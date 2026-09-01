@@ -6,6 +6,59 @@ import (
 	"time"
 )
 
+type legacyJournalBackend struct {
+	*stubDaemon
+	source chan JournalRecord
+}
+
+func newLegacyJournalBackend() *legacyJournalBackend {
+	return &legacyJournalBackend{stubDaemon: newStubDaemon(), source: make(chan JournalRecord, 1)}
+}
+
+func (j *legacyJournalBackend) JournalReadFrom(uint64) (JournalResume, error) {
+	return JournalResume{}, nil
+}
+
+func (j *legacyJournalBackend) JournalSubscribe() (<-chan JournalRecord, func()) {
+	return j.source, func() {}
+}
+
+var _ JournalBackend = (*legacyJournalBackend)(nil)
+
+func TestProtocol_JournalSubscribeFromCapabilityRequiresBackendSupport(t *testing.T) {
+	legacy := newLegacyJournalBackend()
+	sock := tmpSock(t)
+	srv, err := Serve(legacy, sock)
+	if err != nil {
+		t.Fatalf("Serve(legacy journal backend): %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	rc := rawDial(t, sock)
+	rep := rc.hello(Version, []string{CapJournal, CapJournalSubscribeFrom})
+	for _, got := range rep.Capabilities {
+		if got == CapJournalSubscribeFrom {
+			t.Fatalf("legacy backend negotiated %q without JournalSubscribeFromBackend", got)
+		}
+	}
+	if !containsCap(rep.Capabilities, CapJournal) {
+		t.Fatalf("legacy backend lost ordinary journal capability: %v", rep.Capabilities)
+	}
+	rc.writeControl(Control{Op: OpJournalSubscribe, EndpointID: rep.EndpointID})
+	if got := rc.readControl(); got.Op != OpOK {
+		t.Fatalf("legacy journal subscribe = %#v", got)
+	}
+}
+
+func containsCap(caps []string, want string) bool {
+	for _, cap := range caps {
+		if cap == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestProtocol_JournalSubscribeFromReturnsSnapshotBeforeLive(t *testing.T) {
 	js := newJournalStub()
 	js.resume = JournalResume{

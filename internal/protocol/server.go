@@ -233,10 +233,10 @@ const maxControlSessionTTL = 30 * time.Minute
 // kept comfortably larger than this).
 const maxCommandValidity = 1 * time.Hour
 
-// serverCaps is the capability set the daemon supports; the handshake returns the
-// intersection with the client's offer. The remote-tier caps are advertised
-// unconditionally; a journal op still requires both the negotiated `journal` cap
-// and a JournalBackend, and a remote mutating op is gated by the remote tier.
+// serverCaps is the maximal capability set the daemon protocol supports; the handshake returns
+// the intersection with the client's offer after removing capabilities whose optional backend
+// surface is absent. Ordinary remote-tier caps are protocol features and remain advertised; a
+// journal op still requires both the negotiated `journal` cap and a JournalBackend.
 var serverCaps = []string{
 	CapAttach, CapSubscribe,
 	CapRemoteGateway, CapJournal, CapJournalSubscribeFrom, CapActivity, CapPolicy, CapPairing,
@@ -1320,7 +1320,7 @@ func (cc *clientConn) handleHello(c Control) {
 		cc.replyError(d8Message(Version, c.ProtocolVersion)) // (daemonV, clientV) — was swapped (F10)
 		return
 	}
-	cc.caps = intersectCaps(c.Capabilities, serverCaps)
+	cc.caps = intersectCaps(c.Capabilities, cc.srv.supportedCaps())
 	cc.helloed = true
 	_ = cc.writeControl(Control{
 		Op:              OpHello,
@@ -1329,6 +1329,22 @@ func (cc *clientConn) handleHello(c Control) {
 		BuildVersion:    version.Version,
 		Capabilities:    cc.caps,
 	})
+}
+
+// supportedCaps binds advertised atomicity to the backend that can actually provide it. An older
+// DaemonAPI may still satisfy JournalBackend and serve the legacy read+subscribe path; advertising
+// subscribe-from to it would make a new gateway select an operation the server must then refuse.
+func (s *Server) supportedCaps() []string {
+	if _, ok := s.d.(JournalSubscribeFromBackend); ok {
+		return serverCaps
+	}
+	out := make([]string, 0, len(serverCaps)-1)
+	for _, cap := range serverCaps {
+		if cap != CapJournalSubscribeFrom {
+			out = append(out, cap)
+		}
+	}
+	return out
 }
 
 func (cc *clientConn) handleList() {
