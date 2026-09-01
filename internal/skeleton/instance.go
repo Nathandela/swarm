@@ -46,6 +46,19 @@ import (
 // sessionInstanceFile is the per-incarnation identifier's on-disk name.
 const sessionInstanceFile = "session-instance"
 
+type sessionIncarnation struct {
+	ShimPID       int
+	ShimStartTime int64
+}
+
+func incarnationOf(shimPID int, shimStartTime []int64) sessionIncarnation {
+	var start int64
+	if len(shimStartTime) > 0 {
+		start = shimStartTime[0]
+	}
+	return sessionIncarnation{ShimPID: shimPID, ShimStartTime: start}
+}
+
 // mintSessionInstance returns a fresh, unguessable per-incarnation identifier.
 //
 // IT IS NOT A FUNCTION OF THE SESSION ID, and that is the whole point (D-INSTANCE's
@@ -73,7 +86,7 @@ func mintSessionInstance() string {
 // comment here claimed two call sites -- "at shim spawn (a fresh launch) and at replacement"
 // -- and NEITHER existed: the repository has one shim-spawn path (daemon.Launch), it always
 // mints a fresh session id, and nothing re-minted on replacement at all.
-func (d *Daemon) recordSessionInstance(sessionID, instance string, incarnation int) error {
+func (d *Daemon) recordSessionInstance(sessionID, instance string, shimPID int, shimStartTime ...int64) error {
 	if instance == "" {
 		return fmt.Errorf("skeleton: refusing to record an empty session instance for %q", sessionID)
 	}
@@ -91,8 +104,9 @@ func (d *Daemon) recordSessionInstance(sessionID, instance string, incarnation i
 		d.capStore.instances = map[string]string{}
 	}
 	d.capStore.instances[sessionID] = instance
+	incarnation := incarnationOf(shimPID, shimStartTime)
 	if d.capStore.incarnations == nil {
-		d.capStore.incarnations = map[string]int{}
+		d.capStore.incarnations = map[string]sessionIncarnation{}
 	}
 	d.capStore.incarnations[sessionID] = incarnation
 	path := d.sessionStatePathLocked(sessionID, sessionInstanceFile)
@@ -105,27 +119,32 @@ func (d *Daemon) recordSessionInstance(sessionID, instance string, incarnation i
 	return writeSessionStateFile(path, []byte(encodeSessionInstance(instance, incarnation)))
 }
 
-// encodeSessionInstance is the side-file's one-line format: `<instance> <incarnation>`.
+// encodeSessionInstance is the side-file's one-line format: `<instance> <pid> <start-time>`.
 //
 // THE FORMAT IS APPEND-ONLY BY CONSTRUCTION. A file written by an earlier build carries the
 // bare instance with no space, which decodeSessionInstance reads as "incarnation unknown" --
 // and an unknown incarnation ADOPTS. Without that, the upgrade that lands this change would
 // re-mint for every session on the machine at once and show the phone an epoch reset with no
 // shim restart behind any of them.
-func encodeSessionInstance(instance string, incarnation int) string {
-	return instance + " " + strconv.Itoa(incarnation)
+func encodeSessionInstance(instance string, incarnation sessionIncarnation) string {
+	return instance + " " + strconv.Itoa(incarnation.ShimPID) + " " + strconv.FormatInt(incarnation.ShimStartTime, 10)
 }
 
-// decodeSessionInstance splits the side-file. An absent or unparsable incarnation is 0, which
-// is "unknown" and never "different".
-func decodeSessionInstance(raw string) (instance string, incarnation int) {
+// decodeSessionInstance splits the side-file. An absent or unparsable tuple component is zero,
+// which is legacy/unknown and is migrated on the next complete current observation.
+func decodeSessionInstance(raw string) (instance string, incarnation sessionIncarnation) {
 	fields := strings.Fields(strings.TrimSpace(raw))
 	if len(fields) == 0 {
-		return "", 0
+		return "", sessionIncarnation{}
 	}
 	if len(fields) > 1 {
 		if n, err := strconv.Atoi(fields[1]); err == nil {
-			incarnation = n
+			incarnation.ShimPID = n
+		}
+	}
+	if len(fields) > 2 {
+		if n, err := strconv.ParseInt(fields[2], 10, 64); err == nil {
+			incarnation.ShimStartTime = n
 		}
 	}
 	return fields[0], incarnation
@@ -144,27 +163,27 @@ func (d *Daemon) sessionInstance(sessionID string) (string, bool) {
 // sessionInstanceLocked is sessionInstance's body, and it also returns the incarnation the
 // instance was minted for so adoptOrMintSessionInstance can tell adoption from replacement.
 // Caller holds capStore.mu.
-func (d *Daemon) sessionInstanceLocked(sessionID string) (string, int, bool) {
+func (d *Daemon) sessionInstanceLocked(sessionID string) (string, sessionIncarnation, bool) {
 	if inst, ok := d.capStore.instances[sessionID]; ok && inst != "" {
 		return inst, d.capStore.incarnations[sessionID], true
 	}
 	path := d.sessionStatePathLocked(sessionID, sessionInstanceFile)
 	if path == "" {
-		return "", 0, false
+		return "", sessionIncarnation{}, false
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", 0, false
+		return "", sessionIncarnation{}, false
 	}
 	inst, incarnation := decodeSessionInstance(string(data))
 	if inst == "" {
-		return "", 0, false
+		return "", sessionIncarnation{}, false
 	}
 	if d.capStore.instances == nil {
 		d.capStore.instances = map[string]string{}
 	}
 	if d.capStore.incarnations == nil {
-		d.capStore.incarnations = map[string]int{}
+		d.capStore.incarnations = map[string]sessionIncarnation{}
 	}
 	d.capStore.instances[sessionID] = inst
 	d.capStore.incarnations[sessionID] = incarnation
@@ -187,15 +206,31 @@ func (d *Daemon) sessionInstanceLocked(sessionID string) (string, int, bool) {
 //   - a ZERO incarnation is UNKNOWN, not different, and adopts. Two states produce it -- a
 //     side-file written before this format, and a caller with no meta -- and re-minting on
 //     either resets every existing session's view exactly once for no shim restart at all.
-func (d *Daemon) adoptOrMintSessionInstance(sessionID string, incarnation int) (string, error) {
+func (d *Daemon) adoptOrMintSessionInstance(sessionID string, shimPID int, shimStartTime ...int64) (string, error) {
+	incarnation := incarnationOf(shimPID, shimStartTime)
 	d.capStore.mu.Lock()
 	inst, onFile, ok := d.sessionInstanceLocked(sessionID)
 	d.capStore.mu.Unlock()
-	if ok && (incarnation == 0 || onFile == 0 || onFile == incarnation) {
-		return inst, nil
+	if ok {
+		if incarnation.ShimPID == 0 {
+			return inst, nil
+		}
+		if onFile.ShimPID != 0 && onFile.ShimPID != incarnation.ShimPID {
+			// Different known PIDs are different processes even when the caller is too old to
+			// provide start time.
+		} else if incarnation.ShimStartTime == 0 || onFile == incarnation {
+			return inst, nil
+		} else if onFile.ShimPID == 0 || onFile.ShimStartTime == 0 {
+			// Upgrade a bare or pid-only side-file in place. The same running process keeps its
+			// opaque instance; only its durable reuse fence becomes complete.
+			if err := d.recordSessionInstance(sessionID, inst, incarnation.ShimPID, incarnation.ShimStartTime); err != nil {
+				return "", err
+			}
+			return inst, nil
+		}
 	}
 	fresh := mintSessionInstance()
-	if err := d.recordSessionInstance(sessionID, fresh, incarnation); err != nil {
+	if err := d.recordSessionInstance(sessionID, fresh, incarnation.ShimPID, incarnation.ShimStartTime); err != nil {
 		return "", err
 	}
 	return fresh, nil
@@ -265,10 +300,14 @@ func (d *Daemon) authorSessionCapabilities(sessionID, instance, provider string,
 	expectedIncarnation := currentIncarnation
 	if d.core != nil {
 		if m, present := d.core.Get(sessionID); present {
-			if !hasCurrent || (currentIncarnation != 0 && currentIncarnation != m.ShimPID) {
-				return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: stale capability author for session %q shim %d (current %d)", sessionID, currentIncarnation, m.ShimPID)
+			currentMeta := sessionIncarnation{ShimPID: m.ShimPID, ShimStartTime: m.ShimStartTime}
+			knownMismatch := currentIncarnation.ShimPID != 0 && currentIncarnation.ShimPID != currentMeta.ShimPID ||
+				currentIncarnation.ShimStartTime != 0 && currentIncarnation.ShimStartTime != currentMeta.ShimStartTime
+			if !hasCurrent || knownMismatch {
+				return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: stale capability author for session %q shim %d/%d (current %d/%d)",
+					sessionID, currentIncarnation.ShimPID, currentIncarnation.ShimStartTime, m.ShimPID, m.ShimStartTime)
 			}
-			expectedIncarnation = m.ShimPID
+			expectedIncarnation = currentMeta
 			if publisher == nil {
 				publisher = d.core.RecordSessionStateForIncarnation
 			}
@@ -287,7 +326,7 @@ func (d *Daemon) authorSessionCapabilities(sessionID, instance, provider string,
 	defer d.capStore.transitionMu.Unlock()
 	var stored protocol.SessionCapabilities
 	var publishAttempted bool
-	matched, err := publisher(sessionID, expectedIncarnation, func() (json.RawMessage, error) {
+	matched, err := publisher(sessionID, expectedIncarnation.ShimPID, expectedIncarnation.ShimStartTime, func() (json.RawMessage, error) {
 		d.registerSessionCapabilitiesTransitionLocked(sessionID, rec)
 		var ok bool
 		stored, ok = d.sessionCapabilities(sessionID)
@@ -304,7 +343,8 @@ func (d *Daemon) authorSessionCapabilities(sessionID, instance, provider string,
 		return protocol.SessionCapabilities{}, err
 	}
 	if !matched {
-		return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: session %q incarnation %d was replaced before capability publication", sessionID, expectedIncarnation)
+		return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: session %q incarnation %d/%d was replaced before capability publication",
+			sessionID, expectedIncarnation.ShimPID, expectedIncarnation.ShimStartTime)
 	}
 	if publishAttempted {
 		if d.capStore.publishedInstances == nil {
@@ -324,7 +364,7 @@ func (d *Daemon) authorSessionCapabilities(sessionID, instance, provider string,
 // status card. That is the answer for two cases, both deliberate: a session whose
 // instance could not be persisted binds nothing, and the reserved dev "fake" agent has no
 // adapter and no PTY worth showing.
-func (d *Daemon) sessionCapabilityInputs(sessionID, agentType string, incarnation int) (instance string, ad adapter.Adapter, version string, ok bool) {
+func (d *Daemon) sessionCapabilityInputs(sessionID, agentType string, shimPID int, shimStartTime ...int64) (instance string, ad adapter.Adapter, version string, ok bool) {
 	if sessionID == "" || agentType == "" {
 		return "", nil, "", false
 	}
@@ -335,7 +375,7 @@ func (d *Daemon) sessionCapabilityInputs(sessionID, agentType string, incarnatio
 	// dev "fake" agent therefore authors {structured:false, fallback:true} -- which is
 	// true of it: it has a real PTY and no structured plane.
 	ad, _ = d.resolveAdapter(agentType)
-	inst, err := d.adoptOrMintSessionInstance(sessionID, incarnation)
+	inst, err := d.adoptOrMintSessionInstance(sessionID, shimPID, shimStartTime...)
 	if err != nil {
 		log.Printf("skeleton: session %s has no instance, so it keeps the status card: %v", sessionID, err)
 		return "", nil, "", false
@@ -376,8 +416,8 @@ func (d *Daemon) backendPlaneDecided(sessionID string, ad adapter.Adapter) (live
 // authorSessionCapabilitiesWhenDecided is the shape every non-backend call site uses: it
 // authors only once backendPlaneDecided says the structured-plane fact is knowable, and
 // stays silent until then rather than authoring a record it would have to un-say.
-func (d *Daemon) authorSessionCapabilitiesWhenDecided(sessionID, agentType string, incarnation int) {
-	inst, ad, version, ok := d.sessionCapabilityInputs(sessionID, agentType, incarnation)
+func (d *Daemon) authorSessionCapabilitiesWhenDecided(sessionID, agentType string, shimPID int, shimStartTime ...int64) {
+	inst, ad, version, ok := d.sessionCapabilityInputs(sessionID, agentType, shimPID, shimStartTime...)
 	if !ok {
 		return // no bindable instance: T2-a's honest status card
 	}

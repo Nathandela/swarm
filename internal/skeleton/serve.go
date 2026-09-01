@@ -213,7 +213,7 @@ type Daemon struct {
 	// sessionStatePublisher is the exact-incarnation daemon transaction used by
 	// capability authoring. nil selects core.RecordSessionStateForIncarnation;
 	// tests inject append failures without corrupting the durable journal.
-	sessionStatePublisher func(string, int, func() (json.RawMessage, error)) (bool, error)
+	sessionStatePublisher func(string, int, int64, func() (json.RawMessage, error)) (bool, error)
 
 	// sup is the passive handoff supervisor (ADR-010 Amendment 3 C2; supervision.go):
 	// armed from registerSession, signalled from emitStatus and endSession, closed by
@@ -578,7 +578,7 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	// plane. authorCapabilitiesForRunning re-runs for exactly those sessions once the
 	// assembly is complete.
 	if d.core != nil {
-		d.authorSessionCapabilitiesWhenDecided(m.ID, m.AgentType, m.ShimPID)
+		d.authorSessionCapabilitiesWhenDecided(m.ID, m.AgentType, m.ShimPID, m.ShimStartTime)
 	}
 	if d.sup != nil {
 		d.sup.arm(m) // a passive handoff child gets its supervision record (ADR-010 Amendment 3 C2)
@@ -613,7 +613,7 @@ func (d *Daemon) authorCapabilitiesForRunning() {
 		if m.Status.Process != status.ProcessRunning {
 			continue
 		}
-		inst, ad, version, ok := d.sessionCapabilityInputs(m.ID, m.AgentType, m.ShimPID)
+		inst, ad, version, ok := d.sessionCapabilityInputs(m.ID, m.AgentType, m.ShimPID, m.ShimStartTime)
 		if !ok {
 			continue // no bindable instance: T2-a's honest status card
 		}

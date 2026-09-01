@@ -18,9 +18,12 @@ func TestSessionStateAuthor_FailedAppendRetriesAndSuccessDeduplicates(t *testing
 	}
 	wantFailure := errors.New("append failed once")
 	attempts := 0
-	d.sessionStatePublisher = func(_ string, gotIncarnation int, author func() (json.RawMessage, error)) (bool, error) {
+	d.sessionStatePublisher = func(_ string, gotIncarnation int, gotStart int64, author func() (json.RawMessage, error)) (bool, error) {
 		if gotIncarnation != incarnation {
 			t.Fatalf("publisher incarnation = %d, want %d", gotIncarnation, incarnation)
+		}
+		if gotStart != 0 {
+			t.Fatalf("publisher start = %d, want legacy unknown 0", gotStart)
 		}
 		payload, err := author()
 		if err != nil {

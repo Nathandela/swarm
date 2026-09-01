@@ -90,13 +90,11 @@ type sessionCapabilityStore struct {
 	// backed by the same 0700 session dir as the record, so a daemon restart ADOPTS an
 	// instance rather than minting one (ADR-017 T8-a).
 	instances map[string]string
-	// incarnations caches the shim pid each cached instance was minted for. It is what
-	// makes a daemon restart (same shim, same pid) an ADOPTION and a session replacement
-	// (new shim, new pid) a re-mint -- the distinction ADR-017 T8-a's whole binding turns
-	// on, and one the session id cannot make (round-3 blocker 2b). Zero is UNKNOWN, never
-	// "different": a side-file written before this format carries no pid, and reading that
-	// as a replacement would reset every session's view once on the upgrade.
-	incarnations map[string]int
+	// incarnations caches the exact process identity each instance was minted for. PID alone
+	// is insufficient because the OS reuses it; process start time is the reuse fence already
+	// carried by persist.Meta. A zero component is legacy/unknown and is migrated when a current
+	// complete tuple is next observed.
+	incarnations map[string]sessionIncarnation
 	// versions caches the detected CLI version per agent type for this daemon's life.
 	versions map[string]string
 	// liveProof is deliberately process-local. A durable proof records that a history

@@ -43,7 +43,7 @@ func TestLiveState_RecordSessionStatePublishesCurrentCompleteRow(t *testing.T) {
 	m.ShimPID = 41
 	d.putMem(m)
 	payload := json.RawMessage(`{"provider":"claude","session_instance":"i","structured_chat":true}`)
-	matched, err := d.RecordSessionStateForIncarnation(m.ID, m.ShimPID, func() (json.RawMessage, error) { return payload, nil })
+	matched, err := d.RecordSessionStateForIncarnation(m.ID, m.ShimPID, m.ShimStartTime, func() (json.RawMessage, error) { return payload, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestLiveState_RecordSessionStateCannotResurrectTombstone(t *testing.T) {
 	d.putMem(m)
 	d.tombstoneID(m.ID)
 	before := d.journal.Cursor()
-	matched, err := d.RecordSessionStateForIncarnation(m.ID, m.ShimPID, func() (json.RawMessage, error) { return json.RawMessage(`{}`), nil })
+	matched, err := d.RecordSessionStateForIncarnation(m.ID, m.ShimPID, m.ShimStartTime, func() (json.RawMessage, error) { return json.RawMessage(`{}`), nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestLiveState_StaleIncarnationNeverAuthorsOrPublishes(t *testing.T) {
 	d.putMem(m)
 	called := false
 	before := d.journal.Cursor()
-	matched, err := d.RecordSessionStateForIncarnation(m.ID, 101, func() (json.RawMessage, error) {
+	matched, err := d.RecordSessionStateForIncarnation(m.ID, 101, m.ShimStartTime, func() (json.RawMessage, error) {
 		called = true
 		return json.RawMessage(`{"stale":true}`), nil
 	})
@@ -100,6 +100,29 @@ func TestLiveState_StaleIncarnationNeverAuthorsOrPublishes(t *testing.T) {
 	}
 	if after := d.journal.Cursor(); after != before {
 		t.Fatalf("stale incarnation advanced journal %d -> %d", before, after)
+	}
+}
+
+func TestLiveState_ReusedPIDWithDifferentStartNeverAuthorsOrPublishes(t *testing.T) {
+	d := openDaemon(t, daemonConfig(t))
+	m := metaWith("s-reused", "claude", status.ProcessRunning, status.InteractionNone)
+	m.ShimPID = 202
+	m.ShimStartTime = 9002
+	d.putMem(m)
+	called := false
+	before := d.journal.Cursor()
+	matched, err := d.RecordSessionStateForIncarnation(m.ID, m.ShimPID, 9001, func() (json.RawMessage, error) {
+		called = true
+		return json.RawMessage(`{"stale":true}`), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched || called {
+		t.Fatalf("reused-pid old start matched=%v author-called=%v", matched, called)
+	}
+	if after := d.journal.Cursor(); after != before {
+		t.Fatalf("reused-pid stale incarnation advanced journal %d -> %d", before, after)
 	}
 }
 

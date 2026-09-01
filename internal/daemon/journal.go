@@ -111,7 +111,7 @@ func (d *Daemon) JournalSubscribeFrom(from uint64) (journal.Resume, <-chan journ
 // writeMu-fenced meta recheck succeeds; capability persistence therefore cannot
 // overwrite a replacement's side-file before discovering that the row changed.
 // A nil payload means the author had nothing new to publish.
-func (d *Daemon) RecordSessionStateForIncarnation(sessionID string, expectedShimPID int, author func() (json.RawMessage, error)) (bool, error) {
+func (d *Daemon) RecordSessionStateForIncarnation(sessionID string, expectedShimPID int, expectedShimStartTime int64, author func() (json.RawMessage, error)) (bool, error) {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
 	if d.isDeleted(sessionID) {
@@ -120,7 +120,7 @@ func (d *Daemon) RecordSessionStateForIncarnation(sessionID string, expectedShim
 	d.mu.Lock()
 	s, ok := d.sessions[sessionID]
 	var m persist.Meta
-	if ok && s.persisted && s.meta.ShimPID == expectedShimPID {
+	if ok && s.persisted && s.meta.ShimPID == expectedShimPID && s.meta.ShimStartTime == expectedShimStartTime {
 		m = s.meta
 	} else {
 		ok = false

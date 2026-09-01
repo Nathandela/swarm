@@ -74,6 +74,29 @@ func TestR8R3_AReplacementShimMintsANewInstanceThroughTheProductionPath(t *testi
 	}
 }
 
+func TestR8R3_AReusedPIDWithDifferentStartMintsANewInstance(t *testing.T) {
+	d := assembleAt(t, r8StateDir(t))
+	const sessionID = "sess-r8r3-reused-pid"
+	first, err := d.adoptOrMintSessionInstance(sessionID, 4242, 1001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := d.adoptOrMintSessionInstance(sessionID, 4242, 1001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != first {
+		t.Fatalf("exact pid+start tuple re-minted %q -> %q", first, again)
+	}
+	reused, err := d.adoptOrMintSessionInstance(sessionID, 4242, 2002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused == first {
+		t.Fatalf("reused pid with a different process start retained stale instance %q", first)
+	}
+}
+
 // TestR8R3_AnUnknownIncarnationAdoptsRatherThanReMints: the pre-R8 side-file, and any caller
 // with no meta, must not be read as a replacement.
 func TestR8R3_AnUnknownIncarnationAdoptsRatherThanReMints(t *testing.T) {
@@ -122,6 +145,35 @@ func TestR8R3_APreR8SideFileIsAdoptedNotDiscarded(t *testing.T) {
 		t.Fatalf("a pre-R8 instance file was discarded (%q -> %q); every session on the machine "+
 			"would show the phone an epoch reset on the upgrade that lands the incarnation "+
 			"binding", legacy, got)
+	}
+}
+
+func TestR8R3_ALegacyPIDOnlySideFileIsMigratedToExactTuple(t *testing.T) {
+	dir := r8StateDir(t)
+	const sessionID = "sess-r8r3-legacy-pid"
+	d := assembleAt(t, dir)
+	path := filepath.Join(dir, sessionID, sessionInstanceFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const legacy = "0123456789abcdef0123456789abcdef"
+	if err := os.WriteFile(path, []byte(legacy+" 777"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.adoptOrMintSessionInstance(sessionID, 777, 987654321)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != legacy {
+		t.Fatalf("pid-only legacy file re-minted %q -> %q", legacy, got)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "777 987654321") {
+		t.Fatalf("pid-only legacy file was not migrated to exact tuple: %q", raw)
 	}
 }
 

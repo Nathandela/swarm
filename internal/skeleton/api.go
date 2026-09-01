@@ -936,7 +936,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 // core's, its firing order relative to Launch's return is the core's to change, and the
 // two are one authoring function with two call sites rather than two rules.
 func (d *Daemon) authorLaunchedSessionCapabilities(m persist.Meta) {
-	inst, ad, version, ok := d.sessionCapabilityInputs(m.ID, m.AgentType, m.ShimPID)
+	inst, ad, version, ok := d.sessionCapabilityInputs(m.ID, m.AgentType, m.ShimPID, m.ShimStartTime)
 	if !ok {
 		return // no bindable instance: T2-a's honest status card
 	}
