@@ -72,13 +72,12 @@ type PlayIntegrityConfig struct {
 }
 
 type PlayIntegrityVerifier struct {
-	packageName        string
-	cloudProjectNumber int64
-	certificates       [][32]byte
-	maxAge             time.Duration
-	maxFutureSkew      time.Duration
-	now                func() time.Time
-	decode             PlayIntegrityDecodeClient
+	packageName   string
+	certificates  [][32]byte
+	maxAge        time.Duration
+	maxFutureSkew time.Duration
+	now           func() time.Time
+	decode        PlayIntegrityDecodeClient
 }
 
 func NewPlayIntegrityVerifier(cfg PlayIntegrityConfig) (*PlayIntegrityVerifier, error) {
@@ -111,13 +110,12 @@ func NewPlayIntegrityVerifier(cfg PlayIntegrityConfig) (*PlayIntegrityVerifier, 
 		certs = append(certs, cert)
 	}
 	return &PlayIntegrityVerifier{
-		packageName:        cfg.PackageName,
-		cloudProjectNumber: cfg.CloudProjectNumber,
-		certificates:       certs,
-		maxAge:             cfg.MaxVerdictAge,
-		maxFutureSkew:      cfg.MaxFutureSkew,
-		now:                cfg.Now,
-		decode:             cfg.Decode,
+		packageName:   cfg.PackageName,
+		certificates:  certs,
+		maxAge:        cfg.MaxVerdictAge,
+		maxFutureSkew: cfg.MaxFutureSkew,
+		now:           cfg.Now,
+		decode:        cfg.Decode,
 	}, nil
 }
 
@@ -233,6 +231,9 @@ func (c *GooglePlayIntegrityDecodeClient) Decode(ctx context.Context, packageNam
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if err := dec.Decode(&envelope); err != nil {
 		return PlayIntegrityPayload{}, fmt.Errorf("%w: malformed decode response: %v", errPlayIntegrityVerdict, err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return PlayIntegrityPayload{}, fmt.Errorf("%w: trailing decode response data", errPlayIntegrityVerdict)
 	}
 	return envelope.TokenPayloadExternal, nil
 }

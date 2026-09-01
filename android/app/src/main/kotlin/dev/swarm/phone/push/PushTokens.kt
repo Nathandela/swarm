@@ -5,6 +5,9 @@ import android.util.Log
 import com.google.firebase.messaging.FirebaseMessaging
 import dev.swarm.phone.PhoneStartup
 import dev.swarm.phone.SwarmApplication
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import swarmmobile.App
 
 /**
@@ -29,11 +32,19 @@ import swarmmobile.App
  * persist-first ordering to be got wrong. The Go verb persists BEFORE it speaks to the relay
  * precisely because a rotation usually arrives with no connection -- FCM rotates on reinstall,
  * on data restore, on TTL expiry, and the app is disconnected whenever it is backgrounded
- * (ADR-007 B16) -- so nothing here needs to queue, retry or remember anything.
+ * (ADR-007 B16). Registration itself runs on one scheduled worker: Integrity/network failures
+ * retry with a bounded backoff, while a newer token fences every callback for the older one.
  */
 object PushTokens {
     private const val TAG = "SwarmPush"
-
+    private val registration = Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task, "swarm-push-registration").apply { isDaemon = true }
+    }
+    private val applicationContext = AtomicReference<Context>()
+    private val retry = PushRegistrationRetry(
+        schedule = { delay, work -> registration.schedule(work, delay, TimeUnit.MILLISECONDS) },
+        attempt = { token -> registerNow(applicationContext.get(), token) },
+    )
 
     /**
      * Ask Firebase for this install's token and register it.
@@ -109,7 +120,13 @@ object PushTokens {
      * followed by another onNewToken.
      */
     fun register(context: Context, token: String) {
-        val app = phoneOf(context) ?: return
+        applicationContext.set(context.applicationContext)
+        retry.submit(token)
+    }
+
+    private fun registerNow(context: Context?, token: String): Boolean {
+        if (context == null || token.isBlank()) return false
+        val app = phoneOf(context) ?: return false
         try {
             app.registerPushToken(token)
         } catch (refused: Exception) {
@@ -154,7 +171,9 @@ object PushTokens {
             Log.w(TAG, "push gateway registration failed; this phone holds no gateway " +
                 "installation and will not receive background wakes until a later attempt " +
                 "succeeds", refused)
+            return false
         }
+        return true
     }
 
     /**

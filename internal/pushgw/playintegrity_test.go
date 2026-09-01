@@ -76,6 +76,19 @@ func TestGooglePlayIntegrityDecodeClient_ClassifiesAvailability(t *testing.T) {
 	}
 }
 
+func TestGooglePlayIntegrityDecodeClient_RejectsTrailingDocument(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"tokenPayloadExternal":{}} {"smuggled":true}`)
+	}))
+	defer server.Close()
+	client, _ := NewGooglePlayIntegrityDecodeClient(server.Client())
+	client.baseURL = server.URL
+	if _, err := client.Decode(context.Background(), ProductionAndroidPackage, "token"); err == nil || errors.Is(err, ErrAttestationUnavailable) {
+		t.Fatalf("trailing-document error = %v, want definitive invalid", err)
+	}
+}
+
 func (f *fakePlayIntegrityDecoder) Decode(_ context.Context, packageName, token string) (PlayIntegrityPayload, error) {
 	f.packageName, f.token = packageName, token
 	return f.payload, f.err

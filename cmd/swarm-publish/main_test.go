@@ -19,11 +19,14 @@ import (
 const testFirebaseAppID = "1:733314021126:android:ff6e016cffe98782535087"
 
 type provenanceFixture struct {
-	Schema         int    `json:"schema"`
-	ProjectID      string `json:"project_id"`
-	PackageName    string `json:"package_name"`
-	MobileSDKAppID string `json:"mobilesdk_app_id"`
-	AABSHA256      string `json:"aab_sha256"`
+	Schema                       int    `json:"schema"`
+	ProjectID                    string `json:"project_id"`
+	CloudProjectNumber           string `json:"cloud_project_number"`
+	PackageName                  string `json:"package_name"`
+	MobileSDKAppID               string `json:"mobilesdk_app_id"`
+	PushGatewayURL               string `json:"push_gateway_url"`
+	PlaySigningCertificateSHA256 string `json:"play_signing_certificate_sha256"`
+	AABSHA256                    string `json:"aab_sha256"`
 }
 
 func writeAABWithProvenance(t *testing.T, content []byte, projectID string) string {
@@ -35,11 +38,14 @@ func writeAABWithProvenance(t *testing.T, content []byte, projectID string) stri
 	}
 	sum := sha256.Sum256(content)
 	doc, err := json.Marshal(provenanceFixture{
-		Schema:         1,
-		ProjectID:      projectID,
-		PackageName:    "dev.swarm.phone",
-		MobileSDKAppID: testFirebaseAppID,
-		AABSHA256:      hex.EncodeToString(sum[:]),
+		Schema:                       2,
+		ProjectID:                    projectID,
+		CloudProjectNumber:           "733314021126",
+		PackageName:                  "dev.swarm.phone",
+		MobileSDKAppID:               testFirebaseAppID,
+		PushGatewayURL:               "https://push-swarm.dsfactory.org",
+		PlaySigningCertificateSHA256: "hz8YTGhTTgpYccjMiQDrhx5HcddqRsTu1HRcmhhknmU",
+		AABSHA256:                    hex.EncodeToString(sum[:]),
 	})
 	if err != nil {
 		t.Fatalf("marshal provenance fixture: %v", err)
@@ -133,6 +139,38 @@ func TestProductionFirebaseProvenanceRejectsADevelopmentProject(t *testing.T) {
 	err := verifyProductionFirebaseProvenanceForTest(aab, "dev.swarm.phone")
 	if err == nil || !strings.Contains(err.Error(), "project_id") {
 		t.Fatalf("development-project error = %v, want the production project_id refusal", err)
+	}
+}
+
+func TestProductionProvenanceRejectsWrongIntegrityProjectOrGateway(t *testing.T) {
+	for _, tc := range []struct {
+		name, field, value string
+	}{
+		{"cloud project", "cloud_project_number", "999"},
+		{"push gateway", "push_gateway_url", "https://push.example.invalid"},
+		{"upload certificate is not app signing certificate", "play_signing_certificate_sha256", "vwZOzGX-UoUNIfxVZAbudVBPIDTtBlqgdFScnIYPUW4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			aab := writeAABWithProvenance(t, []byte("wrong push provenance"), "swarm-8404f")
+			path := aab + ".swarm-firebase-provenance.json"
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(raw, &doc); err != nil {
+				t.Fatal(err)
+			}
+			doc[tc.field] = tc.value
+			raw, _ = json.Marshal(doc)
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err = verifyProductionFirebaseProvenanceForTest(aab, "dev.swarm.phone")
+			if err == nil || !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("error = %v, want %s refusal", err, tc.field)
+			}
+		})
 	}
 }
 

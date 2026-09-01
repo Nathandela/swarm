@@ -20,17 +20,25 @@ const (
 	firebaseProvenanceSuffix = ".swarm-firebase-provenance.json"
 	firebaseProvenanceMax    = 4096
 
-	productionFirebaseProjectID = "swarm-8404f"
-	productionFirebasePackage   = "dev.swarm.phone"
-	productionFirebaseAppID     = "1:733314021126:android:ff6e016cffe98782535087"
+	productionFirebaseProjectID  = "swarm-8404f"
+	productionCloudProjectNumber = "733314021126"
+	productionFirebasePackage    = "dev.swarm.phone"
+	productionFirebaseAppID      = "1:733314021126:android:ff6e016cffe98782535087"
+	productionPushGatewayURL     = "https://push-swarm.dsfactory.org"
+	// Play Console is authoritative for this App signing certificate. It is deliberately
+	// not the upload certificate that signs the submitted AAB.
+	productionPlaySigningCertificateSHA256 = "hz8YTGhTTgpYccjMiQDrhx5HcddqRsTu1HRcmhhknmU"
 )
 
 type firebaseProvenance struct {
-	Schema         int    `json:"schema"`
-	ProjectID      string `json:"project_id"`
-	PackageName    string `json:"package_name"`
-	MobileSDKAppID string `json:"mobilesdk_app_id"`
-	AABSHA256      string `json:"aab_sha256"`
+	Schema                       int    `json:"schema"`
+	ProjectID                    string `json:"project_id"`
+	CloudProjectNumber           string `json:"cloud_project_number"`
+	PackageName                  string `json:"package_name"`
+	MobileSDKAppID               string `json:"mobilesdk_app_id"`
+	PushGatewayURL               string `json:"push_gateway_url"`
+	PlaySigningCertificateSHA256 string `json:"play_signing_certificate_sha256"`
+	AABSHA256                    string `json:"aab_sha256"`
 }
 
 // openVerifiedProductionFirebaseBundle refuses any bundle that was not the
@@ -95,16 +103,19 @@ func openVerifiedProductionFirebaseBundle(aabPath, packageName string) (_ *os.Fi
 		name, got, want string
 	}{
 		{"project_id", provenance.ProjectID, productionFirebaseProjectID},
+		{"cloud_project_number", provenance.CloudProjectNumber, productionCloudProjectNumber},
 		{"package_name", provenance.PackageName, productionFirebasePackage},
 		{"mobilesdk_app_id", provenance.MobileSDKAppID, productionFirebaseAppID},
+		{"push_gateway_url", provenance.PushGatewayURL, productionPushGatewayURL},
+		{"play_signing_certificate_sha256", provenance.PlaySigningCertificateSHA256, productionPlaySigningCertificateSHA256},
 	} {
 		if fact.got != fact.want {
 			return nil, fmt.Errorf("firebase provenance: %s=%q, want production value %q",
 				fact.name, fact.got, fact.want)
 		}
 	}
-	if provenance.Schema != 1 {
-		return nil, fmt.Errorf("firebase provenance: schema=%d, want 1", provenance.Schema)
+	if provenance.Schema != 2 {
+		return nil, fmt.Errorf("firebase provenance: schema=%d, want 2", provenance.Schema)
 	}
 
 	digest, err := sha256AndRewind(bundle)

@@ -150,6 +150,9 @@ func NewApp(*Config, KeyCustody) (*App, error)
 ifacemethod EventListener.OnEvent(*Event)
 ifacemethod KeyCustody.ContentKEK() ([]byte, error)
 ifacemethod KeyCustody.WakeKEK() ([]byte, error)
+ifacemethod PushAttestor.Attest([]byte) (string, error)
+ifacemethod PushInstallationSigner.PublicKey() []byte
+ifacemethod PushInstallationSigner.Sign([]byte) ([]byte, error)
 ifacemethod RelayTrust.VerifyRelayChain(string, []byte) error
 method App.AddMachine(string, string) error
 method App.Approve(string, string, string) (*Op, error)
@@ -159,6 +162,7 @@ method App.ClearUndeliveredInputs() error
 method App.ClockVerdict() (string, error)
 method App.Close() error
 method App.ComposerSend(string, string, string) (*Op, error)
+method App.ConfigurePushRegistration(PushAttestor, PushInstallationSigner) error
 method App.ConnectionState() (string, error)
 method App.DeletePushToken() error
 method App.EnsurePushRegistration(string) error
@@ -280,6 +284,8 @@ type Outcome struct
 type Pairing struct
 type PresetInfo struct
 type PresetList struct
+type PushAttestor interface
+type PushInstallationSigner interface
 type PushPreference struct
 type PushWakeDrops struct
 type QRPayload struct
