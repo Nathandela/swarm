@@ -2,7 +2,9 @@ package remotegw
 
 import (
 	"context"
+	"encoding/json"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -121,6 +123,102 @@ func TestGateway_FullResyncPublishesOneAtomicReseedAndAdvances(t *testing.T) {
 	}
 	if g.Cursor() != 7 {
 		t.Fatalf("gateway cursor = %d, want repaired boundary 7", g.Cursor())
+	}
+}
+
+func serveOversizedAtomicFullResync(t *testing.T, ln net.Listener) {
+	t.Helper()
+	conn, err := ln.Accept()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, body, err := wire.ReadFrame(conn)
+	if err != nil {
+		return
+	}
+	hello, _ := protocol.DecodeControl(body)
+	reply, _ := protocol.EncodeControl(protocol.Control{
+		Op: protocol.OpHello, EndpointID: "machine", ProtocolVersion: protocol.Version,
+		Capabilities: []string{protocol.CapJournal, protocol.CapJournalSubscribeFrom},
+	})
+	if hello.Op != protocol.OpHello || wire.WriteFrame(conn, wire.TControl, reply) != nil {
+		return
+	}
+	_, body, err = wire.ReadFrame(conn)
+	if err != nil {
+		return
+	}
+	req, _ := protocol.DecodeControl(body)
+	if req.Op != protocol.OpJournalSubscribeFrom {
+		return
+	}
+
+	events := []protocol.JournalRecord{{
+		Cursor: 1, SessionID: "s", Type: "interaction",
+		Item: json.RawMessage(`{"v":1,"item_id":"pending","kind":"approval_request","summary":"allow?"}`),
+	}}
+	item := json.RawMessage(`{"v":1,"item_id":"tail","kind":"agent_message","text":"` + strings.Repeat("x", 16_000) + `"}`)
+	for cursor := uint64(2); cursor <= 100; cursor++ {
+		events = append(events, protocol.JournalRecord{Cursor: cursor, SessionID: "s", Type: "interaction", Item: item})
+	}
+	const perPage = 40
+	for start := 0; start < len(events); start += perPage {
+		end := start + perPage
+		if end > len(events) {
+			end = len(events)
+		}
+		page := protocol.Control{
+			Op: protocol.OpJournalSubscribeFrom, Cursor: 100, FullResync: true,
+			JournalMore: end < len(events), Journal: events[start:end],
+		}
+		if !page.JournalMore {
+			page.Roster = []protocol.JournalRecord{{SessionID: "s", Type: "roster"}}
+		}
+		encoded, err := protocol.EncodeControl(page)
+		if err != nil || len(encoded) > wire.MaxFrame-1 {
+			return
+		}
+		if wire.WriteFrame(conn, wire.TControl, encoded) != nil {
+			return
+		}
+	}
+}
+
+func TestGateway_FullResyncBoundsPagedHistoryAndPreservesPendingApproval(t *testing.T) {
+	sock, ln := journalSocket(t)
+	go serveOversizedAtomicFullResync(t, ln)
+	sink := &atomicResumeSink{}
+	g := New(sock, sink)
+	_ = g.RunJournal(context.Background())
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.reseeds) != 1 {
+		t.Fatalf("full-resync reseeds = %d, want one", len(sink.reseeds))
+	}
+	rs := sink.reseeds[0]
+	if rs.Cursor != 100 || len(rs.Roster) != 1 || len(rs.Events) == 0 || len(rs.Events) >= 100 {
+		t.Fatalf("bounded full resync = cursor %d roster %d events %d", rs.Cursor, len(rs.Roster), len(rs.Events))
+	}
+	pending, newest := false, false
+	for _, rec := range rs.Events {
+		pending = pending || rec.Cursor == 1
+		newest = newest || rec.Cursor == 100
+	}
+	if !pending || !newest {
+		t.Fatalf("bounded full resync lost pending approval/newest tail: pending=%t newest=%t", pending, newest)
+	}
+	body, err := json.Marshal(reseedFrame{Kind: kindJournalReseed, JournalReseed: rs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) > maxJournalReseedPlaintextBytes {
+		t.Fatalf("full-resync plaintext = %d, limit %d", len(body), maxJournalReseedPlaintextBytes)
+	}
+	if g.Cursor() != 100 {
+		t.Fatalf("gateway cursor = %d, want final boundary 100", g.Cursor())
 	}
 }
 

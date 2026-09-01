@@ -200,11 +200,16 @@ func (g *Gateway) Resync(ctx context.Context, from uint64, rosterOnly, discarded
 		}
 		return snapshotErr
 	}
-	return sink.Reseed(protocol.JournalReseed{
+	rs := protocol.JournalReseed{
 		Roster: roster,
 		Events: namespaceRoster(dc.endpointID, res.Journal),
 		Cursor: res.Cursor,
-	})
+	}
+	rs, err = boundJournalReseed(rs)
+	if err != nil {
+		return err
+	}
+	return sink.Reseed(rs)
 }
 
 // Gateway bridges one daemon's remote socket toward the phone. It holds the last
@@ -366,6 +371,10 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 		events := namespaceRoster(dc.endpointID, res.Journal)
 		if res.FullResync {
 			rs := protocol.JournalReseed{Roster: roster, Events: events, Cursor: res.Cursor}
+			rs, err = boundJournalReseed(rs)
+			if err != nil {
+				return err
+			}
 			if sink, ok := g.sink.(FullResyncSink); ok {
 				if err := sink.FullResync(rs); err != nil {
 					return err
