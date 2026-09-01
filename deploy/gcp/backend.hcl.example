@@ -1,0 +1,4 @@
+# Copy to backend.hcl (ignored by local operator convention) and fill in a
+# separately administered, versioned GCS bucket. Do not put credentials here.
+bucket = "REPLACE_WITH_TERRAFORM_STATE_BUCKET"
+prefix = "swarm-8404f/public-services"

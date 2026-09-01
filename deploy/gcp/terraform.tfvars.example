@@ -1,0 +1,5 @@
+# Use a group where possible. Owners retain emergency project access, but this
+# is the explicit day-to-day IAP + OS Login allow-list managed by this stack.
+operator_members = [
+  "group:REPLACE_WITH_OPERATIONS_GROUP",
+]
