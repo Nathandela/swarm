@@ -160,6 +160,15 @@ type App struct {
 	// It is deliberately NOT a.mu -- a.mu guards the app's lifecycle and is taken on paths
 	// that must not queue behind a relay append.
 	bucketMu sync.Mutex
+	// publicationAuthorityMu closes the last publication TOCTOU: bucketMu orders one mailbox
+	// stream, but pairing, purge and terminal unpair mutate the authority for that stream without
+	// taking bucketMu. The publisher takes this lock only for its final durable-authority check
+	// and relay append; every authority mutation takes it around the durable change. Therefore,
+	// once such a mutation returns, no envelope for the superseded authority can begin an append.
+	//
+	// Lock order is bucketMu -> publicationAuthorityMu -> phonecore.Core.mu. Authority mutations
+	// never take bucketMu, and this lock is always released before taking App.mu for cache/UI work.
+	publicationAuthorityMu sync.Mutex
 	// publicationWake nudges the one connection-scoped exact-envelope redrive loop after a
 	// foreground publication entered durable custody but its immediate relay append failed.
 	// Capacity one coalesces nudges: the durable FIFO is the source of truth, not this signal.
@@ -935,7 +944,9 @@ func (a *App) PurgeKeys() (err error) {
 	// same reason the core purges its memory unconditionally: clearing them cannot fail, and
 	// returning first left the app rendering decrypted session content on a handset its owner
 	// has just revoked. The error still reaches the caller -- the blobs at rest survived.
+	a.publicationAuthorityMu.Lock()
 	err = core.PurgeKeys()
+	a.publicationAuthorityMu.Unlock()
 	a.mu.Lock()
 	a.journal = nil
 	a.needs = map[string]string{}

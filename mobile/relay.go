@@ -534,6 +534,8 @@ func transportEndsPairing(state string, graceUntil, now time.Time) bool {
 // covers the process either way. What a failure costs is exactly what not writing at all used to
 // cost -- the next launch comes up paired -- and the next terminal dial writes again.
 func (a *App) recordUnpaired() {
+	a.publicationAuthorityMu.Lock()
+	defer a.publicationAuthorityMu.Unlock()
 	_ = a.core.Mutate(func(st *phonecore.State) { st.Disowned = true })
 }
 

@@ -142,6 +142,92 @@ func TestPendingPublications_ExactPrepareAndSealAreIdempotentButConflictFails(t 
 	}
 }
 
+func TestPendingPublications_PrepareCannotBypassTheTransitionAPI(t *testing.T) {
+	for _, phase := range []PublicationPhase{
+		PublicationSealed,
+		PublicationAdmitted,
+		PublicationTerminal,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			c := publicationCore(t)
+			p := testComposerPublication("op-phase-" + string(phase))
+			p.Phase = phase
+			switch phase {
+			case PublicationSealed, PublicationAdmitted:
+				p.Sequence = 17
+				p.Envelope = []byte("caller-supplied-envelope")
+			case PublicationTerminal:
+				p.TerminalCode = PublicationAuthorityChanged
+			}
+			if err := c.PreparePublication(p); !errors.Is(err, ErrPublicationState) {
+				t.Fatalf("PreparePublication(%q) = %v, want ErrPublicationState", phase, err)
+			}
+			if got := c.PendingPublications(); len(got) != 0 {
+				t.Fatalf("phase bypass entered durable state: %+v", got)
+			}
+		})
+	}
+}
+
+func TestPendingPublications_PrepareRejectsTransitionOwnedFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*PendingPublication)
+	}{
+		{"sequence", func(p *PendingPublication) { p.Sequence = 1 }},
+		{"envelope", func(p *PendingPublication) { p.Envelope = []byte("caller-supplied") }},
+		{"terminal_code", func(p *PendingPublication) { p.TerminalCode = "caller-supplied" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := publicationCore(t)
+			p := testComposerPublication("op-" + tc.name)
+			tc.mutate(&p)
+			if err := c.PreparePublication(p); !errors.Is(err, ErrPublicationState) {
+				t.Fatalf("PreparePublication = %v, want ErrPublicationState", err)
+			}
+		})
+	}
+}
+
+func TestPendingPublications_StateRejectsDuplicateEpochSequence(t *testing.T) {
+	c := publicationCore(t)
+	first := testComposerPublication("op-sequence-first")
+	second := testComposerPublication("op-sequence-second")
+	for _, p := range []*PendingPublication{&first, &second} {
+		p.Phase = PublicationSealed
+		p.Sequence = 23
+		p.Envelope = []byte("different-envelope-" + p.OperationID)
+	}
+	st := c.State()
+	st.PendingPublications = []PendingPublication{first, second}
+	if err := c.Save(st); !errors.Is(err, ErrPublicationConflict) {
+		t.Fatalf("Save duplicate epoch/sequence = %v, want ErrPublicationConflict", err)
+	}
+}
+
+func TestPendingPublications_SealRejectsAnotherRecordsEpochSequence(t *testing.T) {
+	c := publicationCore(t)
+	first := testComposerPublication("op-seal-first")
+	second := testComposerPublication("op-seal-second")
+	if err := c.PreparePublication(first); err != nil {
+		t.Fatalf("prepare first: %v", err)
+	}
+	if err := c.PreparePublication(second); err != nil {
+		t.Fatalf("prepare second: %v", err)
+	}
+	if err := c.SealPublication(first.OperationID, 29, []byte("first")); err != nil {
+		t.Fatalf("seal first: %v", err)
+	}
+	if err := c.SealPublication(second.OperationID, 29, []byte("second")); !errors.Is(err, ErrPublicationConflict) {
+		t.Fatalf("seal colliding epoch/sequence = %v, want ErrPublicationConflict", err)
+	}
+	got := c.PendingPublications()
+	if got[1].Phase != PublicationPrepared || got[1].Sequence != 0 || len(got[1].Envelope) != 0 {
+		t.Fatalf("failed collision mutated second record: %+v", got[1])
+	}
+}
+
 func TestPendingPublications_LogicalIDAndRoutingAuthorityAreUniqueFences(t *testing.T) {
 	c := publicationCore(t)
 	first := testComposerPublication("op-first")

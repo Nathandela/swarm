@@ -42,6 +42,13 @@ type scriptedAppender struct {
 	calls    [][]byte
 	called   chan struct{}
 	onAppend func()
+	before   func()
+}
+
+func (s *scriptedAppender) beforeMailboxAppend() {
+	if s.before != nil {
+		s.before()
+	}
 }
 
 func (s *scriptedAppender) MailboxAppend(_ context.Context, _ string, envelope []byte) (uint64, error) {
@@ -352,6 +359,81 @@ func TestPublicationPump_WrongDerivedTargetNeverLeavesThePhone(t *testing.T) {
 	if calls := appender.envelopes(); len(calls) != 0 {
 		t.Fatalf("wrong-target publication left the phone: %d appends", len(calls))
 	}
+}
+
+func testPublicationAuthorityMutationBeforeAppend(
+	t *testing.T,
+	mutate func(*App) error,
+	assertMutated func(*testing.T, phonecore.State),
+) {
+	t.Helper()
+	a, sc := publicationApp(t, t.TempDir())
+	if err := a.core.PreparePublication(preparedComposer(t, a, sc, "op-authority-race", "never leak")); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	parked := make(chan struct{})
+	release := make(chan struct{})
+	appender := &scriptedAppender{before: func() {
+		close(parked)
+		<-release
+	}}
+	sc.cl = appender
+	flushed := make(chan error, 1)
+	go func() { flushed <- flushForTest(a, sc) }()
+	select {
+	case <-parked:
+	case <-time.After(time.Second):
+		t.Fatal("publisher did not reach the pre-append authority boundary")
+	}
+
+	// The authority mutation must be able to complete while publication is parked before its
+	// final fence. Once it returns, releasing the publisher may not enter MailboxAppend.
+	if err := mutate(a); err != nil {
+		t.Fatalf("authority mutation: %v", err)
+	}
+	assertMutated(t, a.core.State())
+	close(release)
+	select {
+	case err := <-flushed:
+		if !errors.Is(err, errPublicationIdentityChanged) {
+			t.Fatalf("flush after authority mutation = %v, want identity refusal", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publisher did not leave the authority fence")
+	}
+	if calls := appender.envelopes(); len(calls) != 0 {
+		t.Fatalf("superseded authority appended %d old envelopes", len(calls))
+	}
+}
+
+func TestPublicationPump_PairingReplacementFencesAParkedOldEnvelope(t *testing.T) {
+	testPublicationAuthorityMutationBeforeAppend(t,
+		func(a *App) error { return a.pin(pairedOutcome("m1", 8)) },
+		func(t *testing.T, st phonecore.State) {
+			if st.EpochID != 8 {
+				t.Fatalf("pairing replacement did not land: epoch = %d", st.EpochID)
+			}
+		})
+}
+
+func TestPublicationPump_PurgeFencesAParkedOldEnvelope(t *testing.T) {
+	testPublicationAuthorityMutationBeforeAppend(t,
+		func(a *App) error { return a.PurgeKeys() },
+		func(t *testing.T, st phonecore.State) {
+			if !st.Disowned || len(st.PendingPublications) != 0 {
+				t.Fatalf("purge did not land: disowned=%v pending=%d", st.Disowned, len(st.PendingPublications))
+			}
+		})
+}
+
+func TestPublicationPump_TerminalUnpairFencesAParkedOldEnvelope(t *testing.T) {
+	testPublicationAuthorityMutationBeforeAppend(t,
+		func(a *App) error { a.recordUnpaired(); return nil },
+		func(t *testing.T, st phonecore.State) {
+			if !st.Disowned {
+				t.Fatal("terminal unpair did not land")
+			}
+		})
 }
 
 func TestPublicationPump_PersistentFailureBacksOffAndCancellationIsPrompt(t *testing.T) {

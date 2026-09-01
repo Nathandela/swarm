@@ -995,6 +995,10 @@ func (a *App) differentMachine(out *pairing.DeviceOutcome) bool {
 // grant's coordinates. The re-appended bootstrap frame is then refused as a replay forever.
 // phonecore.Core.Mutate carries the whole account.
 func (a *App) pin(out *pairing.DeviceOutcome) error {
+	// Pairing replaces the exact routing authority. Serialize its durable commit against the
+	// publisher's final identity check + append, then release before the App.mu-backed live
+	// destination/UI updates below (documented lock order lives beside the lock in app.go).
+	a.publicationAuthorityMu.Lock()
 	var newEpoch bool
 	err := a.core.Mutate(func(st *phonecore.State) {
 		st.MachineStatic = out.MachineStatic
@@ -1097,6 +1101,7 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 		}
 		st.EpochID = out.Machine.EpochID
 	})
+	a.publicationAuthorityMu.Unlock()
 	// THE ERROR IS RETURNED, not swallowed (ADR-007 B60). This used to be a bare `return`
 	// on a void function, so finish() published `paired` without being able to know whether
 	// anything had been written -- a refused Keystore unwrap, a full disk or a read-only data

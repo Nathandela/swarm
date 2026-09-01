@@ -169,6 +169,11 @@ func validatePendingPublications(publications []PendingPublication) error {
 	}
 	seenOperations := make(map[string]struct{}, len(publications))
 	seenLogical := make(map[string]struct{}, len(publications))
+	type sequenceCoordinate struct {
+		epoch    uint32
+		sequence uint64
+	}
+	seenSequences := make(map[sequenceCoordinate]string, len(publications))
 	for _, p := range publications {
 		if err := validatePendingPublication(p); err != nil {
 			return fmt.Errorf("%w: operation %q: %v", ErrPublicationState, p.OperationID, err)
@@ -181,6 +186,14 @@ func validatePendingPublications(publications []PendingPublication) error {
 		}
 		seenOperations[p.OperationID] = struct{}{}
 		seenLogical[p.LogicalID] = struct{}{}
+		if p.Sequence != 0 {
+			coordinate := sequenceCoordinate{epoch: p.EpochID, sequence: p.Sequence}
+			if operation, ok := seenSequences[coordinate]; ok {
+				return fmt.Errorf("%w: operations %q and %q share epoch %d sequence %d",
+					ErrPublicationConflict, operation, p.OperationID, p.EpochID, p.Sequence)
+			}
+			seenSequences[coordinate] = p.OperationID
+		}
 	}
 	return nil
 }
@@ -222,9 +235,14 @@ func publicationsForIdentity(publications []PendingPublication, machine string, 
 // PreparePublication durably appends one unsequenced publication. Exact repetition is
 // idempotent; the same operation id carrying different content is refused.
 func (c *Core) PreparePublication(p PendingPublication) error {
-	if p.Phase == "" {
-		p.Phase = PublicationPrepared
+	// Prepared is the only caller-authored state. Sequences, exact envelopes, admission and
+	// terminal verdicts belong to the transition methods below; accepting them here would let a
+	// caller bypass both uniqueness checks and the durable crash boundaries those methods own.
+	if (p.Phase != "" && p.Phase != PublicationPrepared) || p.Sequence != 0 ||
+		len(p.Envelope) != 0 || p.TerminalCode != "" {
+		return ErrPublicationState
 	}
+	p.Phase = PublicationPrepared
 	if err := validatePendingPublication(p); err != nil {
 		return err
 	}
@@ -276,6 +294,12 @@ func (c *Core) SealPublication(operationID string, sequence uint64, envelope []b
 		}
 		if p.Phase != PublicationPrepared {
 			return ErrPublicationState
+		}
+		for j := range st.PendingPublications {
+			other := &st.PendingPublications[j]
+			if other.OperationID != operationID && other.EpochID == p.EpochID && other.Sequence == sequence {
+				return ErrPublicationConflict
+			}
 		}
 		p.Phase, p.Sequence, p.Envelope = PublicationSealed, sequence, slices.Clone(envelope)
 		return c.persistLocked(st)

@@ -19,6 +19,12 @@ type mailboxAppender interface {
 	MailboxAppend(context.Context, string, []byte) (uint64, error)
 }
 
+// mailboxAppendObserver is a package-private deterministic test seam for parking a publisher
+// after sealing but before the final authority fence. No production relay client implements it.
+type mailboxAppendObserver interface {
+	beforeMailboxAppend()
+}
+
 var (
 	errPublicationIdentityChanged = classed(ErrClassNotPaired, errors.New("swarmmobile: pending publication belongs to another registration"))
 	errPublicationNoConnection    = classed(ErrClassOffline, errors.New("swarmmobile: no relay connection for pending publication"))
@@ -160,8 +166,27 @@ func (a *App) flushPendingPublicationsLocked(ctx context.Context, sc sendCtx) er
 			return classed(ErrClassInternal, fmt.Errorf("%w: operation %s has phase %q",
 				phonecore.ErrPublicationState, pending.OperationID, pending.Phase))
 		}
-		if _, err := sc.cl.MailboxAppend(ctx, pending.Target, pending.Envelope); err != nil {
-			return err
+		if observer, ok := sc.cl.(mailboxAppendObserver); ok {
+			observer.beforeMailboxAppend()
+		}
+		// Pairing, purge and terminal unpair can all revoke the state observed above while
+		// sealing is in progress. Re-read the exact durable authority under their shared fence
+		// and keep that fence through the append boundary; a generation-only check would still
+		// permit an old envelope after same-process replacement.
+		a.publicationAuthorityMu.Lock()
+		st = core.State()
+		if len(st.MachineRelayAuthPub) != ed25519.PublicKeySize ||
+			pending.Target != relay.RoutingID(ed25519.PublicKey(st.MachineRelayAuthPub)) ||
+			!bytes.Equal(pending.AuthorityPub, st.MachineRelayAuthPub) ||
+			pending.Machine != st.Machine || pending.EpochID != st.EpochID ||
+			pending.EpochID != sc.epoch || pending.Target != sc.target || st.Disowned {
+			a.publicationAuthorityMu.Unlock()
+			return errPublicationIdentityChanged
+		}
+		_, appendErr := sc.cl.MailboxAppend(ctx, pending.Target, pending.Envelope)
+		a.publicationAuthorityMu.Unlock()
+		if appendErr != nil {
+			return appendErr
 		}
 		if err := core.MarkPublicationAdmitted(pending.OperationID); err != nil {
 			return err
