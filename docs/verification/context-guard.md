@@ -73,3 +73,30 @@ feature-owned surface is green under the race detector.
 ## Deliberately unproven / unavailable
 
 No automatic compaction is published yet. Two Codex gates still require real-provider evidence: a concurrent turn must not be cancelled/replaced by compaction, and a concurrent native/manual compaction must not combine with Swarm into two compactions. Until both pass, enabling the setting observes/latches pressure but emits no provider request. Claude, OpenCode, AGY, and Hermes remain unavailable pending their own exact telemetry, action, completion, and concurrency contracts.
+
+## 2026-09-01 live gate results: BOTH GATES FAIL on codex 0.151.0
+
+Method: a throwaway swarm codex session (thread `01a05ce6-7524-7642-9833-beae667c99a7`,
+app-server `codex-cli 0.151.0`), a second WebSocket client on its per-session socket
+(the `internal/appserver` dial + recorded initialize/initialized handshake), and raw
+`thread/compact/start {threadId}` requests observed against the notification stream
+and the TUI screen.
+
+- **Gate 1 (concurrent turn) FAILS.** With a turn ACTIVE (a running 45-second exec
+  tool call), `thread/compact/start` was accepted immediately (`{}` in 1ms — no
+  refusal, no queueing) and CANCELLED the turn: the TUI printed "Conversation
+  interrupted", the sandboxed command was killed mid-run and never completed, then
+  "Context compacted". The provider offers no turn-vs-compaction serialization.
+- **Gate 2 (double compaction) FAILS.** Two concurrent `thread/compact/start` at
+  idle were BOTH accepted (`{}`, `{}`; the second returned no error) and the second
+  INTERRUPTED THE FIRST MID-COMPACTION: the screen reads "Context compacted" /
+  "Conversation interrupted" / "Context compacted", and `thread/status/changed`
+  shows two back-to-back active/idle compaction cycles. There is no provider-side
+  dedup, refusal, or serialization of compaction against compaction.
+
+Consequence: D7's caution is not conservatism but fact. Any automatic dispatch must
+rely ENTIRELY on Swarm-side enforced serialization (D5/D6), and even a perfect lane
+retains a check-to-write residue in which a just-started turn — or a just-started
+manual `/compact` — is destroyed, precisely in the near-full-context sessions where
+the guard fires. Production dispatch stays disabled; these results are the recorded
+evidence the gates demanded, and they came back negative.
