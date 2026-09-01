@@ -116,6 +116,14 @@ var (
 	// exits below. Refusing here costs a pairing that has released nothing; the alternative
 	// costs an address the phone can no longer sever.
 	ErrNoPushRevoke = errors.New("pairing: DeviceParams.PushBinding is set without RevokePushBinding; a binding released in msg4 must be revocable on every non-accept outcome (PG-ALLOC-3)")
+	// ErrPushNotNegotiated refuses a binding unless both peers opted into the
+	// extension. It prevents a forged QR capability bit from making a new phone send
+	// the framed msg4 to an old machine that can only interpret the legacy consent.
+	ErrPushNotNegotiated = errors.New("pairing: push binding was not negotiated by both peers")
+	// ErrNoPushVerifier refuses a binding on a machine that advertised support but
+	// has no provider-acceptance verifier wired. A successful pairing must never be
+	// the first place an unusable gateway binding is discovered.
+	ErrNoPushVerifier = errors.New("pairing: push binding received without a machine verifier")
 )
 
 // RendezvousTransport is the pairing package's seam onto the relay rendezvous
@@ -268,7 +276,11 @@ type MachinePayload struct {
 	// checks a republished profile still names the SAME destination before trusting
 	// it. Empty on a legacy payload, exactly like RelayTLSPolicy.
 	RelayHost string
-	EpochID   uint32
+	// PushBindingSupport is an authenticated acknowledgement of the capability a
+	// new phone requested in msg1. It is encoded only for a requesting new phone;
+	// an old phone sends an empty msg1 and receives the byte-identical legacy msg2.
+	PushBindingSupport bool
+	EpochID            uint32
 }
 
 // DevicePayload is the device's authenticated msg3 handshake payload (R-PAIR.3;
@@ -343,6 +355,14 @@ type MachineParams struct {
 	LocalConsole bool                // R-PAIR.9 / D.0-A12: false => headless => refuse
 	Confirm      ConfirmFunc         // R-PAIR.5 mandatory desktop confirm gate
 	Limiter      RateLimiter         // R-PAIR.8 gateway-side rate limit (nil => unlimited)
+	// PushBindingSupport allows the optional msg1/msg2 negotiation. It does not by
+	// itself change any frame sent to an old phone: the msg2 acknowledgement is emitted
+	// only after that phone explicitly requested it in msg1.
+	PushBindingSupport bool
+	// VerifyPushBinding submits the authenticated WakeV1 test wake and returns nil only
+	// for the gateway's provider_accepted outcome. It runs after msg4 is authenticated
+	// and before the acceptance is sent.
+	VerifyPushBinding func(context.Context, *PushBinding) error
 }
 
 // DeviceParams configures one device-side (Noise XXpsk0 initiator) pairing.
@@ -357,6 +377,14 @@ type DeviceParams struct {
 	VerifyMachine    DeviceVerifyFunc    // optional; checks the authenticated msg2 payload (ADR-007 B48)
 	Consent          DeviceConsentFunc   // MANDATORY (ADR-007 B38); signs the route consent carried in msg4
 	Commit           DeviceCommitFunc    // the durable commit the acknowledgement attests (PB-PAIR-4; nil => this device holds nothing durable)
+	// RequestPushBinding is set only from QRFlagPushBinding. It puts a public
+	// capability marker in msg1 and requires the machine's authenticated msg2
+	// acknowledgement before PreparePushBinding can run.
+	RequestPushBinding bool
+	// PreparePushBinding allocates and durably stages a fresh address/key immediately
+	// before msg4. It returns the rollback arm paired with that exact allocation.
+	// Nil, or a nil binding, keeps the ceremony on the legacy/foreground path.
+	PreparePushBinding func(context.Context) (*PushBinding, func(), error)
 	// PushBinding is the push-wake record this device conveys in msg4, beside the consent
 	// (ADR-015 P7). Nil means none: a pre-R3 build, or a phone whose gateway registration
 	// was refused and is honestly foreground-only -- the machine then sees the P12
@@ -519,12 +547,19 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	if err != nil {
 		return nil, fmt.Errorf("pairing: recv msg1: %w", err)
 	}
-	if _, err := sess.ReadMessage(msg1); err != nil {
+	hello, err := sess.ReadMessage(msg1)
+	if err != nil {
 		return nil, fmt.Errorf("pairing: read msg1: %w", err)
+	}
+	pushRequested, err := decodePairingHello(hello)
+	if err != nil {
+		return nil, err
 	}
 	// msg2 (e, ee, s, es + machine payload): machine -> device. Carries the
 	// machine's Noise static plus its routing payload, incl. the A14 RecipientPub.
-	msg2, err := sess.WriteMessage(encodeMachinePayload(p.Payload))
+	machinePayload := p.Payload
+	machinePayload.PushBindingSupport = pushRequested && p.PushBindingSupport
+	msg2, err := sess.WriteMessage(encodeMachinePayload(machinePayload))
 	if err != nil {
 		return nil, fmt.Errorf("pairing: write msg2: %w", err)
 	}
@@ -654,6 +689,20 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 		return nil, ErrNoConsent
 	}
 	devPayload.ConsentSig = consent
+	if pushBinding != nil {
+		if !machinePayload.PushBindingSupport {
+			declineAndBurn(ctx, sess, rt, label)
+			return nil, ErrPushNotNegotiated
+		}
+		if p.VerifyPushBinding == nil {
+			declineAndBurn(ctx, sess, rt, label)
+			return nil, ErrNoPushVerifier
+		}
+		if err := p.VerifyPushBinding(ctx, pushBinding); err != nil {
+			declineAndBurn(ctx, sess, rt, label)
+			return nil, fmt.Errorf("pairing: verify push binding: %w", err)
+		}
+	}
 
 	// Affirmative confirm (R-PAIR.7): send the acceptance over the authenticated channel.
 	// Up to this instant a dead ctx must fail the pairing CLOSED, and it does so
@@ -981,7 +1030,11 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	}
 
 	// msg1 (e): device -> machine.
-	msg1, err := sess.WriteMessage(nil)
+	var hello []byte
+	if p.RequestPushBinding {
+		hello = []byte(pairingHelloPushBindingV1)
+	}
+	msg1, err := sess.WriteMessage(hello)
 	if err != nil {
 		return nil, fmt.Errorf("pairing: write msg1: %w", err)
 	}
@@ -1076,6 +1129,23 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 		}
 		return nil, ErrNoConsent
 	}
+	binding, revoke := p.PushBinding, p.RevokePushBinding
+	if p.PreparePushBinding != nil && p.RequestPushBinding && machPayload.PushBindingSupport {
+		binding, revoke, cErr = p.PreparePushBinding(ctx)
+		if cErr != nil {
+			abortConsent(ctx, sess, rt)
+			return nil, fmt.Errorf("pairing: prepare push binding: %w", cErr)
+		}
+	}
+	if binding != nil && !(p.RequestPushBinding && machPayload.PushBindingSupport) {
+		abortConsent(ctx, sess, rt)
+		return nil, ErrPushNotNegotiated
+	}
+	if binding != nil && revoke == nil {
+		abortConsent(ctx, sess, rt)
+		return nil, ErrNoPushRevoke
+	}
+
 	// A failed send is REMEMBERED, not returned: the machine may have declined and burned
 	// the rendezvous while the operator was still comparing, in which case its decision is
 	// already waiting below and ErrPairingDeclined is the honest cause, not a transport
@@ -1087,7 +1157,7 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	// ALSO THE RELEASE POINT: from here on the machine holds the wake key and both gateway
 	// capabilities whatever it decides, so every non-accept exit below owes the revoke on
 	// DeviceParams.RevokePushBinding (the NON-ACCEPT OBLIGATION).
-	sendErr := sendConsent(ctx, sess, rt, encodeConsentFrame(consent, p.PushBinding))
+	sendErr := sendConsent(ctx, sess, rt, encodeConsentFrame(consent, binding))
 
 	// EVERYTHING PAST THE RELEASE IS ONE CALL WITH ONE ERROR EXIT, and that shape is the
 	// obligation rather than a tidiness: the tail has five separate non-accept returns
@@ -1095,8 +1165,8 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	// chances to add a sixth return and forget. Here it cannot be forgotten -- if the tail
 	// failed and this device released a binding, the binding is revoked.
 	out, err := p.finishAfterConsent(ctx, sess, rt, sendErr, sas, machineStatic, machPayload)
-	if err != nil && p.PushBinding != nil {
-		p.RevokePushBinding()
+	if err != nil && binding != nil {
+		revoke()
 	}
 	return out, err
 }
@@ -1311,6 +1381,23 @@ func readField(b []byte) (field, rest []byte, ok bool) {
 	return append([]byte(nil), b[:n]...), b[n:], true
 }
 
+// pairingHelloPushBindingV1 is the public capability request carried in Noise msg1.
+// It is deliberately not secret: an old machine ignores msg1 payload bytes, while a
+// new machine uses the exact marker to decide whether it may append the compatible
+// msg2 acknowledgement. Unknown non-empty payloads fail closed instead of being treated
+// as an opt-in to an extension they may mean something else to.
+const pairingHelloPushBindingV1 = "swarm-pair-push-binding-v1"
+
+func decodePairingHello(raw []byte) (bool, error) {
+	if len(raw) == 0 {
+		return false, nil
+	}
+	if string(raw) == pairingHelloPushBindingV1 {
+		return true, nil
+	}
+	return false, fmt.Errorf("pairing: unsupported msg1 capability payload")
+}
+
 // encodeMachinePayload serialises the msg2 machine payload (R-PAIR.3 + A14 +
 // enrollment keystone + S19's endpoint id + B34's relay SPKI pin + ADR-016 W1's TLS
 // policy/host): the nine length-prefixed byte fields followed by the 4-byte big-endian
@@ -1327,6 +1414,9 @@ func encodeMachinePayload(p MachinePayload) []byte {
 	b = appendField(b, p.RelaySPKIPin)
 	b = appendField(b, []byte(p.RelayTLSPolicy))
 	b = appendField(b, []byte(p.RelayHost))
+	if p.PushBindingSupport {
+		b = appendField(b, []byte{1})
+	}
 	b = binary.BigEndian.AppendUint32(b, p.EpochID)
 	return b
 }
@@ -1377,6 +1467,16 @@ func decodeMachinePayload(b []byte) (MachinePayload, error) {
 			return MachinePayload{}, errMalformedPayload
 		}
 		p.RelayHost = string(relayHost)
+		// The acknowledgement is appended only for a new phone that requested it in
+		// msg1. Therefore an old phone never receives this third additive field, while
+		// this decoder accepts both the current two-field tail and the negotiated one.
+		if len(b) != 4 {
+			var pushSupport []byte
+			if pushSupport, b, ok = readField(b); !ok || len(pushSupport) != 1 || pushSupport[0] != 1 {
+				return MachinePayload{}, errMalformedPayload
+			}
+			p.PushBindingSupport = true
+		}
 	}
 	if len(b) != 4 {
 		return MachinePayload{}, errMalformedPayload
