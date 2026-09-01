@@ -172,3 +172,88 @@ func TestPairingPushOwnership_V19MigratesWithNoInventedOwnership(t *testing.T) {
 		t.Fatalf("v19 migration invented pairing push ownership: (%v,%v)", ok, err)
 	}
 }
+
+func TestCommitStagedPushBinding_PostRenameSyncFailureKeepsCommittedStateAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	core := stageCore(t, dir, wake, content)
+	addr := PushAddress{0x51}
+	if err := core.StagePushBinding(addr, crypto.WakeKey{0x52}); err != nil {
+		t.Fatal(err)
+	}
+	previousSync := syncPhonecoreDir
+	syncPhonecoreDir = func(string) error { return errors.New("injected post-rename dir sync") }
+	defer func() { syncPhonecoreDir = previousSync }()
+	if err := core.CommitStagedPushBinding(addr); err == nil || !atomicWriteCommitted(err) {
+		t.Fatalf("commit error = %v, want committed post-rename failure", err)
+	}
+	if core.StagedPushBindingPending(addr) {
+		t.Fatal("memory rolled back a push-store commit already renamed onto disk")
+	}
+	syncPhonecoreDir = previousSync
+	restarted := stageCore(t, dir, wake, content)
+	if restarted.StagedPushBindingPending(addr) {
+		t.Fatal("restart resurrected the committed pending-revoke marker")
+	}
+}
+
+func TestAbandonStagedPushBinding_PostRenameSyncFailureKeepsErasureAndObligation(t *testing.T) {
+	dir := t.TempDir()
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	core := stageCore(t, dir, wake, content)
+	addr := PushAddress{0x61}
+	if err := core.StagePushBinding(addr, crypto.WakeKey{0x62}); err != nil {
+		t.Fatal(err)
+	}
+	previousSync := syncPhonecoreDir
+	syncPhonecoreDir = func(string) error { return errors.New("injected post-rename dir sync") }
+	defer func() { syncPhonecoreDir = previousSync }()
+	if err := core.AbandonStagedPushBinding(addr); err == nil || !atomicWriteCommitted(err) {
+		t.Fatalf("abandon error = %v, want committed post-rename failure", err)
+	}
+	if b := core.push.binding(EncodePushAddress(addr)); b == nil || len(b.WakeKey) != 0 || !core.StagedPushBindingPending(addr) {
+		t.Fatalf("memory rolled back committed abandonment: %+v", b)
+	}
+	syncPhonecoreDir = previousSync
+	restarted := stageCore(t, dir, wake, content)
+	if b := restarted.push.binding(EncodePushAddress(addr)); b == nil || len(b.WakeKey) != 0 || !restarted.StagedPushBindingPending(addr) {
+		t.Fatalf("restart lost committed abandonment: %+v", b)
+	}
+}
+
+func TestCompleteOwnedStagedPushBinding_PostRenameMarkerSyncFailureCannotResurrectPhase(t *testing.T) {
+	dir := t.TempDir()
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	core := stageCore(t, dir, wake, content)
+	addr := PushAddress{0x71}
+	if err := core.StagePushBinding(addr, crypto.WakeKey{0x72}); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.MutateAndOwnStagedPushBinding(addr, func(st *State) { st.Machine = "ep-owned" }); err != nil {
+		t.Fatal(err)
+	}
+	previousSync := syncPhonecoreDir
+	calls := 0
+	syncPhonecoreDir = func(string) error {
+		calls++
+		if calls == 2 {
+			return errors.New("injected ownership-clear dir sync")
+		}
+		return nil
+	}
+	defer func() { syncPhonecoreDir = previousSync }()
+	if err := core.CompleteOwnedStagedPushBinding(addr); err == nil || !atomicWriteCommitted(err) {
+		t.Fatalf("complete error = %v, want committed marker-clear failure", err)
+	}
+	if _, found, err := core.PairingPushOwnership(); err != nil || found {
+		t.Fatalf("memory resurrected renamed ownership clear: (%v,%v)", found, err)
+	}
+	syncPhonecoreDir = previousSync
+	restarted := stageCore(t, dir, wake, content)
+	if _, found, err := restarted.PairingPushOwnership(); err != nil || found {
+		t.Fatalf("restart resurrected ownership phase: (%v,%v)", found, err)
+	}
+	if restarted.StagedPushBindingPending(addr) {
+		t.Fatal("restart resurrected push-store compensation after completed ownership")
+	}
+}

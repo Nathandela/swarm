@@ -397,8 +397,10 @@ func (c *Core) StagePushBinding(addr PushAddress, key crypto.WakeKey) error {
 		c.push.data.PendingPairingRevokes = append(c.push.data.PendingPairingRevokes, enc)
 	}
 	if err := c.push.persist(); err != nil {
-		c.push.data.Bindings = bindingsBefore
-		c.push.data.PendingPairingRevokes = pendingBefore
+		if !atomicWriteCommitted(err) {
+			c.push.data.Bindings = bindingsBefore
+			c.push.data.PendingPairingRevokes = pendingBefore
+		}
 		return err
 	}
 	return nil
@@ -431,8 +433,10 @@ func (c *Core) AbandonStagedPushBinding(addr PushAddress) error {
 		c.push.data.PendingPairingRevokes = append(c.push.data.PendingPairingRevokes, enc)
 	}
 	if err := c.push.persist(); err != nil {
-		c.push.data.Bindings = bindingsBefore
-		c.push.data.PendingPairingRevokes = pendingBefore
+		if !atomicWriteCommitted(err) {
+			c.push.data.Bindings = bindingsBefore
+			c.push.data.PendingPairingRevokes = pendingBefore
+		}
 		return err
 	}
 	return nil
@@ -452,7 +456,9 @@ func (c *Core) CompleteStagedPushRevoke(addr PushAddress) error {
 		b.WakeKey = nil
 	}
 	if err := c.removePendingPairingRevokeLocked(enc); err != nil {
-		c.push.data.Bindings = bindingsBefore
+		if !atomicWriteCommitted(err) {
+			c.push.data.Bindings = bindingsBefore
+		}
 		return err
 	}
 	return nil
@@ -495,7 +501,9 @@ func (c *Core) removePendingPairingRevokeLocked(enc string) error {
 	}
 	c.push.data.PendingPairingRevokes = kept
 	if err := c.push.persist(); err != nil {
-		c.push.data.PendingPairingRevokes = pendingBefore
+		if !atomicWriteCommitted(err) {
+			c.push.data.PendingPairingRevokes = pendingBefore
+		}
 		return err
 	}
 	return nil
@@ -791,7 +799,9 @@ func (c *Core) AcceptWakeV1(raw []byte) error {
 	prev := b.HighWater
 	b.HighWater = seq
 	if err := c.push.persist(); err != nil {
-		b.HighWater = prev
+		if !atomicWriteCommitted(err) {
+			b.HighWater = prev
+		}
 		return err
 	}
 	return nil

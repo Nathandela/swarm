@@ -93,7 +93,9 @@ func (c *Core) PreparePlatformInstallationSigner(public []byte) error {
 	legacy := append([]byte(nil), c.push.data.InstallationKey...)
 	c.push.data.InstallationKey = nil
 	if err := c.persistPlatformInstallationPublicKeyLocked(public); err != nil {
-		c.push.data.InstallationKey = legacy
+		if !atomicWriteCommitted(err) {
+			c.push.data.InstallationKey = legacy
+		}
 		return fmt.Errorf("phonecore: replace unregistered legacy installation key: %w", err)
 	}
 	return nil
@@ -103,7 +105,9 @@ func (c *Core) persistPlatformInstallationPublicKeyLocked(public []byte) error {
 	previous := append([]byte(nil), c.push.data.InstallationPublicKey...)
 	c.push.data.InstallationPublicKey = append([]byte(nil), public...)
 	if err := c.push.persist(); err != nil {
-		c.push.data.InstallationPublicKey = previous
+		if !atomicWriteCommitted(err) {
+			c.push.data.InstallationPublicKey = previous
+		}
 		return err
 	}
 	return nil

@@ -961,11 +961,14 @@ func (s *fileStore) saveLocked(st State) error {
 			wakeKey: wake.blob, contentKey: content.blob,
 			wakeState: wakeState.blob, kept: kept.blob, purgeable: purgeable.blob,
 		}
-		if err := persistState(s.path, merged, seals); err != nil {
-			return err
+		persistErr := persistState(s.path, merged, seals)
+		if persistErr != nil && !atomicWriteCommitted(persistErr) {
+			return persistErr
 		}
 		s.wakeTier, s.contentTier = wake, content
 		s.wakeState, s.kept, s.purgeable = wakeState, kept, purgeable
+		s.st = merged
+		return persistErr
 	}
 	s.st = merged
 	return nil
@@ -1187,7 +1190,9 @@ func (s *fileStore) RewindRelayCursor() error {
 	s.st.RelayIncarnation = ""
 	s.st.relayGen++
 	if err := s.saveLocked(s.st.clone()); err != nil {
-		s.st = previous
+		if !atomicWriteCommitted(err) {
+			s.st = previous
+		}
 		return err
 	}
 	return nil
@@ -1199,7 +1204,9 @@ func (s *fileStore) SetRelayIncarnation(incarnation string) error {
 	previous := s.st.clone()
 	s.st.RelayIncarnation = incarnation
 	if err := s.saveLocked(s.st.clone()); err != nil {
-		s.st = previous
+		if !atomicWriteCommitted(err) {
+			s.st = previous
+		}
 		return err
 	}
 	return nil
@@ -1793,6 +1800,29 @@ func persistState(path string, st State, seals stateSeals) error {
 // phonecore cannot import (PB-BIND-0 binds this package's dependency closure). Without the
 // dir fsync a power loss could resurrect an OLDER blob, and a lower high-water re-opens
 // frames the relay retained -- precisely the replay this state exists to refuse.
+type atomicWriteError struct {
+	err       error
+	committed bool
+}
+
+func (e *atomicWriteError) Error() string { return e.err.Error() }
+func (e *atomicWriteError) Unwrap() error { return e.err }
+
+func atomicWriteCommitted(err error) bool {
+	var writeErr *atomicWriteError
+	return errors.As(err, &writeErr) && writeErr.committed
+}
+
+// syncPhonecoreDir is injected by durability tests at the exact post-rename boundary.
+var syncPhonecoreDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
+}
+
 func writeFileAtomic(path, tmpPattern string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -1822,10 +1852,8 @@ func writeFileAtomic(path, tmpPattern string, data []byte) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
+	if err := syncPhonecoreDir(dir); err != nil {
+		return &atomicWriteError{err: err, committed: true}
 	}
-	defer func() { _ = d.Close() }()
-	return d.Sync()
+	return nil
 }

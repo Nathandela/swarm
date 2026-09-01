@@ -511,11 +511,12 @@ func (c *Core) persistLocked(st State) error {
 	if st.Machine != c.st.Machine || st.EpochID != c.st.EpochID || st.Disowned {
 		st.lastProfile = nil
 	}
-	if err := c.store.Save(st.clone()); err != nil {
+	err := c.store.Save(st.clone())
+	if err != nil && !atomicWriteCommitted(err) {
 		return err
 	}
 	c.st = loadCoreState(c.store)
-	return nil
+	return err
 }
 
 // loadCoreState is the Core-side trust fence on every Store adoption. Store.PurgeKeys must
