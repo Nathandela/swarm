@@ -71,7 +71,8 @@ var (
 )
 
 type store struct {
-	db *bolt.DB
+	db        *bolt.DB
+	admission *storeAdmissionState
 }
 
 func openStore(path string) (*store, error) {
@@ -103,7 +104,15 @@ func openStore(path string) (*store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &store{db: db}, nil
+	s := &store{db: db, admission: newStoreAdmissionState(path)}
+	if err := db.View(func(tx *bolt.Tx) error {
+		s.admission.durableObjects = durableObjectCountTx(tx)
+		return nil
+	}); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 func mintMailboxIncarnation() (string, error) {
@@ -182,26 +191,39 @@ const (
 // it did not have, and it is a routing id rather than a key (R-REL.11).
 func (s *store) appendItem(rid, source string, env []byte, atMillis int64) (uint64, error) {
 	var cursor uint64
-	err := s.db.Update(func(tx *bolt.Tx) error {
+	err := s.update(true, func(tx *bolt.Tx) (storeMutation, error) {
+		var mutation storeMutation
 		seqB := tx.Bucket(bucketSeq)
 		next := uint64(1)
 		if v := seqB.Get([]byte(rid)); v != nil {
 			next = binary.BigEndian.Uint64(v)
+		} else {
+			mutation.durableDelta++
 		}
 		cursor = next
 		if err := seqB.Put([]byte(rid), u64(next+1)); err != nil {
-			return err
+			return storeMutation{}, err
 		}
-		mb, err := tx.Bucket(bucketItems).CreateBucketIfNotExists([]byte(rid))
+		items := tx.Bucket(bucketItems)
+		if items.Bucket([]byte(rid)) == nil {
+			mutation.durableDelta++
+		}
+		mb, err := items.CreateBucketIfNotExists([]byte(rid))
 		if err != nil {
-			return err
+			return storeMutation{}, err
 		}
 		rec := make([]byte, recordHead+len(env))
 		rec[0] = recordV1
 		binary.BigEndian.PutUint64(rec[1:9], uint64(atMillis))
 		copy(rec[9:recordHead], source)
 		copy(rec[recordHead:], env)
-		return mb.Put(u64(cursor), rec)
+		if mb.Get(u64(cursor)) == nil {
+			mutation.durableDelta++
+		}
+		if err := mb.Put(u64(cursor), rec); err != nil {
+			return storeMutation{}, err
+		}
+		return mutation, nil
 	})
 	return cursor, err
 }
@@ -304,9 +326,10 @@ func (s *store) readItemsPageForIncarnation(rid, expectedIncarnation string, aft
 // ackItemsForIncarnation compacts away every item whose storage cursor is at or below
 // throughCursor (the durable consumed watermark), provided it still names this mailbox log.
 func (s *store) ackItemsForIncarnation(rid, expectedIncarnation string, throughCursor uint64) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.update(false, func(tx *bolt.Tx) (storeMutation, error) {
+		var mutation storeMutation
 		if expectedIncarnation != "" && expectedIncarnation != mailboxIncarnation(tx) {
-			return ErrMailboxCursorResetRequired
+			return storeMutation{}, ErrMailboxCursorResetRequired
 		}
 		// A client can survive a store reset with a cursor from the old mailbox.
 		// Letting that stale cursor ack the replacement store would compact new,
@@ -323,20 +346,30 @@ func (s *store) ackItemsForIncarnation(rid, expectedIncarnation string, throughC
 			}
 		}
 		if throughCursor > highWater {
-			return ErrMailboxCursorResetRequired
+			return storeMutation{}, ErrMailboxCursorResetRequired
 		}
-		mb := tx.Bucket(bucketItems).Bucket([]byte(rid))
+		items := tx.Bucket(bucketItems)
+		mb := items.Bucket([]byte(rid))
 		if mb == nil {
-			return nil
+			return mutation, nil
 		}
 		c := mb.Cursor()
 		limit := u64(throughCursor)
 		for k, _ := c.First(); k != nil && bytes.Compare(k, limit) <= 0; k, _ = c.Next() {
 			if err := c.Delete(); err != nil {
-				return err
+				return storeMutation{}, err
 			}
+			mutation.durableDelta--
+			mutation.cleanupItems++
 		}
-		return nil
+		if k, _ := mb.Cursor().First(); k == nil {
+			if err := items.DeleteBucket([]byte(rid)); err != nil {
+				return storeMutation{}, err
+			}
+			mutation.durableDelta--
+			mutation.cleanupMailboxes++
+		}
+		return mutation, nil
 	})
 }
 
@@ -345,10 +378,10 @@ func (s *store) ackItemsForIncarnation(rid, expectedIncarnation string, throughC
 // mandatory at the server boundary; checking it again in the transaction closes the store-reset
 // race between request parsing and deletion.
 func (s *store) discardItemsForIncarnation(rid, expectedIncarnation string) (through uint64, incarnation string, err error) {
-	err = s.db.Update(func(tx *bolt.Tx) error {
+	err = s.update(false, func(tx *bolt.Tx) (storeMutation, error) {
 		incarnation = mailboxIncarnation(tx)
 		if expectedIncarnation == "" || expectedIncarnation != incarnation {
-			return ErrMailboxCursorResetRequired
+			return storeMutation{}, ErrMailboxCursorResetRequired
 		}
 		if v := tx.Bucket(bucketSeq).Get([]byte(rid)); v != nil {
 			next := binary.BigEndian.Uint64(v)
@@ -359,10 +392,19 @@ func (s *store) discardItemsForIncarnation(rid, expectedIncarnation string) (thr
 			}
 		}
 		items := tx.Bucket(bucketItems)
-		if items.Bucket([]byte(rid)) == nil {
-			return nil
+		mb := items.Bucket([]byte(rid))
+		if mb == nil {
+			return storeMutation{}, nil
 		}
-		return items.DeleteBucket([]byte(rid))
+		itemCount := int64(mb.Stats().KeyN)
+		if err := items.DeleteBucket([]byte(rid)); err != nil {
+			return storeMutation{}, err
+		}
+		return storeMutation{
+			durableDelta:     -(itemCount + 1),
+			cleanupItems:     uint64(itemCount),
+			cleanupMailboxes: 1,
+		}, nil
 	})
 	return through, incarnation, err
 }
@@ -370,9 +412,11 @@ func (s *store) discardItemsForIncarnation(rid, expectedIncarnation string) (thr
 // purgeOlderThan deletes every item (across all mailboxes) whose append time is
 // at or before cutoffMillis — the retention cap, even for never-acked items.
 func (s *store) purgeOlderThan(cutoffMillis int64) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.update(false, func(tx *bolt.Tx) (storeMutation, error) {
+		var mutation storeMutation
 		root := tx.Bucket(bucketItems)
-		return root.ForEachBucket(func(rid []byte) error {
+		var empty [][]byte
+		err := root.ForEachBucket(func(rid []byte) error {
 			mb := root.Bucket(rid)
 			c := mb.Cursor()
 			for k, v := c.First(); k != nil; k, v = c.Next() {
@@ -384,10 +428,26 @@ func (s *store) purgeOlderThan(cutoffMillis int64) error {
 					if err := c.Delete(); err != nil {
 						return err
 					}
+					mutation.durableDelta--
+					mutation.cleanupItems++
 				}
+			}
+			if k, _ := mb.Cursor().First(); k == nil {
+				empty = append(empty, append([]byte(nil), rid...))
 			}
 			return nil
 		})
+		if err != nil {
+			return storeMutation{}, err
+		}
+		for _, rid := range empty {
+			if err := root.DeleteBucket(rid); err != nil {
+				return storeMutation{}, err
+			}
+			mutation.durableDelta--
+			mutation.cleanupMailboxes++
+		}
+		return mutation, nil
 	})
 }
 
@@ -598,12 +658,13 @@ func countRetiredFor(rb *bolt.Bucket, pairer, device string, stopAt int) int {
 //
 // A re-pairing is a new ceremony, hence a new id, hence accepted — ban lift and all.
 func (s *store) authorizePair(pairer, device, ceremonyID string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.update(true, func(tx *bolt.Tx) (storeMutation, error) {
+		var mutation storeMutation
 		cb := tx.Bucket(bucketConsents)
 		rb2 := tx.Bucket(bucketRetired)
 		key := pairKey(pairer, device)
 		if rb2.Get(retiredKey(pairer, device, ceremonyID)) != nil {
-			return errConsentRetired
+			return storeMutation{}, errConsentRetired
 		}
 		if live := cb.Get(key); live != nil && !bytes.Equal(live, []byte(ceremonyID)) {
 			// ADR-007 B61: the supersession is what GROWS the bucket, so the cap is charged
@@ -611,24 +672,46 @@ func (s *store) authorizePair(pairer, device, ceremonyID string) error {
 			// retired check above has already run, so a tombstone this cap keeps is still
 			// refusing its own credential — the bound never costs a retirement (B47).
 			if countRetiredFor(rb2, pairer, device, maxRetiredPerPair) >= maxRetiredPerPair {
-				return errRetirementsFull
+				return storeMutation{}, errRetirementsFull
 			}
-			if err := rb2.Put(retiredKey(pairer, device, string(live)), []byte{1}); err != nil {
-				return err
+			retired := retiredKey(pairer, device, string(live))
+			if rb2.Get(retired) == nil {
+				mutation.durableDelta++
+			}
+			if err := rb2.Put(retired, []byte{1}); err != nil {
+				return storeMutation{}, err
 			}
 		}
+		if cb.Get(key) == nil {
+			mutation.durableDelta++
+		}
 		if err := cb.Put(key, []byte(ceremonyID)); err != nil {
-			return err
+			return storeMutation{}, err
 		}
 
 		pb := tx.Bucket(bucketPairs)
-		if err := pb.Put(pairKey(pairer, device), []byte{1}); err != nil {
-			return err
+		forward := pairKey(pairer, device)
+		if pb.Get(forward) == nil {
+			mutation.durableDelta++
 		}
-		if err := pb.Put(pairKey(device, pairer), []byte{1}); err != nil {
-			return err
+		if err := pb.Put(forward, []byte{1}); err != nil {
+			return storeMutation{}, err
 		}
-		return tx.Bucket(bucketRevoked).Delete(pairKey(device, pairer))
+		reverse := pairKey(device, pairer)
+		if pb.Get(reverse) == nil {
+			mutation.durableDelta++
+		}
+		if err := pb.Put(reverse, []byte{1}); err != nil {
+			return storeMutation{}, err
+		}
+		revoked := tx.Bucket(bucketRevoked)
+		if revoked.Get(reverse) != nil {
+			mutation.durableDelta--
+		}
+		if err := revoked.Delete(reverse); err != nil {
+			return storeMutation{}, err
+		}
+		return mutation, nil
 	})
 }
 
@@ -741,8 +824,16 @@ func (s *store) pairedPeers(rid string) []string {
 // re-registration on every reconnect converge — a rotated token REPLACES the
 // stale one instead of sitting beside it and getting every wake delivered twice.
 func (s *store) putToken(rid, token string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketTokens).Put([]byte(rid), []byte(token))
+	return s.update(true, func(tx *bolt.Tx) (storeMutation, error) {
+		b := tx.Bucket(bucketTokens)
+		mutation := storeMutation{}
+		if b.Get([]byte(rid)) == nil {
+			mutation.durableDelta++
+		}
+		if err := b.Put([]byte(rid), []byte(token)); err != nil {
+			return storeMutation{}, err
+		}
+		return mutation, nil
 	})
 }
 
@@ -752,8 +843,16 @@ func (s *store) putToken(rid, token string) error {
 // to a handset that was deliberately silenced, and handing the provider a token
 // that should be gone.
 func (s *store) deleteToken(rid string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketTokens).Delete([]byte(rid))
+	return s.update(false, func(tx *bolt.Tx) (storeMutation, error) {
+		b := tx.Bucket(bucketTokens)
+		mutation := storeMutation{}
+		if b.Get([]byte(rid)) != nil {
+			mutation.durableDelta--
+		}
+		if err := b.Delete([]byte(rid)); err != nil {
+			return storeMutation{}, err
+		}
+		return mutation, nil
 	})
 }
 
@@ -812,10 +911,19 @@ func (s *store) loadTokens() (map[string]string, error) {
 // the transaction that decides everything else about this revoke.
 func (s *store) revokeAndPurge(pairer, rid string) (bool, error) {
 	forgotToken := false
-	err := s.db.Update(func(tx *bolt.Tx) error {
+	err := s.update(false, func(tx *bolt.Tx) (storeMutation, error) {
+		var mutation storeMutation
 		pb := tx.Bucket(bucketPairs)
-		_ = pb.Delete(pairKey(pairer, rid))
-		_ = pb.Delete(pairKey(rid, pairer))
+		forward := pairKey(pairer, rid)
+		reverse := pairKey(rid, pairer)
+		if pb.Get(forward) != nil {
+			mutation.durableDelta--
+		}
+		if pb.Get(reverse) != nil {
+			mutation.durableDelta--
+		}
+		_ = pb.Delete(forward)
+		_ = pb.Delete(reverse)
 		// ADR-007 B47, in the SAME transaction as the edges and the ban: retire the
 		// ceremony that authorized this pair. The signature is a durable artifact the
 		// grantee still holds, so without this the revoke is undone by re-presenting bytes
@@ -824,33 +932,48 @@ func (s *store) revokeAndPurge(pairer, rid string) (bool, error) {
 		cb := tx.Bucket(bucketConsents)
 		key := pairKey(pairer, rid)
 		if live := cb.Get(key); live != nil {
-			if err := tx.Bucket(bucketRetired).Put(retiredKey(pairer, rid, string(live)), []byte{1}); err != nil {
-				return err
+			retired := tx.Bucket(bucketRetired)
+			retiredRow := retiredKey(pairer, rid, string(live))
+			if retired.Get(retiredRow) == nil {
+				mutation.durableDelta++
+			}
+			if err := retired.Put(retiredRow, []byte{1}); err != nil {
+				return storeMutation{}, err
 			}
 			if err := cb.Delete(key); err != nil {
-				return err
+				return storeMutation{}, err
 			}
+			mutation.durableDelta--
 		}
 		// The ban is keyed by the PAIR (ADR-007 B49), and the retirement above is keyed by
 		// the same pair. That is not a coincidence worth leaving implicit: the retirement is
 		// what stops a replayed consent lifting this ban, and it is exactly as durable as
 		// the ban it protects — a relay that loses one loses the other in the same instant,
 		// so no surviving revocation is ever left for a replay to undo.
-		if err := tx.Bucket(bucketRevoked).Put(pairKey(rid, pairer), []byte{1}); err != nil {
-			return err
+		revoked := tx.Bucket(bucketRevoked)
+		if revoked.Get(reverse) == nil {
+			mutation.durableDelta++
+		}
+		if err := revoked.Put(reverse, []byte{1}); err != nil {
+			return storeMutation{}, err
 		}
 		// In the SAME transaction as the revocation: a token purged separately could
 		// survive a crash between the two writes and be resurrected by the next restart,
 		// resuming pushes to a handset whose access the owner withdrew.
 		if !grantsAnyone(pb, rid) {
-			if err := tx.Bucket(bucketTokens).Delete([]byte(rid)); err != nil {
-				return err
+			tokens := tx.Bucket(bucketTokens)
+			if tokens.Get([]byte(rid)) != nil {
+				mutation.durableDelta--
+			}
+			if err := tokens.Delete([]byte(rid)); err != nil {
+				return storeMutation{}, err
 			}
 			forgotToken = true
 		}
-		mb := tx.Bucket(bucketItems).Bucket([]byte(rid))
+		items := tx.Bucket(bucketItems)
+		mb := items.Bucket([]byte(rid))
 		if mb == nil {
-			return nil
+			return mutation, nil
 		}
 		src := []byte(pairer)
 		c := mb.Cursor()
@@ -862,11 +985,20 @@ func (s *store) revokeAndPurge(pairer, rid string) (bool, error) {
 				// TestB49_ARevokeDoesNotDestroyAnotherSendersQueuedFrames, whose revoker
 				// queues two ADJACENT frames for exactly this reason.
 				if err := c.Delete(); err != nil {
-					return err
+					return storeMutation{}, err
 				}
+				mutation.durableDelta--
+				mutation.cleanupItems++
 			}
 		}
-		return nil
+		if k, _ := mb.Cursor().First(); k == nil {
+			if err := items.DeleteBucket([]byte(rid)); err != nil {
+				return storeMutation{}, err
+			}
+			mutation.durableDelta--
+			mutation.cleanupMailboxes++
+		}
+		return mutation, nil
 	})
 	return forgotToken, err
 }

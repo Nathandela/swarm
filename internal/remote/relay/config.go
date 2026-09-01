@@ -10,6 +10,21 @@ import (
 // the injected clock. Defaults are generous; an operator tightens them per
 // deployment.
 type Quotas struct {
+	// MaxDurableObjects caps caller-controlled durable rows and nested mailbox
+	// buckets across the whole relay. It is the public-service Sybil fence: a
+	// distributed caller cannot evade it by minting more source addresses or
+	// relay identities. A value <= 0 disables the fence.
+	MaxDurableObjects int64 `json:"max_durable_objects"`
+	// DurableGrowthWritesPerMin caps, gateway-wide, transactions that can add
+	// durable state. Cleanup, acknowledgement, token deletion, and revocation
+	// are deliberately exempt so a full relay can always shed state. A value
+	// <= 0 disables the fence.
+	DurableGrowthWritesPerMin int `json:"durable_growth_writes_per_min"`
+	// MaxDBBytes refuses durable-growth transactions once the bbolt file has
+	// reached this size. Deleting transactions remain available; bbolt reuses
+	// freed pages even though its file does not shrink. A value <= 0 disables
+	// the fence.
+	MaxDBBytes int64 `json:"max_db_bytes"`
 	// MaxConcurrentRendezvous caps live pairing rendezvous slots.
 	MaxConcurrentRendezvous int `json:"max_concurrent_rendezvous"`
 	// MaxConcurrentConnections is the global cap on live websocket connections
@@ -140,8 +155,13 @@ func DefaultConfig() Config {
 		MaxServerWait:    defaultMaxServerWait,
 		RetentionCap:     7 * 24 * time.Hour,
 		Quotas: Quotas{
-			MaxConcurrentRendezvous:  1024,
-			MaxConcurrentConnections: 4096,
+			// Public defaults are generous but finite. They are global backstops,
+			// independent of the per-source and per-mailbox controls below.
+			MaxDurableObjects:         2_000_000,
+			DurableGrowthWritesPerMin: 60_000,
+			MaxDBBytes:                16 * 1024 * 1024 * 1024,
+			MaxConcurrentRendezvous:   1024,
+			MaxConcurrentConnections:  4096,
 			// ponytail: generous-but-bounded per-source default, same spirit as the
 			// MailboxMaxItems default below — high enough that no legitimate single
 			// source (one client, one NAT'd fleet) trips it, low enough that one
