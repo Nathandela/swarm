@@ -92,6 +92,17 @@ func recordsEqual(t *testing.T, got, want Record) {
 	if got.GrantedEpoch != want.GrantedEpoch {
 		t.Errorf("GrantedEpoch = %d, want %d", got.GrantedEpoch, want.GrantedEpoch)
 	}
+	if (got.Push == nil) != (want.Push == nil) {
+		t.Errorf("Push presence = %v, want %v", got.Push != nil, want.Push != nil)
+	} else if got.Push != nil && (!bytes.Equal(got.Push.Address, want.Push.Address) ||
+		!bytes.Equal(got.Push.WakeKey, want.Push.WakeKey) ||
+		got.Push.GatewayURL != want.Push.GatewayURL ||
+		got.Push.SubmitCapability != want.Push.SubmitCapability ||
+		got.Push.MachineRevokeCapability != want.Push.MachineRevokeCapability ||
+		got.Push.CapabilityRecordVersion != want.Push.CapabilityRecordVersion ||
+		got.Push.Transport != want.Push.Transport) {
+		t.Errorf("Push = %+v, want %+v", got.Push, want.Push)
+	}
 }
 
 // TestRegistry_Persist is an R-DEV.1 verify target. It Adds two devices with

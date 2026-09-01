@@ -1,15 +1,19 @@
 package device
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -55,6 +59,27 @@ type Record struct {
 	// relay is the authority that verifies it and a record that merely fails there is a
 	// re-pair, not a corrupt registry.
 	ConsentSig []byte `json:"consent_sig,omitempty"`
+	// Push is the authenticated, per-pairing push binding conveyed in msg4. Keeping it
+	// inside the registry record makes device admission and its runtime push authority one
+	// atomic rename: no process can observe a paired device with another pairing's address
+	// or wake key. Nil is the legacy/foreground-compatible record shape.
+	Push *PushBinding `json:"push,omitempty"`
+}
+
+// PushTransportGateway is the only transport a persisted PushBinding may select. A
+// legacy or foreground-only pairing carries no PushBinding at all.
+const PushTransportGateway = "gateway"
+
+// PushBinding is the machine's durable half of the authenticated msg4 extension.
+// WakeKey is phone-generated per pairing and deliberately independent of epoch keys.
+type PushBinding struct {
+	GatewayURL              string `json:"gateway_url"`
+	Address                 []byte `json:"address"`
+	SubmitCapability        string `json:"submit_capability"`
+	MachineRevokeCapability string `json:"machine_revoke_capability"`
+	WakeKey                 []byte `json:"wake_key"`
+	CapabilityRecordVersion int    `json:"capability_record_version"`
+	Transport               string `json:"transport"`
 }
 
 // envelope is the versioned on-disk container so the format can migrate forward.
@@ -156,6 +181,53 @@ func validateRecord(rec Record) error {
 	}
 	if !rec.Capability.valid() {
 		return fmt.Errorf("invalid capability %d", uint8(rec.Capability))
+	}
+	if rec.Push != nil {
+		if err := validatePushBinding(*rec.Push); err != nil {
+			return fmt.Errorf("invalid push binding: %w", err)
+		}
+	}
+	return nil
+}
+
+func validatePushBinding(push PushBinding) error {
+	if strings.TrimSpace(push.GatewayURL) != push.GatewayURL {
+		return errors.New("gateway URL has surrounding whitespace")
+	}
+	u, err := url.Parse(push.GatewayURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return errors.New("gateway URL must be an https bare origin")
+	}
+	if len(push.Address) != 16 {
+		return fmt.Errorf("address must be 16 bytes, got %d", len(push.Address))
+	}
+	if len(push.WakeKey) != 32 {
+		return fmt.Errorf("wake key must be 32 bytes, got %d", len(push.WakeKey))
+	}
+	decodeCapability := func(name, encoded string) ([]byte, error) {
+		raw, err := base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil || len(raw) != 32 {
+			return nil, fmt.Errorf("%s must be 32 base64url bytes", name)
+		}
+		return raw, nil
+	}
+	submit, err := decodeCapability("submit capability", push.SubmitCapability)
+	if err != nil {
+		return err
+	}
+	revoke, err := decodeCapability("machine revoke capability", push.MachineRevokeCapability)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(submit, revoke) {
+		return errors.New("submit and machine revoke capabilities must be distinct")
+	}
+	if push.CapabilityRecordVersion <= 0 {
+		return errors.New("capability record version must be positive")
+	}
+	if push.Transport != PushTransportGateway {
+		return fmt.Errorf("transport must be %q", PushTransportGateway)
 	}
 	return nil
 }
@@ -361,5 +433,11 @@ func cloneRecord(rec Record) Record {
 	rec.RecipientPub = append([]byte(nil), rec.RecipientPub...)
 	rec.RoutingID = append([]byte(nil), rec.RoutingID...)
 	rec.ConsentSig = append([]byte(nil), rec.ConsentSig...)
+	if rec.Push != nil {
+		push := *rec.Push
+		push.Address = append([]byte(nil), rec.Push.Address...)
+		push.WakeKey = append([]byte(nil), rec.Push.WakeKey...)
+		rec.Push = &push
+	}
 	return rec
 }
