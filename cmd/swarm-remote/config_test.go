@@ -9,8 +9,10 @@ package main
 // adds them.
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -22,6 +24,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
 // writeMachineIdentity provisions <stateDir>/remote/machine.key exactly as
@@ -40,6 +43,50 @@ func writeMachineIdentity(t *testing.T, stateDir string) *machineid.Identity {
 		t.Fatalf("id.Save: %v", err)
 	}
 	return id
+}
+
+func TestResolveGatewayParams_RegistryPushBindingOwnsFreshWakeKeyAndGatewayTransportAcrossRestart(t *testing.T) {
+	stateDir := t.TempDir()
+	id := writeMachineIdentity(t, stateDir)
+	writeRelayURL(t, stateDir, "ws://127.0.0.1:9999")
+	rec := addPairedDevice(t, stateDir)
+	capability := func(fill byte) string {
+		return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{fill}, 32))
+	}
+	rec.Push = &device.PushBinding{
+		GatewayURL: "https://push-swarm.dsfactory.org", Address: bytes.Repeat([]byte{0x21}, 16),
+		SubmitCapability: capability(0x31), MachineRevokeCapability: capability(0x32),
+		WakeKey: bytes.Repeat([]byte{0x41}, 32), CapabilityRecordVersion: 1,
+		Transport: device.PushTransportGateway,
+	}
+	reg, err := device.Open(filepath.Join(stateDir, "devices"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "remote", "push-gateway.json")); !os.IsNotExist(err) {
+		t.Fatalf("test unexpectedly has legacy sidecar: %v", err)
+	}
+
+	for launch := 1; launch <= 2; launch++ {
+		params, err := resolveGatewayParams(stateDir, "/tmp/remote.sock")
+		if err != nil {
+			t.Fatalf("launch %d: %v", launch, err)
+		}
+		if params.PushGateway == nil || !bytes.Equal(params.PushGateway.WakeKey[:], rec.Push.WakeKey) {
+			t.Fatalf("launch %d did not derive the conveyed wake key: %+v", launch, params.PushGateway)
+		}
+		epochWake := id.EpochKeys().WakeKey
+		if bytes.Equal(params.PushGateway.WakeKey[:], epochWake[:]) {
+			t.Fatalf("launch %d reused the epoch wake key", launch)
+		}
+		transport, err := params.PushGateway.Transport.Transport()
+		if err != nil || transport != remotegw.TransportGateway {
+			t.Fatalf("launch %d transport = (%q,%v), want gateway", launch, transport, err)
+		}
+	}
 }
 
 // writeRelayURL provisions <stateDir>/remote/relay.json exactly as

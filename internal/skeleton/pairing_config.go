@@ -83,6 +83,7 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 		return nil, err
 	}
 	cfg.RelaySPKIPin = pin
+	cfg.PushGatewayURL = relayCfg.PushGatewayURL
 	if relayCfg.RelayURL != "" {
 		// The transport policy is resolved HERE rather than inside the closure, so a
 		// malformed pin aborts assembly like a corrupt identity does. Resolved at dial

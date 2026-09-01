@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaypurge"
+	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
 // defaultPairTTL bounds a rendezvous when the request carries no explicit TTL, and
@@ -98,6 +101,11 @@ type pairingConfig struct {
 	// dial target is the one endpoint known reachable -- and it is never rewritten or
 	// normalized, because a rewritten URL is a different destination.
 	RelayURL string
+	// PushGatewayURL enables the optional msg1/msg2 pairing capability only when a
+	// production HTTPS gateway was explicitly provisioned. PushHTTPClient is a test seam;
+	// nil uses remotegw's bounded production client.
+	PushGatewayURL string
+	PushHTTPClient *http.Client
 
 	// NewRendezvous returns the machine-side RendezvousTransport for a freshly minted
 	// rendezvous id. BeginPairing mints the id + single-use secret + QR, then asks this
@@ -233,16 +241,26 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		RelayURL:      cfg.RelayURL,
 		RendezvousID:  id,
 		PairingSecret: secret,
+		Flags: func() byte {
+			if cfg.PushGatewayURL != "" {
+				return pairing.QRFlagPushBinding
+			}
+			return 0
+		}(),
 	})
 	if err != nil {
 		return protocol.PairView{}, fmt.Errorf("encode pairing qr: %w", err)
 	}
 
 	mp := pairing.MachineParams{
-		Static:       cfg.Static,
-		Secret:       secret,
-		RendezvousID: id,
-		LocalConsole: true,
+		Static:             cfg.Static,
+		Secret:             secret,
+		RendezvousID:       id,
+		LocalConsole:       true,
+		PushBindingSupport: cfg.PushGatewayURL != "",
+		VerifyPushBinding: func(verifyCtx context.Context, binding *pairing.PushBinding) error {
+			return verifyPairingPushBinding(verifyCtx, a.stateDir, cfg, binding)
+		},
 		// The machine-side SAS gate: adapt the host confirm to pairing.ConfirmFunc. The
 		// server's confirm closure selects on the connection-derived ctx, so a disconnect
 		// makes this return (false, non-nil err) -> Machine.Pair declines and errors ->
@@ -363,6 +381,13 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			if err != nil {
 				return protocol.PairResult{Err: err}
 			}
+			if outcome.PushBinding != nil {
+				push := pairingPushRecord(cfg.PushGatewayURL, outcome.PushBinding)
+				if err := device.ValidatePushBinding(push); err != nil {
+					return protocol.PairResult{Err: fmt.Errorf("persist pairing push binding: %w", err)}
+				}
+				res.Record.Push = &push
+			}
 			// C1 (finding, re-audit): commit the enrollment ATOMICALLY. The early Count()>0
 			// fast-reject above is only advisory (it races the background confirm); AddSole is
 			// the real gate -- under the registry mutex it refuses a SECOND, different device,
@@ -400,6 +425,62 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		ExpiresAt:    &expiresAt,
 		ShortCode:    shortCode,
 	}, nil
+}
+
+// verifyPairingPushBinding proves the conveyed address, wake key and submit capability
+// together before the protocol sends acceptance. The first sequence is durably reserved
+// before the request, so a process death can never cause a later gateway to replay it.
+func verifyPairingPushBinding(ctx context.Context, stateDir string, cfg *pairingConfig, binding *pairing.PushBinding) error {
+	if cfg == nil || cfg.PushGatewayURL == "" || binding == nil {
+		return errors.New("push binding verification is not configured")
+	}
+	record := pairingPushRecord(cfg.PushGatewayURL, binding)
+	if err := device.ValidatePushBinding(record); err != nil {
+		return fmt.Errorf("invalid push binding: %w", err)
+	}
+	var key crypto.WakeKey
+	var addr remotegw.PushAddress
+	copy(key[:], binding.WakeKey)
+	copy(addr[:], binding.PushAddress)
+	remoteDir := filepath.Join(stateDir, "remote")
+	if err := os.MkdirAll(remoteDir, 0o700); err != nil {
+		return fmt.Errorf("create remote state directory: %w", err)
+	}
+	seq, err := remotegw.OpenSeqSource(remotegw.WakeSeqPath(remoteDir, addr))
+	if err != nil {
+		return fmt.Errorf("open pairing wake sequence: %w", err)
+	}
+	next, err := seq.Next()
+	if err != nil {
+		return fmt.Errorf("reserve pairing test wake sequence: %w", err)
+	}
+	envelope, err := remotegw.SealWakeV1(key, addr, next, time.Now())
+	if err != nil {
+		return fmt.Errorf("seal pairing test wake: %w", err)
+	}
+	submitter := &remotegw.HTTPWakeSubmitter{
+		BaseURL: cfg.PushGatewayURL, SubmitCapability: binding.SubmitCapability,
+		Client: cfg.PushHTTPClient,
+	}
+	if err := submitter.SubmitWake(ctx, envelope); err != nil {
+		return fmt.Errorf("pairing test wake was not provider_accepted: %w", err)
+	}
+	return nil
+}
+
+func pairingPushRecord(gatewayURL string, binding *pairing.PushBinding) device.PushBinding {
+	if binding == nil {
+		return device.PushBinding{}
+	}
+	return device.PushBinding{
+		GatewayURL:              gatewayURL,
+		Address:                 append([]byte(nil), binding.PushAddress...),
+		SubmitCapability:        binding.SubmitCapability,
+		MachineRevokeCapability: binding.MachineRevokeCapability,
+		WakeKey:                 append([]byte(nil), binding.WakeKey...),
+		CapabilityRecordVersion: binding.CapabilityRecordVersion,
+		Transport:               device.PushTransportGateway,
+	}
 }
 
 // registryDir is where the device registry and its per-device sealed-grant sidecars

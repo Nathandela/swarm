@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 // devicesFile is the single durable registry file under the registry directory.
@@ -195,14 +197,17 @@ func validateRecord(rec Record) error {
 		return fmt.Errorf("invalid capability %d", uint8(rec.Capability))
 	}
 	if rec.Push != nil {
-		if err := validatePushBinding(*rec.Push); err != nil {
+		if err := ValidatePushBinding(*rec.Push); err != nil {
 			return fmt.Errorf("invalid push binding: %w", err)
 		}
 	}
 	return nil
 }
 
-func validatePushBinding(push PushBinding) error {
+// ValidatePushBinding validates the complete authority-bearing record before either the
+// pairing protocol accepts it or the registry persists it. Sharing this boundary prevents a
+// phone from receiving acceptance for a shape enrollment will reject one frame later.
+func ValidatePushBinding(push PushBinding) error {
 	if strings.TrimSpace(push.GatewayURL) != push.GatewayURL {
 		return errors.New("gateway URL has surrounding whitespace")
 	}
@@ -235,8 +240,8 @@ func validatePushBinding(push PushBinding) error {
 	if bytes.Equal(submit, revoke) {
 		return errors.New("submit and machine revoke capabilities must be distinct")
 	}
-	if push.CapabilityRecordVersion <= 0 {
-		return errors.New("capability record version must be positive")
+	if push.CapabilityRecordVersion != schema.CurrentCapabilityRecordVersion {
+		return fmt.Errorf("capability record version must be %d", schema.CurrentCapabilityRecordVersion)
 	}
 	if push.Transport != PushTransportGateway {
 		return fmt.Errorf("transport must be %q", PushTransportGateway)

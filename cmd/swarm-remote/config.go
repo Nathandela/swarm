@@ -231,9 +231,19 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	// ADR-015 P9/P12: an OPTIONAL migration off legacy_relay. Absent (every pairing until
 	// it migrates) leaves PushGateway nil, which NewService reads as "wire the push path
 	// exactly as it is today". See loadPushGatewayConfig's TODO(pairing-conveyance).
-	pushGateway, err := resolvePushGatewayConfig(remoteDir)
+	var pushGateway *remotegw.PushGatewayConfig
+	if rec.Push == nil {
+		pushGateway, err = resolvePushGatewayConfig(remoteDir)
+	} else {
+		pushGateway, err = resolveRegistryPushGatewayConfig(remoteDir, *rec.Push)
+	}
 	if err != nil {
 		return gatewayParams{}, err
+	}
+	if rec.Push == nil && pushGateway != nil {
+		// Backward-compatible hand-provisioned sidecars predate conveyed per-pairing
+		// keys and retain their historical epoch-key behavior until re-pair migration.
+		pushGateway.WakeKey = id.EpochKeys().WakeKey
 	}
 
 	return gatewayParams{
@@ -415,5 +425,47 @@ func resolvePushGatewayConfig(remoteDir string) (*remotegw.PushGatewayConfig, er
 		Transport:               transport,
 		Obligations:             obligations,
 		WakeSeq:                 wakeSeq,
+	}, nil
+}
+
+// resolveRegistryPushGatewayConfig derives every authority-bearing runtime coordinate from
+// the validated sole registry row. The optional legacy sidecar is comparison-only: if it is
+// present and disagrees, startup fails closed instead of mixing its capability with the
+// record's fresh per-pairing wake key.
+func resolveRegistryPushGatewayConfig(remoteDir string, push device.PushBinding) (*remotegw.PushGatewayConfig, error) {
+	if err := device.ValidatePushBinding(push); err != nil {
+		return nil, fmt.Errorf("registry push binding: %w", err)
+	}
+	legacy, legacyAddr, present, err := parsePushGatewayFile(remoteDir)
+	if err != nil {
+		return nil, err
+	}
+	var addr remotegw.PushAddress
+	copy(addr[:], push.Address)
+	if present && (legacy.GatewayURL != push.GatewayURL || legacy.SubmitCapability != push.SubmitCapability ||
+		legacy.MachineRevokeCapability != push.MachineRevokeCapability || legacyAddr != addr) {
+		return nil, errors.New("push-gateway.json disagrees with the sole registry push binding")
+	}
+	var wake crypto.WakeKey
+	copy(wake[:], push.WakeKey)
+	wakeSeq, err := remotegw.OpenSeqSource(remotegw.WakeSeqPath(remoteDir, addr))
+	if err != nil {
+		return nil, fmt.Errorf("open registry push wake seq: %w", err)
+	}
+	obligations, err := remotegw.OpenObligationStore(filepath.Join(remoteDir, "wake-obligations.json"))
+	if err != nil {
+		return nil, fmt.Errorf("open wake-obligation store: %w", err)
+	}
+	transport, err := remotegw.OpenTransportStore(filepath.Join(remoteDir, "push-transport.json"))
+	if err != nil {
+		return nil, fmt.Errorf("open push-transport store: %w", err)
+	}
+	if err := transport.SetTransport(remotegw.TransportGateway); err != nil {
+		return nil, fmt.Errorf("adopt registry push transport: %w", err)
+	}
+	return &remotegw.PushGatewayConfig{
+		GatewayURL: push.GatewayURL, SubmitCapability: push.SubmitCapability,
+		MachineRevokeCapability: push.MachineRevokeCapability, WakeKey: wake,
+		Address: addr, Transport: transport, Obligations: obligations, WakeSeq: wakeSeq,
 	}, nil
 }

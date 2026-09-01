@@ -114,6 +114,10 @@ type ServiceConfig struct {
 type PushGatewayConfig struct {
 	GatewayURL       string // the push gateway's base URL, e.g. https://push.example.com
 	SubmitCapability string // this pairing's submit capability (spec §2.2)
+	// WakeKey is the phone-generated per-pairing key conveyed with this address. It is
+	// deliberately not ServiceConfig.WakeKey (the legacy epoch wake key): rotating the
+	// machine epoch must not invalidate the gateway binding.
+	WakeKey crypto.WakeKey
 	// MachineRevokeCapability is the pairing's machine-revoke capability (spec §2.2/3.4,
 	// PG-AUTH-9: DISTINCT from submit), carried verbatim from push-gateway.json for the
 	// revoke producer (revokeproducer.go, bead agents-tracker-u37c). Empty on every
@@ -282,7 +286,7 @@ func NewService(cfg ServiceConfig) *Service {
 				BaseURL:          cfg.PushGateway.GatewayURL,
 				SubmitCapability: cfg.PushGateway.SubmitCapability,
 			},
-			WakeKey: cfg.WakeKey,
+			WakeKey: cfg.PushGateway.WakeKey,
 			Address: cfg.PushGateway.Address,
 			Seq:     wakeSeq,
 			Now:     cfg.Now,
