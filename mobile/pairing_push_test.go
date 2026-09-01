@@ -32,6 +32,8 @@ func (g *pairingPushGateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"installation_id":"abcdefghijklmnopqrstuv","refresh_before":"2030-01-01T00:00:00Z"}`))
+	case r.Method == http.MethodPut && r.URL.Path == "/v1/installations/abcdefghijklmnopqrstuv/token":
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/installations/abcdefghijklmnopqrstuv/addresses":
 		g.allocated++
 		g.addr[0] = byte(g.allocated)
@@ -194,13 +196,14 @@ func TestPairingPushCommit_CrashAfterPinOwnershipBeforeDispositionRecoversOwners
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := app.ConfigurePushRegistration(&testPushAttestor{}, newPlatformTestSigner(t)); err != nil {
+	signer := newPlatformTestSigner(t)
+	if err := app.ConfigurePushRegistration(&testPushAttestor{}, signer); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.EnsurePushRegistration("fcm-token"); err != nil {
 		t.Fatal(err)
 	}
-	binding, _, err := app.preparePairingPushBinding(context.Background())
+	binding, rollback, err := app.preparePairingPushBinding(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,8 +214,14 @@ func TestPairingPushCommit_CrashAfterPinOwnershipBeforeDispositionRecoversOwners
 
 	func() {
 		defer func() { _ = recover() }()
-		_ = app.ownStagedPushBindingAfterPin(addr, func() { panic("simulated SIGKILL") })
+		_ = app.pinWithStagedPushBinding(pairedOutcome("ep-same-machine", 7), &addr, func() {
+			panic("simulated SIGKILL")
+		})
 	}()
+	// RunDevice invokes the rollback arm when the acknowledgement was never sent. The
+	// combined pin+ownership write has already classified this exact address as owned, so
+	// that generic post-msg4 cleanup must not revoke it.
+	rollback()
 	_ = app.Close()
 
 	restarted, err := NewApp(&Config{StateDir: stateDir, PushGatewayURL: server.URL}, platformPushCustody{})
@@ -220,6 +229,9 @@ func TestPairingPushCommit_CrashAfterPinOwnershipBeforeDispositionRecoversOwners
 		t.Fatalf("restart did not recover pin-owned staged binding: %v", err)
 	}
 	defer restarted.Close()
+	if got := restarted.core.State(); got.Machine != "ep-same-machine" || got.EpochID != 7 {
+		t.Fatalf("restart lost combined machine pin: (%q,%d)", got.Machine, got.EpochID)
+	}
 	if got := restarted.core.PendingPushBindingRevocations(); len(got) != 0 {
 		t.Fatalf("restart left pin-owned address pending revoke: %x", got)
 	}
@@ -229,5 +241,31 @@ func TestPairingPushCommit_CrashAfterPinOwnershipBeforeDispositionRecoversOwners
 	}
 	if err := restarted.core.AcceptWakeV1(env); err != nil {
 		t.Fatalf("restart lost the owned wake binding: %v", err)
+	}
+
+	// The PB-PAIR-4 phone-pinned/machine-empty outcome is repaired by pairing the same
+	// machine again. A fresh allocation can commit normally, and an acknowledgement loss
+	// after that local commit still must not revoke the newly owned address.
+	if err := restarted.ConfigurePushRegistration(&testPushAttestor{}, signer); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.EnsurePushRegistration("fcm-token"); err != nil {
+		t.Fatal(err)
+	}
+	binding2, rollback2, err := restarted.preparePairingPushBinding(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var addr2 phonecore.PushAddress
+	copy(addr2[:], binding2.PushAddress)
+	if err := restarted.pinWithStagedPushBinding(pairedOutcome("ep-same-machine", 7), &addr2, nil); err != nil {
+		t.Fatalf("same-machine repair: %v", err)
+	}
+	rollback2()
+	gateway.mu.Lock()
+	revoked := gateway.revoked
+	gateway.mu.Unlock()
+	if revoked != 0 {
+		t.Fatalf("owned allocations revoked after ack-loss cleanup: %d", revoked)
 	}
 }

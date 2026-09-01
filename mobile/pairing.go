@@ -644,15 +644,7 @@ func (p *Pairing) join(base context.Context) {
 			if app.differentMachine(out) {
 				return errDifferentMachine
 			}
-			if err := app.pin(out); err != nil {
-				return err
-			}
-			if stagedPushAddress != nil {
-				if err := app.ownStagedPushBindingAfterPin(*stagedPushAddress, nil); err != nil {
-					return err
-				}
-			}
-			return nil
+			return app.pinWithStagedPushBinding(out, stagedPushAddress, nil)
 		},
 		// The SAS gate: surfaced to the screen, then held until the operator has compared
 		// it against the machine's own display. Returning an error here fails the pairing
@@ -1014,8 +1006,16 @@ func (a *App) differentMachine(out *pairing.DeviceOutcome) bool {
 // grant's coordinates. The re-appended bootstrap frame is then refused as a replay forever.
 // phonecore.Core.Mutate carries the whole account.
 func (a *App) pin(out *pairing.DeviceOutcome) error {
+	return a.pinWithStagedPushBinding(out, nil, nil)
+}
+
+// pinWithStagedPushBinding makes the machine pin and exact staged-address ownership ONE
+// durable phone-state transaction. afterDurable is the deterministic SIGKILL seam used by
+// the crash test; production passes nil. Push-store disposition is deliberately later and
+// idempotent, so startup can complete it from the write-ahead state after any process death.
+func (a *App) pinWithStagedPushBinding(out *pairing.DeviceOutcome, staged *phonecore.PushAddress, afterDurable func()) error {
 	var newEpoch bool
-	err := a.core.Mutate(func(st *phonecore.State) {
+	mutate := func(st *phonecore.State) {
 		st.MachineStatic = out.MachineStatic
 		st.MachineSignPub = out.Machine.MachineSignPub
 		st.MachineRelayAuthPub = out.Machine.MachineRelayAuthPub
@@ -1115,7 +1115,13 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 			st.Keys = crypto.EpochKeys{}
 		}
 		st.EpochID = out.Machine.EpochID
-	})
+	}
+	var err error
+	if staged == nil {
+		err = a.core.Mutate(mutate)
+	} else {
+		err = a.core.MutateAndOwnStagedPushBinding(*staged, mutate)
+	}
 	// THE ERROR IS RETURNED, not swallowed (ADR-007 B60). This used to be a bare `return`
 	// on a void function, so finish() published `paired` without being able to know whether
 	// anything had been written -- a refused Keystore unwrap, a full disk or a read-only data
@@ -1123,6 +1129,9 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 	// coordinates a pairing exists to pin.
 	if err != nil {
 		return err
+	}
+	if afterDurable != nil {
+		afterDurable()
 	}
 	if newEpoch {
 		a.mu.Lock()
@@ -1134,6 +1143,11 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 	// terminal "revoked" stale. Without this the recovered handset stays on that screen until
 	// the Android process is rebuilt -- the brick reached through the remedy.
 	a.rearmAfterPairing()
+	if staged != nil {
+		if err := a.core.CompleteOwnedStagedPushBinding(*staged); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

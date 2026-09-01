@@ -234,10 +234,23 @@ func (a *App) preparePairingPushBinding(ctx context.Context) (*pairing.PushBindi
 	var once sync.Once
 	rollback := func() {
 		once.Do(func() {
+			// Once the pin+ownership transaction has landed, this allocation belongs to
+			// the pinned phone even if the final acknowledgement is lost. RunDevice calls
+			// rollback on every post-msg4 error, so consult durable classification rather
+			// than revoking an address whose acceptance is already locally committed.
+			owned, found, err := core.PairingPushOwnership()
+			if err != nil {
+				return // fail closed: an unreadable ownership phase is never authority to revoke
+			}
+			if found && owned == alloc.Address {
+				return
+			}
+			if !core.StagedPushBindingPending(alloc.Address) {
+				return
+			}
 			// Erase first and durably retain the revoke obligation. The network leg is
 			// detached from the pairing context because that context is normally already
 			// cancelled on exactly the paths that call this rollback.
-			_ = a.clearPairingPushOwned(alloc.Address)
 			_ = core.AbandonStagedPushBinding(alloc.Address)
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), pushPairingCleanupTimeout)
 			defer cancel()

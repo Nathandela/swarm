@@ -23,11 +23,14 @@ package phonecore
 // path owns no private scalar at all.
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -43,24 +46,75 @@ type installationSigner struct {
 // scalar before Android installs its non-exportable Keystore signer. It refuses once any
 // registration authority or outcome-unknown request exists: replacing that signer would
 // orphan an installation the old key alone can authenticate.
-func (c *Core) PreparePlatformInstallationSigner() error {
+func (c *Core) PreparePlatformInstallationSigner(public []byte) error {
+	if !validPlatformInstallationPublicKey(public) {
+		return errors.New("phonecore: platform installation public key is not canonical P-256 SEC1")
+	}
 	c.regMu.Lock()
 	defer c.regMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.push.data.InstallationID != "" || c.push.data.PendingRegister != nil {
-		return errors.New("phonecore: cannot replace the signer of an existing or pending installation")
-	}
-	if len(c.push.data.InstallationKey) == 0 {
+	bound := c.push.data.InstallationPublicKey
+	if len(bound) != 0 {
+		if len(c.push.data.InstallationKey) != 0 || !bytes.Equal(bound, public) {
+			return errors.New("phonecore: cannot replace the signer of an existing or pending installation")
+		}
 		return nil
 	}
-	legacy := c.push.data.InstallationKey
+
+	// d958's first platform build did not persist the public half beside an accepted
+	// installation. Absence of the old exportable scalar proves this sealed state was in
+	// platform mode; bind the Keystore key once. An installed state that still carries the
+	// old scalar is a known different authority and must never be overwritten.
+	if c.push.data.InstallationID != "" {
+		if len(c.push.data.InstallationKey) != 0 {
+			return errors.New("phonecore: cannot replace the signer of an existing installation")
+		}
+		return c.persistPlatformInstallationPublicKeyLocked(public)
+	}
+
+	// An outcome-unknown legacy registration already names the exact public key in its
+	// durable request body. Rebind only that key; accepting the current Keystore alias by
+	// fiat could orphan an installation the gateway created before the response was lost.
+	if pending := c.push.data.PendingRegister; pending != nil {
+		var body struct {
+			InstallationPublicKey string `json:"installation_public_key"`
+		}
+		if err := json.Unmarshal(pending.Body, &body); err != nil {
+			return fmt.Errorf("phonecore: decode pending registration authority: %w", err)
+		}
+		pendingPublic, err := base64.RawURLEncoding.DecodeString(body.InstallationPublicKey)
+		if err != nil || !validPlatformInstallationPublicKey(pendingPublic) || !bytes.Equal(pendingPublic, public) {
+			return errors.New("phonecore: platform signer does not match pending registration authority")
+		}
+		return c.persistPlatformInstallationPublicKeyLocked(public)
+	}
+
+	legacy := append([]byte(nil), c.push.data.InstallationKey...)
 	c.push.data.InstallationKey = nil
-	if err := c.push.persist(); err != nil {
+	if err := c.persistPlatformInstallationPublicKeyLocked(public); err != nil {
 		c.push.data.InstallationKey = legacy
-		return fmt.Errorf("phonecore: remove legacy installation key: %w", err)
+		return fmt.Errorf("phonecore: replace unregistered legacy installation key: %w", err)
 	}
 	return nil
+}
+
+func (c *Core) persistPlatformInstallationPublicKeyLocked(public []byte) error {
+	previous := append([]byte(nil), c.push.data.InstallationPublicKey...)
+	c.push.data.InstallationPublicKey = append([]byte(nil), public...)
+	if err := c.push.persist(); err != nil {
+		c.push.data.InstallationPublicKey = previous
+		return err
+	}
+	return nil
+}
+
+func validPlatformInstallationPublicKey(public []byte) bool {
+	if len(public) != 65 || public[0] != 4 {
+		return false
+	}
+	x, y := elliptic.Unmarshal(elliptic.P256(), public)
+	return x != nil && y != nil && bytes.Equal(elliptic.Marshal(elliptic.P256(), x, y), public)
 }
 
 // InstallationSigner returns this phone's installation signer, MINTING AND PERSISTING the
@@ -70,6 +124,9 @@ func (c *Core) PreparePlatformInstallationSigner() error {
 func (c *Core) InstallationSigner() (InstallationSigner, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(c.push.data.InstallationPublicKey) != 0 {
+		return nil, errors.New("phonecore: platform installation authority requires its external signer")
+	}
 
 	if der := c.push.data.InstallationKey; len(der) != 0 {
 		key, err := x509.ParseECPrivateKey(der)

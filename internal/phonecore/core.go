@@ -290,6 +290,74 @@ func (c *Core) Mutate(fn func(*State)) error {
 	return nil
 }
 
+// MutateAndOwnStagedPushBinding applies the pairing pin mutation and records ownership of
+// addr in ONE durable phone-state write. StagePushBinding must have persisted the address
+// first. The write-ahead ownership phase deliberately remains after this method returns:
+// CompleteOwnedStagedPushBinding clears it only after the separate wake-tier push store has
+// durably removed the pending-revoke marker.
+//
+// This is a distinct method rather than an exported State field. A normal Mutate caller has
+// no authority to classify an allocation as owned, and allowing it to write the phase would
+// turn any UI state change into a way to suppress pairing rollback.
+func (c *Core) MutateAndOwnStagedPushBinding(addr PushAddress, fn func(*State)) error {
+	enc := EncodePushAddress(addr)
+	c.mu.Lock()
+	st := c.st.clone()
+	if st.pairingPushOwned != "" && st.pairingPushOwned != enc {
+		c.mu.Unlock()
+		return errors.New("phonecore: another staged push binding ownership decision is pending")
+	}
+	if !containsString(c.push.data.PendingPairingRevokes, enc) || c.push.binding(enc) == nil {
+		c.mu.Unlock()
+		return errors.New("phonecore: cannot own a push binding that is not durably staged")
+	}
+	fn(&st)
+	st.pairingPushOwned = enc
+	err := c.persistLocked(st)
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	c.rebind()
+	return nil
+}
+
+// PairingPushOwnership reports the exact staged address whose ownership committed with the
+// phone pin. Its presence is the only safe classification after process death: present means
+// finish adoption; absent means the still-pending allocation remains a revoke obligation.
+func (c *Core) PairingPushOwnership() (PushAddress, bool, error) {
+	c.mu.Lock()
+	enc := c.st.pairingPushOwned
+	c.mu.Unlock()
+	if enc == "" {
+		return PushAddress{}, false, nil
+	}
+	addr, err := decodePushAddress(enc)
+	if err != nil {
+		return PushAddress{}, false, fmt.Errorf("phonecore: decode pairing push ownership: %w", err)
+	}
+	return addr, true, nil
+}
+
+// CompleteOwnedStagedPushBinding idempotently finishes the cross-file transaction. It
+// persists the push-store disposition first and only then clears the write-ahead phase from
+// phone state. A crash between those writes replays the idempotent first leg on restart;
+// there is never a phase-absent state while the allocation is still classified pending.
+func (c *Core) CompleteOwnedStagedPushBinding(addr PushAddress) error {
+	enc := EncodePushAddress(addr)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.st.pairingPushOwned != enc {
+		return errors.New("phonecore: staged push binding is not the pin-owned address")
+	}
+	if err := c.removePendingPairingRevokeLocked(enc); err != nil {
+		return err
+	}
+	st := c.st.clone()
+	st.pairingPushOwned = ""
+	return c.persistLocked(st)
+}
+
 // PurgeKeys is PB-KEY-7's revoke/unpair purge at the durable layer: BOTH tier keys and
 // everything sealed under either one are destroyed, in memory and at rest. It REBINDS
 // afterwards for the same reason Save does -- the live objects must come off the purged epoch,

@@ -46,7 +46,7 @@ func (a *App) ConfigurePushRegistration(attestor PushAttestor, signer PushInstal
 		return classed(ErrClassInvalidRequest, fmt.Errorf(
 			"swarmmobile: Android Keystore installation public key is not a 65-byte uncompressed P-256 point"))
 	}
-	if err := a.core.PreparePlatformInstallationSigner(); err != nil {
+	if err := a.core.PreparePlatformInstallationSigner(public); err != nil {
 		return err
 	}
 	a.mu.Lock()

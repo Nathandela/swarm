@@ -133,6 +133,11 @@ const pushStateFileName = "push-state.sealed"
 // and the refused-wake counter ("dropped and counted, never acted on").
 type pushData struct {
 	InstallationID string `json:"installation_id,omitempty"`
+	// InstallationPublicKey is the canonical SEC1 uncompressed P-256 public key of
+	// Android's non-exportable Keystore signer. It is persisted before registration so a
+	// restarted process can reattach only the byte-identical platform authority; the
+	// private key never enters Go or this sealed container.
+	InstallationPublicKey []byte `json:"installation_public_key,omitempty"`
 	// LastFCMToken is the token the gateway last accepted (register or rotate). It is
 	// what makes a stale snapshot DETECTABLE at this seam at all -- without it, a queued
 	// caller's older token and a genuine rotation are the same PUT.
@@ -468,6 +473,16 @@ func (c *Core) PendingPushBindingRevocations() []PushAddress {
 		}
 	}
 	return out
+}
+
+// StagedPushBindingPending reports whether addr still carries the durable pre-commit
+// compensation obligation. Pairing rollback uses this after its callback returns: a binding
+// whose pin-owned transaction already completed has no pending marker and must not be revoked
+// merely because the final acknowledgement was lost.
+func (c *Core) StagedPushBindingPending(addr PushAddress) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return containsString(c.push.data.PendingPairingRevokes, EncodePushAddress(addr))
 }
 
 func (c *Core) removePendingPairingRevokeLocked(enc string) error {
