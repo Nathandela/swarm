@@ -1054,6 +1054,14 @@ func (d *Daemon) Core() *daemon.Daemon { return d.core }
 func (d *Daemon) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closing)
+		if d.authw != nil {
+			// FIRST (codex finding 7): the watcher's recycle launches sessions
+			// through the whole assembly (hook drains, capability authoring, the
+			// supervisor's arm), so nothing below may be torn down while it can
+			// still act. Its loops are stop-aware, so this wait is bounded by one
+			// in-flight action, not one sweep.
+			d.authw.close()
+		}
 		d.cancel()                   // stops tapGrids + engine.Run: no NEW grid samples/captures start
 		d.tapWG.Wait()               // tapGrids returned: no more sampleWG/captureWG.Add can race the Wait (F7)
 		d.sampleWG.Wait()            // drain in-flight grid samples (bounded by shim timeouts)
@@ -1062,9 +1070,6 @@ func (d *Daemon) Close() error {
 		d.drainPendingInteractions() // flush anything the append floor is still holding (below)
 		if d.sup != nil {
 			d.sup.close() // no supervision send may start once the Server below is closing
-		}
-		if d.authw != nil {
-			d.authw.close() // no recycle kill/launch may start once the core is closing
 		}
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
@@ -1175,6 +1180,11 @@ func endpointID(stateDir string) string {
 	sum := sha256.Sum256([]byte(stateDir))
 	return "ep-" + hex.EncodeToString(sum[:4])
 }
+
+// EndpointIDForStateDir exposes the derivation to `swarm relogin`, which welds
+// local state-dir reads to a dialled daemon and must refuse when the two are
+// not the same daemon (SWARM_DAEMON_SOCK can point anywhere -- audit M4).
+func EndpointIDForStateDir(stateDir string) string { return endpointID(stateDir) }
 
 // preLaunchWorktree creates an isolated git worktree for a session that opted into
 // isolation via the worktree flag (Epic 12), returning it as the agent's working

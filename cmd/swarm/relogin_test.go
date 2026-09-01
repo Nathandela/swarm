@@ -1,9 +1,10 @@
 package main
 
 // `swarm relogin` behind fakes: the ownership rule (watcher-owned rows are
-// reported, never double-recycled), the --force assertion for pre-stamping
-// sessions, the opt-out path where this verb IS the recycle, and the
-// never-delete-without-a-replacement guarantee.
+// reported, never double-recycled), the --force assertion (pre-stamping rows
+// AND same-account re-logins), the opt-out path where this verb IS the
+// recycle, the never-delete-without-a-replacement guarantee, the pre-kill
+// freshness recheck, and the C1 worktree hold.
 
 import (
 	"bytes"
@@ -32,11 +33,25 @@ type fakeReloginClient struct {
 	deleted   []string
 	launched  []protocol.LaunchReq
 	launchErr error
+	// busyOnRecheck flips the named session to mid-turn on every List AFTER the
+	// first, modeling a prompt that starts between classification and kill.
+	busyOnRecheck string
+	lists         int
 }
 
+func (f *fakeReloginClient) EndpointID() string { return "ep-t" }
+
 func (f *fakeReloginClient) List() ([]protocol.SessionView, error) {
+	f.lists++
 	out := make([]protocol.SessionView, len(f.views))
 	copy(out, f.views)
+	if f.busyOnRecheck != "" && f.lists > 1 {
+		for i := range out {
+			if out[i].ID == f.busyOnRecheck {
+				out[i].Status.Turn = status.TurnActive
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -63,9 +78,19 @@ func (f *fakeReloginClient) Delete(id string) error {
 	return nil
 }
 
+// dialTo wraps the fake in the lazy-dial seam runRelogin takes.
+func dialTo(c reloginClient) func() (reloginClient, error) {
+	return func() (reloginClient, error) { return c, nil }
+}
+
 // seedSession writes the meta.json half and returns the view half of one
 // running codex session.
 func seedSession(t *testing.T, stateDir, local, stamp, convID string, turn status.Turn) protocol.SessionView {
+	t.Helper()
+	return seedSessionOptions(t, stateDir, local, stamp, convID, turn, nil)
+}
+
+func seedSessionOptions(t *testing.T, stateDir, local, stamp, convID string, turn status.Turn, options map[string]string) protocol.SessionView {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(stateDir, local), 0o700); err != nil {
 		t.Fatal(err)
@@ -73,6 +98,7 @@ func seedSession(t *testing.T, stateDir, local, stamp, convID string, turn statu
 	m := persist.Meta{
 		SchemaVersion: 1, ID: local, AgentType: "codex", Name: "n-" + local,
 		Cwd: "/work", ConversationID: convID, AuthIdentity: stamp,
+		LaunchOptions: options,
 	}
 	raw, _ := json.Marshal(m)
 	if err := os.WriteFile(filepath.Join(stateDir, local, "meta.json"), raw, 0o600); err != nil {
@@ -80,7 +106,7 @@ func seedSession(t *testing.T, stateDir, local, stamp, convID string, turn statu
 	}
 	return protocol.SessionView{
 		ID: "ep-t/" + local, Agent: "codex", Name: "n-" + local, Cwd: "/work",
-		Status: status.Status{Process: status.ProcessRunning, Turn: turn},
+		Status: status.Status{Process: status.ProcessRunning, Turn: turn, Interaction: status.InteractionNone},
 	}
 }
 
@@ -101,7 +127,7 @@ func TestReloginLeavesStampedRowsToTheEnabledWatcher(t *testing.T) {
 	c := &fakeReloginClient{}
 	c.views = []protocol.SessionView{seedSession(t, dir, "s1", reloginIDOld, "01a05600-0000-7000-8000-000000000001", status.TurnIdle)}
 	var out, errb bytes.Buffer
-	if code := runRelogin(nil, c, dir, &out, &errb); code != 0 {
+	if code := runRelogin(nil, dialTo(c), dir, &out, &errb); code != 0 {
 		t.Fatalf("exit = %d, stderr %s", code, errb.String())
 	}
 	if len(c.killed) != 0 {
@@ -112,26 +138,36 @@ func TestReloginLeavesStampedRowsToTheEnabledWatcher(t *testing.T) {
 	}
 }
 
-func TestReloginForceRecyclesOnlyUnstampedRows(t *testing.T) {
+func TestReloginForceRecyclesWhatTheWatcherCannotJudge(t *testing.T) {
 	withReloginSeams(t, reloginIDCurrent)
 	dir := t.TempDir()
 	c := &fakeReloginClient{}
 	c.views = []protocol.SessionView{
 		seedSession(t, dir, "stamped", reloginIDOld, "01a05600-0000-7000-8000-000000000002", status.TurnIdle),
 		seedSession(t, dir, "unstamped", "", "01a05600-0000-7000-8000-000000000003", status.TurnIdle),
+		// The H2 case: a SAME-ACCOUNT logout/login leaves the stamp matching
+		// while the in-memory tokens are revoked. Only the human can assert it.
+		seedSession(t, dir, "sameacct", reloginIDCurrent, "01a05600-0000-7000-8000-000000000004", status.TurnIdle),
 	}
 	var out, errb bytes.Buffer
-	if code := runRelogin([]string{"--force"}, c, dir, &out, &errb); code != 0 {
+	if code := runRelogin([]string{"--force"}, dialTo(c), dir, &out, &errb); code != 0 {
 		t.Fatalf("exit = %d, stderr %s", code, errb.String())
 	}
-	if len(c.killed) != 1 || c.killed[0] != "ep-t/unstamped" {
-		t.Fatalf("killed %v; --force asserts only what the watcher cannot judge", c.killed)
+	for _, want := range []string{"ep-t/unstamped", "ep-t/sameacct"} {
+		found := false
+		for _, k := range c.killed {
+			if k == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("killed %v; --force must recycle %s (the watcher cannot judge it)", c.killed, want)
+		}
 	}
-	if len(c.launched) != 1 || c.launched[0].Options[protocol.OptionResumeFrom] != "ep-t/unstamped" {
-		t.Fatalf("launched %+v; want one resume of the unstamped row", c.launched)
-	}
-	if len(c.deleted) != 1 || c.deleted[0] != "ep-t/unstamped" {
-		t.Fatalf("deleted %v; want the recycled row removed", c.deleted)
+	for _, k := range c.killed {
+		if k == "ep-t/stamped" {
+			t.Errorf("killed %v; the stamped-stale row stays watcher-owned even under --force", c.killed)
+		}
 	}
 }
 
@@ -143,16 +179,16 @@ func TestReloginRecyclesEverythingWhenTheWatcherIsOff(t *testing.T) {
 	}
 	c := &fakeReloginClient{}
 	c.views = []protocol.SessionView{
-		seedSession(t, dir, "stamped", reloginIDOld, "01a05600-0000-7000-8000-000000000004", status.TurnIdle),
-		seedSession(t, dir, "unstamped", "", "01a05600-0000-7000-8000-000000000005", status.TurnIdle),
-		seedSession(t, dir, "current", reloginIDCurrent, "01a05600-0000-7000-8000-000000000006", status.TurnIdle),
+		seedSession(t, dir, "stamped", reloginIDOld, "01a05600-0000-7000-8000-000000000005", status.TurnIdle),
+		seedSession(t, dir, "unstamped", "", "01a05600-0000-7000-8000-000000000006", status.TurnIdle),
+		seedSession(t, dir, "current", reloginIDCurrent, "01a05600-0000-7000-8000-000000000007", status.TurnIdle),
 	}
 	var out, errb bytes.Buffer
-	if code := runRelogin(nil, c, dir, &out, &errb); code != 0 {
+	if code := runRelogin(nil, dialTo(c), dir, &out, &errb); code != 0 {
 		t.Fatalf("exit = %d, stderr %s", code, errb.String())
 	}
 	if len(c.killed) != 2 {
-		t.Fatalf("killed %v; with the watcher off this verb IS the recycle path (and the current row stays)", c.killed)
+		t.Fatalf("killed %v; with the watcher off this verb IS the recycle path (and the current row stays without --force)", c.killed)
 	}
 	for _, req := range c.launched {
 		if req.Name == "" || req.Cwd == "" || len(req.Env) == 0 {
@@ -168,9 +204,9 @@ func TestReloginDryRunActsOnNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &fakeReloginClient{}
-	c.views = []protocol.SessionView{seedSession(t, dir, "s1", reloginIDOld, "01a05600-0000-7000-8000-000000000007", status.TurnIdle)}
+	c.views = []protocol.SessionView{seedSession(t, dir, "s1", reloginIDOld, "01a05600-0000-7000-8000-000000000008", status.TurnIdle)}
 	var out, errb bytes.Buffer
-	if code := runRelogin([]string{"--dry-run"}, c, dir, &out, &errb); code != 0 {
+	if code := runRelogin([]string{"--dry-run"}, dialTo(c), dir, &out, &errb); code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
 	if len(c.killed) != 0 || len(c.launched) != 0 || len(c.deleted) != 0 {
@@ -181,7 +217,7 @@ func TestReloginDryRunActsOnNothing(t *testing.T) {
 	}
 }
 
-func TestReloginDefersMidTurnAndSkipsUnresumable(t *testing.T) {
+func TestReloginDefersHoldsAndWorktrees(t *testing.T) {
 	withReloginSeams(t, reloginIDCurrent)
 	dir := t.TempDir()
 	if err := skeleton.SetAuthWatchDisabled(dir, true); err != nil {
@@ -189,18 +225,45 @@ func TestReloginDefersMidTurnAndSkipsUnresumable(t *testing.T) {
 	}
 	c := &fakeReloginClient{}
 	c.views = []protocol.SessionView{
-		seedSession(t, dir, "busy", reloginIDOld, "01a05600-0000-7000-8000-000000000008", status.TurnActive),
+		seedSession(t, dir, "busy", reloginIDOld, "01a05600-0000-7000-8000-000000000009", status.TurnActive),
 		seedSession(t, dir, "noconv", reloginIDOld, "", status.TurnIdle),
+		seedSessionOptions(t, dir, "isolated", reloginIDOld, "01a05600-0000-7000-8000-00000000000a", status.TurnIdle,
+			map[string]string{protocol.OptionWorktree: "true"}),
 	}
 	var out, errb bytes.Buffer
-	if code := runRelogin(nil, c, dir, &out, &errb); code != 0 {
+	if code := runRelogin(nil, dialTo(c), dir, &out, &errb); code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
 	if len(c.killed) != 0 {
-		t.Fatalf("killed %v; a mid-turn or unresumable session must never be killed here", c.killed)
+		t.Fatalf("killed %v; mid-turn, unresumable and worktree-isolated sessions must never be killed here", c.killed)
 	}
-	if !strings.Contains(out.String(), "deferred") || !strings.Contains(out.String(), "manual") {
-		t.Fatalf("output %q does not explain the two holds", out.String())
+	for _, want := range []string{"deferred", "manual", "worktree-isolated"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output %q does not explain the %q hold", out.String(), want)
+		}
+	}
+}
+
+// TestReloginRechecksFreshnessBeforeTheKill pins codex finding 6 for the
+// manual verb: the roster snapshot is stale by the time a long sweep reaches a
+// row, so a session that went busy since is skipped, never killed.
+func TestReloginRechecksFreshnessBeforeTheKill(t *testing.T) {
+	withReloginSeams(t, reloginIDCurrent)
+	dir := t.TempDir()
+	if err := skeleton.SetAuthWatchDisabled(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	c := &fakeReloginClient{busyOnRecheck: "ep-t/s1"}
+	c.views = []protocol.SessionView{seedSession(t, dir, "s1", reloginIDOld, "01a05600-0000-7000-8000-00000000000b", status.TurnIdle)}
+	var out, errb bytes.Buffer
+	if code := runRelogin(nil, dialTo(c), dir, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, stderr %s", code, errb.String())
+	}
+	if len(c.killed) != 0 {
+		t.Fatalf("killed %v; a session that went busy since the roster was read must be skipped", c.killed)
+	}
+	if !strings.Contains(out.String(), "went busy") {
+		t.Fatalf("output %q does not explain the skip", out.String())
 	}
 }
 
@@ -211,9 +274,9 @@ func TestReloginFailedResumeKeepsTheEndedRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &fakeReloginClient{launchErr: errors.New("binary missing")}
-	c.views = []protocol.SessionView{seedSession(t, dir, "s1", reloginIDOld, "01a05600-0000-7000-8000-000000000009", status.TurnIdle)}
+	c.views = []protocol.SessionView{seedSession(t, dir, "s1", reloginIDOld, "01a05600-0000-7000-8000-00000000000c", status.TurnIdle)}
 	var out, errb bytes.Buffer
-	if code := runRelogin(nil, c, dir, &out, &errb); code != 1 {
+	if code := runRelogin(nil, dialTo(c), dir, &out, &errb); code != 1 {
 		t.Fatalf("exit = %d; a failed resume must be a failed run", code)
 	}
 	if len(c.deleted) != 0 {
@@ -221,17 +284,20 @@ func TestReloginFailedResumeKeepsTheEndedRow(t *testing.T) {
 	}
 }
 
-func TestReloginAutoTogglesTheWatcherFile(t *testing.T) {
+// TestReloginAutoNeedsNoDaemon pins audit L3: toggling the watcher is a local
+// file operation and must work with nothing to dial.
+func TestReloginAutoNeedsNoDaemon(t *testing.T) {
 	withReloginSeams(t, reloginIDCurrent)
 	dir := t.TempDir()
+	dead := func() (reloginClient, error) { return nil, errors.New("no daemon") }
 	var out, errb bytes.Buffer
-	if code := runRelogin([]string{"--auto", "off"}, &fakeReloginClient{}, dir, &out, &errb); code != 0 {
-		t.Fatalf("--auto off exit = %d", code)
+	if code := runRelogin([]string{"--auto", "off"}, dead, dir, &out, &errb); code != 0 {
+		t.Fatalf("--auto off exit = %d, stderr %s", code, errb.String())
 	}
 	if !skeleton.AuthWatchDisabled(dir) {
 		t.Fatal("--auto off did not disable the watcher")
 	}
-	if code := runRelogin([]string{"--auto", "on"}, &fakeReloginClient{}, dir, &out, &errb); code != 0 {
+	if code := runRelogin([]string{"--auto", "on"}, dead, dir, &out, &errb); code != 0 {
 		t.Fatalf("--auto on exit = %d", code)
 	}
 	if skeleton.AuthWatchDisabled(dir) {
@@ -246,9 +312,9 @@ func TestReloginHoldsWhenCredentialsAreUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &fakeReloginClient{}
-	c.views = []protocol.SessionView{seedSession(t, dir, "s1", reloginIDOld, "01a05600-0000-7000-8000-00000000000a", status.TurnIdle)}
+	c.views = []protocol.SessionView{seedSession(t, dir, "s1", reloginIDOld, "01a05600-0000-7000-8000-00000000000d", status.TurnIdle)}
 	var out, errb bytes.Buffer
-	if code := runRelogin(nil, c, dir, &out, &errb); code != 0 {
+	if code := runRelogin(nil, dialTo(c), dir, &out, &errb); code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
 	if len(c.killed) != 0 {

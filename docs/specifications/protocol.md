@@ -238,6 +238,19 @@ validates the canonical identity, composes the adapter's resume argv, persists t
 identity with the launch, and reuses an existing row with the same provider and
 identity. The two resume keys are mutually exclusive.
 
+A `resume_from` launch inherits the SOURCE's persisted launch options beneath the
+request's own (request keys win), so a resumed session keeps its `model` and
+`sandbox` without the client restating them (ADR-024 side-fix). The reserved
+orchestration keys — `resume_from`, `handoff_from`, `resume_conversation_id`,
+`worktree` and the dev-only `script` — never chain: in particular a resumed
+session is NEVER re-isolated into a fresh worktree, whatever the source opted
+into. The new session is seeded with the source's conversation identity before
+launch, and a source that already has a RUNNING resumed child yields that child
+instead of a duplicate (one live resume per source; the same launch replayed
+returns the same session). A remote preset therefore observes options on the
+resumed session beyond those the preset itself named — they are the source's own
+persisted options, same trust domain, never client-supplied at resume time.
+
 A third option key is reserved for the hands-off handoff (ADR-010 Amendment 4).
 `handoff_from` carries the NAMESPACED id of the SOURCE session whose conversation
 the new session is told to go and read; the source is never signalled, stopped or

@@ -89,9 +89,25 @@ func TestGarbageAndEmptyFailClosed(t *testing.T) {
 		"empty bytes":   "",
 		"no account":    `{"auth_mode":"chatgpt","tokens":{}}`,
 		"truncated mid": `{"auth_mode":"chatgpt","tokens":{"account_id":"acc`,
+		// codex finding 9: a chatgpt login with a STALE API key left beside it
+		// must hold, never derive a valid-but-wrong identity from the key.
+		"chatgpt with stale key": `{"auth_mode":"chatgpt","OPENAI_API_KEY":"sk-stale","tokens":{}}`,
+		// and apikey mode never borrows an account id.
+		"apikey without key": `{"auth_mode":"apikey","tokens":{"account_id":"acct-1"}}`,
 	} {
 		if id, ok := p.AuthIdentity([]byte(raw)); ok {
-			t.Errorf("%s: derived identity %q from unparseable credentials; must hold", name, id)
+			t.Errorf("%s: derived identity %q from ambiguous credentials; must hold", name, id)
 		}
+	}
+}
+
+// TestModesNeverCollide: the same underlying string under different modes is a
+// different identity (the mode participates in the digest).
+func TestModesNeverCollide(t *testing.T) {
+	p := probe(t)
+	a, okA := p.AuthIdentity([]byte(`{"auth_mode":"chatgpt","tokens":{"account_id":"x"}}`))
+	b, okB := p.AuthIdentity([]byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"x"}`))
+	if !okA || !okB || a == b {
+		t.Fatalf("mode collision: %q vs %q (ok %v %v)", a, b, okA, okB)
 	}
 }

@@ -47,6 +47,11 @@ func TestResumeCarriesTheSourceLaunchOptions(t *testing.T) {
 	if got.Options["model"] != "gpt-5.6-sol" || got.Options["sandbox"] != "workspace-write" {
 		t.Errorf("resolved Options %v did not persist the merged launch options; a chained resume would drop them", got.Options)
 	}
+	// The resumed process continues the source's thread, so the new session is
+	// seeded with the SAME conversation identity from birth (audit L4).
+	if got.ConversationID != src.ConversationID {
+		t.Errorf("ConversationID = %q; want the source's %q seeded before launch", got.ConversationID, src.ConversationID)
+	}
 }
 
 func TestResumeRequestOptionsBeatTheSources(t *testing.T) {
@@ -78,8 +83,11 @@ func TestResumeNeverChainsReservedKeys(t *testing.T) {
 		protocol.OptionResumeFrom:           protocol.NamespacedID(testEndpoint, "greatgrandparent"),
 		protocol.OptionHandoffFrom:          protocol.NamespacedID(testEndpoint, "elsewhere"),
 		protocol.OptionResumeConversationID: "01a056ec-0000-7961-84cc-b4fa60e47aee",
-		"script":                            "/tmp/fake-script",
-		"model":                             "gpt-5.6-sol",
+		// OptionWorktree chaining is audit C1: a resume that re-isolates mints a
+		// fresh checkout from HEAD and arms a force-remove of the old one.
+		protocol.OptionWorktree: "true",
+		"script":                "/tmp/fake-script",
+		"model":                 "gpt-5.6-sol",
 	})
 	spec := daemon.LaunchSpec{
 		AgentType: "codex",
@@ -90,7 +98,7 @@ func TestResumeNeverChainsReservedKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume rejected: %v", err)
 	}
-	for _, reserved := range []string{protocol.OptionHandoffFrom, protocol.OptionResumeConversationID, "script"} {
+	for _, reserved := range []string{protocol.OptionHandoffFrom, protocol.OptionResumeConversationID, protocol.OptionWorktree, "script"} {
 		if _, present := got.Options[reserved]; present {
 			t.Errorf("reserved key %q chained through the resume merge", reserved)
 		}
@@ -100,6 +108,27 @@ func TestResumeNeverChainsReservedKeys(t *testing.T) {
 	}
 	if got.ResumedFrom != local {
 		t.Errorf("ResumedFrom = %q; want %q", got.ResumedFrom, local)
+	}
+}
+
+// TestOneLiveResumePerSource pins the audit M1 dedup's pure half: a source
+// with a RUNNING resumed child yields that child; an ended child, a child of
+// another agent, or a child of another source never matches.
+func TestOneLiveResumePerSource(t *testing.T) {
+	running := persist.Meta{ID: "child1", AgentType: "codex", ResumedFrom: "src",
+		Status: status.Status{Process: status.ProcessRunning}}
+	ended := persist.Meta{ID: "child0", AgentType: "codex", ResumedFrom: "src",
+		Status: status.Status{Process: status.ProcessExited}}
+	otherAgent := persist.Meta{ID: "child2", AgentType: "claude", ResumedFrom: "src",
+		Status: status.Status{Process: status.ProcessRunning}}
+	otherSource := persist.Meta{ID: "child3", AgentType: "codex", ResumedFrom: "elsewhere",
+		Status: status.Status{Process: status.ProcessRunning}}
+
+	if got, ok := runningResumeOf([]persist.Meta{ended, otherAgent, otherSource, running}, "codex", "src"); !ok || got.ID != "child1" {
+		t.Fatalf("runningResumeOf = %v/%v; want the running child1", got.ID, ok)
+	}
+	if _, ok := runningResumeOf([]persist.Meta{ended, otherAgent, otherSource}, "codex", "src"); ok {
+		t.Fatal("a source with no RUNNING resumed child must not dedup; the ended child is resumable again")
 	}
 }
 

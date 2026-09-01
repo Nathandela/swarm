@@ -19,9 +19,12 @@ func (codexAdapter) AuthCredentialsFile() string {
 	return filepath.Join(".codex", "auth.json")
 }
 
-// AuthIdentity derives the account identity from auth.json: auth_mode plus
-// tokens.account_id (ChatGPT login), falling back to the raw API key (apikey
-// mode). Codex rewrites auth.json with fresh tokens and a new last_refresh on
+// AuthIdentity derives the account identity from auth.json, honoring the
+// file's OWN auth_mode: a chatgpt login is identified by tokens.account_id and
+// NOTHING ELSE (a stale API key left beside it must not stand in -- a valid-
+// but-wrong identity is worse than "unknown", which holds); apikey mode is
+// identified by the key. An absent/unknown mode falls back to account_id
+// alone. Codex rewrites auth.json with fresh tokens and a new last_refresh on
 // every routine refresh, so the derivation deliberately reads NOTHING but the
 // account fields -- a refresh yields the same identity, a re-login to another
 // account yields a different one. The identity is a SHA-256 digest so it never
@@ -37,9 +40,12 @@ func (codexAdapter) AuthIdentity(raw []byte) (string, bool) {
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return "", false
 	}
-	account := f.Tokens.AccountID
-	if account == "" {
+	var account string
+	switch f.AuthMode {
+	case "apikey":
 		account = f.APIKey
+	default: // "chatgpt", and any mode this build does not know
+		account = f.Tokens.AccountID
 	}
 	if account == "" {
 		return "", false

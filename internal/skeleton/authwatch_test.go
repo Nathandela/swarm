@@ -2,13 +2,19 @@ package skeleton
 
 // The ADR-024 auth watcher's sweep logic, pinned pure: every seam is a fake and
 // ticks are driven by hand (the run goroutine is never started), so each test
-// is one deterministic pass over an authored roster.
+// is one deterministic pass over an authored roster. The audit-round guarantees
+// are pinned by name: a kill the watcher performed is a resume OWED across
+// timeouts, restarts and crashes (H1); the resume launches from the session's
+// own environment and lineage (H3/M2); feasibility precedes destruction (H3);
+// worktree sessions are never auto-recycled (C1); interactions defer like
+// turns (M3); the first tick after start never begins a kill (codex 6).
 
 import (
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -24,18 +30,19 @@ const (
 )
 
 // authFake is the roster + action recorder behind every watcher seam. kill
-// marks the session exited immediately (the daemon monitor's record, without
-// the daemon); launch registers a fresh session stamped with the CURRENT
-// identity, exactly as the production stamp does.
+// marks the session exited immediately unless killNoExit models a slow monitor;
+// launch registers a fresh session stamped with the CURRENT identity, exactly
+// as the production stamp does.
 type authFake struct {
-	identity  string
-	sessions  map[string]*persist.Meta
-	killed    []string
-	launched  []daemon.LaunchSpec
-	deleted   []string
-	launchErr error
-	killErr   error
-	launchN   int
+	identity   string
+	sessions   map[string]*persist.Meta
+	killed     []string
+	launched   []daemon.LaunchSpec
+	deleted    []string
+	launchErr  error
+	killErr    error
+	killNoExit bool
+	launchN    int
 }
 
 func newAuthFake(identity string) *authFake {
@@ -65,7 +72,7 @@ func (f *authFake) kill(local string) error {
 		return f.killErr
 	}
 	f.killed = append(f.killed, local)
-	if m, ok := f.sessions[local]; ok {
+	if m, ok := f.sessions[local]; ok && !f.killNoExit {
 		m.Status.Process = status.ProcessExited
 	}
 	return nil
@@ -80,7 +87,7 @@ func (f *authFake) launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	m := persist.Meta{
 		ID: "fresh" + string(rune('0'+f.launchN)), AgentType: spec.AgentType,
 		Name: spec.Name, Cwd: spec.Cwd, AuthIdentity: f.identity,
-		Status: status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle},
+		Status: status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionNone},
 	}
 	f.add(m)
 	return m, nil
@@ -93,7 +100,8 @@ func (f *authFake) remove(local string) error {
 }
 
 // testWatcher builds a watcher over the fake WITHOUT starting the run
-// goroutine; tests call tick() by hand.
+// goroutine; tests call tick() by hand. settled defaults to true (the sweep
+// under test is the steady state); the first-tick hold has its own test.
 func testWatcher(t *testing.T, f *authFake) *authWatcher {
 	t.Helper()
 	return &authWatcher{
@@ -102,19 +110,23 @@ func testWatcher(t *testing.T, f *authFake) *authWatcher {
 		agents:     []string{"codex"},
 		identity:   func(string) string { return f.identity },
 		list:       f.list, get: f.get, kill: f.kill, launch: f.launch, remove: f.remove,
-		sleep:    func(time.Duration) {},
+		resolve:  func(string, []string) (string, error) { return "/abs/codex", nil },
+		pause:    func(time.Duration) {},
 		exitWait: time.Second, exitPoll: time.Millisecond,
-		state:  authWatchState{Identities: map[string]string{}, Pending: map[string][]string{}},
-		warned: map[string]bool{},
-		stop:   make(chan struct{}),
+		state:   authWatchState{Identities: map[string]string{}, Pending: map[string][]string{}, Killed: map[string]bool{}},
+		settled: true,
+		warned:  map[string]bool{},
+		stop:    make(chan struct{}),
 	}
 }
 
 func runningCodex(id, stamp string, turn status.Turn, convID string) persist.Meta {
 	return persist.Meta{
 		ID: id, AgentType: "codex", Name: "n-" + id, Cwd: "/work/" + id,
+		Env:            []string{"PATH=/agent/bin", "HOME=/agent/home"},
 		ConversationID: convID, AuthIdentity: stamp,
-		Status: status.Status{Process: status.ProcessRunning, Turn: turn},
+		SpawnedFrom: "parent-" + id, SpawnIntent: "delegate",
+		Status: status.Status{Process: status.ProcessRunning, Turn: turn, Interaction: status.InteractionNone},
 	}
 }
 
@@ -168,23 +180,158 @@ func TestReloginRecyclesAnIdleStaleSession(t *testing.T) {
 	if spec.Name != "n-s1" || spec.Cwd != "/work/s1" || spec.AgentType != "codex" {
 		t.Errorf("the resumed session lost its identity: %+v", spec)
 	}
-	if spec.ClientEnv != nil {
-		t.Errorf("ClientEnv = %v; must stay nil so coreAPI resolves the daemon-saved env", spec.ClientEnv)
-	}
 	if len(f.deleted) != 1 || f.deleted[0] != "s1" {
 		t.Errorf("deleted %v; want the stale row s1 (the owner's one-row-per-conversation rule)", f.deleted)
 	}
 	if len(w.state.Pending["codex"]) != 0 {
 		t.Errorf("pending %v after a completed recycle; want empty", w.state.Pending["codex"])
 	}
+	if len(w.state.Killed) != 0 {
+		t.Errorf("killed marks %v after a completed recycle; want none", w.state.Killed)
+	}
 	if w.state.Identities["codex"] != identityB {
 		t.Errorf("baseline = %q, want %q", w.state.Identities["codex"], identityB)
 	}
 }
 
+// TestARecycleCarriesTheSessionsEnvAndLineage pins audit H3/M2: the resume
+// launches from the SESSION's saved environment (its PATH resolved this agent;
+// its HOME/API key are what the conversation ran under), and its handoff
+// lineage survives under the new id.
+func TestARecycleCarriesTheSessionsEnvAndLineage(t *testing.T) {
+	src := runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000002")
+	src.Supervision = "passive"
+	f := newAuthFake(identityB)
+	f.add(src)
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.tick()
+	if len(f.launched) != 1 {
+		t.Fatalf("launched %d; want 1", len(f.launched))
+	}
+	spec := f.launched[0]
+	if !reflect.DeepEqual(spec.ClientEnv, src.Env) {
+		t.Errorf("ClientEnv = %v; want the session's own saved env %v", spec.ClientEnv, src.Env)
+	}
+	if spec.SpawnedFrom != src.SpawnedFrom || spec.SpawnIntent != src.SpawnIntent || spec.Supervision != src.Supervision {
+		t.Errorf("lineage lost: %+v", spec)
+	}
+}
+
+// TestAnUnresolvableBinaryHoldsBeforeTheKill pins audit H3's other half:
+// feasibility precedes destruction -- no kill may happen when the resume's
+// binary cannot resolve on the session's environment.
+func TestAnUnresolvableBinaryHoldsBeforeTheKill(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000003"))
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.resolve = func(string, []string) (string, error) { return "", errors.New("codex not on PATH") }
+	w.tick()
+	w.tick()
+	if len(f.killed) != 0 {
+		t.Fatalf("killed %v although the resume could never launch; feasibility must precede destruction", f.killed)
+	}
+	if got := w.state.Pending["codex"]; len(got) != 1 {
+		t.Fatalf("pending = %v; the held session stays owed", got)
+	}
+}
+
+// TestAKillTimeoutKeepsTheResumeOwed pins audit H1: an exit-wait timeout is
+// not a drop -- the killed mark makes the ended session a resume OWED, and a
+// later tick completes it.
+func TestAKillTimeoutKeepsTheResumeOwed(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000004"))
+	f.killNoExit = true // the monitor is slow: the exit is not recorded in time
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.exitWait = -time.Second // the deadline is already past
+	w.tick()
+	if len(f.killed) != 1 {
+		t.Fatalf("killed %v; want the kill to have happened", f.killed)
+	}
+	if len(f.launched) != 0 {
+		t.Fatalf("launched %d during the timeout tick; want 0", len(f.launched))
+	}
+	if !w.state.Killed["s1"] {
+		t.Fatal("the kill was not recorded as owed")
+	}
+	// The exit lands late; the next tick completes the owed resume.
+	f.sessions["s1"].Status.Process = status.ProcessExited
+	w.tick()
+	if len(f.launched) != 1 || len(f.deleted) != 1 {
+		t.Fatalf("after the late exit: launched %d deleted %v; want the owed resume to complete", len(f.launched), f.deleted)
+	}
+	if len(w.state.Killed) != 0 {
+		t.Fatalf("killed marks %v after completion; want none", w.state.Killed)
+	}
+}
+
+// TestACrashBetweenKillAndResumeIsCompletedByTheNextIncarnation pins the crash
+// half of audit H1: the durable killed mark makes the next daemon's first tick
+// complete the resume instead of dropping the session as "ended by other hands"
+// -- even before that incarnation is settled (an owed resume is not a new kill).
+func TestACrashBetweenKillAndResumeIsCompletedByTheNextIncarnation(t *testing.T) {
+	f := newAuthFake(identityB)
+	dead := runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000005")
+	dead.Status.Process = status.ProcessExited // the prior incarnation's kill landed
+	f.add(dead)
+	w := testWatcher(t, f)
+	w.settled = false // a fresh incarnation's very first tick
+	w.state.Identities["codex"] = identityB
+	w.state.Pending["codex"] = []string{"s1"}
+	w.state.Killed["s1"] = true
+	w.tick()
+	if len(f.launched) != 1 {
+		t.Fatalf("launched %d; the next incarnation must complete the owed resume", len(f.launched))
+	}
+	if len(f.deleted) != 1 || f.deleted[0] != "s1" {
+		t.Fatalf("deleted %v; want the stale row removed after the owed resume", f.deleted)
+	}
+}
+
+// TestASessionEndedByOtherHandsIsNotResurrected: without the killed mark, an
+// ended pending session was ended by someone else and stays theirs.
+func TestASessionEndedByOtherHandsIsNotResurrected(t *testing.T) {
+	f := newAuthFake(identityB)
+	dead := runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000006")
+	dead.Status.Process = status.ProcessExited
+	f.add(dead)
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityB
+	w.state.Pending["codex"] = []string{"s1"}
+	w.tick()
+	if len(f.launched) != 0 {
+		t.Fatalf("launched %d; a session ended by other hands is not ours to resurrect", len(f.launched))
+	}
+	if len(w.state.Pending["codex"]) != 0 {
+		t.Fatalf("pending = %v; want the entry dropped", w.state.Pending["codex"])
+	}
+}
+
+// TestTheFirstTickAfterStartNeverStartsAKill pins codex finding 6: reconciled
+// sessions are seeded from persisted status, so the first pass never begins a
+// kill; the second does.
+func TestTheFirstTickAfterStartNeverStartsAKill(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000007"))
+	w := testWatcher(t, f)
+	w.settled = false
+	w.state.Identities["codex"] = identityA
+	w.tick()
+	if len(f.killed) != 0 {
+		t.Fatalf("killed %v on the first tick after start; persisted status may lag reality", f.killed)
+	}
+	w.tick()
+	if len(f.killed) != 1 {
+		t.Fatalf("killed %v on the settled tick; want the recycle", f.killed)
+	}
+}
+
 func TestReloginIncludesPreFeatureUnstampedSessions(t *testing.T) {
 	f := newAuthFake(identityB)
-	f.add(runningCodex("old1", "", status.TurnIdle, "01a05600-0000-7000-8000-000000000002"))
+	f.add(runningCodex("old1", "", status.TurnIdle, "01a05600-0000-7000-8000-000000000008"))
 	w := testWatcher(t, f)
 	w.state.Identities["codex"] = identityA
 	w.tick()
@@ -195,7 +342,7 @@ func TestReloginIncludesPreFeatureUnstampedSessions(t *testing.T) {
 
 func TestUnstampedSessionsAreNeverTouchedWithoutAnObservedChange(t *testing.T) {
 	f := newAuthFake(identityA)
-	f.add(runningCodex("old1", "", status.TurnIdle, "01a05600-0000-7000-8000-000000000002"))
+	f.add(runningCodex("old1", "", status.TurnIdle, "01a05600-0000-7000-8000-000000000009"))
 	w := testWatcher(t, f)
 	w.state.Identities["codex"] = identityA // no change this tick
 	w.tick()
@@ -209,7 +356,7 @@ func TestStampedMismatchIsSweptEvenWithoutAnObservedChange(t *testing.T) {
 	// already matches the disk, but a session's stamp disagrees. The stamp is
 	// ground truth.
 	f := newAuthFake(identityB)
-	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000003"))
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-00000000000a"))
 	w := testWatcher(t, f)
 	w.state.Identities["codex"] = identityB
 	w.tick()
@@ -219,7 +366,7 @@ func TestStampedMismatchIsSweptEvenWithoutAnObservedChange(t *testing.T) {
 }
 
 func TestAWorkingSessionIsDeferredUntilIdle(t *testing.T) {
-	const conv = "01a05600-0000-7000-8000-000000000004"
+	const conv = "01a05600-0000-7000-8000-00000000000b"
 	f := newAuthFake(identityB)
 	f.add(runningCodex("s1", identityA, status.TurnActive, conv))
 	w := testWatcher(t, f)
@@ -241,12 +388,47 @@ func TestAWorkingSessionIsDeferredUntilIdle(t *testing.T) {
 
 func TestAnUnknownTurnDefersLikeAWorkingOne(t *testing.T) {
 	f := newAuthFake(identityB)
-	f.add(runningCodex("s1", identityA, status.TurnUnknown, "01a05600-0000-7000-8000-000000000005"))
+	f.add(runningCodex("s1", identityA, status.TurnUnknown, "01a05600-0000-7000-8000-00000000000c"))
 	w := testWatcher(t, f)
 	w.state.Identities["codex"] = identityA
 	w.tick()
 	if len(f.killed) != 0 {
 		t.Fatalf("killed %v; an unclassified turn gates conservatively", f.killed)
+	}
+}
+
+// TestAnInteractionDefersLikeAWorkingTurn pins audit M3: a permission prompt
+// rides an IDLE turn, and killing it would discard the pending decision.
+func TestAnInteractionDefersLikeAWorkingTurn(t *testing.T) {
+	m := runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-00000000000d")
+	m.Status.Interaction = status.InteractionPermission
+	f := newAuthFake(identityB)
+	f.add(m)
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.tick()
+	if len(f.killed) != 0 {
+		t.Fatalf("killed %v; a session awaiting an approval must be deferred", f.killed)
+	}
+}
+
+// TestWorktreeSessionsAreNeverAutoRecycled pins audit C1: the resume cannot
+// follow the conversation into its checkout, and the auto-delete would remove
+// the worktree -- with uncommitted agent work -- by force.
+func TestWorktreeSessionsAreNeverAutoRecycled(t *testing.T) {
+	m := runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-00000000000e")
+	m.LaunchOptions = map[string]string{protocol.OptionWorktree: "true"}
+	f := newAuthFake(identityB)
+	f.add(m)
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.tick()
+	w.tick()
+	if len(f.killed) != 0 {
+		t.Fatalf("killed %v; a worktree-isolated session is manual-only", f.killed)
+	}
+	if got := w.state.Pending["codex"]; len(got) != 1 {
+		t.Fatalf("pending = %v; the held session stays visible in state", got)
 	}
 }
 
@@ -263,14 +445,14 @@ func TestNoConversationIDIsLeftRunningAndWarnedOnce(t *testing.T) {
 	if got := w.state.Pending["codex"]; len(got) != 1 || got[0] != "s1" {
 		t.Fatalf("pending = %v; the unresumable session stays visible in state", got)
 	}
-	if !w.warned["s1"] {
+	if !w.warned["noconv:s1"] {
 		t.Fatal("the once-only warning was never recorded")
 	}
 }
 
 func TestLoggedOutWindowHoldsEverything(t *testing.T) {
 	f := newAuthFake("") // credentials missing or unparseable: identity unknown
-	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000006"))
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-00000000000f"))
 	w := testWatcher(t, f)
 	w.state.Identities["codex"] = identityA
 	w.tick()
@@ -284,8 +466,8 @@ func TestLoggedOutWindowHoldsEverything(t *testing.T) {
 
 func TestAFreshSessionUnderTheNewIdentityIsUntouched(t *testing.T) {
 	f := newAuthFake(identityB)
-	f.add(runningCodex("stale", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000007"))
-	f.add(runningCodex("fresh", identityB, status.TurnIdle, "01a05600-0000-7000-8000-000000000008"))
+	f.add(runningCodex("stale", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000010"))
+	f.add(runningCodex("fresh", identityB, status.TurnIdle, "01a05600-0000-7000-8000-000000000011"))
 	w := testWatcher(t, f)
 	w.state.Identities["codex"] = identityA
 	w.tick()
@@ -301,7 +483,7 @@ func TestDisabledSettingsHoldTheSweep(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newAuthFake(identityB)
-			f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000009"))
+			f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000012"))
 			w := testWatcher(t, f)
 			w.state.Identities["codex"] = identityA
 			if err := os.WriteFile(filepath.Join(w.stateDir, authWatchSettingsFile), []byte(body), 0o600); err != nil {
@@ -317,7 +499,7 @@ func TestDisabledSettingsHoldTheSweep(t *testing.T) {
 
 func TestAFailedResumeLeavesTheEndedRowAndStopsRetrying(t *testing.T) {
 	f := newAuthFake(identityB)
-	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-00000000000a"))
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000013"))
 	f.launchErr = errors.New("agent binary codex not found")
 	w := testWatcher(t, f)
 	w.state.Identities["codex"] = identityA
@@ -331,17 +513,23 @@ func TestAFailedResumeLeavesTheEndedRowAndStopsRetrying(t *testing.T) {
 	if got := w.state.Pending["codex"]; len(got) != 0 {
 		t.Fatalf("pending = %v; a failed resume must not kill-loop", got)
 	}
+	if len(w.state.Killed) != 0 {
+		t.Fatalf("killed marks %v after the drop; want none", w.state.Killed)
+	}
 }
 
 func TestAFailedKillIsRetriedNextTick(t *testing.T) {
 	f := newAuthFake(identityB)
-	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-00000000000b"))
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000014"))
 	f.killErr = errors.New("transient")
 	w := testWatcher(t, f)
 	w.state.Identities["codex"] = identityA
 	w.tick()
 	if got := w.state.Pending["codex"]; len(got) != 1 || got[0] != "s1" {
 		t.Fatalf("pending = %v; a failed kill must stay pending", got)
+	}
+	if len(w.state.Killed) != 0 {
+		t.Fatalf("killed marks %v after a kill that never happened; want none", w.state.Killed)
 	}
 	f.killErr = nil
 	w.tick()
@@ -352,7 +540,7 @@ func TestAFailedKillIsRetriedNextTick(t *testing.T) {
 
 func TestAPendingSweepSurvivesARestart(t *testing.T) {
 	f := newAuthFake(identityB)
-	f.add(runningCodex("s1", identityA, status.TurnActive, "01a05600-0000-7000-8000-00000000000c"))
+	f.add(runningCodex("s1", identityA, status.TurnActive, "01a05600-0000-7000-8000-000000000015"))
 	w := testWatcher(t, f)
 	w.state.Identities["codex"] = identityA
 	w.tick() // deferred: mid-turn -- but the pending set is already durable
@@ -387,5 +575,31 @@ func TestStateFileIsPrivate(t *testing.T) {
 	var st authWatchState
 	if err := json.Unmarshal(raw, &st); err != nil {
 		t.Fatalf("state file unparseable: %v", err)
+	}
+}
+
+// TestCredentialsReadIsConservative pins codex finding 9: non-regular files
+// and implausibly large files are refused before any read.
+func TestCredentialsReadIsConservative(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.json")
+	if err := os.WriteFile(big, make([]byte, 8), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(big, authCredentialsMaxBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCredentials(big); err == nil {
+		t.Fatal("an implausibly large credentials file was read")
+	}
+	if _, err := readCredentials(dir); err == nil {
+		t.Fatal("a directory was read as credentials")
+	}
+	ok := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(ok, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCredentials(ok); err != nil {
+		t.Fatalf("a small regular file was refused: %v", err)
 	}
 }
