@@ -20,6 +20,11 @@ on:
     tags:
       - 'v*'
 
+# Fail closed regardless of the repository's configurable token default. The
+# two publishing jobs below opt into only their own necessary write scopes.
+permissions:
+  contents: read
+
 jobs:
   gates:
     name: gates (ci.yml, reused)

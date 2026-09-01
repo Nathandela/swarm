@@ -62,6 +62,9 @@ func TestReleasePublishesOnlyImmutableTagImagesWithProvenance(t *testing.T) {
 	if wf.Permissions["packages"] == "write" {
 		t.Fatal("packages: write must not be granted workflow-wide")
 	}
+	if len(wf.Permissions) != 1 || wf.Permissions["contents"] != "read" {
+		t.Fatalf("release workflow default permissions = %#v, want only contents:read", wf.Permissions)
+	}
 
 	publish, ok := wf.Jobs["publish_containers"]
 	if !ok {
