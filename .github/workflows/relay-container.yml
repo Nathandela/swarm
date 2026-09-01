@@ -27,6 +27,8 @@ permissions:
 
 env:
   IMAGE: swarm-relay:ci
+  # docker-compose.yml deliberately has no mutable fallback tag.
+  RELAY_VERSION: v0.13.15
 
 jobs:
   image:

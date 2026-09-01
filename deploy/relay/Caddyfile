@@ -12,8 +12,8 @@
 # connections with NO extra directives -- unlike nginx, which needs an explicit
 # Upgrade/Connection header pass-through block. Nothing else is required below.
 #
-# Replace relay.example.com with the DNS name pointed at this VPS (see
-# docs/operations/relay-vps-deploy.md, "Point DNS"). Keep it SHORT: `swarm remote init`
+# The production DNS name is relay-swarm.dsfactory.org (see
+# docs/operations/relay-vps-deploy.md, "Point DNS"). Keep any future replacement SHORT: `swarm remote init`
 # caps --relay-url at 39 characters (pairing.MaxRelayURLLen), because the URL is carried
 # verbatim into the pairing QR, and "wss://" alone already spends 6 of those.
 #
@@ -46,7 +46,7 @@
 # procedure rather than treating the pin as permanent: if a Caddy upgrade ever drops it, the
 # pin WILL change and the fix is to recompute it and re-pair, not to debug an interception
 # that never happened.
-relay.example.com {
+relay-swarm.dsfactory.org {
 	tls {
 		reuse_private_keys
 	}

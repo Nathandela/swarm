@@ -98,6 +98,25 @@ func TestComposeServicesAreHardened(t *testing.T) {
 	}
 }
 
+func TestRelayImageVersionMustBeExplicitAndExamplesAreCurrent(t *testing.T) {
+	compose := read(t, "docker-compose.yml")
+	if !strings.Contains(compose, "${RELAY_VERSION:?") {
+		t.Fatal("compose must require an explicit immutable RELAY_VERSION")
+	}
+	for path, content := range map[string]string{
+		"docker-compose.yml": compose,
+		"Dockerfile":         read(t, "Dockerfile"),
+	} {
+		if strings.Contains(content, "v0.10.3") {
+			t.Errorf("%s still contains stale v0.10.3 release examples", path)
+		}
+	}
+	caddy := read(t, "Caddyfile")
+	if !strings.Contains(caddy, "relay-swarm.dsfactory.org") || strings.Contains(caddy, "relay.example.com {") {
+		t.Error("relay Caddyfile does not pin the public production hostname relay-swarm.dsfactory.org")
+	}
+}
+
 // workflowStep / workflowJob / workflowFile are the minimal parsed shape of
 // relay-container.yml this test needs. Parsing (gopkg.in/yaml.v3) instead of substring
 // matching is the point (committee finding Opus M5): a comment or a disabled job could
