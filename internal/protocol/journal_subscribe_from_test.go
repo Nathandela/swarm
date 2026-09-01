@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -25,6 +26,43 @@ func (j *legacyJournalBackend) JournalSubscribe() (<-chan JournalRecord, func())
 
 var _ JournalBackend = (*legacyJournalBackend)(nil)
 
+type restartableLegacyJournalBackend struct {
+	*stubDaemon
+	mu      sync.Mutex
+	sources []chan JournalRecord
+	calls   chan int
+}
+
+func newRestartableLegacyJournalBackend(sources ...chan JournalRecord) *restartableLegacyJournalBackend {
+	return &restartableLegacyJournalBackend{
+		stubDaemon: newStubDaemon(),
+		sources:    sources,
+		calls:      make(chan int, len(sources)),
+	}
+}
+
+func (j *restartableLegacyJournalBackend) JournalReadFrom(uint64) (JournalResume, error) {
+	return JournalResume{}, nil
+}
+
+func (j *restartableLegacyJournalBackend) JournalSubscribe() (<-chan JournalRecord, func()) {
+	j.mu.Lock()
+	call := len(j.sources)
+	var source chan JournalRecord
+	if len(j.sources) > 0 {
+		call = cap(j.calls) - len(j.sources) + 1
+		source = j.sources[0]
+		j.sources = j.sources[1:]
+	} else {
+		source = make(chan JournalRecord)
+	}
+	j.mu.Unlock()
+	j.calls <- call
+	return source, func() {}
+}
+
+var _ JournalBackend = (*restartableLegacyJournalBackend)(nil)
+
 func TestProtocol_JournalSubscribeFromCapabilityRequiresBackendSupport(t *testing.T) {
 	legacy := newLegacyJournalBackend()
 	sock := tmpSock(t)
@@ -47,6 +85,61 @@ func TestProtocol_JournalSubscribeFromCapabilityRequiresBackendSupport(t *testin
 	rc.writeControl(Control{Op: OpJournalSubscribe, EndpointID: rep.EndpointID})
 	if got := rc.readControl(); got.Op != OpOK {
 		t.Fatalf("legacy journal subscribe = %#v", got)
+	}
+}
+
+func TestProtocol_LegacyJournalFanoutResubscribesAfterSourceOverflow(t *testing.T) {
+	first := make(chan JournalRecord, 1)
+	second := make(chan JournalRecord, 1)
+	legacy := newRestartableLegacyJournalBackend(first, second)
+	sock := tmpSock(t)
+	srv, err := Serve(legacy, sock)
+	if err != nil {
+		t.Fatalf("Serve(restartable legacy journal backend): %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	if call := <-legacy.calls; call != 1 {
+		t.Fatalf("initial JournalSubscribe call = %d, want 1", call)
+	}
+	firstClient := rawDial(t, sock)
+	firstHello := firstClient.hello(Version, []string{CapJournal})
+	firstClient.writeControl(Control{Op: OpJournalSubscribe, EndpointID: firstHello.EndpointID})
+	if got := firstClient.readControl(); got.Op != OpOK {
+		t.Fatalf("first legacy subscribe = %#v", got)
+	}
+
+	first <- JournalRecord{Cursor: 1, SessionID: "s", Type: "session_state"}
+	if got := firstClient.readControl(); got.Op != OpJournalEvent || got.Cursor != 1 {
+		t.Fatalf("first legacy event = %#v", got)
+	}
+	// A bounded journal source closes on overflow. Every legacy client on that
+	// source must reconnect and replay, but the Server itself must establish a new
+	// backend source so the replacement connection has a live feed.
+	close(first)
+	_ = firstClient.conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := firstClient.readFrame(); err == nil {
+		t.Fatal("legacy source EOF left the old subscriber connected")
+	}
+	select {
+	case call := <-legacy.calls:
+		if call != 2 {
+			t.Fatalf("replacement JournalSubscribe call = %d, want 2", call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("legacy source EOF permanently stopped the server fanout")
+	}
+
+	secondClient := rawDial(t, sock)
+	secondHello := secondClient.hello(Version, []string{CapJournal})
+	secondClient.writeControl(Control{Op: OpJournalSubscribe, EndpointID: secondHello.EndpointID})
+	if got := secondClient.readControl(); got.Op != OpOK {
+		t.Fatalf("replacement legacy subscribe = %#v", got)
+	}
+	second <- JournalRecord{Cursor: 2, SessionID: "s", Type: "session_state"}
+	_ = secondClient.conn.SetReadDeadline(time.Now().Add(time.Second))
+	if got := secondClient.readControl(); got.Op != OpJournalEvent || got.Cursor != 2 {
+		t.Fatalf("replacement legacy event = %#v", got)
 	}
 }
 

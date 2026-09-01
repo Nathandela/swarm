@@ -335,8 +335,6 @@ type Server struct {
 	jsubs  map[*clientConn]struct{} // legacy journal subscribers (global fan-out)
 	jdsubs map[*clientConn]struct{} // direct atomic journal subscribers
 
-	journalCancel func() // stops the JournalBackend subscription on Close (if any)
-
 	stop chan struct{}
 	wg   sync.WaitGroup
 }
@@ -420,9 +418,8 @@ func newServer(d DaemonAPI) *Server {
 	// events out to journal subscribers (reusing the bounded-queue evict discipline).
 	if jb, ok := d.(JournalBackend); ok {
 		source, cancel := jb.JournalSubscribe()
-		s.journalCancel = cancel
 		s.wg.Add(1)
-		go s.journalFanoutLoop(source)
+		go s.journalFanoutLoop(jb, source, cancel)
 	}
 	return s
 }
@@ -459,9 +456,6 @@ func (s *Server) Close() error {
 	}
 	for _, cc := range conns {
 		cc.close()
-	}
-	if s.journalCancel != nil {
-		s.journalCancel() // release the JournalBackend subscription
 	}
 	s.wg.Wait()
 	// If the DaemonAPI runs a background event source (FromDaemon's roster
@@ -571,19 +565,30 @@ func (s *Server) distribute(m persist.Meta) {
 	}
 }
 
-// journalFanoutLoop drains the single JournalBackend source and distributes each
-// record to every journal subscriber via its bounded queue; a wedged subscriber is
-// evicted, never allowed to block the loop (S9, mirrors fanoutLoop).
-func (s *Server) journalFanoutLoop(source <-chan JournalRecord) {
+// journalFanoutLoop drains one JournalBackend source at a time and distributes each
+// record to every legacy journal subscriber via its bounded queue. A backend source
+// closes when its own bounded queue overflows; that is a gap boundary, so every client
+// on the old source is disconnected for cursor replay and the server immediately
+// registers a fresh source for future connections. The loop owns each cancel func so
+// Close cannot race a replacement subscription and leak it.
+func (s *Server) journalFanoutLoop(jb JournalBackend, source <-chan JournalRecord, cancel func()) {
 	defer s.wg.Done()
 	for {
 		select {
 		case <-s.stop:
+			cancel()
 			return
 		case rec, ok := <-source:
 			if !ok {
+				cancel()
 				s.severLegacyJournalSubscribers()
-				return
+				select {
+				case <-s.stop:
+					return
+				default:
+				}
+				source, cancel = jb.JournalSubscribe()
+				continue
 			}
 			s.distributeJournal(rec)
 		}
