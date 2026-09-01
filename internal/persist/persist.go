@@ -88,11 +88,19 @@ type Meta struct {
 	// the backend planned fine, or the session's CLI needs none (the ordinary case,
 	// indistinguishable by design -- absence of a backend is not a defect).
 	BackendPlanError string `json:"backend_plan_error,omitempty"`
-	ExitCode       *int      `json:"exit_code"`
-	ResumedFrom    string    `json:"resumed_from"`
-	SpawnedFrom    string    `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
-	SpawnIntent    string    `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
-	Supervision    string    `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
+	// AuthIdentity is the provider-account identity (an adapter.AuthProbe digest,
+	// never a secret) the session's agent was launched under (ADR-024). The auth
+	// watcher compares it against the CURRENT identity to find sessions whose
+	// processes hold tokens from a previous login and recycle them (kill + resume).
+	// Additive without a schema-version bump for the same rollback reason as
+	// AgentCwd above; "" means the provider has no probe, or the credentials were
+	// unreadable at launch -- both gate conservatively (never auto-recycled).
+	AuthIdentity string `json:"auth_identity,omitempty"`
+	ExitCode     *int   `json:"exit_code"`
+	ResumedFrom  string `json:"resumed_from"`
+	SpawnedFrom  string `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
+	SpawnIntent  string `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
+	Supervision  string `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
 }
 
 // EffectiveGroupEnteredAt returns the durable ordering instant for a session.

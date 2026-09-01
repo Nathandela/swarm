@@ -44,6 +44,7 @@ func TestR4_PushGatewayConfig_CarriesTheMachineRevokeCapability(t *testing.T) {
 	}
 	if cfg == nil {
 		t.Fatalf("resolvePushGatewayConfig returned nil for a present, valid file")
+		return // unreachable; spelled out for staticcheck SA5011 (2026-09-01 lint drift)
 	}
 	if cfg.MachineRevokeCapability != "cap-machine-revoke-00000000000000" {
 		t.Errorf("MachineRevokeCapability %q, want the file's value verbatim -- the producer "+

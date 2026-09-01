@@ -55,7 +55,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          # EXACT pin, not '1.25': staticcheck's stdlib facts must come from the
+          # same toolchain the module pins (go.mod:3). When the runners rolled
+          # forward to go1.25.14 on 2026-09-01, v2.12.2 under the floating spec
+          # began emitting SA5011 false positives on t.Fatal-guarded nil checks
+          # (t.Fatal's noreturn fact was lost) and failed every branch; the same
+          # linter against go1.25.0 is clean. Bump this together with go.mod.
+          go-version: '1.25.0'
       - name: Run golangci-lint
         # v2.12.2: the golangci-lint release pinned to `go 1.25.0` (go.mod:3, ADR-008).
         # v1.64's binary was built with go1.24.1, which refuses to run at all against a

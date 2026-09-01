@@ -215,6 +215,11 @@ type Daemon struct {
 	// Close. nil in a test Daemon literal, so every use is nil-guarded like d.eng/d.api.
 	sup *supervisor
 
+	// authw is the ADR-024 auth watcher (authwatch.go): it notices a provider
+	// re-login and recycles the sessions whose processes still hold the previous
+	// account's tokens. nil in a test Daemon literal; every use is nil-guarded.
+	authw *authWatcher
+
 	// drains holds the per-session hook-spool drain loops (hookdrainloop.go): the
 	// production caller of HookDrainer, started from registerSession and stopped by
 	// endSession/Close.
@@ -340,6 +345,9 @@ func Serve(cfg Config) (*Daemon, error) {
 		if !assembled {
 			if d.sup != nil {
 				d.sup.close() // its delivery goroutine, once started, must not outlive a failed assembly
+			}
+			if d.authw != nil {
+				d.authw.close() // same rule: no recycle may outlive a failed assembly
 			}
 			d.api.close()
 			_ = core.Close()
@@ -487,6 +495,14 @@ func Serve(cfg Config) (*Daemon, error) {
 	// fan out no event.
 	d.srv.SetSupervisionPendingFunc(d.sup.pending)
 	d.api.SetSupervisionPendingFunc(d.sup.pending)
+
+	// ADR-024: the auth watcher, over the same core surface the TUI's manual
+	// Ctrl+X + r gesture drives (Kill / resume-Launch / Delete through coreAPI,
+	// which resolves env and argv for every launch uniformly). Its first tick
+	// baselines the current credentials identity, or resumes the sweep a prior
+	// incarnation persisted.
+	d.authw = newAuthWatcher(cfg.StateDir, epID, AuthProbedAgents(), CurrentAuthIdentity,
+		d.api.List, d.core.Get, d.api.Kill, d.api.Launch, d.api.Delete)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
@@ -1038,6 +1054,14 @@ func (d *Daemon) Core() *daemon.Daemon { return d.core }
 func (d *Daemon) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closing)
+		if d.authw != nil {
+			// FIRST (codex finding 7): the watcher's recycle launches sessions
+			// through the whole assembly (hook drains, capability authoring, the
+			// supervisor's arm), so nothing below may be torn down while it can
+			// still act. Its loops are stop-aware, so this wait is bounded by one
+			// in-flight action, not one sweep.
+			d.authw.close()
+		}
 		d.cancel()                   // stops tapGrids + engine.Run: no NEW grid samples/captures start
 		d.tapWG.Wait()               // tapGrids returned: no more sampleWG/captureWG.Add can race the Wait (F7)
 		d.sampleWG.Wait()            // drain in-flight grid samples (bounded by shim timeouts)
@@ -1156,6 +1180,11 @@ func endpointID(stateDir string) string {
 	sum := sha256.Sum256([]byte(stateDir))
 	return "ep-" + hex.EncodeToString(sum[:4])
 }
+
+// EndpointIDForStateDir exposes the derivation to `swarm relogin`, which welds
+// local state-dir reads to a dialled daemon and must refuse when the two are
+// not the same daemon (SWARM_DAEMON_SOCK can point anywhere -- audit M4).
+func EndpointIDForStateDir(stateDir string) string { return endpointID(stateDir) }
 
 // preLaunchWorktree creates an isolated git worktree for a session that opted into
 // isolation via the worktree flag (Epic 12), returning it as the agent's working

@@ -115,6 +115,7 @@ func TestR3A_TheCIAndroidJobRunsPluginAbsent(t *testing.T) {
 	}
 	if android == nil {
 		t.Fatal("ci.yml has no android job")
+		return // unreachable; spelled out for staticcheck SA5011 (2026-09-01 lint drift)
 	}
 	tasks := android.gradleTasks()
 	joined := strings.Join(tasks, " ")

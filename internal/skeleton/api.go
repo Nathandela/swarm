@@ -854,6 +854,30 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		if err := a.ensureResumeConversationID(local, source); err != nil {
 			return persist.Meta{}, err
 		}
+		// ONE live resume per source (audit M1/codex-5). Kill on an ended
+		// session is a silent no-op, so the TUI's r, `swarm relogin` and the
+		// auth watcher can each pass their kill step and race Launch on the
+		// SAME ended source -- two live sessions driving one provider thread.
+		// Under the resume mutex (the external-adoption precedent), a source
+		// that already has a RUNNING resumed child yields that child instead of
+		// a duplicate; the same scan is what makes the watcher's crash-replay
+		// of an owed resume idempotent. The mutex is held through the launch
+		// below so two concurrent resumes cannot interleave scan and spawn.
+		a.externalResumeMu.Lock()
+		defer a.externalResumeMu.Unlock()
+		if existing, ok := runningResumeOf(a.core.List(), spec.AgentType, local); ok {
+			return existing, nil
+		}
+	}
+	// ADR-024: stamp the account identity of the credentials this agent will load,
+	// resolved at the same moment as the argv and the env above -- this is the one
+	// point every launch entry passes through, so every session carries the stamp
+	// the auth watcher later compares. The home is the one the AGENT will inherit
+	// (a per-session HOME reads that home's credentials, not the daemon's -- audit
+	// M6). "" (no probe, no readable credentials) gates conservatively: such a
+	// session is never auto-recycled.
+	if spec.AuthIdentity == "" {
+		spec.AuthIdentity = launchAuthIdentity(spec.AgentType, spec.ClientEnv)
 	}
 	resolved, err := composeLaunchSpec(spec, a.endpointID, a.fakeAgentBin, a.core.Get, lookPathIn)
 	if err != nil {
@@ -1008,6 +1032,15 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if err != nil {
 			return daemon.LaunchSpec{}, err
 		}
+		// The source's persisted launch options ride along beneath the request's
+		// own (request keys win), so a resumed session keeps its --model and
+		// --sandbox flags: the TUI's resume request carries ONLY resume_from, and
+		// without this merge the composed argv silently dropped them (observed
+		// live 2026-09-01: a resumed codex fell from its Workspace sandbox to the
+		// thread default). Reserved orchestration keys never chain -- a source
+		// that was itself resumed persisted its own resume_from, and inheriting
+		// it would point the new session at the wrong generation.
+		spec.Options = mergeResumeOptions(spec.Options, srcMeta.LaunchOptions)
 		ad, ok := registry.New(spec.AgentType)
 		if !ok {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: agent %q has no adapter that can resume", spec.AgentType)
@@ -1036,6 +1069,13 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		}
 		spec.Argv = resolved     // the resume argv carries the source's conversation id
 		spec.ResumedFrom = local // stamp ONLY now that a real resume argv is composed
+		// The resumed process CONTINUES the source's thread, so the new session's
+		// conversation identity is known before launch -- seed it (the external-
+		// resume precedent) instead of waiting for transcript recapture, during
+		// which window a second re-login would find no id to resume (audit L4).
+		if spec.ConversationID == "" {
+			spec.ConversationID = srcMeta.ConversationID
+		}
 	}
 
 	if len(spec.Argv) == 0 {
@@ -1354,6 +1394,43 @@ func resolveSourceSession(kind, src, endpointID string, getSource func(local str
 // namespaced id of THIS endpoint, name a session that exists, that has ENDED (not
 // running), and whose agent type matches the requested one. It returns the source
 // local id and meta, or a clear error naming the reason the resume was rejected.
+// mergeResumeOptions folds a resume source's persisted launch options beneath
+// the request's own (request keys win) into a FRESH map -- the caller's map is
+// never mutated. Reserved orchestration keys are never inherited: chaining a
+// source's own resume_from/handoff_from would re-orchestrate a past generation,
+// "script" is the dev-only fake-agent input, and OptionWorktree would make the
+// resume mint a BRAND-NEW worktree from HEAD while the conversation believes
+// its files are where it left them -- and, worse, arm preDeleteWorktree so a
+// later delete of either row `git worktree remove --force`s a checkout with
+// uncommitted agent work (audit C1). A resume continues a conversation; it
+// never re-isolates.
+func mergeResumeOptions(req, src map[string]string) map[string]string {
+	merged := make(map[string]string, len(src)+len(req))
+	for k, v := range src {
+		switch k {
+		case protocol.OptionResumeFrom, protocol.OptionHandoffFrom, protocol.OptionResumeConversationID,
+			protocol.OptionWorktree, "script":
+			continue
+		}
+		merged[k] = v
+	}
+	for k, v := range req {
+		merged[k] = v
+	}
+	return merged
+}
+
+// runningResumeOf finds the RUNNING session that already resumed local, if one
+// exists -- the pure half of the one-live-resume-per-source rule above.
+func runningResumeOf(roster []persist.Meta, agentType, local string) (persist.Meta, bool) {
+	for _, m := range roster {
+		if m.AgentType == agentType && m.ResumedFrom == local && m.Status.Process == status.ProcessRunning {
+			return m, true
+		}
+	}
+	return persist.Meta{}, false
+}
+
 func validateResumeSource(src, agentType, endpointID string, getSource func(local string) (persist.Meta, bool)) (string, persist.Meta, error) {
 	local, m, err := resolveSourceSession("resume", src, endpointID, getSource)
 	if err != nil {
