@@ -217,6 +217,11 @@ type App struct {
 	// enforced against. Per stream because a shared budget lets the two repairable channels
 	// starve each other, and one shared-bucket gap stales both at once.
 	resyncAt map[string][]time.Time
+	// syncRosterInFlight coalesces overlapping lifecycle/network anti-entropy calls at the
+	// facade boundary. The Android coordinator keeps a request outstanding until an
+	// authoritative roster generation lands; this second fence covers concurrent/rebuilt
+	// callers before the per-purpose rate budget observes the completed append.
+	syncRosterInFlight bool
 	// resyncAsked are the streams a repair has been REQUESTED for and not yet landed
 	// (PB-APP-8's fourth state). It is a fact ORTHOGONAL to staleness, never a third value of
 	// StreamState: a stream is stale-and-repairing or stale-and-idle, and one enum cannot
@@ -1515,6 +1520,54 @@ func (a *App) RefreshRoster() (err error) {
 		a.refundResyncBudget(phonecore.StreamJournal, reservedAt)
 	}
 	return err
+}
+
+const passiveRosterBudget = "journal_roster_passive"
+
+// SyncRoster asks for a non-destructive authoritative roster replacement.
+//
+// This is the automatic foreground/network anti-entropy seam. It deliberately cannot enter
+// requestMailboxDiscard: lifecycle and connectivity signals authorize a read, never deletion.
+// Only the visible Inbox Reload ([App.RefreshRoster]) may diagnose and generation-fence an
+// authenticated stale-mailbox discard. Concurrent calls are coalesced here as well as in the
+// Android coordinator, and the independent §6.0 budget prevents process/surface churn from
+// turning a healthy relay into a retry loop without consuming the user's explicit Reload budget.
+func (a *App) SyncRoster() (err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return err
+	}
+	if !a.beginPassiveRosterSync() {
+		return nil
+	}
+	defer a.endPassiveRosterSync()
+
+	reservedAt := time.Now()
+	if err = a.resyncBudget(passiveRosterBudget, reservedAt); err != nil {
+		return err
+	}
+	_, err = a.unsignedRosterRefresh(core.Router().Sessions().Cursor(), false, "")
+	if err != nil {
+		a.refundResyncBudget(passiveRosterBudget, reservedAt)
+	}
+	return err
+}
+
+func (a *App) beginPassiveRosterSync() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.syncRosterInFlight {
+		return false
+	}
+	a.syncRosterInFlight = true
+	return true
+}
+
+func (a *App) endPassiveRosterSync() {
+	a.mu.Lock()
+	a.syncRosterInFlight = false
+	a.mu.Unlock()
 }
 
 // ResyncPending is PB-APP-8's fourth state: a repair has been asked for and has not landed.

@@ -79,13 +79,60 @@ class SyncStatusTest {
         freshness: MachineFreshness = freshMachine,
         streams: List<StreamView> = wholeStreams(),
         reconciled: Boolean = true,
+        paired: Boolean = true,
+        rosterRevision: Long = 1L,
     ) = SyncStatus.of(
-        connection = connection(state),
+        transport = state,
         freshness = freshness,
         nowUnixMs = nowMs,
         streams = streams,
         reconciled = reconciled,
+        paired = paired,
+        rosterRevision = rosterRevision,
     )
+
+    @Test
+    fun `transport authority completeness and freshness derive five honest live states`() {
+        assertEquals(
+            LiveConvergenceState.PAIRED,
+            status(state = ConnectionState.OFFLINE, rosterRevision = 0L).convergence,
+        )
+        for (connecting in listOf(ConnectionState.CONNECTING, ConnectionState.RECONNECTING)) {
+            assertEquals(connecting.name, LiveConvergenceState.CONNECTING, status(state = connecting).convergence)
+        }
+        assertEquals(LiveConvergenceState.LIVE, status().convergence)
+        assertEquals(
+            "online without an authoritative roster claimed live",
+            LiveConvergenceState.UPDATES_PAUSED,
+            status(rosterRevision = 0L).convergence,
+        )
+        assertEquals(LiveConvergenceState.UPDATES_PAUSED, status(reconciled = false).convergence)
+        assertEquals(
+            LiveConvergenceState.UPDATES_PAUSED,
+            status(streams = streamsHoledAt("journal")).convergence,
+        )
+        assertEquals(
+            LiveConvergenceState.UPDATES_PAUSED,
+            status(freshness = heardAgo(18 * HOUR)).convergence,
+        )
+        assertEquals(
+            LiveConvergenceState.OFFLINE,
+            status(state = ConnectionState.OFFLINE, rosterRevision = 9L).convergence,
+        )
+        assertEquals(
+            LiveConvergenceState.OFFLINE,
+            status(state = ConnectionState.RELAY_UNTRUSTED, rosterRevision = 9L).convergence,
+        )
+    }
+
+    @Test
+    fun `the five convergence states have distinct user-facing words`() {
+        assertEquals(SyncStatus.PAIRED, status(state = ConnectionState.OFFLINE, rosterRevision = 0L).pill)
+        assertEquals(SyncStatus.CONNECTING, status(state = ConnectionState.CONNECTING).pill)
+        assertEquals("", status().pill)
+        assertEquals(SyncStatus.UPDATES_PAUSED, status(reconciled = false).pill)
+        assertEquals(SyncStatus.OFFLINE, status(state = ConnectionState.OFFLINE).pill)
+    }
 
     // ---- live says nothing at all ------------------------------------------
 
@@ -173,23 +220,23 @@ class SyncStatusTest {
     // ---- the pill's words --------------------------------------------------
 
     @Test
-    fun `the quiet pill carries an elapsed duration and never a clock time`() {
-        assertEquals("Last seen 18h", status(freshness = heardAgo(18 * HOUR)).pill)
-        assertEquals("Last seen 4m", status(freshness = heardAgo(4 * MINUTE)).pill)
-        assertEquals("Last seen 3d", status(freshness = heardAgo(3 * DAY)).pill)
+    fun `stale authority says updates paused while detail retains elapsed evidence`() {
+        for (age in listOf(18 * HOUR, 4 * MINUTE, 3 * DAY)) {
+            assertEquals(SyncStatus.UPDATES_PAUSED, status(freshness = heardAgo(age)).pill)
+        }
     }
 
     @Test
     fun `a machine never heard from says not seen yet`() {
         // Zero is "this phone has never taken a frame" -- a first launch, or a restore. There is no
         // elapsed time to state, and `0h` would claim the machine spoke at the epoch.
-        assertEquals(SyncStatus.NOT_SEEN, status(freshness = neverHeard).pill)
+        assertEquals(SyncStatus.UPDATES_PAUSED, status(freshness = neverHeard).pill)
     }
 
     @Test
     fun `the syncing and broken pills are one word each`() {
-        assertEquals("Syncing…", status(reconciled = false).pill)
-        assertEquals("Offline", status(state = ConnectionState.REVOKED).pill)
+        assertEquals(SyncStatus.UPDATES_PAUSED, status(reconciled = false).pill)
+        assertEquals(SyncStatus.OFFLINE, status(state = ConnectionState.REVOKED).pill)
     }
 
     // ---- the strip escalates, and only for broken --------------------------

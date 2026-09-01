@@ -243,6 +243,41 @@ func TestGatewayOrdinaryJournalRepairStillCarriesEventsAndFinalCursor(t *testing
 	}
 }
 
+func TestGatewayOrdinaryJournalRepairBoundsAnOversizedReseedAtTheFinalCursor(t *testing.T) {
+	sock, ln := journalSocket(t)
+	done := make(chan error, 1)
+	const records = 480 // >7 MiB across bounded daemon pages; one relay append cannot carry it.
+	go servePagedResync(t, ln, 42, records, done)
+	sink := &reseedCapture{}
+	g := New(sock, sink)
+	if err := g.Resync(context.Background(), 42, false, false, ""); err != nil {
+		t.Fatalf("ordinary oversized journal repair: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("fake daemon: %v", err)
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.reseeds) != 1 {
+		t.Fatalf("reseed count = %d, want one atomic replacement", len(sink.reseeds))
+	}
+	got := sink.reseeds[0]
+	if got.Cursor != 42+records || len(got.Roster) != 1 {
+		t.Fatalf("bounded reseed lost final authority: cursor=%d roster=%#v", got.Cursor, got.Roster)
+	}
+	if len(got.Events) == 0 || len(got.Events) >= records {
+		t.Fatalf("bounded reseed retained %d/%d events, want a non-empty newest tail", len(got.Events), records)
+	}
+	body, err := json.Marshal(reseedFrame{Kind: kindJournalReseed, JournalReseed: got})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) > wire.MaxFrame-1 {
+		t.Fatalf("bounded reseed plaintext = %d bytes, still over the relay's 1 MiB frame", len(body))
+	}
+}
+
 func TestGatewayRosterRefreshOrdersNewerLiveEventAfterReseed(t *testing.T) {
 	sock, ln := journalSocket(t)
 	serverDone := make(chan error, 1)

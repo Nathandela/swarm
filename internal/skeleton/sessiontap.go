@@ -113,7 +113,7 @@ func (d *Daemon) authorAttachedSessionCapabilities(id string) {
 	if !ok {
 		return
 	}
-	inst, ad, version, ok := d.sessionCapabilityInputs(id, m.AgentType, m.ShimPID)
+	inst, ad, version, ok := d.sessionCapabilityInputs(id, m.AgentType, m.ShimPID, m.ShimStartTime)
 	if !ok {
 		return // no bindable instance: T2-a's honest status card
 	}

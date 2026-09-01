@@ -38,6 +38,20 @@ func TestRosterRefreshBudgetRefundCannotRemoveAnotherConcurrentReservation(t *te
 	}
 }
 
+func TestPassiveRosterSyncClaimIsSingleFlightAtFacadeBoundary(t *testing.T) {
+	a := &App{}
+	if !a.beginPassiveRosterSync() {
+		t.Fatal("first passive roster sync claim was refused")
+	}
+	if a.beginPassiveRosterSync() {
+		t.Fatal("overlapping passive roster sync acquired a second facade claim")
+	}
+	a.endPassiveRosterSync()
+	if !a.beginPassiveRosterSync() {
+		t.Fatal("completed passive roster sync did not release its facade claim")
+	}
+}
+
 func TestMailboxDiscardRequestIsCanceledWithItsStartStopSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

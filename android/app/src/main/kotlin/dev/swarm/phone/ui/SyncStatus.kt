@@ -1,5 +1,7 @@
 package dev.swarm.phone.ui
 
+import dev.swarm.phone.keys.ConnectionState
+
 /**
  * agents-tracker-nx44.2 -- what the app says about whether what is on screen is CURRENT.
  *
@@ -48,6 +50,24 @@ enum class SyncState {
     BROKEN,
 }
 
+/** The five user-visible convergence states, derived from independent evidence planes. */
+enum class LiveConvergenceState {
+    /** Pairing exists, but this handset has never committed an authoritative roster. */
+    PAIRED,
+
+    /** The transport is actively establishing or re-establishing a link. */
+    CONNECTING,
+
+    /** Transport, authority, completeness and machine freshness are all current. */
+    LIVE,
+
+    /** The link is up, but authority is missing, incomplete, held or too old to claim current. */
+    UPDATES_PAUSED,
+
+    /** A previously authoritative handset currently has no usable transport. */
+    OFFLINE,
+}
+
 /** One labelled fact in the detail sheet. The label is a heading; the value is the evidence. */
 data class SyncRow(val label: String, val value: String)
 
@@ -81,6 +101,7 @@ data class SyncDetail(
  */
 data class SyncStatus(
     val state: SyncState,
+    val convergence: LiveConvergenceState,
     /** The nav-row pill's words, or empty while the phone is live. */
     val pill: String,
     /**
@@ -96,12 +117,20 @@ data class SyncStatus(
     val detail: SyncDetail,
 ) {
     /** True when the phone has nothing to report. Nothing is drawn in that state -- no slot, no air. */
-    val silent: Boolean get() = state == SyncState.LIVE
+    val silent: Boolean get() = convergence == LiveConvergenceState.LIVE
 
     companion object {
 
         /** The pill's word for [SyncState.SYNCING]. */
         const val SYNCING = "Syncing…"
+
+        const val PAIRED = "Paired"
+
+        const val CONNECTING = "Connecting…"
+
+        const val UPDATES_PAUSED = "Updates paused"
+
+        const val OFFLINE = "Offline"
 
         /** The pill's words for [SyncState.QUIET], followed by the elapsed duration. */
         const val QUIET = "Last seen"
@@ -154,6 +183,7 @@ data class SyncStatus(
         /** Nothing to say -- the state a phone with no core to ask is honestly in. */
         val NONE = SyncStatus(
             state = SyncState.LIVE,
+            convergence = LiveConvergenceState.LIVE,
             pill = "",
             strip = "",
             description = "",
@@ -176,14 +206,31 @@ data class SyncStatus(
          *  phone permanently waiting on a machine it never asked.
          */
         fun of(
-            connection: ConnectionBanner,
+            transport: ConnectionState,
             freshness: MachineFreshness,
             nowUnixMs: Long,
             streams: List<StreamView>,
             reconciled: Boolean = true,
+            paired: Boolean = true,
+            rosterRevision: Long = 1L,
         ): SyncStatus {
+            val connection = ConnectionBanner.of(transport)
             val gapped = streams.filter { it.badge != StreamBadge.LIVE }
             val since = freshness.sinceLastHeard(nowUnixMs)
+            val convergence = when {
+                !paired -> LiveConvergenceState.OFFLINE
+                transport == ConnectionState.CONNECTING || transport == ConnectionState.RECONNECTING ->
+                    LiveConvergenceState.CONNECTING
+                transport == ConnectionState.OFFLINE -> if (rosterRevision == 0L) {
+                    LiveConvergenceState.PAIRED
+                } else {
+                    LiveConvergenceState.OFFLINE
+                }
+                transport.isTerminal -> LiveConvergenceState.OFFLINE
+                rosterRevision == 0L || !reconciled || gapped.isNotEmpty() || freshness.silent ->
+                    LiveConvergenceState.UPDATES_PAUSED
+                else -> LiveConvergenceState.LIVE
+            }
             val state = when {
                 connection.terminal -> SyncState.BROKEN
                 freshness.silent -> SyncState.QUIET
@@ -196,18 +243,20 @@ data class SyncStatus(
             }
             return SyncStatus(
                 state = state,
-                pill = when (state) {
-                    SyncState.LIVE -> ""
-                    SyncState.SYNCING -> SYNCING
-                    SyncState.QUIET -> if (since.isEmpty()) NOT_SEEN else "$QUIET $since"
-                    SyncState.BROKEN -> BROKEN
+                convergence = convergence,
+                pill = when (convergence) {
+                    LiveConvergenceState.PAIRED -> PAIRED
+                    LiveConvergenceState.CONNECTING -> CONNECTING
+                    LiveConvergenceState.LIVE -> ""
+                    LiveConvergenceState.UPDATES_PAUSED -> UPDATES_PAUSED
+                    LiveConvergenceState.OFFLINE -> OFFLINE
                 },
                 // ONLY BROKEN ESCALATES. The strip is opaque chrome that displaces the destination,
                 // which is the cost the stacked banner used to pay on every phone that had anything
                 // at all to say; it is worth paying once, for the one state where the user has to
                 // act and the pill alone cannot say what the act is.
                 strip = if (state == SyncState.BROKEN) connection.text else "",
-                description = descriptionOf(state, since),
+                description = descriptionOf(convergence),
                 detail = SyncDetail(
                     rows = listOf(
                         SyncRow(HEARD, if (since.isEmpty()) NEVER else "$since ago"),
@@ -237,15 +286,12 @@ data class SyncStatus(
          * also has to say that it OPENS something -- a mark that takes a tap and announces itself
          * as a label is a control a screen-reader user cannot find.
          */
-        private fun descriptionOf(state: SyncState, since: String): String = when (state) {
-            SyncState.LIVE -> ""
-            SyncState.SYNCING -> "Sync status: syncing. Open details."
-            SyncState.QUIET -> if (since.isEmpty()) {
-                "Sync status: your computer has not been heard from. Open details."
-            } else {
-                "Sync status: your computer has been quiet for $since. Open details."
-            }
-            SyncState.BROKEN -> "Sync status: broken. Open details."
+        private fun descriptionOf(state: LiveConvergenceState): String = when (state) {
+            LiveConvergenceState.PAIRED -> "Sync status: paired; waiting for the first update. Open details."
+            LiveConvergenceState.CONNECTING -> "Sync status: connecting. Open details."
+            LiveConvergenceState.LIVE -> ""
+            LiveConvergenceState.UPDATES_PAUSED -> "Sync status: updates paused. Open details."
+            LiveConvergenceState.OFFLINE -> "Sync status: offline. Open details."
         }
     }
 }

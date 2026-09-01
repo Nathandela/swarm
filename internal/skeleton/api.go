@@ -169,6 +169,9 @@ type coreAPI struct {
 	// them, and nil is fail-closed -- no record authored, no record found.
 	onLaunched  func(persist.Meta)
 	sessionCaps func(local string) (protocol.SessionCapabilities, bool)
+	// withSessionStateSnapshot, when wired by the full assembly, runs a journal
+	// roster boundary and its capability lookups under one shared state fence.
+	withSessionStateSnapshot func(func())
 	// syncName is the optional provider-name egress. The local rename commits first;
 	// provider sync is best-effort and must never make the durable Swarm rename fail.
 	syncName func(local, name string)
@@ -667,6 +670,7 @@ var _ protocol.ComposerOperationExecutor = (*coreAPI)(nil)
 // internal/journal stay free of a protocol import; the wire-type conversion lives
 // here, where both packages are already in scope.
 var _ protocol.JournalBackend = (*coreAPI)(nil)
+var _ protocol.JournalSubscribeFromBackend = (*coreAPI)(nil)
 
 // toWireJournalRecord converts a daemon-internal journal.Record to the wire-facing
 // protocol.JournalRecord (only the fields the phone needs; the opaque payload and
@@ -700,13 +704,19 @@ func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.Sessi
 		TS:         r.TS,
 		StateSince: r.StateSince,
 	}
-	if r.Type == journal.TypeCapabilityTransition {
+	if r.Type == journal.TypeCapabilityTransition || r.Type == journal.TypeSessionState {
 		// A transition is an ordered fact about the state AT THIS CURSOR. Decode only
 		// its own validated payload: consulting the current roster here would rewrite
-		// a historical false transition as true after recovery (or the reverse).
+		// a historical false transition as true after recovery (or the reverse). A
+		// non-empty invalid session_state payload crosses as an explicitly invalid
+		// sentinel so the phone revokes prior authority. Nil remains meaningful for
+		// metadata-only session_state records from older/current rename producers: it
+		// means this record carries no capability change.
 		var rec protocol.SessionCapabilities
 		if json.Unmarshal(r.Payload, &rec) == nil && rec.Validate() == nil {
 			out.Capabilities = &rec
+		} else if r.Type == journal.TypeSessionState && len(r.Payload) > 0 {
+			out.Capabilities = &protocol.SessionCapabilities{}
 		}
 	} else if caps != nil {
 		if rec, ok := caps(r.SessionID); ok {
@@ -729,23 +739,39 @@ func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.Sessi
 // JournalReadFrom forwards journal_read to the core and converts the daemon
 // journal.Resume to the wire protocol.JournalResume (Events + full-resync + cursor).
 func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
-	res, err := a.core.JournalReadFrom(from)
+	var (
+		res journal.Resume
+		out protocol.JournalResume
+		err error
+	)
+	a.captureSessionStateSnapshot(func() {
+		res, err = a.core.JournalReadFrom(from)
+		if err != nil {
+			return
+		}
+		out = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+		for _, r := range res.Roster {
+			// The roster's metadata and capability record must describe the same
+			// state boundary. The full assembly freezes capability authors and
+			// transitions around this daemon snapshot plus every lookup.
+			out.Roster = append(out.Roster, toWireJournalRecordWith(r, a.sessionCaps))
+		}
+	})
 	if err != nil {
 		return protocol.JournalResume{}, err
-	}
-	out := protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
-	for _, r := range res.Roster {
-		// The ROSTER is where the capability record rides (ADR-017 T2 rule 3: "the phone
-		// renders from that record"). Events do not carry it: the record is authored once
-		// per session instance and immutable except in the degrading direction, so
-		// stamping it onto every event would spend the append budget restating a fact the
-		// roster already carries -- and a degrade reaches the phone as the next roster.
-		out.Roster = append(out.Roster, toWireJournalRecordWith(r, a.sessionCaps))
 	}
 	for _, e := range res.Events {
 		out.Events = append(out.Events, toWireJournalRecord(e))
 	}
 	return out, nil
+}
+
+func (a *coreAPI) captureSessionStateSnapshot(capture func()) {
+	if a.withSessionStateSnapshot != nil {
+		a.withSessionStateSnapshot(capture)
+		return
+	}
+	capture()
 }
 
 // JournalSubscribe forwards to the daemon journal fan-out, converting each
@@ -759,6 +785,7 @@ func (a *coreAPI) JournalSubscribe() (<-chan protocol.JournalRecord, func()) {
 	out := make(chan protocol.JournalRecord, eventsBuffer)
 	done := make(chan struct{})
 	go func() {
+		defer close(out)
 		for {
 			select {
 			case <-done:
@@ -783,6 +810,64 @@ func (a *coreAPI) JournalSubscribe() (<-chan protocol.JournalRecord, func()) {
 		})
 	}
 	return out, cancel
+}
+
+// JournalSubscribeFrom forwards the daemon's atomic resume primitive and converts
+// both halves without consulting mutable current state for ordered payloads.
+func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-chan protocol.JournalRecord, func(), error) {
+	var (
+		res       journal.Resume
+		src       <-chan journal.Record
+		cancelSrc func()
+		err       error
+		outResume protocol.JournalResume
+	)
+	a.captureSessionStateSnapshot(func() {
+		res, src, cancelSrc, err = a.core.JournalSubscribeFrom(from)
+		if err != nil {
+			return
+		}
+		outResume = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+		for _, r := range res.Roster {
+			outResume.Roster = append(outResume.Roster, toWireJournalRecordWith(r, a.sessionCaps))
+		}
+	})
+	if err != nil {
+		closed := make(chan protocol.JournalRecord)
+		close(closed)
+		return protocol.JournalResume{}, closed, cancelSrc, err
+	}
+	for _, r := range res.Events {
+		outResume.Events = append(outResume.Events, toWireJournalRecord(r))
+	}
+	out := make(chan protocol.JournalRecord, eventsBuffer)
+	done := make(chan struct{})
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-done:
+				return
+			case rec, ok := <-src:
+				if !ok {
+					return
+				}
+				select {
+				case out <- toWireJournalRecord(rec):
+				case <-done:
+					return
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			close(done)
+			cancelSrc()
+		})
+	}
+	return outResume, out, cancel, nil
 }
 
 // Launch resolves a client launch/resume request into a concrete daemon spec
@@ -888,7 +973,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 // core's, its firing order relative to Launch's return is the core's to change, and the
 // two are one authoring function with two call sites rather than two rules.
 func (d *Daemon) authorLaunchedSessionCapabilities(m persist.Meta) {
-	inst, ad, version, ok := d.sessionCapabilityInputs(m.ID, m.AgentType, m.ShimPID)
+	inst, ad, version, ok := d.sessionCapabilityInputs(m.ID, m.AgentType, m.ShimPID, m.ShimStartTime)
 	if !ok {
 		return // no bindable instance: T2-a's honest status card
 	}

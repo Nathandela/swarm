@@ -316,7 +316,7 @@ func (d *Daemon) authorCapabilitiesForBackend(local string, live bool) {
 	if !ok {
 		return
 	}
-	inst, ad, version, ok := d.sessionCapabilityInputs(local, m.AgentType, m.ShimPID)
+	inst, ad, version, ok := d.sessionCapabilityInputs(local, m.AgentType, m.ShimPID, m.ShimStartTime)
 	if !ok {
 		return
 	}

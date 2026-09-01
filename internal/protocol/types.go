@@ -45,9 +45,10 @@ const (
 	OpError     = "error"
 
 	// Remote journal ops (R-PROT.3): stream/read the daemon-wide journal.
-	OpJournalSubscribe = "journal_subscribe"
-	OpJournalRead      = "journal_read"
-	OpJournalEvent     = "journal_event"
+	OpJournalSubscribe     = "journal_subscribe"
+	OpJournalSubscribeFrom = "journal_subscribe_from"
+	OpJournalRead          = "journal_read"
+	OpJournalEvent         = "journal_event"
 
 	// Remote control-plane read ops (slice A3.1): non-mutating, capability-gated
 	// reads of the paired-device roster and the machine's remote launch policy.
@@ -178,13 +179,14 @@ const (
 // caps (R-PROT.1): the hello handshake returns the intersection with the client's
 // offer, and an op whose capability was not negotiated is refused.
 const (
-	CapAttach        = "attach"
-	CapSubscribe     = "subscribe"
-	CapRemoteGateway = "remote-gateway"
-	CapJournal       = "journal"
-	CapActivity      = "activity"
-	CapPolicy        = "policy"
-	CapPairing       = "pairing"
+	CapAttach               = "attach"
+	CapSubscribe            = "subscribe"
+	CapRemoteGateway        = "remote-gateway"
+	CapJournal              = "journal"
+	CapJournalSubscribeFrom = "journal-subscribe-from"
+	CapActivity             = "activity"
+	CapPolicy               = "policy"
+	CapPairing              = "pairing"
 	// CapExternalResume permits an owner-tier client to launch a session from a
 	// provider-native conversation id that was discovered outside swarm. Older
 	// daemons do not negotiate it, so a new CLI cannot silently fresh-launch.

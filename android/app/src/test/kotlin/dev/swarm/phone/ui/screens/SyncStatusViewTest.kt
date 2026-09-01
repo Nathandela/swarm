@@ -66,7 +66,7 @@ class SyncStatusViewTest {
         holed: String? = null,
         reconciled: Boolean = true,
     ) = SyncStatus.of(
-        connection = ConnectionBanner.of(state),
+        transport = state,
         freshness = freshness,
         nowUnixMs = nowMs,
         streams = streams(holed),
@@ -116,7 +116,7 @@ class SyncStatusViewTest {
     fun `the pill carries the model's words and its announcement`() {
         val pill = syncPillView(context, quiet) {}!!
 
-        assertEquals("Last seen 18h", (pill as TextView).text.toString())
+        assertEquals(SyncStatus.UPDATES_PAUSED, (pill as TextView).text.toString())
         assertEquals(
             "the pill announces its own three upper-case characters, which read aloud are not a " +
                 "sentence and do not say that pressing opens anything",

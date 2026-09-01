@@ -72,6 +72,12 @@ const (
 	// reconnect. The payload is protocol.SessionCapabilities; journal deliberately
 	// owns only the string discriminator to avoid an import cycle.
 	TypeCapabilityTransition RecordType = "capability_transition"
+	// TypeSessionState is an additive authoritative state delta for one live
+	// session. Unlike TypeRoster it is durable/cursor ordered, and unlike
+	// TypeCapabilityTransition it may establish a new exact session instance. Its
+	// payload, when present, is the complete validated SessionCapabilities value at
+	// this cursor.
+	TypeSessionState RecordType = "session_state"
 )
 
 // Record is one versioned journal entry. Cursor is a monotonic uint64 assigned by
@@ -194,10 +200,10 @@ type Journal struct {
 }
 
 // subscriberBuffer bounds each live subscriber's per-channel buffer. Append does a
-// NON-BLOCKING send (drop-on-full) so a wedged subscriber never stalls journaling
-// (Append is on the daemon's write-critical path under writeMu); the downstream
-// protocol layer evicts a wedged subscriber and the phone resyncs from its cursor
-// (R-JRN.6).
+// NON-BLOCKING send so a wedged subscriber never stalls journaling (Append is on the
+// daemon's write-critical path under writeMu). A full buffer disconnects that
+// subscriber instead of silently dropping a record while leaving it apparently live;
+// reconnect replays the durable tail from the last acknowledged cursor (R-JRN.6).
 const subscriberBuffer = 256
 
 // Open opens (or creates) the journal at dir with default (unbounded) retention.
@@ -291,12 +297,14 @@ func (j *Journal) Append(r Record) (Record, error) {
 	j.records = append(j.records, r)
 	j.enforceRetentionLocked()
 	// Live fan-out: deliver the newly-appended record to every subscriber. The send
-	// is NON-BLOCKING (drop-on-full) so a slow/wedged subscriber never blocks the
-	// write-critical path; the protocol layer evicts it and the phone resyncs.
+	// is NON-BLOCKING so a slow/wedged subscriber never blocks the write-critical
+	// path. Full means observable EOF, never a silent connected gap.
 	for ch := range j.subs {
 		select {
 		case ch <- r:
 		default:
+			delete(j.subs, ch)
+			close(ch)
 		}
 	}
 	return r, nil
@@ -337,6 +345,40 @@ func (j *Journal) Subscribe() (<-chan Record, func()) {
 	return ch, cancel
 }
 
+// SubscribeFrom atomically captures the retained backlog after from and registers
+// the live feed that starts after the returned Cursor. No append can fall between
+// those two actions: both occur under j.mu. The caller must apply res.Events before
+// consuming live; appends during that work are bounded in live and overflow is
+// signalled by closing it.
+func (j *Journal) SubscribeFrom(from uint64) (Resume, <-chan Record, func(), error) {
+	ch := make(chan Record, subscriberBuffer)
+	j.mu.Lock()
+	if j.closed {
+		j.mu.Unlock()
+		close(ch)
+		return Resume{}, ch, func() {}, errors.New("journal: closed")
+	}
+	res := j.readFromLocked(from)
+	if j.subs == nil {
+		j.subs = make(map[chan Record]struct{})
+	}
+	j.subs[ch] = struct{}{}
+	j.mu.Unlock()
+
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			j.mu.Lock()
+			if _, ok := j.subs[ch]; ok {
+				delete(j.subs, ch)
+				close(ch)
+			}
+			j.mu.Unlock()
+		})
+	}
+	return res, ch, cancel, nil
+}
+
 // Cursor returns the current high-water cursor.
 func (j *Journal) Cursor() uint64 {
 	j.mu.Lock()
@@ -351,6 +393,10 @@ func (j *Journal) Cursor() uint64 {
 func (j *Journal) ReadFrom(from uint64) (Resume, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.readFromLocked(from), nil
+}
+
+func (j *Journal) readFromLocked(from uint64) Resume {
 	res := Resume{Cursor: j.cursor}
 	if floor := j.floorLocked(); from > 0 && floor > 0 && from+1 < floor {
 		res.FullResync = true
@@ -360,7 +406,7 @@ func (j *Journal) ReadFrom(from uint64) (Resume, error) {
 			res.Events = append(res.Events, r)
 		}
 	}
-	return res, nil
+	return res
 }
 
 // Close closes the active segment file. Every append was already fsync'd, so a

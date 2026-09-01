@@ -486,7 +486,24 @@ func (s *RelaySink) Reseed(rs protocol.JournalReseed) error {
 		s.setErr(err)
 		return err
 	}
-	return s.seal(plaintext)
+	if err := s.seal(plaintext); err != nil {
+		return err
+	}
+	if rs.Cursor != 0 {
+		return s.outbox.Commit(rs.Cursor)
+	}
+	return nil
+}
+
+// FullResync publishes fresh reconcile authority followed by one atomic
+// roster+events replacement at the daemon's final retained boundary.
+func (s *RelaySink) FullResync(rs protocol.JournalReseed) error {
+	if s.cfg.Authorities != nil {
+		if err := s.Reconcile(); err != nil {
+			return err
+		}
+	}
+	return s.Reseed(rs)
 }
 
 // forwardLocked marshals a bare journal record inside the critical section. A non-zero cursor

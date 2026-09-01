@@ -1650,7 +1650,9 @@ func (a *App) onJournal(rec schema.JournalRecord) {
 	if len(a.journal) > journalLogSize {
 		a.journal = a.journal[len(a.journal)-journalLogSize:]
 	}
-	if rec.SessionID != "" && rec.Type != "" {
+	if rec.SessionID != "" && rec.Type != "" &&
+		rec.Type != phonecore.RecordTypeSessionState &&
+		rec.Type != phonecore.RecordTypeCapabilityTransition {
 		a.needs[rec.SessionID] = rec.Type
 	}
 	subscribed := a.subscribed

@@ -143,6 +143,17 @@ func (c *CoalescingSink) Reseed(rs protocol.JournalReseed) error {
 	return rr.Reseed(rs)
 }
 
+func (c *CoalescingSink) FullResync(rs protocol.JournalReseed) error {
+	inner, ok := c.inner.(FullResyncSink)
+	if !ok {
+		return errNoReseedSink
+	}
+	c.mu.Lock()
+	c.debitLocked(c.now())
+	c.mu.Unlock()
+	return inner.FullResync(rs)
+}
+
 // Snapshot forwards the reconnect roster immediately, consuming the shared slot.
 func (c *CoalescingSink) Snapshot(roster []protocol.JournalRecord, cursor uint64) error {
 	c.mu.Lock()

@@ -217,6 +217,7 @@ method App.StateSummary() (*StateSummary, error)
 method App.Stop() error
 method App.StreamState(string) (string, error)
 method App.SubscribeJournal() error
+method App.SyncRoster() error
 method App.TakeControl(string) (*Op, error)
 method App.TerminalControlBegin(string, string) (*Op, error)
 method App.TerminalControlEnd(string) (*Op, error)

@@ -76,6 +76,10 @@ import (
 // the session's own lifetime by construction.
 type sessionCapabilityStore struct {
 	mu sync.Mutex
+	// authorMu makes the read-before-register test in the initial state publisher
+	// single-flight. Without it two launch/attach seams could both observe absence
+	// and append duplicate instance-establishing records.
+	authorMu sync.Mutex
 	// transitionMu serializes state commit plus its ordered journal publication.
 	// Without it, a proof could commit, a newer gap could publish false, and the
 	// older proof could then append true after it while lookup correctly read false.
@@ -86,13 +90,11 @@ type sessionCapabilityStore struct {
 	// backed by the same 0700 session dir as the record, so a daemon restart ADOPTS an
 	// instance rather than minting one (ADR-017 T8-a).
 	instances map[string]string
-	// incarnations caches the shim pid each cached instance was minted for. It is what
-	// makes a daemon restart (same shim, same pid) an ADOPTION and a session replacement
-	// (new shim, new pid) a re-mint -- the distinction ADR-017 T8-a's whole binding turns
-	// on, and one the session id cannot make (round-3 blocker 2b). Zero is UNKNOWN, never
-	// "different": a side-file written before this format carries no pid, and reading that
-	// as a replacement would reset every session's view once on the upgrade.
-	incarnations map[string]int
+	// incarnations caches the exact process identity each instance was minted for. PID alone
+	// is insufficient because the OS reuses it; process start time is the reuse fence already
+	// carried by persist.Meta. A zero component is legacy/unknown and is migrated when a current
+	// complete tuple is next observed.
+	incarnations map[string]sessionIncarnation
 	// versions caches the detected CLI version per agent type for this daemon's life.
 	versions map[string]string
 	// liveProof is deliberately process-local. A durable proof records that a history
@@ -101,6 +103,10 @@ type sessionCapabilityStore struct {
 	// therefore chat-capable only while this map also names the current instance and
 	// marker generation.
 	liveProof map[string]structuredSinkProof
+	// publishedInstances is process-local publication success, not capability
+	// authority. Absence (including after restart or append failure) means the exact
+	// instance's initial session_state must be retried.
+	publishedInstances map[string]string
 	// publish overrides the final journal append in deterministic tests. Production
 	// leaves it nil and publishes through daemon.EmitCapabilityTransition.
 	publish func(sessionID string, payload []byte) error
@@ -163,6 +169,12 @@ var errStructuredSinkProof = errors.New("skeleton: structured sink proof refused
 func (d *Daemon) registerSessionCapabilities(sessionID string, c protocol.SessionCapabilities) {
 	d.capStore.transitionMu.Lock()
 	defer d.capStore.transitionMu.Unlock()
+	d.registerSessionCapabilitiesTransitionLocked(sessionID, c)
+}
+
+// registerSessionCapabilitiesTransitionLocked is the store half for a caller
+// already serializing capability state with its ordered journal publication.
+func (d *Daemon) registerSessionCapabilitiesTransitionLocked(sessionID string, c protocol.SessionCapabilities) {
 	d.capStore.mu.Lock()
 	defer d.capStore.mu.Unlock()
 	recovered := false

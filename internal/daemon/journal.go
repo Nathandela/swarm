@@ -90,6 +90,56 @@ func (d *Daemon) JournalSubscribe() (<-chan journal.Record, func()) {
 	return d.journal.Subscribe()
 }
 
+// JournalSubscribeFrom atomically captures roster+backlog at one cursor and
+// registers the feed whose first possible record is after that cursor. writeMu
+// freezes session-affecting metadata while the journal registers first and the
+// roster is built; session-neutral appends may proceed, but are already covered
+// by the registered feed.
+func (d *Daemon) JournalSubscribeFrom(from uint64) (journal.Resume, <-chan journal.Record, func(), error) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	res, live, cancel, err := d.journal.SubscribeFrom(from)
+	if err != nil {
+		return journal.Resume{}, live, cancel, err
+	}
+	res.Roster = d.rosterSnapshotLocked()
+	return res, live, cancel, nil
+}
+
+// RecordSessionStateForIncarnation appends one authoritative, complete state
+// delta for the exact current shim incarnation. author runs only after the
+// writeMu-fenced meta recheck succeeds; capability persistence therefore cannot
+// overwrite a replacement's side-file before discovering that the row changed.
+// A nil payload means the author had nothing new to publish.
+func (d *Daemon) RecordSessionStateForIncarnation(sessionID string, expectedShimPID int, expectedShimStartTime int64, author func() (json.RawMessage, error)) (bool, error) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	if d.isDeleted(sessionID) {
+		return false, nil
+	}
+	d.mu.Lock()
+	s, ok := d.sessions[sessionID]
+	var m persist.Meta
+	if ok && s.persisted && s.meta.ShimPID == expectedShimPID && s.meta.ShimStartTime == expectedShimStartTime {
+		m = s.meta
+	} else {
+		ok = false
+	}
+	d.mu.Unlock()
+	if !ok {
+		return false, nil
+	}
+	payload, err := author()
+	if err != nil {
+		return true, err
+	}
+	if payload == nil {
+		return true, nil
+	}
+	_, err = d.journal.Append(completeSessionRecord(m, journal.TypeSessionState, payload))
+	return true, err
+}
+
 // RecordGatewayPresence appends a `presence` record when the remote gateway
 // connects or disconnects (R-JRN.7) — a daemon-side liveness proxy. It carries no
 // session id; the online flag rides in the opaque payload.
@@ -111,14 +161,23 @@ func (d *Daemon) RecordGatewayPresence(online bool) error {
 func journalRecordFor(prev persist.Meta, prevExists bool, next persist.Meta) (journal.Record, bool) {
 	switch {
 	case next.Status.Process == status.ProcessExited && (!prevExists || prev.Status.Process != status.ProcessExited):
-		return journal.Record{SessionID: next.ID, Type: journal.TypeExited, Agent: next.AgentType, Name: next.Name, StateSince: next.EffectiveGroupEnteredAt()}, true
+		return completeSessionRecord(next, journal.TypeExited, nil), true
 	case next.Status.Process == status.ProcessLost && (!prevExists || prev.Status.Process != status.ProcessLost):
-		return journal.Record{SessionID: next.ID, Type: journal.TypeLost, Agent: next.AgentType, Name: next.Name, StateSince: next.EffectiveGroupEnteredAt()}, true
+		return completeSessionRecord(next, journal.TypeLost, nil), true
 	case !prevExists && next.Status.Process == status.ProcessRunning:
-		return journal.Record{SessionID: next.ID, Type: journal.TypeLaunched, Agent: next.AgentType, Name: next.Name, StateSince: next.EffectiveGroupEnteredAt()}, true
+		return completeSessionRecord(next, journal.TypeLaunched, nil), true
 	case prevExists && status.Derive(prev.Status) != status.Derive(next.Status):
-		return journal.Record{SessionID: next.ID, Type: journal.TypeGroupTransition, Group: status.Derive(next.Status), Agent: next.AgentType, Name: next.Name, StateSince: next.EffectiveGroupEnteredAt()}, true
+		return completeSessionRecord(next, journal.TypeGroupTransition, nil), true
+	case prevExists && (prev.AgentType != next.AgentType || prev.Name != next.Name):
+		return completeSessionRecord(next, journal.TypeSessionState, nil), true
 	default:
 		return journal.Record{}, false
+	}
+}
+
+func completeSessionRecord(m persist.Meta, typ journal.RecordType, payload json.RawMessage) journal.Record {
+	return journal.Record{
+		SessionID: m.ID, Type: typ, Group: status.Derive(m.Status), Agent: m.AgentType,
+		Name: m.Name, StateSince: m.EffectiveGroupEnteredAt(), Payload: payload,
 	}
 }
