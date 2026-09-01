@@ -178,6 +178,28 @@ var liveGatedContextGuardVersions = map[string]bool{
 	"0.151.0": true, // 2026-09-01 live gates (both negative; daemon-side enforcement)
 }
 
+// ContextGuardContinuation shapes the post-compaction continuation enqueue
+// (ADR-023 amendment 2) as codex's native thread/queue/add. Live-verified on
+// 0.151.0 (2026-09-01, docs/design/context-guard-continuation.md): a queued
+// submission DEFERS behind a running compaction and auto-starts ~31ms after
+// contextCompaction completes, but DRAINS INSTANTLY (~20ms, becoming a turn)
+// on an idle thread -- so the caller must enqueue only while its own
+// compaction is provably running, or deliberately at latch. Fenced to the
+// exact live-gated versions: queue-versus-compaction ordering is precisely
+// the behavior a new version's live-gate rerun must re-verify.
+// clientUserMessageId is provenance, NOT an idempotency key (two adds with
+// the same id both run); at-most-once belongs to the daemon worker.
+func (codexAdapter) ContextGuardContinuation(version, threadID, messageID, text string) (string, map[string]any, bool) {
+	if !liveGatedContextGuardVersion(version) || threadID == "" || messageID == "" || text == "" {
+		return "", nil, false
+	}
+	return "thread/queue/add", map[string]any{
+		"threadId":            threadID,
+		"clientUserMessageId": messageID,
+		"input":               []map[string]any{{"type": "text", "text": text}},
+	}, true
+}
+
 func liveGatedContextGuardVersion(version string) bool {
 	return liveGatedContextGuardVersions[version]
 }

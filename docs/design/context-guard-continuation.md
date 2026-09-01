@@ -1,6 +1,6 @@
 # ContextGuard continuation: compact, then keep working
 
-Status: investigated and live-verified 2026-09-01; not yet implemented.
+Status: implemented 2026-09-01 (ADR-023 amendment 2) -- integral to automatic dispatch, no separate setting in v1. At-most-once is in-memory by design: crash recovery holds the cycle, which can never re-observe the arming edge, so a durable marker adds nothing.
 Owner ask: an automatic compaction on a working session must not strand the
 task — the compaction should present itself as mid-task context maintenance,
 and the flow should continue afterwards as if nothing happened.

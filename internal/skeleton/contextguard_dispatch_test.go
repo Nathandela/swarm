@@ -33,6 +33,24 @@ type fakeDispatchConn struct {
 	calls []fakeDispatchCall
 	// script[i] shapes call i; a missing entry is the happy path.
 	script map[int]fakeDispatchBehavior
+	// plainCalls records Call (the continuation enqueue path); plainErr, when
+	// set, fails every Call.
+	plainCalls []fakeDispatchCall
+	plainErr   error
+}
+
+func (f *fakeDispatchConn) Call(_ context.Context, method string, params, _ any) error {
+	f.mu.Lock()
+	f.plainCalls = append(f.plainCalls, fakeDispatchCall{method: method, params: params.(map[string]any)})
+	err := f.plainErr
+	f.mu.Unlock()
+	return err
+}
+
+func (f *fakeDispatchConn) plainSnapshot() []fakeDispatchCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeDispatchCall(nil), f.plainCalls...)
 }
 
 type fakeDispatchBehavior struct {
@@ -95,9 +113,10 @@ type dispatchRig struct {
 	lane    *composerLane
 	key     contextguard.Key
 
-	mu        sync.Mutex
-	quietNow  bool
-	uncertain bool
+	mu          sync.Mutex
+	quietNow    bool
+	uncertain   bool
+	attendedNow bool
 }
 
 func newDispatchRig(t *testing.T) *dispatchRig {
@@ -123,6 +142,15 @@ func newDispatchRig(t *testing.T) *dispatchRig {
 		s.lane = func() *composerLane { return r.lane }
 		s.quiet = func() bool { r.mu.Lock(); defer r.mu.Unlock(); return r.quietNow }
 		s.uncertain = func() bool { r.mu.Lock(); defer r.mu.Unlock(); return r.uncertain }
+		// The continuation seams, through the REAL codex continuer at the
+		// live-gated version -- the rig proves the worker choreography against
+		// the exact request shape production sends.
+		if continuer, ok := adapter.AsContextGuardContinuer(codex.New()); ok {
+			s.continuation = func(threadID, messageID, text string) (string, map[string]any, bool) {
+				return continuer.ContextGuardContinuation("0.151.0", threadID, messageID, text)
+			}
+		}
+		s.attended = func() bool { r.mu.Lock(); defer r.mu.Unlock(); return r.attendedNow }
 	}
 	if !manager.registerCurrentWired("session", r.key, source, action, nil, wire) {
 		t.Fatal("wired registration failed")
@@ -653,9 +681,151 @@ func TestContextGuardStalledReplyStillLatchesOnQueuedCompletion(t *testing.T) {
 	r.ingestLifecycle(t, 3, "item/completed")
 	close(gate) // now the reply comes back as an error
 	r.waitPhase(t, contextguard.StateLatched)
+	// The internal drain may be this cycle's last activity: the continuation
+	// must still be enqueued, not forfeited waiting for a wake that never comes.
+	r.waitPlainCalls(t, 1)
 	// Latched, not held: below the re-arm gap the guard re-arms normally.
 	r.ingestUsage(t, 4, 60, 100)
 	r.waitPhase(t, contextguard.StateArmed)
+}
+
+func (r *dispatchRig) setAttended(v bool) { r.mu.Lock(); r.attendedNow = v; r.mu.Unlock() }
+
+func (r *dispatchRig) waitPlainCalls(t *testing.T, want int) []fakeDispatchCall {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		calls := r.conn.plainSnapshot()
+		if len(calls) >= want {
+			return calls
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("plain calls = %d; want %d", len(calls), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (r *dispatchRig) requireNoPlainCallsFor(t *testing.T, d time.Duration) {
+	t.Helper()
+	time.Sleep(d)
+	if calls := r.conn.plainSnapshot(); len(calls) != 0 {
+		t.Fatalf("plain calls = %d; want none", len(calls))
+	}
+}
+
+// TestContextGuardContinuationRidesTheProviderQueue (ADR-023 amendment 2):
+// once the guard's own compaction is observed running, the continuation is
+// enqueued through the provider's native queue -- exactly once per cycle, with
+// the daemon-authored prompt -- and a second cycle earns a second enqueue.
+func TestContextGuardContinuationRidesTheProviderQueue(t *testing.T) {
+	r := newDispatchRig(t)
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.ingestLifecycle(t, 2, "item/started")
+	r.waitPhase(t, contextguard.StateProviderCompacting)
+	plain := r.waitPlainCalls(t, 1)
+	if plain[0].method != "thread/queue/add" {
+		t.Fatalf("continuation method = %q; want thread/queue/add", plain[0].method)
+	}
+	if plain[0].params["threadId"] != contextGuardTestThread {
+		t.Fatalf("continuation thread = %v; want the session's thread", plain[0].params["threadId"])
+	}
+	input, _ := plain[0].params["input"].([]map[string]any)
+	if len(input) != 1 || input[0]["text"] != contextGuardContinuationPrompt {
+		t.Fatalf("continuation input = %+v; want the daemon-authored prompt", plain[0].params["input"])
+	}
+	if id, _ := plain[0].params["clientUserMessageId"].(string); !strings.HasPrefix(id, "swarm-cg-continuation-") {
+		t.Fatalf("continuation message id = %q; want the swarm provenance prefix", plain[0].params["clientUserMessageId"])
+	}
+	// Completion latches; the consumed cycle never enqueues again.
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	time.Sleep(100 * time.Millisecond)
+	if calls := r.conn.plainSnapshot(); len(calls) != 1 {
+		t.Fatalf("continuations after latch = %d; want 1", len(calls))
+	}
+	// A full second cycle earns its own continuation.
+	r.ingestUsage(t, 4, 60, 100)
+	r.waitPhase(t, contextguard.StateArmed)
+	r.ingestUsage(t, 5, 90, 100)
+	r.waitCalls(t, 2)
+	r.ingestLifecycle(t, 6, "item/started")
+	r.waitPlainCalls(t, 2)
+}
+
+// TestContextGuardContinuationAtLatchWhenCompletionArrivesFirst: a compaction
+// so fast its completion is the first evidence seen still gets its
+// continuation -- enqueued at latch, where the idle thread starts it directly.
+func TestContextGuardContinuationAtLatchWhenCompletionArrivesFirst(t *testing.T) {
+	r := newDispatchRig(t)
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.ingestLifecycle(t, 2, "item/completed") // conclusive, straight from awaiting
+	r.waitPhase(t, contextguard.StateLatched)
+	r.waitPlainCalls(t, 1)
+}
+
+// TestContextGuardNeverContinuesACompactionItDidNotDispatch: a native or
+// manual compaction is somebody else's flow; the guard observes and latches
+// but enqueues nothing.
+func TestContextGuardNeverContinuesACompactionItDidNotDispatch(t *testing.T) {
+	r := newDispatchRig(t)
+	r.ingestUsage(t, 1, 50, 100) // below threshold: no dispatch, just armed
+	r.ingestLifecycle(t, 2, "item/started")
+	r.waitPhase(t, contextguard.StateProviderCompacting)
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
+}
+
+// TestContextGuardContinuationSkipsAttendedSessions: someone took the
+// controls during the compaction; they continue the task themselves, and the
+// forfeited continuation is never enqueued later.
+func TestContextGuardContinuationSkipsAttendedSessions(t *testing.T) {
+	r := newDispatchRig(t)
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.setAttended(true)
+	r.ingestLifecycle(t, 2, "item/started")
+	r.waitPhase(t, contextguard.StateProviderCompacting)
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
+	r.setAttended(false)
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond) // consumed, not deferred
+}
+
+// TestContextGuardContinuationFailureIsForfeitNotRetry: an enqueue error
+// leaves the lifecycle untouched and is never retried -- ambiguity would risk
+// a duplicated surprise turn.
+func TestContextGuardContinuationFailureIsForfeitNotRetry(t *testing.T) {
+	r := newDispatchRig(t)
+	r.conn.mu.Lock()
+	r.conn.plainErr = errors.New("queue refused")
+	r.conn.mu.Unlock()
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.ingestLifecycle(t, 2, "item/started")
+	r.waitPlainCalls(t, 1) // attempted once
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched) // lifecycle unharmed
+	time.Sleep(100 * time.Millisecond)
+	if calls := r.conn.plainSnapshot(); len(calls) != 1 {
+		t.Fatalf("enqueue attempts = %d; want exactly 1 (forfeit, never retry)", len(calls))
+	}
+}
+
+// TestContextGuardContinuationForfeitsOnHold: a compaction whose outcome went
+// ambiguous holds -- and takes its continuation with it.
+func TestContextGuardContinuationForfeitsOnHold(t *testing.T) {
+	r := newDispatchRig(t)
+	r.conn.script[0] = fakeDispatchBehavior{replyErr: errors.New("timeout waiting for reply")}
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateOutcomeUnknownHold)
+	r.nudge()
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
 }
 
 // TestContextGuardReconcileWindowKeepsTheFeedAlive: a backend that registers

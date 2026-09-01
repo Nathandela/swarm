@@ -216,6 +216,41 @@ Known limitation, accepted for this milestone: a hold (`outcome_unknown_hold`,
 instance. There is no owner-facing acknowledge-and-rearm operation yet; one
 transient unknown outcome retires the guard for that session instance.
 
+## Amendment 2 (2026-09-01): the compaction continues the task
+
+An automatic compaction on an unattended working session must not strand the
+flow: the owner's intent is context maintenance mid-task, not a stop. The
+mechanism is provider-native and was live-verified before implementation
+(`docs/design/context-guard-continuation.md`): codex's `thread/queue/add`
+DEFERS behind a running compaction and auto-starts the queued message ~31ms
+after `contextCompaction` completes, while on an idle thread it drains
+instantly into a turn. The daemon therefore:
+
+1. **Arms a continuation only for its own compact**, at the write boundary. A
+   native or manual compaction never earns one — the guard does not continue
+   work it did not interrupt.
+2. **Enqueues once per cycle**, on the worker, when the machine reaches
+   `provider_compacting` (the provider-enforced safe window) or `latched`
+   (idle: the continuation starts directly). `clientUserMessageId` is
+   provenance, not an idempotency key, so at-most-once is the worker's: the
+   armed flag is consumed by the single attempt, an enqueue failure or
+   ambiguity forfeits the continuation (a stalled task the owner can nudge
+   beats a duplicated surprise turn), and a crash forfeits it structurally —
+   recovery holds, and a held cycle can never re-observe the arming edge.
+3. **Skips attended sessions** at enqueue time: whoever took the controls
+   continues the task themselves.
+4. **The prompt is daemon-authored and fixed**: it names the compaction as
+   automatic mid-task maintenance, instructs the agent to continue exactly
+   where it left off, and tells an already-finished session to say so briefly
+   rather than start new work.
+
+The continuation is integral to automatic dispatch in this version — no
+separate setting — and rides the same exact-version allowlist: queue-versus-
+compaction ordering is part of what a new version's live-gate rerun must
+re-verify. `compact_prompt` (codex's own summarizer-prompt config) stays
+user-owned per C-4; owners who want every compaction framed can set it at
+launch themselves.
+
 ## Alternatives Considered
 
 - **Type `/compact` into every PTY.** Rejected: provider commands differ and input can be dirty,

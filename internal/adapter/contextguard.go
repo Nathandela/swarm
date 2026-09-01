@@ -73,3 +73,24 @@ func AsContextGuardSource(a Adapter) (ContextGuardSource, bool) {
 	source, ok := a.(ContextGuardSource)
 	return source, ok
 }
+
+// ContextGuardContinuer is a second optional extension (ADR-023 amendment 2):
+// a provider whose NATIVE message queue defers behind a running compaction can
+// resume the interrupted task by enqueueing one message while the compaction
+// runs. The adapter only shapes the request; the daemon worker owns when (and
+// whether) to enqueue, at-most-once per compaction cycle, and never for a
+// compaction the daemon did not itself dispatch.
+type ContextGuardContinuer interface {
+	// ContextGuardContinuation returns the request that enqueues text as the
+	// post-compaction continuation for thread. Pure, total, no I/O, and
+	// version-fenced exactly like the automatic action: ok=false means the
+	// version's queue-versus-compaction semantics are not live-verified and
+	// nothing may be enqueued.
+	ContextGuardContinuation(version, threadID, messageID, text string) (method string, params map[string]any, ok bool)
+}
+
+// AsContextGuardContinuer discovers the optional extension without widening Adapter.
+func AsContextGuardContinuer(a Adapter) (ContextGuardContinuer, bool) {
+	continuer, ok := a.(ContextGuardContinuer)
+	return continuer, ok
+}

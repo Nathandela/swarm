@@ -174,3 +174,20 @@ sessions never dispatch; a human acting inside the notification-latency window
 is the owner-accepted race), Stop during a compaction (human intent; bounded by
 the confirmation deadline), and approval resolution (requires a pending
 approval, which already blocks dispatch at the queue head).
+
+## Continuation (ADR-023 amendment 2)
+
+Implemented against the live-verified provider semantics in
+`docs/design/context-guard-continuation.md`: the guard's own compact arms a
+one-shot continuation at the write boundary; the worker enqueues codex's
+native `thread/queue/add` on reaching `provider_compacting` (or `latched`,
+where the idle thread starts it directly); attended sessions are skipped;
+failure or ambiguity forfeits rather than retries; native/manual compactions
+never continue. Pinned by
+`TestContextGuardContinuationRidesTheProviderQueue` (shape, prompt,
+once-per-cycle, second cycle), `...AtLatchWhenCompletionArrivesFirst`,
+`...NeverContinuesACompactionItDidNotDispatch`,
+`...SkipsAttendedSessions`, `...FailureIsForfeitNotRetry`,
+`...ForfeitsOnHold` (skeleton) and
+`TestContextGuardContinuationShapeAndFence` (codex adapter, exact-version
+fence + degenerate identity).
