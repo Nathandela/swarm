@@ -169,6 +169,9 @@ type coreAPI struct {
 	// them, and nil is fail-closed -- no record authored, no record found.
 	onLaunched  func(persist.Meta)
 	sessionCaps func(local string) (protocol.SessionCapabilities, bool)
+	// withSessionStateSnapshot, when wired by the full assembly, runs a journal
+	// roster boundary and its capability lookups under one shared state fence.
+	withSessionStateSnapshot func(func())
 	// syncName is the optional provider-name egress. The local rename commits first;
 	// provider sync is best-effort and must never make the durable Swarm rename fail.
 	syncName func(local, name string)
@@ -736,23 +739,39 @@ func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.Sessi
 // JournalReadFrom forwards journal_read to the core and converts the daemon
 // journal.Resume to the wire protocol.JournalResume (Events + full-resync + cursor).
 func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
-	res, err := a.core.JournalReadFrom(from)
+	var (
+		res journal.Resume
+		out protocol.JournalResume
+		err error
+	)
+	a.captureSessionStateSnapshot(func() {
+		res, err = a.core.JournalReadFrom(from)
+		if err != nil {
+			return
+		}
+		out = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+		for _, r := range res.Roster {
+			// The roster's metadata and capability record must describe the same
+			// state boundary. The full assembly freezes capability authors and
+			// transitions around this daemon snapshot plus every lookup.
+			out.Roster = append(out.Roster, toWireJournalRecordWith(r, a.sessionCaps))
+		}
+	})
 	if err != nil {
 		return protocol.JournalResume{}, err
-	}
-	out := protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
-	for _, r := range res.Roster {
-		// The ROSTER is where the capability record rides (ADR-017 T2 rule 3: "the phone
-		// renders from that record"). Events do not carry it: the record is authored once
-		// per session instance and immutable except in the degrading direction, so
-		// stamping it onto every event would spend the append budget restating a fact the
-		// roster already carries -- and a degrade reaches the phone as the next roster.
-		out.Roster = append(out.Roster, toWireJournalRecordWith(r, a.sessionCaps))
 	}
 	for _, e := range res.Events {
 		out.Events = append(out.Events, toWireJournalRecord(e))
 	}
 	return out, nil
+}
+
+func (a *coreAPI) captureSessionStateSnapshot(capture func()) {
+	if a.withSessionStateSnapshot != nil {
+		a.withSessionStateSnapshot(capture)
+		return
+	}
+	capture()
 }
 
 // JournalSubscribe forwards to the daemon journal fan-out, converting each
@@ -796,15 +815,27 @@ func (a *coreAPI) JournalSubscribe() (<-chan protocol.JournalRecord, func()) {
 // JournalSubscribeFrom forwards the daemon's atomic resume primitive and converts
 // both halves without consulting mutable current state for ordered payloads.
 func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-chan protocol.JournalRecord, func(), error) {
-	res, src, cancelSrc, err := a.core.JournalSubscribeFrom(from)
+	var (
+		res       journal.Resume
+		src       <-chan journal.Record
+		cancelSrc func()
+		err       error
+		outResume protocol.JournalResume
+	)
+	a.captureSessionStateSnapshot(func() {
+		res, src, cancelSrc, err = a.core.JournalSubscribeFrom(from)
+		if err != nil {
+			return
+		}
+		outResume = protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+		for _, r := range res.Roster {
+			outResume.Roster = append(outResume.Roster, toWireJournalRecordWith(r, a.sessionCaps))
+		}
+	})
 	if err != nil {
 		closed := make(chan protocol.JournalRecord)
 		close(closed)
 		return protocol.JournalResume{}, closed, cancelSrc, err
-	}
-	outResume := protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
-	for _, r := range res.Roster {
-		outResume.Roster = append(outResume.Roster, toWireJournalRecordWith(r, a.sessionCaps))
 	}
 	for _, r := range res.Events {
 		outResume.Events = append(outResume.Events, toWireJournalRecord(r))

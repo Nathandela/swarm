@@ -328,6 +328,17 @@ func Serve(cfg Config) (*Daemon, error) {
 	// exactly one place that decides a bare coreAPI authors nothing.
 	d.api.onLaunched = d.authorLaunchedSessionCapabilities
 	d.api.sessionCaps = d.sessionCapabilities
+	// Freeze capability instance authors and chat-plane transitions outside the
+	// daemon's writeMu boundary. This follows the existing author -> transition ->
+	// writeMu order used by RecordSessionStateForIncarnation, so a roster snapshot
+	// cannot attach capability state from just after its metadata/cursor boundary.
+	d.api.withSessionStateSnapshot = func(capture func()) {
+		d.capStore.authorMu.Lock()
+		defer d.capStore.authorMu.Unlock()
+		d.capStore.transitionMu.Lock()
+		defer d.capStore.transitionMu.Unlock()
+		capture()
+	}
 	d.api.tap.onSubscribe = d.authorAttachedSessionCapabilities
 	if d.detectProviderVersion == nil {
 		d.detectProviderVersion = detectProviderVersion
