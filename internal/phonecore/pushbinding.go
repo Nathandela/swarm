@@ -18,12 +18,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -147,6 +149,13 @@ type pushData struct {
 	InstallationKey []byte           `json:"installation_key,omitempty"`
 	Bindings        []pushBindingRec `json:"bindings,omitempty"`
 	Revoked         []string         `json:"revoked,omitempty"`
+	// PendingPairingRevokes is the durable compensation journal for an address
+	// allocated while pairing has not committed. StagePushBinding adds the address
+	// in the same sealed write that adopts its wake key. Pairing commit removes the
+	// marker; every other exit drops the key and leaves the marker until the gateway
+	// confirms revocation. Process death can therefore leak neither a live local key
+	// nor an untracked public allocation.
+	PendingPairingRevokes []string `json:"pending_pairing_revokes,omitempty"`
 	// Drops is the refused-wake counter, and it is ONE record rather than a total beside a
 	// breakdown: two fields that must sum to each other are two fields that drift. WakeDrops
 	// reads its Total; WakeDropCounts hands back the whole record.
@@ -242,6 +251,11 @@ func openPushStore(dir string, sealer Sealer) (*pushStore, error) {
 	if err := json.Unmarshal(plain, &s.data); err != nil {
 		return nil, fmt.Errorf("decode push state: %w", err)
 	}
+	for _, enc := range s.data.PendingPairingRevokes {
+		if _, err := decodePushAddress(enc); err != nil {
+			return nil, fmt.Errorf("decode pending pairing revoke: %w", err)
+		}
+	}
 	return s, nil
 }
 
@@ -297,13 +311,27 @@ func wakeKeyHash(key []byte) []byte {
 	return h[:]
 }
 
-// AdoptPushBinding installs one pairing's (address, wake key) as the pairing commit
-// will: the coordinate starts at zero for a fresh address (a wake refused before
-// adoption leaves no residue, PG-WAKE-13 step 2), and a machine-revoked address is
-// refused forever (ErrPushAddressRevoked).
-func (c *Core) AdoptPushBinding(addr PushAddress, key crypto.WakeKey) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func decodePushAddress(enc string) (PushAddress, error) {
+	var addr PushAddress
+	raw, err := base64.RawURLEncoding.DecodeString(enc)
+	if err != nil || len(raw) != len(addr) {
+		return addr, fmt.Errorf("invalid push address %q", enc)
+	}
+	copy(addr[:], raw)
+	return addr, nil
+}
+
+func clonePushBindings(in []pushBindingRec) []pushBindingRec {
+	out := make([]pushBindingRec, len(in))
+	for i := range in {
+		out[i] = in[i]
+		out[i].WakeKey = append([]byte(nil), in[i].WakeKey...)
+		out[i].WakeKeyHash = append([]byte(nil), in[i].WakeKeyHash...)
+	}
+	return out
+}
+
+func (c *Core) adoptPushBindingLocked(addr PushAddress, key crypto.WakeKey) error {
 	enc := EncodePushAddress(addr)
 	if c.push.revoked(enc) {
 		return ErrPushAddressRevoked
@@ -332,7 +360,139 @@ func (c *Core) AdoptPushBinding(addr PushAddress, key crypto.WakeKey) error {
 			Address: enc, WakeKey: append([]byte(nil), key[:]...), WakeKeyHash: wakeKeyHash(key[:]),
 		})
 	}
+	return nil
+}
+
+// AdoptPushBinding installs one pairing's (address, wake key) as the pairing commit
+// will: the coordinate starts at zero for a fresh address (a wake refused before
+// adoption leaves no residue, PG-WAKE-13 step 2), and a machine-revoked address is
+// refused forever (ErrPushAddressRevoked).
+func (c *Core) AdoptPushBinding(addr PushAddress, key crypto.WakeKey) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.adoptPushBindingLocked(addr, key); err != nil {
+		return err
+	}
 	return c.push.persist()
+}
+
+// StagePushBinding durably adopts a newly allocated address immediately before the
+// pairing protocol sends it in msg4. The same sealed write records the allocation as a
+// pending compensation: until pairing commits, every exit owes the gateway a revoke.
+func (c *Core) StagePushBinding(addr PushAddress, key crypto.WakeKey) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	bindingsBefore := clonePushBindings(c.push.data.Bindings)
+	pendingBefore := append([]string(nil), c.push.data.PendingPairingRevokes...)
+	if err := c.adoptPushBindingLocked(addr, key); err != nil {
+		return err
+	}
+	enc := EncodePushAddress(addr)
+	if !containsString(c.push.data.PendingPairingRevokes, enc) {
+		c.push.data.PendingPairingRevokes = append(c.push.data.PendingPairingRevokes, enc)
+	}
+	if err := c.push.persist(); err != nil {
+		c.push.data.Bindings = bindingsBefore
+		c.push.data.PendingPairingRevokes = pendingBefore
+		return err
+	}
+	return nil
+}
+
+// CommitStagedPushBinding marks a pairing accepted while retaining its live wake key.
+// It is idempotent so a crash-replayed commit converges on the same sealed state.
+func (c *Core) CommitStagedPushBinding(addr PushAddress) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.removePendingPairingRevokeLocked(EncodePushAddress(addr))
+}
+
+// AbandonStagedPushBinding drops the local wake key but retains the durable revoke
+// obligation. The network revoke is deliberately performed by the caller after this
+// short state transition, never while Core.mu is held.
+func (c *Core) AbandonStagedPushBinding(addr PushAddress) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	enc := EncodePushAddress(addr)
+	bindingsBefore := clonePushBindings(c.push.data.Bindings)
+	pendingBefore := append([]string(nil), c.push.data.PendingPairingRevokes...)
+	if b := c.push.binding(enc); b != nil {
+		if len(b.WakeKey) != 0 && len(b.WakeKeyHash) == 0 {
+			b.WakeKeyHash = wakeKeyHash(b.WakeKey)
+		}
+		b.WakeKey = nil
+	}
+	if !containsString(c.push.data.PendingPairingRevokes, enc) {
+		c.push.data.PendingPairingRevokes = append(c.push.data.PendingPairingRevokes, enc)
+	}
+	if err := c.push.persist(); err != nil {
+		c.push.data.Bindings = bindingsBefore
+		c.push.data.PendingPairingRevokes = pendingBefore
+		return err
+	}
+	return nil
+}
+
+// CompleteStagedPushRevoke clears the durable compensation only after the gateway has
+// confirmed revocation. The key is defensively erased again, making retries safe.
+func (c *Core) CompleteStagedPushRevoke(addr PushAddress) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	enc := EncodePushAddress(addr)
+	bindingsBefore := clonePushBindings(c.push.data.Bindings)
+	if b := c.push.binding(enc); b != nil {
+		if len(b.WakeKey) != 0 && len(b.WakeKeyHash) == 0 {
+			b.WakeKeyHash = wakeKeyHash(b.WakeKey)
+		}
+		b.WakeKey = nil
+	}
+	if err := c.removePendingPairingRevokeLocked(enc); err != nil {
+		c.push.data.Bindings = bindingsBefore
+		return err
+	}
+	return nil
+}
+
+// PendingPushBindingRevocations returns a stable snapshot for the network cleanup
+// worker. Startup validates the sealed encodings, so decoding here cannot fail.
+func (c *Core) PendingPushBindingRevocations() []PushAddress {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	encoded := append([]string(nil), c.push.data.PendingPairingRevokes...)
+	sort.Strings(encoded)
+	out := make([]PushAddress, 0, len(encoded))
+	for _, enc := range encoded {
+		addr, err := decodePushAddress(enc)
+		if err == nil {
+			out = append(out, addr)
+		}
+	}
+	return out
+}
+
+func (c *Core) removePendingPairingRevokeLocked(enc string) error {
+	pendingBefore := append([]string(nil), c.push.data.PendingPairingRevokes...)
+	kept := c.push.data.PendingPairingRevokes[:0]
+	for _, candidate := range c.push.data.PendingPairingRevokes {
+		if candidate != enc {
+			kept = append(kept, candidate)
+		}
+	}
+	c.push.data.PendingPairingRevokes = kept
+	if err := c.push.persist(); err != nil {
+		c.push.data.PendingPairingRevokes = pendingBefore
+		return err
+	}
+	return nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // DropPushBinding is the local half of the phone-initiated "forget this computer": the
