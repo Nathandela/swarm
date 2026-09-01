@@ -114,6 +114,11 @@ const (
 	// navigation, line kill and submit. Provider-dependent word/Meta keys and lone/incomplete
 	// escape sequences remain unknown and busy. A known draft deleted back to empty becomes
 	// clean; a refusal still writes NOTHING, matching the over-long-body posture.
+	//
+	// The same code also refuses a composer_send while the session's ContextGuard
+	// compaction is in flight (ADR-023 amendment 1): the remedy is identical --
+	// nothing was written, retry shortly -- and the window is bounded by the
+	// guard's confirmation deadline.
 	CodeInputBusy ErrorCode = "input_busy"
 )
 

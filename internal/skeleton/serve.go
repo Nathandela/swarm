@@ -210,6 +210,12 @@ type Daemon struct {
 	// playbook §6.2; capability.go).
 	capStore sessionCapabilityStore
 
+	// contextGuardSettings is daemon-global durable configuration for the owner-only
+	// protocol seam. contextGuards owns provider observation and durable per-session
+	// policy state; it never dispatches while the provider action is observe-only.
+	contextGuardSettings *contextGuardSettingsStore
+	contextGuards        *contextGuardManager
+
 	// sup is the passive handoff supervisor (ADR-010 Amendment 3 C2; supervision.go):
 	// armed from registerSession, signalled from emitStatus and endSession, closed by
 	// Close. nil in a test Daemon literal, so every use is nil-guarded like d.eng/d.api.
@@ -272,6 +278,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	// ADR-017 T2 rule 2 degrade outlives the incarnation that authored it
 	// (capability.go). Set before anything can register a record.
 	d.capStore.dir = cfg.StateDir
+	d.contextGuardSettings = openContextGuardSettingsStore(cfg.StateDir)
+	d.contextGuards = newContextGuardManager(d, cfg.StateDir, d.contextGuardSettings)
 
 	// Build the status engine BEFORE opening the core: daemon.Open runs reconcile
 	// synchronously and, for every reconnected running session, fires OnSessionStart
@@ -313,6 +321,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.core = core
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	d.api.contextGuardSettings = d.contextGuardSettings
+	d.api.contextGuards = d.contextGuards
 	d.api.syncName = func(local, name string) {
 		go d.syncSessionNameToProvider(local, name)
 	}
@@ -483,8 +493,25 @@ func Serve(cfg Config) (*Daemon, error) {
 	// fired for the reconnected sessions during daemon.Open above, when d.sup was still
 	// nil, and the durable record is what a re-arm would have kept anyway. A record dir
 	// that cannot be opened aborts assembly like every other component's store.
+	// The supervisor's unsafe-source predicate widens beyond leases: a session
+	// whose ContextGuard compaction is in flight must not be typed into either
+	// (ADR-023 amendment 1 -- the supervisor's SendInput bypasses the composer
+	// lane, so it takes the same effect-window gate composerSend does). The
+	// notification simply stays pending and retries after the compaction.
+	unsafeSource := func(local string) bool {
+		return d.anyControlled(local) || d.contextGuardCompactionInFlight(local)
+	}
+	// The same gate at the typed-input choke point itself: `swarm send` and any
+	// other sendMessage caller refuse before the first byte while a compaction
+	// is in flight (the supervisor's unsafeSource above avoids even attempting).
+	d.srv.SetInputGateFunc(func(local string) error {
+		if d.contextGuardCompactionInFlight(local) {
+			return fmt.Errorf("session %q is compacting its context; nothing was typed -- retry shortly", local)
+		}
+		return nil
+	})
 	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
-		d.core.Get, d.anyControlled, d.srv.SendInput)
+		d.core.Get, unsafeSource, d.srv.SendInput)
 	if err != nil {
 		return nil, err // defer'd cleanup tears down d.api + core
 	}
@@ -529,6 +556,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	// there would have pinned every reconnected Codex session at structured_chat=false
 	// permanently, because T2 rule 2 makes that degrade one-way.
 	d.authorCapabilitiesForRunning()
+	// ContextGuard is the fourth post-assembly catch-up. Backend registration normally
+	// starts it; this closes the reconcile window if a backend became live first.
+	d.startContextGuardsForRunning()
 
 	assembled = true // success: the defer'd cleanup-unless-success must NOT tear anything down
 	close(d.ready)   // assembly complete: the ConnHandler may now serve
@@ -664,6 +694,12 @@ func (d *Daemon) emitStatus(id string, s status.Status) {
 	if d.sup != nil {
 		d.sup.signal(id)
 	}
+	// Same discipline for the context guard's promotion check (ADR-023 amendment
+	// 1): a status edge only NUDGES the guard's worker, which re-reads the
+	// current meta on its own goroutine.
+	if d.contextGuards != nil {
+		d.contextGuards.noteStatus(id)
+	}
 }
 
 // anyControlled reports whether somebody is driving local: the supervisor never types into
@@ -698,6 +734,8 @@ func (d *Daemon) endSession(id string) {
 	// this call always sees an already-terminal status, so the tap path's
 	// Running-gate would silently no-op it every time (HIGH regression, C2 review).
 	d.stopHookDrain(id) // the session's spool has no more producer (hookdrainloop.go)
+	// Join the guard worker before its provider feed and backend identity are forgotten.
+	d.stopContextGuard(id)
 	// The backend's frames have no more producer either: release whatever prose the fold is
 	// holding (a turn's last words must not die in the pump), then drop the connection and
 	// the pump state (backend.go).
@@ -1070,6 +1108,9 @@ func (d *Daemon) Close() error {
 		d.drainPendingInteractions() // flush anything the append floor is still holding (below)
 		if d.sup != nil {
 			d.sup.close() // no supervision send may start once the Server below is closing
+		}
+		if d.contextGuards != nil {
+			d.contextGuards.close() // workers stop before provider backends/core teardown
 		}
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops

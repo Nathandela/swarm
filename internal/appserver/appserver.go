@@ -283,10 +283,13 @@ func (c *Client) Call(ctx context.Context, method string, params, out any) error
 
 // CallAtWriteBoundary is Call with an atomicity seam around the request write. beforeWrite
 // runs after params are encoded and the reply waiter is installed, immediately before bytes
-// are written. When it succeeds, afterWrite runs immediately after the write attempt (success
-// or failure) and before waiting for the reply. The composer queue uses this narrow boundary
-// to order durable Begin + request write against Stop without holding its lane lock for the
-// potentially 30-second reply wait.
+// are written -- and UNDER the connection's write lock, so no other frame on this connection
+// can interpose between beforeWrite's durable record and this request's bytes. When it
+// succeeds, afterWrite runs immediately after the write attempt (success or failure) and
+// before waiting for the reply. The composer queue uses this narrow boundary to order
+// durable Begin + request write against Stop without holding its lane lock for the
+// potentially 30-second reply wait; ContextGuard's dispatch relies on the interposition
+// guarantee (ADR-023 amendment 1). beforeWrite must not call back into this client.
 func (c *Client) CallAtWriteBoundary(ctx context.Context, method string, params, out any, beforeWrite func() error, afterWrite func()) error {
 	return c.callAtWriteBoundary(ctx, method, params, out, beforeWrite, afterWrite)
 }
@@ -308,17 +311,43 @@ func (c *Client) callAtWriteBoundary(ctx context.Context, method string, params,
 	c.waiters[key] = ch
 	c.mu.Unlock()
 
+	data, err := json.Marshal(wireFrame{
+		JSONRPC: "2.0", ID: json.RawMessage(key), Method: method, Params: body,
+	})
+	if err != nil {
+		c.mu.Lock()
+		delete(c.waiters, key)
+		c.mu.Unlock()
+		return err
+	}
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		// Detected before beforeWrite: a caller's durable pre-write record is
+		// never created for a frame that provably cannot be written.
+		c.mu.Lock()
+		delete(c.waiters, key)
+		c.mu.Unlock()
+		return ErrClosed
+	}
+	// beforeWrite and the write are ONE unit under the connection's write lock:
+	// no other frame on this connection (a Respond, a Notify, another call) can
+	// interpose between a caller's durable pre-write record and the bytes it
+	// covers. afterWrite stays outside the lock -- once the frame is on the
+	// wire, later frames are just traffic.
+	c.writeMu.Lock()
 	if beforeWrite != nil {
 		if err := beforeWrite(); err != nil {
+			c.writeMu.Unlock()
 			c.mu.Lock()
 			delete(c.waiters, key)
 			c.mu.Unlock()
 			return err
 		}
 	}
-	writeErr := c.write(ctx, wireFrame{
-		JSONRPC: "2.0", ID: json.RawMessage(key), Method: method, Params: body,
-	})
+	writeErr := c.ws.Write(ctx, websocket.MessageText, data)
+	c.writeMu.Unlock()
 	if afterWrite != nil {
 		afterWrite()
 	}

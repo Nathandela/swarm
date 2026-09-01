@@ -38,6 +38,7 @@ const (
 	CodeStaleApproval  = schema.CodeStaleApproval
 	CodeNotAuthorized  = schema.CodeNotAuthorized
 	CodeInvalidField   = schema.CodeInvalidField
+	CodeStaleRevision  = schema.CodeStaleRevision
 	CodeNotImplemented = schema.CodeNotImplemented
 )
 

@@ -30,6 +30,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [020](ADR-020-unattended-daemon-restart.md) | Unattended daemon restart spawns from the saved environment, or touches nothing | Proposed (owner sign-off pending) | 2026-08-27 |
 | [021](ADR-021-slate-palette-and-breathing-scale.md) | Slate palette and the breathing scale — a cool ladder, wider steps, one rung up (supersedes ADR-009-obsidian D1, D3 values, colour half of D4) | Accepted | 2026-08-27 |
 | [022](ADR-022-live-session-name-adoption.md) | A session's name follows the name its CLI shows, newest wins | Accepted | 2026-08-28 |
+| [023](ADR-023-context-guard-auto-compaction.md) | ContextGuard auto-compaction — exact telemetry, at-most-once dispatch, and harness-gated rollout | Accepted | 2026-08-31 |
 | [024](ADR-024-auth-recycle-on-relogin.md) | A provider re-login recycles its stranded sessions automatically | Accepted | 2026-09-01 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
@@ -44,7 +45,7 @@ ADR-009-structured-chat-interaction.md and drawn in the language of ADR-009-obsi
 
 ## Adding a new ADR
 
-1. Next sequential number (the next FREE one is ADR-025: 013 was minted for the Mirror capture architecture, `docs/specifications/mirror-program.md` M3.1 has reserved 014 for paged interaction history and that reservation still stands, 015-018 were allocated together by Wave R1 for the four playbook §3 amendments, 019 was minted for boundary-aware detach recognition, 020 for the unattended-restart environment decision, and 021 for the Slate palette and breathing scale, and 022 for live session name adoption; 023 is minted by the ContextGuard work on the unmerged `feat/context-guard` branch and stays reserved for it; 024 for auth recycle on re-login)
+1. Next sequential number (the next FREE one is ADR-025: 013 was minted for the Mirror capture architecture, `docs/specifications/mirror-program.md` M3.1 has reserved 014 for paged interaction history and that reservation still stands, 015-018 were allocated together by Wave R1 for the four playbook §3 amendments, 019 was minted for boundary-aware detach recognition, 020 for the unattended-restart environment decision, 021 for the Slate palette and breathing scale, 022 for live session name adoption, 023 for ContextGuard auto-compaction, and 024 for auth recycle on re-login)
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.

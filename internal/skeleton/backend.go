@@ -37,6 +37,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -104,10 +105,35 @@ type sessionBackend struct {
 	threadID        string
 	conn            backendConn
 	sessionInstance string
+	feed            *backendFeed
 	// subscribed is set once thread/resume has succeeded on this connection. It is read for
 	// evidence and by the retry loop; NO OPERATION IS GATED ON IT, which is the whole point.
 	subscribed bool
 }
+
+// backendFeed is the provenance of one physical app-server connection. epoch is
+// opaque and changes on every dial; seq orders every frame read from that source.
+// The callback captures this object before the connection is published, so a late
+// callback from a replaced connection can never borrow the replacement's identity.
+type backendFeed struct {
+	epoch     string
+	userAgent string
+	seq       atomic.Uint64
+
+	// guardMu bridges the interval between opening the app-server connection and
+	// publishing the ContextGuard session. Relevant lifecycle evidence cannot be
+	// replayed by the provider, so it is bounded here until the exact thread and
+	// action support have been established.
+	guardMu          sync.Mutex
+	guardReady       bool
+	guardDiscarded   bool
+	guardLatestUsage *contextGuardFeedFrame
+	guardLifecycle   []contextGuardFeedFrame
+	guardDropped     bool
+	guardDropAt      time.Time
+}
+
+func newBackendFeed() *backendFeed { return &backendFeed{epoch: newItemID()} }
 
 // backendState is the assembly's per-session backend bookkeeping.
 type backendState struct {
@@ -183,13 +209,20 @@ func (d *Daemon) registerBackend(local, threadID string, conn backendConn) {
 // connection can serve turn/start. A replaced session refuses the old connection before
 // it can publish either a sink or a capability upgrade.
 func (d *Daemon) registerBackendForInstance(local, expectedInstance, threadID string, conn backendConn) bool {
+	return d.registerBackendFeedForInstance(local, expectedInstance, threadID, conn, newBackendFeed())
+}
+
+func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadID string, conn backendConn, feed *backendFeed) bool {
 	if local == "" || conn == nil || expectedInstance == "" {
+		return false
+	}
+	if feed == nil || feed.epoch == "" {
 		return false
 	}
 	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
 		return false
 	}
-	entry := &sessionBackend{threadID: threadID, conn: conn, sessionInstance: expectedInstance}
+	entry := &sessionBackend{threadID: threadID, conn: conn, sessionInstance: expectedInstance, feed: feed}
 	d.backend.mu.Lock()
 	if d.backend.live == nil {
 		d.backend.live = map[string]*sessionBackend{}
@@ -245,6 +278,7 @@ func (d *Daemon) registerBackendForInstance(local, expectedInstance, threadID st
 		return false // a sink-shaped object cannot launder a baseline fallback provider
 	}
 	if !d.sessionDegraded(local) {
+		d.registerContextGuardBackend(local, entry)
 		return true // ordinary healthy registration; no recovery transition needed
 	}
 	if err := d.commitStructuredSinkProof(local, expectedInstance, sinkProofBackend); err != nil {
@@ -252,8 +286,10 @@ func (d *Daemon) registerBackendForInstance(local, expectedInstance, threadID st
 		// leave chat disabled, but it must not tear down the only source that can retry
 		// the exact proof. The retry exits on replacement or sink loss.
 		go d.retryBackendSinkProof(local, expectedInstance, entry)
+		d.registerContextGuardBackend(local, entry)
 		return true
 	}
+	d.registerContextGuardBackend(local, entry)
 	return true
 }
 
@@ -377,15 +413,30 @@ func (d *Daemon) adoptedThread(local string) (string, bool) {
 // rather than reaping anything. Closing here covers BOTH callers -- endSession and
 // noteBackendLost -- and is harmless on a connection that has already ended.
 func (d *Daemon) forgetBackend(local string) {
+	_ = d.forgetBackendForFeed(local, "")
+}
+
+// forgetBackendForFeed removes exactly the connection generation named by
+// expectedEpoch. Empty retains the existing unconditional lifecycle helper.
+// The comparison happens under backend.mu, so a late watcher from a replaced
+// app-server can never close or unregister its successor.
+func (d *Daemon) forgetBackendForFeed(local, expectedEpoch string) bool {
 	d.backend.mu.Lock()
-	defer d.backend.mu.Unlock()
-	if b := d.backend.live[local]; b != nil && b.conn != nil {
+	b := d.backend.live[local]
+	if expectedEpoch != "" && (b == nil || b.feed == nil || b.feed.epoch != expectedEpoch) {
+		d.backend.mu.Unlock()
+		return false
+	}
+	if b != nil && b.conn != nil {
 		_ = b.conn.Close()
 	}
 	delete(d.backend.live, local)
 	delete(d.backend.requests, local)
 	delete(d.backend.byID, local)
 	delete(d.backend.adopted, local)
+	d.backend.mu.Unlock()
+	d.unregisterContextGuardBackend(local, b)
+	return b != nil
 }
 
 // markBackendSubscribed records that thread/resume has succeeded on this session's connection,
@@ -856,6 +907,17 @@ func (d *Daemon) noteBackendRejoined(local, threadID string, conn backendConn) {
 // captured, so a structured_gap covers the tail.
 func (d *Daemon) noteBackendLost(local, reason string) {
 	d.forgetBackend(local)
+	d.finishBackendLost(local, reason)
+}
+
+func (d *Daemon) noteBackendLostForFeed(local, feedEpoch, reason string) {
+	if !d.forgetBackendForFeed(local, feedEpoch) {
+		return
+	}
+	d.finishBackendLost(local, reason)
+}
+
+func (d *Daemon) finishBackendLost(local, reason string) {
 	d.flushBackendFrames(local)
 	if reason == "" {
 		reason = gapBackendLost

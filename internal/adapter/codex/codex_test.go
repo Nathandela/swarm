@@ -61,6 +61,10 @@ func TestParseVersion_RealBanner(t *testing.T) {
 	if v2, ok2 := a.ParseVersion("garbage line"); ok2 || v2 != "" {
 		t.Errorf("ParseVersion(garbage) = (%q, %v); want (\"\", false)", v2, ok2)
 	}
+	const appServerUserAgent = "swarm-contextguard-probe/0.150.1 (Mac OS; arm64) dumb (swarm-contextguard-probe; 1)"
+	if v3, ok3 := a.ParseVersion(appServerUserAgent); !ok3 || v3 != "0.150.1" {
+		t.Errorf("ParseVersion(initialize.userAgent) = (%q, %v); want (\"0.150.1\", true)", v3, ok3)
+	}
 }
 
 // TestBinaryAndVersionArgs — E11.4: detection descriptors match the real CLI.

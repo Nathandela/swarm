@@ -218,6 +218,16 @@ func (l *composerLane) endStop() {
 	l.mu.Unlock()
 }
 
+// uncertainNow reports whether the lane holds an unresolved composer outcome.
+// The context guard's dispatch revalidation reads it at its queue head
+// (ADR-023 D6): an automatic compaction never rides over an operation whose
+// effect on the provider is still undecided.
+func (l *composerLane) uncertainNow() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.uncertain
+}
+
 func (l *composerLane) barrierChanged(admitted uint64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -249,6 +259,16 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 	defer lane.leave()
 	if lane.barrierChanged(admittedBarrier) {
 		return protocol.CodeStaleTurn, errIsLife5("composer send was queued before Stop completed; nothing was sent")
+	}
+	// The composer lane orders WRITES; a ContextGuard compaction has an EFFECT
+	// window that outlives its write (ADR-023 amendment 1), and the 2026-09-01
+	// gates prove a stimulus written into that window destroys the compaction,
+	// the message, or both. Same remedy as an unclean input line: nothing is
+	// wrong with the caller or the message, and the same words a moment later
+	// will land.
+	if d.contextGuardCompactionInFlight(local) {
+		return protocol.CodeInputBusy, errIsLife5(
+			"session %q is compacting its context, so this message was not written; nothing was sent", req.Session)
 	}
 	if _, ok := d.core.Get(local); !ok {
 		return protocol.CodeInvalidField, errIsLife5(

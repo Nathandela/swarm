@@ -43,6 +43,7 @@
 - [ADR-013](adr/ADR-013-mirror-capture-architecture.md) — Mirror capture architecture: structure beside the sacred PTY, the held hook rejected on co-presence grounds, the phone's answer typed into the CLI's own dialog
 - [ADR-020](adr/ADR-020-unattended-daemon-restart.md) — unattended daemon restart spawns from the saved environment, or touches nothing
 - [ADR-022](adr/ADR-022-live-session-name-adoption.md) — a session's name follows the name its CLI shows (Claude's `~/.claude/sessions` registry), newest wins
+- [ADR-023](adr/ADR-023-context-guard-auto-compaction.md) — opt-in, exact, provenance-bound ContextGuard with crash-safe at-most-once semantics and provider rollout gates
 
 ## Governance
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
@@ -52,4 +53,5 @@
 - [Audit committee report 002](verification/audit-002-implementation-goals.md) — the review that shaped implementation-goals.md Draft 2
 - [Landscape research](research/agent_view_landscape.md) — Agent View internals, cross-CLI managers, mobile remotes
 - [Hermes adapter evidence](verification/hermes-adapter-evidence.md) — characterization provenance, retained PTY fixtures, TDD records, acceptance gates, and known upstream limitations
+- [ContextGuard evidence](verification/context-guard.md) — implementation map, Codex 0.150.1 characterization, safety gates, test commands, and observe-only rollout status
 - [DESIGN.md](../DESIGN.md) — original design brief (historical)

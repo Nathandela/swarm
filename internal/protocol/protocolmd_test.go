@@ -92,6 +92,7 @@ func allOps() []string {
 		OpHello, OpList, OpLaunch, OpKill, OpDelete, OpRename, OpSetTag,
 		OpAttach, OpDetach, OpResize, OpSubscribe,
 		OpEvent, OpLease, OpOK, OpError,
+		OpContextGuardGet, OpContextGuardSet,
 	}
 }
 
