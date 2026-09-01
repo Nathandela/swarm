@@ -184,3 +184,50 @@ func TestPreparePairingPushBinding_ForegroundOnlyWithoutProductionProviders(t *t
 		t.Fatalf("parked build allocated %d addresses", allocated)
 	}
 }
+
+func TestPairingPushCommit_CrashAfterPinOwnershipBeforeDispositionRecoversOwnership(t *testing.T) {
+	gateway := &pairingPushGateway{}
+	stateDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(gateway.serveHTTP))
+	defer server.Close()
+	app, err := NewApp(&Config{StateDir: stateDir, PushGatewayURL: server.URL}, platformPushCustody{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ConfigurePushRegistration(&testPushAttestor{}, newPlatformTestSigner(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.EnsurePushRegistration("fcm-token"); err != nil {
+		t.Fatal(err)
+	}
+	binding, _, err := app.preparePairingPushBinding(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var addr phonecore.PushAddress
+	copy(addr[:], binding.PushAddress)
+	var wake crypto.WakeKey
+	copy(wake[:], binding.WakeKey)
+
+	func() {
+		defer func() { _ = recover() }()
+		_ = app.ownStagedPushBindingAfterPin(addr, func() { panic("simulated SIGKILL") })
+	}()
+	_ = app.Close()
+
+	restarted, err := NewApp(&Config{StateDir: stateDir, PushGatewayURL: server.URL}, platformPushCustody{})
+	if err != nil {
+		t.Fatalf("restart did not recover pin-owned staged binding: %v", err)
+	}
+	defer restarted.Close()
+	if got := restarted.core.PendingPushBindingRevocations(); len(got) != 0 {
+		t.Fatalf("restart left pin-owned address pending revoke: %x", got)
+	}
+	env, err := remotegw.SealWakeV1(wake, remotegw.PushAddress(addr), 1, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.core.AcceptWakeV1(env); err != nil {
+		t.Fatalf("restart lost the owned wake binding: %v", err)
+	}
+}

@@ -644,12 +644,15 @@ func (p *Pairing) join(base context.Context) {
 			if app.differentMachine(out) {
 				return errDifferentMachine
 			}
+			if err := app.pin(out); err != nil {
+				return err
+			}
 			if stagedPushAddress != nil {
-				if err := app.core.CommitStagedPushBinding(*stagedPushAddress); err != nil {
+				if err := app.ownStagedPushBindingAfterPin(*stagedPushAddress, nil); err != nil {
 					return err
 				}
 			}
-			return app.pin(out)
+			return nil
 		},
 		// The SAS gate: surfaced to the screen, then held until the operator has compared
 		// it against the machine's own display. Returning an error here fails the pairing

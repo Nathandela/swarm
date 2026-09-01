@@ -317,6 +317,10 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 		return nil, err
 	}
 	a.core = core
+	if err := a.recoverPairingPushOwnership(); err != nil {
+		a.events.close()
+		return nil, err
+	}
 	// ADR-017 T6-f: every severance trigger must DROP the bytes the coalescer is holding,
 	// so the control-generation gate needs the buffer that actually exists. Bound here
 	// because the Core is constructed before the App's coalescer is reachable from it.

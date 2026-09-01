@@ -237,6 +237,7 @@ func (a *App) preparePairingPushBinding(ctx context.Context) (*pairing.PushBindi
 			// Erase first and durably retain the revoke obligation. The network leg is
 			// detached from the pairing context because that context is normally already
 			// cancelled on exactly the paths that call this rollback.
+			_ = a.clearPairingPushOwned(alloc.Address)
 			_ = core.AbandonStagedPushBinding(alloc.Address)
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), pushPairingCleanupTimeout)
 			defer cancel()
