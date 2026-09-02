@@ -1,0 +1,12 @@
+# github.com/Nathandela/swarm/internal/adapter/claude [github.com/Nathandela/swarm/internal/adapter/claude.test]
+internal/adapter/claude/trustdialog_test.go:42:20: New().LaunchGateKeys undefined (type claudeAdapter has no field or method LaunchGateKeys)
+internal/adapter/claude/trustdialog_test.go:53:20: New().LaunchGateKeys undefined (type claudeAdapter has no field or method LaunchGateKeys)
+internal/adapter/claude/trustdialog_test.go:68:24: New().LaunchGateKeys undefined (type claudeAdapter has no field or method LaunchGateKeys)
+internal/adapter/claude/trustdialog_test.go:72:23: New().LaunchGateKeys undefined (type claudeAdapter has no field or method LaunchGateKeys)
+internal/adapter/claude/trustdialog_test.go:75:23: New().LaunchGateKeys undefined (type claudeAdapter has no field or method LaunchGateKeys)
+internal/adapter/claude/trustdialog_test.go:83:23: New().LaunchGateKeys undefined (type claudeAdapter has no field or method LaunchGateKeys)
+internal/adapter/claude/trustdialog_test.go:91:23: New().LaunchGateKeys undefined (type claudeAdapter has no field or method LaunchGateKeys)
+internal/adapter/claude/trustdialog_test.go:97:22: undefined: adapter.AsLaunchGateAnswerer
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude [build failed]
+FAIL
+exit=1

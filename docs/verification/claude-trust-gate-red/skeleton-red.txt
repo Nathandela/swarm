@@ -1,0 +1,4 @@
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/launchgate_test.go:88:9: sk.launchGateAnswered undefined (type *Daemon has no field or method launchGateAnswered)
+exit=1
