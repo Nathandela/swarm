@@ -9,7 +9,7 @@ import (
 // TestPlayReleaseIdentityIsV01323Code35 pins the two values Google Play uses to
 // distinguish this upload. Every source release advances both together so a new
 // release never reuses a previous candidate's Android identity (v0.13.21 was
-// versionCode 33).
+// versionCode 34).
 func TestPlayReleaseIdentityIsV01323Code35(t *testing.T) {
 	build := readFileOrFail(t, filepath.Join(appModule(t), "build.gradle.kts"), "Play release identity")
 
