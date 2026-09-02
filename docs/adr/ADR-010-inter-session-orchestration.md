@@ -603,10 +603,12 @@ unknown id and wrong when the id is known.
 Two limits are accepted and named. A pre-UUIDv7 thread id (codex minted v4 ids before it minted
 v7; sixteen such rollouts from 2025 exist on the owner's machine) names no day and is reported not
 found. And a codex source with NO captured id is first offered to the existing `resolveCodex`
-window, which for the same recorded-cwd reason cannot match an app-server thread and fails closed
-on the degenerate rollouts present in the owner's tree, so hands-off from such a source is refused
-by name until `swarm-man` lands. Every source with a captured id — twelve of the eighteen live
-codex sessions at the time of writing — composes.
+window, which for the same recorded-cwd reason cannot match an app-server thread, so hands-off
+from such a source is refused by name as "no matching conversation history" (since Amendment 7 H2
+the scan passes over a torn rollout instead of failing closed as "unsafe to inspect"). A legacy
+codex RESUME is no longer such a source: Amendment 7 H1 backfills its id from its launch argv at
+reconcile. The fresh-launch no-id case stays with `swarm-man`. Every source with a captured id —
+twelve of the eighteen live codex sessions at the time of writing — composes.
 
 E7's gate becomes "either layout": a source is supported when its adapter has characterized where
 its transcripts live, by cwd or by day. agy and opencode still implement neither and are refused
@@ -648,7 +650,7 @@ leaves it unset. D2 and B1 read as this directory from now on.
 ### Consequences
 
 - A codex-to-claude handoff composes by both methods for any source with a captured conversation
-  id, and a codex-to-codex hands-off does too; the no-captured-id case is `swarm-man`.
+  id, and a codex-to-codex hands-off does too; the no-captured-id case is `swarm-man`, narrowed by Amendment 7 to a legacy FRESH launch (a legacy resume regains its id at reconcile, H1).
 - Codex workspace-write sessions launched by swarm have network access on (F2). Recorded as a
   security consequence, not argued away.
 - Handoff copies live under the temp dir and do not survive a reboot; they were always transient.
@@ -746,21 +748,22 @@ A codex resume continues the thread it is given: the rollout of the resumed thre
 user's later turns (measured: thread `01a056e8`'s rollout, resumed 2026-09-01 09:02 UTC, holds the
 user's turns through 16:21 UTC), which is the fact v0.13.16's seeding already relies on. The daemon
 wrote that id into the session's `shim-launch.json` argv at spawn. So at reconcile, a codex session
-with `resumed_from` set and no conversation id takes the one canonical id in its launch argv,
-through the write-once `SetConversationID`, and is thereafter indistinguishable from a seeded one:
-hands-off, resume and recycle compose from it. Claude is excluded on purpose: its id is
-hook-captured and authoritative, and a pre-emptive latch would block that capture. The rejoin is
-not changed: `rejoinSessionBackend` still discovers the loaded thread rather than reading the
-persisted id, which is filed separately.
+with `resumed_from` set and no conversation id takes the first canonical element of its launch
+argv (codex's resume argv places the id right after `resume`, before any option flag), through
+the write-once `SetConversationID`, and is thereafter indistinguishable from a seeded one:
+hands-off, resume and recycle compose from it. Claude is excluded on purpose: its hooks capture
+the id on every start, so a claude session without one is a capture fault to be seen, not a legacy
+gap to be papered over. The rejoin is not changed: `rejoinSessionBackend` still discovers the
+loaded thread rather than reading the persisted id, which is `swarm-9jo`.
 
 ### H2. A torn codex rollout is not a record, so the scan skips it
 
 `resolveCodex` refused the whole scan on any rollout whose first line could not be read as a
 complete strict `session_meta`. Two kinds are now skipped as "not a candidate": a first line that
 is not newline-terminated (an empty file, or a write in progress), and one that is not one
-syntactically complete JSON value (a torn write). Both are what codex itself produces; neither can
-name an id, so skipping them adopts nothing, and a planted decoy that DOES decode still makes the
-scan ambiguous exactly as before. Every other refusal stands: a decodable record with duplicate
+syntactically complete JSON value (a torn write, or anything else that is not JSON). The first two
+are what codex itself produces; none of them can name an id, so skipping them adopts nothing, and a
+planted decoy that DOES decode still makes the scan ambiguous exactly as before. Every other refusal stands: a decodable record with duplicate
 keys, trailing data, missing fields, a mismatched id or stamp; a symlink or non-regular entry; a
 spent budget, which the bytes of a skipped partial line still count against. The hands-off locator
 shares the line reader: a named file with no complete first line is reported as not found rather
