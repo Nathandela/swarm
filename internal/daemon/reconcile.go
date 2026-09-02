@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
@@ -31,11 +32,53 @@ func (d *Daemon) reconcile() error {
 	for _, m := range metas {
 		if m.Status.Process != status.ProcessRunning {
 			d.putMem(m) // already terminal: register as-is, no monitor, no write
-			continue
+		} else {
+			d.reconcileRunning(m)
 		}
-		d.reconcileRunning(m)
+		d.backfillResumedConversationID(m)
 	}
 	return nil
+}
+
+// backfillResumedConversationID gives a codex session resumed before v0.13.16 seeded
+// ids the thread it continues (ADR-010 Amendment 7 H1). A codex resume announces no
+// thread and continues the one it was given, and the daemon wrote that id into the
+// session's launch argv at spawn, the only place it survives. Write-once: a captured id
+// wins. Claude is left to its hook capture, which is authoritative and must not be
+// pre-empted by a latch.
+func (d *Daemon) backfillResumedConversationID(m persist.Meta) {
+	if m.AgentType != "codex" || m.ResumedFrom == "" || m.ConversationID != "" {
+		return
+	}
+	id, ok := readShimLaunchResumedID(d.sessionDir(m.ID))
+	if !ok {
+		return
+	}
+	if err := d.SetConversationID(m.ID, id); err != nil {
+		d.logf("reconcile: backfill conversation id for %s: %v", m.ID, err)
+	}
+}
+
+// readShimLaunchResumedID is the canonical conversation id in a session's launch argv.
+// ponytail: the adapters place the id as its own argv element and nothing else in a
+// resume argv is a UUID, so the first canonical element is the one given to the agent.
+func readShimLaunchResumedID(dir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, shimLaunchConfigFile))
+	if err != nil {
+		return "", false
+	}
+	var lc struct {
+		Argv []string `json:"argv"`
+	}
+	if json.Unmarshal(data, &lc) != nil {
+		return "", false
+	}
+	for _, arg := range lc.Argv {
+		if adapter.IsCanonicalConversationID(arg) {
+			return arg, true
+		}
+	}
+	return "", false
 }
 
 // reconcileRunning resolves one meta that was last persisted as running.
