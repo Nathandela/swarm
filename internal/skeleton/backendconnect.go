@@ -192,7 +192,7 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		// §R7.7 case 1: this session will NEVER have a structured plane. The gap is emitted
 		// AT LAUNCH because the phone reads gaps off the transcript to decide whether to show
 		// a composer at all -- without it the owner types and the refusal arrives after the tap.
-		d.noteBackendUnavailable(id)
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		if aerr := d.core.SendBackendAttach(id, nil); aerr != nil {
 			log.Printf("skeleton: release session %s without a backend: %v", id, aerr)
 		}
@@ -206,7 +206,7 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	if !ok {
 		_ = conn.Close()
 		log.Printf("skeleton: session %s never announced a thread within %s", id, d.backendDeadline())
-		d.noteBackendUnavailable(id)
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
 	// THE FIRST RESUME ATTEMPT IS THE ONE THAT CARRIES INFORMATION (review round 4, RULING 1),
@@ -223,7 +223,7 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	if serr != nil && !isMissingRollout(serr) {
 		_ = conn.Close()
 		log.Printf("skeleton: session %s could not join thread %s: %v", id, threadID, serr)
-		d.noteBackendUnavailable(id)
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
 	// RULING 2: THE MESSAGE SINK IS THE CONNECTION, NOT THE SUBSCRIPTION. Registered here --
@@ -234,17 +234,19 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	// made the wave's exit criterion structurally unreachable on the ORDINARY fresh launch.
 	if !d.registerBackendFeedForInstance(id, expectedInstance, threadID, conn, feed) {
 		_ = conn.Close()
-		d.noteBackendUnavailable(id)
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
 	go d.watchSessionBackend(id, conn, feed.epoch)
 	if subscribed {
-		d.markBackendSubscribed(id)
+		if !d.markBackendSubscribedForFeed(id, feed.epoch) {
+			return
+		}
 		// RULING 1's honest arm, and the only success path that still emits a gap.
-		d.emitBackendGap(id, gapBackendPriorHistory)
+		d.emitBackendGapForInstance(id, expectedInstance, gapBackendPriorHistory)
 		return
 	}
-	go d.subscribeSessionThread(id, conn, threadID)
+	go d.subscribeSessionThread(id, conn, threadID, feed.epoch)
 }
 
 // rejoinSessionBackend is §R7.7 CASE 2: the daemon went away and came back, and the shim and
@@ -273,27 +275,44 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 		// transcript simply stops while the phone keeps offering an unproved composer. A later
 		// exact-instance backend proof may recover future sends; it cannot erase the marker.
 		log.Printf("skeleton: session %s backend could not be rejoined: %v", id, err)
-		d.noteBackendUnavailable(id)
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
-	threadID, terr := d.discoverLoadedThread(conn)
+	threadID, terr := d.discoverRejoinThread(id, expectedInstance, conn)
 	if terr != nil {
 		_ = conn.Close()
 		log.Printf("skeleton: session %s backend has no rejoinable thread: %v", id, terr)
-		d.noteBackendUnavailable(id)
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
 	subscribed, serr := d.resumeThreadOnce(conn, threadID)
 	if serr != nil && !isMissingRollout(serr) {
 		_ = conn.Close()
 		log.Printf("skeleton: session %s could not rejoin thread %s: %v", id, threadID, serr)
-		d.noteBackendUnavailable(id)
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
-	d.adoptBackendThread(id, threadID)
+	legacyIdentity, current := d.rejoinIdentityIsCurrent(id, expectedInstance, threadID)
+	if !current {
+		_ = conn.Close()
+		// A changed instance is stale work and this scoped call is a no-op. A different
+		// durable identity on the SAME instance is a current-session ownership conflict,
+		// so it must withdraw the unproved composer visibly.
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
+		return
+	}
 	if !d.registerBackendFeedForInstance(id, expectedInstance, threadID, conn, feed) {
 		_ = conn.Close()
-		d.noteBackendUnavailable(id)
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
+		return
+	}
+	// A pre-persistence session can still be rejoined only under the legacy exactly-one loaded
+	// thread rule. Persist that identity after the exact-instance sink is installed, behind the
+	// replacement fence; already-persisted sessions need no adoption and therefore cannot poison
+	// backend.adopted from an old in-flight reconnect.
+	if legacyIdentity && !d.adoptRejoinedThreadForInstance(id, expectedInstance, threadID) {
+		_ = d.forgetBackendForFeed(id, feed.epoch)
+		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
 	go d.watchSessionBackend(id, conn, feed.epoch)
@@ -321,10 +340,10 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 	// §R7.7 case 2's rule stands: a successful rejoin is not a PROVEN gap, and this daemon cannot
 	// tell from a rejoin alone whether the downtime window contained any turn at all.
 	if subscribed {
-		d.markBackendSubscribed(id)
+		d.markBackendSubscribedForFeed(id, feed.epoch)
 		return
 	}
-	go d.subscribeSessionThread(id, conn, threadID)
+	go d.subscribeSessionThread(id, conn, threadID, feed.epoch)
 }
 
 // awaitAdoptedThread blocks until the pump has seen the agent's `thread/started`, or the
@@ -360,8 +379,19 @@ func (d *Daemon) awaitAdoptedThread(id string, within time.Duration) (string, bo
 func (d *Daemon) resumeThreadOnce(conn backendConn, threadID string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
 	defer cancel()
-	if err := conn.Call(ctx, "thread/resume", map[string]any{"threadId": threadID}, nil); err != nil {
+	var resumed struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := conn.Call(ctx, "thread/resume", map[string]any{
+		"threadId":     threadID,
+		"excludeTurns": true,
+	}, &resumed); err != nil {
 		return false, err
+	}
+	if !adapter.IsCanonicalConversationID(resumed.Thread.ID) || resumed.Thread.ID != threadID {
+		return false, errBackendProbe("thread/resume returned a different or invalid thread identity")
 	}
 	return true, nil
 }
@@ -391,25 +421,34 @@ const backendSubscribeMaxBackoff = 5 * time.Second
 // reason OTHER than the recorded rollout race will never succeed, so this daemon holds a sink
 // whose item stream can never arrive: the composer would keep working while the transcript
 // never moved, which is the silent bridge ADR-017 forbids.
-func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID string) {
+func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID string, feedEpoch ...string) {
+	expectedFeed := ""
+	if len(feedEpoch) > 0 {
+		expectedFeed = feedEpoch[0]
+	}
 	wait := backendReadyInterval
 	for {
 		timer := time.NewTimer(wait)
 		<-timer.C
-		if _, live := d.sessionBackendFor(id); !live {
-			return // the session ended, or its backend was already reaped
+		if !d.backendFeedCurrent(id, expectedFeed) {
+			return // the session ended, or this exact connection was reaped/replaced
 		}
 		ok, err := d.resumeThreadOnce(conn, threadID)
 		if ok {
-			d.markBackendSubscribed(id)
+			d.markBackendSubscribedForFeed(id, expectedFeed)
 			return
 		}
+		if !d.backendFeedCurrent(id, expectedFeed) {
+			return // a replacement landed while this RPC was in flight
+		}
 		if !isMissingRollout(err) {
-			if _, live := d.sessionBackendFor(id); !live {
-				return // the watcher got there first; one tear, one gap
-			}
 			log.Printf("skeleton: session %s can never subscribe to thread %s: %v", id, threadID, err)
-			d.noteBackendLost(id, "the thread subscription could not be established: "+err.Error())
+			reason := "the thread subscription could not be established: " + err.Error()
+			if expectedFeed == "" {
+				d.noteBackendLost(id, reason)
+			} else {
+				d.noteBackendLostForFeed(id, expectedFeed, reason)
+			}
 			return
 		}
 		if wait < backendSubscribeMaxBackoff {
@@ -439,27 +478,132 @@ func isMissingRollout(err error) bool {
 // puts the phone on a conversation nobody is having. Refusing is the honest answer, and it
 // degrades to a structured_gap rather than to a guess.
 func (d *Daemon) discoverLoadedThread(conn backendConn) (string, error) {
+	loaded, err := loadBackendThreads(conn)
+	if err != nil {
+		return "", err
+	}
+	return selectOnlyLoadedThread(loaded)
+}
+
+// discoverRejoinThread selects the provider thread owned by this exact Swarm session
+// instance. A Codex app-server can legitimately hold the main thread plus guardian or
+// sub-agent threads, so the loaded list is an inventory, not an ownership proof. The
+// canonical conversation id already persisted in Meta is that proof, but only when the
+// provider confirms that it is present exactly once in the current inventory.
+//
+// Legacy sessions with no persisted identity retain the old fail-closed rule: exactly one
+// canonical loaded thread may be selected. A malformed persisted value is not silently
+// treated as absent because doing so could route the phone to the wrong conversation.
+func (d *Daemon) discoverRejoinThread(id, expectedInstance string, conn backendConn) (string, error) {
+	loaded, err := loadBackendThreads(conn)
+	if err != nil {
+		return "", err
+	}
+	persisted, exists, err := d.persistedRejoinIdentity(id, expectedInstance)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return selectOnlyLoadedThread(loaded)
+	}
+	matches := 0
+	for _, candidate := range loaded {
+		if candidate == persisted {
+			matches++
+		}
+	}
+	if matches != 1 {
+		return "", errBackendProbe(fmt.Sprintf(
+			"the persisted conversation appears %d times in this session's loaded thread inventory; exactly one is required",
+			matches))
+	}
+	return persisted, nil
+}
+
+func (d *Daemon) persistedRejoinIdentity(id, expectedInstance string) (string, bool, error) {
+	if expectedInstance == "" || d.core == nil {
+		return "", false, errBackendProbe("the session instance is unavailable during backend rejoin")
+	}
+	if current, ok := d.sessionInstance(id); !ok || current != expectedInstance {
+		return "", false, errBackendProbe("the session instance changed during backend rejoin")
+	}
+	m, ok := d.core.Get(id)
+	if !ok {
+		return "", false, errBackendProbe("the session disappeared during backend rejoin")
+	}
+	if m.ConversationID == "" {
+		return "", false, nil
+	}
+	if !adapter.IsCanonicalConversationID(m.ConversationID) {
+		return "", false, errBackendProbe("the persisted conversation identity is invalid")
+	}
+	return m.ConversationID, true, nil
+}
+
+// rejoinIdentityIsCurrent is the post-resume half of the ownership fence. It prevents an
+// in-flight old connection from being adopted after either session replacement or a change
+// to the durable provider identity.
+func (d *Daemon) rejoinIdentityIsCurrent(id, expectedInstance, threadID string) (legacy, current bool) {
+	persisted, exists, err := d.persistedRejoinIdentity(id, expectedInstance)
+	if err != nil {
+		return false, false
+	}
+	if !exists {
+		return true, true
+	}
+	return false, persisted == threadID
+}
+
+// adoptRejoinedThreadForInstance preserves the legacy one-thread migration without letting a
+// rejoin captured from an old session instance persist its provider identity into a replacement.
+// recordSessionInstance uses the same outer fence, so the comparison and adoption are one
+// replacement transaction.
+func (d *Daemon) adoptRejoinedThreadForInstance(id, expectedInstance, threadID string) bool {
+	if d.contextGuards != nil {
+		d.contextGuards.replaceMu.Lock()
+		defer d.contextGuards.replaceMu.Unlock()
+	}
+	if current, ok := d.sessionInstance(id); !ok || current != expectedInstance {
+		return false
+	}
+	d.adoptBackendThread(id, threadID)
+	adopted, ok := d.adoptedThread(id)
+	if !ok || adopted != threadID || d.core == nil {
+		return false
+	}
+	// SetConversationID is deliberately write-once and reports a competing prior value as
+	// a successful no-op. Read the durable fact back: the in-memory adoption is authority
+	// only when metadata now names this exact provider thread.
+	m, ok := d.core.Get(id)
+	return ok && m.ConversationID == threadID
+}
+
+func loadBackendThreads(conn backendConn) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
 	defer cancel()
 	var loaded struct {
 		Data []string `json:"data"`
 	}
 	if err := conn.Call(ctx, "thread/loaded/list", map[string]any{}, &loaded); err != nil {
-		return "", err
+		return nil, err
 	}
-	if len(loaded.Data) != 1 {
+	return loaded.Data, nil
+}
+
+func selectOnlyLoadedThread(loaded []string) (string, error) {
+	if len(loaded) != 1 {
 		return "", errBackendProbe(fmt.Sprintf(
 			"this session's app-server holds %d threads; exactly one is expected, and guessing "+
 				"which one the owner is looking at is not a choice this daemon may make",
-			len(loaded.Data)))
+			len(loaded)))
 	}
-	if !adapter.IsCanonicalConversationID(loaded.Data[0]) {
+	if !adapter.IsCanonicalConversationID(loaded[0]) {
 		// The raw provider value is untrusted and may contain prose or control
 		// characters. Refuse it before thread/resume, routing registration, or any
 		// log call, and expose only a stable generic diagnostic.
 		return "", errBackendProbe("thread/loaded/list returned an invalid thread identity")
 	}
-	return loaded.Data[0], nil
+	return loaded[0], nil
 }
 
 // dialSessionBackend waits for the shim's backend to be servable, upgrades to its WebSocket
@@ -482,14 +626,12 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 			OnNotify: func(method string, params json.RawMessage) {
 				at := time.Now()
 				frame := rebuildFrame(method, nil, params)
-				d.captureContextGuardFrame(id, expectedInstance, feed, method, frame, at)
-				d.ingestBackendFrame(id, frame, at.UnixMilli())
+				d.ingestBackendFrameForFeed(id, expectedInstance, feed, method, frame, at)
 			},
 			OnRequest: func(rid json.RawMessage, method string, params json.RawMessage) {
 				at := time.Now()
 				frame := rebuildFrame(method, rid, params)
-				d.captureContextGuardFrame(id, expectedInstance, feed, method, frame, at)
-				d.ingestBackendFrame(id, frame, at.UnixMilli())
+				d.ingestBackendFrameForFeed(id, expectedInstance, feed, method, frame, at)
 			},
 		})
 		if err == nil {

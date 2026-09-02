@@ -221,7 +221,7 @@ type r7ResumeConn struct {
 	calls int
 }
 
-func (c *r7ResumeConn) Call(_ context.Context, method string, _, _ any) error {
+func (c *r7ResumeConn) Call(_ context.Context, method string, params, out any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if method != "thread/resume" {
@@ -229,11 +229,22 @@ func (c *r7ResumeConn) Call(_ context.Context, method string, _, _ any) error {
 	}
 	c.calls++
 	if len(c.errs) == 0 {
+		populateR7ResumeResult(params, out)
 		return nil
 	}
 	err := c.errs[0]
 	c.errs = c.errs[1:]
+	if err == nil {
+		populateR7ResumeResult(params, out)
+	}
 	return err
+}
+
+func populateR7ResumeResult(params, out any) {
+	request, _ := params.(map[string]any)
+	threadID, _ := request["threadId"].(string)
+	body, _ := json.Marshal(map[string]any{"thread": map[string]any{"id": threadID}})
+	_ = json.Unmarshal(body, out)
 }
 
 func (c *r7ResumeConn) Respond(context.Context, json.RawMessage, any) error { return nil }
