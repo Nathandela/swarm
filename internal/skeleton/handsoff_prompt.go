@@ -66,18 +66,12 @@ type handsOffPromptData struct {
 // holding a control character is pathological, ADR-010 E7 prefers a NAMED refusal to
 // anything that might degrade, and excluding them leaves genuinely no delimiter to close.
 func renderHandsOffPrompt(data handsOffPromptData) (string, error) {
-	for _, required := range []struct{ field, value string }{
-		{"conversation_id", data.ConversationID},
-		{"transcript_path", data.TranscriptPath},
-		{"agent_cwd", data.AgentCwd},
-		{"source_agent", data.SourceAgent},
-		{"source_session_id", data.SourceSessionID},
-	} {
+	for _, required := range handsOffPromptValues(data) {
 		if strings.TrimSpace(required.value) == "" {
 			return "", fmt.Errorf("hands-off prompt: %s is empty", required.field)
 		}
 		if i := strings.IndexFunc(required.value, forgesPromptText); i >= 0 {
-			return "", fmt.Errorf("hands-off prompt: %s contains a line-breaking, invisible or tag-bracket character at byte %d; it would forge prompt text", required.field, i)
+			return "", fmt.Errorf("hands-off prompt: %s %q contains a line-breaking, invisible or tag-bracket character at byte %d, which the prompt refuses rather than escapes; use the supervised method for this session", required.field, required.value, i)
 		}
 	}
 	var out strings.Builder
@@ -85,6 +79,19 @@ func renderHandsOffPrompt(data handsOffPromptData) (string, error) {
 		return "", fmt.Errorf("render hands-off prompt: %w", err)
 	}
 	return out.String(), nil
+}
+
+// handsOffPromptValues lists the five values in template order, and it is the ONLY
+// list the guard runs over: a field added to handsOffPromptData without a row here
+// would render unguarded, which a test pins against by counting the struct's fields.
+func handsOffPromptValues(data handsOffPromptData) []struct{ field, value string } {
+	return []struct{ field, value string }{
+		{"conversation_id", data.ConversationID},
+		{"transcript_path", data.TranscriptPath},
+		{"agent_cwd", data.AgentCwd},
+		{"source_agent", data.SourceAgent},
+		{"source_session_id", data.SourceSessionID},
+	}
 }
 
 // forgesPromptText reports whether r could manufacture a second logical line, or hide

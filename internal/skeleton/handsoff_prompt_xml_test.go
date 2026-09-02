@@ -6,6 +6,7 @@ package skeleton
 // refuses any pointer value holding a tag bracket, as it already refuses a newline.
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -32,23 +33,33 @@ func TestHandsOffPromptIsStructuredWithXMLSections(t *testing.T) {
 	if !strings.HasPrefix(trimmed, "<swarm_handoff>") || !strings.HasSuffix(trimmed, "</swarm_handoff>") {
 		t.Errorf("prompt is not wrapped in one <swarm_handoff> element\n---\n%s\n---", prompt)
 	}
-	last := -1
+	// Flat and ordered: each section closes before the next one opens (never nested).
+	lastClose := -1
 	for _, name := range handsOffSections {
 		open, closing := "<"+name+">", "</"+name+">"
 		if n, m := strings.Count(prompt, open), strings.Count(prompt, closing); n != 1 || m != 1 {
 			t.Errorf("section <%s> opens %d times and closes %d times, want exactly once each", name, n, m)
 		}
-		if i := strings.Index(prompt, open); i < last {
-			t.Errorf("section <%s> is out of order; want %v", name, handsOffSections)
-		} else {
-			last = i
+		i, j := strings.Index(prompt, open), strings.Index(prompt, closing)
+		if i < lastClose || j < i {
+			t.Errorf("section <%s> nests in or precedes its neighbour; want flat sections in order %v", name, handsOffSections)
 		}
+		lastClose = j
 	}
-	// The five pointers stay bare "label: value" lines, and they live in <pointers>.
+	// The five pointers stay bare "label: value" lines, labels AND values, and they live
+	// in <pointers>: a value that rendered elsewhere in the prompt would satisfy a
+	// whole-prompt search and still leave the pointer block short.
+	data := sampleHandsOffPromptData()
 	pointers := sectionOf(t, prompt, "pointers")
-	for _, label := range []string{"conversation uid: ", "transcript file: ", "working directory: ", "source agent: ", "source swarm session: "} {
-		if !strings.Contains(pointers, "\n"+label) {
-			t.Errorf("<pointers> lacks the bare line %q\n---\n%s\n---", label, pointers)
+	for label, value := range map[string]string{
+		"conversation uid: ":     data.ConversationID,
+		"transcript file: ":      data.TranscriptPath,
+		"working directory: ":    data.AgentCwd,
+		"source agent: ":         data.SourceAgent,
+		"source swarm session: ": data.SourceSessionID,
+	} {
+		if !strings.Contains(pointers, "\n"+label+value+"\n") {
+			t.Errorf("<pointers> lacks the bare line %q\n---\n%s\n---", label+value, pointers)
 		}
 	}
 	if strings.Contains(pointers, "<") {
@@ -71,17 +82,30 @@ func TestHandsOffPromptDelegatesTheTranscriptReading(t *testing.T) {
 		"keep your own context for the work",
 		"subagent",
 		"newest turns first",
+		"weighing rules below as its brief",
 		"the goal in the human's own words",
 		"current state of the work",
 		"decisions and constraints",
-		"open questions",
-		"files it touched",
+		"evidence and validation",
+		"next actions",
+		"pointers to the files it touched",
+		"a human turn, an assistant turn, or tool output",
+		"not ground truth",
 		"only if you cannot delegate",
 		"no digest, no summary and no extract",
 	} {
 		if !strings.Contains(reading, want) {
 			t.Errorf("<reading> never says %q\n---\n%s\n---", want, reading)
 		}
+	}
+}
+
+// The guard runs over one hand-written list of the struct's fields. A sixth field added
+// to handsOffPromptData and the template without a row in that list would render
+// unguarded with every other test green, so the list's length is pinned to the struct's.
+func TestHandsOffPromptGuardsEveryField(t *testing.T) {
+	if got, want := len(handsOffPromptValues(handsOffPromptData{})), reflect.TypeOf(handsOffPromptData{}).NumField(); got != want {
+		t.Fatalf("the guard lists %d fields, handsOffPromptData has %d; every field must be guarded", got, want)
 	}
 }
 
