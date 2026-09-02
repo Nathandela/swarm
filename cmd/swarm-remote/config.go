@@ -429,23 +429,18 @@ func resolvePushGatewayConfig(remoteDir string) (*remotegw.PushGatewayConfig, er
 }
 
 // resolveRegistryPushGatewayConfig derives every authority-bearing runtime coordinate from
-// the validated sole registry row. The optional legacy sidecar is comparison-only: if it is
-// present and disagrees, startup fails closed instead of mixing its capability with the
-// record's fresh per-pairing wake key.
+// the validated sole registry row. A legacy sidecar is retired only after that row exists
+// and validates: the registry commit is the migration point, so a crash before it preserves
+// the old source while a crash after it can safely repeat this idempotent retirement.
 func resolveRegistryPushGatewayConfig(remoteDir string, push device.PushBinding) (*remotegw.PushGatewayConfig, error) {
 	if err := device.ValidatePushBinding(push); err != nil {
 		return nil, fmt.Errorf("registry push binding: %w", err)
 	}
-	legacy, legacyAddr, present, err := parsePushGatewayFile(remoteDir)
-	if err != nil {
+	if err := retireLegacyPushGatewayFile(remoteDir); err != nil {
 		return nil, err
 	}
 	var addr remotegw.PushAddress
 	copy(addr[:], push.Address)
-	if present && (legacy.GatewayURL != push.GatewayURL || legacy.SubmitCapability != push.SubmitCapability ||
-		legacy.MachineRevokeCapability != push.MachineRevokeCapability || legacyAddr != addr) {
-		return nil, errors.New("push-gateway.json disagrees with the sole registry push binding")
-	}
 	var wake crypto.WakeKey
 	copy(wake[:], push.WakeKey)
 	wakeSeq, err := remotegw.OpenSeqSource(remotegw.WakeSeqPath(remoteDir, addr))
@@ -468,4 +463,30 @@ func resolveRegistryPushGatewayConfig(remoteDir string, push device.PushBinding)
 		MachineRevokeCapability: push.MachineRevokeCapability, WakeKey: wake,
 		Address: addr, Transport: transport, Obligations: obligations, WakeSeq: wakeSeq,
 	}, nil
+}
+
+func retireLegacyPushGatewayFile(remoteDir string) error {
+	path := filepath.Join(remoteDir, "push-gateway.json")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect superseded push-gateway.json: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("superseded push-gateway.json is not a regular file")
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("retire superseded push-gateway.json: %w", err)
+	}
+	dir, err := os.Open(remoteDir)
+	if err != nil {
+		return fmt.Errorf("open remote directory after retiring push-gateway.json: %w", err)
+	}
+	defer func() { _ = dir.Close() }()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync remote directory after retiring push-gateway.json: %w", err)
+	}
+	return nil
 }
