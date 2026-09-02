@@ -566,12 +566,6 @@ func (d *Daemon) backendFeedCurrent(local, expectedEpoch string) bool {
 	return live && (expectedEpoch == "" || b.feed != nil && b.feed.epoch == expectedEpoch)
 }
 
-// markBackendSubscribed records that thread/resume has succeeded on this session's connection,
-// so the daemon is now receiving the thread's item stream.
-func (d *Daemon) markBackendSubscribed(local string) {
-	d.markBackendSubscribedForFeed(local, "")
-}
-
 // markBackendSubscribedForFeed records subscription only on the connection generation that
 // produced the successful resume. A late retry from a replaced connection must not mark its
 // successor subscribed merely because the session id was reused.
