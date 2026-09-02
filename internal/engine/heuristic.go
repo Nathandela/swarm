@@ -176,6 +176,10 @@ var claudeDialogHints = []string{
 	"Esc to cancel · Tab to amend",
 	"Enter to select · ↑/↓ to navigate",
 	"shift+tab to approve",
+	// the folder-trust dialog's standing row (ADR-025; recorded on 2.1.231 and 2.1.258
+	// under internal/adapter/claude/testdata): the session is blocked before its first
+	// prompt, and its marked option ("❯ No, exit") reads as a composer without this.
+	"Enter to confirm · Esc to cancel",
 }
 
 // evaluateGridSig reads snap under the named per-adapter grid signature, returning

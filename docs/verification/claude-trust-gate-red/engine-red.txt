@@ -1,0 +1,12 @@
+=== RUN   TestTrustGate_ClaudeFolderTrustDialogReadsAsPermission
+=== RUN   TestTrustGate_ClaudeFolderTrustDialogReadsAsPermission/2.1.258_(No_preselected)
+    trustgate_grid_test.go:36: the folder-trust dialog read (idle, none, conclusive=true); want (idle, permission, true)
+=== RUN   TestTrustGate_ClaudeFolderTrustDialogReadsAsPermission/2.1.231_(Yes_preselected)
+    trustgate_grid_test.go:36: the folder-trust dialog read (idle, none, conclusive=true); want (idle, permission, true)
+--- FAIL: TestTrustGate_ClaudeFolderTrustDialogReadsAsPermission (0.00s)
+    --- FAIL: TestTrustGate_ClaudeFolderTrustDialogReadsAsPermission/2.1.258_(No_preselected) (0.00s)
+    --- FAIL: TestTrustGate_ClaudeFolderTrustDialogReadsAsPermission/2.1.231_(Yes_preselected) (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/engine	0.009s
+FAIL
+exit=1

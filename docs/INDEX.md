@@ -45,6 +45,7 @@
 - [ADR-020](adr/ADR-020-unattended-daemon-restart.md) — unattended daemon restart spawns from the saved environment, or touches nothing
 - [ADR-022](adr/ADR-022-live-session-name-adoption.md) — a session's name follows the name its CLI shows (Claude's `~/.claude/sessions` registry), newest wins
 - [ADR-023](adr/ADR-023-context-guard-auto-compaction.md) — opt-in, exact, provenance-bound ContextGuard with crash-safe at-most-once semantics and provider rollout gates
+- [ADR-025](adr/ADR-025-launch-gate-answered-by-the-daemon.md) — the daemon answers Claude Code's folder-trust launch gate itself, grid-gated and once per session; an unanswered gate reads as needs_input
 
 ## Governance
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))

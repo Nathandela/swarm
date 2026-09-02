@@ -117,6 +117,10 @@ type Daemon struct {
 	sampleWG sync.WaitGroup // in-flight per-session grid samples
 	tapWG    sync.WaitGroup // the tapGrids loop (the sole sampleWG/captureWG Adder)
 	sampleFn func(id string)
+	// gateDone marks the sessions whose launch gate this daemon already answered
+	// (launchgate.go); gateMu guards it. Bounded to running sessions by endSession.
+	gateMu   sync.Mutex
+	gateDone map[string]bool
 	// controlled reports whether a session has a live controller lease; the tap
 	// skips such a session so its stream is not stolen every poll (R1.3.7). It is
 	// d.srv.IsControlled in production, overridable in tests.
@@ -836,6 +840,9 @@ func (d *Daemon) endSession(id string) {
 	d.convScanMu.Lock()
 	delete(d.convScan, id) // bound convScan to running sessions (R2.1.3 hygiene)
 	d.convScanMu.Unlock()
+	d.gateMu.Lock()
+	delete(d.gateDone, id)
+	d.gateMu.Unlock()
 	if d.eng != nil {
 		d.eng.EndSession(id)
 	}
@@ -984,6 +991,7 @@ func (d *Daemon) sampleGrid(id string) {
 		return
 	}
 	d.eng.OnOutput(id, snap)
+	d.answerLaunchGate(id, snap)
 }
 
 // tapLogInterval rate-limits the grid-tap snapshot-failure log so a persistently
