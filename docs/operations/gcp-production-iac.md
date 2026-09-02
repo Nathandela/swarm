@@ -203,7 +203,7 @@ Each `vMAJOR.MINOR.PATCH` release attaches `container-images.json`. It names bot
 `@sha256:` digest; a moving alias is never deployment authority.
 
 ```bash
-release=v0.13.16
+release=v0.13.19
 mkdir -p /tmp/swarm-release
 gh release download "${release}" --repo Nathandela/swarm \
   --pattern container-images.json --dir /tmp/swarm-release

@@ -496,7 +496,7 @@ android {
         // published and Play refuses it for a reason that has nothing to do with the change.
         // A number a person types is a number a person can reconcile with the Console.
         versionCode = 31
-        versionName = "0.13.16"
+        versionName = "0.13.19"
 
         // PB-E2E-2. Without this the module has no instrumented test task at all and
         // `connectedAndroidTest` is a no-op that reports success -- so the exit demonstration's
