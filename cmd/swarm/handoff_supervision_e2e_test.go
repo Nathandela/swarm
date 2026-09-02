@@ -23,7 +23,6 @@ import (
 )
 
 func TestHandoffSupervision_PassiveChildWakesSourceThroughRealBinaries(t *testing.T) {
-	useTempHandoffRoot(t) // the in-process handoff verb copies into os.TempDir; keep it out of the real /tmp
 	if testing.Short() {
 		t.Skip("spawns a real daemon + sessions")
 	}
@@ -68,9 +67,14 @@ func TestHandoffSupervision_PassiveChildWakesSourceThroughRealBinaries(t *testin
 	if err := os.WriteFile(ctx, []byte("# Goal\nsmoke\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The real `swarm handoff` copies the document into its own os.TempDir; point THAT
+	// process's TMPDIR at a per-test root so the copy never lands in the real /tmp. Only
+	// the subprocess env changes: the daemon's socket paths were minted above and must
+	// stay short.
+	copyRoot := t.TempDir()
 	run := func(args ...string) (string, error) {
 		cmd := exec.Command(swarmBin, args...)
-		cmd.Env = append(append(os.Environ(), env...), hookclient.EnvSessionID+"="+sourceLocal)
+		cmd.Env = append(append(os.Environ(), env...), hookclient.EnvSessionID+"="+sourceLocal, "TMPDIR="+copyRoot)
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
