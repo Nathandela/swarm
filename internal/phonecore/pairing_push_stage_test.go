@@ -257,3 +257,51 @@ func TestCompleteOwnedStagedPushBinding_PostRenameMarkerSyncFailureCannotResurre
 		t.Fatal("restart resurrected push-store compensation after completed ownership")
 	}
 }
+
+func TestPairingPushOwnership_SupersedesOldBindingOnlyAfterNewOwnershipIsDurable(t *testing.T) {
+	dir := t.TempDir()
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	core := stageCore(t, dir, wake, content)
+	oldAddr, newAddr := PushAddress{0x81}, PushAddress{0x82}
+	oldKey, newKey := crypto.WakeKey{0x91}, crypto.WakeKey{0x92}
+
+	if err := core.StagePushBinding(oldAddr, oldKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.MutateAndOwnStagedPushBinding(oldAddr, func(st *State) { st.Machine = "same-machine" }); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.CompleteOwnedStagedPushBinding(oldAddr); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.StagePushBinding(newAddr, newKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.MutateAndOwnStagedPushBinding(newAddr, func(st *State) { st.Machine = "same-machine" }); err != nil {
+		t.Fatal(err)
+	}
+
+	// SIGKILL before the new binding's push-store disposition: the old address remains the
+	// sole committed fallback and MUST NOT yet be scheduled for revocation.
+	crashed := stageCore(t, dir, wake, content)
+	if pending := crashed.PendingPushBindingRevocations(); len(pending) != 1 || pending[0] != newAddr {
+		t.Fatalf("pending before new ownership disposition=%x, want only new address", pending)
+	}
+	if err := crashed.AcceptWakeV1(r3aSeal(t, oldKey, oldAddr, 1, time.Now())); err != nil {
+		t.Fatalf("old binding was revoked before its replacement committed: %v", err)
+	}
+	if err := crashed.CompleteOwnedStagedPushBinding(newAddr); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := stageCore(t, dir, wake, content)
+	if pending := restarted.PendingPushBindingRevocations(); len(pending) != 1 || pending[0] != oldAddr {
+		t.Fatalf("pending after replacement commit=%x, want superseded old address", pending)
+	}
+	if err := restarted.AcceptWakeV1(r3aSeal(t, oldKey, oldAddr, 2, time.Now())); !errors.Is(err, ErrNoWakeKey) {
+		t.Fatalf("superseded old binding still opens wakes: %v", err)
+	}
+	if err := restarted.AcceptWakeV1(r3aSeal(t, newKey, newAddr, 1, time.Now())); err != nil {
+		t.Fatalf("new durable binding refused wake: %v", err)
+	}
+}

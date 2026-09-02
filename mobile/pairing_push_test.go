@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,11 +18,14 @@ import (
 )
 
 type pairingPushGateway struct {
-	mu         sync.Mutex
-	allocated  int
-	revoked    int
-	failRevoke bool
-	addr       phonecore.PushAddress
+	mu                 sync.Mutex
+	allocated          int
+	revoked            int
+	failRevoke         bool
+	failRevokes        int
+	revokedAddresses   []phonecore.PushAddress
+	firstRevokeFailure chan struct{}
+	addr               phonecore.PushAddress
 }
 
 func (g *pairingPushGateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +51,18 @@ func (g *pairingPushGateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
 	case r.Method == http.MethodDelete:
 		g.revoked++
-		if g.failRevoke {
+		raw, _ := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(r.URL.Path, "/v1/addresses/"))
+		var revokedAddr phonecore.PushAddress
+		copy(revokedAddr[:], raw)
+		g.revokedAddresses = append(g.revokedAddresses, revokedAddr)
+		if g.failRevoke || g.failRevokes > 0 {
+			if g.failRevokes > 0 {
+				g.failRevokes--
+			}
+			if g.firstRevokeFailure != nil {
+				close(g.firstRevokeFailure)
+				g.firstRevokeFailure = nil
+			}
 			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -316,10 +331,76 @@ func TestPairingPushCommit_CrashAfterPinOwnershipBeforeDispositionRecoversOwners
 		t.Fatalf("same-machine repair: %v", err)
 	}
 	rollback2()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(restarted.core.PendingPushBindingRevocations()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	gateway.mu.Lock()
 	revoked := gateway.revoked
+	revokedAddresses := append([]phonecore.PushAddress(nil), gateway.revokedAddresses...)
 	gateway.mu.Unlock()
-	if revoked != 0 {
-		t.Fatalf("owned allocations revoked after ack-loss cleanup: %d", revoked)
+	if revoked != 1 || len(revokedAddresses) != 1 || revokedAddresses[0] != addr {
+		t.Fatalf("same-machine repair revokes=%d addresses=%x, want old %x exactly once", revoked, revokedAddresses, addr)
+	}
+	if got := restarted.core.PendingPushBindingRevocations(); len(got) != 0 {
+		t.Fatalf("same-process supersession cleanup remained pending: %x", got)
+	}
+	var wake2 crypto.WakeKey
+	copy(wake2[:], binding2.WakeKey)
+	env2, err := remotegw.SealWakeV1(wake2, remotegw.PushAddress(addr2), 1, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.core.AcceptWakeV1(env2); err != nil {
+		t.Fatalf("new binding was revoked with its predecessor: %v", err)
+	}
+}
+
+func TestPairingPushCommit_SupersededRevokeFailureStaysDurableAndRetries(t *testing.T) {
+	gateway := &pairingPushGateway{}
+	app, _ := newPairingPushApp(t, gateway)
+	first, _, err := app.preparePairingPushBinding(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldAddr phonecore.PushAddress
+	copy(oldAddr[:], first.PushAddress)
+	if err := app.pinWithStagedPushBinding(pairedOutcome("ep-same-machine", 7), &oldAddr, nil); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := app.preparePairingPushBinding(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var newAddr phonecore.PushAddress
+	copy(newAddr[:], second.PushAddress)
+	gateway.mu.Lock()
+	gateway.failRevokes = 1
+	gateway.firstRevokeFailure = make(chan struct{})
+	failed := gateway.firstRevokeFailure
+	gateway.mu.Unlock()
+	if err := app.pinWithStagedPushBinding(pairedOutcome("ep-same-machine", 7), &newAddr, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-failed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("superseded revoke was not attempted")
+	}
+	if pending := app.core.PendingPushBindingRevocations(); len(pending) != 1 || pending[0] != oldAddr {
+		t.Fatalf("failed supersession revoke was not durable: %x", pending)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(app.core.PendingPushBindingRevocations()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pending := app.core.PendingPushBindingRevocations(); len(pending) != 0 {
+		t.Fatalf("retry did not clear superseded revoke: %x", pending)
+	}
+	gateway.mu.Lock()
+	addresses := append([]phonecore.PushAddress(nil), gateway.revokedAddresses...)
+	gateway.mu.Unlock()
+	if len(addresses) != 2 || addresses[0] != oldAddr || addresses[1] != oldAddr {
+		t.Fatalf("retry addresses=%x, want old address twice", addresses)
 	}
 }

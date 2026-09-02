@@ -350,7 +350,7 @@ func (c *Core) CompleteOwnedStagedPushBinding(addr PushAddress) error {
 	if c.st.pairingPushOwned != enc {
 		return errors.New("phonecore: staged push binding is not the pin-owned address")
 	}
-	if err := c.removePendingPairingRevokeLocked(enc); err != nil {
+	if err := c.commitOwnedPairingBindingLocked(enc); err != nil {
 		return err
 	}
 	st := c.st.clone()

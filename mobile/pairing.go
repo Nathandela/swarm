@@ -1147,6 +1147,11 @@ func (a *App) pinWithStagedPushBinding(out *pairing.DeviceOutcome, staged *phone
 		if err := a.core.CompleteOwnedStagedPushBinding(*staged); err != nil {
 			return err
 		}
+		// A same-machine repair may have atomically converted the previous binding into a
+		// durable revoke obligation. Provider/token callbacks can already have run, so this
+		// post-commit edge must schedule cleanup itself. It runs only after the new pin and
+		// binding ownership are durable; the old address is never revoked first.
+		a.schedulePendingPairingPushRevokes()
 	}
 	return nil
 }

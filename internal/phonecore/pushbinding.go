@@ -161,6 +161,11 @@ type pushData struct {
 	// confirms revocation. Process death can therefore leak neither a live local key
 	// nor an untracked public allocation.
 	PendingPairingRevokes []string `json:"pending_pairing_revokes,omitempty"`
+	// OwnedPairingAddress is the last pairing binding whose cross-file ownership
+	// transaction completed. When a same-machine repair commits a fresh binding, this
+	// exact predecessor becomes a durable revoke obligation in the SAME push-store write;
+	// it is never revoked while it is still the sole committed binding.
+	OwnedPairingAddress string `json:"owned_pairing_address,omitempty"`
 	// Drops is the refused-wake counter, and it is ONE record rather than a total beside a
 	// breakdown: two fields that must sum to each other are two fields that drift. WakeDrops
 	// reads its Total; WakeDropCounts hands back the whole record.
@@ -261,7 +266,75 @@ func openPushStore(dir string, sealer Sealer) (*pushStore, error) {
 			return nil, fmt.Errorf("decode pending pairing revoke: %w", err)
 		}
 	}
+	if s.data.OwnedPairingAddress != "" {
+		if _, err := decodePushAddress(s.data.OwnedPairingAddress); err != nil {
+			return nil, fmt.Errorf("decode owned pairing address: %w", err)
+		}
+		if s.binding(s.data.OwnedPairingAddress) == nil {
+			return nil, errors.New("owned pairing address has no binding")
+		}
+	}
 	return s, nil
+}
+
+// commitOwnedPairingBindingLocked atomically promotes enc and schedules its exact
+// predecessor for cleanup. The predecessor key is erased in the same sealed rename that
+// makes the new binding current, so a crash sees either the old sole binding or the new
+// binding plus a durable old-address revoke -- never neither and never both untracked.
+func (c *Core) commitOwnedPairingBindingLocked(enc string) error {
+	bindingsBefore := clonePushBindings(c.push.data.Bindings)
+	pendingBefore := append([]string(nil), c.push.data.PendingPairingRevokes...)
+	ownedBefore := c.push.data.OwnedPairingAddress
+	if c.push.binding(enc) == nil {
+		return errors.New("phonecore: owned pairing address has no staged binding")
+	}
+
+	old := ownedBefore
+	if old == "" {
+		// One-time migration for pre-field push state: only an unambiguous single live,
+		// non-pending predecessor can be the binding this repair is replacing.
+		for i := range c.push.data.Bindings {
+			candidate := &c.push.data.Bindings[i]
+			if candidate.Address == enc || len(candidate.WakeKey) == 0 ||
+				containsString(c.push.data.PendingPairingRevokes, candidate.Address) {
+				continue
+			}
+			if old != "" {
+				old = "" // ambiguous legacy state: invent no revoke authority
+				break
+			}
+			old = candidate.Address
+		}
+	}
+
+	kept := c.push.data.PendingPairingRevokes[:0]
+	for _, candidate := range c.push.data.PendingPairingRevokes {
+		if candidate != enc {
+			kept = append(kept, candidate)
+		}
+	}
+	c.push.data.PendingPairingRevokes = kept
+	c.push.data.OwnedPairingAddress = enc
+	if old != "" && old != enc {
+		if b := c.push.binding(old); b != nil {
+			if len(b.WakeKey) != 0 && len(b.WakeKeyHash) == 0 {
+				b.WakeKeyHash = wakeKeyHash(b.WakeKey)
+			}
+			b.WakeKey = nil
+		}
+		if !containsString(c.push.data.PendingPairingRevokes, old) {
+			c.push.data.PendingPairingRevokes = append(c.push.data.PendingPairingRevokes, old)
+		}
+	}
+	if err := c.push.persist(); err != nil {
+		if !atomicWriteCommitted(err) {
+			c.push.data.Bindings = bindingsBefore
+			c.push.data.PendingPairingRevokes = pendingBefore
+			c.push.data.OwnedPairingAddress = ownedBefore
+		}
+		return err
+	}
+	return nil
 }
 
 // persist seals and atomically rewrites the container. Memory-only stores (empty path)
