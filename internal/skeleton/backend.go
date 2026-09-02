@@ -119,6 +119,10 @@ type backendFeed struct {
 	epoch     string
 	userAgent string
 	seq       atomic.Uint64
+	// retired closes the producer edge for a removed or displaced connection. It is
+	// checked again behind the replacement fence, so a callback already dispatched by
+	// the app-server read loop cannot inject into a successor that reused the session id.
+	retired atomic.Bool
 
 	// guardMu bridges the interval between opening the app-server connection and
 	// publishing the ContextGuard session. Relevant lifecycle evidence cannot be
@@ -138,6 +142,12 @@ func newBackendFeed() *backendFeed { return &backendFeed{epoch: newItemID()} }
 // backendState is the assembly's per-session backend bookkeeping.
 type backendState struct {
 	mu sync.Mutex
+	// beforeRegisterInstall is a deterministic test seam at the instance-check/map-install
+	// boundary. Production leaves it nil.
+	beforeRegisterInstall func(local, expectedInstance string)
+	// afterFeedRemovalBeforeLoss is a deterministic test seam between removing the exact
+	// failed feed and publishing its loss. Production leaves it nil.
+	afterFeedRemovalBeforeLoss func(local, expectedEpoch string)
 	// live maps a local session id to its connection. ABSENCE IS THE REFUSAL: a session
 	// with no entry has no message sink and no approval channel, and the ops refuse rather
 	// than falling back to a keystroke.
@@ -222,7 +232,24 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
 		return false
 	}
+	if hook := d.backend.beforeRegisterInstall; hook != nil {
+		hook(local, expectedInstance)
+	}
+	// Re-check and install under the same replacement fence recordSessionInstance uses.
+	// The first check keeps the common stale path cheap; this one closes the interval in
+	// which a replacement and its successor can otherwise land after that check, only to
+	// be overwritten and then deleted by this attempt's rollback.
+	if d.contextGuards != nil {
+		d.contextGuards.replaceMu.Lock()
+	}
+	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
+		if d.contextGuards != nil {
+			d.contextGuards.replaceMu.Unlock()
+		}
+		return false
+	}
 	entry := &sessionBackend{threadID: threadID, conn: conn, sessionInstance: expectedInstance, feed: feed}
+	var displaced *sessionBackend
 	d.backend.mu.Lock()
 	if d.backend.live == nil {
 		d.backend.live = map[string]*sessionBackend{}
@@ -232,14 +259,38 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 	if d.backend.adopted == nil {
 		d.backend.adopted = map[string]string{}
 	}
+	displaced = d.backend.live[local]
+	if displaced != nil && displaced.feed != nil {
+		displaced.feed.retired.Store(true)
+	}
 	d.backend.live[local] = entry
+	// JSON-RPC ids and thread adoption are connection-scoped. None may cross the
+	// compare-install boundary into the newly authoritative app-server connection.
+	delete(d.backend.requests, local)
+	delete(d.backend.byID, local)
+	delete(d.backend.adopted, local)
 	d.backend.mu.Unlock()
+	if displaced != nil {
+		// Any delta already accepted from the old producer belongs before the new
+		// generation. Callback ingestion takes the same outer fence, so no new-feed
+		// frame can overtake this release.
+		d.flushBackendFrames(local)
+	}
+	if d.contextGuards != nil {
+		d.contextGuards.replaceMu.Unlock()
+	}
+	d.retireBackendRegistration(local, displaced)
 	rollback := func() {
 		d.backend.mu.Lock()
 		if d.backend.live[local] == entry {
+			entry.feed.retired.Store(true)
 			delete(d.backend.live, local)
+			delete(d.backend.requests, local)
+			delete(d.backend.byID, local)
+			delete(d.backend.adopted, local)
 		}
 		d.backend.mu.Unlock()
+		d.discardContextGuardFeed(entry.feed)
 	}
 	// A rejoined backend already has its thread id. Bring a durable Swarm label
 	// across immediately; a fresh backend with no id is handled by adoptBackendThread.
@@ -255,11 +306,12 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 	// Off the caller's goroutine: registerBackend holds d.backend.mu and the authoring
 	// path takes the capability store's lock and writes the session dir; holding a backend
 	// lock across a disk write would put the pump behind the filesystem.
-	d.authorCapabilitiesOnBackendJoin(local)
+	d.authorCapabilitiesOnBackendJoin(local, expectedInstance)
 
 	// Re-check after registration/authoring: either replacement wins and this exact
 	// entry is removed, or the proof commits for the instance it was captured from.
-	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
+	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance ||
+		!d.backendRegistrationCurrent(local, entry) {
 		rollback()
 		return false
 	}
@@ -293,6 +345,26 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 	return true
 }
 
+func (d *Daemon) backendRegistrationCurrent(local string, expected *sessionBackend) bool {
+	d.backend.mu.Lock()
+	defer d.backend.mu.Unlock()
+	return expected != nil && d.backend.live[local] == expected && !expected.feed.retired.Load()
+}
+
+// retireBackendRegistration releases every resource whose meaning is scoped to one physical
+// app-server connection. The map swap already made late callbacks fail their feed check; exact
+// ContextGuard unregistering therefore cannot remove a newer guard installed concurrently.
+func (d *Daemon) retireBackendRegistration(local string, displaced *sessionBackend) {
+	if displaced == nil {
+		return
+	}
+	if displaced.conn != nil {
+		_ = displaced.conn.Close()
+	}
+	d.unregisterContextGuardBackend(local, displaced)
+	d.discardContextGuardFeed(displaced.feed)
+}
+
 func (d *Daemon) retryBackendSinkProof(local, expectedInstance string, entry *sessionBackend) {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
@@ -319,14 +391,29 @@ func (d *Daemon) retryBackendSinkProof(local, expectedInstance string, entry *se
 
 // authorCapabilitiesOnBackendJoin authors local's record with the structured plane PROVEN
 // LIVE. It is the true half of the pair below.
-func (d *Daemon) authorCapabilitiesOnBackendJoin(local string) {
+func (d *Daemon) authorCapabilitiesOnBackendJoin(local, expectedInstance string) {
 	// Recovery migrates the existing record; it does not re-author it. Besides
 	// preserving metadata, this prevents a concurrent proof observer from forcing
-	// raw StructuredChat=false between another observer's publish and activation.
-	if d.sessionDegraded(local) && d.hasRawSessionCapabilities(local) {
+	// raw StructuredChat=false between another observer's publish and activation. The
+	// shortcut is instance-bound: a replacement must author its own record even when an old
+	// incarnation left both the durable gap marker and a raw capability record behind.
+	if d.sessionDegraded(local) {
+		if existing, ok := d.sessionCapabilities(local); ok && existing.SessionInstance == expectedInstance {
+			return
+		}
+	}
+	if d.core == nil {
 		return
 	}
-	d.authorCapabilitiesForBackend(local, true)
+	m, ok := d.core.Get(local)
+	if !ok {
+		return
+	}
+	ad, _ := d.resolveAdapter(m.AgentType)
+	if _, err := d.authorSessionCapabilities(local, expectedInstance, m.AgentType, ad,
+		d.providerVersion(m.AgentType), adapterRevision, true); err != nil {
+		log.Printf("skeleton: author capability record for backend session %s: %v", local, err)
+	}
 }
 
 // degradeCapabilitiesOnBackendLoss authors local's record with NO backend plane, which is
@@ -341,6 +428,25 @@ func (d *Daemon) authorCapabilitiesOnBackendJoin(local string) {
 // terminal.
 func (d *Daemon) degradeCapabilitiesOnBackendLoss(local string) {
 	d.authorCapabilitiesForBackend(local, false)
+}
+
+// degradeCapabilitiesOnBackendLossForInstance authors the false backend fact against an
+// instance already verified under the replacement fence. It deliberately does not call
+// sessionCapabilityInputs: that helper may upgrade legacy incarnation metadata by calling
+// recordSessionInstance, which would recursively acquire the same non-reentrant fence.
+func (d *Daemon) degradeCapabilitiesOnBackendLossForInstance(local, expectedInstance string) {
+	if d.core == nil || expectedInstance == "" {
+		return
+	}
+	m, ok := d.core.Get(local)
+	if !ok {
+		return
+	}
+	ad, _ := d.resolveAdapter(m.AgentType)
+	if _, err := d.authorSessionCapabilities(local, expectedInstance, m.AgentType, ad,
+		d.providerVersion(m.AgentType), adapterRevision, false); err != nil {
+		log.Printf("skeleton: author capability record for unavailable backend session %s: %v", local, err)
+	}
 }
 
 // authorCapabilitiesForBackend is the shared body of the two above.
@@ -421,11 +527,22 @@ func (d *Daemon) forgetBackend(local string) {
 // The comparison happens under backend.mu, so a late watcher from a replaced
 // app-server can never close or unregister its successor.
 func (d *Daemon) forgetBackendForFeed(local, expectedEpoch string) bool {
+	_, removed := d.removeBackendForFeed(local, expectedEpoch)
+	return removed
+}
+
+// removeBackendForFeed returns the exact registration it removed. Loss publication needs
+// that identity after the map entry is gone so it can prove, behind the replacement fence,
+// that no successor became authoritative in the interval.
+func (d *Daemon) removeBackendForFeed(local, expectedEpoch string) (*sessionBackend, bool) {
 	d.backend.mu.Lock()
 	b := d.backend.live[local]
 	if expectedEpoch != "" && (b == nil || b.feed == nil || b.feed.epoch != expectedEpoch) {
 		d.backend.mu.Unlock()
-		return false
+		return nil, false
+	}
+	if b != nil && b.feed != nil {
+		b.feed.retired.Store(true)
 	}
 	if b != nil && b.conn != nil {
 		_ = b.conn.Close()
@@ -436,17 +553,31 @@ func (d *Daemon) forgetBackendForFeed(local, expectedEpoch string) bool {
 	delete(d.backend.adopted, local)
 	d.backend.mu.Unlock()
 	d.unregisterContextGuardBackend(local, b)
-	return b != nil
+	if b != nil {
+		d.discardContextGuardFeed(b.feed)
+	}
+	return b, b != nil
 }
 
-// markBackendSubscribed records that thread/resume has succeeded on this session's connection,
-// so the daemon is now receiving the thread's item stream.
-func (d *Daemon) markBackendSubscribed(local string) {
+// backendFeedCurrent reports whether local is still bound to the connection generation that
+// initiated some asynchronous work. Empty retains the legacy any-live-backend predicate.
+func (d *Daemon) backendFeedCurrent(local, expectedEpoch string) bool {
+	b, live := d.sessionBackendFor(local)
+	return live && (expectedEpoch == "" || b.feed != nil && b.feed.epoch == expectedEpoch)
+}
+
+// markBackendSubscribedForFeed records subscription only on the connection generation that
+// produced the successful resume. A late retry from a replaced connection must not mark its
+// successor subscribed merely because the session id was reused.
+func (d *Daemon) markBackendSubscribedForFeed(local, expectedEpoch string) bool {
 	d.backend.mu.Lock()
 	defer d.backend.mu.Unlock()
-	if b := d.backend.live[local]; b != nil {
+	if b := d.backend.live[local]; b != nil &&
+		(expectedEpoch == "" || b.feed != nil && b.feed.epoch == expectedEpoch) {
 		b.subscribed = true
+		return true
 	}
+	return false
 }
 
 // backendSubscribed reports whether this session's thread subscription is live.
@@ -607,6 +738,34 @@ func (d *Daemon) ingestBackendFrame(local string, frame []byte, receivedAtMs int
 		d.releaseFoldLocked(local)
 	}
 	d.emitBackendFrame(local, fr, frame, receivedAtMs)
+}
+
+// ingestBackendFrameForFeed is the app-server callback boundary. Before registration it accepts
+// a frame only for the still-current session instance (needed for fresh thread/started); after
+// registration it additionally requires this exact feed. Holding the replacement fence through
+// capture and pump ingestion makes the decision linearizable with compare-install and loss.
+func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed *backendFeed, method string, frame []byte, at time.Time) {
+	if local == "" || expectedInstance == "" || feed == nil || at.IsZero() || feed.retired.Load() {
+		return
+	}
+	if d.contextGuards != nil {
+		d.contextGuards.replaceMu.Lock()
+		defer d.contextGuards.replaceMu.Unlock()
+	}
+	if feed.retired.Load() {
+		return
+	}
+	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
+		return
+	}
+	if current, live := d.sessionBackendFor(local); live && current.feed != feed {
+		return
+	}
+	if feed.retired.Load() {
+		return
+	}
+	d.captureContextGuardFrame(local, expectedInstance, feed, method, frame, at)
+	d.ingestBackendFrame(local, frame, at.UnixMilli())
 }
 
 func backendStartedThreadID(frame []byte) (string, bool) {
@@ -890,6 +1049,25 @@ func (d *Daemon) noteBackendUnavailable(local string) {
 	d.degradeCapabilitiesOnBackendLoss(local)
 }
 
+// noteBackendUnavailableForInstance binds a rejoin failure to the session incarnation whose
+// backend was probed. recordSessionInstance takes the same replacement fence before changing
+// the instance, so an old dial/resume cannot publish a gap or withdraw chat from its replacement.
+func (d *Daemon) noteBackendUnavailableForInstance(local, expectedInstance string) {
+	if expectedInstance == "" {
+		return
+	}
+	if d.contextGuards != nil {
+		d.contextGuards.replaceMu.Lock()
+		defer d.contextGuards.replaceMu.Unlock()
+	}
+	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
+		return
+	}
+	d.markSessionDegradedFor(local, backendGapGeneration(gapBackendUnavailable))
+	d.emitBackendGap(local, gapBackendUnavailable)
+	d.degradeCapabilitiesOnBackendLossForInstance(local, expectedInstance)
+}
+
 // noteBackendRejoined is CASE 2: the daemon went away and came back, the shim and its
 // app-server survived (ADR-001), the dial succeeded and the thread was rejoined.
 //
@@ -911,8 +1089,28 @@ func (d *Daemon) noteBackendLost(local, reason string) {
 }
 
 func (d *Daemon) noteBackendLostForFeed(local, feedEpoch, reason string) {
-	if !d.forgetBackendForFeed(local, feedEpoch) {
+	removed, ok := d.removeBackendForFeed(local, feedEpoch)
+	if !ok {
 		return
+	}
+	if hook := d.backend.afterFeedRemovalBeforeLoss; hook != nil {
+		hook(local, feedEpoch)
+	}
+	// Registration and session replacement use this same fence. Once held, either a
+	// successor is already visible and this stale loss is discarded, or the loss commits
+	// before any successor can become authoritative. The instance check also covers the
+	// interval where replacement has published its identity but not installed its backend.
+	if d.contextGuards != nil {
+		d.contextGuards.replaceMu.Lock()
+		defer d.contextGuards.replaceMu.Unlock()
+	}
+	if d.backendFeedCurrent(local, "") {
+		return
+	}
+	if removed.sessionInstance != "" {
+		if current, exists := d.sessionInstance(local); !exists || current != removed.sessionInstance {
+			return
+		}
 	}
 	d.finishBackendLost(local, reason)
 }
@@ -942,4 +1140,21 @@ func (d *Daemon) emitBackendGap(local, reason string) {
 	if err := d.core.EmitStructuredGap(local, reason); err != nil {
 		log.Printf("skeleton: EmitStructuredGap for session %s: %v", local, err)
 	}
+}
+
+// emitBackendGapForInstance publishes a join-time history boundary only while the session
+// incarnation that proved it is still current. It uses the same replacement fence as
+// recordSessionInstance, so a late successful join cannot scar its successor.
+func (d *Daemon) emitBackendGapForInstance(local, expectedInstance, reason string) {
+	if expectedInstance == "" {
+		return
+	}
+	if d.contextGuards != nil {
+		d.contextGuards.replaceMu.Lock()
+		defer d.contextGuards.replaceMu.Unlock()
+	}
+	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
+		return
+	}
+	d.emitBackendGap(local, reason)
 }

@@ -373,6 +373,79 @@ func TestR7R4_AFreshLaunchNEVERGapsAndTheComposerDrivesTheThreadBeforeAnyTurnExi
 	}
 }
 
+// The registration helper's compare/install fence is only useful if its real caller also binds
+// the failure outcome to the instance that attempted the join. A replacement may install its own
+// exact backend while the old fresh-launch join is paused immediately before registration; when
+// the stale helper then refuses, the caller must not publish backend_unavailable against the
+// successor or remove its sink.
+func TestR7R4_StaleJoinRegistrationCannotGapOrDegradeReplacement(t *testing.T) {
+	r := newR7R4Rig(t, fakeCodexThreadID)
+	oldInstance, ok := r.sk.sessionInstance(r.local)
+	if !ok {
+		t.Fatal("launched session has no instance")
+	}
+	oldReachedInstall := make(chan struct{})
+	releaseOld := make(chan struct{})
+	var signalOnce sync.Once
+	r.sk.backend.beforeRegisterInstall = func(_ string, expectedInstance string) {
+		if expectedInstance != oldInstance {
+			return
+		}
+		signalOnce.Do(func() { close(oldReachedInstall) })
+		<-releaseOld
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.join()
+	}()
+	select {
+	case <-oldReachedInstall:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fresh join never reached the backend registration boundary")
+	}
+
+	m, ok := r.sk.core.Get(r.local)
+	if !ok {
+		t.Fatal("launched session disappeared")
+	}
+	replacement := mintSessionInstance()
+	if err := r.sk.recordSessionInstance(
+		r.local, replacement, m.ShimPID, m.ShimStartTime,
+	); err != nil {
+		t.Fatalf("replace session instance: %v", err)
+	}
+	successorConn := newR7FakeBackend()
+	successorFeed := newBackendFeed()
+	if !r.sk.registerBackendFeedForInstance(
+		r.local, replacement, fakeCodexThreadID, successorConn, successorFeed,
+	) {
+		t.Fatal("successor backend registration was refused")
+	}
+
+	close(releaseOld)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stale fresh join did not return")
+	}
+
+	backend, live := r.sk.sessionBackendFor(r.local)
+	if !live || backend.conn != successorConn || backend.feed != successorFeed ||
+		backend.sessionInstance != replacement {
+		t.Fatalf("live backend after stale caller rollback = (%+v, %t), want untouched successor", backend, live)
+	}
+	r.noGap(t, "a stale join registration refusal belongs to the replaced instance, not its successor")
+	if r.sk.sessionDegraded(r.local) {
+		t.Fatal("stale join registration permanently degraded its replacement")
+	}
+	capability, ok := r.sk.sessionCapabilities(r.local)
+	if !ok || capability.SessionInstance != replacement || !capability.StructuredChat {
+		t.Fatalf("replacement capability after stale join = (%+v, %t), want current structured chat", capability, ok)
+	}
+}
+
 // subscribed reports whether the daemon's thread subscription is live for this session.
 func (r *r7r4Rig) subscribed() bool { return r.sk.backendSubscribed(r.local) }
 

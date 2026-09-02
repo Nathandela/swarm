@@ -1,7 +1,6 @@
 package dev.swarm.phone.ui.screens
 
 import android.content.Context
-import android.graphics.Rect
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -731,6 +730,15 @@ private fun patchConversation(
     val current = drawn.toMutableList()
     val atBottom = listIsScrolledToBottom(list)
 
+    // Decide from the PRE-MUTATION viewport, then spend that decision only after Android has
+    // measured and laid out the new tail. The previous implementation called
+    // requestRectangleOnScreen on the inserted row immediately below; at that instant the row's
+    // width and height are both zero, so ScrollView can move toward its temporary origin (the
+    // handset regression was a jump near the top) instead of the new bottom.
+    val followNewTail =
+        TranscriptIncremental.stickToBottom(atBottom, mutations, decisionPending) ||
+            followsGrowingAgentTail(atBottom, decisionPending, drawn, next, mutations)
+
     for (mutation in mutations) {
         when (mutation) {
             is BlockMutation.Remove -> {
@@ -759,11 +767,84 @@ private fun patchConversation(
     // UP is never yanked down by a burst, and a page of history arriving at the FRONT never
     // scrolls at all -- which is why the predicate reads the insertion's own position rather than
     // the fact that something arrived.
-    if (TranscriptIncremental.stickToBottom(atBottom, mutations, decisionPending)) {
-        val last = list.getChildAt(list.childCount - 1) ?: return
-        last.requestRectangleOnScreen(Rect(0, 0, last.width, last.height))
+    if (followNewTail) anchorListToBottomAfterLayout(list)
+}
+
+/**
+ * Keep a reader who was already following the conversation on its new bottom.
+ *
+ * The fresh tail view owns the one-shot listener, so even a same-height rebind spends it on that
+ * row's first layout rather than leaving it armed on the long-lived content. The callback reads
+ * the scrollable child's final height for the clamp. Removing the listener inside the callback is
+ * what preserves the other half of the policy -- later layouts cannot pull a reader back down.
+ */
+private fun anchorListToBottomAfterLayout(list: ViewGroup) {
+    val scroll = listScrollingAncestor(list) ?: return
+    val armedScrollY = scroll.scrollY
+    // Every append/rebind above installs a fresh tail view. Listening to that view rather than
+    // the long-lived scroll content guarantees this one-shot is spent even when the replacement
+    // measures to the SAME height as the row it replaced. A listener on the content would see no
+    // bounds change in that case and could survive until a later, unrelated layout, pulling a
+    // reader down after they had deliberately scrolled up.
+    val tail = list.getChildAt(list.childCount - 1) ?: return
+    tail.addOnLayoutChangeListener(
+        object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(
+                view: View,
+                left: Int,
+                top: Int,
+                right: Int,
+                bottom: Int,
+                oldLeft: Int,
+                oldTop: Int,
+                oldRight: Int,
+                oldBottom: Int,
+            ) {
+                view.removeOnLayoutChangeListener(this)
+                if (listScrollingAncestor(view) !== scroll) return
+                // The follow decision belongs to the viewport that existed when the mutation
+                // arrived. A scroll event can run before the next layout traversal; a changed
+                // offset is newer reader intent and cancels this deferred action.
+                if (scroll.scrollY != armedScrollY) return
+                val content = scroll.getChildAt(0) ?: return
+                scroll.scrollTo(0, content.height + scroll.paddingBottom)
+            }
+        },
+    )
+}
+
+/**
+ * The narrow rebind exception to [TranscriptIncremental.stickToBottom].
+ *
+ * Codex streams one agent message as many records with one item id. The first record inserts a
+ * tail, while every later record rebinds that same tail with a longer reconstructed body. Treating
+ * every rebind as a status pulse leaves a following reader behind during the ordinary live path.
+ * Only visible growth of the final agent message qualifies: a tool/status rebind, an edit above
+ * the tail, a shrink, an unanswered decision, or a reader already away from the bottom never does.
+ */
+private fun followsGrowingAgentTail(
+    atBottom: Boolean,
+    decisionPending: Boolean,
+    drawn: List<TranscriptBlock>,
+    next: List<TranscriptBlock>,
+    mutations: List<BlockMutation>,
+): Boolean {
+    if (!atBottom || decisionPending || next.isEmpty()) return false
+    // Loading earlier is an explicit request to keep the history-side anchor. A batched redraw
+    // can contain both that front insertion and growth of the live tail; the history request wins
+    // rather than being mistaken for an ordinary streaming-only update.
+    if (mutations.any { it is BlockMutation.Insert && !it.tail }) return false
+    return mutations.any { mutation ->
+        if (mutation !is BlockMutation.Rebind || mutation.index != next.lastIndex) return@any false
+        val before = drawn.getOrNull(mutation.index) ?: return@any false
+        before.kind == AGENT_MESSAGE_KIND &&
+            mutation.block.kind == AGENT_MESSAGE_KIND &&
+            visibleAgentBodySize(mutation.block) > visibleAgentBodySize(before)
     }
 }
+
+/** Text-bearing parts the agent-message view can make taller; metadata/status is excluded. */
+private fun visibleAgentBodySize(block: TranscriptBlock): Int = block.line.length + block.well.length
 
 /** Where [index]'s views start in a flat container holding [blocks]. */
 private fun childOffsetOf(
@@ -805,15 +886,18 @@ private fun insertRun(
  * honestly "at the bottom": there is nowhere else to be.
  */
 private fun listIsScrolledToBottom(list: View): Boolean {
+    val scroll = listScrollingAncestor(list) ?: return true
+    val content = scroll.getChildAt(0) ?: return true
+    return scroll.scrollY + scroll.height >= content.height - SCROLL_BOTTOM_SLACK_PX
+}
+
+private fun listScrollingAncestor(list: View): ScrollView? {
     var parent = list.parent
     while (parent is View) {
-        if (parent is ScrollView) {
-            val content = parent.getChildAt(0) ?: return true
-            return parent.scrollY + parent.height >= content.height - SCROLL_BOTTOM_SLACK_PX
-        }
+        if (parent is ScrollView) return parent
         parent = parent.getParent()
     }
-    return true
+    return null
 }
 
 /**
@@ -825,6 +909,7 @@ private fun listIsScrolledToBottom(list: View): Boolean {
  * an exact comparison would make "following the conversation" depend on rounding.
  */
 private const val SCROLL_BOTTOM_SLACK_PX = 4
+private const val AGENT_MESSAGE_KIND = "agent_message"
 
 /**
  * Tag a slot with the part it renders and detach it from whatever last held it.

@@ -963,6 +963,28 @@ daemon restart would permanently scar every live Codex transcript and unnecessar
 composer on the first `swarm daemon restart` — the operation ADR-001 exists to make ordinary. A gap
 is emitted only when the rejoin fails, or when the interval demonstrably cannot be backfilled.
 
+**Amended 2026-09-02 — exact restart identity and a history-free subscription.**
+`thread/loaded/list` is only an inventory: current Codex app-servers can list the main thread beside
+guardian and sub-agent threads. When this session instance has a persisted canonical
+`Meta.ConversationID`, rejoin selects that id only if the inventory contains it exactly once. A
+legacy session with no persisted id retains the exactly-one-canonical-loaded-thread fallback; an
+invalid id, no exact match, a duplicate match, or an instance replacement refuses without guessing.
+Every outcome stays bound to the instance captured before dial, so an old probe cannot install,
+remove or degrade state belonging to its replacement. A successful legacy adoption must also read
+back the selected id from durable metadata before it becomes routing authority.
+
+The join call is `thread/resume {threadId, excludeTurns: true}`. A successful response proves the
+subscription only when its canonical `thread.id` equals the requested id. The characterized
+`no rollout found for thread id` error is the pre-first-turn state, not a successful response: the
+already identity-selected, initialized connection may be registered as the exact sink so the first
+message can start that turn, while the same history-free resume retries in the background. It is
+not marked subscribed until one retry returns the matching id; every other error fails closed. The
+flag deliberately prevents a long-running conversation's complete turn history from crossing the
+app-server client's 8 MiB inbound-frame boundary before its live notifications are subscribed. A
+matching response therefore proves an identity-bound **live subscription**, not history recovery:
+the journal supplies history already captured by Swarm, and Q4's possible `thread/read` backfill of
+the daemon-downtime interval remains open.
+
 **What backfills it is not fully recorded, and this is the largest open mechanical question in R7.**
 `turn/completed` carried the turn's `items` in one recorded sample (`frame-samples.json`,
 `itemsView: "summary"`) and an EMPTY array in another (`turn-completed-interrupted.json`,

@@ -1,6 +1,6 @@
 # ADR-010: Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs
 
-**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6), 2026-09-02 (Amendment 7))
+**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6), 2026-09-02 (Amendment 7), 2026-09-02 (Amendment 8))
 **Date**: 2026-07-24
 
 ## Context
@@ -753,8 +753,9 @@ argv (codex's resume argv places the id right after `resume`, before any option 
 the write-once `SetConversationID`, and is thereafter indistinguishable from a seeded one:
 hands-off, resume and recycle compose from it. Claude is excluded on purpose: its hooks capture
 the id on every start, so a claude session without one is a capture fault to be seen, not a legacy
-gap to be papered over. The rejoin is not changed: `rejoinSessionBackend` still discovers the
-loaded thread rather than reading the persisted id, which is `swarm-9jo`.
+gap to be papered over. Rejoin was not changed in v0.13.24: `rejoinSessionBackend` still discovered
+the loaded thread rather than reading the persisted id, which was filed as `swarm-9jo` and is
+superseded by Amendment 8 below.
 
 ### H2. A torn codex rollout is not a record, so the scan skips it
 
@@ -777,3 +778,62 @@ id's own day already named. Claude's per-cwd scan is unchanged.
 - A no-id codex source whose window holds a torn rollout is now judged on its other rollouts.
 - Evidence: `docs/verification/adr010/amendment7-red.md`.
 
+## Amendment 8 (2026-09-02): daemon rejoin follows the persisted codex identity, and subscribes without replaying history
+
+Amendment 7 deliberately left `swarm-9jo` open: restart rejoin ignored the canonical conversation
+id already persisted in session metadata and selected a backend thread only when
+`thread/loaded/list` contained exactly one entry. The v0.13.24 rollout then reproduced the cost on
+three live sessions. Codex 0.151.0 legitimately kept a main thread plus guardian/sub-agent threads
+loaded in each per-session app-server; the daemon treated that inventory as ambiguous, authored
+`backend_unavailable`, and withdrew chat from a healthy conversation it could identify exactly.
+
+### I1. The persisted canonical id is the selector; the loaded list only confirms it
+
+For the exact current session instance, a non-empty canonical `Meta.ConversationID` is the durable
+ownership fact. Rejoin requires that value to occur exactly once in `thread/loaded/list`, then
+resumes that value. The list is an inventory, not authority to choose a different thread. Zero
+matches, duplicate matches, an invalid persisted value, or an instance that changed while the
+probe was in flight fail closed without dispatching a resume to an arbitrary thread.
+
+A legacy session with no persisted conversation id retains the narrower Amendment 7 behavior:
+exactly one loaded canonical thread may be selected. If that join succeeds, adoption is complete
+only when session metadata reads back the same id; a concurrent write-once winner with another id
+is a refusal, not permission to route one conversation while persisting another.
+
+### I2. Resume proves a live subscription; it does not fetch history
+
+Every joining and rejoining call is `thread/resume {threadId, excludeTurns: true}`. A successful
+resume response must carry one canonical `thread.id` exactly equal to the requested id before that
+connection is marked subscribed. The one characterized error is different: `no rollout found for
+thread id` means the selected fresh thread has not begun its first turn. Because ownership was
+already established by I1 and the connection is initialized, that case may register the exact
+identity-selected sink so the first message can be sent, then retry the same history-free resume;
+it does not claim the notification subscription is live. Every other error fails closed.
+`excludeTurns` is a bounded-subscription rule: an established conversation can otherwise return
+its complete turn history in the response and exceed the client's intentional 8 MiB inbound-frame
+limit before the live notification stream is installed.
+
+This is not the history backfill contemplated by ADR-013 Q4. Swarm's journal remains the source of
+the history it already captured; the resume call asks only to receive future frames. Whether
+`thread/read` can losslessly fill a daemon-downtime interval remains open, and this amendment makes
+no claim that a successful subscription recovered that interval.
+
+### I3. A stale probe has no authority over a replacement
+
+Selection, sink installation, legacy adoption, failure disclosure and capability recovery are all
+bound to the session instance captured before the backend dial. Replacement and backend
+registration share one exclusion boundary: an old attempt may neither overwrite nor remove the
+replacement's sink, persist its identity, publish a gap, nor withdraw the replacement's composer.
+A previously visible durable history marker is never erased; a freshly initialized exact-instance
+sink may restore authority for future sends through the existing sink-proof transition.
+
+### Consequences
+
+- A daemon restart rejoins the persisted main codex conversation even when its app-server also
+  lists guardian or sub-agent threads; a successful exact rejoin emits no
+  `backend_unavailable` gap and does not degrade the session.
+- Sessions without a trustworthy durable selector remain fail-closed, and resume cannot silently
+  bind the daemon to a thread other than the one it requested.
+- Large existing conversations establish the live stream without weakening the 8 MiB allocation
+  boundary or treating provider history as newly captured Swarm history.
+- Evidence: `docs/verification/adr010/amendment8-red.md`.
