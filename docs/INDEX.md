@@ -10,6 +10,7 @@
 - [Operator runbook](operations/operator-runbook.md) — install, pair, revoke, kill switch, device loss, push configuration (PB-OPS-2)
 - [Metadata disclosure](operations/metadata-disclosure.md) — the register of who observes what: the relay operator, the push provider, the gateway, a network observer, and (§5) a second model vendor, the one entry that receives session content rather than metadata (PB-OPS-3)
 - [Physical-handset gate](operations/physical-handset-gate.md) — **every step UNRUN**: the playbook 11.2 matrix as 95 executable PH-* rows (rewritten 2026-08-15 for gateway push, multi-machine, presets)
+- [`swarm-8404f` production IaC](operations/gcp-production-iac.md) — import-first Terraform for the relay/push-gateway VPC, VMs, identities, durable disks/snapshots, IAP/OS Login, exact-image deployment, and external DNS outputs
 - [Auto-upgrade runbook](ops/auto-upgrade.md) — the nightly `launchd` timer that upgrades the owner's machine and converges the daemon/gateway onto it, or touches nothing (ADR-020)
 
 ## The plan

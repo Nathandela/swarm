@@ -83,3 +83,13 @@ deploy/relay/relay.config
 deploy/relay/Caddyfile.local
 # goreleaser before-hook output (the release's compatibility card)
 /compat.json
+
+# Terraform working data and operator-specific production inputs. The provider
+# lock and *.example files are committed; state, saved plans, backend selection,
+# and the explicit operator allow-list never are.
+deploy/gcp/.terraform/
+deploy/gcp/backend.hcl
+deploy/gcp/terraform.tfvars
+deploy/gcp/*.tfplan
+deploy/gcp/*.tfstate
+deploy/gcp/*.tfstate.*
