@@ -182,6 +182,8 @@ func TestDNSIsAnExplicitExternalOutputAndDocsAreOperational(t *testing.T) {
 		"Do not run `terraform apply` before",
 		"container-images.json",
 		"@sha256:",
+		`export RELAY_VERSION="${release}"`,
+		`export PUSHGW_VERSION="${release}"`,
 		"gh attestation verify",
 		"--tunnel-through-iap",
 		"terraform output -json dns_a_records",

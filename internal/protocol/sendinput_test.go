@@ -893,3 +893,96 @@ func TestSendInput_InputGateRefusesBeforeFirstByte(t *testing.T) {
 		t.Fatalf("ungated send_input still refused: %q", got.Error)
 	}
 }
+
+// A gate checked only before attachMu/inMu has a TOCTOU: the send can pass it,
+// wait behind a recycler holding the exact write locks, then write after the
+// recycler has withdrawn authority. The final gate under those locks closes
+// that window and must run before even opening an upstream stream.
+func TestSendInput_RechecksGateAfterWaitingForInputFence(t *testing.T) {
+	d := newSendInputDaemon()
+	d.setMetas(statusMeta("sess1", status.TurnIdle, status.InteractionNone))
+	sock := tmpSock(t)
+	srv, err := Serve(d, sock)
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	var gateMu sync.Mutex
+	blocked := false
+	firstGate := make(chan struct{})
+	var firstOnce sync.Once
+	srv.SetInputGateFunc(func(string) error {
+		gateMu.Lock()
+		defer gateMu.Unlock()
+		firstOnce.Do(func() { close(firstGate) })
+		if blocked {
+			return errors.New("recycling; nothing was typed")
+		}
+		return nil
+	})
+
+	holderEntered := make(chan struct{})
+	releaseHolder := make(chan struct{})
+	holderDone := make(chan error, 1)
+	go func() {
+		holderDone <- srv.WithInputFence("sess1", func() error {
+			close(holderEntered)
+			<-releaseHolder
+			return nil
+		})
+	}()
+	<-holderEntered
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- srv.SendInput("sess1", SendInputReq{Text: "forbidden", Submit: true})
+	}()
+	select {
+	case <-firstGate: // early gate passed; SendInput is parked on attachMu
+	case <-time.After(5 * time.Second):
+		t.Fatal("SendInput never passed its early gate")
+	}
+	gateMu.Lock()
+	blocked = true
+	gateMu.Unlock()
+	close(releaseHolder)
+	if err := <-holderDone; err != nil {
+		t.Fatalf("input-fence holder: %v", err)
+	}
+	select {
+	case err := <-sendDone:
+		if err == nil || !strings.Contains(err.Error(), "recycling") {
+			t.Fatalf("parked SendInput = %v, want final-gate refusal", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("parked SendInput did not settle")
+	}
+	if got := d.attachCount(); got != 0 {
+		t.Fatalf("final-gated SendInput opened %d streams; want zero bytes/streams", got)
+	}
+}
+
+func TestAttach_RefusesUnderInputGateBeforeOpeningAStream(t *testing.T) {
+	d := newSendInputDaemon()
+	d.setMetas(statusMeta("sess1", status.TurnIdle, status.InteractionNone))
+	sock := tmpSock(t)
+	srv, err := Serve(d, sock)
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	srv.SetInputGateFunc(func(string) error { return errors.New("recycling; attach refused") })
+
+	c, err := Dial(sock, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if _, err := c.Attach(c.endpointID + "/sess1"); err == nil || !strings.Contains(err.Error(), "recycling") {
+		t.Fatalf("gated attach = %v, want recycle refusal", err)
+	}
+	if got := d.attachCount(); got != 0 {
+		t.Fatalf("gated attach opened %d upstream streams", got)
+	}
+}

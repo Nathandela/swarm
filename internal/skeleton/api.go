@@ -46,6 +46,11 @@ type coreAPI struct {
 	core         *daemon.Daemon
 	fakeAgentBin string
 	endpointID   string // this daemon's stable federation id (resume source validation)
+	// killFn/deleteFn let the assembly place owner lifecycle operations behind
+	// the same per-session end fence as automatic auth recycling. Bare coreAPI
+	// tests retain the raw daemon fallback.
+	killFn   func(string) error
+	deleteFn func(string) error
 	// externalResumeMu makes provider-native adoption idempotent across concurrent
 	// owner-tier requests: lookup and launch are one critical section.
 	externalResumeMu sync.Mutex
@@ -93,6 +98,10 @@ type coreAPI struct {
 	interrupt             func(machine, operationID string, req protocol.TurnInterruptReq) (protocol.ErrorCode, error)
 	history               func(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error)
 	detail                func(session, itemID string) (json.RawMessage, protocol.ErrorCode, error)
+	// The durable direct-input marker and its authoritative status consumer.
+	// Both are nil in bare coreAPI tests and wired before Server construction.
+	directInputObserver func(local string, class protocol.DirectInputClass) error
+	statusObserver      func(local string, current status.Status)
 
 	// pairing carries the machine-side pairing identity + enrollment material and the
 	// rendezvous seam BeginPairing hosts a real pairing on (slice A3.3-d). It is nil
@@ -627,9 +636,19 @@ func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	return a
 }
 
-func (a *coreAPI) List() []persist.Meta   { return a.core.List() }
-func (a *coreAPI) Kill(id string) error   { return a.core.Kill(id) }
-func (a *coreAPI) Delete(id string) error { return a.core.Delete(id) }
+func (a *coreAPI) List() []persist.Meta { return a.core.List() }
+func (a *coreAPI) Kill(id string) error {
+	if a.killFn != nil {
+		return a.killFn(id)
+	}
+	return a.core.Kill(id)
+}
+func (a *coreAPI) Delete(id string) error {
+	if a.deleteFn != nil {
+		return a.deleteFn(id)
+	}
+	return a.core.Delete(id)
+}
 func (a *coreAPI) Rename(id, name string) error {
 	err := a.core.Rename(id, name)
 	if err == nil {
@@ -1653,6 +1672,11 @@ var _ protocol.TerminalTapper = (*coreAPI)(nil)
 func (a *coreAPI) emitStatus(id string, s status.Status) {
 	if err := a.core.SetStatus(id, s); err != nil {
 		return // unknown/ended session: nothing to persist or fan out
+	}
+	if a.statusObserver != nil {
+		if current, ok := a.core.Get(id); ok {
+			a.statusObserver(id, current.Status)
+		}
 	}
 	// FAN OUT happens via the poller, which is the SOLE snapshot producer: a
 	// direct Get-then-send here could capture meta, lose the CPU to a concurrent

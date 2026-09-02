@@ -457,6 +457,52 @@ func TestAuthRecycleRechecksUnsafeInsideTheComposerFence(t *testing.T) {
 	}
 }
 
+// The durable killed mark is authority to resurrect an ended session after a
+// restart. It therefore belongs to the same composer-lane critical section as
+// the final safety check and kill: while an admitted send still owns the lane,
+// neither memory nor disk may claim that authwatch has killed the session.
+func TestAuthRecycleDoesNotClaimKillBeforeComposerFenceReleases(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-00000000001f"))
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	w.withRecycleFence = func(local string, attempt func() error) error {
+		if local != "s1" {
+			t.Fatalf("fenced %q, want s1", local)
+		}
+		close(entered)
+		<-release
+		return attempt()
+	}
+	done := make(chan struct{})
+	go func() {
+		w.tick()
+		close(done)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("auth recycle never reached the blocked composer fence")
+	}
+
+	if w.state.Killed["s1"] {
+		t.Fatal("in-memory killed claim appeared before the composer fence released")
+	}
+	if persisted := loadAuthWatchState(w.stateDir); persisted.Killed["s1"] {
+		t.Fatal("durable killed claim appeared before the composer fence released")
+	}
+
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("auth recycle did not finish after the composer fence released")
+	}
+}
+
 func TestAuthRecycleFenceSerializesWithTheRealComposerLane(t *testing.T) {
 	d := &Daemon{}
 	lane := d.composerLaneFor("s1")
@@ -599,13 +645,36 @@ func TestAFailedKillIsRetriedNextTick(t *testing.T) {
 	if got := w.state.Pending["codex"]; len(got) != 1 || got[0] != "s1" {
 		t.Fatalf("pending = %v; a failed kill must stay pending", got)
 	}
-	if len(w.state.Killed) != 0 {
-		t.Fatalf("killed marks %v after a kill that never happened; want none", w.state.Killed)
+	if !w.state.Killed["s1"] {
+		t.Fatalf("ambiguous kill error dropped its durable resume obligation: %v", w.state.Killed)
 	}
 	f.killErr = nil
 	w.tick()
 	if len(f.launched) != 1 {
 		t.Fatalf("launched %d after the kill recovered; want the recycle to complete", len(f.launched))
+	}
+}
+
+func TestAKillErrorThatStillExitsRemainsOwedAndResumes(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000026"))
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.kill = func(local string) error {
+		f.killed = append(f.killed, local)
+		f.sessions[local].Status.Process = status.ProcessExited
+		return errors.New("ambiguous signal reply")
+	}
+	w.tick()
+	if !w.state.Killed["s1"] {
+		t.Fatal("ambiguous signal error lost the resume obligation after the process exited")
+	}
+	w.tick()
+	if len(f.killed) != 1 || len(f.launched) != 1 {
+		t.Fatalf("ambiguous delivered signal kills=%v launches=%d, want 1/1", f.killed, len(f.launched))
+	}
+	if w.state.Killed["s1"] {
+		t.Fatal("completed replacement retained its old kill claim")
 	}
 }
 

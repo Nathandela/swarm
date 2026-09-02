@@ -330,6 +330,10 @@ type Server struct {
 	// effect-window gate (ADR-023 amendment 1). Same atomic-pointer shape as the
 	// seams above.
 	inputGateFn atomic.Pointer[inputGateFunc]
+	// directInputObserverFn is the assembly-owned, durable pre-write marker. It is
+	// invoked under a session's attachMu -> inMu immediately before the first
+	// SessionStream.Input attempt, on both one-shot and attached raw input paths.
+	directInputObserverFn atomic.Pointer[directInputObserverFunc]
 
 	mu     sync.Mutex
 	conns  map[*clientConn]struct{}
@@ -380,7 +384,7 @@ func Serve(d DaemonAPI, socketPath string) (*Server, error) {
 	s := newServer(d)
 	s.ln = ln
 	s.wg.Add(1)
-	go s.acceptLoop()
+	go s.acceptLoop(nil)
 	return s, nil
 }
 
@@ -413,6 +417,9 @@ func newServer(d DaemonAPI) *Server {
 		composerFallback: make(map[string]composerCachedOutcome),
 		composerOpLocks:  make(map[string]*composerOperationLock),
 		stop:             make(chan struct{}),
+	}
+	if observer, ok := d.(DirectInputObserver); ok {
+		s.SetDirectInputObserver(observer.ObserveDirectInput)
 	}
 	s.wg.Add(1)
 	go s.fanoutLoop()
@@ -474,8 +481,15 @@ func (s *Server) Close() error {
 	return nil
 }
 
-func (s *Server) acceptLoop() {
+func (s *Server) acceptLoop(ready <-chan struct{}) {
 	defer s.wg.Done()
+	if ready != nil {
+		select {
+		case <-ready:
+		case <-s.stop:
+			return
+		}
+	}
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
@@ -700,6 +714,8 @@ type activityFunc func(local string) time.Time
 
 type inputGateFunc func(local string) error
 
+type directInputObserverFunc func(local string, class DirectInputClass) error
+
 // SetRemoteActivityFunc registers the source of SessionView.RemoteActivityAt. Production
 // wires the assembly's own horizon-bounded read (skeleton.serve), so an owner's roster can
 // say when a phone last sent rather than merely that one did. nil clears it; unset, no row is
@@ -772,6 +788,13 @@ func (s *Server) attach(cc *clientConn, local string) error {
 
 	ls.attachMu.Lock()
 	defer ls.attachMu.Unlock()
+	// Auth recycling publishes its gate before waiting for this same attachMu.
+	// An attach that was already inside completes before recycle's final safety
+	// check; one that waited behind a successful recycle refuses before claiming
+	// a controller or opening the dying shim's stream.
+	if err := s.inputGate(local); err != nil {
+		return err
+	}
 
 	// Phase 1 — claim the lease at a NEW generation and capture the prior state.
 	// inMu serializes the generation bump with in-flight input (F5); lock order is
@@ -1048,12 +1071,17 @@ func (s *Server) dropLease(local string) {
 // per-lease input lock, so a keystroke validated at generation N never reaches the
 // shim after a supersede to N+1 (F5); s.mu is never held across the shim I/O.
 func (s *Server) forwardInput(cc *clientConn, local string, gen uint64, p []byte) {
+	if len(p) == 0 {
+		return
+	}
 	s.mu.Lock()
 	ls := s.leases[local]
 	s.mu.Unlock()
 	if ls == nil {
 		return
 	}
+	ls.attachMu.Lock()
+	defer ls.attachMu.Unlock()
 	ls.inMu.Lock()
 	defer ls.inMu.Unlock()
 	s.mu.Lock()
@@ -1063,7 +1091,21 @@ func (s *Server) forwardInput(cc *clientConn, local string, gen uint64, p []byte
 	if !valid || stream == nil {
 		return
 	}
-	_ = stream.Input(p)
+	// Recheck the assembly gate under the exact write locks. A recycler can
+	// publish its embargo after handleDataIn's remote authority check while this
+	// frame waits behind another writer; that stale frame must not cross it.
+	if err := s.inputGate(local); err != nil {
+		return
+	}
+	if err := s.observeDirectInput(local, DirectInputDraft); err != nil {
+		return // raw input is fire-and-forget; marker failure drops before bytes
+	}
+	if err := stream.Input(p); err == nil && rawDirectInputSubmits(p) {
+		// Same two-phase rule as send_input: only an exact CR whose Input call
+		// returned success advances Draft to Submitted. Update failure leaves the
+		// safer Draft marker and raw input has no reply channel.
+		_ = s.observeDirectInput(local, DirectInputSubmitted)
+	}
 }
 
 // forwardResize forwards a resize only under the current lease generation and

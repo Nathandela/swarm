@@ -295,7 +295,7 @@ func (d *Daemon) registerContextGuardBackend(local string, backend *sessionBacke
 		s.conn = dispatchConn
 		s.lane = func() *composerLane { return d.composerLaneFor(local) }
 		s.quiet = func() bool { return d.contextGuardQuiet(local) }
-		s.uncertain = func() bool { return d.composerLaneFor(local).uncertainNow() }
+		s.uncertain = func() bool { return d.composerOutcomeUnresolved(local) }
 		s.current = isCurrent
 		// The continuation seams (ADR-023 amendment 2) ride the same wiring:
 		// only a live automatic backend ever continues, and only when the
@@ -878,7 +878,7 @@ func (s *contextGuardSession) sendContinuation() {
 	defer lane.leave()
 	// quiet() already folds in the unattended rule; barrier, uncertainty, and
 	// backend identity mirror the dispatch's queue-head revalidation.
-	if lane.barrierChanged(admittedBarrier) || (s.quiet != nil && !s.quiet()) ||
+	if lane.barrierChanged(admittedBarrier) || lane.recyclingNow() || (s.quiet != nil && !s.quiet()) ||
 		(s.uncertain != nil && s.uncertain()) || (s.current != nil && !s.current()) {
 		log.Printf("skeleton: context guard continuation for session %s forfeited at the lane head", s.id)
 		return
@@ -1125,7 +1125,7 @@ func (s *contextGuardSession) dispatchCompaction() {
 	// barrierChanged means a Stop was admitted while this dispatch was queued
 	// (the world the promotion was decided in is gone), and current re-proves
 	// the backend identity registration established.
-	if lane.barrierChanged(admittedBarrier) || !s.quiet() ||
+	if lane.barrierChanged(admittedBarrier) || lane.recyclingNow() || !s.quiet() ||
 		(s.uncertain != nil && s.uncertain()) || (s.current != nil && !s.current()) || s.pendingEvidence() {
 		s.applyReturning(contextguard.Event{Kind: contextguard.EventSessionBusy, At: time.Now(), Key: s.key}, nil)
 		return

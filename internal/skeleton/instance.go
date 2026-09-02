@@ -91,9 +91,10 @@ func (d *Daemon) recordSessionInstance(sessionID, instance string, shimPID int, 
 		return fmt.Errorf("skeleton: refusing to record an empty session instance for %q", sessionID)
 	}
 	// Context-guard replacement is the outer lock because its registration path already
-	// holds replaceMu while reading the current instance. Keeping that global order avoids
-	// a replaceMu -> capStore.mu path crossing an authorMu -> replaceMu publication path.
-	// Feeds continue into
+	// holds replaceMu while reading the current instance. The global hierarchy here is
+	// replaceMu -> authorMu -> transitionMu -> capStore.mu: in particular, never hold
+	// capStore.mu while waiting for an old guard worker to close, because that worker's
+	// isCurrent callback reads the instance through capStore.mu. Feeds continue into
 	// their bounded pre-registration buffer while this lock is held; an old worker
 	// is joined before its sidecar is removed, and no old-instance registration can
 	// slip into the remove/publish gap.

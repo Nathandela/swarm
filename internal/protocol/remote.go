@@ -246,7 +246,25 @@ func ServeRemote(d DaemonAPI, socketPath string) (*Server, error) {
 // restarts (a phone signs and addresses a session by the same id every client sees).
 // The assembly passes the daemon's federation id here; an empty id falls back to a
 // per-connection id (test-only).
-func ServeRemoteWithID(d DaemonAPI, socketPath, endpointID string) (*Server, error) {
+// An optional ready channel binds the private socket immediately but delays
+// accept/serve until the channel closes. Assembly supplies its publication
+// barrier so bootstrap gates and crash-recovered embargoes precede both sockets;
+// existing standalone callers omit it and serve immediately.
+func ServeRemoteWithID(d DaemonAPI, socketPath, endpointID string, ready ...<-chan struct{}) (*Server, error) {
+	if len(ready) > 1 {
+		return nil, errors.New("protocol: multiple remote readiness gates")
+	}
+	var gate <-chan struct{}
+	if len(ready) == 1 {
+		if ready[0] == nil {
+			return nil, errors.New("protocol: remote readiness gate is nil")
+		}
+		gate = ready[0]
+	}
+	return serveRemoteWithIDReady(d, socketPath, endpointID, gate)
+}
+
+func serveRemoteWithIDReady(d DaemonAPI, socketPath, endpointID string, ready <-chan struct{}) (*Server, error) {
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return nil, err
@@ -278,6 +296,6 @@ func ServeRemoteWithID(d DaemonAPI, socketPath, endpointID string) (*Server, err
 	s.ln = ln
 	s.remoteTier = true
 	s.wg.Add(1)
-	go s.acceptLoop()
+	go s.acceptLoop(ready)
 	return s, nil
 }

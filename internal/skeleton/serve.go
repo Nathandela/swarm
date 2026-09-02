@@ -63,6 +63,9 @@ type Config struct {
 	// historyHome is a private test seam for the trusted daemon-user home used by
 	// lazy resume migration. Production leaves it empty and uses os.UserHomeDir.
 	historyHome string
+	// remoteBound is a private deterministic startup seam. Tests may pause after
+	// the remote listener is bound to prove it serves nothing before ready closes.
+	remoteBound func()
 	// RemoteSocketPath, when non-empty, stands up the dedicated REMOTE-tier UDS the
 	// gateway dials (R-GW.8 / amendment D.0-A1), distinct from the owner-trusted main
 	// SocketPath. Every connection on it is unconditionally remote-origin, so every
@@ -89,14 +92,15 @@ type Config struct {
 // the protocol server bound to its socket, the status engine, and the roster
 // event source, with one Close that tears all four down cleanly.
 type Daemon struct {
-	core       *daemon.Daemon
-	srv        *protocol.Server
-	remoteSrv  *protocol.Server // the dedicated remote-tier listener (R-GW.8); nil unless configured
-	api        *coreAPI
-	eng        *engine.Engine
-	socketPath string
-	stateDir   string // for reading a session's transcript tail (conversation-id capture)
-	home       string // the trusted daemon-user home: resume history and the CLIs' live-name registries (ADR-022)
+	core        *daemon.Daemon
+	srv         *protocol.Server
+	remoteSrv   *protocol.Server // the dedicated remote-tier listener (R-GW.8); nil unless configured
+	api         *coreAPI
+	eng         *engine.Engine
+	socketPath  string
+	stateDir    string // for reading a session's transcript tail (conversation-id capture)
+	home        string // the trusted daemon-user home: resume history and the CLIs' live-name registries (ADR-022)
+	directInput directInputState
 
 	cancel context.CancelFunc // stops engine.Run
 
@@ -325,6 +329,11 @@ func Serve(cfg Config) (*Daemon, error) {
 		return nil, err
 	}
 	d.core = core
+	locals := make([]string, 0, len(core.List()))
+	for _, m := range core.List() {
+		locals = append(locals, m.ID)
+	}
+	d.restoreDirectInputState(locals)
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
 	d.api.contextGuardSettings = d.contextGuardSettings
 	d.api.contextGuards = d.contextGuards
@@ -374,6 +383,16 @@ func Serve(cfg Config) (*Daemon, error) {
 			}
 			if d.authw != nil {
 				d.authw.close() // same rule: no recycle may outlive a failed assembly
+			}
+			// A remote listener may already be bound with its accept loop waiting on
+			// ready. Close both protocol servers before their backend/core so a
+			// failed in-process Serve neither leaks goroutines nor keeps remote.sock
+			// accepting forever on a barrier that will never close.
+			if d.remoteSrv != nil {
+				_ = d.remoteSrv.Close()
+			}
+			if d.srv != nil {
+				_ = d.srv.Close()
 			}
 			d.api.close()
 			_ = core.Close()
@@ -458,6 +477,13 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.interrupt = d.interruptTurn
 	d.api.history = d.interactionHistory
 	d.api.detail = d.interactionDetail
+	d.api.directInputObserver = d.markDirectInputUnresolved
+	d.api.statusObserver = d.noteDirectInputStatus
+	// Owner lifecycle requests and automatic auth recycling share the session's
+	// end fence. Authwatch receives the raw core actions below; every protocol
+	// caller reaches these owner-aware wrappers through coreAPI.
+	d.api.killFn = d.ownerKill
+	d.api.deleteFn = d.ownerDelete
 	d.srv = protocol.NewServer(d.api, epID)
 	d.controlled = d.srv.IsControlled // grid tap skips a session with a live controller (R1.3.7)
 
@@ -483,11 +509,14 @@ func Serve(cfg Config) (*Daemon, error) {
 		if fi, lerr := os.Lstat(cfg.RemoteSocketPath); lerr == nil && fi.Mode()&os.ModeSocket != 0 {
 			_ = os.Remove(cfg.RemoteSocketPath)
 		}
-		rs, rerr := protocol.ServeRemoteWithID(d.api, cfg.RemoteSocketPath, epID)
+		rs, rerr := protocol.ServeRemoteWithID(d.api, cfg.RemoteSocketPath, epID, d.ready)
 		if rerr != nil {
 			return nil, rerr // defer'd cleanup tears down d.api + core
 		}
 		d.remoteSrv = rs
+		if cfg.remoteBound != nil {
+			cfg.remoteBound()
+		}
 		// C2a: `swarm remote off` (or removing the last device) must proactively SEVER every live
 		// remote control lease + terminal peek on the remote Server, not merely pause per-keystroke
 		// input. Wire the coreAPI kill-switch setter to the remote Server's teardown seam. Set
@@ -526,25 +555,43 @@ func Serve(cfg Config) (*Daemon, error) {
 	// fired for the reconnected sessions during daemon.Open above, when d.sup was still
 	// nil, and the durable record is what a re-arm would have kept anyway. A record dir
 	// that cannot be opened aborts assembly like every other component's store.
-	// The supervisor's unsafe-source predicate widens beyond leases: a session
-	// whose ContextGuard compaction is in flight must not be typed into either
-	// (ADR-023 amendment 1 -- the supervisor's SendInput bypasses the composer
-	// lane, so it takes the same effect-window gate composerSend does). The
-	// notification simply stays pending and retries after the compaction.
-	unsafeSource := func(local string) bool {
-		return d.anyControlled(local) || d.contextGuardCompactionInFlight(local)
+	// The shared unsafe predicate covers live facts persisted Status cannot:
+	// controller leases, ContextGuard effects, ambiguous composer outcomes, and
+	// durable direct-input drafts/submits. The supervisor additionally blocks on
+	// recycle itself; authwatch uses the committed-only recycle view so a restored
+	// durable claim can redrive without self-refusal.
+	baseUnsafeSource := func(local string) bool {
+		return d.anyControlled(local) || d.contextGuardCompactionInFlight(local) ||
+			d.composerOutcomeUnresolved(local) || d.directInputUnresolved(local)
 	}
-	// The same gate at the typed-input choke point itself: `swarm send` and any
-	// other sendMessage caller refuse before the first byte while a compaction
-	// is in flight (the supervisor's unsafeSource above avoids even attempting).
-	d.srv.SetInputGateFunc(func(local string) error {
+	supervisorUnsafeSource := func(local string) bool {
+		return baseUnsafeSource(local) || d.composerRecycleInFlight(local)
+	}
+	// A successfully signalled in-process recycle is unsafe to begin again while
+	// Core still reports Running. Restored claims deliberately carry
+	// recycleRestored rather than recycleCommitted, so their one crash-recovery
+	// redrive can still reach the claimed fence.
+	authRecycleUnsafeSource := func(local string) bool {
+		return baseUnsafeSource(local) || d.composerRecycleCommitted(local)
+	}
+	// The same gate at each typed-input choke point: `swarm send`, raw attached
+	// input, and supervisor delivery refuse before bytes while compaction or auth
+	// recycling owns the session (the supervisor avoids even attempting).
+	inputGate := func(local string) error {
+		if d.composerRecycleInFlight(local) {
+			return fmt.Errorf("session %q is recycling stale credentials; nothing was typed -- wait for its replacement", local)
+		}
 		if d.contextGuardCompactionInFlight(local) {
 			return fmt.Errorf("session %q is compacting its context; nothing was typed -- retry shortly", local)
 		}
 		return nil
-	})
+	}
+	d.srv.SetInputGateFunc(inputGate)
+	if d.remoteSrv != nil {
+		d.remoteSrv.SetInputGateFunc(inputGate)
+	}
 	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
-		d.core.Get, unsafeSource, d.srv.SendInput)
+		d.core.Get, supervisorUnsafeSource, d.srv.SendInput)
 	if err != nil {
 		return nil, err // defer'd cleanup tears down d.api + core
 	}
@@ -562,8 +609,14 @@ func Serve(cfg Config) (*Daemon, error) {
 	// baselines the current credentials identity, or resumes the sweep a prior
 	// incarnation persisted.
 	d.authw = newAuthWatcher(cfg.StateDir, epID, AuthProbedAgents(), CurrentAuthIdentity,
-		d.api.List, d.core.Get, d.api.Kill, d.api.Launch, d.api.Delete,
-		unsafeSource, d.withAuthRecycleFence)
+		d.api.List, d.core.Get, d.core.Kill, d.api.Launch, d.core.Delete,
+		authRecycleUnsafeSource, authRecycleCoordination{
+			restore: d.restoreAuthRecycle,
+			clear:   d.clearAuthRecycle,
+			fresh:   d.withAuthRecycleFence,
+			claimed: d.withClaimedAuthRecycleFence,
+			resume:  d.withAuthResumeFence,
+		})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
@@ -768,6 +821,9 @@ func (d *Daemon) endSession(id string) {
 	// this call always sees an already-terminal status, so the tap path's
 	// Running-gate would silently no-op it every time (HIGH regression, C2 review).
 	d.stopHookDrain(id) // the session's spool has no more producer (hookdrainloop.go)
+	if err := d.forgetDirectInput(id); err != nil {
+		log.Printf("skeleton: retire direct-input marker for %s: %v", id, err)
+	}
 	// Join the guard worker before its provider feed and backend identity are forgotten.
 	d.stopContextGuard(id)
 	// The backend's frames have no more producer either: release whatever prose the fold is

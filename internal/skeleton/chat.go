@@ -37,6 +37,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/appserver"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/submitframe"
 )
 
@@ -170,6 +171,25 @@ type composerLane struct {
 	uncertainClosed   string
 	uncertainProgress uint64
 	progress          atomic.Uint64
+	// recycling is an embargo on every later provider write through this old
+	// session lane. daemon.Kill returns after delivering SIGTERM, before Core
+	// necessarily records ProcessExited; without this bit a queued composer or
+	// ContextGuard dispatch could write into the dying process in that window.
+	// It is published transiently at the recycle queue head, before the recycler
+	// waits for direct-input fences; a failed attempt clears it, a successful kill
+	// retains it across process retirement until authwatch clears the durable
+	// replacement obligation.
+	recycling        bool
+	recycleCommitted bool
+	recycleRestored  bool
+	// endMu is the per-session lifecycle authority fence. Owner Kill/Delete and
+	// auth recycling take it around their raw core action, so exactly one side
+	// can own a terminal edge. The global lifecycle order is endMu -> lane.mu;
+	// auth takes its composer ticket first but releases lane.mu before endMu.
+	endMu       sync.Mutex
+	ownerEnding bool // protected by endMu + lane.mu; old pointers retain it as a tombstone
+	ownerActive bool // owner terminal callback is currently running under endMu
+	retired     bool // endSession has retired this process interaction
 }
 
 // withComposerInteractionState is the one nesting boundary for state shared by the
@@ -198,10 +218,127 @@ func (d *Daemon) composerLaneFor(local string) *composerLane {
 // send waits until attempt has either refused or issued the kill. The attempt itself performs
 // the final status/controller/ContextGuard revalidation at this queue head.
 func (d *Daemon) withAuthRecycleFence(local string, attempt func() error) error {
+	return d.withAuthRecycleFenceState(local, false, attempt)
+}
+
+// withClaimedAuthRecycleFence redrives a durable pre-signal claim restored by a
+// new daemon incarnation. It is the only path allowed to consume a restored
+// embargo; a committed in-process kill still refuses duplicate signalling.
+func (d *Daemon) withClaimedAuthRecycleFence(local string, attempt func() error) error {
+	return d.withAuthRecycleFenceState(local, true, attempt)
+}
+
+func (d *Daemon) withAuthRecycleFenceState(local string, claimed bool, attempt func() error) error {
 	lane := d.composerLaneFor(local)
-	lane.enter()
+	alreadyRecycling := lane.enterRecycle(claimed)
 	defer lane.leave()
-	return attempt()
+	// Kill is asynchronous. Once a prior attempt successfully delivered it, a
+	// later auth-watch tick must neither signal the old shim again nor clear the
+	// embargo while Core still reports Running.
+	if alreadyRecycling {
+		return errAuthRecycleUnsafe
+	}
+	lane.endMu.Lock()
+	defer lane.endMu.Unlock()
+	lane.mu.Lock()
+	ownerEnding := lane.ownerEnding
+	if ownerEnding {
+		lane.recycling = false
+		lane.recycleCommitted = false
+		lane.recycleRestored = false
+	}
+	lane.mu.Unlock()
+	if ownerEnding {
+		return errAuthOwnerEnding
+	}
+	fencedAttempt := attempt
+	if d.remoteSrv != nil {
+		inner := fencedAttempt
+		fencedAttempt = func() error { return d.remoteSrv.WithInputFence(local, inner) }
+	}
+	if d.srv != nil {
+		inner := fencedAttempt
+		fencedAttempt = func() error { return d.srv.WithInputFence(local, inner) }
+	}
+	err := fencedAttempt()
+	lane.mu.Lock()
+	if err == nil {
+		lane.recycleCommitted = true
+		lane.recycleRestored = false
+	} else if claimed || errors.Is(err, errAuthRecycleObligationRetained) {
+		// A durable claim remains fail-closed and retryable. authwatch clears it
+		// explicitly only when an owner action wins or the row disappears.
+		lane.recycling = true
+		lane.recycleCommitted = false
+		lane.recycleRestored = true
+	} else {
+		lane.recycling = false
+		lane.recycleCommitted = false
+		lane.recycleRestored = false
+	}
+	lane.mu.Unlock()
+	return err
+}
+
+// enterRecycle takes one FIFO position and publishes the transient embargo in
+// the same lane.mu critical section that proves this ticket is the queue head.
+// Stop's priority path reads the same bit under lane.mu, so neither can slip
+// between queue-head admission and embargo publication.
+func (l *composerLane) enterRecycle(claimed bool) (alreadyRecycling bool) {
+	l.mu.Lock()
+	ticket := l.nextTicket
+	l.nextTicket++
+	for ticket != l.servingTicket || l.stopsInFlight != 0 {
+		l.ready.Wait()
+	}
+	alreadyRecycling = l.recycling
+	if alreadyRecycling && claimed && l.recycleRestored {
+		// The durable state file, not this process, owns the embargo. Consume its
+		// one redrive opportunity while retaining the bit for every other writer.
+		alreadyRecycling = false
+		l.recycleRestored = false
+	}
+	if !l.recycling {
+		l.recycling = true
+	}
+	l.mu.Unlock()
+	return alreadyRecycling
+}
+
+// restoreAuthRecycle reconstructs the fail-closed lifecycle authority for any
+// durable Killed claim after restart: Running rows may need a signal redrive;
+// terminal rows are still owed a serialized replacement launch.
+func (d *Daemon) restoreAuthRecycle(local string) {
+	lane := d.composerLaneFor(local)
+	lane.mu.Lock()
+	lane.recycling = true
+	lane.recycleCommitted = false
+	lane.recycleRestored = true
+	lane.mu.Unlock()
+}
+
+// clearAuthRecycle withdraws a claim that an owner won or whose row vanished.
+// It deliberately does not create a lane for an already-retired session.
+func (d *Daemon) clearAuthRecycle(local string) {
+	value, ok := d.composerLanes.Load(local)
+	if !ok {
+		return
+	}
+	lane := value.(*composerLane)
+	lane.mu.Lock()
+	hadRecycleAuthority := lane.recycling || lane.recycleCommitted || lane.recycleRestored
+	if hadRecycleAuthority {
+		lane.mu.Unlock()
+		// Remove the map entry without clearing the old pointer. A concurrent
+		// owner may already be parked on its endMu; the tombstone must still make
+		// that waiter refuse after auth's final action releases the lock.
+		d.composerLanes.CompareAndDelete(local, lane)
+		return
+	}
+	lane.recycling = false
+	lane.recycleCommitted = false
+	lane.recycleRestored = false
+	lane.mu.Unlock()
 }
 
 // enter assigns an explicit FIFO ticket and returns when that ticket is at the head. The
@@ -229,14 +366,89 @@ func (l *composerLane) endStop() {
 	l.mu.Unlock()
 }
 
-// uncertainNow reports whether the lane holds an unresolved composer outcome.
-// The context guard's dispatch revalidation reads it at its queue head
-// (ADR-023 D6): an automatic compaction never rides over an operation whose
-// effect on the provider is still undecided.
-func (l *composerLane) uncertainNow() bool {
+func (l *composerLane) recyclingNow() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.uncertain
+	return l.recycling
+}
+
+// retireComposerLane records synchronous/asynchronous process retirement. A
+// recycle obligation or owner callback still on its stack keeps the map entry;
+// otherwise removal leaves any waiter that already captured the old pointer on
+// its fail-closed tombstone while a future unrelated id starts cleanly.
+func (d *Daemon) retireComposerLane(local string) {
+	value, ok := d.composerLanes.Load(local)
+	if !ok {
+		return
+	}
+	lane := value.(*composerLane)
+	lane.mu.Lock()
+	lane.retired = true
+	retain := lane.recycling || lane.ownerActive
+	lane.mu.Unlock()
+	if !retain {
+		d.composerLanes.CompareAndDelete(local, lane)
+	}
+}
+
+func (l *composerLane) recycleCommittedNow() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.recycleCommitted
+}
+
+// composerRecycleInFlight reports an existing old-lane embargo without
+// creating state for an unknown session. It is shared by auth-watch's early
+// unsafe check, the supervisor, and the owner's typed-input gate.
+func (d *Daemon) composerRecycleInFlight(local string) bool {
+	value, ok := d.composerLanes.Load(local)
+	return ok && value.(*composerLane).recyclingNow()
+}
+
+// composerRecycleCommitted is the auth watcher's no-create early guard. It
+// intentionally excludes the transient bit set by its own final fence; the
+// supervisor and typed-input gates use composerRecycleInFlight and therefore
+// observe both transient and committed embargoes.
+func (d *Daemon) composerRecycleCommitted(local string) bool {
+	value, ok := d.composerLanes.Load(local)
+	return ok && value.(*composerLane).recycleCommittedNow()
+}
+
+// composerOutcomeUnresolved is a read-only/no-create safety predicate for
+// background actors. The uncertainty bit is a snapshot, not a permanent hold:
+// a changed turn/close/progress tuple is authoritative evidence that provider
+// state advanced, and consumes the stale uncertainty here. Requiring another
+// composer send to perform that lazy clear would wedge an otherwise idle auth
+// recycle or supervisor notification forever.
+func (d *Daemon) composerOutcomeUnresolved(local string) bool {
+	value, ok := d.composerLanes.Load(local)
+	if !ok {
+		return false
+	}
+	lane := value.(*composerLane)
+	unresolved := false
+	d.withComposerInteractionState(lane, func() {
+		unresolved = d.composerOutcomeUnresolvedLocked(local, lane)
+	})
+	return unresolved
+}
+
+// composerOutcomeUnresolvedLocked is the shared tuple rule. Caller holds
+// lane.mu then itemMu through withComposerInteractionState.
+func (d *Daemon) composerOutcomeUnresolvedLocked(local string, lane *composerLane) bool {
+	if !lane.uncertain {
+		return false
+	}
+	if d.turnIDs[local] == lane.uncertainTurn &&
+		d.closedTurns[local] == lane.uncertainClosed &&
+		lane.progress.Load() == lane.uncertainProgress {
+		return true
+	}
+	lane.uncertain = false
+	lane.uncertainTurn = ""
+	lane.uncertainClosed = ""
+	lane.uncertainProgress = 0
+	return false
 }
 
 func (l *composerLane) barrierChanged(admitted uint64) bool {
@@ -271,6 +483,10 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 	if lane.barrierChanged(admittedBarrier) {
 		return protocol.CodeStaleTurn, errIsLife5("composer send was queued before Stop completed; nothing was sent")
 	}
+	if lane.recyclingNow() {
+		return protocol.CodeInputBusy, errIsLife5(
+			"session %q is recycling stale credentials, so this message was not written; retry after the replacement appears", req.Session)
+	}
 	// The composer lane orders WRITES; a ContextGuard compaction has an EFFECT
 	// window that outlives its write (ADR-023 amendment 1), and the 2026-09-01
 	// gates prove a stimulus written into that window destroys the compaction,
@@ -281,9 +497,14 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 		return protocol.CodeInputBusy, errIsLife5(
 			"session %q is compacting its context, so this message was not written; nothing was sent", req.Session)
 	}
-	if _, ok := d.core.Get(local); !ok {
+	meta, ok := d.core.Get(local)
+	if !ok {
 		return protocol.CodeInvalidField, errIsLife5(
 			"composer send names session %q, which is not one this daemon runs; OK here would be a sent message no agent received", req.Session)
+	}
+	if meta.Status.Process != status.ProcessRunning {
+		return protocol.CodeInvalidField, errIsLife5(
+			"composer send names session %q, but that session is not running; nothing was sent", req.Session)
 	}
 	if req.SessionInstance != "" {
 		currentInstance, ok := d.sessionInstance(local)
@@ -321,13 +542,9 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 		// send the daemon's answer against a turn the CLI has already replaced.
 		native = d.nativeTurns[local]
 		closed = d.closedTurns[local]
-		progress := lane.progress.Load()
-		if lane.uncertain {
-			if current == lane.uncertainTurn && closed == lane.uncertainClosed && progress == lane.uncertainProgress {
-				priorUncertain = true
-				return
-			}
-			lane.uncertain = false
+		if d.composerOutcomeUnresolvedLocked(local, lane) {
+			priorUncertain = true
+			return
 		}
 		active = current != ""
 		if active && lane.reservedNativeTurn != "" && lane.supersededTurn == current {
@@ -951,11 +1168,20 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 	// queued messages.
 	lane := d.composerLaneFor(local)
 	var current, native string
-	var stale bool
+	var stale, recycling bool
 	d.withComposerInteractionState(lane, func() {
 		d.initInteractionsLocked()
 		current = d.turnIDs[local]
 		native = d.nativeTurns[local]
+		// enterRecycle publishes this bit under lane.mu in the same critical
+		// section that establishes its queue-head position. Stop is a priority
+		// path rather than a FIFO ticket, so this in-transaction read is its
+		// serialization point: once the bit is visible it must not publish a
+		// barrier or write an interrupt into the process being recycled.
+		recycling = lane.recycling
+		if recycling {
+			return
+		}
 		if hook := testHookInterruptValidatedNotYetBarrier.Load(); hook != nil {
 			(*hook)(local)
 		}
@@ -966,6 +1192,10 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 			lane.stopsInFlight++
 		}
 	})
+	if recycling {
+		return protocol.CodeInputBusy, fmt.Errorf(
+			"turn interrupt: session %q is recycling stale credentials; nothing was interrupted", session)
+	}
 	if stale {
 		return protocol.CodeStaleTurn, fmt.Errorf(
 			"turn interrupt: expected_turn %q is not session %q's current turn; the turn it was rendered against is over, and interrupting whatever replaced it -- including a turn the owner just started at the terminal -- is what this refusal exists to prevent",

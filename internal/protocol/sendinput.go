@@ -30,6 +30,7 @@ package protocol
 // minutes) and submitted text ending in a newline twice.
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -47,6 +48,24 @@ import (
 // internal/protocol must not pull it in, the same re-homing submitframe did for the
 // framing rule itself.
 const MaxSendInputText = 4096
+
+// DirectInputClass is the durable ambiguity class at the PTY write boundary. Every
+// input first records Draft immediately before its first Input attempt. Only an
+// explicit Enter/Submit whose Input call then returns success advances the marker
+// to Submitted. Arbitrary keys/control bytes never prove draft consumption. The
+// closed vocabulary crosses only the in-process protocol -> skeleton seam.
+type DirectInputClass string
+
+const (
+	DirectInputDraft     DirectInputClass = "draft"
+	DirectInputSubmitted DirectInputClass = "submitted"
+)
+
+// DirectInputObserver is an optional daemon assembly seam. Production implements
+// it with a durable per-session marker; small protocol backends may omit it.
+type DirectInputObserver interface {
+	ObserveDirectInput(local string, class DirectInputClass) error
+}
 
 // keySequences is the CLOSED named-key vocabulary of ADR-010 A2, in ONE place: the daemon
 // maps a name to bytes here and `swarm send` validates against KeySequence rather than
@@ -99,7 +118,7 @@ func (cc *clientConn) handleSendInput(c Control) {
 		cc.replyError("send_input: session " + strconv.Quote(local) + " is not running")
 		return
 	}
-	if err := cc.srv.sendMessage(local, frames); err != nil {
+	if err := cc.srv.sendMessage(local, frames, sendInputSubmits(c.SendInput)); err != nil {
 		cc.replyError("send_input: " + err.Error())
 		return
 	}
@@ -123,7 +142,19 @@ func (s *Server) SendInput(local string, req SendInputReq) error {
 	if !s.sessionRunning(local) {
 		return fmt.Errorf("send_input: session %s is not running", strconv.Quote(local))
 	}
-	return s.sendMessage(local, frames)
+	return s.sendMessage(local, frames, sendInputSubmits(&req))
+}
+
+func sendInputSubmits(req *SendInputReq) bool {
+	return req != nil && (req.Submit || req.Key == "enter")
+}
+
+// rawDirectInputSubmits recognizes only the terminal's characterized Enter
+// frame. A paste containing CR plus other bytes, escape sequences, Ctrl-C,
+// backspace and navigation keys are sticky draft/unknown state: none proves the
+// provider consumed the editor contents.
+func rawDirectInputSubmits(p []byte) bool {
+	return len(p) == 1 && p[0] == '\r'
 }
 
 // sendInputFrames validates one request and cuts it into the exact PTY writes the message
@@ -212,12 +243,11 @@ func (s *Server) sessionRunning(local string) bool {
 // only the submit is missing. That is recoverable — peek, then send --key enter — but only
 // if the caller is told, so it is reported distinctly from a message that wrote nothing.
 // SetInputGateFunc registers an assembly-owned refusal that runs before any typed
-// message's first byte. Production wires ContextGuard's effect-window gate
-// (ADR-023 amendment 1): a session whose automatic compaction is in flight
-// refuses daemon-originated typed input -- `swarm send` and supervisor
-// notifications alike -- until the compaction confirms, holds, or latches.
-// Attached-PTY keystrokes do not pass through here by design: an attended
-// session is never auto-compacted in the first place. nil clears the gate.
+// message's first byte. sendMessage checks it once before waiting and again under
+// attachMu+inMu; attach checks it under attachMu. The second checks are load-bearing:
+// an authority transition may publish while an earlier check waits for the session's
+// write locks, and that waiter must not write or attach after the transition.
+// Production wires ContextGuard's effect window and auth recycling. nil clears the gate.
 func (s *Server) SetInputGateFunc(fn func(local string) error) {
 	if fn == nil {
 		s.inputGateFn.Store(nil)
@@ -234,7 +264,60 @@ func (s *Server) inputGate(local string) error {
 	return nil
 }
 
-func (s *Server) sendMessage(local string, frames [][]byte) error {
+// SetDirectInputObserver installs the fail-closed marker invoked at the last
+// pre-write boundary. nil clears it. The atomic pointer permits assembly wiring
+// before or alongside listener startup without racing serving goroutines.
+func (s *Server) SetDirectInputObserver(fn func(local string, class DirectInputClass) error) {
+	if fn == nil {
+		s.directInputObserverFn.Store(nil)
+		return
+	}
+	f := directInputObserverFunc(fn)
+	s.directInputObserverFn.Store(&f)
+}
+
+func (s *Server) observeDirectInput(local string, class DirectInputClass) error {
+	if p := s.directInputObserverFn.Load(); p != nil {
+		return (*p)(local, class)
+	}
+	return nil
+}
+
+// WithInputFence runs fn while holding the exact per-session locks that serialize
+// owner-tier send_input and attach: attachMu -> inMu. It is the assembly seam for
+// a destructive session transition that must begin only after every earlier direct
+// input/attach has completed, and before any later one can pass its final gate.
+// fn must be bounded and must not call back into attach/send_input for this Server.
+func (s *Server) WithInputFence(local string, fn func() error) error {
+	if fn == nil {
+		return errors.New("protocol: nil input-fence callback")
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("protocol: server closed")
+	}
+	ls := s.leases[local]
+	if ls == nil {
+		ls = &sessionLease{}
+		s.leases[local] = ls
+	}
+	s.mu.Unlock()
+
+	ls.attachMu.Lock()
+	defer ls.attachMu.Unlock()
+	ls.inMu.Lock()
+	defer ls.inMu.Unlock()
+	s.mu.Lock()
+	current := !s.closed && s.leases[local] == ls
+	s.mu.Unlock()
+	if !current {
+		return fmt.Errorf("protocol: session %q input fence is no longer current", local)
+	}
+	return fn()
+}
+
+func (s *Server) sendMessage(local string, frames [][]byte, submits bool) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -261,6 +344,12 @@ func (s *Server) sendMessage(local string, frames [][]byte) error {
 	defer ls.attachMu.Unlock()
 	ls.inMu.Lock()
 	defer ls.inMu.Unlock()
+	// A destructive transition may have published after the optimistic gate
+	// above while this send waited for a prior message/attach. Recheck under the
+	// exact write locks, immediately before resolving/opening the stream.
+	if err := s.inputGate(local); err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	stream := ls.stream
@@ -278,6 +367,14 @@ func (s *Server) sendMessage(local string, frames [][]byte) error {
 
 	var wrote time.Time // when this message's PRECEDING frame was written
 	for i, f := range frames {
+		if i == 0 {
+			// Mark before the first ambiguous Input attempt: an error from Input does
+			// not prove whether the shim consumed bytes. Marker failure itself is a
+			// refusal and therefore precedes every byte.
+			if err := s.observeDirectInput(local, DirectInputDraft); err != nil {
+				return fmt.Errorf("record direct input before write: %w", err)
+			}
+		}
 		// The gap separates a message's text from the CR that submits it, and a message has
 		// at most those two frames. It is owed because a TEXT frame precedes the CR, not
 		// because of what that text contains — text and submit co-arriving in one PTY read
@@ -296,6 +393,12 @@ func (s *Server) sendMessage(local string, frames [][]byte) error {
 			return err
 		}
 		wrote = time.Now()
+	}
+	if submits {
+		// This is deliberately AFTER the explicit CR Input returned success. If
+		// the update itself fails, the durable Draft marker remains fail-closed;
+		// the already-successful user input must not be reported failed/retried.
+		_ = s.observeDirectInput(local, DirectInputSubmitted)
 	}
 	return nil
 }

@@ -293,6 +293,20 @@ func TestContextGuardUncertainLaneBlocksTheDispatch(t *testing.T) {
 	r.waitCalls(t, 1)
 }
 
+// A successful auth recycle fence has already signalled the old shim, but its
+// persisted process status can remain Running until the monitor observes exit.
+// The lane embargo is the only fact available at this queue head, and must veto
+// automatic compaction before the provider write boundary.
+func TestContextGuardRecycleEmbargoBlocksTheDispatch(t *testing.T) {
+	r := newDispatchRig(t)
+	r.lane.mu.Lock()
+	r.lane.recycling = true
+	r.lane.mu.Unlock()
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitPhase(t, contextguard.StatePendingIdle)
+	r.requireNoCallsFor(t, 150*time.Millisecond)
+}
+
 func TestContextGuardOrdersBehindTheComposerLane(t *testing.T) {
 	r := newDispatchRig(t)
 	// Occupy the lane the way a composer send does; the dispatch must queue.
@@ -788,6 +802,28 @@ func TestContextGuardContinuationForfeitsOnStopBarrierAtTheLaneHead(t *testing.T
 	time.Sleep(100 * time.Millisecond) // the worker is parked in the lane wait
 	r.lane.mu.Lock()
 	r.lane.barrier++
+	r.lane.mu.Unlock()
+	r.lane.leave()
+	r.requireNoPlainCallsFor(t, 200*time.Millisecond)
+	r.nudge()
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond) // consumed, never retried
+}
+
+// A successful auth recycle can leave Core reporting Running until the process
+// monitor observes exit. A continuation already queued behind the recycler
+// must therefore recheck the lane embargo at its own queue head and forfeit;
+// turn/start here would write into the dying provider.
+func TestContextGuardContinuationForfeitsOnRecycleAtTheLaneHead(t *testing.T) {
+	r := newDispatchRig(t)
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.lane.enter() // hold the lane while completion arms the continuation
+	r.ingestLifecycle(t, 2, "item/started")
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	time.Sleep(100 * time.Millisecond) // continuation is parked behind our ticket
+	r.lane.mu.Lock()
+	r.lane.recycling = true
 	r.lane.mu.Unlock()
 	r.lane.leave()
 	r.requireNoPlainCallsFor(t, 200*time.Millisecond)

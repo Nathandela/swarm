@@ -36,13 +36,15 @@ package skeleton
 // DESTRUCTION NEVER OUTRUNS RECOVERY (audit round: Fable H1/H3, codex 4).
 // Before any kill the watcher (a) proves the resume is composable -- the agent
 // binary resolves on the SESSION's own saved environment, the conversation id
-// is captured -- and (b) durably records the kill as its own (state.Killed), so
-// the one hazardous asymmetry an unattended session-killer could have (a kill
-// that succeeds paired with a resume that is lost to a crash, a timeout, or an
-// unresolvable binary) cannot arise: an ended session carrying the killed mark
-// is a resume OWED, completed on a later tick or by the next incarnation, and
-// never dropped as "ended by other hands". A claim that cannot be persisted
-// forbids the kill outright.
+// is captured -- and (b), inside the composer fence after its fresh safety
+// check, durably records the kill as its own (state.Killed), so the one hazardous
+// asymmetry an unattended session-killer could have (a kill that succeeds paired
+// with a resume that is lost to a crash, a timeout, or an unresolvable binary)
+// cannot arise: an ended session carrying the killed mark is a resume OWED,
+// completed on a later tick or by the next incarnation, and never dropped as
+// "ended by other hands". A claim that cannot be persisted forbids the kill
+// outright, and no claim is visible while an earlier composer operation still
+// owns the fence.
 //
 // THE RECYCLE IS THE OWNER'S LOCKED GESTURE (2026-09-01 decisions): fully
 // automatic; a session mid-turn -- or mid-INTERACTION: a permission prompt sits
@@ -218,6 +220,17 @@ type authWatchState struct {
 	Killed     map[string]bool     `json:"killed,omitempty"`
 }
 
+// authRecycleCoordination is the assembly-owned serialization around the pure
+// watcher's actions. Fresh and claimed fences are distinct because only a
+// durable pre-crash claim may consume a restored embargo.
+type authRecycleCoordination struct {
+	restore func(local string)
+	clear   func(local string)
+	fresh   func(local string, attempt func() error) error
+	claimed func(local string, attempt func() error) error
+	resume  func(local string, attempt func() bool) (attempted, retry bool)
+}
+
 // authWatcher is the component. Every action goes through an injected seam
 // (production: the coreAPI's Kill/Launch/Delete and the core's roster; fakes in
 // tests), so the sweep logic is unit-testable with no daemon and no socket.
@@ -233,15 +246,20 @@ type authWatcher struct {
 	launch     func(daemon.LaunchSpec) (persist.Meta, error)
 	remove     func(local string) error
 	resolve    func(name string, env []string) (string, error)
-	// unsafe covers live authority/effect state absent from persisted Status: owner/remote
-	// controls and ContextGuard's provider effect window. withRecycleFence queues the final
-	// revalidation+kill behind every already-admitted composer operation and keeps later ones
-	// behind it, closing the check-to-kill window on the durable phone send plane.
-	unsafe           func(local string) bool
-	withRecycleFence func(local string, attempt func() error) error
-	pause            func(time.Duration)
-	exitWait         time.Duration
-	exitPoll         time.Duration
+	// unsafe covers every live authority/effect fact absent from persisted Status:
+	// owner/remote controls, ContextGuard effects, unresolved composer/direct
+	// input, and an already-committed recycle. withRecycleFence queues the final
+	// revalidation+kill behind every admitted composer operation and keeps later
+	// ones behind it, closing the check-to-kill window on every input plane.
+	unsafe                  func(local string) bool
+	restoreRecycle          func(local string)
+	clearRecycle            func(local string)
+	withRecycleFence        func(local string, attempt func() error) error
+	withClaimedRecycleFence func(local string, attempt func() error) error
+	withResumeFence         func(local string, attempt func() bool) (attempted, retry bool)
+	pause                   func(time.Duration)
+	exitWait                time.Duration
+	exitPoll                time.Duration
 
 	state authWatchState
 	// settled flips after the first full tick: reconciled sessions are seeded
@@ -252,6 +270,10 @@ type authWatcher struct {
 	// conversation id, worktree-isolated, unresolvable binary): each is said
 	// once per session, not every 30s.
 	warned map[string]bool
+	// writeState is the crash-durable state-file seam. committed distinguishes
+	// an error before rename from a directory-sync error after rename.
+	writeState        func(path string, data []byte) (committed bool, err error)
+	unconfirmedClaims map[string]bool
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -269,16 +291,19 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 	launch func(daemon.LaunchSpec) (persist.Meta, error),
 	remove func(local string) error,
 	unsafe func(local string) bool,
-	withRecycleFence func(local string, attempt func() error) error) *authWatcher {
+	coord authRecycleCoordination) *authWatcher {
 	w := &authWatcher{
 		stateDir: stateDir, endpointID: endpointID, interval: authWatchInterval,
 		agents: agents, identity: identity,
 		list: list, get: get, kill: kill, launch: launch, remove: remove,
-		unsafe: unsafe, withRecycleFence: withRecycleFence,
-		resolve:  lookPathIn,
-		exitWait: authRecycleExitWait, exitPoll: authRecycleExitPoll,
-		warned: map[string]bool{},
-		stop:   make(chan struct{}),
+		unsafe:         unsafe,
+		restoreRecycle: coord.restore, clearRecycle: coord.clear,
+		withRecycleFence: coord.fresh, withClaimedRecycleFence: coord.claimed,
+		withResumeFence: coord.resume,
+		resolve:         lookPathIn,
+		exitWait:        authRecycleExitWait, exitPoll: authRecycleExitPoll,
+		warned: map[string]bool{}, unconfirmedClaims: map[string]bool{},
+		stop: make(chan struct{}),
 	}
 	// pause is a stop-aware sleep, so a shutdown never waits behind an exit
 	// poll (audit M5); tests replace it with a no-op.
@@ -289,6 +314,16 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 		}
 	}
 	w.state = loadAuthWatchState(stateDir)
+	// A durable claim is authority over the next terminal edge. Reconstruct its
+	// fail-closed input embargo synchronously, before the constructor returns and
+	// before any client can race the asynchronous first tick.
+	if w.restoreRecycle != nil {
+		for local := range w.state.Killed {
+			if _, ok := w.get(local); ok {
+				w.restoreRecycle(local)
+			}
+		}
+	}
 	w.wg.Add(1)
 	go w.run()
 	return w
@@ -300,11 +335,15 @@ func (w *authWatcher) sessionUnsafe(local string) bool {
 	return w.unsafe != nil && w.unsafe(local)
 }
 
-func (w *authWatcher) fencedRecycleAttempt(local string, attempt func() error) error {
-	if w.withRecycleFence == nil {
+func (w *authWatcher) fencedRecycleAttempt(local string, claimed bool, attempt func() error) error {
+	fence := w.withRecycleFence
+	if claimed && w.withClaimedRecycleFence != nil {
+		fence = w.withClaimedRecycleFence
+	}
+	if fence == nil {
 		return attempt()
 	}
-	return w.withRecycleFence(local, attempt)
+	return fence(local, attempt)
 }
 
 // loadAuthWatchState reads the state a prior incarnation persisted; a missing
@@ -484,6 +523,10 @@ func (w *authWatcher) addPending(agent, local string) bool {
 // forget clears every per-session record when an entry leaves the pending set.
 func (w *authWatcher) forget(local string) {
 	delete(w.state.Killed, local)
+	delete(w.unconfirmedClaims, local)
+	if w.clearRecycle != nil {
+		w.clearRecycle(local)
+	}
 	for k := range w.warned {
 		if k == local || len(k) > len(local) && k[len(k)-len(local):] == local {
 			delete(w.warned, k)
@@ -525,7 +568,7 @@ func (w *authWatcher) workPending(agent, id string) {
 			// -- or in the next incarnation -- and completes the gesture. The
 			// daemon-side resume dedup makes a replay after a crash-between-
 			// launch-and-delete idempotent.
-			if w.resumeEnded(agent, m) {
+			if w.resumeClaimed(agent, m) {
 				keep = append(keep, local)
 			} else {
 				w.forget(local)
@@ -587,6 +630,7 @@ func (w *authWatcher) workPending(agent, id string) {
 // whether the session should stay pending (true = retry next tick).
 func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 	local := m.ID
+	hadClaim := w.state.Killed[local]
 	// FEASIBILITY BEFORE DESTRUCTION (audit H3): the resume must be provably
 	// composable before anything is killed. The binary is resolved against the
 	// SESSION's own saved environment -- the same env the resume will launch
@@ -598,31 +642,65 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 			return true
 		}
 	}
-	// THE CLAIM: record the kill as ours -- durably -- before signalling it. A
-	// claim that cannot be persisted forbids the kill: otherwise a crash in the
-	// next instant would strand a session we could not prove we killed.
-	w.state.Killed[local] = true
-	if err := w.saveState(); err != nil {
-		delete(w.state.Killed, local)
-		log.Printf("authwatch: cannot persist the kill claim for %s (%v); not killing", local, err)
-		return true
-	}
-	// Serialize the final revalidation+kill with the session's composer FIFO. Existing sends
-	// finish first; later sends queue behind the recycle. Controller and ContextGuard state is
-	// re-read INSIDE that fence because neither is represented in persisted Status.
-	killErr := w.fencedRecycleAttempt(local, func() error {
+	// Serialize the final revalidation+claim+kill with the session's composer FIFO. Existing
+	// sends finish first; later sends queue behind the recycle. Controller and ContextGuard
+	// state is re-read INSIDE that fence because neither is represented in persisted Status.
+	// The durable claim belongs here too: publishing it before the fence would let a crash while
+	// an earlier composer send still owns the lane resurrect a session the watcher never killed.
+	var claimErr error
+	killErr := w.fencedRecycleAttempt(local, hadClaim, func() error {
 		cur, ok := w.get(local)
 		if !ok || cur.Status.Process != status.ProcessRunning ||
 			cur.Status.Turn != status.TurnIdle || cur.Status.Interaction != status.InteractionNone ||
 			w.sessionUnsafe(local) {
 			return errAuthRecycleUnsafe
 		}
-		return w.kill(local)
+		// THE CLAIM: record the kill as ours -- durably -- immediately before
+		// signalling it. A claim that cannot be persisted forbids the kill:
+		// otherwise a crash in the next instant would strand a session we could
+		// not prove we killed.
+		if !hadClaim {
+			w.state.Killed[local] = true
+		}
+		// A post-rename directory-sync error keeps the visible claim and embargo
+		// but cannot authorize destruction. Re-persist it on a later claimed
+		// redrive and require a fully successful parent sync before signalling.
+		if !hadClaim || w.claimUnconfirmed(local) {
+			committed, err := w.persistState()
+			if err != nil {
+				if !committed && !hadClaim {
+					delete(w.state.Killed, local)
+				} else {
+					w.markClaimUnconfirmed(local)
+					err = fmt.Errorf("%w: claim durability unconfirmed: %v", errAuthRecycleObligationRetained, err)
+				}
+				claimErr = err
+				return err
+			}
+			w.clearClaimUnconfirmed(local)
+		}
+		if err := w.kill(local); err != nil {
+			// signalShim reports transport errors whose delivery is ambiguous: the
+			// complete kill frame may already be in the shim. Never withdraw the
+			// durable claim on a generic kill error. Keep the old lane embargoed;
+			// the next tick either observes the exit and resumes, or redrives once.
+			return fmt.Errorf("%w: signal stale session: %v", errAuthRecycleObligationRetained, err)
+		}
+		return nil
 	})
 	if killErr != nil {
-		delete(w.state.Killed, local)
-		if err := w.saveState(); err != nil {
-			log.Printf("authwatch: persist claim release for %s: %v", local, err)
+		if errors.Is(killErr, errAuthOwnerEnding) {
+			// The owner's explicit terminal action linearized first. It is never
+			// authwatch's session to resurrect, including a restored claim.
+			w.forget(local)
+			if err := w.saveState(); err != nil {
+				log.Printf("authwatch: persist owner-won claim release for %s: %v", local, err)
+			}
+			return false
+		}
+		if claimErr != nil {
+			log.Printf("authwatch: cannot persist the kill claim for %s (%v); not killing", local, claimErr)
+			return true
 		}
 		if !errors.Is(killErr, errAuthRecycleUnsafe) {
 			log.Printf("authwatch: kill stale %s session %s (%s): %v", agent, local, m.Name, killErr)
@@ -632,7 +710,12 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 	deadline := time.Now().Add(w.exitWait)
 	for {
 		cur, ok := w.get(local)
-		if !ok || cur.Status.Process != status.ProcessRunning {
+		if !ok {
+			// Delete is an explicit owner action, not an exit authwatch may
+			// resurrect from the stale Meta captured above.
+			return false
+		}
+		if cur.Status.Process != status.ProcessRunning {
 			break
 		}
 		if w.stopping() {
@@ -644,7 +727,21 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 		}
 		w.pause(w.exitPoll)
 	}
-	return w.resumeEnded(agent, m)
+	return w.resumeClaimed(agent, m)
+}
+
+func (w *authWatcher) resumeClaimed(agent string, m persist.Meta) (retry bool) {
+	if w.withResumeFence == nil {
+		return w.resumeEnded(agent, m)
+	}
+	attempted, retry := w.withResumeFence(m.ID, func() bool { return w.resumeEnded(agent, m) })
+	if !attempted {
+		// An owner terminal action already owned this edge. The owner's persisted
+		// row transition/delete is the cancellation authority; workPending forgets
+		// and persists our claim instead of ever launching from that source.
+		return false
+	}
+	return retry
 }
 
 // resumeEnded is the second half of the gesture, also entered directly for an
@@ -685,18 +782,105 @@ func (w *authWatcher) resumeEnded(agent string, m persist.Meta) (retry bool) {
 	return false
 }
 
-// saveState persists the watcher's memory atomically (tmp + rename), 0600 like
-// every other daemon-authored state file. Callers that are about to DESTROY
-// something treat an error as a veto.
+var errAuthRecycleObligationRetained = errors.New("authwatch: recycle obligation retained")
+
+func (w *authWatcher) claimUnconfirmed(local string) bool {
+	return w.unconfirmedClaims != nil && w.unconfirmedClaims[local]
+}
+
+func (w *authWatcher) markClaimUnconfirmed(local string) {
+	if w.unconfirmedClaims == nil {
+		w.unconfirmedClaims = make(map[string]bool)
+	}
+	w.unconfirmedClaims[local] = true
+}
+
+func (w *authWatcher) clearClaimUnconfirmed(local string) {
+	delete(w.unconfirmedClaims, local)
+}
+
+// saveState persists the watcher's memory through the crash-durable writer.
+// Bookkeeping callers only need the error; the pre-kill claim path calls
+// persistState directly because it must distinguish either side of rename.
 func (w *authWatcher) saveState() error {
+	_, err := w.persistState()
+	return err
+}
+
+func (w *authWatcher) persistState() (committed bool, err error) {
 	raw, err := json.MarshalIndent(w.state, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	path := filepath.Join(w.stateDir, authWatchStateFile)
+	write := w.writeState
+	if write == nil {
+		write = writeAuthWatchState
+	}
+	return write(path, raw)
+}
+
+type authWatchStateWriteOps struct {
+	rename  func(oldpath, newpath string) error
+	syncDir func(dir string) error
+}
+
+func writeAuthWatchState(path string, data []byte) (committed bool, err error) {
+	return writeAuthWatchStateWithOps(path, data, authWatchStateWriteOps{})
+}
+
+// writeAuthWatchStateWithOps uses the same durable replacement contract as the
+// device registry: sync the new inode, atomically rename it, then sync the
+// parent directory. After rename, committed remains true even if parent sync
+// fails, so callers never roll memory back against the visible document.
+func writeAuthWatchStateWithOps(path string, data []byte, ops authWatchStateWriteOps) (committed bool, err error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false, err
+	}
+	tmp, err := os.CreateTemp(dir, authWatchStateFile+".tmp*")
+	if err != nil {
+		return false, err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return false, err
+	}
+	rename := ops.rename
+	if rename == nil {
+		rename = os.Rename
+	}
+	if err := rename(tmpName, path); err != nil {
+		return false, err
+	}
+	syncDir := ops.syncDir
+	if syncDir == nil {
+		syncDir = syncAuthWatchStateDir
+	}
+	if err := syncDir(dir); err != nil {
+		return true, fmt.Errorf("sync auth-watch state directory: %w", err)
+	}
+	return true, nil
+}
+
+func syncAuthWatchStateDir(dir string) error {
+	handle, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(w.stateDir, authWatchStateFile)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	defer func() { _ = handle.Close() }()
+	return handle.Sync()
 }

@@ -204,6 +204,10 @@ Each `vMAJOR.MINOR.PATCH` release attaches `container-images.json`. It names bot
 
 ```bash
 release=v0.13.19
+# The base Compose files require these build/version inputs even though the
+# digest-only override below remains the deployment authority.
+export RELAY_VERSION="${release}"
+export PUSHGW_VERSION="${release}"
 mkdir -p /tmp/swarm-release
 gh release download "${release}" --repo Nathandela/swarm \
   --pattern container-images.json --dir /tmp/swarm-release

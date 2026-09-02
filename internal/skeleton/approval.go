@@ -453,6 +453,18 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 	if me := d.machineID(); me != "" && (endpoint != me || (machine != "" && machine != me)) {
 		return protocol.CodeInvalidField, errIsLife4("approve binds machine %q/%q; this machine is %q", machine, endpoint, me)
 	}
+	// An approval is provider input just like a composer send. Take its normal
+	// FIFO position before re-reading the pending card so a card resolved while
+	// this request waited cannot be applied, and so an auth recycle at the queue
+	// head embargoes both native decisions and PTY keys.
+	lane := d.composerLaneFor(local)
+	lane.enter()
+	defer lane.leave()
+	if lane.recyclingNow() {
+		return protocol.CodeInputBusy, errIsLife4(
+			"session %q is recycling stale credentials, so approval %q was not applied; nothing was typed",
+			req.Session, req.InteractionID)
+	}
 
 	d.itemMu.Lock()
 	d.initInteractionsLocked()
