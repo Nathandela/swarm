@@ -25,18 +25,6 @@ const (
 	spawnRows = 24
 )
 
-// spawnStateDir resolves the swarm state dir the handoff copies land under. It is a
-// package-level indirection (the persist.writeTemp precedent) so a test can point
-// the copy at a temp dir; production resolves the same dir every other client role
-// uses.
-var spawnStateDir = func() (string, error) {
-	cc, err := clientConfig()
-	if err != nil {
-		return "", err
-	}
-	return cc.StateDir, nil
-}
-
 // runSpawn is `swarm spawn --cli <agent> [--dir d] [--model m] [--worktree]
 // [--name n] (--prompt <text> | --handoff <file> | --delegate <file>)`. On success
 // the new session id goes to stdout ALONE, so an agent can pipe it straight into
@@ -133,7 +121,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 		// A refused launch must not strand its handoff copy: retries against a
 		// full daemon would otherwise accumulate documents no session references.
 		if dest != "" {
-			_ = os.Remove(dest)
+			_ = os.RemoveAll(filepath.Dir(dest)) // the private directory is the copy's
 		}
 		_, _ = fmt.Fprintf(stderr, "spawn: %v\n", err)
 		return 1
@@ -143,28 +131,20 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// copyHandoff copies the agent-authored document into <stateDir>/handoffs and
-// returns the destination path. The copy is the point (D2): the child reads a
-// snapshot under the swarm state dir, not a repo path the source session may
-// rewrite or delete while the child is still starting. CreateTemp gives each copy a
-// unique name under a readable timestamp prefix, so two spawns from one source file
-// never overwrite each other.
+// copyHandoff snapshots the agent-authored document into a private temporary
+// directory of its own and returns the copy's absolute path. The copy is the point
+// (D2): the child reads a stable path of swarm's while the source's own file may go
+// away. It is NOT under the swarm state dir (ADR-010 Amendment 5 F3): a codex source
+// runs this command inside its workspace-write sandbox, where the state dir is
+// read-only and the temp dir is the one writable place outside the checkout, and a
+// 0700 directory of its own protects the copy exactly as the state dir did.
 func copyHandoff(src string) (string, error) {
 	body, err := os.ReadFile(src)
 	if err != nil {
 		return "", err
 	}
-	stateDir, err := spawnStateDir()
+	dir, err := os.MkdirTemp("", "swarm-handoff-") // 0700, one per handoff, no squatting
 	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(stateDir, "handoffs")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	// MkdirAll leaves an existing directory's mode untouched (the persist.NewStore
-	// precedent), so the 0700 hardening is unconditional: handoffs carry work context.
-	if err := os.Chmod(dir, 0o700); err != nil {
 		return "", err
 	}
 	f, err := os.CreateTemp(dir, time.Now().UTC().Format("20060102-150405")+"-*.md")
@@ -172,7 +152,7 @@ func copyHandoff(src string) (string, error) {
 		return "", err
 	}
 	// The pointer prompt must name a path the CHILD can resolve from its own cwd,
-	// so the destination is forced absolute even under a relative state-dir knob.
+	// so the destination is forced absolute even under a relative TMPDIR.
 	dest, err := filepath.Abs(f.Name())
 	if err != nil {
 		_ = f.Close()

@@ -41,15 +41,16 @@ func TestRunSpawn_RelativeDirResolvesAbsolute(t *testing.T) {
 }
 
 // TestRunSpawn_HandoffPointerIsAbsolute pins that the pointer prompt names an
-// absolute destination even when the state-dir resolver yields a relative path
-// (SWARM_DAEMON_STATE is a supported knob): the child starts in its own cwd and
-// would otherwise be pointed at a file it cannot resolve.
+// absolute destination even when os.TempDir yields a relative path (TMPDIR is an
+// environment knob honoured verbatim): the child starts in its own cwd and would
+// otherwise be pointed at a file it cannot resolve.
 func TestRunSpawn_HandoffPointerIsAbsolute(t *testing.T) {
 	base := t.TempDir()
 	t.Chdir(base)
-	prev := spawnStateDir
-	spawnStateDir = func() (string, error) { return "state", nil }
-	t.Cleanup(func() { spawnStateDir = prev })
+	if err := os.Mkdir("state", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", "state")
 
 	src := filepath.Join(base, "plan.md")
 	if err := os.WriteFile(src, []byte("do the thing\n"), 0o600); err != nil {
@@ -72,7 +73,7 @@ func TestRunSpawn_HandoffPointerIsAbsolute(t *testing.T) {
 // strand its handoff copy: retries against a full daemon must not accumulate
 // orphaned documents no session will ever reference.
 func TestRunSpawn_LaunchErrorRemovesHandoffCopy(t *testing.T) {
-	stateDir := useTempStateDir(t)
+	root := useTempHandoffRoot(t)
 
 	src := filepath.Join(t.TempDir(), "plan.md")
 	if err := os.WriteFile(src, []byte("do the thing\n"), 0o600); err != nil {
@@ -84,11 +85,7 @@ func TestRunSpawn_LaunchErrorRemovesHandoffCopy(t *testing.T) {
 	if code := runSpawn([]string{"--cli", "claude", "--handoff", src}, c, io.Discard, io.Discard); code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	left, err := os.ReadDir(filepath.Join(stateDir, "handoffs"))
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	if len(left) != 0 {
-		t.Errorf("handoffs dir holds %d orphaned copies after a refused launch, want 0", len(left))
+	if left := handoffDirs(t, root); len(left) != 0 {
+		t.Errorf("%d orphaned handoff directories remain after a refused launch, want 0", len(left))
 	}
 }

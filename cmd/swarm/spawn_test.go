@@ -18,19 +18,15 @@ package main
 //
 //	func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int
 //
-//	// spawnStateDir resolves the swarm state dir the handoff copy lands under. It is
-//	// a package-level indirection (the persist.writeTemp precedent) so a test can
-//	// point it at a temp dir; production resolves the same dir the daemon uses.
-//	var spawnStateDir = func() (string, error) { ... }
-//
 // Frozen behavior:
 //   - --cli is required; --dir defaults to the caller's cwd; --model becomes
 //     Options["model"]; --worktree sets LaunchReq.Worktree; --name is optional (the
 //     daemon defaults it).
 //   - EXACTLY ONE of --prompt/--handoff/--delegate. --prompt: InitialPrompt is the
-//     text verbatim, intent "delegate". --handoff/--delegate: the file is COPIED to
-//     <stateDir>/handoffs/<timestamped-unique>.md (dir 0700) and InitialPrompt is the
-//     one-line pointer "Read and follow the instructions in <abs dest>." — so
+//     text verbatim, intent "delegate". --handoff/--delegate: the file is COPIED to a
+//     private <os.TempDir()>/swarm-handoff-*/ directory of its own (0700, one per
+//     handoff; ADR-010 Amendment 5 F3) as <timestamped-unique>.md and InitialPrompt is
+//     the one-line pointer "Read and follow the instructions in <abs dest>." — so
 //     instructions never travel as argv (A4).
 //   - SpawnedFrom comes from SWARM_SESSION_ID; when the caller is a plain terminal
 //     (no session env) NEITHER lineage field is set — an intent without a parent is
@@ -39,8 +35,8 @@ package main
 //   - Success prints the new session id on stdout (name on stderr for humans);
 //     errors exit 1; flag misuse exits 2 (the runLS convention).
 //
-// RED today: runSpawn, spawnStateDir and the agentClient.Launch method do not exist,
-// so the package fails to compile on the undefined production symbols.
+// RED today: runSpawn and the agentClient.Launch method do not exist, so the package
+// fails to compile on the undefined production symbols.
 
 import (
 	"bytes"
@@ -111,15 +107,54 @@ func onlyLaunch(t *testing.T, c *fakeSpawnClient) protocol.LaunchReq {
 	return got[0]
 }
 
-// useTempStateDir points the handoff copy at a temp state dir for the duration of a
-// test, restoring the production resolver afterwards.
-func useTempStateDir(t *testing.T) string {
+// useTempHandoffRoot points os.TempDir -- where each handoff copy gets a private
+// directory of its own (ADR-010 Amendment 5 F3) -- at a per-test root, and returns it.
+func useTempHandoffRoot(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	prev := spawnStateDir
-	spawnStateDir = func() (string, error) { return dir, nil }
-	t.Cleanup(func() { spawnStateDir = prev })
-	return dir
+	root := t.TempDir()
+	t.Setenv("TMPDIR", root)
+	return root
+}
+
+// handoffDirs lists the private handoff directories under root.
+func handoffDirs(t *testing.T, root string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "swarm-handoff-") {
+			dirs = append(dirs, filepath.Join(root, e.Name()))
+		}
+	}
+	return dirs
+}
+
+// handoffCopies lists the copied documents under root, checking the contract on the
+// way: one 0700 directory per handoff holding exactly one copied document.
+func handoffCopies(t *testing.T, root string) []string {
+	t.Helper()
+	var copies []string
+	for _, dir := range handoffDirs(t, root) {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o700 {
+			t.Errorf("%s mode = %04o, want 0700", dir, perm)
+		}
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 1 {
+			t.Fatalf("%s holds %d entries, want exactly one copied document", dir, len(files))
+		}
+		copies = append(copies, filepath.Join(dir, files[0].Name()))
+	}
+	return copies
 }
 
 // inSession sets the per-session env the daemon injects into every agent, so the
@@ -210,7 +245,7 @@ func TestRunSpawn_PromptBuildsLaunchReq(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			useTempStateDir(t)
+			useTempHandoffRoot(t)
 			inSession(t, "sess-parent-1")
 			t.Setenv("SWARM_SPAWN_ENV_MARKER", "present")
 
@@ -241,7 +276,7 @@ func TestRunSpawn_PromptBuildsLaunchReq(t *testing.T) {
 
 // TestRunSpawn_DirDefaultsToCallerCwd: an agent that omits --dir means "here".
 func TestRunSpawn_DirDefaultsToCallerCwd(t *testing.T) {
-	useTempStateDir(t)
+	useTempHandoffRoot(t)
 	inSession(t, "sess-parent-1")
 	wd, err := os.Getwd()
 	if err != nil {
@@ -263,7 +298,7 @@ func TestRunSpawn_DirDefaultsToCallerCwd(t *testing.T) {
 // spawned_from is refused server-side (handleLaunch), so sending one here would make
 // every human-run spawn fail.
 func TestRunSpawn_NoSessionEnvSendsNoLineage(t *testing.T) {
-	useTempStateDir(t)
+	useTempHandoffRoot(t)
 	t.Setenv(hookclient.EnvSessionID, "")    // registers the restore...
 	_ = os.Unsetenv(hookclient.EnvSessionID) // ...then genuinely unset it
 
@@ -301,7 +336,7 @@ func TestRunSpawn_HandoffCopiesFileAndPointsPrompt(t *testing.T) {
 		{"--delegate", "delegate"},
 	} {
 		t.Run(tc.flag, func(t *testing.T) {
-			stateDir := useTempStateDir(t)
+			root := useTempHandoffRoot(t)
 			inSession(t, "sess-parent-1")
 
 			src := filepath.Join(t.TempDir(), "handoff.md")
@@ -316,24 +351,16 @@ func TestRunSpawn_HandoffCopiesFileAndPointsPrompt(t *testing.T) {
 				t.Fatalf("runSpawn(%v) exit = %d, want 0; stderr=%q", args, exit, stderr.String())
 			}
 
-			handoffs := filepath.Join(stateDir, "handoffs")
-			info, err := os.Stat(handoffs)
-			if err != nil {
-				t.Fatalf("the handoff copy dir %s was not created: %v", handoffs, err)
+			copies := handoffCopies(t, root)
+			if len(copies) != 1 {
+				t.Fatalf("handoff copies %v, want exactly one copied document", copies)
 			}
-			if perm := info.Mode().Perm(); perm != 0o700 {
-				t.Errorf("%s mode = %04o, want 0700", handoffs, perm)
-			}
-			names := dirNames(t, handoffs)
-			if len(names) != 1 {
-				t.Fatalf("handoffs dir holds %v, want exactly one copied document", names)
-			}
-			dest := filepath.Join(handoffs, names[0])
+			dest := copies[0]
 			if !strings.HasSuffix(dest, ".md") {
-				t.Errorf("copied handoff %q does not end in .md", names[0])
+				t.Errorf("copied handoff %q does not end in .md", dest)
 			}
 			if dest == src {
-				t.Fatalf("the handoff must be COPIED under the state dir, not referenced in place (%s)", src)
+				t.Fatalf("the handoff must be COPIED into a private directory, not referenced in place (%s)", src)
 			}
 			got, err := os.ReadFile(dest)
 			if err != nil {
@@ -365,7 +392,7 @@ func TestRunSpawn_HandoffCopiesFileAndPointsPrompt(t *testing.T) {
 // must not collide — the second would otherwise overwrite the document the first
 // child is still being told to read.
 func TestRunSpawn_HandoffCopiesGetUniqueNames(t *testing.T) {
-	stateDir := useTempStateDir(t)
+	root := useTempHandoffRoot(t)
 	inSession(t, "sess-parent-1")
 
 	src := filepath.Join(t.TempDir(), "handoff.md")
@@ -382,9 +409,8 @@ func TestRunSpawn_HandoffCopiesGetUniqueNames(t *testing.T) {
 		}
 	}
 
-	names := dirNames(t, filepath.Join(stateDir, "handoffs"))
-	if len(names) != 2 {
-		t.Fatalf("handoffs dir holds %v after two spawns, want two distinct copies", names)
+	if copies := handoffCopies(t, root); len(copies) != 2 {
+		t.Fatalf("handoff copies %v after two spawns, want two distinct copies", copies)
 	}
 	reqs := client.reqs()
 	if len(reqs) != 2 || reqs[0].InitialPrompt == reqs[1].InitialPrompt {
@@ -396,7 +422,7 @@ func TestRunSpawn_HandoffCopiesGetUniqueNames(t *testing.T) {
 // path named, and NOTHING is launched — a child told to read a file that does not
 // exist is worse than no child.
 func TestRunSpawn_MissingHandoffFileIsAnError(t *testing.T) {
-	useTempStateDir(t)
+	useTempHandoffRoot(t)
 	inSession(t, "sess-parent-1")
 	missing := filepath.Join(t.TempDir(), "nope.md")
 
@@ -435,7 +461,7 @@ func TestRunSpawn_FlagMisuse(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			useTempStateDir(t)
+			useTempHandoffRoot(t)
 			inSession(t, "sess-parent-1")
 			client := newFakeSpawnClient()
 			var stdout, stderr bytes.Buffer
@@ -455,7 +481,7 @@ func TestRunSpawn_FlagMisuse(t *testing.T) {
 // TestRunSpawn_LaunchError: a daemon refusal is exit 1 with the cause on stderr and
 // no session id on stdout for a caller to parse.
 func TestRunSpawn_LaunchError(t *testing.T) {
-	useTempStateDir(t)
+	useTempHandoffRoot(t)
 	inSession(t, "sess-parent-1")
 
 	client := newFakeSpawnClient()
@@ -477,7 +503,7 @@ func TestRunSpawn_LaunchError(t *testing.T) {
 // TestRunSpawn_PrintsSessionID: stdout carries the new session id ALONE (an agent
 // pipes it straight into `swarm watch`), with the human-facing name on stderr.
 func TestRunSpawn_PrintsSessionID(t *testing.T) {
-	useTempStateDir(t)
+	useTempHandoffRoot(t)
 	inSession(t, "sess-parent-1")
 
 	client := newFakeSpawnClient()
@@ -514,17 +540,4 @@ func envHas(env []string, kv string) bool {
 		}
 	}
 	return false
-}
-
-func dirNames(t *testing.T, dir string) []string {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read dir %s: %v", dir, err)
-	}
-	out := make([]string, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, e.Name())
-	}
-	return out
 }

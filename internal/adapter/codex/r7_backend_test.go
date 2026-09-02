@@ -50,7 +50,10 @@ func TestR7CodexBackend_DescribesTheRecordedAppServerArgv(t *testing.T) {
 		t.Errorf("plan.Program = %q, want %q; the backend is the same binary as the agent in a "+
 			"different mode (r1-codex-gate.md:53)", plan.Program, binary)
 	}
-	wantArgs := []string{"app-server", "--listen", "unix://" + r7Sock}
+	// The recorded argv plus the sandbox override (ADR-010 Amendment 5 F2): the app-server
+	// is the process that executes the agent's commands, so it is the one whose sandbox
+	// must let the swarm CLI dial the daemon.
+	wantArgs := []string{"app-server", "--listen", "unix://" + r7Sock, "-c", "sandbox_workspace_write.network_access=true"}
 	if strings.Join(plan.Args, " ") != strings.Join(wantArgs, " ") {
 		t.Errorf("plan.Args = %v, want %v; recorded at r1-codex-gate.md:53. Note that "+
 			"`codex app-server proxy --sock` is NOT the bridge to this endpoint (gate correction 2) "+
