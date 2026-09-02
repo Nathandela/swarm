@@ -1,0 +1,108 @@
+# The push gateway is a separate public service from the untrusted relay. Caddy
+# shares its network namespace so both application and admin listeners can stay
+# loopback-only. Only Caddy's 80/443 listeners are published.
+
+services:
+  pushgw-init:
+    image: busybox:1.36
+    command: ["chown", "-R", "65532:65532", "/var/lib/swarm-pushgw"]
+    volumes:
+      - swarm-pushgw-data:/var/lib/swarm-pushgw
+    restart: "no"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+
+  swarm-pushgw:
+    build:
+      context: ../..
+      dockerfile: deploy/pushgw/Dockerfile
+      args:
+        VERSION: ${PUSHGW_VERSION:?set PUSHGW_VERSION to an immutable release tag, for example v0.13.15}
+    image: ghcr.io/nathandela/swarm-pushgw:${PUSHGW_VERSION:?set PUSHGW_VERSION to an immutable release tag, for example v0.13.15}
+    container_name: swarm-pushgw
+    restart: unless-stopped
+    depends_on:
+      pushgw-init:
+        condition: service_completed_successfully
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - swarm-pushgw-data:/var/lib/swarm-pushgw
+    command:
+      - -db
+      - /var/lib/swarm-pushgw/pushgw.db
+      - -listen
+      - 127.0.0.1:8450
+      - -admin-listen
+      - 127.0.0.1:8451
+      - -insecure-http
+      - -trusted-proxies
+      - 127.0.0.1/32
+      # One attached swarm-8404f VM identity/ADC token source serves both FCM
+      # and Play Integrity. Production construction refuses a foreign project.
+      - -gcp-project-id
+      - swarm-8404f
+      - -gcp-project-number
+      - "733314021126"
+      - -android-package
+      - dev.swarm.phone
+      - -play-signing-cert-sha256
+      - hz8YTGhTTgpYccjMiQDrhx5HcddqRsTu1HRcmhhknmU
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/swarm-pushgw", "healthcheck", "-url", "http://127.0.0.1:8451/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          pids: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.9-alpine
+    container_name: swarm-pushgw-caddy
+    restart: unless-stopped
+    network_mode: "service:swarm-pushgw"
+    depends_on:
+      swarm-pushgw:
+        condition: service_healthy
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          pids: 128
+
+volumes:
+  swarm-pushgw-data:
+  caddy-data:
+  caddy-config:

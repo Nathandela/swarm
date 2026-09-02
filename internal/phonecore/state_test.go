@@ -79,7 +79,7 @@ func fullState() State {
 	for i := range wake {
 		wake[i] = byte(i + 100)
 	}
-	return State{
+	st := State{
 		Machine:                   "m1",
 		MachineName:               "nathans-mbp",
 		MachineStatic:             bytes.Repeat([]byte{0xA1}, 32),
@@ -118,6 +118,11 @@ func fullState() State {
 			Body: json.RawMessage(`{"v":1,"item_id":"itm-1","kind":"agent_message"}`),
 		}},
 	}
+	st.pairingPushOwned = EncodePushAddress(PushAddress{
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+	})
+	return st
 }
 
 // TestState_EveryResumeCriticalFieldSurvivesARestart is PB-STATE-1's acceptance criterion
@@ -535,6 +540,17 @@ var stateV17Fixture = func() string {
 	return strings.Replace(fixture, `"reconciled_epoch":7`, `"reconciled_epoch":7,"last_profile":null`, 1)
 }()
 
+// stateV20Fixture adds the write-ahead ownership phase for the exact staged push address
+// whose machine pin committed in the same phone-state transaction. The address is public
+// synchronization metadata; its wake key and capabilities remain sealed in push-state. At
+// integration this is mechanically rebased onto the real v19 publication-authority fixture;
+// the top-level pairing field itself is independent of those sealed content additions.
+var stateV20Fixture = func() string {
+	fixture := strings.Replace(stateV17Fixture, `"schema_version":17`, `"schema_version":20`, 1)
+	return strings.Replace(fixture, `"last_profile":null`,
+		`"last_profile":null,"pairing_push_owned":"AQIDBAUGBwgJCgsMDQ4PEA"`, 1)
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -550,6 +566,7 @@ var stateFixtures = map[int]string{
 	15: stateV15Fixture,
 	16: stateV16Fixture,
 	17: stateV17Fixture,
+	20: stateV20Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

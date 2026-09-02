@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"time"
 )
 
 // WithDiskFreeFunc overrides the low-disk check's free-space source (default:
@@ -70,7 +71,8 @@ func (s *Server) startAdmin() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
-	s.adminSrv = &http.Server{Handler: mux}
+	mux.HandleFunc("/metrics", s.handleMetrics)
+	s.adminSrv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = s.adminSrv.Serve(ln) }()
 	return nil
 }
@@ -109,6 +111,10 @@ type storageHealth struct {
 	diskErr          string
 	diskFreeBytes    uint64
 	diskFreeMinBytes int64
+	durableObjects   int64
+	durableObjectMax int64
+	dbBytes          int64
+	dbBytesMax       int64
 }
 
 // checkStorage runs the store-writable and free-disk checks against the
@@ -140,6 +146,11 @@ func (s *Server) checkStorage() storageHealth {
 			s.setDiskLow(false)
 		}
 	}
+	snap := s.st.storageSnapshot()
+	h.durableObjects = snap.DurableObjects
+	h.durableObjectMax = s.cfg.Quotas.MaxDurableObjects
+	h.dbBytes = snap.DBBytes
+	h.dbBytesMax = s.cfg.Quotas.MaxDBBytes
 	return h
 }
 
@@ -165,6 +176,12 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 			reasons = append(reasons, fmt.Sprintf("low disk space: %d bytes free, want >= %d", h.diskFreeBytes, h.diskFreeMinBytes))
 		}
 	}
+	if h.durableObjectMax > 0 && h.durableObjects >= h.durableObjectMax {
+		reasons = append(reasons, fmt.Sprintf("durable object capacity reached: %d, limit %d", h.durableObjects, h.durableObjectMax))
+	}
+	if h.dbBytesMax > 0 && h.dbBytes >= h.dbBytesMax {
+		reasons = append(reasons, fmt.Sprintf("database byte capacity reached: %d, limit %d", h.dbBytes, h.dbBytesMax))
+	}
 
 	if len(reasons) > 0 {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -175,6 +192,32 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+// handleMetrics publishes aggregate, low-cardinality storage/admission counters only.
+// Routing ids, source addresses, mailbox names, and other caller-controlled values are
+// intentionally absent from both labels and values.
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	snap := s.st.storageSnapshot()
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	_, _ = fmt.Fprintln(w, "# TYPE relay_durable_objects gauge")
+	_, _ = fmt.Fprintf(w, "relay_durable_objects %d\n", snap.DurableObjects)
+	_, _ = fmt.Fprintln(w, "# TYPE relay_database_bytes gauge")
+	_, _ = fmt.Fprintf(w, "relay_database_bytes %d\n", snap.DBBytes)
+	if snap.FreeDiskKnown {
+		_, _ = fmt.Fprintln(w, "# TYPE relay_storage_free_bytes gauge")
+		_, _ = fmt.Fprintf(w, "relay_storage_free_bytes %d\n", snap.FreeDiskBytes)
+	}
+	_, _ = fmt.Fprintln(w, "# TYPE relay_durable_growth_writes_total counter")
+	_, _ = fmt.Fprintf(w, "relay_durable_growth_writes_total %d\n", snap.GrowthWrites)
+	_, _ = fmt.Fprintln(w, "# TYPE relay_cleanup_items_total counter")
+	_, _ = fmt.Fprintf(w, "relay_cleanup_items_total %d\n", snap.CleanupItems)
+	_, _ = fmt.Fprintln(w, "# TYPE relay_cleanup_mailboxes_total counter")
+	_, _ = fmt.Fprintf(w, "relay_cleanup_mailboxes_total %d\n", snap.CleanupMailboxes)
+	_, _ = fmt.Fprintln(w, "# TYPE relay_storage_admission_refusals_total counter")
+	for _, reason := range []storageAdmissionReason{admissionDurableObjects, admissionGrowthWrites, admissionDBBytes, admissionFreeDisk} {
+		_, _ = fmt.Fprintf(w, "relay_storage_admission_refusals_total{reason=%q} %d\n", reason, snap.Refusals[reason])
+	}
 }
 
 // setDiskLow records the low-disk state and logs a warning ONLY on the

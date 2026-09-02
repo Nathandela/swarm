@@ -12,7 +12,7 @@ before:
     # checksum covers it; activation gates on it with pure disk reads.
     - go run ./scripts/releasemanifest --out compat.json
 
-# Three deployables ship from this pipeline:
+# Four deployables ship from this pipeline:
 #
 #   swarm         the CLI/TUI the owner drives
 #   swarm-remote  the remote-control gateway sidecar, which runs under launchd or
@@ -26,6 +26,8 @@ before:
 #                 `binaries:` list below, which a cask does not derive on its own.
 #   swarm-relay   the server-side rendezvous/mailbox relay, deployed on a host of its
 #                 own and therefore archived on its own.
+#   swarm-pushgw  the public push gateway, deployed separately from the relay and
+#                 therefore archived on its own.
 #
 # swarm-char and swarm-fake-agent (cmd/swarm-char, cmd/swarm-fake-agent) are dev/test
 # tools; the build list below is the whole release matrix.
@@ -73,6 +75,23 @@ builds:
   - id: swarm-relay
     main: ./cmd/swarm-relay
     binary: swarm-relay
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/Nathandela/swarm/internal/version.Version={{ .Version }}
+      - -X github.com/Nathandela/swarm/internal/version.Commit={{ .Commit }}
+      - -X github.com/Nathandela/swarm/internal/version.Date={{ .Date }}
+
+  - id: swarm-pushgw
+    main: ./cmd/swarm-pushgw
+    binary: swarm-pushgw
     env:
       - CGO_ENABLED=0
     goos:
@@ -135,6 +154,13 @@ archives:
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}-relay_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+  - id: swarm-pushgw
+    ids:
+      - swarm-pushgw
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}-pushgw_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 
 checksum:
   name_template: "checksums.txt"

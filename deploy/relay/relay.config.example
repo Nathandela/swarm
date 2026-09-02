@@ -39,6 +39,15 @@
 
   "_comment_quotas": "Day-one abuse controls (R-REL.8), all operator-tunable. Every window below is per minute unless noted otherwise. These values are the relay's own generous shipped defaults (relay.DefaultConfig) -- tighten deliberately, and read mailbox_append_per_min's comment before touching that one specifically. NOTE ON CADDY: with trusted_proxies set (above) to cover Caddy's address, the relay derives every one of these per-source windows from the client address it recovers from X-Forwarded-For, not from the raw TCP peer (which would otherwise be Caddy for every real client, collapsing them into one shared bucket). This is what makes max_concurrent_connections_per_source and conn_per_min mean \"per real client\" again behind this proxy (R2 playbook 6.5). If you ever clear trusted_proxies, these per-source windows revert to keying off Caddy itself for every client combined.",
   "quotas": {
+    "_comment_max_durable_objects": "Global cap on caller-created durable rows and mailbox buckets across all identities. This is the distributed/Sybil backstop that per-source limits cannot provide. Growth past the cap is atomically refused; ack, purge, token deletion, and revoke remain available so the relay can recover.",
+    "max_durable_objects": 2000000,
+
+    "_comment_durable_growth_writes_per_min": "Gateway-wide per-minute cap on transactions that can add durable state, independent of source IP or relay identity. Cleanup/revocation transactions are exempt. 60000 permits about 100 fully active 10 Hz streams while bounding a distributed write flood.",
+    "durable_growth_writes_per_min": 60000,
+
+    "_comment_max_db_bytes": "Hard bbolt file-size admission ceiling. Growth is refused at/above the ceiling while deletions remain available; bbolt reuses freed pages but does not shrink the file. 17179869184 = 16 GiB.",
+    "max_db_bytes": 17179869184,
+
     "_comment_max_concurrent_rendezvous": "Cap on live pairing rendezvous slots at once, across all clients.",
     "max_concurrent_rendezvous": 1024,
 

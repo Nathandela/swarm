@@ -6,12 +6,16 @@ package main
 // TODO(pairing-conveyance) scope limit this file's fixtures deliberately stay inside.
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -102,6 +106,51 @@ func TestResolveGatewayParams_PushGatewayFileWiresConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "remote", "outbound-wake.seq")); err != nil {
 		t.Fatalf("outbound-wake.seq was not created by Next(): %v", err)
+	}
+}
+
+func TestResolveGatewayParams_CommittedRegistryPushSupersedesAndRetiresLegacySidecar(t *testing.T) {
+	stateDir := t.TempDir()
+	writeMachineIdentity(t, stateDir)
+	writeRelayURL(t, stateDir, "ws://127.0.0.1:9999")
+	addPairedDevice(t, stateDir)
+	remoteDir := filepath.Join(stateDir, "remote")
+	writePushGatewayFile(t, stateDir, pushGatewayFile{
+		GatewayURL: "https://old-push.example.com", SubmitCapability: "old-submit",
+		MachineRevokeCapability: "old-revoke", PushAddress: hex.EncodeToString(bytes.Repeat([]byte{0x11}, 16)),
+	})
+
+	reg, err := device.Open(filepath.Join(stateDir, "devices"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs := reg.List()
+	if len(recs) != 1 {
+		t.Fatalf("registry count=%d", len(recs))
+	}
+	capability := func(fill byte) string {
+		return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{fill}, 32))
+	}
+	recs[0].Push = &device.PushBinding{
+		GatewayURL: "https://push-swarm.dsfactory.org", Address: bytes.Repeat([]byte{0x22}, 16),
+		SubmitCapability: capability(0x31), MachineRevokeCapability: capability(0x32),
+		WakeKey: bytes.Repeat([]byte{0x41}, 32), CapabilityRecordVersion: schema.CurrentCapabilityRecordVersion,
+		Transport: device.PushTransportGateway,
+	}
+	if err := reg.AddSole(recs[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	params, err := resolveGatewayParams(stateDir, "/tmp/remote.sock")
+	if err != nil {
+		t.Fatalf("committed registry authority was bricked by stale legacy sidecar: %v", err)
+	}
+	if params.PushGateway == nil || params.PushGateway.GatewayURL != recs[0].Push.GatewayURL ||
+		params.PushGateway.SubmitCapability != recs[0].Push.SubmitCapability {
+		t.Fatalf("runtime did not use committed registry authority: %+v", params.PushGateway)
+	}
+	if _, err := os.Stat(filepath.Join(remoteDir, "push-gateway.json")); !os.IsNotExist(err) {
+		t.Fatalf("legacy sidecar survived committed migration: %v", err)
 	}
 }
 

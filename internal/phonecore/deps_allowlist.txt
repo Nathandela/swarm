@@ -33,6 +33,11 @@ github.com/Nathandela/swarm/internal/phonecore
 github.com/Nathandela/swarm/internal/protocol/schema
 github.com/Nathandela/swarm/internal/status
 
+# --- shared Play registration request canonicalizer
+# This stdlib-only leaf is used by both phonecore and pushgw so the Play Integrity
+# requestHash cannot drift between handset preparation and server verification.
+github.com/Nathandela/swarm/internal/pushreg
+
 # --- the shared submit-boundary framing rule (ADR-010 Amendment 1 A2)
 # The coalescer's own frameLen/isSubmit, extracted verbatim so the daemon-side send_input
 # writer applies ONE copy of the r3p rule instead of a second that could drift. What ships

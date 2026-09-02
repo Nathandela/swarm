@@ -93,8 +93,18 @@ type App struct {
 	// EnsurePushRegistration, and pushClient is the gateway client built over the durable
 	// installation key. Both are guarded by mu; see pushgateway.go for why the token is
 	// stored at arrival and read at act time.
-	pushToken  string
-	pushClient *phonecore.GatewayClient
+	pushToken    string
+	pushClient   *phonecore.GatewayClient
+	pushAttestor PushAttestor
+	pushSigner   PushInstallationSigner
+	// pushProviderMu serializes the one-time reverse-bound provider installation with
+	// construction of the first GatewayClient.
+	pushProviderMu sync.Mutex
+	// pushCleanupWG owns the bounded startup/foreground revoker. running/cancel are guarded
+	// by mu; the worker never holds mu or pushProviderMu across gateway I/O.
+	pushCleanupWG      sync.WaitGroup
+	pushCleanupRunning bool
+	pushCleanupCancel  context.CancelFunc
 	// stateDir is the phone's private state directory. The core owns phone-state.json and
 	// device.key inside it; the facade keeps PB-PAIR-4's pairing-attempt record beside them
 	// (see mobile/pairing.go persist for why that one is not a State field).
@@ -317,6 +327,10 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 		return nil, err
 	}
 	a.core = core
+	if err := a.recoverPairingPushOwnership(); err != nil {
+		a.events.close()
+		return nil, err
+	}
 	// ADR-017 T6-f: every severance trigger must DROP the bytes the coalescer is holding,
 	// so the control-generation gate needs the buffer that actually exists. Bound here
 	// because the Core is constructed before the App's coalescer is reachable from it.
@@ -680,7 +694,11 @@ func (a *App) Close() (err error) {
 	}
 	machines := a.machines
 	a.machines = nil
+	pushCleanupCancel := a.pushCleanupCancel
 	a.mu.Unlock()
+	if pushCleanupCancel != nil {
+		pushCleanupCancel()
+	}
 
 	// The machines manager owns per-pairing clients and the aggregate-stream relay;
 	// closing it here is what lets drainAggregate terminate (machines.go).
@@ -716,6 +734,7 @@ func (a *App) Close() (err error) {
 		<-s.done
 	}
 	a.pairingWG.Wait()
+	a.pushCleanupWG.Wait()
 	a.suspendInput("the app closed")
 	a.events.close()
 	return nil

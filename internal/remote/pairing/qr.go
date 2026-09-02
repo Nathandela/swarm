@@ -24,6 +24,10 @@ const (
 	// QRFlagMachineStaticPub marks (in the flags byte) that the optional 32-byte
 	// machine_static_pub trailer is present.
 	QRFlagMachineStaticPub = 0x01
+	// QRFlagPushBinding advertises that this machine can negotiate the optional
+	// post-SAS push binding. Older phones preserve/ignore unknown flag bits and send
+	// an empty msg1, so a new machine still answers them with the legacy msg2 shape.
+	QRFlagPushBinding = 0x02
 	// QRMaxBytes is the hard size budget for the whole encoded string (R-PAIR.2).
 	QRMaxBytes = 200
 	// MaxRelayURLLen is the longest relay URL whose pairing QR can still be DRAWN on a

@@ -105,7 +105,7 @@ func scanGoreleaser(t *testing.T, path string) (builds []releaseBuild, archived 
 }
 
 // TestGoreleaser_ShipsGatewayAndRelay is PB-LIFE-6 + PB-OPS-4: the release matrix builds
-// swarm-remote and swarm-relay, each from its real main package, each landing in an
+// swarm-remote, swarm-relay, and swarm-pushgw, each from its real main package, each landing in an
 // archive. The gateway's binary name must match the name the supervision unit's ExecStart
 // will carry, or a released machine installs a unit pointing at nothing.
 func TestGoreleaser_ShipsGatewayAndRelay(t *testing.T) {
@@ -122,6 +122,7 @@ func TestGoreleaser_ShipsGatewayAndRelay(t *testing.T) {
 		"swarm":        "./cmd/swarm",
 		"swarm-remote": "./cmd/swarm-remote",
 		"swarm-relay":  "./cmd/swarm-relay",
+		"swarm-pushgw": "./cmd/swarm-pushgw",
 	}
 	for id, main := range want {
 		b, ok := byID[id]
@@ -176,7 +177,7 @@ func TestGoreleaser_ShipsGatewayAndRelay(t *testing.T) {
 // surface for the first time during a release.
 func TestReleaseBinaries_BuildStatically(t *testing.T) {
 	out := t.TempDir()
-	for _, pkg := range []string{"swarm", "swarm-remote", "swarm-relay"} {
+	for _, pkg := range []string{"swarm", "swarm-remote", "swarm-relay", "swarm-pushgw"} {
 		t.Run(pkg, func(t *testing.T) {
 			cmd := exec.Command("go", "build", "-o", filepath.Join(out, pkg), "github.com/Nathandela/swarm/cmd/"+pkg)
 			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")

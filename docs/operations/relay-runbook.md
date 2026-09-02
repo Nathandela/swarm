@@ -511,7 +511,7 @@ in one command, against a relay that is already running:
 ```bash
 swarm relay doctor --relay-pin "$(cat relay.pin.b64)" \
   --operator-secret-file operator.secret \
-  wss://relay.example.com
+  wss://relay-swarm.dsfactory.org
 ```
 
 Omit `--relay-pin` to dial under system trust roots (the ADR-016 `webpki` policy
@@ -552,7 +552,7 @@ exits `0` unless a step actually **fails** — a `skip`ped step (only Mailbox ro
 and only when `--operator-secret-file` is omitted) does not affect the exit code:
 
 ```
-DNS resolution       ok   relay.example.com -> 203.0.113.7
+DNS resolution       ok   relay-swarm.dsfactory.org -> 203.0.113.7
 TCP+TLS              ok   policy: system trust roots; issuer="R3" not-after=2026-11-01T00:00:00Z
 WebSocket upgrade     ok   101 Switching Protocols
 Protocol version     ok   negotiated version 1
@@ -563,7 +563,7 @@ Storage              ok   store writable; 42817728512 bytes free (>= 1073741824)
 Network-only (`--operator-secret-file` omitted), against the same healthy relay, still exits `0`:
 
 ```
-DNS resolution       ok   relay.example.com -> 203.0.113.7
+DNS resolution       ok   relay-swarm.dsfactory.org -> 203.0.113.7
 TCP+TLS              ok   policy: system trust roots; issuer="R3" not-after=2026-11-01T00:00:00Z
 WebSocket upgrade     ok   101 Switching Protocols
 Protocol version     ok   negotiated version 1

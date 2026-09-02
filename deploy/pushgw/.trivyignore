@@ -1,0 +1,2 @@
+# The only sanctioned image-scan waiver file. It intentionally contains no CVE
+# ids. Every future waiver must document applicability and an expiry date.

@@ -1,10 +1,12 @@
 package skeleton
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +65,11 @@ type coreAPI struct {
 	// (nil => time.Now).
 	devices *device.Registry
 	clock   func() time.Time
+	// pushRevokeCustody is the self-contained machine-side cleanup record for both
+	// pairing-before-enrollment and explicit registry deletion. The HTTP client is a
+	// bounded test seam; production uses the default client with caller deadlines.
+	pushRevokeCustody *machinePushCustody
+	pushHTTPClient    *http.Client
 
 	// launchPolicy is the machine-configured remote launch policy (allowed cwd roots,
 	// R-POL.3/.7), loaded at assembly. nil until wired; the assembly ALWAYS wires a
@@ -274,8 +281,19 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 		// (mirrors Registry.Remove's absent=false) and must NOT rotate the epoch. Under lifecycleMu
 		// this check is atomic with the rotation, so a second concurrent revoke of the same device
 		// finds it already gone here and does not rotate a second time (finding 4).
-		if _, ok := a.devices.Get(deviceID); !ok {
+		rec, ok := a.devices.Get(deviceID)
+		if !ok {
 			return false, false, nil
+		}
+		// Preserve exact gateway cleanup authority BEFORE the registry row that carries it
+		// can be deleted. A stopped sidecar or process crash can then redrive from custody.
+		if rec.Push != nil {
+			if a.pushRevokeCustody == nil {
+				return false, false, errors.New("push revoke custody is not configured")
+			}
+			if err := a.pushRevokeCustody.Stage(rec.DeviceID, *rec.Push); err != nil {
+				return false, false, fmt.Errorf("stage push revoke before device deletion: %w", err)
+			}
 		}
 		// Finding 3 (re-audit, crash-atomicity): ROTATE THE EPOCH BEFORE REMOVING the device so the
 		// invariant "device removed => epoch rotated" holds across a crash between the two. codex#1:
@@ -311,6 +329,18 @@ func (a *coreAPI) RevokeDevice(deviceID string) (bool, error) {
 		}
 		return true, shouldSever, derr
 	}()
+
+	// Network cleanup never runs under lifecycleMu. If the local transaction failed before
+	// deletion, reconciliation sees the still-matching registry row and clears the harmless
+	// stage without issuing DELETE. If deletion committed, it presents the exact revoke.
+	if a.pushRevokeCustody != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanupErr := reconcileMachinePushCustody(cleanupCtx, a.pushRevokeCustody, a.devices, a.pushHTTPClient)
+		cancel()
+		if cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("drive push revoke custody: %w", cleanupErr))
+		}
+	}
 
 	if shouldSever {
 		// C2a: this removal took the LAST device (Count was 0) -> remote control transitions to

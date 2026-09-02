@@ -408,6 +408,23 @@ func Serve(cfg Config) (*Daemon, error) {
 		return nil, err // defer'd cleanup tears down d.api + core
 	}
 	d.api.pairing = pc
+	pushCustody, err := openMachinePushCustody(cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	d.api.pushRevokeCustody = pushCustody
+	if pc != nil {
+		d.api.pushHTTPClient = pc.PushHTTPClient
+	}
+	// Redrive any allocation whose test wake bound at the provider but whose pairing did
+	// not commit. A matching registry row proves ownership and clears without a DELETE.
+	// Transient gateway failure leaves the self-contained record pending for the next
+	// restart; malformed custody already failed assembly above.
+	reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if rerr := reconcileMachinePushCustody(reconcileCtx, pushCustody, devReg, d.api.pushHTTPClient); rerr != nil {
+		log.Printf("swarm: pending pairing push revoke retained for retry: %v", rerr)
+	}
+	reconcileCancel()
 	// IS-LIFE-4: the coreAPI is what the protocol Server holds, and the approval lifecycle
 	// lives on the OUTER Daemon (approval.go's binding tuples ride d.itemMu). Handing the
 	// method across here is the same shape as sampleFn/captureFn -- the alternative, a

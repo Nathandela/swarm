@@ -201,11 +201,18 @@ func (l *countingLimiter) Allow() bool {
 // and a local console present.
 func newMachineParams(id *crypto.Identity, secret [32]byte, rid [16]byte, confirm ConfirmFunc) MachineParams {
 	return MachineParams{
-		Static:       id.NoiseStatic(),
-		Secret:       secret,
-		RendezvousID: rid,
-		LocalConsole: true,
-		Confirm:      confirm,
+		Static:             id.NoiseStatic(),
+		Secret:             secret,
+		RendezvousID:       rid,
+		LocalConsole:       true,
+		Confirm:            confirm,
+		PushBindingSupport: true,
+		StagePushBinding: func(context.Context, *PushBinding, DevicePayload) error {
+			return nil
+		},
+		VerifyPushBinding: func(context.Context, *PushBinding) error {
+			return nil
+		},
 		Payload: MachinePayload{
 			Hostname:            "test-machine.local",
 			MachineRoutingID:    []byte("machine-routing-id-0001"),

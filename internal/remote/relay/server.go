@@ -318,6 +318,7 @@ func New(cfg Config, opts ...Option) (*Server, error) {
 		return nil, err
 	}
 	s.st = st
+	st.configureAdmission(cfg.Quotas, s.clk, s.diskFreeFn)
 	// PB-PUSH-6: resume with the push tokens the previous run held. Fail closed on an
 	// unreadable tokens bucket rather than booting with an empty map, which would look
 	// exactly like a fleet that had never registered — silently push-less, with the loss
@@ -1109,6 +1110,8 @@ func (sc *serverConn) handleAuthorizeDevice(payload []byte) error {
 	// sc.rid itself placed (B24). See store.authorizePair.
 	switch err := sc.s.st.authorizePair(sc.rid, deviceRID, ceremonyID); {
 	case err == nil:
+	case isStorageAdmissionError(err):
+		return sc.replyErr(codeQuotaExceeded)
 	case errors.Is(err, errRetirementsFull):
 		// ADR-007 B61's cap on retained retirements. quota_exceeded rather than
 		// consent_retired because the credential is fine and the remedy is NOT "pair the
@@ -1186,6 +1189,9 @@ func (sc *serverConn) handleMailboxAppend(payload []byte) error {
 	}
 	cur, err := sc.s.st.appendItem(req.Target, sc.rid, req.Envelope, sc.s.clk.Now().UnixMilli())
 	if err != nil {
+		if isStorageAdmissionError(err) {
+			return sc.replyErr(codeQuotaExceeded)
+		}
 		return sc.replyErr(codeBadRequest)
 	}
 	// Wake the target's parked wait BEFORE replying: the appender's own round-trip
@@ -1344,6 +1350,9 @@ func (sc *serverConn) handleTokenRegister(payload []byte) error {
 	// Durable BEFORE the cache (PB-PUSH-6): a persist failure must leave the relay
 	// reporting the failure rather than holding a token that vanishes on restart.
 	if err := sc.s.st.putToken(sc.rid, req.Token); err != nil {
+		if isStorageAdmissionError(err) {
+			return sc.replyErr(codeQuotaExceeded)
+		}
 		return sc.replyErr(codeBadRequest)
 	}
 	sc.s.mu.Lock()

@@ -105,6 +105,13 @@ func r3aMachineParams(t *testing.T, secret [32]byte, rid [16]byte) pairing.Machi
 		Confirm: func(context.Context, [6]string, string) (bool, error) {
 			return true, nil
 		},
+		PushBindingSupport: true,
+		StagePushBinding: func(context.Context, *pairing.PushBinding, pairing.DevicePayload) error {
+			return nil
+		},
+		VerifyPushBinding: func(context.Context, *pairing.PushBinding) error {
+			return nil
+		},
 		Payload: pairing.MachinePayload{
 			Hostname:            "r3a-machine.local",
 			MachineRoutingID:    r3aFill(0x31, 16),
@@ -134,7 +141,8 @@ func r3aDeviceParams(t *testing.T, secret [32]byte, rid [16]byte, binding *pairi
 		Consent: func(m pairing.MachinePayload) ([]byte, error) {
 			return append([]byte("consent-for:"), m.MachineRelayAuthPub...), nil
 		},
-		PushBinding: binding,
+		RequestPushBinding: binding != nil,
+		PushBinding:        binding,
 		// ROUND 4: the revoke arm is MANDATORY beside a binding (ErrNoPushRevoke) -- msg4
 		// releases the wake key and both gateway capabilities before the machine decides,
 		// so a device with no way to take them back is refused before it releases anything.

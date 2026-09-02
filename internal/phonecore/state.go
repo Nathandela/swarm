@@ -177,7 +177,19 @@ import (
 // caller can manufacture this authenticated authority through Save or Mutate. The version bump
 // makes downgrade fail closed instead of silently dropping the predicate that decides whether a
 // restored session may expose chat or terminal control.
-const StateSchemaVersion = 17
+//
+// v20 adds pairing_push_owned, the exact staged push address whose ownership was accepted in
+// the SAME durable state transaction as the machine pin. The push binding itself lives in the
+// wake-tier push store, but that separate file cannot classify the pin->disposition crash
+// boundary: without this write-ahead phase, a SIGKILL after the pin and before a sidecar marker
+// leaves a pinned phone with an allocation startup can only guess whether to keep or revoke.
+// A v19 build would silently drop that ownership decision on its next state rewrite, so the
+// schema bump is mandatory rather than a compatible optional field.
+//
+// Versions 18 and 19 are reserved by the outbound-publication journal and its exact relay-key
+// authority binding respectively. This isolated delivery branch does not duplicate those
+// fields; integration applies their commits before this v20 delta.
+const StateSchemaVersion = 20
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -375,6 +387,13 @@ type State struct {
 	// A pointer distinguishes "never reconciled" from an authenticated legacy zero profile even
 	// though LastProfile intentionally returns the zero value for both.
 	lastProfile *schema.RemoteProfileV1
+
+	// pairingPushOwned is a write-ahead ownership decision for one staged push address.
+	// Only Core.MutateAndOwnStagedPushBinding may set it, atomically with a machine pin;
+	// callers cannot manufacture it through State or Mutate. It remains until the separate
+	// push store has durably removed its revoke obligation, making every crash boundary
+	// replayable: absent means revoke, present means finish adopting this exact address.
+	pairingPushOwned string
 
 	// LastHeardAt is the newest AAD-COVERED IssuedAt this phone has ACCEPTED from the
 	// machine, in unix milliseconds; zero means it has never heard from it (PB-APP-11).
@@ -605,6 +624,10 @@ type stateFile struct {
 	// while an object is the exact authority Reconcile adopted. Keeping the tag present makes
 	// StateSchemaVersion's pinned durable-field-set check mechanical.
 	LastProfile *schema.RemoteProfileV1 `json:"last_profile"`
+	// PairingPushOwned is cleartext synchronization metadata, not authority: the address is
+	// public and the wake key/capabilities remain sealed in push-state. It has no omitempty so
+	// the pinned durable-field-set fixture mechanically covers its presence in schema v20.
+	PairingPushOwned string `json:"pairing_push_owned"`
 
 	// WakeKey and ContentKey are SEALED blobs from v3 on, each under its own tier KEK
 	// (PB-KEY-9): one file cannot be opened two ways, and a content key the push path can
@@ -938,11 +961,14 @@ func (s *fileStore) saveLocked(st State) error {
 			wakeKey: wake.blob, contentKey: content.blob,
 			wakeState: wakeState.blob, kept: kept.blob, purgeable: purgeable.blob,
 		}
-		if err := persistState(s.path, merged, seals); err != nil {
-			return err
+		persistErr := persistState(s.path, merged, seals)
+		if persistErr != nil && !atomicWriteCommitted(persistErr) {
+			return persistErr
 		}
 		s.wakeTier, s.contentTier = wake, content
 		s.wakeState, s.kept, s.purgeable = wakeState, kept, purgeable
+		s.st = merged
+		return persistErr
 	}
 	s.st = merged
 	return nil
@@ -1164,7 +1190,9 @@ func (s *fileStore) RewindRelayCursor() error {
 	s.st.RelayIncarnation = ""
 	s.st.relayGen++
 	if err := s.saveLocked(s.st.clone()); err != nil {
-		s.st = previous
+		if !atomicWriteCommitted(err) {
+			s.st = previous
+		}
 		return err
 	}
 	return nil
@@ -1176,7 +1204,9 @@ func (s *fileStore) SetRelayIncarnation(incarnation string) error {
 	previous := s.st.clone()
 	s.st.RelayIncarnation = incarnation
 	if err := s.saveLocked(s.st.clone()); err != nil {
-		s.st = previous
+		if !atomicWriteCommitted(err) {
+			s.st = previous
+		}
 		return err
 	}
 	return nil
@@ -1425,6 +1455,11 @@ func (s *fileStore) load() error {
 	if f.DiscardRecoveryCompleted > f.DiscardRecoveryGeneration {
 		return fmt.Errorf("%w: %s: discard recovery completion exceeds generation", ErrCorruptState, path)
 	}
+	if f.PairingPushOwned != "" {
+		if _, err := decodePushAddress(f.PairingPushOwned); err != nil {
+			return fmt.Errorf("%w: %s: malformed pairing push ownership: %v", ErrCorruptState, path, err)
+		}
+	}
 	pendingRecovery := f.DiscardRecoveryGeneration > f.DiscardRecoveryCompleted
 	if pendingRecovery != (f.DiscardRecoveryToken != "") ||
 		(f.DiscardRecoveryToken != "" && !validPersistedRelayIncarnation(f.DiscardRecoveryToken)) {
@@ -1458,6 +1493,7 @@ func (s *fileStore) load() error {
 		PushPreference:            f.PushPreference,
 		ReconciledEpoch:           f.ReconciledEpoch,
 		lastProfile:               cloneRemoteProfilePtr(f.LastProfile),
+		pairingPushOwned:          f.PairingPushOwned,
 		GrantEpoch:                f.GrantEpoch,
 		GrantSeq:                  f.GrantSeq,
 		RelayCursor:               f.RelayCursor,
@@ -1717,6 +1753,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		PushPreference:            st.PushPreference,
 		ReconciledEpoch:           st.ReconciledEpoch,
 		LastProfile:               cloneRemoteProfilePtr(st.lastProfile),
+		PairingPushOwned:          st.pairingPushOwned,
 		WakeKey:                   seals.wakeKey,
 		ContentKey:                seals.contentKey,
 		WakeState:                 seals.wakeState,
@@ -1763,6 +1800,29 @@ func persistState(path string, st State, seals stateSeals) error {
 // phonecore cannot import (PB-BIND-0 binds this package's dependency closure). Without the
 // dir fsync a power loss could resurrect an OLDER blob, and a lower high-water re-opens
 // frames the relay retained -- precisely the replay this state exists to refuse.
+type atomicWriteError struct {
+	err       error
+	committed bool
+}
+
+func (e *atomicWriteError) Error() string { return e.err.Error() }
+func (e *atomicWriteError) Unwrap() error { return e.err }
+
+func atomicWriteCommitted(err error) bool {
+	var writeErr *atomicWriteError
+	return errors.As(err, &writeErr) && writeErr.committed
+}
+
+// syncPhonecoreDir is injected by durability tests at the exact post-rename boundary.
+var syncPhonecoreDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
+}
+
 func writeFileAtomic(path, tmpPattern string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -1792,10 +1852,8 @@ func writeFileAtomic(path, tmpPattern string, data []byte) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
+	if err := syncPhonecoreDir(dir); err != nil {
+		return &atomicWriteError{err: err, committed: true}
 	}
-	defer func() { _ = d.Close() }()
-	return d.Sync()
+	return nil
 }

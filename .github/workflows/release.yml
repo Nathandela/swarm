@@ -32,9 +32,13 @@ jobs:
     name: container (relay-container.yml, reused)
     uses: ./.github/workflows/relay-container.yml
 
+  container_pushgw:
+    name: container (pushgw-container.yml, reused)
+    uses: ./.github/workflows/pushgw-container.yml
+
   publish:
     name: publish (goreleaser release)
-    needs: [gates, container]
+    needs: [gates, container, container_pushgw]
     runs-on: ubuntu-latest
     permissions:
       contents: write

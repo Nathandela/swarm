@@ -28,6 +28,7 @@ val googleServicesConfigured = googleServicesConfig.asFile.isFile
 
 data class ProductionFirebaseConfig(
     val projectID: String,
+    val projectNumber: String,
     val packageName: String,
     val mobileSDKAppID: String,
 )
@@ -67,6 +68,11 @@ fun validatedProductionFirebaseConfig(): ProductionFirebaseConfig {
         "android/app/google-services.json does not name the production Firebase " +
             "project_id=swarm-8404f. Refusing to build the Play bundle."
     }
+    val projectNumber = jsonString(projectInfo["project_number"], "project_info.project_number")
+    check(projectNumber == "733314021126") {
+        "android/app/google-services.json does not name the Play Integrity linked " +
+            "project_number=733314021126. Refusing to build the Play bundle."
+    }
 
     val clients = root["client"] as? List<*>
         ?: throw GradleException(
@@ -103,6 +109,7 @@ fun validatedProductionFirebaseConfig(): ProductionFirebaseConfig {
 
     return ProductionFirebaseConfig(
         projectID = projectID,
+        projectNumber = projectNumber,
         packageName = packageName,
         mobileSDKAppID = mobileSDKAppID,
     )
@@ -152,6 +159,19 @@ fun operatorSetting(name: String): String? =
 fun releaseSigningSetting(suffix: String): String? = operatorSetting("SWARM_RELEASE_$suffix")
 
 val releaseKeystore: String? = releaseSigningSetting("KEYSTORE")
+val productionPushGatewayURL = "https://push-swarm.dsfactory.org"
+// Play Console's App signing key certificate, not the separate upload certificate. Google
+// returns this SHA-256 digest in base64url form in appIntegrity.
+val productionPlaySigningCertificateSHA256 =
+    "hz8YTGhTTgpYccjMiQDrhx5HcddqRsTu1HRcmhhknmU"
+val configuredPushGatewayURL = operatorSetting("SWARM_PUSH_GATEWAY_URL") ?: ""
+
+fun validatedProductionPushConfig() {
+    check(configuredPushGatewayURL == productionPushGatewayURL) {
+        "A Play release requires SWARM_PUSH_GATEWAY_URL=$productionPushGatewayURL. " +
+            "Refusing to publish a foreground-only or wrong-gateway bundle."
+    }
+}
 
 // A missing keystore must FAIL the release build. The usual idiom -- attach the signing
 // config only when the material is present -- produces an unsigned release APK and a green
@@ -185,6 +205,11 @@ val requireProductionFirebaseConfig = tasks.register("requireProductionFirebaseC
     }
 }
 
+val requireProductionPushConfig = tasks.register("requireProductionPushConfig") {
+    description = "Refuses a Play bundle without the production push and Integrity identities."
+    doLast { validatedProductionPushConfig() }
+}
+
 tasks.matching { it.name == "assembleRelease" }
     .configureEach { dependsOn(requireReleaseSigning) }
 
@@ -200,6 +225,7 @@ val writeProductionFirebaseProvenance = tasks.register("writeProductionFirebaseP
     dependsOn("signReleaseBundle")
     dependsOn(requireReleaseSigning)
     dependsOn(requireProductionFirebaseConfig)
+    dependsOn(requireProductionPushConfig)
 
     // cmd/swarm-publish refuses an AAB without this sidecar. The SHA-256 binds
     // the public Firebase identities to the exact signed bundle, so an operator
@@ -233,10 +259,13 @@ val writeProductionFirebaseProvenance = tasks.register("writeProductionFirebaseP
         provenanceFile.writeText(
             """
             {
-              "schema": 1,
+              "schema": 2,
               "project_id": "${firebaseConfig.projectID}",
+              "cloud_project_number": "${firebaseConfig.projectNumber}",
               "package_name": "${firebaseConfig.packageName}",
               "mobilesdk_app_id": "${firebaseConfig.mobileSDKAppID}",
+              "push_gateway_url": "$productionPushGatewayURL",
+              "play_signing_certificate_sha256": "$productionPlaySigningCertificateSHA256",
               "aab_sha256": "$aabSHA256"
             }
             """.trimIndent() + "\n",
@@ -247,6 +276,7 @@ val writeProductionFirebaseProvenance = tasks.register("writeProductionFirebaseP
 tasks.matching { it.name == "bundleRelease" }.configureEach {
     dependsOn(requireReleaseSigning)
     dependsOn(requireProductionFirebaseConfig)
+    dependsOn(requireProductionPushConfig)
     dependsOn(writeProductionFirebaseProvenance)
 }
 
@@ -498,7 +528,7 @@ android {
         // resValue rather than buildConfigField: this module does not enable the buildConfig
         // feature, and a string resource is read by the same Context every other configured
         // value on this side is.
-        resValue("string", "swarm_push_gateway_url", operatorSetting("SWARM_PUSH_GATEWAY_URL") ?: "")
+        resValue("string", "swarm_push_gateway_url", configuredPushGatewayURL)
     }
 
     signingConfigs {
@@ -634,6 +664,7 @@ dependencies {
     implementation(files(swarmAar))
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.firebase:firebase-messaging:24.1.2")
+    implementation("com.google.android.play:integrity:1.6.0")
 
     implementation("com.google.zxing:core:3.5.3")
     implementation("androidx.camera:camera-core:1.4.2")

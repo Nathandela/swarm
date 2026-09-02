@@ -50,6 +50,7 @@ func r3ar4Device(id *crypto.Identity, secret [32]byte, rid [16]byte, spy *r3ar4R
 	close(matched)
 	dp.DeviceSAS = shippedDeviceSAS(make(chan struct{}, 1), matched)
 	dp.PushBinding = r3ar2ValidBinding()
+	dp.RequestPushBinding = true
 	if spy != nil {
 		dp.RevokePushBinding = spy.fn()
 	}

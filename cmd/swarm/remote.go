@@ -153,6 +153,7 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 	relayPin := fs.String("relay-pin", "", "base64 SHA-256 of the relay certificate's SubjectPublicKeyInfo (see the relay runbook); mandatory under --relay-tls-policy pinned_spki, refused under webpki")
 	relayTLSPolicy := fs.String("relay-tls-policy", "", "relay TLS verification policy: webpki (default) or pinned_spki (ADR-016)")
 	relayPinCompat := fs.String("relay-pin-compat", "", "W9 compatibility SPKI pin published alongside --relay-tls-policy webpki, for handsets that predate ADR-016")
+	pushGatewayURL := fs.String("push-gateway-url", "", "public HTTPS push gateway origin advertised for negotiated phone pairing")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -161,6 +162,14 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
+	}
+	if err := relaycfg.ValidatePushGatewayURL(*pushGatewayURL); err != nil {
+		_, _ = fmt.Fprintf(stderr, "remote init: --push-gateway-url: %v\n", err)
+		return 1
+	}
+	if *pushGatewayURL != "" && *relayURL == "" {
+		_, _ = fmt.Fprintln(stderr, "remote init: --push-gateway-url requires --relay-url")
+		return 1
 	}
 
 	stateDir := os.Getenv(daemon.EnvStateDir)
@@ -221,10 +230,20 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *relayURL != "" {
+		effectivePushGatewayURL := *pushGatewayURL
+		if effectivePushGatewayURL == "" {
+			if existing, found, loadErr := relaycfg.Load(stateDir); loadErr != nil {
+				_, _ = fmt.Fprintf(stderr, "remote init: preserve push gateway config: %v\n", loadErr)
+				return 1
+			} else if found && existing.RelayURL == *relayURL {
+				effectivePushGatewayURL = existing.PushGatewayURL
+			}
+		}
 		if err := relaycfg.Save(stateDir, relaycfg.Config{
-			RelayURL:  *relayURL,
-			TLSPolicy: relayTLSPolicyEffective,
-			SPKIPin:   strings.TrimSpace(relaySPKIPinEffective),
+			RelayURL:       *relayURL,
+			PushGatewayURL: effectivePushGatewayURL,
+			TLSPolicy:      relayTLSPolicyEffective,
+			SPKIPin:        strings.TrimSpace(relaySPKIPinEffective),
 		}); err != nil {
 			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1

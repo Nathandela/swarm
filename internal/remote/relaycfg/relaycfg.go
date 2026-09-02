@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,10 @@ type Config struct {
 	// serving both, because it is also what `swarm remote pair` puts in the QR verbatim
 	// (PB-PAIR-7), so a machine reachable only over loopback cannot pair a handset.
 	RelayURL string `json:"relay_url"`
+	// PushGatewayURL is the public bare HTTPS origin both peers are provisioned to use
+	// for negotiated push bindings. It carries no capability or address; those authorities
+	// exist only in the authenticated pairing transcript and sole device registry row.
+	PushGatewayURL string `json:"push_gateway_url,omitempty"`
 	// TLSPolicy is ADR-016 W1's named relay TLS policy (PolicyWebPKI or PolicyPinnedSPKI),
 	// authored by `swarm remote init --relay-tls-policy` and published to the phone
 	// verbatim (pairing.MachinePayload.RelayTLSPolicy, RemoteProfileV1.RelayTLSPolicy).
@@ -104,11 +109,17 @@ func Load(stateDir string) (cfg Config, found bool, err error) {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return Config{}, true, fmt.Errorf("parse %s: %w", FileName, err)
 	}
+	if err := ValidatePushGatewayURL(cfg.PushGatewayURL); err != nil {
+		return Config{}, true, fmt.Errorf("parse %s: %w", FileName, err)
+	}
 	return cfg, true, nil
 }
 
 // Save writes relay.json at 0600, creating <stateDir>/remote if needed.
 func Save(stateDir string, cfg Config) error {
+	if err := ValidatePushGatewayURL(cfg.PushGatewayURL); err != nil {
+		return err
+	}
 	dir := filepath.Join(stateDir, Dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -118,6 +129,24 @@ func Save(stateDir string, cfg Config) error {
 		return err
 	}
 	return os.WriteFile(path(stateDir), b, 0o600)
+}
+
+// ValidatePushGatewayURL accepts an absent endpoint (foreground/legacy mode) or one bare
+// HTTPS origin. Paths, credentials, query/fragment and whitespace are refused before the
+// endpoint can be advertised in a pairing QR.
+func ValidatePushGatewayURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if strings.TrimSpace(raw) != raw {
+		return fmt.Errorf("push_gateway_url has surrounding whitespace")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("push_gateway_url must be an https bare origin")
+	}
+	return nil
 }
 
 // Security is the transport policy this machine's dials run under: relay.MachineSecurity

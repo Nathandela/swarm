@@ -10,19 +10,16 @@ package swarmmobile
 // already reach (PushTokens.register: SwarmApplication's initial getToken, and
 // SwarmMessagingService.onNewToken's rotation).
 //
-// WHAT IS DELIBERATELY NOT HERE, so nobody reads the gap as an oversight:
+// Android installs Play Integrity and its Keystore P-256 signer through
+// ConfigurePushRegistration immediately after NewApp. A platform/build that does not install
+// both retains the named fail-closed path below: it enrolls nothing and remains foreground-only.
+// No fake verdict or exportable fallback authority is minted.
 //
-//   - PLAY INTEGRITY. The gateway refuses an unattested registration (PG-AUTH-11/13) and the
-//     verdict provider is owner-console setup this repository cannot do. The attestor below
-//     therefore REFUSES BY NAME rather than inventing a token: a fabricated verdict is
-//     simulated data in production code, and it would turn a refusal an operator can act on
-//     into a 403 nobody can explain. A build with no attestation provider is honestly
-//     foreground-only, which is the same graceful-and-loud shape PB-PUSH-5 already requires
-//     of an absent Firebase project.
-//   - THE PAIRING CONVEYANCE. Allocating an address and putting the binding in msg4 is gated
-//     on a machine-side capability signal that does not exist yet (see
-//     pairing.DeviceParams.PushBinding's MIXED-VERSION OBLIGATION); wiring it without that
-//     signal breaks every mixed-version pair.
+// PAIRING CONVEYANCE IS HERE TOO. preparePairingPushBinding runs only after the QR msg1/msg2
+// negotiation authenticated machine support, allocates and stages immediately before msg4,
+// and returns the exact rollback arm pairing.RunDevice invokes on every non-accept outcome.
+// A legacy QR, short code, old machine, unregistered phone, or build without the two platform
+// authorities stays on the byte-compatible foreground path and allocates nothing.
 //
 // The gateway URL crosses on Config, exactly like the relay URL: the phone core has no
 // durable field for either, and the Android side supplies both at construction.
@@ -31,15 +28,23 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/remote/pairing"
 )
 
 // pushRegisterTimeout bounds one registration round trip. Both callers are background
 // callbacks with no user present, so the bound exists to stop a dead radio pinning an
 // Android thread, not to make anybody wait less.
-const pushRegisterTimeout = 30 * time.Second
+const (
+	pushRegisterTimeout       = 30 * time.Second
+	pushPairingCleanupTimeout = 10 * time.Second
+)
+
+var pushPairingCleanupBackoffs = []time.Duration{0, 250 * time.Millisecond, time.Second, 4 * time.Second}
 
 var (
 	// errNoPushGateway is a build with no gateway endpoint configured. It is an ERROR and
@@ -49,8 +54,8 @@ var (
 		"swarmmobile: no push gateway is configured for this build; the phone works without "+
 			"push and will not receive background wakes"))
 
-	// errPushAttestationParked is the ONE external this slice cannot supply. See the file
-	// comment: a named refusal, never a fabricated verdict token.
+	// errPushAttestationParked is the explicit fallback when a platform installed no real
+	// providers. It is a named refusal, never a fabricated verdict token.
 	errPushAttestationParked = classed(ErrClassOffline, errors.New(
 		"swarmmobile: no app attestation provider is configured for this build, and the push "+
 			"gateway refuses an unattested registration (PG-AUTH-11/13); the phone works "+
@@ -145,14 +150,85 @@ func (a *App) EnsurePushRegistration(token string) (err error) {
 		return errNoPushGateway
 	}
 
-	client, cerr := a.pushGatewayClient(core, url)
+	client, cerr := a.pushGatewayClient(url)
 	if cerr != nil {
 		return cerr
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pushRegisterTimeout)
 	defer cancel()
 	_, rerr := core.EnsurePushRegistration(ctx, client, a.currentPushToken)
+	if rerr == nil {
+		a.schedulePendingPairingPushRevokes()
+	}
 	return rerr
+}
+
+// schedulePendingPairingPushRevokes starts one bounded cleanup worker when startup or a
+// foreground token callback discovers durable failed-pairing obligations. It never waits
+// under App.mu, pushProviderMu, or Core.mu. A permanently unavailable gateway leaves the
+// marker intact after bounded backoff; the next foreground/configure trigger safely retries.
+func (a *App) schedulePendingPairingPushRevokes() {
+	if a == nil || a.core == nil || a.core.PushInstallationID() == "" || len(a.core.PendingPushBindingRevocations()) == 0 {
+		return
+	}
+	a.mu.Lock()
+	if a.closed || a.pushCleanupRunning || a.pushGatewayURL == "" || a.pushAttestor == nil || a.pushSigner == nil {
+		a.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.pushCleanupRunning = true
+	a.pushCleanupCancel = cancel
+	a.pushCleanupWG.Add(1)
+	url := a.pushGatewayURL
+	a.mu.Unlock()
+
+	go a.runPendingPairingPushRevokes(ctx, url)
+}
+
+func (a *App) runPendingPairingPushRevokes(ctx context.Context, url string) {
+	defer a.pushCleanupWG.Done()
+	defer func() {
+		a.mu.Lock()
+		a.pushCleanupRunning = false
+		a.pushCleanupCancel = nil
+		a.mu.Unlock()
+	}()
+	client, err := a.pushGatewayClient(url)
+	if err != nil {
+		return
+	}
+	for _, backoff := range pushPairingCleanupBackoffs {
+		if backoff > 0 {
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+			}
+		}
+		if a.drainPendingPairingPushRevokes(ctx, client) == nil {
+			return
+		}
+	}
+}
+
+func (a *App) drainPendingPairingPushRevokes(parent context.Context, client *phonecore.GatewayClient) error {
+	for _, pending := range a.core.PendingPushBindingRevocations() {
+		ctx, cancel := context.WithTimeout(parent, pushPairingCleanupTimeout)
+		err := client.RevokeAddress(ctx, pending)
+		cancel()
+		if err != nil {
+			return err
+		}
+		if err := a.core.CompleteStagedPushRevoke(pending); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // currentPushToken is the core's TokenSource: the newest token any caller has handed this
@@ -170,11 +246,108 @@ func (a *App) currentPushToken() (string, error) {
 	return a.pushToken, nil
 }
 
+// preparePairingPushBinding is the phone half of the negotiated msg4 extension. It is
+// deliberately called lazily by pairing.RunDevice immediately before msg4: allocating
+// before the SAS gate would release a live public address for every abandoned scan.
+//
+// A configured URL is not enough. Both Android production authorities and an accepted
+// installation must already exist, otherwise this phone is honestly foreground-only and
+// returns a nil binding without touching the gateway. Every allocation is paired with a
+// sealed compensation marker before it can leave the process.
+func (a *App) preparePairingPushBinding(ctx context.Context) (*pairing.PushBinding, func(), error) {
+	core, err := a.ready()
+	if err != nil {
+		return nil, nil, err
+	}
+	a.mu.Lock()
+	url := a.pushGatewayURL
+	productionProviders := a.pushAttestor != nil && a.pushSigner != nil
+	a.mu.Unlock()
+	if url == "" || !productionProviders || core.PushInstallationID() == "" {
+		return nil, nil, nil
+	}
+	client, err := a.pushGatewayClient(url)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// A killed earlier ceremony may have left an allocation whose key was already
+	// erased locally. Clear those obligations before minting another address so repeated
+	// failures cannot accumulate live public objects.
+	for _, pending := range core.PendingPushBindingRevocations() {
+		if err := client.RevokeAddress(ctx, pending); err != nil {
+			return nil, nil, err
+		}
+		if err := core.CompleteStagedPushRevoke(pending); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	alloc, err := client.AllocateAddress(ctx, core.PushInstallationID())
+	if err != nil {
+		return nil, nil, err
+	}
+	wakeKey, err := phonecore.NewPairingWakeKey()
+	if err != nil {
+		revokePairingAllocation(client, alloc.Address)
+		return nil, nil, err
+	}
+	if err := core.StagePushBinding(alloc.Address, wakeKey); err != nil {
+		revokePairingAllocation(client, alloc.Address)
+		return nil, nil, err
+	}
+
+	binding := &pairing.PushBinding{
+		WakeKey:                 append([]byte(nil), wakeKey[:]...),
+		PushAddress:             append([]byte(nil), alloc.Address[:]...),
+		SubmitCapability:        alloc.SubmitCapability,
+		MachineRevokeCapability: alloc.MachineRevokeCapability,
+		CapabilityRecordVersion: schema.CurrentCapabilityRecordVersion,
+	}
+	var once sync.Once
+	rollback := func() {
+		once.Do(func() {
+			// Once the pin+ownership transaction has landed, this allocation belongs to
+			// the pinned phone even if the final acknowledgement is lost. RunDevice calls
+			// rollback on every post-msg4 error, so consult durable classification rather
+			// than revoking an address whose acceptance is already locally committed.
+			owned, found, err := core.PairingPushOwnership()
+			if err != nil {
+				return // fail closed: an unreadable ownership phase is never authority to revoke
+			}
+			if found && owned == alloc.Address {
+				return
+			}
+			if !core.StagedPushBindingPending(alloc.Address) {
+				return
+			}
+			// Erase first and durably retain the revoke obligation. The network leg is
+			// detached from the pairing context because that context is normally already
+			// cancelled on exactly the paths that call this rollback.
+			_ = core.AbandonStagedPushBinding(alloc.Address)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), pushPairingCleanupTimeout)
+			defer cancel()
+			if err := client.RevokeAddress(cleanupCtx, alloc.Address); err == nil {
+				_ = core.CompleteStagedPushRevoke(alloc.Address)
+			}
+		})
+	}
+	return binding, rollback, nil
+}
+
+func revokePairingAllocation(client *phonecore.GatewayClient, addr phonecore.PushAddress) {
+	ctx, cancel := context.WithTimeout(context.Background(), pushPairingCleanupTimeout)
+	defer cancel()
+	_ = client.RevokeAddress(ctx, addr)
+}
+
 // pushGatewayClient returns the one client this App uses, building it on first need. It is
 // cached because the client carries the clock offset PG-AUTH-3's server_time taught it: a
 // fresh client per call would re-learn a handset's clock skew on every registration, one
 // wasted round trip at a time.
-func (a *App) pushGatewayClient(core *phonecore.Core, url string) (*phonecore.GatewayClient, error) {
+func (a *App) pushGatewayClient(url string) (*phonecore.GatewayClient, error) {
+	a.pushProviderMu.Lock()
+	defer a.pushProviderMu.Unlock()
 	a.mu.Lock()
 	if a.pushClient != nil {
 		defer a.mu.Unlock()
@@ -182,14 +355,24 @@ func (a *App) pushGatewayClient(core *phonecore.Core, url string) (*phonecore.Ga
 	}
 	a.mu.Unlock()
 
-	// Built with a.mu RELEASED: minting the installation key seals and rewrites the push
-	// container, which takes the core's own lock and reaches Keystore through the wake-tier
-	// sealer.
-	signer, err := core.InstallationSigner()
-	if err != nil {
-		return nil, err
+	// Built with a.mu RELEASED: the legacy fallback can seal and rewrite the push
+	// container. Production installs both reverse-bound providers before this path runs.
+	a.mu.Lock()
+	platformAttestor, platformSigner := a.pushAttestor, a.pushSigner
+	a.mu.Unlock()
+	var signer phonecore.InstallationSigner
+	attest := parkedAttestor
+	if platformAttestor != nil && platformSigner != nil {
+		signer = platformSigner
+		attest = func(requestHash [32]byte) (string, error) {
+			return platformAttestor.Attest(append([]byte(nil), requestHash[:]...))
+		}
+	} else {
+		// No production authorities means no registration can pass attestation. Do not mint
+		// an exportable Go private key merely to reach that named refusal.
+		signer = parkedInstallationSigner{}
 	}
-	client := phonecore.NewGatewayClient(url, signer, parkedAttestor, nil)
+	client := phonecore.NewGatewayClient(url, signer, attest, nil)
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -199,8 +382,14 @@ func (a *App) pushGatewayClient(core *phonecore.Core, url string) (*phonecore.Ga
 	return a.pushClient, nil
 }
 
-// parkedAttestor is the Play Integrity seam with no provider behind it (see the file
-// comment). It refuses; it does not invent.
+// parkedAttestor is the fail-closed no-provider path. It refuses; it does not invent.
 func parkedAttestor(_ [32]byte) (string, error) {
 	return "", errPushAttestationParked
+}
+
+type parkedInstallationSigner struct{}
+
+func (parkedInstallationSigner) PublicKey() []byte { return nil }
+func (parkedInstallationSigner) Sign([]byte) ([]byte, error) {
+	return nil, errPushAttestationParked
 }

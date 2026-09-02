@@ -48,22 +48,15 @@ nothing that serves. `docs/operations/relay-runbook.md` section 0 says the same.
 proxy terminating real TLS in front of a loopback-only relay is not one option among several — it
 is the only way to get `wss://` at all.
 
-**This document overrides a standing security recommendation, and that is recorded here rather than
-left as a silent contradiction.** `docs/ops/play-closed-testing-application.md` §0 says to run the
-relay on a **private** network for the closed test — localhost, Tailscale, WireGuard or an SSH
-tunnel — because every per-identity bound in the relay is a bound on nothing when minting an
-identity is free, and global per-bucket caps and connection-rate admission control are recorded as
-production blockers and are **not** done. Standing it up on the public internet, as everything below
-does, is a deliberate departure: a handset on cellular cannot reach a LAN relay, and the app carries
-no VPN or tunnel client of its own, so a publicly reachable `wss://` endpoint is the only thing such
-a phone can dial. What you accept in exchange is that any stranger who reaches the hostname can mint
-identities freely and grow `relay.db` without bound, and **the hostname is not a secret**: Caddy gets
-its certificate through ACME, and every ACME issuance is published in Certificate Transparency logs
-within minutes, so the name is discoverable by anyone watching a CT feed and obscurity is not a
-defence. Take the recommendation instead whenever the handset is on Wi-Fi you control; when you
-cannot, restrict inbound 443 to known addresses if your provider's firewall allows it, and alarm on
-`relay.db` size — unexpected growth is the first symptom of every defect in this class, and there
-have been five.
+**Public exposure is bounded, not trusted.** A relay identity remains free to mint, so per-identity
+limits alone are not an abuse boundary. The shipped configuration therefore adds gateway-wide
+admission: `max_durable_objects`, `durable_growth_writes_per_min`, `max_db_bytes`, global and
+per-source connection bounds, plus `disk_free_min_bytes`. A growth transaction that crosses a
+limit rolls back atomically while acknowledgements, purge, token deletion, and revoke remain
+available to recover capacity. These controls bound storage/write exhaustion; they do not
+authenticate strangers or make the hostname secret. ACME publishes the name in Certificate
+Transparency, so keep monitoring and edge filtering in place and prefer a private network for
+closed tests that do not require cellular reachability.
 
 ---
 
@@ -227,7 +220,7 @@ step itself, only over `swarm-relay` and the config it consumes.
 
 ## 7. Install the Caddyfile and point DNS
 
-Edit `deploy/relay/Caddyfile`, replacing `relay.example.com` with your real domain — **keep it
+`deploy/relay/Caddyfile` ships with `relay-swarm.dsfactory.org` — **keep any replacement
 short** (§11 explains why, precisely), then copy it to `/etc/caddy/Caddyfile`:
 
 ```bash
@@ -238,7 +231,7 @@ Create an `A` (or `AAAA`) record at your DNS provider pointing that domain at th
 and wait for it to resolve:
 
 ```bash
-dig +short relay.example.com
+dig +short relay-swarm.dsfactory.org
 ```
 
 Caddy will not obtain a certificate for a name that does not yet resolve to this host.
@@ -246,7 +239,7 @@ Caddy will not obtain a certificate for a name that does not yet resolve to this
 ## 8. Verify reachability
 
 ```bash
-curl -i --http1.1 --max-time 5 https://relay.example.com/
+curl -i --http1.1 --max-time 5 https://relay-swarm.dsfactory.org/
 ```
 
 Expect:
@@ -285,7 +278,7 @@ topology — Caddy manages the certificate and its private key itself. Compute t
 `docs/operations/relay-runbook.md` section 6 verifies one: against the **live** endpoint.
 
 ```bash
-openssl s_client -connect relay.example.com:443 -servername relay.example.com </dev/null 2>/dev/null |
+openssl s_client -connect relay-swarm.dsfactory.org:443 -servername relay-swarm.dsfactory.org </dev/null 2>/dev/null |
   openssl x509 -pubkey -noout |
   openssl pkey -pubin -outform der |
   openssl dgst -sha256 -binary | openssl base64
@@ -332,7 +325,7 @@ them.**
 guessing is not necessary:
 
 ```bash
-openssl s_client -connect relay.example.com:443 -servername relay.example.com </dev/null 2>/dev/null |
+openssl s_client -connect relay-swarm.dsfactory.org:443 -servername relay-swarm.dsfactory.org </dev/null 2>/dev/null |
   openssl x509 -noout -issuer -subject -dates -fingerprint -sha256
 ```
 
@@ -399,7 +392,7 @@ proxy in front of Caddy (see §12) isn't quietly mangling it:
 ```bash
 python3 - <<'PY'
 import base64, hashlib, os, socket, ssl
-HOST, PORT = "relay.example.com", 443
+HOST, PORT = "relay-swarm.dsfactory.org", 443
 ctx = ssl.create_default_context()  # a real ACME cert: verify it properly, unlike the LAN runbook's pin-only check
 tls = ctx.wrap_socket(socket.create_connection((HOST, PORT)), server_hostname=HOST)
 key = base64.b64encode(os.urandom(16)).decode()
@@ -418,8 +411,8 @@ Expect `HTTP/1.1 101 Switching Protocols | accept ok: True`.
 ## 11. Provision the machine
 
 ```bash
-swarm remote init --relay-url wss://relay.example.com --relay-pin "$(
-  openssl s_client -connect relay.example.com:443 -servername relay.example.com </dev/null 2>/dev/null |
+swarm remote init --relay-url wss://relay-swarm.dsfactory.org --relay-pin "$(
+  openssl s_client -connect relay-swarm.dsfactory.org:443 -servername relay-swarm.dsfactory.org </dev/null 2>/dev/null |
     openssl x509 -pubkey -noout |
     openssl pkey -pubin -outform der |
     openssl dgst -sha256 -binary | openssl base64
@@ -433,7 +426,7 @@ swarm remote init --relay-url wss://relay.example.com --relay-pin "$(
 > **default** flow, needing nothing to compute and nothing to pin, is now:
 >
 > ```bash
-> swarm remote init --relay-url wss://relay.example.com --relay-tls-policy webpki
+> swarm remote init --relay-url wss://relay-swarm.dsfactory.org --relay-tls-policy webpki
 > ```
 >
 > (also the default with the flag omitted entirely). And a machine inside the ADR-016
@@ -442,9 +435,9 @@ swarm remote init --relay-url wss://relay.example.com --relay-pin "$(
 > migrated build stops consulting the pin (W3):
 >
 > ```bash
-> swarm remote init --relay-url wss://relay.example.com \
+> swarm remote init --relay-url wss://relay-swarm.dsfactory.org \
 >   --relay-tls-policy webpki --relay-pin-compat "$(
->     openssl s_client -connect relay.example.com:443 -servername relay.example.com </dev/null 2>/dev/null |
+>     openssl s_client -connect relay-swarm.dsfactory.org:443 -servername relay-swarm.dsfactory.org </dev/null 2>/dev/null |
 >       openssl x509 -pubkey -noout |
 >       openssl pkey -pubin -outform der |
 >       openssl dgst -sha256 -binary | openssl base64
@@ -464,7 +457,7 @@ before anything is written to disk, today:
 
 - **`--relay-url` is capped at 39 characters** (`pairing.MaxRelayURLLen`) because it rides verbatim
   into the pairing QR, which is why the domain in this doc's examples is kept short.
-  `wss://relay.example.com` is 23 characters; omit an explicit `:443` (the default for `wss://`) to
+  `wss://relay-swarm.dsfactory.org` is 31 characters; omit an explicit `:443` (the default for `wss://`) to
   keep every character you can.
 - **`--relay-pin` is refused outright on a `ws://` URL** (`validateRelayPin`) — cleartext presents
   no certificate, so a pin on it could never be checked. Once R2 ships, the same refusal extends to
@@ -571,7 +564,8 @@ transport layer.
 cd deploy/relay
 cp relay.config.example relay.config   # the shipped defaults already match the compose
                                         # topology's listen/admin_listen addresses
-# edit relay.example.com in ./Caddyfile to your real domain (same requirement as §7)
+# production hostname is relay-swarm.dsfactory.org (same requirement as §7)
+export RELAY_VERSION=v0.13.15          # replace with the reviewed immutable release tag
 docker compose build
 docker compose up -d
 docker compose ps                      # swarm-relay should read "healthy"
@@ -590,7 +584,8 @@ how the two processes are packaged and supervised differs.
 
 **Added by wave R2 (playbook §6.5), 2026-08-15.** The relay serves `/healthz` (process up) and
 `/readyz` (bbolt store writable, public listener accepting, free disk above
-`quotas.disk_free_min_bytes`) on `admin_listen` — a SEPARATE, loopback-only port from the public
+`quotas.disk_free_min_bytes`, durable objects below `max_durable_objects`, and bbolt below
+`max_db_bytes`) plus aggregate `/metrics` on `admin_listen` — a SEPARATE, loopback-only port from the public
 `listen` address, refused outright by `Start` if pointed anywhere else
 (`internal/remote/relay/health.go`). This is not new attack surface on the public protocol: the
 doctor rule (playbook §6.5, `swarm relay doctor`) — no privileged unauthenticated endpoint on the
@@ -606,7 +601,9 @@ sudo -u swarm-relay /opt/swarm-relay/bin/swarm-relay healthcheck --config /etc/s
 
 Falling below `quotas.disk_free_min_bytes` (1 GiB shipped default) fails `/readyz` and logs one
 bounded warning per transition into the low state — never once per poll, since an orchestrator
-healthcheck hits this every few seconds for the container's whole life.
+healthcheck hits this every few seconds for the container's whole life. Reaching the global durable
+object or database ceiling also fails readiness. `/metrics` exposes aggregate occupancy, growth,
+and refusal reasons only; it contains no relay identity, mailbox, token, source address, or payload.
 
 ### 14b. The generated operator secret
 

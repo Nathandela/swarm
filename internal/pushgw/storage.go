@@ -73,11 +73,18 @@ type tombstoneRecord struct {
 
 // store wraps the single bbolt file plus the gateway-local at-rest encryption key.
 type store struct {
-	db  *bolt.DB
-	key [32]byte
+	db      *bolt.DB
+	key     [32]byte
+	dbPath  string
+	keyPath string
 }
 
 func openStore(dbPath, keyPath string) (*store, error) {
+	if _, err := os.Stat(restoreMarkerPath(dbPath)); err == nil {
+		return nil, fmt.Errorf("pushgw: interrupted restore for %s; rerun the restore command before opening the gateway", dbPath)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("pushgw: inspect restore marker: %w", err)
+	}
 	db, err := bolt.Open(dbPath, 0o600, &bolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("pushgw: open %s: %w", dbPath, err)
@@ -99,10 +106,48 @@ func openStore(dbPath, keyPath string) (*store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &store{db: db, key: key}, nil
+	return &store{db: db, key: key, dbPath: dbPath, keyPath: keyPath}, nil
 }
 
 func (s *store) close() error { return s.db.Close() }
+
+func (s *store) healthCheck() error {
+	if err := s.db.Update(func(*bolt.Tx) error { return nil }); err != nil {
+		return fmt.Errorf("database not writable: %w", err)
+	}
+	onDiskKey, err := os.ReadFile(s.keyPath)
+	if err != nil {
+		return fmt.Errorf("AEAD key unavailable: %w", err)
+	}
+	if len(onDiskKey) != len(s.key) {
+		return fmt.Errorf("AEAD key has size %d, want %d", len(onDiskKey), len(s.key))
+	}
+	if !bytes.Equal(onDiskKey, s.key[:]) {
+		return errors.New("AEAD key on disk does not match the key loaded by this process")
+	}
+	return nil
+}
+
+type storeMetrics struct {
+	DBBytes       int64
+	Installations int
+	Addresses     int
+	Tombstones    int
+}
+
+func (s *store) metrics() storeMetrics {
+	var out storeMetrics
+	if info, err := os.Stat(s.dbPath); err == nil {
+		out.DBBytes = info.Size()
+	}
+	_ = s.db.View(func(tx *bolt.Tx) error {
+		out.Installations = tx.Bucket(bucketInstallations).Stats().KeyN
+		out.Addresses = tx.Bucket(bucketAddresses).Stats().KeyN
+		out.Tombstones = tx.Bucket(bucketTombstones).Stats().KeyN
+		return nil
+	})
+	return out
+}
 
 // --- at-rest encryption (PG-RET-5) -----------------------------------------------------
 

@@ -3,6 +3,7 @@ package dev.swarm.phone
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.http.X509TrustManagerExtensions
+import android.util.Log
 import dev.swarm.phone.keys.AndroidKeyInfoReader
 import dev.swarm.phone.keys.AndroidKeystoreAlgorithms
 import dev.swarm.phone.keys.AndroidKeystoreProvisioner
@@ -21,6 +22,8 @@ import dev.swarm.phone.keys.KeystoreKeyCustody
 import dev.swarm.phone.keys.PersistentCustodyBacking
 import dev.swarm.phone.keys.SealedStore
 import dev.swarm.phone.relay.RelayTrustImpl
+import dev.swarm.phone.push.AndroidInstallationSigner
+import dev.swarm.phone.push.PlayIntegrityAttestor
 import dev.swarm.phone.ui.ErrorRouter
 import dev.swarm.phone.ui.RoutedError
 import dev.swarm.phone.ui.SwarmErrorTokens
@@ -255,8 +258,27 @@ class PhoneRuntime(private val context: Context) {
             machineID = ""
         }
         val app = Swarmmobile.newApp(config, KeystoreKeyCustody(store))
+        installPushRegistration(app)
         installRelayTrust(app)
         return app
+    }
+
+    private fun installPushRegistration(app: App) {
+        try {
+            app.configurePushRegistration(
+                PlayIntegrityAttestor(context),
+                AndroidInstallationSigner(),
+            )
+        } catch (failure: Exception) {
+            // Push is optional to the foreground product, but absence must be diagnosable.
+            // The Go fallback remains fail-closed and refuses registration by name.
+            Log.w(
+                TAG,
+                "Play Integrity or Android Keystore push authority unavailable; " +
+                    "the phone remains foreground-only",
+                failure,
+            )
+        }
     }
 
     /**
@@ -476,6 +498,7 @@ class PhoneRuntime(private val context: Context) {
     private val coreDir: File get() = File(runtimeDir, "phone-core")
 
     private companion object {
+		private const val TAG = "SwarmPush"
         const val RELAY_FILE = "relay-url"
     }
 }

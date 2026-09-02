@@ -1,24 +1,30 @@
 package device
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 // devicesFile is the single durable registry file under the registry directory.
 const devicesFile = "devices.json"
 
 // registrySchemaVersion stamps the on-disk envelope for forward migration.
-const registrySchemaVersion = 1
+const registrySchemaVersion = 2
 
 // DeviceIDFor derives the canonical device id from the device's Ed25519
 // command-signing public key: the hex SHA-256 of the key. It is deterministic and
@@ -55,6 +61,27 @@ type Record struct {
 	// relay is the authority that verifies it and a record that merely fails there is a
 	// re-pair, not a corrupt registry.
 	ConsentSig []byte `json:"consent_sig,omitempty"`
+	// Push is the authenticated, per-pairing push binding conveyed in msg4. Keeping it
+	// inside the registry record makes device admission and its runtime push authority one
+	// atomic rename: no process can observe a paired device with another pairing's address
+	// or wake key. Nil is the legacy/foreground-compatible record shape.
+	Push *PushBinding `json:"push,omitempty"`
+}
+
+// PushTransportGateway is the only transport a persisted PushBinding may select. A
+// legacy or foreground-only pairing carries no PushBinding at all.
+const PushTransportGateway = "gateway"
+
+// PushBinding is the machine's durable half of the authenticated msg4 extension.
+// WakeKey is phone-generated per pairing and deliberately independent of epoch keys.
+type PushBinding struct {
+	GatewayURL              string `json:"gateway_url"`
+	Address                 []byte `json:"address"`
+	SubmitCapability        string `json:"submit_capability"`
+	MachineRevokeCapability string `json:"machine_revoke_capability"`
+	WakeKey                 []byte `json:"wake_key"`
+	CapabilityRecordVersion int    `json:"capability_record_version"`
+	Transport               string `json:"transport"`
 }
 
 // envelope is the versioned on-disk container so the format can migrate forward.
@@ -104,12 +131,19 @@ func Open(dir string) (*Registry, error) {
 	// schema could change a record's meaning (e.g. add a revoked flag or narrow a
 	// capability), and silently ignoring the unknown fields would grant authority the
 	// writer did not intend. An unstamped (0) file was never legitimately written.
-	if env.SchemaVersion != registrySchemaVersion {
+	if env.SchemaVersion != 1 && env.SchemaVersion != registrySchemaVersion {
 		return nil, fmt.Errorf("device: registry %s schema version %d unsupported (want %d)", r.path, env.SchemaVersion, registrySchemaVersion)
 	}
+	migrateV1 := env.SchemaVersion == 1
 	// A pre-existing file may have a loosened mode; reharden it to 0600.
 	_ = os.Chmod(r.path, 0o600)
 	for _, rec := range env.Devices {
+		// Schema v1 predates Push. Even if a newer/hostile writer spliced a JSON field
+		// under the old stamp, v1 carries no semantics authorizing it: migrate only the
+		// identity record and deliberately invent no push authority.
+		if migrateV1 {
+			rec.Push = nil
+		}
 		// A persisted record with an invalid key or capability is rejected loudly
 		// rather than admitted -- the registry is the R-POL.9 authorization
 		// authority, so a malformed identity must never load (fail-closed).
@@ -117,6 +151,11 @@ func Open(dir string) (*Registry, error) {
 			return nil, fmt.Errorf("device: invalid persisted record %q: %w", rec.DeviceID, err)
 		}
 		r.byID[rec.DeviceID] = cloneRecord(rec)
+	}
+	if migrateV1 {
+		if _, err := r.persistLocked(); err != nil {
+			return nil, fmt.Errorf("device: migrate registry %s from schema v1: %w", r.path, err)
+		}
 	}
 	return r, nil
 }
@@ -156,6 +195,56 @@ func validateRecord(rec Record) error {
 	}
 	if !rec.Capability.valid() {
 		return fmt.Errorf("invalid capability %d", uint8(rec.Capability))
+	}
+	if rec.Push != nil {
+		if err := ValidatePushBinding(*rec.Push); err != nil {
+			return fmt.Errorf("invalid push binding: %w", err)
+		}
+	}
+	return nil
+}
+
+// ValidatePushBinding validates the complete authority-bearing record before either the
+// pairing protocol accepts it or the registry persists it. Sharing this boundary prevents a
+// phone from receiving acceptance for a shape enrollment will reject one frame later.
+func ValidatePushBinding(push PushBinding) error {
+	if strings.TrimSpace(push.GatewayURL) != push.GatewayURL {
+		return errors.New("gateway URL has surrounding whitespace")
+	}
+	u, err := url.Parse(push.GatewayURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return errors.New("gateway URL must be an https bare origin")
+	}
+	if len(push.Address) != 16 {
+		return fmt.Errorf("address must be 16 bytes, got %d", len(push.Address))
+	}
+	if len(push.WakeKey) != 32 {
+		return fmt.Errorf("wake key must be 32 bytes, got %d", len(push.WakeKey))
+	}
+	decodeCapability := func(name, encoded string) ([]byte, error) {
+		raw, err := base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil || len(raw) != 32 {
+			return nil, fmt.Errorf("%s must be 32 base64url bytes", name)
+		}
+		return raw, nil
+	}
+	submit, err := decodeCapability("submit capability", push.SubmitCapability)
+	if err != nil {
+		return err
+	}
+	revoke, err := decodeCapability("machine revoke capability", push.MachineRevokeCapability)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(submit, revoke) {
+		return errors.New("submit and machine revoke capabilities must be distinct")
+	}
+	if push.CapabilityRecordVersion != schema.CurrentCapabilityRecordVersion {
+		return fmt.Errorf("capability record version must be %d", schema.CurrentCapabilityRecordVersion)
+	}
+	if push.Transport != PushTransportGateway {
+		return fmt.Errorf("transport must be %q", PushTransportGateway)
 	}
 	return nil
 }
@@ -361,5 +450,11 @@ func cloneRecord(rec Record) Record {
 	rec.RecipientPub = append([]byte(nil), rec.RecipientPub...)
 	rec.RoutingID = append([]byte(nil), rec.RoutingID...)
 	rec.ConsentSig = append([]byte(nil), rec.ConsentSig...)
+	if rec.Push != nil {
+		push := *rec.Push
+		push.Address = append([]byte(nil), rec.Push.Address...)
+		push.WakeKey = append([]byte(nil), rec.Push.WakeKey...)
+		rec.Push = &push
+	}
 	return rec
 }

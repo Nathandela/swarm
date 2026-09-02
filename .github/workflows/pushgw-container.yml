@@ -1,0 +1,68 @@
+name: pushgw-container
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: swarm-pushgw:ci
+
+jobs:
+  image:
+    name: build, scan, non-root, hardening
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build push gateway image
+        run: docker build -f deploy/pushgw/Dockerfile -t "$IMAGE" .
+
+      - name: Vulnerability scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: swarm-pushgw:ci
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: deploy/pushgw/.trivyignore
+
+      - name: Assert non-root execution
+        run: |
+          user="$(docker inspect --format '{{.Config.User}}' "$IMAGE")"
+          case "$user" in
+            ''|0|root|0:*|root:*) exit 1 ;;
+          esac
+
+      - name: Validate Compose and service hardening
+        working-directory: deploy/pushgw
+        env:
+          PUSHGW_VERSION: v0.13.15
+        run: |
+          docker compose config > rendered.yml
+          python3 - <<'PY'
+          import sys, yaml
+          services = yaml.safe_load(open("rendered.yml"))["services"]
+          failed = False
+          for name, service in sorted(services.items()):
+              caps = service.get("cap_drop") or []
+              options = service.get("security_opt") or []
+              checks = [
+                  (service.get("read_only") is True, "read_only"),
+                  ("ALL" in caps, "cap_drop ALL"),
+                  (any("no-new-privileges" in str(v) for v in options), "no-new-privileges"),
+              ]
+              for ok, label in checks:
+                  if not ok:
+                      print(f"FAIL: {name} missing {label}")
+                      failed = True
+          sys.exit(1 if failed else 0)
+          PY
