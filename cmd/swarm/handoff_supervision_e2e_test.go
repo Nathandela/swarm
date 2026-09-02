@@ -23,6 +23,7 @@ import (
 )
 
 func TestHandoffSupervision_PassiveChildWakesSourceThroughRealBinaries(t *testing.T) {
+	useTempHandoffRoot(t) // the in-process handoff verb copies into os.TempDir; keep it out of the real /tmp
 	if testing.Short() {
 		t.Skip("spawns a real daemon + sessions")
 	}
