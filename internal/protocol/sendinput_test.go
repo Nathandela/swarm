@@ -850,3 +850,46 @@ func TestSendInput_SpecLockstep(t *testing.T) {
 		}
 	})
 }
+
+// TestSendInput_InputGateRefusesBeforeFirstByte pins the assembly-owned input
+// gate (ADR-023 amendment 1): while a session's automatic compaction is in
+// flight, the typed-input choke point refuses BEFORE any byte reaches the
+// PTY -- `swarm send` and supervisor notifications ride the same sendMessage
+// path. nil (the default) gates nothing.
+func TestSendInput_InputGateRefusesBeforeFirstByte(t *testing.T) {
+	d := newSendInputDaemon()
+	d.setMetas(statusMeta("sess1", status.TurnIdle, status.InteractionNone))
+	sock := tmpSock(t)
+	srv, err := Serve(d, sock)
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	srv.SetInputGateFunc(func(local string) error {
+		if local == "sess1" {
+			return errors.New("session is compacting its context; nothing was typed")
+		}
+		return nil
+	})
+	rc := rawDial(t, sock)
+	rep := rc.hello(Version, nil)
+	sid := rep.EndpointID + "/sess1"
+	rc.writeControl(Control{Op: OpSendInput, EndpointID: rep.EndpointID, SessionID: sid, SendInput: &SendInputReq{Text: "hello", Submit: true}})
+	got := nextControl(t, rc)
+	if got.Op != OpError || !strings.Contains(got.Error, "compacting") {
+		t.Fatalf("gated send_input = op %q error %q; want the gate's refusal", got.Op, got.Error)
+	}
+	if n := d.attachCount(); n != 0 {
+		t.Fatalf("a gated send_input opened %d upstream streams; the refusal must precede the first byte", n)
+	}
+	// The supervisor's daemon-authored path is the same choke point.
+	if err := srv.SendInput("sess1", SendInputReq{Text: "notify", Submit: true}); err == nil || !strings.Contains(err.Error(), "compacting") {
+		t.Fatalf("daemon-authored SendInput bypassed the gate: err=%v", err)
+	}
+	// Clearing the gate restores the path.
+	srv.SetInputGateFunc(nil)
+	rc.writeControl(Control{Op: OpSendInput, EndpointID: rep.EndpointID, SessionID: sid, SendInput: &SendInputReq{Text: "hello", Submit: true}})
+	if got := nextControl(t, rc); got.Op == OpError {
+		t.Fatalf("ungated send_input still refused: %q", got.Error)
+	}
+}

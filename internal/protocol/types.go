@@ -76,6 +76,12 @@ const (
 	// turned off. The desired enabled state rides on Control.RemoteControl.
 	OpRemoteSetControl = "remote_set_control"
 
+	// OpContextGuardGet / OpContextGuardSet are owner-tier operations over the
+	// daemon-global context-guard settings document (ADR-023 D3). They deliberately
+	// do not start a context-guard worker; this is settings/protocol foundation only.
+	OpContextGuardGet = "context_guard_get"
+	OpContextGuardSet = "context_guard_set"
+
 	// OpTakeControl is the signed remote MUTATING op (slice A5-a) that acquires a
 	// controller lease on a session — the anti-abuse gate that must precede any remote
 	// keystroke reaching a session. It runs through requireRemoteAuthz like every other
@@ -196,6 +202,9 @@ const (
 	// the `handoff_from` launch option). Older daemons do not negotiate it, so a new
 	// CLI cannot silently degrade to a bare, context-free launch.
 	CapHandsOffHandoff = "hands-off-handoff"
+	// CapContextGuardSettings keeps a new owner settings operation from silently
+	// degrading against an older daemon that would otherwise only know version 1.
+	CapContextGuardSettings = "context-guard-settings"
 )
 
 // The closed spawn-intent vocabulary (ADR-010 D4), re-exported from the schema
@@ -221,19 +230,23 @@ const (
 // the daemon, the shim and the VT emulator into the bound Android app
 // (docs/specifications/remote-phaseB-requirements.md 4.2, ADR-007 Decision 2).
 type (
-	Control             = schema.Control
-	TerminalSnapshot    = schema.TerminalSnapshot
-	ApproveReq          = schema.ApproveReq
-	AgentInstanceRef    = schema.AgentInstanceRef
-	SessionView         = schema.SessionView
-	DeviceView          = schema.DeviceView
-	PolicyView          = schema.PolicyView
-	PairingControl      = schema.PairingControl
-	LaunchReq           = schema.LaunchReq
-	ReconcileRecord     = schema.ReconcileRecord
-	SendInputReq        = schema.SendInputReq
-	RemoteProfileV1     = schema.RemoteProfileV1
-	SessionCapabilities = schema.SessionCapabilities
+	Control                    = schema.Control
+	TerminalSnapshot           = schema.TerminalSnapshot
+	ApproveReq                 = schema.ApproveReq
+	AgentInstanceRef           = schema.AgentInstanceRef
+	SessionView                = schema.SessionView
+	DeviceView                 = schema.DeviceView
+	PolicyView                 = schema.PolicyView
+	PairingControl             = schema.PairingControl
+	LaunchReq                  = schema.LaunchReq
+	ReconcileRecord            = schema.ReconcileRecord
+	SendInputReq               = schema.SendInputReq
+	RemoteProfileV1            = schema.RemoteProfileV1
+	SessionCapabilities        = schema.SessionCapabilities
+	ContextGuardAutoCompact    = schema.ContextGuardAutoCompact
+	ContextGuardSettings       = schema.ContextGuardSettings
+	ContextGuardSettingsSetReq = schema.ContextGuardSettingsSetReq
+	ContextGuardView           = schema.ContextGuardView
 )
 
 // The wire schema now has two spellings (protocol.X and schema.X) and Go gives them no
@@ -251,6 +264,13 @@ var _ Control = schema.Control{}
 // silent signature-verification failures with no compile error, so there is exactly one.
 var LaunchContentHash = schema.LaunchContentHash
 
+// ValidateContextGuardAutoCompact is the shared syntactic policy boundary for the
+// owner request and durable store. It deliberately wraps, rather than exposes a mutable
+// function variable pointing at, the daemon-free schema implementation.
+func ValidateContextGuardAutoCompact(autoCompact ContextGuardAutoCompact) error {
+	return schema.ValidateContextGuardAutoCompact(autoCompact)
+}
+
 // Event is the client-facing subscribe payload: one status-changed session view.
 type Event struct {
 	Session SessionView
@@ -259,6 +279,29 @@ type Event struct {
 // ErrIncompatibleVersion is returned by Dial on a protocol-version mismatch. Its
 // message names `swarm daemon restart` and states the restart is safe (D-8).
 var ErrIncompatibleVersion = errors.New("protocol: incompatible daemon version")
+
+// These sentinel errors make a context-guard settings client failure stable across
+// human-readable server messages. Unavailable is fail-closed: callers must not treat
+// a corrupt/future on-disk document as permission to overwrite it.
+var (
+	ErrContextGuardSettingsStaleRevision = errors.New("protocol: stale context guard settings revision")
+	ErrContextGuardSettingsUnavailable   = errors.New("protocol: context guard settings unavailable")
+)
+
+// ContextGuardSettingsBackend is an OPTIONAL owner-tier backend seam. DaemonAPI stays
+// frozen; a daemon that does not implement this interface reports unavailable instead
+// of manufacturing settings it cannot durably own.
+type ContextGuardSettingsBackend interface {
+	ContextGuardSettings() (ContextGuardSettings, error)
+	SetContextGuardSettings(expectedRevision uint64, autoCompact ContextGuardAutoCompact) (ContextGuardSettings, error)
+}
+
+// ContextGuardViewBackend is an OPTIONAL, read-only roster seam. Implementations
+// return only the sanitized/coalesced view; provider payloads and raw errors stay
+// below the protocol boundary.
+type ContextGuardViewBackend interface {
+	ContextGuardView(sessionID string) (ContextGuardView, bool)
+}
 
 // SessionStream is the daemon's single pipe to one session's shim: a snapshot, a
 // live output stream, and the input/resize/close controls. The Server opens

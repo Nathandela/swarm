@@ -123,6 +123,7 @@ func TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatal("device mailbox has no epoch_grant_bootstrap frame after delivery")
+		return // unreachable; spelled out for staticcheck SA5011 (2026-09-01 lint drift)
 	}
 	if found.EpochID != seeded.EpochID || found.GrantSeq != seeded.GrantSeq ||
 		string(found.Sealed) != string(seeded.Sealed) || string(found.Sig) != string(seeded.Sig) {

@@ -84,6 +84,13 @@ type Control struct {
 	GateToken       string          `json:"gate_token,omitempty"`        // take_control: one-shot gate token bound into the device signature via content_hash and made single-use (A5-c)
 	RemoteControl   *bool           `json:"remote_control,omitempty"`    // remote_set_control: the DESIRED remote-control master state (true=on, false=manual off). Pointer so false is transmittable and a zero Control emits no key (A4)
 
+	// ContextGuardSettings carries the current daemon-global context-guard policy on
+	// context_guard_get/context_guard_set. ContextGuardSet is the CAS request body.
+	// Both are owner-tier-only and capability-negotiated; pointer carriers preserve the
+	// byte shape of every pre-ADR-023 Control frame.
+	ContextGuardSettings *ContextGuardSettings       `json:"context_guard_settings,omitempty"`
+	ContextGuardSet      *ContextGuardSettingsSetReq `json:"context_guard_set,omitempty"`
+
 	Terminal *TerminalSnapshot `json:"terminal,omitempty"` // server-rendered terminal snapshot, carried on terminal_snapshot (A7 slice B)
 
 	// TerminalView is the SAME snapshot, versioned (ADR-017 T4/T4-a/T8-a). It rides the SAME
@@ -303,6 +310,21 @@ type SessionView struct {
 	// structured_chat=false. The phone renders from this record and infers nothing from
 	// whether a transcript happens to be empty (T2 rule 3).
 	Capabilities *SessionCapabilities `json:"capabilities,omitempty"`
+	// ContextGuard is live, sanitized daemon state for a provider whose context
+	// occupancy can be observed exactly. It is absent for unsupported harnesses,
+	// older daemons, and every remote-tier roster. No provider payload or raw error
+	// is allowed onto this wire surface.
+	ContextGuard *ContextGuardView `json:"context_guard,omitempty"`
+}
+
+// ContextGuardView is the bounded roster projection of one guard. UsagePercent
+// is display-only; policy decisions continue to use exact token arithmetic.
+type ContextGuardView struct {
+	UsagePercent int    `json:"usage_percent"`
+	Support      string `json:"support"`
+	Phase        string `json:"phase"`
+	LastResult   string `json:"last_result,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
 }
 
 // DeviceView is one paired-device row (R-DEV.1), carried on the device_list

@@ -182,6 +182,11 @@ type LaunchSpec struct {
 	// session — the replay reuses the reserved session and spawns nothing. Local
 	// launches leave it "" (no idempotency reservation).
 	OperationID string
+	// AuthIdentity is the provider-account identity the agent is being launched
+	// under (ADR-024). The assembly resolves it from the adapter's AuthProbe and
+	// the credentials on disk — exactly as it resolves Argv — and the daemon only
+	// stamps it into meta.AuthIdentity.
+	AuthIdentity string
 }
 
 // session is the daemon's live handle on one session: its last-known meta plus a

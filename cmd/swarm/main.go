@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|doctor|upgrade|version]
+const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|doctor|relogin|upgrade|version]
 
   swarm            open the TUI
   swarm daemon     run the session daemon
@@ -82,6 +82,9 @@ const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|reattach|ls|watch|ki
   swarm peek       print a session's current screen <session> [--lines N]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)
+  swarm relogin    recycle sessions stranded by a provider re-login
+                   ([--dry-run] [--force] [--auto on|off]; the daemon's
+                    watcher does this automatically -- this is the manual face)
   swarm upgrade    check, --stage, --activate, --rollback, or --unattended
                    (signature + checksum verified; activation defers around
                     live sessions and hands off to the new binary's converge;
@@ -130,6 +133,11 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		// NOT dispatchAgentVerb: that seam ensures a daemon (D-1), and doctor's
 		// whole contract is that it never starts one (see doctor.go's header).
 		return runDoctor(args[1:], stdout, stderr)
+	case "relogin":
+		// The manual face of the ADR-024 auth watcher: needs Delete (which
+		// agentClient lacks) plus the state dir for its local reads, so it
+		// carries its own thin dispatch.
+		return dispatchRelogin(args[1:], stdout, stderr)
 	case "upgrade":
 		// Same posture as doctor: the transaction stages, never activates, and
 		// never starts a daemon.
@@ -265,7 +273,7 @@ func clientConfig() (daemon.ClientConfig, error) {
 // attachDialer's per-attach dial deliberately does NOT use this set: it offers
 // {"attach"} and never submits a launch.
 func tuiCaps() []string {
-	return []string{"attach", "subscribe", protocol.CapHandsOffHandoff}
+	return []string{"attach", "subscribe", protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings}
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected

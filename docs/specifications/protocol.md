@@ -94,6 +94,8 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `ttl_seconds`      | int               | `take_control`: caller-requested control-session lifetime (seconds), clamped server-side (A5-b) |
 | `gate_token`       | string            | `take_control`: one-shot gate token bound into the device signature via `content_hash` and made single-use (A5-c) |
 | `remote_control`   | `*bool`           | `remote_set_control`: the DESIRED remote-control master state (true=on, false=manual off), owner-tier only (A4) |
+| `context_guard_settings` | `*ContextGuardSettings` | daemon-global context-guard settings reply, carried on `context_guard_get` / `context_guard_set` (ADR-023) |
+| `context_guard_set` | `*ContextGuardSettingsSetReq` | owner CAS request body for `context_guard_set`, carrying expected revision and auto-compact policy (ADR-023) |
 | `terminal`         | `*TerminalSnapshot` | server-rendered terminal snapshot, carried on `terminal_snapshot` (A7 slice B) |
 | `send_input`       | `*SendInputReq`     | `send_input`: one owner-tier steering message for `session_id`, owner-tier only (ADR-010 A2) |
 | `body_version`     | int                 | R1 refusal-ops (`session_launch`/`composer_send`/`operation_status`/`turn_interrupt`/`terminal_control_begin`/`terminal_control_end`): the profile version the phone bound this op to (`RemoteProfileV1.accepted_body_versions`); there is no version `0` (Wave R1 skeleton, playbook §6.3) |
@@ -203,6 +205,7 @@ alongside the group.
 | `supervision`   | string          | the persisted supervision mode of a handoff child: `passive`, `manual` or `none` (ADR-010 Amendment 3 C1); absent when none |
 | `supervision_pending` | bool      | an attention event of this handoff child awaits its source; live supervisor state, sampled like `remote_controlled` (ADR-010 Amendment 3 C5); absent when false |
 | `capabilities`  | `*SessionCapabilities` | daemon-authored per-session capability record (ADR-017 T2), absent on an older daemon or a session not yet stamped -- see "The `SessionCapabilities` record" below. Shares its wire name with `Control.capabilities` (the hello negotiated-capability list); the two are unrelated fields of unrelated messages that happen to share a name, and the GG-7 drift check treats the key as documented once it has one row |
+| `context_guard` | `*ContextGuardView` | optional owner-tier-only live guard projection for exactly supported sessions: integer `usage_percent`, `support`, `phase`, optional stable `last_result`, and optional stable `error_code`; absent for remote-tier rosters and never carries raw provider data (ADR-023) |
 
 ## The `LaunchReq` message
 
@@ -237,6 +240,19 @@ tier when `external-resume` was negotiated during `hello`; it is refused with
 validates the canonical identity, composes the adapter's resume argv, persists the
 identity with the launch, and reuses an existing row with the same provider and
 identity. The two resume keys are mutually exclusive.
+
+A `resume_from` launch inherits the SOURCE's persisted launch options beneath the
+request's own (request keys win), so a resumed session keeps its `model` and
+`sandbox` without the client restating them (ADR-024 side-fix). The reserved
+orchestration keys — `resume_from`, `handoff_from`, `resume_conversation_id`,
+`worktree` and the dev-only `script` — never chain: in particular a resumed
+session is NEVER re-isolated into a fresh worktree, whatever the source opted
+into. The new session is seeded with the source's conversation identity before
+launch, and a source that already has a RUNNING resumed child yields that child
+instead of a duplicate (one live resume per source; the same launch replayed
+returns the same session). A remote preset therefore observes options on the
+resumed session beyond those the preset itself named — they are the source's own
+persisted options, same trust domain, never client-supplied at resume time.
 
 A third option key is reserved for the hands-off handoff (ADR-010 Amendment 4).
 `handoff_from` carries the NAMESPACED id of the SOURCE session whose conversation
@@ -1122,3 +1138,15 @@ endpoint, is rejected before the daemon is touched. No message field references 
 transport-specific construct (a socket path, socket address, peer credential, or
 file-descriptor handoff), so a future non-UDS transport can reuse these schemas
 unchanged (F-2).
+
+### Context guard settings (ADR-023)
+
+The owner-tier-only `context_guard_get` and `context_guard_set` operations require the
+negotiated `context-guard-settings` capability. Their additive bodies are
+`context_guard_settings` (the current versioned settings document) and
+`context_guard_set` (the compare-and-swap request). The document carries
+`schema_version`, `revision`, and `auto_compact`; the set body carries
+`expected_revision`, while `auto_compact` carries `enabled` and `threshold_percent`.
+The only accepted schema version is 1 and the threshold is an inclusive integer 40..95.
+Remote-tier callers are refused before body or backend access. A stale CAS is
+`stale_revision`; a missing or untrustworthy backend/document is `unavailable`.

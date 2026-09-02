@@ -193,6 +193,17 @@ func (d *Daemon) composerLaneFor(local string) *composerLane {
 	return lane.(*composerLane)
 }
 
+// withAuthRecycleFence gives the automatic credential recycler one FIFO position in the
+// session's composer lane. Every already-admitted send completes before attempt; every later
+// send waits until attempt has either refused or issued the kill. The attempt itself performs
+// the final status/controller/ContextGuard revalidation at this queue head.
+func (d *Daemon) withAuthRecycleFence(local string, attempt func() error) error {
+	lane := d.composerLaneFor(local)
+	lane.enter()
+	defer lane.leave()
+	return attempt()
+}
+
 // enter assigns an explicit FIFO ticket and returns when that ticket is at the head. The
 // bookkeeping lock is released during provider I/O so later arrivals can take their place in
 // the queue; only the serving ticket executes. A plain mutex is not sufficient as a product
@@ -216,6 +227,16 @@ func (l *composerLane) endStop() {
 	}
 	l.ready.Broadcast()
 	l.mu.Unlock()
+}
+
+// uncertainNow reports whether the lane holds an unresolved composer outcome.
+// The context guard's dispatch revalidation reads it at its queue head
+// (ADR-023 D6): an automatic compaction never rides over an operation whose
+// effect on the provider is still undecided.
+func (l *composerLane) uncertainNow() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.uncertain
 }
 
 func (l *composerLane) barrierChanged(admitted uint64) bool {
@@ -249,6 +270,16 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 	defer lane.leave()
 	if lane.barrierChanged(admittedBarrier) {
 		return protocol.CodeStaleTurn, errIsLife5("composer send was queued before Stop completed; nothing was sent")
+	}
+	// The composer lane orders WRITES; a ContextGuard compaction has an EFFECT
+	// window that outlives its write (ADR-023 amendment 1), and the 2026-09-01
+	// gates prove a stimulus written into that window destroys the compaction,
+	// the message, or both. Same remedy as an unclean input line: nothing is
+	// wrong with the caller or the message, and the same words a moment later
+	// will land.
+	if d.contextGuardCompactionInFlight(local) {
+		return protocol.CodeInputBusy, errIsLife5(
+			"session %q is compacting its context, so this message was not written; nothing was sent", req.Session)
 	}
 	if _, ok := d.core.Get(local); !ok {
 		return protocol.CodeInvalidField, errIsLife5(

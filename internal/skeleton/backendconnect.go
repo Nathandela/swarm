@@ -186,7 +186,7 @@ func (d *Daemon) connectBackendsForRunning() {
 // absence of exactly that is why round 3 shipped two blockers in these twenty lines.
 func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	expectedInstance, _ := d.sessionInstance(id)
-	conn, err := d.dialSessionBackend(id, ch)
+	conn, feed, err := d.dialSessionBackend(id, expectedInstance, ch)
 	if err != nil {
 		log.Printf("skeleton: session %s backend unavailable: %v", id, err)
 		// §R7.7 case 1: this session will NEVER have a structured plane. The gap is emitted
@@ -232,12 +232,12 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	// Round 3 registered below the resume, and the resume cannot succeed until a turn starts,
 	// and no turn can start because resolveMessageSink finds no backend: a closed loop that
 	// made the wave's exit criterion structurally unreachable on the ORDINARY fresh launch.
-	if !d.registerBackendForInstance(id, expectedInstance, threadID, conn) {
+	if !d.registerBackendFeedForInstance(id, expectedInstance, threadID, conn, feed) {
 		_ = conn.Close()
 		d.noteBackendUnavailable(id)
 		return
 	}
-	go d.watchSessionBackend(id, conn)
+	go d.watchSessionBackend(id, conn, feed.epoch)
 	if subscribed {
 		d.markBackendSubscribed(id)
 		// RULING 1's honest arm, and the only success path that still emits a gap.
@@ -266,7 +266,7 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 		return // already joined by the launch path; a rejoin would open a second connection
 	}
 	expectedInstance, _ := d.sessionInstance(id)
-	conn, err := d.dialSessionBackend(id, ch)
+	conn, feed, err := d.dialSessionBackend(id, expectedInstance, ch)
 	if err != nil {
 		// The shim outlived this daemon but its backend did not, or its socket is gone. The
 		// current structured plane is unavailable and history must say so: without this the
@@ -291,12 +291,12 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 		return
 	}
 	d.adoptBackendThread(id, threadID)
-	if !d.registerBackendForInstance(id, expectedInstance, threadID, conn) {
+	if !d.registerBackendFeedForInstance(id, expectedInstance, threadID, conn, feed) {
 		_ = conn.Close()
 		d.noteBackendUnavailable(id)
 		return
 	}
-	go d.watchSessionBackend(id, conn)
+	go d.watchSessionBackend(id, conn, feed.epoch)
 	// A REJOIN NEVER GAPS ON PRIOR HISTORY, AND THAT SILENTLY BRIDGES THE DOWNTIME WINDOW.
 	// Stated honestly (pre-commit correction, 2026-08-20), because the earlier wording here --
 	// "this thread's earlier turns were captured by the daemon that launched it and are in the
@@ -466,9 +466,10 @@ func (d *Daemon) discoverLoadedThread(conn backendConn) (string, error) {
 // JSON-RPC endpoint and completes the boot handshake. IT STARTS NO THREAD: which thread this
 // session is on is the AGENT's to decide, and the two callers above learn it in the two ways
 // their situations allow.
-func (d *Daemon) dialSessionBackend(id string, ch daemon.BackendChannel) (*appserver.Client, error) {
+func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.BackendChannel) (*appserver.Client, *backendFeed, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.backendDeadline())
 	defer cancel()
+	feed := newBackendFeed()
 
 	var conn *appserver.Client
 	var err error
@@ -479,10 +480,16 @@ func (d *Daemon) dialSessionBackend(id string, ch daemon.BackendChannel) (*appse
 			// and a server-request differ only in whether an id rides along, and the pump
 			// reads that off the frame itself, so both arrive here as the same verbatim bytes.
 			OnNotify: func(method string, params json.RawMessage) {
-				d.ingestBackendFrame(id, rebuildFrame(method, nil, params), time.Now().UnixMilli())
+				at := time.Now()
+				frame := rebuildFrame(method, nil, params)
+				d.captureContextGuardFrame(id, expectedInstance, feed, method, frame, at)
+				d.ingestBackendFrame(id, frame, at.UnixMilli())
 			},
 			OnRequest: func(rid json.RawMessage, method string, params json.RawMessage) {
-				d.ingestBackendFrame(id, rebuildFrame(method, rid, params), time.Now().UnixMilli())
+				at := time.Now()
+				frame := rebuildFrame(method, rid, params)
+				d.captureContextGuardFrame(id, expectedInstance, feed, method, frame, at)
+				d.ingestBackendFrame(id, frame, at.UnixMilli())
 			},
 		})
 		if err == nil {
@@ -490,7 +497,7 @@ func (d *Daemon) dialSessionBackend(id string, ch daemon.BackendChannel) (*appse
 		}
 		select {
 		case <-ctx.Done():
-			return nil, err
+			return nil, nil, err
 		case <-time.After(backendReadyInterval):
 		}
 	}
@@ -503,24 +510,39 @@ func (d *Daemon) dialSessionBackend(id string, ch daemon.BackendChannel) (*appse
 		"capabilities": map[string]any{"experimentalApi": true, "requestAttestation": false},
 	}, &initRes); cerr != nil {
 		_ = conn.Close()
-		return nil, cerr
+		return nil, nil, cerr
 	}
 	if nerr := conn.Notify(ctx, "initialized", map[string]any{}); nerr != nil {
 		_ = conn.Close()
-		return nil, nerr
+		return nil, nil, nerr
 	}
-	return conn, nil
+	// The running app-server reports its own spawn-bound user agent. ContextGuard
+	// parses the semantic version from this value instead of re-probing whatever
+	// `codex` binary happens to be on the daemon's current PATH. Older/object-shaped
+	// replies remain valid backends but leave the optional guard unsupported.
+	var initialized struct {
+		UserAgent json.RawMessage `json:"userAgent"`
+	}
+	if json.Unmarshal(initRes, &initialized) == nil {
+		feed.userAgent = parseContextGuardUserAgent(initialized.UserAgent)
+	}
+	return conn, feed, nil
+}
+
+func parseContextGuardUserAgent(raw json.RawMessage) string {
+	var userAgent string
+	if json.Unmarshal(raw, &userAgent) != nil {
+		return ""
+	}
+	return userAgent
 }
 
 // watchSessionBackend turns the connection's own end into §R7.7 case 3. The backend died
 // mid-session: the session ends (the SHIM fires that, from its own edge) and history must be
 // honest about the tail it never captured.
-func (d *Daemon) watchSessionBackend(id string, conn *appserver.Client) {
+func (d *Daemon) watchSessionBackend(id string, conn *appserver.Client, feedEpoch string) {
 	<-conn.Done()
-	if _, ok := d.sessionBackendFor(id); !ok {
-		return // already forgotten by endSession; the session is over, not torn
-	}
-	d.noteBackendLost(id, "the app-server connection closed")
+	d.noteBackendLostForFeed(id, feedEpoch, "the app-server connection closed")
 }
 
 // rebuildFrame reassembles the verbatim JSON-RPC frame the pump and the adapter both expect.

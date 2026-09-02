@@ -30,6 +30,8 @@
 
 **S12 — SINGLETON DAEMON**: At most one process holds the flock + bound socket; stale sockets are unlinked only under the lock. *Assert*: two simultaneous daemon starts → exactly one survives, client reaches it. [D-6, D-7]
 
+**S13 — CONTEXTGUARD FAILS CLOSED**: ContextGuard performs no provider action from an unsupported shape/version, stale session instance, replaced backend feed, foreign thread, old settings revision, reordered source edge, persisted telemetry, corrupt lifecycle state, or ambiguous prior outcome. Provider callbacks remain independent of filesystem latency. Automatic dispatch (ADR-023 amendment 1) exists ONLY for exactly allowlisted live-gated versions, only opt-in, only unattended-and-quiet through the composer lane's write boundary, and gates daemon-originated typed input for the compaction's whole effect window; every other characterized version is observe-only. The post-compaction continuation exists only for a compaction the guard itself wrote, fires at most once per cycle, only at latched, only through the lane's revalidated head, and is forfeited by any ambiguity, hold, or crash. *Assert*: stale-feed/replacement races, settings provenance, event loss, crash recovery, malformed/overflow telemetry, and blocked-persistence fixtures all produce zero automatic dispatch; once bytes may have left, no path re-sends. [C-1..C-5, ADR-023]
+
 ## Liveness properties (must eventually happen)
 
 **L1**: After any status-dimension change, the session's latest committed state reaches every still-connected subscriber within 1 s (or that subscriber is disconnected for slowness). Intermediate states MAY coalesce to the latest (ADR-008). [V-2, P-3]
@@ -37,3 +39,5 @@
 **L2**: After a daemon restart, every still-live shim is eventually reconnected and re-registered. [D-4, D-5]
 
 **L3**: After a mid-attach client disconnect, the lease and stream are released so a subsequent attach succeeds. [P-4]
+
+**L4**: For a characterized supported feed, the latest exact ContextGuard percentage and phase eventually reach every owner-tier roster subscriber, coalesced by displayed state; remote-tier subscribers receive no ContextGuard body. [C-2, C-4, P-3]
