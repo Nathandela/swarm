@@ -5,7 +5,7 @@
 #   cp relay.config.example relay.config   # edit db_path/admin_listen only if you changed
 #                                           # the defaults below; they already agree
 #   cp Caddyfile Caddyfile.local           # production host is relay-swarm.dsfactory.org
-#   export RELAY_VERSION=v0.13.23           # immutable release tag; no implicit fallback
+#   export RELAY_VERSION=v0.13.24           # immutable release tag; no implicit fallback
 #   docker compose build                   # builds swarm-relay from ../.. (repo root) via
 #                                           # ./Dockerfile's own multi-stage build
 #   docker compose up -d
@@ -57,7 +57,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/relay/Dockerfile
-    image: ghcr.io/nathandela/swarm-relay:${RELAY_VERSION:?set RELAY_VERSION to an immutable release tag, for example v0.13.23}
+    image: ghcr.io/nathandela/swarm-relay:${RELAY_VERSION:?set RELAY_VERSION to an immutable release tag, for example v0.13.24}
     container_name: swarm-relay
     restart: unless-stopped
     depends_on:
