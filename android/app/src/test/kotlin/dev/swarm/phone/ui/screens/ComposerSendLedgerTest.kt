@@ -9,6 +9,103 @@ import org.junit.Test
 class ComposerSendLedgerTest {
 
     @Test
+    fun `durable hydration is idempotent across surface recreation`() {
+        val ledger = ComposerSendLedger()
+        val durable = listOf(
+            DurableComposerPublication(
+                logicalId = "logical-1",
+                operationId = "op-1",
+                sessionId = "m/one",
+                expectedTurn = "turn-a",
+                text = "hello",
+                phase = "admitted",
+                terminalCode = "",
+            ),
+        )
+
+        ledger.hydrate(durable)
+        ledger.hydrate(durable)
+
+        assertEquals(listOf("op-1"), ledger.unansweredOperations())
+        assertEquals(listOf("hello"), ledger.pendingFor("m/one").map { it.text })
+    }
+
+    @Test
+    fun `recreated retry replaces its prior operation by logical id`() {
+        val ledger = ComposerSendLedger()
+        ledger.hydrate(
+            listOf(
+                DurableComposerPublication(
+                    logicalId = "logical-1",
+                    operationId = "op-old",
+                    sessionId = "m/one",
+                    expectedTurn = "turn-a",
+                    text = "same bubble",
+                    phase = "terminal",
+                    terminalCode = "input_busy",
+                ),
+            ),
+        )
+        ledger.hydrate(
+            listOf(
+                DurableComposerPublication(
+                    logicalId = "logical-1",
+                    operationId = "op-new",
+                    sessionId = "m/one",
+                    expectedTurn = "turn-a",
+                    text = "same bubble",
+                    phase = "prepared",
+                    terminalCode = "",
+                ),
+            ),
+        )
+
+        assertEquals(listOf("op-new"), ledger.unansweredOperations())
+        assertEquals(listOf("op-new"), ledger.pendingFor("m/one").map { it.operationId })
+    }
+
+    @Test
+    fun `identical text with distinct logical ids remains two messages`() {
+        val ledger = ComposerSendLedger()
+        ledger.hydrate(
+            listOf(
+                DurableComposerPublication("logical-a", "op-a", "m/one", "turn-a", "repeat", "admitted", ""),
+                DurableComposerPublication("logical-b", "op-b", "m/one", "turn-a", "repeat", "admitted", ""),
+            ),
+        )
+
+        assertEquals(listOf("op-a", "op-b"), ledger.unansweredOperations())
+        assertEquals(listOf("repeat", "repeat"), ledger.pendingFor("m/one").map { it.text })
+    }
+
+    @Test
+    fun `hydration does not reset a claimed terminal result or authorize an unknown retry`() {
+        val ledger = ComposerSendLedger()
+        val durable = DurableComposerPublication(
+            "logical-unknown", "op-unknown", "m/one", "turn-a", "check first",
+            "terminal", "outcome_unknown",
+        )
+        ledger.hydrate(listOf(durable))
+        ledger.settle(
+            "op-unknown",
+            ComposerVerdict(
+                answered = true,
+                state = SendState.REFUSED,
+                refusal = "UNKNOWN",
+                clearsDraft = false,
+                notice = "Not sure it went through. Check before retrying.",
+                detail = "outcome_unknown",
+            ),
+        )
+
+        ledger.hydrate(listOf(durable))
+
+        assertTrue(ledger.unansweredOperations().isEmpty())
+        assertEquals("UNKNOWN", ledger.latestFor("m/one")?.refusal)
+        assertEquals(null, ledger.beginRetry("op-unknown"))
+    }
+
+    @Test
     fun `input busy retry keeps one logical bubble and replaces only its operation id`() {
         val ledger = ComposerSendLedger()
         ledger.sealed("op-1", "m/one", "turn-a", "first")

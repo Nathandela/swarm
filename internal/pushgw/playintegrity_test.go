@@ -134,6 +134,8 @@ func newValidPlayIntegrityVerifier(t *testing.T) (*PlayIntegrityVerifier, *fakeP
 
 func TestPlayIntegrityVerifier_DoesNotClaimUndecodedProjectAuthority(t *testing.T) {
 	t.Parallel()
+	// tokenPayloadExternal has no Cloud project coordinate. Keep it out of the verifier
+	// policy rather than accepting and discarding a value that appears authority-bearing.
 	if _, found := reflect.TypeOf(PlayIntegrityConfig{}).FieldByName("CloudProjectNumber"); found {
 		t.Fatal("decoded-verdict verifier misleadingly claims to enforce a Cloud project number")
 	}

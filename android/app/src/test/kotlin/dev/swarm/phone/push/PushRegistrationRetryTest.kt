@@ -14,10 +14,9 @@ class PushRegistrationRetryTest {
         val answers = ArrayDeque(listOf(false, false, true))
         val retry = PushRegistrationRetry(
             schedule = { delay, work -> scheduled += Scheduled(delay, work) },
-            attempt = { token -> attempts += token; answers.removeFirst() },
         )
 
-        retry.submit("token-a")
+        retry.submit("token-a") { token -> attempts += token; answers.removeFirst() }
         assertEquals(0L, scheduled.removeFirst().also { it.work() }.delayMillis)
         assertEquals(5_000L, scheduled.removeFirst().also { it.work() }.delayMillis)
         assertEquals(30_000L, scheduled.removeFirst().also { it.work() }.delayMillis)
@@ -31,12 +30,12 @@ class PushRegistrationRetryTest {
         val attempts = mutableListOf<String>()
         val retry = PushRegistrationRetry(
             schedule = { delay, work -> scheduled += Scheduled(delay, work) },
-            attempt = { token -> attempts += token; false },
         )
 
-        retry.submit("old")
+        val attempt = { token: String -> attempts += token; false }
+        retry.submit("old", attempt)
         scheduled.removeFirst().work() // old immediate fails, queues old retry
-        retry.submit("new") // queues new immediate
+        retry.submit("new", attempt) // queues new immediate
         val oldRetry = scheduled.removeFirst()
         val newImmediate = scheduled.removeFirst()
         oldRetry.work()

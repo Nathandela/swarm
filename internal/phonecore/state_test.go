@@ -55,6 +55,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -107,16 +108,49 @@ func fullState() State {
 		Sessions:                  []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
 		Snapshots:                 []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
 		PendingOps:                []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
-		OpOutcomes:                map[string]protocol.Control{"op-done": {Op: protocol.OpOK, OperationID: "op-done"}},
-		Stale:                     map[Bucket]bool{replyBucket(7): true},
-		StaleStreams:              map[string]bool{StreamJournal: true},
-		LastHeardAt:               1753900000000,
-		Disowned:                  true,
+		PendingPublications: []PendingPublication{
+			{
+				LogicalID: "logical-pending", OperationID: "op-publication", Kind: PublicationComposer,
+				SessionID: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "ship it",
+				Machine: "m1", EpochID: 7, Target: "rid-m1", AuthorityPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize), Phase: PublicationSealed,
+				Sequence: 41, Envelope: []byte("exact-envelope"), CreatedAt: time.Unix(1_700_000_000, 0),
+				Command: protocol.DeviceCommandAuth{
+					Action: protocol.ActionComposerSend, Machine: "m1", Session: "m1/s1",
+					OperationID: "op-publication", ExpiresAt: time.Unix(1_700_000_060, 0),
+				},
+				Composer: &protocol.ComposerSendReq{
+					Session: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "ship it",
+				},
+			},
+			{
+				LogicalID: "logical-result", OperationID: "op-result", Kind: PublicationComposer,
+				SessionID: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "result",
+				Machine: "m1", EpochID: 7, Target: "rid-m1", AuthorityPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
+				Phase: PublicationTerminal, TerminalCode: "policy", ResultOrder: 29, CreatedAt: time.Unix(1_700_000_001, 0),
+				Command: protocol.DeviceCommandAuth{
+					Action: protocol.ActionComposerSend, Machine: "m1", Session: "m1/s1",
+					OperationID: "op-result", ExpiresAt: time.Unix(1_700_000_061, 0),
+				},
+				Composer: &protocol.ComposerSendReq{
+					Session: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "result",
+				},
+			},
+		},
+		OpOutcomes: map[string]protocol.Control{
+			"op-done":   {Op: protocol.OpOK, OperationID: "op-done"},
+			"op-result": {Op: protocol.OpError, OperationID: "op-result", ErrorCode: protocol.CodePolicy},
+		},
+		Stale:        map[Bucket]bool{replyBucket(7): true},
+		StaleStreams: map[string]bool{StreamJournal: true},
+		LastHeardAt:  1753900000000,
+		Disowned:     true,
 		Items: []Item{{
 			SessionID: "m1/s1", ItemID: "itm-1", Cursor: 9, LastCursor: 11, Kind: KindAgentMessage,
 			Status: StatusCompleted, TurnID: "turn-1", TSUnixMs: 1753900000000, Text: "on it",
 			Body: json.RawMessage(`{"v":1,"item_id":"itm-1","kind":"agent_message"}`),
 		}},
+		HistoryFloor:  map[string]bool{"m1/history-floor": true},
+		HistoryCapped: map[string]bool{"m1/history-capped": true},
 	}
 	st.pairingPushOwned = EncodePushAddress(PushAddress{
 		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -540,15 +574,90 @@ var stateV17Fixture = func() string {
 	return strings.Replace(fixture, `"reconciled_epoch":7`, `"reconciled_epoch":7,"last_profile":null`, 1)
 }()
 
+// stateV18ContentKept is the pinned content_kept ciphertext produced for fullState() under
+// stateV4FixtureKEK. v18 adds pending_publications inside this container; pinning the new
+// ciphertext is what prevents a future reader from silently dropping the exact-envelope
+// journal while still decoding every unchanged top-level field.
+const stateV18ContentKept = `I89HMfDPCoeDfPrb/t7rm+b8U0ALVdeZ0qwygq4bDIqfNqwIx7fMAuFS8tN/sfUvvLZK9CBAOBNjGuGeTfmOnb/h36/ZVYaPl5NxG+wv1C4/PO721NTi4621UWbIqrhBobi6JkJ1cgKmQr/oNPbe4LN4dSdc7iT+zRPnMCesOkd4LSGk0sqch7TaYHoEN23i9vBNUlJHmBbbBCj4N9cjKRW+AgxTURsy7hT/9pic82VALyqKRjD/t42PKXYsB7hhLoKyAQh6hVkyL4+UR0347qvlUa8FnQI94ITRttP6Nr5z2JP54Bi7NqCMvCWCcDxcF/RdlI+DZLFtoHjOU9gTGIqlEyijLDnCzDEi2Acdz4rgYGgZDcn+Fz2asUgq2Uup/X3GdAAPlm8eECrATk6a7IHQNxBhjx0nDKwL/G7JfoWIkh1AmKC2LOgdqlANQDndK4I4iT9+mjeOGxvX031Os6MA3OATTh45mnIgIi39G3NsAS9zLDy6apbssewxEgHENYzNMR6V6RF9rZ2btWgHx9Gyzp1uGhdVOyYaxHgoMSAEDHQpP00eDkTm+Jgdj3YCjrOxt7EVmZGPj/YBgvgceuCla3yjzIL2wkIpDXuYDmY8gyWADlqb2wYHekbbDSC8DNdK9+YLNAOqrrvppKDOKEYLsvpBlkzwQ7bnimVPfDr6NjncPbJj/DukyJ9O6rDGlLao69GGDaF3MDT7gOK05GVuGwHIYv5HlsyjswdipJqB7jTtMiMpbFZLHo2zJtFTvE2Aia5SfL38ZkLxzlheVA+k2AHjoOq411FEcAUlwXBO3lUp9zfYuSLO/GJuHw1YOH6PVjGneZEHAUAkT+f6h8h38/Szu3xwMYfNqcSWi0lHfvn/pybvxPVDoqHFviaQs/JFIYg3z5dqnagylF/H7sYlPXQz9+WdvjBZeKWZH7VgB7w6q66lOUWUzRkQ6ftt83lAPCoumr2s0sXy9HzroWw2bjkZ1lr86xvu8vl3FTrIoa9aiJKHRmz0X4Qt03n5c/PjWFpeNQHXZGuV/M3RiBSn1rCOkgwitUs8ncztK6ohZrbsuV4ePpEn0dlA80Ar3pkt4dxxNlxXqLSI8Og90Lwat6QiOFhhodqzLFz0HZVq/waXA2isnmYCEq0r79OIo+UPhN8TIlwCykkUrN/nEldW/FnC/B0b1tnlbb6N8vFQFWL1Gf1O7K3BKpx+4l7k5PtVEj6kFnjB+kOiKRABYzZoFv8Nk8ATN1p/gs+7GYMizuWHjZvClqXKRkH66rXQ4pwoIQhiSyU5Sifa+n0p8luG7mCPTYg2h0TztavFhlj6G/0zBbAvqi0Ge5D4rZUqrz6cm811Xs4tx1N1Y23pduUmQjp8kFz/hMqY+MFD21vae0tvi/pCYOxXlLwx`
+
+var stateV18Fixture = func() string {
+	fixture := strings.Replace(stateV17Fixture, `"schema_version":17`, `"schema_version":18`, 1)
+	const field = `"content_kept":"`
+	start := strings.Index(fixture, field)
+	if start < 0 {
+		panic("stateV17Fixture has no content_kept field")
+	}
+	start += len(field)
+	end := strings.IndexByte(fixture[start:], '"')
+	if end < 0 {
+		panic("stateV17Fixture content_kept field is unterminated")
+	}
+	return fixture[:start] + stateV18ContentKept + fixture[start+end:]
+}()
+
+// stateV19 adds the exact machine relay-auth public key beside each pending publication.
+// The pinned ciphertext proves the authority binding survives custody; v18 remains below to
+// exercise the migration which attaches its already-authenticated top-level machine key.
+const stateV19ContentKept = `F0a4R8SXL56JXgD3N3BFRmnIRLlrvseK15Eb8NZXgkfxI4CFI1l4IQd9Yoyg7BRcQEPX811/RQH1YzuxyFjrUY+ZaIqOFM5KFwcoM+V+9DdjjRcB3EUNFAjeLlVoZG96ERReDlKlwMCVKyCxqfy2+LsDE9JJFoIuftV6F2cxKgISa6Htee40wHagTP9lUzUT3ULt0WqWcr0NJUCk29kpBVS/ssL+ZN6cQs2bVVuvTgzRuRQpirFgDsRq1tmDPX74m1u1iRWb0wwo9G0Jw5GSNHmdnNzLhLBsXAIFFh+lq2CRYI37MhJ9y5/H0pbF9wi17x7/v7NXXZ51mjpb4qPQEId+3Pws3wY74huGX5jSgYiPtfBaZusylrcQ0JzGW9SNuDhDT8mcDjvVw6IVmVUJ/fqUIMNczg2NhVMQdEGcGFE3i/sQgXnFYF+PEqDe/UGF1tUbtNkWuB3bcWV8ymlnmoW9qhfbuKR+x0T5fYLAZbicg8jrXd2VfTkaRsitRq1N2Jd8tJXwNX3fQpnSI4xsBnfRGgJHIs4hCyKtqY8130V0NekoLPXto6gVA0qrVLGJCAaWnzBkbCHxry8+ZqtMYDfotIw2u+HVjRS5Smn2pCr3SU3PP4IkYpW+FbumF5RG1l+rw51mLgBov+dwprzf+X8aDWReOlAExcXLIpLcezlITXq1c0srDDah5E2I1iEAEm2L6m7rRCnYut9jQAs49aW8u2FRN629FhafS1w0R6dmI2m3Dwypvicz2KOZf3KEj/tJ+HpScOYlqf8N808juvD+Xu+rQQQKzGl5aEOJNrBakMCjxnVgAM6eVTLDWmLbxS72NL7IlTMf8+Inpn9cTg1SWqv041H+Yywrk9nPpBt2xTdAhE1pyS5uvhqnp8skpt2Y40vFNSWS66LiCyKr33QqUfEYoWRbosPu1GZTCokbHJkqBef/5+NUB2srwlxBCr/aavurXFrcYA+exBF2qSzlYumMUIkluhkqGh8N4j286k/QarBUC5VlCTCDw+lt5emrEaHRyIKTHKvpHhAe/TOEmWqF1GQQGj0dYk5QcGaMBbd+hTjpUOoMPaeShIYu3gsEvEwGu0nUzpoCykj5A3Og3HLX8mJT11UYG3QtbYXO1rOAttlsKTvDkqbbugvOUqJyR8MNeTczWRVfNC3V5RpRz/uV73UXGQC28VJNaoZDbekdhzivE+vTrdE0aKJ25OuBLsT44ToALrr61irZGuRCT5s9ye9LIy1NZ9vkBWwxdXTu7EDll/vslAk9eAiFTFohVFaCBoyI2ljc7Z1eNrF30+tNdkjOY5PsXLSzmdR5QZeqN/B9jgI0K8GphCSs1hf2bl9eB2/7oRDHQQckQtYbVmwbxaezggDhxdUyGSAOWYUCbHD8fCYJuWGxSvM78zaIA4TcV5fpivkYlC2kKJ9D3s7xQqMimvuuEVDOra+9WiVXstK3xkQF8qdZK3/Xy4x0Ixn1meoJ65F6`
+
+var stateV19Fixture = func() string {
+	fixture := strings.Replace(stateV18Fixture, `"schema_version":18`, `"schema_version":19`, 1)
+	const field = `"content_kept":"`
+	start := strings.Index(fixture, field)
+	if start < 0 {
+		panic("stateV18Fixture has no content_kept field")
+	}
+	start += len(field)
+	end := strings.IndexByte(fixture[start:], '"')
+	if end < 0 {
+		panic("stateV18Fixture content_kept field is unterminated")
+	}
+	return fixture[:start] + stateV19ContentKept + fixture[start+end:]
+}()
+
 // stateV20Fixture adds the write-ahead ownership phase for the exact staged push address
-// whose machine pin committed in the same phone-state transaction. The address is public
-// synchronization metadata; its wake key and capabilities remain sealed in push-state. At
-// integration this is mechanically rebased onto the real v19 publication-authority fixture;
-// the top-level pairing field itself is independent of those sealed content additions.
+// whose machine pin committed in the same phone-state transaction. It is based on the real
+// v19 publication-authority fixture so an upgrade cannot preserve one durable contract by
+// silently dropping the other.
 var stateV20Fixture = func() string {
-	fixture := strings.Replace(stateV17Fixture, `"schema_version":17`, `"schema_version":20`, 1)
+	fixture := strings.Replace(stateV19Fixture, `"schema_version":19`, `"schema_version":20`, 1)
 	return strings.Replace(fixture, `"last_profile":null`,
 		`"last_profile":null,"pairing_push_owned":"AQIDBAUGBwgJCgsMDQ4PEA"`, 1)
+}()
+
+// v20 belongs to the pairing branch's combined pin/push-ownership phase. v21 is this branch's
+// independent addition of history_floor/history_capped inside content_purgeable. Reusing v19's
+// publication fixture shape is no longer sufficient because v21 also pins terminal result
+// ordering inside content_kept. Both new ciphertexts are independently captured under the
+// fixture KEK so older migration literals remain immutable.
+const stateV21ContentKept = `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`
+
+const stateV21ContentPurgeable = `yjUxZbiMHHTc8KQSkhuOiV6iz4uxBpna49PQD2GvELNcJQR4n7gzuNUevRoxG1NjTZqnWyG/T0yzD9yyt7alxk82pGbT4CFVzJcPLGfgBdlM/t0kR/9XK7Tt3RGCb7KGPtGRt6rFQmgGojpWvHaZFUhNz8aVG2zvHWVmudFuD475+OhuGyNk+UffXELl3OGfDfkWi1uWlYhrjfWMJIOA/W+TjmlPDDQnjM6iybwX+9Xn15IRZDDK83KGfqUlvIgsgnh526nSVJ0TVLsXbOTiKXZ8Jpmhmo8F1K+GiE+7X5gCzUJ6nNUHBNG6FP2p9Dv08Q+/0UuqpJ5EERXqsJh0Az0y/L46LnUXPrJ4bty+Lhh3+8zOukHGykwAVfEgau0qEgQ/67IvJkCtvYCRu7ebXnH4j2ACnLIno+aLzf/FS1kq8da9yuTIzEeAJP8Q6Y9um3Jin3jgpwqrZu2S1y+3tI3TniTZIrmapgaJ+KLdZcuFTy1sD9kuaYqQTtbCGWs6GHKgRPIW09JvZUVmJYZYxkUfEU9BmMpQssUMpgQQKiqMO6aJqWh2RKR181Ihtxg5kV5AXRxkFMUh6gUH3qWB0Uurjlum2g32ErgKe9FA2MGrC/753dXFFmcxeaaJP7y8DcqOz4SsANz2IytwFpRUwot1SS1Sc4oj8vl/h7TKj3zWV8ZOtBwr+2OofFxKuGRasNolF2sPEa+fjzVuje9FJ0zjLVXHqmOYBuXG41ZTGJAuagMeR/5myrtj6LRfpDqbuPFlmuG+Cxn+/IszC0nGnVcCZ6Wob09umA4wZ0EB+iSfV9zSJ+55mnbOmqb+nMemWiAuAXoZDp5xSXxF/USjgGZIEpsuexgVsHDCSwDJE44+cXbTIPF7k9dE/BY9RRiMDxhvfMSAsubwB/ke+RAdmXbwStgF6SbESWn3pt21WC9GnNSQatBTkTyoZUVxrcoYQpwCoIzQYE0IoMLvM5pJgLs01ij3jtgVokAlykvrCW0HyYqkXb//SFbhb1X3w46Dc5YBO7RMDCIV4FCKB/QVDCo6JyyNMjfkCAZ3paz+a5SXx+N0HRRtsIqiUtDWsXyux34obuBcd3x7w7NEdLiUS0bxfzO58aRwydarcvD+rd7G/c0WOfuPfz/hG+RatO5/MCgQ9WUyvn2olXDS+z8eJd49Ms7PWJM4M4ngTMHEstWHjr9XbnXATE2MMQuzBGCR9iXl+UQbsJLOp9VSOMdFNObTPz0DckY8ldAg2H5H`
+
+var stateV21Fixture = func() string {
+	fixture := strings.Replace(stateV20Fixture, `"schema_version":20`, `"schema_version":21`, 1)
+	const keptField = `"content_kept":"`
+	keptStart := strings.Index(fixture, keptField)
+	if keptStart < 0 {
+		panic("stateV20Fixture has no content_kept field")
+	}
+	keptStart += len(keptField)
+	keptEnd := strings.IndexByte(fixture[keptStart:], '"')
+	if keptEnd < 0 {
+		panic("stateV20Fixture content_kept field is unterminated")
+	}
+	fixture = fixture[:keptStart] + stateV21ContentKept + fixture[keptStart+keptEnd:]
+	const field = `"content_purgeable":"`
+	start := strings.Index(fixture, field)
+	if start < 0 {
+		panic("stateV20Fixture has no content_purgeable field")
+	}
+	start += len(field)
+	end := strings.IndexByte(fixture[start:], '"')
+	if end < 0 {
+		panic("stateV20Fixture content_purgeable field is unterminated")
+	}
+	return fixture[:start] + stateV21ContentPurgeable + fixture[start+end:]
 }()
 
 var stateFixtures = map[int]string{
@@ -566,7 +675,10 @@ var stateFixtures = map[int]string{
 	15: stateV15Fixture,
 	16: stateV16Fixture,
 	17: stateV17Fixture,
+	18: stateV18Fixture,
+	19: stateV19Fixture,
 	20: stateV20Fixture,
+	21: stateV21Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
@@ -653,6 +765,51 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A v20 install may be killed after the machine pin and exact staged-address ownership
+// commit but before the separate push-store disposition. The first unrelated v21 write must
+// carry that private write-ahead phase forward; dropping it would make startup revoke the
+// address the completed pairing owns.
+func TestStateStore_V20PairingOwnershipSurvivesV21UnrelatedSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), StateFileName)
+	if err := os.WriteFile(path, []byte(stateV20Fixture), 0o600); err != nil {
+		t.Fatalf("write v20 fixture: %v", err)
+	}
+	kek := &s14aSealer{kek: stateV4FixtureKEK}
+	store, err := OpenStore(path, "m1", kek, kek)
+	if err != nil {
+		t.Fatalf("open v20 fixture: %v", err)
+	}
+	const owned = "AQIDBAUGBwgJCgsMDQ4PEA"
+	if got := store.(*fileStore).st.pairingPushOwned; got != owned {
+		t.Fatalf("loaded v20 ownership = %q, want %q", got, owned)
+	}
+
+	state := store.Load()
+	state.PushPreference.Version++ // unrelated durable mutation
+	if err := store.Save(state); err != nil {
+		t.Fatalf("rewrite v20 state as v21: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted stateFile
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.SchemaVersion != 21 || persisted.PairingPushOwned != owned {
+		t.Fatalf("rewritten checkpoint = (v%d,%q), want (v21,%q)",
+			persisted.SchemaVersion, persisted.PairingPushOwned, owned)
+	}
+	restarted, err := OpenStore(path, "m1", kek, kek)
+	if err != nil {
+		t.Fatalf("reopen rewritten v21 state: %v", err)
+	}
+	if got := restarted.(*fileStore).st.pairingPushOwned; got != owned {
+		t.Fatalf("restarted v21 ownership = %q, want %q", got, owned)
 	}
 }
 

@@ -3,6 +3,7 @@ package dev.swarm.phone.ui
 import dev.swarm.phone.keys.ConnectionState
 import dev.swarm.phone.ui.screens.GlobalInboxRowModel
 import dev.swarm.phone.ui.screens.GlobalInboxScreen
+import dev.swarm.phone.ui.screens.DurableComposerPublication
 import dev.swarm.phone.ui.screens.LaunchAvailability
 import dev.swarm.phone.ui.screens.LaunchPresetScreen
 import dev.swarm.phone.ui.screens.MachineRowModel
@@ -719,6 +720,23 @@ class FacadeBridge(private val app: App) {
             code = outcome.getCode(),
             message = outcome.getMessage(),
         )
+    }
+
+    /** Durable composer bubbles, in the core journal's insertion order. */
+    fun composerPublications(): List<DurableComposerPublication> {
+        val list = app.composerPublications()
+        return (0 until list.count()).map { index ->
+            val publication = list.at(index)
+            DurableComposerPublication(
+                logicalId = publication.getLogicalID(),
+                operationId = publication.getOperationID(),
+                sessionId = publication.getSessionID(),
+                expectedTurn = publication.getExpectedTurn(),
+                text = publication.getText(),
+                phase = publication.getPhase(),
+                terminalCode = publication.getTerminalCode(),
+            )
+        }
     }
 
     /** PB-APP-7's screen: the two push preferences, and nothing this seam has to invent. */

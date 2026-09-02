@@ -534,6 +534,8 @@ func transportEndsPairing(state string, graceUntil, now time.Time) bool {
 // covers the process either way. What a failure costs is exactly what not writing at all used to
 // cost -- the next launch comes up paired -- and the next terminal dial writes again.
 func (a *App) recordUnpaired() {
+	a.publicationAuthorityMu.Lock()
+	defer a.publicationAuthorityMu.Unlock()
 	_ = a.core.Mutate(func(st *phonecore.State) { st.Disowned = true })
 }
 
@@ -711,6 +713,10 @@ func (a *App) run(ctx context.Context) {
 		// cache MachinePresence exposes and never asks the relay itself.
 		pctx, endPoll := context.WithCancel(ctx)
 		go a.pollPresence(pctx, cl)
+		go a.runPublicationPump(pctx, func() (sendCtx, error) {
+			return a.resolveSend(func() (*relay.Client, error) { return cl, nil })
+		})
+		a.wakePublicationPump()
 		a.drain(ctx, cl)
 		endPoll()
 		// The link is gone, so the phone can no longer ask what it last answered. Holding the
@@ -1706,13 +1712,20 @@ func (a *App) onInteraction(rec schema.JournalRecord) {
 }
 
 func (a *App) onReply(ctrl schema.Control) {
-	if ctrl.OperationID != "" {
-		a.resolve(ctrl.OperationID)
+	// The authenticated timestamp is useful even when a reply was delivered behind a gap, so
+	// close/report the skew bracket first. Operation settlement, UI events and kill-switch state
+	// require the verdict that commitReceive durably attributed; router.apply's live reply alone
+	// is deliberately insufficient.
+	a.reportSkew()
+	committed, ok := a.core.State().OpOutcomes[ctrl.OperationID]
+	if ctrl.OperationID == "" || !ok {
+		return
 	}
+	ctrl = committed
+	a.resolve(ctrl.OperationID)
 	a.mu.Lock()
 	a.killSwitch = ctrl.ErrorCode == schema.CodeKillSwitch
 	a.mu.Unlock()
-	a.reportSkew()
 	a.events.emit(&Event{
 		Kind:      "outcome",
 		Stream:    "reply",

@@ -54,6 +54,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -76,6 +77,9 @@ const (
 	s15OpID                 = "s15-op-id-5e1b8d"
 	s15OpOutcome            = "s15-outcome-9c4a2f"
 	s15QueuedOp             = "s15-queued-op-3d9f7b"
+	s15PublicationID        = "s15-publication-91b3e7"
+	s15PublicationText      = "s15-publication-text-f4c82a"
+	s15PublicationEnvelope  = "s15-publication-envelope-6a2d1f"
 	s15StaleStream          = "s15-stream-6f2e1a"
 	s15RelayIncarnation     = "abcdef0123456789abcdef0123456789"
 	s15DiscardRecoveryToken = "1234567890abcdef1234567890abcdef"
@@ -166,18 +170,34 @@ func s15State() State {
 		Sessions:                  []CachedSession{{SessionID: s15SessionID, Present: true}},
 		Snapshots:                 []Snapshot{{Session: s15SessionID, Lines: []string{s15SnapLine}, Cols: 80, Rows: 24}},
 		PendingOps:                []QueuedOp{{Op: s15QueuedOp, SessionID: s15SessionID}},
-		OpOutcomes:                map[string]schema.Control{s15OpID: {Op: "kill", Error: s15OpOutcome}},
-		Stale:                     map[Bucket]bool{s15StaleBucket: true},
-		StaleStreams:              map[string]bool{s15StaleStream: true},
-		PushToken:                 s15PushToken,
-		PushPreference:            PushPreference{Alerts: true},
-		ReconciledEpoch:           s15ReconciledEpoch,
-		LastHeardAt:               s15LastHeardAt,
-		Disowned:                  true,
+		PendingPublications: []PendingPublication{{
+			LogicalID: s15PublicationID + "-logical", OperationID: s15PublicationID,
+			Kind: PublicationComposer, SessionID: s15SessionID, SessionInstance: "s15-instance",
+			Text: s15PublicationText, Machine: s15Machine, EpochID: s15EpochID,
+			Target: s15RoutingID, AuthorityPub: s15MachineRelayPub(), Phase: PublicationSealed, Sequence: 71,
+			Envelope: []byte(s15PublicationEnvelope), CreatedAt: time.Unix(1_700_000_000, 0),
+			Command: schema.DeviceCommandAuth{
+				Action: schema.ActionComposerSend, Machine: s15Machine, Session: s15SessionID,
+				OperationID: s15PublicationID, ExpiresAt: time.Unix(1_700_000_060, 0),
+			},
+			Composer: &schema.ComposerSendReq{
+				Session: s15SessionID, SessionInstance: "s15-instance", Text: s15PublicationText,
+			},
+		}},
+		OpOutcomes:      map[string]schema.Control{s15OpID: {Op: "kill", Error: s15OpOutcome}},
+		Stale:           map[Bucket]bool{s15StaleBucket: true},
+		StaleStreams:    map[string]bool{s15StaleStream: true},
+		PushToken:       s15PushToken,
+		PushPreference:  PushPreference{Alerts: true},
+		ReconciledEpoch: s15ReconciledEpoch,
+		LastHeardAt:     s15LastHeardAt,
+		Disowned:        true,
 		Items: []Item{{
 			SessionID: s15SessionID, ItemID: "s15-item-id", Kind: KindAgentMessage,
 			Status: StatusCompleted, Text: s15ItemText,
 		}},
+		HistoryFloor:  map[string]bool{"s15-history-floor-session": true},
+		HistoryCapped: map[string]bool{"s15-history-capped-session": true},
 	}
 	return st
 }
@@ -369,6 +389,8 @@ func s15Inventory() []s15Tier {
 		// permissions -- so a locked handset reading it in the clear would disclose more than
 		// the other three combined.
 		{field: "Items", tier: "content", needles: s15Str(s15ItemText)},
+		{field: "HistoryFloor", tier: "content", needles: s15Str("s15-history-floor-session")},
+		{field: "HistoryCapped", tier: "content", needles: s15Str("s15-history-capped-session")},
 
 		// REASSIGNED, on this row's own instruction. It was written UNASSIGNED and FLAGGED --
 		// "the offline mutating-op queue holds session ids and, for a launch, the command line
@@ -380,6 +402,10 @@ func s15Inventory() []s15Tier {
 		// is why it sits in the content tier's KEPT container beside the replay-guard
 		// coordinates rather than in the purgeable one beside the caches.
 		{field: "PendingOps", tier: "content", needles: s15Str(s15QueuedOp)},
+		{field: "PendingPublications", tier: "content", needles: append(
+			append(s15Str(s15PublicationID), s15Str(s15PublicationText)...),
+			s15Str(s15PublicationEnvelope)...),
+		},
 
 		{field: "Stale", needles: s15SenderID(s15StaleBucket.Sender),
 			why: "which buckets have a hole in them. It is the record that content is untrustworthy, " +

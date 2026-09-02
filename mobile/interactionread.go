@@ -28,6 +28,7 @@ package swarmmobile
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -48,9 +49,9 @@ const maxHistoryPage = 200
 // beforeItem is an ITEM ID and never a cursor or a position (IS-ENV-2): a daemon restart's
 // reconciliation legitimately re-delivers the same items at new cursors, so a cursor-paged
 // read would silently skip or repeat after one. Empty is the explicit newest-page sentinel,
-// not a cursor substitute. The answer is claimed with Outcome, which is
-// also where its records are folded into the transcript, and where HistoryFloor -- "nothing
-// older than this is retained" -- becomes readable via HistoryFloor.
+// not a cursor substitute. The authenticated answer is folded durably with its receive
+// high-water before Outcome can expose its payload-free verdict; HistoryFloor -- "nothing
+// older than this is retained" -- therefore survives process death with the page it describes.
 //
 // LIVE-ONLY: with no connection it refuses ErrClassOffline having stored nothing. A queued
 // read is a page delivered against a transcript the user has since left.
@@ -118,86 +119,37 @@ func (a *App) unsignedRead(action, session string, body readBody) (*Op, error) {
 	auth := schema.DeviceCommandAuth{
 		Action: action, Machine: core.State().Machine, Session: session, OperationID: id,
 	}
+	var kind phonecore.PublicationKind
+	switch {
+	case body.history != nil && body.detail == nil:
+		kind = phonecore.PublicationHistory
+	case body.detail != nil && body.history == nil:
+		kind = phonecore.PublicationDetail
+	default:
+		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: unsigned read needs exactly one body"))
+	}
 	a.bucketMu.Lock()
 	defer a.bucketMu.Unlock()
-	seq, err := core.Seq().NextCommand()
-	if err != nil {
+	if err := core.ExpirePublications(time.Now()); err != nil {
 		return nil, err
 	}
-	var env []byte
-	switch {
-	case body.history != nil:
-		env, err = phonecore.SealInteractionHistoryEnvelope(sc.key, sc.epoch, seq, auth, body.history)
-	case body.detail != nil:
-		env, err = phonecore.SealInteractionDetailEnvelope(sc.key, sc.epoch, seq, auth, body.detail)
-	default:
-		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: unsigned read with no body"))
+	pending := phonecore.PendingPublication{
+		LogicalID: id, OperationID: id, Kind: kind, SessionID: session,
+		Command: auth,
+		History: body.history, Detail: body.detail,
+		Phase: phonecore.PublicationPrepared, CreatedAt: time.Now(),
 	}
-	if err != nil {
+	if err := a.preparePublicationLocked(core, sc, pending, ""); err != nil {
 		return nil, err
 	}
-	if _, err := sc.cl.MailboxAppend(context.Background(), sc.target, env); err != nil {
-		return nil, err
+	if err := a.flushPendingPublicationsLocked(context.Background(), sc); err != nil {
+		a.wakePublicationPump()
 	}
+	// Wake even after successful admission: the pump owns the bounded no-reply timer.
+	a.wakePublicationPump()
 	op := &Op{OperationID: id, Action: action, SessionID: session}
 	a.issue(op)
 	return op, nil
-}
-
-// adoptInteractionRead folds a claimed interaction_history / interaction_detail reply into
-// the live transcript. Called from Outcome the moment the reply is TAKEN, which is also the
-// only moment it exists: a durable outcome is a verdict and carries no records
-// (phonecore.RecordOutcome), so folding here is not a convenience, it is the one place the
-// records can be read.
-//
-// DURABILITY IS THE LIVE STORE'S, NOT THIS CALL'S, and that is deliberate rather than
-// unnoticed: the folded page is held by the in-memory ItemStore and is NOT written into the
-// durable transcript snapshot, so it is gone after a process death and a screen that wants it
-// again asks again.
-//
-// THE TWO REPLIES FOLD DIFFERENTLY, AND THAT IS WAVE R6 REVIEW ROUND 2 (see ItemStore's own
-// docs for both probes). A history page is records the reader asked for, held in the backfill
-// region so the live trim cannot eat the page it was paged in behind -- and refused WHOLE when
-// the phone can hold no more, which is what HistoryAtCapacity reports. A detail reply is not a
-// record at all in the fold's sense: it is one held item's clipped body REPLACED by the whole
-// of it, and putting it through the delta path either dropped it (no cursor, terminal status)
-// or concatenated it into a garble presented as the whole (the ambiguity IS-CAP-3 forbids).
-//
-// A refusal folds NOTHING, including the detail read's `unavailable`: IS-CAP-3's whole point
-// is that a refusal must not arrive beside a body.
-func (a *App) adoptInteractionRead(ctrl schema.Control) {
-	if ctrl.ErrorCode != "" {
-		return
-	}
-	core, err := a.ready()
-	if err != nil {
-		return
-	}
-	items := core.Router().Items()
-	switch ctrl.Op {
-	case schema.ActionInteractionDetail:
-		for _, rec := range ctrl.Journal {
-			items.ApplyDetail(rec)
-		}
-	case schema.ActionInteractionHistory:
-		held := items.ApplyPage(ctrl.Journal)
-		a.mu.Lock()
-		if a.historyFloor == nil {
-			a.historyFloor = map[string]bool{}
-		}
-		if a.historyCapped == nil {
-			a.historyCapped = map[string]bool{}
-		}
-		// The machine's floor describes THIS page. If the handset refused the page whole,
-		// its oldest folded item did not move and inheriting the reply's true floor would
-		// claim a beginning the transcript does not contain. Preserve the last held page's
-		// floor and report the separate handset-capacity fact below.
-		if held {
-			a.historyFloor[ctrl.SessionID] = ctrl.HistoryFloor
-		}
-		a.historyCapped[ctrl.SessionID] = !held
-		a.mu.Unlock()
-	}
 }
 
 // HistoryFloor reports whether the machine has said that NOTHING older than this session's
@@ -206,12 +158,11 @@ func (a *App) adoptInteractionRead(ctrl schema.Control) {
 // been read yet, and those are the same state to a screen -- it should offer the control.
 func (a *App) HistoryFloor(session string) (atFloor bool, err error) {
 	defer barrier(&err)
-	if _, err = a.ready(); err != nil {
+	core, err := a.ready()
+	if err != nil {
 		return false, err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.historyFloor[session], nil
+	return core.State().HistoryFloor[session], nil
 }
 
 // HistoryAtCapacity reports whether THIS PHONE could not hold the last page it asked for
@@ -226,10 +177,9 @@ func (a *App) HistoryFloor(session string) (atFloor bool, err error) {
 // forever with nothing moving.
 func (a *App) HistoryAtCapacity(session string) (capped bool, err error) {
 	defer barrier(&err)
-	if _, err = a.ready(); err != nil {
+	core, err := a.ready()
+	if err != nil {
 		return false, err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.historyCapped[session], nil
+	return core.State().HistoryCapped[session], nil
 }
