@@ -44,7 +44,11 @@ func newPlatformTestSigner(t *testing.T) *testPlatformInstallationSigner {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &testPlatformInstallationSigner{public: elliptic.Marshal(elliptic.P256(), key.X, key.Y)}
+	public, err := key.PublicKey.ECDH()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testPlatformInstallationSigner{public: public.Bytes()}
 }
 
 func (s *testPlatformInstallationSigner) PublicKey() []byte { return append([]byte(nil), s.public...) }
@@ -54,11 +58,8 @@ func (s *testPlatformInstallationSigner) Sign([]byte) ([]byte, error) {
 }
 
 func TestConfigurePushRegistration_UsesPlatformAuthorityAndLeavesNoGoPrivateKey(t *testing.T) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	public := elliptic.Marshal(elliptic.P256(), key.X, key.Y)
+	signer := newPlatformTestSigner(t)
+	public := signer.PublicKey()
 	var registrationBody struct {
 		InstallationPublicKey string `json:"installation_public_key"`
 		Attestation           struct {
@@ -85,13 +86,12 @@ func TestConfigurePushRegistration_UsesPlatformAuthorityAndLeavesNoGoPrivateKey(
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer app.Close()
+	defer func() { _ = app.Close() }()
 	// Exercise migration from the old pre-production scalar before configuring Android.
 	if _, err := app.core.InstallationSigner(); err != nil {
 		t.Fatal(err)
 	}
 	attestor := &testPushAttestor{}
-	signer := &testPlatformInstallationSigner{public: public}
 	if err := app.ConfigurePushRegistration(attestor, signer); err != nil {
 		t.Fatal(err)
 	}
@@ -118,12 +118,11 @@ func TestConfigurePushRegistration_FailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer app.Close()
+	defer func() { _ = app.Close() }()
 	if err := app.ConfigurePushRegistration(nil, nil); err == nil {
 		t.Fatal("nil production providers were accepted")
 	}
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	signer := &testPlatformInstallationSigner{public: elliptic.Marshal(elliptic.P256(), key.X, key.Y)}
+	signer := newPlatformTestSigner(t)
 	if err := app.ConfigurePushRegistration(&testPushAttestor{}, signer); err != nil {
 		t.Fatal(err)
 	}

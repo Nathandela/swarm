@@ -186,7 +186,7 @@ func TestDigestManifestIsAttachedToTheDurableGitHubRelease(t *testing.T) {
 	if download < 0 || goreleaser < 0 || upload < 0 {
 		t.Fatalf("durable manifest wiring: download=%d goreleaser=%d release-upload=%d", download, goreleaser, upload)
 	}
-	if !(download < goreleaser && goreleaser < upload) {
+	if download >= goreleaser || goreleaser >= upload {
 		t.Fatalf("manifest ordering must be download -> create release -> attach manifest; got %d -> %d -> %d", download, goreleaser, upload)
 	}
 }

@@ -200,7 +200,8 @@ func Restore(dbPath, backupPath string) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("pushgw: read backup archive: %w", err)
 		}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+		// A zero typeflag is the deprecated tar.TypeRegA spelling for a regular file.
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != 0 {
 			return fmt.Errorf("pushgw: backup entry %q is not a regular file", hdr.Name)
 		}
 		if err := validateRestoreEntrySize(hdr.Name, hdr.Size); err != nil {

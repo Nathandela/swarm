@@ -1,15 +1,20 @@
 package phonecore
 
 import (
-	"crypto/elliptic"
+	"crypto/ecdh"
 	"encoding/base64"
 	"fmt"
 	"testing"
 )
 
 func platformSignerTestPublic(multiplier byte) []byte {
-	x, y := elliptic.P256().ScalarBaseMult([]byte{multiplier})
-	return elliptic.Marshal(elliptic.P256(), x, y)
+	scalar := make([]byte, 32)
+	scalar[len(scalar)-1] = multiplier
+	private, err := ecdh.P256().NewPrivateKey(scalar)
+	if err != nil {
+		panic(err)
+	}
+	return private.PublicKey().Bytes()
 }
 
 func TestPreparePlatformInstallationSigner_RemovesUnregisteredExportableKey(t *testing.T) {

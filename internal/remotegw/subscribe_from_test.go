@@ -48,7 +48,7 @@ func serveAtomicResume(t *testing.T, ln net.Listener, endpoint string, full bool
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 	_, body, err := wire.ReadFrame(conn)
 	if err != nil {
@@ -132,7 +132,7 @@ func serveOversizedAtomicFullResync(t *testing.T, ln net.Listener) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	_, body, err := wire.ReadFrame(conn)
 	if err != nil {

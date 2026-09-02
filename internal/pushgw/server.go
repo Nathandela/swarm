@@ -187,7 +187,7 @@ func (s *Server) RunRetention(_ context.Context) error {
 // "every operation lives under /v1/ and is one of the five" (PG-TR-6 / addition A2).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
-	status := http.StatusNotFound
+	var status int
 	operation := routeOperation(r.Method, path)
 
 	switch {

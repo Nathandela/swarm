@@ -212,7 +212,7 @@ func TestPendingPairingPushRevoke_RestartDrainsWithoutAnotherPairing(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restarted.Close()
+	defer func() { _ = restarted.Close() }()
 	if err := restarted.ConfigurePushRegistration(&testPushAttestor{}, signer); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestPreparePairingPushBinding_ForegroundOnlyWithoutProductionProviders(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer app.Close()
+	defer func() { _ = app.Close() }()
 
 	binding, revoke, err := app.preparePairingPushBinding(context.Background())
 	if err != nil {
@@ -297,7 +297,7 @@ func TestPairingPushCommit_CrashAfterPinOwnershipBeforeDispositionRecoversOwners
 	if err != nil {
 		t.Fatalf("restart did not recover pin-owned staged binding: %v", err)
 	}
-	defer restarted.Close()
+	defer func() { _ = restarted.Close() }()
 	if got := restarted.core.State(); got.Machine != "ep-same-machine" || got.EpochID != 7 {
 		t.Fatalf("restart lost combined machine pin: (%q,%d)", got.Machine, got.EpochID)
 	}

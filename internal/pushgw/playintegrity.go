@@ -208,7 +208,7 @@ func (c *GooglePlayIntegrityDecodeClient) Decode(ctx context.Context, packageNam
 	if err != nil {
 		return PlayIntegrityPayload{}, fmt.Errorf("%w: decode request: %v", ErrAttestationUnavailable, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, playIntegrityResponseMax+1))
 	if err != nil {
 		return PlayIntegrityPayload{}, fmt.Errorf("%w: read decode response: %v", ErrAttestationUnavailable, err)

@@ -24,6 +24,7 @@ package phonecore
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -117,8 +118,8 @@ func validPlatformInstallationPublicKey(public []byte) bool {
 	if len(public) != 65 || public[0] != 4 {
 		return false
 	}
-	x, y := elliptic.Unmarshal(elliptic.P256(), public)
-	return x != nil && y != nil && bytes.Equal(elliptic.Marshal(elliptic.P256(), x, y), public)
+	key, err := ecdh.P256().NewPublicKey(public)
+	return err == nil && bytes.Equal(key.Bytes(), public)
 }
 
 // InstallationSigner returns this phone's installation signer, MINTING AND PERSISTING the

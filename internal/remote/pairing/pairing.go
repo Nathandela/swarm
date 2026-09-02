@@ -1149,7 +1149,7 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 			return nil, fmt.Errorf("pairing: prepare push binding: %w", cErr)
 		}
 	}
-	if binding != nil && !(p.RequestPushBinding && machPayload.PushBindingSupport) {
+	if binding != nil && (!p.RequestPushBinding || !machPayload.PushBindingSupport) {
 		abortConsent(ctx, sess, rt)
 		return nil, ErrPushNotNegotiated
 	}
