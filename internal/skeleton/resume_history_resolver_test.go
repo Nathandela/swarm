@@ -355,6 +355,8 @@ func TestResumeHistory_CodexRejectsMalformedCriticalRecords(t *testing.T) {
 		{"missing timestamp", fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cwd":%q}}`, legacyCodexRootID, cwd)},
 		{"missing cwd", fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"timestamp":%q}}`, legacyCodexRootID, ts)},
 		{"invalid parent UUID", fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"timestamp":%q,"cwd":%q,"parent_thread_id":"parent-prose"}}`, legacyCodexRootID, ts, cwd)},
+		{"top-level null", `null`},
+		{"top-level array", `[]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

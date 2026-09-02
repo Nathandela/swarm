@@ -762,8 +762,10 @@ syntactically complete JSON value (a torn write). Both are what codex itself pro
 name an id, so skipping them adopts nothing, and a planted decoy that DOES decode still makes the
 scan ambiguous exactly as before. Every other refusal stands: a decodable record with duplicate
 keys, trailing data, missing fields, a mismatched id or stamp; a symlink or non-regular entry; a
-spent budget. The same reading rule serves the hands-off locator, which reports such a named file
-as not found rather than unsafe. Claude's per-cwd scan is unchanged.
+spent budget, which the bytes of a skipped partial line still count against. The hands-off locator
+shares the line reader: a named file with no complete first line is reported as not found rather
+than unsafe, and a name hit ends the search, so the neighbouring days are not tried for a file the
+id's own day already named. Claude's per-cwd scan is unchanged.
 
 ### Consequences
 

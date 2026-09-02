@@ -31,7 +31,7 @@ func (d *Daemon) reconcile() error {
 	}
 	for _, m := range metas {
 		if m.Status.Process != status.ProcessRunning {
-			d.putMem(m) // already terminal: register as-is, no monitor, no write
+			d.putMem(m) // already terminal: register as-is, no monitor, no write here
 		} else {
 			d.reconcileRunning(m)
 		}
@@ -43,42 +43,42 @@ func (d *Daemon) reconcile() error {
 // backfillResumedConversationID gives a codex session resumed before v0.13.16 seeded
 // ids the thread it continues (ADR-010 Amendment 7 H1). A codex resume announces no
 // thread and continues the one it was given, and the daemon wrote that id into the
-// session's launch argv at spawn, the only place it survives. Write-once: a captured id
-// wins. Claude is left to its hook capture, which is authoritative and must not be
-// pre-empted by a latch.
+// session's launch argv at spawn, which outlives the source session the id came from.
+// Write-once: a captured id wins. Claude is left to its hook capture, which is
+// authoritative and must not be pre-empted by a latch. It runs after the session is in
+// memory and, for a live shim, after OnSessionStart fired with the pre-backfill meta:
+// consumers read the id back through Get/List, never off that snapshot.
 func (d *Daemon) backfillResumedConversationID(m persist.Meta) {
 	if m.AgentType != "codex" || m.ResumedFrom == "" || m.ConversationID != "" {
 		return
 	}
-	id, ok := readShimLaunchResumedID(d.sessionDir(m.ID))
+	lc, ok := readShimLaunch(d.sessionDir(m.ID))
 	if !ok {
 		return
 	}
-	if err := d.SetConversationID(m.ID, id); err != nil {
-		d.logf("reconcile: backfill conversation id for %s: %v", m.ID, err)
+	// ponytail: codex Resume composes [binary, "resume", <id>, option flags...], so the
+	// first canonical element is the id it was given, whatever the flags carry after it.
+	for _, arg := range lc.Argv {
+		if adapter.IsCanonicalConversationID(arg) {
+			if err := d.SetConversationID(m.ID, arg); err != nil {
+				d.logf("reconcile: backfill conversation id for %s: %v", m.ID, err)
+			}
+			return
+		}
 	}
 }
 
-// readShimLaunchResumedID is the canonical conversation id in a session's launch argv.
-// ponytail: the adapters place the id as its own argv element and nothing else in a
-// resume argv is a UUID, so the first canonical element is the one given to the agent.
-func readShimLaunchResumedID(dir string) (string, bool) {
+// readShimLaunch re-reads the 0600 shim-launch.json the daemon wrote at spawn (launch.go).
+func readShimLaunch(dir string) (shimSpawnConfig, bool) {
 	data, err := os.ReadFile(filepath.Join(dir, shimLaunchConfigFile))
 	if err != nil {
-		return "", false
+		return shimSpawnConfig{}, false
 	}
-	var lc struct {
-		Argv []string `json:"argv"`
-	}
+	var lc shimSpawnConfig
 	if json.Unmarshal(data, &lc) != nil {
-		return "", false
+		return shimSpawnConfig{}, false
 	}
-	for _, arg := range lc.Argv {
-		if adapter.IsCanonicalConversationID(arg) {
-			return arg, true
-		}
-	}
-	return "", false
+	return lc, true
 }
 
 // reconcileRunning resolves one meta that was last persisted as running.
@@ -151,14 +151,8 @@ func (d *Daemon) registerRunning(m persist.Meta) {
 // ADR-004's 0600 threat model, so a restarting daemon can recover it to re-share
 // with the engine on reconnect.
 func readShimLaunchToken(dir string) (string, bool) {
-	data, err := os.ReadFile(filepath.Join(dir, shimLaunchConfigFile))
-	if err != nil {
-		return "", false
-	}
-	var lc struct {
-		Env []string `json:"env"`
-	}
-	if json.Unmarshal(data, &lc) != nil {
+	lc, ok := readShimLaunch(dir)
+	if !ok {
 		return "", false
 	}
 	prefix := hookclient.EnvToken + "="
