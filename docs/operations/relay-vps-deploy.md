@@ -565,7 +565,7 @@ cd deploy/relay
 cp relay.config.example relay.config   # the shipped defaults already match the compose
                                         # topology's listen/admin_listen addresses
 # production hostname is relay-swarm.dsfactory.org (same requirement as §7)
-export RELAY_VERSION=v0.13.20          # replace with the reviewed immutable release tag
+export RELAY_VERSION=v0.13.21          # replace with the reviewed immutable release tag
 docker compose build
 docker compose up -d
 docker compose ps                      # swarm-relay should read "healthy"
