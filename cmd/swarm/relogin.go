@@ -53,7 +53,7 @@ type reloginClient interface {
 	Delete(id string) error
 }
 
-// Package-level seams (the spawnStateDir precedent) so runRelogin is testable
+// Package-level seams (the persist.writeTemp precedent) so runRelogin is testable
 // with no adapter registry reads and no real clock.
 var (
 	reloginIdentity = skeleton.CurrentAuthIdentity

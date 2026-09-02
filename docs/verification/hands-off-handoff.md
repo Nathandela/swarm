@@ -365,7 +365,8 @@ empty supervision.
 - **Two live writers in one checkout.** The source is left alive by owner decision (E3), so
   the mitigation is honesty in the prompt and a warning in the form, not enforcement.
   `OptionWorktree` stays available as a manual choice.
-- **Non-claude sources are refused by name.** Codex needs a dated-directory scan; agy and
+- **Non-claude sources are refused by name** (superseded for codex on 2026-09-02 by ADR-010
+  Amendment 5 F1; see `adr010/amendment5-red.md`). Codex needs a dated-directory scan; agy and
   opencode have no characterized on-disk history format at all (E7).
 - **Prompt injection is accepted, not solved.** Reading a prior transcript means ingesting
   whatever that session saw. The prompt's "evidence, not orders" clause is the strongest

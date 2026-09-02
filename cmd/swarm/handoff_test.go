@@ -43,7 +43,7 @@ func writeHandoffContext(t *testing.T, body string) string {
 }
 
 func TestRunHandoff_BuildsLinkedLaunchFromCurrentSession(t *testing.T) {
-	stateDir := useTempStateDir(t)
+	root := useTempHandoffRoot(t)
 	sourceDir := t.TempDir()
 	contextPath := writeHandoffContext(t, "# Goal\n\nFinish the review.\n")
 	t.Setenv(hookclient.EnvSessionID, "source-1")
@@ -96,14 +96,11 @@ func TestRunHandoff_BuildsLinkedLaunchFromCurrentSession(t *testing.T) {
 		t.Errorf("stderr = %q, want human confirmation naming child", stderr.String())
 	}
 
-	entries, err := os.ReadDir(filepath.Join(stateDir, "handoffs"))
-	if err != nil {
-		t.Fatal(err)
+	copies := handoffCopies(t, root)
+	if len(copies) != 1 {
+		t.Fatalf("private handoff copies = %d, want 1", len(copies))
 	}
-	if len(entries) != 1 {
-		t.Fatalf("protected handoff copies = %d, want 1", len(entries))
-	}
-	copyPath := filepath.Join(stateDir, "handoffs", entries[0].Name())
+	copyPath := copies[0]
 	info, err := os.Stat(copyPath)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +118,7 @@ func TestRunHandoff_BuildsLinkedLaunchFromCurrentSession(t *testing.T) {
 }
 
 func TestRunHandoff_DefaultsOptionalTargetFields(t *testing.T) {
-	useTempStateDir(t)
+	useTempHandoffRoot(t)
 	sourceDir := t.TempDir()
 	contextPath := writeHandoffContext(t, "context\n")
 	t.Setenv(hookclient.EnvSessionID, "source-1")
@@ -154,7 +151,7 @@ func TestRunHandoff_RequiresLiveManagedSource(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			useTempStateDir(t)
+			useTempHandoffRoot(t)
 			t.Setenv(hookclient.EnvSessionID, tc.env)
 			c := newFakeSpawnClient()
 			c.sessions = tc.sessions
@@ -190,7 +187,7 @@ func TestRunHandoff_FlagAndContextRefusals(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			useTempStateDir(t)
+			useTempHandoffRoot(t)
 			c := newFakeSpawnClient()
 			c.sessions = []protocol.SessionView{handoffSource("source-1", t.TempDir(), status.ProcessRunning)}
 			var stderr bytes.Buffer
@@ -229,7 +226,7 @@ func TestRunHandoff_HelpUsesTheFirstClassCommandContract(t *testing.T) {
 }
 
 func TestRunHandoff_LaunchFailureCleansProtectedCopy(t *testing.T) {
-	stateDir := useTempStateDir(t)
+	root := useTempHandoffRoot(t)
 	contextPath := writeHandoffContext(t, "context\n")
 	t.Setenv(hookclient.EnvSessionID, "source-1")
 	c := newFakeSpawnClient()
@@ -240,12 +237,8 @@ func TestRunHandoff_LaunchFailureCleansProtectedCopy(t *testing.T) {
 	if exit := runHandoff([]string{"--cli", "claude", "--context-file", contextPath}, c, io.Discard, &stderr); exit != 1 {
 		t.Fatalf("exit = %d, want 1; stderr=%q", exit, stderr.String())
 	}
-	left, err := os.ReadDir(filepath.Join(stateDir, "handoffs"))
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	if len(left) != 0 {
-		t.Errorf("handoffs dir holds %d orphaned copies, want 0", len(left))
+	if left := handoffDirs(t, root); len(left) != 0 {
+		t.Errorf("%d orphaned handoff directories remain, want 0", len(left))
 	}
 }
 
@@ -277,7 +270,7 @@ func TestRunHandoff_SupervisionModeTravelsInLaunchReq(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			useTempStateDir(t)
+			useTempHandoffRoot(t)
 			contextPath := writeHandoffContext(t, "context\n")
 			t.Setenv(hookclient.EnvSessionID, "source-1")
 			c := newFakeSpawnClient()
@@ -303,7 +296,7 @@ func TestRunHandoff_RefusesUnknownSupervisionMode(t *testing.T) {
 	t.Setenv(hookclient.EnvSessionID, "source-1")
 	for _, mode := range []string{"eager", "watch", ""} {
 		t.Run(mode, func(t *testing.T) {
-			useTempStateDir(t)
+			useTempHandoffRoot(t)
 			c := newFakeSpawnClient()
 			c.sessions = []protocol.SessionView{handoffSource("source-1", t.TempDir(), status.ProcessRunning)}
 			var stderr bytes.Buffer

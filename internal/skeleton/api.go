@@ -1361,13 +1361,16 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 		return daemon.LaunchSpec{}, err
 	}
 
-	// STEP 2. E7's scope gate, and it is the ADAPTER's knowledge that draws the line:
-	// an adapter without a characterized transcript layout is not asserted into the
-	// interface, so codex, agy and opencode are refused BY NAME rather than handed a
-	// path this daemon cannot compute.
+	// STEP 2. E7's scope gate as amended (Amendment 5 F1), and it is the ADAPTER's
+	// knowledge that draws the line: a source is supported when its adapter has
+	// characterized where its transcripts live, by cwd (claude) or by day (codex). An
+	// adapter that characterizes neither is asserted into neither interface, so agy and
+	// opencode are refused BY NAME rather than handed a path this daemon cannot compute.
 	ad, _ := registry.New(source.AgentType)
-	if _, ok := adapter.AsTranscriptLayout(ad); !ok {
-		return daemon.LaunchSpec{}, fmt.Errorf("handoff: source agent %q has no characterized transcript layout; hands-off supports claude sources only in this sweep", source.AgentType)
+	_, byCwd := adapter.AsTranscriptLayout(ad)
+	_, byDay := adapter.AsDatedTranscriptLayout(ad)
+	if !byCwd && !byDay {
+		return daemon.LaunchSpec{}, fmt.Errorf("handoff: source agent %q has no characterized transcript layout; hands-off supports claude and codex sources", source.AgentType)
 	}
 	if resolver == nil {
 		return daemon.LaunchSpec{}, fmt.Errorf("handoff: no provider history resolver is configured")
@@ -1529,6 +1532,8 @@ func handsOffTranscriptError(provider, convID string, outcome resumeHistoryOutco
 		return fmt.Errorf("handoff: the %s transcript for conversation %s was not found", provider, convID)
 	case resumeHistoryUnsupported:
 		return fmt.Errorf("handoff: %s has no characterized transcript layout", provider)
+	case resumeHistoryAmbiguous:
+		return fmt.Errorf("handoff: more than one %s transcript names conversation %s; refusing to guess", provider, convID)
 	case resumeHistoryUnsafe:
 		return fmt.Errorf("handoff: the %s transcript for conversation %s is unsafe to open", provider, convID)
 	default:

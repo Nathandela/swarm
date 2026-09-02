@@ -32,9 +32,11 @@ const backendScheme = "unix://"
 // unconditionally true here and false everywhere else.
 func (codexAdapter) Backend(spec adapter.BackendSpec) (adapter.BackendPlan, bool) {
 	endpoint := backendScheme + spec.SocketPath
+	// The recorded argv plus the sandbox override: the app-server is the process that
+	// executes the agent's commands, so its sandbox is the one the swarm CLI runs under.
 	return adapter.BackendPlan{
 		Program:   binary,
-		Args:      []string{"app-server", "--listen", endpoint},
+		Args:      []string{"app-server", "--listen", endpoint, "-c", sandboxNetworkOverride},
 		AgentArgs: []string{"--remote", endpoint},
 	}, true
 }

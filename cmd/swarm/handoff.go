@@ -2,8 +2,8 @@ package main
 
 // `swarm handoff` is the first-class supervised handoff entry point. It is a
 // deliberately thin owner-tier wrapper over the already-shipped List + Launch
-// protocol: the source agent authors context, this command snapshots it under
-// Swarm's protected state directory, and the daemon launches a linked child.
+// protocol: the source agent authors context, this command snapshots it into a
+// private temporary directory of its own, and the daemon launches a linked child.
 // Monitoring remains explicit through `swarm watch`, `peek`, and `send`, or is
 // delegated to the daemon's passive supervisor (ADR-010 Amendment 3 C1).
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -110,7 +111,7 @@ func runHandoff(args []string, c agentClient, stdout, stderr io.Writer) int {
 
 	id, canonical, err := c.Launch(req)
 	if err != nil {
-		_ = os.Remove(dest)
+		_ = os.RemoveAll(filepath.Dir(dest)) // the private directory is the copy's
 		_, _ = fmt.Fprintf(stderr, "handoff: launch target: %v\n", err)
 		return 1
 	}

@@ -1,6 +1,6 @@
 # ADR-010: Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs
 
-**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/)
+**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02)
 **Date**: 2026-07-24
 
 ## Context
@@ -60,8 +60,9 @@ launches via `OpLaunch` with an `InitialPrompt` instructing the new agent to rea
 handoff file first. The handoff file is authored by the source agent (goal, current state,
 decisions, next steps) and carries pointers, not payloads: the source swarm session id, the
 source CLI's native transcript path (raw — no cross-vendor normalization in v1), git state,
-and relevant beads issue ids. Handoff files live under the swarm state dir
-(`<stateDir>/handoffs/`), never in the repo. `--handoff` and `--delegate` share mechanics
+and relevant beads issue ids. Handoff files live in a private temporary directory of
+their own (`<os.TempDir()>/swarm-handoff-*/`, Amendment 5 F3; originally `<stateDir>/handoffs/`),
+never in the repo. `--handoff` and `--delegate` share mechanics
 and differ only in recorded intent (D4) and defaults (handoff: same cwd; delegate:
 `--worktree` recommended).
 
@@ -279,7 +280,8 @@ transport. This amendment supersedes D3 and A5 Phase 4 where they conflict.
 `swarm handoff --cli <agent> [--model <model>] [--name <name>] --context-file <file>`
 is shipped in the swarm binary. It must run inside a live swarm-managed source session,
 resolved from `SWARM_SESSION_ID` and the daemon roster. The command copies the authored
-document under the protected swarm state directory, launches the target in the source
+document into a private temporary directory of its own (Amendment 5 F3; originally the protected
+swarm state directory), launches the target in the source
 session's cwd, records `spawned_from` plus `spawn_intent=handoff`, and prints only the
 child session ID on stdout. A launch refusal removes the protected copy. The existing
 lower-level `swarm spawn` and delegation behavior remain available; handoff no longer
@@ -539,8 +541,117 @@ sessions are refused. Codex is the next candidate and needs the dated-directory 
 resume resolver already performs, so it is a later slice, not this one. agy and opencode have no
 characterized on-disk history format at all, which is the same line R-2 already draws for resume.
 
+**Superseded for codex by Amendment 5 F1 (2026-09-02).** agy and opencode remain refused by name.
+
 The launch option (`handoff_from`) is owner-tier only and capability-negotiated for the same
 fail-closed reason: a client talking to an older daemon that does not know the option must be
 refused by name, never served a launch with the option quietly dropped. Its `protocol.md` rows —
 the launch-option row and the capability row — land in the same commit as the code (GG-7), and the
 product requirement lands in `system-spec.md` as R-5.
+
+## Amendment 5 (2026-09-02): codex sources — hands-off by the id's day, supervised through the sandbox
+
+Neither handoff method worked from a codex source, for two unrelated reasons, and no codex-sourced
+handoff had ever reached the daemon on the owner's machine (daemon.log held no handoff line; no
+session meta carried a handoff lineage). Hands-off was refused by name under E7. Supervised failed
+one layer lower: the swarm CLI cannot run inside codex's `workspace-write` sandbox. Measured with
+`codex sandbox` on codex-cli 0.151.0, 2026-09-02:
+
+```
+touch ~/.local/state/swarm/.probe   -> Read-only file system
+swarm ls                            -> dial unix .../daemon.sock: connect: operation not permitted
+```
+
+The socket connect is refused by codex's network seccomp filter, so `swarm handoff` died at its
+first call and `swarm watch`, `peek` and `send` died with it; the state-dir write is refused by
+the filesystem sandbox, so the context copy could not land either. Both are measured, not
+inferred, and each has its own clause. The clauses are lettered F for the same reason E1-E7 are E.
+
+### F1. Hands-off resolves codex sources by the day their id names
+
+Codex files one rollout per thread under `~/.codex/sessions/YYYY/MM/DD/rollout-<stamp>-<id>.jsonl`.
+Both the day and the stamp are the thread's creation time in UTC, and a codex thread id is a
+UUIDv7 whose first 48 bits are that creation time in milliseconds — measured on four real
+rollouts: every name's stamp equalled its id's embedded time to the second, and its directory was
+that UTC day. So the file is found without a search across the tree and without leaning on the
+swarm session's own creation date, which for a RESUMED thread (the ordinary codex case) is days
+later than the rollout.
+
+The codex adapter implements a second optional interface, `adapter.DatedTranscriptLayout`
+(`TranscriptDay(convID) (time.Time, bool)`), on the same terms as `TranscriptLayout`: pure, total,
+no I/O, discovered by type assertion, absence is the signal. The resolver lists that day first (so a busy neighbour cannot spend the entry budget before the
+right day is read), then the day after (the id carries the millisecond the thread was minted, the
+file the second codex wrote it; across midnight those differ — measured: of 1888 real rollouts, 28
+are stamped later than their id and none earlier), then the day before, which only a machine
+filing rollouts by a local time behind UTC could need; all under the same anchored, budgeted walk
+`resolveCodex` uses. It opens only the entry whose parsed id is the conversation — two entries
+claiming one id fail closed as ambiguous — and requires its first record to be a `session_meta`
+naming that id.
+
+THERE IS NO CWD CLAUSE, and its absence is measured rather than lazy. Codex records the
+app-server's working directory as the thread's, and under swarm the app-server runs in the
+session's state dir (`internal/shim/backend.go`), so every swarm-launched rollout names
+`<stateDir>/sessions/<creating session>` — a resumed thread names an older session's — and a
+clause requiring the source's checkout refused every real session (found by adversarial review
+against the 1888 rollouts on the owner's machine, before this shipped). The containment claude's
+per-cwd directory gives for free therefore has no codex equivalent: a poisoned latched id
+(`agents-tracker-hpga`) would point the successor at another same-user thread, which D7 already
+accepts and the prompt's "repository wins" rule bounds. The check is deliberately not
+`parseCodexSessionMeta`, whose cwd and creation-window matches are right when searching for an
+unknown id and wrong when the id is known.
+
+Two limits are accepted and named. A pre-UUIDv7 thread id (codex minted v4 ids before it minted
+v7; sixteen such rollouts from 2025 exist on the owner's machine) names no day and is reported not
+found. And a codex source with NO captured id is first offered to the existing `resolveCodex`
+window, which for the same recorded-cwd reason cannot match an app-server thread and fails closed
+on the degenerate rollouts present in the owner's tree, so hands-off from such a source is refused
+by name until `swarm-man` lands. Every source with a captured id — twelve of the eighteen live
+codex sessions at the time of writing — composes.
+
+E7's gate becomes "either layout": a source is supported when its adapter has characterized where
+its transcripts live, by cwd or by day. agy and opencode still implement neither and are refused
+by name. A MISSING codex id is first offered to the existing `resolveCodex` window before the locator runs;
+the limits above say what that recovers today.
+
+### F2. Every codex argv lifts the sandbox's network filter for the swarm CLI
+
+The codex adapter appends `-c sandbox_workspace_write.network_access=true` to the agent argv
+(`Command` and `Resume`) and to the app-server argv (`Backend`): the app-server is the process
+that executes the agent's commands, and which process's configuration wins is codex's business,
+not swarm's. This is codex's own key for exactly this; it is inert under `read-only` (which blocks
+every write, including the `/tmp` file the source prompt authors, so a read-only codex session is
+not a supervised-handoff source) and under `danger-full-access` (no sandbox to lift).
+
+The trade is stated rather than hidden: a codex session swarm launches in workspace-write mode may
+open network connections without an approval prompt. That is the price of a CLI that talks to a
+daemon over a socket. The alternative — letting codex ask to rerun `swarm ...` outside the sandbox
+— depends on the approval policy and reviewer configured in codex and is not automatic, which is
+the property the owner asked for. An owner who wants the filter back chooses `--sandbox read-only`
+for that session and forgoes supervised handoff from it.
+
+### F3. The handoff copy lives in a private temporary directory, not the state dir
+
+`swarm handoff` and `swarm spawn --handoff/--delegate` copy the authored document into a fresh
+`os.MkdirTemp("", "swarm-handoff-")` directory (0700, unique, one per handoff) rather than under
+`<stateDir>/handoffs/`, because the state dir is read-only inside the codex sandbox while the
+temp dir is writable there (measured: `/tmp` subdirectories are writable under workspace-write).
+Every property the copy had is kept: absolute path in the pointer prompt, 0600 file, one copy per
+handoff, and removal — now of the whole directory — when the launch is refused or the copy itself
+fails. A pre-existing directory can never be squatted because the directory is minted, not named.
+An owner who sets codex's `sandbox_workspace_write.exclude_slash_tmp` makes the copy fail inside
+the sandbox with a named refusal ("read-only file system"), which is the correct outcome for a
+knob whose purpose is to keep the sandbox from writing there. Codex likewise excludes `$TMPDIR`
+from the writable roots (`exclude_tmpdir_env_var`), so an owner who exports `TMPDIR` outside `/tmp`
+gets the same named refusal; `os.TempDir` honours that variable, and the sandbox's own environment
+leaves it unset. D2 and B1 read as this directory from now on.
+
+### Consequences
+
+- A codex-to-claude handoff composes by both methods for any source with a captured conversation
+  id, and a codex-to-codex hands-off does too; the no-captured-id case is `swarm-man`.
+- Codex workspace-write sessions launched by swarm have network access on (F2). Recorded as a
+  security consequence, not argued away.
+- Handoff copies live under the temp dir and do not survive a reboot; they were always transient.
+- The dated locator LISTS a day directory (budget-bounded), where claude's locator opens one exact
+  name. A stray entry in that directory is ignored, not judged.
+- Evidence: `docs/verification/adr010/amendment5-red.md`.
