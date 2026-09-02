@@ -21,6 +21,7 @@ package adapter
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/vt"
 )
@@ -301,5 +302,27 @@ type TranscriptLayout interface {
 // AsTranscriptLayout reports whether a has a characterized transcript layout.
 func AsTranscriptLayout(a Adapter) (TranscriptLayout, bool) {
 	layout, ok := a.(TranscriptLayout)
+	return layout, ok
+}
+
+// DatedTranscriptLayout is the OPTIONAL extension a CLI implements when it files
+// transcripts by DAY rather than by working directory, so no path can be composed
+// from a cwd and an id alone: the file sits in a day directory named after when the
+// conversation began and carries a launch timestamp of its own in its name. The
+// adapter names the DAY -- its knowledge is that its ids carry one -- and the core's
+// anchored, budgeted resolver lists that day and matches the id. Same terms as
+// TranscriptLayout: pure, total, no I/O, discovered by type assertion, and absence is
+// the signal (ADR-010 Amendment 5 F1).
+type DatedTranscriptLayout interface {
+	// TranscriptDay returns the UTC calendar day the CLI filed convID's transcript
+	// under, when the id itself carries that day, and false when it does not. It does
+	// NOT validate convID beyond what reading the day needs -- callers owe
+	// IsCanonicalConversationID before it and an os.Root anchor after it.
+	TranscriptDay(convID string) (time.Time, bool)
+}
+
+// AsDatedTranscriptLayout reports whether a files its transcripts by day.
+func AsDatedTranscriptLayout(a Adapter) (DatedTranscriptLayout, bool) {
+	layout, ok := a.(DatedTranscriptLayout)
 	return layout, ok
 }

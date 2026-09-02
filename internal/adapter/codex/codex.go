@@ -22,7 +22,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -175,8 +177,38 @@ func (codexAdapter) ExtractConversationID(grid *vt.Snap, tail []byte) (string, b
 	return threadIDFrom(gridText(grid))
 }
 
+// sandboxNetworkOverride lets the swarm CLI reach the daemon from inside codex's
+// workspace-write sandbox (ADR-010 Amendment 5 F2). Codex's Linux sandbox blocks every
+// connect(2) with a seccomp filter, a unix socket included, so `swarm handoff`, `watch`,
+// `peek` and `send` all failed from a codex source with "connect: operation not
+// permitted" (measured with `codex sandbox` on codex-cli 0.151.0, 2026-09-02). This is
+// codex's own config key for lifting that filter, passed as `-c key=value`. It is inert
+// under read-only, which blocks everything including the /tmp write the handoff prompt
+// needs, and under danger-full-access, which has no sandbox to lift.
+const sandboxNetworkOverride = "sandbox_workspace_write.network_access=true"
+
+// TranscriptDay makes the codex adapter an adapter.DatedTranscriptLayout. Codex files
+// each thread's rollout under ~/.codex/sessions/YYYY/MM/DD/rollout-<stamp>-<id>.jsonl,
+// where the day and the stamp are the thread's creation time in UTC -- and a codex
+// thread id is a UUIDv7, whose first 48 bits ARE that creation time in milliseconds.
+// Measured 2026-09-02 on four real rollouts: every name's stamp equalled its id's
+// embedded time to the second, and its directory was that UTC day. An id that is not a
+// canonical v7 carries no day and reports false.
+func (codexAdapter) TranscriptDay(convID string) (time.Time, bool) {
+	if !adapter.IsCanonicalConversationID(convID) || convID[14] != '7' {
+		return time.Time{}, false
+	}
+	ms, err := strconv.ParseUint(convID[:8]+convID[9:13], 16, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	t := time.UnixMilli(int64(ms)).UTC()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), true
+}
+
 // optionFlags translates resolved option values into codex flags in a fixed
-// order, so Command stays deterministic.
+// order, so Command stays deterministic, and closes with the sandbox override
+// every codex argv carries.
 func optionFlags(opts map[string]string) []string {
 	var flags []string
 	if m := opts["model"]; m != "" {
@@ -185,7 +217,7 @@ func optionFlags(opts map[string]string) []string {
 	if s := opts["sandbox"]; s != "" {
 		flags = append(flags, "--sandbox", s)
 	}
-	return flags
+	return append(flags, "-c", sandboxNetworkOverride)
 }
 
 // threadIDFrom accepts canonical threadId values only from complete JSON-object
