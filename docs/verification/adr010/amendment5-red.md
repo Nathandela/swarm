@@ -219,3 +219,42 @@ id, 37 bytes and a year-10889 prefix without panicking. Eight findings:
 The reviewer also saw two `TestRunHook_*` tests fail in its own sandbox; on this machine they pass
 in isolation with the `SWARM_*` session variables unset (§5).
 
+## 7. Rollout: v0.13.21 on the owner's machine (2026-09-02)
+
+The first Release run for the tag failed in the fuzz gate (`FuzzReadFrame`, "context deadline
+exceeded" at the 30 s fuzztime boundary, no failing input written; `internal/wire` is untouched by
+the release and the same commit's PR run had passed) and publish was skipped. Filed as `swarm-vf1`.
+The re-run published at 09:34 UTC with the signed checksums and the 4 + 4 + 1 archives.
+
+```
+swarm upgrade --stage      -> staged, 0.13.18 -> v0.13.21 (signature verified)
+swarm upgrade --activate   -> binaries installed; converge deferred: session f4mcl7qjyreiw6ed is working
+swarm daemon restart       -> exit 0 (from a terminal with the six SWARM_* variables unset)
+daemon pid 3650303 -> 3767447, exe inode 6924 == /usr/local/bin/swarm, roster 30 -> 30
+```
+
+The deferral was correct: the only working session was the one driving the upgrade, and the
+attended restart is the documented path for that case.
+
+**Live smoke, in a scratch repository trusted for codex (`/tmp/swarm-smoke-20260902`).**
+
+- `swarm spawn --cli codex` from a clean environment launched session `wythw7mqt4e3pkd3`. Its
+  app-server argv was `codex app-server --listen unix://… -c sandbox_workspace_write.network_access=true`
+  and its agent argv `codex -c sandbox_workspace_write.network_access=true <prompt>` (F2, both
+  processes). Its rollout's `turn_context.sandbox_policy` recorded
+  `{"type":"workspace-write","writable_roots":["/tmp/swarm-smoke-20260902","/tmp"],"network_access":true,…}`:
+  the override took effect through the app-server/`--remote` path, which is the proof the
+  reviewers asked for. Its `session_meta.cwd` was `<stateDir>/sessions/wythw7mqt4e3pkd3`, the
+  measurement behind F1's missing cwd clause. The session latched its thread id from typed events.
+- The codex turn itself did not run: the account had hit its usage cap ("try again at Sep 8th").
+  The end-to-end supervised run (codex executing `swarm handoff`) is therefore deferred to
+  `swarm-6bo`; F2's mechanism is proven above, its use by a live model turn is not yet.
+- That left a genuinely rate-limited codex source, the case hands-off exists for. A hands-off
+  launch (`handoff_from=ep-8d00dc6d/wythw7mqt4e3pkd3`, target claude) composed session
+  `uzjtnk7nwbgpavxn` with `spawned_from=wythw7mqt4e3pkd3`, `spawn_intent=handoff`, empty
+  supervision, cwd `/tmp/swarm-smoke-20260902`, and a prompt carrying the five pointers with the
+  real rollout path under the daemon's resolved `~/.codex` alias. Past Claude Code's folder-trust
+  dialog the successor announced read-only reconnaissance and ran `git status`, `git log`, a
+  listing, and opened the rollout — the prompt's before-writing rules, followed. It exited with
+  143 at 09:44:40, the moment the owner interrupted the session and removed the codex source from
+  the roster; not a defect.
