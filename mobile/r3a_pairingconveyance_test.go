@@ -106,6 +106,9 @@ func r3aMachineParams(t *testing.T, secret [32]byte, rid [16]byte) pairing.Machi
 			return true, nil
 		},
 		PushBindingSupport: true,
+		StagePushBinding: func(context.Context, *pairing.PushBinding, pairing.DevicePayload) error {
+			return nil
+		},
 		VerifyPushBinding: func(context.Context, *pairing.PushBinding) error {
 			return nil
 		},

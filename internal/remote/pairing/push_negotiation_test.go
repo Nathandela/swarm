@@ -26,10 +26,21 @@ func TestPushBindingNegotiation_NewPeersPrepareAndVerifyOnlyAfterAgreement(t *te
 
 	mp := newMachineParams(mID, secret, rid, acceptConfirm)
 	mp.PushBindingSupport = true
+	var staged atomic.Int32
+	mp.StagePushBinding = func(_ context.Context, b *PushBinding, payload DevicePayload) error {
+		if b == nil || payload.DeviceName == "" {
+			return errors.New("stager did not receive the authenticated binding and device payload")
+		}
+		staged.Add(1)
+		return nil
+	}
 	var verified atomic.Int32
 	mp.VerifyPushBinding = func(_ context.Context, b *PushBinding) error {
 		if b == nil {
 			t.Fatal("verifier received nil binding")
+		}
+		if staged.Load() != 1 {
+			t.Fatal("provider verification ran before durable revoke custody")
 		}
 		verified.Add(1)
 		return nil
@@ -47,8 +58,8 @@ func TestPushBindingNegotiation_NewPeersPrepareAndVerifyOnlyAfterAgreement(t *te
 	if mErr != nil || dErr != nil || mo == nil || do == nil {
 		t.Fatalf("negotiated pairing: machine=(%v,%v) device=(%v,%v)", mo, mErr, do, dErr)
 	}
-	if prepared.Load() != 1 || verified.Load() != 1 {
-		t.Fatalf("prepare=%d verify=%d, want exactly one of each", prepared.Load(), verified.Load())
+	if prepared.Load() != 1 || staged.Load() != 1 || verified.Load() != 1 {
+		t.Fatalf("prepare=%d stage=%d verify=%d, want exactly one of each", prepared.Load(), staged.Load(), verified.Load())
 	}
 	if mo.PushBinding == nil {
 		t.Fatal("negotiated pairing conveyed no binding")
@@ -119,6 +130,36 @@ func TestPushBindingNegotiation_VerificationFailureDeclinesAndRevokes(t *testing
 	}
 	if revoked.Load() != 1 {
 		t.Fatalf("revoke count=%d, want exactly 1", revoked.Load())
+	}
+}
+
+func TestPushBindingNegotiation_MissingDurableStageDeclinesBeforeProviderVerification(t *testing.T) {
+	mID, _ := crypto.GenerateIdentity()
+	dID, _ := crypto.GenerateIdentity()
+	rid, secret := fill16(0x97), fill32(0x98)
+	mp := newMachineParams(mID, secret, rid, acceptConfirm)
+	mp.StagePushBinding = nil
+	var verified atomic.Int32
+	mp.VerifyPushBinding = func(context.Context, *PushBinding) error {
+		verified.Add(1)
+		return nil
+	}
+	dp := newDeviceParams(dID, secret, rid)
+	dp.RequestPushBinding = true
+	var revoked atomic.Int32
+	dp.PreparePushBinding = func(context.Context) (*PushBinding, func(), error) {
+		return negotiatedBinding(), func() { revoked.Add(1) }, nil
+	}
+	mEnd, dEnd := newRendezvousPipe()
+	mo, mErr, do, dErr := drivePair(t, NewMachine(mp), dp, mEnd, dEnd)
+	if mo != nil || !errors.Is(mErr, ErrNoPushVerifier) {
+		t.Fatalf("machine outcome/error=(%v,%v), want missing-stage refusal", mo, mErr)
+	}
+	if do != nil || !errors.Is(dErr, ErrPairingDeclined) {
+		t.Fatalf("device outcome/error=(%v,%v), want authenticated decline", do, dErr)
+	}
+	if verified.Load() != 0 || revoked.Load() != 1 {
+		t.Fatalf("provider verification=%d revoke=%d, want 0 then 1", verified.Load(), revoked.Load())
 	}
 }
 

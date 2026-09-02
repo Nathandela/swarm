@@ -363,6 +363,10 @@ type MachineParams struct {
 	// for the gateway's provider_accepted outcome. It runs after msg4 is authenticated
 	// and before the acceptance is sent.
 	VerifyPushBinding func(context.Context, *PushBinding) error
+	// StagePushBinding durably records the exact revoke obligation before verification
+	// can bind the allocation at the provider. It receives the authenticated device
+	// payload so the stage is bound to the eventual registry DeviceID.
+	StagePushBinding func(context.Context, *PushBinding, DevicePayload) error
 }
 
 // DeviceParams configures one device-side (Noise XXpsk0 initiator) pairing.
@@ -697,6 +701,14 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 		if p.VerifyPushBinding == nil {
 			declineAndBurn(ctx, sess, rt, label)
 			return nil, ErrNoPushVerifier
+		}
+		if p.StagePushBinding == nil {
+			declineAndBurn(ctx, sess, rt, label)
+			return nil, ErrNoPushVerifier
+		}
+		if err := p.StagePushBinding(ctx, pushBinding, devPayload); err != nil {
+			declineAndBurn(ctx, sess, rt, label)
+			return nil, fmt.Errorf("pairing: stage push binding: %w", err)
 		}
 		if err := p.VerifyPushBinding(ctx, pushBinding); err != nil {
 			declineAndBurn(ctx, sess, rt, label)

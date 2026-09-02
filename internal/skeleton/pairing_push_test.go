@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
+	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 	"github.com/Nathandela/swarm/internal/remotegw"
@@ -228,5 +230,88 @@ func TestLoadPairingConfig_ProductionPushEndpointReachesBeginPairingCapability(t
 	}
 	if decoded.Flags&pairing.QRFlagPushBinding == 0 {
 		t.Fatal("production-loaded endpoint did not advertise push binding support")
+	}
+}
+
+func TestBeginPairing_NegotiatedPushStagesBeforeTestWakeAndPersistsWithGrant(t *testing.T) {
+	var wakeRequests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/wakes" {
+			wakeRequests.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"provider_accepted"}`))
+	}))
+	defer server.Close()
+
+	sk := assemble(t)
+	deviceEnds := injectPairing(t, sk)
+	sk.api.pairing.PushGatewayURL = server.URL
+	sk.api.pairing.PushHTTPClient = server.Client()
+	sk.api.pushHTTPClient = server.Client()
+
+	rc := dialRemote(t, sk.SocketPath(), protocol.CapPairing)
+	rc.write(protocol.Control{Op: protocol.OpPairStart, EndpointID: rc.endpointID,
+		Pairing: &protocol.PairingControl{Capability: "full"}})
+	reply := awaitControl(t, rc, protocol.OpPairStart)
+	qp, err := pairing.DecodeQR(reply.Pairing.QR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qp.Flags&pairing.QRFlagPushBinding == 0 {
+		t.Fatal("configured production pairing did not negotiate push")
+	}
+	dEnd := recvDeviceEnd(t, deviceEnds)
+	ks, err := crypto.NewFileKeyStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	static, err := ks.NoiseStatic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, _, _ := skeletonPushBinding()
+	done := make(chan error, 1)
+	go func() {
+		_, err := pairing.RunDevice(context.Background(), pairing.DeviceParams{
+			Static: static, Secret: qp.PairingSecret, RendezvousID: qp.RendezvousID,
+			Payload: pairing.DevicePayload{
+				DeviceName: "push-phone", DeviceRoutingID: bytes.Repeat([]byte{0x11}, 16),
+				DeviceRelayAuthPub: ks.RelayAuthPublic(), RecipientPub: ks.RecipientPublic(),
+				DeviceCommandSignPub: ks.CommandSigningPublic(),
+			},
+			Consent:            phoneConsentFor(ks, qp.RendezvousID),
+			RequestPushBinding: true,
+			PreparePushBinding: func(context.Context) (*pairing.PushBinding, func(), error) {
+				return binding, func() {}, nil
+			},
+		}, dEnd)
+		done <- err
+	}()
+	pending := awaitControl(t, rc, protocol.OpPairPending)
+	if pending.Pairing == nil || len(pending.Pairing.SAS) != 6 {
+		t.Fatalf("missing pairing SAS: %+v", pending.Pairing)
+	}
+	rc.write(protocol.Control{Op: protocol.OpPairConfirm, EndpointID: rc.endpointID,
+		Pairing: &protocol.PairingControl{Allow: true}})
+	res := awaitControl(t, rc, protocol.OpPairResult)
+	if res.Pairing == nil || res.Pairing.DeviceID == "" {
+		t.Fatalf("negotiated pairing failed: %+v", res.Pairing)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("device pairing: %v", err)
+	}
+	if wakeRequests.Load() != 1 {
+		t.Fatalf("test wake requests=%d, want 1", wakeRequests.Load())
+	}
+	rec, ok := sk.api.devices.Get(res.Pairing.DeviceID)
+	if !ok || rec.Push == nil || !bytes.Equal(rec.Push.WakeKey, binding.WakeKey) {
+		t.Fatalf("registry lost negotiated push authority: %+v", rec.Push)
+	}
+	if g, err := grant.Load(sk.api.registryDir(), res.Pairing.DeviceID); err != nil || g == nil {
+		t.Fatalf("owned push row has no committed grant: %v, %v", g, err)
+	}
+	if _, ok := sk.api.pushRevokeCustody.Pending(); ok {
+		t.Fatal("successful registry+grant commit left revoke custody pending")
 	}
 }

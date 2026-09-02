@@ -258,6 +258,13 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		RendezvousID:       id,
 		LocalConsole:       true,
 		PushBindingSupport: cfg.PushGatewayURL != "",
+		StagePushBinding: func(_ context.Context, binding *pairing.PushBinding, payload pairing.DevicePayload) error {
+			if a.pushRevokeCustody == nil {
+				return errors.New("machine push revoke custody is not configured")
+			}
+			push := pairingPushRecord(cfg.PushGatewayURL, binding)
+			return a.pushRevokeCustody.Stage(device.DeviceIDFor(payload.DeviceCommandSignPub), push)
+		},
 		VerifyPushBinding: func(verifyCtx context.Context, binding *pairing.PushBinding) error {
 			return verifyPairingPushBinding(verifyCtx, a.stateDir, cfg, binding)
 		},
@@ -348,6 +355,12 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		defer cancelPair()
 		outcome, err := pairing.NewMachine(mp).Pair(pairCtx, transport)
 		if err != nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			cleanupErr := reconcileMachinePushCustody(cleanupCtx, a.pushRevokeCustody, a.devices, cfg.PushHTTPClient)
+			cleanupCancel()
+			if cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("drive failed-pairing push revoke: %w", cleanupErr))
+			}
 			result(protocol.PairResult{Err: err})
 			return
 		}
@@ -415,6 +428,15 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 				Capability: req.Capability,
 			}
 		}()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanupErr := reconcileMachinePushCustody(cleanupCtx, a.pushRevokeCustody, a.devices, cfg.PushHTTPClient)
+		cleanupCancel()
+		// Once registry + grant committed, the stage itself is only write-ahead cleanup
+		// metadata. A clear/fsync failure must not turn the already-acknowledged pairing into
+		// a reported failure: restart will see the matching owned row and retry the clear.
+		if cleanupErr != nil && res.Err != nil {
+			res.Err = errors.Join(res.Err, fmt.Errorf("drive pairing push revoke custody: %w", cleanupErr))
+		}
 		result(res) // OUTSIDE lifecycleMu (round-5 finding 2): the owner-socket write cannot stall a revoke/pair
 	}()
 

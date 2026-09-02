@@ -207,6 +207,9 @@ func newMachineParams(id *crypto.Identity, secret [32]byte, rid [16]byte, confir
 		LocalConsole:       true,
 		Confirm:            confirm,
 		PushBindingSupport: true,
+		StagePushBinding: func(context.Context, *PushBinding, DevicePayload) error {
+			return nil
+		},
 		VerifyPushBinding: func(context.Context, *PushBinding) error {
 			return nil
 		},
