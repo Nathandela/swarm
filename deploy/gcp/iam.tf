@@ -33,6 +33,22 @@ locals {
     relay  = google_service_account.relay.member
     pushgw = google_service_account.pushgw.member
   }
+
+  operator_attached_service_accounts = {
+    relay  = google_service_account.relay.name
+    pushgw = google_service_account.pushgw.name
+  }
+
+  # OS Login requires an operator to have Service Account User on the service
+  # account attached to the target VM. Build the full operator x VM identity
+  # product so access does not accidentally depend on a project Owner grant.
+  operator_service_account_users = {
+    for pair in setproduct(var.operator_members, keys(local.operator_attached_service_accounts)) :
+    "${pair[1]}:${pair[0]}" => {
+      member             = pair[0]
+      service_account_id = local.operator_attached_service_accounts[pair[1]]
+    }
+  }
 }
 
 resource "google_project_iam_member" "runtime_log_writer" {
@@ -74,4 +90,12 @@ resource "google_project_iam_member" "operator_os_login" {
   project = var.project_id
   role    = "roles/compute.osLogin"
   member  = each.value
+}
+
+resource "google_service_account_iam_member" "operator_service_account_user" {
+  for_each = local.operator_service_account_users
+
+  service_account_id = each.value.service_account_id
+  role               = "roles/iam.serviceAccountUser"
+  member             = each.value.member
 }

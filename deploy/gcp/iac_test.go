@@ -144,6 +144,23 @@ func TestRuntimeIdentitiesAreDedicatedAndLeastPrivilege(t *testing.T) {
 	}
 }
 
+func TestEveryOperatorCanUseBothAttachedRuntimeIdentities(t *testing.T) {
+	tf := terraform(t)
+	requireContains(t, tf,
+		`operator_attached_service_accounts = {`,
+		`relay  = google_service_account.relay.name`,
+		`pushgw = google_service_account.pushgw.name`,
+		`for pair in setproduct(var.operator_members, keys(local.operator_attached_service_accounts))`,
+	)
+	binding := resourceBlock(t, tf, "google_service_account_iam_member", "operator_service_account_user")
+	requireContains(t, binding,
+		`for_each = local.operator_service_account_users`,
+		`service_account_id = each.value.service_account_id`,
+		`role               = "roles/iam.serviceAccountUser"`,
+		`member             = each.value.member`,
+	)
+}
+
 func TestDataDisksAndSnapshotsAreDurableAndEUResident(t *testing.T) {
 	tf := terraform(t)
 	for _, name := range []string{"relay_data", "pushgw_data"} {
@@ -186,6 +203,10 @@ func TestDNSIsAnExplicitExternalOutputAndDocsAreOperational(t *testing.T) {
 		`export PUSHGW_VERSION="${release}"`,
 		"gh attestation verify",
 		"--tunnel-through-iap",
+		"exactly four least-privilege IAM grants per operator",
+		"roles/iam.serviceAccountUser",
+		`operator_service_account_user["relay:user:operator@example.com"]`,
+		`operator_service_account_user["pushgw:user:operator@example.com"]`,
 		"terraform output -json dns_a_records",
 		"deletion protection",
 		"restore drill",

@@ -17,6 +17,12 @@ keys, and require OS Login over IAP. Only TCP 80/443 is public. TCP 22 is limite
 multi-region and kept if the source disk is removed. VM deletion protection and Terraform
 `prevent_destroy` are independent safeguards.
 
+For every principal in `operator_members`, the stack manages exactly four least-privilege IAM grants
+per operator: IAP tunnel access, OS Login, and `roles/iam.serviceAccountUser` on each of the two
+runtime service accounts attached to the VMs. The last two grants are required by OS Login when a
+VM has an attached service account. They do not grant the operator runtime API permissions and
+avoid relying on a project Owner role for SSH access.
+
 ## 1. Preconditions and remote state
 
 Use Terraform 1.7 or newer, the Google provider version selected by the committed lock file, a
@@ -112,7 +118,28 @@ terraform import google_compute_instance.pushgw \
 `iap.googleapis.com` and `oslogin.googleapis.com` were not explicit services in the hand-built
 inventory. Leave them unimported: the first reviewed apply enables them without disabling anything
 on destroy. IAM resources for `operator_members` are new and therefore are not imported unless the
-same explicit member/role pairs already exist.
+same explicit member/role pairs already exist. A plan must show four grants for each operator: one
+IAP tunnel grant, one project OS Login grant, and one Service Account User grant on each attached
+runtime identity. It must not add `roles/owner`, `roles/editor`, or a project-wide Service Account
+User grant.
+
+If any of those exact bindings already exists, import it rather than allowing Terraform to attempt
+to recreate it. For example, after replacing the sample principal, the per-service-account imports
+for one operator are:
+
+```bash
+terraform import \
+  'google_service_account_iam_member.operator_service_account_user["relay:user:operator@example.com"]' \
+  'projects/swarm-8404f/serviceAccounts/swarm-relay-runtime@swarm-8404f.iam.gserviceaccount.com roles/iam.serviceAccountUser user:operator@example.com'
+terraform import \
+  'google_service_account_iam_member.operator_service_account_user["pushgw:user:operator@example.com"]' \
+  'projects/swarm-8404f/serviceAccounts/swarm-push-runtime@swarm-8404f.iam.gserviceaccount.com roles/iam.serviceAccountUser user:operator@example.com'
+```
+
+Use the corresponding `google_project_iam_member.operator_iap_tunnel` and
+`google_project_iam_member.operator_os_login` addresses if the project-level pairs already exist.
+Import only bindings confirmed by `gcloud projects get-iam-policy` and
+`gcloud iam service-accounts get-iam-policy`; imports are not a way to create missing authority.
 
 Now inspect, save, and review the complete plan:
 
