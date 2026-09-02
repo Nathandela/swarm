@@ -305,3 +305,25 @@ func TestPairingPushOwnership_SupersedesOldBindingOnlyAfterNewOwnershipIsDurable
 		t.Fatalf("new durable binding refused wake: %v", err)
 	}
 }
+
+func TestPairingPushOwnership_MachineRevokeClearsCurrentMarkerBeforeRemovingBinding(t *testing.T) {
+	dir := t.TempDir()
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	core := stageCore(t, dir, wake, content)
+	addr, key := PushAddress{0xa1}, crypto.WakeKey{0xa2}
+	if err := core.StagePushBinding(addr, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.MutateAndOwnStagedPushBinding(addr, func(st *State) { st.Machine = "revoked-machine" }); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.CompleteOwnedStagedPushBinding(addr); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.HonorMachineRevoke(addr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content}); err != nil {
+		t.Fatalf("machine revoke left owned marker pointing at removed binding: %v", err)
+	}
+}

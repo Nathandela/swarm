@@ -5,22 +5,9 @@ package remotegw
 // a gateway pairing never also fires the legacy relay's push_trigger, and foreground_only
 // fires neither.
 //
-// SCOPE HONESTY: real per-pairing conveyance (the phone allocating an address and handing
-// it to the machine over an authenticated pairing-update, PG-MIG-2) is a LATER slice --
-// internal/phonecore, internal/remote/mobile and internal/remote/android are untouched
-// here. This wave's transport selection is a single durable value for THIS machine,
-// sourced from gateway params/config.
-//
-// TODO(pairing-conveyance): a later slice replaces the single static value this wave's
-// config supplies with the real per-pairing PG-MIG-2 transition (address allocation,
-// pairing-update ack, gateway test wake). TransportStore's contract does not change when
-// that lands; only what calls SetTransport does. THE WAKE KEY (ServiceConfig.WakeKey,
-// threaded into WakeObligationConfig by service.go) has the identical gap: ADR-015 P7
-// requires it be PHONE-GENERATED PER PAIRING and conveyed alongside the address, NOT
-// epoch material, so that an ADR-011 M5 epoch rotation cannot invalidate a push binding
-// -- this wave sources it from id.EpochKeys().WakeKey instead, so until the real
-// conveyance lands, an epoch rotation silently breaks every WakeV1 tag with nothing
-// failing on the machine.
+// A negotiated pairing flips this store to gateway only after the authenticated binding,
+// provider-accepted test wake, registry row and grant are committed. Legacy records retain
+// their prior selection until re-pair; the store itself remains the single durable router.
 
 import (
 	"context"

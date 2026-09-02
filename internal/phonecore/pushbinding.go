@@ -617,11 +617,25 @@ func (c *Core) HonorMachineRevoke(addr PushAddress) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	enc := EncodePushAddress(addr)
+	bindingsBefore := clonePushBindings(c.push.data.Bindings)
+	revokedBefore := append([]string(nil), c.push.data.Revoked...)
+	ownedBefore := c.push.data.OwnedPairingAddress
 	c.push.removeBinding(enc)
 	if !c.push.revoked(enc) {
 		c.push.data.Revoked = append(c.push.data.Revoked, enc)
 	}
-	return c.push.persist()
+	if c.push.data.OwnedPairingAddress == enc {
+		c.push.data.OwnedPairingAddress = ""
+	}
+	if err := c.push.persist(); err != nil {
+		if !atomicWriteCommitted(err) {
+			c.push.data.Bindings = bindingsBefore
+			c.push.data.Revoked = revokedBefore
+			c.push.data.OwnedPairingAddress = ownedBefore
+		}
+		return err
+	}
+	return nil
 }
 
 // WakeDrops is the monotonic count of refused wakes: the scope's "an unverifiable wake

@@ -27,10 +27,8 @@ package remotegw
 //	// (outbox.go, seqstore.go) -- and an in-flight SetTransport must never leave a torn
 //	// file: on failure, the PREVIOUS durable value is what a reopen still reports.
 //	//
-//	// TODO(pairing-conveyance): a later slice replaces the single static value this
-//	// wave's config supplies with the real per-pairing PG-MIG-2 transition (address
-//	// allocation, pairing-update ack, gateway test wake). TransportStore's contract does
-//	// not change when that lands; only what calls SetTransport does.
+//	// Negotiated pairing calls SetTransport only after the authenticated binding and
+//	// provider-accepted test wake commit. TransportStore keeps that decision durable.
 //	type TransportStore interface {
 //		Transport() (PushTransport, error)
 //		SetTransport(PushTransport) error

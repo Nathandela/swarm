@@ -260,8 +260,8 @@ func TestNewService_PushGatewayConfiguredWrapsPusherInTransportRouter(t *testing
 }
 
 // TestNewService_NoPushGatewayLeavesThePusherUntouched pins the other half: the default
-// (PushGateway nil, every pairing until it migrates) must be BYTE-FOR-BYTE today's
-// behaviour -- the relay's PushTriggerer wired directly, no TransportRouter in the way.
+// (PushGateway nil on a foreground/legacy record) must keep the relay's PushTriggerer
+// wired directly, with no TransportRouter in the way.
 func TestNewService_NoPushGatewayLeavesThePusherUntouched(t *testing.T) {
 	mb := &pushCapableMailbox{}
 	svc := NewService(ServiceConfig{Relay: mb})
