@@ -104,9 +104,9 @@ type gatewayParams struct {
 	DeviceConsentSig []byte
 	Grant            *crypto.EpochGrant
 
-	// PushGateway configures the ADR-015 P9/P12 wake-obligation machine (nil => this
-	// pairing has not migrated off legacy_relay, which is every pairing until the
-	// optional push-gateway.json below exists). See loadPushGatewayConfig's TODO.
+	// PushGateway configures the ADR-015 P9/P12 wake-obligation machine. A negotiated
+	// pairing derives it wholly from the sole registry record; nil means a foreground/
+	// legacy record with no compatibility sidecar.
 	PushGateway *remotegw.PushGatewayConfig
 }
 
@@ -228,9 +228,9 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	if err != nil {
 		return gatewayParams{}, fmt.Errorf("open inbound state: %w", err)
 	}
-	// ADR-015 P9/P12: an OPTIONAL migration off legacy_relay. Absent (every pairing until
-	// it migrates) leaves PushGateway nil, which NewService reads as "wire the push path
-	// exactly as it is today". See loadPushGatewayConfig's TODO(pairing-conveyance).
+	// ADR-015 P9/P12: negotiated pairings consume the registry's atomic Push binding.
+	// Pre-conveyance records may still use the optional compatibility sidecar; if neither
+	// exists, PushGateway stays nil and the service remains foreground/legacy-compatible.
 	var pushGateway *remotegw.PushGatewayConfig
 	if rec.Push == nil {
 		pushGateway, err = resolvePushGatewayConfig(remoteDir)
@@ -306,18 +306,10 @@ func loadRelayConfig(stateDir string) (relaycfg.Config, error) {
 	return cfg, nil
 }
 
-// pushGatewayFile is <StateDir>/remote/push-gateway.json's shape: the SCAFFOLD this wave
-// provides for ADR-015 P9/P12's gateway-url/submit-capability/push-address plumbing.
-//
-// TODO(pairing-conveyance): this file stands in for PG-MIG-2's real per-pairing
-// conveyance -- Android gateway registration, address allocation, an authenticated
-// pairing-update acknowledgement, and a successful gateway test wake, ending in the
-// atomic push_transport transition (internal/remotegw/pushtransport.go's own
-// TODO(pairing-conveyance)). Until that slice lands, nothing in this tree WRITES this
-// file; an operator (or a future migration tool) provisions it by hand. Its presence
-// alone does not flip push_transport to gateway -- OpenTransportStore still starts at
-// legacy_relay (PG-MIG-1) until something calls SetTransport, which this wave does not
-// do either. This is deliberately just plumbing, not a migration trigger.
+// pushGatewayFile is the legacy <StateDir>/remote/push-gateway.json compatibility shape.
+// New pairings convey a complete PushBinding into the atomic device registry and never
+// write this file. A validated registry binding is the migration commit: runtime adopts
+// gateway transport from it and durably retires this older split source.
 type pushGatewayFile struct {
 	GatewayURL       string `json:"gateway_url"`
 	SubmitCapability string `json:"submit_capability"`

@@ -96,21 +96,9 @@ type ServiceConfig struct {
 
 // PushGatewayConfig configures the ADR-015 P9 wake-obligation machine for one pairing.
 //
-// TODO(pairing-conveyance): GatewayURL, SubmitCapability and Address are, for this wave,
-// sourced from static machine configuration (cmd/swarm-remote/config.go's optional
-// push-gateway.json) rather than the real PG-MIG-2 per-pairing conveyance -- the phone
-// allocating an address and handing it to this machine over an authenticated
-// pairing-update. THE SAME IS TRUE OF THE WAKE KEY: ServiceConfig.WakeKey (fed into
-// WakeObligationConfig below, not a field on this struct) is sourced from
-// id.EpochKeys().WakeKey, epoch material, rather than ADR-015 P7's phone-generated,
-// per-pairing key conveyed inside that same pairing transcript and DELIBERATELY not
-// epoch material -- precisely so an ADR-011 M5 epoch rotation does not invalidate a push
-// binding. Left sourced from epoch material, an epoch rotation silently breaks every
-// WakeV1 tag on this pairing with nothing failing on the machine: the mirror image of
-// the half-migration P8 delta 2 exists to forbid. That conveyance, and ADR-018's
-// eventual N-pairings widening, are a later slice; see pushtransport.go's own
-// TODO(pairing-conveyance) on TransportStore, which this config feeds. This wave's
-// contract does not change when that lands.
+// Negotiated pairings source every field, including WakeKey, from the authenticated
+// registry PushBinding. The optional legacy sidecar remains a compatibility source for
+// pre-conveyance records and uses its historical epoch-key behavior until re-pair.
 type PushGatewayConfig struct {
 	GatewayURL       string // the push gateway's base URL, e.g. https://push.example.com
 	SubmitCapability string // this pairing's submit capability (spec §2.2)
@@ -119,9 +107,9 @@ type PushGatewayConfig struct {
 	// machine epoch must not invalidate the gateway binding.
 	WakeKey crypto.WakeKey
 	// MachineRevokeCapability is the pairing's machine-revoke capability (spec §2.2/3.4,
-	// PG-AUTH-9: DISTINCT from submit), carried verbatim from push-gateway.json for the
-	// revoke producer (revokeproducer.go, bead agents-tracker-u37c). Empty on every
-	// pre-producer provisioning: the producer then cannot run and must say so --
+	// PG-AUTH-9: DISTINCT from submit), carried verbatim from the registry binding or a
+	// legacy push-gateway.json for the revoke producer. Empty on pre-producer legacy
+	// provisioning: the producer then cannot run and must say so --
 	// degraded and disclosed, never silently required.
 	MachineRevokeCapability string
 	Address                 PushAddress
@@ -262,8 +250,8 @@ func NewService(cfg ServiceConfig) *Service {
 	// ADR-015 P9/P12: when this pairing has migrated (cfg.PushGateway set), the push path
 	// is a TransportRouter in front of the legacy relay pusher discovered above, so
 	// selection stays EXCLUSIVE (P12) and legacy_relay keeps working byte-for-byte should
-	// the pairing roll back. cfg.PushGateway == nil (every pairing until it migrates)
-	// leaves `pusher` exactly as it always has been -- no router, no obligation machine.
+	// a legacy record roll back. cfg.PushGateway == nil leaves `pusher` exactly as it
+	// always has been -- no router, no obligation machine.
 	var wakeMachine *WakeObligationMachine
 	var wakeObligations ObligationStore
 	var wakeRetry *WakeRetryScheduler

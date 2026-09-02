@@ -3,12 +3,11 @@ package main
 // FAILING-FIRST (TDD RED, GG-5) for Wave R4 deliverable 4's machine-side revoke
 // producer, config half (bead agents-tracker-u37c). The producer presents the
 // MACHINE-REVOKE capability (push-gateway-api.md 2.2/3.4: distinct from submit,
-// PG-AUTH-9), so the machine must HOLD it durably -- and today neither
-// push-gateway.json nor remotegw.PushGatewayConfig has anywhere to put it: the pairing
-// allocates {push_address, submit_capability, machine_revoke_capability} and the
-// machine-side plumbing carries only the first two (config.go's pushGatewayFile).
+// PG-AUTH-9), so the machine must HOLD it durably. This regression originated when the
+// pairing allocation carried all three values but the legacy config plumbing carried only
+// the first two. Negotiated pairings now persist the same field in device.PushBinding.
 //
-// THE CONTRACT UNDER TEST (undefined today -- compile-level RED):
+// THE LEGACY COMPATIBILITY CONTRACT UNDER TEST:
 //
 //   - pushGatewayFile.MachineRevokeCapability, JSON "machine_revoke_capability".
 //   - remotegw.PushGatewayConfig.MachineRevokeCapability, carried verbatim.

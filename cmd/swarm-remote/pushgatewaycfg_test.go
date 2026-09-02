@@ -1,9 +1,8 @@
 package main
 
-// Tests for the ADR-015 P9/P12 config-plumbing scaffold: the optional
-// <StateDir>/remote/push-gateway.json that feeds remotegw.ServiceConfig.PushGateway.
-// See config.go's resolvePushGatewayConfig doc comment for the honest
-// TODO(pairing-conveyance) scope limit this file's fixtures deliberately stay inside.
+// Tests for ADR-015 P9/P12 runtime configuration: legacy records may consume the optional
+// push-gateway.json compatibility file, while negotiated records consume and supersede it
+// from their atomic registry PushBinding.
 
 import (
 	"bytes"
