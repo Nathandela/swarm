@@ -168,7 +168,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: container-images-${{ github.ref_name }}
-          path: release-metadata
+          # Keep generated release inputs outside the checkout: goreleaser's
+          # dirty-tree refusal is a provenance gate, not something to disable.
+          path: ${{ runner.temp }}/release-metadata
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -201,4 +203,4 @@ jobs:
       - name: Attach exact container deployment manifest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${GITHUB_REF_NAME}" release-metadata/container-images.json --repo "${GITHUB_REPOSITORY}"
+        run: gh release upload "${GITHUB_REF_NAME}" "${RUNNER_TEMP}/release-metadata/container-images.json" --repo "${GITHUB_REPOSITORY}"

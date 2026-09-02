@@ -173,14 +173,17 @@ func TestDigestManifestIsAttachedToTheDurableGitHubRelease(t *testing.T) {
 	}
 
 	download, goreleaser, upload := -1, -1, -1
+	downloadPath, uploadCommand := "", ""
 	for i, s := range publish.Steps {
 		switch {
 		case strings.HasPrefix(s.Uses, "actions/download-artifact") && input(s, "name") == "container-images-${{ github.ref_name }}":
 			download = i
+			downloadPath = input(s, "path")
 		case strings.Contains(s.Run, "goreleaser release"):
 			goreleaser = i
 		case strings.Contains(s.Run, "gh release upload") && strings.Contains(s.Run, "container-images.json"):
 			upload = i
+			uploadCommand = s.Run
 		}
 	}
 	if download < 0 || goreleaser < 0 || upload < 0 {
@@ -188,5 +191,11 @@ func TestDigestManifestIsAttachedToTheDurableGitHubRelease(t *testing.T) {
 	}
 	if download >= goreleaser || goreleaser >= upload {
 		t.Fatalf("manifest ordering must be download -> create release -> attach manifest; got %d -> %d -> %d", download, goreleaser, upload)
+	}
+	if downloadPath != "${{ runner.temp }}/release-metadata" {
+		t.Fatalf("container manifest download path = %q, want runner.temp so goreleaser sees a clean checkout", downloadPath)
+	}
+	if !strings.Contains(uploadCommand, `"${RUNNER_TEMP}/release-metadata/container-images.json"`) {
+		t.Fatalf("container manifest upload must read the runner.temp download, got %q", uploadCommand)
 	}
 }
