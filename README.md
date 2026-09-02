@@ -1,7 +1,7 @@
 # swarm
 
 <p align="center">
-  <img src="docs/assets/swarm-hero.png" alt="swarm — many coding agents moving through one blue-hour landscape toward a persistent relay" width="960">
+  <img src="docs/assets/swarm-hero-flightwritten.png" alt="swarm — its name written by autonomous light trails across a blue-hour landscape toward a persistent relay" width="960">
 </p>
 
 <p align="center"><strong>Every coding agent on your machine. One calm, keyboard-driven view.</strong></p>

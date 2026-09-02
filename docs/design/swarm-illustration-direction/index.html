@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>swarm — Brandbook v1 · Night Orchestra</title>
+  <title>swarm — Brandbook v1.1 · Flight-written wordmark</title>
   <style>
     :root {
       /* The shipped mobile Slate tokens. */
@@ -92,6 +92,14 @@
     }
 
     .mini-mark { width: 27px; height: 27px; display: block; border-radius: 7px; }
+
+    .mini-wordmark {
+      width: 116px;
+      height: 42px;
+      display: block;
+      object-fit: contain;
+      object-position: left center;
+    }
 
     .edition {
       color: var(--p-ink3);
@@ -519,6 +527,144 @@
 
     .logo-stage img { width: min(94%, 720px); display: block; }
 
+    .wordmark-intro {
+      margin-top: 18px;
+      padding: 22px;
+      display: grid;
+      grid-template-columns: 0.7fr 1.3fr;
+      gap: 34px;
+      border: 1px solid rgba(142, 180, 230, 0.28);
+      border-radius: 16px;
+      background: linear-gradient(135deg, rgba(142, 180, 230, 0.08), rgba(111, 195, 188, 0.025));
+    }
+
+    .wordmark-intro b {
+      font-size: 15px;
+      font-weight: 500;
+    }
+
+    .wordmark-intro p {
+      margin: 0;
+      color: var(--p-ink2);
+      font-size: 14px;
+    }
+
+    .wordmark-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .wordmark-card {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--p-hair);
+      border-radius: 16px;
+      background: var(--p-card);
+      box-shadow: inset 0 1px 0 rgba(238, 242, 248, 0.08);
+    }
+
+    .wordmark-card[data-choice="selected"] {
+      border-color: rgba(142, 180, 230, 0.58);
+      box-shadow: inset 0 1px 0 rgba(238, 242, 248, 0.1), 0 20px 55px rgba(0, 0, 0, 0.24);
+    }
+
+    .wordmark-stage {
+      min-height: 238px;
+      padding: 24px 18px;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 40% 42%, rgba(142, 180, 230, 0.07), transparent 58%),
+        var(--p-well);
+    }
+
+    .wordmark-stage img {
+      width: 100%;
+      height: 190px;
+      display: block;
+      object-fit: contain;
+    }
+
+    .wordmark-copy { padding: 20px; }
+
+    .wordmark-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .wordmark-heading h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .concept-badge {
+      flex: 0 0 auto;
+      padding: 4px 7px;
+      border: 1px solid var(--p-hair);
+      border-radius: 999px;
+      color: var(--p-ink3);
+      font-family: var(--mono);
+      font-size: 8px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    [data-choice="selected"] .concept-badge {
+      border-color: transparent;
+      color: var(--p-hero-ink);
+      background: var(--p-hero);
+    }
+
+    .wordmark-copy p {
+      min-height: 88px;
+      margin: 0;
+      color: var(--p-ink2);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .concept-notes {
+      display: grid;
+      gap: 8px;
+      margin: 18px 0 0;
+    }
+
+    .concept-note {
+      display: grid;
+      grid-template-columns: 68px 1fr;
+      gap: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--p-hair);
+      color: var(--p-ink3);
+      font-size: 11px;
+    }
+
+    .concept-note b {
+      color: var(--p-ink2);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 400;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .wordmark-download {
+      display: inline-block;
+      margin-top: 16px;
+      color: var(--p-hero);
+      font-family: var(--mono);
+      font-size: 10px;
+      text-decoration: none;
+    }
+
+    .wordmark-download:hover { text-decoration: underline; }
+
     .identity-note {
       margin: 18px 0 0;
       color: var(--p-ink3);
@@ -773,6 +919,7 @@
       .principles { grid-template-columns: 1fr 1fr; }
       .palette { grid-template-columns: repeat(3, 1fr); }
       .identity-grid { grid-template-columns: 1fr; }
+      .wordmark-grid { grid-template-columns: 1fr; }
       .crop-grid, .decision-grid { grid-template-columns: 1fr; }
       .research-links { grid-template-columns: 1fr; }
       .hero-tagline { max-width: 180px; }
@@ -799,6 +946,10 @@
       .identity-panel { padding: 14px; }
       .identity-rules { grid-template-columns: 1fr; }
       .identity-rule { border-left: 0; border-top: 1px solid var(--p-hair); }
+      .wordmark-intro { grid-template-columns: 1fr; gap: 12px; }
+      .wordmark-stage { min-height: 190px; }
+      .wordmark-stage img { height: 150px; }
+      .wordmark-copy p { min-height: 0; }
       .asset-caption { grid-template-columns: 1fr; }
       .asset-use { justify-content: space-between; }
       .block { padding: 68px 0; }
@@ -814,10 +965,9 @@
 <body>
   <header class="masthead shell">
     <div class="mini-brand">
-      <img class="mini-mark" src="swarm-atmospheric-app-icon.png" alt="">
-      <span>warm</span>
+      <img class="mini-wordmark" src="swarm-wordmark-flightwritten-alpha.png" alt="swarm">
     </div>
-    <div class="edition">Brandbook v1 · Night Orchestra · 2026</div>
+    <div class="edition">Brandbook v1.1 · Wordmark studies · 2026</div>
   </header>
 
   <main>
@@ -842,7 +992,7 @@
       <div class="hero-frame" data-view="brand">
         <img src="swarm-night-orchestra.png" alt="A lone operator overlooks a vast blue-hour mountain valley. Five luminous agent beacons trace separate paths toward a persistent relay observatory beneath a huge pale planet.">
         <div class="hero-identity" aria-hidden="true">
-          <img class="hero-atmospheric-logo" src="swarm-atmospheric-logo.png" alt="">
+          <img class="hero-atmospheric-logo" src="swarm-wordmark-flightwritten-alpha.png" alt="">
         </div>
         <div class="meaning-layer" aria-hidden="true">
           <div class="pin operator"><span>you · one calm vantage point</span></div>
@@ -914,8 +1064,8 @@
       <div class="block-head">
         <span class="eyebrow">Identity system</span>
         <div>
-          <h2>Let the artwork draw the logo.</h2>
-          <p class="block-lede">The same atmospheric swarm now anchors every scale. In the logo and app icon alike, the identity is only the motion itself: painted trajectories, negative space, and tiny autonomous lights. Nothing competes with that gesture.</p>
+          <h2>Let the swarm write its own name.</h2>
+          <p class="block-lede">The icon already speaks in atmospheric trajectories. The wordmark should not change into ordinary typography after the first letter: every letter must feel made by the same moving agents, with one material, one rhythm, and one continuous idea.</p>
         </div>
       </div>
 
@@ -939,28 +1089,88 @@
 
         <article class="identity-panel">
           <div class="identity-label">
-            <h3>Atmospheric Swarm · repository lockup</h3>
-            <span>generated large-format signature</span>
+            <h3>Current lockup · the visible seam</h3>
+            <span>retire this construction</span>
           </div>
           <div class="logo-stage">
-            <img src="swarm-atmospheric-logo.png" alt="Proposed atmospheric swarm logo: soft painted agent trails imply the initial S and continue beneath a lightweight lowercase warm wordmark.">
+            <img src="swarm-atmospheric-logo.png" alt="Current logo construction: an atmospheric S followed by the conventionally typeset letters warm.">
           </div>
           <div class="identity-rules">
-            <div class="identity-rule"><b>Core logo</b><span>The generated atmosphere is the initial S; typeset only “warm” after it in a light weight.</span></div>
-            <div class="identity-rule"><b>Campaign lockup</b><span>Use the full mist, trajectories, and tagline only above 480 px wide.</span></div>
-            <div class="identity-rule"><b>Small-size behavior</b><span>Let the bot heads and the S-shaped motion carry recognition; keep the painted trail thin instead of redrawing it as a bold glyph.</span></div>
+            <div class="identity-rule"><b>The problem</b><span>The atmospheric S and typeset “warm” have different authors, weight, and motion.</span></div>
+            <div class="identity-rule"><b>The reading</b><span>The eye sees a symbol beside the word “warm,” not one complete name written by a swarm.</span></div>
+            <div class="identity-rule"><b>The invariant</b><span>Keep the fine S, then give w, a, r, and m the same trail logic—never a font substitution.</span></div>
           </div>
-          <p class="identity-note">The emblem is generated from the hero artwork’s material language; the word “warm” and micro-copy remain deterministic. This keeps the poetry in the motion while preserving correct typography.</p>
+          <p class="identity-note">This remains here as the “before.” The app icon is sound; only the repository wordmark construction is being reconsidered.</p>
           <div class="asset-use" style="margin-top:12px">
             <a href="swarm-atmospheric-mark.png" download>transparent emblem ↓</a>
-            <a href="swarm-atmospheric-logo.png" download>complete lockup ↓</a>
+          </div>
+        </article>
+      </div>
+
+      <div class="wordmark-intro">
+        <b>Selected direction: A · Flight-written signature</b>
+        <p>It preserves the original S as the hero gesture while making the remaining letters unmistakably part of the same event. This is now the canonical long-form wordmark direction and the identity used by the repository hero.</p>
+      </div>
+
+      <div class="wordmark-grid" aria-label="Flight-written swarm wordmark explorations">
+        <article class="wordmark-card" data-choice="selected">
+          <div class="wordmark-stage">
+            <img src="swarm-wordmark-flightwritten-alpha.png" alt="Concept A: the complete word swarm written by delicate autonomous light trails, with a large atmospheric S and a long shared trajectory.">
+          </div>
+          <div class="wordmark-copy">
+            <div class="wordmark-heading">
+              <h3>A · Flight-written signature</h3>
+              <span class="concept-badge">selected</span>
+            </div>
+            <p>One airy signature. The iconic S opens the motion; individual agents carry the same gesture through w, a, r, and m. The underline reads as a shared route rather than decoration.</p>
+            <div class="concept-notes">
+              <div class="concept-note"><b>Best for</b><span>README hero, website masthead, store feature art</span></div>
+              <div class="concept-note"><b>Refine</b><span>Reduce glow slightly; preserve the hairline inner trajectories</span></div>
+            </div>
+            <a class="wordmark-download" href="swarm-wordmark-flightwritten-alpha.png" download>selected transparent wordmark ↓</a>
+          </div>
+        </article>
+
+        <article class="wordmark-card">
+          <div class="wordmark-stage">
+            <img src="swarm-wordmark-formation.png" alt="Concept B: multiple luminous bot paths coordinate to spell the complete word swarm.">
+          </div>
+          <div class="wordmark-copy">
+            <div class="wordmark-heading">
+              <h3>B · Coordinated formation</h3>
+              <span class="concept-badge">structural study</span>
+            </div>
+            <p>Several agents collaborate on every stroke. It communicates “swarm” most literally and remains highly legible, but the current rendering is too bright and substantial for the established artwork.</p>
+            <div class="concept-notes">
+              <div class="concept-note"><b>Best for</b><span>Motion identity, launch animation, large campaign surfaces</span></div>
+              <div class="concept-note"><b>Refine</b><span>Cut stroke and halo weight by roughly half</span></div>
+            </div>
+            <a class="wordmark-download" href="swarm-wordmark-formation.png" download>transparent study ↓</a>
+          </div>
+        </article>
+
+        <article class="wordmark-card">
+          <div class="wordmark-stage">
+            <img src="swarm-wordmark-baseline.png" alt="Concept C: five restrained flight gestures spell swarm above one persistent baseline trajectory.">
+          </div>
+          <div class="wordmark-copy">
+            <div class="wordmark-heading">
+              <h3>C · Persistent route</h3>
+              <span class="concept-badge">systemic study</span>
+            </div>
+            <p>Each bot draws one letter while a persistent route holds the system together below. The metaphor is excellent for Swarm, although the signature currently feels more illustrative than canonical.</p>
+            <div class="concept-notes">
+              <div class="concept-note"><b>Best for</b><span>Architecture stories, session-survival assets, chapter breaks</span></div>
+              <div class="concept-note"><b>Refine</b><span>More open spacing and the lighter S atmosphere from option A</span></div>
+            </div>
+            <a class="wordmark-download" href="swarm-wordmark-baseline.png" download>transparent study ↓</a>
           </div>
         </article>
       </div>
 
       <details>
-        <summary>Atmospheric emblem generation brief</summary>
-        <pre class="prompt">Image 1 is a mood, material, and palette reference only. Create a refined, delicate abstract swarm emblem: five extremely slender autonomous light trails sweep through negative space and collectively imply a graceful lowercase S without drawing a literal typographic glyph. Each trail tapers naturally like a distant moving beacon in atmosphere; tiny luminous bot points sit at different leading edges, and one finest trail continues right, translating the old cursor into motion. Smooth digital gouache and atmospheric airbrush, softly painted edges, subtle mist, restrained matte grain, quiet rather than techy. Only #8eb4e6, #eef2f8, #9aa6ba, and #6fc3bc. No text, solid glyph, thick stroke, outline, hard vector geometry, neon, insects, honeycomb, or watermark.</pre>
+        <summary>Flight-written wordmark generation brief</summary>
+        <pre class="prompt">Use the atmospheric S as the exact material and motion reference. Draw the complete lowercase name “swarm”—s w a r m, exactly once—as one refined formation of autonomous bot trajectories. Every letter must be made from the same extremely slender, softly painted flight trails; tiny pale-blue and teal agent heads lead selected strokes. Preserve generous negative space and excellent word-level legibility. The result should feel authored by moving agents, never by a conventional font. Genuine transparent background. No bold stroke, block typography, generic script font, scenery, bees, honeycomb, extra text, or watermark.</pre>
       </details>
     </section>
 
@@ -1000,14 +1210,14 @@
 
       <div class="asset-list">
         <figure class="asset-card" style="margin:0">
-          <img src="readme-night-orchestra-lockup.png" alt="Branded Night Orchestra repository hero with the swarm mark and wordmark over the blue-hour agent landscape.">
+          <img src="../../assets/swarm-hero-flightwritten.png" alt="Night Orchestra repository hero with the complete name swarm written by autonomous light trails over the blue-hour agent landscape.">
           <figcaption class="asset-caption">
             <div>
               <span class="asset-kicker">Asset 00 · top of README</span>
               <h3>Repository Hero Lockup</h3>
-              <p>The emotional promise comes first. It establishes the world and the brand before the README becomes technical; the title remains readable at GitHub’s content width.</p>
+              <p>The emotional promise comes first. The swarm writes its complete name in the same flight language as the scene, so the identity and the system metaphor now arrive as one gesture.</p>
             </div>
-            <div class="asset-use"><span>1774 × 887</span><a href="readme-night-orchestra-lockup.png" download>PNG ↓</a></div>
+            <div class="asset-use"><span>1774 × 887</span><a href="../../assets/swarm-hero-flightwritten.png" download>selected PNG ↓</a></div>
           </figcaption>
         </figure>
 
@@ -1051,7 +1261,7 @@
       <details>
         <summary>Suggested README insertion skeleton</summary>
         <pre class="prompt">&lt;p align="center"&gt;
-  &lt;img src="docs/design/swarm-illustration-direction/readme-night-orchestra-lockup.png" alt="swarm — every agent, in one steady view" width="960"&gt;
+  &lt;img src="docs/assets/swarm-hero-flightwritten.png" alt="swarm — its name written by autonomous light trails" width="960"&gt;
 &lt;/p&gt;
 
 ## How it works
@@ -1127,7 +1337,7 @@ STATUS RIDGE — Image 1 is a style and palette reference only. Create an ultra-
 
   <footer>
     <div class="shell footer-note">
-      <span>swarm · Brandbook v1 · Night Orchestra</span>
+      <span>swarm · Brandbook v1.1 · Flight-written wordmark</span>
       <span>mobile source palette · Slate / ADR-021</span>
     </div>
   </footer>
