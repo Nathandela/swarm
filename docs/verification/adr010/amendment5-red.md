@@ -191,11 +191,31 @@ editing the tested resume path; left alone.
 
 | # | Finding | Disposition |
 |---|---|---|
-| 1 | A thread resumed in another directory is refused with "not found" | Taken: its own outcome, `resumeHistoryForeign`, and its own refusal text ("ran in another working directory"); the ADR names the limit |
+| 1 | A thread resumed in another directory is refused with "not found" | First given its own outcome and refusal text; then OVERTAKEN by the adversarial review below, which showed the cwd clause itself could never match a real swarm-launched thread. The clause is gone, so the case no longer arises |
 | 2 | Evidence lacked gates and a live proof that `codex app-server` accepts `-c` and that the sandbox's `/tmp` is the host's | Gates recorded (§5). `codex app-server --listen unix://… -c sandbox_workspace_write.network_access=true` bound its socket within 8 s with no error output, run live on codex-cli 0.151.0. `/tmp` visibility is proven by the post-release smoke (§7). The `exclude_slash_tmp` knob is now named in F3 |
 | 3 | `copyHandoff` stranded its directory when the copy itself failed | Taken: the directory is removed on every error after it is minted |
 | 4 | A zero-byte rollout reads as "unsafe to open" rather than "not found" | Accepted as a known limit: `readCompleteLine`'s EOF semantics belong to `resolveCodex`, whose tests pin them, and a rollout without its first record is a crash artefact |
 | 5 | Pre-v7 (v4) thread ids are refused as not found | Accepted and named in the ADR (F1) |
 | 6 | Physical versus logical cwd (a symlinked checkout) — pre-existing in `parseCodexSessionMeta`, now load-bearing for hands-off | Recorded; the owner's `data/` tree is not symlinked (`readlink -f` is the identity). Not fixed here |
 | 7 | Test gaps: the v4 case was non-discriminating; no worktree (`AgentCwd`) case; no budget bound; no stray-entry case | Taken: the v4 case now writes the rollout under the session's own day and still expects not-found; new tests cover the worktree cwd, a stray and a malformed neighbour, and `MaxEntries` failing closed |
+
+**Adversarial reviewer** (read-only; probed a `git archive` copy and, read-only, the real
+`~/.codex/sessions` tree of 1888 rollouts). Nothing at HIGH for confinement, traversal, hangs, or
+a refusal degrading into a launch: every failure path returns an error and launches nothing, and
+`TranscriptDay` survived "", one byte, 36 bytes of 0xff, eighteen two-byte runes, a NUL-terminated
+id, 37 bytes and a year-10889 prefix without panicking. Eight findings:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | HIGH (functional): the cwd clause can never match a swarm-launched codex thread — codex records the app-server's cwd, which under swarm is `<stateDir>/sessions/<creating session>` (10 of 10 rollouts from 0.151.0, 36 of 45 app-server rollouts overall); verified live that the locator returned not-found with the real cwd and found with the state dir | Taken: the clause is removed; the identity check is the id. The ADR (F1) records the measurement and the trade it implies for a poisoned id. The fixture that hid it (`writeCodexHistory` writing `cwd == source cwd`) is now complemented by a test whose rollout names a state dir |
+| 2 | MEDIUM: the ADR's claim that a missing id is recovered by `resolveCodex` is false on this machine — its cwd clause has the same defect, its window cannot match a resumed thread, and it fails closed on a 0-byte rollout and one with an undecodable first record in the three-day window (`Resolve` returned Unsafe live) | Accepted as a known limit of this slice and filed as `swarm-man`; the ADR's F1 limits and Consequences now say exactly what composes (sources with a captured id: twelve of eighteen live codex sessions) |
+| 3 | MEDIUM (process): evidence file was untracked in the reviewed range and its gates section empty; no live proof of the override's effect through the app-server path | Gates and live checks recorded here; the reviewer's own live reading of `turn_context.sandbox_policy` confirmed the per-turn policy comes from the TUI's config, so the override on the agent argv is the right lever, and the app-server argv carries it too. Effect demonstrated by the post-release smoke (§7) |
+| 4 | LOW: a zero-byte or partial-first-line rollout reads as "unsafe to open"; a first line over 64 KiB likewise (real `session_meta` lines are ~22 KiB) | Accepted, as for the code-analysis reviewer's finding 4 |
+| 5 | LOW: two files claiming one id in a day — first in directory order wins, nondeterministically | Taken: two claimants fail closed as ambiguous, with a named refusal |
+| 6 | LOW: day −1 was listed first and can never hold the file (0 of 1888 rollouts are stamped before their id), and the entry budget is cumulative, so a busy previous day could exhaust it | Taken: the id's day first, then +1, then −1 (kept only as insurance for a machine filing by a local time behind UTC) |
+| 7 | LOW: `copyHandoff` stranded its directory on its own error paths | Already taken in the previous round |
+| 8 | Informational: `exclude_tmpdir_env_var` is on in the live sandbox policy, so `TMPDIR` outside `/tmp` yields a loud pre-launch refusal; 16 pre-v7 rollouts exist | Both named in the ADR (F1, F3) |
+
+The reviewer also saw two `TestRunHook_*` tests fail in its own sandbox; on this machine they pass
+in isolation with the `SWARM_*` session variables unset (§5).
 

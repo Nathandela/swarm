@@ -24,9 +24,6 @@ const (
 	resumeHistoryAmbiguous
 	resumeHistoryUnsafe
 	resumeHistoryUnreadable
-	// resumeHistoryForeign: the transcript names the conversation but ran in a
-	// different working directory from the source (the hands-off codex locator only).
-	resumeHistoryForeign
 )
 
 type resumeHistoryResult struct {
@@ -201,7 +198,7 @@ func (r *filesystemResumeHistoryResolver) LocateTranscript(m persist.Meta, convI
 		if !ok {
 			return "", resumeHistoryNoMatch // a canonical id that names no day names no file
 		}
-		return r.locateCodexTranscript(home, budget, day, convID, filepath.Clean(cwd))
+		return r.locateCodexTranscript(home, budget, day, convID)
 	}
 	provider, providerAbs, closeProvider, outcome, ok := r.openProviderRoot(home, ".claude")
 	if !ok {
@@ -300,13 +297,16 @@ func claudeTranscriptNamesItsConversation(f *os.File, budget *historyBudget, wan
 
 // locateCodexTranscript is the dated-layout locator, codex's exactly as resolveCodex
 // is: the provider root is .codex and the tree beneath it is sessions/YYYY/MM/DD. The
-// day is the id's own (adapter.DatedTranscriptLayout) and its two neighbours are tried
-// too, because the id carries the millisecond the thread was minted while the file
-// carries the second codex wrote it, and across midnight those fall in different
-// directories. Within a day the entries are LISTED, bounded by the budget, and only the
-// one whose parsed id is convID is opened; every other entry is ignored rather than
-// judged, since a stray file in a day directory is not this locator's business.
-func (r *filesystemResumeHistoryResolver) locateCodexTranscript(home *os.Root, budget *historyBudget, day time.Time, convID, cleanCWD string) (string, resumeHistoryOutcome) {
+// day is the id's own (adapter.DatedTranscriptLayout), tried FIRST so a busy neighbour
+// cannot spend the entry budget before the right day is read; then the day after,
+// because the id carries the millisecond the thread was minted while the file carries
+// the second codex wrote it, and across midnight those differ (measured: of 1888 real
+// rollouts, 28 are stamped later than their id, none earlier); then the day before,
+// which only a machine filing rollouts by a local time behind UTC could ever need.
+// Within a day the entries are LISTED, bounded by the budget, and only the one whose
+// parsed id is convID is opened; every other entry is ignored rather than judged,
+// since a stray file in a day directory is not this locator's business.
+func (r *filesystemResumeHistoryResolver) locateCodexTranscript(home *os.Root, budget *historyBudget, day time.Time, convID string) (string, resumeHistoryOutcome) {
 	provider, providerAbs, closeProvider, outcome, ok := r.openProviderRoot(home, ".codex")
 	if !ok {
 		return "", outcome
@@ -317,7 +317,7 @@ func (r *filesystemResumeHistoryResolver) locateCodexTranscript(home *os.Root, b
 		return "", outcome
 	}
 	defer closeSessions()
-	for delta := -1; delta <= 1; delta++ {
+	for _, delta := range []int{0, 1, -1} {
 		d := day.AddDate(0, 0, delta)
 		parts := []string{d.Format("2006"), d.Format("01"), d.Format("02")}
 		dayRoot, closeDay, dayOutcome, present := r.openDirPath(sessions, sessionsAbs, parts...)
@@ -327,7 +327,7 @@ func (r *filesystemResumeHistoryResolver) locateCodexTranscript(home *os.Root, b
 			}
 			return "", dayOutcome
 		}
-		path, outcome := r.locateCodexInDay(dayRoot, filepath.Join(sessionsAbs, filepath.Join(parts...)), budget, convID, cleanCWD)
+		path, outcome := r.locateCodexInDay(dayRoot, filepath.Join(sessionsAbs, filepath.Join(parts...)), budget, convID)
 		closeDay()
 		if outcome != resumeHistoryNoMatch {
 			return path, outcome
@@ -336,62 +336,66 @@ func (r *filesystemResumeHistoryResolver) locateCodexTranscript(home *os.Root, b
 	return "", resumeHistoryNoMatch
 }
 
-func (r *filesystemResumeHistoryResolver) locateCodexInDay(dayRoot *os.Root, absDir string, budget *historyBudget, convID, cleanCWD string) (string, resumeHistoryOutcome) {
+func (r *filesystemResumeHistoryResolver) locateCodexInDay(dayRoot *os.Root, absDir string, budget *historyBudget, convID string) (string, resumeHistoryOutcome) {
 	entries, outcome := readDirBounded(dayRoot, budget)
 	if outcome != resumeHistoryFound {
 		return "", outcome
 	}
+	// Names first, so two files claiming one id (a same-user decoy, D7) fail closed
+	// instead of whichever the directory lists first winning.
+	name := ""
 	for _, entry := range entries {
-		if _, fileID, candidate, valid := parseCodexHistoryName(entry.Name()); !candidate || !valid || fileID != convID {
-			continue
+		if _, fileID, candidate, valid := parseCodexHistoryName(entry.Name()); candidate && valid && fileID == convID {
+			if name != "" {
+				return "", resumeHistoryAmbiguous
+			}
+			name = entry.Name()
 		}
-		f, outcome := r.openCandidate(dayRoot, absDir, entry.Name(), budget)
-		if outcome != resumeHistoryFound {
-			return "", outcome
-		}
-		line, outcome := readCompleteLine(f, budget)
-		_ = f.Close()
-		if outcome != resumeHistoryFound {
-			return "", outcome
-		}
-		if outcome := codexTranscriptNamesItsConversation(line, convID, cleanCWD); outcome != resumeHistoryFound {
-			return "", outcome
-		}
-		return filepath.Join(absDir, entry.Name()), resumeHistoryFound
 	}
-	return "", resumeHistoryNoMatch
+	if name == "" {
+		return "", resumeHistoryNoMatch
+	}
+	f, outcome := r.openCandidate(dayRoot, absDir, name, budget)
+	if outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	line, outcome := readCompleteLine(f, budget)
+	_ = f.Close()
+	if outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	if !codexTranscriptNamesItsConversation(line, convID) {
+		return "", resumeHistoryNoMatch
+	}
+	return filepath.Join(absDir, name), resumeHistoryFound
 }
 
 // codexTranscriptNamesItsConversation is the codex half of "a regular file with the
 // right name is not yet a transcript" (claudeTranscriptNamesItsConversation): the first
-// record must be a session_meta whose payload names convID AND the directory the source
-// ran in. The cwd clause buys what claude's per-cwd layout buys for free -- a foreign id
-// that merely passed the syntax check (agents-tracker-hpga) resolves only if it ran in
-// the same checkout -- and its refusal is its OWN outcome, because codex keeps the
-// creation cwd in that first record across resumes: a thread created in one directory
-// and resumed by swarm in another is refused, and the owner must be told it was refused
-// rather than that it was not there. It is deliberately NOT parseCodexSessionMeta, which
-// also matches the creation window: right when searching for an unknown id, wrong here,
-// where a resumed thread is legitimately older than the swarm session handing off.
-func codexTranscriptNamesItsConversation(line []byte, want, cleanCWD string) resumeHistoryOutcome {
+// record must be a session_meta whose payload names convID. THERE IS NO CWD CLAUSE, and
+// its absence is measured rather than lazy: codex records the app-server's working
+// directory as the thread's, and under swarm the app-server runs in the session's state
+// dir (internal/shim/backend.go), so every swarm-launched rollout names
+// <stateDir>/sessions/<creating session> -- a resumed thread names an OLDER session's --
+// and a clause requiring the source's checkout would refuse every real session (found
+// by adversarial review against 1888 real rollouts). The identity the name promises is
+// the id, and that is what is checked. It is deliberately NOT parseCodexSessionMeta,
+// which also matches cwd and the creation window: right when searching for an unknown
+// id, wrong when the id is known and the thread may be older than the session.
+func codexTranscriptNamesItsConversation(line []byte, want string) bool {
 	top, ok := decodeStrictObject([]byte(strings.TrimSpace(string(line))))
 	if !ok {
-		return resumeHistoryNoMatch
+		return false
 	}
 	if typ, ok := strictJSONString(top["type"]); !ok || typ != "session_meta" {
-		return resumeHistoryNoMatch
+		return false
 	}
 	payload, ok := decodeStrictObject(top["payload"])
 	if !ok {
-		return resumeHistoryNoMatch
+		return false
 	}
-	if id, ok := strictJSONString(payload["id"]); !ok || id != want {
-		return resumeHistoryNoMatch
-	}
-	if cwd, ok := strictJSONString(payload["cwd"]); !ok || !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cleanCWD {
-		return resumeHistoryForeign
-	}
-	return resumeHistoryFound
+	id, ok := strictJSONString(payload["id"])
+	return ok && id == want
 }
 
 func (r *filesystemResumeHistoryResolver) openHome() (*os.Root, resumeHistoryOutcome) {

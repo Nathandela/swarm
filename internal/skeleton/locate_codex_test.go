@@ -100,11 +100,10 @@ func TestLocateTranscript_CodexRefusesByName(t *testing.T) {
 			other := uuidv7At(codexThreadStart.Add(time.Minute))
 			writeRawCodexHistory(t, home, id, codexThreadStart, codexSessionMetaLine(t, other, cwd, codexThreadStart))
 		}, id, resumeHistoryNoMatch},
-		// Codex keeps the creation cwd in the first record across resumes, so a thread
-		// resumed by swarm elsewhere is refused -- and refused as FOREIGN, not "not there".
-		{"the thread ran in another checkout", func(t *testing.T, home, _ string) {
-			writeCodexHistory(t, home, id, filepath.Join(home, "elsewhere"), codexThreadStart, "", "cli", "")
-		}, id, resumeHistoryForeign},
+		{"two files in one day claim the id", func(t *testing.T, home, cwd string) {
+			writeCodexHistory(t, home, id, cwd, codexThreadStart, "", "cli", "")
+			writeCodexHistory(t, home, id, cwd, codexThreadStart.Add(time.Second), "", "cli", "")
+		}, id, resumeHistoryAmbiguous},
 		{"a first record that is not a session_meta", func(t *testing.T, home, _ string) {
 			writeRawCodexHistory(t, home, id, codexThreadStart, `{"type":"response_item","payload":{}}`)
 		}, id, resumeHistoryNoMatch},
@@ -132,17 +131,17 @@ func TestLocateTranscript_CodexRefusesByName(t *testing.T) {
 	}
 }
 
-// TestLocateTranscript_CodexUsesTheProviderCwdOfAWorktreeSource: a worktree-isolated
-// source has Meta.Cwd at the repo root while the agent RAN in <repo>/.swarm/worktrees/<slug>,
-// and codex recorded the latter. Reading Cwd here would refuse every worktree source.
-func TestLocateTranscript_CodexUsesTheProviderCwdOfAWorktreeSource(t *testing.T) {
+// TestLocateTranscript_CodexAcceptsTheAppServersRecordedCwd: codex records the
+// app-server's working directory as the thread's, and under swarm that is the creating
+// session's STATE dir, never the checkout (every real swarm-launched rollout on the
+// owner's machine). The locator must therefore judge the file by its id alone.
+func TestLocateTranscript_CodexAcceptsTheAppServersRecordedCwd(t *testing.T) {
 	home := t.TempDir()
 	id := uuidv7At(codexThreadStart)
 	repo := filepath.Join(home, "work")
-	worktree := filepath.Join(repo, ".swarm", "worktrees", "slug")
-	src := codexSource("srclocal", repo, id, codexThreadStart)
-	src.AgentCwd = worktree
-	want := writeCodexHistory(t, home, id, worktree, codexThreadStart, "", "cli", "")
+	recorded := filepath.Join(home, ".local", "state", "swarm", "sessions", "olderses")
+	src := codexSource("srclocal", repo, id, codexThreadStart.Add(48*time.Hour))
+	want := writeCodexHistory(t, home, id, recorded, codexThreadStart, "", "cli", "")
 
 	got, outcome := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits()).LocateTranscript(src, id)
 	if outcome != resumeHistoryFound || got != want {
@@ -231,26 +230,6 @@ func TestHandsOff_ComposesForACodexSourceFromItsDatedRollout(t *testing.T) {
 	}
 	if n := strings.Count(strings.Join(resolved.Argv, "\x00"), got.InitialPrompt); n != 1 {
 		t.Errorf("argv carries the composed prompt %d times, want exactly once", n)
-	}
-}
-
-// TestHandsOff_RefusesACodexTranscriptFromAnotherCheckoutByName: the refusal names what
-// happened, so the owner does not go looking for a file that is there.
-func TestHandsOff_RefusesACodexTranscriptFromAnotherCheckoutByName(t *testing.T) {
-	home := t.TempDir()
-	const local = "srclocal"
-	id := uuidv7At(codexThreadStart)
-	sourceCwd := filepath.Join(home, "work")
-	if err := os.MkdirAll(sourceCwd, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	src := codexSource(local, sourceCwd, id, codexThreadStart)
-	writeCodexHistory(t, home, id, filepath.Join(home, "elsewhere"), codexThreadStart, "", "cli", "")
-	resolver := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits())
-
-	_, err := composeHandsOffLaunch(handsOffSpec(testEndpoint, local, "/new-work"), testEndpoint, srcGetter(local, src), resolver)
-	if err == nil || !strings.Contains(err.Error(), "another working directory") {
-		t.Fatalf("err = %v, want a refusal naming the other working directory", err)
 	}
 }
 

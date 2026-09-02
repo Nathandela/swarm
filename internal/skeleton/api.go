@@ -1532,8 +1532,8 @@ func handsOffTranscriptError(provider, convID string, outcome resumeHistoryOutco
 		return fmt.Errorf("handoff: the %s transcript for conversation %s was not found", provider, convID)
 	case resumeHistoryUnsupported:
 		return fmt.Errorf("handoff: %s has no characterized transcript layout", provider)
-	case resumeHistoryForeign:
-		return fmt.Errorf("handoff: the %s transcript for conversation %s ran in another working directory; refusing to hand off a conversation that did not run in this checkout", provider, convID)
+	case resumeHistoryAmbiguous:
+		return fmt.Errorf("handoff: more than one %s transcript names conversation %s; refusing to guess", provider, convID)
 	case resumeHistoryUnsafe:
 		return fmt.Errorf("handoff: the %s transcript for conversation %s is unsafe to open", provider, convID)
 	default:

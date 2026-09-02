@@ -579,27 +579,39 @@ later than the rollout.
 
 The codex adapter implements a second optional interface, `adapter.DatedTranscriptLayout`
 (`TranscriptDay(convID) (time.Time, bool)`), on the same terms as `TranscriptLayout`: pure, total,
-no I/O, discovered by type assertion, absence is the signal. The resolver lists that day and its
-two neighbours (the id carries the millisecond the thread was minted, the file the second codex
-wrote it; across midnight those differ) under the same anchored, budgeted walk `resolveCodex`
-uses, opens only the entry whose parsed id is the conversation, and requires its first record to
-be a `session_meta` naming both that id and the source's provider cwd. The cwd clause buys what
-claude's per-cwd directory buys for free: a foreign id that merely passed the syntax check
-(`agents-tracker-hpga`) resolves only if it ran in the same checkout. It is deliberately not
-`parseCodexSessionMeta`, whose creation-window match is right when searching for an unknown id and
-wrong when the id is known.
+no I/O, discovered by type assertion, absence is the signal. The resolver lists that day first (so a busy neighbour cannot spend the entry budget before the
+right day is read), then the day after (the id carries the millisecond the thread was minted, the
+file the second codex wrote it; across midnight those differ — measured: of 1888 real rollouts, 28
+are stamped later than their id and none earlier), then the day before, which only a machine
+filing rollouts by a local time behind UTC could need; all under the same anchored, budgeted walk
+`resolveCodex` uses. It opens only the entry whose parsed id is the conversation — two entries
+claiming one id fail closed as ambiguous — and requires its first record to be a `session_meta`
+naming that id.
 
-Two limits are accepted and named. Codex keeps the creation cwd in that first record across
-resumes, so a thread created in one directory and resumed by swarm in another is refused — as
-"ran in another working directory", its own outcome, never as "not found". And a pre-UUIDv7 thread
-id (codex minted v4 ids before it minted v7) names no day and is reported not found; every thread
-on the owner's machine is v7 and the supported codex floor (0.100) predates none of them.
+THERE IS NO CWD CLAUSE, and its absence is measured rather than lazy. Codex records the
+app-server's working directory as the thread's, and under swarm the app-server runs in the
+session's state dir (`internal/shim/backend.go`), so every swarm-launched rollout names
+`<stateDir>/sessions/<creating session>` — a resumed thread names an older session's — and a
+clause requiring the source's checkout refused every real session (found by adversarial review
+against the 1888 rollouts on the owner's machine, before this shipped). The containment claude's
+per-cwd directory gives for free therefore has no codex equivalent: a poisoned latched id
+(`agents-tracker-hpga`) would point the successor at another same-user thread, which D7 already
+accepts and the prompt's "repository wins" rule bounds. The check is deliberately not
+`parseCodexSessionMeta`, whose cwd and creation-window matches are right when searching for an
+unknown id and wrong when the id is known.
+
+Two limits are accepted and named. A pre-UUIDv7 thread id (codex minted v4 ids before it minted
+v7; sixteen such rollouts from 2025 exist on the owner's machine) names no day and is reported not
+found. And a codex source with NO captured id is first offered to the existing `resolveCodex`
+window, which for the same recorded-cwd reason cannot match an app-server thread and fails closed
+on the degenerate rollouts present in the owner's tree, so hands-off from such a source is refused
+by name until `swarm-man` lands. Every source with a captured id — twelve of the eighteen live
+codex sessions at the time of writing — composes.
 
 E7's gate becomes "either layout": a source is supported when its adapter has characterized where
 its transcripts live, by cwd or by day. agy and opencode still implement neither and are refused
-by name. A MISSING codex id is still recovered by the existing `resolveCodex` window before the
-locator runs, which is the path the owner's app-server sessions (several threads, none latched)
-take.
+by name. A MISSING codex id is first offered to the existing `resolveCodex` window before the locator runs;
+the limits above say what that recovers today.
 
 ### F2. Every codex argv lifts the sandbox's network filter for the swarm CLI
 
@@ -628,12 +640,15 @@ handoff, and removal — now of the whole directory — when the launch is refus
 fails. A pre-existing directory can never be squatted because the directory is minted, not named.
 An owner who sets codex's `sandbox_workspace_write.exclude_slash_tmp` makes the copy fail inside
 the sandbox with a named refusal ("read-only file system"), which is the correct outcome for a
-knob whose purpose is to keep the sandbox from writing there. D2 and B1 read as this directory
-from now on.
+knob whose purpose is to keep the sandbox from writing there. Codex likewise excludes `$TMPDIR`
+from the writable roots (`exclude_tmpdir_env_var`), so an owner who exports `TMPDIR` outside `/tmp`
+gets the same named refusal; `os.TempDir` honours that variable, and the sandbox's own environment
+leaves it unset. D2 and B1 read as this directory from now on.
 
 ### Consequences
 
-- A codex-to-claude handoff composes by both methods, and a codex-to-codex hands-off does too.
+- A codex-to-claude handoff composes by both methods for any source with a captured conversation
+  id, and a codex-to-codex hands-off does too; the no-captured-id case is `swarm-man`.
 - Codex workspace-write sessions launched by swarm have network access on (F2). Recorded as a
   security consequence, not argued away.
 - Handoff copies live under the temp dir and do not survive a reboot; they were always transient.
