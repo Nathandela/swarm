@@ -126,6 +126,24 @@ class SessionDetailVerdictTest {
         )
     }
 
+    @Test
+    fun `durable local terminal outcomes explain themselves and never auto retry`() {
+        val authority = SessionDetailScreen.composerVerdictFor(outcome("authority_changed"), op)
+        assertEquals(SendState.REFUSED, authority.state)
+        assertEquals("authority_changed", authority.refusal)
+        assertEquals(
+            "Not sent. The connection changed. Send again if it is still relevant.",
+            authority.notice,
+        )
+        assertFalse(authority.retryable)
+
+        val expired = SessionDetailScreen.composerVerdictFor(outcome("expired"), op)
+        assertEquals(SendState.REFUSED, expired.state)
+        assertEquals("expired", expired.refusal)
+        assertEquals("Not sent. It expired before delivery.", expired.notice)
+        assertFalse(expired.retryable)
+    }
+
     /**
      * W2.2's caller (phone-refit-playbook §3): an unmapped code with a sentence is still
      * REFUSED, keeps the draft, and its notice is the code's own sentence rather than the generic

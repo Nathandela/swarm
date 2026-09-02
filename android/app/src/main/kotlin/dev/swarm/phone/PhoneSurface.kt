@@ -2093,6 +2093,14 @@ class PhoneSurface(
 
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
+        try {
+            // Go owns crash recovery and operation identity. Hydrate before claiming outcomes so
+            // a recreated Activity can settle the exact durable operation (or replace an
+            // input_busy retry by LogicalID) without inventing a second bubble.
+            composerSends.hydrate(bridge.composerPublications())
+        } catch (unreadable: Exception) {
+            outcome.text = bridge.routeFacadeErrorSafely(unreadable.message.orEmpty()).message
+        }
         val nextRosterRevision = try {
             bridge.rosterRevision()
         } catch (unreadable: Exception) {
@@ -4706,7 +4714,14 @@ class PhoneSurface(
     ): Boolean {
         val accepted = dispatch.enqueueCompleting(
             SendPlane.COMMAND,
-            work = { app.composerSend(retry.sessionId, retry.expectedTurn, retry.text) },
+            work = {
+                app.composerRetry(
+                    previousOperationId,
+                    retry.sessionId,
+                    retry.expectedTurn,
+                    retry.text,
+                )
+            },
             complete = { answer ->
                 answer.fold(
                     onSuccess = { result ->

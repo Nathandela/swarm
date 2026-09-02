@@ -50,7 +50,8 @@ func TestComposerRapidSend_InputBusyRetriesTheLogicalBubbleWithFreshOperationOwn
 	}
 	retry := kotlinMember(t, surface, "private fun retryComposerSend(")
 	for _, want := range []string{
-		"app.composerSend(",
+		"app.composerRetry(",
+		"previousOperationId",
 		"retrySealed(",
 		"val accepted = dispatch.enqueueCompleting(",
 		"complete =",
@@ -62,11 +63,34 @@ func TestComposerRapidSend_InputBusyRetriesTheLogicalBubbleWithFreshOperationOwn
 			t.Errorf("composer retry path does not contain %q", want)
 		}
 	}
+	if strings.Contains(retry, "app.composerSend(") {
+		t.Error("input_busy retry calls ComposerSend, creating a second LogicalID instead of replacing the exact prior operation")
+	}
 
 	ledger := kotlinCodeOnly(all["dev/swarm/phone/ui/screens/ComposerSendLedger.kt"])
 	for _, want := range []string{"fun beginRetry(", "fun retrySealed(", "fun retryRejected(", "expectedTurn", "retryAttempt"} {
 		if !strings.Contains(ledger, want) {
 			t.Errorf("composer ledger does not contain %q; retry cannot preserve one logical bubble", want)
+		}
+	}
+}
+
+func TestComposerRapidSend_RenderHydratesDurableOperationsBeforeClaimingOutcomes(t *testing.T) {
+	all := r8AllProductionKotlin(t)
+	surface := kotlinMember(t, kotlinCodeOnly(all["dev/swarm/phone/PhoneSurface.kt"]), "private fun renderReady(")
+	hydrate := strings.Index(surface, "composerSends.hydrate(bridge.composerPublications())")
+	verdicts := strings.Index(surface, "renderVerdicts(bridge, startup.app)")
+	if hydrate < 0 || verdicts < 0 || hydrate > verdicts {
+		t.Fatalf("renderReady does not hydrate durable composer operations before claiming their outcomes")
+	}
+	bridge := kotlinMember(t, kotlinCodeOnly(all["dev/swarm/phone/ui/FacadeBridge.kt"]), "fun composerPublications(")
+	for _, want := range []string{
+		"app.composerPublications()", "publication.getLogicalID()", "publication.getOperationID()",
+		"publication.getSessionID()", "publication.getText()", "publication.getPhase()",
+		"publication.getTerminalCode()",
+	} {
+		if !strings.Contains(bridge, want) {
+			t.Errorf("durable composer facade mapping omits %q", want)
 		}
 	}
 }

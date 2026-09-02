@@ -4,6 +4,7 @@ import dev.swarm.phone.ui.kit.SendState
 
 /** One locally sealed composer command, retained until outcome and transcript settle separately. */
 data class ComposerSendRecord(
+    val logicalId: String,
     val operationId: String,
     val sessionId: String,
     val expectedTurn: String = "",
@@ -17,6 +18,17 @@ data class ComposerSendRecord(
     val retrying: Boolean = false,
     val retryDispatched: Boolean = false,
     val retryAttempt: Int = 0,
+)
+
+/** Content-only durable projection returned by App.ComposerPublications. */
+data class DurableComposerPublication(
+    val logicalId: String,
+    val operationId: String,
+    val sessionId: String,
+    val expectedTurn: String,
+    val text: String,
+    val phase: String,
+    val terminalCode: String,
 )
 
 /**
@@ -37,12 +49,73 @@ class ComposerSendLedger {
     fun sealed(operationId: String, sessionId: String, expectedTurn: String, text: String) {
         if (operationId.isEmpty()) return
         val record = ComposerSendRecord(
+            logicalId = operationId,
             operationId = operationId,
             sessionId = sessionId,
             expectedTurn = expectedTurn,
             text = text,
         )
         if (sends.putIfAbsent(operationId, record) == null) latestBySession[sessionId] = record
+    }
+
+    /**
+     * Adopt the durable Go projection atomically. Exact operations keep any already-claimed UI
+     * verdict; a fresh operation with the same LogicalID replaces that one bubble in its durable
+     * FIFO slot. Text is content, never identity, so identical words under distinct logical ids
+     * remain distinct messages.
+     */
+    fun hydrate(publications: List<DurableComposerPublication>) {
+        val seenOperations = mutableSetOf<String>()
+        val seenLogical = mutableSetOf<String>()
+        val currentByLogical = sends.values.associateBy { it.logicalId }
+        val adopted = linkedMapOf<String, ComposerSendRecord>()
+        for (publication in publications) {
+            require(
+                publication.operationId.isNotEmpty() && publication.logicalId.isNotEmpty() &&
+                    publication.sessionId.isNotEmpty() && publication.text.isNotEmpty(),
+            ) { "invalid durable composer publication" }
+            require(seenOperations.add(publication.operationId)) {
+                "duplicate durable composer operation"
+            }
+            require(seenLogical.add(publication.logicalId)) {
+                "duplicate durable logical composer send"
+            }
+            val current = sends[publication.operationId] ?: currentByLogical[publication.logicalId]
+            if (current != null) {
+                require(
+                    current.logicalId == publication.logicalId &&
+                        current.sessionId == publication.sessionId &&
+                        current.expectedTurn == publication.expectedTurn &&
+                        current.text == publication.text,
+                ) { "durable composer identity changed content" }
+            }
+            val next = when {
+                current == null -> ComposerSendRecord(
+                    logicalId = publication.logicalId,
+                    operationId = publication.operationId,
+                    sessionId = publication.sessionId,
+                    expectedTurn = publication.expectedTurn,
+                    text = publication.text,
+                )
+                current.operationId == publication.operationId -> current
+                else -> current.copy(
+                    operationId = publication.operationId,
+                    state = SendState.PENDING,
+                    refusal = "",
+                    notice = "",
+                    detail = "",
+                    answered = false,
+                    echoed = false,
+                    retrying = false,
+                    retryDispatched = false,
+                )
+            }
+            adopted[next.operationId] = next
+        }
+        sends.clear()
+        sends.putAll(adopted)
+        latestBySession.clear()
+        for (record in sends.values) latestBySession[record.sessionId] = record
     }
 
     fun unansweredOperations(): List<String> = sends.values

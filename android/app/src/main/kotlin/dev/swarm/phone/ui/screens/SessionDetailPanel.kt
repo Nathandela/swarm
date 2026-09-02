@@ -906,11 +906,17 @@ object SessionDetailScreen {
             SendState.REFUSED
         }
         val notice = ComposerModel.noticeFor(routed.state.name)
+        val localNotice = when (outcome.code) {
+            "authority_changed" -> "Not sent. The connection changed. Send again if it is still relevant."
+            "expired" -> "Not sent. It expired before delivery."
+            else -> null
+        }
         // W2.2's caller (phone-refit-playbook §3): an unmapped code with its own sentence says it
         // (`routed.message` carries it; state and remedy stay UNKNOWN), and the refusal token
         // carries the CODE so the panel can say the same sentence from
         // `SessionDetail.composerRefusal`. A code this build has never seen keeps the generic copy.
-        val sentenced = routed.state == ErrorState.UNKNOWN && outcome.code in MachineRefusalCodes.sentence
+        val sentenced = routed.state == ErrorState.UNKNOWN &&
+            (outcome.code in MachineRefusalCodes.sentence || localNotice != null)
         return ComposerVerdict(
             answered = true,
             state = state,
@@ -919,7 +925,7 @@ object SessionDetailScreen {
             // the user's words punishes them for the machine's answer, and `stale_turn` -- the
             // ordinary one -- is the case that makes it obvious.
             clearsDraft = false,
-            notice = if (sentenced) routed.message else notice.copy,
+            notice = localNotice ?: if (sentenced) routed.message else notice.copy,
             detail = verdict.reason,
             // Only input_busy is an explicit proof that the shim wrote no bytes. Retrying an
             // unknown/lost outcome could duplicate a message that was actually delivered.
