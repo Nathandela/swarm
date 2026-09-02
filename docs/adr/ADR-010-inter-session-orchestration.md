@@ -1,6 +1,6 @@
 # ADR-010: Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs
 
-**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6))
+**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6), 2026-09-02 (Amendment 7))
 **Date**: 2026-07-24
 
 ## Context
@@ -726,3 +726,49 @@ rendered prompt are unchanged and stay green.
 - Directories and transcript paths containing `<` or `>` can no longer be handed off; they could not
   be typed into most shells without quoting either.
 - Evidence: `docs/verification/adr010/amendment6-red.md`.
+
+## Amendment 7 (2026-09-02): legacy codex sessions — the resume argv names the conversation, and a torn rollout is skipped
+
+Codex announces `thread/started` only for a thread the agent creates. A RESUMED codex session
+announces nothing, so the daemon fell back to `thread/loaded/list` and adopted a thread only when
+exactly one was loaded. Codex 0.151.0 (2026-09-01) keeps its guardian and sub-agent threads
+(`source: {"subagent": ...}`, `parent_thread_id` = the main thread) loaded in the same app-server,
+so that list holds several entries and the daemon refuses to guess. v0.13.16 seeds a resumed
+session's id from its source at launch; every codex resume launched before it on the owner's
+machine (five on 2026-09-01) has no id, and hands-off from such a source was refused as "unsafe to
+inspect" because the fallback scan fails closed on two rollouts codex 0.151.0 tore while writing
+sub-agent headers: a zero-byte file, and a first record cut by a raw newline at byte 12289 with a
+second `session_meta` starting on line two.
+
+### H1. A resumed codex session's launch record names its conversation, and reconcile backfills it
+
+A codex resume continues the thread it is given: the rollout of the resumed thread carries the
+user's later turns (measured: thread `01a056e8`'s rollout, resumed 2026-09-01 09:02 UTC, holds the
+user's turns through 16:21 UTC), which is the fact v0.13.16's seeding already relies on. The daemon
+wrote that id into the session's `shim-launch.json` argv at spawn. So at reconcile, a codex session
+with `resumed_from` set and no conversation id takes the one canonical id in its launch argv,
+through the write-once `SetConversationID`, and is thereafter indistinguishable from a seeded one:
+hands-off, resume and recycle compose from it. Claude is excluded on purpose: its id is
+hook-captured and authoritative, and a pre-emptive latch would block that capture. The rejoin is
+not changed: `rejoinSessionBackend` still discovers the loaded thread rather than reading the
+persisted id, which is filed separately.
+
+### H2. A torn codex rollout is not a record, so the scan skips it
+
+`resolveCodex` refused the whole scan on any rollout whose first line could not be read as a
+complete strict `session_meta`. Two kinds are now skipped as "not a candidate": a first line that
+is not newline-terminated (an empty file, or a write in progress), and one that is not one
+syntactically complete JSON value (a torn write). Both are what codex itself produces; neither can
+name an id, so skipping them adopts nothing, and a planted decoy that DOES decode still makes the
+scan ambiguous exactly as before. Every other refusal stands: a decodable record with duplicate
+keys, trailing data, missing fields, a mismatched id or stamp; a symlink or non-regular entry; a
+spent budget. The same reading rule serves the hands-off locator, which reports such a named file
+as not found rather than unsafe. Claude's per-cwd scan is unchanged.
+
+### Consequences
+
+- The five legacy codex resumes on the owner's machine regain their id at the next daemon start.
+  The two legacy fresh launches with no id (2026-08-28) remain refused, as F1 already says.
+- A no-id codex source whose window holds a torn rollout is now judged on its other rollouts.
+- Evidence: `docs/verification/adr010/amendment7-red.md`.
+
