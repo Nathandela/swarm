@@ -149,8 +149,12 @@ func copyHandoff(src string) (string, error) {
 	// The pointer prompt must name a path the CHILD can resolve from its own cwd,
 	// so the destination is forced absolute even under a relative TMPDIR.
 	dest, err := filepath.Abs(filepath.Join(dir, "handoff.md"))
+	if err == nil {
+		err = os.WriteFile(dest, body, 0o600)
+	}
 	if err != nil {
+		_ = os.RemoveAll(dir) // never strand a directory the caller will not hear about
 		return "", err
 	}
-	return dest, os.WriteFile(dest, body, 0o600)
+	return dest, nil
 }

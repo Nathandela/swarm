@@ -24,6 +24,9 @@ const (
 	resumeHistoryAmbiguous
 	resumeHistoryUnsafe
 	resumeHistoryUnreadable
+	// resumeHistoryForeign: the transcript names the conversation but ran in a
+	// different working directory from the source (the hands-off codex locator only).
+	resumeHistoryForeign
 )
 
 type resumeHistoryResult struct {
@@ -351,8 +354,8 @@ func (r *filesystemResumeHistoryResolver) locateCodexInDay(dayRoot *os.Root, abs
 		if outcome != resumeHistoryFound {
 			return "", outcome
 		}
-		if !codexTranscriptNamesItsConversation(line, convID, cleanCWD) {
-			return "", resumeHistoryNoMatch
+		if outcome := codexTranscriptNamesItsConversation(line, convID, cleanCWD); outcome != resumeHistoryFound {
+			return "", outcome
 		}
 		return filepath.Join(absDir, entry.Name()), resumeHistoryFound
 	}
@@ -364,24 +367,31 @@ func (r *filesystemResumeHistoryResolver) locateCodexInDay(dayRoot *os.Root, abs
 // record must be a session_meta whose payload names convID AND the directory the source
 // ran in. The cwd clause buys what claude's per-cwd layout buys for free -- a foreign id
 // that merely passed the syntax check (agents-tracker-hpga) resolves only if it ran in
-// the same checkout. It is deliberately NOT parseCodexSessionMeta, which also matches
-// the creation window: right when searching for an unknown id, wrong here, where a
-// resumed thread is legitimately older than the swarm session handing off.
-func codexTranscriptNamesItsConversation(line []byte, want, cleanCWD string) bool {
+// the same checkout -- and its refusal is its OWN outcome, because codex keeps the
+// creation cwd in that first record across resumes: a thread created in one directory
+// and resumed by swarm in another is refused, and the owner must be told it was refused
+// rather than that it was not there. It is deliberately NOT parseCodexSessionMeta, which
+// also matches the creation window: right when searching for an unknown id, wrong here,
+// where a resumed thread is legitimately older than the swarm session handing off.
+func codexTranscriptNamesItsConversation(line []byte, want, cleanCWD string) resumeHistoryOutcome {
 	top, ok := decodeStrictObject([]byte(strings.TrimSpace(string(line))))
 	if !ok {
-		return false
+		return resumeHistoryNoMatch
 	}
 	if typ, ok := strictJSONString(top["type"]); !ok || typ != "session_meta" {
-		return false
+		return resumeHistoryNoMatch
 	}
 	payload, ok := decodeStrictObject(top["payload"])
 	if !ok {
-		return false
+		return resumeHistoryNoMatch
 	}
-	id, idOK := strictJSONString(payload["id"])
-	cwd, cwdOK := strictJSONString(payload["cwd"])
-	return idOK && cwdOK && id == want && filepath.IsAbs(cwd) && filepath.Clean(cwd) == cleanCWD
+	if id, ok := strictJSONString(payload["id"]); !ok || id != want {
+		return resumeHistoryNoMatch
+	}
+	if cwd, ok := strictJSONString(payload["cwd"]); !ok || !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cleanCWD {
+		return resumeHistoryForeign
+	}
+	return resumeHistoryFound
 }
 
 func (r *filesystemResumeHistoryResolver) openHome() (*os.Root, resumeHistoryOutcome) {

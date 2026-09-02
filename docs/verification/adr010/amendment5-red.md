@@ -179,3 +179,23 @@ Three independent reviewers ran over the pushed branch, read-only (an adversaria
 correctness/confinement reviewer, an over-engineering hunter, and a code-analysis reviewer).
 Their findings and what was done with each:
 
+**Over-engineering hunter** — verdict: proportionate; the interface earns its place over an
+agent-type switch (the day-from-id knowledge stays inside the codex adapter). Three findings, all
+taken: two comments F3 had left stale (`spawn.go` package doc, the copy test's doc) and the
+timestamped `CreateTemp` name, redundant once each copy has a directory of its own — the copy is
+now a plain `handoff.md`. One suggestion declined: a shared `session_meta` identity parser between
+`parseCodexSessionMeta` and `codexTranscriptNamesItsConversation` would save about eight lines by
+editing the tested resume path; left alone.
+
+**Code-analysis reviewer** — seven findings, six acted on:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | A thread resumed in another directory is refused with "not found" | Taken: its own outcome, `resumeHistoryForeign`, and its own refusal text ("ran in another working directory"); the ADR names the limit |
+| 2 | Evidence lacked gates and a live proof that `codex app-server` accepts `-c` and that the sandbox's `/tmp` is the host's | Gates recorded (§5). `codex app-server --listen unix://… -c sandbox_workspace_write.network_access=true` bound its socket within 8 s with no error output, run live on codex-cli 0.151.0. `/tmp` visibility is proven by the post-release smoke (§7). The `exclude_slash_tmp` knob is now named in F3 |
+| 3 | `copyHandoff` stranded its directory when the copy itself failed | Taken: the directory is removed on every error after it is minted |
+| 4 | A zero-byte rollout reads as "unsafe to open" rather than "not found" | Accepted as a known limit: `readCompleteLine`'s EOF semantics belong to `resolveCodex`, whose tests pin them, and a rollout without its first record is a crash artefact |
+| 5 | Pre-v7 (v4) thread ids are refused as not found | Accepted and named in the ADR (F1) |
+| 6 | Physical versus logical cwd (a symlinked checkout) — pre-existing in `parseCodexSessionMeta`, now load-bearing for hands-off | Recorded; the owner's `data/` tree is not symlinked (`readlink -f` is the identity). Not fixed here |
+| 7 | Test gaps: the v4 case was non-discriminating; no worktree (`AgentCwd`) case; no budget bound; no stray-entry case | Taken: the v4 case now writes the rollout under the session's own day and still expects not-found; new tests cover the worktree cwd, a stray and a malformed neighbour, and `MaxEntries` failing closed |
+

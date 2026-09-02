@@ -589,6 +589,12 @@ claude's per-cwd directory buys for free: a foreign id that merely passed the sy
 `parseCodexSessionMeta`, whose creation-window match is right when searching for an unknown id and
 wrong when the id is known.
 
+Two limits are accepted and named. Codex keeps the creation cwd in that first record across
+resumes, so a thread created in one directory and resumed by swarm in another is refused — as
+"ran in another working directory", its own outcome, never as "not found". And a pre-UUIDv7 thread
+id (codex minted v4 ids before it minted v7) names no day and is reported not found; every thread
+on the owner's machine is v7 and the supported codex floor (0.100) predates none of them.
+
 E7's gate becomes "either layout": a source is supported when its adapter has characterized where
 its transcripts live, by cwd or by day. agy and opencode still implement neither and are refused
 by name. A MISSING codex id is still recovered by the existing `resolveCodex` window before the
@@ -618,9 +624,12 @@ for that session and forgoes supervised handoff from it.
 `<stateDir>/handoffs/`, because the state dir is read-only inside the codex sandbox while the
 temp dir is writable there (measured: `/tmp` subdirectories are writable under workspace-write).
 Every property the copy had is kept: absolute path in the pointer prompt, 0600 file, one copy per
-handoff, and removal — now of the whole directory — when the launch is refused. A pre-existing
-directory can never be squatted because the directory is minted, not named. D2 and B1 read as
-this directory from now on.
+handoff, and removal — now of the whole directory — when the launch is refused or the copy itself
+fails. A pre-existing directory can never be squatted because the directory is minted, not named.
+An owner who sets codex's `sandbox_workspace_write.exclude_slash_tmp` makes the copy fail inside
+the sandbox with a named refusal ("read-only file system"), which is the correct outcome for a
+knob whose purpose is to keep the sandbox from writing there. D2 and B1 read as this directory
+from now on.
 
 ### Consequences
 
