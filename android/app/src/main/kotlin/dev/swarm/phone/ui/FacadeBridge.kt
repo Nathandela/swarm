@@ -506,13 +506,11 @@ class FacadeBridge(private val app: App) {
 
     fun connectionState(): ConnectionState = ConnectionState.of(app.connectionState())
 
-    fun connectionBanner(): ConnectionBanner = ConnectionBanner.of(connectionState())
-
     /** Automatic foreground/network anti-entropy; never authorizes mailbox deletion. */
     fun syncRoster() = app.syncRoster()
 
     /**
-     * PB-APP-11, and it is a SEPARATE question from [connectionBanner] on purpose.
+     * PB-APP-11, and it is a SEPARATE question from [connectionState] on purpose.
      *
      * The transport can only report what it knows: the socket is up and the polls are
      * succeeding. A relay that answers every poll with an empty page while withholding the

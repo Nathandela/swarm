@@ -13,7 +13,7 @@ import org.junit.Test
  * screen and had nothing to say on it.
  *
  * THE DEFECT IS A DECISION ORDER, not a missing sentence. `PhoneSurface.renderReady` asks
- * [PairOnlyScreen.presentationOf] FIRST and returns before `FacadeBridge.connectionBanner()` is
+ * [PairOnlyScreen.presentationOf] FIRST and returns before `FacadeBridge.connectionState()` is
  * ever read; `mobile/relay.go`'s `transportEndsPairing` folds `repair_required` and a
  * past-grace `revoked` into `paired = false`. So the two most carefully worded banners in
  * `ConnectionUi.kt` -- the ones that name a cause the user cannot otherwise know -- are
