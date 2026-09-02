@@ -32,6 +32,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [022](ADR-022-live-session-name-adoption.md) | A session's name follows the name its CLI shows, newest wins | Accepted | 2026-08-28 |
 | [023](ADR-023-context-guard-auto-compaction.md) | ContextGuard auto-compaction — exact telemetry, at-most-once dispatch, and harness-gated rollout | Accepted | 2026-08-31 |
 | [024](ADR-024-auth-recycle-on-relogin.md) | A provider re-login recycles its stranded sessions automatically | Accepted | 2026-09-01 |
+| [025](ADR-025-launch-gate-answered-by-the-daemon.md) | The daemon answers a CLI's own launch gate (Claude Code's folder-trust dialog) from the grid tap, once, on the screen it is proven on | Accepted | 2026-09-02 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the

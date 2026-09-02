@@ -40,6 +40,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/adapter/claude"
 )
 
 // Grid markers the scenarios wait on. Each is a literal a real claude screen
@@ -210,8 +212,16 @@ func runDialogScenario(t *testing.T, variant, dumpDir, scratch string, argv, fol
 		if _, err := s.record("00-trust-dialog"); err != nil {
 			t.Fatalf("record trust: %v", err)
 		}
-		s.note("trust dialog seen; answering 1")
-		if err := s.send("1"); err != nil {
+		_, snap, _, err := s.snapshot()
+		if err != nil {
+			t.Fatalf("read trust dialog: %v", err)
+		}
+		keys, ok := claude.New().LaunchGateKeys(snap)
+		if !ok {
+			t.Fatalf("the trust dialog on screen is not one LaunchGateKeys recognizes; record it under testdata/trustdialog and extend the recognizer")
+		}
+		s.note("trust dialog seen; answering with the adapter's launch-gate keys %q", keys)
+		if err := s.send(keys); err != nil {
 			t.Fatalf("send trust: %v", err)
 		}
 		if err := s.waitAbsent(markerTrust, 30*time.Second); err != nil {

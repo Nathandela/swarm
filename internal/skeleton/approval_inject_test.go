@@ -61,13 +61,14 @@ import (
 const permDialogFixtures = "../adapter/claude/testdata/permdialog"
 
 // recordedGrid names one fixture and a string from its LAST painted row, used to drain an
-// attachment past the repaint so everything seen afterwards is new output.
-type recordedGrid struct{ fixture, lastRow string }
+// attachment past the repaint so everything seen afterwards is new output. dir is the
+// fixture's directory; empty means M1.1's permdialog corpus.
+type recordedGrid struct{ fixture, lastRow, dir string }
 
 var (
-	bashDialogGrid = recordedGrid{"bash-approval-2.1.231", "ctrl+e to explain"}
-	editDialogGrid = recordedGrid{"edit-approval-2.1.231", "Tab to amend"}
-	composerGrid   = recordedGrid{"neg-composer-idle-2.1.231", "manual mode on"}
+	bashDialogGrid = recordedGrid{fixture: "bash-approval-2.1.231", lastRow: "ctrl+e to explain"}
+	editDialogGrid = recordedGrid{fixture: "edit-approval-2.1.231", lastRow: "Tab to amend"}
+	composerGrid   = recordedGrid{fixture: "neg-composer-idle-2.1.231", lastRow: "manual mode on"}
 )
 
 // gridScript builds a fake-agent script that reproduces the given recorded grids in a real PTY,
@@ -100,7 +101,11 @@ func gridScript(t *testing.T, gs ...recordedGrid) (script string, cols, rows int
 	var b strings.Builder
 	var park string
 	for _, g := range gs {
-		raw, err := os.ReadFile(filepath.Join(permDialogFixtures, g.fixture+".snap.json"))
+		dir := g.dir
+		if dir == "" {
+			dir = permDialogFixtures
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, g.fixture+".snap.json"))
 		if err != nil {
 			t.Fatalf("read recorded grid %s: %v", g.fixture, err)
 		}

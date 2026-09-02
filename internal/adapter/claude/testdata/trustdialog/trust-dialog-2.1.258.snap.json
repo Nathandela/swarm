@@ -1,0 +1,389 @@
+{
+  "version": 1,
+  "cols": 100,
+  "rows": 30,
+  "altScreen": false,
+  "cursorX": 1,
+  "cursorY": 14,
+  "cursorVisible": false,
+  "lines": [
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "────────────────────────────────────────────────────────────────────────────────────────────────────",
+          "width": 100,
+          "fg": "#ffd700"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Accessing",
+          "width": 9,
+          "fg": "#ffd700",
+          "bold": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "workspace:",
+          "width": 10,
+          "fg": "#ffd700",
+          "bold": true
+        },
+        {
+          "text": "                                                                               ",
+          "width": 79
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "/home/ubuntu/data/trust-fixture-1788339955",
+          "width": 42,
+          "bold": true
+        },
+        {
+          "text": "                                                         ",
+          "width": 57
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " Quick safety check: Is this a project you created or one you trust? (Like your own code, a         ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " well-known open source project, or work from your team). If not, take a moment to review what's in ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " this folder first.                                                                                 ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " Claude Code'll be able to read, edit, and execute files here.                                      ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Security",
+          "width": 8,
+          "fg": "#949494"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "guide",
+          "width": 5,
+          "fg": "#949494"
+        },
+        {
+          "text": "                                                                                     ",
+          "width": 85
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "❯",
+          "width": 1,
+          "fg": "#afd7ff"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "No,",
+          "width": 3,
+          "fg": "#afd7ff"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "exit",
+          "width": 4,
+          "fg": "#afd7ff"
+        },
+        {
+          "text": "                                                                                         ",
+          "width": 89
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "   Yes, I trust this folder                                                                         ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Enter",
+          "width": 5,
+          "fg": "#949494"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "to",
+          "width": 2,
+          "fg": "#949494"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "confirm",
+          "width": 7,
+          "fg": "#949494"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "·",
+          "width": 1,
+          "fg": "#949494"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Esc",
+          "width": 3,
+          "fg": "#949494"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "to",
+          "width": 2,
+          "fg": "#949494"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "cancel",
+          "width": 6,
+          "fg": "#949494"
+        },
+        {
+          "text": "                                                                   ",
+          "width": 67
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    }
+  ]
+}
