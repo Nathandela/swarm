@@ -1,0 +1,101 @@
+package skeleton
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestResumeHistory_CodexSkipsTornRollouts pins ADR-010 Amendment 7 H2: a rollout codex
+// tore while writing it is not a record and cannot name an id, so the scan passes over it
+// and judges the session on its other rollouts. The three shapes are the measured ones: a
+// zero-byte file, a first line still being written, and a first record cut by a raw newline
+// with a second header starting on line two. A matching rollout sits beside each.
+func TestResumeHistory_CodexSkipsTornRollouts(t *testing.T) {
+	cwd := "/work/project"
+	when := legacyCreatedAt.Add(time.Second)
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"zero-byte rollout", ""},
+		{"first line still being written", `{"type":"session_meta","payload":{"id":"` + legacyCodexOtherID + `"`},
+		{"first record torn by a raw newline", `{"type":"session_meta","payload":{"id":"` + legacyCodexOtherID + `","base_instructions":"cut here` + "\n" +
+			`{"timestamp":"2026-09-01T14:52:06.628Z","type":"session_meta","payload":{}}` + "\n"},
+		{"blank first line before the header", "\n" + `{"type":"session_meta","payload":{"id":"` + legacyCodexOtherID + `"}}` + "\n"},
+		{"control character inside a string", `{"type":"session_meta","payload":{"id":"` + legacyCodexOtherID + `","note":"tab` + "\t" + `here"}}` + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeCodexHistory(t, home, legacyCodexRootID, cwd, when, "", "cli", "")
+			torn := codexHistoryPath(home, when.Add(2*time.Second), legacyCodexOtherID)
+			if err := os.WriteFile(torn, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+			requireHistoryResult(t, got, resumeHistoryFound, legacyCodexRootID)
+		})
+	}
+}
+
+// TestLocateTranscript_CodexNamedFileWithoutARecordIsNotFound is H2's face on the hands-off
+// locator: the file the id names exists but holds no complete record, which is "the
+// transcript is not there", not "unsafe to inspect".
+func TestLocateTranscript_CodexNamedFileWithoutARecordIsNotFound(t *testing.T) {
+	home := t.TempDir()
+	created := time.Date(2026, 9, 1, 9, 2, 54, 0, time.UTC)
+	id := uuidv7At(created)
+	p := codexHistoryPath(home, created, id)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := codexSource("legacy-source", "/work/project", id, created)
+	got, outcome := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits()).LocateTranscript(src, id)
+	if outcome != resumeHistoryNoMatch || got != "" {
+		t.Fatalf("LocateTranscript = (%q, %v), want (\"\", %v)", got, outcome, resumeHistoryNoMatch)
+	}
+}
+
+// TestLocateTranscript_CodexNameHitEndsTheSearch: the id's own day names the file but it
+// holds no record, and a well-formed rollout claiming the same id sits in the next day.
+// The search stops at the name hit; the neighbour does not answer for it.
+func TestLocateTranscript_CodexNameHitEndsTheSearch(t *testing.T) {
+	home := t.TempDir()
+	created := time.Date(2026, 9, 1, 9, 2, 54, 0, time.UTC)
+	id := uuidv7At(created)
+	torn := codexHistoryPath(home, created, id)
+	if err := os.MkdirAll(filepath.Dir(torn), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(torn, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeCodexHistory(t, home, id, "/work/project", created.AddDate(0, 0, 1), "", "cli", "")
+	src := codexSource("legacy-source", "/work/project", id, created)
+	got, outcome := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits()).LocateTranscript(src, id)
+	if outcome != resumeHistoryNoMatch || got != "" {
+		t.Fatalf("LocateTranscript = (%q, %v), want (\"\", %v)", got, outcome, resumeHistoryNoMatch)
+	}
+}
+
+// TestResumeHistory_CodexPartialLineStillCountsAgainstTheBudget: a skipped partial line
+// was still read, so its bytes are charged and a spent budget still refuses.
+func TestResumeHistory_CodexPartialLineStillCountsAgainstTheBudget(t *testing.T) {
+	home := t.TempDir()
+	cwd := "/work/project"
+	when := legacyCreatedAt.Add(time.Second)
+	writeCodexHistory(t, home, legacyCodexRootID, cwd, when, "", "cli", "")
+	partial := codexHistoryPath(home, when.Add(2*time.Second), legacyCodexOtherID)
+	if err := os.WriteFile(partial, []byte(strings.Repeat("x", 1024)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	limits := generousResumeHistoryLimits()
+	limits.MaxTotalBytes = 600
+	got := resolveHistory(t, home, limits, legacySource("codex", cwd, legacyCreatedAt))
+	requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+}

@@ -230,7 +230,7 @@ Each `vMAJOR.MINOR.PATCH` release attaches `container-images.json`. It names bot
 `@sha256:` digest; a moving alias is never deployment authority.
 
 ```bash
-release=v0.13.23
+release=v0.13.24
 # The base Compose files require these build/version inputs even though the
 # digest-only override below remains the deployment authority.
 export RELAY_VERSION="${release}"
