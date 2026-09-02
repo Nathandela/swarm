@@ -104,3 +104,33 @@ two tightenings in the reading and before-writing sections. All taken; every pin
 guard stays green. Its observation that Claude Code's own delegation-damping guidance may pull the
 other way for a small transcript is recorded, not acted on: the prompt's specific instruction is
 meant to win.
+
+## 6. Rollout: v0.13.23 on the owner's machine (2026-09-02)
+
+PR #31 merged at 10:49 UTC after one CI re-run (the first run failed in `internal/protocol`'s
+direct-input observer test with a data race and a missed raw input, code this slice does not
+touch; filed as `swarm-8yz`; the test passed six of six locally under the race detector). Tag
+`v0.13.23` published at 11:04 UTC, 14 assets.
+
+```
+swarm upgrade --stage      -> staged, 0.13.22 -> v0.13.23 (the machine had been moved to 0.13.22 in between)
+swarm upgrade --activate   -> binaries installed; converge deferred: a session is working
+swarm daemon restart       -> exit 0, daemon pid 70962, exe inode 6930 == /usr/local/bin/swarm, roster 33 -> 33
+```
+
+**Live smoke.** A fresh codex source in the scratch repository (`wtdiukmtgazchz3r`, thread
+`01a061cc-4dcd-7e50-92fc-68d6cf7a19a9`, capped by the codex usage limit before answering, id
+latched from typed events) was handed off to claude with `handoff_from`. The successor
+`dy2jrbbetsijhqg3` (spawned_from the source, intent handoff, empty supervision) received the
+sectioned prompt from the live daemon: fourteen tags in the pinned order, the five bare pointer
+lines with the real rollout path, the delegation guidance present, 4397 bytes. It started work with
+no folder-trust dialog (the v0.13.22 trust gate answered it), announced read-only reconnaissance
+and ran `git status`, the log and a listing first, then judged the transcript "tiny (12 lines,
+~90KB), so I'll read it directly rather than delegate", read it, and reported: the only human
+instruction was the smoke prompt, the codex session never answered because of its usage limit and
+made no edits, the tree was clean and nothing changed under it, no files needed to change, and it
+completed the work by replying "ready". Both smoke sessions were killed and deleted afterwards,
+the codex trust entry for the scratch directory removed, and the directory deleted.
+
+Not exercised live: a transcript large enough that the successor chooses to delegate, and the
+supervised codex path (still `swarm-6bo`, until the codex cap resets).
