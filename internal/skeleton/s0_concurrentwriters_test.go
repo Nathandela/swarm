@@ -86,18 +86,9 @@ func finishStdinAudit(t *testing.T, r *r7ComposerRig, logPath string) []string {
 	return lines[:len(lines)-1]
 }
 
-// drainSubmitted collects the fake CLI's `got:` reports until `want` of them have arrived AND
-// a further `settle` has passed without another. The settle window is what makes an EXTRA
-// submit -- the empty line a split message leaves behind, a duplicate -- an observation rather
-// than something the assertion races past.
-func drainSubmitted(att *protocol.Attachment, want int, settle, within time.Duration) []string {
-	_, lines := drainStream(att, want, settle, within)
-	return lines
-}
-
-// drainStream is drainSubmitted's whole body, returning the RAW bytes as well as the reports
-// parsed out of them -- so a caller that must prove something is ABSENT from the session's
-// terminal stream can look at the stream rather than at a summary of it.
+// drainStream returns the RAW bytes as well as the fake CLI's parsed `got:` reports, settling
+// after `want` reports. Callers that must prove something is ABSENT from the terminal stream can
+// inspect the stream rather than relying only on the summary.
 func drainStream(att *protocol.Attachment, want int, settle, within time.Duration) (string, []string) {
 	var buf []byte
 	deadline := time.After(within)

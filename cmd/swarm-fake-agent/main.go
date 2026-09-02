@@ -24,7 +24,7 @@ func main() {
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	scriptPath, stdinLog, ok := parseArgs(args)
 	if !ok {
-		fmt.Fprintln(stderr, "usage: swarm-fake-agent [--stdin-log PATH] <script-path|->")
+		_, _ = fmt.Fprintln(stderr, "usage: swarm-fake-agent [--stdin-log PATH] <script-path|->")
 		return 2
 	}
 
@@ -35,7 +35,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	} else {
 		f, err := os.Open(scriptPath)
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			_, _ = fmt.Fprintln(stderr, err)
 			return 2
 		}
 		defer func() { _ = f.Close() }()
@@ -44,7 +44,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	steps, err := fakeagent.Parse(script)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 2
 	}
 
@@ -53,7 +53,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if fromStdin {
 		for _, s := range steps {
 			if s.Kind == fakeagent.KindAsk {
-				fmt.Fprintln(stderr, "ask requires a script file (stdin is consumed by the script)")
+				_, _ = fmt.Fprintln(stderr, "ask requires a script file (stdin is consumed by the script)")
 				return 2
 			}
 		}
@@ -62,14 +62,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if stdinLog != "" {
 		logFile, openErr := os.OpenFile(stdinLog, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if openErr != nil {
-			fmt.Fprintln(stderr, openErr)
+			_, _ = fmt.Fprintln(stderr, openErr)
 			return 2
 		}
 		defer func() { _ = logFile.Close() }()
 		// OpenFile's mode only governs creation. Pin an existing opt-in log back to
 		// the same private mode too, so the side channel never leaves readable input.
 		if chmodErr := logFile.Chmod(0o600); chmodErr != nil {
-			fmt.Fprintln(stderr, chmodErr)
+			_, _ = fmt.Fprintln(stderr, chmodErr)
 			return 2
 		}
 		stdin = io.TeeReader(stdin, logFile)
@@ -77,7 +77,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	code, err := fakeagent.Run(steps, stdin, stdout, time.Sleep)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 3
 	}
 	return code
