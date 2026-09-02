@@ -105,14 +105,25 @@ func assemble(t *testing.T, opts ...func(*Config)) *Daemon {
 // (agent->argv composition is the Epic 9 adapter's job; the walking skeleton
 // carries argv explicitly). Cleanup terminates the shim's process group.
 func launchFake(t *testing.T, sk *Daemon, script string) persist.Meta {
+	return launchFakeWithOptions(t, sk, script)
+}
+
+// launchFakeWithOptions inserts explicit dev/test-only fake-agent flags before
+// the script path. It avoids weakening the production launch-environment
+// allowlist merely to configure a fixture observation such as --stdin-log.
+func launchFakeWithOptions(t *testing.T, sk *Daemon, script string, options ...string) persist.Meta {
 	t.Helper()
 	spath := filepath.Join(t.TempDir(), "script.txt")
 	if err := os.WriteFile(spath, []byte(script), 0o600); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
+	argv := make([]string, 0, len(options)+2)
+	argv = append(argv, fakeAgentBin)
+	argv = append(argv, options...)
+	argv = append(argv, spath)
 	m, err := sk.Core().Launch(daemon.LaunchSpec{
 		AgentType: "fake",
-		Argv:      []string{fakeAgentBin, spath},
+		Argv:      argv,
 		Cwd:       t.TempDir(),
 		ClientEnv: []string{"PATH=" + os.Getenv("PATH")},
 		Cols:      80,

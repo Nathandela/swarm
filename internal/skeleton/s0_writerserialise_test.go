@@ -50,7 +50,15 @@ import (
 // (internal/adapter/claude/interaction.go).
 func newKeystrokeRig(t *testing.T) *r7ComposerRig {
 	t.Helper()
-	r := newR7ComposerRig(t, false)
+	return newKeystrokeRigWithFakeOptions(t)
+}
+
+// newKeystrokeRigWithFakeOptions keeps the real owner attachment/shim/PTY path
+// while opting the fake process into fixture-only observations such as its
+// byte-exact stdin log.
+func newKeystrokeRigWithFakeOptions(t *testing.T, fakeOptions ...string) *r7ComposerRig {
+	t.Helper()
+	r := newR7ComposerRigWithFakeOptions(t, false, fakeOptions...)
 	r.sk.setAdapterForTest(func(string) (adapter.Adapter, bool) {
 		return &r7KeystrokeAdapter{Adapter: newPlainAdapter().Adapter}, true
 	})

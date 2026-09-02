@@ -30,6 +30,9 @@ package skeleton
 // split across two of them has been misordered no matter which line it lands on.
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -37,6 +40,51 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/submitframe"
 )
+
+const stdinAuditBarrier = "__swarm_stdin_audit_barrier__"
+
+// newAuditedKeystrokeRig gives this timing-sensitive test a unique observation
+// of what the fake process actually read. Terminal frames remain useful for
+// liveness, but are not an input oracle: PTY ECHO can paint bytes before the
+// canonical line discipline has delivered them to the child.
+func newAuditedKeystrokeRig(t *testing.T) (*r7ComposerRig, string) {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "fake-agent-stdin.bin")
+	return newKeystrokeRigWithFakeOptions(t, "--stdin-log", logPath), logPath
+}
+
+// finishStdinAudit writes a final owner line only after every concurrent writer
+// has returned. Seeing the fake process report that barrier is a deterministic
+// liveness fence: every earlier PTY write has then been consumed and copied to
+// the audit file. No timing settle or PTY-echo interpretation is part of the
+// integrity verdict.
+func finishStdinAudit(t *testing.T, r *r7ComposerRig, logPath string) []string {
+	t.Helper()
+	if err := r.att.Input([]byte(stdinAuditBarrier + "\r")); err != nil {
+		t.Fatalf("write stdin-audit barrier: %v", err)
+	}
+	if ok, drained := awaitFrames(r.att, "got: "+stdinAuditBarrier, 20*time.Second); !ok {
+		t.Fatalf("fake agent never consumed the stdin-audit barrier; drained %q", drained)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake-agent stdin audit: %v", err)
+	}
+	if len(raw) == 0 || raw[len(raw)-1] != '\n' {
+		t.Fatalf("fake-agent stdin audit is not a sequence of complete lines: %q", raw)
+	}
+	parts := bytes.Split(raw, []byte{'\n'})
+	parts = parts[:len(parts)-1] // the byte after the final newline is empty
+	lines := make([]string, len(parts))
+	for i, part := range parts {
+		lines[i] = string(part) // byte-exact: deliberately no TrimSpace/CR removal
+	}
+	if len(lines) == 0 || lines[len(lines)-1] != stdinAuditBarrier {
+		t.Fatalf("fake-agent stdin audit ended in %q, want barrier %q; raw=%q",
+			lines, stdinAuditBarrier, raw)
+	}
+	return lines[:len(lines)-1]
+}
 
 // drainSubmitted collects the fake CLI's `got:` reports until `want` of them have arrived AND
 // a further `settle` has passed without another. The settle window is what makes an EXTRA
@@ -117,15 +165,15 @@ func assertEveryLineIsAWholeMessage(t *testing.T, lines []string, landed map[str
 	}
 }
 
-// TestSlice0_OwnerEnterAndTwoPhoneSendsEachLandAsOneWholeMessage is the committee's case with
-// the owner submitting a COMPLETE line: they finish their thought and press return in one
-// motion while both phone messages are already in flight.
+// TestSlice0_OwnerCompleteInputFrameAndTwoPhoneSendsEachLandAsOneWholeMessage is the
+// committee's case with the owner submitting a COMPLETE line and its return in one Input call
+// while both phone messages are already in flight.
 //
 // This is the arm with no acceptable refusal. A write that ends in a return leaves the input
 // line clean, so at no instant is there a draft for the quiescence guard to refuse on -- and
 // all three messages must therefore land, whole, each exactly once.
-func TestSlice0_OwnerEnterAndTwoPhoneSendsEachLandAsOneWholeMessage(t *testing.T) {
-	r := newKeystrokeRig(t)
+func TestSlice0_OwnerCompleteInputFrameAndTwoPhoneSendsEachLandAsOneWholeMessage(t *testing.T) {
+	r, stdinLog := newAuditedKeystrokeRig(t)
 
 	const ownerLine = "the owner's own question"
 	landed := map[string]bool{ownerLine: true}
@@ -150,15 +198,15 @@ func TestSlice0_OwnerEnterAndTwoPhoneSendsEachLandAsOneWholeMessage(t *testing.T
 	go func() {
 		defer wg.Done()
 		<-start
-		// ONE WRITE, ending in the return. This is the owner pressing Enter on a line they
-		// have already typed -- the case where nothing they do can leave a draft behind.
+		// ONE INPUT FRAME carries both the text and its return. Unlike the next test, this
+		// owner does not park a previously typed draft before the concurrent sends begin.
 		ownerErr = r.att.Input([]byte(ownerLine + "\r"))
 	}()
 	close(start)
 	wg.Wait()
 
 	if ownerErr != nil {
-		t.Fatalf("the owner's own Enter failed: %v. The terminal's keystrokes are not this "+
+		t.Fatalf("the owner's complete input frame failed: %v. The terminal's keystrokes are not this "+
 			"mechanism's to refuse", ownerErr)
 	}
 	for i := range texts {
@@ -172,7 +220,7 @@ func TestSlice0_OwnerEnterAndTwoPhoneSendsEachLandAsOneWholeMessage(t *testing.T
 		landed[texts[i]] = true
 	}
 
-	lines := drainSubmitted(r.att, 3, 750*time.Millisecond, 25*time.Second)
+	lines := finishStdinAudit(t, r, stdinLog)
 	if len(lines) != 3 {
 		t.Fatalf("the session's stdin submitted %d lines %q, want exactly 3.\n"+
 			"Three messages went in. Fewer lines means two were run together; more means one was "+
@@ -191,7 +239,7 @@ func TestSlice0_OwnerEnterAndTwoPhoneSendsEachLandAsOneWholeMessage(t *testing.T
 // the outcome: a send is delivered WHOLE or it wrote nothing, the owner's line is exactly the
 // words the owner typed, and no line on that PTY is two messages wearing one carriage return.
 func TestSlice0_AnOwnerDraftAndItsEnterNeverSplitAPhoneSend(t *testing.T) {
-	r := newKeystrokeRig(t)
+	r, stdinLog := newAuditedKeystrokeRig(t)
 
 	const draft = "half a thought"
 	landed := map[string]bool{draft: true}
@@ -248,13 +296,7 @@ func TestSlice0_AnOwnerDraftAndItsEnterNeverSplitAPhoneSend(t *testing.T) {
 		}
 	}
 
-	want := 0
-	for _, ok := range landed {
-		if ok {
-			want++ // the owner's line, plus every send that answered OK
-		}
-	}
-	lines := drainSubmitted(r.att, want, 750*time.Millisecond, 25*time.Second)
+	lines := finishStdinAudit(t, r, stdinLog)
 	assertEveryLineIsAWholeMessage(t, lines, landed)
 	if got := countOf(lines, draft); got != 1 {
 		t.Fatalf("the owner's own line was submitted %d times as %q; the stdin lines were %q.\n"+

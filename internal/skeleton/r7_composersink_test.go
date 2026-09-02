@@ -49,11 +49,19 @@ type r7ComposerRig struct {
 
 func newR7ComposerRig(t *testing.T, withBackend bool) *r7ComposerRig {
 	t.Helper()
+	return newR7ComposerRigWithFakeOptions(t, withBackend)
+}
+
+// newR7ComposerRigWithFakeOptions is the same real shim/fake-process rig with
+// explicit options for the dev-only fake binary. Production agent environment
+// filtering and session I/O are deliberately unchanged.
+func newR7ComposerRigWithFakeOptions(t *testing.T, withBackend bool, fakeOptions ...string) *r7ComposerRig {
+	t.Helper()
 	ad := &r7CodexAdapter{Adapter: newPlainAdapter().Adapter}
 	sk := assemble(t)
 	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return ad, true })
 
-	m := launchFake(t, sk, r7StdinScript)
+	m := launchFakeWithOptions(t, sk, r7StdinScript, fakeOptions...)
 	session := protocol.NamespacedID(sk.api.endpointID, m.ID)
 	oc := dialClient(t, sk)
 	att, err := oc.Attach(session)
