@@ -3,8 +3,8 @@ package main
 // `swarm spawn` — the agent-facing WRITE verb of ADR-010 Phase 2 (D1/D2, Amendment
 // A4): launch a NEW session with continuity of context, either from inline
 // instructions (--prompt) or from an agent-authored document (--handoff /
-// --delegate) that is copied under the swarm state dir and pointed at by a one-line
-// initial prompt, so instructions never travel as argv.
+// --delegate) that is copied into a private temporary directory of its own and
+// pointed at by a one-line initial prompt, so instructions never travel as argv.
 
 import (
 	"flag"
@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -147,23 +146,11 @@ func copyHandoff(src string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f, err := os.CreateTemp(dir, time.Now().UTC().Format("20060102-150405")+"-*.md")
-	if err != nil {
-		return "", err
-	}
 	// The pointer prompt must name a path the CHILD can resolve from its own cwd,
 	// so the destination is forced absolute even under a relative TMPDIR.
-	dest, err := filepath.Abs(f.Name())
-	if err != nil {
-		_ = f.Close()
-		return "", err
-	}
-	_, err = f.Write(body)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
+	dest, err := filepath.Abs(filepath.Join(dir, "handoff.md"))
 	if err != nil {
 		return "", err
 	}
-	return dest, nil
+	return dest, os.WriteFile(dest, body, 0o600)
 }

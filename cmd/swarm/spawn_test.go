@@ -321,10 +321,11 @@ func TestRunSpawn_NoSessionEnvSendsNoLineage(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestRunSpawn_HandoffCopiesFileAndPointsPrompt pins D2's mechanics for both flags,
-// which differ ONLY in recorded intent: the agent-authored document is COPIED under
-// the swarm state dir (never left in the repo, never read from a path the source
-// session may rewrite), and the child's initial prompt is a one-line POINTER at the
-// copy — the instructions themselves never travel as argv (A4).
+// which differ ONLY in recorded intent: the agent-authored document is COPIED into a
+// private temporary directory of its own (never left in the repo, never read from a
+// path the source session may rewrite; ADR-010 Amendment 5 F3), and the child's
+// initial prompt is a one-line POINTER at the copy — the instructions themselves
+// never travel as argv (A4).
 func TestRunSpawn_HandoffCopiesFileAndPointsPrompt(t *testing.T) {
 	const body = "# Handoff\n\nHANDOFF-BODY-MARKER: finish the parser refactor.\n"
 
