@@ -462,6 +462,47 @@ type Outcome struct {
 	Resolved    bool
 }
 
+// ComposerPublication is one durable composer bubble projection. It exposes no envelope,
+// signing material or routing authority: Android needs only the stable operation/logical ids,
+// captured text/context and lifecycle verdict to reconstruct the process-local ledger.
+type ComposerPublication struct {
+	LogicalID       string
+	OperationID     string
+	SessionID       string
+	SessionInstance string
+	ExpectedTurn    string
+	Text            string
+	Phase           string
+	TerminalCode    string
+	CreatedAtMillis int64
+}
+
+// ComposerPublicationList is the gomobile-safe ordered handle for durable composer state.
+type ComposerPublicationList struct {
+	items []ComposerPublication
+}
+
+func (l *ComposerPublicationList) Count() (n int, err error) {
+	defer barrier(&err)
+	if l == nil {
+		return 0, errNoReceiver
+	}
+	return len(l.items), nil
+}
+
+func (l *ComposerPublicationList) At(i int) (p *ComposerPublication, err error) {
+	defer barrier(&err)
+	if l == nil {
+		return nil, errNoReceiver
+	}
+	if i < 0 || i >= len(l.items) {
+		return nil, classed(ErrClassNotFound,
+			fmt.Errorf("swarmmobile: composer publication index %d out of range [0,%d)", i, len(l.items)))
+	}
+	item := l.items[i]
+	return &item, nil
+}
+
 // PushPreference is PB-APP-7's pair of coarse notification toggles.
 type PushPreference struct {
 	Alerts   bool

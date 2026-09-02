@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"sync"
 	"time"
 
@@ -773,6 +774,18 @@ func (r *MailboxRouter) apply(f inboundFrame) {
 	case kindCommandReply:
 		replies.Append(f.reply)
 		if r.core != nil {
+			// History/detail payloads are folded in commitReceive with the high-water. Mirror
+			// the exact committed transcript only when this exact payload-free verdict landed.
+			// Resetting on an arbitrary/composer/error reply would erase interaction records
+			// intentionally retained live-only after a journal gap.
+			st := r.core.State()
+			verdict := f.reply
+			verdict.Journal = nil
+			committed, ok := st.OpOutcomes[f.reply.OperationID]
+			if ok && reflect.DeepEqual(committed, verdict) &&
+				(f.reply.Op == schema.ActionInteractionHistory || f.reply.Op == schema.ActionInteractionDetail) {
+				r.replaceItems(st.Items)
+			}
 			// A command reply is the ONLY machine -> phone frame the phone can correlate to
 			// a send it made, so it is where both of S11's time-and-lease consumers live:
 			// PB-INPUT-2's lease lifecycle (the OpLease confirmation and the OpDetach
@@ -852,6 +865,13 @@ func (r *MailboxRouter) apply(f inboundFrame) {
 		}
 		sessions.Apply(f.record)
 	}
+}
+
+func (r *MailboxRouter) replaceItems(items []Item) {
+	replacement := itemStoreFrom(items)
+	r.mu.Lock()
+	r.items = replacement
+	r.mu.Unlock()
 }
 
 // ReceiptDisposition tells a mailbox drain whether an item that returned an error may be

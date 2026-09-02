@@ -108,20 +108,38 @@ func fullState() State {
 		Sessions:                  []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
 		Snapshots:                 []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
 		PendingOps:                []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
-		PendingPublications: []PendingPublication{{
-			LogicalID: "logical-pending", OperationID: "op-publication", Kind: PublicationComposer,
-			SessionID: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "ship it",
-			Machine: "m1", EpochID: 7, Target: "rid-m1", AuthorityPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize), Phase: PublicationSealed,
-			Sequence: 41, Envelope: []byte("exact-envelope"), CreatedAt: time.Unix(1_700_000_000, 0),
-			Command: protocol.DeviceCommandAuth{
-				Action: protocol.ActionComposerSend, Machine: "m1", Session: "m1/s1",
-				OperationID: "op-publication", ExpiresAt: time.Unix(1_700_000_060, 0),
+		PendingPublications: []PendingPublication{
+			{
+				LogicalID: "logical-pending", OperationID: "op-publication", Kind: PublicationComposer,
+				SessionID: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "ship it",
+				Machine: "m1", EpochID: 7, Target: "rid-m1", AuthorityPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize), Phase: PublicationSealed,
+				Sequence: 41, Envelope: []byte("exact-envelope"), CreatedAt: time.Unix(1_700_000_000, 0),
+				Command: protocol.DeviceCommandAuth{
+					Action: protocol.ActionComposerSend, Machine: "m1", Session: "m1/s1",
+					OperationID: "op-publication", ExpiresAt: time.Unix(1_700_000_060, 0),
+				},
+				Composer: &protocol.ComposerSendReq{
+					Session: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "ship it",
+				},
 			},
-			Composer: &protocol.ComposerSendReq{
-				Session: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "ship it",
+			{
+				LogicalID: "logical-result", OperationID: "op-result", Kind: PublicationComposer,
+				SessionID: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "result",
+				Machine: "m1", EpochID: 7, Target: "rid-m1", AuthorityPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
+				Phase: PublicationTerminal, TerminalCode: "policy", ResultOrder: 29, CreatedAt: time.Unix(1_700_000_001, 0),
+				Command: protocol.DeviceCommandAuth{
+					Action: protocol.ActionComposerSend, Machine: "m1", Session: "m1/s1",
+					OperationID: "op-result", ExpiresAt: time.Unix(1_700_000_061, 0),
+				},
+				Composer: &protocol.ComposerSendReq{
+					Session: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "result",
+				},
 			},
-		}},
-		OpOutcomes:   map[string]protocol.Control{"op-done": {Op: protocol.OpOK, OperationID: "op-done"}},
+		},
+		OpOutcomes: map[string]protocol.Control{
+			"op-done":   {Op: protocol.OpOK, OperationID: "op-done"},
+			"op-result": {Op: protocol.OpError, OperationID: "op-result", ErrorCode: protocol.CodePolicy},
+		},
 		Stale:        map[Bucket]bool{replyBucket(7): true},
 		StaleStreams: map[string]bool{StreamJournal: true},
 		LastHeardAt:  1753900000000,
@@ -131,6 +149,8 @@ func fullState() State {
 			Status: StatusCompleted, TurnID: "turn-1", TSUnixMs: 1753900000000, Text: "on it",
 			Body: json.RawMessage(`{"v":1,"item_id":"itm-1","kind":"agent_message"}`),
 		}},
+		HistoryFloor:  map[string]bool{"m1/history-floor": true},
+		HistoryCapped: map[string]bool{"m1/history-capped": true},
 	}
 }
 
@@ -590,6 +610,41 @@ var stateV19Fixture = func() string {
 	return fixture[:start] + stateV19ContentKept + fixture[start+end:]
 }()
 
+// v20 belongs to the pairing branch's combined pin/push-ownership phase. v21 is this branch's
+// independent addition of history_floor/history_capped inside content_purgeable. Reusing v19's
+// publication fixture shape is no longer sufficient because v21 also pins terminal result
+// ordering inside content_kept. Both new ciphertexts are independently captured under the
+// fixture KEK so older migration literals remain immutable.
+const stateV21ContentKept = `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`
+
+const stateV21ContentPurgeable = `yjUxZbiMHHTc8KQSkhuOiV6iz4uxBpna49PQD2GvELNcJQR4n7gzuNUevRoxG1NjTZqnWyG/T0yzD9yyt7alxk82pGbT4CFVzJcPLGfgBdlM/t0kR/9XK7Tt3RGCb7KGPtGRt6rFQmgGojpWvHaZFUhNz8aVG2zvHWVmudFuD475+OhuGyNk+UffXELl3OGfDfkWi1uWlYhrjfWMJIOA/W+TjmlPDDQnjM6iybwX+9Xn15IRZDDK83KGfqUlvIgsgnh526nSVJ0TVLsXbOTiKXZ8Jpmhmo8F1K+GiE+7X5gCzUJ6nNUHBNG6FP2p9Dv08Q+/0UuqpJ5EERXqsJh0Az0y/L46LnUXPrJ4bty+Lhh3+8zOukHGykwAVfEgau0qEgQ/67IvJkCtvYCRu7ebXnH4j2ACnLIno+aLzf/FS1kq8da9yuTIzEeAJP8Q6Y9um3Jin3jgpwqrZu2S1y+3tI3TniTZIrmapgaJ+KLdZcuFTy1sD9kuaYqQTtbCGWs6GHKgRPIW09JvZUVmJYZYxkUfEU9BmMpQssUMpgQQKiqMO6aJqWh2RKR181Ihtxg5kV5AXRxkFMUh6gUH3qWB0Uurjlum2g32ErgKe9FA2MGrC/753dXFFmcxeaaJP7y8DcqOz4SsANz2IytwFpRUwot1SS1Sc4oj8vl/h7TKj3zWV8ZOtBwr+2OofFxKuGRasNolF2sPEa+fjzVuje9FJ0zjLVXHqmOYBuXG41ZTGJAuagMeR/5myrtj6LRfpDqbuPFlmuG+Cxn+/IszC0nGnVcCZ6Wob09umA4wZ0EB+iSfV9zSJ+55mnbOmqb+nMemWiAuAXoZDp5xSXxF/USjgGZIEpsuexgVsHDCSwDJE44+cXbTIPF7k9dE/BY9RRiMDxhvfMSAsubwB/ke+RAdmXbwStgF6SbESWn3pt21WC9GnNSQatBTkTyoZUVxrcoYQpwCoIzQYE0IoMLvM5pJgLs01ij3jtgVokAlykvrCW0HyYqkXb//SFbhb1X3w46Dc5YBO7RMDCIV4FCKB/QVDCo6JyyNMjfkCAZ3paz+a5SXx+N0HRRtsIqiUtDWsXyux34obuBcd3x7w7NEdLiUS0bxfzO58aRwydarcvD+rd7G/c0WOfuPfz/hG+RatO5/MCgQ9WUyvn2olXDS+z8eJd49Ms7PWJM4M4ngTMHEstWHjr9XbnXATE2MMQuzBGCR9iXl+UQbsJLOp9VSOMdFNObTPz0DckY8ldAg2H5H`
+
+var stateV21Fixture = func() string {
+	fixture := strings.Replace(stateV19Fixture, `"schema_version":19`, `"schema_version":21`, 1)
+	const keptField = `"content_kept":"`
+	keptStart := strings.Index(fixture, keptField)
+	if keptStart < 0 {
+		panic("stateV19Fixture has no content_kept field")
+	}
+	keptStart += len(keptField)
+	keptEnd := strings.IndexByte(fixture[keptStart:], '"')
+	if keptEnd < 0 {
+		panic("stateV19Fixture content_kept field is unterminated")
+	}
+	fixture = fixture[:keptStart] + stateV21ContentKept + fixture[keptStart+keptEnd:]
+	const field = `"content_purgeable":"`
+	start := strings.Index(fixture, field)
+	if start < 0 {
+		panic("stateV19Fixture has no content_purgeable field")
+	}
+	start += len(field)
+	end := strings.IndexByte(fixture[start:], '"')
+	if end < 0 {
+		panic("stateV19Fixture content_purgeable field is unterminated")
+	}
+	return fixture[:start] + stateV21ContentPurgeable + fixture[start+end:]
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -607,6 +662,7 @@ var stateFixtures = map[int]string{
 	17: stateV17Fixture,
 	18: stateV18Fixture,
 	19: stateV19Fixture,
+	21: stateV21Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

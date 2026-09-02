@@ -187,7 +187,19 @@ import (
 // Target was derived. The v18 migration retains the operation and attaches the durable current
 // public key; the mobile publisher independently recomputes Target from that key before sending,
 // so a malformed legacy target remains inert rather than being guessed or re-targeted.
-const StateSchemaVersion = 19
+//
+// v20 is reserved for the pairing lane's combined durable pin/push-ownership phase. This branch
+// deliberately skips that number so its independently mergeable migration never reinterprets a
+// v20 blob as history state.
+//
+// v21 adds history_floor and history_capped beside the durable transcript, plus each terminal
+// pending publication's result_order. An interaction-read reply advances the receive high-water
+// in the same transaction that folds its page/detail and the two history facts; without them a
+// crash after that commit permanently loses the payload because the restored high-water refuses
+// the retained reply as a replay. Result order is independent of logical FIFO position, so a
+// long-lived admitted send whose answer arrives late is not immediately evicted as the “oldest”
+// visible result. Pre-v21 terminal rows decode with zero and are conservatively oldest.
+const StateSchemaVersion = 21
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -360,6 +372,11 @@ type State struct {
 	// than re-fetched, and it takes with it any pending approval the machine is still blocked
 	// on -- the one item IS-LIFE-3 exists to keep answerable across exactly that event.
 	Items []Item
+	// HistoryFloor is the machine's retained-history floor for the oldest page this phone
+	// actually held. HistoryCapped is the distinct handset-capacity refusal. Both are sparse:
+	// absent means false, and both are content-tier transcript facts destroyed with Items.
+	HistoryFloor  map[string]bool
+	HistoryCapped map[string]bool
 	// PushToken is the provider push token PB-STATE-9 assigns to the WAKE tier and
 	// PB-PUSH-9 requires to survive process death and app upgrade: a token held only in
 	// memory is re-registered only if the app happens to be foregrounded.
@@ -465,6 +482,8 @@ func (s State) clone() State {
 	s.Sessions = slices.Clone(s.Sessions)
 	s.Snapshots = slices.Clone(s.Snapshots)
 	s.Items = slices.Clone(s.Items)
+	s.HistoryFloor = maps.Clone(s.HistoryFloor)
+	s.HistoryCapped = maps.Clone(s.HistoryCapped)
 	s.PendingOps = slices.Clone(s.PendingOps)
 	s.PendingPublications = clonePendingPublications(s.PendingPublications)
 	s.OpOutcomes = maps.Clone(s.OpOutcomes)
@@ -698,10 +717,12 @@ type keptContainer struct {
 // content this phone decrypted, exactly like the sessions and grids beside it, and it is the
 // most revealing of the set.
 type purgeableContainer struct {
-	Sessions   []CachedSession           `json:"sessions,omitempty"`
-	Snapshots  []Snapshot                `json:"snapshots,omitempty"`
-	OpOutcomes map[string]schema.Control `json:"op_outcomes,omitempty"`
-	Items      []Item                    `json:"items,omitempty"`
+	Sessions      []CachedSession           `json:"sessions,omitempty"`
+	Snapshots     []Snapshot                `json:"snapshots,omitempty"`
+	OpOutcomes    map[string]schema.Control `json:"op_outcomes,omitempty"`
+	Items         []Item                    `json:"items,omitempty"`
+	HistoryFloor  map[string]bool           `json:"history_floor,omitempty"`
+	HistoryCapped map[string]bool           `json:"history_capped,omitempty"`
 }
 
 // sendSeqRecord is one epoch's durable send-seq reservation ceiling.
@@ -1041,7 +1062,10 @@ func keptContainerOf(st State) keptContainer {
 }
 
 func purgeableContainerOf(st State) purgeableContainer {
-	return purgeableContainer{Sessions: st.Sessions, Snapshots: st.Snapshots, OpOutcomes: st.OpOutcomes, Items: st.Items}
+	return purgeableContainer{
+		Sessions: st.Sessions, Snapshots: st.Snapshots, OpOutcomes: st.OpOutcomes, Items: st.Items,
+		HistoryFloor: st.HistoryFloor, HistoryCapped: st.HistoryCapped,
+	}
 }
 
 // dropContentMaterial returns st holding exactly what a process that could NOT OPEN the
@@ -1073,6 +1097,7 @@ func purgeableContainerOf(st State) purgeableContainer {
 func dropContentMaterial(st State) State {
 	st.Keys.ContentKey = crypto.ContentKey{}
 	st.Sessions, st.Snapshots, st.OpOutcomes, st.Items = nil, nil, nil, nil
+	st.HistoryFloor, st.HistoryCapped = nil, nil
 	st.SendSeq, st.Receive, st.PendingOps, st.PendingPublications = nil, nil, nil, nil
 	return st
 }
@@ -1703,6 +1728,7 @@ func (s *fileStore) loadContentState(st *State, f stateFile, path string) error 
 			return fmt.Errorf("%w: %s: decrypted cache container: %v", ErrCorruptState, path, err)
 		}
 		st.Sessions, st.Snapshots, st.OpOutcomes, st.Items = c.Sessions, c.Snapshots, c.OpOutcomes, c.Items
+		st.HistoryFloor, st.HistoryCapped = c.HistoryFloor, c.HistoryCapped
 	}
 	return nil
 }

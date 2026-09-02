@@ -27,6 +27,15 @@ const KeyCustodyKeyInvalidated
 const RelayTrustUnavailable
 const RelayTrustUntrusted
 const WakeNotificationText
+field ComposerPublication.CreatedAtMillis int64
+field ComposerPublication.ExpectedTurn string
+field ComposerPublication.LogicalID string
+field ComposerPublication.OperationID string
+field ComposerPublication.Phase string
+field ComposerPublication.SessionID string
+field ComposerPublication.SessionInstance string
+field ComposerPublication.TerminalCode string
+field ComposerPublication.Text string
 field Config.MachineID string
 field Config.PushGatewayURL string
 field Config.RelayURL string
@@ -161,6 +170,8 @@ method App.BeginPairingWithCode(string, string) (*Pairing, error)
 method App.ClearUndeliveredInputs() error
 method App.ClockVerdict() (string, error)
 method App.Close() error
+method App.ComposerPublications() (*ComposerPublicationList, error)
+method App.ComposerRetry(string, string, string, string) (*Op, error)
 method App.ComposerSend(string, string, string) (*Op, error)
 method App.ConfigurePushRegistration(PushAttestor, PushInstallationSigner) error
 method App.ConnectionState() (string, error)
@@ -235,6 +246,8 @@ method App.UndeliveredInputs() (*UndeliveredList, error)
 method App.UnlockContent() error
 method App.UnsubscribeJournal() error
 method App.WakeDropCounts() (*PushWakeDrops, error)
+method ComposerPublicationList.At(int) (*ComposerPublication, error)
+method ComposerPublicationList.Count() (int, error)
 method InboxList.At(int) (*InboxItem, error)
 method InboxList.Count() (int, error)
 method JournalPage.At(int) (*JournalEntry, error)
@@ -266,6 +279,8 @@ method UndeliveredList.At(int) (*UndeliveredInput, error)
 method UndeliveredList.Count() (int, error)
 method UndeliveredList.Dropped() (int, error)
 type App struct
+type ComposerPublication struct
+type ComposerPublicationList struct
 type Config struct
 type Event struct
 type EventListener interface

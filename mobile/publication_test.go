@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -193,6 +195,125 @@ func flushForTest(a *App, sc sendCtx) error {
 	a.bucketMu.Lock()
 	defer a.bucketMu.Unlock()
 	return a.flushPendingPublicationsLocked(context.Background(), sc)
+}
+
+func TestPublicationPrepare_ContextReplacementBeforeComposerCustodyRefuses(t *testing.T) {
+	a, sc := publicationApp(t, t.TempDir())
+	p := preparedComposer(t, a, sc, "op-stale-context-composer", "never persist")
+	// sendContext already returned sc. Pairing replaces the routing authority before the
+	// producer enters bucketMu/publication custody.
+	st := a.core.State()
+	st.MachineRelayAuthPub = bytes.Repeat([]byte{0x66}, 32)
+	if err := a.core.Save(st); err != nil {
+		t.Fatalf("replace authority: %v", err)
+	}
+	p.Machine, p.EpochID, p.Target, p.AuthorityPub = "", 0, "", nil
+	a.bucketMu.Lock()
+	err := a.preparePublicationLocked(a.core, sc, p, "")
+	a.bucketMu.Unlock()
+	if !errors.Is(err, errPublicationIdentityChanged) {
+		t.Fatalf("stale composer context = %v, want identity changed", err)
+	}
+	if got := a.core.PendingPublications(); len(got) != 0 {
+		t.Fatalf("stale composer context entered durable custody: %+v", got)
+	}
+}
+
+func TestPublicationPrepare_ContextReplacementBeforeUnsignedReadCustodyRefuses(t *testing.T) {
+	for _, kind := range []phonecore.PublicationKind{phonecore.PublicationHistory, phonecore.PublicationDetail} {
+		t.Run(string(kind), func(t *testing.T) {
+			a, sc := publicationApp(t, t.TempDir())
+			operationID := "op-stale-context-" + string(kind)
+			p := phonecore.PendingPublication{
+				LogicalID: operationID, OperationID: operationID, Kind: kind, SessionID: "m1/s1",
+				Command: schema.DeviceCommandAuth{
+					Machine: "m1", Session: "m1/s1", OperationID: operationID,
+				},
+				Phase: phonecore.PublicationPrepared, CreatedAt: time.Now(),
+			}
+			if kind == phonecore.PublicationHistory {
+				p.Command.Action = schema.ActionInteractionHistory
+				p.History = &schema.InteractionHistoryReq{Session: p.SessionID, BeforeItem: "item-9", Limit: 20}
+			} else {
+				p.Command.Action = schema.ActionInteractionDetail
+				p.Detail = &schema.InteractionDetailReq{Session: p.SessionID, ItemID: "item-9"}
+			}
+			st := a.core.State()
+			st.MachineRelayAuthPub = bytes.Repeat([]byte{0x67}, 32)
+			if err := a.core.Save(st); err != nil {
+				t.Fatalf("replace authority: %v", err)
+			}
+			a.bucketMu.Lock()
+			err := a.preparePublicationLocked(a.core, sc, p, "")
+			a.bucketMu.Unlock()
+			if !errors.Is(err, errPublicationIdentityChanged) {
+				t.Fatalf("stale %s context = %v, want identity changed", kind, err)
+			}
+			if got := a.core.PendingPublications(); len(got) != 0 {
+				t.Fatalf("zero-expiry stale %s read permanently entered FIFO: %+v", kind, got)
+			}
+		})
+	}
+}
+
+func TestPublicationPrepare_ProductionComposerAndReadsUseTheSharedAuthorityFence(t *testing.T) {
+	readSource, err := os.ReadFile("interactionread.go")
+	if err != nil {
+		t.Fatalf("read interactionread.go: %v", err)
+	}
+	read := string(readSource)
+	start, end := strings.Index(read, "func (a *App) unsignedRead("), strings.Index(read, "func (a *App) HistoryFloor(")
+	if start < 0 || end <= start {
+		t.Fatal("could not isolate unsignedRead production body")
+	}
+	read = read[start:end]
+	if !strings.Contains(read, "a.preparePublicationLocked(core, sc, pending, \"\")") ||
+		strings.Contains(read, "core.PreparePublication(pending)") ||
+		strings.Contains(read, "AuthorityPub:") {
+		t.Fatalf("unsignedRead bypasses the shared current-context custody fence:\n%s", read)
+	}
+
+	commandSource, err := os.ReadFile("commands.go")
+	if err != nil {
+		t.Fatalf("read commands.go: %v", err)
+	}
+	command := string(commandSource)
+	start = strings.Index(command, "func (a *App) sealSignedCommand(")
+	if start < 0 {
+		t.Fatal("could not isolate sealSignedCommand production body")
+	}
+	end = strings.Index(command[start:], "func (a *App) unsignedResync(")
+	if end < 0 {
+		t.Fatal("could not isolate sealSignedCommand production body")
+	}
+	command = command[start : start+end]
+	if !strings.Contains(command, "a.preparePublicationLocked(core, sc, pending, body.retryOf)") ||
+		strings.Contains(command, "core.PreparePublication(pending)") {
+		t.Fatalf("composer publication bypasses the shared current-context custody fence")
+	}
+
+	helperSource, err := os.ReadFile("publication.go")
+	if err != nil {
+		t.Fatalf("read publication.go: %v", err)
+	}
+	helper := string(helperSource)
+	start = strings.Index(helper, "func (a *App) preparePublicationLocked(")
+	if start < 0 {
+		t.Fatal("could not isolate preparePublicationLocked production body")
+	}
+	end = strings.Index(helper[start:], "func (a *App) runPublicationPump(")
+	if end < 0 {
+		t.Fatal("could not isolate preparePublicationLocked production body")
+	}
+	helper = helper[start : start+end]
+	for _, required := range []string{
+		"a.publicationAuthorityMu.Lock()", "st := core.State()", "sc.epoch != st.EpochID",
+		"sc.key != st.Keys.ContentKey", "relay.RoutingID", "core.PreparePublication",
+	} {
+		if !strings.Contains(helper, required) {
+			t.Errorf("publication authority fence omits %q", required)
+		}
+	}
 }
 
 func TestPublicationPump_FailedAppendRestartsWithTheExactEnvelope(t *testing.T) {
@@ -434,6 +555,240 @@ func TestPublicationPump_TerminalUnpairFencesAParkedOldEnvelope(t *testing.T) {
 				t.Fatal("terminal unpair did not land")
 			}
 		})
+}
+
+func TestPublicationOutcome_UncommittedReplyCannotResolveOrPersistAnOperation(t *testing.T) {
+	a, _ := publicationApp(t, t.TempDir())
+	const operationID = "op-uncommitted-reply"
+	a.issue(&Op{OperationID: operationID, Action: schema.ActionComposerSend, SessionID: "m1/s1"})
+	ctrl := schema.Control{
+		Op: "error", OperationID: operationID, SessionID: "m1/other",
+		ErrorCode: schema.ErrorCode("input_busy"),
+	}
+	// This models both a binding-mismatched reply and an exact reply delivered behind a gap:
+	// router.apply may expose it live, but commitReceive did not put an attributed verdict in
+	// State. Neither the event handler nor Outcome may manufacture one after the fact.
+	a.core.Router().Replies().Append(ctrl)
+	a.onReply(ctrl)
+	if n, err := a.PendingOpCount(); err != nil || n != 1 {
+		t.Fatalf("uncommitted onReply resolved inflight: count=%d err=%v", n, err)
+	}
+	out, err := a.Outcome(operationID)
+	if err != nil {
+		t.Fatalf("Outcome: %v", err)
+	}
+	if out.Resolved || out.Code != "" {
+		t.Fatalf("uncommitted Outcome = %+v", out)
+	}
+	if _, ok := a.core.State().OpOutcomes[operationID]; ok {
+		t.Fatal("Outcome persisted a live-only/mismatched reply through the legacy fallback")
+	}
+}
+
+func TestPublicationPump_AdmittedNoReplyExpiresIntoVisibleOutcomeWithoutReplay(t *testing.T) {
+	a, sc := publicationApp(t, t.TempDir())
+	p := preparedComposer(t, a, sc, "op-admitted-timeout", "check before retrying")
+	p.CreatedAt = time.Now().Add(-phonecore.PublicationOutcomeTimeout - time.Second)
+	if err := a.core.PreparePublication(p); err != nil {
+		t.Fatalf("PreparePublication: %v", err)
+	}
+	if err := a.core.SealPublication(p.OperationID, 92, []byte("already-appended-envelope")); err != nil {
+		t.Fatalf("SealPublication: %v", err)
+	}
+	if err := a.core.MarkPublicationAdmitted(p.OperationID); err != nil {
+		t.Fatalf("MarkPublicationAdmitted: %v", err)
+	}
+	a.issue(&Op{OperationID: p.OperationID, Action: schema.ActionComposerSend, SessionID: p.SessionID})
+
+	appender := &scriptedAppender{}
+	sc.cl = appender
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		a.runPublicationPump(ctx, func() (sendCtx, error) { return sc, nil })
+		close(done)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := a.core.State().OpOutcomes[p.OperationID]; ok {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	out, err := a.Outcome(p.OperationID)
+	if err != nil {
+		t.Fatalf("Outcome: %v", err)
+	}
+	if !out.Resolved || out.Code != phonecore.PublicationOutcomeUnknown {
+		t.Fatalf("expired admitted outcome = %+v", out)
+	}
+	if n, err := a.PendingOpCount(); err != nil || n != 0 {
+		t.Fatalf("expired admitted operation remains in flight: count=%d err=%v", n, err)
+	}
+	if calls := appender.envelopes(); len(calls) != 0 {
+		t.Fatalf("expiry authorized %d automatic replays", len(calls))
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("publication pump did not stop promptly after expiry")
+	}
+}
+
+func TestComposerPublications_RestartProjectsDurableFIFOAndRestoresInflight(t *testing.T) {
+	dir := t.TempDir()
+	a, sc := publicationApp(t, dir)
+	first := preparedComposer(t, a, sc, "op-restored-A", "first durable bubble")
+	second := preparedComposer(t, a, sc, "op-restored-B", "second durable bubble")
+	for i, p := range []phonecore.PendingPublication{first, second} {
+		if err := a.core.PreparePublication(p); err != nil {
+			t.Fatalf("PreparePublication %d: %v", i, err)
+		}
+		if err := a.core.SealPublication(p.OperationID, uint64(120+i), []byte("durable-envelope-"+p.OperationID)); err != nil {
+			t.Fatalf("SealPublication %d: %v", i, err)
+		}
+		if err := a.core.MarkPublicationAdmitted(p.OperationID); err != nil {
+			t.Fatalf("MarkPublicationAdmitted %d: %v", i, err)
+		}
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("Close first app: %v", err)
+	}
+
+	restarted, _ := publicationApp(t, dir)
+	list, err := restarted.ComposerPublications()
+	if err != nil {
+		t.Fatalf("ComposerPublications: %v", err)
+	}
+	if n, err := list.Count(); err != nil || n != 2 {
+		t.Fatalf("projection count = %d, %v", n, err)
+	}
+	for i, want := range []phonecore.PendingPublication{first, second} {
+		got, err := list.At(i)
+		if err != nil {
+			t.Fatalf("At(%d): %v", i, err)
+		}
+		if got.OperationID != want.OperationID || got.SessionID != want.SessionID ||
+			got.ExpectedTurn != want.ExpectedTurn || got.Text != want.Text ||
+			got.Phase != string(phonecore.PublicationAdmitted) || got.TerminalCode != "" {
+			t.Fatalf("projection[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+	if n, err := restarted.PendingOpCount(); err != nil || n != 2 {
+		t.Fatalf("restored inflight count = %d, %v", n, err)
+	}
+}
+
+func TestComposerPublications_TerminalResultIsProjectedButNotRestoredInflight(t *testing.T) {
+	a, sc := publicationApp(t, t.TempDir())
+	p := preparedComposer(t, a, sc, "op-terminal-projection", "do not retry me")
+	p.CreatedAt = time.Now().Add(-phonecore.PublicationOutcomeTimeout - time.Second)
+	if err := a.core.PreparePublication(p); err != nil {
+		t.Fatalf("PreparePublication: %v", err)
+	}
+	if err := a.core.SealPublication(p.OperationID, 130, []byte("terminal-envelope")); err != nil {
+		t.Fatalf("SealPublication: %v", err)
+	}
+	if err := a.core.MarkPublicationAdmitted(p.OperationID); err != nil {
+		t.Fatalf("MarkPublicationAdmitted: %v", err)
+	}
+	if err := a.core.ExpirePublications(time.Now()); err != nil {
+		t.Fatalf("ExpirePublications: %v", err)
+	}
+	list, err := a.ComposerPublications()
+	if err != nil {
+		t.Fatalf("ComposerPublications: %v", err)
+	}
+	got, err := list.At(0)
+	if err != nil {
+		t.Fatalf("At(0): %v", err)
+	}
+	if got.Phase != string(phonecore.PublicationTerminal) ||
+		got.TerminalCode != phonecore.PublicationOutcomeUnknown {
+		t.Fatalf("terminal projection = %+v", got)
+	}
+	if n, err := a.PendingOpCount(); err != nil || n != 0 {
+		t.Fatalf("terminal result restored as in-flight: count=%d err=%v", n, err)
+	}
+}
+
+func TestComposerPublications_RestartKeepsOneLogicalBubbleAcrossInputBusyRetry(t *testing.T) {
+	dir := t.TempDir()
+	a, sc := publicationApp(t, dir)
+	prior := preparedComposer(t, a, sc, "op-prior-busy", "identical words")
+	prior.LogicalID = "logical-one-bubble"
+	prior.Phase = phonecore.PublicationTerminal
+	prior.TerminalCode = string(schema.CodeInputBusy)
+	st := a.core.State()
+	st.PendingPublications = []phonecore.PendingPublication{prior}
+	st.OpOutcomes = map[string]schema.Control{prior.OperationID: {
+		Op: "error", OperationID: prior.OperationID, SessionID: prior.SessionID,
+		ErrorCode: schema.CodeInputBusy,
+	}}
+	if err := a.core.Save(st); err != nil {
+		t.Fatalf("seed input_busy result: %v", err)
+	}
+	retry := preparedComposer(t, a, sc, "op-retry-busy", prior.Text)
+	retry.LogicalID = prior.LogicalID
+	if err := a.core.PreparePublicationRetry(prior.OperationID, retry); err != nil {
+		t.Fatalf("PreparePublicationRetry: %v", err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("Close first app: %v", err)
+	}
+
+	restarted, _ := publicationApp(t, dir)
+	list, err := restarted.ComposerPublications()
+	if err != nil {
+		t.Fatalf("ComposerPublications: %v", err)
+	}
+	if n, err := list.Count(); err != nil || n != 1 {
+		t.Fatalf("logical bubble count after restart = %d, %v", n, err)
+	}
+	got, err := list.At(0)
+	if err != nil {
+		t.Fatalf("At(0): %v", err)
+	}
+	if got.LogicalID != prior.LogicalID || got.OperationID != retry.OperationID ||
+		got.Text != prior.Text || got.Phase != string(phonecore.PublicationPrepared) {
+		t.Fatalf("recreated logical retry = %+v", got)
+	}
+}
+
+func TestComposerPublications_RestartSettlesOldAuthorityBubble(t *testing.T) {
+	dir := t.TempDir()
+	a, sc := publicationApp(t, dir)
+	p := preparedComposer(t, a, sc, "op-old-authority-visible", "do not leave me sending")
+	if err := a.core.PreparePublication(p); err != nil {
+		t.Fatalf("PreparePublication: %v", err)
+	}
+	st := a.core.State()
+	st.MachineRelayAuthPub = bytes.Repeat([]byte{0x66}, 32)
+	if err := a.core.Save(st); err != nil {
+		t.Fatalf("replace authority: %v", err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("Close first app: %v", err)
+	}
+
+	restarted, _ := publicationApp(t, dir)
+	out, err := restarted.Outcome(p.OperationID)
+	if err != nil {
+		t.Fatalf("Outcome: %v", err)
+	}
+	if !out.Resolved || out.Code != phonecore.PublicationAuthorityChanged || out.Message == "" {
+		t.Fatalf("old-authority durable outcome = %+v", out)
+	}
+	list, err := restarted.ComposerPublications()
+	if err != nil {
+		t.Fatalf("ComposerPublications: %v", err)
+	}
+	got, err := list.At(0)
+	if err != nil || got.TerminalCode != phonecore.PublicationAuthorityChanged {
+		t.Fatalf("old-authority projection = %+v, %v", got, err)
+	}
 }
 
 func TestPublicationPump_PersistentFailureBacksOffAndCancellationIsPrompt(t *testing.T) {

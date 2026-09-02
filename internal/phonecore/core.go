@@ -451,8 +451,7 @@ func (c *Core) persistLocked(st State) error {
 		// Carrying them into a replacement registration can deliver old conversation text to
 		// a different authority. Preserve the user's record but retire every binding that does
 		// not already belong to the new exact identity; terminal records are never published.
-		st.PendingPublications = publicationsForIdentity(st.PendingPublications,
-			st.Machine, st.EpochID, st.MachineRelayAuthPub)
+		publicationsForIdentity(&st, st.Machine, st.EpochID, st.MachineRelayAuthPub)
 	}
 	if err := c.store.Save(st.clone()); err != nil {
 		return err
@@ -700,15 +699,11 @@ func (c *Core) installGrant(g *crypto.EpochGrant, cursor uint64) (opened bool, e
 // phone guessing. An UNTAGGED outcome is refused -- attributing it to some op by proximity
 // would persist the wrong verdict for a mutating op.
 //
-// WHAT IS PERSISTED IS A VERDICT AND NOT A PAYLOAD (Wave R6 review round 2). This stored the
-// WHOLE Control, journal records included, into a map nothing prunes -- this package's own
-// recorded residual, quoted at interaction.go: "never pruned, so every launch re-offers every
-// outcome ever recorded". Wave R6's two reads answer WITH RECORDS, so every history page wrote
-// up to `limit` full item bodies into the phone's durable state file permanently, and every
-// detail read wrote the FULL PRE-TRUNCATION BODY -- precisely the payload that was too large
-// to ship inline. The records belong to the LIVE transcript, which is where the facade folds
-// them the moment the reply is claimed; what has to survive a process death is the answer:
-// which op, what the machine said, and whether it said anything at all.
+// WHAT IS PERSISTED IS A VERDICT AND NOT A PAYLOAD (Wave R6 review round 2). History/detail
+// payloads are folded into State.Items by commitReceive in the same transaction as this
+// payload-free verdict and the receive high-water. RecordOutcome remains the explicit verdict
+// API for callers that did not arrive through the mailbox router; it must never become a second
+// way to persist an uncommitted journal payload.
 func (c *Core) RecordOutcome(ctrl schema.Control) error {
 	if ctrl.OperationID == "" {
 		return errors.New("phonecore: outcome carries no operation id")
@@ -920,10 +915,70 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 		if f.reply.OperationID == "" {
 			return // unattributable: Take still drains it in memory, nothing is silently mis-keyed
 		}
+		publication, publicationIndex, pending := publicationForReply(st.PendingPublications, f.reply)
+		if pending && !replyMatchesPublication(publication, f.reply) {
+			// The operation id is exact but the action/session/payload binding is not. Persisting
+			// it as this operation's verdict would let the malformed reply settle the wrong intent.
+			return
+		}
 		if st.OpOutcomes == nil {
 			st.OpOutcomes = map[string]schema.Control{}
 		}
-		st.OpOutcomes[f.reply.OperationID] = f.reply
+		verdict := f.reply
+		verdict.Journal = nil
+		st.OpOutcomes[f.reply.OperationID] = verdict
+		if !pending {
+			return
+		}
+		if f.reply.Op == controlOpError || f.reply.ErrorCode != "" {
+			if publication.Kind == PublicationComposer {
+				code := string(f.reply.ErrorCode)
+				if code == "" {
+					code = "error"
+				}
+				terminalizePublication(st, &st.PendingPublications[publicationIndex], code)
+				boundPublicationResults(st)
+			} else {
+				st.PendingPublications = removePublicationAt(st.PendingPublications, publicationIndex)
+			}
+			return
+		}
+		scratch := itemStoreFrom(st.Items)
+		switch publication.Kind {
+		case PublicationHistory:
+			held := scratch.ApplyPage(f.reply.Journal)
+			if held {
+				st.Items = scratch.All()
+				if st.HistoryFloor == nil {
+					st.HistoryFloor = map[string]bool{}
+				}
+				if f.reply.HistoryFloor {
+					st.HistoryFloor[publication.SessionID] = true
+				} else {
+					delete(st.HistoryFloor, publication.SessionID)
+				}
+			}
+			if st.HistoryCapped == nil {
+				st.HistoryCapped = map[string]bool{}
+			}
+			if held {
+				delete(st.HistoryCapped, publication.SessionID)
+			} else {
+				st.HistoryCapped[publication.SessionID] = true
+			}
+			st.PendingPublications = removePublicationAt(st.PendingPublications, publicationIndex)
+		case PublicationDetail:
+			for _, rec := range f.reply.Journal {
+				scratch.ApplyDetail(rec)
+			}
+			st.Items = scratch.All()
+			st.PendingPublications = removePublicationAt(st.PendingPublications, publicationIndex)
+		case PublicationComposer:
+			// An OK is daemon admission, not delivery. Only its authenticated user_message echo
+			// below removes the composer publication.
+			terminalizePublication(st, &st.PendingPublications[publicationIndex], PublicationAccepted)
+			boundPublicationResults(st)
+		}
 	case kindJournalReseed:
 		if token := f.reseed.DiscardRecoveryToken; token != "" &&
 			st.DiscardRecoveryGeneration > st.DiscardRecoveryCompleted &&
@@ -943,6 +998,7 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 		// for why the two halves of one frame commit under opposite rules), and it is the
 		// channel IS-LIFE-3 re-delivers an unresolved approval_request on.
 		st.Items = itemsWith(c.router.Items(), f.reseed.Events...)
+		settleComposerItems(st)
 	case "":
 		// Interaction records and structured_gap boundaries shape the TRANSCRIPT alone
 		// (IS-LAYER-1, IS-SS-1). Runtime capability changes have their own narrowly-fenced
@@ -950,11 +1006,22 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 		// unfenced second authority channel.
 		if f.record.Type == RecordTypeInteraction || f.record.Type == RecordTypeStructuredGap {
 			st.Items = itemsWith(c.router.Items(), f.record)
+			// Settlement reads only the post-fold Item projection. A malformed echo is absent;
+			// a validated duplicate restored by repair is present and may settle exactly once.
+			settleComposerItems(st)
 			return
 		}
 		st.Sessions = sessionsWith(c.router.Sessions(), f.record)
 	}
 	// Grants, reserved kinds and the reconcile record carry no cache state.
+}
+
+func itemStoreFrom(items []Item) *ItemStore {
+	scratch := NewItemStore()
+	for _, item := range items {
+		scratch.restore(item)
+	}
+	return scratch
 }
 
 // sessionsWith folds rec into a COPY of the live session cache and returns the durable

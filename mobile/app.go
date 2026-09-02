@@ -219,18 +219,6 @@ type App struct {
 	// the launch screen's only honest source for its tier-denied state. "" until the
 	// machine has answered one: the screens' first-run state, never a guess.
 	launchCapability string
-	// historyFloor is ADR-014 §2's retention floor per session, as the machine last stated
-	// it on an interaction_history reply: true once nothing older than the delivered page
-	// is retained. Absent (false) until a page has been read, which is the same state as
-	// "more exists" to the screen that reads it -- both mean "offer load earlier".
-	historyFloor map[string]bool
-	// historyCapped is the OTHER end of the same control: the phone could not hold the page
-	// the machine sent (phonecore.MaxBackfillPerSession), so there is more history and this
-	// handset cannot show it. It is kept apart from historyFloor deliberately -- they are
-	// two different sentences, one about the MACHINE's retention and one about the PHONE's,
-	// and a screen that collapsed them would tell a reader they had reached the beginning of
-	// a conversation that goes further back.
-	historyCapped map[string]bool
 	// resyncAt are the resync attempt times PER STREAM, the state §6.0's rate bound is
 	// enforced against. Per stream because a shared budget lets the two repairable channels
 	// starve each other, and one shared-bucket gap stales both at once.
@@ -338,6 +326,14 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 
 	st := core.State()
 	a.setDestination(st.MachineRelayAuthPub)
+	// The Android ledger is a view, not custody. Rebuild the facade's in-flight accounting
+	// from every unresolved durable publication so process recreation cannot make a redriving
+	// command invisible or report PendingOpCount=0 while it still awaits an outcome.
+	for _, publication := range st.PendingPublications {
+		if publication.Phase != phonecore.PublicationTerminal {
+			a.inflight[publication.OperationID] = true
+		}
+	}
 	// PB-STATE-10: adoption of the machine's rollback authorities is DURABLE, so a
 	// process death -- routine on Android -- does not re-arm the fail-closed refusal of
 	// every mutating op with no phone-triggerable exit.
@@ -1686,15 +1682,13 @@ func (a *App) Outcome(operationID string) (out *Outcome, err error) {
 	if operationID == "" {
 		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: Outcome requires an operation id"))
 	}
-	if ctrl, ok := core.Router().Replies().TakeFor(operationID); ok {
-		// Wave R6 fix-pack, ROUND 2: the moment an interaction_history /
-		// interaction_detail reply is TAKEN is the moment its records become the
-		// transcript -- and the only moment they can, because RecordOutcome below
-		// persists a verdict and drops the payload (a durable map nothing prunes is
-		// where a page of full item bodies must never be written).
-		a.adoptInteractionRead(ctrl)
-		_ = core.RecordOutcome(ctrl)
+	if err := a.expirePublicationOutcomes(core, time.Now()); err != nil {
+		return nil, err
 	}
+	// Drain the live delivery cache, but never manufacture durability from it. A reply may be
+	// live-only because it arrived behind a gap, or may have failed the pending publication's
+	// action/session binding; only commitReceive may author OpOutcomes.
+	_, _ = core.Router().Replies().TakeFor(operationID)
 	if ctrl, ok := core.State().OpOutcomes[operationID]; ok {
 		// Wave R5: a launch_presets reply claimed here is also the moment its list
 		// becomes the machine-published preset cache LaunchPresets renders.
@@ -1708,7 +1702,11 @@ func (a *App) Outcome(operationID string) (out *Outcome, err error) {
 // PendingOpCount is how many operations this app has issued whose outcome has not landed.
 func (a *App) PendingOpCount() (n int, err error) {
 	defer barrier(&err)
-	if _, err = a.ready(); err != nil {
+	core, err := a.ready()
+	if err != nil {
+		return 0, err
+	}
+	if err := a.expirePublicationOutcomes(core, time.Now()); err != nil {
 		return 0, err
 	}
 	a.mu.Lock()

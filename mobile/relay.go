@@ -1710,13 +1710,20 @@ func (a *App) onInteraction(rec schema.JournalRecord) {
 }
 
 func (a *App) onReply(ctrl schema.Control) {
-	if ctrl.OperationID != "" {
-		a.resolve(ctrl.OperationID)
+	// The authenticated timestamp is useful even when a reply was delivered behind a gap, so
+	// close/report the skew bracket first. Operation settlement, UI events and kill-switch state
+	// require the verdict that commitReceive durably attributed; router.apply's live reply alone
+	// is deliberately insufficient.
+	a.reportSkew()
+	committed, ok := a.core.State().OpOutcomes[ctrl.OperationID]
+	if ctrl.OperationID == "" || !ok {
+		return
 	}
+	ctrl = committed
+	a.resolve(ctrl.OperationID)
 	a.mu.Lock()
 	a.killSwitch = ctrl.ErrorCode == schema.CodeKillSwitch
 	a.mu.Unlock()
-	a.reportSkew()
 	a.events.emit(&Event{
 		Kind:      "outcome",
 		Stream:    "reply",

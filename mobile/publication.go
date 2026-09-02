@@ -58,6 +58,91 @@ func actionablePublication(pending []phonecore.PendingPublication) bool {
 	return false
 }
 
+func nextPublicationExpiry(pending []phonecore.PendingPublication, now time.Time) (time.Duration, bool) {
+	var earliest time.Time
+	for _, p := range pending {
+		var deadline time.Time
+		switch p.Phase {
+		case phonecore.PublicationPrepared, phonecore.PublicationSealed:
+			deadline = p.Command.ExpiresAt
+		case phonecore.PublicationAdmitted:
+			if !p.CreatedAt.IsZero() {
+				deadline = p.CreatedAt.Add(phonecore.PublicationOutcomeTimeout)
+			}
+		}
+		if !deadline.IsZero() && (earliest.IsZero() || deadline.Before(earliest)) {
+			earliest = deadline
+		}
+	}
+	if earliest.IsZero() {
+		return 0, false
+	}
+	wait := earliest.Sub(now)
+	if wait < 0 {
+		wait = 0
+	}
+	return wait, true
+}
+
+// expirePublicationOutcomes makes locally knowable terminal publication states visible through
+// the same durable Outcome surface as machine replies. Only the two local timeout codes enter
+// here; authenticated accept/refuse replies still resolve through onReply exactly once.
+func (a *App) expirePublicationOutcomes(core *phonecore.Core, now time.Time) error {
+	if err := core.ExpirePublications(now); err != nil {
+		return err
+	}
+	st := core.State()
+	for _, p := range st.PendingPublications {
+		if p.Phase != phonecore.PublicationTerminal ||
+			(p.TerminalCode != phonecore.PublicationExpired &&
+				p.TerminalCode != phonecore.PublicationOutcomeUnknown) {
+			continue
+		}
+		ctrl, ok := st.OpOutcomes[p.OperationID]
+		if !ok {
+			continue
+		}
+		a.mu.Lock()
+		tracked := a.inflight[p.OperationID]
+		delete(a.inflight, p.OperationID)
+		a.mu.Unlock()
+		if tracked && a.events != nil {
+			a.events.emit(&Event{
+				Kind: "outcome", Stream: "publication", SessionID: p.SessionID,
+				State: string(ctrl.ErrorCode), Message: p.OperationID,
+			})
+		}
+	}
+	return nil
+}
+
+// ComposerPublications returns the durable composer FIFO as a content-only read model. Android
+// hydrates its process-local ledger from this on every surface construction; the Go journal is
+// the authority and therefore repeated hydration is idempotent rather than another send.
+func (a *App) ComposerPublications() (list *ComposerPublicationList, err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	if err := a.expirePublicationOutcomes(core, time.Now()); err != nil {
+		return nil, err
+	}
+	list = &ComposerPublicationList{}
+	for _, p := range core.PendingPublications() {
+		if p.Kind != phonecore.PublicationComposer {
+			continue
+		}
+		list.items = append(list.items, ComposerPublication{
+			LogicalID: p.LogicalID, OperationID: p.OperationID, SessionID: p.SessionID,
+			SessionInstance: p.SessionInstance, ExpectedTurn: p.ExpectedTurn, Text: p.Text,
+			Phase: string(p.Phase), TerminalCode: p.TerminalCode,
+			CreatedAtMillis: p.CreatedAt.UnixMilli(),
+		})
+	}
+	return list, nil
+}
+
 // wakePublicationPump is only a hint. Durable PendingPublications, re-read on every wake,
 // owns both the work and its order; dropping a duplicate hint cannot drop a publication.
 func (a *App) wakePublicationPump() {
@@ -68,6 +153,41 @@ func (a *App) wakePublicationPump() {
 	case a.publicationWake <- struct{}{}:
 	default:
 	}
+}
+
+// preparePublicationLocked closes the sendContext-to-custody TOCTOU. The caller holds bucketMu;
+// this function takes publicationAuthorityMu, validates the pre-lock transport context against
+// one current durable State, fills every authority field from that same snapshot, and persists
+// before releasing the authority fence. Network append happens later, without this lock held.
+func (a *App) preparePublicationLocked(
+	core *phonecore.Core,
+	sc sendCtx,
+	p phonecore.PendingPublication,
+	retryOf string,
+) error {
+	a.publicationAuthorityMu.Lock()
+	defer a.publicationAuthorityMu.Unlock()
+	st := core.State()
+	if st.Disowned || len(st.MachineRelayAuthPub) != ed25519.PublicKeySize ||
+		sc.epoch != st.EpochID || sc.key != st.Keys.ContentKey ||
+		sc.target != relay.RoutingID(ed25519.PublicKey(st.MachineRelayAuthPub)) ||
+		p.Command.Machine != st.Machine {
+		return errPublicationIdentityChanged
+	}
+	p.Machine = st.Machine
+	p.EpochID = st.EpochID
+	p.Target = sc.target
+	p.AuthorityPub = bytes.Clone(st.MachineRelayAuthPub)
+	if retryOf == "" {
+		return core.PreparePublication(p)
+	}
+	for _, current := range st.PendingPublications {
+		if current.OperationID == retryOf {
+			p.LogicalID = current.LogicalID
+			return core.PreparePublicationRetry(retryOf, p)
+		}
+	}
+	return phonecore.ErrPublicationState
 }
 
 // runPublicationPump is the one redrive loop for a live relay connection. It never keeps a
@@ -81,24 +201,47 @@ func (a *App) runPublicationPump(ctx context.Context, resolve func() (sendCtx, e
 		if err != nil {
 			return
 		}
-		if !actionablePublication(core.PendingPublications()) {
-			attempt = 0
-			select {
-			case <-ctx.Done():
-				return
-			case <-a.publicationWake:
-				continue
+		if err = a.expirePublicationOutcomes(core, time.Now()); err == nil {
+			pending := core.PendingPublications()
+			if !actionablePublication(pending) {
+				attempt = 0
+				wait, scheduled := nextPublicationExpiry(pending, time.Now())
+				if !scheduled {
+					select {
+					case <-ctx.Done():
+						return
+					case <-a.publicationWake:
+						continue
+					}
+				}
+				timer := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				case <-a.publicationWake:
+					if !timer.Stop() {
+						<-timer.C
+					}
+					continue
+				case <-timer.C:
+					continue
+				}
 			}
 		}
-
-		sc, err := resolve()
 		if err == nil {
-			a.bucketMu.Lock()
-			err = a.flushPendingPublicationsLocked(ctx, sc)
-			a.bucketMu.Unlock()
-			// Do not retain epoch content material across the retry wait. The next attempt
-			// must pass through custody again if the core has purged its in-memory key.
-			sc.key = [32]byte{}
+			var sc sendCtx
+			sc, err = resolve()
+			if err == nil {
+				a.bucketMu.Lock()
+				err = a.flushPendingPublicationsLocked(ctx, sc)
+				a.bucketMu.Unlock()
+				// Do not retain epoch content material across the retry wait. The next attempt
+				// must pass through custody again if the core has purged its in-memory key.
+				sc.key = [32]byte{}
+			}
 		}
 		if err == nil {
 			attempt = 0
@@ -132,6 +275,9 @@ func (a *App) flushPendingPublicationsLocked(ctx context.Context, sc sendCtx) er
 	}
 	core, err := a.ready()
 	if err != nil {
+		return err
+	}
+	if err := core.ExpirePublications(time.Now()); err != nil {
 		return err
 	}
 	for _, pending := range core.PendingPublications() {

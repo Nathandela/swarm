@@ -397,6 +397,25 @@ func (a *App) ComposerSend(session, expectedTurn, text string) (op *Op, err erro
 	})
 }
 
+// ComposerRetry authors a fresh operation for one exact composer attempt which the machine
+// refused with input_busy. The durable core retains its LogicalID and FIFO slot, so Android may
+// replace one bubble without treating identical message text as identity. No other refusal,
+// accepted result or delivery-unknown state authorizes this verb.
+func (a *App) ComposerRetry(previousOperationID, session, expectedTurn, text string) (op *Op, err error) {
+	defer barrier(&err)
+	if previousOperationID == "" || session == "" || text == "" {
+		return nil, classed(ErrClassInvalidRequest, errors.New(
+			"swarmmobile: ComposerRetry needs the prior operation, session and non-empty message"))
+	}
+	if _, err = a.ready(); err != nil {
+		return nil, err
+	}
+	return a.signedCommand(schema.ActionComposerSend, session, nil, commandBody{
+		composer: &schema.ComposerSendReq{Session: session, ExpectedTurn: expectedTurn, Text: text},
+		retryOf:  previousOperationID,
+	})
+}
+
 // TerminalWatch opens the server-rendered terminal peek for a session (PB-APP-4). It is a
 // READ: the phone seals an UNSIGNED command carrying only the action and the target, and
 // the gateway routes it to its terminal watcher without forwarding it to the daemon's
@@ -967,6 +986,10 @@ type commandBody struct {
 	// body (SealComposerSendEnvelope) -- and for the same reason the derivation is
 	// phonecore's (SignComposerSend), not this package's.
 	composer *schema.ComposerSendReq
+	// retryOf is the exact terminal input_busy operation ComposerRetry replaces. It never
+	// changes the signed/wire body; the durable publication transition uses it only to retain
+	// the prior LogicalID and atomically retire that one proven-no-write attempt.
+	retryOf string
 	// interrupt is Wave R6's turn_interrupt body, composer's exact twin since the fix-pack
 	// bound expected_turn into it (finding B7): signature covers
 	// schema.TurnInterruptContentHash(it), envelope carries it, derivation is phonecore's
@@ -1131,7 +1154,9 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 	a.bucketMu.Lock()
 	defer a.bucketMu.Unlock()
 	if body.composer != nil {
-		st := core.State()
+		if err := core.ExpirePublications(time.Now()); err != nil {
+			return nil, err
+		}
 		pending := phonecore.PendingPublication{
 			LogicalID:       id,
 			OperationID:     id,
@@ -1140,16 +1165,12 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 			SessionInstance: body.composer.SessionInstance,
 			ExpectedTurn:    body.composer.ExpectedTurn,
 			Text:            body.composer.Text,
-			Machine:         st.Machine,
-			EpochID:         st.EpochID,
-			Target:          sc.target,
-			AuthorityPub:    st.MachineRelayAuthPub,
 			Command:         cmd,
 			Composer:        body.composer,
 			Phase:           phonecore.PublicationPrepared,
 			CreatedAt:       time.Now(),
 		}
-		if err := core.PreparePublication(pending); err != nil {
+		if err := a.preparePublicationLocked(core, sc, pending, body.retryOf); err != nil {
 			return nil, err
 		}
 		// Once PreparePublication commits, this press is accepted locally and owns an
@@ -1158,6 +1179,8 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 		if err := a.flushPendingPublicationsLocked(context.Background(), sc); err != nil {
 			a.wakePublicationPump()
 		}
+		// Wake even after successful admission: the pump owns the bounded no-reply timer.
+		a.wakePublicationPump()
 		return &Op{Action: action, SessionID: session, OperationID: id}, nil
 	}
 	// Non-durable producers may not allocate above an older sealed publication. If its

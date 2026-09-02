@@ -196,6 +196,8 @@ func s15State() State {
 			SessionID: s15SessionID, ItemID: "s15-item-id", Kind: KindAgentMessage,
 			Status: StatusCompleted, Text: s15ItemText,
 		}},
+		HistoryFloor:  map[string]bool{"s15-history-floor-session": true},
+		HistoryCapped: map[string]bool{"s15-history-capped-session": true},
 	}
 	return st
 }
@@ -387,6 +389,8 @@ func s15Inventory() []s15Tier {
 		// permissions -- so a locked handset reading it in the clear would disclose more than
 		// the other three combined.
 		{field: "Items", tier: "content", needles: s15Str(s15ItemText)},
+		{field: "HistoryFloor", tier: "content", needles: s15Str("s15-history-floor-session")},
+		{field: "HistoryCapped", tier: "content", needles: s15Str("s15-history-capped-session")},
 
 		// REASSIGNED, on this row's own instruction. It was written UNASSIGNED and FLAGGED --
 		// "the offline mutating-op queue holds session ids and, for a launch, the command line

@@ -346,22 +346,12 @@ latest retained page; it does not optimistically clear the global journal stale 
   of M3.1/M3.3 is deferred.
 - ~~**An ANCHORLESS "newest page" read** (amendment A5)~~: closed by A11. Empty
   `before_item` requests the newest retained page; cold-open and conversation Reload use it.
-- **A paged read is not persisted.** The records a page delivers fold into the phone's live
-  `ItemStore` and are NOT written into the durable transcript snapshot, so they are gone after a
-  process death and a screen that wants them asks again. Deliberate: persisting them would let
-  one "load earlier" walk the phone past `MaxItemsPerSession` and evict the LIVE tail to make
-  room for history, which is the wrong trade on a handset — the recent conversation is what the
-  retention bound exists to protect.
-
-  **This was half true when it was written, and the other half pointed the wrong way** (review
-  round 2). Nothing wrote the records into the transcript SNAPSHOT — and `Core.RecordOutcome`
-  persisted the WHOLE reply, records included, into `OpOutcomes`, a map this codebase's own
-  comment records as "never pruned, so every launch re-offers every outcome ever recorded". So
-  every page wrote up to `limit` full item bodies into the phone's durable state file
-  permanently, and every detail read wrote the FULL PRE-TRUNCATION BODY — the exact payload that
-  was too large to ship inline — with none of the benefit, since no screen could read them back
-  as transcript. A durable outcome is now a VERDICT and carries no journal records, and the fold
-  happens where the reply is taken. The bullet above is true in both halves as of this
-  amendment.
+- ~~**A paged read is not persisted.**~~ Superseded by the durable-publication amendment. A
+  contiguous authenticated history/detail reply now folds into the bounded durable transcript
+  in the same transaction as its receive high-water, payload-free verdict and floor/capacity
+  facts. A process death can therefore neither consume the reply and lose its content nor leave
+  the screen guessing whether the machine or handset reached its limit. The separate
+  `MaxBackfillPerSession` region preserves the original retention intent: loaded history cannot
+  evict the recent live tail, and a page that does not fit is refused whole.
 - **The daemon session-item index**: see decision 2 — the journal scan is the implementation
   until measurement says otherwise; the ratified shape is index-agnostic.

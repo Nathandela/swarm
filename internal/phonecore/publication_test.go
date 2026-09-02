@@ -3,8 +3,10 @@ package phonecore
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -86,6 +88,214 @@ func TestPendingPublications_PrepareIsBoundedAndNeverEvictsUnresolved(t *testing
 		if got[i].OperationID != want[i].OperationID {
 			t.Fatalf("overflow evicted/reordered index %d: got %q want %q", i, got[i].OperationID, want[i].OperationID)
 		}
+	}
+}
+
+func TestPendingPublications_TerminalResultsAreBoundedWithoutConsumingSendCapacity(t *testing.T) {
+	c := publicationCore(t)
+	st := c.State()
+	st.OpOutcomes = map[string]schema.Control{
+		"unrelated-operation": {Op: "error", OperationID: "unrelated-operation", ErrorCode: schema.CodePolicy},
+	}
+	for i := 0; i < maxPublicationResults; i++ {
+		p := testComposerPublication(fmt.Sprintf("op-result-%02d", i))
+		p.Phase = PublicationTerminal
+		p.TerminalCode = PublicationAuthorityChanged
+		st.PendingPublications = append(st.PendingPublications, p)
+		st.OpOutcomes[p.OperationID] = schema.Control{
+			Op: "error", OperationID: p.OperationID, ErrorCode: schema.ErrorCode(PublicationAuthorityChanged),
+		}
+	}
+	if err := c.Save(st); err != nil {
+		t.Fatalf("seed terminal results: %v", err)
+	}
+	if err := c.PreparePublication(testComposerPublication("op-new-intent")); err != nil {
+		t.Fatalf("terminal results consumed send capacity: %v", err)
+	}
+	got := c.PendingPublications()
+	if len(got) != maxPublicationResults || got[len(got)-1].OperationID != "op-new-intent" ||
+		got[len(got)-1].Phase != PublicationPrepared {
+		t.Fatalf("bounded result projection = %+v", got)
+	}
+	for _, p := range got {
+		if p.OperationID == "op-result-00" {
+			t.Fatal("oldest terminal result was not pruned")
+		}
+	}
+	outcomes := c.State().OpOutcomes
+	if _, ok := outcomes["op-result-00"]; ok {
+		t.Fatal("evicted terminal publication left its per-send outcome claimable")
+	}
+	if _, ok := outcomes["op-result-01"]; !ok {
+		t.Fatal("bounding removed a retained publication's outcome")
+	}
+	if _, ok := outcomes["unrelated-operation"]; !ok {
+		t.Fatal("composer result bounding pruned an unrelated operation outcome")
+	}
+}
+
+func TestPendingPublications_AdmittedWorkStillCountsUntilOutcomeBound(t *testing.T) {
+	c := publicationCore(t)
+	st := c.State()
+	for i := 0; i < MaxPendingPublications; i++ {
+		p := testComposerPublication(fmt.Sprintf("op-admitted-%02d", i))
+		p.Phase = PublicationAdmitted
+		p.Sequence = uint64(i + 1)
+		p.Envelope = []byte(fmt.Sprintf("envelope-%02d", i))
+		st.PendingPublications = append(st.PendingPublications, p)
+	}
+	if err := c.Save(st); err != nil {
+		t.Fatalf("seed admitted work: %v", err)
+	}
+	if err := c.PreparePublication(testComposerPublication("op-overflow-admitted")); !errors.Is(err, ErrPublicationQueueFull) {
+		t.Fatalf("PreparePublication = %v, want unresolved queue full", err)
+	}
+}
+
+func terminalInputBusyPublication(t *testing.T, c *Core, id, logicalID, text string) PendingPublication {
+	t.Helper()
+	p := testComposerPublication(id)
+	p.LogicalID = logicalID
+	p.Text, p.Composer.Text = text, text
+	p.Phase = PublicationTerminal
+	p.TerminalCode = string(schema.CodeInputBusy)
+	st := c.State()
+	p.ResultOrder = uint64(len(st.PendingPublications) + 1)
+	st.PendingPublications = append(st.PendingPublications, p)
+	if st.OpOutcomes == nil {
+		st.OpOutcomes = map[string]schema.Control{}
+	}
+	st.OpOutcomes[id] = schema.Control{
+		Op: controlOpError, OperationID: id, SessionID: p.SessionID,
+		ErrorCode: schema.CodeInputBusy,
+	}
+	if err := c.Save(st); err != nil {
+		t.Fatalf("seed terminal input_busy publication: %v", err)
+	}
+	return p
+}
+
+func retryPublication(prior PendingPublication, operationID string) PendingPublication {
+	retry := prior.clone()
+	retry.OperationID = operationID
+	retry.Command.OperationID = operationID
+	retry.Command.ExpiresAt = prior.Command.ExpiresAt.Add(time.Minute)
+	retry.Phase = PublicationPrepared
+	retry.Sequence = 0
+	retry.Envelope = nil
+	retry.TerminalCode = ""
+	retry.ResultOrder = 0
+	retry.CreatedAt = prior.CreatedAt.Add(time.Second)
+	return retry
+}
+
+func TestPendingPublications_RetryInputBusyReplacesOnlyExactPriorLogicalSend(t *testing.T) {
+	c := publicationCore(t)
+	first := terminalInputBusyPublication(t, c, "op-old-A", "logical-A", "same words")
+	second := terminalInputBusyPublication(t, c, "op-old-B", "logical-B", "same words")
+	retry := retryPublication(second, "op-new-B")
+
+	if err := c.PreparePublicationRetry(second.OperationID, retry); err != nil {
+		t.Fatalf("PreparePublicationRetry: %v", err)
+	}
+	got := c.PendingPublications()
+	if len(got) != 2 || got[0].OperationID != first.OperationID ||
+		got[1].OperationID != retry.OperationID || got[1].LogicalID != second.LogicalID ||
+		got[1].Phase != PublicationPrepared {
+		t.Fatalf("exact logical replacement = %+v", got)
+	}
+	// A repeated facade completion after the durable transition is idempotent; it may not
+	// duplicate the bubble or require the retired operation to still exist.
+	if err := c.PreparePublicationRetry(second.OperationID, retry); err != nil {
+		t.Fatalf("repeated PreparePublicationRetry: %v", err)
+	}
+	if got := c.PendingPublications(); len(got) != 2 || got[1].OperationID != retry.OperationID {
+		t.Fatalf("repeated retry duplicated/reordered queue: %+v", got)
+	}
+	if _, ok := c.State().OpOutcomes[second.OperationID]; ok {
+		t.Fatal("successful retry left the retired input_busy proof claimable")
+	}
+}
+
+func TestPendingPublications_RetryRequiresAuthenticatedExactInputBusyProof(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		terminalCode string
+		outcomeCode  schema.ErrorCode
+		mutate       func(*PendingPublication)
+	}{
+		{name: "accepted", terminalCode: PublicationAccepted},
+		{name: "delivery_unknown", terminalCode: PublicationOutcomeUnknown,
+			outcomeCode: schema.ErrorCode(PublicationOutcomeUnknown)},
+		{name: "expired", terminalCode: PublicationExpired,
+			outcomeCode: schema.ErrorCode(PublicationExpired)},
+		{name: "other_refusal", terminalCode: "policy", outcomeCode: schema.CodePolicy},
+		{name: "missing_authenticated_outcome", terminalCode: string(schema.CodeInputBusy)},
+		{name: "wrong_text", terminalCode: string(schema.CodeInputBusy), outcomeCode: schema.CodeInputBusy,
+			mutate: func(p *PendingPublication) { p.Text, p.Composer.Text = "different", "different" }},
+		{name: "wrong_logical_id", terminalCode: string(schema.CodeInputBusy), outcomeCode: schema.CodeInputBusy,
+			mutate: func(p *PendingPublication) { p.LogicalID = "another-logical-send" }},
+		{name: "caller_phase_bypass", terminalCode: string(schema.CodeInputBusy), outcomeCode: schema.CodeInputBusy,
+			mutate: func(p *PendingPublication) {
+				p.Phase, p.Sequence, p.Envelope = PublicationSealed, 99, []byte("caller-envelope")
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := publicationCore(t)
+			prior := testComposerPublication("op-prior")
+			prior.Phase, prior.TerminalCode = PublicationTerminal, tc.terminalCode
+			st := c.State()
+			st.PendingPublications = []PendingPublication{prior}
+			if tc.outcomeCode != "" {
+				st.OpOutcomes = map[string]schema.Control{prior.OperationID: {
+					Op: controlOpError, OperationID: prior.OperationID,
+					SessionID: prior.SessionID, ErrorCode: tc.outcomeCode,
+				}}
+			}
+			if err := c.Save(st); err != nil {
+				t.Fatalf("seed prior: %v", err)
+			}
+			retry := retryPublication(prior, "op-retry")
+			if tc.mutate != nil {
+				tc.mutate(&retry)
+			}
+			if err := c.PreparePublicationRetry(prior.OperationID, retry); !errors.Is(err, ErrPublicationState) {
+				t.Fatalf("PreparePublicationRetry = %v, want ErrPublicationState", err)
+			}
+			got := c.PendingPublications()
+			if len(got) != 1 || got[0].OperationID != prior.OperationID {
+				t.Fatalf("refused retry changed prior: %+v", got)
+			}
+		})
+	}
+}
+
+func TestPendingPublications_ExpiryNeverReplaysAndLateAuthorityMayRefineIt(t *testing.T) {
+	c := publicationCore(t)
+	prepared := testComposerPublication("op-expired-before-append")
+	prepared.Command.ExpiresAt = prepared.CreatedAt.Add(time.Minute)
+	if err := c.PreparePublication(prepared); err != nil {
+		t.Fatalf("prepare expiring: %v", err)
+	}
+	admitted := testComposerPublication("op-outcome-timeout")
+	if err := c.PreparePublication(admitted); err != nil {
+		t.Fatalf("prepare admitted: %v", err)
+	}
+	if err := c.SealPublication(admitted.OperationID, 91, []byte("exact")); err != nil {
+		t.Fatalf("seal admitted: %v", err)
+	}
+	if err := c.MarkPublicationAdmitted(admitted.OperationID); err != nil {
+		t.Fatalf("admit: %v", err)
+	}
+	if err := c.ExpirePublications(admitted.CreatedAt.Add(PublicationOutcomeTimeout)); err != nil {
+		t.Fatalf("ExpirePublications: %v", err)
+	}
+	got := c.PendingPublications()
+	if got[0].Phase != PublicationTerminal || got[0].TerminalCode != PublicationExpired {
+		t.Fatalf("prepared expiry = %+v", got[0])
+	}
+	if got[1].Phase != PublicationTerminal || got[1].TerminalCode != PublicationOutcomeUnknown {
+		t.Fatalf("admitted timeout = %+v", got[1])
 	}
 }
 
@@ -206,6 +416,58 @@ func TestPendingPublications_StateRejectsDuplicateEpochSequence(t *testing.T) {
 	}
 }
 
+func TestPendingPublications_StateRejectsInvalidResultOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*PendingPublication, *PendingPublication)
+	}{
+		{name: "duplicate_terminal_order", mutate: func(first, second *PendingPublication) {
+			for _, p := range []*PendingPublication{first, second} {
+				p.Phase, p.TerminalCode, p.ResultOrder = PublicationTerminal, "policy", 7
+			}
+		}},
+		{name: "nonterminal_order", mutate: func(first, _ *PendingPublication) {
+			first.ResultOrder = 7
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := publicationCore(t)
+			first := testComposerPublication("op-result-order-first")
+			second := testComposerPublication("op-result-order-second")
+			tc.mutate(&first, &second)
+			st := c.State()
+			st.PendingPublications = []PendingPublication{first, second}
+			if err := c.Save(st); err == nil {
+				t.Fatal("invalid result ordering entered durable state")
+			}
+		})
+	}
+}
+
+func TestPendingPublications_ResultOrderExhaustionRenormalizesWithoutChangingFIFO(t *testing.T) {
+	first := testComposerPublication("op-result-near-max")
+	first.Phase, first.TerminalCode, first.ResultOrder = PublicationTerminal, "policy", ^uint64(0)-1
+	second := testComposerPublication("op-result-at-max")
+	second.Phase, second.TerminalCode, second.ResultOrder = PublicationTerminal, "policy", ^uint64(0)
+	newest := testComposerPublication("op-result-newest")
+	st := State{PendingPublications: []PendingPublication{first, second, newest}}
+
+	terminalizePublication(&st, &st.PendingPublications[2], string(schema.CodeInputBusy))
+
+	if got := []string{
+		st.PendingPublications[0].OperationID,
+		st.PendingPublications[1].OperationID,
+		st.PendingPublications[2].OperationID,
+	}; !reflect.DeepEqual(got, []string{first.OperationID, second.OperationID, newest.OperationID}) {
+		t.Fatalf("renormalization changed logical FIFO: %v", got)
+	}
+	for i, p := range st.PendingPublications {
+		if p.ResultOrder != uint64(i+1) {
+			t.Fatalf("renormalized result[%d] order = %d, want %d", i, p.ResultOrder, i+1)
+		}
+	}
+}
+
 func TestPendingPublications_SealRejectsAnotherRecordsEpochSequence(t *testing.T) {
 	c := publicationCore(t)
 	first := testComposerPublication("op-seal-first")
@@ -261,6 +523,133 @@ func TestPendingPublications_RegistrationIdentityChangePurgesRatherThanRetargets
 	got := c.PendingPublications()
 	if len(got) != 1 || got[0].Phase != PublicationTerminal || got[0].TerminalCode != PublicationAuthorityChanged {
 		t.Fatalf("replacement did not quarantine the old publication: %+v", got)
+	}
+	outcome, ok := c.State().OpOutcomes[got[0].OperationID]
+	if !ok || outcome.ErrorCode != schema.ErrorCode(PublicationAuthorityChanged) {
+		t.Fatalf("replacement did not author a visible authority_changed outcome: %+v, %v", outcome, ok)
+	}
+}
+
+func TestPendingPublications_IdentityChangePreservesDeliveryUncertaintyAndTerminalVerdicts(t *testing.T) {
+	c := publicationCore(t)
+	st := c.State()
+	prepared := testComposerPublication("op-prepared-change")
+	sealed := testComposerPublication("op-sealed-change")
+	sealed.Phase, sealed.Sequence, sealed.Envelope = PublicationSealed, 51, []byte("sealed")
+	admitted := testComposerPublication("op-admitted-change")
+	admitted.Phase, admitted.Sequence, admitted.Envelope = PublicationAdmitted, 52, []byte("admitted")
+	accepted := testComposerPublication("op-accepted-change")
+	accepted.Phase, accepted.TerminalCode = PublicationTerminal, PublicationAccepted
+	busy := testComposerPublication("op-busy-change")
+	busy.Phase, busy.TerminalCode = PublicationTerminal, string(schema.CodeInputBusy)
+	unknown := testComposerPublication("op-unknown-change")
+	unknown.Phase, unknown.TerminalCode = PublicationTerminal, PublicationOutcomeUnknown
+	st.PendingPublications = []PendingPublication{prepared, sealed, admitted, accepted, busy, unknown}
+	st.OpOutcomes = map[string]schema.Control{
+		accepted.OperationID: {Op: controlOpOK, OperationID: accepted.OperationID, SessionID: accepted.SessionID},
+		busy.OperationID: {
+			Op: controlOpError, OperationID: busy.OperationID, SessionID: busy.SessionID,
+			ErrorCode: schema.CodeInputBusy, Error: "provider wrote no bytes",
+		},
+		unknown.OperationID: localPublicationOutcome(unknown, PublicationOutcomeUnknown),
+	}
+	if err := c.Save(st); err != nil {
+		t.Fatalf("seed mixed phases: %v", err)
+	}
+	wantTerminalOutcomes := map[string]schema.Control{
+		accepted.OperationID: st.OpOutcomes[accepted.OperationID],
+		busy.OperationID:     st.OpOutcomes[busy.OperationID],
+		unknown.OperationID:  st.OpOutcomes[unknown.OperationID],
+	}
+	st = c.State()
+	st.MachineRelayAuthPub = bytes.Repeat([]byte{0x77}, 32)
+	if err := c.Save(st); err != nil {
+		t.Fatalf("replace authority: %v", err)
+	}
+	got := c.State()
+	wantCodes := map[string]string{
+		prepared.OperationID: PublicationAuthorityChanged,
+		sealed.OperationID:   PublicationOutcomeUnknown,
+		admitted.OperationID: PublicationOutcomeUnknown,
+		accepted.OperationID: PublicationAccepted,
+		busy.OperationID:     string(schema.CodeInputBusy),
+		unknown.OperationID:  PublicationOutcomeUnknown,
+	}
+	for _, p := range got.PendingPublications {
+		if p.Phase != PublicationTerminal || p.TerminalCode != wantCodes[p.OperationID] {
+			t.Errorf("identity transition %q = phase %q code %q, want terminal/%q",
+				p.OperationID, p.Phase, p.TerminalCode, wantCodes[p.OperationID])
+		}
+		outcome, ok := got.OpOutcomes[p.OperationID]
+		if !ok {
+			t.Errorf("identity transition %q has no durable outcome", p.OperationID)
+			continue
+		}
+		if want, preserved := wantTerminalOutcomes[p.OperationID]; preserved && !reflect.DeepEqual(outcome, want) {
+			t.Errorf("terminal outcome %q changed: got %+v want %+v", p.OperationID, outcome, want)
+		}
+	}
+	retry := retryPublication(busy, "op-busy-after-authority-change")
+	retry.AuthorityPub = bytes.Repeat([]byte{0x77}, 32)
+	if err := c.PreparePublicationRetry(busy.OperationID, retry); !errors.Is(err, ErrPublicationState) {
+		t.Fatalf("old-authority input_busy authorized a retry: %v", err)
+	}
+}
+
+func TestPendingPublications_IdentityChangeBoundsTerminalizedMixedCapacity(t *testing.T) {
+	c := publicationCore(t)
+	st := c.State()
+	st.OpOutcomes = map[string]schema.Control{
+		"unrelated-operation": {Op: "error", OperationID: "unrelated-operation", ErrorCode: schema.CodePolicy},
+	}
+	for i := 0; i < maxPublicationResults; i++ {
+		p := testComposerPublication(fmt.Sprintf("old-result-%02d", i))
+		p.Phase = PublicationTerminal
+		p.TerminalCode = PublicationAuthorityChanged
+		st.PendingPublications = append(st.PendingPublications, p)
+		st.OpOutcomes[p.OperationID] = schema.Control{
+			Op: "error", OperationID: p.OperationID, ErrorCode: schema.ErrorCode(PublicationAuthorityChanged),
+		}
+	}
+	for i := 0; i < MaxPendingPublications; i++ {
+		p := testComposerPublication(fmt.Sprintf("unresolved-%02d", i))
+		st.PendingPublications = append(st.PendingPublications, p)
+	}
+	if err := c.Save(st); err != nil {
+		t.Fatalf("seed full mixed projection: %v", err)
+	}
+	st = c.State()
+	st.Machine = "replacement-machine"
+	st.EpochID = 8
+	st.MachineRelayAuthPub = bytes.Repeat([]byte{0x55}, 32)
+	if err := c.Save(st); err != nil {
+		t.Fatalf("identity replacement was blocked by terminal overflow: %v", err)
+	}
+	got := c.PendingPublications()
+	if len(got) != maxPublicationResults {
+		t.Fatalf("identity replacement retained %d results, want %d", len(got), maxPublicationResults)
+	}
+	for _, p := range got {
+		if p.Phase != PublicationTerminal || p.TerminalCode != PublicationAuthorityChanged {
+			t.Fatalf("old authority remains publishable: %+v", p)
+		}
+	}
+	if got[0].OperationID != "unresolved-00" || got[len(got)-1].OperationID != "unresolved-63" {
+		t.Fatalf("result bound did not preserve newest retired intents: first=%q last=%q",
+			got[0].OperationID, got[len(got)-1].OperationID)
+	}
+	outcomes := c.State().OpOutcomes
+	if _, ok := outcomes["old-result-63"]; ok {
+		t.Fatal("evicted old-authority result remained claimable")
+	}
+	if _, ok := outcomes["unrelated-operation"]; !ok {
+		t.Fatal("identity result bounding removed an unrelated outcome")
+	}
+	for _, p := range got {
+		outcome, ok := outcomes[p.OperationID]
+		if !ok || outcome.ErrorCode != schema.ErrorCode(PublicationAuthorityChanged) {
+			t.Fatalf("retired intent %q has no authority_changed outcome: %+v, %v", p.OperationID, outcome, ok)
+		}
 	}
 }
 
