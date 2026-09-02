@@ -159,6 +159,65 @@ func fullState() State {
 	return st
 }
 
+// durableStateFieldEqual keeps the restart/schema guards byte-strict for every durable
+// coordinate except time.Time's process-local representation. encoding/json preserves a
+// time's instant and numeric offset, but it cannot preserve its *time.Location identity or
+// monotonic clock reading. Those are not state-file coordinates: publication expiry and
+// command signatures both consume the instant (Before/Unix), so compare the two persisted
+// publication timestamps in the canonical location while leaving every other bit exact.
+func durableStateFieldEqual(name string, want, got any) bool {
+	if name != "PendingPublications" {
+		return reflect.DeepEqual(want, got)
+	}
+	wantPublications, wantOK := want.([]PendingPublication)
+	gotPublications, gotOK := got.([]PendingPublication)
+	if !wantOK || !gotOK {
+		return false
+	}
+	canonicalTimes := func(in []PendingPublication) []PendingPublication {
+		if in == nil {
+			return nil
+		}
+		out := clonePendingPublications(in)
+		for i := range out {
+			out[i].CreatedAt = out[i].CreatedAt.UTC()
+			out[i].Command.ExpiresAt = out[i].Command.ExpiresAt.UTC()
+		}
+		return out
+	}
+	return reflect.DeepEqual(canonicalTimes(wantPublications), canonicalTimes(gotPublications))
+}
+
+func TestDurableStateFieldEqual_PendingPublicationTimesAreInstantsAcrossZones(t *testing.T) {
+	want := clonePendingPublications(fullState().PendingPublications)
+	for i := range want {
+		want[i].CreatedAt = want[i].CreatedAt.UTC()
+		want[i].Command.ExpiresAt = want[i].Command.ExpiresAt.UTC()
+	}
+	got := clonePendingPublications(want)
+	zones := []*time.Location{
+		time.FixedZone("UTC-07", -7*60*60),
+		time.FixedZone("UTC+05:45", 5*60*60+45*60),
+	}
+	for i := range got {
+		got[i].CreatedAt = got[i].CreatedAt.In(zones[i%len(zones)])
+		got[i].Command.ExpiresAt = got[i].Command.ExpiresAt.In(zones[(i+1)%len(zones)])
+	}
+
+	if !durableStateFieldEqual("PendingPublications", want, got) {
+		t.Fatal("equal publication instants in UTC and fixed non-UTC locations compare unequal")
+	}
+	got[0].CreatedAt = got[0].CreatedAt.Add(time.Nanosecond)
+	if durableStateFieldEqual("PendingPublications", want, got) {
+		t.Fatal("different publication instants compare equal")
+	}
+	got = clonePendingPublications(want)
+	got[0].Text = "different"
+	if durableStateFieldEqual("PendingPublications", want, got) {
+		t.Fatal("a non-time publication mutation compares equal")
+	}
+}
+
 // TestState_EveryResumeCriticalFieldSurvivesARestart is PB-STATE-1's acceptance criterion
 // verbatim: "a test asserts each field survives a restart". The restart is a real one --
 // the first Core is dropped and a SECOND Core is built from the directory alone, so
@@ -212,7 +271,7 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 			continue
 		}
 		name := wv.Type().Field(i).Name
-		if !reflect.DeepEqual(wv.Field(i).Interface(), gv.Field(i).Interface()) {
+		if !durableStateFieldEqual(name, wv.Field(i).Interface(), gv.Field(i).Interface()) {
 			t.Errorf("State.%s after restart = %#v; want %#v (resume-critical, PB-STATE-1)",
 				name, gv.Field(i).Interface(), wv.Field(i).Interface())
 		}
@@ -758,7 +817,7 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 				if version != StateSchemaVersion && !carries(tagOf[name]) {
 					continue // added after this version was pinned; legitimately absent
 				}
-				if !reflect.DeepEqual(wv.Field(i).Interface(), gv.Field(i).Interface()) {
+				if !durableStateFieldEqual(name, wv.Field(i).Interface(), gv.Field(i).Interface()) {
 					t.Errorf("the pinned v%d fixture restored State.%s = %#v; want %#v. A coordinate the "+
 						"literal carries and this build no longer reads is a durable field dropped without "+
 						"a schema bump", version, name, gv.Field(i).Interface(), wv.Field(i).Interface())
