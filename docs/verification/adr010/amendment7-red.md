@@ -138,9 +138,41 @@ reconcile cases and the two extra torn shapes pass on `ac7b1094` as well (`ok in
 
 ## 6. Gates
 
-Recorded from the final run over the reviewed tip, below.
+Local, over the reviewed tip (`b1be6d97`), all six `SWARM_*` variables unset:
+
+```
+go build ./...        BUILD_OK
+go vet ./...          VET_OK
+golangci-lint run     0 issues
+ok  	github.com/Nathandela/swarm/internal/skeleton	398.632s
+ok  	github.com/Nathandela/swarm/internal/daemon	45.399s
+ok  	github.com/Nathandela/swarm/cmd/swarm	32.145s
+ok  	github.com/Nathandela/swarm/internal/hookclient	1.354s
+ok  	github.com/Nathandela/swarm/internal/daemon	2.545s   (-race, TestReconcile*)
+```
+
+The whole-tree `go test ./...` and `-race` runs were attempted locally but the machine's root
+filesystem reached 100% during them (the relay's health floor is 1 GiB free, so every relay-backed
+test refused); after clearing the Go build cache and stale test directories the touched packages
+were rerun as above, and the whole-tree race gate is CI's: `go test -race ./...`, lint, vet, the
+darwin, android, fuzz and release dry-run jobs all passed on the pull-request head
+(runs 33635305983 and 33635312315, and 33633713579 / 33633718038 on the review-round commit).
 
 ## 7. Rollout
 
-Recorded after the release.
+- PR #32 merged as `b66ae6af`; tag `v0.13.24`; release run 33636613570 published 14 assets.
+- tf-wks-nathan: `swarm upgrade --stage` (0.13.23 -> v0.13.24), `swarm upgrade --activate`
+  (deferred: a session was working), attended `swarm daemon restart`; daemon pid 70962 -> 670917,
+  exe inode 156108803 -> 160824489, roster 38 before and after.
+- At the first reconcile all five legacy codex resumes regained their id from their launch argv:
+  `mwgm7slyux2b4nqj` -> `01a056e8-6352-7901-9290-e8a09b37dc2e`, `5326gm2ltcuqbevs` ->
+  `01a0571c-a74d-…`, `nw73dhtcadei3cnl` -> `01a0568f-02f4-…`, `pxwtsbxb5sdy6ome` ->
+  `01a043c4-8100-…`, `xszywjtnkto6j3a5` -> `01a01f24-0a89-…`. The two legacy fresh launches
+  (`ix64yt47bdni5ki7`, `zdvss6uloeg5iyvq`) remain without an id, as H1 says.
+- The restart also showed `swarm-9jo` on sessions that already had an id (`wxeejk425rw3jsxl`,
+  `vzjoi74zltzi45yi`, `ks575n5uede54jh6`: "app-server holds 4 threads"): the rejoin still ignores
+  the persisted id, as Amendment 7 states.
+- Not exercised here: a hands-off launch from "WIP prod telemetry", which would start a claude
+  session in the owner's checkout. Its id now names the rollout under `2026/08/31` whose first
+  record was verified to carry that id, the path Amendment 5's live smoke already exercised.
 
