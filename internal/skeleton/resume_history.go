@@ -2,6 +2,8 @@ package skeleton
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -698,11 +700,17 @@ func (r *filesystemResumeHistoryResolver) resolveCodex(home *os.Root, budget *hi
 			}
 			line, readOutcome := readCompleteLine(f, budget)
 			_ = f.Close()
+			if readOutcome == resumeHistoryNoMatch {
+				continue // no complete first line: not a record (ADR-010 Amendment 7 H2)
+			}
 			if readOutcome != resumeHistoryFound {
 				closeDay()
 				return resumeHistoryResult{Outcome: readOutcome}
 			}
 			candidateValue, matched, parseOutcome := parseCodexSessionMeta(line, fileID, fileTime, cleanCWD, m.CreatedAt)
+			if parseOutcome == resumeHistoryNoMatch {
+				continue // a torn first record: not a record (ADR-010 Amendment 7 H2)
+			}
 			if parseOutcome != resumeHistoryFound {
 				closeDay()
 				return resumeHistoryResult{Outcome: parseOutcome}
@@ -741,6 +749,11 @@ func readCompleteLine(f *os.File, budget *historyBudget) ([]byte, resumeHistoryO
 	}
 	reader := bufio.NewReaderSize(f, int(budget.limits.MaxRecordBytes)+1)
 	line, err := reader.ReadSlice('\n')
+	if errors.Is(err, io.EOF) {
+		// Empty, or still being written: no complete first line to judge (ADR-010
+		// Amendment 7 H2). An over-long line is bufio.ErrBufferFull and stays unsafe.
+		return nil, resumeHistoryNoMatch
+	}
 	if err != nil {
 		return nil, resumeHistoryUnsafe
 	}
@@ -750,8 +763,22 @@ func readCompleteLine(f *os.File, budget *historyBudget) ([]byte, resumeHistoryO
 	return append([]byte(nil), line[:len(line)-1]...), resumeHistoryFound
 }
 
+// tornRecord reports a line that is not one syntactically complete JSON value: a torn
+// write, which codex 0.151 produces while writing sub-agent headers (measured), and not
+// a record anyone can be refused on (ADR-010 Amendment 7 H2). A value that parses but
+// violates the strict schema is still decodeStrictObject's to refuse.
+func tornRecord(line []byte) bool {
+	var syntaxErr *json.SyntaxError
+	err := json.NewDecoder(bytes.NewReader(line)).Decode(new(json.RawMessage))
+	return errors.As(err, &syntaxErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
 func parseCodexSessionMeta(line []byte, fileID string, fileTime time.Time, cleanCWD string, created time.Time) (codexHistoryCandidate, bool, resumeHistoryOutcome) {
-	top, ok := decodeStrictObject([]byte(strings.TrimSpace(string(line))))
+	trimmed := []byte(strings.TrimSpace(string(line)))
+	if tornRecord(trimmed) {
+		return codexHistoryCandidate{}, false, resumeHistoryNoMatch
+	}
+	top, ok := decodeStrictObject(trimmed)
 	if !ok {
 		return codexHistoryCandidate{}, false, resumeHistoryUnsafe
 	}

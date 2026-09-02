@@ -391,7 +391,9 @@ func TestResumeHistory_CodexRequiresCanonicalFilenameIdentityAndCompleteLine(t *
 		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
 		requireHistoryResult(t, got, resumeHistoryFound, legacyCodexRootID)
 	})
-	t.Run("missing newline is incomplete", func(t *testing.T) {
+	// ADR-010 Amendment 7 H2: a first line without its newline is a write still in
+	// progress, not a record; it is passed over (no match) rather than refused as unsafe.
+	t.Run("missing newline is not yet a record", func(t *testing.T) {
 		home := t.TempDir()
 		p := codexHistoryPath(home, legacyCreatedAt.Add(time.Second), legacyCodexRootID)
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -402,7 +404,7 @@ func TestResumeHistory_CodexRequiresCanonicalFilenameIdentityAndCompleteLine(t *
 			t.Fatal(err)
 		}
 		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
-		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+		requireHistoryResult(t, got, resumeHistoryNoMatch, "")
 	})
 }
 
