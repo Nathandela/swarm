@@ -7,7 +7,7 @@
 # BUILD FROM THE REPO ROOT (this Dockerfile needs go.mod and every package under
 # internal/ and cmd/ in its context), pointing -f at this file:
 #
-#   docker build -f deploy/relay/Dockerfile -t swarm-relay:v0.13.25 .
+#   docker build -f deploy/relay/Dockerfile -t swarm-relay:v0.13.26 .
 #
 # Multi-arch release build (documented here; NOT run automatically by anything in this
 # repo -- docker buildx may not be installed in every environment that builds this
@@ -19,7 +19,7 @@
 #     --build-arg COMMIT=$(git rev-parse HEAD) \
 #     --build-arg DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
 #     -f deploy/relay/Dockerfile \
-#     -t ghcr.io/nathandela/swarm-relay:v0.13.25 \
+#     -t ghcr.io/nathandela/swarm-relay:v0.13.26 \
 #     --push .
 #
 # The three --build-arg values feed the exact same internal/version.{Version,Commit,Date}

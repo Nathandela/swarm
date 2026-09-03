@@ -151,8 +151,25 @@ func categoryEnteredAt(s protocol.SessionView) time.Time {
 	return s.CreatedAt
 }
 
+// groupRank is a session's position in the fixed group display order, so a cell
+// that mixes statuses can be blocked by the same order the status sections use.
+func groupRank(g status.Group) int {
+	if i := slices.Index(groupOrder, g); i >= 0 {
+		return i
+	}
+	return len(groupOrder)
+}
+
 func sortSessionsBy(sessions []protocol.SessionView, ordering orderingMode, grouping groupingMode) {
 	slices.SortFunc(sessions, func(a, b protocol.SessionView) int {
+		// Status is always the first key, so a repo or tag cell — which mixes statuses —
+		// reads needs input first and completed last, with the chosen ordering as the key
+		// within each status block. Under status grouping this is a no-op rather than a
+		// special case: display order is only ever read after filtering by section, and
+		// every row in a status section shares its group, so the ranks always tie.
+		if c := cmp.Compare(groupRank(a.Group), groupRank(b.Group)); c != 0 {
+			return c
+		}
 		var c int
 		switch ordering {
 		case orderByActivity:

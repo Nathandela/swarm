@@ -23,8 +23,8 @@ services:
       context: ../..
       dockerfile: deploy/pushgw/Dockerfile
       args:
-        VERSION: ${PUSHGW_VERSION:?set PUSHGW_VERSION to an immutable release tag, for example v0.13.25}
-    image: ghcr.io/nathandela/swarm-pushgw:${PUSHGW_VERSION:?set PUSHGW_VERSION to an immutable release tag, for example v0.13.25}
+        VERSION: ${PUSHGW_VERSION:?set PUSHGW_VERSION to an immutable release tag, for example v0.13.26}
+    image: ghcr.io/nathandela/swarm-pushgw:${PUSHGW_VERSION:?set PUSHGW_VERSION to an immutable release tag, for example v0.13.26}
     container_name: swarm-pushgw
     restart: unless-stopped
     depends_on:

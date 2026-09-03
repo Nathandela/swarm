@@ -114,6 +114,8 @@ Structured events are preferred when a CLI exposes them—Claude Code uses confi
   <img src="docs/assets/swarm-board.svg" alt="The swarm terminal board listing coding-agent sessions grouped by status, with Needs input first" width="840">
 </p>
 
+`o` opens the board options: group by status, repository, or tag, and order by arrival, activity, creation, or name. Repository and tag cells stay blocked by status internally — Needs input first, Completed last — so the ordering you pick applies within each status block rather than shuffling an idle session above one waiting on you.
+
 ## Bring existing Claude sessions into swarm
 
 Inspect Claude Agent View background sessions that can be adopted:
