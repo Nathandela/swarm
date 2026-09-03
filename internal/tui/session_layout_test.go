@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 func layoutSession(id, name, cwd, tag string, created, activity, entered time.Time) protocol.SessionView {
@@ -118,5 +119,74 @@ func TestSessionLayoutRemoveDropsEmptySection(t *testing.T) {
 	m.remove("endpoint/w")
 	if got := stripANSI(m.view()); strings.Contains(got, "WORKING") {
 		t.Fatalf("empty WORKING section still rendered on an empty board:\n%s", got)
+	}
+}
+
+// grouped builds a session in a fixed display group, carrying the repo/tag cell
+// metadata and a name so the ordering key inside a status block is observable. It
+// goes through the per-group builders so every fixture carries a raw status that
+// status.Derive really produces for that group.
+func grouped(id, name, cwd, tag string, g status.Group, created time.Time) protocol.SessionView {
+	build := sWorking
+	switch g {
+	case status.GroupNeedsInput:
+		build = sNeedsInput
+	case status.GroupReadyForReview:
+		build = sReview
+	case status.GroupCompleted:
+		build = sCompleted
+	}
+	s := build("endpoint/"+id, "claude", cwd, id, 0)
+	s.Name = name
+	s.Tag = tag
+	s.CreatedAt = created
+	s.LastActivity = created
+	s.GroupEnteredAt = created
+	return s
+}
+
+// Inside a repo or tag cell, rows are blocked by status in the same fixed order the
+// status sections use (needs input, working, ready for review, completed), and the
+// chosen ordering stays the key WITHIN each block.
+func TestSessionLayoutSubOrdersCellsByStatus(t *testing.T) {
+	base := time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)
+	sessions := []protocol.SessionView{
+		grouped("done", "Delta", "/code/repo-a", "backend", status.GroupCompleted, base.Add(4*time.Hour)),
+		grouped("work-z", "Zulu", "/code/repo-a", "backend", status.GroupWorking, base.Add(3*time.Hour)),
+		grouped("review", "Charlie", "/code/repo-a", "backend", status.GroupReadyForReview, base.Add(2*time.Hour)),
+		grouped("work-b", "Bravo", "/code/repo-a", "backend", status.GroupWorking, base.Add(time.Hour)),
+		grouped("needs", "Alpha", "/code/repo-a", "backend", status.GroupNeedsInput, base),
+	}
+
+	for _, grouping := range []groupingMode{groupByRepo, groupByTag} {
+		m := newGeneralModel(sessions)
+		m.setLayout(grouping, orderByName)
+		want := "endpoint/needs,endpoint/work-b,endpoint/work-z,endpoint/review,endpoint/done"
+		if got := strings.Join(displayedIDs(m), ","); got != want {
+			t.Errorf("grouping %v order name = %s, want %s", grouping, got, want)
+		}
+
+		m.setLayout(grouping, orderByCreated)
+		want = "endpoint/needs,endpoint/work-z,endpoint/work-b,endpoint/review,endpoint/done"
+		if got := strings.Join(displayedIDs(m), ","); got != want {
+			t.Errorf("grouping %v order created = %s, want %s", grouping, got, want)
+		}
+	}
+}
+
+// Making status the first sort key must not disturb status grouping: its sections are
+// already partitioned by status, so within a section the chosen ordering still decides.
+// This pins the equivalence that lets the comparator apply the rank unconditionally.
+func TestSessionLayoutStatusGroupingKeepsChosenOrder(t *testing.T) {
+	base := time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)
+	m := newGeneralModel([]protocol.SessionView{
+		grouped("work-z", "Zulu", "/code/repo-a", "", status.GroupWorking, base.Add(3*time.Hour)),
+		grouped("work-b", "Bravo", "/code/repo-a", "", status.GroupWorking, base.Add(time.Hour)),
+		grouped("needs", "Alpha", "/code/repo-a", "", status.GroupNeedsInput, base),
+	})
+	m.setLayout(groupByStatus, orderByCreated)
+	want := "endpoint/needs,endpoint/work-z,endpoint/work-b"
+	if got := strings.Join(displayedIDs(m), ","); got != want {
+		t.Errorf("status grouping order created = %s, want %s", got, want)
 	}
 }
