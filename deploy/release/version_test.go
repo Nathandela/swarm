@@ -15,11 +15,11 @@ func TestOperationalExamplesNameTheCurrentRelease(t *testing.T) {
 		"../../docs/operations/gcp-production-iac.md",
 	} {
 		contents := read(t, path)
-		if !strings.Contains(contents, "v0.13.26") {
-			t.Errorf("%s does not name the current immutable release v0.13.26", path)
+		if !strings.Contains(contents, "v0.13.27") {
+			t.Errorf("%s does not name the current immutable release v0.13.27", path)
 		}
-		if strings.Contains(contents, "v0.13.25") {
-			t.Errorf("%s still recommends consumed release v0.13.25", path)
+		if strings.Contains(contents, "v0.13.26") {
+			t.Errorf("%s still recommends consumed release v0.13.26", path)
 		}
 	}
 }
