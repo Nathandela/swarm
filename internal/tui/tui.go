@@ -220,6 +220,10 @@ type rootModel struct {
 	restarter        DaemonRestarter
 	restartAttempted bool
 
+	// layoutStore is the durable custody of the board layout (ADR-026). Nil means
+	// the pre-ADR behaviour: the grouping/ordering choice lives for one process.
+	layoutStore LayoutStore
+
 	pairing *pairingModal // open SAS-gate overlay (nil -> no pairing modal), see pairing_modal.go
 }
 
@@ -255,6 +259,9 @@ func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 	for _, opt := range opts {
 		opt(&m)
 	}
+	// After the options, so the injected LayoutStore is in hand: the board must
+	// already be on the restored layout when Init paints (N-1).
+	m.restoreLayout()
 	return m
 }
 
@@ -534,6 +541,14 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.general.setBanner("session tag cleared")
 		}
 		return m, m.general.setBanner("session tagged " + msg.tag)
+
+	case layoutSavedMsg:
+		// Durable custody is best-effort: the layout is already applied, so a failed
+		// write is reported and nothing is rolled back (ADR-026).
+		if msg.err != nil {
+			return m, m.general.setBanner("layout not saved: " + msg.err.Error())
+		}
+		return m, nil
 
 	case bannerExpireMsg:
 		// The transient banner reached its expiry; re-emit the general frame so the

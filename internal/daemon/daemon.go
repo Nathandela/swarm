@@ -144,6 +144,11 @@ type LaunchSpec struct {
 	// into the session meta; an empty name falls back to the agent name at display
 	// time (P2 / bd agents-tracker-4e2).
 	Name string
+	// Tag is the optional manual grouping label given at creation -- the same label
+	// SetTag assigns to a live session. Like Name, the daemon only stamps it into
+	// the session meta, and it is stamped with the RESERVATION, so a tagged launch
+	// has no window in which the session exists untagged.
+	Tag string
 	// InitialPrompt is the optional first prompt text. The Epic 9 adapter composes
 	// it into the agent argv; the daemon only carries it (F8).
 	InitialPrompt string

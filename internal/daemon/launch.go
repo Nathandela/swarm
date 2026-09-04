@@ -311,6 +311,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		ConversationID: spec.ConversationID,
 		Name:           spec.Name, // user-provided label (P2); "" falls back to the agent name at display
 		NameSetAt:      now,       // the newest-wins clock starts at launch (ADR-022)
+		Tag:            spec.Tag,  // manual grouping label given on the new-session form; "" is untagged
 		Cwd:            spec.Cwd,
 		LaunchOptions:  spec.Options,
 		Env:            PolicyEnv(spec.ClientEnv), // already resolved above; idempotent

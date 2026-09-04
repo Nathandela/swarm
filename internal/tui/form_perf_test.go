@@ -107,7 +107,8 @@ func TestLaunch_ModelStringOptionEditable(t *testing.T) {
 	m = send(m, detectMsg{agents: detectEditable()()})
 	m = send(m, keyRune('n'))
 	m = send(m, keyDown) // directory -> name
-	m = send(m, keyDown) // name -> agent
+	m = send(m, keyDown) // name -> tag
+	m = send(m, keyDown) // tag -> agent
 	m = send(m, keyDown) // agent -> model (string)
 
 	m = sendType(m, "opus")
@@ -131,7 +132,8 @@ func TestLaunch_ModelSuggestionsCycle(t *testing.T) {
 	m = send(m, detectMsg{agents: detectEditable()()})
 	m = send(m, keyRune('n'))
 	m = send(m, keyDown) // directory -> name
-	m = send(m, keyDown) // name -> agent
+	m = send(m, keyDown) // name -> tag
+	m = send(m, keyDown) // tag -> agent
 	m = send(m, keyDown) // agent -> model
 
 	// Suggest = [sonnet, opus, haiku]; from empty, right -> sonnet, right -> opus.
@@ -158,7 +160,8 @@ func TestLaunch_SpaceTogglesBoolOption(t *testing.T) {
 	m = send(m, detectMsg{agents: detectEditable()()})
 	m = send(m, keyRune('n'))
 	m = send(m, keyDown) // directory -> name
-	m = send(m, keyDown) // name -> agent
+	m = send(m, keyDown) // name -> tag
+	m = send(m, keyDown) // tag -> agent
 	m = send(m, keyDown) // agent -> model
 	m = send(m, keyDown) // model -> skip (bool)
 
@@ -228,6 +231,10 @@ func TestLaunch_HintFooterFollowsFocus(t *testing.T) {
 	m = send(m, keyDown) // name (text)
 	if v := view(m); !strings.Contains(v, "type or paste") {
 		t.Fatalf("name hint missing 'type or paste':\n%s", v)
+	}
+	m = send(m, keyDown) // tag (text)
+	if v := view(m); !strings.Contains(v, "type or paste") {
+		t.Fatalf("tag hint missing 'type or paste':\n%s", v)
 	}
 	m = send(m, keyDown) // agent
 	if v := view(m); !strings.Contains(v, "arrows change") {

@@ -16,9 +16,11 @@ import (
 )
 
 // launchModel is the new-session form. Fields are collected in the L-1 order:
-// directory, name, agent, options..., prompt, worktree. The cwd is free text with
-// "~" expansion; an invalid cwd is refused inline (L-3). The name is an optional
-// label; left empty it defaults to "<agent>-<base cwd>" at submit (P2).
+// directory, name, tag, agent, options..., prompt, worktree. The cwd is free text
+// with "~" expansion; an invalid cwd is refused inline (L-3). The name is an
+// optional label; left empty it defaults to "<agent>-<base cwd>" at submit (P2).
+// The tag is the optional grouping label `t` also sets on a live session; given
+// here it rides the launch request, so the session is tagged from birth.
 type launchModel struct {
 	agents   []AgentInfo
 	agentIdx int  // index into agents of the chosen agent
@@ -26,6 +28,7 @@ type launchModel struct {
 
 	cwd      lineEditor
 	name     lineEditor            // optional session label; empty defaults to "<agent>-<base cwd>" at submit (P2)
+	tag      lineEditor            // optional grouping label; empty (or blank) launches untagged
 	optSpecs []adapter.OptionSpec  // the chosen agent's declarative schema
 	options  map[string]lineEditor // option key -> current value/editor; non-string cursors are unused
 	prompt   lineEditor
@@ -74,6 +77,7 @@ func (m *launchModel) refreshAgents(agents []AgentInfo) {
 	// misroute typed runes/Space (L3/Opus MEDIUM).
 	wasDir := m.isDir()
 	wasName := m.isName()
+	wasTag := m.isTag()
 	wasAgent := m.isAgent()
 	wasPrompt := m.isPrompt()
 	wasWorktree := m.isWorktree()
@@ -95,16 +99,18 @@ func (m *launchModel) refreshAgents(agents []AgentInfo) {
 	}
 
 	// Re-anchor focus onto the same semantic field after the re-index. Directory,
-	// name, agent, prompt and worktree map to their new indices; an option focus (the
-	// field most likely to have moved or vanished as the list changed beneath it)
-	// clamps to the directory field.
+	// name, tag, agent, prompt and worktree map to their new indices; an option focus
+	// (the field most likely to have moved or vanished as the list changed beneath
+	// it) clamps to the directory field.
 	switch {
 	case wasDir:
 		m.focus = 0
 	case wasName:
 		m.focus = 1
+	case wasTag:
+		m.focus = m.tagIndex()
 	case wasAgent:
-		m.focus = 2
+		m.focus = m.agentIndex()
 	case wasPrompt:
 		m.focus = m.promptIndex()
 	case wasWorktree:
@@ -153,21 +159,26 @@ func (m *launchModel) loadAgentOptions() {
 }
 
 // ---------------------------------------------------------------------------
-// Field indexing: directory, name, agent, [options...], prompt, worktree.
+// Field indexing: directory, name, tag, agent, [options...], prompt, worktree.
+// The option block's base index is named once (optionsIndex) so a field inserted
+// ahead of it moves every dependent index together.
 // ---------------------------------------------------------------------------
 
-func (m launchModel) fieldCount() int    { return 5 + len(m.optSpecs) }
+func (m launchModel) fieldCount() int    { return 6 + len(m.optSpecs) }
 func (m launchModel) isDir() bool        { return m.focus == 0 }
 func (m launchModel) isName() bool       { return m.focus == 1 }
-func (m launchModel) agentIndex() int    { return 2 }
+func (m launchModel) tagIndex() int      { return 2 }
+func (m launchModel) isTag() bool        { return m.focus == m.tagIndex() }
+func (m launchModel) agentIndex() int    { return 3 }
 func (m launchModel) isAgent() bool      { return m.focus == m.agentIndex() }
-func (m launchModel) promptIndex() int   { return 3 + len(m.optSpecs) }
-func (m launchModel) worktreeIndex() int { return 4 + len(m.optSpecs) }
+func (m launchModel) optionsIndex() int  { return 4 }
+func (m launchModel) promptIndex() int   { return m.optionsIndex() + len(m.optSpecs) }
+func (m launchModel) worktreeIndex() int { return m.promptIndex() + 1 }
 func (m launchModel) isPrompt() bool     { return m.focus == m.promptIndex() }
 func (m launchModel) isWorktree() bool   { return m.focus == m.worktreeIndex() }
 func (m launchModel) optionFocus() (int, bool) {
-	if m.focus >= 3 && m.focus < 3+len(m.optSpecs) {
-		return m.focus - 3, true
+	if m.focus >= m.optionsIndex() && m.focus < m.optionsIndex()+len(m.optSpecs) {
+		return m.focus - m.optionsIndex(), true
 	}
 	return 0, false
 }
@@ -262,6 +273,8 @@ func (m *launchModel) updateFocusedText(k tea.KeyPressMsg) lineEditResult {
 		result = m.cwd.update(k)
 	case m.isName():
 		result = m.name.update(k)
+	case m.isTag():
+		result = m.tag.update(k)
 	case m.isPrompt():
 		result = m.prompt.update(k)
 	default:
@@ -307,6 +320,8 @@ func (m *launchModel) paste(s string) {
 		changed = m.cwd.paste(s)
 	case m.isName():
 		changed = m.name.paste(s)
+	case m.isTag():
+		changed = m.tag.paste(s)
 	case m.isPrompt():
 		changed = m.prompt.paste(s)
 	default:
@@ -484,6 +499,7 @@ func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 	req := protocol.LaunchReq{
 		Agent:         agent,
 		Name:          launchName(lm.name.text, agent, expanded),
+		Tag:           strings.TrimSpace(lm.tag.text), // blank is untagged; the server re-sanitizes
 		Cwd:           expanded,
 		Options:       opts,
 		InitialPrompt: lm.prompt.text,
@@ -720,9 +736,10 @@ func (m launchModel) view() string {
 		b.WriteString(strings.Repeat(" ", 2+launchLabelW) + styleDim.Render(row) + "\n")
 	}
 	b.WriteString(m.launchFieldLine("name", m.nameValue(), m.isName()))
+	b.WriteString(m.launchFieldLine("tag", m.tagValue(), m.isTag()))
 	b.WriteString(m.launchFieldLine("agent", m.agentValue(), m.isAgent()))
 	for i, spec := range m.optSpecs {
-		focused := m.focus == 3+i
+		focused := m.focus == m.optionsIndex()+i
 		b.WriteString(m.launchFieldLine(spec.Label, m.optionValue(spec, focused), focused))
 	}
 	b.WriteString(m.launchFieldLine("prompt", m.promptValue(), m.isPrompt()))
@@ -1010,6 +1027,20 @@ func (m launchModel) nameValue() string {
 	}
 	if v == "" {
 		return styleDim.Render("(optional · defaults to agent-dir)")
+	}
+	return v
+}
+
+// tagValue renders the grouping-label row. An empty tag is stated as the no-op it
+// is -- the board's tag grouping files an untagged session under "(untagged)" --
+// rather than suggesting a default that does not exist.
+func (m launchModel) tagValue() string {
+	v := m.tag.text
+	if m.isTag() {
+		return m.focusedEditorValue("tag", m.tag)
+	}
+	if v == "" {
+		return styleDim.Render("(optional · groups the board under o)")
 	}
 	return v
 }

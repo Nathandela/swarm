@@ -376,8 +376,14 @@ type PairingControl struct {
 // LaunchReq is a client's request to launch a new session. Every field is
 // re-validated server-side (E6.6) before it reaches the DaemonAPI.
 type LaunchReq struct {
-	Agent         string            `json:"agent"`
-	Name          string            `json:"name,omitempty"` // optional user-provided session label; re-validated + sanitized server-side (E6.6)
+	Agent string `json:"agent"`
+	Name  string `json:"name,omitempty"` // optional user-provided session label; re-validated + sanitized server-side (E6.6)
+	// Tag is the optional manual grouping label given at creation, the same label
+	// set_tag assigns to a live session. It is re-validated + sanitized server-side
+	// exactly like Name, and stamped into the reservation meta, so a session the
+	// owner tagged on the new-session form is tagged from its first persisted
+	// record. omitempty: an untagged launch is byte-identical to the pre-tag shape.
+	Tag           string            `json:"tag,omitempty"`
 	Cwd           string            `json:"cwd"`
 	Options       map[string]string `json:"options"`
 	Env           []string          `json:"env"`

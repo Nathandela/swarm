@@ -220,6 +220,7 @@ and unrelated secrets are dropped.
 | ---------------- | ------------------- | ---------------------------------------------------------- |
 | `agent`          | string              | agent type to launch                                       |
 | `name`           | string              | optional session label; sanitized + length-capped server-side (P2) |
+| `tag`            | string              | optional manual grouping label given at creation, sanitized exactly as `set_tag`'s (blank is untagged) and stamped into the reservation meta |
 | `cwd`            | string              | working directory (must exist and be a directory)          |
 | `options`        | map[string]string   | declarative adapter options (each value length-capped)     |
 | `env`            | []string            | `KEY=VALUE` launch env (allowlist-filtered server-side)    |
@@ -565,6 +566,10 @@ The client sends `set_tag` with a `session_id` and the new `tag`. The daemon
 sanitizes the tag as a single-line cosmetic label, persists it in session meta,
 and broadcasts a roster `event` so every client converges. An empty (or
 whitespace-only) tag clears the assignment. Older daemons reply with `error`, which the client surfaces.
+
+`set_tag` retags a session that already exists. A tag known at creation time
+travels instead on `LaunchReq.tag`, under the same sanitization, so the session
+is tagged from its first persisted record rather than after a second round trip.
 
 ### `attach`
 

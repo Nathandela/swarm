@@ -122,8 +122,10 @@ func TestLaunch_SubmitComposesLaunchReq(t *testing.T) {
 		m = send(m, keyBackspace)
 	}
 	m = sendType(m, dir)
-	// Field order: directory -> name -> agent -> (Model option) -> prompt. Tab four times.
+	// Field order: directory -> name -> tag -> agent -> (Model option) -> prompt.
+	// Tab five times.
 	m = send(m, keyDown) // name (leave empty -> defaults at submit)
+	m = send(m, keyDown) // tag (leave empty -> untagged)
 	m = send(m, keyDown) // agent (leave default claude)
 	m = send(m, keyDown) // Model option (leave default opus)
 	m = send(m, keyDown) // prompt
@@ -216,7 +218,8 @@ func TestLaunch_UnusableAgentSelectableAndRefusedWithReason(t *testing.T) {
 	// Focus the agent field and cycle right onto the unusable codex; the arrow must
 	// land on it rather than skip back to the only usable agent.
 	m = send(m, keyDown)  // directory -> name
-	m = send(m, keyDown)  // name -> agent
+	m = send(m, keyDown)  // name -> tag
+	m = send(m, keyDown)  // tag -> agent
 	m = send(m, keyRight) // claude -> codex (unusable)
 	if got := launchOf(m).currentAgentName(); got != "codex" {
 		t.Fatalf("right arrow must land on the unusable codex, got %q", got)

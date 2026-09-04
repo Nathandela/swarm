@@ -77,6 +77,9 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 	return daemon.LaunchSpec{
 		AgentType: req.Agent,
 		Name:      SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
+		// The launch-time tag takes the SAME sanitization as set_tag's (handleSetTag):
+		// a client is never trusted to have sanitized it, and a blank tag is no tag.
+		Tag:       strings.TrimSpace(SanitizeName(req.Tag)),
 		Cwd:       req.Cwd,
 		ClientEnv: clientEnv,
 		Cols:      req.Cols,
