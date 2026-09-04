@@ -15,7 +15,7 @@
 
 ## The plan
 
-- [Scale-to-zero remote-control plan](specifications/remote-scale-to-zero-plan.md) — proposed hibernating relay/on-demand push migration, tested local probes, source contracts, rollout/rollback gates and conditional cost budget; not deployed
+- [Clean v2 remote-control plan](specifications/remote-scale-to-zero-plan.md) — owner-directed zero-user replacement: no backward compatibility, direct on-demand push, legacy cleanup, safety gates and conditional cost budget; not deployed
 - [Scale-to-zero verification](verification/remote-scale-to-zero/README.md) — reproducible local runtime/emulator/interop tests and explicit unrun production gates
 - [Private mobile repository decision](research/mobile-private-repository.md) — source-access/IP benefits, APK/history limits, split/CI costs and release-continuity gates
 

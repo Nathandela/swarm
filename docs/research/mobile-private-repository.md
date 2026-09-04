@@ -3,6 +3,12 @@
 **Status:** research recommendation, not an approved migration.
 **Decision:** defer a private-repository split as a cost-saving measure. If source-access separation is independently required, sequence an Android-only split first; do not begin with a full Go phone-core split.
 
+Owner clarification, 2026-09-05: privacy/source concealment is secondary to safe, cheap
+operation for the owner and friends; there are no current users or backward-compatibility
+obligations. The split remains deferred. The current architecture is the
+[clean v2 plan](../specifications/remote-scale-to-zero-plan.md); the historical hostname
+preservation option at the end of this investigation is no longer selected.
+
 ## What problem this solves—and what it cannot
 
 A private repository limits casual source browsing and separates Android-only contributors, CI secrets, UX experiments, and build configuration from the public tree. It is not a confidentiality boundary for a released phone application. An installed APK/AAB contains Kotlin/Dex, resources, manifest, endpoint strings, native libraries and the Go AAR; Android's official [APK Analyzer](https://developer.android.com/studio/debug/apk-analyzer) can inspect final manifests, DEX composition and resources. Existing public Git history, published release artifacts, issues, forks, caches, screenshots, documentation and protocol observations also remain outside the protection of a later visibility change. GitHub specifically says that making a public repository private leaves existing public forks detached and public ([repository visibility consequences](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility)).

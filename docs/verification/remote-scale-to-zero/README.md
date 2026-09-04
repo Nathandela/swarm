@@ -4,6 +4,11 @@ Date: 2026-09-04. Source: Swarm v0.13.27 / `f1621618`. These isolated probes sup
 [the proposed implementation plan](../../specifications/remote-scale-to-zero-plan.md).
 They do not change production application code or deploy infrastructure.
 
+Scope update, 2026-09-05: the owner confirmed zero users and explicitly removed backward
+compatibility. The revised plan is a fresh v2 replacement. Legacy framing, bbolt parity
+and migration-fence models below remain historical investigation evidence, not features
+or acceptance requirements to retain in v2. No new hosted tests are claimed by that revision.
+
 ## Result ledger
 
 | Lane | Execution | Established | Not established |

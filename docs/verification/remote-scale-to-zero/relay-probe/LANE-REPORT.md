@@ -5,6 +5,10 @@ The normative proposed architecture and migration protocol are in
 This document records only local runtime evidence, source observations, and the
 limits of this probe. It is not production protocol pseudocode.
 
+Scope update, 2026-09-05: v2 is now a fresh replacement with no v1 compatibility or
+live-state migration. Historical migration remarks below are not implementation work;
+the linked revised plan governs cleanup and fresh-launch behavior.
+
 ## Reproduced local result
 
 `npm run test:all` starts and stops local Wrangler itself. It passed on Node
