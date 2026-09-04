@@ -14,6 +14,11 @@
 - [Auto-upgrade runbook](ops/auto-upgrade.md) — the nightly `launchd` timer that upgrades the owner's machine and converges the daemon/gateway onto it, or touches nothing (ADR-020)
 
 ## The plan
+
+- [Scale-to-zero remote-control plan](specifications/remote-scale-to-zero-plan.md) — proposed hibernating relay/on-demand push migration, tested local probes, source contracts, rollout/rollback gates and conditional cost budget; not deployed
+- [Scale-to-zero verification](verification/remote-scale-to-zero/README.md) — reproducible local runtime/emulator/interop tests and explicit unrun production gates
+- [Private mobile repository decision](research/mobile-private-repository.md) — source-access/IP benefits, APK/history limits, split/CI costs and release-continuity gates
+
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
 - [Build plan](specifications/build-plan.md) — 15 ordered epics, contracts, gap resolutions, implementation guidelines (Gate 3-approved)
 - [Implementation goals](specifications/implementation-goals.md) — per-epic exit criteria, global goals, orchestration protocol (post audit-002)

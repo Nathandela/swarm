@@ -1,0 +1,14 @@
+{
+  "name": "swarm-cf-do-relay-probe",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "wrangler dev --local --port 8788",
+    "test:integration": "node test/integration.mjs",
+    "test:negative": "node test/negative.mjs",
+    "test:all": "sh test/run.sh"
+  },
+  "devDependencies": {
+    "wrangler": "4.129.0"
+  }
+}

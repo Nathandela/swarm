@@ -1,0 +1,15 @@
+name = "swarm-cf-do-relay-probe"
+main = "src/worker.mjs"
+compatibility_date = "2026-09-04"
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Relay"]
+
+[vars]
+AUTH_SECRET = "local-probe-only-not-a-production-secret"
+RETENTION_MS = "250"
