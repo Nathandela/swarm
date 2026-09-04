@@ -15,7 +15,9 @@ import (
 // grouping and ordering are chosen. `o` on the general view opens it (owner
 // decision 2026-08-27: one window with arrow navigation, not one key per
 // setting). It renders like the new-session form, applies on Enter and
-// discards on Esc. The choice lives with the running client only.
+// discards on Esc. The grouping/ordering choice is durable from ADR-026 on: it
+// is written through the router's LayoutStore and restored at the next start.
+// The context-guard rows below it are a DAEMON policy and travel the protocol.
 
 type contextGuardSettingsClient interface {
 	Capabilities() []string
@@ -128,8 +130,7 @@ func (m rootModel) updateOptions(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !o.contextGuard.dirty() {
-			m.general.setLayout(o.grouping, o.ordering)
-			return m, m.enterGeneral()
+			return m, tea.Batch(m.applyLayout(o.grouping, o.ordering), m.enterGeneral())
 		}
 		return m.beginContextGuardSave()
 	case tea.KeyLeft, tea.KeyRight:
@@ -247,8 +248,7 @@ func (m rootModel) applyContextGuardSettingsSaved(msg contextGuardSettingsSavedM
 	o.savedCompact = msg.settings.AutoCompact
 	o.threshold.set(strconv.Itoa(msg.settings.AutoCompact.ThresholdPercent))
 	o.err = ""
-	m.general.setLayout(m.options.grouping, m.options.ordering)
-	return m, m.enterGeneral()
+	return m, tea.Batch(m.applyLayout(m.options.grouping, m.options.ordering), m.enterGeneral())
 }
 
 // view renders the form in the new-session form's idiom: title, focus bar, and

@@ -83,8 +83,10 @@ The daemon starts automatically and opens the session board.
 |---|---|
 | <kbd>↑</kbd> <kbd>↓</kbd> | Move through sessions |
 | <kbd>⏎</kbd> | Attach to the selected agent; <kbd>ctrl</kbd>+<kbd>q</kbd> returns to swarm |
-| <kbd>n</kbd> | Start a session and choose its CLI and working directory |
+| <kbd>n</kbd> | Start a session and choose its CLI, working directory, and optional tag |
 | <kbd>e</kbd> | Rename the selected session |
+| <kbd>t</kbd> | Tag the selected session; an empty tag clears it |
+| <kbd>o</kbd> | Options: how the board groups (status, repo, tag) and orders its rows. The choice is remembered across restarts |
 | <kbd>h</kbd> | Hand work to another supported CLI |
 | <kbd>ctrl</kbd>+<kbd>x</kbd> | Kill a live session or delete a finished one; confirm with <kbd>y</kbd> |
 | <kbd>esc</kbd> | Close the TUI while agents keep running |

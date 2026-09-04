@@ -33,6 +33,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [023](ADR-023-context-guard-auto-compaction.md) | ContextGuard auto-compaction — exact telemetry, at-most-once dispatch, and harness-gated rollout | Accepted | 2026-08-31 |
 | [024](ADR-024-auth-recycle-on-relogin.md) | A provider re-login recycles its stranded sessions automatically | Accepted | 2026-09-01 |
 | [025](ADR-025-launch-gate-answered-by-the-daemon.md) | The daemon answers a CLI's own launch gate (Claude Code's folder-trust dialog) from the grid tap, once, on the screen it is proven on | Accepted | 2026-09-02 |
+| [026](ADR-026-board-layout-outlives-the-client.md) | The board's grouping and ordering outlive the client that chose them (amends the options window's process-scoped rule) | Accepted | 2026-09-04 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the
@@ -46,7 +47,7 @@ ADR-009-structured-chat-interaction.md and drawn in the language of ADR-009-obsi
 
 ## Adding a new ADR
 
-1. Next sequential number (the next FREE one is ADR-025: 013 was minted for the Mirror capture architecture, `docs/specifications/mirror-program.md` M3.1 has reserved 014 for paged interaction history and that reservation still stands, 015-018 were allocated together by Wave R1 for the four playbook §3 amendments, 019 was minted for boundary-aware detach recognition, 020 for the unattended-restart environment decision, 021 for the Slate palette and breathing scale, 022 for live session name adoption, 023 for ContextGuard auto-compaction, and 024 for auth recycle on re-login)
+1. Next sequential number (the next FREE one is ADR-027: 013 was minted for the Mirror capture architecture, `docs/specifications/mirror-program.md` M3.1 has reserved 014 for paged interaction history and that reservation still stands, 015-018 were allocated together by Wave R1 for the four playbook §3 amendments, 019 was minted for boundary-aware detach recognition, 020 for the unattended-restart environment decision, 021 for the Slate palette and breathing scale, 022 for live session name adoption, 023 for ContextGuard auto-compaction, 024 for auth recycle on re-login, 025 for the daemon-answered launch gate, and 026 for durable board layout)
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.

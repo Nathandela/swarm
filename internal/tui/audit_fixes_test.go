@@ -48,7 +48,8 @@ func TestRefreshAgents_PreservesPromptFocusAcrossReindex(t *testing.T) {
 	m := newModel(t, newFakeClient(), detectEditable())
 	m = send(m, keyRune('n')) // open cold: no options yet (fieldCount = 5)
 	m = send(m, keyDown)      // directory -> name
-	m = send(m, keyDown)      // name -> agent
+	m = send(m, keyDown)      // name -> tag
+	m = send(m, keyDown)      // tag -> agent
 	m = send(m, keyDown)      // agent -> prompt (promptIndex = 3 with no options)
 	if !launchOf(m).isPrompt() {
 		t.Fatalf("precondition: focus must be on prompt before detection lands; focus=%d", launchOf(m).focus)
@@ -72,7 +73,8 @@ func TestRefreshAgents_OptionFocusClampsToDirectory(t *testing.T) {
 	m = send(m, detectMsg{agents: detectEditable()()}) // land options first (gen 0, before any form-open)
 	m = send(m, keyRune('n'))
 	m = send(m, keyDown) // directory -> name
-	m = send(m, keyDown) // name -> agent
+	m = send(m, keyDown) // name -> tag
+	m = send(m, keyDown) // tag -> agent
 	m = send(m, keyDown) // agent -> first option (model)
 	if _, ok := launchOf(m).optionFocus(); !ok {
 		t.Fatalf("precondition: focus must be on an option field; focus=%d", launchOf(m).focus)

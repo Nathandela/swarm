@@ -204,8 +204,14 @@ func runTUI(stdout, stderr io.Writer) int {
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
 	})
-	model := tui.New(client, detectAgents(os.Getenv(envFakeAgentBin)),
-		tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc)))
+	opts := []tui.Option{tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc))}
+	// The board layout is restored from, and written back to, the owner's config
+	// document (ADR-026). A machine with no resolvable config dir simply runs
+	// without durable custody rather than refusing to open the TUI.
+	if path, err := tui.DefaultLayoutPath(); err == nil {
+		opts = append(opts, tui.WithLayoutStore(tui.NewFileLayoutStore(path)))
+	}
+	model := tui.New(client, detectAgents(os.Getenv(envFakeAgentBin)), opts...)
 
 	prog = tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out))
 	if _, err := prog.Run(); err != nil && !errors.Is(err, tea.ErrInterrupted) {

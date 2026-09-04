@@ -481,6 +481,7 @@ func TestExternalTextReplacementResetsCursorToRuneEnd(t *testing.T) {
 		m = send(m, detectMsg{agents: resetAgents})
 		m = send(m, keyRune('n'))
 		m = send(m, keyDown) // name
+		m = send(m, keyDown) // tag
 		m = send(m, keyDown) // agent
 		m = send(m, keyDown) // model
 		m = send(m, tea.KeyPressMsg{Code: tea.KeyHome})

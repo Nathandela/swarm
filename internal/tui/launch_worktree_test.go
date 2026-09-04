@@ -15,15 +15,16 @@ func TestLaunch_SubmitCarriesWorktreeToggle(t *testing.T) {
 	f := newFakeClient()
 	m := openLaunch(t, f)
 
-	// Field order (detectMixed, one option "Model"): directory, name, agent, Model,
-	// prompt, worktree. Five Down presses from directory land on worktree.
+	// Field order (detectMixed, one option "Model"): directory, name, tag, agent,
+	// Model, prompt, worktree. Six Down presses from directory land on worktree.
 	m = send(m, keyDown) // directory -> name
-	m = send(m, keyDown) // name -> agent
+	m = send(m, keyDown) // name -> tag
+	m = send(m, keyDown) // tag -> agent
 	m = send(m, keyDown) // agent -> Model
 	m = send(m, keyDown) // Model -> prompt
 	m = send(m, keyDown) // prompt -> worktree
 	if !launchOf(m).isWorktree() {
-		t.Fatalf("expected focus on the worktree field after 5 tabs, got focus %d", launchOf(m).focus)
+		t.Fatalf("expected focus on the worktree field after 6 tabs, got focus %d", launchOf(m).focus)
 	}
 	m = send(m, keyRune(' ')) // toggle worktree on
 	if !launchOf(m).worktree {

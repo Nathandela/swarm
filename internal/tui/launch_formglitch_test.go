@@ -19,7 +19,8 @@ func openCodexForm(t *testing.T) tea.Model {
 		t.Fatalf("expected the launch form after `n`, got:\n%s", v)
 	}
 	m = send(m, keyDown) // directory -> name
-	m = send(m, keyDown) // name -> agent
+	m = send(m, keyDown) // name -> tag
+	m = send(m, keyDown) // tag -> agent
 	return m
 }
 
