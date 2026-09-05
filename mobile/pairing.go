@@ -30,6 +30,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relayhome"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // The pairing state machine (PB-PAIR-5). Every terminal state is its OWN value: collapsed
@@ -199,7 +200,7 @@ type Pairing struct {
 	reached   string
 
 	mu2  sync.Mutex // guards conn, which is written by ConfirmOrigin and read by Cancel
-	conn *relay.Conn
+	conn pairTransport
 
 	app *App
 }
@@ -472,12 +473,20 @@ func (p *Pairing) ConfirmOrigin(origin string) (err error) {
 	return nil
 }
 
-// relayDialRawSecure reaches relay.DialRawSecure through a package variable so a test can
+// relayV2DialPair reaches relayv2.DialPair through a package variable so a test can
 // observe -- or fake -- pairingDial's two-attempt shape without a live network dial or a way
 // to fake DNS for a "public" hostname. Production code never assigns it; it is overridden
 // only inside a test binary (mobile/r2_adr016_w3_pairingdial_test.go), the same seam shape
 // applyRelayTLSPolicy's injected probe already uses for the same reason.
-var relayDialRawSecure = relay.DialRawSecure
+type pairTransport interface {
+	pairing.RendezvousTransport
+	Close()
+	PeerSPKI() []byte
+}
+
+var relayV2DialPair = func(ctx context.Context, profile relayv2.Profile, ceremony string) (pairTransport, error) {
+	return relayv2.DialPair(ctx, profile, ceremony)
+}
 
 // verifyPairingMachine repeats the decoder's namespace fence at the mobile boundary before
 // checking the relay pin. The decoder has already rejected a malformed authenticated msg2
@@ -527,16 +536,16 @@ func verifyPairingMachine(machine pairing.MachinePayload, presentedSPKI []byte) 
 // over the prior unconditional-unverified dial and not a complete closure of it. Closing it
 // fully needs the phone to know the target's policy before the first byte, which nothing
 // before pairing carries.
-func (a *App) pairingDial(ctx context.Context, relayURL string) (*relay.Conn, error) {
+func (a *App) pairingDial(ctx context.Context, relayURL, ceremony string) (pairTransport, error) {
 	verified := a.withPlatformTrust(relay.Security{AllowLoopbackCleartext: true})
-	conn, err := relayDialRawSecure(ctx, relayURL, verified)
+	conn, err := relayV2DialPair(ctx, relayv2.Profile{RelayURL: relayURL, Security: verified}, ceremony)
 	if err == nil {
 		return conn, nil
 	}
 	if !originIsPrivate(relayURL) {
 		return nil, err
 	}
-	return relayDialRawSecure(ctx, relayURL, relay.PairingSecurity())
+	return relayV2DialPair(ctx, relayv2.Profile{RelayURL: relayURL, Security: relay.PairingSecurity()}, ceremony)
 }
 
 // join dials the confirmed destination and drives the device half of the handshake. base
@@ -569,7 +578,8 @@ func (p *Pairing) join(base context.Context) {
 	// Every dial AFTER this one is pinned (App.handsetSecurity), and that scope is fenced:
 	// see mobile/b45_pairingscope_test.go, which fails if PairingSecurity becomes reachable
 	// from the session dial or from any file but this one.
-	conn, err := app.pairingDial(ctx, payload.RelayURL)
+	ceremony := hex.EncodeToString(payload.RendezvousID[:])
+	conn, err := app.pairingDial(ctx, payload.RelayURL, ceremony)
 	if err != nil {
 		// THE STAGE IS THE CLASSIFICATION (agents-tracker-n4vs): nothing has crossed the
 		// wire yet, so whatever the dial's own error says -- refused, no route, a connect
@@ -588,7 +598,7 @@ func (p *Pairing) join(base context.Context) {
 	ks := app.core.KeyStore()
 	static, err := ks.NoiseStatic()
 	if err != nil {
-		_ = conn.Close()
+		conn.Close()
 		p.finish(nil, err, ctx)
 		return
 	}
@@ -624,12 +634,12 @@ func (p *Pairing) join(base context.Context) {
 		// comes from the scanned payload rather than from anything the machine asserted,
 		// which is the same rule the grantee follows one line below.
 		Consent: func(m pairing.MachinePayload) ([]byte, error) {
-			ceremonyID := hex.EncodeToString(payload.RendezvousID[:])
-			sig, err := ks.SignRelayAuth(relay.ConsentMessage(ceremonyID, relay.RoutingID(m.MachineRelayAuthPub)))
+			machineRID := relayv2.RoutingID(m.MachineRelayAuthPub)
+			sig, err := ks.SignRelayAuth(relayv2.ConsentMessage(ceremony, machineRID))
 			if err != nil {
 				return nil, err
 			}
-			return relay.MarshalConsent(ceremonyID, sig), nil
+			return relayv2.MarshalConsent(ceremony, sig), nil
 		},
 		// ADR-007 B48: the certificate this dial accepted UNVERIFIED, checked against the
 		// pin the real machine authored and put inside the authenticated msg2. It runs
@@ -681,9 +691,8 @@ func (p *Pairing) join(base context.Context) {
 			}
 		},
 	}
-	rt := &rendezvous{conn: conn, label: hex.EncodeToString(payload.RendezvousID[:])}
-	out, err := pairing.RunDevice(ctx, params, rt)
-	_ = conn.Close()
+	out, err := pairing.RunDevice(ctx, params, conn)
+	conn.Close()
 	p.finish(out, err, ctx)
 }
 
@@ -756,7 +765,8 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 		next = pairDifferentMachine
 	case errors.Is(err, pairing.ErrPairingDeclined):
 		next = pairDeclined
-	case errors.Is(err, pairing.ErrRateLimited):
+	case errors.Is(err, pairing.ErrRateLimited),
+		relayV2PairState(err) == pairRateLimited:
 		next = pairRateLimited
 	case errors.Is(err, errRelayUnreachable):
 		// BEFORE the ctx cases deliberately: the cellular-against-a-LAN-relay failure is a
@@ -766,7 +776,7 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 		// is the story (agents-tracker-n4vs).
 		next = pairRelayUnreachable
 		failErr = err
-	case errors.Is(err, relay.ErrRendezvousExpired), errors.Is(err, relay.ErrRendezvousBurned):
+	case relayV2PairState(err) == pairExpired:
 		// The rendezvous is gone: its TTL elapsed, or the QR was already used. Both look
 		// identical from here and lead to the same place -- ask the machine for a fresh QR --
 		// so they share a state rather than inventing a distinction the phone cannot make.
@@ -815,11 +825,24 @@ func (p *Pairing) cancelHandshake() {
 	p.conn = nil
 	p.mu2.Unlock()
 	if conn != nil {
-		// CloseNow, not Close: this is the ABORT path, and Close's graceful handshake burns
-		// five seconds waiting for a close frame that a cancelled connection can never read
-		// (relay.Conn.CloseNow). App.Close waits for this, so that timeout would be five
-		// seconds of an Android lifecycle callback.
-		_ = conn.CloseNow()
+		// PairTransport.Close aborts the relay-v2 socket immediately. App.Close waits for
+		// this join, so cancellation must not depend on a graceful websocket handshake.
+		conn.Close()
+	}
+}
+
+func relayV2PairState(err error) string {
+	var protocolErr *relayv2.ProtocolError
+	if !errors.As(err, &protocolErr) {
+		return ""
+	}
+	switch protocolErr.Code {
+	case "pairing_not_found":
+		return pairExpired
+	case "pairing_rate_limited", "pairing_full", "pairing_directory_full":
+		return pairRateLimited
+	default:
+		return ""
 	}
 }
 
@@ -1431,27 +1454,3 @@ func (p *Pairing) Cancel() (err error) {
 	p.cancelHandshake()
 	return nil
 }
-
-// rendezvous adapts a raw relay connection to the pairing package's transport seam. The
-// relay only ever forwards opaque bytes; it never sees the pairing secret or any
-// handshake plaintext.
-type rendezvous struct {
-	conn  *relay.Conn
-	label string
-}
-
-func (r *rendezvous) Create(ctx context.Context, id string) error {
-	return r.conn.RendezvousCreate(ctx, id)
-}
-func (r *rendezvous) Claim(ctx context.Context, id string) error {
-	return r.conn.RendezvousClaim(ctx, id)
-}
-func (r *rendezvous) Send(ctx context.Context, msg []byte) error {
-	return r.conn.RendezvousSend(ctx, r.label, msg)
-}
-func (r *rendezvous) Recv(ctx context.Context) ([]byte, error) { return r.conn.RendezvousRecv(ctx) }
-func (r *rendezvous) Complete(ctx context.Context, id string) error {
-	return r.conn.RendezvousComplete(ctx, id)
-}
-
-var _ pairing.RendezvousTransport = (*rendezvous)(nil)

@@ -1,71 +1,59 @@
 package swarmmobile
 
-// ADR-016 W3 (FAILING FIRST, RED phase, bd agents-tracker-hggx.3.5): "Under webpki, the
+// ADR-016 W3 (bd agents-tracker-hggx.3.5): "Under webpki, the
 // pairing dial is an ordinary verified dial ... B45's deadlock does not exist under the
 // default policy and its exemption is therefore withdrawn from it" -- reached only as a
 // fallback (see pairingDial's own doc comment in mobile/pairing.go).
 //
-// This file proves the two-attempt shape end to end against a REAL relay, rather than only
-// against the Security-value logic mobile/r2_adr016_w3_test.go already covers: a self-signed
-// relay (the pinned_spki, expert/opt-in shape) still admits the pairing dial via B45's
-// preserved fallback, and a relay whose chain a real platform delegate approves is admitted
-// through the VERIFIED attempt -- proven by Conn.PeerSPKI() staying EMPTY, since only the
-// unverified branch's VerifyPeerCertificate records into the B48 observer (security.go).
+// This file proves the two-attempt dial policy against a TLS websocket and a narrow dial seam.
+// The full Noise ceremony against workerd lives in pairing_relay_v2_test.go. A self-signed
+// endpoint still admits the private-origin fallback, while a platform-approved chain uses the
+// verified attempt. Both paths retain the presented SPKI for the later pin check.
 //
 // Internal test file (package swarmmobile) because pairingDial is unexported.
 
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
+	"github.com/coder/websocket"
 )
 
-type w3NoopPushSink struct{}
+const w3Ceremony = "11111111111111111111111111111111"
 
-func (w3NoopPushSink) Push(context.Context, string, relay.PushPayload) error { return nil }
-
-// w3StartRelay boots a real relay on 127.0.0.1:0 over plain ws://.
-func w3StartRelay(t *testing.T) string {
-	t.Helper()
-	cfg := relay.DefaultConfig()
-	cfg.Listen = "127.0.0.1:0"
-	cfg.TLSMode = "off"
-	cfg.DBPath = filepath.Join(t.TempDir(), "relay.db")
-	srv, err := relay.New(cfg, relay.WithPushSink(w3NoopPushSink{}))
-	if err != nil {
-		t.Fatalf("relay.New: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	if err := srv.Start(ctx); err != nil {
-		t.Fatalf("relay.Start: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
-	return srv.URL()
-}
-
-// w3TLSFrontedRelay fronts a real ws:// relay with a self-signed httptest TLS server --
-// untrusted by any system root pool, exactly the pinned_spki (expert, self-signed) shape.
+// w3TLSFrontedRelay accepts the relay-v2 websocket endpoint with a self-signed certificate.
+// pairingDial only opens the socket; the Noise exchange is covered by the workerd test.
 func w3TLSFrontedRelay(t *testing.T) string {
 	t.Helper()
-	wsURL := w3StartRelay(t)
-	target, err := url.Parse(strings.Replace(wsURL, "ws://", "http://", 1))
-	if err != nil {
-		t.Fatalf("parse relay url: %v", err)
-	}
-	front := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(target))
+	front := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		<-r.Context().Done()
+	}))
 	t.Cleanup(front.Close)
 	return strings.Replace(front.URL, "https://", "wss://", 1)
 }
+
+// w3PairTransport is only the dial-policy seam; no test here drives its Noise methods.
+type w3PairTransport struct{ peerSPKI []byte }
+
+func (*w3PairTransport) Create(context.Context, string) error   { return nil }
+func (*w3PairTransport) Claim(context.Context, string) error    { return nil }
+func (*w3PairTransport) Send(context.Context, []byte) error     { return nil }
+func (*w3PairTransport) Recv(context.Context) ([]byte, error)   { return nil, nil }
+func (*w3PairTransport) Complete(context.Context, string) error { return nil }
+func (*w3PairTransport) Close()                                 {}
+func (p *w3PairTransport) PeerSPKI() []byte                     { return p.peerSPKI }
 
 // alwaysTrustingRelayTrust is a stub W2 delegate that approves every chain -- standing in
 // for a real X509TrustManagerExtensions that has the peer's issuer in its store. Go still
@@ -96,13 +84,13 @@ func TestADR016W3_PairingDialFallsBackToUnverifiedAgainstASelfSignedRelay(t *tes
 	wss := w3TLSFrontedRelay(t)
 	a := w3TestApp(t)
 
-	conn, err := a.pairingDial(context.Background(), wss)
+	conn, err := a.pairingDial(context.Background(), wss, w3Ceremony)
 	if err != nil {
 		t.Fatalf("pairingDial against a self-signed relay with no platform delegate: %v.\n"+
 			"B45's fallback must still admit a pinned_spki-shaped relay, or a fresh phone can "+
 			"never pair with one over wss:// at all", err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer conn.Close()
 	if len(conn.PeerSPKI()) == 0 {
 		t.Fatalf("PeerSPKI() is empty after the fallback dial; B48's capture must still record " +
 			"what an unverified dial presented")
@@ -129,11 +117,11 @@ func TestADR016W3_PairingDialUsesTheVerifiedAttemptWhenAPlatformDelegateTrustsTh
 		t.Fatalf("SetRelayTrust: %v", err)
 	}
 
-	conn, err := a.pairingDial(context.Background(), wss)
+	conn, err := a.pairingDial(context.Background(), wss, w3Ceremony)
 	if err != nil {
 		t.Fatalf("pairingDial with a trusting platform delegate installed: %v", err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer conn.Close()
 	if len(conn.PeerSPKI()) == 0 {
 		t.Fatalf("PeerSPKI() is empty after the VERIFIED attempt succeeded; B48's capture must " +
 			"be recorded on every branch, not only the unverified fallback, or a pinned_spki " +
@@ -150,26 +138,26 @@ func TestADR016W3_PairingDialUsesTheVerifiedAttemptWhenAPlatformDelegateTrustsTh
 // otherwise an on-path attacker forces the same fallback by presenting ANY certificate that
 // fails verification, against every machine regardless of its actual policy.
 //
-// relayDialRawSecure is a package variable exactly so this can be proven without a live
+// relayV2DialPair is a package variable exactly so this can be proven without a live
 // network dial or a way to fake a "public" DNS name resolving anywhere.
 func TestADR016W3_PairingDialDoesNotFallBackForAPublicHost(t *testing.T) {
 	a := w3TestApp(t)
 	verifiedErr := errors.New("wrong-name or untrusted certificate")
-	var calls []relay.Security
-	orig := relayDialRawSecure
-	t.Cleanup(func() { relayDialRawSecure = orig })
-	relayDialRawSecure = func(_ context.Context, _ string, sec relay.Security) (*relay.Conn, error) {
-		calls = append(calls, sec)
+	var calls []relayv2.Profile
+	orig := relayV2DialPair
+	t.Cleanup(func() { relayV2DialPair = orig })
+	relayV2DialPair = func(_ context.Context, profile relayv2.Profile, _ string) (pairTransport, error) {
+		calls = append(calls, profile)
 		return nil, verifiedErr
 	}
 
-	_, err := a.pairingDial(context.Background(), "wss://relay.example.com:443/")
+	_, err := a.pairingDial(context.Background(), "wss://relay.example.com:443/", w3Ceremony)
 	if !errors.Is(err, verifiedErr) {
 		t.Fatalf("pairingDial(public host) = %v, want the verified attempt's own error "+
 			"propagated -- a public host must never fall back to B45's unverified policy", err)
 	}
 	if len(calls) != 1 {
-		t.Fatalf("relayDialRawSecure called %d time(s), want exactly 1: a public host's "+
+		t.Fatalf("relayV2DialPair called %d time(s), want exactly 1: a public host's "+
 			"verified failure must not trigger the unverified fallback", len(calls))
 	}
 }
@@ -183,16 +171,18 @@ func TestADR016W3_PairingDialDoesNotFallBackForAPublicHost(t *testing.T) {
 // falls back to a certificate an on-path attacker could present.
 func TestADR016W3_PairingDialUsesTheVerifiedDialForAWebPKIMachineOnAPublicHost(t *testing.T) {
 	a := w3TestApp(t)
-	want := &relay.Conn{}
-	var calls []relay.Security
-	orig := relayDialRawSecure
-	t.Cleanup(func() { relayDialRawSecure = orig })
-	relayDialRawSecure = func(_ context.Context, _ string, sec relay.Security) (*relay.Conn, error) {
-		calls = append(calls, sec)
+	want := &w3PairTransport{}
+	var calls []relayv2.Profile
+	var ceremonies []string
+	orig := relayV2DialPair
+	t.Cleanup(func() { relayV2DialPair = orig })
+	relayV2DialPair = func(_ context.Context, profile relayv2.Profile, ceremony string) (pairTransport, error) {
+		calls = append(calls, profile)
+		ceremonies = append(ceremonies, ceremony)
 		return want, nil
 	}
 
-	conn, err := a.pairingDial(context.Background(), "wss://relay.example.com:443/")
+	conn, err := a.pairingDial(context.Background(), "wss://relay.example.com:443/", w3Ceremony)
 	if err != nil {
 		t.Fatalf("pairingDial(public host, verified succeeds) = %v, want nil", err)
 	}
@@ -200,8 +190,11 @@ func TestADR016W3_PairingDialUsesTheVerifiedDialForAWebPKIMachineOnAPublicHost(t
 		t.Fatalf("pairingDial returned %v, want the verified attempt's own connection", conn)
 	}
 	if len(calls) != 1 {
-		t.Fatalf("relayDialRawSecure called %d time(s), want exactly 1: a successful verified "+
+		t.Fatalf("relayV2DialPair called %d time(s), want exactly 1: a successful verified "+
 			"attempt on a public host must never also try the unverified fallback", len(calls))
+	}
+	if len(ceremonies) != 1 || ceremonies[0] != w3Ceremony {
+		t.Fatalf("DialPair ceremonies = %q, want [%q]", ceremonies, w3Ceremony)
 	}
 }
 
@@ -211,18 +204,20 @@ func TestADR016W3_PairingDialUsesTheVerifiedDialForAWebPKIMachineOnAPublicHost(t
 func TestADR016W3_PairingDialStillFallsBackForAPrivateHost(t *testing.T) {
 	a := w3TestApp(t)
 	verifiedErr := errors.New("self-signed relay: verified attempt cannot chain")
-	var calls []relay.Security
-	orig := relayDialRawSecure
-	t.Cleanup(func() { relayDialRawSecure = orig })
-	relayDialRawSecure = func(_ context.Context, _ string, sec relay.Security) (*relay.Conn, error) {
-		calls = append(calls, sec)
+	var calls []relayv2.Profile
+	var ceremonies []string
+	orig := relayV2DialPair
+	t.Cleanup(func() { relayV2DialPair = orig })
+	relayV2DialPair = func(_ context.Context, profile relayv2.Profile, ceremony string) (pairTransport, error) {
+		calls = append(calls, profile)
+		ceremonies = append(ceremonies, ceremony)
 		if len(calls) == 1 {
 			return nil, verifiedErr
 		}
-		return &relay.Conn{}, nil
+		return &w3PairTransport{}, nil
 	}
 
-	conn, err := a.pairingDial(context.Background(), "wss://192.168.1.5:8443/")
+	conn, err := a.pairingDial(context.Background(), "wss://192.168.1.5:8443/", w3Ceremony)
 	if err != nil {
 		t.Fatalf("pairingDial(private host) = %v, want the fallback dial to succeed", err)
 	}
@@ -230,8 +225,11 @@ func TestADR016W3_PairingDialStillFallsBackForAPrivateHost(t *testing.T) {
 		t.Fatal("pairingDial(private host) returned a nil connection with no error")
 	}
 	if len(calls) != 2 {
-		t.Fatalf("relayDialRawSecure called %d time(s), want exactly 2: a private origin must "+
+		t.Fatalf("relayV2DialPair called %d time(s), want exactly 2: a private origin must "+
 			"still retry unverified after a failed verified attempt", len(calls))
+	}
+	if len(ceremonies) != 2 || ceremonies[0] != w3Ceremony || ceremonies[1] != w3Ceremony {
+		t.Fatalf("DialPair ceremonies = %q, want [%q %q]", ceremonies, w3Ceremony, w3Ceremony)
 	}
 }
 
@@ -250,11 +248,11 @@ func TestADR016W3_AMismatchedPinStillRefusesOnTheVerifiedPath(t *testing.T) {
 		t.Fatalf("SetRelayTrust: %v", err)
 	}
 
-	conn, err := a.pairingDial(context.Background(), wss)
+	conn, err := a.pairingDial(context.Background(), wss, w3Ceremony)
 	if err != nil {
 		t.Fatalf("pairingDial with a trusting platform delegate installed: %v", err)
 	}
-	defer func() { _ = conn.Close() }()
+	defer conn.Close()
 
 	wrongPin := make([]byte, 32)
 	for i := range wrongPin {

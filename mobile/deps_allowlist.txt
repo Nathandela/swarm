@@ -88,6 +88,7 @@ github.com/Nathandela/swarm/internal/remote/transport
 # into a client half and a server half removes it; that edit is outside this slice's scope
 # (internal/remote/* is frozen for S8) and is owed.
 github.com/Nathandela/swarm/internal/remote/relay
+github.com/Nathandela/swarm/internal/remote/relayv2
 github.com/coder/websocket
 github.com/coder/websocket/internal/errd
 github.com/coder/websocket/internal/util
