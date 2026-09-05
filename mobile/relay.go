@@ -13,6 +13,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +29,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
-	"github.com/Nathandela/swarm/internal/remote/transport"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // The reconnect backoff between relay dial attempts, PB-NET-4 / ADR-007 section 6.0's
@@ -107,14 +109,47 @@ var reconnectDelayObserver atomic.Pointer[func(attempt int, d time.Duration)]
 // relayAcker releases consumed relay mailbox items. It is injected into the core, which
 // must not import the relay client (PB-BIND-0 constrains its closure).
 //
-// Acks are COALESCED to one per drained page rather than one per frame. The relay ack is
-// monotonic and idempotent -- acking cursor N releases everything up to it -- and an ack
-// that a process death loses is harmless: the relay redelivers, the phone's DURABLE
-// receive high-water refuses the redelivery with crypto.ErrStaleSeq, and the frame is
-// acked then. Per-frame acking cost a full websocket round trip and a server-side commit
-// on every journal event, which made the phone drain several times slower than the
-// machine could publish.
+// AcceptPhoneDelivery invokes this only after its durable receive transaction commits.
+// The subscription ACK is monotonic and idempotent; a crash before it completes merely
+// redelivers a frame the durable receive high-water already knows.
 type relayAcker struct{ app *App }
+
+// phoneStream is one relay-v2 stream connection and its sole subscription. It is
+// intentionally also the existing publication seam: callers keep appending opaque
+// envelopes while this adapter supplies the generation fence and deterministic id.
+type phoneStream struct {
+	conn        *relayv2.Conn
+	sub         *relayv2.Subscription
+	binding     relayv2.Binding
+	coreBinding phonecore.PhoneBinding
+}
+
+// relayV2ProbeConnection is the entire authority a WebPKI migration probe
+// needs after relay-v2 authentication succeeds.
+type relayV2ProbeConnection interface{ Close() }
+
+var relayV2DialProbe = func(ctx context.Context, profile relayv2.Profile, auth relayv2.Auth) (relayV2ProbeConnection, error) {
+	return relayv2.Dial(ctx, profile, auth)
+}
+
+func relayMessageID(ciphertext []byte) string {
+	digest := sha256.Sum256(ciphertext)
+	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func (s *phoneStream) MailboxAppend(ctx context.Context, target string, ciphertext []byte) (uint64, error) {
+	if s == nil || s.conn == nil || target != s.binding.MachineRID {
+		return 0, classed(ErrClassOffline, errors.New("swarmmobile: relay-v2 append target does not match the active binding"))
+	}
+	result, err := s.conn.Append(ctx, s.binding, relayMessageID(ciphertext), ciphertext)
+	return result.Cursor, err
+}
+
+func (s *phoneStream) Close() {
+	if s != nil && s.conn != nil {
+		s.conn.Close()
+	}
+}
 
 type mailboxDiscardRequest struct {
 	ctx     context.Context
@@ -132,54 +167,27 @@ const mailboxDiscardRequestTimeout = 15 * time.Second
 func (r *relayAcker) Ack(cursor uint64) error {
 	a := r.app
 	a.mu.Lock()
-	if cursor > a.ackPending {
-		a.ackPending = cursor
-	}
+	stream := a.ackStream
 	a.mu.Unlock()
-	return nil
-}
-
-// flushAcks releases everything the core has committed since the last flush. It is the
-// POLL drain's ack path; the wait drain acks the same coordinates through
-// transport.AckBatcher instead (see drainWait), which is why the batcher's flush closure
-// mirrors the ackSent bookkeeping below.
-//
-// The error is REPORTED, not acted on: an ack is an optimisation (the durable receive
-// high-water refuses any redelivery), so nothing is lost when one fails. The poll drain
-// ignores it, because its next MailboxRead re-probes the link within one
-// DefaultCallTimeout anyway.
-func (a *App) flushAcks(ctx context.Context, cl *relay.Client, generation uint64) error {
-	a.mu.Lock()
-	cursor := a.ackPending
-	sent := a.ackSent
-	a.mu.Unlock()
-	if cursor <= sent {
-		return nil
+	if stream == nil || stream.sub == nil {
+		return errPublicationNoConnection
 	}
-	if err := cl.MailboxAckGeneration(ctx, cursor, generation); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	if cursor > a.ackSent {
-		a.ackSent = cursor
-	}
-	a.mu.Unlock()
-	return nil
+	return stream.sub.Ack(context.Background(), cursor)
 }
 
 // requestMailboxDiscard hands an explicit roster refresh to the single mailbox reader and
 // waits for its bounded diagnosis/recovery result. Executing on the drain is the concurrency
-// boundary: a facade-side InboundAgeRefused check can race the wait page currently being
+// boundary: a facade-side InboundAgeRefused check can race the delivery currently being
 // accepted and publish the replacement behind the stale backlog. A healthy diagnosis returns
 // an empty token and deletes nothing; only authenticated stale age (or a durable pending token)
 // crosses into the destructive, incarnation-fenced self-mailbox discard.
 func (a *App) requestMailboxDiscard() (string, error) {
 	// RefreshRoster is an idempotent command, so it inherits the command plane's brief
-	// post-Start wait. Start publishes sess before run publishes client; failing immediately
+	// post-Start wait. Start publishes sess before run publishes stream; failing immediately
 	// in that ordinary window regresses the roster-only refresh that existed before guarded
 	// stale-head diagnosis. This only waits for the connection -- the facade still performs
 	// no mailbox read, and the request below is still claimed by the drain's single reader.
-	if _, err := a.awaitConn(); err != nil {
+	if _, err := a.awaitStream(); err != nil {
 		return "", err
 	}
 	a.mu.Lock()
@@ -188,7 +196,7 @@ func (a *App) requestMailboxDiscard() (string, error) {
 		return "", errClosed
 	}
 	sess := a.sess
-	if sess == nil || a.client == nil {
+	if sess == nil || a.stream == nil {
 		a.mu.Unlock()
 		return "", classed(ErrClassOffline, errors.New("swarmmobile: relay connection not established for mailbox recovery"))
 	}
@@ -200,8 +208,11 @@ func (a *App) requestMailboxDiscard() (string, error) {
 	defer cancel()
 	req := &mailboxDiscardRequest{ctx: ctx, done: make(chan mailboxDiscardResult, 1)}
 	a.mailboxDiscard = req
-	wake := a.waitCancel
+	wake := a.recvCancel
 	a.mu.Unlock()
+	// Recv only waits on the subscription's delivery channel; canceling its caller
+	// context wakes the single reader without closing the relay-v2 connection. That
+	// keeps the exact bound connection alive for the PROBE/DISCARD transaction.
 	if wake != nil {
 		wake()
 	}
@@ -223,15 +234,14 @@ func (a *App) requestMailboxDiscard() (string, error) {
 }
 
 // performMailboxDiscard executes at the top of a drain iteration, when that goroutine owns no
-// in-flight read. acks is the wait path's AckBatcher and nil on the synchronous poll path.
-// Reset is both the wait-ack generation barrier before a synchronous healthy-diagnosis ack,
-// and the retirement barrier before a destructive transaction is issued.
-func (a *App) performMailboxDiscard(cl *relay.Client, acks *transport.AckBatcher) bool {
+// in-flight Recv. PROBE is the healthy read barrier; DISCARD is issued only from a durable,
+// exact-incarnation recovery phase.
+func (a *App) performMailboxDiscard(stream *phoneStream) (*phoneStream, bool) {
 	a.mu.Lock()
 	req := a.mailboxDiscard
 	if req == nil || req.claimed {
 		a.mu.Unlock()
-		return false
+		return stream, false
 	}
 	req.claimed = true
 	a.mu.Unlock()
@@ -246,101 +256,76 @@ func (a *App) performMailboxDiscard(cl *relay.Client, acks *transport.AckBatcher
 	}
 	if err := req.ctx.Err(); err != nil {
 		finish("", classed(ErrClassOffline, err))
-		return true
+		return stream, true
 	}
 	// The stale verdict may not exist YET: RefreshRoster can cross a page already in flight
 	// before MailboxRouter opens its authenticated head. Diagnose one immediate page here,
 	// while the single reader owns the connection, so one press cannot publish its replacement
 	// behind an existing stale backlog. Stop at the first unique, unacked stale-age refusal:
 	// later items must not advance the durable cursor past it.
-	pendingToken := a.core.DiscardRecoveryToken()
-	staleAge := a.core.Router().InboundAgeRefused()
-	ackGeneration := cl.MailboxGeneration()
-	if !staleAge && pendingToken == "" {
-		cursor := a.core.State().RelayCursor
-		items, err := cl.MailboxRead(req.ctx, cursor)
-		if errors.Is(err, relay.ErrMailboxCursorResetRequired) {
-			if err = a.rewindRelayCursor(); err == nil {
-				ackGeneration = cl.MailboxGeneration()
-				items, err = cl.MailboxRead(req.ctx, 0)
-			}
-		}
+	pendingToken, recoveryIncarnation, recoveryCursor := a.core.DiscardRecovery()
+	staleAge := false
+	if pendingToken == "" {
+		items, err := stream.sub.Probe(req.ctx)
 		if err != nil {
 			finish("", err)
-			return true
+			return stream, true
 		}
-		if err := a.adoptRelayIncarnation(cl.MailboxIncarnation()); err != nil {
-			finish("", err)
-			return true
-		}
-		staleAge, err = diagnoseMailboxPage(req.ctx, items, a.accept)
+		recoveryCursor, err = diagnosePhoneDeliveries(req.ctx, items, func(ctx context.Context, raw []byte, cursor uint64) (phonecore.Receipt, error) {
+			return a.acceptPhone(ctx, stream, raw, cursor)
+		})
 		if err != nil {
 			finish("", err)
-			return true
+			return stream, true
 		}
+		staleAge = recoveryCursor != 0
 	}
 	// Healthy frames may have repaired the transport while RefreshRoster woke the reader.
 	// Compacting them would no longer be the narrowly authorized recovery. Before the caller
 	// publishes its ordinary roster refresh, synchronously ack the safe diagnostic high-water:
-	// otherwise a mailbox at its depth cap refuses the daemon's replacement. This explicit,
-	// user-visible refresh deliberately pays at most one fsync/relay op; ordinary drains retain
-	// the off-delivery-path, metered AckBatcher latency and quota behavior. Reset first on the
-	// wait path so no old async ack overlaps this generation-fenced flush.
+	// otherwise a mailbox at its depth cap refuses the daemon's replacement.
 	if !staleAge && pendingToken == "" {
-		if acks != nil {
-			acks.Reset()
-		}
-		if err := a.flushAcks(req.ctx, cl, ackGeneration); err != nil {
-			finish("", err)
-			return true
-		}
 		finish("", nil)
-		return true
-	}
-	if !a.mailboxRecoverySupported.Load() {
-		finish("", relay.ErrPeerCapabilityUnavailable)
-		return true
+		return stream, true
 	}
 	// The intent must reach durable state BEFORE the destructive RPC. If the process dies
 	// after this Save, the next explicit RefreshRoster sees the same token and reissues the
 	// incarnation-fenced idempotent discard even though the in-memory age refusal is gone.
-	recoveryToken, err := a.core.BeginRelayDiscardRecovery()
+	recoveryToken, err := a.core.BeginRelayDiscardRecovery(recoveryCursor)
 	if err != nil {
 		finish("", err)
-		return true
+		return stream, true
 	}
-	if acks != nil {
-		acks.Reset()
+	if pendingToken == "" {
+		_, recoveryIncarnation, recoveryCursor = a.core.DiscardRecovery()
 	}
-	target, _ := a.destination()
-	if target == "" {
-		routeErr := classed(ErrClassOffline, errors.New("swarmmobile: paired machine route unavailable for mailbox recovery"))
-		finish("", routeErr)
-		return true
+	// The durable original incarnation is also the recovery phase. If the current
+	// checkpoint still equals it, DISCARD and adoption are owed. Once adoption moved
+	// the current checkpoint, only the token-bearing roster request remains owed;
+	// deleting the new mailbox again could lose deliveries created after recovery.
+	if a.core.State().RelayIncarnation == recoveryIncarnation {
+		result, err := stream.conn.Discard(req.ctx, stream.binding, recoveryIncarnation, recoveryCursor)
+		if err != nil {
+			finish("", err)
+			return stream, true
+		}
+		if err := a.core.AdoptPhoneDiscard(stream.coreBinding, recoveryIncarnation, result.Incarnation, result.Cursor); err != nil {
+			finish("", err)
+			return stream, true
+		}
+		stream, err = a.dialPhoneStream(req.ctx)
+		if err != nil {
+			finish("", err)
+			return stream, true
+		}
+		a.setStream(stream)
 	}
-	result, err := cl.MailboxDiscard(req.ctx, target)
-	if err != nil {
-		finish("", err)
-		return true
-	}
-	if err := a.core.AdoptRelayDiscard(result.ThroughCursor, result.MailboxIncarnation); err != nil {
-		// The relay operation is idempotent and returns the same durable high-water even when
-		// its mailbox is now empty. Report the failed local adoption honestly; the next pull
-		// retries it instead of pretending replacement state can resume from an unpersisted
-		// coordinate.
-		finish("", err)
-		return true
-	}
-	a.mu.Lock()
-	a.ackPending = result.ThroughCursor
-	a.ackSent = result.ThroughCursor // the destructive op already compacted through it
-	a.mu.Unlock()
 	finish(recoveryToken, nil)
-	return true
+	return stream, true
 }
 
-// conn returns the live relay client, or why there is none.
-func (a *App) conn() (*relay.Client, error) {
+// conn returns the live mailbox appender, or why there is none.
+func (a *App) conn() (*phoneStream, error) {
 	if a == nil {
 		return nil, errNoReceiver
 	}
@@ -352,16 +337,18 @@ func (a *App) conn() (*relay.Client, error) {
 	if a.sess == nil {
 		return nil, errNotRunning
 	}
-	if a.client == nil {
+	if a.stream == nil {
 		return nil, classed(ErrClassOffline, errors.New("swarmmobile: relay connection not established yet"))
 	}
-	return a.client, nil
+	return a.stream, nil
 }
 
 // awaitConn waits briefly for the connection Start is bringing up, so a screen that
 // issues a command immediately after Start is not refused by a race it cannot see. A
 // stopped or closed App fails immediately -- there is nothing to wait for.
-func (a *App) awaitConn() (*relay.Client, error) {
+func (a *App) awaitConn() (*phoneStream, error) { return a.awaitStream() }
+
+func (a *App) awaitStream() (*phoneStream, error) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		cl, err := a.conn()
@@ -557,13 +544,13 @@ func (a *App) currentConn() string {
 	return a.connState
 }
 
-func (a *App) setClient(cl *relay.Client) {
+func (a *App) setStream(stream *phoneStream) {
 	a.mu.Lock()
-	a.client = cl
+	a.stream = stream
 	a.mu.Unlock()
 }
 
-// run is one Start..Stop generation: dial, drain, reconnect until the context is done.
+// run is one native relay-v2 Start..Stop generation.
 func (a *App) run(ctx context.Context) {
 	first := true
 	rb := newReconnectBackoff()
@@ -572,249 +559,83 @@ func (a *App) run(ctx context.Context) {
 			a.setConn(connConnecting)
 			first = false
 		} else {
-			// A state that is NOT a recoverable link condition must not be overwritten by
-			// "reconnecting": a spinner promises that waiting is enough, and for every state
-			// held here waiting is exactly what does not help. The state therefore persists
-			// across the retry, and the next successful dial clears it by setting "online".
-			//
-			// connRevoked only ever survives a retry inside the post-pairing window
-			// rearmAfterPairing opens: hiding it behind a spinner there would put back exactly
-			// the loop PB-APP-10 forbids. The transport-policy verdicts are on this list for
-			// the same reason: they survive a retry only while a pairing is in flight (B58),
-			// and overwriting them with "reconnecting" there would put the spinner back over
-			// the one screen that says what is actually wrong.
-			if s := a.currentConn(); s != connRevoked && s != connRelayUntrusted &&
-				s != connRelayInsecure && s != connRelayTrustUnavailable {
-				a.setConn(connReconnecting)
-			}
+			a.setConn(connReconnecting)
 			delay := rb.next()
-			// Test-only observation seam (nil in production, the internal/shim
-			// testHookAfterSignalArm pattern): it publishes the delay the loop SCHEDULED,
-			// which is the only place that quantity exists. Every out-of-process rig can
-			// see is a dial ARRIVING at a relay, which is the scheduled delay plus however
-			// long this host took to wake the goroutine and carry the connection -- a
-			// quantity PB-NET-4 does not control and must not assert (Wave R6 review round
-			// 3, finding F5(a): a 605.6 ms arrival gap against section 6.0's 600 ms
-			// ceiling, on a schedule that had been correct). It adds no production
-			// behaviour: nothing reads it unless a test has installed an observer.
 			if obs := reconnectDelayObserver.Load(); obs != nil {
 				(*obs)(rb.attempt, delay)
 			}
 			select {
 			case <-ctx.Done():
+				break
 			case <-time.After(delay):
 			}
 			if ctx.Err() != nil {
 				break
 			}
 		}
-		cl, err := a.dial(ctx)
+
+		stream, err := a.dialPhoneStream(ctx)
 		if err != nil {
-			// PB-KEY-6, at the one production call site of relay.ClientAuth.Sign that can
-			// refuse. This error used to be discarded with a bare `continue`, which was
-			// unreachable while the app ran on the software keystore and went LIVE the
-			// moment PB-KEY-9's Keystore-backed KEK landed: a destroyed key became an
-			// endless "reconnecting" loop against something that would never work again.
 			switch {
-			case errors.Is(err, crypto.ErrKeyInvalidated),
-				errors.Is(err, crypto.ErrKeyAuthRequired):
-				// PERMANENT and therefore TERMINAL. The relay-auth key is destroyed or
-				// unusable; nothing on-device recovers it and every retry is a round trip
-				// spent proving that again. Returning here rather than breaking is
-				// deliberate -- break would fall through to setConn("offline") and erase
-				// the one state that tells the user to pair again.
-				//
-				// THE TWO SENTINELS SHARE AN ARM AFTER ADR-007 B133, and they did not
-				// before. ErrKeyAuthRequired used to set "reauth_required", which meant
-				// "prompt for the biometric and it will connect". There is no prompt left
-				// in the product, so the same refusal is now something the user can never
-				// satisfy on this handset -- which is what "permanent" means. Pairing again
-				// is a real fix and is what the state says: it re-provisions the key
-				// without the authenticator that is refusing.
+			case errors.Is(err, crypto.ErrKeyInvalidated), errors.Is(err, crypto.ErrKeyAuthRequired):
 				a.setConn(connRepairRequired)
 				a.recordUnpaired()
-				a.setClient(nil)
 				return
-			case errors.Is(err, relay.ErrRevoked):
-				// PB-APP-10. The THIRD identity this switch has to distinguish, and the one
-				// the fix for the first two left behind with an identical shape: a bare
-				// `continue` here is an unbounded reconnect the user is shown as a spinner.
-				// Returning rather than breaking, for the same reason as the arm above --
-				// break falls through to setConn("offline") and erases the one state that
-				// tells the user what happened.
+			case errors.Is(err, relay.ErrNotAuthorized):
 				a.setConn(connRevoked)
-				// PB-STATE-10: unless a pairing has just made this answer STALE. See
-				// rearmAfterPairing -- the state stays "revoked" either way, so nothing is
-				// hidden; only the retry survives, and only inside a bounded window.
-				if a.withinPairingGrace() {
+				if a.pairingInFlight() || a.withinPairingGrace() {
 					continue
 				}
 				a.recordUnpaired()
-				a.setClient(nil)
 				return
 			case a.relayTrustUnavailable(err):
-				// ADR-016 W8's own Conformance row: "No platform verifier | ErrPinRequired |
-				// relay_trust_unavailable | distinct copy from a security verdict." Checked
-				// BEFORE the generic ErrPinRequired arm below, which this would otherwise
-				// also match -- see relayTrustUnavailable's own doc for why the same
-				// sentinel needs telling apart by cause rather than by identity alone.
 				a.setConn(connRelayTrustUnavailable)
-				// Same B58 non-terminal-during-pairing rule as the arm below: the ordinary
-				// first pairing on a handset with no delegate installed yet must survive.
 				if a.pairingInFlight() || a.withinPairingGrace() {
 					continue
 				}
-				a.setClient(nil)
 				return
-			case errors.Is(err, relay.ErrPinMismatch),
-				errors.Is(err, relay.ErrPinRequired),
-				errors.Is(err, relay.ErrPinMalformed):
-				// The relay is not the one this phone pinned at pairing, or nothing was
-				// pinned and the platform has no trust roots to fall back to. Both are
-				// answered by pairing again, which is the only channel that carries a pin.
+			case errors.Is(err, relay.ErrPinMismatch), errors.Is(err, relay.ErrPinRequired), errors.Is(err, relay.ErrPinMalformed):
 				a.setConn(connRelayUntrusted)
-				// ADR-007 B58: NOT TERMINAL while a pairing is running. The remedy for this
-				// verdict IS a pairing, so ending the loop during one destroys the recovery the
-				// user is in the middle of performing -- and on a FIRST pairing this is the
-				// ordinary path, because a handset that holds no pin yet is refused on every
-				// retry. The STATE still stands, so nothing is hidden; only the retry survives.
 				if a.pairingInFlight() || a.withinPairingGrace() {
 					continue
 				}
-				a.setClient(nil)
 				return
 			case errors.Is(err, relay.ErrCleartextRefused):
-				// The MACHINE named a cleartext relay. Nothing on the handset can fix it and
-				// re-pairing carries the same URL, so this says what is actually wrong.
 				a.setConn(connRelayInsecure)
-				// B58, same reason: a pairing in flight may be about to publish a relay URL
-				// this phone will accept.
 				if a.pairingInFlight() || a.withinPairingGrace() {
 					continue
 				}
-				a.setClient(nil)
 				return
 			}
 			continue
 		}
-		// The wait verdict is negotiated FIRST, before the client is published and before
-		// the presence cadence starts, so the hello is the connection's only in-flight
-		// exchange and the drain mode is decided from the relay's own advertisement
-		// rather than from a blind probe's timeout (committee findings M1/M3).
-		cl.SetMailboxIncarnation(a.core.State().RelayIncarnation)
-		a.waitSupport.Store(a.negotiateWaitSupport(ctx, cl))
-		a.setClient(cl)
+
+		a.setStream(stream)
 		a.setConn(connOnline)
-		rb.reset() // PB-NET-4: a successful connection un-does whatever backoff came before it
-		a.onConnected(ctx, cl)
-		// The presence cadence lives for exactly this connection's lifetime, so it can never
-		// poll through a client the drain has finished with (bead agents-tracker-xtj). Its
-		// timer is what keeps a relay round-trip off the render path: a screen reads the
-		// cache MachinePresence exposes and never asks the relay itself.
-		pctx, endPoll := context.WithCancel(ctx)
-		go a.pollPresence(pctx, cl)
-		go a.runPublicationPump(pctx, func() (sendCtx, error) {
-			return a.resolveSend(func() (*relay.Client, error) { return cl, nil })
-		})
+		rb.reset()
+		pctx, cancelPump := context.WithCancel(ctx)
+		pumpDone := make(chan struct{})
+		go func() {
+			defer close(pumpDone)
+			a.runPublicationPump(pctx, func() (sendCtx, error) {
+				return a.resolveSend(func() (*phoneStream, error) { return a.conn() })
+			})
+		}()
 		a.wakePublicationPump()
-		a.drain(ctx, cl)
-		endPoll()
-		// The link is gone, so the phone can no longer ask what it last answered. Holding the
-		// previous reading would leave the machine rendered "online" on evidence nothing can
-		// refresh -- PB-APP-11's silence, one value over.
-		if a.presence.forget() {
-			a.events.emit(&Event{Kind: "presence", State: presenceUnknown})
+		stream = a.drainPhone(ctx, stream)
+		cancelPump()
+		<-pumpDone
+		if stream != nil {
+			stream.Close()
 		}
-		a.setClient(nil)
-		// PB-INPUT-2's FIRST enumerated severance event. A gateway restart kills the lease
-		// while being unable to seal any notice about it -- the gateway is the thing that
-		// died -- so the phone's own transport dropping is the ONLY signal that can exist,
-		// and a disconnect must therefore SEVER rather than merely pause. Without this the
-		// phone keeps reporting the pre-outage generation live and types against a lease the
-		// new gateway does not hold. It also empties the coalescer, so bytes buffered when
-		// the link went away resolve as undelivered instead of riding the reconnect.
+		a.setStream(nil)
 		a.suspendInput("the connection to the machine was lost")
-		// CloseNow, NOT the graceful Close (Opus round-4 F6): this teardown is an
-		// abandonment on every path that reaches it -- the link already died (the
-		// reconnect must redial, not say goodbye to a peer that is not listening) or
-		// the generation was cancelled (Stop/backgrounding joins this loop from the
-		// facade's serial command lane). The polite close costs its full five-second
-		// handshake wait exactly when the pump has exited and the peer is silent --
-		// the state a dead link leaves behind -- which delayed the redial, and a
-		// background -> foreground resume, by up to ~5 s. The orderly goodbye
-		// survives where it matters: App.Close's machines manager and push gateway
-		// (process exit) and the pairing probe's finished exchange.
-		_ = cl.CloseNow()
 	}
-	a.setClient(nil)
+	a.setStream(nil)
 	a.setConn(connOffline)
 }
 
-// handsetSecurity is the transport policy EVERY session dial this handset makes runs
-// under (PB-NET-2, ADR-007 B34/B37, ADR-016 W2/W3) -- POST-ADR-016, updated from this
-// comment's own pre-ADR-016 text, which described a pinning-only world this build no
-// longer ships. It starts from the platform's default trust-root source, cleartext
-// refused, the decision re-asked on every redirect hop -- plus the loopback carve-out,
-// which is honoured only inside a test binary and is therefore inert in the shipped .so.
-//
-// SO A RELEASE HANDSET REFUSES CLEARTEXT OUTRIGHT, which is the point: auth_init carries
-// the phone's full relay-auth public key, and a passive observer who reads it can revoke
-// a never-paired identity through B27's first-use clause. The refusal is decided from the
-// URL before a socket is opened, so a QR naming ws:// costs the handset nothing -- not
-// even the connection that would tell an attacker's relay that this phone scanned it.
-//
-// It deliberately does NOT use relay.MachineSecurity: on a handset "loopback" is the
-// handset, so a ws://127.0.0.1 relay is never a legitimate destination, and a QR that
-// named one would be pointing the phone at something already running on it.
-//
-// THE PIN IS SCOPED BY POLICY (ADR-016 W3's single rule, applied through
-// effectiveStatePin below): consulted verbatim under pinned_spki (and under the unset
-// legacy policy, which reads as pinned_spki for a pre-ADR-016 machine's payload), withheld
-// entirely under webpki. State.RelaySPKIPin is still written by pin() from
-// pairing.MachinePayload regardless of policy (B54's verbatim adoption), so a webpki phone
-// carries a pin it never reads here -- deliberate (W4.4), not a bug, and the reason any
-// diagnostic that prints the pin must print the policy beside it or it teaches the wrong
-// lesson.
-//
-// THE PLATFORM DELEGATE is layered in by withPlatformTrust below, if SetRelayTrust ever
-// installed one (ADR-016 W2): on Android this is what lets TrustRootsPlatformDelegate
-// replace the pinning-only floor under webpki, reaching the Conscrypt APEX store Go
-// itself cannot see. A pin present in relay.Security still outranks it (security.go's own
-// precedence), so a pinned_spki handset's session dial is unaffected by whether a
-// delegate is installed at all -- this only ever matters for a webpki handset.
-//
-// WHAT A USER SEES, in the states a handset can be in:
-//
-//   - PAIRED, PINNED_SPKI (or a legacy machine whose payload carries no policy field).
-//     The pin replaces name and chain verification, so the operator's self-signed relay is
-//     reachable and an impostor holding any other key is refused with
-//     relay.ErrPinMismatch however well-issued its certificate is.
-//   - PAIRED, WEBPKI (the default). No pin is applied. Chain trust comes from the
-//     platform's own roots, plus the Android delegate above when one is installed; every
-//     platform independently checks the leaf's hostname and validity window
-//     (VerifyHostname, security.go) regardless of what the delegate answers. A handset
-//     that reaches Android with NO delegate installed is not read as "nothing pinned" --
-//     see relayTrustUnavailable (mobile/relaytrust.go), which is what keeps that app fault
-//     from reaching the user as connRelayUntrusted's security accusation.
-//   - PAIRED, PINNED_SPKI, BEFORE THE MACHINE PUBLISHED A PIN (or paired with a machine
-//     that publishes none while itself holding pinned_spki). No pin is applied and, on a
-//     handset with no platform delegate available, the wss:// dial is refused with
-//     relay.ErrPinRequired rather than falling back to an unverified connection -- fail
-//     closed, never dial unpinned.
-//   - NEVER PAIRED. There is no relay URL to dial until a QR supplies one, and the pairing
-//     dial runs under a DIFFERENT policy entirely -- see below.
-//
-// THE PAIRING DIAL DOES NOT RUN UNDER THIS FUNCTION, and that is what closes the bootstrap
-// this comment used to record as unresolved ("residual 1.9"). mobile/pairing.go's
-// pairingDial is its own policy: under webpki it is an ordinary VERIFIED dial (ADR-016
-// W3) -- there is no pin to fetch, so the old deadlock does not exist for this policy at
-// all. Against a private/self-signed destination (W3's amendment; pinned_spki's own
-// population) B45's exemption still lets an unpinned pairing dial complete against a
-// machine no CA has issued for, and B48's capture-then-compare then authenticates what
-// msg2 actually delivers -- a Noise handshake the operator confirms by comparing a SAS,
-// so a hostile terminator on that dial sees routing metadata and no pinned material
-// either way. This function governs the SESSION dial only, reached after a pin (if any)
-// is already durable.
+// run is one Start..Stop generation: dial, drain, reconnect until the context is done.
 func (a *App) handsetSecurity() relay.Security {
 	sec := relay.Security{AllowLoopbackCleartext: true}
 	st := a.core.State()
@@ -1058,480 +879,175 @@ func checkRelayPin(machinePin, presented []byte) error {
 	return nil
 }
 
-// dial names the PINNED MACHINE as the peer whose revocation verdict this handset is here
-// for, and that is what keeps PB-APP-10's signal alive (ADR-007 B49).
-//
-// A ban used to refuse the banned routing id's every dial, whoever placed it. That made
-// every device_revoke mutual assured destruction — a stolen handset removed the machine
-// from the relay for good and no party the owner controlled could undo it — so the ban is
-// now scoped to the relationship it ended, and a scoped verdict has to be ASKED FOR. The
-// relay cannot supply the missing coordinate itself: after a revoke the machine and the
-// handset hold identical relay state, so no rule it can apply tells them apart.
-//
-// This is the one place that knows which answer matters to this device. An empty
-// destination — a handset whose durable state has no machine yet — asks for no verdict and
-// is admitted, which is correct: it has no relationship for a revoke to have ended.
-func (a *App) dial(ctx context.Context) (*relay.Client, error) {
-	ks := a.core.KeyStore()
+func (a *App) dialPhoneStream(ctx context.Context) (*phoneStream, error) {
 	target, _ := a.destination()
-	return relay.DialSecure(ctx, a.relayURL, relay.ClientAuth{
-		RelayAuthPub: ed25519.PublicKey(ks.RelayAuthPublic()),
-		Sign:         ks.SignRelayAuth,
-		Peer:         target,
-	}, a.handsetSecurity())
-}
-
-// onConnected re-establishes the per-connection state the relay does not persist: the
-// push token (PB-PUSH-9 requires re-registration on every authenticated reconnect).
-//
-// IT NO LONGER AUTHORIZES THE MACHINE, and the deletion is the point rather than a
-// simplification (ADR-007 B38). That call was `authorize_device` naming the machine, and
-// the relay now records nothing from such a call without the NAMED party's signed consent
-// — which only the machine can produce and the phone has never held. Making the phone
-// carry the machine's consent would have been redundant as well as unprovable: a consented
-// authorize_device records BOTH directed edges at once, so the machine's own call, at
-// pairing (cmd/swarm/remote.go authorizeAtRelay) and on every gateway connect
-// (cmd/swarm-remote/deliver.go), already writes the edge this one used to write.
-//
-// What was silently depending on it: nothing that survives. Its documented job was "the
-// machine's authorization to append to this phone's mailbox", which the pairs bucket holds
-// durably in bbolt; its side effect was ADR-007 B22's ban-lift, which belongs to the owner's
-// machine and is still performed there. What it also did, and could not stop doing, was
-// assert an authority relation from one side's say-so — the whole of ADR-007 B25.
-//
-// THE TOKEN ARM RECONCILES IN BOTH DIRECTIONS, which is what makes an offline DELETION reach
-// the relay at all. It used to register when durable state held a token and do nothing when it
-// did not -- so a deletion issued while backgrounded (the normal state under ADR-007 B16)
-// cleared the phone and left the relay delivering forever, with nothing to retry it because the
-// phone had forgotten the token. Durable state is authoritative for what the relay should hold,
-// so no token means DELETE, and the deletion is owed by exactly the mechanism that owes a
-// registration.
-//
-// The empty case cannot destroy a good registration, which is the objection worth answering.
-// State.PushToken is durable and wake-tier, so it survives process death and a lock purge
-// (PB-STATE-9, and fileStore.PurgeKeys carries the wake container byte for byte). The only ways
-// to reach a connect with no token held are a phone that has never registered one -- for which
-// the relay holds nothing either -- and a phone whose user deleted it, which is the case this
-// arm exists for.
-func (a *App) onConnected(ctx context.Context, cl *relay.Client) {
-	if token := a.core.State().PushToken; token != "" {
-		_ = cl.TokenRegister(ctx, token)
-	} else {
-		_ = cl.TokenDelete(ctx)
+	if target == "" {
+		return nil, errNoDestination
 	}
-}
+	st := a.core.State()
+	ks := a.core.KeyStore()
+	profile := relayv2.Profile{
+		RelayURL: a.relayURL, MachineRID: target, OperatorNamespace: st.OperatorNamespace,
+		Security: a.handsetSecurity(),
+	}
+	auth := relayv2.Auth{
+		PublicKey: ed25519.PublicKey(ks.RelayAuthPublic()), Sign: ks.SignRelayAuth,
+		Role: relayv2.RolePhone, Purpose: relayv2.PurposeStream,
+	}
+	dial := func() (*relayv2.Conn, relayv2.Binding, phonecore.PhoneBinding, error) {
+		conn, err := relayv2.Dial(ctx, profile, auth)
+		if err != nil {
+			return nil, relayv2.Binding{}, phonecore.PhoneBinding{}, err
+		}
+		binding, err := conn.PhoneBinding()
+		if err != nil {
+			conn.Close()
+			return nil, relayv2.Binding{}, phonecore.PhoneBinding{}, err
+		}
+		coreBinding := phonecore.PhoneBinding{
+			Home: relayv2.HomeID(st.OperatorNamespace, target), PhoneRID: binding.PeerRID,
+			Generation: binding.Generation, Active: true,
+		}
+		if err := a.core.ActivatePhoneBinding(coreBinding); err != nil {
+			conn.Close()
+			return nil, relayv2.Binding{}, phonecore.PhoneBinding{}, err
+		}
+		return conn, binding, coreBinding, nil
+	}
 
-// The relay's mailbox_wait support, as negotiated for the CURRENT connection
-// (App.waitSupport). run() overwrites it on every successful dial with the verdict of
-// that connection's r_hello capability exchange (negotiateWaitSupport), so the value is
-// PER CONNECTION, never process-sticky: an old relay that is upgraded is re-evaluated for
-// free on the next reconnect (bead agents-tracker-zphd), and one network stall can no
-// longer pin a modern relay to the 500 ms poll for the process lifetime (committee
-// finding M2).
-//
-//   - waitAdvertised: this connection's hello named "wait" among the agreed caps. The
-//     drain parks the wait tail on that promise; the first wait the relay ANSWERS --
-//     items or a clean empty page alike -- confirms it as waitSupported.
-//   - waitSupported: a wait has been answered on this connection; a later black-holed
-//     link is a transport failure, never a demotion.
-//   - waitUnsupported: the hello omitted "wait" (or failed outright), or -- defense in
-//     depth -- a relay that ADVERTISED the op never answered the first wait within
-//     waitTimeout (see drainWait). The drain runs the compatibility poll for the
-//     remainder of this connection.
-const (
-	waitAdvertised int32 = iota
-	waitSupported
-	waitUnsupported
-)
-
-// helloRequestCaps is every capability the phone's r_hello asks the relay for -- the
-// CLIENT half of the negotiation whose server half is relay's serverCaps. The two sets
-// live in different packages by design (the relay cannot know which of its caps a given
-// client wants; the phone deliberately omits "rendezvous", which pairing speaks on a raw
-// connection), so TestCommitteeR3_PhoneHelloCapsAreServedByTheRelay fences them against
-// drift: every capability named here must be granted by the shipped relay, or the phone
-// would silently run degraded against its OWN relay (committee round 3, Opus nit 6).
-var helloRequestCaps = []string{"mailbox", "push", "presence", "wait", relay.CapabilityMailboxRecovery}
-
-// negotiateWaitSupport derives one connection's wait verdict from its r_hello exchange.
-// A refused or failed hello reads as unsupported rather than an error: the poll fallback
-// works against every relay, and if the hello failed because the link is dying the drain
-// discovers that within one bounded call anyway.
-func (a *App) negotiateWaitSupport(ctx context.Context, cl *relay.Client) int32 {
-	a.mailboxRecoverySupported.Store(false)
-	_, caps, err := cl.Hello(ctx, relay.ProtocolVersion, helloRequestCaps)
+	conn, binding, coreBinding, err := dial()
 	if err != nil {
-		return waitUnsupported
+		return nil, err
 	}
-	for _, c := range caps {
-		if c == relay.CapabilityMailboxRecovery {
-			a.mailboxRecoverySupported.Store(true)
+	checkpoint := relayv2.Checkpoint{Incarnation: a.core.State().RelayIncarnation, Cursor: a.core.State().RelayCursor}
+	sub, err := conn.Subscribe(ctx, binding, checkpoint)
+	var protocolErr *relayv2.ProtocolError
+	if err != nil && checkpoint.Incarnation != "" && errors.As(err, &protocolErr) && protocolErr.Code == "incarnation_mismatch" {
+		recoveryToken, recoveryIncarnation, recoveryCursor := a.core.DiscardRecovery()
+		if recoveryToken != "" && recoveryIncarnation == checkpoint.Incarnation {
+			discarded, discardErr := conn.Discard(ctx, binding, checkpoint.Incarnation, recoveryCursor)
+			if discardErr != nil {
+				conn.Close()
+				return nil, discardErr
+			}
+			if err := a.core.AdoptPhoneDiscard(coreBinding, checkpoint.Incarnation, discarded.Incarnation, discarded.Cursor); err != nil {
+				return nil, err
+			}
+		} else {
+			conn.Close()
+			if err := a.core.RecoverPhoneIncarnation(coreBinding, checkpoint.Incarnation); err != nil {
+				return nil, err
+			}
 		}
-	}
-	for _, c := range caps {
-		if c == "wait" {
-			return waitAdvertised
+		conn, binding, coreBinding, err = dial()
+		if err != nil {
+			return nil, err
 		}
+		sub, err = conn.Subscribe(ctx, binding, relayv2.Checkpoint{})
 	}
-	return waitUnsupported
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	subCheckpoint := sub.Checkpoint()
+	if err := a.core.SetPhoneCheckpoint(coreBinding, subCheckpoint.Incarnation, subCheckpoint.Cursor); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return &phoneStream{conn: conn, sub: sub, binding: binding, coreBinding: coreBinding}, nil
 }
 
-// serverWaitCeiling is §6.0's "Server-side wait (long-poll) maximum | 25 s" (PB-NET-5),
-// transcribed exactly as internal/remotegw does for the machine hop: it is the RELAY's
-// ceiling, which is why it cannot be the phone's bound and is instead the number the
-// phone's own bound has to clear.
-const serverWaitCeiling = 25 * time.Second
-
-// waitTimeout bounds ONE MailboxWait from the phone's side: the relay's own 25 s wait
-// ceiling plus PB-NET-7's request budget for the frames that carry the wait out and its
-// reply back -- composed from §6.0's terms rather than chosen, exactly like the gateway's
-// defaultWaitTimeout, and for the same reason (a relay that honours the ceiling is never
-// cut off early; one that answers nothing is ended one request budget later).
-//
-// It is a var, not a const, for one reason only: a test that needs the defense-in-depth
-// demotion (an ADVERTISED wait that is never answered, see drainWait) would otherwise
-// spend the full production bound proving a timeout fires. Nothing in production writes
-// it.
-var waitTimeout = serverWaitCeiling + relay.DefaultCallTimeout
-
-// drain hands every mailbox item to the core, in order, until the connection dies: the
-// bounded-MailboxWait live tail against every relay whose hello advertised the "wait"
-// capability, and the legacy 500 ms poll ONLY against one that did not (playbook section
-// 10: "an explicit compatibility fallback only for old relays" -- selected by the
-// relay's own capability set, never by a config flag).
-//
-// The second dispatch below is drainWait's defense-in-depth demotion landing: a relay
-// that ADVERTISED the wait and then answered nothing within waitTimeout is polled for
-// the remainder of this connection -- still exactly one mailbox reader, handed off
-// sequentially on one goroutine (PB-NET-6). If the deadline was really the link dying,
-// the poll's first bounded MailboxRead discovers that within DefaultCallTimeout and the
-// generation ends for an ordinary reconnect.
-func (a *App) drain(ctx context.Context, cl *relay.Client) {
-	if a.waitSupport.Load() != waitUnsupported {
-		a.drainWait(ctx, cl)
-	}
-	if ctx.Err() == nil && a.waitSupport.Load() == waitUnsupported {
-		a.drainPoll(ctx, cl)
-	}
-}
-
-// drainWait is the live tail: park a bounded server-side wait at the durable cursor,
-// deliver whatever page it returns, ack, park the next one. Reads are paced by the SAME
-// transport.DrainPacer the gateway's command-IN loop uses, so §6.0's inbound drain budget
-// binds this hop by construction rather than by a second transcription -- including
-// against a poisoned mailbox tail, where the wait returns instantly forever and the pacer
-// is what keeps the loop at the budget instead of at full speed (PB-SYNC-6; the poll
-// loop's progress condition, restated for a drain with no sleep to fall into).
-//
-// AN OLD RELAY NEVER REACHES THIS FUNCTION. Its hello does not advertise the "wait"
-// capability, so negotiateWaitSupport records waitUnsupported at connection setup and
-// drain selects the poll outright -- no blind probe, no dark window, and no uncorrelated
-// MsgError refusal queued where the next request/reply exchange would consume it as its
-// own answer (committee finding H1; internal/remote/relay's pump additionally drops any
-// such unsolicited frame as defense in depth).
-//
-// THE ONE DEMOTION LEFT is therefore itself defense in depth, against a relay that
-// ADVERTISED the wait and then answered nothing: a deadline-shaped failure while no wait
-// has ever been answered on THIS connection stores waitUnsupported and returns, and
-// drain hands the same connection to the poll. That is safe precisely because the relay
-// claimed the op -- a claiming relay replies via the correlated MsgWaitReply or not at
-// all, so unlike the old blind probe there is no stray in-order error to desynchronise
-// the stream. Every other failure -- the link dying under the wait (ErrConnClosed), the
-// drain's own shutdown -- returns for an ordinary reconnect with the verdict unchanged,
-// and once ANY wait has been answered the verdict is supported and a later black-holed
-// link can no longer demote it. The verdict dies with the connection either way: the
-// next generation's hello decides afresh (committee finding M2).
-//
-// ACKS RIDE transport.AckBatcher, OFF the delivery path, at most one metered op per
-// second (MaxDrainAcksPerSec) -- the same batcher, and the same argument, as the
-// gateway's command-IN loop. The synchronous shape this replaced acked once per
-// delivered page, which at the specified 8 frames/s spends the relay's own OpsPerMin
-// window (600) in about 40 s and gets the drain quota-refused by the relay it is
-// draining (codex committee probe). Dropping an ack is safe: it is an optimisation, the
-// durable receive high-water refuses any redelivery, and a cursor that failed to flush
-// is re-recorded for the next tick.
-func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
-	pacer := transport.NewDrainPacer()
-	acks := transport.NewAckBatcher(func(actx context.Context, cursor uint64) error {
-		if err := cl.MailboxAck(actx, cursor); err != nil {
-			return err
-		}
-		a.mu.Lock()
-		if cursor > a.ackSent {
-			a.ackSent = cursor
-		}
-		a.mu.Unlock()
-		return nil
-	})
-	a.setAckReset(acks.Reset)
-	defer a.setAckReset(nil)
-	actx, stopAcks := context.WithCancel(ctx)
-	ackDone := make(chan struct{})
-	go func() { defer close(ackDone); acks.Run(actx) }()
-	defer func() { stopAcks(); <-ackDone }() // joined, so no ack outlives the drain that owns it
+// drainPhone is the sole Subscription.Recv owner. A refresh cancels only its current
+// receive context, then the next loop iteration performs the serialized PROBE/DISCARD.
+func (a *App) drainPhone(ctx context.Context, stream *phoneStream) *phoneStream {
 	for ctx.Err() == nil {
-		if a.performMailboxDiscard(cl, acks) {
+		if next, handled := a.performMailboxDiscard(stream); handled {
+			stream = next
+			if stream == nil {
+				return nil
+			}
 			continue
 		}
-		if pacer.Pace(ctx) != nil {
-			return
-		}
-		// ONE deadline per wait, cancelled rather than deferred (a defer here would
-		// accumulate one live timer per cycle for the connection's life).
-		waitCtx, cancelWait := context.WithTimeout(ctx, waitTimeout)
-		a.setWaitCancel(cancelWait)
-		// The durable cursor is read AFTER the nudge target is registered, which is what
-		// closes RewindRelayCursor's race with a parking wait: a rewind that lands before
-		// this line is picked up here, and one that lands after it cancels the wait
-		// (nudgeDrain), so neither ordering leaves the drain parked at the old cursor.
-		cursor := a.core.State().RelayCursor
-		ackGeneration := acks.Generation()
-		items, _, err := cl.MailboxWait(waitCtx, cursor)
-		a.setWaitCancel(nil)
-		cancelWait()
-		pacer.Observe(len(items))
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if errors.Is(err, relay.ErrMailboxCursorResetRequired) {
-				if resetErr := a.rewindRelayCursor(); resetErr != nil {
-					return
-				}
-				continue
-			}
-			if errors.Is(err, context.Canceled) {
-				// The NUDGE, and it can be nothing else: the drain's own shutdown was
-				// checked above, the deadline is a different sentinel, and nothing else
-				// cancels waitCtx. RewindRelayCursor moved the durable cursor under this
-				// parked wait; re-park at the value it holds now. The client already freed
-				// the relay's wait slot on the way out (mailbox_wait_cancel travels the
-				// same stream in order), so the immediate replacement is admitted.
-				continue
-			}
-			if a.waitSupport.Load() == waitAdvertised && errors.Is(err, context.DeadlineExceeded) {
-				// The defense-in-depth demotion the function comment describes: an
-				// advertised wait went unanswered for the whole bound. Recorded for THIS
-				// connection; drain falls through to the poll on the same one.
-				a.waitSupport.Store(waitUnsupported)
-			}
-			return
-		}
-		if err := a.adoptRelayIncarnation(cl.MailboxIncarnation()); err != nil {
-			return
-		}
-		a.waitSupport.Store(waitSupported)
-		a.acceptMailboxPage(ctx, items)
-		// Hand the page's committed high-water to the batcher and re-park immediately.
-		// Recording is lock-order-safe (a.mu is not held) and does no I/O; the batcher's
-		// own tick meters the flush. The silent-relay bound does not regress: the next
-		// PROBE of a relay that answers nothing is the wait parked above, ended by
-		// waitTimeout, which is the same bound the old inline-ack early exit defended.
+		recvCtx, cancel := context.WithCancel(ctx)
 		a.mu.Lock()
-		pending, sent := a.ackPending, a.ackSent
+		a.recvCancel = cancel
+		pendingRecovery := a.mailboxDiscard != nil
 		a.mu.Unlock()
-		if pending > sent {
-			if !acks.RecordGeneration(pending, ackGeneration) {
-				// A manual Resync crossed this delivery. Its cursor belongs to the
-				// retired mailbox generation, including the facade's coalescing copy.
-				a.mu.Lock()
-				a.ackPending = 0
-				a.ackSent = 0
-				a.mu.Unlock()
-			}
-		}
-	}
-}
-
-// drainPoll polls the mailbox at pollInterval: the pre-wait drain, kept verbatim as the
-// compatibility fallback an old relay's refusal selects (see drain).
-//
-// The immediate next read is conditioned on PROGRESS -- the durable cursor moved -- and
-// not on the page having been non-empty. The cursor advances only for a frame the core
-// OPENED (phonecore commits it inside the receive transaction), so an item that cannot be
-// opened is re-served by every subsequent read: one undecodable frame at the mailbox TAIL
-// makes every page non-empty forever. Looping on a non-empty page would then spin at full
-// speed on a battery-powered device and burn the relay's per-source ops budget until the
-// connection dies -- an unbounded-work lever handed to the party the design treats as
-// hostile (PB-SYNC-6), and reachable benignly by any frame that arrives before
-// InstallContentKey. A real backlog still drains at full speed: it advances the cursor.
-// setWaitCancel publishes (or clears) the cancel function of the wait the drain is about
-// to park, the seam nudgeDrain acts through. Guarded by a.mu like the rest of the App's
-// cross-goroutine state.
-func (a *App) setWaitCancel(fn context.CancelFunc) {
-	a.mu.Lock()
-	a.waitCancel = fn
-	a.mu.Unlock()
-}
-
-func (a *App) setAckReset(fn func()) {
-	a.mu.Lock()
-	a.ackReset = fn
-	a.mu.Unlock()
-}
-
-// nudgeDrain wakes a parked mailbox wait so the drain re-reads the durable relay cursor.
-//
-// IT EXISTS FOR EXACTLY ONE CALLER: Resync, right after RewindRelayCursor. The poll
-// fallback re-reads State.RelayCursor every cycle, so a rewind reached it within one
-// pollInterval by construction; the wait drain instead PARKS at the cursor it read, and a
-// wait parked at a poisoned coordinate (ADR-007 B126) is woken by nothing -- no item is
-// ever past it -- until the relay's 25 s ceiling answers it empty. The rewind is the one
-// local state change that must interrupt the wait, and cancelling the wait's own context
-// is the mechanism the client already defines for withdrawing one cleanly.
-//
-// With no wait parked it is a no-op, and correctly so: the rewind is already durable, and
-// whichever read the drain makes next starts from it.
-func (a *App) nudgeDrain() {
-	a.mu.Lock()
-	fn := a.waitCancel
-	a.mu.Unlock()
-	if fn != nil {
-		fn()
-	}
-}
-
-// rewindRelayCursor moves only the relay-owned storage coordinate back to zero and retires
-// every queued ack from its prior generation. The phonecore rewind preserves authenticated
-// receive and grant replay high-waters, so re-served envelopes are refused/acked without
-// being applied twice. Both ack counters must move with it: their numeric ordering has no
-// meaning in the replacement mailbox and a larger stale ack could otherwise delete new items.
-func (a *App) rewindRelayCursor() error {
-	a.mu.Lock()
-	resetAcks := a.ackReset
-	cl := a.client
-	a.mu.Unlock()
-	// Reset is a barrier: any already-started old-coordinate ack completes while
-	// the client still carries the retired incarnation. Clear it only afterwards.
-	if resetAcks != nil {
-		resetAcks()
-	}
-	if cl != nil {
-		cl.ResetMailboxIncarnation()
-	}
-	// Write the durable rewind last. If an already-returned page was adopting the
-	// retired incarnation concurrently, this write follows it and clears it; if its
-	// request was still in flight, the client generation barrier refuses its response.
-	if err := a.core.RewindRelayCursor(); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	a.ackPending = 0
-	a.ackSent = 0
-	a.mu.Unlock()
-	return nil
-}
-
-func (a *App) adoptRelayIncarnation(incarnation string) error {
-	if incarnation == "" || a.core.State().RelayIncarnation == incarnation {
-		return nil
-	}
-	return a.core.SetRelayIncarnation(incarnation)
-}
-
-func (a *App) drainPoll(ctx context.Context, cl *relay.Client) {
-	for ctx.Err() == nil {
-		if a.performMailboxDiscard(cl, nil) {
-			continue
-		}
-		cursor := a.core.State().RelayCursor
-		ackGeneration := cl.MailboxGeneration()
-		items, err := cl.MailboxRead(ctx, cursor)
-		if err != nil {
-			if errors.Is(err, relay.ErrMailboxCursorResetRequired) {
-				if resetErr := a.rewindRelayCursor(); resetErr == nil {
-					continue
-				}
-			}
-			return
-		}
-		if err := a.adoptRelayIncarnation(cl.MailboxIncarnation()); err != nil {
-			return
-		}
-		a.acceptMailboxPage(ctx, items)
-		if err := a.flushAcks(ctx, cl, ackGeneration); errors.Is(err, relay.ErrMailboxCursorResetRequired) {
-			// A manual recovery crossed this already-returned poll page. Its coalesced
-			// cursor belongs to the retired mailbox generation and must not leak into
-			// the next page's ack.
+		if pendingRecovery {
+			cancel()
 			a.mu.Lock()
-			a.ackPending = 0
-			a.ackSent = 0
+			a.recvCancel = nil
 			a.mu.Unlock()
-		}
-		if a.core.State().RelayCursor > cursor {
 			continue
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(pollInterval):
+		delivery, err := stream.sub.Recv(recvCtx)
+		cancel()
+		a.mu.Lock()
+		a.recvCancel = nil
+		pendingRecovery = a.mailboxDiscard != nil
+		a.mu.Unlock()
+		if err != nil {
+			if pendingRecovery {
+				continue
+			}
+			return stream
+		}
+		receipt, err := a.acceptPhone(ctx, stream, delivery.Ciphertext, delivery.Cursor)
+		if blocksMailboxPage(receipt, err) {
+			return stream
 		}
 	}
+	return stream
 }
 
+func diagnosePhoneDeliveries(ctx context.Context, deliveries []relayv2.Delivery, accept mailboxAccept) (uint64, error) {
+	for _, delivery := range deliveries {
+		receipt, err := accept(ctx, delivery.Ciphertext, delivery.Cursor)
+		if !blocksMailboxPage(receipt, err) {
+			continue
+		}
+		if errors.Is(err, crypto.ErrStaleAge) {
+			return delivery.Cursor, nil
+		}
+		return 0, err
+	}
+	return 0, nil
+}
+
+// mailboxAccept is the narrow acceptance seam used by PROBE diagnosis tests.
 type mailboxAccept func(context.Context, []byte, uint64) (phonecore.Receipt, error)
 
 func blocksMailboxPage(receipt phonecore.Receipt, err error) bool {
 	return err != nil && !receipt.Acked && receipt.Disposition == phonecore.ReceiptRetained
 }
 
-// acceptMailboxPage sweeps one relay page until the core says an errored item must be
-// retained. Discardable parse/auth/decode failures deliberately do not stop the sweep: an
-// untrusted relay could otherwise pin every valid frame behind one malformed head for the
-// retention window (PB-SYNC-6). A retained stale-age/custody refusal or failed durable
-// commit is the opposite case: accepting a later cursor would make an eventual coalesced ack
-// compact the only recoverable copy of the refused item.
-func acceptMailboxPage(ctx context.Context, items []relay.Item, accept mailboxAccept) {
-	for _, it := range items {
-		receipt, err := accept(ctx, it.Envelope, it.Cursor)
-		if blocksMailboxPage(receipt, err) {
-			break
-		}
-	}
-}
-
-// diagnoseMailboxPage applies the same page fence while distinguishing the one retained
-// condition the explicit roster-refresh gesture is authorized to discard. Every other
-// retained error is surfaced to the caller; treating it as a healthy diagnosis would let
-// the later refresh/ack compact recoverable content the core deliberately kept.
-func diagnoseMailboxPage(ctx context.Context, items []relay.Item, accept mailboxAccept) (staleAge bool, err error) {
-	for _, it := range items {
-		receipt, acceptErr := accept(ctx, it.Envelope, it.Cursor)
-		if !blocksMailboxPage(receipt, acceptErr) {
-			continue
-		}
-		if errors.Is(acceptErr, crypto.ErrStaleAge) {
-			return true, nil
-		}
-		return false, acceptErr
-	}
-	return false, nil
-}
-
-func (a *App) acceptMailboxPage(ctx context.Context, items []relay.Item) {
-	acceptMailboxPage(ctx, items, a.accept)
-}
-
-// accept runs the core's durable receive transaction for one envelope, then -- only for a
-// frame the core ACCEPTED -- builds the app-facing read models and events from it.
-//
-// IT NO LONGER ATTRIBUTES THE GAP, and that is PB-SYNC-1. This used to mark the stream of
-// the frame it happened to be holding -- a hole seen while decoding a terminal snapshot
-// staled "terminal" -- but journal and terminal share ONE (sender, epoch) seq space and
-// crypto.MailboxResult carries a bare Gap bool with no frame kind, so the skipped seq may
-// just as well have been the journal record saying a session exited. The conservative
-// per-bucket mark and the per-channel clear both live in the core now, inside the same
-// durable transaction that moves the watermark (PB-SYNC-3), and StreamState reads them from
-// there.
-func (a *App) accept(ctx context.Context, raw []byte, cursor uint64) (phonecore.Receipt, error) {
+// acceptPhone binds the core transaction and its ACK to the exact subscription that
+// produced the delivery. Pairing or discard replacement cannot redirect an old ACK onto
+// the new generation because lifecycle teardown joins this call before publishing it.
+func (a *App) acceptPhone(ctx context.Context, stream *phoneStream, raw []byte, cursor uint64) (phonecore.Receipt, error) {
 	key := a.core.State().Keys.ContentKey
-	receipt, err := a.core.Router().AcceptCommit(raw, cursor)
+	a.mu.Lock()
+	a.ackStream = stream
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		if a.ackStream == stream {
+			a.ackStream = nil
+		}
+		a.mu.Unlock()
+	}()
+	receipt, err := a.core.AcceptPhoneDelivery(stream.coreBinding, raw, cursor)
 	if err != nil {
 		return receipt, err
 	}
+	a.publishAccepted(ctx, key, raw)
+	return receipt, nil
+}
+
+func (a *App) publishAccepted(ctx context.Context, key crypto.ContentKey, raw []byte) {
 	v, ok := viewFrame(key, raw)
 	if !ok {
-		return receipt, nil
+		return
 	}
 	switch v.Kind {
 	case "terminal_snapshot":
@@ -1549,7 +1065,6 @@ func (a *App) accept(ctx context.Context, raw []byte, cursor uint64) (phonecore.
 	case "":
 		a.onJournal(v.Record)
 	}
-	return receipt, nil
 }
 
 // adoptReconcile folds the machine's rollback authorities into every durable coordinate
@@ -1620,23 +1135,37 @@ func (a *App) reportWebPKIUnavailable(cause error) {
 
 // probeWebPKI is W4 step 3's real dial: relay_host already matched a.relayURL (the caller
 // checked before calling probe at all), so proving the profile's claim is exactly proving
-// THIS phone's own relay URL under an ordinary verified dial -- the platform delegate on
-// Android once SetRelayTrust installed one (W2), the system trust store elsewhere -- on a
-// connection separate from the live pinned one, which this never touches.
+// THIS phone's own relay URL under an ordinary verified relay-v2 dial -- the platform
+// delegate on Android once SetRelayTrust installed one (W2), the system trust store
+// elsewhere -- on a
+// separately authenticated phone/probe purpose that cannot supersede or issue RPCs on the
+// live phone/stream purpose.
 func (a *App) probeWebPKI(ctx context.Context, _ string) error {
 	// REVIEW-ROUND FIX: bounded on ITS OWN deadline rather than inheriting whatever the
 	// drain goroutine's ctx happens to carry -- this runs on that goroutine synchronously,
 	// so an unbounded probe would block message draining for as long as the relay stays
-	// silent. relay.DefaultDialTimeout is the same bound DialRawSecure's own connect phase
-	// already applies; this makes it explicit rather than incidental.
+	// silent. relay.DefaultDialTimeout is the same bound the relay-v2 connect phase applies;
+	// this makes it explicit rather than incidental.
 	ctx, cancel := context.WithTimeout(ctx, relay.DefaultDialTimeout)
 	defer cancel()
-	sec := a.withPlatformTrust(relay.Security{AllowLoopbackCleartext: true})
-	conn, err := relay.DialRawSecure(ctx, a.relayURL, sec)
+	target, _ := a.destination()
+	if target == "" {
+		return errNoDestination
+	}
+	st := a.core.State()
+	ks := a.core.KeyStore()
+	conn, err := relayV2DialProbe(ctx, relayv2.Profile{
+		RelayURL: a.relayURL, MachineRID: target, OperatorNamespace: st.OperatorNamespace,
+		Security: a.withPlatformTrust(relay.Security{AllowLoopbackCleartext: true}),
+	}, relayv2.Auth{
+		PublicKey: ed25519.PublicKey(ks.RelayAuthPublic()), Sign: ks.SignRelayAuth,
+		Role: relayv2.RolePhone, Purpose: relayv2.PurposeProbe,
+	})
 	if err != nil {
 		return err
 	}
-	return conn.Close()
+	conn.Close()
+	return nil
 }
 
 func (a *App) onJournal(rec schema.JournalRecord) {

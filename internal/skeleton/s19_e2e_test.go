@@ -9,9 +9,9 @@ package skeleton
 // THE HARD PART IS THE NEGATIVE, so the seam inventory is stated here rather than left to be
 // reconstructed from the code. Every component in the chain, and what it really is:
 //
-//	relay      REAL   internal/remote/relay.Server over a real localhost WebSocket, its own
-//	                  BoltDB store. Both parties reach it by URL; nothing is short-circuited.
-//	client     REAL   internal/remote/relay.Client on BOTH sides -- the phone's is the one
+//	relay      REAL   relay-v2 Worker under local workerd with SQLite durable state. Both
+//	                  parties reach it by URL; nothing is short-circuited.
+//	client     REAL   internal/remote/relayv2.Conn on BOTH sides -- the phone's is the one
 //	                  mobile/relay.go dials from the phone's own relay-auth key, the machine's
 //	                  is the one cmd/swarm-remote dials from the machine identity.
 //	façade     REAL   the bound swarmmobile.App: durable phonecore.Core underneath it, the
@@ -72,6 +72,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
+	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 	swarmmobile "github.com/Nathandela/swarm/mobile"
 )
 
@@ -247,9 +248,11 @@ type s19Rig struct {
 
 func newS19Rig(t *testing.T) *s19Rig {
 	t.Helper()
+	relayURL := os.Getenv("SKELETON_RELAY_V2_HTTP")
+	if relayURL == "" {
+		t.Skip("SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig")
+	}
 	buildBinaries(t)
-
-	srv := startPairingRelay(t)
 
 	// A short state-directory path: the daemon's UDS must fit in sun_path (104 bytes).
 	stateDir, err := os.MkdirTemp("/tmp", "s19")
@@ -259,8 +262,15 @@ func newS19Rig(t *testing.T) *s19Rig {
 	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
 
 	// What `swarm remote init --relay-url` persists, minus the supervision-unit install.
-	writeTestIdentity(t, stateDir, "s19-machine.local")
-	writeRelayURL(t, stateDir, srv.URL())
+	// The local workerd admits the deterministic RID this identity supplies.  This
+	// is the same provisioned identity used by the real relay-v2 pairing test,
+	// rather than a v1 fixture or an allowlist bypass.
+	writeAllowedRelayV2Identity(t, stateDir, "s19-machine.local")
+	if err := relaycfg.Save(stateDir, relaycfg.Config{
+		RelayURL: relayURL, OperatorNamespace: "local-test", TLSPolicy: relaycfg.PolicyWebPKI,
+	}); err != nil {
+		t.Fatalf("save relay-v2 config: %v", err)
+	}
 	// R-POL.7: remote launches are confined to configured cwd roots and fail CLOSED with
 	// none. The phone's launch below runs in a t.TempDir(), which lives under this root.
 	tmpRoot, terr := filepath.EvalSymlinks(os.TempDir())
@@ -290,7 +300,7 @@ func newS19Rig(t *testing.T) *s19Rig {
 	t.Cleanup(func() { _ = sk.Close() })
 
 	r := &s19Rig{
-		t: t, relayURL: srv.URL(),
+		t: t, relayURL: relayURL,
 		stateDir: stateDir, remoteSock: remoteSock, sk: sk,
 		phoneDir: t.TempDir(), custody: newS19Custody(t),
 		created: make(chan struct{}),

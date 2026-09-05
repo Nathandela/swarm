@@ -67,15 +67,14 @@ data class MachinePane(
      */
     val machineName: String = "",
     /**
-     * `App.Presence`, verbatim -- and it is the RELAY'S OPINION, never evidence about the
-     * machine (PB-APP-11). It must be rendered with [freshness] beside it, which is why that
-     * is a required parameter of this pane rather than a screen's option.
+     * `App.MachinePresence`, currently the honest relay-v2 value `unknown`. It is never evidence
+     * about the machine (PB-APP-11); [freshness] is the required authenticated evidence.
      */
     val presence: String,
     /**
      * `App.MachineFreshness` -- the phone's OWN evidence: how long since the machine's newest
-     * authenticated word. A relay that withholds every frame while answering every poll leaves
-     * presence reading "online" and this reading silent, which is the whole of ADR-007 B121.
+     * authenticated word. A relay can withhold every frame while the stream remains connected;
+     * this is the evidence it cannot make newer, which is the whole of ADR-007 B121.
      */
     val freshness: MachineFreshness,
     val pairedDeviceName: String,
@@ -134,16 +133,15 @@ data class MachinePane(
     companion object {
 
         /**
-         * What a phone may say about reachability given the relay's word and its OWN evidence.
+         * What a phone may say given its neutral presence marker and OWN evidence.
          *
          * EMPTY IS A HEALTHY MACHINE (agents-tracker-ksvb.6): inside section 6.0's freshness
          * budget there is nothing to report, and an unconditional sentence restating what the
          * presence dot already says in colour is the always-on notice this app refuses everywhere
          * else. [announcementOf] is where the fact goes for a reader the silence excludes.
          *
-         * @param presence `App.MachinePresence`'s state, verbatim -- the RELAY's opinion.
-         * @param freshness the phone's own evidence, which is what decides whether the relay's
-         *  word is allowed to stand alone.
+         * @param presence `App.MachinePresence`'s state, currently `unknown`.
+         * @param freshness the phone's authenticated evidence, which decides the liveness line.
          * @param nowUnixMs this phone's clock, for the elapsed duration alone (agents-tracker-2pnu
          *  F5). It replaced an Android time FORMATTER: the sentence read `since 14:57`, and a
          *  wall clock with no date on it reads the same at three minutes and at nineteen hours.

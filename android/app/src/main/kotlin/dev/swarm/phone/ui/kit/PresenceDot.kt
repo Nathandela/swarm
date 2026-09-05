@@ -11,13 +11,13 @@ import dev.swarm.phone.R
  *
  * IT IS AN ENUM AND NOT A `status.Group` STRING, and that distinction is the same one
  * [presenceDot] exists for: a Group is the server's derived session state, rendered verbatim
- * through `android/group-tokens.tsv`, and presence is the RELAY's opinion about reachability with
- * three values where a Group has four. An enum is also what makes the third state unskippable --
+ * through `android/group-tokens.tsv`, and machine liveness is not a session Group. The retained
+ * `unknown` mark is the only relay-v2 production value; an enum also makes it unskippable --
  * `when (mark)` over a closed set has no default arm to fold `UNKNOWN` into, which is exactly how
  * it went unrendered while the parameter was a `Boolean`.
  *
- * The names are the relay's own words (`internal/remote/relay/client.go`) and the maquette's own
- * class suffixes, which is what lets the tests read `.pdot.${mark}` straight out of the design.
+ * The names are the maquette's class suffixes, which is what lets the tests read
+ * `.pdot.${mark}` straight out of the design.
  */
 enum class PresenceMark { ONLINE, OFFLINE, UNKNOWN }
 
@@ -40,9 +40,8 @@ enum class PresenceMark { ONLINE, OFFLINE, UNKNOWN }
  * derived once, on the server, and rendered verbatim (PB-TOK-8); `android/group-tokens.tsv` is the
  * checked-in join and `TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping` refuses any bound key
  * that is not in it, deliberately. Presence is not on that table and could not be: it is
- * `App.Presence`, the RELAY's opinion about reachability, and it has three values where a Group
- * has four. So the binding here is [PresenceMark] and the Group fence stays exactly as strict as
- * it was.
+ * a distinct liveness mark and the Group fence stays exactly as strict as it was. Relay-v2 sends
+ * `UNKNOWN`; the other two marks remain design variants, not relay assertions.
  *
  * **IT NEVER GLOWS, IN EITHER STATE.** Row 11: "Flat in both states -- no glow. Nothing glows
  * unless it is alive, and a reachable machine is not a running agent." Online is the state that
@@ -50,8 +49,7 @@ enum class PresenceMark { ONLINE, OFFLINE, UNKNOWN }
  * takes no glow parameter at all rather than defaulting one to null.
  *
  * **THE THIRD STATE IS DRAWN, AND IT USED TO BE FOLDED ONTO THE SECOND.** This parameter was
- * `online: Boolean` and `unknown` took the offline fill, on the argument that the caller states
- * the relay's actual word in the line beside the mark. That argument was correct against the
+ * `online: Boolean` and `unknown` took the offline fill. That argument was correct against the
  * SUBSTRATE artifact, which draws no `.pdot.unknown` rule at all -- row 11 gives presence two
  * colours because two was all there was to render. The Obsidian maquette draws three, and
  * ADR-009 D2 makes it normative:
@@ -62,9 +60,8 @@ enum class PresenceMark { ONLINE, OFFLINE, UNKNOWN }
  * reasoning protected survives untouched: `unknown` still must never read as REACHABLE, and a
  * recessive-ink ring could not be mistaken for the `--p-ok` disc.
  *
- * @param mark which of the relay's three words this is. `App.Presence` returns `unknown`,
- *  `offline` or `online` (internal/remote/relay/client.go), and `unknown` means the relay has no
- *  live record -- after its own restart, for instance, because presence is never persisted.
+ * @param mark the presentation state. Relay-v2 supplies only `unknown`; online/offline remain
+ *  maquette variants rather than a relay reachability claim.
  * @param description what a screen reader says about the mark, or null where the row states
  *  presence in words -- [statusDot]'s arrangement and its reason. Never the empty string, which is
  *  the platform's idiom for "decorative, skip me" rather than for "I have no words of my own".

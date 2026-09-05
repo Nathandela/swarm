@@ -94,8 +94,8 @@ func (c *Core) ActivatePhoneBinding(next PhoneBinding) error {
 	return err
 }
 
-// SetPhoneIncarnation binds the native relay-v2 checkpoint to the exact live authority.
-func (c *Core) SetPhoneIncarnation(binding PhoneBinding, incarnation string) error {
+// SetPhoneCheckpoint binds the effective relay-v2 subscription baseline to the exact live authority.
+func (c *Core) SetPhoneCheckpoint(binding PhoneBinding, incarnation string, cursor uint64) error {
 	if !validPhoneIncarnation(incarnation) {
 		return errors.New("phonecore: invalid relay-v2 mailbox incarnation")
 	}
@@ -106,11 +106,12 @@ func (c *Core) SetPhoneIncarnation(binding PhoneBinding, incarnation string) err
 	if c.st.phoneBinding != binding || !binding.Active {
 		return ErrPhoneBindingChanged
 	}
-	if c.st.RelayIncarnation == incarnation {
+	if c.st.RelayIncarnation == incarnation && c.st.RelayCursor == cursor {
 		return nil
 	}
 	st := c.st.clone()
 	st.RelayIncarnation = incarnation
+	st.RelayCursor = cursor
 	return c.persistLocked(st)
 }
 
@@ -218,6 +219,10 @@ func (c *Core) CommitPhonePairing(staged *PushAddress, fn func(*State)) error {
 		retired.Active = false
 	}
 	st.RelayCursor, st.RelayIncarnation = 0, ""
+	st.DiscardRecoveryCompleted = st.DiscardRecoveryGeneration
+	st.DiscardRecoveryToken = ""
+	st.DiscardRecoveryIncarnation = ""
+	st.DiscardRecoveryCursor = 0
 	st = c.stateForPersistLocked(st)
 	st.phoneBinding = retired
 	err := c.store.CommitPhonePairing(st.clone())

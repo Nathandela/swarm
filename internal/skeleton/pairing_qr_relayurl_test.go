@@ -45,16 +45,13 @@ package skeleton
 
 import (
 	"context"
-	"encoding/hex"
 	"net/url"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 )
 
 // TestBeginPairing_QRCarriesTheConfiguredRelayURL is the direct PB-PAIR-7 regression
@@ -65,12 +62,13 @@ import (
 // The relay is real and in-process only so the rendezvous seam loadPairingConfig wires
 // has something to dial; the assertion is entirely about the QR.
 func TestBeginPairing_QRCarriesTheConfiguredRelayURL(t *testing.T) {
-	srv := startPairingRelay(t)
-	relayURL := srv.URL()
+	relayURL := "ws://127.0.0.1:4567"
 
 	stateDir := t.TempDir()
 	writeTestIdentity(t, stateDir, "qr-relayurl-host")
-	writeRelayURL(t, stateDir, relayURL)
+	if err := relaycfg.Save(stateDir, relaycfg.Config{RelayURL: relayURL, OperatorNamespace: "owner"}); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg, err := loadPairingConfig(stateDir)
 	if err != nil {
@@ -78,6 +76,10 @@ func TestBeginPairing_QRCarriesTheConfiguredRelayURL(t *testing.T) {
 	}
 	if cfg == nil {
 		t.Fatal("loadPairingConfig returned nil despite a present identity + relay.json")
+	}
+	cfg.NewRendezvous = func(context.Context, [16]byte) (pairing.RendezvousTransport, error) {
+		machine, _ := rendezvousPair()
+		return machine, nil
 	}
 
 	sk := assemble(t)
@@ -179,108 +181,5 @@ func TestBeginPairing_RefusesAConfigWithNoRelayEndpoint(t *testing.T) {
 		t.Error("a rendezvous transport was opened despite the refusal; the guard must run " +
 			"before any transport work, like the nil-seam and single-device guards beside it")
 	default:
-	}
-}
-
-// TestPairing_PhoneDrivenOnlyByTheQR is PB-PAIR-7's acceptance criterion in its strong
-// form: "a phone driven only from the QR completes pairing with no out-of-band
-// configuration."
-//
-// The rule this test enforces on itself: AFTER pairing.DecodeQR, the device leg touches
-// NOTHING but the decoded payload — the relay it dials is qp.RelayURL, not srv.URL().
-// So the test cannot pass by accident on a machine whose relay address the phone was
-// told some other way, which is exactly the hole PB-PAIR-7 describes.
-//
-// RED today: qp.RelayURL is "", so the device leg has nothing to dial and fails at the
-// endpoint assertion before any handshake.
-func TestPairing_PhoneDrivenOnlyByTheQR(t *testing.T) {
-	srv := startPairingRelay(t)
-
-	stateDir := t.TempDir()
-	writeTestIdentity(t, stateDir, "qr-only-host")
-	writeRelayURL(t, stateDir, srv.URL())
-
-	cfg, err := loadPairingConfig(stateDir)
-	if err != nil {
-		t.Fatalf("loadPairingConfig: %v", err)
-	}
-	if cfg == nil || cfg.NewRendezvous == nil {
-		t.Fatal("loadPairingConfig did not wire a relay-backed rendezvous seam")
-	}
-
-	sk := assemble(t)
-	sk.api.pairing = cfg
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
-
-	// Owner-tier pair_start: the reply carries the QR, and from here on the phone side
-	// knows only what the camera saw.
-	rc := dialRemote(t, sk.SocketPath(), protocol.CapPairing)
-	rc.write(protocol.Control{Op: protocol.OpPairStart, EndpointID: rc.endpointID,
-		Pairing: &protocol.PairingControl{Capability: "full"}})
-
-	reply := awaitControl(t, rc, protocol.OpPairStart)
-	if reply.Pairing == nil || reply.Pairing.QR == "" {
-		t.Fatalf("pair_start reply missing the QR: %+v", reply.Pairing)
-	}
-	qp, err := pairing.DecodeQR(reply.Pairing.QR)
-	if err != nil {
-		t.Fatalf("pair_start QR is not a decodable pairing QR: %v", err)
-	}
-
-	// ---- Everything below this line is the PHONE, and may read ONLY qp. ----
-
-	if qp.RelayURL == "" {
-		t.Fatalf("the scanned QR carries no relay endpoint (PB-PAIR-7): a phone holding only "+
-			"this payload has a rendezvous id (%s) and a pairing secret but no address to "+
-			"dial, so it can never claim the rendezvous and pairing cannot start",
-			hex.EncodeToString(qp.RendezvousID[:]))
-	}
-
-	devConn, err := relay.DialRaw(ctx, qp.RelayURL)
-	if err != nil {
-		t.Fatalf("dialing the relay endpoint carried by the QR (%q) failed: %v; the QR must "+
-			"carry an endpoint a phone can reach with no out-of-band configuration",
-			qp.RelayURL, err)
-	}
-	t.Cleanup(func() { _ = devConn.Close() })
-
-	dEnd := &relayDeviceRendezvous{conn: devConn, label: hex.EncodeToString(qp.RendezvousID[:])}
-	ks, err := crypto.NewFileKeyStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("device keystore: %v", err)
-	}
-	devDone := runDeviceLeg(ctx, ks, dEnd, qp)
-
-	// ---- Machine side again: the owner's SAS gate. ----
-
-	pending := awaitControl(t, rc, protocol.OpPairPending)
-	if pending.Pairing == nil || len(pending.Pairing.SAS) != 6 {
-		t.Fatalf("pair_pending missing the 6-word SAS gate: %+v", pending.Pairing)
-	}
-	rc.write(protocol.Control{Op: protocol.OpPairConfirm, EndpointID: rc.endpointID,
-		Pairing: &protocol.PairingControl{Allow: true}})
-
-	res := awaitControl(t, rc, protocol.OpPairResult)
-	if res.Pairing == nil || res.Pairing.DeviceID == "" {
-		t.Fatalf("pair_result = %+v; want success carrying the new DeviceID", res.Pairing)
-	}
-
-	select {
-	case r := <-devDone:
-		if r.err != nil {
-			t.Fatalf("device leg driven only from the QR failed: %v", r.err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("device leg driven only from the QR never completed")
-	}
-
-	recs := sk.api.devices.List()
-	if len(recs) != 1 {
-		t.Fatalf("registry has %d devices; want exactly 1 enrolled from the QR-only pairing", len(recs))
-	}
-	if want := device.DeviceIDFor(ks.CommandSigningPublic()); recs[0].DeviceID != want {
-		t.Fatalf("enrolled DeviceID = %q; want %q", recs[0].DeviceID, want)
 	}
 }

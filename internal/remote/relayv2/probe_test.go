@@ -115,8 +115,9 @@ func TestConnectionDiscardAcceptsRetiredSubscriptionIncarnation(t *testing.T) {
 			RequestID   string `json:"request_id"`
 			Type        string `json:"type"`
 			Incarnation string `json:"incarnation"`
+			Through     string `json:"through_cursor"`
 		}
-		if json.Unmarshal(body, &request) != nil || request.Type != "DISCARD" || request.Incarnation != testIncarnation {
+		if json.Unmarshal(body, &request) != nil || request.Type != "DISCARD" || request.Incarnation != testIncarnation || request.Through != "9" {
 			return
 		}
 		response, _ := json.Marshal(map[string]any{
@@ -132,7 +133,7 @@ func TestConnectionDiscardAcceptsRetiredSubscriptionIncarnation(t *testing.T) {
 	c, sub := testSubscription(t, server)
 	defer c.Close()
 	want := Checkpoint{Incarnation: "AQAAAAAAAAAAAAAAAAAAAA", Cursor: 9}
-	if got, err := c.Discard(context.Background(), sub.binding, sub.incarnation); err != nil || got != want {
+	if got, err := c.Discard(context.Background(), sub.binding, sub.incarnation, 9); err != nil || got != want {
 		t.Fatalf("Conn.Discard = (%+v, %v), want %+v", got, err, want)
 	}
 	select {

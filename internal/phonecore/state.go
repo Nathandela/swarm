@@ -215,7 +215,13 @@ import (
 //
 // v24 adds relay_generation, fencing stale whole-State writers after a checkpoint namespace
 // replacement, including writers that outlive and reopen the Store process which performed it.
-const StateSchemaVersion = 24
+//
+// v25 adds discard_recovery_incarnation, separating an owed DISCARD from an already-adopted
+// recovery that only awaits its token-bearing authoritative roster.
+//
+// v26 adds discard_recovery_cursor, binding that destructive intent and every crash retry to
+// the one authenticated retained head. A retry must never infer a cutoff after queue expiry.
+const StateSchemaVersion = 26
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -371,6 +377,14 @@ type State struct {
 	DiscardRecoveryGeneration uint64
 	DiscardRecoveryCompleted  uint64
 	DiscardRecoveryToken      string
+	// DiscardRecoveryIncarnation is the exact mailbox incarnation the pending
+	// recovery authorized for deletion. While RelayIncarnation still equals it,
+	// the DISCARD RPC is owed; once AdoptPhoneDiscard advances RelayIncarnation,
+	// only the replacement roster remains owed.
+	DiscardRecoveryIncarnation string
+	// DiscardRecoveryCursor is the exact retained head the pending destructive
+	// recovery may remove. It binds crash retry to the same narrow cutoff.
+	DiscardRecoveryCursor uint64
 	// RosterRevision advances whenever a contiguous authoritative journal reseed commits.
 	// Unlike a row count or cursor it proves that even an empty roster at cursor zero arrived.
 	RosterRevision      uint64
@@ -718,17 +732,19 @@ type stateFile struct {
 	ContentKept      []byte `json:"content_kept,omitempty"`
 	ContentPurgeable []byte `json:"content_purgeable,omitempty"`
 
-	GrantEpoch                uint32         `json:"grant_epoch"`
-	GrantSeq                  uint64         `json:"grant_seq"`
-	RelayCursor               uint64         `json:"relay_cursor"`
-	RelayIncarnation          string         `json:"relay_incarnation,omitempty"`
-	RelayGeneration           uint64         `json:"relay_generation,omitempty"`
-	PhoneBinding              PhoneBinding   `json:"phone_binding,omitzero"`
-	DiscardRecoveryGeneration uint64         `json:"discard_recovery_generation,omitempty"`
-	DiscardRecoveryCompleted  uint64         `json:"discard_recovery_completed,omitempty"`
-	DiscardRecoveryToken      string         `json:"discard_recovery_token,omitempty"`
-	RosterRevision            uint64         `json:"roster_revision,omitempty"`
-	Stale                     []bucketRecord `json:"stale,omitempty"`
+	GrantEpoch                 uint32         `json:"grant_epoch"`
+	GrantSeq                   uint64         `json:"grant_seq"`
+	RelayCursor                uint64         `json:"relay_cursor"`
+	RelayIncarnation           string         `json:"relay_incarnation,omitempty"`
+	RelayGeneration            uint64         `json:"relay_generation,omitempty"`
+	PhoneBinding               PhoneBinding   `json:"phone_binding,omitzero"`
+	DiscardRecoveryGeneration  uint64         `json:"discard_recovery_generation,omitempty"`
+	DiscardRecoveryCompleted   uint64         `json:"discard_recovery_completed,omitempty"`
+	DiscardRecoveryToken       string         `json:"discard_recovery_token,omitempty"`
+	DiscardRecoveryIncarnation string         `json:"discard_recovery_incarnation,omitempty"`
+	DiscardRecoveryCursor      uint64         `json:"discard_recovery_cursor,omitempty"`
+	RosterRevision             uint64         `json:"roster_revision,omitempty"`
+	Stale                      []bucketRecord `json:"stale,omitempty"`
 	// StaleStreams travels as a sorted array of channel names (see State.StaleStreams).
 	StaleStreams []string `json:"stale_streams,omitempty"`
 	// LastHeardAt is PB-APP-11's freshness coordinate (see State.LastHeardAt). It is
@@ -1595,14 +1611,26 @@ func mergeGuards(cur, next State) State {
 	if cur.DiscardRecoveryGeneration > next.DiscardRecoveryGeneration {
 		next.DiscardRecoveryGeneration = cur.DiscardRecoveryGeneration
 		next.DiscardRecoveryToken = cur.DiscardRecoveryToken
+		next.DiscardRecoveryIncarnation = cur.DiscardRecoveryIncarnation
+		next.DiscardRecoveryCursor = cur.DiscardRecoveryCursor
 	}
 	if cur.DiscardRecoveryCompleted > next.DiscardRecoveryCompleted {
 		next.DiscardRecoveryCompleted = cur.DiscardRecoveryCompleted
 	}
 	if next.DiscardRecoveryCompleted >= next.DiscardRecoveryGeneration {
 		next.DiscardRecoveryToken = ""
-	} else if next.DiscardRecoveryToken == "" && cur.DiscardRecoveryGeneration == next.DiscardRecoveryGeneration {
-		next.DiscardRecoveryToken = cur.DiscardRecoveryToken
+		next.DiscardRecoveryIncarnation = ""
+		next.DiscardRecoveryCursor = 0
+	} else if cur.DiscardRecoveryGeneration == next.DiscardRecoveryGeneration {
+		if next.DiscardRecoveryToken == "" {
+			next.DiscardRecoveryToken = cur.DiscardRecoveryToken
+		}
+		if next.DiscardRecoveryIncarnation == "" {
+			next.DiscardRecoveryIncarnation = cur.DiscardRecoveryIncarnation
+		}
+		if next.DiscardRecoveryCursor == 0 {
+			next.DiscardRecoveryCursor = cur.DiscardRecoveryCursor
+		}
 	}
 	return next
 }
@@ -1661,9 +1689,21 @@ func (s *fileStore) load() error {
 		}
 	}
 	pendingRecovery := f.DiscardRecoveryGeneration > f.DiscardRecoveryCompleted
+	// Before v25 a pending recovery could only still owe its destructive call: the
+	// legacy adoption kept the same incarnation. Preserve that exact coordinate when
+	// opening a pinned older fixture; never guess for a current-schema file.
+	if pendingRecovery && f.SchemaVersion >= 23 && f.SchemaVersion < 25 && f.DiscardRecoveryIncarnation == "" {
+		f.DiscardRecoveryIncarnation = f.RelayIncarnation
+	}
 	if pendingRecovery != (f.DiscardRecoveryToken != "") ||
+		(f.SchemaVersion >= 23 && pendingRecovery != (f.DiscardRecoveryIncarnation != "")) ||
+		(f.SchemaVersion >= 26 && pendingRecovery != (f.DiscardRecoveryCursor != 0)) ||
 		(f.DiscardRecoveryToken != "" && !validRecoveryToken(f.DiscardRecoveryToken)) {
 		return fmt.Errorf("%w: %s: malformed discard recovery checkpoint", ErrCorruptState, path)
+	}
+	if f.DiscardRecoveryIncarnation != "" && !validPersistedRelayIncarnation(f.DiscardRecoveryIncarnation) &&
+		!(f.SchemaVersion < 23 && validRecoveryToken(f.DiscardRecoveryIncarnation)) {
+		return fmt.Errorf("%w: %s: malformed discard recovery incarnation", ErrCorruptState, path)
 	}
 	// Before v3 the two epoch keys were CLEARTEXT in these same fields. Reading them as
 	// sealed blobs would be exactly the silent reinterpretation the version guard exists
@@ -1680,32 +1720,34 @@ func (s *fileStore) load() error {
 	}
 
 	st := State{
-		Machine:                   f.Machine,
-		MachineName:               f.MachineName,
-		MachineStatic:             f.MachineStatic,
-		MachineSignPub:            f.MachineSignPub,
-		MachineRelayAuthPub:       f.MachineRelayAuthPub,
-		OperatorNamespace:         f.OperatorNamespace,
-		RelaySPKIPin:              f.RelaySPKIPin,
-		RelayTLSPolicy:            f.RelayTLSPolicy,
-		Disowned:                  f.Disowned,
-		RoutingID:                 f.RoutingID,
-		EpochID:                   f.EpochID,
-		PushPreference:            f.PushPreference,
-		ReconciledEpoch:           f.ReconciledEpoch,
-		lastProfile:               cloneRemoteProfilePtr(f.LastProfile),
-		pairingPushOwned:          f.PairingPushOwned,
-		GrantEpoch:                f.GrantEpoch,
-		GrantSeq:                  f.GrantSeq,
-		RelayCursor:               f.RelayCursor,
-		RelayIncarnation:          f.RelayIncarnation,
-		relayGen:                  f.RelayGeneration,
-		phoneBinding:              f.PhoneBinding,
-		DiscardRecoveryGeneration: f.DiscardRecoveryGeneration,
-		DiscardRecoveryCompleted:  f.DiscardRecoveryCompleted,
-		DiscardRecoveryToken:      f.DiscardRecoveryToken,
-		RosterRevision:            f.RosterRevision,
-		LastHeardAt:               f.LastHeardAt,
+		Machine:                    f.Machine,
+		MachineName:                f.MachineName,
+		MachineStatic:              f.MachineStatic,
+		MachineSignPub:             f.MachineSignPub,
+		MachineRelayAuthPub:        f.MachineRelayAuthPub,
+		OperatorNamespace:          f.OperatorNamespace,
+		RelaySPKIPin:               f.RelaySPKIPin,
+		RelayTLSPolicy:             f.RelayTLSPolicy,
+		Disowned:                   f.Disowned,
+		RoutingID:                  f.RoutingID,
+		EpochID:                    f.EpochID,
+		PushPreference:             f.PushPreference,
+		ReconciledEpoch:            f.ReconciledEpoch,
+		lastProfile:                cloneRemoteProfilePtr(f.LastProfile),
+		pairingPushOwned:           f.PairingPushOwned,
+		GrantEpoch:                 f.GrantEpoch,
+		GrantSeq:                   f.GrantSeq,
+		RelayCursor:                f.RelayCursor,
+		RelayIncarnation:           f.RelayIncarnation,
+		relayGen:                   f.RelayGeneration,
+		phoneBinding:               f.PhoneBinding,
+		DiscardRecoveryGeneration:  f.DiscardRecoveryGeneration,
+		DiscardRecoveryCompleted:   f.DiscardRecoveryCompleted,
+		DiscardRecoveryToken:       f.DiscardRecoveryToken,
+		DiscardRecoveryIncarnation: f.DiscardRecoveryIncarnation,
+		DiscardRecoveryCursor:      f.DiscardRecoveryCursor,
+		RosterRevision:             f.RosterRevision,
+		LastHeardAt:                f.LastHeardAt,
 		// The pre-v5 cleartext copies. A v5 blob carries none of them (the same coordinates
 		// arrive from the sealed containers below), so this is the forward migration and not a
 		// second source: an installed v4 blob loads with its replay guard intact and the first
@@ -1723,6 +1765,18 @@ func (s *fileStore) load() error {
 	if f.SchemaVersion < 23 {
 		st.RelayCursor, st.RelayIncarnation = 0, ""
 		st.relayGen = 0
+		// Relay-v1 recovery cannot be resumed against relay-v2: its opaque
+		// incarnation is a different protocol coordinate. Retire the destructive
+		// intent explicitly while preserving the rest of the installed state.
+		st.DiscardRecoveryGeneration, st.DiscardRecoveryCompleted = 0, 0
+		st.DiscardRecoveryToken, st.DiscardRecoveryIncarnation, st.DiscardRecoveryCursor = "", "", 0
+	}
+	// A pre-v26 recovery did not bind the destructive request to an exact queue
+	// cutoff. Retire that unshipped WIP intent; inferring RelayCursor+1 could delete
+	// a fresh head after the stale item expires. A new authenticated PROBE may begin it.
+	if f.SchemaVersion >= 23 && f.SchemaVersion < 26 {
+		st.DiscardRecoveryGeneration, st.DiscardRecoveryCompleted = 0, 0
+		st.DiscardRecoveryToken, st.DiscardRecoveryIncarnation, st.DiscardRecoveryCursor = "", "", 0
 	}
 	applySendSeq(&st, f.LegacySendSeq)
 	if err := applyReceive(&st, f.LegacyReceive); err != nil {
@@ -1947,38 +2001,40 @@ type stateSeals struct {
 // seal is what makes the containers safe to rewrite at all.
 func persistState(path string, st State, seals stateSeals) error {
 	f := stateFile{
-		SchemaVersion:             StateSchemaVersion,
-		Machine:                   st.Machine,
-		MachineName:               st.MachineName,
-		MachineStatic:             st.MachineStatic,
-		MachineSignPub:            st.MachineSignPub,
-		MachineRelayAuthPub:       st.MachineRelayAuthPub,
-		OperatorNamespace:         st.OperatorNamespace,
-		RelaySPKIPin:              st.RelaySPKIPin,
-		RelayTLSPolicy:            st.RelayTLSPolicy,
-		Disowned:                  st.Disowned,
-		RoutingID:                 st.RoutingID,
-		EpochID:                   st.EpochID,
-		PushPreference:            st.PushPreference,
-		ReconciledEpoch:           st.ReconciledEpoch,
-		LastProfile:               cloneRemoteProfilePtr(st.lastProfile),
-		PairingPushOwned:          st.pairingPushOwned,
-		WakeKey:                   seals.wakeKey,
-		ContentKey:                seals.contentKey,
-		WakeState:                 seals.wakeState,
-		ContentKept:               seals.kept,
-		ContentPurgeable:          seals.purgeable,
-		GrantEpoch:                st.GrantEpoch,
-		GrantSeq:                  st.GrantSeq,
-		RelayCursor:               st.RelayCursor,
-		RelayIncarnation:          st.RelayIncarnation,
-		RelayGeneration:           st.relayGen,
-		PhoneBinding:              st.phoneBinding,
-		DiscardRecoveryGeneration: st.DiscardRecoveryGeneration,
-		DiscardRecoveryCompleted:  st.DiscardRecoveryCompleted,
-		DiscardRecoveryToken:      st.DiscardRecoveryToken,
-		RosterRevision:            st.RosterRevision,
-		LastHeardAt:               st.LastHeardAt,
+		SchemaVersion:              StateSchemaVersion,
+		Machine:                    st.Machine,
+		MachineName:                st.MachineName,
+		MachineStatic:              st.MachineStatic,
+		MachineSignPub:             st.MachineSignPub,
+		MachineRelayAuthPub:        st.MachineRelayAuthPub,
+		OperatorNamespace:          st.OperatorNamespace,
+		RelaySPKIPin:               st.RelaySPKIPin,
+		RelayTLSPolicy:             st.RelayTLSPolicy,
+		Disowned:                   st.Disowned,
+		RoutingID:                  st.RoutingID,
+		EpochID:                    st.EpochID,
+		PushPreference:             st.PushPreference,
+		ReconciledEpoch:            st.ReconciledEpoch,
+		LastProfile:                cloneRemoteProfilePtr(st.lastProfile),
+		PairingPushOwned:           st.pairingPushOwned,
+		WakeKey:                    seals.wakeKey,
+		ContentKey:                 seals.contentKey,
+		WakeState:                  seals.wakeState,
+		ContentKept:                seals.kept,
+		ContentPurgeable:           seals.purgeable,
+		GrantEpoch:                 st.GrantEpoch,
+		GrantSeq:                   st.GrantSeq,
+		RelayCursor:                st.RelayCursor,
+		RelayIncarnation:           st.RelayIncarnation,
+		RelayGeneration:            st.relayGen,
+		PhoneBinding:               st.phoneBinding,
+		DiscardRecoveryGeneration:  st.DiscardRecoveryGeneration,
+		DiscardRecoveryCompleted:   st.DiscardRecoveryCompleted,
+		DiscardRecoveryToken:       st.DiscardRecoveryToken,
+		DiscardRecoveryIncarnation: st.DiscardRecoveryIncarnation,
+		DiscardRecoveryCursor:      st.DiscardRecoveryCursor,
+		RosterRevision:             st.RosterRevision,
+		LastHeardAt:                st.LastHeardAt,
 	}
 	for b, stale := range st.Stale {
 		if stale {

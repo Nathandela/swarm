@@ -32,7 +32,6 @@ import (
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // TakeControl acquires the live control lease for a session (PB-INPUT-3). It is also the
@@ -892,7 +891,7 @@ func (a *App) liveSendContext() (sendCtx, error) {
 }
 
 // resolveSend is the shared destination lookup; conn supplies the connection policy.
-func (a *App) resolveSend(conn func() (*relay.Client, error)) (sendCtx, error) {
+func (a *App) resolveSend(conn func() (*phoneStream, error)) (sendCtx, error) {
 	core, err := a.ready()
 	if err != nil {
 		return sendCtx{}, err

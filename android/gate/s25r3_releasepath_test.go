@@ -125,7 +125,10 @@ func s25r3HasBareReceive(root ast.Node) bool {
 func s25r3TeardownVerbs(t *testing.T) map[string]bool {
 	t.Helper()
 	blockers := s25r3BlockingReceivers(t)
-	graph := s25AppCallGraph(t)
+	// Teardown waiting is a property of the exported caller. Calls inside a function
+	// literal run in that literal's caller (Start's literal is a goroutine), so use the
+	// synchronous graph matching s25r3HasBareReceive's identical exclusion.
+	graph := s25AppCallGraphWithFuncLits(t, false)
 	reaching := map[string]bool{}
 	for target := range blockers {
 		for name := range s25Reaches(graph, target) {

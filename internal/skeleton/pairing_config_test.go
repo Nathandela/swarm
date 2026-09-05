@@ -72,6 +72,9 @@ func TestLoadPairingConfig_MapsIdentity(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("loadPairingConfig returned a nil config for a present, valid identity")
 	}
+	if cfg.NewRendezvous != nil {
+		t.Fatal("loadPairingConfig configured relay-v2 rendezvous without relay.json")
+	}
 
 	if cfg.Static == nil {
 		t.Error("cfg.Static is nil; want the identity's Noise-static handshake handle")

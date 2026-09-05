@@ -269,10 +269,9 @@ data class MachineRow(
      * Row 11's `meta` line -- [dev.swarm.phone.ui.MachinePane.explanationOf], the pane's OWN
      * sentence.
      *
-     * It is not re-worded here. PB-APP-11's whole subject is that the relay answers the presence
-     * query and the relay is the declared adversary, so this line is the one place the screen
-     * says whose word `online` is; two files deciding that separately is how one of them ends up
-     * telling a user their machine is fine.
+     * It is not re-worded here. Relay-v2 supplies only the neutral `unknown` presence marker;
+     * PB-APP-11 keeps the authenticated freshness statement in one place so no second formatter
+     * can accidentally present relay connectivity as machine liveness.
      *
      * EMPTY FOR A HEALTHY MACHINE (agents-tracker-ksvb.6), which is when [presenceDescription]
      * stops being null.
@@ -291,11 +290,8 @@ data class MachineRow(
     /**
      * Which of the relay's THREE words the mark draws, carried rather than collapsed.
      *
-     * `App.MachinePresence` returns `unknown`, `offline` or `online`, and the cheap implementation
-     * is "not offline" -- which paints a machine nobody can vouch for as reachable. `unknown`
-     * means the relay has no live record, or that this phone has lost the link and can no longer
-     * ask (`presenceCache.forget`), and reporting the absence of evidence as evidence is the one
-     * thing this field must not do.
+     * Relay-v2 has no presence RPC, so `App.MachinePresence` returns `unknown`. Reporting the
+     * absence of evidence as online or offline is the one thing this field must not do.
      *
      * IT WAS A `Boolean` UNTIL ADR-009 D2. The maquette draws `.pdot.unknown` as a hollow ring, so
      * the third word now has a mark of its own; folding it onto `offline` here would put the
@@ -390,17 +386,8 @@ object SettingsPanelScreen {
     private const val CONNECTION = "Connection"
 
     /**
-     * The relay's words for a live authenticated connection and for a closed one
-     * (`relay.PresenceOnline`, `relay.PresenceOffline`).
-     *
-     * COMPARED AGAINST, NEVER RENDERED. The line a user reads carries whatever the relay actually
-     * said; these constants only decide which of the maquette's three marks the 7 dp dot takes.
-     *
-     * ANYTHING ELSE IS `unknown`, INCLUDING THE RELAY'S OWN THIRD WORD, and that is the safe
-     * direction rather than a shrug: a word this phone does not recognise is a word it has learned
-     * nothing from, which is exactly what `unknown` means. The failure the old `presence == ONLINE`
-     * boolean could produce -- an unrecognised word reading as reachable -- is impossible here for
-     * the same reason.
+     * Retained maquette variants. Relay-v2 passes neither one: `App.MachinePresence` is always
+     * `unknown`, and the fallback below is deliberately neutral for every unrecognised value.
      */
     private const val ONLINE = "online"
     private const val OFFLINE = "offline"
@@ -437,8 +424,8 @@ object SettingsPanelScreen {
      *  site written before this row existed keep meaning what it meant.
      * @param connection [connectionOf]'s answer, or null on a phone that cannot read its own link
      *  -- which is the same null every call site written before agents-tracker-nx44.3 passes. It
-     *  is COMPOSED rather than built here so that the facts it needs (the relay's presence, the
-     *  phone's freshness, four stream verdicts and the clock) are read once, at the seam that can
+     *  is COMPOSED rather than built here so that the facts it needs (the neutral presence marker,
+     *  phone freshness, four stream verdicts and the clock) are read once, at the seam that can
      *  read them, instead of this function growing six parameters it only forwards.
      */
     fun of(
@@ -479,9 +466,8 @@ object SettingsPanelScreen {
      * The CONNECTION section (agents-tracker-nx44.3).
      *
      * IT IS A PURE FUNCTION OVER FACTS THE ADAPTER CAN READ WITHOUT A ROUND TRIP, and that is what
-     * makes it callable from a draw at all. `App.MachinePresence` is a cached O(1) read fed by the
-     * relay goroutine on its own 15 s cadence -- NOT `App.Presence`, which is the blocking
-     * round-trip android/unbound-verbs.tsv bars a render from -- and `App.MachineFreshness`,
+     * makes it callable from a draw at all. `App.MachinePresence` is the local relay-v2 value
+     * `unknown` -- `App.Presence` is unsupported -- and `App.MachineFreshness`,
      * `App.StreamState`, `App.ResyncPending` and `App.ClockVerdict` all read local state.
      *
      * @param machineId the endpoint id this phone is pinned to -- the machine's identity, and the
@@ -490,11 +476,11 @@ object SettingsPanelScreen {
      *  published none. WHICH CELL EACH ENDS UP IN IS DECIDED HERE and not at the call site, so the
      *  one rule -- [dev.swarm.phone.ui.MachineLabel.of], and an endpoint cell only where it is a
      *  SECOND fact -- is in a function a JVM can check.
-     * @param presence `App.MachinePresence`'s state, verbatim. It is the RELAY's opinion and never
-     *  evidence about the machine, which is why [freshness] is a required parameter here rather
+     * @param presence `App.MachinePresence`'s state, currently `unknown` because relay-v2 has no
+     *  presence RPC. It is never evidence about the machine, so [freshness] is required rather
      *  than an option a caller may drop.
      * @param freshness `App.MachineFreshness` -- the phone's OWN evidence, the one thing a relay
-     *  that answers every poll while withholding every frame cannot fake.
+     *  that withholds every frame cannot make newer.
      * @param streams `FacadeBridge.streamViews()`, in `FacadeBridge.REPAIR_CHANNELS` order. The
      *  order is not decided here.
      * @param clock `FacadeBridge.clockBanner()` -- PB-TIME-1's verdict, pulled per draw and never

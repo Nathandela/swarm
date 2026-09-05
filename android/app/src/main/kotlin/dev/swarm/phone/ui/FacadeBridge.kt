@@ -527,11 +527,9 @@ class FacadeBridge(private val app: App) {
      * What the MACHINE calls itself (agents-tracker-ksvb.1): `App.MachineName`, the hostname it
      * published in the pairing payload, or empty where it published none.
      *
-     * IT IS SAFE FROM A RENDER, which is the question android/unbound-verbs.tsv makes anyone ask
-     * of a verb reached from a draw. `App.Presence` is barred here because it is a blocking relay
-     * round-trip at a 10 s call timeout; this reads durable state behind a mutex, the same class
-     * as `App.ClockVerdict` and `App.StreamState`, which `LinkPanel` already renders on this
-     * argument.
+     * IT IS SAFE FROM A RENDER: it reads durable state behind a mutex, the same class as
+     * `App.ClockVerdict` and `App.StreamState`. Relay-v2 has no presence RPC; `App.Presence`
+     * remains unsupported and is never a UI source.
      *
      * IT IS NOT LABELLED HERE. `MachineLabel.of` is where the name and the endpoint id become one
      * string a person reads, and doing it at this seam would put a display decision in the
@@ -540,24 +538,11 @@ class FacadeBridge(private val app: App) {
     fun machineName(): String = app.machineName()
 
     /**
-     * The RELAY's last word on whether the machine is reachable (PB-APP-5, agents-tracker-nx44.3).
+     * The honest relay-v2 presence value: `unknown` (PB-APP-5).
      *
-     * IT IS `App.MachinePresence` AND IT MAY NEVER BE `App.Presence`. That verb is a relay
-     * round-trip at the transport's 10 s call timeout, and this surface's render is driven by an
-     * event stream -- one RPC per journal record, on the main thread. `android/unbound-verbs.tsv`
-     * ledgers it barred for exactly that reason. This one is an O(1) read of a cache the relay
-     * goroutine fills on its own 15 s cadence, which is the arrangement that made the settings
-     * CONNECTION section landable at all.
-     *
-     * IT RETURNS THE STATE AND NOT THE READING'S AGE, which the facade also carries, and the
-     * reason is that the age is the WEAKER of the two qualifications available here. A cached
-     * opinion that cannot say how old it is renders staleness as liveness -- so Go resets the
-     * cache to `unknown` the moment the link drops (`presenceCache.forget`), which is the case an
-     * age would have had to catch. What is left is a reading that ages while the link is up and
-     * the poll keeps failing, and PB-APP-11 already requires the answer to that: the section
-     * renders `machineFreshness` beside this word, which is the machine's OWN authenticated stamp
-     * and the one thing the relay cannot fake. A fresh reading of a withholding relay is worth
-     * nothing; a stale reading beside a machine that is demonstrably speaking is corroborated.
+     * `App.Presence` is unsupported because relay-v2 has no presence RPC. The section renders
+     * `machineFreshness` beside this neutral value; that machine-authenticated stamp is the
+     * liveness evidence a withholding relay cannot forge.
      */
     fun machinePresence(): String = app.machinePresence().state
 
@@ -609,9 +594,8 @@ class FacadeBridge(private val app: App) {
      *
      * IT IS EIGHT LOCAL READS AND NO ROUND TRIP. `App.StreamState` reads the core's stale map and
      * `App.ResyncPending` reads a mutex-guarded map on the facade; neither goes near the relay.
-     * That is what makes this callable from a render at all, and it is the distinction
-     * android/unbound-verbs.tsv draws around `App.Presence`, which is a blocking relay round-trip
-     * and stays unbound for exactly that reason.
+     * That is what makes this callable from a render at all. Relay-v2 deliberately has no
+     * presence RPC, so this remains entirely local.
      */
     // `map { streamView(it) }` AND NOT `map(::streamView)`. The two are the same call and only one
     // of them is visible to android/gate/boundverbledger_test.go, which matches a call by NAME

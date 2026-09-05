@@ -83,7 +83,7 @@ func TestRefreshRosterDiagnosisWaitsForStartsConnection(t *testing.T) {
 	body := s11FuncSource(t, src, "App", "requestMailboxDiscard")
 	label := s11FuncLabel("App", "requestMailboxDiscard")
 	s11RequireCalls(t, label, body, map[string]string{
-		"a.awaitConn()": "RefreshRoster is an idempotent command and must preserve the command " +
+		"a.awaitStream()": "RefreshRoster is an idempotent command and must preserve the command " +
 			"plane's brief Start-to-connection wait before installing its drain-owned diagnosis; " +
 			"failing on a.client == nil makes an immediate post-Start pull report offline.",
 	})

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // remoteIdentityFile is the machine identity `swarm remote init` persists (see
@@ -100,7 +101,20 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 		// to build the closure and then discarded, leaving the scanning phone with no
 		// endpoint to dial.
 		cfg.RelayURL = relayCfg.RelayURL
-		cfg.NewRendezvous = relayRendezvousFactory(relayCfg.RelayURL, sec)
+		profile := relayv2.Profile{
+			RelayURL:          relayCfg.RelayURL,
+			MachineRID:        relayv2.RoutingID(id.RelayAuthPublic()),
+			OperatorNamespace: relayCfg.OperatorNamespace,
+			Security:          sec,
+		}
+		auth := relayv2.Auth{
+			PublicKey: id.RelayAuthPublic(),
+			Sign: func(message []byte) ([]byte, error) {
+				return id.RelayAuthSign(message), nil
+			},
+			Role: relayv2.RoleMachine, Purpose: relayv2.PurposeControl,
+		}
+		cfg.NewRendezvous = relayRendezvousFactory(profile, auth)
 		// ADR-016 W1: the policy is carried verbatim, independent of the pin above -- never
 		// derived from whether a pin is configured -- and RelayHost is derived from the
 		// same RelayURL rather than a separate config field, since it is already "the

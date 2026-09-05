@@ -1174,11 +1174,59 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 // the crash test; production passes nil. Push-store disposition is deliberately later and
 // idempotent, so startup can complete it from the write-ahead state after any process death.
 func (a *App) pinWithStagedPushBinding(out *pairing.DeviceOutcome, staged *phonecore.PushAddress, afterDurable func()) error {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	a.mu.Lock()
+	closed := a.closed
+	a.mu.Unlock()
+	if closed {
+		return errClosed
+	}
+	if a.differentMachine(out) {
+		return errDifferentMachine
+	}
+	a.mu.Lock()
+	oldSession := a.sess
+	restartOwed := oldSession != nil
+	oldWasTerminal := false
+	if oldSession != nil {
+		select {
+		case <-oldSession.done:
+			oldWasTerminal = true
+		default:
+		}
+	}
+	oldStream := a.stream
+	a.sess = nil
+	a.stream = nil
+	a.mu.Unlock()
+	if oldStream != nil {
+		oldStream.Close()
+	}
+	if oldSession != nil {
+		oldSession.cancel()
+		<-oldSession.done
+	}
+	defer func() {
+		st := a.core.State()
+		a.setDestination(st.MachineRelayAuthPub)
+		a.mu.Lock()
+		a.reconciled = st.EpochID != 0 && st.ReconciledEpoch == st.EpochID
+		a.mu.Unlock()
+		if !restartOwed {
+			return
+		}
+		a.mu.Lock()
+		if !a.closed && a.sess == nil {
+			a.startSessionLocked(oldWasTerminal)
+		}
+		a.mu.Unlock()
+	}()
+
 	// Pairing replaces the exact routing authority. Serialize its durable commit against the
 	// publisher's final identity check + append, then release before the App.mu-backed live
 	// destination/UI updates below (documented lock order lives beside the lock in app.go).
 	a.publicationAuthorityMu.Lock()
-	var newEpoch bool
 	mutate := func(st *phonecore.State) {
 		st.MachineStatic = out.MachineStatic
 		st.MachineSignPub = out.Machine.MachineSignPub
@@ -1275,18 +1323,12 @@ func (a *App) pinWithStagedPushBinding(out *pairing.DeviceOutcome, staged *phone
 		// owner is here because the machine went quiet.
 		st.LastHeardAt = 0
 		st.RosterRevision = 0
-		newEpoch = st.EpochID != out.Machine.EpochID
-		if newEpoch {
+		if st.EpochID != out.Machine.EpochID {
 			st.Keys = crypto.EpochKeys{}
 		}
 		st.EpochID = out.Machine.EpochID
 	}
-	var err error
-	if staged == nil {
-		err = a.core.Mutate(mutate)
-	} else {
-		err = a.core.MutateAndOwnStagedPushBinding(*staged, mutate)
-	}
+	err := a.core.CommitPhonePairing(staged, mutate)
 	a.publicationAuthorityMu.Unlock()
 	// THE ERROR IS RETURNED, not swallowed (ADR-007 B60). This used to be a bare `return`
 	// on a void function, so finish() published `paired` without being able to know whether
@@ -1296,22 +1338,13 @@ func (a *App) pinWithStagedPushBinding(out *pairing.DeviceOutcome, staged *phone
 	if err != nil {
 		return err
 	}
+	a.setDestination(out.Machine.MachineRelayAuthPub)
 	if err := a.commitBootstrapPairing(); err != nil {
 		return err
 	}
 	if afterDurable != nil {
 		afterDurable()
 	}
-	if newEpoch {
-		a.mu.Lock()
-		a.reconciled = false
-		a.mu.Unlock()
-	}
-	a.setDestination(out.Machine.MachineRelayAuthPub)
-	// PB-STATE-10: a pairing is the owner acting, and it is the one event that can make a
-	// terminal "revoked" stale. Without this the recovered handset stays on that screen until
-	// the Android process is rebuilt -- the brick reached through the remedy.
-	a.rearmAfterPairing()
 	if staged != nil {
 		if err := a.core.CompleteOwnedStagedPushBinding(*staged); err != nil {
 			return err

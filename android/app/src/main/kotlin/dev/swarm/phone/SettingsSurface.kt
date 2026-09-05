@@ -654,9 +654,8 @@ class SettingsSurface(
      * a link -- no pairing, or a state this phone cannot read.
      *
      * EVERY READ HERE IS LOCAL AND THAT IS WHAT MAKES IT SAFE FROM [render], which `PhoneSurface`
-     * calls on every journal event. `App.MachinePresence` is an O(1) read of a cache the relay
-     * goroutine fills on its own cadence (never `App.Presence`, which is a blocking round-trip
-     * android/unbound-verbs.tsv bars a render from); `App.MachineFreshness`, `App.StreamState`,
+     * calls on every journal event. `App.MachinePresence` is the local relay-v2 value `unknown`
+     * (never `App.Presence`, which relay-v2 does not support); `App.MachineFreshness`, `App.StreamState`,
      * `App.ResyncPending` and `App.ClockVerdict` read core state. [draw]'s equality check is what
      * keeps the redraw itself off the switches.
      *

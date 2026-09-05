@@ -834,3 +834,86 @@ This does not claim a production cutover: the mobile relay-v2 stream/data plane 
 end-to-end suite remain open, as do hosted deployment/CI evidence and a connected-device
 test. No hosted deployment or physical-device result is recorded for this work-branch
 checkpoint.
+
+## Native mobile relay-v2 data plane
+
+The phone production path now has one relay-v2 connection/subscription. Its startup order is
+Dial, authenticated PhoneBinding, durable ActivatePhoneBinding, then Subscribe from the exact
+durable incarnation/cursor. Deliveries enter only through AcceptPhoneDelivery and ACK the exact
+subscription that delivered them. Phone publications use Append with a canonical base64url
+SHA-256 ciphertext id. Pairing serializes stop/join, atomic authority commit and conditional
+restart with Start, Stop and Close; no old delivery can ACK a replacement generation.
+
+Explicit roster recovery wakes only the current Recv context and PROBEs the same live connection.
+A destructive recovery first persists its token, exact old incarnation and authenticated stale-head
+cursor. DISCARD is wire-bound to that cursor, atomically rotates the incarnation and removes only
+through that head; later queued frames retain their cursor, receipt and byte accounting in the new
+incarnation. An idempotent old-incarnation retry must repeat the identical cutoff. The current checkpoint
+equaling that old incarnation means DISCARD is still owed; after atomic adoption changes it, a
+crash retry sends only the token-bearing replacement-roster command and cannot delete the fresh
+mailbox a second time. State schema v26 persists this phase; pre-v26 pending destructive intent is
+retired rather than assigned a guessed cutoff. Pre-v23 relay-v1 checkpoints are also retired at load;
+no relay-v1 resume is attempted. Native Resync joins the old subscription, performs the binding-fenced
+checkpoint reset, reconnects from blank, persists the server-returned effective ACK floor, then
+publishes the repair request. An immediate stop/start with no intervening delivery therefore remains
+an exact valid reconnect.
+
+The compiled relay-v1 phone path and its hello/wait/poll/presence/token/cursor-reset fields were
+removed. The entire `mobile/conformance` package was also removed because every executable test
+was transitively coupled to its in-process relay-v1 Server/Client harness. This was not replaced
+with a fake compatibility adapter or skipped suite. Its retained invariants map to:
+
+- native workerd mobile vertical: pairing/SAS, durable grant receive and ACK, bidirectional append,
+  exact reconnect, healthy same-connection PROBE, encrypted facade repair commands, native Resync,
+  immediate post-Resync reconnect, malformed authenticated plaintext followed by valid delivery,
+  stale authenticated head with preserved fresh tail, exact DISCARD retry/adoption, post-adoption
+  roster-only retry, stale generation refusal, durable revoke/reopen/re-pair, and a faulted phone
+  pairing commit that yields neither machine outcome nor relay authorization;
+- mobile lifecycle/unit gates: pairing-vs-Stop serialization, pairing-vs-Close serialization,
+  old delivery/ACK custody through session join and binding retirement, close refusal, bounded
+  panic-isolated event dispatch, concurrent Start/Stop/Close, exact pre-confirm origin dial gating,
+  pin install/clear, backoff, live-send ordering, trust/pin, publication and error taxonomy;
+- phonecore gates: binding activation/retirement, pairing commit atomicity, delivery transaction,
+  checkpoint/discard crash retry, v26 cutoff persistence/merge, replay, grant, stale-stream,
+  capability, interaction, wake and custody behavior;
+- relay-v2 Worker/protocol gates: authentication, home/generation isolation, queue bounds,
+  dedupe, Subscribe/Recv/ACK/PROBE/DISCARD, revoke, expiry, alarms, admission and rate limits.
+
+RED evidence included the initially missing relay-v2 ciphertext digest helper and missing durable
+discard-phase accessor, followed by the post-adoption double-discard and old conformance failures.
+After the replacement pass, `go test -race ./mobile/... -count=1` passed in 45.619 s,
+`go test -race ./internal/phonecore -count=1` in 47.532 s, and the relay-v2 race in 2.794 s.
+A fresh isolated actual-workerd `npm test` passed on port 18959; the expanded mobile vertical
+passed in 1.32 s and its faulted-commit negative in 2.15 s, alongside pairing, cutoff discard retry,
+S19 skeleton, cost/alarm/expiry and pre-auth rate gates. These are local tests only; no hosted or
+physical-phone result is claimed.
+
+Final P1 review found two additional crash/production-wiring gaps and both are closed. A persisted
+DISCARD cutoff may now expire before retry without wedging recovery: the Worker advances only when
+the exact interval `(ack_cursor, through_cursor]` is empty, revalidates authority and coordinates in
+the transaction, deletes only through the requested cutoff and preserves later mail. An accelerated-
+retention real-Worker test covers expiry between durable intent and retry, exact idempotence and a
+fresh queued tail. WebPKI reconciliation now authenticates the phone against native `/v2/ws` with a
+signed, phone-only `probe` purpose. That purpose has no RPC authority and a separate supersession
+identity, so it cannot replace the live stream. The real mobile Worker vertical exercises the
+production `probeWebPKI` path, a denied probe RPC, the unchanged live stream and subsequent delivery.
+
+Root independently passed the complete isolated Worker suite on port 18991, including both new
+cases, and package races for mobile (45.729 s), phonecore (49.074 s) and relay-v2 (2.635 s). Focused
+skeleton race (7.723 s), Android S25R3 (1.113 s), vet and whitespace checks also passed. Independent
+Sol security re-review returned GO with no remaining P1 correctness, security or data-loss blocker.
+The broad whole-repository race result is recorded separately when it completes. These remain local
+checks; hosted admission stays closed and no physical-phone result is claimed.
+
+The subsequent whole-repository race completed non-green and is not reported as a pass. Its useful
+failure was B94 identifying 29 exported relay-v1 client/connection symbols with no production entry
+point; removing their last operator callers and then deleting that transport is the next breaking
+cleanup package. The run also exposed two verification fences still describing the retired v1
+wait/rendezvous client and three budget rows pointing at deleted conformance tests. Those fences were
+replaced with a non-vacuous native relay-v2 deadline audit and current replacement-test references;
+their exact verifier run passes. The relay-v2 slow-consumer failure was load-sensitive only: its
+isolated race test passed 10/10, and the full relay-v2 package race passed separately. Hook and process
+inspection failures came from inherited whole-suite environment or sandbox-denied `ps`/`pgrep`; the
+hook packages pass in isolation with the leaked socket variable absent. Several PB-STATE-10 command
+tests still construct the removed relay-v1 pairing fixture and are therefore cleanup work, not green
+v2 evidence. The same broad run did pass the full skeleton package in 468.232 s.

@@ -50,6 +50,7 @@ const (
 
 	PurposeControl Purpose = "control"
 	PurposeStream  Purpose = "stream"
+	PurposeProbe   Purpose = "probe"
 )
 
 type Profile struct {
@@ -176,7 +177,9 @@ func Dial(ctx context.Context, profile Profile, auth Auth) (*Conn, error) {
 	if auth.Role != RoleMachine && auth.Role != RolePhone {
 		return nil, errors.New("relay v2: invalid role")
 	}
-	if auth.Purpose != PurposeStream && (auth.Role != RoleMachine || auth.Purpose != PurposeControl) {
+	validPurpose := (auth.Role == RolePhone && (auth.Purpose == PurposeStream || auth.Purpose == PurposeProbe)) ||
+		(auth.Role == RoleMachine && (auth.Purpose == PurposeControl || auth.Purpose == PurposeStream))
+	if !validPurpose {
 		return nil, errors.New("relay v2: invalid purpose")
 	}
 	endpoint, err := relayEndpoint(profile.RelayURL, "/v2/ws", url.Values{"machine_rid": {profile.MachineRID}})
@@ -510,11 +513,12 @@ func (c *Conn) Subscribe(ctx context.Context, binding Binding, checkpoint Checkp
 		return nil, err
 	}
 	after, err := parseUint64(frame.After)
-	if err != nil || after != checkpoint.Cursor || frame.PeerRID != peer || frame.Generation != formatUint64(binding.Generation) || !validIncarnation(frame.Incarnation) ||
+	blankRecovery := checkpoint.Incarnation == "" && checkpoint.Cursor == 0
+	if err != nil || (!blankRecovery && after != checkpoint.Cursor) || frame.PeerRID != peer || frame.Generation != formatUint64(binding.Generation) || !validIncarnation(frame.Incarnation) ||
 		(checkpoint.Incarnation != "" && frame.Incarnation != checkpoint.Incarnation) {
 		return nil, errors.New("relay v2: invalid subscription response")
 	}
-	return &Subscription{conn: c, binding: binding, peer: peer, incarnation: frame.Incarnation}, nil
+	return &Subscription{conn: c, binding: binding, peer: peer, incarnation: frame.Incarnation, after: after}, nil
 }
 
 func (c *Conn) Revoke(ctx context.Context, binding Binding) error {
@@ -555,9 +559,13 @@ type Subscription struct {
 	binding     Binding
 	peer        string
 	incarnation string
+	after       uint64
 }
 
 func (s *Subscription) Incarnation() string { return s.incarnation }
+func (s *Subscription) Checkpoint() Checkpoint {
+	return Checkpoint{Incarnation: s.incarnation, Cursor: s.after}
+}
 
 func (s *Subscription) Recv(ctx context.Context) (Delivery, error) {
 	queued, err := s.take(ctx)
@@ -657,8 +665,8 @@ func (s *Subscription) Ack(ctx context.Context, cursor uint64) error {
 	return nil
 }
 
-func (c *Conn) Discard(ctx context.Context, binding Binding, incarnation string) (Checkpoint, error) {
-	if c.purpose != PurposeStream || !validIncarnation(incarnation) {
+func (c *Conn) Discard(ctx context.Context, binding Binding, incarnation string, through uint64) (Checkpoint, error) {
+	if c.purpose != PurposeStream || !validIncarnation(incarnation) || through == 0 {
 		return Checkpoint{}, errors.New("relay v2: invalid discard")
 	}
 	peer, err := c.bindingPeer(binding)
@@ -666,13 +674,13 @@ func (c *Conn) Discard(ctx context.Context, binding Binding, incarnation string)
 		return Checkpoint{}, err
 	}
 	frame, err := c.call(ctx, "DISCARDED", map[string]any{
-		"v": 2, "type": "DISCARD", "peer_rid": peer, "generation": formatUint64(binding.Generation), "incarnation": incarnation,
+		"v": 2, "type": "DISCARD", "peer_rid": peer, "generation": formatUint64(binding.Generation), "incarnation": incarnation, "through_cursor": formatUint64(through),
 	})
 	if err != nil {
 		return Checkpoint{}, err
 	}
 	cursor, err := parseUint64(frame.Cursor)
-	if err != nil || !validIncarnation(frame.Incarnation) || frame.Incarnation == incarnation || frame.PeerRID != peer || frame.Generation != formatUint64(binding.Generation) {
+	if err != nil || cursor != through || !validIncarnation(frame.Incarnation) || frame.Incarnation == incarnation || frame.PeerRID != peer || frame.Generation != formatUint64(binding.Generation) {
 		return Checkpoint{}, errors.New("relay v2: invalid discard response")
 	}
 	checkpoint := Checkpoint{Incarnation: frame.Incarnation, Cursor: cursor}
@@ -680,8 +688,8 @@ func (c *Conn) Discard(ctx context.Context, binding Binding, incarnation string)
 	return checkpoint, nil
 }
 
-func (s *Subscription) Discard(ctx context.Context) (Checkpoint, error) {
-	return s.conn.Discard(ctx, s.binding, s.incarnation)
+func (s *Subscription) Discard(ctx context.Context, through uint64) (Checkpoint, error) {
+	return s.conn.Discard(ctx, s.binding, s.incarnation, through)
 }
 
 type PairTransport struct {

@@ -3,7 +3,7 @@ package skeleton
 // THE THIRD CALLER OF THE UNBOUNDED DIAL, and the worst of the three -- fenced at the
 // consequence that is its own, which "the dial returns" does not show.
 //
-// relayRendezvousFactory (pairing_rendezvous.go) dials relay.DialRawSecure inside the closure
+// relayRendezvousFactory (pairing_rendezvous.go) dials relayv2.Dial inside the closure
 // BeginPairing calls at pairing.go's `cfg.NewRendezvous(ctx, id)`. That ctx is the pair_start
 // handler's -- internal/protocol/server.go's context.WithCancel(context.Background()), the
 // OWNER CONNECTION's lifetime context. No deadline, like the phone's and the sidecar's.
@@ -24,7 +24,7 @@ package skeleton
 //
 // AND IT IS AN ARGUMENT FOR BOUNDING AT dialConn RATHER THAN HERE. The ctx this closure
 // receives has DUAL DUTY: it bounds the dial AND owns the connection's lifetime, through the
-// `go func(){ <-ctx.Done(); _ = conn.Close() }()` watcher three lines below the dial. A
+// context watcher closes the authenticated control socket. A
 // caller-side `defer cancel()` on it would close the connection the factory just returned. The
 // boundary bound has no such hazard, at this site or the other two.
 //
@@ -35,14 +35,17 @@ package skeleton
 
 import (
 	"crypto/ed25519"
+	"encoding/hex"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // stalledDialAnswerBound is how long these assertions wait for the daemon to answer a
@@ -54,13 +57,14 @@ const stalledDialAnswerBound = 60 * time.Second
 // ServerHello, no HTTP response, no upgrade. Nothing is closed or reset, so there is no event
 // for the dialling side to observe and nothing for the OS to time out. It returns the ws:// URL
 // production would have been configured with.
-func newSilentRelayListener(t *testing.T) string {
+func newSilentRelayListener(t *testing.T) (string, *atomic.Uint64) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
+	accepted := new(atomic.Uint64)
 	go func() {
 		var held []net.Conn
 		defer func() {
@@ -73,16 +77,16 @@ func newSilentRelayListener(t *testing.T) string {
 			if err != nil {
 				return
 			}
+			accepted.Add(1)
 			held = append(held, c) // accepted and held open, unanswered
 		}
 	}()
-	return "ws://" + ln.Addr().String()
+	return "ws://" + ln.Addr().String(), accepted
 }
 
 // injectRelayPairing is injectPairing's sibling with the ONE difference this file is about: the
-// rendezvous comes from the REAL production closure, relayRendezvousFactory, under the machine's
-// own transport policy, rather than from an in-memory pair. Everything a stalled dial does to
-// the pairing slot happens inside that closure, so a test that substitutes it measures nothing.
+// rendezvous comes from the REAL authenticated relay-v2 production closure rather than from an
+// in-memory pair. Everything a stalled dial does to the pairing slot happens inside that closure.
 func injectRelayPairing(t *testing.T, sk *Daemon, relayURL string) {
 	t.Helper()
 	machineID, err := crypto.GenerateIdentity()
@@ -97,6 +101,21 @@ func injectRelayPairing(t *testing.T, sk *Daemon, relayURL string) {
 	if err != nil {
 		t.Fatalf("epoch keys: %v", err)
 	}
+	relayPub, relayPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("relay auth key: %v", err)
+	}
+	machineRID := relayv2.RoutingID(relayPub)
+	routingID, err := hex.DecodeString(machineRID)
+	if err != nil {
+		t.Fatalf("decode machine RID: %v", err)
+	}
+	profile := relayv2.Profile{RelayURL: relayURL, MachineRID: machineRID,
+		OperatorNamespace: "owner", Security: relay.MachineSecurity()}
+	auth := relayv2.Auth{PublicKey: relayPub, Role: relayv2.RoleMachine,
+		Purpose: relayv2.PurposeControl, Sign: func(message []byte) ([]byte, error) {
+			return ed25519.Sign(relayPriv, message), nil
+		}}
 	sk.api.pairing = &pairingConfig{
 		Static:            machineID.NoiseStatic(),
 		RecipientPub:      machineID.RecipientPublic(),
@@ -107,10 +126,10 @@ func injectRelayPairing(t *testing.T, sk *Daemon, relayURL string) {
 		EpochKeys:         keys,
 		Hostname:          "test-machine.local",
 		OperatorNamespace: "owner",
-		RoutingID:         []byte("machine-routing-id-0001"),
-		RelayAuthPub:      make([]byte, 32),
+		RoutingID:         routingID,
+		RelayAuthPub:      relayPub,
 		RelayURL:          relayURL,
-		NewRendezvous:     relayRendezvousFactory(relayURL, relay.MachineSecurity()),
+		NewRendezvous:     relayRendezvousFactory(profile, auth),
 	}
 }
 
@@ -124,7 +143,8 @@ func injectRelayPairing(t *testing.T, sk *Daemon, relayURL string) {
 // on WHICH frame comes back.
 func TestPBNET7_AStalledRendezvousDialDoesNotBurnThePairingSlot(t *testing.T) {
 	sk := assemble(t)
-	injectRelayPairing(t, sk, newSilentRelayListener(t))
+	relayURL, accepted := newSilentRelayListener(t)
+	injectRelayPairing(t, sk, relayURL)
 
 	rc := dialRemote(t, sk.SocketPath(), protocol.CapPairing)
 	start := protocol.Control{Op: protocol.OpPairStart, EndpointID: rc.endpointID,
@@ -135,7 +155,7 @@ func TestPBNET7_AStalledRendezvousDialDoesNotBurnThePairingSlot(t *testing.T) {
 	first, err := rc.readTry(stalledDialAnswerBound)
 	if err != nil {
 		t.Fatalf("no answer to pair_start within %v: %v.\n"+
-			"The daemon is parked in relayRendezvousFactory's relay.DialRawSecure against a peer "+
+			"The daemon is parked in relayRendezvousFactory's relayv2.Dial against a peer "+
 			"that accepted the TCP connection and went quiet. That dial runs BEFORE pairing.go's "+
 			"pairCtx, so ADR-007 B64's window is not yet in force, and the pairing slot claimed by "+
 			"the pair_start handler is held with nothing left to release it",
@@ -144,6 +164,10 @@ func TestPBNET7_AStalledRendezvousDialDoesNotBurnThePairingSlot(t *testing.T) {
 	if first.Op != protocol.OpError {
 		t.Fatalf("the first pair_start answered with %q against a relay that never replies; "+
 			"want an error naming the failed rendezvous open", first.Op)
+	}
+	firstDials := accepted.Load()
+	if firstDials == 0 {
+		t.Fatal("the first pair_start never reached the silent relay")
 	}
 
 	// ---- the second, on the SAME connection: the slot must be free ----------------------
@@ -170,6 +194,9 @@ func TestPBNET7_AStalledRendezvousDialDoesNotBurnThePairingSlot(t *testing.T) {
 	case second.Op == protocol.OpError:
 		// The second dial reaching the same silent relay and failing the same way IS the slot
 		// being free -- it got as far as dialling, which a refused pair_start never does.
+		if accepted.Load() <= firstDials {
+			t.Fatalf("the second pair_start returned an error without opening a fresh relay connection: accepts stayed at %d", firstDials)
+		}
 	default:
 		t.Fatalf("unexpected op %q in answer to the second pair_start", second.Op)
 	}

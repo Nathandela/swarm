@@ -23,7 +23,7 @@ func TestAdoptRelayDiscard_AdvancesOnlyTheTransportCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	token, err := core.BeginRelayDiscardRecovery()
+	token, err := core.BeginRelayDiscardRecovery(8)
 	if err != nil || token == "" {
 		t.Fatalf("BeginRelayDiscardRecovery = %q, %v", token, err)
 	}
@@ -48,7 +48,7 @@ func TestAdoptRelayDiscard_RefusesAReplyFromAnotherMailboxGeneration(t *testing.
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	if _, err := core.BeginRelayDiscardRecovery(); err != nil {
+	if _, err := core.BeginRelayDiscardRecovery(8); err != nil {
 		t.Fatalf("BeginRelayDiscardRecovery: %v", err)
 	}
 	if err := core.AdoptRelayDiscard(53, "AQAAAAAAAAAAAAAAAAAAAA"); !errors.Is(err, ErrRelayIncarnationChanged) {
@@ -66,13 +66,15 @@ func TestAdoptRelayDiscard_FailedPersistenceClaimsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	if _, err := core.BeginRelayDiscardRecovery(); !errors.Is(err, errStoreDied) {
+	if _, err := core.BeginRelayDiscardRecovery(8); !errors.Is(err, errStoreDied) {
 		t.Fatalf("BeginRelayDiscardRecovery persistence failure = %v, want %v", err, errStoreDied)
 	}
 	// Seed the pending coordinate behind the failing wrapper so this assertion remains about
 	// adoption's own atomic transport write.
 	inner.st.DiscardRecoveryGeneration = 1
 	inner.st.DiscardRecoveryToken = "11111111111111111111111111111111"
+	inner.st.DiscardRecoveryIncarnation = testRelayDiscardIncarnation
+	inner.st.DiscardRecoveryCursor = 8
 	if err := core.AdoptRelayDiscard(53, testRelayDiscardIncarnation); !errors.Is(err, errStoreDied) {
 		t.Fatalf("AdoptRelayDiscard persistence failure = %v, want %v", err, errStoreDied)
 	}
@@ -103,7 +105,7 @@ func TestAdoptRelayDiscard_SurvivesAFileBackedCoreRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	token, err := core.BeginRelayDiscardRecovery()
+	token, err := core.BeginRelayDiscardRecovery(8)
 	if err != nil {
 		t.Fatalf("BeginRelayDiscardRecovery: %v", err)
 	}
@@ -191,5 +193,58 @@ func TestDiscardRecoveryMatchingEchoSaveFailureKeepsPending(t *testing.T) {
 	}
 	if core.DiscardRecoveryToken() != token || inner.Load().DiscardRecoveryToken != token {
 		t.Fatal("failed recovery commit cleared pending token")
+	}
+}
+
+func TestDiscardRecoveryPersistsExactDiscardPhaseAcrossAdoptionAndRestart(t *testing.T) {
+	core, store := testPhoneCore(t)
+	binding := phoneBinding(testPhoneHome, testPhoneRID, 1)
+	if err := core.ActivatePhoneBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.SetPhoneCheckpoint(binding, testPhoneIncarnation, 0); err != nil {
+		t.Fatal(err)
+	}
+	token, err := core.BeginRelayDiscardRecovery(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotToken, old, through := core.DiscardRecovery(); gotToken != token || old != testPhoneIncarnation || through != 1 {
+		t.Fatalf("begun recovery = (%q,%q), want (%q,%q)", gotToken, old, token, testPhoneIncarnation)
+	}
+	if err := core.AdoptPhoneDiscard(binding, testPhoneIncarnation, testNextPhoneIncarnation, 7); err != nil {
+		t.Fatal(err)
+	}
+	if gotToken, old, through := core.DiscardRecovery(); gotToken != token || old != testPhoneIncarnation || through != 1 {
+		t.Fatalf("adopted recovery = (%q,%q), want token and original incarnation retained", gotToken, old)
+	}
+	if got := core.State().RelayIncarnation; got != testNextPhoneIncarnation {
+		t.Fatalf("adopted incarnation = %q, want %q", got, testNextPhoneIncarnation)
+	}
+
+	restarted, err := Resume(Config{State: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotToken, old, through := restarted.DiscardRecovery(); gotToken != token || old != testPhoneIncarnation || through != 1 {
+		t.Fatalf("restarted recovery = (%q,%q), want (%q,%q)", gotToken, old, token, testPhoneIncarnation)
+	}
+}
+
+func TestDiscardRecoveryMergeRestoresMissingPhaseFromSameGeneration(t *testing.T) {
+	const token = "11111111111111111111111111111111"
+	cur := State{
+		DiscardRecoveryGeneration:  4,
+		DiscardRecoveryCompleted:   3,
+		DiscardRecoveryToken:       token,
+		DiscardRecoveryIncarnation: testPhoneIncarnation,
+		DiscardRecoveryCursor:      9,
+	}
+	next := cur.clone()
+	next.DiscardRecoveryIncarnation = ""
+	next.DiscardRecoveryCursor = 0
+	got := mergeGuards(cur, next)
+	if got.DiscardRecoveryToken != token || got.DiscardRecoveryIncarnation != testPhoneIncarnation || got.DiscardRecoveryCursor != 9 {
+		t.Fatalf("merged recovery = (%q,%q), want (%q,%q)", got.DiscardRecoveryToken, got.DiscardRecoveryIncarnation, token, testPhoneIncarnation)
 	}
 }

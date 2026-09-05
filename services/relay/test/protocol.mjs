@@ -92,6 +92,10 @@ const wrongRole = await open(`/v2/ws?machine_rid=${machine.rid}`);
 send(wrongRole, { type: "AUTH_INIT", request_id: "wrong-role", role: "machine", purpose: "control", pub: b64(phone.pub) });
 assert.equal((await waitFor(wrongRole, (x) => x.request_id === "wrong-role")).code, "role_mismatch");
 
+const machineProbe = await open(`/v2/ws?machine_rid=${machine.rid}`);
+send(machineProbe, { type: "AUTH_INIT", request_id: "machine-probe", role: "machine", purpose: "probe", pub: b64(machine.pub) });
+assert.equal((await waitFor(machineProbe, (x) => x.request_id === "machine-probe")).code, "invalid_purpose", "probe purpose is phone-only");
+
 const stale = await open(`/v2/ws?machine_rid=${machine.rid}`);
 send(stale, { type: "AUTH_INIT", request_id: "stale-init", role: "machine", purpose: "control", pub: b64(machine.pub) });
 const staleChallenge = await waitFor(stale, (x) => x.type === "CHALLENGE");
@@ -121,6 +125,13 @@ send(p, { type: "SUBSCRIBE", request_id: "sub-1", peer_rid: machine.rid, generat
 const subscribed = await waitFor(p, (x) => x.request_id === "sub-1");
 assert.equal(subscribed.type, "SUBSCRIBED");
 const incarnation = subscribed.incarnation;
+
+const endpointProbe = await open(`/v2/ws?machine_rid=${machine.rid}`);
+assert.equal((await authenticate(endpointProbe, phone, "phone", "probe")).purpose, "probe");
+send(endpointProbe, { type: "REVOKE", request_id: "probe-rpc", peer_rid: machine.rid, generation: "1" });
+assert.equal((await waitFor(endpointProbe, (x) => x.request_id === "probe-rpc")).code, "not_authorized", "authenticated probe has no RPC authority");
+assert.equal(p.ws.readyState, WebSocket.OPEN, "probe identity does not supersede the live phone stream");
+endpointProbe.ws.close();
 
 const ms = await open(`/v2/ws?machine_rid=${machine.rid}`);
 assert.equal((await authenticate(ms, machine, "machine", "stream")).purpose, "stream");
@@ -186,10 +197,13 @@ assert.equal((await waitFor(p, (x) => x.request_id === "overflow-cursor")).code,
 
 send(ms, { type: "APPEND", request_id: "append-recovery", peer_rid: phone.rid, generation: "1", msg_id: "msg-recovery", ciphertext: "cmVjb3Zlcg" });
 await waitFor(p, (x) => x.type === "DELIVER" && x.msg_id === "msg-recovery");
-send(p, { type: "DISCARD", request_id: "discard", peer_rid: machine.rid, generation: "1", incarnation });
+send(ms, { type: "APPEND", request_id: "append-recovery-tail", peer_rid: phone.rid, generation: "1", msg_id: "msg-recovery-tail", ciphertext: "ZnJlc2g" });
+await waitFor(p, (x) => x.type === "DELIVER" && x.msg_id === "msg-recovery-tail");
+send(p, { type: "DISCARD", request_id: "discard", peer_rid: machine.rid, generation: "1", incarnation, through_cursor: "3" });
 const discarded = await waitFor(p, (x) => x.request_id === "discard");
 assert.equal(discarded.type, "DISCARDED");
 assert.notEqual(discarded.incarnation, incarnation);
+assert.equal(discarded.cursor, "3", "DISCARD cuts through only the unacknowledged head");
 p.ws.close();
 await waitUntil(() => p.ws.readyState >= WebSocket.CLOSING);
 p = await open(`/v2/ws?machine_rid=${machine.rid}`);
@@ -199,6 +213,9 @@ assert.equal((await waitFor(p, (x) => x.request_id === "stale-incarnation")).cod
 send(p, { type: "SUBSCRIBE", request_id: "sub-after-discard", peer_rid: machine.rid, generation: "1", incarnation: discarded.incarnation, after: discarded.cursor });
 const afterDiscardSub = await waitFor(p, (x) => x.request_id === "sub-after-discard");
 assert.equal(afterDiscardSub.type, "SUBSCRIBED");
+assert.equal((await waitFor(p, (x) => x.type === "DELIVER" && x.msg_id === "msg-recovery-tail")).ciphertext, "ZnJlc2g", "DISCARD retains the fresh tail in the replacement incarnation");
+send(p, { type: "ACK", request_id: "ack-recovery-tail", peer_rid: machine.rid, generation: "1", incarnation: discarded.incarnation, cursor: "4" });
+await waitFor(p, (x) => x.request_id === "ack-recovery-tail" && x.type === "ACKED");
 
 for (let i = 0; i < 257; i++) {
   const appendRequest = i < 100 ? `cost-append-${i}` : `burst-${i}`;
@@ -211,8 +228,6 @@ for (let i = 0; i < 257; i++) {
 }
 send(ms, { type: "APPEND", request_id: "burst-last-duplicate", peer_rid: phone.rid, generation: "1", msg_id: "burst-256", ciphertext: "AA" });
 assert.equal((await waitFor(ms, (x) => x.request_id === "burst-last-duplicate")).deduped, true, "sliding receipt window keeps throughput open and the newest retry exact");
-send(p, { type: "DISCARD", request_id: "discard-burst", peer_rid: machine.rid, generation: "1", incarnation: afterDiscardSub.incarnation });
-await waitFor(p, (x) => x.request_id === "discard-burst" && x.type === "DISCARDED");
 send(ms, { type: "APPEND", request_id: "window-trigger", peer_rid: phone.rid, generation: "1", msg_id: "window-trigger", ciphertext: "AA" });
 await waitFor(ms, (x) => x.request_id === "window-trigger");
 send(ms, { type: "APPEND", request_id: "old-retry", peer_rid: phone.rid, generation: "1", msg_id: "msg-one", ciphertext: "AAECAwQ" });

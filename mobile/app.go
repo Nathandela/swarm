@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -28,17 +27,6 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
-
-// pollInterval is the IDLE mailbox cadence of the COMPATIBILITY FALLBACK drain -- the
-// pre-wait poll loop, kept only for a relay that refuses the mailbox_wait op (an old
-// relay; see mobile/relay.go drain). The shipped drain against every supporting relay is
-// the bounded MailboxWait live tail (playbook section 10, ADR-007 B100); a page that came
-// back non-empty is still followed immediately by the next read, so a backlog drains at
-// full speed. The 500 ms matches what the gateway's command-IN cadence used to be, for
-// the reason both had: the relay meters mailbox_read and mailbox_ack against a per-source
-// ops budget (600/min by default), and a phone that polled at tens of hertz would spend
-// that budget refusing its own reads.
-const pollInterval = 500 * time.Millisecond
 
 // journalLogSize bounds the in-memory journal read model. The DURABLE model is the
 // core's; this is the page cache ReadJournal serves, so it is bounded rather than grown
@@ -131,30 +119,6 @@ type App struct {
 	// is not guarded by a.mu.
 	coalesce *phonecore.InputCoalescer
 
-	// presence is the machine's reachability as the relay last reported it, fed by the
-	// per-connection poll and read O(1) by MachinePresence. Like coalesce it has its own
-	// lock: the relay goroutine writes it while the UI thread reads.
-	presence *presenceCache
-
-	// waitSupport is the CURRENT CONNECTION's mailbox_wait verdict (waitAdvertised /
-	// waitSupported / waitUnsupported, mobile/relay.go), overwritten on every
-	// successful dial from that connection's r_hello capability exchange -- never
-	// process-sticky. Atomic rather than under mu: it is written by the transport
-	// goroutine and read by tests across generations.
-	waitSupport atomic.Int32
-	// mailboxRecoverySupported is the CURRENT connection's r_hello verdict. A destructive
-	// request is refused locally unless this connection advertised the capability.
-	mailboxRecoverySupported atomic.Bool
-	// waitCancel, guarded by mu, is the cancel function of the mailbox wait the drain
-	// currently has parked (nil between waits). Resync cancels it through nudgeDrain
-	// after rewinding the relay cursor, because a parked wait is the one reader that
-	// would otherwise not look at the rewound cursor until the relay's wait ceiling
-	// answered it empty (mobile/relay.go).
-	waitCancel context.CancelFunc
-	// AckBatcher.Reset for the live wait drain. It is a generation barrier used by
-	// both automatic recovery and the manual Resync cursor rewind.
-	ackReset func()
-
 	// bucketMu orders the phone -> machine MAILBOX BUCKET -- every envelope on it, command
 	// and input alike. It is held across allocate-seal-append at each of the three append
 	// sites (sendInputFrame, sealSignedCommand, unsignedCommand), for the reason
@@ -186,8 +150,11 @@ type App struct {
 
 	// pairingWG counts the in-flight pairing handshakes started by startPairingJoin. It is
 	// NOT guarded by a.mu -- Close waits on it with the lock released, because a handshake
-	// winding down takes a.mu itself (pin -> rearmAfterPairing).
+	// winding down takes a.mu itself.
 	pairingWG sync.WaitGroup
+	// lifecycleMu serializes session ownership with pairing's stop/commit/restart
+	// transaction. No network or core lock is acquired while App.mu is held.
+	lifecycleMu sync.Mutex
 
 	mu     sync.Mutex
 	closed bool
@@ -198,7 +165,9 @@ type App struct {
 	drainTimer *time.Timer
 	skewed     bool // whether the clock is currently out of budget, so only a CHANGE raises an event
 	sess       *session
-	client     *relay.Client
+	stream     *phoneStream
+	ackStream  *phoneStream       // exact stream whose AcceptPhoneDelivery call may ACK
+	recvCancel context.CancelFunc // wakes only the current Subscription.Recv; the Conn stays usable for PROBE
 	// relayTrust is ADR-016 W2's reverse-bound platform delegate, installed by
 	// SetRelayTrust. It is nil on every platform that never calls it (desktop, iOS): W2's
 	// "Desktop is unchanged" means relay.WithPlatformVerifier is never reached there, and
@@ -210,11 +179,9 @@ type App struct {
 	reconciled    bool
 	killSwitch    bool
 	subscribed    bool
-	ackPending    uint64
-	ackSent       uint64
 	// mailboxDiscard is the one explicit stale-mailbox recovery the drain goroutine owns.
-	// RefreshRoster publishes it and wakes a parked wait; the single mailbox reader claims
-	// it only after that wait has returned, so no read page or old-generation ack can cross
+	// RefreshRoster publishes it and cancels the current Recv; the single mailbox reader claims
+	// it before receiving again, so no delivery or old-generation ack can cross
 	// the destructive operation.
 	mailboxDiscard *mailboxDiscardRequest
 	journal        []JournalEntry
@@ -297,7 +264,6 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 		stateDir:        cfg.StateDir,
 		events:          newDispatcher(),
 		coalesce:        phonecore.NewInputCoalescer(time.Now),
-		presence:        newPresenceCache(time.Now),
 		connState:       "offline",
 		subscribed:      true,
 		needs:           map[string]string{},
@@ -387,6 +353,8 @@ func (a *App) ready() (*phonecore.Core, error) {
 // IDEMPOTENT: a second Start while running is a no-op.
 func (a *App) Start() (err error) {
 	defer barrier(&err)
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
 	if _, err = a.ready(); err != nil {
 		return err
 	}
@@ -399,17 +367,24 @@ func (a *App) Start() (err error) {
 		return classed(ErrClassNotPaired,
 			errors.New("swarmmobile: finish pairing before connecting to a machine"))
 	}
+	a.startSessionLocked(false)
+	return nil
+}
+
+func (a *App) startSessionLocked(pairingGrace bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &session{ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	a.sess = s
+	if pairingGrace {
+		a.pairingGraceUntil = time.Now().Add(pairingRevokeGrace)
+	}
 	go func() {
 		defer close(s.done)
 		a.run(ctx)
 	}()
-	return nil
 }
 
-// pairingRevokeGrace is how long a transport that a PAIRING re-armed keeps retrying a relay
+// pairingRevokeGrace is how long a transport that pairing restarted keeps retrying a relay
 // still answering "revoked".
 //
 // It exists because the two ends of a recovery cannot be ordered. The phone learns the
@@ -423,51 +398,6 @@ func (a *App) Start() (err error) {
 // and generous because the losing side of the race can be a supervised process starting.
 const pairingRevokeGrace = 30 * time.Second
 
-// rearmAfterPairing restarts a transport generation that a revocation ended, and opens the
-// window above. It is the phone half of PB-STATE-10 and it runs on exactly one event: a
-// pairing that pinned a destination.
-//
-// WHY A RE-ARM IS OWED AT ALL. connRevoked returns from the loop rather than breaking, so the
-// generation is OVER -- correctly, since nothing on-device can un-revoke itself. But a
-// completed pairing is the owner having acted, which is the one thing that can make that
-// verdict stale, and the App carries it across: the handset the user is holding shows REVOKED,
-// they pair from that very screen, and without this they would go on seeing REVOKED until the
-// Android process happened to be rebuilt. That is the same brick the requirement is named for,
-// reached through the remedy.
-//
-// A generation still RUNNING is left alone -- the ordinary first pairing, where nothing was
-// ever revoked -- so no grace is opened and a later revocation stays terminal.
-func (a *App) rearmAfterPairing() {
-	a.mu.Lock()
-	dead := a.sess
-	a.mu.Unlock()
-	if dead == nil {
-		return // never started, or stopped: Start owns that transition
-	}
-	select {
-	case <-dead.done:
-	default:
-		return // still connected or retrying; nothing to re-arm
-	}
-
-	a.mu.Lock()
-	if a.sess != dead || a.closed {
-		a.mu.Unlock()
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s := &session{ctx: ctx, cancel: cancel, done: make(chan struct{})}
-	a.sess = s
-	a.pairingGraceUntil = time.Now().Add(pairingRevokeGrace)
-	a.mu.Unlock()
-
-	dead.cancel() // release the finished generation's context
-	go func() {
-		defer close(s.done)
-		a.run(ctx)
-	}()
-}
-
 // pairingInFlight reports whether a handshake is running right now (ADR-007 B57/B58).
 //
 // A TRANSPORT VERDICT REACHED DURING A PAIRING MUST NOT BE TERMINAL, because the thing that
@@ -476,11 +406,8 @@ func (a *App) rearmAfterPairing() {
 // on a pinning-only platform is refused before a packet, and the transport loop is retrying
 // that refusal on the reconnect backoff for the whole time the user is comparing SAS symbols.
 //
-// withinPairingGrace cannot serve here and that is why this exists. It is opened by
-// rearmAfterPairing, which runs at the END of pin() -- after the durable write -- so it is
-// still closed during the window this covers. Worse, rearm polls the dead generation's channel
-// ONCE and non-blockingly, so a loop that dies between that poll and its own deferred close is
-// never restarted by anything: Start and rearmAfterPairing are the only two launch sites.
+// withinPairingGrace cannot serve here because pin opens it only after the durable commit;
+// pairingInFlight covers the handshake before that boundary.
 //
 // Membership spans the write. startPairingJoin adds the handle before the goroutine starts and
 // deletes it in that goroutine's defer, and join -> finish -> pin all run inside it, so this
@@ -503,15 +430,22 @@ func (a *App) withinPairingGrace() bool {
 // method: Android calls it from a lifecycle callback while a UI thread is mid-Peek.
 func (a *App) Stop() (err error) {
 	defer barrier(&err)
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
 	if _, err = a.ready(); err != nil {
 		return err
 	}
 	a.mu.Lock()
 	s := a.sess
+	stream := a.stream
 	a.sess = nil
+	a.stream = nil
 	a.mu.Unlock()
 	if s == nil {
 		return nil
+	}
+	if stream != nil {
+		stream.Close()
 	}
 	s.cancel()
 	<-s.done
@@ -686,13 +620,17 @@ func (a *App) Close() (err error) {
 	if a == nil || a.core == nil {
 		return errNoReceiver
 	}
+	a.lifecycleMu.Lock()
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
+		a.lifecycleMu.Unlock()
 		return nil
 	}
 	s := a.sess
+	stream := a.stream
 	a.sess = nil
+	a.stream = nil
 	a.closed = true
 	live := make([]*Pairing, 0, len(a.pairings))
 	for p := range a.pairings {
@@ -711,6 +649,14 @@ func (a *App) Close() (err error) {
 	if machines != nil {
 		_ = machines.mgr.Close()
 	}
+	if s != nil {
+		if stream != nil {
+			stream.Close()
+		}
+		s.cancel()
+		<-s.done
+	}
+	a.lifecycleMu.Unlock()
 
 	// AN IN-FLIGHT HANDSHAKE IS A WRITER ON stateDir, and Close used to leave it running: it
 	// joined the relay-drain session and nothing else. The handshake's last act is persist()
@@ -734,10 +680,6 @@ func (a *App) Close() (err error) {
 	// committed (Pairing.abandon).
 	for _, p := range live {
 		p.abandon()
-	}
-	if s != nil {
-		s.cancel()
-		<-s.done
 	}
 	a.pairingWG.Wait()
 	a.pushCleanupWG.Wait()
@@ -1373,19 +1315,7 @@ func (a *App) Presence() (state string, err error) {
 	if _, err = a.ready(); err != nil {
 		return "", err
 	}
-	cl, err := a.conn()
-	if err != nil {
-		return "", err
-	}
-	target, _ := a.destination()
-	if target == "" {
-		return "", errNoDestination
-	}
-	info, err := cl.Presence(context.Background(), target)
-	if err != nil {
-		return "", err
-	}
-	return string(info.State), nil
+	return "", classed(ErrClassInvalidRequest, errors.New("swarmmobile: relay presence is not part of relay-v2"))
 }
 
 // StreamState is PER-STREAM staleness (PB-APP-8 / PB-SYNC-1): "live" or "stale". It is
@@ -1405,16 +1335,14 @@ func (a *App) StreamState(stream string) (state string, err error) {
 // MachineFreshness is PB-APP-11: how long it has been since the machine itself last spoke,
 // and whether anything the phone holds may still be shown as current.
 //
-// IT IS THE STATE THE PHONE DEGRADES TO INSTEAD OF A SUCCESSFUL EMPTY POLL. The relay is the
+// IT IS THE STATE THE PHONE DEGRADES TO DESPITE A HEALTHY RELAY CONNECTION. The relay is the
 // declared adversary (ADR-007 D9) and its cheapest attack is not a forgery: it withholds the
-// newest frames and keeps answering. No gap forms, so no stream is marked stale; the poll
-// succeeds, so ConnectionState goes on reading "online"; and Presence() asks that same relay
-// whether the machine is alive. Section 6.0's freshness budget is the only thing in the
+// newest frames and keeps answering. No gap forms, so no stream is marked stale and
+// ConnectionState goes on reading "online". Section 6.0's freshness budget is the only thing in the
 // system that can see it, because it measures the machine's own AAD-covered stamp -- which a
 // relay can make older by holding a frame, and can never make newer.
 //
-// PRESENCE IS NOT THIS, and a screen may not substitute one for the other: Presence is the
-// relay's opinion, and this is the phone's evidence.
+// The retired relay-presence RPC is not a substitute: this is the phone's authenticated evidence.
 func (a *App) MachineFreshness() (f *Freshness, err error) {
 	defer barrier(&err)
 	core, err := a.ready()
@@ -1468,37 +1396,13 @@ func (a *App) Resync(stream string) (err error) {
 	if err = a.resyncBudget(stream, time.Now()); err != nil {
 		return err
 	}
-	// RESET THE READ POSITION, LOCALLY, BEFORE ANY ROUND TRIP. This verb used to mean "ask the
-	// machine for a reseed"; it now means "reset my read position AND ask for a reseed", and
-	// the local half has to come first because the reseed is delivered THROUGH the read
-	// position. A relay that rewrites one item's storage cursor past every real one ends all
-	// machine->phone delivery permanently and durably (ADR-007 B126), and a repair that only
-	// sent a request would be answered into the same hole -- which is measured: the poisoned
-	// phone's Resync returned nil and changed nothing.
-	//
-	// It rides EVERY admitted resync, not only the journal's, because the read cursor is the
-	// TRANSPORT's and all four channels share it -- a user whose terminal has gone silent must
-	// not have to guess which button repairs the connection. It is inside the budget for the
-	// same reason the rest of the verb is: the work is one re-drain of a depth-capped mailbox,
-	// and the seq high-water refuses every frame in it that was already applied.
-	if err = a.rewindRelayCursor(); err != nil {
+	// Relay-v2 binds the checkpoint to a server-authenticated generation. Stop and join the
+	// exact old subscription before resetting it, then reconnect from a blank checkpoint;
+	// mutating a cursor beneath a live ACK would let the retired subscription advance the
+	// replacement generation.
+	if err = a.restartForResync(); err != nil {
 		return err
 	}
-	// The wait drain PARKS at the cursor it read, and a wait parked at the poisoned value
-	// is woken by nothing -- an append wakes the server-side wait, which re-reads past the
-	// poisoned coordinate, finds nothing and re-parks -- until the relay's 25 s ceiling
-	// lapses. So the rewind must interrupt it, or the repair this verb exists for waits
-	// out a ceiling the user experiences as the button doing nothing (see nudgeDrain).
-	//
-	// DEFERRED, SO IT RUNS LAST -- strictly after the reseed request below has crossed the
-	// connection -- and the ordering is load-bearing: cancelling a context that the wait's
-	// own request write happens to be riding closes the WHOLE websocket underneath every
-	// caller (the websocket library's cancel-during-write contract; it cannot leave a
-	// partial frame on the wire). In that worst case the nudge costs one silent reconnect
-	// and the fresh drain starts from the rewound cursor -- but a reseed request issued
-	// AFTER the nudge would be racing the connection the nudge may have just killed, and
-	// was measured losing that race as Resync returning "offline" from a healthy phone.
-	defer a.nudgeDrain()
 	// ADMITTED, so the repair is in flight from this instant (PB-APP-8's fourth state). It is
 	// marked BEFORE the request is sealed rather than after: the seal can take a relay round
 	// trip, and a user who pressed a button and saw nothing change for a second is the exact
@@ -1512,6 +1416,52 @@ func (a *App) Resync(stream string) (err error) {
 	}
 	_, err = a.unsignedResync(core.Router().Sessions().Cursor())
 	return err
+}
+
+func (a *App) restartForResync() error {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return errClosed
+	}
+	s := a.sess
+	stream := a.stream
+	if s == nil {
+		a.mu.Unlock()
+		return errNotRunning
+	}
+	a.sess, a.stream = nil, nil
+	a.mu.Unlock()
+	if stream != nil {
+		stream.Close()
+	}
+	s.cancel()
+	<-s.done
+
+	restart := func() {
+		a.mu.Lock()
+		if !a.closed && a.sess == nil {
+			a.startSessionLocked(false)
+		}
+		a.mu.Unlock()
+	}
+	binding, active := a.core.PhoneBinding()
+	checkpoint := a.core.State().RelayIncarnation
+	if !active || checkpoint == "" {
+		restart()
+		return classed(ErrClassOffline, errors.New("swarmmobile: no active relay-v2 checkpoint to resync"))
+	}
+	if err := a.core.RecoverPhoneIncarnation(binding, checkpoint); err != nil {
+		restart()
+		return err
+	}
+	restart()
+	if _, err := a.awaitStream(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // RefreshRoster asks for one authoritative all-session roster without turning the phone's
@@ -1715,8 +1665,7 @@ func (a *App) refundResyncBudget(stream string, reservedAt time.Time) {
 //
 // THE SILENCE CLAUSE IS THE THIRD, AND IT IS THE ONE NO GAP CAN EXPRESS (PB-APP-11). The
 // other two answer "is there a hole in what arrived"; a relay that simply stops delivering
-// leaves no hole, answers every poll, and is itself the source of the only other liveness
-// signal the phone has. So the age of the newest authenticated machine timestamp bounds every
+// leaves no hole while keeping the transport open. So the age of the newest authenticated machine timestamp bounds every
 // channel at once -- unlike a gap, which belongs to one bucket -- because all four are
 // rendered from content that came over the same withheld link.
 //
@@ -1849,11 +1798,7 @@ func (a *App) RegisterPushToken(token string) (err error) {
 	if err = core.Mutate(func(st *phonecore.State) { st.PushToken = token }); err != nil {
 		return err
 	}
-	cl, cerr := a.conn()
-	if cerr != nil {
-		return nil
-	}
-	return cl.TokenRegister(context.Background(), token)
+	return nil
 }
 
 // DeletePushToken removes the token from the relay and from durable state. Deletion on
@@ -1904,11 +1849,7 @@ func (a *App) dropPushTokenLocally(core *phonecore.Core) error {
 // the next authenticated reconnect. A relay that is REACHED and refuses is reported, and it is
 // the caller that decides what that refusal is allowed to stop.
 func (a *App) dropPushTokenAtRelay() error {
-	cl, cerr := a.conn()
-	if cerr != nil {
-		return nil
-	}
-	return cl.TokenDelete(context.Background())
+	return nil
 }
 
 // PushPreference is the persisted pair of coarse toggles (PB-APP-7).

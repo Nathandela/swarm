@@ -351,6 +351,9 @@ export class RelayHome {
       if (attachment.phase === "pair") return await this.pairMessage(ws, attachment, message);
       if (attachment.phase !== "authed") protocolError("auth_required");
       attachment = this.meter(ws, attachment);
+      // A probe proves the authenticated WebPKI endpoint and nothing else. Keeping it
+      // as a distinct purpose prevents auth supersession from touching the live stream.
+      if (attachment.purpose === "probe") protocolError("not_authorized");
       switch (message.type) {
         case "TEST_ALARM": {
           if (this.env.TEST_COST_METRICS !== "1") protocolError("unsupported_type");
@@ -392,7 +395,9 @@ export class RelayHome {
   async authInit(ws, attachment, message) {
     exact(message, ["pub", "purpose", "role"]);
     if (message.role !== "machine" && message.role !== "phone") protocolError("invalid_role");
-    if (!(["control", "stream"].includes(message.purpose)) || (message.role === "phone" && message.purpose !== "stream")) protocolError("invalid_purpose");
+    const validPurpose = (message.role === "phone" && ["stream", "probe"].includes(message.purpose)) ||
+      (message.role === "machine" && ["control", "stream"].includes(message.purpose));
+    if (!validPurpose) protocolError("invalid_purpose");
     const pub = decodeBase64URL(message.pub, 32);
     ws.serializeAttachment({ ...attachment, phase: "initializing" });
     const rid = await routingID(pub);
@@ -627,7 +632,7 @@ export class RelayHome {
     if ((!blankRecovery && after < stream.ack_cursor) || after > stream.next_cursor) protocolError("invalid_cursor");
     const sub = { peer: message.peer_rid, recipient, sender: peerSender, generation, incarnation: stream.incarnation, sentHigh: blankRecovery ? stream.ack_cursor : after, sentCount: 0, sentBytes: 0 };
     ws.serializeAttachment({ ...attachment, sub });
-    this.send(ws, "SUBSCRIBED", message.request_id, { peer_rid: message.peer_rid, generation: wireCursor(generation), incarnation: stream.incarnation, after: wireCursor(after) });
+    this.send(ws, "SUBSCRIBED", message.request_id, { peer_rid: message.peer_rid, generation: wireCursor(generation), incarnation: stream.incarnation, after: wireCursor(sub.sentHigh) });
     await this.pump(ws);
   }
 
@@ -715,30 +720,40 @@ export class RelayHome {
   }
 
   async discard(ws, attachment, message) {
-    exact(message, ["generation", "incarnation", "peer_rid"]);
+    exact(message, ["generation", "incarnation", "peer_rid", "through_cursor"]);
     this.requireStream(attachment);
     const binding = this.liveBinding(attachment, message.peer_rid, message.generation);
     const { sender, recipient } = attachment.role === "machine"
       ? { sender: message.peer_rid, recipient: attachment.machineRID }
       : { sender: attachment.machineRID, recipient: attachment.rid };
-    const current = this.row("SELECT incarnation,discard_old_incarnation,discard_through_cursor FROM streams WHERE recipient=? AND sender=? AND generation=?", recipient, sender, binding.generation);
+    const through = cursorKey(message.through_cursor);
+    if (through === ZERO_KEY) protocolError("invalid_cursor");
+    const current = this.row("SELECT incarnation,ack_cursor,discard_old_incarnation,discard_through_cursor FROM streams WHERE recipient=? AND sender=? AND generation=?", recipient, sender, binding.generation);
     if (!current) protocolError("incarnation_mismatch");
     if (current.incarnation !== message.incarnation) {
-      if (current.discard_old_incarnation !== message.incarnation) protocolError("incarnation_mismatch");
+      if (current.discard_old_incarnation !== message.incarnation || current.discard_through_cursor !== through) protocolError("incarnation_mismatch");
       this.send(ws, "DISCARDED", message.request_id, { peer_rid: message.peer_rid, generation: wireCursor(binding.generation), incarnation: current.incarnation, cursor: wireCursor(current.discard_through_cursor) });
       return;
     }
+    const sub = attachment.sub;
+    if (!sub || sub.recipient !== recipient || sub.sender !== sender || sub.generation !== binding.generation || sub.incarnation !== current.incarnation) protocolError("not_subscribed");
     const nextIncarnation = randomToken(16);
     const result = this.state.storage.transactionSync(() => {
       this.liveBinding(attachment, message.peer_rid, message.generation);
       const stream = this.row("SELECT incarnation,next_cursor,ack_cursor FROM streams WHERE recipient=? AND sender=? AND generation=?", recipient, sender, binding.generation);
       if (!stream || stream.incarnation !== message.incarnation) protocolError("incarnation_mismatch");
-      const newlyAcked = this.row("SELECT COUNT(*) AS n FROM receipts WHERE recipient=? AND sender=? AND generation=? AND cursor>? AND cursor<=?", recipient, sender, binding.generation, stream.ack_cursor, stream.next_cursor).n;
+      if (through < stream.ack_cursor || through > stream.next_cursor) protocolError("invalid_cursor");
+      const head = this.row("SELECT cursor FROM items WHERE recipient=? AND sender=? AND generation=? AND cursor>? AND cursor<=? ORDER BY cursor LIMIT 1", recipient, sender, binding.generation, stream.ack_cursor, through);
+      // Ordinarily the authenticated retained head must have been sent on this exact
+      // subscription. After a crash it may expire before the first DISCARD; advancing
+      // across that now-empty range is safe, while selecting a later live head is not.
+      if (head && (head.cursor !== through || through > sub.sentHigh)) protocolError("invalid_cursor");
+      const newlyAcked = this.row("SELECT COUNT(*) AS n FROM receipts WHERE recipient=? AND sender=? AND generation=? AND cursor>? AND cursor<=?", recipient, sender, binding.generation, stream.ack_cursor, through).n;
       this.exec("UPDATE streams SET acked_receipts=acked_receipts+? WHERE recipient=? AND sender=? AND generation=?", newlyAcked, recipient, sender, binding.generation);
-      this.exec("UPDATE streams SET incarnation=?,ack_cursor=?,discard_old_incarnation=?,discard_through_cursor=? WHERE recipient=? AND sender=? AND generation=?", nextIncarnation, stream.next_cursor, stream.incarnation, stream.next_cursor, recipient, sender, binding.generation);
-      this.deleteItems("DELETE FROM items WHERE rowid IN (SELECT rowid FROM items WHERE recipient=? AND sender=? AND generation=? LIMIT ?)", recipient, sender, binding.generation, CLEANUP_BATCH);
+      this.exec("UPDATE streams SET incarnation=?,ack_cursor=?,discard_old_incarnation=?,discard_through_cursor=? WHERE recipient=? AND sender=? AND generation=?", nextIncarnation, through, stream.incarnation, through, recipient, sender, binding.generation);
+      this.deleteItems("DELETE FROM items WHERE rowid IN (SELECT rowid FROM items WHERE recipient=? AND sender=? AND generation=? AND cursor<=? LIMIT ?)", recipient, sender, binding.generation, through, CLEANUP_BATCH);
       this.pruneReceiptWindow(recipient, sender, binding.generation);
-      return stream.next_cursor;
+      return through;
     });
     ws.serializeAttachment({ ...attachment, sub: undefined });
     await this.scheduleAlarm(Date.now() + 1);

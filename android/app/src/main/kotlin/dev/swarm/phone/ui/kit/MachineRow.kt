@@ -33,8 +33,8 @@ import dev.swarm.phone.R
  * because `.mrow .eid` and `.prow .ag` are the same cell and the derivation table says so. What is
  * NOT shared is the leading mark and four spacing steps, which is what this file is.
  *
- * @param presence the meta line, which the SCREEN writes: `App.MachinePresence` is the relay's
- *  opinion and PB-APP-11 requires this phone's own freshness beside it, so what a person reads
+ * @param presence the meta line, which the SCREEN writes: `App.MachinePresence` is `unknown`
+ *  under relay-v2 and PB-APP-11 requires this phone's own freshness beside it, so what a person reads
  *  here is a sentence about both. Copy is the screen's (PB-DS-9) and this component styles it.
  * @param mark drives the leading dot and nothing else. It carries all three of the relay's words;
  *  see [presenceDot], which argues why `unknown` is neither `online` nor `offline` and what the

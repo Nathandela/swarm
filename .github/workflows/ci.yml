@@ -147,7 +147,7 @@ jobs:
           npm ci --prefix docs/verification/remote-scale-to-zero/push-probe --ignore-scripts --no-audit --no-fund
       - name: Native Worker, Go interoperability and SQLite cost bounds
         working-directory: services/relay
-        run: npm test
+        run: RELAY_TEST_PORT=8916 RELAY_TEST_BUDGET_SECONDS=180 npm test
       - name: Transactional push with the actual Firestore SDK
         working-directory: docs/verification/remote-scale-to-zero/push-probe
         run: |

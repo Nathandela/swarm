@@ -211,11 +211,10 @@ data class ClockBanner(
  * still be presented as current.
  *
  * IT IS NOT A CONNECTION STATE, and that is the whole reason it exists. The declared adversary
- * (ADR-007 D9) does not have to break the connection: it withholds the newest frames and keeps
- * answering the polls. No gap forms, so no stream is stale; the poll succeeds, so
- * [ConnectionBanner] reads "Connected to your machine."; and `App.Presence` asks that same
- * relay whether the machine is alive. The only signal left is the machine's own AAD-covered
- * timestamp, which a relay can make older by holding a frame and can never make newer.
+ * (ADR-007 D9) does not have to break the connection: it can withhold the newest frames while
+ * the stream remains connected. Relay-v2 intentionally offers no relay presence opinion. The
+ * only liveness signal is the machine's own AAD-covered timestamp, which a relay can make older
+ * by holding a frame and can never make newer.
  *
  * @param silent `swarmmobile.Freshness.Silent`: past section 6.0's five-minute budget.
  * @param lastHeardUnixMs the MACHINE's own stamp, not this phone's arrival time. Zero means

@@ -171,6 +171,10 @@ const s25LiveFloor = 3
 // would report that nothing waits. So every selector on the receiver counts as an edge,
 // whether it is called or merely named.
 func s25AppCallGraph(t *testing.T) map[string]map[string]bool {
+	return s25AppCallGraphWithFuncLits(t, true)
+}
+
+func s25AppCallGraphWithFuncLits(t *testing.T, followFuncLits bool) map[string]map[string]bool {
 	t.Helper()
 	dir := facadeDir(t)
 	entries, err := os.ReadDir(dir)
@@ -207,6 +211,9 @@ func s25AppCallGraph(t *testing.T) map[string]map[string]bool {
 				graph[fn.Name.Name] = map[string]bool{}
 			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if _, ok := n.(*ast.FuncLit); ok && !followFuncLits {
+					return false
+				}
 				sel, ok := n.(*ast.SelectorExpr)
 				if !ok {
 					return true

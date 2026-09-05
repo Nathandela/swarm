@@ -448,11 +448,17 @@ var ErrRelayIncarnationChanged = errors.New("phonecore: relay mailbox incarnatio
 // the relay to delete anything. Repeated calls while one is pending return the same token, so
 // a restarted phone can safely reissue the relay's idempotent discard and the same sealed
 // roster-refresh intent. No destructive RPC may precede this commit.
-func (c *Core) BeginRelayDiscardRecovery() (string, error) {
+func (c *Core) BeginRelayDiscardRecovery(through uint64) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.st.DiscardRecoveryGeneration > c.st.DiscardRecoveryCompleted && c.st.DiscardRecoveryToken != "" {
+		if through != c.st.DiscardRecoveryCursor {
+			return "", ErrRelayIncarnationChanged
+		}
 		return c.st.DiscardRecoveryToken, nil
+	}
+	if !validPhoneIncarnation(c.st.RelayIncarnation) || through == 0 || through <= c.st.RelayCursor {
+		return "", ErrRelayIncarnationChanged
 	}
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -461,10 +467,25 @@ func (c *Core) BeginRelayDiscardRecovery() (string, error) {
 	st := c.st.clone()
 	st.DiscardRecoveryGeneration++
 	st.DiscardRecoveryToken = hex.EncodeToString(raw[:])
+	st.DiscardRecoveryIncarnation = c.st.RelayIncarnation
+	st.DiscardRecoveryCursor = through
 	if err := c.persistLocked(st); err != nil {
 		return "", err
 	}
 	return c.st.DiscardRecoveryToken, nil
+}
+
+// DiscardRecovery returns the pending replacement-roster token and the exact
+// pre-discard incarnation. The caller owes DISCARD only while the live durable
+// RelayIncarnation still equals oldIncarnation; after adoption, retry must only
+// resend the token-bearing roster request.
+func (c *Core) DiscardRecovery() (token, oldIncarnation string, through uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.st.DiscardRecoveryGeneration <= c.st.DiscardRecoveryCompleted {
+		return "", "", 0
+	}
+	return c.st.DiscardRecoveryToken, c.st.DiscardRecoveryIncarnation, c.st.DiscardRecoveryCursor
 }
 
 // DiscardRecoveryToken returns the currently pending durable recovery token, or empty when
@@ -1069,6 +1090,8 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 			token == st.DiscardRecoveryToken {
 			st.DiscardRecoveryCompleted = st.DiscardRecoveryGeneration
 			st.DiscardRecoveryToken = ""
+			st.DiscardRecoveryIncarnation = ""
+			st.DiscardRecoveryCursor = 0
 		}
 		// PB-SYNC-8: REPLACE, never merge. The durable list is computed the same way the
 		// live cache will be (a scratch cache the reseed is applied to), so the two cannot

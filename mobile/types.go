@@ -548,17 +548,9 @@ type Freshness struct {
 	LastHeardUnixMs int64
 }
 
-// MachinePresence is the relay's last reported reachability for the machine, and when this
-// phone took that reading (PB-APP-5, bead agents-tracker-xtj).
-//
-// State is the relay's own vocabulary -- online, offline, unknown -- with unknown covering
-// both "the relay has no live record" and "this phone has no connection through which to
-// ask". A screen renders one word either way, because in both cases nobody can currently
-// vouch for the machine.
-//
-// ObservedUnixMs is what makes the reading judgeable rather than merely available: this is a
-// CACHED opinion, so its age is part of the answer, and 0 means nothing has been observed yet
-// rather than that the reading is from the epoch.
+// MachinePresence is retained for the bind surface. Relay-v2 has no presence
+// RPC, so State is always "unknown" and ObservedUnixMs is zero. Use
+// MachineFreshness for authenticated liveness evidence.
 type MachinePresence struct {
 	State          string
 	ObservedUnixMs int64

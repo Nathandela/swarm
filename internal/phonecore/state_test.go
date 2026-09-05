@@ -81,34 +81,36 @@ func fullState() State {
 		wake[i] = byte(i + 100)
 	}
 	st := State{
-		Machine:                   "m1",
-		MachineName:               "nathans-mbp",
-		MachineStatic:             bytes.Repeat([]byte{0xA1}, 32),
-		MachineSignPub:            bytes.Repeat([]byte{0xB2}, ed25519.PublicKeySize),
-		MachineRelayAuthPub:       bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
-		OperatorNamespace:         "owner",
-		RelaySPKIPin:              bytes.Repeat([]byte{0xD4}, sha256.Size),
-		RelayTLSPolicy:            "pinned_spki",
-		RoutingID:                 "rid-m1",
-		EpochID:                   7,
-		PushToken:                 "fcm-token-m1",
-		PushPreference:            PushPreference{Alerts: true, Mentions: true},
-		ReconciledEpoch:           7,
-		Keys:                      crypto.EpochKeys{WakeKey: wake, ContentKey: testContentKey()},
-		SendSeq:                   map[uint32]uint64{7: 512, 6: 1024},
-		Receive:                   map[Bucket]uint64{journalBucket(7): 42, replyBucket(7): 5},
-		GrantEpoch:                7,
-		GrantSeq:                  2,
-		WakeReplay:                91,
-		RelayCursor:               17,
-		RelayIncarnation:          "AAAAAAAAAAAAAAAAAAAAAA",
-		DiscardRecoveryGeneration: 3,
-		DiscardRecoveryCompleted:  2,
-		DiscardRecoveryToken:      "fedcba9876543210fedcba9876543210",
-		RosterRevision:            23,
-		Sessions:                  []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
-		Snapshots:                 []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
-		PendingOps:                []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
+		Machine:                    "m1",
+		MachineName:                "nathans-mbp",
+		MachineStatic:              bytes.Repeat([]byte{0xA1}, 32),
+		MachineSignPub:             bytes.Repeat([]byte{0xB2}, ed25519.PublicKeySize),
+		MachineRelayAuthPub:        bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
+		OperatorNamespace:          "owner",
+		RelaySPKIPin:               bytes.Repeat([]byte{0xD4}, sha256.Size),
+		RelayTLSPolicy:             "pinned_spki",
+		RoutingID:                  "rid-m1",
+		EpochID:                    7,
+		PushToken:                  "fcm-token-m1",
+		PushPreference:             PushPreference{Alerts: true, Mentions: true},
+		ReconciledEpoch:            7,
+		Keys:                       crypto.EpochKeys{WakeKey: wake, ContentKey: testContentKey()},
+		SendSeq:                    map[uint32]uint64{7: 512, 6: 1024},
+		Receive:                    map[Bucket]uint64{journalBucket(7): 42, replyBucket(7): 5},
+		GrantEpoch:                 7,
+		GrantSeq:                   2,
+		WakeReplay:                 91,
+		RelayCursor:                17,
+		RelayIncarnation:           "AAAAAAAAAAAAAAAAAAAAAA",
+		DiscardRecoveryGeneration:  3,
+		DiscardRecoveryCompleted:   2,
+		DiscardRecoveryToken:       "fedcba9876543210fedcba9876543210",
+		DiscardRecoveryIncarnation: "AAAAAAAAAAAAAAAAAAAAAA",
+		DiscardRecoveryCursor:      18,
+		RosterRevision:             23,
+		Sessions:                   []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
+		Snapshots:                  []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
+		PendingOps:                 []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
 		PendingPublications: []PendingPublication{
 			{
 				LogicalID: "logical-pending", OperationID: "op-publication", Kind: PublicationComposer,
@@ -745,6 +747,18 @@ var stateV24Fixture = func() string {
 		`"relay_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","relay_generation":5`, 1)
 }()
 
+var stateV25Fixture = func() string {
+	fixture := strings.Replace(stateV24Fixture, `"schema_version":24`, `"schema_version":25`, 1)
+	return strings.Replace(fixture, `"discard_recovery_token":"fedcba9876543210fedcba9876543210"`,
+		`"discard_recovery_token":"fedcba9876543210fedcba9876543210","discard_recovery_incarnation":"AAAAAAAAAAAAAAAAAAAAAA"`, 1)
+}()
+
+var stateV26Fixture = func() string {
+	fixture := strings.Replace(stateV25Fixture, `"schema_version":25`, `"schema_version":26`, 1)
+	return strings.Replace(fixture, `"discard_recovery_incarnation":"AAAAAAAAAAAAAAAAAAAAAA"`,
+		`"discard_recovery_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","discard_recovery_cursor":18`, 1)
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -767,6 +781,8 @@ var stateFixtures = map[int]string{
 	22: stateV22Fixture,
 	23: stateV23Fixture,
 	24: stateV24Fixture,
+	25: stateV25Fixture,
+	26: stateV26Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
@@ -853,6 +869,13 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 					continue // added after this version was pinned; legitimately absent
 				}
 				if version < 23 && (name == "RelayCursor" || name == "RelayIncarnation") {
+					if !gv.Field(i).IsZero() {
+						t.Errorf("the pinned v%d fixture retained retired relay-v1 State.%s = %#v", version, name, gv.Field(i).Interface())
+					}
+					continue
+				}
+				if version < 26 && (name == "DiscardRecoveryGeneration" || name == "DiscardRecoveryCompleted" ||
+					name == "DiscardRecoveryToken" || name == "DiscardRecoveryIncarnation" || name == "DiscardRecoveryCursor") {
 					if !gv.Field(i).IsZero() {
 						t.Errorf("the pinned v%d fixture retained retired relay-v1 State.%s = %#v", version, name, gv.Field(i).Interface())
 					}

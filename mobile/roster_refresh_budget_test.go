@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 func TestRosterRefreshBudgetReservationCanBeRefundedAfterDiscardFailure(t *testing.T) {
@@ -57,7 +56,7 @@ func TestMailboxDiscardRequestIsCanceledWithItsStartStopSession(t *testing.T) {
 	t.Cleanup(cancel)
 	a := &App{
 		sess:   &session{ctx: ctx, cancel: cancel, done: make(chan struct{})},
-		client: &relay.Client{},
+		stream: &phoneStream{},
 	}
 	result := make(chan error, 1)
 	go func() {

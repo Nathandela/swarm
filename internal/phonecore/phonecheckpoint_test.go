@@ -63,7 +63,7 @@ func phoneCheckpointCore(t *testing.T, store Store) (*Core, PhoneBinding) {
 	if err := core.ActivatePhoneBinding(binding); err != nil {
 		t.Fatal(err)
 	}
-	if err := core.SetPhoneIncarnation(binding, testPhoneIncarnation); err != nil {
+	if err := core.SetPhoneCheckpoint(binding, testPhoneIncarnation, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := core.Mutate(func(st *State) { st.RelayCursor = 41 }); err != nil {

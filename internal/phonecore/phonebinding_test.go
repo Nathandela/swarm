@@ -121,17 +121,17 @@ func TestPhoneBinding_NativeIncarnationIsCanonicalRawURLAndRecoveryTokenStaysHex
 		"AAAAAAAAAAAAAAAAAAAAAA=",
 		"short",
 	} {
-		if err := core.SetPhoneIncarnation(binding, bad); err == nil {
+		if err := core.SetPhoneCheckpoint(binding, bad, 0); err == nil {
 			t.Fatalf("accepted noncanonical native incarnation %q", bad)
 		}
 	}
-	if err := core.SetPhoneIncarnation(binding, testPhoneIncarnation); err != nil {
+	if err := core.SetPhoneCheckpoint(binding, testPhoneIncarnation, 0); err != nil {
 		t.Fatalf("canonical native incarnation: %v", err)
 	}
 	if got := core.State().RelayIncarnation; got != testPhoneIncarnation {
 		t.Fatalf("persisted native incarnation = %q", got)
 	}
-	token, err := core.BeginRelayDiscardRecovery()
+	token, err := core.BeginRelayDiscardRecovery(1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestCommitPhonePairing_AtomicallyPinsOwnsPushAndResetsOnlyRelayCheckpoint(t
 	if err := core.ActivatePhoneBinding(binding); err != nil {
 		t.Fatal(err)
 	}
-	if err := core.SetPhoneIncarnation(binding, testPhoneIncarnation); err != nil {
+	if err := core.SetPhoneCheckpoint(binding, testPhoneIncarnation, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := core.Mutate(func(st *State) {
@@ -286,7 +286,7 @@ func TestPhoneBinding_WrappedFileStoreForwardsCustodyCheckpointResets(t *testing
 			if err := core.ActivatePhoneBinding(binding); err != nil {
 				t.Fatal(err)
 			}
-			if err := core.SetPhoneIncarnation(binding, testPhoneIncarnation); err != nil {
+			if err := core.SetPhoneCheckpoint(binding, testPhoneIncarnation, 0); err != nil {
 				t.Fatal(err)
 			}
 			if err := core.Mutate(func(st *State) { st.RelayCursor = 41 }); err != nil {
