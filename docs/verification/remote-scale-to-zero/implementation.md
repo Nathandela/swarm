@@ -341,6 +341,28 @@ authenticated additional-pairing staging, and Android selection/rebuild. Merely 
 an arbitrary registry row on restart would hide the problem and could dial the wrong
 relay. Full concurrent per-machine event/connection wiring remains beyond that slice.
 
+## Completed-main CI and deadlock-fixture ordering
+
+Main `33608f35` CI `33954039671` finished with one failure, in the existing skeleton
+deadlock regression harness: the child returned nil/PASS before the parent's next
+readiness poll. The dedicated remote-v2 job, Android job and all other jobs passed;
+both container workflows (`33954039677`, `33954039685`) passed, including the push
+vulnerability scan. This is not an overall green CI result.
+
+The harness now checks its durable readiness marker when the child result arrives
+first, accepting only a present marker plus a successful exit. Missing readiness and
+failed child exits still fail; the 30-second setup and 3-second production deadlines
+are unchanged. No production code changed. Sol independently reviewed the actual diff
+and found no must-fix. The original passed 20 local non-race repetitions (78.736 s),
+while the correction passed 20 race repetitions (75.220 s) with the race runtime's
+artificial exit sleep disabled.
+
+A temporary scheduling experiment delayed readiness polling until after the setup
+deadline, forcing the completed-child result branch. The original reproduced the
+exact nil/PASS failure (9.916 s package time); the correction passed (5.281 s). The
+ordinary 20 ms poll was restored afterward; the temporary schedule is not committed.
+This isolates the harness ordering bug without weakening its deadlock assertions.
+
 ## Operator access and changes
 
 Read-only access verified the dedicated Google project `swarm-8404f` and enabled billing.
@@ -365,3 +387,10 @@ The safety reviewer separately paused removal of the obsolete SingleMachineManag
 implementation/tests and the production push-command switch from bbolt/local-key startup
 to Firestore/injected keyring. Fresh scoped owner approval was requested; these refused
 mutations were not retried through another tool or applied by the orchestrator.
+
+The owner subsequently explicitly approved all three held source actions: publishing
+the phone checkpoint to the public repository, deleting the obsolete manager and its
+tests while retaining shared primitives, and switching production push startup to
+Firestore with the injected keyring. Implementation/review resumed under that authority.
+This approval does not include deployment, infrastructure deletion or phone resets;
+hosted/device validation and the phone caller gaps above remain separate open gates.
