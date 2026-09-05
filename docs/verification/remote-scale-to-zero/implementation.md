@@ -394,3 +394,25 @@ tests while retaining shared primitives, and switching production push startup t
 Firestore with the injected keyring. Implementation/review resumed under that authority.
 This approval does not include deployment, infrastructure deletion or phone resets;
 hosted/device validation and the phone caller gaps above remain separate open gates.
+
+## Approved source cleanup: phone manager
+
+The approved phone checkpoint and merged main evidence were published on
+`plan/remote-scale-to-zero` as `70950f8a`. Main `2beeefb9` subsequently completed all CI
+jobs successfully. The branch checkpoint exposed two additional deterministic fixture
+failures: Android's source scanner treated an internal pending-ACK storage marker as a
+public screen state, and seven CLI recovery tests started a fresh unpaired app and used
+the old flat state path. Those are separate follow-up corrections, not a flaky-main claim.
+
+Terra first observed RED from a new guard finding all five obsolete singleton symbols,
+then removed the unused manager, adapter alias/constructor and refusal error. Shared
+MachineClient/MachineManager interfaces, CoreMachineClient and RegistryManager remain.
+Lifecycle, stop-signal and aggregate-stream tests now exercise the retained registry.
+Root review requested restoration of the exact four-event/order/all-field comparison
+and widening the guard to every non-test phonecore source file; both were applied.
+
+Terra passed full phonecore tests (24.973 s), race tests (41.656 s) and vet; after the
+review amendments, its focused race run passed (4.802 s). Root independently passed
+five focused race repetitions including those amended assertions (11.923 s).
+The nine paused-manager reachability exemptions were deleted with the symbols.
+These checks do not complete the phone's multi-machine production caller wiring.

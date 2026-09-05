@@ -13,10 +13,8 @@ package phonecore
 //   - (*MachineRegistry).AddMachine(d) (dir, error): creates the per-machine namespace
 //     and the durable descriptor row; refuses a duplicate id.
 //   - (*MachineRegistry).RemoveMachine(id): deletes exactly that pairing's namespace.
-//   - NewRegistryManager(reg, ManagerOptions): the real N-entry MachineManager --
-//     SingleMachineManager.Add/Remove refuse behind ErrMultiMachineNotImplemented by
-//     design (machinemanager.go:83-87), and THIS is the R4 seam that retires them. Its
-//     wiring is also what deletes the ~15 b94Allowed MM4 rows in
+//   - NewRegistryManager(reg, ManagerOptions): the N-entry MachineManager. Its wiring
+//     is also what deletes the ~15 b94Allowed MM4 rows in
 //     internal/verify/phaseb_reachability_test.go:114-133 -- the fence is bidirectional.
 //
 // ISOLATION IS PROVED AT THE BYTE LEVEL where it matters: machine B's namespace is

@@ -93,8 +93,6 @@ var b94HarnessPkgs = map[string]string{
 // fail as soon as a caller becomes reachable; P1/P4 cannot close while they remain.
 const b94V2Foundation = "ADR-027 / agents-tracker-wjp4: native v2 foundation exercised against workerd; production phone/gateway caller wiring and authenticated home-profile custody are unfinished. Remove this exemption when that caller is wired; this does not certify P1/P4."
 
-const b94PausedLegacyManager = "agents-tracker-wjp4.1: registry-only startup no longer calls this legacy manager; its separately refused source deletion awaits scoped approval. Retained only on the unfinished phone branch, not a v2 fallback or P4 completion. Delete the symbol and exemption together."
-
 // b94Allowed is the ledger: an exported symbol with no production caller, and WHY that is
 // acceptable. It is bidirectional -- an entry that becomes reachable fails too, so a symbol
 // that gets wired up cannot leave a stale exemption behind.
@@ -146,19 +144,6 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remote/crypto.LivePrologue":                "Noise prologue helper for the LIVE handshake tier; no shipped caller since the live tier rides the mailbox.",
 	"github.com/Nathandela/swarm/internal/remote/crypto.NoiseSession.Rekey":          "Noise rekey, reachable only on a session the shipped mailbox tier does not open.",
 	"github.com/Nathandela/swarm/internal/remote/crypto.NoiseSession.Suite":          "as NoiseSession.Rekey.",
-
-	// ---- Registry-only phone checkpoint, deliberately not integrated on main -----------
-	// NewMachineRegistry is now production-reachable, so its old exemption is gone.
-	// No root-set widening or fake production caller hides the paused deletion below.
-	"github.com/Nathandela/swarm/internal/phonecore.NewSingleMachineAdapter":            b94PausedLegacyManager,
-	"github.com/Nathandela/swarm/internal/phonecore.NewSingleMachineManager":            b94PausedLegacyManager,
-	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Add":           b94PausedLegacyManager,
-	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Close":         b94PausedLegacyManager,
-	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.ConnectionCap": b94PausedLegacyManager,
-	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Events":        b94PausedLegacyManager,
-	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.List":          b94PausedLegacyManager,
-	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Remove":        b94PausedLegacyManager,
-	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Select":        b94PausedLegacyManager,
 
 	// ---- internal/phonecore: the ADR-015 R3 push seams ------------------------------------
 	// NewGatewayClient's row is GONE because the symbol is now REACHABLE: mobile's

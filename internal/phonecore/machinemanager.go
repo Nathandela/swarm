@@ -4,7 +4,6 @@ package phonecore
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 )
 
@@ -75,16 +74,12 @@ type MachineManager interface {
 // ErrMachineNotFound is Select's refusal for an id the registry does not hold.
 var ErrMachineNotFound = errors.New("phonecore: no machine registered with that id")
 
-// ErrMultiMachineNotImplemented remains only for the blocked historical
-// SingleMachineManager implementation. RegistryManager is the v2 implementation.
-var ErrMultiMachineNotImplemented = errors.New("phonecore: multi-machine registry mutation is not implemented")
-
-// CoreMachineClient wraps one independently namespaced Core.
-// unchanged as a MachineClient. Start/Stop/Running never touch Core itself -- Core has no
-// Close (see core.go), so nothing destructive happens on either transition -- but Stop does
-// have one real effect: it tells the owning registry relay to stop forwarding this client's
-// events (see stopped, below). Both Start and Stop are idempotent so a caller
-// never has to track whether it already called one.
+// CoreMachineClient wraps one independently namespaced Core and exposes it unchanged as a
+// MachineClient. Start/Stop/Running never touch Core itself -- Core has no Close (see
+// core.go), so nothing destructive happens on either transition -- but Stop tells the
+// owning registry relay to stop forwarding this client's events (see stopped, below).
+// Both Start and Stop are idempotent so a caller never has to track whether it already
+// called one.
 type CoreMachineClient struct {
 	id     string
 	core   *Core
@@ -99,17 +94,6 @@ type CoreMachineClient struct {
 // unchanged from the given channel.
 func NewCoreMachineClient(id string, core *Core, events <-chan Event) *CoreMachineClient {
 	return &CoreMachineClient{id: id, core: core, events: events}
-}
-
-// SingleMachineAdapter is a temporary source alias pending removal of the obsolete
-// compatibility manager and its historical tests. New v2 code must use
-// NewCoreMachineClient and RegistryManager.
-type SingleMachineAdapter = CoreMachineClient
-
-// NewSingleMachineAdapter is kept only so the historical compatibility tests continue
-// compiling until their blocked manager deletion can be completed.
-func NewSingleMachineAdapter(id string, core *Core, events <-chan Event) *CoreMachineClient {
-	return NewCoreMachineClient(id, core, events)
 }
 
 // ID is the pairing's identity.
@@ -188,105 +172,3 @@ func (a *CoreMachineClient) stopSignal() <-chan struct{} {
 	}
 	return a.stopCh
 }
-
-// SingleMachineManager is retained temporarily only for source compatibility while callers
-// move to RegistryManager. Production v2 construction uses RegistryManager exclusively.
-// It holds exactly one
-// CoreMachineClient and relays that client's events onto the
-// aggregate stream, qualified with its machine id.
-//
-// It takes the concrete *SingleMachineAdapter, not a MachineClient, because relay needs
-// adapter's private stopped() half of the lifecycle state (see stopped's doc) that
-// MachineClient deliberately does not expose -- callers of the interface only ever need
-// Running(). That is fine while Add/Remove refuse behind ErrMultiMachineNotImplemented, so no
-// other MachineClient can ever reach this constructor; MM6/R4's real registry is what makes
-// this join generic.
-type SingleMachineManager struct {
-	descriptor MachineDescriptor
-	adapter    *CoreMachineClient
-	events     chan MachineEvent
-
-	done      chan struct{}
-	closeOnce sync.Once
-}
-
-// NewSingleMachineManager constructs a manager around adapter, displayed as displayName, and
-// starts relaying adapter's events onto the aggregate stream. Callers must call Close when
-// done with the manager, or the relay goroutine runs forever.
-func NewSingleMachineManager(displayName string, adapter *CoreMachineClient) *SingleMachineManager {
-	m := &SingleMachineManager{
-		descriptor: MachineDescriptor{ID: adapter.ID(), DisplayName: displayName},
-		adapter:    adapter,
-		events:     make(chan MachineEvent),
-		done:       make(chan struct{}),
-	}
-	go m.relay()
-	return m
-}
-
-// relay forwards the sole adapter's events onto the aggregate stream unchanged, qualified
-// with its machine id (MM3). Once the adapter is Stop()ed its events are drained but not
-// forwarded; an event already dequeued and parked in the inner send is abandoned via the
-// stopSignal() case, so Stop's guarantee covers in-flight events too. relay exits when done
-// closes, and closes m.events on every exit path so a ranging consumer terminates.
-func (m *SingleMachineManager) relay() {
-	defer close(m.events)
-	for {
-		select {
-		case e, ok := <-m.adapter.Events():
-			if !ok {
-				return
-			}
-			if m.adapter.stopped() {
-				continue
-			}
-			select {
-			case m.events <- MachineEvent{MachineID: m.descriptor.ID, Event: e}:
-			case <-m.done:
-				return
-			case <-m.adapter.stopSignal():
-				continue
-			}
-		case <-m.done:
-			return
-		}
-	}
-}
-
-// Close stops the relay goroutine. Idempotent; safe to call more than once or concurrently.
-// It does not touch the wrapped adapter or Core -- Close is the manager's own shutdown, not
-// the client's (that is Stop).
-func (m *SingleMachineManager) Close() error {
-	m.closeOnce.Do(func() { close(m.done) })
-	return nil
-}
-
-// List returns the sole compatibility-adapter entry.
-func (m *SingleMachineManager) List() []MachineDescriptor {
-	return []MachineDescriptor{m.descriptor}
-}
-
-// Select resolves id to the wrapped adapter, or ErrMachineNotFound for anything else.
-func (m *SingleMachineManager) Select(id string) (MachineClient, error) {
-	if id != m.descriptor.ID {
-		return nil, fmt.Errorf("phonecore: select %q: %w", id, ErrMachineNotFound)
-	}
-	return m.adapter, nil
-}
-
-// Add always refuses: there is nowhere to put a second pairing before MM6/R4.
-func (m *SingleMachineManager) Add(MachineDescriptor, MachineClient) error {
-	return ErrMultiMachineNotImplemented
-}
-
-// Remove always refuses: removing the sole entry is equally undefined before MM6/R4.
-func (m *SingleMachineManager) Remove(string) error {
-	return ErrMultiMachineNotImplemented
-}
-
-// Events is the aggregate event stream (MM3).
-func (m *SingleMachineManager) Events() <-chan MachineEvent { return m.events }
-
-// ConnectionCap is fixed at 1: the compatibility adapter can never exceed one live
-// connection, so there is nothing to arbitrate.
-func (m *SingleMachineManager) ConnectionCap() int { return 1 }

@@ -8,7 +8,7 @@ package phonecore
 //     arbitration has promoted its successor, so the documented connection cap is
 //     exceeded between the promote and the stop. The cap is a HARD bound.
 //   - D2/D5 MEDIUM: a PARKED client's events still reach the aggregate stream --
-//     the exact fail-open class SingleMachineManager.relay closes with stopped()
+//     the exact fail-open class the registry relay closes with stopped()
 //     and stopSignal() (machinemanager.go:130), left open on the N-entry seam.
 //   - LOW: NewMachineRegistry over a root that still holds an unmigrated singleton
 //     blob constructs an EMPTY live registry, after which Resume refuses with
@@ -117,9 +117,9 @@ func TestR4R2_ConnectionCap_RemainsAHardBoundAcrossRemove(t *testing.T) {
 
 // TestR4R2_ParkedClientEventsNeverReachTheAggregateStream: Stop()-parking a client must
 // bound its event flow, not just a boolean. The clients here are REAL
-// SingleMachineAdapters -- the exact type mobile/machines.go hands the manager in
-// production -- so the stopped()/stopSignal() halves the single-machine relay already
-// consults exist and are simply ignored by the N-entry relay under test.
+// CoreMachineClients -- the exact type mobile/machines.go hands the manager in
+// production -- so the stopped()/stopSignal() lifecycle is exercised by the N-entry
+// relay under test.
 func TestR4R2_ParkedClientEventsNeverReachTheAggregateStream(t *testing.T) {
 	reg, err := NewMachineRegistry(t.TempDir())
 	if err != nil {
@@ -133,8 +133,8 @@ func TestR4R2_ParkedClientEventsNeverReachTheAggregateStream(t *testing.T) {
 
 	chA := make(chan Event, 1)
 	chB := make(chan Event, 1)
-	a := NewSingleMachineAdapter("m-a", nil, chA)
-	b := NewSingleMachineAdapter("m-b", nil, chB)
+	a := NewCoreMachineClient("m-a", nil, chA)
+	b := NewCoreMachineClient("m-b", nil, chB)
 	if err := mgr.Add(MachineDescriptor{ID: "m-a"}, a); err != nil {
 		t.Fatalf("manager Add m-a: %v", err)
 	}

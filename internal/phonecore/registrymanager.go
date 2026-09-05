@@ -1,8 +1,7 @@
 package phonecore
 
-// RegistryManager is the REAL N-entry MachineManager (ADR-018 MM3, wave R4): the seam
-// that retires SingleMachineManager's ErrMultiMachineNotImplemented refusals. It owns
-// the lifecycle of one MachineClient per registered pairing, relays every client's
+// RegistryManager is the N-entry MachineManager (ADR-018 MM3, wave R4). It owns the
+// lifecycle of one MachineClient per registered pairing, relays every client's
 // events onto ONE aggregate stream qualified with its machine id (MM3), and arbitrates
 // the foreground connection cap with a deterministic least-recently-viewed policy
 // (playbook 4.2: "Connections beyond the cap use a deterministic least-recently-viewed
@@ -131,11 +130,9 @@ func (m *RegistryManager) Add(d MachineDescriptor, c MachineClient) error {
 }
 
 // stopAware is the OPTIONAL client surface relay consults so a PARKED client's events
-// never reach the aggregate stream -- the same two halves SingleMachineManager.relay
-// already reads off the concrete adapter (machinemanager.go: stopped covers events not
-// yet dequeued, stopSignal abandons one parked mid-send). The production client type,
-// SingleMachineAdapter, implements both; a double that does not keeps the
-// forward-everything shape.
+// never reach the aggregate stream. CoreMachineClient implements both: stopped covers
+// events not yet dequeued, and stopSignal abandons one parked mid-send. A double that
+// does not keeps the forward-everything shape.
 type stopAware interface {
 	stopped() bool
 	stopSignal() <-chan struct{}
