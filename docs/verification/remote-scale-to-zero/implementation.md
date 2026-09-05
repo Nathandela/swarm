@@ -781,3 +781,29 @@ before the limiter, so these probes verify hosted configuration, TLS and refusal
 not hosted counter behavior, Durable Object usage, hibernation, capacity or billing.
 The per-location limiter remains an abuse reduction, not a global spending cap.
 Active client wiring and the previously recorded hosted/device/recovery gates remain open.
+
+## Phone connection retains authenticated generation
+
+The first agents-tracker-wjp4.8 slice retains the phone generation only after `Dial`
+validates the complete `AUTHENTICATED` identity, role, purpose, home and canonical
+nonzero generation. `PhoneBinding` returns that value; machine or uninitialized
+phone connections return no binding. Phone Append/Subscribe/Revoke now reject a
+different binding locally. Machine control-to-separate-stream binding transfer
+remains valid. A binding is relative to its connection's authenticated home, not a
+standalone namespace-bearing credential or a replacement for durable home fencing.
+
+Sol recorded RED with the missing accessor, implemented the three-file slice and
+passed focused/full package races. Independent Sol review found no must-fix. Root
+tightened the fake-server test to require the actual generation error and a bounded
+context, then independently passed the full package race (2.375 s), package vet,
+and a fresh actual-workerd integration race on reserved port 8912 (3.056 s).
+The latter checks real Noise pairing, wrong-key authentication refusal, equality
+with machine-issued authorization, bidirectional mailbox delivery, reconnect,
+endpoint replay rejection and revocation. The temporary listener was stopped.
+An initial package-vet invocation lacked the explicit writable cache setting and
+hit a sandbox cache denial; the correctly configured rerun passed.
+Whole build/vet and lint also passed with zero issues; lint was repeated with its
+own writable cache to remove cache-write warnings from the first successful run.
+
+This is a native client API foundation, not the production mobile/gateway cutover.
+The broader agents-tracker-wjp4.8 task remains in progress.

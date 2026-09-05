@@ -65,6 +65,8 @@ type Auth struct {
 	Purpose   Purpose
 }
 
+// Binding names one phone generation inside the machine home already authenticated by
+// Conn. Namespace/home are deliberately not duplicated here.
 type Binding struct {
 	MachineRID string
 	PeerRID    string
@@ -115,13 +117,14 @@ type wireFrame struct {
 }
 
 type Conn struct {
-	ws         *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	role       Role
-	purpose    Purpose
-	machineRID string
-	rid        string
+	ws           *websocket.Conn
+	ctx          context.Context
+	cancel       context.CancelFunc
+	role         Role
+	purpose      Purpose
+	machineRID   string
+	rid          string
+	phoneBinding Binding
 
 	writeGate chan struct{}
 	mu        sync.Mutex
@@ -222,6 +225,7 @@ func Dial(ctx context.Context, profile Profile, auth Auth) (*Conn, error) {
 			c.Close()
 			return nil, errors.New("relay v2: invalid authenticated generation")
 		}
+		c.phoneBinding = Binding{MachineRID: profile.MachineRID, PeerRID: c.rid, Generation: generation}
 	} else if authed.Generation != "" {
 		c.Close()
 		return nil, errors.New("relay v2: machine auth response carried a phone generation")
@@ -256,6 +260,15 @@ func (c *Conn) Close() {
 }
 
 func (c *Conn) Done() <-chan struct{} { return c.done }
+
+// PhoneBinding returns the exact mailbox authority authenticated for this phone
+// connection. Machine connections obtain bindings through Authorize instead.
+func (c *Conn) PhoneBinding() (Binding, error) {
+	if c.role != RolePhone || c.phoneBinding.Generation == 0 {
+		return Binding{}, errors.New("relay v2: phone binding unavailable")
+	}
+	return c.phoneBinding, nil
+}
 
 // PeerSPKI is the SHA-256 digest of the peer's SubjectPublicKeyInfo on a TLS
 // dial. Pairing compares it with the pin delivered inside the Noise transcript.
@@ -506,8 +519,8 @@ func (c *Conn) bindingPeer(binding Binding) (string, error) {
 		return "", errors.New("relay v2: invalid binding")
 	}
 	if c.role == RolePhone {
-		if c.rid != binding.PeerRID {
-			return "", errors.New("relay v2: binding belongs to another phone")
+		if binding != c.phoneBinding {
+			return "", errors.New("relay v2: binding does not match authenticated phone")
 		}
 		return binding.MachineRID, nil
 	}

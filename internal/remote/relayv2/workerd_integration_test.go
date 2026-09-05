@@ -34,6 +34,9 @@ func TestWorkerdNoiseMailboxReconnectReplayAndRevoke(t *testing.T) {
 		t.Fatalf("Dial machine control: %v", err)
 	}
 	defer control.Close()
+	if binding, err := control.PhoneBinding(); err == nil || binding != (Binding{}) {
+		t.Fatalf("machine control PhoneBinding = (%+v, %v), want zero binding and error", binding, err)
+	}
 
 	var rendezvous [16]byte
 	copy(rendezvous[:], []byte("noise-workerd-v2"))
@@ -129,11 +132,19 @@ func TestWorkerdNoiseMailboxReconnectReplayAndRevoke(t *testing.T) {
 	if binding.PeerRID != phoneRID || binding.Generation == 0 {
 		t.Fatalf("binding = %+v", binding)
 	}
+	forged, err := Dial(ctx, profile, privateAuth(phonePub, machinePriv, RolePhone, PurposeStream))
+	if err == nil || forged != nil {
+		t.Fatalf("forged phone Dial = (%v, %v), want nil connection and error", forged, err)
+	}
 
 	machineStream := dialForTest(t, ctx, profile, privateAuth(machinePub, machinePriv, RoleMachine, PurposeStream))
 	defer machineStream.Close()
 	phoneStream := dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
-	phoneSub, err := phoneStream.Subscribe(ctx, binding, Checkpoint{})
+	phoneBinding, err := phoneStream.PhoneBinding()
+	if err != nil || phoneBinding != binding {
+		t.Fatalf("phone PhoneBinding = (%+v, %v), want server-issued %+v", phoneBinding, err, binding)
+	}
+	phoneSub, err := phoneStream.Subscribe(ctx, phoneBinding, Checkpoint{})
 	if err != nil {
 		t.Fatalf("phone Subscribe: %v", err)
 	}
@@ -161,7 +172,7 @@ func TestWorkerdNoiseMailboxReconnectReplayAndRevoke(t *testing.T) {
 		t.Fatalf("phone Ack: %v", err)
 	}
 	phoneOne := seal(t, keys.ContentKey, phoneSender, 1, "phone-one")
-	if _, err := phoneStream.Append(ctx, binding, "phone-1", phoneOne); err != nil {
+	if _, err := phoneStream.Append(ctx, phoneBinding, "phone-1", phoneOne); err != nil {
 		t.Fatalf("phone Append: %v", err)
 	}
 	machineDelivery := receivePlain(t, ctx, machineSub, machineReceiver, keys.ContentKey, "phone-one")
@@ -177,7 +188,11 @@ func TestWorkerdNoiseMailboxReconnectReplayAndRevoke(t *testing.T) {
 	}
 	phoneStream = dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
 	defer phoneStream.Close()
-	phoneSub, err = phoneStream.Subscribe(ctx, binding, checkpoint)
+	phoneBinding, err = phoneStream.PhoneBinding()
+	if err != nil || phoneBinding != binding {
+		t.Fatalf("reconnect PhoneBinding = (%+v, %v), want server-issued %+v", phoneBinding, err, binding)
+	}
+	phoneSub, err = phoneStream.Subscribe(ctx, phoneBinding, checkpoint)
 	if err != nil {
 		t.Fatalf("reconnect Subscribe: %v", err)
 	}
