@@ -30,7 +30,7 @@ func TestAdminSurfacesUseSharedRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.SetServing(true)
-	srv.SetRetentionWorkerRunning(true)
+	srv.retentionWorker.Store(true)
 	if got := adminRequest(t, srv, "/readyz").Code; got != http.StatusOK {
 		t.Fatalf("readyz=%d, want 200", got)
 	}
@@ -47,7 +47,7 @@ func TestFirestoreMetricsDoNotInventEmptyStoreCounts(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("metrics status = %d", w.Code)
 	}
-	for _, name := range []string{"pushgw_database_bytes", "pushgw_installations", "pushgw_addresses", "pushgw_tombstones"} {
+	for _, name := range []string{"pushgw_database_bytes", "pushgw_installations", "pushgw_addresses", "pushgw_tombstones", "pushgw_retention_last_success_timestamp_seconds"} {
 		if strings.Contains(w.Body.String(), name) {
 			t.Errorf("unobserved Firestore store gauge %s was emitted", name)
 		}
@@ -65,6 +65,42 @@ type opsAttestor struct{}
 
 func (opsAttestor) Verify(context.Context, string) (VerdictBinding, error) {
 	return VerdictBinding{}, errors.New("not used")
+}
+
+type deadlineRepository struct {
+	Repository
+	remaining time.Duration
+}
+
+func (r *deadlineRepository) healthCheck(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("health check context has no deadline")
+	}
+	r.remaining = time.Until(deadline)
+	return nil
+}
+
+func TestCheckStoreBoundsRemoteRead(t *testing.T) {
+	repository := &deadlineRepository{Repository: NewMemoryRepository()}
+	srv, err := NewFirestoreServer(Config{
+		Repository:            repository,
+		TokenKeys:             map[string][]byte{"v1": bytes.Repeat([]byte{1}, 32)},
+		ActiveTokenKeyVersion: "v1",
+		RegistrationDigestKey: bytes.Repeat([]byte{2}, 32),
+		RegistrationAdmission: func(string) bool { return true },
+		Sender:                opsSender{},
+		Attest:                opsAttestor{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.CheckStore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repository.remaining <= 0 || repository.remaining > storeCheckTimeout {
+		t.Fatalf("store check deadline budget = %s, want (0,%s]", repository.remaining, storeCheckTimeout)
+	}
 }
 
 func newOpsServer(t *testing.T, readiness DeploymentReadiness, logger *slog.Logger) *Server {
@@ -98,7 +134,7 @@ func TestAdminReadinessRequiresStaticProductionDependenciesAndWorkers(t *testing
 	}
 
 	srv.SetServing(true)
-	srv.SetRetentionWorkerRunning(true)
+	srv.retentionWorker.Store(true)
 	w := adminRequest(t, srv, "/readyz")
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz without production dependencies = %d, want 503", w.Code)
@@ -117,12 +153,26 @@ func TestAdminReadinessDoesNotFlapOnTransientProviderOutcome(t *testing.T) {
 		RequiredConfig:     true,
 	}, nil)
 	srv.SetServing(true)
-	srv.SetRetentionWorkerRunning(true)
+	srv.retentionWorker.Store(true)
 	srv.recordProviderOutcome(ErrUnavailable)
 
 	w := adminRequest(t, srv, "/readyz")
 	if w.Code != http.StatusOK {
 		t.Fatalf("readyz after transient upstream failure = %d body=%q, want 200", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminReadinessDoesNotRequireBackgroundRetentionWhenFreshnessDisabled(t *testing.T) {
+	srv := newOpsServer(t, DeploymentReadiness{
+		ProductionSender:   true,
+		ProductionAttestor: true,
+		RequiredConfig:     true,
+	}, nil)
+	srv.SetServing(true)
+
+	w := adminRequest(t, srv, "/readyz")
+	if w.Code != http.StatusOK {
+		t.Fatalf("readyz without background retention = %d body=%q, want 200", w.Code, w.Body.String())
 	}
 }
 
@@ -134,7 +184,7 @@ func TestAdminReadinessFailsAfterRetentionFailure(t *testing.T) {
 		RetentionFreshFor:  time.Hour,
 	}, nil)
 	srv.SetServing(true)
-	srv.SetRetentionWorkerRunning(true)
+	srv.retentionWorker.Store(true)
 	if err := srv.RunRetention(context.Background()); err != nil {
 		t.Fatalf("initial RunRetention: %v", err)
 	}
@@ -169,7 +219,7 @@ func TestAdminReadinessFailsWhenRetentionSuccessBecomesStale(t *testing.T) {
 	}
 	defer func() { _ = srv.Close() }()
 	srv.SetServing(true)
-	srv.SetRetentionWorkerRunning(true)
+	srv.retentionWorker.Store(true)
 	if err := srv.RunRetention(context.Background()); err != nil {
 		t.Fatalf("RunRetention: %v", err)
 	}
@@ -187,7 +237,7 @@ func TestAdminReadinessChecksThePersistedAEADKey(t *testing.T) {
 		RequiredConfig:     true,
 	}, nil)
 	srv.SetServing(true)
-	srv.SetRetentionWorkerRunning(true)
+	srv.retentionWorker.Store(true)
 	if err := os.Remove(srv.store.keyPath); err != nil {
 		t.Fatalf("remove temporary key: %v", err)
 	}
@@ -204,7 +254,7 @@ func TestAdminReadinessRejectsSameSizeReplacementAEADKey(t *testing.T) {
 		RequiredConfig:     true,
 	}, nil)
 	srv.SetServing(true)
-	srv.SetRetentionWorkerRunning(true)
+	srv.retentionWorker.Store(true)
 	replacement := make([]byte, 32)
 	for i := range replacement {
 		replacement[i] = byte(i + 1)

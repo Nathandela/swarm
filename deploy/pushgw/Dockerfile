@@ -29,6 +29,7 @@ LABEL org.opencontainers.image.title="swarm-pushgw" \
       org.opencontainers.image.licenses="MIT"
 
 COPY --from=builder /out/swarm-pushgw /swarm-pushgw
-EXPOSE 8450
+ENV PORT=8080
+EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/swarm-pushgw"]

@@ -38,6 +38,7 @@ func TestLoadTokenKeyringRejectsNonCanonicalOrAmbiguousInput(t *testing.T) {
 		"duplicate field":   `{"active":"v1","active":"v1","keys":{"v1":"` + key + `"},"registration_digest_key":"` + digest + `"}`,
 		"padded base64":     `{"active":"v1","keys":{"v1":"` + key + `="},"registration_digest_key":"` + digest + `"}`,
 		"unbounded version": `{"active":"v1","keys":{"` + strings.Repeat("v", 33) + `":"` + key + `"},"registration_digest_key":"` + digest + `"}`,
+		"reused digest key": `{"active":"v1","keys":{"v1":"` + key + `"},"registration_digest_key":"` + key + `"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := os.WriteFile(path, []byte(document), 0o600); err != nil {

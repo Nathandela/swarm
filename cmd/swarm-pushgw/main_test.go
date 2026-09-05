@@ -1,7 +1,7 @@
 package main
 
 // run(ctx, args) is directly table-testable without binding a port for every fail-fast
-// validation path (flag.NewFlagSet, TLS gate, -db requirement), and this file also boots
+// validation path, and this file also boots
 // the real listener once in each transport mode to prove the wiring beyond the flag checks:
 // -insecure-http actually serves plain HTTP and shuts down cleanly on context cancellation,
 // and -tls-cert/-tls-key actually terminates TLS with MinVersion pinned at TLS 1.3 (PG-TR-1),
@@ -15,6 +15,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"math/big"
 	"net"
@@ -30,66 +31,113 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func dbPath(t *testing.T) string {
+func writeTestKeyring(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), "pushgw.db")
+	key := base64.RawStdEncoding.EncodeToString(make([]byte, 32))
+	digest := base64.RawStdEncoding.EncodeToString([]byte(strings.Repeat("d", 32)))
+	path := filepath.Join(t.TempDir(), "keyring.json")
+	if err := os.WriteFile(path, []byte(`{"active":"v1","keys":{"v1":"`+key+`"},"registration_digest_key":"`+digest+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // --- fail-fast validation, no port ever bound --------------------------------------------
 
-func TestRun_MissingDB_ReturnsError(t *testing.T) {
-	err := run(context.Background(), []string{"-insecure-http"})
-	if err == nil {
-		t.Fatal("run accepted a missing -db")
+func requiredRuntimeArgs(t *testing.T) []string {
+	t.Helper()
+	key := testInstallationPublicKey(t)
+	return []string{
+		"-gcp-project-id=" + productionGCPProjectID,
+		"-firestore-namespace=push-v2-test",
+		"-token-keyring-file=" + writeTestKeyring(t),
+		"-registration-admission-file=" + writeAdmissionFile(t, `{"installation_public_keys":["`+key+`"]}`),
+	}
+}
+
+func devRuntimeArgs(t *testing.T) []string {
+	t.Helper()
+	return append(requiredRuntimeArgs(t), "-dev", "-allow-firestore-emulator")
+}
+
+func TestRun_MissingFirestoreConfiguration_ReturnsError(t *testing.T) {
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "")
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", filepath.Join(t.TempDir(), "ambient-credential-must-not-be-read.json"))
+	for missing, wantError := range map[string]string{
+		"project":   "gcp-project-id",
+		"namespace": "firestore-namespace",
+		"keyring":   "token keyring file",
+		"admission": "registration admission file",
+	} {
+		args := requiredRuntimeArgs(t)
+		switch missing {
+		case "project":
+			args[0] = "-gcp-project-id="
+		case "namespace":
+			args[1] = "-firestore-namespace="
+		case "keyring":
+			args[2] = "-token-keyring-file="
+		case "admission":
+			args[3] = "-registration-admission-file="
+		}
+		args = append(args, "-insecure-http")
+		if err := run(context.Background(), args); err == nil || !strings.Contains(err.Error(), wantError) {
+			t.Fatalf("run missing %s error = %v, want %q before ambient credentials", missing, err, wantError)
+		}
 	}
 }
 
 func TestRun_NeitherTLSNorInsecureHTTP_ReturnsError(t *testing.T) {
-	err := run(context.Background(), []string{"-db", dbPath(t)})
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8799")
+	err := run(context.Background(), devRuntimeArgs(t))
 	if err == nil {
 		t.Fatal("run booted with neither -tls-cert/-tls-key nor -insecure-http set (PG-TR-1 requires HTTPS)")
 	}
 }
 
 func TestRun_BothTLSAndInsecureHTTP_ReturnsError(t *testing.T) {
-	err := run(context.Background(), []string{
-		"-db", dbPath(t),
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8799")
+	err := run(context.Background(), append(devRuntimeArgs(t),
 		"-tls-cert", "cert.pem", "-tls-key", "key.pem",
 		"-insecure-http",
-	})
-	if err == nil {
+	))
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatal("run accepted both -tls-cert/-tls-key and -insecure-http")
 	}
 }
 
 func TestRun_TLSCertWithoutKey_ReturnsError(t *testing.T) {
-	err := run(context.Background(), []string{"-db", dbPath(t), "-tls-cert", "cert.pem"})
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8799")
+	err := run(context.Background(), append(devRuntimeArgs(t), "-tls-cert", "cert.pem"))
 	if err == nil {
 		t.Fatal("run accepted -tls-cert without -tls-key")
 	}
 }
 
 func TestRun_TLSKeyWithoutCert_ReturnsError(t *testing.T) {
-	err := run(context.Background(), []string{"-db", dbPath(t), "-tls-key", "key.pem"})
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8799")
+	err := run(context.Background(), append(devRuntimeArgs(t), "-tls-key", "key.pem"))
 	if err == nil {
 		t.Fatal("run accepted -tls-key without -tls-cert")
 	}
 }
 
 func TestRun_BadTrustedProxyCIDR_ReturnsError(t *testing.T) {
-	err := run(context.Background(), []string{
-		"-db", dbPath(t), "-insecure-http", "-trusted-proxies", "not-a-cidr",
-	})
-	if err == nil {
-		t.Fatal("run accepted a malformed -trusted-proxies CIDR")
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8799")
+	err := run(context.Background(), append(devRuntimeArgs(t),
+		"-insecure-http", "-trusted-proxies", "not-a-cidr",
+	))
+	if err == nil || !strings.Contains(err.Error(), "trusted_proxies") {
+		t.Fatalf("run error = %v, want malformed -trusted-proxies rejection", err)
 	}
 }
 
 func TestRun_NonLoopbackAdminListen_ReturnsError(t *testing.T) {
-	err := run(context.Background(), []string{
-		"-db", dbPath(t), "-insecure-http", "-admin-listen", "0.0.0.0:8451",
-	})
-	if err == nil {
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8799")
+	err := run(context.Background(), append(devRuntimeArgs(t),
+		"-insecure-http", "-admin-listen", "0.0.0.0:8451",
+	))
+	if err == nil || !strings.Contains(err.Error(), "loopback-only") {
 		t.Fatal("run accepted a non-loopback admin listener")
 	}
 }
@@ -111,7 +159,7 @@ func (staticRuntimeTokenSource) Token() (*oauth2.Token, error) {
 	return &oauth2.Token{AccessToken: "test", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour)}, nil
 }
 
-func TestProductionDependenciesUseOneExactProjectCredentialForFCMAndIntegrity(t *testing.T) {
+func TestProductionDependenciesUseOneExactProjectCredentialForProvidersAndFirestore(t *testing.T) {
 	var gotPath string
 	var gotScopes []string
 	loader := runtimeCredentialLoader(func(_ context.Context, path string, scopes []string) (runtimeGoogleCredentials, error) {
@@ -132,7 +180,7 @@ func TestProductionDependenciesUseOneExactProjectCredentialForFCMAndIntegrity(t 
 	if gotPath != "/runtime/swarm-8404f.json" {
 		t.Fatalf("credential path = %q", gotPath)
 	}
-	for _, want := range []string{fcmMessagingScope, playIntegrityScope} {
+	for _, want := range []string{fcmMessagingScope, playIntegrityScope, datastoreScope} {
 		found := false
 		for _, got := range gotScopes {
 			found = found || got == want
@@ -142,8 +190,11 @@ func TestProductionDependenciesUseOneExactProjectCredentialForFCMAndIntegrity(t 
 		}
 	}
 	if deps.sender == nil || deps.attestor == nil || !deps.readiness.ProductionSender ||
-		!deps.readiness.ProductionAttestor || !deps.readiness.RequiredConfig {
+		!deps.readiness.ProductionAttestor || !deps.readiness.RequiredConfig || deps.tokenSource == nil {
 		t.Fatalf("production dependencies not ready: %+v", deps.readiness)
+	}
+	if deps.tokenSource != (staticRuntimeTokenSource{}) {
+		t.Fatal("production dependencies did not preserve the exact runtime token source for Firestore")
 	}
 }
 
@@ -176,33 +227,6 @@ func TestProductionDependenciesRejectWrongRuntimeOrDeclaredAuthority(t *testing.
 	}
 }
 
-func TestBackupRestoreSubcommandsRoundTripDBAndKey(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source.db")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := run(ctx, []string{"-db", source, "-listen", "127.0.0.1:0", "-insecure-http", "-dev"}); err != nil {
-		t.Fatalf("initialize source: %v", err)
-	}
-	archive := filepath.Join(dir, "backup.tar")
-	if err := run(context.Background(), []string{"backup", "-db", source, archive}); err != nil {
-		t.Fatalf("backup subcommand: %v", err)
-	}
-	target := filepath.Join(dir, "target.db")
-	if err := run(context.Background(), []string{"restore", "-db", target, archive}); err != nil {
-		t.Fatalf("restore subcommand: %v", err)
-	}
-	for _, path := range []string{target, target + ".key"} {
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatalf("stat restored %s: %v", path, err)
-		}
-		if info.Size() == 0 {
-			t.Fatalf("restored %s is empty", path)
-		}
-	}
-}
-
 func TestHealthcheckSubcommandRequiresReadyStatus(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not ready", http.StatusServiceUnavailable)
@@ -214,10 +238,11 @@ func TestHealthcheckSubcommandRequiresReadyStatus(t *testing.T) {
 }
 
 func TestRun_UnreadableGoogleRuntimeCredentials_ReturnsError(t *testing.T) {
-	err := run(context.Background(), []string{
-		"-db", dbPath(t), "-insecure-http",
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "")
+	err := run(context.Background(), append(requiredRuntimeArgs(t),
+		"-insecure-http",
 		"-google-credentials", filepath.Join(t.TempDir(), "does-not-exist.json"),
-	})
+	))
 	if err == nil {
 		t.Fatal("run accepted an unreadable -google-credentials path")
 	}
@@ -230,36 +255,27 @@ func TestRun_UnreadableGoogleRuntimeCredentials_ReturnsError(t *testing.T) {
 // reach the select, see ctx already Done, and return a nil error from a graceful
 // http.Server.Shutdown -- deterministically, with no reliance on timing.
 func TestRun_InsecureHTTP_BootsAndShutsDownCleanly(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("requires Firestore emulator")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
+	addr := freeTCPAddr(t)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(ctx, append(devRuntimeArgs(t),
+			"-listen", addr,
+			"-insecure-http",
+		))
+	}()
+	dialTCPWithRetry(t, addr)
 	cancel()
-	err := run(ctx, []string{
-		"-db", dbPath(t),
-		"-listen", "127.0.0.1:0",
-		"-insecure-http",
-		"-dev",
-	})
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-}
-
-func TestRetentionWorkerStopJoinsAndDropsReadinessSignal(t *testing.T) {
-	srv, err := pushgw.NewServer(pushgw.Config{
-		DBPath: dbPath(t),
-		Sender: devSender{},
-		Attest: notImplementedAttestor{},
-	})
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-	stop := startRetentionWorker(context.Background(), srv, time.Hour, nil)
-	stop()
-	srv.SetServing(true)
-	w := httptest.NewRecorder()
-	srv.AdminHandler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	if !strings.Contains(w.Body.String(), "retention worker not running") {
-		t.Fatalf("joined retention worker still reports running: %q", w.Body.String())
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after context cancellation")
 	}
 }
 
@@ -314,6 +330,22 @@ func freeTCPAddr(t *testing.T) string {
 	return addr
 }
 
+func dialTCPWithRetry(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		lastErr = err
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("dial %s: %v", addr, lastErr)
+}
+
 // dialTLSWithRetry waits for the gateway's listener to come up (ListenAndServeTLS runs in
 // its own goroutine, asynchronously with run's caller) and returns the completed
 // connection state, or fails the test after a bounded number of attempts.
@@ -340,6 +372,9 @@ func dialTLSWithRetry(t *testing.T, addr string, cfg *tls.Config) tls.Connection
 // TLS 1.3 SHALL be accepted -- against the gateway's REAL http.Server, not a config literal
 // read off the source.
 func TestRun_TLSMode_PinsMinimumVersionAtTLS13(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("requires Firestore emulator")
+	}
 	dir := t.TempDir()
 	certPath, keyPath := generateSelfSignedCert(t, dir)
 	addr := freeTCPAddr(t)
@@ -347,13 +382,11 @@ func TestRun_TLSMode_PinsMinimumVersionAtTLS13(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- run(ctx, []string{
-			"-db", dbPath(t),
+		errCh <- run(ctx, append(devRuntimeArgs(t),
 			"-listen", addr,
 			"-tls-cert", certPath,
 			"-tls-key", keyPath,
-			"-dev",
-		})
+		))
 	}()
 
 	state := dialTLSWithRetry(t, addr, &tls.Config{InsecureSkipVerify: true, MaxVersion: tls.VersionTLS13})

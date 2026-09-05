@@ -69,6 +69,11 @@ func loadTokenKeyring(path string) (map[string][]byte, string, []byte, error) {
 	if file.Active == "" || keys[file.Active] == nil {
 		return nil, "", nil, errors.New("swarm-pushgw: active token key version is unavailable")
 	}
+	for _, key := range keys {
+		if bytes.Equal(key, digestKey) {
+			return nil, "", nil, errors.New("swarm-pushgw: registration digest key must be distinct from token encryption keys")
+		}
+	}
 	return keys, file.Active, digestKey, nil
 }
 

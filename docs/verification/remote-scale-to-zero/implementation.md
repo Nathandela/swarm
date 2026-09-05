@@ -416,3 +416,67 @@ review amendments, its focused race run passed (4.802 s). Root independently pas
 five focused race repetitions including those amended assertions (11.923 s).
 The nine paused-manager reachability exemptions were deleted with the symbols.
 These checks do not complete the phone's multi-machine production caller wiring.
+
+## Approved source cutover: Firestore command and operational bundle
+
+Sol implemented and a second Sol independently reviewed the sole production command
+path through NewFirestoreRepository/NewFirestoreServer. Startup requires an explicit
+project and canonical namespace, the default Firestore database, a strict mounted
+versioned keyring and a bounded nonempty owner key allowlist. Secrets are checked before
+ADC; the same token source with FCM/Play/datastore scopes is passed to all clients.
+Production refuses emulator configuration and forwarded-header trust; development
+requires explicit emulator opt-in. The command honors validated PORT unless -listen
+overrides it; the non-root image defaults PORT/EXPOSE to 8080.
+
+The old database flag, backup/restore commands and retention interval/ticker are gone.
+One-shot `retention` performs a bounded pass with a 30-second operation deadline;
+no listener, public cleanup endpoint or schedule is created. Readiness uses the same
+five-second store check as startup, with a one-document-limit query rather than treating
+all NotFound responses as a harmless absent sentinel document. The actual-SDK gRPC
+test distinguishes an empty collection from a missing database. This read is not a
+write-IAM or FCM/Play reachability proof. Serving metrics no longer invent a zero-valued
+cleanup timestamp for a separate job.
+
+Observed REDs covered the absent admission loader, background-worker-dependent readiness,
+and reused HMAC/AES material. Tests now require the exact unknown-command/undefined-flag
+errors for retired command surfaces, not any error from incomplete configuration.
+Sol's full emulator race passed (command 5.639 s, internal 16.368 s); the independent
+reviewer passed in 5.814 s / 20.128 s and reported no remaining must-fix. Root separately
+passed full build, vet and lint (zero issues), and full emulator race in 8.748 s /
+20.803 s. The last test-only tightening/import-group correction was followed by a
+focused command check; no production logic changed after that full emulator run.
+
+Root's operational-source guard first failed on the four old VM manifests and obsolete
+runbook commands (0.845 s), then passed after their source-only removal. Docker hardening,
+scanner and release gates remain; CI now runs the full command and push packages inside
+the Firestore emulator. Active docs describe only v2. The retained GCP VM inventory is
+explicitly an operator safeguard, not a v2 deployment instruction. Removed source files
+remain recoverable in git; no existing VM, database, key, disk or backup was touched.
+
+A separate attempt to delete the unused bbolt backup/restore implementation, its tests
+and interrupted-restore guard was refused by the safety reviewer. Nothing in that patch
+was applied; exact owner approval was requested and those sources/guards remain intact.
+The new test expectation for that unapproved deletion was withdrawn, not counted green.
+Backup/Restore have precise paused-source reachability entries and no command route.
+NewServer separately remains only for old push/phonecore test fixtures; porting those
+fixtures and removing the remaining old handler branches is unfinished P4 work.
+
+The allowlist is not a secret invitation or registration proof of possession. A licensed
+client reusing a known allowed public key can create inert duplicates and consume bounded
+storage/provider/quota work; it cannot authenticate later operations without that key's
+private half. Real onboarding hardening, Google IAM/attestation/FCM, scheduled cleanup,
+hosted ingress/latency/cost and revocation-safe restore remain open launch gates.
+
+## Registry-only CI fixture reconciliation
+
+Terra reproduced the CLI fixture's pre-pair Start refusal locally (RED 1.745 s), then
+made the existing actual owner QR/SAS/confirmation ceremony finish before Start. The
+corruption fixture resolves the sole authenticated registry entry and corrupts its
+namespaced state, explicitly refusing a flat-root fixture. All PBSTATE10 tests passed
+(5.225 s); root independently passed three race repetitions (17.475 s).
+
+The pending-ACK storage constant was renamed outside the public `pairX` naming convention;
+its persisted bytes and App.PairingState-to-failed mapping are unchanged. Android's
+public-state parity scanner required no exclusion or unreachable Kotlin UI state.
+Root passed the bootstrap-focused mobile race suite (3.802 s) and the full Android source
+gate (12.073 s). No local AAR, Gradle or device rebuild was part of those checks.

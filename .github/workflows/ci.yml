@@ -153,7 +153,7 @@ jobs:
         run: |
           node run-bounded.mjs 180 ./node_modules/.bin/firebase emulators:exec \
             --only firestore --project demo-swarm-push-probe --config firebase.json \
-            'cd ../../../.. && go test -race ./internal/pushgw -run TestFirestore -count=1 -timeout 120s -v'
+            'cd ../../../.. && go test -race ./internal/pushgw ./cmd/swarm-pushgw -count=1 -timeout 120s -v'
 
   # E10.6: the darwin half. The pure CPU parsers run in the unit step (untagged, on
   # every runner), and the integration step exercises the REAL proc_pidinfo syscall

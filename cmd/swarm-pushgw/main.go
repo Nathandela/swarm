@@ -1,7 +1,6 @@
-// Command swarm-pushgw boots the Swarm push gateway
-// (docs/specifications/push-gateway-api.md, ADR-015). It fails closed: a missing -db, an
-// unreadable/wrong-project Google runtime credential, or an unusable quota bucket is a
-// clean error rather than a boot on unspecified defaults.
+// Command swarm-pushgw boots the Firestore-backed Swarm push gateway
+// (docs/specifications/push-gateway-api.md, ADR-027). It fails closed rather than booting
+// with an implicit project, namespace, admission set, or encryption key.
 //
 // PG-TR-1 requires HTTPS on the ordinary Web PKI for every operation, TLS 1.3 as the floor.
 // This binary satisfies that in one of two DECLARED ways, never silently: pass -tls-cert
@@ -11,9 +10,8 @@
 // certificate-provisioning excuses invites. -insecure-http is a deliberate, explicit flag
 // specifically so an operator cannot reach a plaintext listener by omission. A
 // TLS-terminating proxy also means every caller presents the proxy's address, not its own
-// (PG-Q-4): pair -insecure-http with -trusted-proxies naming that proxy's CIDR(s), the same
-// trusted-proxy principle internal/remote/relay's bundle already uses, so quota accounting
-// still keys on the real caller instead of collapsing every source into one shared bucket.
+// (PG-Q-4). Production conservatively uses that raw peer for quota accounting until hosted
+// forwarding-header evidence exists; -trusted-proxies is available only in explicit dev.
 package main
 
 import (
@@ -28,20 +26,19 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	"github.com/Nathandela/swarm/internal/pushgw"
 	"github.com/Nathandela/swarm/internal/remote/push"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/option"
 )
-
-// defaultRetentionInterval is the production cadence for the retention sweep (spec
-// section 8.1) when -retention-interval is not set.
-const defaultRetentionInterval = time.Hour
 
 // shutdownTimeout bounds how long a graceful shutdown waits for in-flight requests.
 const shutdownTimeout = 10 * time.Second
@@ -54,13 +51,18 @@ const (
 	maxHeaderBytes    = 32 << 10
 
 	productionGCPProjectID                 = "swarm-8404f"
+	productionFirestoreDatabase            = "(default)"
 	productionPlaySigningCertificateSHA256 = "hz8YTGhTTgpYccjMiQDrhx5HcddqRsTu1HRcmhhknmU"
 	fcmMessagingScope                      = "https://www.googleapis.com/auth/firebase.messaging"
 	playIntegrityScope                     = "https://www.googleapis.com/auth/playintegrity"
+	datastoreScope                         = "https://www.googleapis.com/auth/datastore"
 	productionProviderTimeout              = 15 * time.Second
 	productionPlayVerdictMaxAge            = 2 * time.Minute
 	productionPlayVerdictMaxFutureSkew     = 30 * time.Second
+	retentionTimeout                       = 30 * time.Second
 )
+
+var firestoreNamespacePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
 type runtimeGoogleCredentials struct {
 	ProjectID   string
@@ -78,9 +80,10 @@ type productionDependencyConfig struct {
 }
 
 type productionDependencies struct {
-	sender    pushgw.WakeSender
-	attestor  pushgw.AttestationVerifier
-	readiness pushgw.DeploymentReadiness
+	sender      pushgw.WakeSender
+	attestor    pushgw.AttestationVerifier
+	readiness   pushgw.DeploymentReadiness
+	tokenSource oauth2.TokenSource
 }
 
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
@@ -98,41 +101,17 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 func run(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		switch args[0] {
-		case "backup":
-			return runBackup(args[1:])
-		case "restore":
-			return runRestore(args[1:])
 		case "healthcheck":
 			return runHealthcheck(ctx, args[1:])
+		case "retention":
+			return runGateway(ctx, args[1:], true)
+		default:
+			if !strings.HasPrefix(args[0], "-") {
+				return fmt.Errorf("swarm-pushgw: unknown command %q", args[0])
+			}
 		}
 	}
 	return runServe(ctx, args)
-}
-
-func runBackup(args []string) error {
-	fs := flag.NewFlagSet("swarm-pushgw backup", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	dbPath := fs.String("db", "", "path to the stopped gateway database")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if *dbPath == "" || fs.NArg() != 1 {
-		return errors.New("usage: swarm-pushgw backup -db <pushgw.db> <archive.tar>")
-	}
-	return pushgw.Backup(*dbPath, fs.Arg(0))
-}
-
-func runRestore(args []string) error {
-	fs := flag.NewFlagSet("swarm-pushgw restore", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	dbPath := fs.String("db", "", "path for the restored gateway database")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if *dbPath == "" || fs.NArg() != 1 {
-		return errors.New("usage: swarm-pushgw restore -db <pushgw.db> <archive.tar>")
-	}
-	return pushgw.Restore(*dbPath, fs.Arg(0))
 }
 
 func runHealthcheck(ctx context.Context, args []string) error {
@@ -161,19 +140,25 @@ func runHealthcheck(ctx context.Context, args []string) error {
 }
 
 func runServe(ctx context.Context, args []string) error {
+	return runGateway(ctx, args, false)
+}
+
+func runGateway(ctx context.Context, args []string, retentionOnly bool) error {
 	fs := flag.NewFlagSet("swarm-pushgw", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	listen := fs.String("listen", ":8443", "address to serve the gateway on")
 	adminListen := fs.String("admin-listen", "", "separate loopback-only address for /healthz, /readyz, and /metrics (empty disables)")
-	dbPath := fs.String("db", "", "path to the gateway's bbolt file (required)")
 	devMode := fs.Bool("dev", false, "explicit fail-closed development mode: no Google credential, FCM delivery, or Play registration")
-	googleCredentials := fs.String("google-credentials", "", "path to a swarm-8404f service-account JSON for FCM and Play Integrity (empty uses Application Default Credentials)")
-	gcpProjectID := fs.String("gcp-project-id", productionGCPProjectID, "Google Cloud project id (production is fixed)")
+	allowFirestoreEmulator := fs.Bool("allow-firestore-emulator", false, "permit FIRESTORE_EMULATOR_HOST; requires -dev")
+	googleCredentials := fs.String("google-credentials", "", "path to one swarm-8404f service-account JSON for FCM, Play Integrity, and Firestore (empty uses Application Default Credentials)")
+	gcpProjectID := fs.String("gcp-project-id", "", "Google Cloud project id (required; production is fixed)")
+	firestoreNamespace := fs.String("firestore-namespace", "", "fresh bounded Firestore collection namespace (required)")
+	tokenKeyringFile := fs.String("token-keyring-file", "", "path to the stable versioned token encryption keyring (required)")
+	registrationAdmissionFile := fs.String("registration-admission-file", "", "path to the closed-beta installation public-key allowlist (required)")
 	gcpProjectNumber := fs.Int64("gcp-project-number", pushgw.ProductionCloudProjectNumber, "Google Cloud project number (production is fixed)")
 	androidPackage := fs.String("android-package", pushgw.ProductionAndroidPackage, "Google Play Android package (production is fixed)")
 	playSigningCert := fs.String("play-signing-cert-sha256", productionPlaySigningCertificateSHA256, "allowed Play App Signing certificate SHA-256, canonical base64url")
-	retentionInterval := fs.Duration("retention-interval", defaultRetentionInterval, "how often the retention sweep (spec section 8.1) runs")
 
 	tlsCert := fs.String("tls-cert", "", "path to a PEM certificate; terminates TLS in-process (PG-TR-1)")
 	tlsKey := fs.String("tls-key", "", "path to the PEM private key matching -tls-cert")
@@ -197,13 +182,22 @@ func runServe(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *dbPath == "" {
-		return errors.New("swarm-pushgw: -db is required")
+	if fs.NArg() != 0 {
+		return errors.New("swarm-pushgw: unexpected positional arguments")
 	}
-	if *retentionInterval <= 0 {
-		return errors.New("swarm-pushgw: -retention-interval must be positive")
+	if !retentionOnly {
+		explicitListen := false
+		fs.Visit(func(f *flag.Flag) { explicitListen = explicitListen || f.Name == "listen" })
+		resolvedListen, err := resolveListenAddress(*listen, os.Getenv("PORT"), explicitListen)
+		if err != nil {
+			return err
+		}
+		*listen = resolvedListen
 	}
-	if *adminListen != "" {
+	if err := validateFirestoreMode(*devMode, *allowFirestoreEmulator, *gcpProjectID, *firestoreNamespace, os.Getenv("FIRESTORE_EMULATOR_HOST")); err != nil {
+		return err
+	}
+	if !retentionOnly && *adminListen != "" {
 		loopback, err := isLoopbackHostPort(*adminListen)
 		if err != nil {
 			return fmt.Errorf("swarm-pushgw: -admin-listen: %w", err)
@@ -212,20 +206,28 @@ func runServe(ctx context.Context, args []string) error {
 			return errors.New("swarm-pushgw: -admin-listen must be loopback-only")
 		}
 	}
-	if (*tlsCert == "") != (*tlsKey == "") {
+	if !retentionOnly && (*tlsCert == "") != (*tlsKey == "") {
 		return errors.New("swarm-pushgw: -tls-cert and -tls-key must both be set")
 	}
 	tlsConfigured := *tlsCert != ""
-	if !tlsConfigured && !*insecureHTTP {
+	if !retentionOnly && !tlsConfigured && !*insecureHTTP {
 		return errors.New("swarm-pushgw: TLS is required (PG-TR-1): pass -tls-cert and -tls-key, or set -insecure-http to declare a TLS-terminating reverse proxy deployment")
 	}
-	if tlsConfigured && *insecureHTTP {
+	if !retentionOnly && tlsConfigured && *insecureHTTP {
 		return errors.New("swarm-pushgw: -tls-cert/-tls-key and -insecure-http are mutually exclusive")
 	}
 
-	var trustedProxyCIDRs []string
-	if *trustedProxies != "" {
-		trustedProxyCIDRs = strings.Split(*trustedProxies, ",")
+	trustedProxyCIDRs, err := validatedTrustedProxies(*devMode, *trustedProxies)
+	if err != nil {
+		return err
+	}
+	tokenKeys, activeTokenKeyVersion, registrationDigestKey, err := loadTokenKeyring(*tokenKeyringFile)
+	if err != nil {
+		return err
+	}
+	registrationAdmission, err := loadRegistrationAdmission(*registrationAdmissionFile)
+	if err != nil {
+		return err
 	}
 
 	deps := productionDependencies{
@@ -250,18 +252,35 @@ func runServe(ctx context.Context, args []string) error {
 		deps = production
 	}
 
+	clientOptions := []option.ClientOption(nil)
+	if !*devMode {
+		clientOptions = append(clientOptions, option.WithTokenSource(deps.tokenSource))
+	}
+	firestoreClient, err := firestore.NewClientWithDatabase(ctx, *gcpProjectID, productionFirestoreDatabase, clientOptions...)
+	if err != nil {
+		return fmt.Errorf("swarm-pushgw: construct Firestore client: %w", err)
+	}
+	defer func() { _ = firestoreClient.Close() }()
+	repository, err := pushgw.NewFirestoreRepository(firestoreClient, *firestoreNamespace)
+	if err != nil {
+		return err
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	srv, err := pushgw.NewServer(pushgw.Config{
-		DBPath:         *dbPath,
-		Sender:         deps.sender,
-		Attest:         deps.attestor,
-		Logger:         logger,
-		TrustedProxies: trustedProxyCIDRs,
+	srv, err := pushgw.NewFirestoreServer(pushgw.Config{
+		Repository:            repository,
+		TokenKeys:             tokenKeys,
+		ActiveTokenKeyVersion: activeTokenKeyVersion,
+		RegistrationDigestKey: registrationDigestKey,
+		RegistrationAdmission: registrationAdmission,
+		Sender:                deps.sender,
+		Attest:                deps.attestor,
+		Logger:                logger,
+		TrustedProxies:        trustedProxyCIDRs,
 		Readiness: pushgw.DeploymentReadiness{
 			ProductionSender:   deps.readiness.ProductionSender,
 			ProductionAttestor: deps.readiness.ProductionAttestor,
 			RequiredConfig:     deps.readiness.RequiredConfig,
-			RetentionFreshFor:  2 * *retentionInterval,
 		},
 		Quotas: pushgw.QuotaConfig{
 			WakesPerAddress:            pushgw.RateLimit{Max: *wakesPerAddr, Window: *wakesPerAddrWindow},
@@ -278,13 +297,18 @@ func runServe(ctx context.Context, args []string) error {
 	}
 	defer func() { _ = srv.Close() }()
 
-	// Establish one successful retention pass before any listener can become ready;
-	// the worker owns its own running signal after this point.
-	if err := srv.RunRetention(ctx); err != nil {
-		return fmt.Errorf("swarm-pushgw: initial retention sweep: %w", err)
+	if retentionOnly {
+		retentionCtx, cancel := context.WithTimeout(ctx, retentionTimeout)
+		defer cancel()
+		if err := srv.RunRetention(retentionCtx); err != nil {
+			return fmt.Errorf("swarm-pushgw retention: %w", err)
+		}
+		return nil
 	}
-	stopRetention := startRetentionWorker(ctx, srv, *retentionInterval, logger)
-	defer stopRetention()
+	err = srv.CheckStore(ctx)
+	if err != nil {
+		return fmt.Errorf("swarm-pushgw: Firestore startup check: %w", err)
+	}
 
 	var adminLn net.Listener
 	var adminSrv *http.Server
@@ -325,10 +349,8 @@ func runServe(ctx context.Context, args []string) error {
 
 	select {
 	case <-ctx.Done():
-		// Readiness drops before connection draining begins, and the retention
-		// worker is joined before the deferred store close can run.
+		// Readiness drops before connection draining begins.
 		srv.SetServing(false)
-		stopRetention()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		var errs []error
@@ -343,7 +365,6 @@ func runServe(ctx context.Context, args []string) error {
 		return errors.Join(errs...)
 	case err := <-errCh:
 		srv.SetServing(false)
-		stopRetention()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = httpSrv.Shutdown(shutdownCtx)
@@ -354,22 +375,6 @@ func runServe(ctx context.Context, args []string) error {
 			return nil
 		}
 		return err
-	}
-}
-
-// startRetentionWorker returns an idempotent synchronous stop function. The worker owns
-// its running signal, and every caller that stops it joins it before the store can close.
-func startRetentionWorker(ctx context.Context, srv *pushgw.Server, interval time.Duration, logger *slog.Logger) func() {
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	var once sync.Once
-	go func() {
-		defer close(done)
-		runRetentionLoop(ctx, srv, interval, stop, logger)
-	}()
-	return func() {
-		once.Do(func() { close(stop) })
-		<-done
 	}
 }
 
@@ -388,27 +393,47 @@ func isLoopbackHostPort(addr string) (bool, error) {
 	return ip.IsLoopback(), nil
 }
 
-// runRetentionLoop drives Server.RunRetention on a real-clock ticker (the fake-clock seam
-// is Config.Now, exercised by the test suite; production always uses the wall clock).
-func runRetentionLoop(ctx context.Context, srv *pushgw.Server, interval time.Duration, stop <-chan struct{}, logger *slog.Logger) {
-	srv.SetRetentionWorkerRunning(true)
-	defer srv.SetRetentionWorkerRunning(false)
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-stop:
-			return
-		case <-t.C:
-			if err := srv.RunRetention(ctx); err != nil {
-				if logger != nil {
-					logger.Error("pushgw retention sweep failed", "error", err)
-				}
-			}
-		}
+func resolveListenAddress(flagValue, port string, explicitlySet bool) (string, error) {
+	if explicitlySet || port == "" {
+		return flagValue, nil
 	}
+	value, err := strconv.Atoi(port)
+	if err != nil || value < 1 || value > 65535 || strconv.Itoa(value) != port {
+		return "", errors.New("swarm-pushgw: PORT must be a canonical integer from 1 to 65535")
+	}
+	return ":" + port, nil
+}
+
+func validateFirestoreMode(devMode, allowEmulator bool, projectID, namespace, emulatorHost string) error {
+	if devMode {
+		if !allowEmulator {
+			return errors.New("swarm-pushgw: Firestore emulator use in -dev requires explicit -allow-firestore-emulator")
+		}
+		if emulatorHost == "" {
+			return errors.New("swarm-pushgw: -dev requires FIRESTORE_EMULATOR_HOST")
+		}
+	} else if allowEmulator {
+		return errors.New("swarm-pushgw: -allow-firestore-emulator requires -dev")
+	} else if emulatorHost != "" {
+		return errors.New("swarm-pushgw: Firestore emulator environment is forbidden outside -dev")
+	}
+	if projectID != productionGCPProjectID {
+		return fmt.Errorf("swarm-pushgw: -gcp-project-id must be the production project %q", productionGCPProjectID)
+	}
+	if !firestoreNamespacePattern.MatchString(namespace) {
+		return errors.New("swarm-pushgw: -firestore-namespace must match ^[a-z][a-z0-9-]{0,31}$")
+	}
+	return nil
+}
+
+func validatedTrustedProxies(devMode bool, value string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	if !devMode {
+		return nil, errors.New("swarm-pushgw: -trusted-proxies is disabled until hosted forwarding-header evidence is recorded")
+	}
+	return strings.Split(value, ","), nil
 }
 
 func loadRuntimeGoogleCredentials(ctx context.Context, path string, scopes []string) (runtimeGoogleCredentials, error) {
@@ -451,7 +476,7 @@ func buildProductionDependencies(ctx context.Context, cfg productionDependencyCo
 	if loader == nil {
 		return productionDependencies{}, errors.New("swarm-pushgw: Google runtime credential loader is required")
 	}
-	creds, err := loader(ctx, cfg.CredentialPath, []string{fcmMessagingScope, playIntegrityScope})
+	creds, err := loader(ctx, cfg.CredentialPath, []string{fcmMessagingScope, playIntegrityScope, datastoreScope})
 	if err != nil {
 		return productionDependencies{}, err
 	}
@@ -485,8 +510,9 @@ func buildProductionDependencies(ctx context.Context, cfg productionDependencyCo
 		return productionDependencies{}, err
 	}
 	return productionDependencies{
-		sender:   pushgw.NewFCMSender(fcm),
-		attestor: attestor,
+		sender:      pushgw.NewFCMSender(fcm),
+		attestor:    attestor,
+		tokenSource: creds.TokenSource,
 		readiness: pushgw.DeploymentReadiness{
 			ProductionSender: true, ProductionAttestor: true, RequiredConfig: true,
 		},

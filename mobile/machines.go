@@ -298,7 +298,7 @@ func (a *App) resumeRegistryCore(cfg *Config) (*phonecore.Core, error) {
 		if err != nil {
 			return nil, err
 		}
-		if attempt == pairBootstrapCommitted {
+		if attempt == bootstrapCommittedPendingACK {
 			// The registry rename is local authority only. Until RunDevice records
 			// successful ACK completion, retain the bootstrap gate across restarts.
 			a.bootstrap = reg
@@ -460,7 +460,7 @@ func (a *App) commitBootstrapPairing() error {
 	d := phonecore.MachineDescriptor{ID: st.Machine, DisplayName: st.MachineName}
 	// This record must precede the registry authority flip: after the flip, a crash
 	// before or during ACK cannot be distinguished and must restart fail-closed.
-	if err := a.writePairingState(pairBootstrapCommitted); err != nil {
+	if err := a.writePairingState(bootstrapCommittedPendingACK); err != nil {
 		return err
 	}
 	err := commitBootstrapAuthority(a.bootstrap, d)
@@ -490,7 +490,7 @@ func (a *App) preserveBootstrapCompletion() {
 	if pending {
 		// A failed delete may have removed the directory entry before its fsync
 		// failed. Put the conservative marker back; the reported error remains.
-		_ = a.writePairingState(pairBootstrapCommitted)
+		_ = a.writePairingState(bootstrapCommittedPendingACK)
 	}
 }
 

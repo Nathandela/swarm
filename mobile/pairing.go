@@ -43,10 +43,6 @@ const (
 	pairPairing            = "pairing"    // the handshake is running; a SAS may be derived
 	pairConfirming         = "confirming" // the user compared the two displays and said yes
 	pairPaired             = "paired"
-	// pairBootstrapCommitted is internal crash-recovery state: the first machine is
-	// locally authoritative, but RunDevice has not yet returned from sending its ACK.
-	// PairingState presents it as failed so it does not expand the mobile state surface.
-	pairBootstrapCommitted = "bootstrap_committed_pending_ack"
 
 	// The five terminal states PB-PAIR-5 enumerates, plus the two the flow already had.
 	pairDeclined    = "declined"     // the machine operator refused at their own SAS gate
@@ -91,6 +87,11 @@ const (
 	// one URL and something offered another, which is a security event.
 	pairOriginMismatch = "refused_origin_mismatch"
 )
+
+// bootstrapCommittedPendingACK is internal crash-recovery state: the first machine is
+// locally authoritative, but RunDevice has not yet returned from sending its ACK.
+// PairingState presents it as failed so it does not expand the mobile state surface.
+const bootstrapCommittedPendingACK = "bootstrap_committed_pending_ack"
 
 // errLateCancel is what a Cancel or a SAS rejection gets when it arrives while the pairing's
 // durable effects are already being written (ADR-007 B58).
@@ -884,7 +885,7 @@ func (a *App) persistPairingState(state string) {
 	if err != nil {
 		return
 	}
-	if current == pairBootstrapCommitted && state != pairPaired {
+	if current == bootstrapCommittedPendingACK && state != pairPaired {
 		return
 	}
 	if state == pairPaired || state == pairCancelled {
@@ -984,7 +985,7 @@ func (a *App) beginPairingState() error {
 	a.pairingStateMu.Lock()
 	defer a.pairingStateMu.Unlock()
 	current, err := a.readPairingStateLocked()
-	if err != nil || current == pairBootstrapCommitted {
+	if err != nil || current == bootstrapCommittedPendingACK {
 		return err
 	}
 	return a.writePairingStateLocked(pairConfirmDestination)
@@ -1055,7 +1056,7 @@ func (a *App) PairingState() (state string, err error) {
 	if err != nil {
 		return "", err
 	}
-	if state == pairBootstrapCommitted {
+	if state == bootstrapCommittedPendingACK {
 		return pairFailed, nil
 	}
 	return state, nil

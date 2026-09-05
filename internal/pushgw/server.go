@@ -65,10 +65,11 @@ type DeploymentReadiness struct {
 	ProductionSender   bool
 	ProductionAttestor bool
 	RequiredConfig     bool
-	// RetentionFreshFor is the maximum age of the last successful local sweep.
-	// Zero disables the age gate for embedded/test servers; the production command
-	// always sets it from its worker interval. Provider reachability is deliberately
-	// absent: a transient Google failure must not flap local readiness.
+	// RetentionFreshFor is the maximum age of the last successful local sweep and
+	// enables the legacy local worker gate. Zero disables both for request-billed
+	// Firestore servers, whose security boundaries enforce logical expiry at use and
+	// whose bounded physical cleanup runs as a separate job. Provider reachability is
+	// deliberately absent: a transient Google failure must not flap local readiness.
 	RetentionFreshFor time.Duration
 }
 
@@ -216,9 +217,9 @@ func (s *Server) Close() error {
 
 // RunRetention applies section 8.1's three durable retention rows, plus PG-RET-4's
 // hardening sweep of the three bounded in-memory caches (quota windows, registration and
-// wake idempotency), once, as of the server's current clock reading. Production wiring
-// (cmd/swarm-pushgw) calls it on a timer; tests call it directly after advancing a fake
-// clock.
+// wake idempotency), once, as of the server's current clock reading. The Firestore
+// production deployment invokes it as a bounded job; tests call it directly after
+// advancing a fake clock.
 func (s *Server) RunRetention(ctx context.Context) error {
 	now := s.now()
 	if s.v2store != nil {
@@ -314,10 +315,9 @@ func routeOperation(method, path string) string {
 	}
 }
 
-// SetServing and SetRetentionWorkerRunning are lifecycle signals owned by the executable.
-// They do not perform probes and therefore cannot flap on transient Google failures.
-func (s *Server) SetServing(v bool)                { s.serving.Store(v) }
-func (s *Server) SetRetentionWorkerRunning(v bool) { s.retentionWorker.Store(v) }
+// SetServing is the listener lifecycle signal owned by the executable. It does not
+// perform a probe and therefore cannot flap on transient Google failures.
+func (s *Server) SetServing(v bool) { s.serving.Store(v) }
 
 func statusLabel(status int) string { return strconv.Itoa(status) }
 

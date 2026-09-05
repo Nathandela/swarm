@@ -33,8 +33,8 @@ func committedBootstrapAttempt(t *testing.T) (*App, string, r4r3Custody) {
 	if err := app.commitBootstrapPairing(); err != nil {
 		t.Fatalf("commit local registry authority: %v", err)
 	}
-	if got, err := app.readPairingState(); err != nil || got != pairBootstrapCommitted {
-		t.Fatalf("local authority marker = %q, %v; want %q", got, err, pairBootstrapCommitted)
+	if got, err := app.readPairingState(); err != nil || got != bootstrapCommittedPendingACK {
+		t.Fatalf("local authority marker = %q, %v; want %q", got, err, bootstrapCommittedPendingACK)
 	}
 	return app, dir, custody
 }
@@ -169,8 +169,8 @@ func TestPairingFinish_DoesNotReportSuccessWhenRecoveryRecordCannotClear(t *test
 	if err := app.Start(); err == nil {
 		t.Fatal("pairing connected after its recovery record failed to clear")
 	}
-	if got, err := app.readPairingState(); err != nil || got != pairBootstrapCommitted {
-		t.Fatalf("recovery state after failed clear = %q, %v; want %q", got, err, pairBootstrapCommitted)
+	if got, err := app.readPairingState(); err != nil || got != bootstrapCommittedPendingACK {
+		t.Fatalf("recovery state after failed clear = %q, %v; want %q", got, err, bootstrapCommittedPendingACK)
 	}
 
 	// A clean restart after the failed durability acknowledgement must remain gated too.
@@ -272,8 +272,8 @@ func TestBootstrapCommit_ConcurrentProgressCannotOverwritePending(t *testing.T) 
 	if err := <-commitDone; err != nil {
 		t.Fatalf("commit bootstrap: %v", err)
 	}
-	if got, err := app.readPairingState(); err != nil || got != pairBootstrapCommitted {
-		t.Fatalf("pairing state after concurrent stale writer = %q, %v; want %q", got, err, pairBootstrapCommitted)
+	if got, err := app.readPairingState(); err != nil || got != bootstrapCommittedPendingACK {
+		t.Fatalf("pairing state after concurrent stale writer = %q, %v; want %q", got, err, bootstrapCommittedPendingACK)
 	}
 }
 

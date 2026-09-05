@@ -35,6 +35,34 @@ type claimProbeFirestore struct {
 	wakeRecords map[int]*wakeAttemptRecord
 }
 
+type healthProbeFirestore struct {
+	firestorepb.UnimplementedFirestoreServer
+	request *firestorepb.RunQueryRequest
+	err     error
+}
+
+func (s *healthProbeFirestore) RunQuery(request *firestorepb.RunQueryRequest, _ firestorepb.Firestore_RunQueryServer) error {
+	s.request = request
+	return s.err
+}
+
+func TestFirestoreHealthCheckUsesBoundedQueryAndPropagatesMissingDatabase(t *testing.T) {
+	probe := &healthProbeFirestore{}
+	client := newFirestoreTestClient(t, probe)
+	repo := newFirestorePersistence(client, "health")
+	if err := repo.healthCheck(context.Background()); err != nil {
+		t.Fatalf("empty collection health check: %v", err)
+	}
+	if probe.request == nil || probe.request.GetStructuredQuery().GetLimit().GetValue() != 1 {
+		t.Fatalf("health query was not bounded to one document: %+v", probe.request)
+	}
+
+	probe.err = status.Error(codes.NotFound, "database does not exist")
+	if err := repo.healthCheck(context.Background()); status.Code(err) != codes.NotFound {
+		t.Fatalf("missing database error = %v, want NotFound preserved", err)
+	}
+}
+
 func (s *claimProbeFirestore) BeginTransaction(context.Context, *firestorepb.BeginTransactionRequest) (*firestorepb.BeginTransactionResponse, error) {
 	s.attempt++
 	return &firestorepb.BeginTransactionResponse{Transaction: []byte{byte(s.attempt)}}, nil

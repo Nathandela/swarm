@@ -206,10 +206,7 @@ func (f *firestorePersistence) col(name string) *firestore.CollectionRef {
 }
 func (f *firestorePersistence) close() error { return nil }
 func (f *firestorePersistence) healthCheck(ctx context.Context) error {
-	_, err := f.col("metadata").Doc("health").Get(ctx)
-	if status.Code(err) == codes.NotFound {
-		return nil
-	}
+	_, err := f.col("metadata").Limit(1).Documents(ctx).GetAll()
 	return err
 }
 

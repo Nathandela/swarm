@@ -1,9 +1,0 @@
-push-swarm.dsfactory.org {
-	# Caddy logs are deliberately disabled: request paths contain opaque push
-	# addresses and are not an operations signal. Aggregate counters are on the
-	# loopback-only /metrics endpoint instead.
-	log {
-		output discard
-	}
-	reverse_proxy 127.0.0.1:8450
-}

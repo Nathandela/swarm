@@ -89,6 +89,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
@@ -97,11 +98,6 @@ import (
 	"github.com/Nathandela/swarm/internal/skeleton"
 	swarmmobile "github.com/Nathandela/swarm/mobile"
 )
-
-// s18bMachineID is the endpoint label the phone stamps its state blob with. It only has to
-// be STABLE across the corruption and the recovery: phonecore discards another machine's
-// blob wholesale, so a test that varied it would exercise that path instead of this one.
-const s18bMachineID = "machine-endpoint-s18b"
 
 // s18bCustody is the Android Keystore stand-in: two fixed 32-byte tier KEKs. It survives a
 // "clear the app's data" (which deletes files, not the Keystore) and that is exactly what
@@ -125,14 +121,13 @@ func (c *s18bCustody) ContentKEK() ([]byte, error) { return append([]byte(nil), 
 // s18bRig is one machine (provisioned identity + relay + live daemon) and one phone, wired
 // through the real relay -- the fixture every test below starts from.
 type s18bRig struct {
-	relay     *relay.Server
-	relayURL  string
-	stateDir  string // the MACHINE's state dir
-	phoneDir  string // the PHONE's state dir ("app data")
-	custody   *s18bCustody
-	deviceID  string // the paired device's registry id
-	phoneRID  string // the paired device's relay routing id
-	machineID string
+	relay    *relay.Server
+	relayURL string
+	stateDir string // the MACHINE's state dir
+	phoneDir string // the PHONE's state dir ("app data")
+	custody  *s18bCustody
+	deviceID string // the paired device's registry id
+	phoneRID string // the paired device's relay routing id
 }
 
 // s18bNewRig provisions a machine for remote control the way an owner does -- `swarm remote
@@ -147,10 +142,9 @@ func s18bNewRig(t *testing.T) *s18bRig {
 	fakeGatewayBinaryOnPath(t)
 
 	rig := &s18bRig{
-		stateDir:  shortStateDir(t),
-		phoneDir:  t.TempDir(),
-		custody:   newS18bCustody(t),
-		machineID: s18bMachineID,
+		stateDir: shortStateDir(t),
+		phoneDir: t.TempDir(),
+		custody:  newS18bCustody(t),
 	}
 	rig.relay, rig.relayURL = s18bFreshRelay(t)
 
@@ -203,18 +197,15 @@ func s18bFreshRelay(t *testing.T) (*relay.Server, string) {
 	return srv, srv.URL()
 }
 
-// s18bApp opens the phone over its state directory. It returns the constructor's error
-// rather than failing the test, because "NewApp refuses" is the fail-closed state under test.
+// s18bApp opens the phone over its state directory without connecting. A fresh v2 registry
+// is intentionally unpaired; s18bPairPhone starts only after authenticated pairing commits.
 func (r *s18bRig) s18bApp(t *testing.T) (*swarmmobile.App, error) {
 	t.Helper()
 	app, err := swarmmobile.NewApp(&swarmmobile.Config{
-		StateDir: r.phoneDir, RelayURL: r.relayURL, MachineID: r.machineID,
+		StateDir: r.phoneDir, RelayURL: r.relayURL,
 	}, r.custody)
 	if err != nil {
 		return nil, err
-	}
-	if err := app.Start(); err != nil {
-		t.Fatalf("App.Start: %v", err)
 	}
 	t.Cleanup(func() { _ = app.Close() })
 	return app, nil
@@ -299,12 +290,35 @@ func (r *s18bRig) s18bPairPhone(t *testing.T) (*swarmmobile.App, s18bPairResult)
 	// durable state before calling the pairing done, or a test that corrupts that state races
 	// the write that creates it.
 	s18bAwaitRestored(t, app)
+	s18bAwaitPaired(t, p)
+	if err := app.Start(); err != nil {
+		t.Fatalf("App.Start after authenticated pairing: %v", err)
+	}
 
 	// Record the coordinates the recovery has to act on: the registry id the owner will type
 	// and the relay routing id whose relay-side state has to be purged.
 	r.deviceID = s18bOnlyDeviceID(t)
 	r.phoneRID = r.s18bPhoneRoutingID(t, r.deviceID)
 	return app, res
+}
+
+func s18bAwaitPaired(t *testing.T, p *swarmmobile.Pairing) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := p.State()
+		if err != nil {
+			t.Fatalf("Pairing.State while waiting for authenticated completion: %v", err)
+		}
+		if state == "paired" {
+			return
+		}
+		if state != "pairing" && state != "confirming" && state != "confirm_destination" {
+			t.Fatalf("pairing reached terminal state %q before authenticated completion", state)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the phone never reached authenticated pairing completion within 20s")
 }
 
 // s18bAwaitQR reads the pairing payload back off `swarm remote pair`'s own stdout -- the
@@ -451,7 +465,21 @@ func (r *s18bRig) s18bMachineRelayClient(t *testing.T) *relay.Client {
 // BECAUSE the app never constructs to offer it.
 func (r *s18bRig) s18bCorruptPhoneState(t *testing.T) {
 	t.Helper()
-	path := filepath.Join(r.phoneDir, "phone-state.json")
+	legacyPath := filepath.Join(r.phoneDir, phonecore.StateFileName)
+	if _, err := os.Lstat(legacyPath); err == nil {
+		t.Fatalf("v2 fixture unexpectedly wrote state at legacy root %s", legacyPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("inspect legacy root state path %s: %v", legacyPath, err)
+	}
+	reg, err := phonecore.OpenMachineRegistry(r.phoneDir)
+	if err != nil {
+		t.Fatalf("open v2 machine registry: %v", err)
+	}
+	entries := reg.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("registry entries = %+v; want exactly the paired machine", entries)
+	}
+	path := filepath.Join(reg.MachineDir(entries[0].ID), phonecore.StateFileName)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("the phone wrote no durable state to corrupt at %s: %v", path, err)
 	}

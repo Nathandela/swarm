@@ -98,8 +98,9 @@ const b94V2Foundation = "ADR-027 / agents-tracker-wjp4: native v2 foundation exe
 // that gets wired up cannot leave a stale exemption behind.
 var b94Allowed = map[string]string{
 	// ---- ADR-027 implementation checkpoint: deliberately not a shipped v2 path ----
-	"github.com/Nathandela/swarm/internal/pushgw.NewFirestoreRepository":           "agents-tracker-wjp4.1: Firestore foundation tested with the real SDK/emulator; production command cutover is separately paused pending scoped source approval. Remove when wired; not P1/P2 completion.",
-	"github.com/Nathandela/swarm/internal/pushgw.NewFirestoreServer":               "as NewFirestoreRepository: production startup remains unchanged until the separately paused cutover is authorized.",
+	"github.com/Nathandela/swarm/internal/pushgw.NewServer":                        "ADR-027 / agents-tracker-wjp4.2: old local-store constructor is now used only by push unit and two phonecore HTTP fixtures. No production command calls it or offers a backend selector. Port those fixtures to the repository seam and delete this constructor/remaining old branches before P4; not runtime parity or P4 completion.",
+	"github.com/Nathandela/swarm/internal/pushgw.Backup":                           "agents-tracker-wjp4.1: old command route removed; deletion of recovery implementation/tests was separately refused and awaits exact owner approval. Source retained without a production command caller, not a v2 backup or P4 completion.",
+	"github.com/Nathandela/swarm/internal/pushgw.Restore":                          "as Backup: old recovery source/guard deletion explicitly paused; no command route or v2 restore claim. Remove symbol and exemption only with the required approval.",
 	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Append":              b94V2Foundation,
 	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Authorize":           b94V2Foundation,
 	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Close":               b94V2Foundation,

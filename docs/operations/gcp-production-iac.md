@@ -1,5 +1,11 @@
 # `swarm-8404f` production infrastructure
 
+Scope note (ADR-027): this is the retained **legacy VM inventory and operator safeguard**,
+not the v2 deployment path. Existing resources stay untouched pending a separately
+authorized retirement. The v2 push image no longer supports this document's old local
+store topology; use the [v2 push contract](push-gateway-deploy.md). Do not apply this
+stack or restart the old services as a step of the scale-to-zero source cutover.
+
 `deploy/gcp` is an import-first Terraform description of the two public services that already
 exist in project `swarm-8404f`. It is not a generic example and must not be pointed at another
 project. The configuration deliberately contains no service secret, credential, bootstrap script,
@@ -259,12 +265,12 @@ printf 'services:\n  swarm-relay:\n    image: %s\n' "${relay_image}" > /tmp/rela
 docker compose -f deploy/relay/docker-compose.yml -f /tmp/relay-image.yml pull
 docker compose -f deploy/relay/docker-compose.yml -f /tmp/relay-image.yml up -d --no-build
 
-printf 'services:\n  swarm-pushgw:\n    image: %s\n' "${pushgw_image}" > /tmp/pushgw-image.yml
-docker compose -f deploy/pushgw/docker-compose.yml -f /tmp/pushgw-image.yml pull
-docker compose -f deploy/pushgw/docker-compose.yml -f /tmp/pushgw-image.yml up -d --no-build
 ```
 
-Run only the command for the service hosted by that VM. Keep service configuration and credentials
+The push VM startup commands were removed when the command switched to Firestore. Do not
+deploy a v2 push image onto the old VM configuration. The remaining relay example applies
+only to the retained legacy relay, not the native Worker/DO replacement.
+Keep service configuration and credentials
 out of Terraform state and instance metadata. Follow
 [`relay-vps-deploy.md`](relay-vps-deploy.md) or
 [`push-gateway-deploy.md`](push-gateway-deploy.md) for configuration, readiness, and acceptance.
