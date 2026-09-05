@@ -752,3 +752,32 @@ rerun above is the corrected result. Full command CLI race passed earlier (91.77
 and Android source gates passed (340.912 s). Final whole build/vet and lint passed
 with zero issues. Shell syntax and whitespace checks passed. The full skeleton rerun
 and remote CI are pending at this source checkpoint; no real handset result is claimed.
+
+## Native limiter deployed; namespace checkpoint verified
+
+The final full skeleton race rerun passed in 489.532 s. Source checkpoint
+`e442649c43ee1c8949533163dcf967322267643d` is committed and pushed to `main`.
+Root verified all 14 jobs in [CI 33969436512](https://github.com/Nathandela/swarm/actions/runs/33969436512)
+and both [relay container](https://github.com/Nathandela/swarm/actions/runs/33969436477)
+and [push container](https://github.com/Nathandela/swarm/actions/runs/33969436502)
+workflows succeeded for that exact SHA. These container workflows still do not
+publish an image or deploy Cloud Run.
+
+Root uploaded that committed relay source to the same Worker `s`, with the approved
+profile/account, telemetry disabled and no variable override. Cloudflare accepted
+version `ff45fa08-db01-4ec6-bae7-01792fb90c20`, created at
+2026-09-05T13:41:32.181542Z, without a paid upgrade or new permission scope.
+Read-only version metadata confirms `has_preview: false`, migration tag `v1`,
+the same two Durable Object namespace IDs as the first deployment, and exactly
+one added `RATE_LIMITER` binding with namespace `1001`, limit 60 and period 60.
+There are no admission, test, variable or secret bindings. This updates the sole
+live environment; the local auth-profile name does not create a staging target.
+
+At 13:43:46 UTC, root's certificate-verified HTTP/1.1 probes returned `200` with
+`swarm relay v2` at the public root and `503` with
+`relay admission is not configured` for complete WebSocket upgrades on both
+well-formed v2 routes. No identity or command was admitted. Admission is checked
+before the limiter, so these probes verify hosted configuration, TLS and refusal,
+not hosted counter behavior, Durable Object usage, hibernation, capacity or billing.
+The per-location limiter remains an abuse reduction, not a global spending cap.
+Active client wiring and the previously recorded hosted/device/recovery gates remain open.

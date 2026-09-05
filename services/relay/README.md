@@ -9,7 +9,7 @@ npm ci
 npm test
 ```
 
-Set `RELAY_TEST_PORT` when 8790 is unavailable. The runner refuses an occupied port, uses unique temporary config/state/log directories, has a 90-second outer deadline (including a cold Go build) and terminates the whole Wrangler/workerd process group on success, failure, timeout or interruption.
+Set `RELAY_TEST_PORT` when 8790 is unavailable. The runner refuses an occupied HTTP port, requests an ephemeral debugger port, uses unique temporary config/state/log directories, has a 90-second outer deadline (including a cold Go build) and terminates the whole Wrangler/workerd process group on success, failure, timeout or interruption.
 
 ## One live Worker configuration
 
@@ -36,21 +36,23 @@ checked-in deployment offline; this needs no credentials or network:
 WRANGLER_SEND_METRICS=false ./node_modules/.bin/wrangler deploy --dry-run
 ```
 
-For a separately authorized first upload, require the operator-held account ID
+For an authorized upload, require the operator-held account ID
 before invoking Wrangler. `CLOUDFLARE_AUTH_USE_KEYRING=true` makes Wrangler use
 the OS keyring backend; `--profile swarm-staging` selects only that local
-credential profile. The command creates the public Worker, its native
-rate-limit binding and its two SQLite Durable Object namespaces. Current
-Workers pricing lists no separate rate-limit operation charge, but the first
-upload is also the account-level availability check: stop if Cloudflare
-requests a plan upgrade, payment or new scope. Do not add `--keep-vars` or any
+credential profile. Worker `s`, the native limiter and both SQLite Durable Object
+namespaces already exist; subsequent uploads update that same deployment, not a
+second environment. The limiter was accepted on the existing Free plan without
+an upgrade. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
+lists no separate rate-limit operation charge; stop if a later change makes Cloudflare
+request a plan upgrade, payment or new scope. Do not add `--keep-vars` or any
 `--var` values.
 
 ```sh
 : "${SWARM_RELAY_ACCOUNT_ID:?set intended account ID}"
 CLOUDFLARE_AUTH_USE_KEYRING=true \
   CLOUDFLARE_ACCOUNT_ID="$SWARM_RELAY_ACCOUNT_ID" \
-  ./node_modules/.bin/wrangler deploy --profile swarm-staging
+  WRANGLER_SEND_METRICS=false \
+  ./node_modules/.bin/wrangler deploy --profile swarm-staging --no-autoconfig
 ```
 
 After an authorized upload, the only bounded smoke checks are the public root
