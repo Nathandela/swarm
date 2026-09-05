@@ -716,8 +716,8 @@ func (c *Core) EnsurePushRegistration(ctx context.Context, client *GatewayClient
 			// Everything else is REPORTED, never re-registered -- errRequestExpired above
 			// all. That one means this phone's clock is outside PG-AUTH-3's horizon after
 			// doSigned already corrected it and retried; the installation is fine, and
-			// re-registering would mint a duplicate (the register POST carries no
-			// signature, so it succeeds while the clock is still wrong) and orphan the live
+			// re-registering would mint a duplicate (its registration proof is deliberately
+			// clock-independent, so it succeeds while the clock is still wrong) and orphan the live
 			// one for 180 days holding this phone's FCM token.
 			return PushRegistration{}, err
 		}
@@ -732,7 +732,7 @@ func (c *Core) EnsurePushRegistration(ctx context.Context, client *GatewayClient
 	// same Idempotency-Key, byte-identical body. Inside pushgw's retention window a
 	// processed POST answers with the installation it already minted.
 	if pending != nil {
-		reg, err := client.registerPrepared(ctx, preparedRegister(*pending))
+		reg, err := client.registerPrepared(ctx, preparedRegister(*pending), true)
 		switch {
 		case err == nil:
 			if perr := c.persistPushIdentity(reg.InstallationID, pending.FCMToken); perr != nil {
@@ -771,7 +771,7 @@ func (c *Core) EnsurePushRegistration(ctx context.Context, client *GatewayClient
 	if err := c.storePendingRegister(prep); err != nil {
 		return PushRegistration{}, err
 	}
-	reg, err := client.registerPrepared(ctx, prep)
+	reg, err := client.registerPrepared(ctx, prep, false)
 	if err != nil {
 		if errors.Is(err, errRegisterOutcomeUnknown) {
 			return PushRegistration{}, err

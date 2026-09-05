@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/pushreg"
 )
 
 // expiryHorizon is PG-AUTH-3's window: a signed request's expiry must be no more than this
@@ -76,6 +78,34 @@ func unmarshalP256(raw []byte) (*ecdsa.PublicKey, bool) {
 	return &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}, true
 }
 
+func verifyP256P1363(pub *ecdsa.PublicKey, message, signature []byte) bool {
+	if len(signature) != 64 {
+		return false
+	}
+	r := new(big.Int).SetBytes(signature[:32])
+	s := new(big.Int).SetBytes(signature[32:])
+	half := new(big.Int).Rsh(pub.Curve.Params().N, 1)
+	if s.Cmp(half) > 0 {
+		return false
+	}
+	digest := sha256.Sum256(message)
+	return ecdsa.Verify(pub, digest[:], r, s)
+}
+
+func verifyRegistrationProof(r *http.Request, pub *ecdsa.PublicKey, idempotencyKey string, body []byte) bool {
+	const prefix = "p256-sha256 "
+	values := r.Header.Values("Swarm-Registration-Proof")
+	if len(values) != 1 || len(values[0]) != len(prefix)+86 || !strings.HasPrefix(values[0], prefix) {
+		return false
+	}
+	encoded := strings.TrimPrefix(values[0], prefix)
+	signature, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || base64.RawURLEncoding.EncodeToString(signature) != encoded {
+		return false
+	}
+	return verifyP256P1363(pub, pushreg.RegistrationProofMessage(idempotencyKey, body), signature)
+}
+
 // verifyResult is what a successful installation-signature check (PG-AUTH-1) hands back
 // to the caller so it can perform the post-auth housekeeping PG-AUTH-4/5 require.
 type verifyResult struct {
@@ -135,17 +165,7 @@ func (s *Server) verifyInstallationSignature(r *http.Request, method, path strin
 		nonce,
 		strconv.FormatInt(expirySec, 10),
 	}, "|")
-	digest := sha256.Sum256([]byte(canonical))
-
-	rInt := new(big.Int).SetBytes(sigBytes[:32])
-	sInt := new(big.Int).SetBytes(sigBytes[32:])
-	// PG-AUTH-2: a high-s signature is refused, not merely non-canonical.
-	half := new(big.Int).Rsh(pub.Curve.Params().N, 1)
-	if sInt.Cmp(half) > 0 {
-		e := errUnauthorized
-		return authOutcome{err: &e}
-	}
-	if !ecdsa.Verify(pub, digest[:], rInt, sInt) {
+	if !verifyP256P1363(pub, []byte(canonical), sigBytes) {
 		e := errUnauthorized
 		return authOutcome{err: &e}
 	}

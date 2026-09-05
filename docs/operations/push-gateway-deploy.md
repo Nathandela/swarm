@@ -41,14 +41,17 @@ Pass that mount with `-token-keyring-file`. Pass a separate owner-controlled
 `{"installation_public_keys":["CANONICAL_PUBLIC_KEY"]}`. Replace the placeholder with
 1–64 unique, canonical unpadded base64url SEC1 P-256 public keys. Empty or malformed
 admission fails startup; there is no anonymous enrollment default.
+The admission list is loaded at startup. Apply changes through a validated replacement
+revision; editing the mounted file alone does not reload already-running instances.
 
 Admission keys are public identifiers, not secret invitations or proof of private-key
-possession. The current registration POST uses Play attestation/request binding but
-does not add a P-256 possession proof. Another licensed client that knows an allowed
-public key can create inert duplicate installation records and consume bounded quotas;
-without the private key it cannot authenticate allocation, rotation or control.
-Registration PoP or a reviewed uniqueness/invite rule remains an enrollment-hardening
-decision before treating this as abuse-resistant friends onboarding.
+possession on their own. Registration also requires `Swarm-Registration-Proof`, a
+P-256 proof over the exact final body and idempotency key, before shared state, quota
+or Play verification is accessed. Knowing an allowed public key alone cannot create
+records. The phone re-signs its saved body/key on retry; there is no unsigned fallback.
+This is not a single-use invitation or a uniqueness constraint: an admitted private-key
+holder can deliberately prepare more registrations, subject to attestation and quotas.
+Hosted admission/ingress testing remains required before inviting friends.
 
 Production rejects `FIRESTORE_EMULATOR_HOST`. Local development requires both `-dev`
 and `-allow-firestore-emulator` plus the emulator address, and cannot silently use

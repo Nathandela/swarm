@@ -6,12 +6,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -142,6 +144,23 @@ func firestoreTestPublicKey(t *testing.T, private *ecdsa.PrivateKey) string {
 	return base64.RawURLEncoding.EncodeToString(public.Bytes())
 }
 
+func firestoreTestRegistrationProof(t *testing.T, private *ecdsa.PrivateKey, idempotencyKey string, body []byte) string {
+	t.Helper()
+	digest := sha256.Sum256(pushreg.RegistrationProofMessage(idempotencyKey, body))
+	r, s, err := ecdsa.Sign(rand.Reader, private, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := private.Curve.Params().N
+	if half := new(big.Int).Rsh(n, 1); s.Cmp(half) > 0 {
+		s.Sub(n, s)
+	}
+	signature := make([]byte, 64)
+	r.FillBytes(signature[:32])
+	s.FillBytes(signature[32:])
+	return "p256-sha256 " + base64.RawURLEncoding.EncodeToString(signature)
+}
+
 func (firestoreTestSender) Send(context.Context, string, []byte) error { return nil }
 
 type countingFirestoreSender struct {
@@ -227,7 +246,9 @@ func TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch(t *testing.T)
 	post := func(url string, body []byte) *http.Response {
 		req, _ := http.NewRequest(http.MethodPost, url+"/v1/installations", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Idempotency-Key", "AAAAAAAAAAAAAAAAAAAAAA")
+		const idem = "AAAAAAAAAAAAAAAAAAAAAA"
+		req.Header.Set("Idempotency-Key", idem)
+		req.Header.Set("Swarm-Registration-Proof", firestoreTestRegistrationProof(t, privateKey, idem, body))
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -266,6 +287,137 @@ func TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch(t *testing.T)
 	}
 	if got := attestor.calls.Load(); got != 1 {
 		t.Fatalf("attestation calls = %d, want 1; retries and body conflicts must resolve from shared idempotency state first", got)
+	}
+}
+
+func TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("requires Firestore emulator")
+	}
+	ctx := context.Background()
+	client, err := firestore.NewClient(ctx, "demo-swarm-push-probe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	namespace := fmt.Sprintf("go-register-proof-%d", time.Now().UnixNano())
+	repository, err := NewFirestoreRepository(client, namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistence := repository.(*firestorePersistence)
+	holder, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonholder, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := firestoreTestPublicKey(t, holder)
+	const (
+		idem        = "EEEEEEEEEEEEEEEEEEEEEE"
+		attestation = "proof-verdict"
+	)
+	body, _ := json.Marshal(map[string]any{
+		"installation_public_key": publicKey,
+		"fcm_token":               "proof-fcm-token",
+		"attestation":             map[string]any{"kind": "play_integrity", "token": attestation},
+	})
+	wantHash, err := pushreg.RequestHash(publicKey, "proof-fcm-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attestationCalls atomic.Int32
+	srv, err := NewFirestoreServer(Config{
+		Repository: repository, TokenKeys: map[string][]byte{"1": bytes.Repeat([]byte{7}, 32)},
+		ActiveTokenKeyVersion: "1", RegistrationDigestKey: bytes.Repeat([]byte{9}, 32),
+		RegistrationAdmission: func(candidate string) bool { return candidate == publicKey },
+		Sender:                firestoreTestSender{},
+		Attest:                firestoreTestAttestor{bindings: map[string]VerdictBinding{attestation: {RequestHash: wantHash, LicensedBuild: true}}, calls: &attestationCalls},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srv.Close() }()
+	post := func(signer *ecdsa.PrivateKey) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1/installations", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", idem)
+		request.Header.Set("Swarm-Registration-Proof", firestoreTestRegistrationProof(t, signer, idem, body))
+		response := httptest.NewRecorder()
+		srv.ServeHTTP(response, request)
+		return response
+	}
+	collectionCount := func(name string) int {
+		snapshots, err := persistence.col(name).Documents(ctx).GetAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(snapshots)
+	}
+	quotaState := func() (int, int64) {
+		snapshots, err := persistence.col("rate_windows").Documents(ctx).GetAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var total int64
+		for _, snapshot := range snapshots {
+			var record rateWindowRecord
+			if err := snapshot.DataTo(&record); err != nil {
+				t.Fatal(err)
+			}
+			total += record.Count
+		}
+		return len(snapshots), total
+	}
+
+	if response := post(nonholder); response.Code != http.StatusUnauthorized {
+		t.Fatalf("nonholder status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, collection := range []string{"installations", "registration_attempts", "rate_windows"} {
+		if got := collectionCount(collection); got != 0 {
+			t.Fatalf("nonholder created %d documents in %s, want 0", got, collection)
+		}
+	}
+	if got := attestationCalls.Load(); got != 0 {
+		t.Fatalf("nonholder attestation calls=%d, want 0", got)
+	}
+
+	first := post(holder)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("holder status=%d body=%s", first.Code, first.Body.String())
+	}
+	var firstResult registerResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResult); err != nil {
+		t.Fatal(err)
+	}
+	if firstResult.InstallationID == "" {
+		t.Fatal("holder returned an empty installation id")
+	}
+	quotaDocs, quotaTotal := quotaState()
+	if quotaDocs == 0 || quotaTotal == 0 {
+		t.Fatalf("successful registration did not charge durable quota: documents=%d total=%d", quotaDocs, quotaTotal)
+	}
+	replay := post(holder)
+	if replay.Code != http.StatusCreated {
+		t.Fatalf("signed replay status=%d body=%s", replay.Code, replay.Body.String())
+	}
+	var replayResult registerResponse
+	if err := json.Unmarshal(replay.Body.Bytes(), &replayResult); err != nil {
+		t.Fatal(err)
+	}
+	if replayResult.InstallationID != firstResult.InstallationID {
+		t.Fatalf("signed replay installation id=%q, want %q", replayResult.InstallationID, firstResult.InstallationID)
+	}
+	if got := attestationCalls.Load(); got != 1 {
+		t.Fatalf("attestation calls after replay=%d, want 1", got)
+	}
+	if gotDocs, gotTotal := quotaState(); gotDocs != quotaDocs || gotTotal != quotaTotal {
+		t.Fatalf("signed replay changed quota: before=(%d,%d) after=(%d,%d)", quotaDocs, quotaTotal, gotDocs, gotTotal)
+	}
+	if got := collectionCount("installations"); got != 1 {
+		t.Fatalf("installations after replay=%d, want 1", got)
 	}
 }
 
@@ -322,7 +474,10 @@ func TestFirestoreSecretsAreNotPersistedInPlaintext(t *testing.T) {
 	})
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/installations", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Idempotency-Key", "BBBBBBBBBBBBBBBBBBBBBB")
+	const idem = "BBBBBBBBBBBBBBBBBBBBBB"
+	registrationProof := firestoreTestRegistrationProof(t, privateKey, idem, body)
+	req.Header.Set("Idempotency-Key", idem)
+	req.Header.Set("Swarm-Registration-Proof", registrationProof)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +514,8 @@ func TestFirestoreSecretsAreNotPersistedInPlaintext(t *testing.T) {
 	for label, secret := range map[string]string{
 		"FCM token": fcmToken, "attestation token": attestation,
 		"submit capability": submitCap, "machine-revoke capability": machineCap,
-		"revoked address": pushAddress,
+		"revoked address": pushAddress, "registration proof": registrationProof,
+		"raw idempotency key": idem,
 	} {
 		if bytes.Contains(persisted.Bytes(), []byte(secret)) {
 			t.Fatalf("Firestore documents contain raw %s", label)

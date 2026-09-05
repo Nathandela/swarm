@@ -116,7 +116,7 @@ func TestQuota_RegistrationsGlobal_Returns429(t *testing.T) {
 	})
 	_ = registerInstallation(t, h, "fcm-token-quota-regglobal-1")
 
-	_, pub := genInstallationKey(t)
+	priv, pub := genInstallationKey(t)
 	body, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub,
 		"fcm_token":               "fcm-token-quota-regglobal-2",
@@ -126,7 +126,8 @@ func TestQuota_RegistrationsGlobal_Returns429(t *testing.T) {
 	h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
 		return pushgw.VerdictBinding{RequestHash: hash, LicensedBuild: true}, nil
 	})
-	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": fixedIdemKey("quota-regglobal-key")})
+	idem := fixedIdemKey("quota-regglobal-key")
+	resp := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idem, body))
 	requireStatus(t, resp, http.StatusTooManyRequests)
 	if e := decodeError(t, resp); e.Code != "quota_exceeded" || !e.Retryable {
 		t.Fatalf("got code=%q retryable=%v, want quota_exceeded/true", e.Code, e.Retryable)
@@ -140,7 +141,7 @@ func TestQuota_RegistrationsPerSourceIP_Returns429(t *testing.T) {
 	})
 	_ = registerInstallation(t, h, "fcm-token-quota-reg-1")
 
-	_, pub := genInstallationKey(t)
+	priv, pub := genInstallationKey(t)
 	body, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub,
 		"fcm_token":               "fcm-token-quota-reg-2",
@@ -150,7 +151,8 @@ func TestQuota_RegistrationsPerSourceIP_Returns429(t *testing.T) {
 	h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
 		return pushgw.VerdictBinding{RequestHash: hash, LicensedBuild: true}, nil
 	})
-	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": fixedIdemKey("quota-reg-key")})
+	idem := fixedIdemKey("quota-reg-key")
+	resp := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idem, body))
 	requireStatus(t, resp, http.StatusTooManyRequests)
 	if e := decodeError(t, resp); e.Code != "quota_exceeded" || !e.Retryable {
 		t.Fatalf("got code=%q retryable=%v, want quota_exceeded/true", e.Code, e.Retryable)

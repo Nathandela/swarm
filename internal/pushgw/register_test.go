@@ -2,7 +2,7 @@ package pushgw_test
 
 // POST /v1/installations (spec §3.1). Covers PG-REG-1..3, PG-AUTH-11..13, PG-TR-3's 12 KiB
 // register row (and the exact 10423-octet arithmetic §1 derives it from), and PG-TR-5's
-// content-type gate on the one operation that has no signature to order it against.
+// content-type gate before registration-proof verification.
 //
 // RED: package pushgw has no implementation yet; every pushgw.* reference below is an
 // undefined symbol.
@@ -10,14 +10,165 @@ package pushgw_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/pushgw"
+	"github.com/Nathandela/swarm/internal/pushreg"
 )
+
+func TestRegister_ProofRejectsNonHolderAndMutationsBeforeAttestation(t *testing.T) {
+	h := newHarness(t, nil)
+	priv, pub := genInstallationKey(t)
+	body, _ := json.Marshal(map[string]any{
+		"installation_public_key": pub,
+		"fcm_token":               "fcm-token-proof",
+		"attestation":             map[string]any{"kind": "play_integrity", "token": "verdict-proof"},
+	})
+	idem := fixedIdemKey("proof")
+	valid := registrationHeaders(t, priv, idem, body)["Swarm-Registration-Proof"]
+	other, _ := genInstallationKey(t)
+	prefix := "p256-sha256 "
+	encoded := strings.TrimPrefix(valid, prefix)
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	noncanonicalBytes := []byte(encoded)
+	last := strings.IndexByte(alphabet, noncanonicalBytes[len(noncanonicalBytes)-1])
+	if last < 0 || last%4 != 0 {
+		t.Fatalf("canonical final base64url digit has index %d, want a multiple of 4", last)
+	}
+	noncanonicalBytes[len(noncanonicalBytes)-1] = alphabet[last+1]
+	if same, err := base64.RawURLEncoding.DecodeString(string(noncanonicalBytes)); err != nil || !bytes.Equal(same, decoded) {
+		t.Fatalf("noncanonical fixture must decode to the same 64 bytes: equal=%v err=%v", bytes.Equal(same, decoded), err)
+	}
+
+	highSBytes, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := new(big.Int).SetBytes(highSBytes[32:])
+	s.Sub(priv.Curve.Params().N, s).FillBytes(highSBytes[32:])
+	highS := prefix + base64RawURL(highSBytes)
+	domainMutation := bytes.Replace(pushreg.RegistrationProofMessage(idem, body), []byte("swarm-pg-register-v1"), []byte("swarm-pg-register-v2"), 1)
+
+	tests := []struct {
+		name, proof string
+	}{
+		{name: "missing"},
+		{name: "different private key", proof: registrationHeaders(t, other, idem, body)["Swarm-Registration-Proof"]},
+		{name: "different body", proof: registrationHeaders(t, priv, idem, append(append([]byte(nil), body...), ' '))["Swarm-Registration-Proof"]},
+		{name: "different idempotency key", proof: registrationHeaders(t, priv, fixedIdemKey("other"), body)["Swarm-Registration-Proof"]},
+		{name: "different domain", proof: prefix + base64RawURL(signP256(t, priv, domainMutation))},
+		{name: "high s", proof: highS},
+		{name: "bad scheme", proof: "ecdsa-sha256 " + encoded},
+		{name: "short signature", proof: prefix + encoded[:len(encoded)-1]},
+		{name: "long signature", proof: prefix + encoded + "A"},
+		{name: "padded base64", proof: prefix + encoded + "="},
+		{name: "noncanonical trailing bits", proof: prefix + string(noncanonicalBytes)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attestCalls := 0
+			h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
+				attestCalls++
+				return pushgw.VerdictBinding{}, nil
+			})
+			headers := map[string]string{"Idempotency-Key": idem}
+			if tt.proof != "" {
+				headers["Swarm-Registration-Proof"] = tt.proof
+			}
+			resp := h.doJSON(http.MethodPost, "/v1/installations", body, headers)
+			requireStatus(t, resp, http.StatusUnauthorized)
+			if attestCalls != 0 {
+				t.Fatalf("attestation calls=%d, want 0", attestCalls)
+			}
+		})
+	}
+}
+
+func TestRegister_ProofRejectsDuplicateHeaderAndRawQuery(t *testing.T) {
+	h := newHarness(t, nil)
+	priv, pub := genInstallationKey(t)
+	body, _ := json.Marshal(map[string]any{
+		"installation_public_key": pub,
+		"fcm_token":               "fcm-token-ambiguous",
+		"attestation":             map[string]any{"kind": "play_integrity", "token": "verdict-ambiguous"},
+	})
+	idem := fixedIdemKey("ambiguous")
+	proof := registrationHeaders(t, priv, idem, body)["Swarm-Registration-Proof"]
+
+	for _, tc := range []struct {
+		name, path     string
+		duplicateProof bool
+		duplicateIdem  bool
+		want           int
+	}{
+		{name: "duplicate proof", path: "/v1/installations", duplicateProof: true, want: http.StatusUnauthorized},
+		{name: "duplicate idempotency key", path: "/v1/installations", duplicateIdem: true, want: http.StatusBadRequest},
+		{name: "query", path: "/v1/installations?ignored=1", want: http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", idem)
+			req.Header.Add("Swarm-Registration-Proof", proof)
+			if tc.duplicateProof {
+				req.Header.Add("Swarm-Registration-Proof", proof)
+			}
+			if tc.duplicateIdem {
+				req.Header.Add("Idempotency-Key", idem)
+			}
+			rr := httptest.NewRecorder()
+			h.srv.ServeHTTP(rr, req)
+			if rr.Code != tc.want {
+				t.Fatalf("status=%d body=%s, want %d", rr.Code, rr.Body.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestRegister_LegacyTestServerHasNoUnsignedFallback(t *testing.T) {
+	clock := newFakeClock()
+	attestor := newFakeAttestor()
+	attestationCalls := 0
+	attestor.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
+		attestationCalls++
+		return pushgw.VerdictBinding{}, nil
+	})
+	server, err := pushgw.NewServer(pushgw.Config{
+		DBPath: t.TempDir() + "/push.db", Sender: newFakeSender(), Attest: attestor, Now: clock.Now, Quotas: defaultTestQuotas(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	_, pub := genInstallationKey(t)
+	body, _ := json.Marshal(map[string]any{
+		"installation_public_key": pub,
+		"fcm_token":               "legacy-test-token",
+		"attestation":             map[string]any{"kind": "play_integrity", "token": "legacy-test-verdict"},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/installations", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", fixedIdemKey("legacy-proof"))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if attestationCalls != 0 {
+		t.Fatalf("attestation calls=%d, want 0", attestationCalls)
+	}
+}
 
 // TestRegister_HappyPath_ReturnsOpaqueIDAndAllocatesNoAddress is PG-REG-1 plus the basic
 // 201 shape: an opaque installation_id and a refresh_before, and nothing address-shaped.
@@ -36,7 +187,7 @@ func TestRegister_HappyPath_ReturnsOpaqueIDAndAllocatesNoAddress(t *testing.T) {
 // response on a flaky handset network must not mint a second durable installation.
 func TestRegister_RepeatedIdempotencyKey_ReturnsSameInstallationID(t *testing.T) {
 	h := newHarness(t, nil)
-	_, pub := genInstallationKey(t)
+	priv, pub := genInstallationKey(t)
 	body, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub,
 		"fcm_token":               "fcm-token-idem",
@@ -50,14 +201,14 @@ func TestRegister_RepeatedIdempotencyKey_ReturnsSameInstallationID(t *testing.T)
 		return pushgw.VerdictBinding{RequestHash: hash, LicensedBuild: true}, nil
 	})
 	idemKey := fixedIdemKey("idem-key")
-	first := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": idemKey})
+	first := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idemKey, body))
 	requireStatus(t, first, http.StatusCreated)
 	var firstOut struct {
 		InstallationID string `json:"installation_id"`
 	}
 	decodeJSON(t, first, &firstOut)
 
-	second := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": idemKey})
+	second := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idemKey, body))
 	requireStatus(t, second, http.StatusCreated)
 	var secondOut struct {
 		InstallationID string `json:"installation_id"`
@@ -74,7 +225,7 @@ func TestRegister_RepeatedIdempotencyKey_ReturnsSameInstallationID(t *testing.T)
 // a different request than the one actually sent.
 func TestRegister_AttestationHashMismatch_Returns403AttestationInvalid(t *testing.T) {
 	h := newHarness(t, nil)
-	_, pub := genInstallationKey(t)
+	priv, pub := genInstallationKey(t)
 	body, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub,
 		"fcm_token":               "fcm-token-mismatch",
@@ -86,7 +237,8 @@ func TestRegister_AttestationHashMismatch_Returns403AttestationInvalid(t *testin
 	h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
 		return pushgw.VerdictBinding{RequestHash: [32]byte{0xDE, 0xAD}, LicensedBuild: true}, nil
 	})
-	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": fixedIdemKey("mismatch-key")})
+	idem := fixedIdemKey("mismatch-key")
+	resp := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idem, body))
 	requireStatus(t, resp, http.StatusForbidden)
 	if e := decodeError(t, resp); e.Code != "attestation_invalid" || e.Retryable {
 		t.Fatalf("got code=%q retryable=%v, want attestation_invalid/false", e.Code, e.Retryable)
@@ -97,7 +249,7 @@ func TestRegister_AttestationHashMismatch_Returns403AttestationInvalid(t *testin
 // that is not the licensed Play-signed package (PG-AUTH-11's third refusal reason).
 func TestRegister_UnlicensedBuild_Returns403AttestationInvalid(t *testing.T) {
 	h := newHarness(t, nil)
-	_, pub := genInstallationKey(t)
+	priv, pub := genInstallationKey(t)
 	body, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub,
 		"fcm_token":               "fcm-token-unlicensed",
@@ -110,7 +262,8 @@ func TestRegister_UnlicensedBuild_Returns403AttestationInvalid(t *testing.T) {
 	h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
 		return pushgw.VerdictBinding{RequestHash: hash, LicensedBuild: false}, nil
 	})
-	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": fixedIdemKey("unlicensed-key")})
+	idem := fixedIdemKey("unlicensed-key")
+	resp := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idem, body))
 	requireStatus(t, resp, http.StatusForbidden)
 	if e := decodeError(t, resp); e.Code != "attestation_invalid" {
 		t.Fatalf("code = %q, want attestation_invalid", e.Code)
@@ -122,7 +275,7 @@ func TestRegister_UnlicensedBuild_Returns403AttestationInvalid(t *testing.T) {
 // unattested (PG-AUTH-13).
 func TestRegister_AttestationUnavailable_Returns403Retryable(t *testing.T) {
 	h := newHarness(t, nil)
-	_, pub := genInstallationKey(t)
+	priv, pub := genInstallationKey(t)
 	body, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub,
 		"fcm_token":               "fcm-token-unavailable",
@@ -134,7 +287,8 @@ func TestRegister_AttestationUnavailable_Returns403Retryable(t *testing.T) {
 	h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
 		return pushgw.VerdictBinding{}, pushgw.ErrAttestationUnavailable
 	})
-	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": fixedIdemKey("unavail-key")})
+	idem := fixedIdemKey("unavail-key")
+	resp := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idem, body))
 	requireStatus(t, resp, http.StatusForbidden)
 	e := decodeError(t, resp)
 	if e.Code != "attestation_unavailable" || !e.Retryable {
@@ -161,7 +315,7 @@ func TestRegister_BodyOverTwelveKiB_Returns413BeforeParsing(t *testing.T) {
 // that used 8 KiB here would refuse a body this document itself declares valid.
 func TestRegister_MaximalSchemaLegalBody_FitsUnderTwelveKiB(t *testing.T) {
 	h := newHarness(t, nil)
-	_, pub := genInstallationKey(t) // pattern-legal 87 chars regardless of value chosen
+	priv, pub := genInstallationKey(t) // pattern-legal 87 chars regardless of value chosen
 	maxFCMToken := strings.Repeat("a", 4096)
 	maxAttestationToken := strings.Repeat("b", 6144)
 	body, err := json.Marshal(map[string]any{
@@ -185,15 +339,15 @@ func TestRegister_MaximalSchemaLegalBody_FitsUnderTwelveKiB(t *testing.T) {
 	h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
 		return pushgw.VerdictBinding{RequestHash: hash, LicensedBuild: true}, nil
 	})
-	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": fixedIdemKey("maximal-key")})
+	idem := fixedIdemKey("maximal-key")
+	resp := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idem, body))
 	if resp.StatusCode == http.StatusRequestEntityTooLarge {
 		t.Fatalf("a schema-maximal body (%d octets) was refused 413 under the 12 KiB cap", len(body))
 	}
 	requireStatus(t, resp, http.StatusCreated)
 }
 
-// TestRegister_WrongContentType_Returns400MalformedRequest is PG-TR-5 on the one operation
-// where "before authentication" has no auth step to precede.
+// TestRegister_WrongContentType_Returns400MalformedRequest is PG-TR-5 before proof verification.
 func TestRegister_WrongContentType_Returns400MalformedRequest(t *testing.T) {
 	h := newHarness(t, nil)
 	_, pub := genInstallationKey(t)
@@ -281,7 +435,7 @@ func TestRegister_IdempotencyKeyWrongLength_Returns400(t *testing.T) {
 func TestRegister_IdempotencyKeyReplayedWithDifferentBody_ConflictsBeforeAttestation(t *testing.T) {
 	h := newHarness(t, nil)
 
-	_, pub1 := genInstallationKey(t)
+	priv1, pub1 := genInstallationKey(t)
 	body1, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub1,
 		"fcm_token":               "victim-fcm-token",
@@ -292,7 +446,7 @@ func TestRegister_IdempotencyKeyReplayedWithDifferentBody_ConflictsBeforeAttesta
 		return pushgw.VerdictBinding{RequestHash: hash1, LicensedBuild: true}, nil
 	})
 	idem := fixedIdemKey("sharedkey")
-	victim := h.doJSON("POST", "/v1/installations", body1, map[string]string{"Idempotency-Key": idem})
+	victim := h.doJSON("POST", "/v1/installations", body1, registrationHeaders(t, priv1, idem, body1))
 	requireStatus(t, victim, http.StatusCreated)
 	var victimOut struct {
 		InstallationID string `json:"installation_id"`
@@ -304,13 +458,13 @@ func TestRegister_IdempotencyKeyReplayedWithDifferentBody_ConflictsBeforeAttesta
 		attestCalls++
 		return pushgw.VerdictBinding{}, pushgw.ErrAttestationUnavailable
 	})
-	_, pub2 := genInstallationKey(t)
+	priv2, pub2 := genInstallationKey(t)
 	body2, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub2,
 		"fcm_token":               "attacker-fcm-token",
 		"attestation":             map[string]any{"kind": "play_integrity", "token": "verdict-attacker"},
 	})
-	attacker := h.doJSON("POST", "/v1/installations", body2, map[string]string{"Idempotency-Key": idem})
+	attacker := h.doJSON("POST", "/v1/installations", body2, registrationHeaders(t, priv2, idem, body2))
 
 	if attestCalls != 0 {
 		t.Fatalf("attestation calls = %d, want 0 for a durable body conflict", attestCalls)
@@ -325,7 +479,7 @@ func TestRegister_IdempotencyKeyReplayedWithDifferentBody_ConflictsBeforeAttesta
 // half of the fix above: a genuine byte-identical retry (PG-REG-2) must still work.
 func TestRegister_IdempotencyKeyReplayedWithSameBody_StillReturnsSameID(t *testing.T) {
 	h := newHarness(t, nil)
-	_, pub := genInstallationKey(t)
+	priv, pub := genInstallationKey(t)
 	body, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub,
 		"fcm_token":               "fcm-token-samebody",
@@ -336,7 +490,7 @@ func TestRegister_IdempotencyKeyReplayedWithSameBody_StillReturnsSameID(t *testi
 		return pushgw.VerdictBinding{RequestHash: hash, LicensedBuild: true}, nil
 	})
 	idem := fixedIdemKey("samebodykey")
-	first := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": idem})
+	first := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idem, body))
 	requireStatus(t, first, http.StatusCreated)
 	var firstOut struct {
 		InstallationID string `json:"installation_id"`
@@ -347,7 +501,7 @@ func TestRegister_IdempotencyKeyReplayedWithSameBody_StillReturnsSameID(t *testi
 	h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
 		return pushgw.VerdictBinding{}, pushgw.ErrAttestationUnavailable
 	})
-	second := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": idem})
+	second := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idem, body))
 	requireStatus(t, second, http.StatusCreated)
 	var secondOut struct {
 		InstallationID string `json:"installation_id"`
@@ -385,7 +539,7 @@ func TestRegister_ClosedBetaRefusesBeforeAttestation(t *testing.T) {
 
 func TestRegister_AttestationPastAttemptExpiryCannotCommit(t *testing.T) {
 	h := newHarness(t, nil)
-	_, pub := genInstallationKey(t)
+	priv, pub := genInstallationKey(t)
 	body, _ := json.Marshal(map[string]any{
 		"installation_public_key": pub,
 		"fcm_token":               "fcm-token-slow-attestation",
@@ -396,7 +550,8 @@ func TestRegister_AttestationPastAttemptExpiryCannotCommit(t *testing.T) {
 		h.clock.advance(10 * time.Minute)
 		return pushgw.VerdictBinding{RequestHash: wantHash, LicensedBuild: true}, nil
 	})
-	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": fixedIdemKey("slow-attestation")})
+	idem := fixedIdemKey("slow-attestation")
+	resp := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idem, body))
 	requireStatus(t, resp, http.StatusServiceUnavailable)
 	if e := decodeError(t, resp); e.Code != "service_unavailable" || !e.Retryable {
 		t.Fatalf("got code=%q retryable=%v, want service_unavailable/true", e.Code, e.Retryable)

@@ -6,10 +6,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -398,5 +402,59 @@ func TestClosedBetaAdmissionPrecedesRepositoryRead(t *testing.T) {
 	}
 	if repository.registrationLookups != 0 {
 		t.Fatalf("repository registration lookups=%d, want 0 for denied key", repository.registrationLookups)
+	}
+}
+
+func TestRegistrationProofPrecedesRepositoryQuotaAndAttestation(t *testing.T) {
+	repository := NewMemoryRepository().(*memoryRepository)
+	var attestationCalls atomic.Int32
+	srv, err := NewFirestoreServer(Config{
+		Repository: repository, TokenKeys: map[string][]byte{"v1": bytes.Repeat([]byte{1}, 32)},
+		ActiveTokenKeyVersion: "v1", RegistrationDigestKey: bytes.Repeat([]byte{2}, 32),
+		RegistrationAdmission: func(string) bool { return true }, Sender: firestoreTestSender{},
+		Attest: firestoreTestAttestor{calls: &attestationCalls},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := firestoreTestPublicKey(t, privateKey)
+	body, _ := json.Marshal(map[string]any{"installation_public_key": publicKey, "fcm_token": "token", "attestation": map[string]any{"kind": "play_integrity", "token": "verdict"}})
+	const idem = "DDDDDDDDDDDDDDDDDDDDDD"
+	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongKey := firestoreTestRegistrationProof(t, otherKey, idem, body)
+	highSRaw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(firestoreTestRegistrationProof(t, privateKey, idem, body), "p256-sha256 "))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := new(big.Int).SetBytes(highSRaw[32:])
+	s.Sub(privateKey.Curve.Params().N, s).FillBytes(highSRaw[32:])
+	highS := "p256-sha256 " + base64.RawURLEncoding.EncodeToString(highSRaw)
+	for _, test := range []struct{ name, proof string }{{name: "missing"}, {name: "wrong key", proof: wrongKey}, {name: "high s", proof: highS}} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/installations", bytes.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", idem)
+			if test.proof != "" {
+				request.Header.Set("Swarm-Registration-Proof", test.proof)
+			}
+			response := httptest.NewRecorder()
+			srv.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if repository.registrationLookups != 0 || len(repository.regs) != 0 || len(repository.rates) != 0 || len(repository.installations) != 0 {
+				t.Fatalf("invalid proof touched repository: lookups=%d registrations=%d rates=%d installations=%d", repository.registrationLookups, len(repository.regs), len(repository.rates), len(repository.installations))
+			}
+			if got := attestationCalls.Load(); got != 0 {
+				t.Fatalf("attestation calls=%d, want 0", got)
+			}
+		})
 	}
 }

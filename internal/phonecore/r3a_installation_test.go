@@ -185,10 +185,11 @@ type r3aRecordingTransport struct {
 }
 
 type r3aWireRequest struct {
-	method         string
-	path           string
-	idempotencyKey string
-	body           []byte
+	method            string
+	path              string
+	idempotencyKey    string
+	registrationProof string
+	body              []byte
 }
 
 func (rt *r3aRecordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -211,10 +212,11 @@ func (rt *r3aRecordingTransport) RoundTrip(r *http.Request) (*http.Response, err
 	rt.mu.Lock()
 	seq := len(rt.requests)
 	rt.requests = append(rt.requests, r3aWireRequest{
-		method:         r.Method,
-		path:           r.URL.Path,
-		idempotencyKey: r.Header.Get("Idempotency-Key"),
-		body:           body,
+		method:            r.Method,
+		path:              r.URL.Path,
+		idempotencyKey:    r.Header.Get("Idempotency-Key"),
+		registrationProof: r.Header.Get("Swarm-Registration-Proof"),
+		body:              body,
 	})
 	swallow := rt.swallow
 	rt.mu.Unlock()

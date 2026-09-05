@@ -171,6 +171,12 @@ A stale UNREGISTERED result cannot erase a newer token. Revoke-before-claim deni
 
 Keep authenticated installation/capability requests, existing attestation and least-privilege Google identity in the first working slice. Add owner-approved, short-lived, single-use enrollment if needed to restrict onboarding. Replacing Play Integrity is a separate deliberate enrollment-security decision, not an automatic consequence of zero users.
 
+Owner-approved installation public keys are an allowlist, not secret invitations. Require
+PG-AUTH-15 registration proof using the existing P-256 signer before shared state, quota or
+attestation verification. Bind the exact final body and idempotency key; re-sign the saved
+attempt on retry without changing its identity. This closes non-holder key reuse but does
+not impose one installation per legitimate key or replace attestation and abuse limits.
+
 Use the actual service-issued run.app HTTPS URL in fresh configuration. No DNS migration, Firebase Hosting, old-origin alias or redirect. Platform-public access is needed for ordinary app clients; application authentication remains mandatory. A guessed URL must grant no access.
 
 Test forwarded-header spoofing and source-rate-limit derivation even without Hosting. If reliable client IP is unavailable, change that limiter design; do not trust arbitrary X-Forwarded-For. Installation/capability/global quotas still apply. Bound unauthenticated work before expensive allocation/attestation.

@@ -500,3 +500,49 @@ whole-suite green claim. At this checkpoint the remote Worker/Firestore emulator
 lint, macOS checks, fuzzing, build matrix, release dry-run and both container workflows
 passed; the full Go and Android jobs were still running. No hosted or device validation
 is inferred from those CI results.
+
+## Registration proof: TDD, caller integration and review
+
+The next authorized slice (agents-tracker-wjp4.3) adds mandatory P-256 registration
+proof using the existing installation signer. The exact transcript is
+`swarm-pg-register-v1|Idempotency-Key|base64url(SHA256(final request body))`.
+The final body includes the attestation token; Play's existing JCS request hash does
+not change. One canonical low-S P1363 proof header is required even on a completed
+retry, after owner admission and before shared lookup, quota, attestation or allocation.
+No crypto dependency, mobile public interface or persistent field was added.
+
+Sol observed server RED: absent/forged proofs reached attestation instead of returning
+401. The client and Terra's mobile bridge tests separately observed zero signer calls
+before registration, HTTP despite a signer error, and lost-response uncertainty not
+surviving a later signing failure. The implementation re-signs the existing saved
+body/key for each POST. An ephemeral prior-outcome flag preserves a possibly committed
+attempt across later local failures, while a never-sent first signing failure leaves
+no pending registration. Restart replay is checked against the exact server-minted ID
+captured before the first response was deliberately lost, with one phone attestation.
+
+Root review restored an existing rotation assertion that registration signing could
+otherwise satisfy, removed unbounded proof-channel waits, tightened the one-field domain
+mutation and noncanonical base64 cases, and required missing/wrong-key/high-S proofs to
+leave the repository, quotas and verifier untouched. Actual Firestore checks cover zero
+records for a non-holder, exact ID on signed replay, unchanged quota and one attestation;
+the stored-data scan now also excludes raw registration proof and idempotency key.
+Both Sol agents independently reviewed the opposite implementation and found no remaining
+runtime/security must-fix. API/retention and operational documentation now agree with
+the proof and shared durable metadata, without retaining an unsigned-registration rule.
+
+Final local evidence: full phonecore race 38.928 s; Terra's full mobile/conformance/
+Android source-gate race 84.461 / 252.367 / 109.666 s. Root independently passed three
+focused caller-race repetitions (phonecore 6.319 s, mobile 5.378 s), full verification
+(24.476 s), all deploy gates, whole build/vet and lint (zero issues). Root's separate
+Firestore emulator passed full push/command/pushreg race suites in 16.889 / 6.674 /
+2.909 s and shut down cleanly. These checks do not prove Google IAM: the local emulator
+allows test reads/writes and uses no real Play/FCM or phone Keystore.
+
+The prepared-proof verification benchmark measured 162,958–174,783 ns/op over three
+Sol runs, with 1,632 bytes and 26 allocations per operation; a separate short reviewer
+run measured 121,835 ns/op. These are local verifier microbenchmarks, not end-to-end or
+handset/hosted latency claims. Admission still permits a legitimate key holder to create
+fresh registrations subject to attestation and quotas; there is no per-key uniqueness
+constraint or invitation-secret lifecycle. Hosted ingress/device/recovery/billing gates,
+the remaining mobile multi-machine caller work and the separately paused bbolt recovery
+source deletion remain open. CI for this source checkpoint has not yet been run here.

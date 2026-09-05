@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/pushgw"
+	"github.com/Nathandela/swarm/internal/pushreg"
 )
 
 // ---------------------------------------------------------------------------------------
@@ -327,7 +328,26 @@ func sign(t *testing.T, priv *ecdsa.PrivateKey, now time.Time, p signParams) (he
 		nonce,
 		strconv.FormatInt(expiry, 10),
 	}, "|")
-	digest := sha256.Sum256([]byte(canonical))
+	sig := signP256(t, priv, []byte(canonical))
+	return map[string]string{
+		"Swarm-Nonce":     nonce,
+		"Swarm-Expiry":    strconv.FormatInt(expiry, 10),
+		"Swarm-Signature": "p256-sha256 " + base64RawURL(sig),
+	}, nonce, expiry
+}
+
+func registrationHeaders(t *testing.T, priv *ecdsa.PrivateKey, idem string, body []byte) map[string]string {
+	t.Helper()
+	sig := signP256(t, priv, pushreg.RegistrationProofMessage(idem, body))
+	return map[string]string{
+		"Idempotency-Key":          idem,
+		"Swarm-Registration-Proof": "p256-sha256 " + base64RawURL(sig),
+	}
+}
+
+func signP256(t *testing.T, priv *ecdsa.PrivateKey, message []byte) []byte {
+	t.Helper()
+	digest := sha256.Sum256(message)
 	r, s, err := ecdsa.Sign(rand.Reader, priv, digest[:])
 	if err != nil {
 		t.Fatalf("ecdsa.Sign: %v", err)
@@ -341,11 +361,7 @@ func sign(t *testing.T, priv *ecdsa.PrivateKey, now time.Time, p signParams) (he
 	sig := make([]byte, 64)
 	r.FillBytes(sig[:32])
 	s.FillBytes(sig[32:])
-	return map[string]string{
-		"Swarm-Nonce":     nonce,
-		"Swarm-Expiry":    strconv.FormatInt(expiry, 10),
-		"Swarm-Signature": "p256-sha256 " + base64RawURL(sig),
-	}, nonce, expiry
+	return sig
 }
 
 func base64RawURL(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
@@ -462,9 +478,8 @@ func registerInstallation(t *testing.T, h *harness, fcmToken string) registered 
 	})
 	idem := make([]byte, 16)
 	_, _ = rand.Read(idem)
-	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{
-		"Idempotency-Key": base64RawURL(idem),
-	})
+	idemKey := base64RawURL(idem)
+	resp := h.doJSON("POST", "/v1/installations", body, registrationHeaders(t, priv, idemKey, body))
 	requireStatus(t, resp, http.StatusCreated)
 	var out struct {
 		InstallationID string `json:"installation_id"`

@@ -7,8 +7,8 @@
 //     EVERY 401 onto errGatewayUnauthorized, discarding the body's code; pushgw returns 401
 //     `request_expired` WITH `server_time` precisely so the client can correct its clock and
 //     retry (PG-AUTH-3), and EnsurePushRegistration read that 401 as "the gateway forgot the
-//     installation" and registered afresh. The registration POST is not signature
-//     authenticated, so the second registration SUCCEEDS while the clock is still wrong: the
+//     installation" and registered afresh. The registration proof is clock-independent,
+//     so the second registration SUCCEEDS while the clock is still wrong: the
 //     first installation is orphaned for 180 days holding a live FCM token, every address
 //     under it dies at the inactivity floor, and every live pairing silently stops waking
 //     with the phone reporting healthy.
@@ -61,9 +61,9 @@ func r3ar4SkewedGateway(t *testing.T, sender pushgw.WakeSender, skew time.Durati
 // horizon and outside the client's own 60-second expiry window, which is the exact regime
 // the probe used.
 //
-// The phone registers once (the POST carries no signature, so it is accepted whatever the
-// clock says). The SECOND EnsurePushRegistration signs a rotation PUT that the gateway
-// refuses as request_expired -- and the phone must consume the returned server_time as a
+// The phone registers once (registration proof is clock-independent, so it is accepted
+// whatever the clock says). The SECOND EnsurePushRegistration signs a rotation PUT that
+// the gateway refuses as request_expired -- and the phone must consume server_time as a
 // clock offset and retry the ROTATION, never fall through to a fresh registration. One
 // installation, one register POST, one durable identity.
 func TestR3AR4_AClockSkewNeverMintsASecondInstallation(t *testing.T) {

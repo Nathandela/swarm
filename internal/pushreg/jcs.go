@@ -1,5 +1,4 @@
-// Package pushreg owns the serialization shared by the phone's Play Integrity request
-// and the push gateway's independent recomputation.
+// Package pushreg owns the registration transcripts shared by the phone and push gateway.
 package pushreg
 
 import (

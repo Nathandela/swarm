@@ -1,7 +1,7 @@
 # Swarm push gateway — API, `WakeV1`, and wake-obligation contract
 
 **V2 amendment (2026-09-05):** [ADR-027](../adr/ADR-027-clean-remote-control-v2.md)
-supersedes this document's process-local-only replay/idempotency requirement (PG-RET-4),
+supersedes the former process-local-only replay/idempotency requirement (PG-RET-4),
 closed durable metadata set (PG-RET-10), and legacy migration/transport requirements
 (PG-MIG). V2 uses fresh Firestore state and bounded shared transactional authority;
 there is no old-client or old-origin fallback. Existing authentication, attestation,
@@ -9,6 +9,9 @@ capability, encrypted-wake, expiry and log-safety guarantees remain binding. `Wa
 and `/v1/` may remain the sole push format/API, not a compatibility mode. Implementation
 and hosted verification status are tracked in the
 [replacement plan](remote-scale-to-zero-plan.md).
+Registration additionally requires the installation-key proof in PG-AUTH-15; the former
+unsigned-registration exception is removed. This does not replace Play Integrity or
+owner admission, and no unsigned fallback is supported.
 
 **Spec ID**: 0003
 **Status**: Draft — binds at Wave R3 implementation
@@ -150,7 +153,7 @@ depart from only with a recorded reason; **MAY** is permission.
 
 Three credential kinds, deliberately distinct, never interchangeable.
 
-### 2.1 Installation-key signature (register is the exception; every other installation op requires it)
+### 2.1 Installation-control signature (registration uses the distinct proof in §2.5)
 
 - **PG-AUTH-1** (Ubiquitous) An installation-control request — rotate token, allocate address,
   revoke address by owner — SHALL carry a signature by the installation private key over the
@@ -273,6 +276,46 @@ Three credential kinds, deliberately distinct, never interchangeable.
   production quota. This is a build-configuration obligation on R3, stated here because the API is
   where its absence would first be invisible.
 
+### 2.5 Registration proof of installation-key possession
+
+- **PG-AUTH-15** (Ubiquitous) Every `POST /v1/installations`, including a completed
+  idempotent retry, SHALL carry exactly one `Swarm-Registration-Proof` header:
+
+  ```text
+  Swarm-Registration-Proof: p256-sha256 <base64url-unpadded signature>
+  ```
+
+  The installation key named in the body signs the following exact UTF-8 bytes using
+  the SHA-256/P-256, fixed-width 64-byte, low-`s` P1363 format of PG-AUTH-2:
+
+  ```text
+  swarm-pg-register-v1|<Idempotency-Key>|<body_sha256>
+  ```
+
+  `body_sha256` is raw base64url SHA-256 of the **exact final request body**, including
+  the attestation token. This is deliberately different from the JCS attestation
+  request hash: attestation is prepared first, then the finished body is signed.
+  The domain is exclusive to registration; it cannot authorize a control operation.
+  The fixed idempotency-key alphabet and body-hash alphabet exclude `|`. Duplicate
+  idempotency headers and query strings are malformed requests, not unsigned extensions.
+  Missing, duplicated, malformed, noncanonical, wrong-key or high-`s` proofs are
+  `401 unauthorized`; proof material is never echoed, logged or persisted.
+
+  After bounded request/key parsing and the cheap owner allowlist check, verification
+  SHALL precede every registration-state lookup, shared quota operation, attestation
+  verification and allocation. Removing a key from the active admission policy also refuses completed
+  retries. Knowing an admitted public key alone therefore cannot spend those resources.
+
+  The phone SHALL save the existing prepared body and idempotency key before sending,
+  and sign those same bytes again for each POST, including after restart. A retry may
+  have different ECDSA signature bytes; the signature is not part of idempotency identity.
+  No new durable signature, nonce or clock field is introduced. A local signing failure
+  cannot erase an earlier outcome-unknown registration. There is no handset-clock expiry
+  on this proof; existing attestation freshness and shared idempotency lifetimes still
+  apply. The proof is not a single-use invitation or a one-installation-per-key rule:
+  legitimate key holders can deliberately prepare fresh registrations, still subject to
+  admission, attestation and global/source quotas.
+
 ---
 
 ## 3. The five operations
@@ -317,7 +360,7 @@ servers:
 
 ### 3.1 Register installation
 
-Caller: Android. Purpose (playbook `:518`): with valid app-attestation evidence, exchange an FCM
+Caller: Android. Purpose (playbook `:518`): with valid app-attestation evidence and installation-key proof, exchange an FCM
 token and a Keystore-generated installation public key for an opaque installation id; **allocate no
 machine address yet**.
 
@@ -326,8 +369,9 @@ paths:
   /installations:
     post:
       operationId: registerInstallation
-      summary: Exchange an attested FCM token + installation public key for an opaque installation id.
-      security: []          # no installation exists yet; attestation is the admission control
+      summary: Exchange an attested, installation-key-proven FCM token for an opaque installation id.
+      security:
+        - registrationProof: []
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -386,7 +430,9 @@ paths:
                       The 180-day inactivity floor (section 8). Any successfully authenticated
                       installation request moves it.
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }  # registration proof
         '403': { $ref: '#/components/responses/Forbidden' }     # attestation_invalid, beta_closed
+        '409': { $ref: '#/components/responses/Conflict' }      # idempotency_conflict
         '413': { $ref: '#/components/responses/TooLarge' }
         '429': { $ref: '#/components/responses/Throttled' }
         '500': { $ref: '#/components/responses/Internal' }
@@ -396,8 +442,11 @@ paths:
 - **PG-REG-1** (Ubiquitous) Registration SHALL allocate no address. Address allocation is a separate,
   installation-key-signed operation (§3.3), because the two objects have different lifetimes
   (ADR-015 P5).
-- **PG-REG-2** (Ubiquitous) A repeated registration with the same `Idempotency-Key` inside the key's
-  retention window SHALL return the same `installation_id` rather than mint a second one. Without
+- **PG-REG-2** (Ubiquitous) A proven, still-admitted registration with the same `Idempotency-Key`
+  and byte-identical body inside the key's retention window SHALL return the same
+  `installation_id` rather than mint a second one, without another attestation verification
+  or quota debit. The same key with a different, validly proven body is
+  `409 idempotency_conflict`; an invalid proof is refused before that lookup. Without
   this, a response lost on a flaky handset network yields two durable installations for one app
   install, and the abandoned one holds a live token until its 180-day expiry.
 - **PG-REG-3** (Ubiquitous) Registrations SHALL be bounded per source and globally (playbook
@@ -705,6 +754,16 @@ paths:
 ```yaml
 components:
   securitySchemes:
+    registrationProof:
+      type: apiKey
+      in: header
+      name: Swarm-Registration-Proof
+      description: >-
+        Exactly one p256-sha256 signature over
+        swarm-pg-register-v1|Idempotency-Key|body_sha256 (section 2.5), verified using the
+        installation_public_key in the final body. body_sha256 covers the exact body,
+        including attestation.token. Canonical raw base64url of 64-byte low-s P1363.
+        Does not authorize installation control, replace attestation, or bypass admission.
     installationSignature:
       type: apiKey
       in: header
@@ -798,7 +857,7 @@ components:
       description: Admission refused — attestation or closed beta.
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
     Conflict:
-      description: Replayed request nonce, or a bound reached.
+      description: Replayed request nonce, registration idempotency conflict, or a bound reached.
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
     TooLarge:
       description: Body exceeded the pre-parse bound.
@@ -842,9 +901,10 @@ components:
 | `malformed_request` | 400 | no | Unparseable body, wrong content type, `Content-Encoding` present, disallowed field. |
 | `wake_malformed` | 400 | no | `POST /wakes` body is not exactly 74 octets — over, under, or unmeasurable — or its version/type bytes are not `WakeV1`'s. Refused before any routing lookup. **This is the only length refusal on the wake path**: `body_too_large` is never returned there (PG-TR-3). |
 | `body_too_large` | 413 | no | Exceeded the pre-parse bound of PG-TR-3 on one of the four JSON/empty-bodied operations. Unreachable on `POST /wakes`. |
-| `unauthorized` | 401 | no | **Deliberately non-discriminating**: unknown installation, bad signature, unknown or revoked capability, capability/address mismatch. Splitting these would build an enumeration oracle out of an error code. |
+| `unauthorized` | 401 | no | **Deliberately non-discriminating**: unknown installation, missing/invalid registration proof, bad control signature, unknown or revoked capability, capability/address mismatch. Splitting these would build an enumeration oracle out of an error code. |
 | `request_expired` | 401 | **no** | Signed `expiry` is past or beyond the 120 s horizon. `retryable` is `false` because the field means *an identical retry can succeed later* (§3.6) and an identical retry cannot: `expiry` is inside the signed pre-image, so the byte-identical request is expired forever. The recovery is a **different** request — re-signed against the `server_time` this error carries — which is why the code is distinguished at all. Safe to distinguish: computed from the presented request with no lookup. |
 | `nonce_replayed` | 409 | no | Reached only after a signature verified, so it discloses nothing an authenticated caller does not already know. |
+| `idempotency_conflict` | 409 | no | Registration's idempotency key already names a different body; checked only after admission and valid registration proof. |
 | `attestation_invalid` | 403 | no | Play Integrity evidence absent, unbound to the body, or not the licensed Play-signed build. |
 | `attestation_unavailable` | 403 | yes | Google's verification endpoint could not be reached. The handset retries; it is never enrolled unattested. |
 | `beta_closed` | 403 | no | Closed-beta admission control (playbook `:559-560`). Carries the appeal path §14 of the playbook requires. |
@@ -1300,20 +1360,23 @@ P11's three edits; **this document does not edit that file** and does not claim 
   the same row's regime — so the row's ban on capabilities is not violated by a one-way hash of one.
   The position is arguable, the row is reproduced verbatim from playbook `:980` and cannot be
   reworded here, and §13.3 puts both the placement and this wording collision to the owner.
-- **PG-RET-4** (Ubiquitous) Three bounded caches exist, each expiring on its own horizon, none of
-  them a retention row and none of them a stored field under PG-RET-10:
+- **PG-RET-4** (Ubiquitous, amended by ADR-027) Replay, idempotency and quota authority
+  SHALL be shared durable metadata, not process-local caches. Logical expiry is checked
+  at use; physical cleanup is bounded and does not extend authority.
 
-  | Cache | Horizon | Contents, exhaustively |
+  | Shared metadata | Horizon | Permitted contents |
   |---|---|---|
-  | Request-nonce cache (PG-AUTH-4) | 120 s, PG-AUTH-3's expiry horizon | `(installation_id, nonce)` |
-  | Wake idempotency cache (PG-SUB-4) | 5 min, the wake's expiry | `SHA-256(74 octets)` → an outcome FCM already returned |
-  | Registration idempotency store (§3.6, PG-REG-2) | **10 minutes**, the `Idempotency-Key` retention window §3.6 states | `SHA-256(Idempotency-Key)` → the minted `installation_id`, and nothing else |
+  | Request nonce claims (PG-AUTH-4) | 120 s, PG-AUTH-3's expiry horizon | Digest of installation id plus nonce; expiry |
+  | Wake attempts (PG-SUB-4, ADR-027) | 5 min, bounded by the original wake deadline | Request/target digest, installation/address ids, token generation, state, attempt count, lease id/deadline, expiry and bounded gateway response status/body; never the wake payload |
+  | Registration attempts (§3.6, PG-REG-2) | **10 minutes** | `HMAC-SHA256(Idempotency-Key)` document id; exact-body SHA-256 digest, installation id, refresh-before, expiry, state, lease id and lease-until |
+  | Quota windows (§9) | The configured bounded rate window | Bucket digest, count and expiry |
 
-  The third is listed because it was previously implicit: §3.6 makes `Idempotency-Key` a required
-  header retained 10 minutes, PG-REG-2 requires the key→`installation_id` mapping that makes a lost
-  response recoverable, and PG-REV-1 deletes "any in-flight idempotency state" on revocation — so the
-  store exists and must be named somewhere. It holds the **hash** of the client-generated key, never
-  the key itself, on the same reasoning as PG-AUTH-7.
+  Registration's separate HMAC key is stable injected secret material. No raw
+  idempotency key, request body, attestation token or registration proof is stored by
+  the gateway. Registration attempts use a 30-second provider-owner lease inside the
+  ten-minute identity window; a takeover does not create a new identity window.
+  Provider work is outside retryable transactions. Wake claim/complete state permits
+  bounded at-least-once submission, not an exactly-once provider guarantee.
 
 ### 8.2 What may never be stored, logged, or traced
 
@@ -1331,10 +1394,12 @@ P11's three edits; **this document does not edit that file** and does not claim 
   one is a change to this document rather than a diagnostic improvement.
 - **PG-RET-10** (Ubiquitous) The stored field set is closed: token mapping, installation public key,
   opaque address, hashed capability verifiers, creation/last-use timestamps, an attestation verdict
-  class, and minimum delivery diagnostics (playbook `:527-528`). A field not on that list requires an
-  amendment here. The closure is over **durable** fields: PG-RET-4's three bounded caches are not
-  stored fields, and that list is closed the same way — a fourth cache requires an amendment to
-  PG-RET-4.
+  class, and minimum delivery diagnostics (playbook `:527-528`). ADR-027 adds token generation,
+  encryption-key version and the bounded shared replay/idempotency/quota/attempt metadata
+  enumerated in PG-RET-4. These are durable fields, not a cache exception. A field beyond
+  this set requires an amendment; plaintext tokens, raw capabilities, request signatures,
+  attestation tokens and session content remain forbidden. Registration proof adds no
+  stored field.
 
 ---
 

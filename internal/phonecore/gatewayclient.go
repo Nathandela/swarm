@@ -94,7 +94,7 @@ var ErrAttestationRefused = errors.New("phonecore: push gateway refused the app 
 // signed request whose expiry is outside PG-AUTH-3's 120-second horizon, and it returns the
 // server time precisely so the client can correct its clock and retry. Read as this
 // sentinel, a phone whose clock is ~60 seconds off falls through to a FRESH registration:
-// the register POST carries no signature, so it succeeds while the clock is still wrong, and
+// the register proof is clock-independent, so it succeeds while the clock is still wrong, and
 // the phone silently swaps its durable identity. The first installation is then orphaned for
 // 180 days holding a live FCM token -- the exact orphan PG-REG-2 exists to prevent, reached
 // by a path that never touches it -- and every address under it dies at the inactivity
@@ -193,10 +193,9 @@ func registrationRequestHash(body registerBody) ([32]byte, error) {
 }
 
 // preparedRegister is one registration attempt's durable identity: the Idempotency-Key
-// and the exact bytes it keys. pushgw's idempotency cache is keyed on BOTH (see
-// register.go's recorded deviation), so a replay -- within one call or from the NEXT
-// call after a lost response -- must present this pair verbatim or it is a cache miss
-// that mints a second installation.
+// and the exact bytes it keys. A replay -- within one call or from the NEXT call after a
+// lost response -- must present this pair verbatim to recover the installation already
+// minted; reusing the key with different bytes is an idempotency conflict.
 type preparedRegister struct {
 	IdemKey  string
 	Body     []byte
@@ -234,31 +233,40 @@ func (g *GatewayClient) prepareRegister(fcmToken string) (preparedRegister, erro
 }
 
 // registerPrepared POSTs one prepared registration, retrying a lost response with the
-// SAME key and byte-identical body (PG-REG-2), spaced by registerBackoff. When every
-// attempt loses the response the error is errRegisterOutcomeUnknown: the pair may have
-// been processed and must be kept for replay, never re-minted.
-func (g *GatewayClient) registerPrepared(ctx context.Context, prep preparedRegister) (PushRegistration, error) {
+// SAME key and byte-identical body (PG-REG-2), spaced by registerBackoff. Each actual
+// POST gets a fresh proof by the installation key over that exact pair; the proof is not
+// durable and does not expire. priorOutcomeUnknown is true only when this is the replay
+// of a durable pair whose earlier POST may already have committed.
+func (g *GatewayClient) registerPrepared(ctx context.Context, prep preparedRegister, priorOutcomeUnknown bool) (PushRegistration, error) {
 	var lastErr error
+	outcomeUnknown := priorOutcomeUnknown
 	for attempt := 0; attempt < registerAttempts; attempt++ {
 		if attempt > 0 {
 			// Backoff BETWEEN attempts, cancellable: 250ms then 500ms.
 			select {
 			case <-time.After(registerBackoff << (attempt - 1)):
 			case <-ctx.Done():
-				return PushRegistration{}, fmt.Errorf("%w: %w", errRegisterOutcomeUnknown, ctx.Err())
+				return PushRegistration{}, registerAttemptError(ctx.Err(), outcomeUnknown)
 			}
+		}
+		canonical := pushreg.RegistrationProofMessage(prep.IdemKey, prep.Body)
+		sig, err := g.signer.Sign(canonical)
+		if err != nil {
+			return PushRegistration{}, registerAttemptError(fmt.Errorf("phonecore: sign registration proof: %w", err), outcomeUnknown)
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.baseURL+"/v1/installations", bytes.NewReader(prep.Body))
 		if err != nil {
-			return PushRegistration{}, err
+			return PushRegistration{}, registerAttemptError(err, outcomeUnknown)
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Idempotency-Key", prep.IdemKey)
+		req.Header.Set("Swarm-Registration-Proof", "p256-sha256 "+base64.RawURLEncoding.EncodeToString(sig))
 		resp, err := g.hc.Do(req)
 		if err != nil {
 			// The request may well have been PROCESSED and only the response lost; the
 			// retry is byte-identical under the same key, which is what makes it safe.
 			lastErr = err
+			outcomeUnknown = true
 			continue
 		}
 		reg, err := g.decodeRegisterResponse(resp)
@@ -274,6 +282,13 @@ func (g *GatewayClient) registerPrepared(ctx context.Context, prep preparedRegis
 	return PushRegistration{}, fmt.Errorf("%w: %w", errRegisterOutcomeUnknown, lastErr)
 }
 
+func registerAttemptError(err error, outcomeUnknown bool) error {
+	if outcomeUnknown {
+		return fmt.Errorf("%w: %w", errRegisterOutcomeUnknown, err)
+	}
+	return err
+}
+
 // Register mints one installation (POST /v1/installations, spec section 3.1): attested
 // admission, no address allocated. A response lost on the way back is retried with the
 // SAME Idempotency-Key and the byte-identical body (PG-REG-2), so a flaky handset
@@ -285,7 +300,7 @@ func (g *GatewayClient) Register(ctx context.Context, fcmToken string) (PushRegi
 	if err != nil {
 		return PushRegistration{}, err
 	}
-	return g.registerPrepared(ctx, prep)
+	return g.registerPrepared(ctx, prep, false)
 }
 
 func (g *GatewayClient) decodeRegisterResponse(resp *http.Response) (PushRegistration, error) {

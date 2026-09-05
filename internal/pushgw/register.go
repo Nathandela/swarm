@@ -50,11 +50,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 		s.writeErr(w, errMalformedRequest)
 		return errMalformedRequest.status
 	}
-	idemKey := r.Header.Get("Idempotency-Key")
-	if !idempotencyKeyPattern.MatchString(idemKey) {
+	idemValues := r.Header.Values("Idempotency-Key")
+	if len(idemValues) != 1 || !idempotencyKeyPattern.MatchString(idemValues[0]) {
 		s.writeErr(w, errMalformedRequest)
 		return errMalformedRequest.status
 	}
+	idemKey := idemValues[0]
 
 	body, tooLarge, err := readBounded(r, registerBodyMax)
 	if err != nil {
@@ -88,33 +89,26 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 		s.writeErr(w, errMalformedRequest)
 		return errMalformedRequest.status
 	}
-	if _, ok := unmarshalP256(pubRaw); !ok {
+	pub, ok := unmarshalP256(pubRaw)
+	if !ok {
 		s.writeErr(w, errMalformedRequest)
 		return errMalformedRequest.status
 	}
+	if s.v2store != nil && !s.registrationAdmission(req.InstallationPublicKey) {
+		s.writeErr(w, errBetaClosed)
+		return errBetaClosed.status
+	}
+	if r.URL.RawQuery != "" {
+		s.writeErr(w, errMalformedRequest)
+		return errMalformedRequest.status
+	}
+	if !verifyRegistrationProof(r, pub, idemKey, body) {
+		s.writeErr(w, errUnauthorized)
+		return errUnauthorized.status
+	}
 
-	// PG-REG-2: a repeated Idempotency-Key inside its retention window returns the
-	// mapping already minted rather than a fresh one -- but ONLY for a byte-identical
-	// retry. The cache key is bound to BOTH the hashed Idempotency-Key and a hash of the
-	// body, so a second caller presenting the same key with a DIFFERENT body (a different
-	// installation_public_key or fcm_token) is a cache MISS: it falls through to the
-	// normal, fail-closed attestation flow below rather than being handed the first
-	// caller's installation_id. Without this, the idempotency cache was an unauthenticated
-	// admission-control bypass -- PG-AUTH-13 requires attestation before a registration is
-	// ever admitted, and a lookup keyed on the client-chosen header alone let a second body
-	// skip it entirely.
-	//
-	// RECORDED DEVIATION, escalated rather than silently carried: PG-REG-2 as literally
-	// written -- "a repeated registration with the same Idempotency-Key ... SHALL return the
-	// same installation_id", unconditioned on the body -- is satisfied by this cache only for
-	// a byte-identical retry, not for any two requests sharing one key. PG-RET-4 also
-	// declares the cache's contents exhaustively as "SHA-256(Idempotency-Key) -> the minted
-	// installation_id, and nothing else"; keying on a hash of the body too is a second field
-	// that closed list does not contemplate, and the body hash is itself a derived value of
-	// fcm_token. The engineering reasoning above is sound (an unconditioned cache is an
-	// attestation bypass), but this document does not get to promote it to a ruling -- see
-	// the return value for the escalation to the owner for a PG-REG-2 amendment and a
-	// PG-RET-4 field-list update.
+	// A byte-identical retry returns the completed result without spending quota or
+	// replaying attestation. Reusing the key for another body is a durable conflict.
 	bodySum := sha256.Sum256(body)
 	cacheKey := hashSecret(idemKey) + ":" + hex.EncodeToString(bodySum[:])
 	now := s.now()
@@ -123,13 +117,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 			return s.writeJSON(w, http.StatusCreated, registerResponse{InstallationID: e.installationID, RefreshBefore: e.refreshBefore})
 		}
 	} else {
-		// Admission is an in-memory operator decision and must precede any attacker-selected
-		// Firestore read. An accepted completed retry remains cheap and provider-free while
-		// the key stays admitted; removing it closes registration immediately.
-		if !s.registrationAdmission(req.InstallationPublicKey) {
-			s.writeErr(w, errBetaClosed)
-			return errBetaClosed.status
-		}
 		result, found, mismatch, lookupErr := s.v2store.p.lookupRegistration(r.Context(), s.v2store.idempotencyID(idemKey), hex.EncodeToString(bodySum[:]), now)
 		if lookupErr != nil {
 			s.writeErr(w, errInternal)
