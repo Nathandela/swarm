@@ -27,6 +27,7 @@ guard is not treated as runtime evidence; local platform tests are not hosted ev
 | `sh android/gate/release-push-origin-contract.sh` | Passed, independently rerun by root: two Gradle tasks | Both provider URL forms accepted; malformed origins, credentials, ports, paths, queries, fragments, whitespace and DNS edge cases rejected; no signed phone release |
 | Native relay first red test | Agent reported missing Worker entrypoint | Before implementation |
 | Native relay first workerd test | Agent reported initial auth/pair/mailbox/revoke success | Root review found security/lifecycle gaps; not accepted as final green |
+| Native relay workerd checkpoint | Root independently passed `RELAY_TEST_PORT=8791 npm test` | Actual local Worker/SQLite auth, home, pairing, mailbox, dedupe, ACK and revoke; subsequent Go-client and resource-cost review remains in progress |
 | Firestore first red test | Agent reported missing official Firestore module | Before implementation |
 | Firestore emulator checkpoint | Root independently passed five real-SDK tests in 7.883 s: shared nonce, registration retry/body conflict, registration transaction conflict, wake lease/token-generation CAS, one registration provider owner | Local emulator, not actual IAM/FCM/Play Integrity |
 
@@ -48,6 +49,52 @@ repeating provider verification. Provider-reuse rejection is a required test dou
 behavior; it is not a claim that Google guarantees exactly one successful decode.
 [Google's standard-request contract](https://developer.android.com/google/play/integrity/standard#automatic-replay-protection).
 
+## Reviewed main checkpoint and broader gates
+
+The plan, ADR and configured push-origin slice were fast-forwarded into the owner's
+main checkout through `04b4457f`. The active relay, Firestore and registry work remained
+separate in the implementation worktree during review; a passing main test therefore
+does not certify those unfinished ports.
+
+The first broad test found an old ignored Android AAR behind the current public Go
+facade. The prior AAR and sources jar were preserved in the task's `aar-before-rebuild`
+directory and `sh android/build-aar.sh` rebuilt the unsigned arm64-v8a/x86_64 library.
+No phone was installed, signed or published. The Android gate subsequently passed.
+
+Main's `go build ./...`, `go vet ./...` and `golangci-lint run` passed (lint: zero issues).
+The first sandboxed full test also hit forbidden process-inspection/module-cache writes
+and an inherited `SWARM_SHIM_HOOK_SOCK`; a permitted local run with that variable unset
+removed those environment failures. A later complete `go test -p 4 ./...` passed.
+
+One preceding full run exposed a real randomized test-fixture bug in
+`TestSH5_StatusSurfacesTheDeferredPurgeLedger`: replacing the first byte with `aa` did
+not produce a different RID when the original already began with `aa`. Root reproduced
+the missing-OWED failure deterministically with that prefix, then assigned distinct
+`aa`/`bb` ledger prefixes; the regression passed five consecutive runs. This changes
+only the status test, not revocation behavior.
+
+The publisher passed `-race`; the changed endpoint/config/publisher-document Android
+gates passed a focused race run. A full Android source-gate race run exceeded its
+120-second test budget in an unrelated screen-regex gate, so it is not recorded as a
+full race pass. The epic-wide race/release gates remain open.
+
+## Ongoing review boundaries
+
+The local Go-to-workerd slice uses real Noise/SAS and encrypted mailbox primitives,
+but its replay check initially used an in-memory receiver, not the production phone's
+durable checkpoint or the machine's command/PTY execution loop. It cannot certify
+local-before-ACK crash recovery or uncertain raw-input behavior.
+
+Root review is testing slow-reader/subscription bounds, at-use expiry independent of
+bounded GC, and actual SQLite row work rather than inferring low cost from serverless
+deployment. Receipt suppression is a bounded optimization, not exactly-once execution.
+No retained-byte ceiling or operation-rate setting is evidence of unchanged capacity.
+
+Registry review rejected both a reused fixed staging directory and a separate retirement
+marker. The current direction stores a fresh bootstrap namespace in the same registry
+authority commit as last-pairing removal. Reserved-path protection, crash/reopen,
+uncertain directory-fsync retry and existing multi-machine startup are acceptance gates.
+
 ## Operator access and changes
 
 Read-only access verified the dedicated Google project `swarm-8404f` and enabled billing.
@@ -67,3 +114,8 @@ No Android device was attached at the initial `adb devices -l` check.
 Cloudflare CLI access was unauthenticated at the initial check; operator login/account
 selection was requested. Hosted relay, real ADC/Play Integrity/FCM, phone lifecycle,
 latency distributions, recovery and billing verification have not yet passed.
+
+The safety reviewer separately paused removal of the obsolete SingleMachineManager
+implementation/tests and the production push-command switch from bbolt/local-key startup
+to Firestore/injected keyring. Fresh scoped owner approval was requested; these refused
+mutations were not retried through another tool or applied by the orchestrator.

@@ -465,14 +465,18 @@ func sh5GarbageFront(t *testing.T, upstream string) string {
 // forensic surface (round-3 review F2's "a JSON field with no reader").
 func TestSH5_StatusSurfacesTheDeferredPurgeLedger(t *testing.T) {
 	rig := b1NewRig(t, nil)
+	// Exercise the formerly random collision in the status-only ledger fixture.
+	// Status reads this ledger without requiring its RID to be a current device.
+	rig.routingID = "aa" + rig.routingID[2:]
+	refusedID := "bb" + rig.routingID[2:]
 	st := sh5Store(t, rig.stateDir)
 	if err := st.Record(rig.routingID, sh5RelayURL(t, rig.stateDir), ""); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	if err := st.Record("aa"+rig.routingID[2:], sh5RelayURL(t, rig.stateDir), ""); err != nil {
+	if err := st.Record(refusedID, sh5RelayURL(t, rig.stateDir), ""); err != nil {
 		t.Fatalf("record second: %v", err)
 	}
-	if err := st.Resolve("aa"+rig.routingID[2:], "relay: store failure"); err != nil {
+	if err := st.Resolve(refusedID, "relay: store failure"); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 
