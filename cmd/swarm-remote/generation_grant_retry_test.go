@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"sync"
 	"testing"
@@ -11,6 +10,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -19,12 +19,10 @@ import (
 type grantRetryConn struct {
 	mu sync.Mutex
 
-	authorizeErr   error
-	authorizeCalls int
-	appendResults  []error
-	appendDefault  error
-	appendCalls    int
-	appendFrames   [][]byte
+	appendResults []error
+	appendDefault error
+	appendCalls   int
+	appendFrames  [][]byte
 
 	waitStarted  chan struct{}
 	waitOnce     sync.Once
@@ -40,13 +38,6 @@ func newGrantRetryConn(results ...error) *grantRetryConn {
 		appendCalled:  make(chan int, 16),
 		done:          make(chan struct{}),
 	}
-}
-
-func (c *grantRetryConn) AuthorizeDevice(context.Context, ed25519.PublicKey, []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.authorizeCalls++
-	return c.authorizeErr
 }
 
 func (c *grantRetryConn) MailboxAppend(_ context.Context, _ string, env []byte) (uint64, error) {
@@ -88,10 +79,10 @@ func (c *grantRetryConn) markWaitStarted() {
 	c.waitOnce.Do(func() { close(c.waitStarted) })
 }
 
-func (c *grantRetryConn) counts() (authorize, append int) {
+func (c *grantRetryConn) count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.authorizeCalls, c.appendCalls
+	return c.appendCalls
 }
 
 func testGatewayGrant() *crypto.EpochGrant {
@@ -171,40 +162,71 @@ func TestRunConnectedGeneration_GrantDepthQuotaStartsCommandDrainAndRetries(t *t
 	if progressed := <-progressedResult; progressed {
 		t.Fatal("bootstrap grant retry counted as relay progress and would reset the reconnect backoff")
 	}
-	if auth, appends := conn.counts(); auth != 1 || appends != 2 {
-		t.Fatalf("calls after successful retry = authorize %d, append %d; want 1, 2", auth, appends)
+	if appends := conn.count(); appends != 2 {
+		t.Fatalf("calls after successful retry = append %d; want 2", appends)
 	}
 }
 
-func TestRunConnectedGeneration_AuthorizationFailuresStayFailClosed(t *testing.T) {
-	for _, refusal := range []error{
-		// The phase marker matters: a quota refusal from AuthorizeDevice must not be
-		// mistaken for the recoverable mailbox-append depth refusal.
-		relay.ErrQuotaExceeded,
-		relay.ErrConsentRetired,
-		relay.ErrConsentMalformed,
-		relay.ErrRevoked,
-	} {
-		t.Run(refusal.Error(), func(t *testing.T) {
-			conn := newGrantRetryConn()
-			conn.authorizeErr = refusal
-			_, err := runConnectedGeneration(context.Background(), gatewayParams{
-				DaemonSocket: "/nonexistent/swarm-remote.sock",
-				PhoneTarget:  "phone",
-				Grant:        testGatewayGrant(),
-			}, conn)
-			if !errors.Is(err, refusal) {
-				t.Fatalf("generation error = %v, want %v", err, refusal)
-			}
-			if _, appends := conn.counts(); appends != 0 {
-				t.Fatalf("authorization refusal still appended %d grant(s)", appends)
-			}
-			select {
-			case <-conn.waitStarted:
-				t.Fatal("authorization refusal still started the Service")
-			default:
-			}
+func TestRunGenerationAuthorizesBeforeConnectingOrStartingService(t *testing.T) {
+	inbound, err := remotegw.OpenInboundState("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := newGrantRetryConn()
+	phone := "6019466df50bcada1f8bcd23f7a9e4ee"
+	p := gatewayParams{DaemonSocket: "/nonexistent/swarm-remote.sock", PhoneTarget: phone, Inbound: inbound}
+	order := make(chan string, 2)
+	authorize := func(context.Context, gatewayParams) (relayv2.Binding, error) {
+		order <- "authorize"
+		return relayv2.Binding{MachineRID: "88564c8ede170d2ed321e21e61354184", PeerRID: phone, Generation: 1}, nil
+	}
+	connect := func(context.Context, gatewayParams, relayv2.Binding) (generationMailbox, func(), error) {
+		order <- "connect"
+		return conn, func() {}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := runGenerationWith(ctx, p, authorize, connect); done <- err }()
+	select {
+	case <-conn.waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Service did not start")
+	}
+	if first, second := <-order, <-order; first != "authorize" || second != "connect" {
+		t.Fatalf("startup order = %q, %q", first, second)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("runGenerationWith = %v", err)
+	}
+}
+
+func TestRunGenerationRefusesNilInboundBeforeAuthorization(t *testing.T) {
+	called := false
+	_, err := runGenerationWith(context.Background(), gatewayParams{}, func(context.Context, gatewayParams) (relayv2.Binding, error) {
+		called = true
+		return relayv2.Binding{}, nil
+	}, nil)
+	if err == nil || called {
+		t.Fatalf("nil inbound = (%v, authorize called=%v)", err, called)
+	}
+}
+
+func TestRunGenerationAuthorizationFailurePreventsConnectAndServiceWithoutGrant(t *testing.T) {
+	inbound, err := remotegw.OpenInboundState("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusal := relay.ErrConsentRetired
+	connected := false
+	_, err = runGenerationWith(context.Background(), gatewayParams{Inbound: inbound},
+		func(context.Context, gatewayParams) (relayv2.Binding, error) { return relayv2.Binding{}, refusal },
+		func(context.Context, gatewayParams, relayv2.Binding) (generationMailbox, func(), error) {
+			connected = true
+			return nil, nil, nil
 		})
+	if !errors.Is(err, refusal) || connected {
+		t.Fatalf("authorization refusal = (%v, connected=%v)", err, connected)
 	}
 }
 
@@ -276,9 +298,9 @@ func TestRunConnectedGeneration_CancelLeavesNoGrantRetryGoroutine(t *testing.T) 
 	if err := waitGenerationResult(t, done); !errors.Is(err, context.Canceled) {
 		t.Fatalf("generation returned %v, want context.Canceled", err)
 	}
-	_, before := conn.counts()
+	before := conn.count()
 	time.Sleep(650 * time.Millisecond) // longer than the fastest jittered first retry
-	_, after := conn.counts()
+	after := conn.count()
 	if after != before {
 		t.Fatalf("grant retry outlived its generation: append calls grew from %d to %d", before, after)
 	}
@@ -314,9 +336,9 @@ func TestRunConnectedGeneration_RelayLossJoinsGrantRetry(t *testing.T) {
 	if err := waitGenerationResult(t, done); !errors.Is(err, remotegw.ErrRelayGone) {
 		t.Fatalf("generation returned %v, want remotegw.ErrRelayGone", err)
 	}
-	_, before := conn.counts()
+	before := conn.count()
 	time.Sleep(650 * time.Millisecond) // longer than the slowest jittered first retry
-	_, after := conn.counts()
+	after := conn.count()
 	if after != before {
 		t.Fatalf("grant retry outlived relay loss: append calls grew from %d to %d", before, after)
 	}

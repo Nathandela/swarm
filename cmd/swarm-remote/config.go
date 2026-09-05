@@ -23,8 +23,8 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -32,14 +32,14 @@ import (
 // dialed relay Mailbox (assembled by G2).
 type gatewayParams struct {
 	DaemonSocket string
-	RelayURL     string
-	RelayAuth    relay.ClientAuth
-	// RelaySecurity is the transport policy the sidecar dials under (PB-NET-2), resolved
+	RelayAuth    relayv2.Auth
+	// RelayV2Profile contains the relay-v2 route and transport policy the sidecar dials
+	// under (PB-NET-2), resolved
 	// from the SAME relay.json the URL came from: verified TLS, cleartext refused except
 	// to a loopback IP literal, and the operator's SPKI pin when one is configured
 	// (ADR-007 B34). It is a resolved VALUE rather than a flag the dial re-derives, so
 	// the policy cannot differ between assembly and dial.
-	RelaySecurity relay.Security
+	RelayV2Profile relayv2.Profile
 	// Profile is ADR-016 "profile"'s first real publisher: the machine's relay TLS policy,
 	// host and pin, built from the SAME relaycfg.Config the dial policy above reads, and
 	// carried into remotegw.ServiceConfig.Profile so every reconcile record publishes it.
@@ -92,14 +92,14 @@ type gatewayParams struct {
 	Inbound remotegw.InboundState
 
 	// C5 grant delivery (ADR-007 2026-07-24): the paired device's relay-auth pub is the
-	// AuthorizeDevice target that opens the machine->device mailbox route; Grant is the
+	// native AUTHORIZE target that opens the machine->device mailbox route; Grant is the
 	// persisted sealed EpochGrant the gateway appends to that mailbox as the phone's
 	// bootstrap. Grant is nil when no sidecar was persisted (a pre-grant pairing), which
 	// deliverEpochGrant treats as a no-op.
 	DeviceRelayAuthPub ed25519.PublicKey
 	// DeviceConsentSig is the paired device's relay-route consent for this machine
 	// (ADR-007 B27/B38), carried from its registry record. Without it the relay refuses
-	// the AuthorizeDevice above and the grant append behind it, so it is resolved here
+	// AUTHORIZE and the grant append behind it, so it is resolved here
 	// with the key it accompanies rather than looked up later.
 	DeviceConsentSig []byte
 	Grant            *crypto.EpochGrant
@@ -223,7 +223,7 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	// any identity regeneration.
 	inbound, err := remotegw.OpenInboundState(
 		filepath.Join(remoteDir, "inbound-state.json"),
-		relay.RoutingID(id.RelayAuthPublic()),
+		relayv2.RoutingID(id.RelayAuthPublic()),
 	)
 	if err != nil {
 		return gatewayParams{}, fmt.Errorf("open inbound state: %w", err)
@@ -247,14 +247,16 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	}
 
 	return gatewayParams{
-		DaemonSocket:  daemonSocket,
-		RelayURL:      relayCfg.RelayURL,
-		RelaySecurity: relaySecurity,
-		Profile:       profile,
-		RelayAuth: relay.ClientAuth{
-			RelayAuthPub: id.RelayAuthPublic(),
+		DaemonSocket: daemonSocket,
+		RelayV2Profile: relayv2.Profile{
+			RelayURL: relayCfg.RelayURL, MachineRID: relayv2.RoutingID(id.RelayAuthPublic()),
+			OperatorNamespace: relayCfg.OperatorNamespace, Security: relaySecurity,
+		},
+		Profile: profile,
+		RelayAuth: relayv2.Auth{
+			PublicKey: id.RelayAuthPublic(),
 			// The MACHINE identity is a software key with no custody gate, so it never
-			// refuses; relay.ClientAuth.Sign is failable for the PHONE (ADR-007 B18(a)).
+			// refuses; the native Sign seam is failable for the PHONE (ADR-007 B18(a)).
 			Sign: func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
 			// NO Peer, deliberately, for the reason cmd/swarm/remote.go withMachineRelay
 			// states in full (ADR-007 B49): asking the relay whether the paired handset has
@@ -262,11 +264,11 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 			// the gateway, and no legitimate flow revokes a machine at the relay.
 		},
 		// C5 (finding, re-audit): the relay keys the phone's mailbox by
-		// relay.RoutingID(its relay-auth pub) -- the SAME deriver the relay (client.go:
-		// RoutingID(auth.RelayAuthPub)) and machineid use. Derive PhoneTarget the same way,
+		// relayv2.RoutingID(its relay-auth pub) -- the SAME deriver the relay and machineid
+		// use. Derive PhoneTarget the same way,
 		// NOT from the phone's self-reported (unverifiable) rec.RoutingID: a phone that
 		// supplied a non-canonical routing id then cannot make the gateway misroute the grant.
-		PhoneTarget:        relay.RoutingID(ed25519.PublicKey(rec.RelayAuthPub)),
+		PhoneTarget:        relayv2.RoutingID(ed25519.PublicKey(rec.RelayAuthPub)),
 		Key:                id.EpochKeys().ContentKey,
 		WakeKey:            id.EpochKeys().WakeKey,
 		EpochID:            id.EpochID(),

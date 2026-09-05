@@ -8,10 +8,10 @@ package main
 // three machine dial paths already read -- so there is no size budget in the way and no
 // reason for the gateway to be the unpinned one.
 //
-// THE FENCE IS ON run(), NOT ON DialSecure, for the reason that made B34 exist at all: a
+// THE FENCE IS ON run(), not only the native dial helper, for the reason that made B34 exist at all: a
 // pin proved against the secure helper is a pin that may or may not be on the path the
-// sidecar takes. The relay behind the TLS front is the real relay, so a dial that passes
-// the pin goes on to complete the real relay-auth handshake.
+// sidecar takes. This legacy relay backend cannot complete native-v2 authentication; the
+// matching path therefore proves TLS admission, while the mismatching path proves refusal.
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
@@ -34,7 +35,7 @@ import (
 // startTLSFrontedRelay stands up the real relay behind a TLS terminator, which is the
 // deployment docs/operations/relay-runbook.md describes: the relay itself speaks ws://,
 // and a front terminates TLS for everyone who reaches it over a network.
-func startTLSFrontedRelay(ctx context.Context, t *testing.T) (wssURL string, cert *x509.Certificate) {
+func startTLSFrontedRelay(ctx context.Context, t *testing.T) (wssURL string, cert *x509.Certificate, accepted <-chan string) {
 	t.Helper()
 	rcfg := relay.DefaultConfig()
 	rcfg.Listen = "127.0.0.1:0"
@@ -53,9 +54,17 @@ func startTLSFrontedRelay(ctx context.Context, t *testing.T) (wssURL string, cer
 	if err != nil {
 		t.Fatalf("parse relay url: %v", err)
 	}
-	front := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(target))
+	seen := make(chan string, 1)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	front := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case seen <- r.URL.Path:
+		default:
+		}
+		proxy.ServeHTTP(w, r)
+	}))
 	t.Cleanup(front.Close)
-	return strings.Replace(front.URL, "https://", "wss://", 1), front.Certificate()
+	return strings.Replace(front.URL, "https://", "wss://", 1), front.Certificate(), seen
 }
 
 // spkiPinOf is the runbook's section-3 value, computed in Go: base64 of SHA-256 over the
@@ -77,9 +86,9 @@ func otherPin() string {
 func TestPBOPS5_TheGatewayHonoursTheConfiguredPin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	wss, cert := startTLSFrontedRelay(ctx, t)
+	wss, cert, accepted := startTLSFrontedRelay(ctx, t)
 
-	// ---- control: the MATCHING pin reaches the relay-auth handshake --------
+	// ---- control: the MATCHING pin passes TLS admission --------------------
 	// run() fails after the dial -- there is no daemon behind this sidecar -- so the
 	// assertion is that it got PAST the transport policy, not that it ran.
 	matching, err := relaycfg.Config{RelayURL: wss, SPKIPin: spkiPinOf(cert)}.Security()
@@ -88,13 +97,23 @@ func TestPBOPS5_TheGatewayHonoursTheConfiguredPin(t *testing.T) {
 	}
 	ctlCtx, ctlCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer ctlCancel()
-	err = run(ctlCtx, gatewayParams{RelayURL: wss, RelayAuth: gwAuth(t), RelaySecurity: matching})
+	matchingParams := gatewayParamsFor(t, wss)
+	matchingParams.RelayV2Profile.Security = matching
+	err = run(ctlCtx, matchingParams)
 	if errors.Is(err, relay.ErrPinMismatch) || errors.Is(err, relay.ErrCleartextRefused) {
 		t.Fatalf("the MATCHING pin was refused, so this rig cannot demonstrate anything: %v", err)
 	}
 	if err != nil && strings.Contains(err.Error(), "dial relay") &&
 		strings.Contains(err.Error(), "certificate") {
 		t.Fatalf("the matching pin did not replace chain verification: %v", err)
+	}
+	select {
+	case path := <-accepted:
+		if path != "/v2/ws" {
+			t.Fatalf("matching pin admitted %q, want native /v2/ws", path)
+		}
+	default:
+		t.Fatal("matching pin never reached the TLS front; the positive arm is vacuous")
 	}
 
 	// ---- the fence: a valid pin for a DIFFERENT key ------------------------
@@ -104,7 +123,9 @@ func TestPBOPS5_TheGatewayHonoursTheConfiguredPin(t *testing.T) {
 	}
 	fenceCtx, fenceCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer fenceCancel()
-	err = run(fenceCtx, gatewayParams{RelayURL: wss, RelayAuth: gwAuth(t), RelaySecurity: wrong})
+	wrongParams := gatewayParamsFor(t, wss)
+	wrongParams.RelayV2Profile.Security = wrong
+	err = run(fenceCtx, wrongParams)
 	if !errors.Is(err, relay.ErrPinMismatch) {
 		t.Fatalf("run() against a relay that does not match the configured pin returned %v, "+
 			"want relay.ErrPinMismatch; a gateway that ignores its own relay.json pin is the "+
@@ -117,7 +138,7 @@ func TestPBOPS5_TheGatewayHonoursTheConfiguredPin(t *testing.T) {
 // in. resolveGatewayParams is the sidecar's own assembly, and this asserts the pin
 // survives it.
 func TestPBOPS5_TheGatewayResolvesItsPinFromRelayJSON(t *testing.T) {
-	_, cert := startTLSFrontedRelay(t.Context(), t)
+	_, cert, _ := startTLSFrontedRelay(t.Context(), t)
 	pin := spkiPinOf(cert)
 
 	stateDir := t.TempDir()
@@ -137,8 +158,8 @@ func TestPBOPS5_TheGatewayResolvesItsPinFromRelayJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Security: %v", err)
 	}
-	if string(p.RelaySecurity.PinnedSPKISHA256) != string(want.PinnedSPKISHA256) {
+	if string(p.RelayV2Profile.Security.PinnedSPKISHA256) != string(want.PinnedSPKISHA256) {
 		t.Fatalf("resolveGatewayParams dropped the configured pin: got %x, want %x",
-			p.RelaySecurity.PinnedSPKISHA256, want.PinnedSPKISHA256)
+			p.RelayV2Profile.Security.PinnedSPKISHA256, want.PinnedSPKISHA256)
 	}
 }

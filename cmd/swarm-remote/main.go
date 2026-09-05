@@ -20,6 +20,7 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/remote/supervise"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
@@ -56,20 +57,17 @@ func serviceConfigFromParams(p gatewayParams, mailbox remotegw.Mailbox) remotegw
 	}
 }
 
-// relayConn is the relay surface ONE gateway generation needs. It exists to pin the
+// generationMailbox is the relay surface ONE gateway generation needs. It exists to pin the
 // LIVENESS half at COMPILE time: remotegw.Service discovers Done() by type assertion (a
 // Mailbox that cannot report liveness is a supported configuration -- every unit-test fake
 // is one), so a production client that quietly stopped satisfying remotegw.LinkWatcher
 // would not fail to build, it would fail to RECONNECT, silently, in the field.
-type relayConn interface {
+type generationMailbox interface {
 	remotegw.Mailbox
 	remotegw.LinkWatcher
-	grantDeliverer
-	Close() error
 }
 
-// The production relay client is a relayConn. Pinned at compile time.
-var _ relayConn = (*relay.Client)(nil)
+var _ generationMailbox = (*relayv2.MachineMailbox)(nil)
 
 // run drives remotegw.Service over the relay until ctx is cancelled, REDIALLING whenever
 // the link dies (PB-NET-4, ADR-007 D9: "client reconnect backoff + jitter on both hops").
@@ -128,22 +126,81 @@ func run(ctx context.Context, p gatewayParams) error {
 // runGeneration dials the relay and drives one Service over that connection until it ends.
 // It reports whether traffic crossed the link, which is what the caller's backoff resets on.
 func runGeneration(ctx context.Context, p gatewayParams) (progressed bool, err error) {
-	// PB-NET-2 on the path production takes (ADR-007 B34/B37). The sidecar's auth_init
-	// carries the MACHINE's full relay-auth public key, so a cleartext hop discloses it
-	// to any observer; the policy refuses ws:// to everything but a loopback IP literal,
-	// decides it from the URL before a socket is opened, and carries the operator's SPKI
-	// pin when relay.json configures one.
-	client, err := relay.DialSecure(ctx, p.RelayURL, p.RelayAuth, p.RelaySecurity)
-	if err != nil {
-		return false, fmt.Errorf("dial relay: %w", err)
+	return runGenerationWith(ctx, p, authorizeRelayV2, connectRelayV2)
+}
+
+type authorizeGeneration func(context.Context, gatewayParams) (relayv2.Binding, error)
+type connectGeneration func(context.Context, gatewayParams, relayv2.Binding) (generationMailbox, func(), error)
+
+func runGenerationWith(ctx context.Context, p gatewayParams, authorize authorizeGeneration, connect connectGeneration) (progressed bool, err error) {
+	if p.Inbound == nil {
+		return false, errors.New("gateway: durable inbound state is required")
 	}
-	defer func() { _ = client.Close() }()
-	return runConnectedGeneration(ctx, p, client)
+	binding, err := authorize(ctx, p)
+	if err != nil {
+		return false, fmt.Errorf("authorize relay generation: %w", err)
+	}
+	if binding.PeerRID != p.PhoneTarget {
+		return false, errors.New("gateway: relay authorized a different phone")
+	}
+	mailbox, closeMailbox, err := connect(ctx, p, binding)
+	if err != nil {
+		return false, fmt.Errorf("connect relay stream: %w", err)
+	}
+	defer closeMailbox()
+	return runConnectedGeneration(ctx, p, mailbox)
+}
+
+func authorizeRelayV2(ctx context.Context, p gatewayParams) (relayv2.Binding, error) {
+	auth := p.RelayAuth
+	auth.Role, auth.Purpose = relayv2.RoleMachine, relayv2.PurposeControl
+	control, err := relayv2.Dial(ctx, p.RelayV2Profile, auth)
+	if err != nil {
+		return relayv2.Binding{}, err
+	}
+	defer control.Close()
+	return control.Authorize(ctx, p.DeviceRelayAuthPub, p.DeviceConsentSig)
+}
+
+func connectRelayV2(ctx context.Context, p gatewayParams, binding relayv2.Binding) (generationMailbox, func(), error) {
+	auth := p.RelayAuth
+	auth.Role, auth.Purpose = relayv2.RoleMachine, relayv2.PurposeStream
+	stream, err := relayv2.Dial(ctx, p.RelayV2Profile, auth)
+	if err != nil {
+		return nil, nil, err
+	}
+	fail := func(err error) (generationMailbox, func(), error) {
+		stream.Close()
+		return nil, nil, err
+	}
+	authority := remotegw.RelayAuthority{
+		Home:     relayv2.HomeID(p.RelayV2Profile.OperatorNamespace, p.RelayV2Profile.MachineRID),
+		PhoneRID: binding.PeerRID, Generation: binding.Generation,
+	}
+	if err := p.Inbound.BindRelay(authority); err != nil {
+		return fail(err)
+	}
+	checkpoint := p.Inbound.Load()
+	subscription, err := stream.Subscribe(ctx, binding, relayv2.Checkpoint{
+		Incarnation: checkpoint.Incarnation, Cursor: checkpoint.Cursor,
+	})
+	if err != nil {
+		return fail(err)
+	}
+	checkpoint.Incarnation = subscription.Incarnation()
+	if err := p.Inbound.Save(checkpoint); err != nil {
+		return fail(err)
+	}
+	mailbox, err := relayv2.NewMachineMailbox(subscription)
+	if err != nil {
+		return fail(err)
+	}
+	return mailbox, stream.Close, nil
 }
 
 // runConnectedGeneration is split from the secure dial so the startup ordering can be
 // exercised at the complete relay/Service seam without replacing production dial policy.
-func runConnectedGeneration(ctx context.Context, p gatewayParams, client relayConn) (progressed bool, err error) {
+func runConnectedGeneration(ctx context.Context, p gatewayParams, client generationMailbox) (progressed bool, err error) {
 	// C5: authorize the paired device and deliver its sealed epoch grant over the mailbox
 	// before the bridge starts (idempotent; the phone dedups by grant seq). A clean grant-
 	// append quota refusal (including the mailbox depth cap) is the one exception: keeping

@@ -23,7 +23,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -133,11 +133,11 @@ func addPairedDevice(t *testing.T, stateDir string) device.Record {
 		t.Fatalf("ed25519.GenerateKey: %v", err)
 	}
 	// A CANONICAL, well-behaved phone: its self-reported RoutingID is exactly the raw
-	// bytes of relay.RoutingID(its relay-auth pub) -- the same derivation machineid uses
-	// for the machine's own routing id. So hex(RoutingID) == relay.RoutingID(RelayAuthPub),
+	// bytes of relayv2.RoutingID(its relay-auth pub) -- the same derivation machineid uses
+	// for the machine's own routing id. So hex(RoutingID) == relayv2.RoutingID(RelayAuthPub),
 	// and PhoneTarget resolves identically whether derived from the pub or the stored bytes.
 	relayAuthPub := randBytes(t, 32)
-	routingID, err := hex.DecodeString(relay.RoutingID(relayAuthPub))
+	routingID, err := hex.DecodeString(relayv2.RoutingID(relayAuthPub))
 	if err != nil {
 		t.Fatalf("decode canonical routing id: %v", err)
 	}
@@ -176,8 +176,12 @@ func TestResolveGatewayParams_Populated(t *testing.T) {
 	if got.DaemonSocket != daemonSocket {
 		t.Errorf("DaemonSocket = %q, want %q", got.DaemonSocket, daemonSocket)
 	}
-	if got.RelayURL != "ws://127.0.0.1:9999" {
-		t.Errorf("RelayURL = %q, want %q", got.RelayURL, "ws://127.0.0.1:9999")
+	if got.RelayV2Profile.RelayURL != "ws://127.0.0.1:9999" || got.RelayV2Profile.OperatorNamespace != "owner" ||
+		got.RelayV2Profile.MachineRID != relayv2.RoutingID(id.RelayAuthPublic()) {
+		t.Fatalf("RelayV2Profile = %+v, want URL/namespace/machine/security from relay.json + machine identity", got.RelayV2Profile)
+	}
+	if _, err := got.RelayV2Profile.Security.Resolve(got.RelayV2Profile.RelayURL); err != nil {
+		t.Fatalf("RelayV2Profile.Security rejected the provisioned loopback URL: %v", err)
 	}
 
 	// Post-revocation confidentiality (codex#1): the resolver must carry the stateDir and the
@@ -191,8 +195,8 @@ func TestResolveGatewayParams_Populated(t *testing.T) {
 	}
 
 	// PhoneTarget is the relay routing STRING the relay keys the phone's mailbox by:
-	// relay.RoutingID(the device's relay-auth pub) -- the SAME deriver the relay
-	// (client.go: RoutingID(auth.RelayAuthPub)) and machineid use. For this canonical
+	// relayv2.RoutingID(the device's relay-auth pub) -- the SAME deriver the relay
+	// (client.go: RoutingID(auth.PublicKey)) and machineid use. For this canonical
 	// fixture that equals hex(rec.RoutingID), so the happy-path value is unchanged; the
 	// derivation itself (from the pub, not the self-reported routing bytes) is pinned by
 	// TestResolveGatewayParams_PhoneTargetDerivedFromRelayAuth.
@@ -219,23 +223,23 @@ func TestResolveGatewayParams_Populated(t *testing.T) {
 
 	// RelayAuth must be usable: its Sign closure must produce a signature that
 	// verifies under its own RelayAuthPub, and that pub must be the machine
-	// identity's relay-auth public key (relay.ClientAuth's shape, per
+	// identity's relay-auth public key (relayv2.Auth's shape, per
 	// machineid.go's own doc comment on RelayAuthSign).
-	if !ed25519PubEqual(got.RelayAuth.RelayAuthPub, id.RelayAuthPublic()) {
-		t.Errorf("RelayAuth.RelayAuthPub = %x, want %x", got.RelayAuth.RelayAuthPub, id.RelayAuthPublic())
+	if !ed25519PubEqual(got.RelayAuth.PublicKey, id.RelayAuthPublic()) {
+		t.Errorf("RelayAuth.PublicKey = %x, want %x", got.RelayAuth.PublicKey, id.RelayAuthPublic())
 	}
 	challenge := []byte("resolver-test-challenge")
 	sig, err := got.RelayAuth.Sign(challenge)
 	if err != nil {
 		t.Fatalf("RelayAuth.Sign: %v", err)
 	}
-	if !ed25519.Verify(got.RelayAuth.RelayAuthPub, challenge, sig) {
-		t.Errorf("RelayAuth.Sign produced a signature that does not verify under RelayAuth.RelayAuthPub")
+	if !ed25519.Verify(got.RelayAuth.PublicKey, challenge, sig) {
+		t.Errorf("RelayAuth.Sign produced a signature that does not verify under RelayAuth.PublicKey")
 	}
 }
 
 // TestResolveGatewayParams_PhoneTargetDerivedFromRelayAuth (re-audit finding C5) pins that
-// PhoneTarget is DERIVED from the paired device's relay-auth pub via relay.RoutingID -- the
+// PhoneTarget is DERIVED from the paired device's relay-auth pub via relayv2.RoutingID -- the
 // same function the relay keys the phone's mailbox by -- NOT the phone's self-reported,
 // unverifiable Record.RoutingID. A phone that supplied a non-canonical routing id must not be
 // able to make the gateway misroute (or silently drop) its bootstrap grant.
@@ -276,9 +280,9 @@ func TestResolveGatewayParams_PhoneTargetDerivedFromRelayAuth(t *testing.T) {
 		t.Fatalf("resolveGatewayParams: %v", err)
 	}
 
-	want := relay.RoutingID(rec.RelayAuthPub)
+	want := relayv2.RoutingID(rec.RelayAuthPub)
 	if got.PhoneTarget != want {
-		t.Errorf("PhoneTarget = %q, want %q (relay.RoutingID of the device relay-auth pub)", got.PhoneTarget, want)
+		t.Errorf("PhoneTarget = %q, want %q (relayv2.RoutingID of the device relay-auth pub)", got.PhoneTarget, want)
 	}
 	// And it must NOT be the self-reported routing id -- that is the exact misroute C5 fixes.
 	if got.PhoneTarget == hex.EncodeToString(rec.RoutingID) {

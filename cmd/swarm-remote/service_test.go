@@ -65,7 +65,6 @@ func TestServiceConfigFromParams_MapsAllFields(t *testing.T) {
 
 	p := gatewayParams{
 		DaemonSocket:   "/tmp/swarm-remote-test/remote.sock",
-		RelayURL:       "wss://relay.example.test/v1",
 		PhoneTarget:    "phone-routing-id-distinctive",
 		Key:            key,
 		EpochID:        7,

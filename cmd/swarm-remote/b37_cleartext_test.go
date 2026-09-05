@@ -3,8 +3,8 @@ package main
 // ADR-007 B37 (FAILING FIRST): the gateway sidecar's own dial refuses a cleartext relay,
 // and refuses it before it sends the machine's relay-auth public key.
 //
-// run() is the sidecar's whole body and it dialed with relay.Dial, which applies no
-// transport-security policy. The machine's key is disclosed by the same auth_init frame
+// run() is the sidecar's whole body and used to dial with relay.Dial, which applies no
+// transport-security policy. The machine's key is disclosed by the AUTH_INIT frame
 // the handset's is, so the same chain runs against the MACHINE identity: an observer of a
 // ws:// hop learns it, and B27's first-use clause lets any registered identity revoke a
 // target that has authorized nobody.
@@ -31,6 +31,8 @@ import (
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
+	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
 // gwTap is a websocket proxy in front of the real relay: it forwards every frame verbatim
@@ -137,15 +139,15 @@ func startTapRelay(ctx context.Context, t *testing.T) *gwTap {
 
 // gwAuth is a machine relay-auth identity, the one resolveGatewayParams loads from
 // <stateDir>/remote in production.
-func gwAuth(t *testing.T) relay.ClientAuth {
+func gwAuth(t *testing.T) relayv2.Auth {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("relay-auth key: %v", err)
 	}
-	return relay.ClientAuth{
-		RelayAuthPub: pub,
-		Sign:         func(ch []byte) ([]byte, error) { return ed25519.Sign(priv, ch), nil },
+	return relayv2.Auth{
+		PublicKey: pub,
+		Sign:      func(ch []byte) ([]byte, error) { return ed25519.Sign(priv, ch), nil },
 	}
 }
 
@@ -159,7 +161,25 @@ func gatewayParamsFor(t *testing.T, relayURL string) gatewayParams {
 	if err != nil {
 		t.Fatalf("resolve the machine transport policy: %v", err)
 	}
-	return gatewayParams{RelayURL: relayURL, RelayAuth: gwAuth(t), RelaySecurity: sec}
+	auth := gwAuth(t)
+	phonePub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gatewayParams{
+		RelayAuth: auth, Inbound: mustMemoryInbound(t),
+		RelayV2Profile: relayv2.Profile{RelayURL: relayURL, MachineRID: relayv2.RoutingID(auth.PublicKey), OperatorNamespace: "owner", Security: sec},
+		PhoneTarget:    relayv2.RoutingID(phonePub), DeviceRelayAuthPub: phonePub, DeviceConsentSig: []byte("test-consent"),
+	}
+}
+
+func mustMemoryInbound(t *testing.T) remotegw.InboundState {
+	t.Helper()
+	state, err := remotegw.OpenInboundState("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
 }
 
 // TestPBNET2_TheGatewayRefusesACleartextRelayBeforeSendingItsPublicKey drives run()
@@ -181,11 +201,11 @@ func TestPBNET2_TheGatewayRefusesACleartextRelayBeforeSendingItsPublicKey(t *tes
 			"sidecar against, was refused: %v", err)
 	}
 	conns, sent := tap.observed()
-	if conns == 0 || !bytes.Contains(sent, []byte("auth_init")) {
+	if conns == 0 || !bytes.Contains(sent, []byte("AUTH_INIT")) {
 		t.Fatalf("the tap did not observe the relay-auth handshake it must be able to observe "+
 			"(%d connections, %d bytes); the negative half below would be vacuous", conns, len(sent))
 	}
-	baseConns, baseAuth := conns, bytes.Count(sent, []byte("auth_init"))
+	baseConns, baseAuth := conns, bytes.Count(sent, []byte("AUTH_INIT"))
 
 	// ---- the fence: same listener, same relay, addressed by name -----------
 	// A refusal is decided from the URL, so it needs no time at all. The bound is here so
@@ -203,8 +223,8 @@ func TestPBNET2_TheGatewayRefusesACleartextRelayBeforeSendingItsPublicKey(t *tes
 		t.Errorf("the gateway opened %d connection(s) to a cleartext relay before refusing it; "+
 			"the refusal must be decided from the URL, so it costs no connection", conns-baseConns)
 	}
-	if n := bytes.Count(sent, []byte("auth_init")) - baseAuth; n != 0 {
-		t.Errorf("the gateway sent %d auth_init frame(s) in cleartext; auth_init carries the "+
+	if n := bytes.Count(sent, []byte("AUTH_INIT")) - baseAuth; n != 0 {
+		t.Errorf("the gateway sent %d AUTH_INIT frame(s) in cleartext; AUTH_INIT carries the "+
 			"machine's FULL relay-auth public key (ADR-007 B37 step 2)", n)
 	}
 }
