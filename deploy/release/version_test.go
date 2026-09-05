@@ -9,8 +9,6 @@ func TestOperationalExamplesNameTheCurrentRelease(t *testing.T) {
 	for _, path := range []string{
 		"../relay/docker-compose.yml",
 		"../relay/Dockerfile",
-		"../pushgw/docker-compose.yml",
-		"../pushgw/pushgw.env.example",
 		"../../docs/operations/relay-vps-deploy.md",
 		"../../docs/operations/gcp-production-iac.md",
 	} {

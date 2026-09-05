@@ -480,3 +480,23 @@ its persisted bytes and App.PairingState-to-failed mapping are unchanged. Androi
 public-state parity scanner required no exclusion or unreachable Kotlin UI state.
 Root passed the bootstrap-focused mobile race suite (3.802 s) and the full Android source
 gate (12.073 s). No local AAR, Gradle or device rebuild was part of those checks.
+
+## Full-suite release inventory follow-up
+
+The reviewed Firestore cutover was published as `1431618f`. The broader local suite
+caught a missed relative-path consumer: the release-version gate still opened the two
+removed push-gateway Compose/env examples. Terra reproduced that exact missing-file RED,
+removed only those two obsolete inventory entries, and passed the full release package
+(0.782 s). Sol independently traced the remaining examples, dynamic image tags, digest
+manifest and provenance checks, found no active stale references and passed the package
+(0.562 s). Root reviewed the two-line change and passed every deploy package with race
+detection (1.987–2.304 s). The four active release-version examples remain checked.
+
+The sandboxed whole-repository run also reported denied macOS process inspection and
+related daemon/child-process failures. An approved, isolated rerun outside the sandbox
+passed all seven reported daemon tests in 8.572 s without source changes. That separates
+those environment failures from the real release-inventory regression; it is not a
+whole-suite green claim. At this checkpoint the remote Worker/Firestore emulator lane,
+lint, macOS checks, fuzzing, build matrix, release dry-run and both container workflows
+passed; the full Go and Android jobs were still running. No hosted or device validation
+is inferred from those CI results.
