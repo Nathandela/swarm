@@ -654,3 +654,39 @@ activation was created by this preflight. First public-resource creation remains
 explicit operator action. Hosted abuse controls, authenticated namespace/home carriage
 in the real clients, real-device/Google calls, recovery, capacity and billing evidence
 remain open; `200/503` alone is not production readiness.
+
+## First live relay deployment (admission closed)
+
+The owner explicitly authorized the single public Worker and two SQLite Durable
+Object namespaces, keeping the existing Free plan and admission disabled. Read-only
+preflight returned Cloudflare error `10007` for Worker `s`, confirming there was no
+existing deployment to overwrite. Root uploaded the reviewed `70e9f33a` Worker/config
+with the explicit approved auth profile and account, telemetry disabled, no variable
+override, no automatic configuration and no paid upgrade.
+
+Cloudflare accepted version `cc7584c7-6932-4103-93b9-2ff37ead35b0` on
+2026-09-05 at 12:30:44 UTC. Read-only version metadata confirms migration tag `v1`,
+`has_preview: false`, and exactly the `HOMES`/`RelayHome` and
+`RENDEZVOUS`/`RendezvousDirectory` namespace bindings, with no admission, test or
+secret bindings. The migration tag is a provider schema identifier, not v1 protocol
+support. The sole origin is `https://s.nathan-delacretaz.workers.dev` (WSS for clients).
+
+Root's public, certificate-verified HTTP/1.1 smoke at 12:31:40–41 UTC returned the
+expected banner with `200`, then the exact `relay admission is not configured` body
+with `503` for complete WebSocket upgrades to well-formed machine and pairing routes.
+No real machine, phone, fixture identity or command was admitted. This is hosted
+TLS/routing/refusal evidence, not a pairing, hibernation, usage-meter or performance
+measurement. Provider Durable Object request/row metrics have not yet been measured.
+
+The deployed source checkpoint also completed all 14 jobs in
+[CI 33965898472](https://github.com/Nathandela/swarm/actions/runs/33965898472), and
+both container workflows (`33965898483`, `33965898474`) passed. The container jobs
+build and scan locally in CI; they do not publish a push image or deploy Cloud Run.
+
+The separate GCP preflight was read-only and limited to the existing `swarm-8404f`
+project. Required APIs and the push runtime service account exist, but no Firestore
+database, Cloud Run service, Artifact Registry repository or Secret Manager secret
+was found. Existing project-level runtime grants demonstrate FCM send, not the needed
+Firestore/secret access. No GCP resource, IAM or billing change was made. The owner's
+ignored Android Firebase config exists in the owner checkout, not the temporary
+worktree; no credential values were requested in chat.
