@@ -289,6 +289,28 @@ original failed in CI but passed 50 local repetitions; after synchronization,
 100 race-enabled repetitions passed (13.492 s). No relay production behavior or
 compatibility policy changed in that fixture correction.
 
+## Completed-main CI and deadlock-fixture ordering
+
+Main `33608f35` CI `33954039671` finished with one failure, in the existing skeleton
+deadlock regression harness: the child returned nil/PASS before the parent's next
+readiness poll. The dedicated remote-v2 job, Android job and all other jobs passed;
+both container workflows (`33954039677`, `33954039685`) passed, including the push
+vulnerability scan. This is not an overall green CI result.
+
+The harness now checks its durable readiness marker when the child result arrives
+first, accepting only a present marker plus a successful exit. Missing readiness and
+failed child exits still fail; the 30-second setup and 3-second production deadlines
+are unchanged. No production code changed. Sol independently reviewed the actual diff
+and found no must-fix. The original passed 20 local non-race repetitions (78.736 s),
+while the correction passed 20 race repetitions (75.220 s) with the race runtime's
+artificial exit sleep disabled.
+
+A temporary scheduling experiment delayed readiness polling until after the setup
+deadline, forcing the completed-child result branch. The original reproduced the
+exact nil/PASS failure (9.916 s package time); the correction passed (5.281 s). The
+ordinary 20 ms poll was restored afterward; the temporary schedule is not committed.
+This isolates the harness ordering bug without weakening its deadlock assertions.
+
 ## Operator access and changes
 
 Read-only access verified the dedicated Google project `swarm-8404f` and enabled billing.

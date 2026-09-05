@@ -517,7 +517,15 @@ func TestNoteBackendUnavailableForInstance_LegacyPIDOnlyMigrationDoesNotDeadlock
 	for !ready {
 		select {
 		case got := <-result:
-			t.Fatalf("deadlock child exited before reaching the production call: %v\n%s", got.err, got.out)
+			// A successful child can reach the call and exit between readiness polls.
+			// Its durable marker still proves that setup reached the production path.
+			if _, err := os.Stat(readyPath); err != nil {
+				t.Fatalf("deadlock child exited before reaching the production call: %v\n%s", got.err, got.out)
+			}
+			if got.err != nil {
+				t.Fatalf("legacy migration production path failed: %v\n%s", got.err, got.out)
+			}
+			return
 		case <-setupDeadline.C:
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
