@@ -209,7 +209,12 @@ import (
 // v22 adds operator_namespace beside the machine relay-auth public key. The namespace and
 // that key are the two authenticated inputs a relay-v2 reconnect must use to recompute its
 // canonical home; dropping either can redirect or strand the pairing after process death.
-const StateSchemaVersion = 22
+//
+// v23 adds phone_binding: the exact relay-v2 home, phone RID and server-issued generation,
+// plus whether pairing has retired it. The inactive generation is a rollback floor scoped
+// to those exact two identities; dropping it lets a restored relay generation revive an
+// authorization the owner replaced.
+const StateSchemaVersion = 23
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -341,6 +346,9 @@ type State struct {
 	WakeReplay       uint64            // highest accepted push-wake counter
 	RelayCursor      uint64            // relay mailbox read cursor the next poll resumes from
 	RelayIncarnation string            // durable identity of the relay mailbox RelayCursor belongs to
+	// phoneBinding is private so only the server-authenticated relay-v2 activation seam can
+	// advance it and only the pairing transaction can retire it into a generation floor.
+	phoneBinding PhoneBinding
 	// DiscardRecoveryGeneration, DiscardRecoveryCompleted and DiscardRecoveryToken are the
 	// crash-safe transaction spanning an explicit self-mailbox discard and its replacement
 	// roster. BeginRelayDiscardRecovery advances Generation and persists a fresh Token BEFORE
@@ -534,6 +542,11 @@ func cloneRemoteProfilePtr(profile *schema.RemoteProfileV1) *schema.RemoteProfil
 type Store interface {
 	Load() State
 	Save(State) error
+	// ActivatePhoneBinding and CommitPhonePairing are the only writes authorized to change
+	// relay-v2 binding authority. They also permit the checkpoint reset that ordinary Save's
+	// replay-guard merge must reject.
+	ActivatePhoneBinding(State) error
+	CommitPhonePairing(State) error
 	// PurgeKeys is PB-KEY-7's REVOKE/UNPAIR purge: it destroys BOTH tier keys and everything
 	// sealed under either of them, in memory and at rest, and RECORDS THE UNPAIR durably
 	// (State.Disowned).
@@ -692,6 +705,7 @@ type stateFile struct {
 	GrantSeq                  uint64         `json:"grant_seq"`
 	RelayCursor               uint64         `json:"relay_cursor"`
 	RelayIncarnation          string         `json:"relay_incarnation,omitempty"`
+	PhoneBinding              PhoneBinding   `json:"phone_binding,omitzero"`
 	DiscardRecoveryGeneration uint64         `json:"discard_recovery_generation,omitempty"`
 	DiscardRecoveryCompleted  uint64         `json:"discard_recovery_completed,omitempty"`
 	DiscardRecoveryToken      string         `json:"discard_recovery_token,omitempty"`
@@ -918,10 +932,10 @@ func (s *fileStore) hasSealedContentKey() bool {
 // Save adopts st and rewrites the blob atomically. The REPLAY-GUARD coordinates (send-seq
 // ceilings, receive high-waters, grant watermark, wake replay, relay cursor) are merged
 // MONOTONICALLY: durable custody never moves them backwards, so a stale in-memory caller
-// cannot reuse a seq or re-open a frame already consumed. Everything else is adopted as
-// given -- Save is how the app records a new pairing, epoch or op queue. The in-memory copy
-// advances only once the write succeeded, so a failed Save leaves exactly what a crashed
-// process would have left: nothing durable, nothing claimed.
+// cannot reuse a seq or re-open a frame already consumed. Binding authority is also retained;
+// only its two dedicated verbs may change it. Everything else is adopted as given. The
+// in-memory copy advances only once the write succeeded, so a failed Save leaves exactly what
+// a crashed process would have left: nothing durable, nothing claimed.
 func (s *fileStore) Save(st State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -964,6 +978,12 @@ func (s *fileStore) saveLocked(st State) error {
 		st.RelayCursor = s.st.RelayCursor
 		st.RelayIncarnation = s.st.RelayIncarnation
 		st.relayGen = s.st.relayGen
+	}
+	// Binding authority has dedicated custody verbs. An ordinary whole-State save is never
+	// authorized to activate, retire, replace, or erase it, including after process restart.
+	st.phoneBinding = s.st.phoneBinding
+	if err := validatePhoneBindingState(st.phoneBinding); err != nil {
+		return fmt.Errorf("phonecore: invalid phone binding: %w", err)
 	}
 	// A CALLER ARRIVING WITH A REAL CONTENT KEY HAS PROVED THE TIER IS OPEN, and the containers
 	// have to be told. resealTier's "a real key always wins" branch is about to seal that key
@@ -1279,6 +1299,47 @@ func (s *fileStore) SetRelayIncarnation(incarnation string) error {
 	return nil
 }
 
+// CommitPhonePairing is Save with custody-authorized checkpoint retirement. Updating s.st
+// first makes the ordinary monotonic merge preserve every other replay guard while allowing
+// this one explicit cursor reset in the same atomic state-file rename as the pairing pin.
+func (s *fileStore) CommitPhonePairing(st State) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.st.clone()
+	s.st.RelayCursor, s.st.RelayIncarnation = 0, ""
+	s.st.relayGen++
+	s.st.phoneBinding = st.phoneBinding
+	st.RelayCursor, st.RelayIncarnation, st.relayGen = 0, "", s.st.relayGen
+	if err := s.saveLocked(st); err != nil {
+		if !atomicWriteCommitted(err) {
+			s.st = previous
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *fileStore) ActivatePhoneBinding(st State) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.st.clone()
+	s.st.phoneBinding = st.phoneBinding
+	if st.phoneBinding.Home != previous.phoneBinding.Home ||
+		st.phoneBinding.PhoneRID != previous.phoneBinding.PhoneRID ||
+		st.phoneBinding.Generation != previous.phoneBinding.Generation {
+		s.st.RelayCursor, s.st.RelayIncarnation = 0, ""
+		s.st.relayGen++
+		st.RelayCursor, st.RelayIncarnation, st.relayGen = 0, "", s.st.relayGen
+	}
+	if err := s.saveLocked(st); err != nil {
+		if !atomicWriteCommitted(err) {
+			s.st = previous
+		}
+		return err
+	}
+	return nil
+}
+
 // UnsealContent re-opens the content tier IN PLACE: PB-KEY-7's "require a fresh unwrap before
 // restoring content", and the only way back from PurgeKeys.
 //
@@ -1533,8 +1594,12 @@ func (s *fileStore) load() error {
 	}); err != nil {
 		return fmt.Errorf("%w: %s: malformed operator namespace", ErrCorruptState, path)
 	}
-	if f.RelayIncarnation != "" && !validPersistedRelayIncarnation(f.RelayIncarnation) {
+	if f.RelayIncarnation != "" && !validPersistedRelayIncarnation(f.RelayIncarnation) &&
+		!(f.SchemaVersion < 23 && validRecoveryToken(f.RelayIncarnation)) {
 		return fmt.Errorf("%w: %s: malformed relay mailbox incarnation", ErrCorruptState, path)
+	}
+	if err := validatePhoneBindingState(f.PhoneBinding); err != nil {
+		return fmt.Errorf("%w: %s: malformed phone binding", ErrCorruptState, path)
 	}
 	if f.DiscardRecoveryCompleted > f.DiscardRecoveryGeneration {
 		return fmt.Errorf("%w: %s: discard recovery completion exceeds generation", ErrCorruptState, path)
@@ -1546,7 +1611,7 @@ func (s *fileStore) load() error {
 	}
 	pendingRecovery := f.DiscardRecoveryGeneration > f.DiscardRecoveryCompleted
 	if pendingRecovery != (f.DiscardRecoveryToken != "") ||
-		(f.DiscardRecoveryToken != "" && !validPersistedRelayIncarnation(f.DiscardRecoveryToken)) {
+		(f.DiscardRecoveryToken != "" && !validRecoveryToken(f.DiscardRecoveryToken)) {
 		return fmt.Errorf("%w: %s: malformed discard recovery checkpoint", ErrCorruptState, path)
 	}
 	// Before v3 the two epoch keys were CLEARTEXT in these same fields. Reading them as
@@ -1583,6 +1648,7 @@ func (s *fileStore) load() error {
 		GrantSeq:                  f.GrantSeq,
 		RelayCursor:               f.RelayCursor,
 		RelayIncarnation:          f.RelayIncarnation,
+		phoneBinding:              f.PhoneBinding,
 		DiscardRecoveryGeneration: f.DiscardRecoveryGeneration,
 		DiscardRecoveryCompleted:  f.DiscardRecoveryCompleted,
 		DiscardRecoveryToken:      f.DiscardRecoveryToken,
@@ -1599,6 +1665,11 @@ func (s *fileStore) load() error {
 		Snapshots:  f.LegacySnapshots,
 		PendingOps: f.LegacyPendingOps,
 		OpOutcomes: f.LegacyOpOutcomes,
+	}
+	// A pre-v23 cursor belongs to the retired relay-v1 mailbox and its 32-hex
+	// incarnation. Native relay-v2 never subscribes from that checkpoint.
+	if f.SchemaVersion < 23 {
+		st.RelayCursor, st.RelayIncarnation = 0, ""
 	}
 	applySendSeq(&st, f.LegacySendSeq)
 	if err := applyReceive(&st, f.LegacyReceive); err != nil {
@@ -1663,19 +1734,10 @@ func (s *fileStore) load() error {
 	return nil
 }
 
-// Kept local rather than importing remote/relay: phonecore's durable core must not depend on
-// the websocket client package (PB-BIND-0). This mirrors the protocol's canonical 128-bit,
-// lowercase-hex representation at the persistence trust boundary.
+// Kept local rather than importing remote/relayv2: phonecore's durable core must not depend
+// on the websocket client package. This is relay-v2's canonical rawurl 128-bit identity.
 func validPersistedRelayIncarnation(incarnation string) bool {
-	if len(incarnation) != 32 {
-		return false
-	}
-	for i := range incarnation {
-		if c := incarnation[i]; c < '0' || (c > '9' && c < 'a') || c > 'f' {
-			return false
-		}
-	}
-	return true
+	return validPhoneIncarnation(incarnation)
 }
 
 func decodeBucket(sender string, epoch uint32) (Bucket, error) {
@@ -1857,6 +1919,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		GrantSeq:                  st.GrantSeq,
 		RelayCursor:               st.RelayCursor,
 		RelayIncarnation:          st.RelayIncarnation,
+		PhoneBinding:              st.phoneBinding,
 		DiscardRecoveryGeneration: st.DiscardRecoveryGeneration,
 		DiscardRecoveryCompleted:  st.DiscardRecoveryCompleted,
 		DiscardRecoveryToken:      st.DiscardRecoveryToken,

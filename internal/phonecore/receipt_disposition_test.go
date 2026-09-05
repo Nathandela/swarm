@@ -21,6 +21,20 @@ func (s *failOnceStore) Save(st State) error {
 	}
 	return s.inner.Save(st)
 }
+func (s *failOnceStore) ActivatePhoneBinding(st State) error {
+	if s.fail {
+		s.fail = false
+		return errStoreDied
+	}
+	return s.inner.ActivatePhoneBinding(st)
+}
+func (s *failOnceStore) CommitPhonePairing(st State) error {
+	if s.fail {
+		s.fail = false
+		return errStoreDied
+	}
+	return s.inner.CommitPhonePairing(st)
+}
 func (s *failOnceStore) PurgeKeys() error                   { return s.inner.PurgeKeys() }
 func (s *failOnceStore) UnsealContent() error               { return s.inner.UnsealContent() }
 func (s *failOnceStore) RewindRelayCursor() error           { return s.inner.RewindRelayCursor() }

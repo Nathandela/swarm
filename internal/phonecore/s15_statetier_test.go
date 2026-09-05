@@ -81,7 +81,7 @@ const (
 	s15PublicationText      = "s15-publication-text-f4c82a"
 	s15PublicationEnvelope  = "s15-publication-envelope-6a2d1f"
 	s15StaleStream          = "s15-stream-6f2e1a"
-	s15RelayIncarnation     = "abcdef0123456789abcdef0123456789"
+	s15RelayIncarnation     = "AAAAAAAAAAAAAAAAAAAAAA"
 	s15DiscardRecoveryToken = "1234567890abcdef1234567890abcdef"
 	// s15ItemText is the TRANSCRIPT's sentinel: the reconstructed body of one interaction item
 	// (ADR-009). It is what the user and the agent actually said to each other, which makes it

@@ -9,7 +9,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
-const testRelayDiscardIncarnation = "0123456789abcdef0123456789abcdef"
+const testRelayDiscardIncarnation = "AAAAAAAAAAAAAAAAAAAAAA"
 
 func TestAdoptRelayDiscard_AdvancesOnlyTheTransportCursor(t *testing.T) {
 	bucket := Bucket{Epoch: 7}
@@ -51,7 +51,7 @@ func TestAdoptRelayDiscard_RefusesAReplyFromAnotherMailboxGeneration(t *testing.
 	if _, err := core.BeginRelayDiscardRecovery(); err != nil {
 		t.Fatalf("BeginRelayDiscardRecovery: %v", err)
 	}
-	if err := core.AdoptRelayDiscard(53, "11111111111111111111111111111111"); !errors.Is(err, ErrRelayIncarnationChanged) {
+	if err := core.AdoptRelayDiscard(53, "AQAAAAAAAAAAAAAAAAAAAA"); !errors.Is(err, ErrRelayIncarnationChanged) {
 		t.Fatalf("AdoptRelayDiscard(other incarnation) = %v, want ErrRelayIncarnationChanged", err)
 	}
 	if got := core.State().RelayCursor; got != 7 {

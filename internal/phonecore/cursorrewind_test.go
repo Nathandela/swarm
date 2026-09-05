@@ -79,7 +79,7 @@ func TestRewindRelayCursor_StaleConcurrentWriterCannotRestoreRetiredGeneration(t
 
 	seed := core.State()
 	seed.RelayCursor = 53
-	seed.RelayIncarnation = "11111111111111111111111111111111"
+	seed.RelayIncarnation = "AAAAAAAAAAAAAAAAAAAAAA"
 	if err := core.Save(seed); err != nil {
 		t.Fatalf("seed continuity: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRewindRelayCursor_StaleConcurrentWriterCannotRestoreRetiredGeneration(t
 	if err := core.RewindRelayCursor(); err != nil {
 		t.Fatalf("RewindRelayCursor: %v", err)
 	}
-	if err := core.SetRelayIncarnation("22222222222222222222222222222222"); err != nil {
+	if err := core.SetRelayIncarnation("AQAAAAAAAAAAAAAAAAAAAA"); err != nil {
 		t.Fatalf("SetRelayIncarnation: %v", err)
 	}
 	close(releaseWriter) // the pre-recovery writer finishes last
@@ -107,11 +107,11 @@ func TestRewindRelayCursor_StaleConcurrentWriterCannotRestoreRetiredGeneration(t
 	}
 
 	got := core.State()
-	if got.RelayCursor != 0 || got.RelayIncarnation != "22222222222222222222222222222222" {
+	if got.RelayCursor != 0 || got.RelayIncarnation != "AQAAAAAAAAAAAAAAAAAAAA" {
 		t.Fatalf("stale writer restored retired continuity: cursor=%d incarnation=%q", got.RelayCursor, got.RelayIncarnation)
 	}
 	reopened := s14aR2Resume(t, dir, wake, content).State()
-	if reopened.RelayCursor != 0 || reopened.RelayIncarnation != "22222222222222222222222222222222" {
+	if reopened.RelayCursor != 0 || reopened.RelayIncarnation != "AQAAAAAAAAAAAAAAAAAAAA" {
 		t.Fatalf("stale writer reached disk: cursor=%d incarnation=%q", reopened.RelayCursor, reopened.RelayIncarnation)
 	}
 }

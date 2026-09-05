@@ -50,6 +50,14 @@ func (c *countingStore) Save(s State) error {
 	c.saves++
 	return c.inner.Save(s)
 }
+func (c *countingStore) ActivatePhoneBinding(s State) error {
+	c.saves++
+	return c.inner.ActivatePhoneBinding(s)
+}
+func (c *countingStore) CommitPhonePairing(s State) error {
+	c.saves++
+	return c.inner.CommitPhonePairing(s)
+}
 func (c *countingStore) PurgeKeys() error                   { return c.inner.PurgeKeys() }
 func (c *countingStore) UnsealContent() error               { return c.inner.UnsealContent() }
 func (c *countingStore) RewindRelayCursor() error           { return c.inner.RewindRelayCursor() }
@@ -74,6 +82,20 @@ func (f *failAfterNStore) Save(s State) error {
 	}
 	return f.inner.Save(s)
 }
+func (f *failAfterNStore) ActivatePhoneBinding(s State) error {
+	f.saves++
+	if f.saves > f.n {
+		return errStoreDied
+	}
+	return f.inner.ActivatePhoneBinding(s)
+}
+func (f *failAfterNStore) CommitPhonePairing(s State) error {
+	f.saves++
+	if f.saves > f.n {
+		return errStoreDied
+	}
+	return f.inner.CommitPhonePairing(s)
+}
 func (f *failAfterNStore) PurgeKeys() error                   { return f.inner.PurgeKeys() }
 func (f *failAfterNStore) UnsealContent() error               { return f.inner.UnsealContent() }
 func (f *failAfterNStore) RewindRelayCursor() error           { return f.inner.RewindRelayCursor() }
@@ -85,8 +107,14 @@ func (f *failAfterNStore) SetRelayIncarnation(v string) error { return f.inner.S
 // reuses one memInboundState across two bridges.
 type memStore struct{ st State }
 
-func (m *memStore) Load() State        { return m.st }
-func (m *memStore) Save(s State) error { m.st = s; return nil }
+func (m *memStore) Load() State { return m.st }
+func (m *memStore) Save(s State) error {
+	s.phoneBinding = m.st.phoneBinding
+	m.st = s
+	return nil
+}
+func (m *memStore) ActivatePhoneBinding(s State) error { m.st = s; return nil }
+func (m *memStore) CommitPhonePairing(s State) error   { m.st = s; return nil }
 func (m *memStore) PurgeKeys() error {
 	m.st.Keys = crypto.EpochKeys{}
 	m.st.Snapshots, m.st.Sessions = nil, nil

@@ -505,6 +505,19 @@ func (c *Core) persist(st State) error {
 }
 
 func (c *Core) persistLocked(st State) error {
+	st = c.stateForPersistLocked(st)
+	err := c.store.Save(st.clone())
+	if err != nil && !atomicWriteCommitted(err) {
+		return err
+	}
+	c.st = loadCoreState(c.store)
+	return err
+}
+
+func (c *Core) stateForPersistLocked(st State) State {
+	// Phone binding authority has dedicated activation/retirement verbs. An ordinary Save may
+	// carry a stale private snapshot but cannot restore a retired generation through it.
+	st.phoneBinding = c.st.phoneBinding
 	// The profile is authenticated for the State identity that held it when Reconcile
 	// succeeded. A whole-state adoption that changes either half of that identity cannot
 	// carry the authority across with it. This runs above Store so the rule also holds for
@@ -521,12 +534,7 @@ func (c *Core) persistLocked(st State) error {
 		// not already belong to the new exact identity; terminal records are never published.
 		publicationsForIdentity(&st, st.Machine, st.EpochID, st.MachineRelayAuthPub)
 	}
-	err := c.store.Save(st.clone())
-	if err != nil && !atomicWriteCommitted(err) {
-		return err
-	}
-	c.st = loadCoreState(c.store)
-	return err
+	return st
 }
 
 // loadCoreState is the Core-side trust fence on every Store adoption. Store.PurgeKeys must

@@ -931,7 +931,10 @@ func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error)
 func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time) (Receipt, error) {
 	r.acceptMu.Lock()
 	defer r.acceptMu.Unlock()
+	return r.acceptCommitAtLocked(raw, cursor, now)
+}
 
+func (r *MailboxRouter) acceptCommitAtLocked(raw []byte, cursor uint64, now time.Time) (Receipt, error) {
 	// PB-KEY-10, and it must come BEFORE ParseEnvelope. The machine's bootstrap grant is a
 	// TAGGED PLAINTEXT frame, not a ContentKey-sealed envelope -- deliberately, because it is
 	// what DELIVERS the ContentKey -- so the envelope parser refuses it, commits nothing and

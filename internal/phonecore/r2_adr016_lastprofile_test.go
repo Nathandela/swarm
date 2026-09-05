@@ -31,8 +31,14 @@ const wireReconcileFrameWithCurrentProfile = `{"kind":"reconcile","machine":"m1"
 // for enforcing that a disowned State never exposes the retained authority on adoption.
 type opaqueProfileStore struct{ st State }
 
-func (s *opaqueProfileStore) Load() State         { return s.st }
-func (s *opaqueProfileStore) Save(st State) error { s.st = st; return nil }
+func (s *opaqueProfileStore) Load() State { return s.st }
+func (s *opaqueProfileStore) Save(st State) error {
+	st.phoneBinding = s.st.phoneBinding
+	s.st = st
+	return nil
+}
+func (s *opaqueProfileStore) ActivatePhoneBinding(st State) error { s.st = st; return nil }
+func (s *opaqueProfileStore) CommitPhonePairing(st State) error   { s.st = st; return nil }
 func (s *opaqueProfileStore) PurgeKeys() error {
 	s.st.Keys = crypto.EpochKeys{}
 	s.st.Sessions, s.st.Snapshots, s.st.Items = nil, nil, nil

@@ -15,7 +15,7 @@ package phonecore
 //	type Bucket struct{ Sender [8]byte; Epoch uint32 }   // per-(sender,epoch) receive bucket
 //	type State struct{ ... }                             // the ONE enumerated schema
 //	const StateSchemaVersion = 1
-//	type Store interface{ Load() State; Save(State) error }
+//	type Store interface{ Load() State; Save(State) error; ...custody verbs... }
 //	func OpenStore(path, machine string) (Store, error)  // mirrors remotegw.OpenInboundState
 //	var ErrCorruptState, ErrFutureSchema error
 //	type Config struct{ Dir, Machine string; State Store; Ack Acker }
@@ -101,7 +101,7 @@ func fullState() State {
 		GrantSeq:                  2,
 		WakeReplay:                91,
 		RelayCursor:               17,
-		RelayIncarnation:          "0123456789abcdef0123456789abcdef",
+		RelayIncarnation:          "AAAAAAAAAAAAAAAAAAAAAA",
 		DiscardRecoveryGeneration: 3,
 		DiscardRecoveryCompleted:  2,
 		DiscardRecoveryToken:      "fedcba9876543210fedcba9876543210",
@@ -157,6 +157,12 @@ func fullState() State {
 		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
 		0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
 	})
+	st.phoneBinding = PhoneBinding{
+		Home:       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		PhoneRID:   "0123456789abcdef0123456789abcdef",
+		Generation: 7,
+		Active:     true,
+	}
 	return st
 }
 
@@ -727,6 +733,12 @@ var stateV22Fixture = func() string {
 		`"machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","operator_namespace":"owner",`, 1)
 }()
 
+var stateV23Fixture = func() string {
+	fixture := strings.Replace(stateV22Fixture, `"schema_version":22`, `"schema_version":23`, 1)
+	return strings.Replace(fixture, `"relay_incarnation":"0123456789abcdef0123456789abcdef"`,
+		`"relay_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","phone_binding":{"home":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","phone_rid":"0123456789abcdef0123456789abcdef","generation":"7","active":true}`, 1)
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -747,6 +759,7 @@ var stateFixtures = map[int]string{
 	20: stateV20Fixture,
 	21: stateV21Fixture,
 	22: stateV22Fixture,
+	23: stateV23Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
@@ -831,6 +844,12 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 				}
 				if version != StateSchemaVersion && !carries(tagOf[name]) {
 					continue // added after this version was pinned; legitimately absent
+				}
+				if version < 23 && (name == "RelayCursor" || name == "RelayIncarnation") {
+					if !gv.Field(i).IsZero() {
+						t.Errorf("the pinned v%d fixture retained retired relay-v1 State.%s = %#v", version, name, gv.Field(i).Interface())
+					}
+					continue
 				}
 				if !durableStateFieldEqual(name, wv.Field(i).Interface(), gv.Field(i).Interface()) {
 					t.Errorf("the pinned v%d fixture restored State.%s = %#v; want %#v. A coordinate the "+
@@ -955,8 +974,8 @@ func TestStateStore_PinnedV1FixtureStillLoads(t *testing.T) {
 		t.Fatalf("OpenStore on the pinned v1 fixture: %v (a shipped schema version must keep loading)", err)
 	}
 	got := st.Load()
-	if got.EpochID != 7 || got.RelayCursor != 17 || got.WakeReplay != 91 {
-		t.Errorf("v1 fixture loaded as epoch=%d cursor=%d wake_replay=%d; want 7/17/91", got.EpochID, got.RelayCursor, got.WakeReplay)
+	if got.EpochID != 7 || got.RelayCursor != 0 || got.WakeReplay != 91 {
+		t.Errorf("v1 fixture loaded as epoch=%d cursor=%d wake_replay=%d; want 7/0/91 (the retired transport cursor cannot seed relay-v2)", got.EpochID, got.RelayCursor, got.WakeReplay)
 	}
 	if got.SendSeq[7] != 512 {
 		t.Errorf("v1 fixture send-seq ceiling for epoch 7 = %d; want 512", got.SendSeq[7])
