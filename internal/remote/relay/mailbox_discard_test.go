@@ -102,6 +102,9 @@ func TestMailboxDiscard_DisconnectedGatewayCannotAuthorizeDeletion(t *testing.T)
 	case <-testCtx(t).Done():
 		t.Fatal("gateway connection did not close")
 	}
+	// Local CloseNow/Done is not an acknowledgement of server-side removal.
+	// Assert the disconnected-peer rule only after the relay observes that fact.
+	awaitGatewayDrop(t, srv, machine.RoutingID())
 
 	if _, err := phone.MailboxDiscard(testCtx(t), machine.RoutingID()); !errors.Is(err, ErrPeerCapabilityUnavailable) {
 		t.Fatalf("discard with disconnected gateway = %v, want ErrPeerCapabilityUnavailable", err)

@@ -274,6 +274,21 @@ late claim commit does not undo attempt/quota writes. Registration/other reposit
 clock paths, real IAM and FCM remain separate gates. The memory repository now exists
 only in the Go test build; it is not an alternate production backend.
 
+Root then passed the implementation worktree's full build, vet and lint (zero issues).
+The broader local main run still did not pass as a whole: skeleton completed in
+520.604 s and mobile/conformance in 250.377 s, but daemon launch timed out and the
+transport package was terminated at 660 s. Both failed packages passed isolated
+reruns (daemon test 4.42 s, transport package 12.538 s); the transport hang's cause
+was not established. These reruns are not a full-suite success claim.
+
+Hosted CI `33953202959` exposed a separate ordering flaw in the existing mailbox
+discard fixture: client CloseNow/Done does not acknowledge the server's session
+removal. Root reused `awaitGatewayDrop`, which observes removal under the server
+lock, before the unchanged deletion-refusal and retained-item assertions. The
+original failed in CI but passed 50 local repetitions; after synchronization,
+100 race-enabled repetitions passed (13.492 s). No relay production behavior or
+compatibility policy changed in that fixture correction.
+
 ## Operator access and changes
 
 Read-only access verified the dedicated Google project `swarm-8404f` and enabled billing.
