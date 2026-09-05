@@ -57,6 +57,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/relayhome"
 )
 
 // ErrUnimplemented is returned by every stub in this failing-first skeleton. It
@@ -268,17 +269,20 @@ type MachinePayload struct {
 	// RelayTLSPolicy is ADR-016 W1's named relay TLS policy ("webpki" or
 	// "pinned_spki"), carried VERBATIM from relaycfg.Config.TLSPolicy. It is
 	// INDEPENDENT of RelaySPKIPin above -- a pin's presence never implies
-	// pinned_spki and a pin's absence never implies webpki -- and empty means a
-	// legacy machine build that predates this field, not a policy of "".
+	// pinned_spki and a pin's absence never implies webpki.
 	RelayTLSPolicy string
 	// RelayHost is "the hostname the machine itself dials" (W1), derived from
 	// RelayURL rather than asserted separately -- the phone's W4 migration probe
 	// checks a republished profile still names the SAME destination before trusting
-	// it. Empty on a legacy payload, exactly like RelayTLSPolicy.
+	// it.
 	RelayHost string
+	// OperatorNamespace is the operator-selected relay-v2 home namespace. The QR URL
+	// only locates the relay; this authenticated field binds the phone to the home the
+	// machine was provisioned to use.
+	OperatorNamespace string
 	// PushBindingSupport is an authenticated acknowledgement of the capability a
-	// new phone requested in msg1. It is encoded only for a requesting new phone;
-	// an old phone sends an empty msg1 and receives the byte-identical legacy msg2.
+	// phone requested in msg1. It is encoded only for a requesting phone, after the
+	// namespace every fresh v2 msg2 requires.
 	PushBindingSupport bool
 	EpochID            uint32
 }
@@ -356,8 +360,8 @@ type MachineParams struct {
 	Confirm      ConfirmFunc         // R-PAIR.5 mandatory desktop confirm gate
 	Limiter      RateLimiter         // R-PAIR.8 gateway-side rate limit (nil => unlimited)
 	// PushBindingSupport allows the optional msg1/msg2 negotiation. It does not by
-	// itself change any frame sent to an old phone: the msg2 acknowledgement is emitted
-	// only after that phone explicitly requested it in msg1.
+	// itself add the acknowledgement unless the phone explicitly requests it in msg1.
+	// Every fresh-v2 msg2 independently carries the required operator namespace.
 	PushBindingSupport bool
 	// VerifyPushBinding submits the authenticated WakeV1 test wake and returns nil only
 	// for the gateway's provider_accepted outcome. It runs after msg4 is authenticated
@@ -1412,9 +1416,9 @@ func decodePairingHello(raw []byte) (bool, error) {
 
 // encodeMachinePayload serialises the msg2 machine payload (R-PAIR.3 + A14 +
 // enrollment keystone + S19's endpoint id + B34's relay SPKI pin + ADR-016 W1's TLS
-// policy/host): the nine length-prefixed byte fields followed by the 4-byte big-endian
-// epoch id. Each added field rides BEFORE the epoch trailer, so the epoch-trailer
-// contract is undisturbed.
+// policy/host + relay-v2 namespace): ten required length-prefixed fields, an optional
+// push-support acknowledgement, then the 4-byte big-endian epoch id. Each field rides
+// BEFORE the epoch trailer, so the epoch-trailer contract is undisturbed.
 func encodeMachinePayload(p MachinePayload) []byte {
 	var b []byte
 	b = appendField(b, []byte(p.Hostname))
@@ -1426,6 +1430,7 @@ func encodeMachinePayload(p MachinePayload) []byte {
 	b = appendField(b, p.RelaySPKIPin)
 	b = appendField(b, []byte(p.RelayTLSPolicy))
 	b = appendField(b, []byte(p.RelayHost))
+	b = appendField(b, []byte(p.OperatorNamespace))
 	if p.PushBindingSupport {
 		b = appendField(b, []byte{1})
 	}
@@ -1462,33 +1467,29 @@ func decodeMachinePayload(b []byte) (MachinePayload, error) {
 	if p.RelaySPKIPin, b, ok = readField(b); !ok {
 		return MachinePayload{}, errMalformedPayload
 	}
-	// ADR-016 W9's N/N-1 requirement: "No policy field means pinned_spki with whatever pin
-	// the payload carries, i.e. today's behaviour exactly." RelayTLSPolicy and RelayHost are
-	// ADDITIVE -- a pre-ADR-016 machine's msg2 ends here, with exactly the 4-byte epoch
-	// trailer left, and requiring the two newer fields unconditionally would refuse every
-	// such payload as malformed instead of decoding it with an empty policy and host. Only a
-	// payload that actually wrote them (encodeMachinePayload's two extra appendField calls)
-	// has anything left to read at this point.
+	var policy, relayHost, namespace []byte
+	if policy, b, ok = readField(b); !ok {
+		return MachinePayload{}, errMalformedPayload
+	}
+	p.RelayTLSPolicy = string(policy)
+	if relayHost, b, ok = readField(b); !ok {
+		return MachinePayload{}, errMalformedPayload
+	}
+	p.RelayHost = string(relayHost)
+	if namespace, b, ok = readField(b); !ok {
+		return MachinePayload{}, errMalformedPayload
+	}
+	p.OperatorNamespace = string(namespace)
+	if err := relayhome.ValidateNamespace(p.OperatorNamespace); err != nil {
+		return MachinePayload{}, errMalformedPayload
+	}
+	// The acknowledgement is appended only for a phone that requested it in msg1.
 	if len(b) != 4 {
-		var policy, relayHost []byte
-		if policy, b, ok = readField(b); !ok {
+		var pushSupport []byte
+		if pushSupport, b, ok = readField(b); !ok || len(pushSupport) != 1 || pushSupport[0] != 1 {
 			return MachinePayload{}, errMalformedPayload
 		}
-		p.RelayTLSPolicy = string(policy)
-		if relayHost, b, ok = readField(b); !ok {
-			return MachinePayload{}, errMalformedPayload
-		}
-		p.RelayHost = string(relayHost)
-		// The acknowledgement is appended only for a new phone that requested it in
-		// msg1. Therefore an old phone never receives this third additive field, while
-		// this decoder accepts both the current two-field tail and the negotiated one.
-		if len(b) != 4 {
-			var pushSupport []byte
-			if pushSupport, b, ok = readField(b); !ok || len(pushSupport) != 1 || pushSupport[0] != 1 {
-				return MachinePayload{}, errMalformedPayload
-			}
-			p.PushBindingSupport = true
-		}
+		p.PushBindingSupport = true
 	}
 	if len(b) != 4 {
 		return MachinePayload{}, errMalformedPayload

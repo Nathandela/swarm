@@ -29,6 +29,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayhome"
 )
 
 // The pairing state machine (PB-PAIR-5). Every terminal state is its OWN value: collapsed
@@ -478,6 +479,18 @@ func (p *Pairing) ConfirmOrigin(origin string) (err error) {
 // applyRelayTLSPolicy's injected probe already uses for the same reason.
 var relayDialRawSecure = relay.DialRawSecure
 
+// verifyPairingMachine repeats the decoder's namespace fence at the mobile boundary before
+// checking the relay pin. The decoder has already rejected a malformed authenticated msg2
+// before SAS or consent; this keeps constructed outcomes and future call paths fail-closed too.
+// The QR's relay URL remains a location hint and contributes no home authority.
+func verifyPairingMachine(machine pairing.MachinePayload, presentedSPKI []byte) error {
+	if err := relayhome.ValidateNamespace(machine.OperatorNamespace); err != nil {
+		return classed(ErrClassPairingFailed,
+			fmt.Errorf("swarmmobile: machine advertised an invalid relay namespace: %w", err))
+	}
+	return checkRelayPin(effectiveRelayPin(machine), presentedSPKI)
+}
+
 // pairingDial is ADR-016 W3's mechanism for the ONE dial B45 exempts from verification. It
 // ATTEMPTS AN ORDINARY VERIFIED DIAL FIRST -- the platform delegate on Android (W2) once
 // SetRelayTrust installed one, the system trust store elsewhere -- because that is what
@@ -623,7 +636,7 @@ func (p *Pairing) join(base context.Context) {
 		// before the SAS gate below, so an operator is never asked to compare a code for a
 		// connection already known to be terminated.
 		VerifyMachine: func(m pairing.MachinePayload) error {
-			return checkRelayPin(effectiveRelayPin(m), conn.PeerSPKI())
+			return verifyPairingMachine(m, conn.PeerSPKI())
 		},
 		RequestPushBinding: payload.Flags&pairing.QRFlagPushBinding != 0,
 		PreparePushBinding: func(ctx context.Context) (*pairing.PushBinding, func(), error) {
@@ -1142,6 +1155,7 @@ func (a *App) pinWithStagedPushBinding(out *pairing.DeviceOutcome, staged *phone
 		st.MachineStatic = out.MachineStatic
 		st.MachineSignPub = out.Machine.MachineSignPub
 		st.MachineRelayAuthPub = out.Machine.MachineRelayAuthPub
+		st.OperatorNamespace = out.Machine.OperatorNamespace
 		// The relay's SPKI pin (ADR-007 B33/B34), and pairing is the ONLY channel that can
 		// carry it: the QR has no room (MaxRelayURLLen = 39 leaves one byte of slack in the
 		// v6-L symbol) and every later frame already rides the connection the pin is meant

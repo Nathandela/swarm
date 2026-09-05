@@ -102,6 +102,7 @@ func (m *b54Machine) offerAt(t *testing.T, pin []byte, qrURL string) string {
 		Confirm:      func(context.Context, [6]string, string) (bool, error) { return true, nil },
 		Payload: pairing.MachinePayload{
 			Hostname:            "b54.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte(relay.RoutingID(m.authPub)),
 			MachineRelayAuthPub: m.authPub,
 			RecipientPub:        m.id.RecipientPublic(),

@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayhome"
 )
 
 // Dir is the subdirectory of the state dir that holds a machine's remote provisioning.
@@ -55,6 +56,10 @@ type Config struct {
 	// serving both, because it is also what `swarm remote pair` puts in the QR verbatim
 	// (PB-PAIR-7), so a machine reachable only over loopback cannot pair a handset.
 	RelayURL string `json:"relay_url"`
+	// OperatorNamespace is the operator-selected relay-v2 home namespace. It is
+	// carried inside the authenticated pairing payload; the QR's RelayURL only
+	// locates the service and is never a source of home authority.
+	OperatorNamespace string `json:"operator_namespace"`
 	// PushGatewayURL is the public bare HTTPS origin both peers are provisioned to use
 	// for negotiated push bindings. It carries no capability or address; those authorities
 	// exist only in the authenticated pairing transcript and sole device registry row.
@@ -109,6 +114,9 @@ func Load(stateDir string) (cfg Config, found bool, err error) {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return Config{}, true, fmt.Errorf("parse %s: %w", FileName, err)
 	}
+	if err := validateRelayNamespacePair(cfg); err != nil {
+		return Config{}, true, fmt.Errorf("parse %s: %w", FileName, err)
+	}
 	if err := ValidatePushGatewayURL(cfg.PushGatewayURL); err != nil {
 		return Config{}, true, fmt.Errorf("parse %s: %w", FileName, err)
 	}
@@ -117,6 +125,9 @@ func Load(stateDir string) (cfg Config, found bool, err error) {
 
 // Save writes relay.json at 0600, creating <stateDir>/remote if needed.
 func Save(stateDir string, cfg Config) error {
+	if err := validateRelayNamespacePair(cfg); err != nil {
+		return err
+	}
 	if err := ValidatePushGatewayURL(cfg.PushGatewayURL); err != nil {
 		return err
 	}
@@ -129,6 +140,19 @@ func Save(stateDir string, cfg Config) error {
 		return err
 	}
 	return os.WriteFile(path(stateDir), b, 0o600)
+}
+
+func validateRelayNamespacePair(cfg Config) error {
+	if cfg.RelayURL == "" && cfg.OperatorNamespace == "" {
+		return nil
+	}
+	if cfg.RelayURL == "" {
+		return fmt.Errorf("operator_namespace requires relay_url")
+	}
+	if err := relayhome.ValidateNamespace(cfg.OperatorNamespace); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ValidatePushGatewayURL accepts an absent endpoint (foreground/legacy mode) or one bare

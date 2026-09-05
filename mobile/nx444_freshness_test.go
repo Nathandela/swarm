@@ -51,6 +51,7 @@ func pairedOutcome(machine string, epoch uint32) *pairing.DeviceOutcome {
 		MachineStatic: []byte(machine + "-static"),
 		Machine: pairing.MachinePayload{
 			Hostname:            machine,
+			OperatorNamespace:   "owner",
 			MachineEndpointID:   machine,
 			MachineRelayAuthPub: pub,
 			MachineSignPub:      pub,

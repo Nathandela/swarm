@@ -28,14 +28,17 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/relayhome"
 )
 
 // StateSchemaVersion stamps the on-disk blob. A blob stamped with a HIGHER version was
 // written by a newer build and is refused (ErrFutureSchema) rather than decoded with this
 // build's field set: silently dropping a coordinate it does not know means resetting a
 // send-seq ceiling or a receive high-water to zero, which is exactly the replay hole this
-// file closes. Every shipped version keeps a byte-literal fixture in state_test.go that
-// must go on loading (PB-STATE-5).
+// file closes. Every shipped version keeps a byte-literal fixture in state_test.go. An
+// older ACTIVE pairing that lacks a newly required authenticated authority coordinate is
+// deliberately refused rather than inferred; disowned/unpaired fixtures still exercise
+// the mechanical migration path (PB-STATE-5).
 //
 // v2 adds the coordinates the gomobile facade (S8) is the first consumer to need:
 // MachineRelayAuthPub, PushToken, PushPreference and ReconciledEpoch. The bump is what
@@ -202,7 +205,11 @@ import (
 // the retained reply as a replay. Result order is independent of logical FIFO position, so a
 // long-lived admitted send whose answer arrives late is not immediately evicted as the “oldest”
 // visible result. Pre-v21 terminal rows decode with zero and are conservatively oldest.
-const StateSchemaVersion = 21
+//
+// v22 adds operator_namespace beside the machine relay-auth public key. The namespace and
+// that key are the two authenticated inputs a relay-v2 reconnect must use to recompute its
+// canonical home; dropping either can redirect or strand the pairing after process death.
+const StateSchemaVersion = 22
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -268,6 +275,9 @@ type State struct {
 	// machine may append back. Without it a restored phone holds a valid content key, a
 	// valid send-seq and no destination -- and nothing fails loudly.
 	MachineRelayAuthPub []byte
+	// OperatorNamespace is the relay-v2 home namespace authenticated in pairing msg2.
+	// Together with MachineRelayAuthPub it is the durable input to the canonical home KDF.
+	OperatorNamespace string
 	// RelaySPKIPin is the SHA-256 of the relay certificate's SubjectPublicKeyInfo, pinned
 	// at pairing from MachinePayload (ADR-007 B33/B34). Empty means the machine published
 	// no pin. It is a coordinate rather than a key: it says which relay this phone is
@@ -627,6 +637,7 @@ type stateFile struct {
 	MachineStatic       []byte `json:"machine_static,omitempty"`
 	MachineSignPub      []byte `json:"machine_sign_pub,omitempty"`
 	MachineRelayAuthPub []byte `json:"machine_relay_auth_pub,omitempty"`
+	OperatorNamespace   string `json:"operator_namespace,omitempty"`
 	RelaySPKIPin        []byte `json:"relay_spki_pin,omitempty"`
 	// RelayTLSPolicy is ADR-016 W1's named policy (see State.RelayTLSPolicy). Omitempty for
 	// the same reason RelaySPKIPin is: absent means a phone that has never learned one, and
@@ -939,6 +950,9 @@ func (s *fileStore) saveLocked(st State) error {
 	if st.purgeGen < s.purgeGen {
 		st = disown(st)
 	}
+	if err := validateRelayHomeAuthority(st); err != nil {
+		return err
+	}
 	// The durable profile is authenticated for exactly the identity that held it when
 	// Reconcile succeeded. Direct Store users do not pass through Core.persistLocked, so the
 	// custody boundary repeats the fence rather than letting a whole-state machine/epoch
@@ -1007,6 +1021,19 @@ func (s *fileStore) saveLocked(st State) error {
 	}
 	s.st = merged
 	s.legacyPendingAuthority = false
+	return nil
+}
+
+func validateRelayHomeAuthority(st State) error {
+	// An unpaired namespace has no machine relay key yet. A disowned pairing retains public
+	// coordinates for diagnosis/re-pairing but has no live relay authority. Every active
+	// pairing must carry both authenticated home inputs together.
+	if len(st.MachineRelayAuthPub) == 0 || st.Disowned {
+		return nil
+	}
+	if err := relayhome.ValidateNamespace(st.OperatorNamespace); err != nil {
+		return fmt.Errorf("phonecore: active pairing has invalid operator namespace")
+	}
 	return nil
 }
 
@@ -1499,6 +1526,13 @@ func (s *fileStore) load() error {
 		// not write a blob stamped with an empty machine, or it discards itself next launch.
 		return nil
 	}
+	if err := validateRelayHomeAuthority(State{
+		MachineRelayAuthPub: f.MachineRelayAuthPub,
+		OperatorNamespace:   f.OperatorNamespace,
+		Disowned:            f.Disowned,
+	}); err != nil {
+		return fmt.Errorf("%w: %s: malformed operator namespace", ErrCorruptState, path)
+	}
 	if f.RelayIncarnation != "" && !validPersistedRelayIncarnation(f.RelayIncarnation) {
 		return fmt.Errorf("%w: %s: malformed relay mailbox incarnation", ErrCorruptState, path)
 	}
@@ -1535,6 +1569,7 @@ func (s *fileStore) load() error {
 		MachineStatic:             f.MachineStatic,
 		MachineSignPub:            f.MachineSignPub,
 		MachineRelayAuthPub:       f.MachineRelayAuthPub,
+		OperatorNamespace:         f.OperatorNamespace,
 		RelaySPKIPin:              f.RelaySPKIPin,
 		RelayTLSPolicy:            f.RelayTLSPolicy,
 		Disowned:                  f.Disowned,
@@ -1803,6 +1838,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		MachineStatic:             st.MachineStatic,
 		MachineSignPub:            st.MachineSignPub,
 		MachineRelayAuthPub:       st.MachineRelayAuthPub,
+		OperatorNamespace:         st.OperatorNamespace,
 		RelaySPKIPin:              st.RelaySPKIPin,
 		RelayTLSPolicy:            st.RelayTLSPolicy,
 		Disowned:                  st.Disowned,

@@ -185,7 +185,8 @@ func TestPBNET1_TheFacadeDrivesTheRealClientFromPairingThroughAppend(t *testing.
 			return true, nil
 		},
 		Payload: pairing.MachinePayload{
-			Hostname: "s9.local",
+			Hostname:          "s9.local",
+			OperatorNamespace: "owner",
 			// THE REAL COORDINATES, and that is the point of this test rather than an
 			// incidental choice. The existing pairing conformance tests publish a ZERO
 			// MachineRelayAuthPub, which is harmless for a SAS assertion and fatal for

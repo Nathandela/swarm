@@ -119,6 +119,7 @@ func s15MachineRelayPub() []byte { return s15Filled(0xC3) }
 func s15RelaySPKIPin() []byte { return s15Filled(0xD4) }
 
 const s15RelayTLSPolicy = "pinned_spki"
+const s15OperatorNamespace = "owner"
 
 func s15Filled(first byte) []byte {
 	b := make([]byte, 32)
@@ -152,6 +153,7 @@ func s15State() State {
 		MachineStatic:             s15MachineStatic(),
 		MachineSignPub:            s15MachineSignPub(),
 		MachineRelayAuthPub:       s15MachineRelayPub(),
+		OperatorNamespace:         s15OperatorNamespace,
 		RelaySPKIPin:              s15RelaySPKIPin(),
 		RelayTLSPolicy:            s15RelayTLSPolicy,
 		RoutingID:                 s15RoutingID,
@@ -333,6 +335,8 @@ func s15Inventory() []s15Tier {
 			why: "a public key pinned at pairing"},
 		{field: "MachineRelayAuthPub", needles: s15Raw(s15MachineRelayPub()),
 			why: "a public key, and the destination the wake path needs to reach the machine at all"},
+		{field: "OperatorNamespace", needles: s15Str(s15OperatorNamespace),
+			why: "the authenticated public home coordinate paired with MachineRelayAuthPub; a background-resumed relay reconnect needs both without user presence"},
 		{field: "RelaySPKIPin", needles: s15Raw(s15RelaySPKIPin()),
 			why: "a hash of a public key from a public certificate; it is a REFUSAL criterion, not a " +
 				"secret, and the wake path must apply it with no user present -- a pin behind the " +

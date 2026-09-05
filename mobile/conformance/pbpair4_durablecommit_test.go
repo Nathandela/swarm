@@ -80,6 +80,7 @@ func pbPair4Offer(t *testing.T, m *b54Machine) (qr string, done <-chan pbPair4Re
 		Confirm:      func(context.Context, [6]string, string) (bool, error) { return true, nil },
 		Payload: pairing.MachinePayload{
 			Hostname:            "pbpair4.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte(relay.RoutingID(m.authPub)),
 			MachineRelayAuthPub: m.authPub,
 			RecipientPub:        m.id.RecipientPublic(),

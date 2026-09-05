@@ -379,6 +379,7 @@ func (r *s17Rig) seedState(ks crypto.KeyStore) {
 	st := phonecore.State{
 		Machine:             s17Machine,
 		MachineRelayAuthPub: r.machinePub,
+		OperatorNamespace:   "owner",
 		RoutingID:           relay.RoutingID(ks.RelayAuthPublic()),
 		EpochID:             s17Epoch,
 		Keys:                r.Keys,

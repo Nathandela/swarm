@@ -215,6 +215,7 @@ func s6bNewLatencyRig(t *testing.T) s6bLatencyRig {
 		Confirm:      func(context.Context, [6]string, string) (bool, error) { return true, nil },
 		Payload: pairing.MachinePayload{
 			Hostname:            "s6b-latency.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte("machine-routing-id-0001"),
 			MachineRelayAuthPub: make([]byte, 32),
 			RecipientPub:        machineID.RecipientPublic(),

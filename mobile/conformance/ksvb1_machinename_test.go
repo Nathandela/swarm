@@ -57,6 +57,7 @@ func ksvb1Offer(t *testing.T, m *b54Machine, hostname string) string {
 		Confirm:      func(context.Context, [6]string, string) (bool, error) { return true, nil },
 		Payload: pairing.MachinePayload{
 			Hostname:            hostname,
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte(relay.RoutingID(m.authPub)),
 			MachineRelayAuthPub: m.authPub,
 			RecipientPub:        m.id.RecipientPublic(),

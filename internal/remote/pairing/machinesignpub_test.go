@@ -50,6 +50,7 @@ func fillMachineSignPub() []byte {
 // preserved -- guarding against a mis-ordered field append/read.
 func TestMachinePayload_SignPubRoundTrip(t *testing.T) {
 	want := MachinePayload{
+		OperatorNamespace:   "owner",
 		Hostname:            "test-machine.local",
 		MachineRoutingID:    []byte("machine-routing-id-0001"),
 		MachineRelayAuthPub: []byte("machine-relay-auth-pub-ed25519!!"), // 32B, distinct

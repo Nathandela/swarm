@@ -153,6 +153,7 @@ func (m *s10Machine) pairWith(secret [32]byte, rid [16]byte) (qr string, sasSeen
 		},
 		Payload: pairing.MachinePayload{
 			Hostname:            "s10-bootstrap.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte(relay.RoutingID(m.authPub)),
 			MachineRelayAuthPub: m.authPub,
 			RecipientPub:        m.identity.RecipientPublic(),

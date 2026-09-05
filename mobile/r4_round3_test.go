@@ -141,7 +141,7 @@ func TestRegistryOnly_PinWithholdsAckUntilUncertainBootstrapRetry(t *testing.T) 
 		return reg.CommitBootstrap(d)
 	}
 	t.Cleanup(func() { commitBootstrapAuthority = original })
-	out := &pairing.DeviceOutcome{Machine: pairing.MachinePayload{MachineEndpointID: "m-a"}}
+	out := &pairing.DeviceOutcome{Machine: pairing.MachinePayload{MachineEndpointID: "m-a", OperatorNamespace: "owner"}}
 	if err := app.pin(out); !errors.Is(err, phonecore.ErrBootstrapCommitUncertain) {
 		t.Fatalf("first pin error = %v, want uncertainty so RunDevice withholds ACK", err)
 	}

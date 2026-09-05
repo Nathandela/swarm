@@ -119,7 +119,7 @@ func b1NewRig(t *testing.T, front func(*testing.T, string) string) *b1Rig {
 	t.Setenv(daemon.EnvStateDir, rig.stateDir)
 
 	var out, errOut bytes.Buffer
-	if exit := runRemote([]string{"init", "--relay-url", dialURL}, &out, &errOut); exit != 0 {
+	if exit := runRemote([]string{"init", "--relay-url", dialURL, "--relay-namespace", "owner"}, &out, &errOut); exit != 0 {
 		t.Fatalf("`swarm remote init --relay-url %s` exit = %d, want 0; stderr=%q",
 			dialURL, exit, errOut.String())
 	}

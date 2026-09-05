@@ -236,17 +236,18 @@ func injectFaultedPairing(t *testing.T, sk *Daemon, fault decisionFault) (chan *
 	var mu sync.Mutex
 	handedOut := 0
 	sk.api.pairing = &pairingConfig{
-		Static:       machineID.NoiseStatic(),
-		RecipientPub: machineID.RecipientPublic(),
-		SignPub:      signPub,
-		SignPriv:     signPriv,
-		EpochID:      1,
-		GrantSeq:     1,
-		EpochKeys:    keys,
-		Hostname:     "test-machine.local",
-		RoutingID:    []byte("machine-routing-id-0001"),
-		RelayAuthPub: make([]byte, 32),
-		RelayURL:     "ws://rendezvous.test:9999",
+		Static:            machineID.NoiseStatic(),
+		RecipientPub:      machineID.RecipientPublic(),
+		SignPub:           signPub,
+		SignPriv:          signPriv,
+		EpochID:           1,
+		GrantSeq:          1,
+		EpochKeys:         keys,
+		Hostname:          "test-machine.local",
+		OperatorNamespace: "owner",
+		RoutingID:         []byte("machine-routing-id-0001"),
+		RelayAuthPub:      make([]byte, 32),
+		RelayURL:          "ws://rendezvous.test:9999",
 		NewRendezvous: func(context.Context, [16]byte) (pairing.RendezvousTransport, error) {
 			mEnd, dEnd := rendezvousPair()
 			deviceEnds <- dEnd

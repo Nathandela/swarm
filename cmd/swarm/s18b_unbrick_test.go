@@ -161,7 +161,7 @@ func s18bNewRig(t *testing.T) *s18bRig {
 	t.Setenv("TERM", "dumb")
 
 	var out, errOut bytes.Buffer
-	if exit := runRemote([]string{"init", "--relay-url", rig.relayURL}, &out, &errOut); exit != 0 {
+	if exit := runRemote([]string{"init", "--relay-url", rig.relayURL, "--relay-namespace", "owner"}, &out, &errOut); exit != 0 {
 		t.Fatalf("swarm remote init exit = %d, want 0; stderr=%q", exit, errOut.String())
 	}
 

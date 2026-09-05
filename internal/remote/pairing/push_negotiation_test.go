@@ -69,14 +69,14 @@ func TestPushBindingNegotiation_NewPeersPrepareAndVerifyOnlyAfterAgreement(t *te
 	}
 }
 
-func TestPushBindingNegotiation_OldPhoneAndOldMachineStayLegacyCompatible(t *testing.T) {
+func TestPushBindingNegotiation_UnnegotiatedPeersDoNotCreateBinding(t *testing.T) {
 	cases := []struct {
 		name           string
 		machineSupport bool
 		deviceRequest  bool
 	}{
-		{name: "old phone with new machine", machineSupport: true},
-		{name: "new phone with old machine", deviceRequest: true},
+		{name: "request absent", machineSupport: true},
+		{name: "support absent", deviceRequest: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,10 +96,10 @@ func TestPushBindingNegotiation_OldPhoneAndOldMachineStayLegacyCompatible(t *tes
 			mEnd, dEnd := newRendezvousPipe()
 			mo, mErr, do, dErr := drivePair(t, NewMachine(mp), dp, mEnd, dEnd)
 			if mErr != nil || dErr != nil || mo == nil || do == nil {
-				t.Fatalf("legacy-compatible pairing: machine=(%v,%v) device=(%v,%v)", mo, mErr, do, dErr)
+				t.Fatalf("unnegotiated pairing: machine=(%v,%v) device=(%v,%v)", mo, mErr, do, dErr)
 			}
 			if prepared.Load() != 0 || mo.PushBinding != nil {
-				t.Fatalf("prepare=%d binding=%+v; an unnegotiated peer must stay legacy", prepared.Load(), mo.PushBinding)
+				t.Fatalf("prepare=%d binding=%+v; an unnegotiated peer must not create a binding", prepared.Load(), mo.PushBinding)
 			}
 		})
 	}

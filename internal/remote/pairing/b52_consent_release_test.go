@@ -74,7 +74,7 @@ func TestB52_NoSharedSASExistsBeforeMsg3(t *testing.T) {
 	if _, err := mach.ReadMessage(msg1); err != nil {
 		t.Fatalf("read msg1: %v", err)
 	}
-	msg2, err := mach.WriteMessage(encodeMachinePayload(MachinePayload{Hostname: "m"}))
+	msg2, err := mach.WriteMessage(encodeMachinePayload(MachinePayload{Hostname: "m", OperatorNamespace: "owner"}))
 	if err != nil {
 		t.Fatalf("write msg2: %v", err)
 	}

@@ -75,6 +75,7 @@ func TestPhonesim_GrantDeliveredOverMailboxBootstrapsE2E(t *testing.T) {
 		Confirm:      func(context.Context, [6]string, string) (bool, error) { return true, nil },
 		Payload: pairing.MachinePayload{
 			Hostname:            "test-machine.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte("machine-routing-id-0001"),
 			MachineRelayAuthPub: make([]byte, 32),
 			RecipientPub:        machineID.RecipientPublic(),

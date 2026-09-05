@@ -30,9 +30,10 @@ func TestADR016Profile_ResolveGatewayParamsPublishesTheRelayTLSProfile(t *testin
 	writeMachineIdentity(t, stateDir)
 	pin := "cGluLWJ5dGVzLXBpbi1ieXRlcy1waW4tYnl0ZXMtcDE="
 	if err := relaycfg.Save(stateDir, relaycfg.Config{
-		RelayURL:  "wss://swarm-relay.example.com:8443",
-		TLSPolicy: relaycfg.PolicyWebPKI,
-		SPKIPin:   pin,
+		RelayURL:          "wss://swarm-relay.example.com:8443",
+		OperatorNamespace: "owner",
+		TLSPolicy:         relaycfg.PolicyWebPKI,
+		SPKIPin:           pin,
 	}); err != nil {
 		t.Fatalf("relaycfg.Save: %v", err)
 	}

@@ -106,16 +106,17 @@ func injectPairing(t *testing.T, sk *Daemon) chan *memRendezvous {
 
 	deviceEnds := make(chan *memRendezvous, 1)
 	sk.api.pairing = &pairingConfig{
-		Static:       machineID.NoiseStatic(),
-		RecipientPub: machineID.RecipientPublic(),
-		SignPub:      signPub,
-		SignPriv:     signPriv,
-		EpochID:      1,
-		GrantSeq:     1,
-		EpochKeys:    keys,
-		Hostname:     "test-machine.local",
-		RoutingID:    []byte("machine-routing-id-0001"),
-		RelayAuthPub: make([]byte, 32),
+		Static:            machineID.NoiseStatic(),
+		RecipientPub:      machineID.RecipientPublic(),
+		SignPub:           signPub,
+		SignPriv:          signPriv,
+		EpochID:           1,
+		GrantSeq:          1,
+		EpochKeys:         keys,
+		Hostname:          "test-machine.local",
+		OperatorNamespace: "owner",
+		RoutingID:         []byte("machine-routing-id-0001"),
+		RelayAuthPub:      make([]byte, 32),
 		// The endpoint BeginPairing puts in the QR (PB-PAIR-7). The transport below is
 		// in-memory, so nothing dials this; it stands in for the relay.json URL production
 		// always has, which BeginPairing now requires (fail-closed, no endpoint no QR).

@@ -98,18 +98,19 @@ func injectRelayPairing(t *testing.T, sk *Daemon, relayURL string) {
 		t.Fatalf("epoch keys: %v", err)
 	}
 	sk.api.pairing = &pairingConfig{
-		Static:        machineID.NoiseStatic(),
-		RecipientPub:  machineID.RecipientPublic(),
-		SignPub:       signPub,
-		SignPriv:      signPriv,
-		EpochID:       1,
-		GrantSeq:      1,
-		EpochKeys:     keys,
-		Hostname:      "test-machine.local",
-		RoutingID:     []byte("machine-routing-id-0001"),
-		RelayAuthPub:  make([]byte, 32),
-		RelayURL:      relayURL,
-		NewRendezvous: relayRendezvousFactory(relayURL, relay.MachineSecurity()),
+		Static:            machineID.NoiseStatic(),
+		RecipientPub:      machineID.RecipientPublic(),
+		SignPub:           signPub,
+		SignPriv:          signPriv,
+		EpochID:           1,
+		GrantSeq:          1,
+		EpochKeys:         keys,
+		Hostname:          "test-machine.local",
+		OperatorNamespace: "owner",
+		RoutingID:         []byte("machine-routing-id-0001"),
+		RelayAuthPub:      make([]byte, 32),
+		RelayURL:          relayURL,
+		NewRendezvous:     relayRendezvousFactory(relayURL, relay.MachineSecurity()),
 	}
 }
 

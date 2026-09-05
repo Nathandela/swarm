@@ -171,7 +171,7 @@ func TestBeginPairing_AdvertisesPushOnlyWithConfiguredProductionGateway(t *testi
 			defer cancel()
 			api := &coreAPI{stateDir: stateDir, devices: reg, clock: time.Now}
 			api.pairing = &pairingConfig{
-				Static: id.NoiseStatic(), RelayURL: "ws://127.0.0.1:1",
+				Static: id.NoiseStatic(), RelayURL: "ws://127.0.0.1:1", OperatorNamespace: "owner",
 				PushGatewayURL: tc.url,
 				NewRendezvous: func(context.Context, [16]byte) (pairing.RendezvousTransport, error) {
 					machine, _ := rendezvousPair()
@@ -199,7 +199,7 @@ func TestLoadPairingConfig_ProductionPushEndpointReachesBeginPairingCapability(t
 	stateDir := t.TempDir()
 	writeTestIdentity(t, stateDir, "push-config-machine")
 	if err := relaycfg.Save(stateDir, relaycfg.Config{
-		RelayURL: "ws://127.0.0.1:1", PushGatewayURL: "https://push-swarm.dsfactory.org",
+		RelayURL: "ws://127.0.0.1:1", OperatorNamespace: "owner", PushGatewayURL: "https://push-swarm.dsfactory.org",
 	}); err != nil {
 		t.Fatal(err)
 	}

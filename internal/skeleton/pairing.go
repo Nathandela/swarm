@@ -85,6 +85,9 @@ type pairingConfig struct {
 	// MachinePayload.RelayHost so the phone's W4 migration probe can confirm a republished
 	// profile still names the same destination.
 	RelayHost string
+	// OperatorNamespace is the relay-v2 home namespace from relay.json, carried in
+	// authenticated msg2. It is not derived from the QR URL or relay hostname.
+	OperatorNamespace string
 
 	// EndpointID is the daemon's federation endpoint id, carried into MachinePayload so
 	// the paired phone can NAME the machine it just paired with (S19). Every mutating
@@ -322,6 +325,7 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			RelaySPKIPin:        cfg.RelaySPKIPin,
 			RelayTLSPolicy:      cfg.RelayTLSPolicy,
 			RelayHost:           cfg.RelayHost,
+			OperatorNamespace:   cfg.OperatorNamespace,
 			EpochID:             cfg.EpochID,
 		},
 	}

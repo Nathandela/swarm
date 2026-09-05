@@ -120,6 +120,7 @@ func TestB30_TheWholeBlobAdoptRevertsWhatLandedSinceTheRead(t *testing.T) {
 	// against the snapshot they belong to the old one.
 	st.MachineStatic = []byte("machine-noise-static")
 	st.MachineRelayAuthPub = []byte("machine-relay-auth")
+	st.OperatorNamespace = "owner"
 	if st.EpochID != 8 {
 		st.Keys = crypto.EpochKeys{}
 	}
@@ -183,6 +184,7 @@ func TestB30_AFieldUpdateUnderTheCoreLockPreservesAConcurrentGrant(t *testing.T)
 	err := c.Mutate(func(st *State) {
 		st.MachineStatic = machineStatic
 		st.MachineRelayAuthPub = machineRelay
+		st.OperatorNamespace = "owner"
 		newEpoch = st.EpochID != 8
 		if newEpoch {
 			st.Keys = crypto.EpochKeys{}

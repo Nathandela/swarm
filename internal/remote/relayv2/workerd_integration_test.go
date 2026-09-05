@@ -65,6 +65,7 @@ func TestWorkerdNoiseMailboxReconnectReplayAndRevoke(t *testing.T) {
 			RecipientPub:        machineIdentity.RecipientPublic(),
 			MachineSignPub:      machinePub,
 			MachineEndpointID:   "workerd-machine",
+			OperatorNamespace:   "local-test",
 			EpochID:             1,
 		},
 	})

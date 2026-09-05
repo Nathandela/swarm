@@ -124,7 +124,7 @@ func TestPBOPS5_TheGatewayResolvesItsPinFromRelayJSON(t *testing.T) {
 	writeMachineIdentity(t, stateDir)
 	addPairedDevice(t, stateDir)
 	if err := relaycfg.Save(stateDir, relaycfg.Config{
-		RelayURL: "wss://relay.example.com:8443", SPKIPin: pin,
+		RelayURL: "wss://relay.example.com:8443", OperatorNamespace: "owner", SPKIPin: pin,
 	}); err != nil {
 		t.Fatalf("Save relay.json: %v", err)
 	}

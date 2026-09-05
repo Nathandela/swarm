@@ -114,6 +114,7 @@ func r3aMachineParams(t *testing.T, secret [32]byte, rid [16]byte) pairing.Machi
 		},
 		Payload: pairing.MachinePayload{
 			Hostname:            "r3a-machine.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    r3aFill(0x31, 16),
 			MachineRelayAuthPub: r3aFill(0x32, 32),
 			RecipientPub:        id.RecipientPublic(),

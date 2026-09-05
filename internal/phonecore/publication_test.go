@@ -59,6 +59,7 @@ func publicationCore(t *testing.T) *Core {
 	st := c.State()
 	st.Machine = "m1"
 	st.MachineRelayAuthPub = bytes.Repeat([]byte{0x44}, 32)
+	st.OperatorNamespace = "owner"
 	st.EpochID = 7
 	st.RoutingID = "rid-m1"
 	st.Keys = s15EpochKeys()
@@ -688,6 +689,7 @@ func TestPendingPublications_SurviveRestartAndRevokePurgesThem(t *testing.T) {
 	st := c.State()
 	st.Machine, st.EpochID, st.RoutingID, st.Keys = "m1", 7, "rid-m1", s15EpochKeys()
 	st.MachineRelayAuthPub = bytes.Repeat([]byte{0x44}, 32)
+	st.OperatorNamespace = "owner"
 	if err := c.Save(st); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

@@ -317,6 +317,7 @@ func TestR9_AnOldRelayWithoutTheWaitCapabilitySelectsThePollFallback(t *testing.
 		Machine:             machine,
 		MachineSignPub:      signPub,
 		MachineRelayAuthPub: mPub,
+		OperatorNamespace:   "owner",
 		RoutingID:           phoneTarget,
 		EpochID:             epoch,
 		Keys:                keys,

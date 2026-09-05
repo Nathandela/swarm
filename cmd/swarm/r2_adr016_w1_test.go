@@ -40,7 +40,7 @@ func TestADR016W1_RelayTLSPolicyOmittedDefaultsToWebPKI(t *testing.T) {
 	defer restore()
 
 	var stdout, stderr bytes.Buffer
-	if exit := runRemoteInit([]string{"--relay-url", "wss://swarm-relay.example.com:8443"}, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit([]string{"--relay-url", "wss://swarm-relay.example.com:8443", "--relay-namespace", "owner"}, &stdout, &stderr); exit != 0 {
 		t.Fatalf("remote init exit=%d stderr=%s", exit, stderr.String())
 	}
 	cfg, found, err := relaycfg.Load(stateDir)
@@ -61,7 +61,7 @@ func TestADR016W1_RelayPinWithNoPolicyFlagInfersPinnedSPKI(t *testing.T) {
 	pin := "cGluLWJ5dGVzLXBpbi1ieXRlcy1waW4tYnl0ZXMtcDE="
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://swarm-relay.example.com:8443", "--relay-pin", pin}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit != 0 {
 		t.Fatalf("remote init exit=%d stderr=%s", exit, stderr.String())
 	}
 	cfg, _, err := relaycfg.Load(stateDir)
@@ -87,7 +87,7 @@ func TestADR016W1_RelayPinUnderWebPKIIsRefusedNamingCompat(t *testing.T) {
 	pin := "cGluLWJ5dGVzLXBpbi1ieXRlcy1waW4tYnl0ZXMtcDE="
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://swarm-relay.example.com:8443", "--relay-tls-policy", "webpki", "--relay-pin", pin}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit == 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit == 0 {
 		t.Fatalf("remote init accepted --relay-pin with --relay-tls-policy webpki; W1 refuses this before any write")
 	}
 	if !strings.Contains(stderr.String(), "--relay-pin-compat") {
@@ -108,7 +108,7 @@ func TestADR016W1_RelayPinCompatUnderPinnedSPKIIsRefused(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://swarm-relay.example.com:8443", "--relay-tls-policy", "pinned_spki",
 		"--relay-pin", pin, "--relay-pin-compat", pin}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit == 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit == 0 {
 		t.Fatalf("remote init accepted --relay-pin-compat under pinned_spki; W1 makes it webpki-only")
 	}
 	if _, found, _ := relaycfg.Load(stateDir); found {
@@ -124,7 +124,7 @@ func TestADR016W1_PinnedSPKIWithNoPinIsRefused(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://swarm-relay.example.com:8443", "--relay-tls-policy", "pinned_spki"}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit == 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit == 0 {
 		t.Fatalf("remote init accepted --relay-tls-policy pinned_spki with no --relay-pin; W1 makes the pin mandatory in this policy")
 	}
 }
@@ -139,7 +139,7 @@ func TestADR016W1_WebPKIWithCompatPinPublishesBothFieldsIndependently(t *testing
 	pin := "cGluLWJ5dGVzLXBpbi1ieXRlcy1waW4tYnl0ZXMtcDE="
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://swarm-relay.example.com:8443", "--relay-tls-policy", "webpki", "--relay-pin-compat", pin}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit != 0 {
 		t.Fatalf("remote init exit=%d stderr=%s", exit, stderr.String())
 	}
 	cfg, _, err := relaycfg.Load(stateDir)
@@ -170,7 +170,7 @@ func TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteAnAlreadyPinnedMachine(t 
 	pin := "cGluLWJ5dGVzLXBpbi1ieXRlcy1waW4tYnl0ZXMtcDE="
 	var stdout, stderr bytes.Buffer
 	first := []string{"--relay-url", "wss://swarm-relay.example.com:8443", "--relay-pin", pin}
-	if exit := runRemoteInit(first, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit(append(first, "--relay-namespace", "owner"), &stdout, &stderr); exit != 0 {
 		t.Fatalf("first remote init exit=%d stderr=%s", exit, stderr.String())
 	}
 	cfg, _, err := relaycfg.Load(stateDir)
@@ -182,7 +182,7 @@ func TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteAnAlreadyPinnedMachine(t 
 	stdout.Reset()
 	stderr.Reset()
 	second := []string{"--relay-url", "wss://swarm-relay.example.com:8443"}
-	if exit := runRemoteInit(second, &stdout, &stderr); exit == 0 {
+	if exit := runRemoteInit(append(second, "--relay-namespace", "owner"), &stdout, &stderr); exit == 0 {
 		t.Fatalf("re-running remote init with no --relay-tls-policy silently demoted an "+
 			"already-pinned machine to webpki (stdout=%q); it must refuse, not rewrite", stdout.String())
 	}
@@ -218,15 +218,16 @@ func TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteALegacyPinnedMachine(t *t
 	// Seed the LEGACY shape directly (not through the CLI, which always writes an explicit
 	// policy): a relay.json as it existed before relay_tls_policy was ever introduced.
 	if err := relaycfg.Save(stateDir, relaycfg.Config{
-		RelayURL: "wss://swarm-relay.example.com:8443",
-		SPKIPin:  pin,
+		RelayURL:          "wss://swarm-relay.example.com:8443",
+		OperatorNamespace: "owner",
+		SPKIPin:           pin,
 	}); err != nil {
 		t.Fatalf("seed relaycfg.Save: %v", err)
 	}
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://swarm-relay.example.com:8443"}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit == 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit == 0 {
 		t.Fatalf("re-running remote init with no --relay-tls-policy silently demoted a LEGACY "+
 			"pinned machine (relay_spki_pin set, no relay_tls_policy field) to webpki "+
 			"(stdout=%q); it must refuse, not rewrite", stdout.String())
@@ -260,7 +261,7 @@ func TestADR016W1_BareReRunOnAPinnedMachineStillProvisionsTheIdentity(t *testing
 	pin := "cGluLWJ5dGVzLXBpbi1ieXRlcy1waW4tYnl0ZXMtcDE="
 	var stdout, stderr bytes.Buffer
 	first := []string{"--relay-url", "wss://swarm-relay.example.com:8443", "--relay-pin", pin}
-	if exit := runRemoteInit(first, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit(append(first, "--relay-namespace", "owner"), &stdout, &stderr); exit != 0 {
 		t.Fatalf("first remote init exit=%d stderr=%s", exit, stderr.String())
 	}
 	firstIdentity := strings.TrimSpace(stdout.String())
@@ -307,7 +308,7 @@ func TestADR016W1_ReRunWithCorruptRelayJSONRefusesRatherThanSilentlyOverwriting(
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://swarm-relay.example.com:8443"}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit == 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit == 0 {
 		t.Fatalf("remote init silently overwrote a CORRUPT relay.json (stdout=%q); "+
 			"relaycfg.Load's parse error must fail the run closed, not be discarded", stdout.String())
 	}
@@ -330,7 +331,7 @@ func TestADR016W1_WebPKIRefusesAnIPLiteralHost(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://203.0.113.7:8443", "--relay-tls-policy", "webpki"}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit == 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit == 0 {
 		t.Fatalf("remote init accepted an IP-literal relay under webpki; W6 refuses it before any write")
 	}
 	if _, found, _ := relaycfg.Load(stateDir); found {
@@ -350,7 +351,7 @@ func TestADR016W1_WebPKIWarnsButAdmitsAnObviouslyPrivateDNSSuffix(t *testing.T) 
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://swarm-relay.local:8443", "--relay-tls-policy", "webpki"}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit != 0 {
 		t.Fatalf("remote init refused a private-suffix host under webpki (should warn, not "+
 			"refuse): exit=%d stderr=%s", exit, stderr.String())
 	}
@@ -384,16 +385,17 @@ func TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteAnUnrecognisedPinnedPolic
 	// A relay.json carrying an unrecognised policy string alongside a real pin -- neither
 	// "pinned_spki" nor the legacy empty shape, but SPKIPin is set, so Security() pins it.
 	if err := relaycfg.Save(stateDir, relaycfg.Config{
-		RelayURL:  "wss://swarm-relay.example.com:8443",
-		TLSPolicy: "Pinned_SPKI",
-		SPKIPin:   pin,
+		RelayURL:          "wss://swarm-relay.example.com:8443",
+		OperatorNamespace: "owner",
+		TLSPolicy:         "Pinned_SPKI",
+		SPKIPin:           pin,
 	}); err != nil {
 		t.Fatalf("seed relaycfg.Save: %v", err)
 	}
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"--relay-url", "wss://swarm-relay.example.com:8443"}
-	if exit := runRemoteInit(args, &stdout, &stderr); exit == 0 {
+	if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit == 0 {
 		t.Fatalf("re-running remote init with no --relay-tls-policy silently demoted a "+
 			"machine carrying an UNRECOGNISED pinned policy (stdout=%q); relaycfg.Config.Security "+
 			"reads anything other than %q as pinned, so the guard must too", stdout.String(), relaycfg.PolicyWebPKI)
@@ -428,14 +430,14 @@ func TestADR016W1_ReRunWithoutPolicyFlagCarriesForwardTheExistingCompatibilityPi
 	url := "wss://swarm-relay.example.com:8443"
 	var stdout, stderr bytes.Buffer
 	first := []string{"--relay-url", url, "--relay-tls-policy", "webpki", "--relay-pin-compat", pin}
-	if exit := runRemoteInit(first, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit(append(first, "--relay-namespace", "owner"), &stdout, &stderr); exit != 0 {
 		t.Fatalf("first remote init exit=%d stderr=%s", exit, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
 	second := []string{"--relay-url", url} // no --relay-tls-policy, no --relay-pin-compat
-	if exit := runRemoteInit(second, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit(append(second, "--relay-namespace", "owner"), &stdout, &stderr); exit != 0 {
 		t.Fatalf("flagless re-run over an unchanged relay was refused: exit=%d stderr=%s",
 			exit, stderr.String())
 	}
@@ -463,14 +465,14 @@ func TestADR016W1_ExplicitWebPKIWithNoCompatPinWithdrawsAnExistingCompatibilityP
 	url := "wss://swarm-relay.example.com:8443"
 	var stdout, stderr bytes.Buffer
 	first := []string{"--relay-url", url, "--relay-tls-policy", "webpki", "--relay-pin-compat", pin}
-	if exit := runRemoteInit(first, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit(append(first, "--relay-namespace", "owner"), &stdout, &stderr); exit != 0 {
 		t.Fatalf("first remote init exit=%d stderr=%s", exit, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
 	second := []string{"--relay-url", url, "--relay-tls-policy", "webpki"} // deliberate, no compat pin
-	if exit := runRemoteInit(second, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit(append(second, "--relay-namespace", "owner"), &stdout, &stderr); exit != 0 {
 		t.Fatalf("explicit --relay-tls-policy webpki with no compat pin was refused: exit=%d stderr=%s",
 			exit, stderr.String())
 	}
@@ -495,7 +497,7 @@ func TestADR016W1_ReRunRefusesToDemoteAPolicyStoredWithoutAPin(t *testing.T) {
 		t.Run(stored, func(t *testing.T) {
 			stateDir, restore := r2w1RemoteInitStateDir(t)
 			defer restore()
-			seed := []byte(`{"relay_url":"wss://a.example.com","relay_tls_policy":"` + stored + `"}`)
+			seed := []byte(`{"relay_url":"wss://a.example.com","operator_namespace":"owner","relay_tls_policy":"` + stored + `"}`)
 			dir := filepath.Join(stateDir, relaycfg.Dir)
 			if err := os.MkdirAll(dir, 0o700); err != nil {
 				t.Fatal(err)
@@ -505,7 +507,7 @@ func TestADR016W1_ReRunRefusesToDemoteAPolicyStoredWithoutAPin(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			args := []string{"--relay-url", "wss://a.example.com"}
-			if exit := runRemoteInit(args, &stdout, &stderr); exit == 0 {
+			if exit := runRemoteInit(append(args, "--relay-namespace", "owner"), &stdout, &stderr); exit == 0 {
 				cfg, _, _ := relaycfg.Load(stateDir)
 				t.Fatalf("flagless re-run over stored policy %q exited 0 and left policy %q; "+
 					"a policy demotion must refuse whether or not a pin is present", stored, cfg.TLSPolicy)

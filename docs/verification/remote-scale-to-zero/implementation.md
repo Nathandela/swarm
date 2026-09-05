@@ -690,3 +690,65 @@ was found. Existing project-level runtime grants demonstrate FCM send, not the n
 Firestore/secret access. No GCP resource, IAM or billing change was made. The owner's
 ignored Android Firebase config exists in the owner checkout, not the temporary
 worktree; no credential values were requested in chat.
+
+## Authenticated namespace carriage and native pre-authentication limits
+
+Under agents-tracker-wjp4.6, Sol added one required operator namespace from explicit
+`remote init --relay-namespace` configuration through authenticated Noise msg2 to
+the same durable phone-state mutation that pins the machine relay-auth public key
+before the pairing ACK. The QR is unchanged. One dependency-free scalar validator
+enforces the same bounded ASCII grammar in Go; the Worker checks the same grammar.
+The first attempted shared-package placement pulled forbidden legacy dependencies
+into the mobile closure, so review moved only the validator to `relayhome` and
+documented its narrow allowance. No unused profile factory or new dependency was added.
+
+Phone schema 22 requires a canonical namespace on active paired state at both Load
+and Save, including older schema inputs. Root caught an initial load-then-save path
+that could brick the next restart. Regression tests now refuse that old pairing on
+first load and prove a rejected save changes neither disk bytes nor memory; disowned
+and unpaired state remain writable. The actual Noise test proves invalid msg2 fails
+before verification callbacks, SAS, consent or commit. Retired wire shapes are refused,
+not assigned a guessed namespace. Terra updated affected valid caller fixtures;
+the full mobile gate found an additional disk-backed publication seed omitted by the
+first focused selection. After correction, all 20 named Publication/Composer race
+tests passed (8.270 s). Sol independently reviewed the complete trust chain.
+
+Under agents-tracker-wjp4.7, the Worker now checks route, admission and WebSocket
+upgrade before the native rate limiter and either Durable Object. One binding has
+constant `ws` and `pair` keys, initially 60 calls per 60 seconds per location. Missing,
+throwing or malformed limiter access fails closed with 503; denial returns 429 and
+`Retry-After: 60`. Throwing binding getters in the tests prove rejected requests do
+not reach Durable Objects. This is a permissive per-location abuse control, not a
+global counter, availability guarantee or exact monetary limit.
+
+Root's independent full local suite on 8901 passed protocol/cost, native Go integration
+(2.287 s), bounded alarm work, expired-receipt handling (4.468 s) and the separate fresh
+native control observing 60 pair lookups followed by a 429. The production-shaped
+offline dry-run reports 53.82 KiB / 11.35 KiB gzip, two Durable Objects and one 60/60
+rate binding, with no admission/test variables. Chrome's unfiltered account inventory
+showed exactly one application, `s`; its current version had no limiter binding, so
+namespace ID 1001 is reserved for this sole current Worker, not claimed historically
+unused across the account.
+
+Earlier full-run attempts are not green evidence: one hit the outer deadline and
+another exposed Wrangler's shared default debugger port despite separate HTTP ports.
+The test runner now requests an ephemeral debugger port without changing its deadline
+or adding a production bypass. A separate transient native-process startup stall
+also interrupted tooling; a one-second sample of root's hung version diagnostic stayed
+at `_dyld_start`. It recovered without changes to security controls, installations or
+user shell configuration. Subsequent commands use non-login shells.
+
+These are foundation changes, not an active client cutover. Production callers still
+need the relay-issued generation, home-bound durable cursors/incarnations, retained
+delivery retry semantics, revocation obligations and selected-machine reconnect wiring.
+Admission remains closed; real phone/Google, hosted hibernation, recovery and billing
+gates remain open. Final broad local gates and CI are recorded below when complete.
+
+Root's final independent race gates passed: full mobile (51.419 s), conformance
+(257.687 s), phonecore (40.273 s), relayhome (1.887 s), relaycfg (2.245 s), pairing
+(21.461 s), machine sidecar (38.116 s) and supervisor (13.544 s). The serialized
+command initially failed only mobile's missed publication seed; its separate full
+rerun above is the corrected result. Full command CLI race passed earlier (91.772 s),
+and Android source gates passed (340.912 s). Final whole build/vet and lint passed
+with zero issues. Shell syntax and whitespace checks passed. The full skeleton rerun
+and remote CI are pending at this source checkpoint; no real handset result is claimed.

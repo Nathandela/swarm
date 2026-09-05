@@ -93,7 +93,7 @@ func TestPBOPS5_RemoteInitPersistsThePin(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv(daemon.EnvStateDir, stateDir)
 	var out, errOut strings.Builder
-	if code := runRemoteInit([]string{"--relay-url", "wss://relay.example.com", "--relay-pin", pin}, &out, &errOut); code != 0 {
+	if code := runRemoteInit([]string{"--relay-url", "wss://relay.example.com", "--relay-pin", pin, "--relay-namespace", "owner"}, &out, &errOut); code != 0 {
 		t.Fatalf("remote init --relay-pin exited %d: %s", code, errOut.String())
 	}
 
@@ -132,7 +132,7 @@ func TestPBOPS5_RemoteInitRefusesAnUnusablePin(t *testing.T) {
 			stateDir := t.TempDir()
 			t.Setenv(daemon.EnvStateDir, stateDir)
 			var out, errOut strings.Builder
-			if code := runRemoteInit(args, &out, &errOut); code == 0 {
+			if code := runRemoteInit(append(args, "--relay-namespace", "owner"), &out, &errOut); code == 0 {
 				t.Fatalf("remote init accepted %v", args)
 			}
 			if _, found, _ := relaycfg.Load(stateDir); found {
@@ -151,7 +151,7 @@ func TestPBOPS5_TheCLIOwnerConnectionHonoursTheConfiguredPin(t *testing.T) {
 
 	// ---- control: the matching pin completes the relay-auth handshake ------
 	reached := false
-	stateDir := b34StateDir(t, relaycfg.Config{RelayURL: wss, SPKIPin: b34SPKIPin(cert)})
+	stateDir := b34StateDir(t, relaycfg.Config{RelayURL: wss, OperatorNamespace: "owner", SPKIPin: b34SPKIPin(cert)})
 	if err := withMachineRelay(stateDir, func(_ context.Context, cl *relay.Client) error {
 		reached = cl.RoutingID() != ""
 		return nil
@@ -166,7 +166,7 @@ func TestPBOPS5_TheCLIOwnerConnectionHonoursTheConfiguredPin(t *testing.T) {
 	called := false
 	wrongSum := sha256.Sum256([]byte("some other relay's public key"))
 	stateDir = b34StateDir(t, relaycfg.Config{
-		RelayURL: wss, SPKIPin: base64.StdEncoding.EncodeToString(wrongSum[:]),
+		RelayURL: wss, OperatorNamespace: "owner", SPKIPin: base64.StdEncoding.EncodeToString(wrongSum[:]),
 	})
 	err := withMachineRelay(stateDir, func(context.Context, *relay.Client) error {
 		called = true

@@ -78,7 +78,7 @@ func TestPBOPS5_TheDaemonRendezvousHonoursTheConfiguredPin(t *testing.T) {
 	copy(id[:], "b34-rendezvous--")
 
 	// ---- control: the matching pin opens a rendezvous transport ------------
-	pc := b34PairingConfig(t, relaycfg.Config{RelayURL: wss, SPKIPin: b34SPKIPin(cert)})
+	pc := b34PairingConfig(t, relaycfg.Config{RelayURL: wss, OperatorNamespace: "owner", SPKIPin: b34SPKIPin(cert)})
 	rt, err := pc.NewRendezvous(ctx, id)
 	if err != nil {
 		t.Fatalf("the MATCHING pin was refused, so this rig cannot demonstrate anything: %v", err)
@@ -90,7 +90,7 @@ func TestPBOPS5_TheDaemonRendezvousHonoursTheConfiguredPin(t *testing.T) {
 	// ---- the fence: a valid pin for a different key ------------------------
 	wrongSum := sha256.Sum256([]byte("some other relay's public key"))
 	pc = b34PairingConfig(t, relaycfg.Config{
-		RelayURL: wss, SPKIPin: base64.StdEncoding.EncodeToString(wrongSum[:]),
+		RelayURL: wss, OperatorNamespace: "owner", SPKIPin: base64.StdEncoding.EncodeToString(wrongSum[:]),
 	})
 	rt, err = pc.NewRendezvous(ctx, id)
 	if !errors.Is(err, relay.ErrPinMismatch) {
@@ -110,7 +110,7 @@ func TestPBOPS5_AnUnpinnedMachineKeepsTheLoopbackRelay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pc := b34PairingConfig(t, relaycfg.Config{RelayURL: srv.URL()})
+	pc := b34PairingConfig(t, relaycfg.Config{RelayURL: srv.URL(), OperatorNamespace: "owner"})
 	var id [16]byte
 	copy(id[:], "b34-loopback----")
 	if _, err := pc.NewRendezvous(ctx, id); err != nil {

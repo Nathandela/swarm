@@ -299,7 +299,8 @@ func TestPairing_MalformedPayloadDecodeFailsClosed(t *testing.T) {
 	deviceDecode := func(b []byte) error { _, err := decodeDevicePayload(b); return err }
 
 	validMach := encodeMachinePayload(MachinePayload{
-		Hostname: "h", MachineRoutingID: []byte("r"), MachineRelayAuthPub: []byte("a"),
+		OperatorNamespace: "owner",
+		Hostname:          "h", MachineRoutingID: []byte("r"), MachineRelayAuthPub: []byte("a"),
 		RecipientPub: []byte("p"), EpochID: 7,
 	})
 	validDev := encodeDevicePayload(DevicePayload{

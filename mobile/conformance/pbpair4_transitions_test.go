@@ -535,6 +535,7 @@ func newPBPair4Machine(t *testing.T, relayURL string, hold pbPair4Hold) (*pbPair
 		},
 		Payload: pairing.MachinePayload{
 			Hostname:            "pbpair4-transitions.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte(relay.RoutingID(m.authPub)),
 			MachineRelayAuthPub: m.authPub,
 			RecipientPub:        m.identity.RecipientPublic(),

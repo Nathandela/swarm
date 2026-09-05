@@ -72,7 +72,7 @@ func TestRemoteInit_RelayURLWritesConfig(t *testing.T) {
 	const wantURL = "ws://127.0.0.1:9999"
 
 	var stdout, stderr bytes.Buffer
-	if exit := runRemoteInit([]string{"--relay-url", wantURL}, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit([]string{"--relay-url", wantURL, "--relay-namespace", "owner"}, &stdout, &stderr); exit != 0 {
 		t.Fatalf("runRemoteInit([--relay-url %s]) exit = %d, want 0; stderr=%q", wantURL, exit, stderr.String())
 	}
 
@@ -151,7 +151,7 @@ func TestRemoteInit_RejectsARelayURLTheQRCannotCarry(t *testing.T) {
 			t.Setenv(daemon.EnvStateDir, dir)
 
 			var stdout, stderr bytes.Buffer
-			exit := runRemoteInit([]string{"--relay-url", tc.url}, &stdout, &stderr)
+			exit := runRemoteInit([]string{"--relay-url", tc.url, "--relay-namespace", "owner"}, &stdout, &stderr)
 			if exit == 0 {
 				t.Fatalf("runRemoteInit accepted a %d-character relay URL (exit 0); `swarm remote "+
 					"pair` will then draw NO QR symbol and blame the terminal for it. The limit is "+
@@ -195,7 +195,7 @@ func TestRemoteInit_RejectsAnUndialableRelayURL(t *testing.T) {
 			t.Setenv(daemon.EnvStateDir, dir)
 
 			var stdout, stderr bytes.Buffer
-			if exit := runRemoteInit([]string{"--relay-url", tc.url}, &stdout, &stderr); exit == 0 {
+			if exit := runRemoteInit([]string{"--relay-url", tc.url, "--relay-namespace", "owner"}, &stdout, &stderr); exit == 0 {
 				t.Fatalf("runRemoteInit accepted --relay-url %q (exit 0); a phone that scans the "+
 					"pairing QR has this string and nothing else to dial", tc.url)
 			}
@@ -225,7 +225,7 @@ func TestRemoteInit_AcceptsARelayURLAtTheCeiling(t *testing.T) {
 	t.Setenv(daemon.EnvStateDir, dir)
 
 	var stdout, stderr bytes.Buffer
-	if exit := runRemoteInit([]string{"--relay-url", atCeiling}, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit([]string{"--relay-url", atCeiling, "--relay-namespace", "owner"}, &stdout, &stderr); exit != 0 {
 		t.Fatalf("runRemoteInit refused a relay URL of exactly %d characters (exit %d, stderr=%q); "+
 			"the ceiling must be the derived one, not a round number below it",
 			len(atCeiling), exit, stderr.String())
@@ -252,7 +252,7 @@ func TestRemoteInit_RelayURLStillCreatesIdentity(t *testing.T) {
 	t.Setenv(daemon.EnvStateDir, dir)
 
 	var stdout, stderr bytes.Buffer
-	if exit := runRemoteInit([]string{"--relay-url", "ws://127.0.0.1:9999"}, &stdout, &stderr); exit != 0 {
+	if exit := runRemoteInit([]string{"--relay-url", "ws://127.0.0.1:9999", "--relay-namespace", "owner"}, &stdout, &stderr); exit != 0 {
 		t.Fatalf("runRemoteInit([--relay-url ...]) exit = %d, want 0; stderr=%q", exit, stderr.String())
 	}
 

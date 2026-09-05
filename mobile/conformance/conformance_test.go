@@ -515,6 +515,7 @@ func (h *harness) runMachinePairing(t *testing.T) (func() [6]string, string) {
 		},
 		Payload: pairing.MachinePayload{
 			Hostname:            "conformance.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte(h.phoneTarget),
 			MachineRelayAuthPub: make([]byte, 32),
 			RecipientPub:        machineID.RecipientPublic(),

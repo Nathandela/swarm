@@ -214,6 +214,7 @@ func newMachineParams(id *crypto.Identity, secret [32]byte, rid [16]byte, confir
 			return nil
 		},
 		Payload: MachinePayload{
+			OperatorNamespace:   "owner",
 			Hostname:            "test-machine.local",
 			MachineRoutingID:    []byte("machine-routing-id-0001"),
 			MachineRelayAuthPub: []byte("machine-relay-auth-pub-ed25519!!"),

@@ -231,6 +231,7 @@ func (h *harness) seedState(ks crypto.KeyStore, machineRelayAuthPub ed25519.Publ
 		Machine:             h.Machine,
 		MachineSignPub:      h.machineSignPub,
 		MachineRelayAuthPub: machineRelayAuthPub,
+		OperatorNamespace:   "owner",
 		RoutingID:           relay.RoutingID(ks.RelayAuthPublic()),
 		EpochID:             h.EpochID,
 		Keys:                h.Keys,

@@ -113,6 +113,7 @@ func s16MachinePairingAs(t *testing.T, relayURL string, machineSignPub, mAuthPub
 		},
 		Payload: pairing.MachinePayload{
 			Hostname:            "s16.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte(relay.RoutingID(mAuthPub)),
 			MachineRelayAuthPub: mAuthPub,
 			RecipientPub:        machineID.RecipientPublic(),

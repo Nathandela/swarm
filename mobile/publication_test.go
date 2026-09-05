@@ -158,6 +158,7 @@ func publicationApp(t *testing.T, dir string) (*App, sendCtx) {
 		machineRelayPub := bytes.Repeat([]byte{0x44}, 32)
 		st.Machine = "m1"
 		st.MachineRelayAuthPub = machineRelayPub
+		st.OperatorNamespace = "owner"
 		st.RoutingID = "phone-routing-id"
 		st.EpochID = 7
 		st.Keys = keys
@@ -391,7 +392,7 @@ func TestPublicationPump_CrashAfterSequenceBeforeSealBurnsOnlyTheReservation(t *
 func TestPublicationPump_AppendSuccessBeforeAdmissionCommitRetriesTheExactEnvelope(t *testing.T) {
 	pub := bytes.Repeat([]byte{0x44}, 32)
 	store := &publicationMemoryStore{state: phonecore.State{
-		Machine: "m1", MachineRelayAuthPub: pub, EpochID: 7,
+		Machine: "m1", MachineRelayAuthPub: pub, OperatorNamespace: "owner", EpochID: 7,
 		Keys: phonecoreTestEpochKeys(),
 	}}
 	a, sc := publicationAppFromStore(t, store)

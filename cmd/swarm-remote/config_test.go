@@ -98,7 +98,7 @@ func writeRelayURL(t *testing.T, stateDir, url string) {
 	if err := os.MkdirAll(remoteDir, 0o700); err != nil {
 		t.Fatalf("mkdir remote dir: %v", err)
 	}
-	b, err := json.Marshal(map[string]string{"relay_url": url})
+	b, err := json.Marshal(map[string]string{"relay_url": url, "operator_namespace": "owner"})
 	if err != nil {
 		t.Fatalf("marshal relay.json: %v", err)
 	}

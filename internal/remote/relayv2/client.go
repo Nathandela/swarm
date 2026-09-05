@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayhome"
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/hkdf"
 )
@@ -146,8 +147,8 @@ var token = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var errorCode = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 func Dial(ctx context.Context, profile Profile, auth Auth) (*Conn, error) {
-	if profile.OperatorNamespace == "" {
-		return nil, errors.New("relay v2: operator namespace is required")
+	if err := relayhome.ValidateNamespace(profile.OperatorNamespace); err != nil {
+		return nil, fmt.Errorf("relay v2: invalid operator namespace: %w", err)
 	}
 	if !validRID(profile.MachineRID) || len(auth.PublicKey) != ed25519.PublicKeySize || auth.Sign == nil {
 		return nil, errors.New("relay v2: invalid profile or auth")

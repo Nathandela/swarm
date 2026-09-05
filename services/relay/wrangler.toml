@@ -4,6 +4,16 @@ compatibility_date = "2026-09-04"
 workers_dev = true
 preview_urls = false
 
+# Account-unique namespace 1001 is reserved for this sole relay Worker. The two
+# constant route keys in worker.mjs have independent per-location counters.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 60
+  period = 60
+
 [[durable_objects.bindings]]
 name = "HOMES"
 class_name = "RelayHome"

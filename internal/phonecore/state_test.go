@@ -86,6 +86,7 @@ func fullState() State {
 		MachineStatic:             bytes.Repeat([]byte{0xA1}, 32),
 		MachineSignPub:            bytes.Repeat([]byte{0xB2}, ed25519.PublicKeySize),
 		MachineRelayAuthPub:       bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
+		OperatorNamespace:         "owner",
 		RelaySPKIPin:              bytes.Repeat([]byte{0xD4}, sha256.Size),
 		RelayTLSPolicy:            "pinned_spki",
 		RoutingID:                 "rid-m1",
@@ -408,10 +409,11 @@ func TestState_GrantWatermarkRefusesAReplayedGrantAfterRestart(t *testing.T) {
 }
 
 // stateV1Fixture is the PINNED v1 on-disk blob (§9 rule 4). PB-STATE-5 requires a forward
-// migration path, and the only mechanical way to have one is to keep a byte-literal of
-// each shipped version loading. When StateSchemaVersion is raised this literal MUST keep
-// loading with every v1 coordinate intact -- that is the migration test, and it cannot be
-// satisfied by regenerating the fixture from the current code.
+// migration path, and the only mechanical way to inspect one is to keep a byte-literal of
+// each shipped version. When StateSchemaVersion is raised this literal MUST keep its v1
+// coordinates intact -- that is the migration artifact, and it cannot be satisfied by
+// regenerating the fixture from the current code. A later security invariant may still
+// refuse an active legacy pairing rather than invent missing authority.
 const stateV1Fixture = `{
   "schema_version": 1,
   "machine": "m1",
@@ -719,6 +721,12 @@ var stateV21Fixture = func() string {
 	return fixture[:start] + stateV21ContentPurgeable + fixture[start+end:]
 }()
 
+var stateV22Fixture = func() string {
+	fixture := strings.Replace(stateV21Fixture, `"schema_version":21`, `"schema_version":22`, 1)
+	return strings.Replace(fixture, `"machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=",`,
+		`"machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","operator_namespace":"owner",`, 1)
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -738,6 +746,7 @@ var stateFixtures = map[int]string{
 	19: stateV19Fixture,
 	20: stateV20Fixture,
 	21: stateV21Fixture,
+	22: stateV22Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
@@ -748,7 +757,7 @@ var stateFixtures = map[int]string{
 // other test here uses, over a key that is a literal rather than fresh entropy. That is what
 // lets the two sealed fields live in the byte literal at all.
 func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
-	// EVERY pinned version from v4 on, not just the newest -- this is the forward-migration path:
+	// EVERY pinned version from v4 on, not just the newest -- this exercises the migration path:
 	// a v4 blob must still yield every coordinate it carries after those fields moved inside
 	// sealed containers. Iterating the map is what makes the sealed-tag exemption above honest --
 	// a field dropped from a container has no top-level tag to miss, and fails HERE instead.
@@ -760,9 +769,9 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 	// literal that never carried it -- falsifying the very artifact that proves migration works --
 	// or to weaken this guard. An implementer hit exactly that wall and correctly refused both.
 	//
-	// So: the CURRENT version must equal fullState() exactly, and an OLDER version must load and
-	// restore every coordinate ITS OWN literal carries. A field added later is legitimately absent
-	// from an older blob; a field the old blob carries and this build drops is the defect.
+	// So: the CURRENT version must equal fullState() exactly. An older active pairing without
+	// the authenticated namespace is refused; every other older version restores each coordinate
+	// ITS OWN literal carries. A field the old blob carries and this build drops is the defect.
 	for _, version := range sortedFixtureVersions() {
 		if version < 4 {
 			continue // v1 predates the KEK and has its own test below
@@ -775,6 +784,12 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 			}
 			kek := &s14aSealer{kek: stateV4FixtureKEK}
 			st, err := OpenStore(path, "m1", kek, kek)
+			if version >= 4 && version <= 8 {
+				if !errors.Is(err, ErrCorruptState) {
+					t.Fatalf("OpenStore on active pre-namespace v%d fixture = %v, want ErrCorruptState", version, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("OpenStore on the pinned v%d fixture: %v (a shipped schema version must keep "+
 					"loading; if StateSchemaVersion was lowered, this blob is now from the future)", version, err)
@@ -828,10 +843,10 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 }
 
 // A v20 install may be killed after the machine pin and exact staged-address ownership
-// commit but before the separate push-store disposition. The first unrelated v21 write must
+// commit but before the separate push-store disposition. The first unrelated current write must
 // carry that private write-ahead phase forward; dropping it would make startup revoke the
 // address the completed pairing owns.
-func TestStateStore_V20PairingOwnershipSurvivesV21UnrelatedSave(t *testing.T) {
+func TestStateStore_V20PairingOwnershipSurvivesCurrentUnrelatedSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), StateFileName)
 	if err := os.WriteFile(path, []byte(stateV20Fixture), 0o600); err != nil {
 		t.Fatalf("write v20 fixture: %v", err)
@@ -849,7 +864,7 @@ func TestStateStore_V20PairingOwnershipSurvivesV21UnrelatedSave(t *testing.T) {
 	state := store.Load()
 	state.PushPreference.Version++ // unrelated durable mutation
 	if err := store.Save(state); err != nil {
-		t.Fatalf("rewrite v20 state as v21: %v", err)
+		t.Fatalf("rewrite v20 state as current: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -859,16 +874,16 @@ func TestStateStore_V20PairingOwnershipSurvivesV21UnrelatedSave(t *testing.T) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.SchemaVersion != 21 || persisted.PairingPushOwned != owned {
-		t.Fatalf("rewritten checkpoint = (v%d,%q), want (v21,%q)",
-			persisted.SchemaVersion, persisted.PairingPushOwned, owned)
+	if persisted.SchemaVersion != StateSchemaVersion || persisted.PairingPushOwned != owned {
+		t.Fatalf("rewritten checkpoint = (v%d,%q), want (v%d,%q)",
+			persisted.SchemaVersion, persisted.PairingPushOwned, StateSchemaVersion, owned)
 	}
 	restarted, err := OpenStore(path, "m1", kek, kek)
 	if err != nil {
-		t.Fatalf("reopen rewritten v21 state: %v", err)
+		t.Fatalf("reopen rewritten current state: %v", err)
 	}
 	if got := restarted.(*fileStore).st.pairingPushOwned; got != owned {
-		t.Fatalf("restarted v21 ownership = %q, want %q", got, owned)
+		t.Fatalf("restarted current ownership = %q, want %q", got, owned)
 	}
 }
 

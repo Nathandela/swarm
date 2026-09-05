@@ -67,6 +67,9 @@ golang.org/x/sys/cpu
 
 # --- pairing: the XXpsk0 handshake the phone drives as initiator
 github.com/Nathandela/swarm/internal/remote/pairing
+# Stdlib-only canonical validation of the operator namespace authenticated in pairing
+# and persisted beside the machine relay-auth public key.
+github.com/Nathandela/swarm/internal/remote/relayhome
 
 # --- transport: the inbound drain pacing primitives (Wave R9, playbook section 10).
 # Stdlib-only leaf (context, sync, time): DrainPacer meters the phone's MailboxWait live

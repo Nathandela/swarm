@@ -10,6 +10,7 @@ start_worker() {
   log="$scratch/$state.log"
   XDG_CONFIG_HOME="$scratch/config" WRANGLER_LOG_PATH="$scratch/debug-$state" \
     ./node_modules/.bin/wrangler dev --local --persist-to "$scratch/$state" --port "$port" \
+      --inspector-port 0 \
       --var OPERATOR_NAMESPACE:local-test \
       --var ALLOWED_MACHINE_RIDS:88564c8ede170d2ed321e21e61354184 \
       --var CHALLENGE_TTL_MS:"$challenge_ttl" --var RENDEZVOUS_TTL_MS:1000 --var RETENTION_MS:"$retention" \
@@ -44,3 +45,9 @@ wait "$wrangler" || :
 start_worker expiry-state 3000 1 30000
 RELAY_V2_EXPIRY_HTTP="http://127.0.0.1:$port" \
   go test ../../internal/remote/relayv2 -run TestExpiredReceipt -count=1
+kill "$wrangler"
+wait "$wrangler" || :
+start_worker rate-state 60000 0 30000
+RELAY_HTTP="http://127.0.0.1:$port" node test/rate-limit.mjs
+kill "$wrangler"
+wait "$wrangler" || :

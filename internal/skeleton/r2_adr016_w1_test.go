@@ -37,7 +37,7 @@ func r2w1ProvisionMachine(t *testing.T, relayURL, policy, pin string) string {
 	if err := id.Save(filepath.Join(remoteDir, remoteIdentityFile)); err != nil {
 		t.Fatalf("save identity: %v", err)
 	}
-	if err := relaycfg.Save(stateDir, relaycfg.Config{RelayURL: relayURL, TLSPolicy: policy, SPKIPin: pin}); err != nil {
+	if err := relaycfg.Save(stateDir, relaycfg.Config{RelayURL: relayURL, OperatorNamespace: "owner", TLSPolicy: policy, SPKIPin: pin}); err != nil {
 		t.Fatalf("relaycfg.Save: %v", err)
 	}
 	return stateDir

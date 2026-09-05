@@ -4,7 +4,7 @@ Updated 2026-09-05. Source inspected: v0.13.27 / f1621618. This revision superse
 
 Owner decisions: there are **no current users**; backward compatibility must be dropped and cleaned up. Use **one live environment**, developed and deployed directly from `main`; no standing staging environment or promotion pipeline. Price and efficiency take priority over geographic residency. Bounded shared metadata is acceptable; security still matters. Initial audience is the owner and friends, not an unrestricted public service.
 
-Status: implementation underway, not a deployed replacement. Existing local experiments are supporting evidence, not a completed v2 implementation. Follow-up: agents-tracker-wjp4. Architecture is recorded in [ADR-027](../adr/ADR-027-clean-remote-control-v2.md); current test and review evidence is in the [implementation journal](../verification/remote-scale-to-zero/implementation.md).
+Status: implementation underway; the sole relay is deployed with admission closed, not usable as a completed replacement. Existing local experiments are supporting evidence, not a completed v2 implementation. Follow-up: agents-tracker-wjp4. Architecture is recorded in [ADR-027](../adr/ADR-027-clean-remote-control-v2.md); current test and review evidence is in the [implementation journal](../verification/remote-scale-to-zero/implementation.md).
 
 ## 1. Decision
 
@@ -268,7 +268,13 @@ Measure actual hosted reconstruction and eligible-idle duration separately. Hibe
 
 The low-use goal remains approximately **$5–10/month after retiring the old infrastructure**, with $10 as a planning budget rather than a quote or spending cap. Removing compatibility work mainly reduces engineering and operational complexity; it does not make active computation or abuse free.
 
-Use Workers Paid's $5 base for the first reliable hosted release rather than depending on hard Free-plan failure thresholds. A completely free setup can be evaluated later if its limits are acceptable. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+The owner approved the initial admission-closed relay on the existing Workers Free plan;
+keep that plan while measuring the owner pilot. This supersedes the earlier assumption
+of an immediate $5 Paid subscription. Free-plan limits can stop service, and native
+per-location rate limits do not guarantee availability or impose a global spending
+cap. Revisit Paid only if measured use or a required feature justifies its base fee,
+with a separate billing decision. The $5–10 total remains a planning allowance, not a
+measured bill or a minimum charge. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
 
 | Remaining line | Measure |
 |---|---|

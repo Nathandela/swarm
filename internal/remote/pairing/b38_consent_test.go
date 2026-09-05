@@ -38,6 +38,7 @@ import (
 func TestB38_ConsentAndRelayPinSurviveTheWire(t *testing.T) {
 	wantPin := bytes.Repeat([]byte{0xD4}, 32)
 	mach := MachinePayload{
+		OperatorNamespace:   "owner",
 		Hostname:            "test-machine.local",
 		MachineRoutingID:    []byte("machine-routing-id-0001"),
 		MachineRelayAuthPub: bytes.Repeat([]byte{0xC3}, 32),

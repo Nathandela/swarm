@@ -45,6 +45,7 @@ func s9PinCoordinates(st State) State {
 	st.MachineStatic = bytes.Repeat([]byte{0xA1}, 32)
 	st.MachineSignPub = bytes.Repeat([]byte{0xB2}, 32)
 	st.MachineRelayAuthPub = bytes.Repeat([]byte{0xC3}, 32)
+	st.OperatorNamespace = "owner"
 	st.EpochID = 7
 	st.Keys.ContentKey = crypto.ContentKey(bytes.Repeat([]byte{0xD4}, len(crypto.ContentKey{})))
 	st.SendSeq = map[uint32]uint64{7: 512}

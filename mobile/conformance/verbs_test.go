@@ -269,6 +269,7 @@ func (h *harness) pairMachineAtEpoch(t *testing.T, epoch uint32) string {
 		Confirm:      func(context.Context, [6]string, string) (bool, error) { return true, nil },
 		Payload: pairing.MachinePayload{
 			Hostname:            "repair.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte(relay.RoutingID(h.machineRelayAuthPub)),
 			MachineRelayAuthPub: h.machineRelayAuthPub,
 			RecipientPub:        machineID.RecipientPublic(),

@@ -103,6 +103,7 @@ func d0b8NewStranded(t *testing.T) *d0b8Stranded {
 	if err := store.Save(phonecore.State{
 		Machine:             testMachineID,
 		MachineRelayAuthPub: mPub,
+		OperatorNamespace:   "owner",
 		RoutingID:           relay.RoutingID(phonePub),
 	}); err != nil {
 		t.Fatalf("seed the stranded phone's pairing record: %v", err)

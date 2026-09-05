@@ -46,7 +46,7 @@ func TestRelayCfg_AbsentFileIsNotAnError(t *testing.T) {
 func TestRelayCfg_RoundTripsThePin(t *testing.T) {
 	_, b64 := samplePin()
 	dir := t.TempDir()
-	want := relaycfg.Config{RelayURL: "wss://relay.example.com:8443", SPKIPin: b64}
+	want := relaycfg.Config{RelayURL: "wss://relay.example.com:8443", OperatorNamespace: "owner", SPKIPin: b64}
 	if err := relaycfg.Save(dir, want); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestRelayCfg_RoundTripsThePin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read relay.json: %v", err)
 	}
-	for _, key := range []string{`"relay_url"`, `"relay_spki_pin"`} {
+	for _, key := range []string{`"relay_url"`, `"operator_namespace"`, `"relay_spki_pin"`} {
 		if !strings.Contains(string(raw), key) {
 			t.Errorf("relay.json does not carry %s; on disk it is:\n%s", key, raw)
 		}
@@ -77,7 +77,7 @@ func TestRelayCfg_RoundTripsThePin(t *testing.T) {
 // shape that reads as "pinned with an empty pin".
 func TestRelayCfg_NoPinIsOmittedFromTheFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := relaycfg.Save(dir, relaycfg.Config{RelayURL: "wss://relay.example.com"}); err != nil {
+	if err := relaycfg.Save(dir, relaycfg.Config{RelayURL: "wss://relay.example.com", OperatorNamespace: "owner"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "remote", "relay.json"))

@@ -38,6 +38,7 @@ func TestADR016W1_MachinePayloadCarriesTLSPolicyAndHostIndependentOfThePin(t *te
 		MachineEndpointID:   "ep-abc123",
 		RelayTLSPolicy:      "webpki",
 		RelayHost:           "swarm-relay.example.com",
+		OperatorNamespace:   "owner",
 		EpochID:             7,
 	}
 	got, err := decodeMachinePayload(encodeMachinePayload(webpkiNoPin))
@@ -63,6 +64,7 @@ func TestADR016W1_MachinePayloadCarriesTLSPolicyAndHostIndependentOfThePin(t *te
 		MachineSignPub:      []byte("sign-pub-32-bytes-of-filler!!!!"),
 		MachineEndpointID:   "ep-abc123",
 		RelaySPKIPin:        []byte("32-byte-sha256-digest-of-spki!!"),
+		OperatorNamespace:   "owner",
 		EpochID:             7,
 	}
 	got2, err := decodeMachinePayload(encodeMachinePayload(pinnedNoPolicyHost))
@@ -71,9 +73,7 @@ func TestADR016W1_MachinePayloadCarriesTLSPolicyAndHostIndependentOfThePin(t *te
 	}
 	if got2.RelayTLSPolicy != "" {
 		t.Errorf("RelayTLSPolicy = %q, want empty: a MachinePayload{} literal with no policy set "+
-			"must not encode-then-decode one from nowhere. This does NOT exercise a genuine "+
-			"pre-ADR-016 WIRE payload -- see TestADR016W9_DecodeMachinePayloadAcceptsALegacySevenFieldWire "+
-			"for that", got2.RelayTLSPolicy)
+			"must not encode-then-decode one from nowhere", got2.RelayTLSPolicy)
 	}
 	if got2.RelayHost != "" {
 		t.Errorf("RelayHost = %q, want empty", got2.RelayHost)
@@ -99,6 +99,7 @@ func TestADR016W1_MachinePayloadEncodingIsForwardCompatibleWithTheEpochTrailer(t
 		RelayTLSPolicy:      "webpki",
 		RelayHost:           "relay.example.com",
 		RelaySPKIPin:        []byte("pin"),
+		OperatorNamespace:   "owner",
 		EpochID:             42,
 	}
 	b := encodeMachinePayload(p)
@@ -111,14 +112,9 @@ func TestADR016W1_MachinePayloadEncodingIsForwardCompatibleWithTheEpochTrailer(t
 	}
 }
 
-// TestADR016W9_DecodeMachinePayloadAcceptsALegacySevenFieldWire is W9's N/N-1 claim, proven
-// against an ACTUAL pre-ADR-016 wire shape rather than a new encoder's zero values: a
-// payload built with the SEVEN fields encodeMachinePayload wrote before RelayTLSPolicy and
-// RelayHost existed, followed directly by the 4-byte epoch trailer -- exactly what a machine
-// binary built before this ADR still sends. "New app / old machine. No policy field means
-// pinned_spki with whatever pin the payload carries, i.e. today's behaviour exactly" (W9) is
-// false if this refuses to decode at all.
-func TestADR016W9_DecodeMachinePayloadAcceptsALegacySevenFieldWire(t *testing.T) {
+// TestRelayV2_DecodeMachinePayloadRejectsLegacyWire proves the clean v2 build never
+// guesses a namespace for an older msg2 shape.
+func TestRelayV2_DecodeMachinePayloadRejectsLegacyWire(t *testing.T) {
 	var b []byte
 	b = appendField(b, []byte("nathans-mbp"))
 	b = appendField(b, []byte("routing-id-32-bytes-of-filler!!"))
@@ -130,25 +126,7 @@ func TestADR016W9_DecodeMachinePayloadAcceptsALegacySevenFieldWire(t *testing.T)
 	b = appendField(b, pin)
 	b = binary.BigEndian.AppendUint32(b, 7) // the epoch trailer, with NOTHING after it
 
-	got, err := decodeMachinePayload(b)
-	if err != nil {
-		t.Fatalf("decodeMachinePayload refused a legacy (pre-ADR-016) seven-field wire payload: %v.\n"+
-			"A new app talking to an old machine can never pair at all -- W9's N/N-1 claim "+
-			"('additive, version-skew safe') is false", err)
-	}
-	if got.RelayTLSPolicy != "" {
-		t.Errorf("RelayTLSPolicy = %q, want empty on a legacy wire payload", got.RelayTLSPolicy)
-	}
-	if got.RelayHost != "" {
-		t.Errorf("RelayHost = %q, want empty on a legacy wire payload", got.RelayHost)
-	}
-	if string(got.RelaySPKIPin) != string(pin) {
-		t.Errorf("RelaySPKIPin = %x, want %x -- the legacy pin must still carry", got.RelaySPKIPin, pin)
-	}
-	if got.EpochID != 7 {
-		t.Errorf("EpochID = %d, want 7", got.EpochID)
-	}
-	if got.MachineEndpointID != "ep-abc123" {
-		t.Errorf("MachineEndpointID = %q, want %q", got.MachineEndpointID, "ep-abc123")
+	if _, err := decodeMachinePayload(b); err == nil {
+		t.Fatal("decodeMachinePayload accepted a legacy wire payload with no authenticated relay namespace")
 	}
 }

@@ -56,6 +56,9 @@ github.com/Nathandela/swarm/internal/remote/device
 # I/O (Save/Load/Delete over <stateDir>/devices/grants), which the handset has no use for
 # and no business holding. grant re-exports grantwire, so the machine side is unchanged.
 github.com/Nathandela/swarm/internal/remote/grantwire
+# Stdlib-only validation of the authenticated operator namespace carried by pairing
+# and persisted beside the machine relay-auth public key.
+github.com/Nathandela/swarm/internal/remote/relayhome
 github.com/flynn/noise
 golang.org/x/crypto/blake2b
 golang.org/x/crypto/blake2s

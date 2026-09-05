@@ -158,6 +158,7 @@ func TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace(t *tes
 	if err := store.Save(phonecore.State{
 		Machine:             testMachineID,
 		MachineRelayAuthPub: mPub,
+		OperatorNamespace:   "owner",
 		RoutingID:           phoneRID,
 	}); err != nil {
 		t.Fatalf("seed the stranded phone's pairing record: %v", err)

@@ -186,6 +186,7 @@ func TestPBNET1_AFreshInstallsPairingSurvivesTheNextProcessStart(t *testing.T) {
 		},
 		Payload: pairing.MachinePayload{
 			Hostname:            "s9-restart.local",
+			OperatorNamespace:   "owner",
 			MachineRoutingID:    []byte(relay.RoutingID(mAuthPub)),
 			MachineRelayAuthPub: mAuthPub,
 			RecipientPub:        machineID.RecipientPublic(),

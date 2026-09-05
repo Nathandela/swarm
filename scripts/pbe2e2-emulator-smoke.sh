@@ -214,7 +214,7 @@ log "machine provisioning"
 # dial path -- the gateway sidecar, this CLI's owner connection and the daemon's pairing
 # rendezvous -- reads the pin from the one relay.json parser (internal/remote/relaycfg).
 RELAY_URL="wss://$HOST_IP:8443"
-"$OUT/bin/swarm" remote init --relay-url "$RELAY_URL" --relay-pin "$PIN"
+"$OUT/bin/swarm" remote init --relay-url "$RELAY_URL" --relay-namespace local-test --relay-pin "$PIN"
 # R-POL.7: remote launches are confined to configured cwd roots and fail closed with none.
 printf '{"version":1,"allowed_cwd_roots":["%s"]}\n' "$OUT" > "$STATE/remote-policy.json"
 

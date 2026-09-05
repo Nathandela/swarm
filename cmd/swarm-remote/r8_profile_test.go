@@ -34,8 +34,9 @@ func r8ProvisionedProfile(t *testing.T) schema.RemoteProfileV1 {
 	stateDir := t.TempDir()
 	writeMachineIdentity(t, stateDir)
 	if err := relaycfg.Save(stateDir, relaycfg.Config{
-		RelayURL:  "wss://swarm-relay.example.com:8443",
-		TLSPolicy: relaycfg.PolicyWebPKI,
+		RelayURL:          "wss://swarm-relay.example.com:8443",
+		OperatorNamespace: "owner",
+		TLSPolicy:         relaycfg.PolicyWebPKI,
 	}); err != nil {
 		t.Fatalf("relaycfg.Save: %v", err)
 	}

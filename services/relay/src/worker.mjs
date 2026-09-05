@@ -42,6 +42,11 @@ function allowedMachines(env) {
   return new Set(ids);
 }
 
+function validOperatorNamespace(value) {
+  return typeof value === "string" && value.length >= 1 && value.length <= 64 &&
+    value[0] >= "a" && value[0] <= "z" && !/[^a-z0-9-]/.test(value);
+}
+
 function u32(n) {
   const out = new Uint8Array(4);
   new DataView(out.buffer).setUint32(0, n);
@@ -142,12 +147,28 @@ function forwarded(request, machineRID, home, pairCeremony = "") {
   return new Request(request, { headers });
 }
 
+async function checkPreAuthRateLimit(env, key) {
+  let result;
+  try {
+    const limiter = env.RATE_LIMITER;
+    if (typeof limiter?.limit !== "function") throw new Error("missing rate limiter");
+    result = await limiter.limit({ key });
+  } catch {
+    return new Response("relay rate limit is unavailable", { status: 503 });
+  }
+  if (result?.success === true) return null;
+  if (result?.success === false) {
+    return new Response("relay rate limit exceeded", { status: 429, headers: { "Retry-After": "60" } });
+  }
+  return new Response("relay rate limit is unavailable", { status: 503 });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/") return new Response("swarm relay v2");
     const allowed = allowedMachines(env);
-    if (!allowed || !env.OPERATOR_NAMESPACE) return new Response("relay admission is not configured", { status: 503 });
+    if (!allowed || !validOperatorNamespace(env.OPERATOR_NAMESPACE)) return new Response("relay admission is not configured", { status: 503 });
 
     let machineRID;
     let ceremony = "";
@@ -157,15 +178,19 @@ export default {
     } else if (url.pathname === "/v2/pair") {
       ceremony = url.searchParams.get("ceremony") || "";
       if (!/^[0-9a-f]{32}$/.test(ceremony)) return new Response("bad ceremony", { status: 400 });
+    } else {
+      return new Response("not found", { status: 404 });
+    }
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("websocket required", { status: 426 });
+    const limited = await checkPreAuthRateLimit(env, url.pathname === "/v2/ws" ? "ws" : "pair");
+    if (limited) return limited;
+    if (url.pathname === "/v2/pair") {
       const directory = env.RENDEZVOUS.get(env.RENDEZVOUS.idFromName("v2"));
       const resolved = await directory.fetch(`https://rendezvous.invalid/resolve?ceremony=${ceremony}`);
       if (!resolved.ok) return new Response("pairing not found", { status: resolved.status });
       machineRID = (await resolved.json()).machine_rid;
       if (!allowed.has(machineRID)) return new Response("machine not admitted", { status: 403 });
-    } else {
-      return new Response("not found", { status: 404 });
     }
-    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("websocket required", { status: 426 });
     const home = await homeID(env.OPERATOR_NAMESPACE, machineRID);
     return env.HOMES.get(env.HOMES.idFromName(home)).fetch(forwarded(request, machineRID, home, ceremony));
   },

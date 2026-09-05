@@ -363,7 +363,7 @@ func provisionZeroDeviceStateDir(t *testing.T) string {
 	if err := id.Save(filepath.Join(remoteDir, "machine.key")); err != nil {
 		t.Fatalf("save machine identity: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(remoteDir, "relay.json"), []byte(`{"relay_url":"wss://relay.invalid/ws"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(remoteDir, "relay.json"), []byte(`{"relay_url":"wss://relay.invalid/ws","operator_namespace":"owner"}`), 0o600); err != nil {
 		t.Fatalf("write relay.json: %v", err)
 	}
 	return dir

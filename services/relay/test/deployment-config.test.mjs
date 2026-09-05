@@ -11,6 +11,8 @@ assert.doesNotMatch(config, /^\[env\./m, "a second Worker environment is not con
 assert.doesNotMatch(config, /^\[vars\]$/m, "runtime variables are not deployment defaults");
 assert.doesNotMatch(config, /^(?:route|routes)\s*=|^\[\[routes\]\]$/m, "workers.dev is the only public route");
 assert.doesNotMatch(config, /\b(?:OPERATOR_NAMESPACE|ALLOWED_MACHINE_RIDS|CHALLENGE_TTL_MS|RENDEZVOUS_TTL_MS|RETENTION_MS|TEST_[A-Z_]+)\b/, "admission and test fixtures are local-only");
+assert.equal((config.match(/^\[\[ratelimits\]\]$/gm) || []).length, 1);
+assert.match(config, /\[\[ratelimits\]\]\nname = "RATE_LIMITER"\nnamespace_id = "1001"\n\n  \[ratelimits\.simple\]\n  limit = 60\n  period = 60/);
 assert.equal((config.match(/^\[\[durable_objects\.bindings\]\]$/gm) || []).length, 2);
 assert.match(config, /\[\[durable_objects\.bindings\]\]\nname = "HOMES"\nclass_name = "RelayHome"/);
 assert.match(config, /\[\[durable_objects\.bindings\]\]\nname = "RENDEZVOUS"\nclass_name = "RendezvousDirectory"/);

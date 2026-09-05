@@ -31,6 +31,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/qrterm"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
+	"github.com/Nathandela/swarm/internal/remote/relayhome"
 	"github.com/Nathandela/swarm/internal/remote/relaypurge"
 	"github.com/Nathandela/swarm/internal/remote/supervise"
 	"github.com/Nathandela/swarm/internal/remotegw"
@@ -150,6 +151,7 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("remote init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	relayURL := fs.String("relay-url", "", "relay server URL for remote pairing")
+	relayNamespace := fs.String("relay-namespace", "", "operator namespace for the relay-v2 machine home")
 	relayPin := fs.String("relay-pin", "", "base64 SHA-256 of the relay certificate's SubjectPublicKeyInfo (see the relay runbook); mandatory under --relay-tls-policy pinned_spki, refused under webpki")
 	relayTLSPolicy := fs.String("relay-tls-policy", "", "relay TLS verification policy: webpki (default) or pinned_spki (ADR-016)")
 	relayPinCompat := fs.String("relay-pin-compat", "", "W9 compatibility SPKI pin published alongside --relay-tls-policy webpki, for handsets that predate ADR-016")
@@ -162,6 +164,13 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
+		if err := relayhome.ValidateNamespace(*relayNamespace); err != nil {
+			_, _ = fmt.Fprintf(stderr, "remote init: --relay-namespace: %v\n", err)
+			return 1
+		}
+	} else if *relayNamespace != "" {
+		_, _ = fmt.Fprintln(stderr, "remote init: --relay-namespace requires --relay-url")
+		return 1
 	}
 	if err := relaycfg.ValidatePushGatewayURL(*pushGatewayURL); err != nil {
 		_, _ = fmt.Fprintf(stderr, "remote init: --push-gateway-url: %v\n", err)
@@ -240,10 +249,11 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		if err := relaycfg.Save(stateDir, relaycfg.Config{
-			RelayURL:       *relayURL,
-			PushGatewayURL: effectivePushGatewayURL,
-			TLSPolicy:      relayTLSPolicyEffective,
-			SPKIPin:        strings.TrimSpace(relaySPKIPinEffective),
+			RelayURL:          *relayURL,
+			OperatorNamespace: *relayNamespace,
+			PushGatewayURL:    effectivePushGatewayURL,
+			TLSPolicy:         relayTLSPolicyEffective,
+			SPKIPin:           strings.TrimSpace(relaySPKIPinEffective),
 		}); err != nil {
 			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
