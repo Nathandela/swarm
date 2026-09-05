@@ -84,16 +84,6 @@ func (s *Server) writeErr(w http.ResponseWriter, spec errSpec) {
 // actual-deletion requirement -- or an amendment to section 3.5/section 4/section 6.4. This
 // document does not pick one; see the return value for the escalation.
 //
-// `beta_closed` (403) is likewise in the closed vocabulary and likewise absent below.
-//
-// RECORDED DEVIATION, deferred rather than silently dropped: closed-beta admission control
-// (playbook `:559-560`) has no ruled admission mechanism to enforce this code against --
-// section 13's open question 6 puts to the owner HOW an installation is admitted without
-// becoming an account (a single-use invite consumed at registration is the obvious shape,
-// and is one more secret to distribute and revoke). Implementing the code with no admission
-// mechanism behind it would be enforcement theater with nothing to refuse; this waits on
-// that ruling rather than shipping a code nothing ever returns for the wrong reason.
-//
 // `service_unavailable` (503) is also absent, for a different and simpler reason: this
 // gateway has no load-shedding or maintenance-mode path -- every request that reaches
 // ServeHTTP is served or refused on its own merits, never turned away to protect gateway
@@ -104,8 +94,11 @@ var (
 	errWakeMalformed          = errSpec{http.StatusBadRequest, "wake_malformed", "the wake body is not a valid WakeV1 envelope", false, 0, false}
 	errUnauthorized           = errSpec{http.StatusUnauthorized, "unauthorized", "the credential presented was not accepted", false, 0, false}
 	errNonceReplayed          = errSpec{http.StatusConflict, "nonce_replayed", "this request nonce has already been used", false, 0, false}
+	errIdempotencyConflict    = errSpec{http.StatusConflict, "idempotency_conflict", "this idempotency key was already used with a different body", false, 0, false}
+	errRegistrationInProgress = errSpec{http.StatusServiceUnavailable, "service_unavailable", "registration with this idempotency key is in progress", true, 1, false}
 	errAttestationInvalid     = errSpec{http.StatusForbidden, "attestation_invalid", "app attestation did not verify", false, 0, false}
 	errAttestationUnavailable = errSpec{http.StatusForbidden, "attestation_unavailable", "attestation verification is temporarily unavailable", true, 0, false}
+	errBetaClosed             = errSpec{http.StatusForbidden, "beta_closed", "registration is not enabled for this installation", false, 0, false}
 	errAddressLimitReached    = errSpec{http.StatusConflict, "address_limit_reached", "this installation has reached its allocation limit", false, 0, false}
 	errPushTokenUnregistered  = errSpec{http.StatusGone, "push_token_unregistered", "the provider reports this token is no longer registered", false, 0, false}
 	errUpstreamUnavailable    = errSpec{http.StatusBadGateway, "upstream_unavailable", "the push provider is temporarily unavailable", true, 0, false}

@@ -48,7 +48,7 @@ func (s *Server) handleAllocate(w http.ResponseWriter, r *http.Request) int {
 		return spec.status
 	}
 
-	inst, found, err := s.store.getInstallation(installationID)
+	inst, found, err := s.getInstallation(r.Context(), installationID)
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
@@ -69,13 +69,14 @@ func (s *Server) handleAllocate(w http.ResponseWriter, r *http.Request) int {
 		return outcome.err.status
 	}
 	now := s.now()
-	if !s.nonces.checkAndStore(installationID, outcome.ok.nonce, now, outcome.ok.expiry) {
-		s.writeErr(w, errNonceReplayed)
-		return errNonceReplayed.status
-	}
-	if err := s.store.touchInstallation(installationID, now.UnixMilli()); err != nil {
+	claimed, err := s.claimNonce(r.Context(), installationID, inst.PublicKey, outcome.ok.nonce, now, outcome.ok.expiry)
+	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
+	}
+	if !claimed {
+		s.writeErr(w, errNonceReplayed)
+		return errNonceReplayed.status
 	}
 
 	// The request schema is deliberately empty (section 3.3): the only legal body is {}.
@@ -89,25 +90,33 @@ func (s *Server) handleAllocate(w http.ResponseWriter, r *http.Request) int {
 
 	// PG-Q-3: allocations SHALL be bounded per source IP and globally, in addition to
 	// the per-installation bound below.
-	if ok, retryAfter := s.limiter.allow("alloc-src:"+s.sourceIP(r), s.quotas.AllocationsPerSourceIP, now); !ok {
+	if ok, retryAfter, limitErr := s.allow(r.Context(), "alloc-global", s.quotas.AllocationsGlobal, now); limitErr != nil {
+		s.writeErr(w, errInternal)
+		return errInternal.status
+	} else if !ok {
 		spec := errQuotaExceeded(retryAfter)
 		s.writeErr(w, spec)
 		return spec.status
 	}
-	if ok, retryAfter := s.limiter.allow("alloc-global", s.quotas.AllocationsGlobal, now); !ok {
+	if ok, retryAfter, limitErr := s.allow(r.Context(), "alloc-src:"+s.sourceIP(r), s.quotas.AllocationsPerSourceIP, now); limitErr != nil {
+		s.writeErr(w, errInternal)
+		return errInternal.status
+	} else if !ok {
 		spec := errQuotaExceeded(retryAfter)
 		s.writeErr(w, spec)
 		return spec.status
 	}
 
-	count, err := s.store.countAddresses(installationID)
-	if err != nil {
-		s.writeErr(w, errInternal)
-		return errInternal.status
-	}
-	if count >= s.quotas.AllocationsPerInstallation {
-		s.writeErr(w, errAddressLimitReached)
-		return errAddressLimitReached.status
+	if s.v2store == nil {
+		count, countErr := s.store.countAddresses(installationID)
+		if countErr != nil {
+			s.writeErr(w, errInternal)
+			return errInternal.status
+		}
+		if count >= s.quotas.AllocationsPerInstallation {
+			s.writeErr(w, errAddressLimitReached)
+			return errAddressLimitReached.status
+		}
 	}
 
 	addrBytes := make([]byte, 16)
@@ -138,7 +147,17 @@ func (s *Server) handleAllocate(w http.ResponseWriter, r *http.Request) int {
 		Bound:             false,
 		UnboundExpiresMs:  unboundExpires.UnixMilli(),
 	}
-	if err := s.store.putAddress(pushAddress, rec); err != nil {
+	if s.v2store != nil {
+		created, putErr := s.v2store.p.putAddressIfBelowLimit(r.Context(), pushAddress, installationID, rec, s.quotas.AllocationsPerInstallation, now)
+		if putErr != nil {
+			s.writeErr(w, errInternal)
+			return errInternal.status
+		}
+		if !created {
+			s.writeErr(w, errAddressLimitReached)
+			return errAddressLimitReached.status
+		}
+	} else if err := s.store.putAddress(pushAddress, rec); err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
 	}

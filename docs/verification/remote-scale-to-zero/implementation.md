@@ -78,6 +78,65 @@ gates passed a focused race run. A full Android source-gate race run exceeded it
 120-second test budget in an unrelated screen-regex gate, so it is not recorded as a
 full race pass. The epic-wide race/release gates remain open.
 
+The owner's later commit/push approval cleared public source publication. Main was
+pushed through `764e82bd`, without a release/tag or deployment. The corresponding
+[CI run](https://github.com/Nathandela/swarm/actions/runs/33950158347) completed
+successfully, including the Linux test suite, macOS checks, lint, fuzzing, unsigned
+release artifact checks and Android AAR/Gradle/debug-APK gates. This certifies that
+published checkpoint only, not the subsequent worktree changes below.
+
+## Transactional push review checkpoint
+
+Root independently passed the expanded real-SDK Firestore emulator suite, initially
+nine integration tests (11.293 s), then eleven integration tests plus the metrics
+regression (12.653 s). The latter run includes registration admission/idempotency,
+nonce/quota contention, token-generation and lease CAS, bounded retention, cancelled
+provider attempts and the expiry tests described below. Two clients share emulator
+state; the memory fake is not the evidence for shared transactional behavior.
+
+Root's expiry regression first failed in both the memory fake and actual Firestore:
+late successful completion bound an allocation, late UNREGISTERED erased token bytes,
+an allocation expiring during a send became bound, expired completed results were
+returned, and a never-claimed expired wake acquired a lease. The same contract passed
+after adding at-use completion/claim fences. Expiry is checked before the completed
+cache, independently of physical garbage collection. A separate provider test first
+failed because the supplied context had no deadline. Provider calls now use the shorter
+remaining original wake/lease duration; a provider response arriving after the wake
+deadline cannot extend durable authority. HTTP `provider_accepted` reports that external
+fact only, not phone receipt or successful late binding. Byte-identical expired retries
+are rejected without another provider call. These tests advance the injected clock
+across a provider call; they do not contact FCM or prove cross-host clock agreement.
+
+The original wake deadline remains the envelope's issued-at time plus five minutes.
+The handler allows up to two minutes of future issued-at clock skew, so the maximum
+accepted deadline can be seven minutes from gateway receipt. Transaction retries still
+use process-supplied timestamps; shared-clock and retry-boundary review remains open.
+
+Root also reproduced fabricated empty-store metrics: the v2 admin handler exported
+zero installation/address/tombstone/database gauges without observing Firestore.
+Those unavailable gauges are now omitted, with no collection scans introduced.
+Actual process request/retention metrics remain. The regression constructs a Firestore
+repository without a client and verifies that metrics do not query shared storage.
+
+After these changes, root passed the push library and command package race tests
+(5.497 s / 3.695 s). The production command still starts the old local repository while
+the separately refused startup cutover awaits scoped approval. The new Firestore
+repository/keyring are a reviewed foundation, not a deployed replacement.
+
+## Native relay review checkpoint
+
+Root independently reran the combined native workerd suite and the Go integration
+tests: Worker negative controls, real Noise/SAS and encrypted bidirectional delivery,
+reconnect/replay/revocation, and a separate alarm-disabled expiry case with more than
+256 expired rows. The Go runs passed in 1.993 s and 4.388 s.
+
+The actual SQLite cursor counters for 100 sequential append/deliver/ACK cycles were
+3,000 rows read, 1,600 rows written and 2,900 statements. First and hundredth append
+both measured 11 reads/11 writes; first and hundredth ACK both measured 19 reads/5
+writes. This is an active-traffic microprobe, not a bill estimate: idle/cleanup alarms,
+hosted eviction and retained-backlog work must also be measured. Root's subsequent
+alarm-query review remains in progress.
+
 ## Ongoing review boundaries
 
 The local Go-to-workerd slice uses real Noise/SAS and encrypted mailbox primitives,

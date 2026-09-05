@@ -33,7 +33,7 @@ func (s *Server) handleAdminHealth(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
-func (s *Server) handleAdminReady(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleAdminReady(w http.ResponseWriter, r *http.Request) {
 	var reasons []string
 	if !s.serving.Load() {
 		reasons = append(reasons, "public listener not serving")
@@ -60,8 +60,14 @@ func (s *Server) handleAdminReady(w http.ResponseWriter, _ *http.Request) {
 	if !s.ready.RequiredConfig {
 		reasons = append(reasons, "required production configuration not validated")
 	}
-	if err := s.store.healthCheck(); err != nil {
-		reasons = append(reasons, err.Error())
+	var healthErr error
+	if s.v2store != nil {
+		healthErr = s.v2store.p.healthCheck(r.Context())
+	} else {
+		healthErr = s.store.healthCheck()
+	}
+	if healthErr != nil {
+		reasons = append(reasons, healthErr.Error())
 	}
 	if len(reasons) > 0 {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -76,15 +82,19 @@ func (s *Server) handleAdminReady(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleAdminMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	store := s.store.metrics()
-	_, _ = fmt.Fprintln(w, "# TYPE pushgw_database_bytes gauge")
-	_, _ = fmt.Fprintf(w, "pushgw_database_bytes %d\n", store.DBBytes)
-	_, _ = fmt.Fprintln(w, "# TYPE pushgw_installations gauge")
-	_, _ = fmt.Fprintf(w, "pushgw_installations %d\n", store.Installations)
-	_, _ = fmt.Fprintln(w, "# TYPE pushgw_addresses gauge")
-	_, _ = fmt.Fprintf(w, "pushgw_addresses %d\n", store.Addresses)
-	_, _ = fmt.Fprintln(w, "# TYPE pushgw_tombstones gauge")
-	_, _ = fmt.Fprintf(w, "pushgw_tombstones %d\n", store.Tombstones)
+	// Shared-store totals are not process observations. Omit those gauges for
+	// Firestore instead of inventing zeroes or scanning the database per scrape.
+	if s.v2store == nil {
+		store := s.store.metrics()
+		_, _ = fmt.Fprintln(w, "# TYPE pushgw_database_bytes gauge")
+		_, _ = fmt.Fprintf(w, "pushgw_database_bytes %d\n", store.DBBytes)
+		_, _ = fmt.Fprintln(w, "# TYPE pushgw_installations gauge")
+		_, _ = fmt.Fprintf(w, "pushgw_installations %d\n", store.Installations)
+		_, _ = fmt.Fprintln(w, "# TYPE pushgw_addresses gauge")
+		_, _ = fmt.Fprintf(w, "pushgw_addresses %d\n", store.Addresses)
+		_, _ = fmt.Fprintln(w, "# TYPE pushgw_tombstones gauge")
+		_, _ = fmt.Fprintf(w, "pushgw_tombstones %d\n", store.Tombstones)
+	}
 	_, _ = fmt.Fprintln(w, "# TYPE pushgw_retention_last_success_timestamp_seconds gauge")
 	_, _ = fmt.Fprintf(w, "pushgw_retention_last_success_timestamp_seconds %d\n", s.lastRetentionOK.Load())
 	_, _ = fmt.Fprintln(w, "# TYPE pushgw_requests_total counter")

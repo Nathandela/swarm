@@ -57,6 +57,14 @@ func TestNewServer_NegativeAllocationsPerInstallation_FailsClosedAtBoot(t *testi
 	}
 }
 
+func TestNewServer_AllocationsPerInstallationAboveRetentionBoundFailsClosed(t *testing.T) {
+	cfg := minimalValidConfig(t)
+	cfg.Quotas.AllocationsPerInstallation = 21
+	if _, err := pushgw.NewServer(cfg); err == nil {
+		t.Fatal("NewServer accepted more addresses than one bounded retention transaction can cascade")
+	}
+}
+
 // TestNewServer_UnsetQuotas_AppliesSpecDefaults proves the zero-value QuotaConfig (every
 // bucket unset) still boots -- withDefaults, not validate, owns that shape.
 func TestNewServer_UnsetQuotas_AppliesSpecDefaults(t *testing.T) {

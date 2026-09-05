@@ -1,6 +1,7 @@
 package pushgw
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -48,16 +49,16 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) int {
 
 	auth := r.Header.Get("Authorization")
 	if token, ok := strings.CutPrefix(auth, "Swarm-Revoke "); ok {
-		return s.revokeByMachineCapability(w, pushAddress, token)
+		return s.revokeByMachineCapability(r.Context(), w, pushAddress, token)
 	}
 	return s.revokeByOwnerSignature(w, r, pushAddress)
 }
 
-func (s *Server) revokeByMachineCapability(w http.ResponseWriter, pushAddress, capability string) int {
+func (s *Server) revokeByMachineCapability(ctx context.Context, w http.ResponseWriter, pushAddress, capability string) int {
 	capHash := hashSecret(capability)
 	now := s.now()
 
-	rec, found, err := s.store.getAddress(pushAddress)
+	rec, found, err := s.getAddress(ctx, pushAddress)
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
@@ -71,7 +72,13 @@ func (s *Server) revokeByMachineCapability(w http.ResponseWriter, pushAddress, c
 		// writes here used to let a crash or a write error between them leave the address
 		// gone with no tombstone, which turned every later durable retry into a permanent
 		// 401 instead of the idempotent 204 the tombstone exists to guarantee.
-		if err := s.store.deleteAddressAndTombstone(pushAddress, rec, now.UnixMilli()); err != nil {
+		var deleteErr error
+		if s.v2store != nil {
+			deleteErr = s.v2store.p.deleteAddressAndTombstone(ctx, pushAddress, rec, now)
+		} else {
+			deleteErr = s.store.deleteAddressAndTombstone(pushAddress, rec, now.UnixMilli())
+		}
+		if deleteErr != nil {
 			s.writeErr(w, errInternal)
 			return errInternal.status
 		}
@@ -84,12 +91,17 @@ func (s *Server) revokeByMachineCapability(w http.ResponseWriter, pushAddress, c
 	// tombstone has not aged past its 7-day window. No comparison is needed beyond the
 	// bucket lookup itself: capHash IS the key, so a hit already proves the presented
 	// capability is the one that was revoked.
-	tomb, found, err := s.store.getTombstone(capHash)
+	var tomb tombstoneRecord
+	if s.v2store != nil {
+		tomb, found, err = s.v2store.p.getTombstone(ctx, capHash)
+	} else {
+		tomb, found, err = s.store.getTombstone(capHash)
+	}
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
 	}
-	if found && now.UnixMilli()-tomb.RevokedAtMs <= tombstoneWindow.Milliseconds() {
+	if found && now.UnixMilli()-tomb.RevokedAtMs < tombstoneWindow.Milliseconds() {
 		w.WriteHeader(http.StatusNoContent)
 		return http.StatusNoContent
 	}
@@ -98,7 +110,7 @@ func (s *Server) revokeByMachineCapability(w http.ResponseWriter, pushAddress, c
 }
 
 func (s *Server) revokeByOwnerSignature(w http.ResponseWriter, r *http.Request, pushAddress string) int {
-	rec, found, err := s.store.getAddress(pushAddress)
+	rec, found, err := s.getAddress(r.Context(), pushAddress)
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
@@ -111,7 +123,7 @@ func (s *Server) revokeByOwnerSignature(w http.ResponseWriter, r *http.Request, 
 		s.writeErr(w, errUnauthorized)
 		return errUnauthorized.status
 	}
-	inst, found, err := s.store.getInstallation(rec.InstallationID)
+	inst, found, err := s.getInstallation(r.Context(), rec.InstallationID)
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
@@ -132,13 +144,14 @@ func (s *Server) revokeByOwnerSignature(w http.ResponseWriter, r *http.Request, 
 		return outcome.err.status
 	}
 	now := s.now()
-	if !s.nonces.checkAndStore(rec.InstallationID, outcome.ok.nonce, now, outcome.ok.expiry) {
-		s.writeErr(w, errNonceReplayed)
-		return errNonceReplayed.status
-	}
-	if err := s.store.touchInstallation(rec.InstallationID, now.UnixMilli()); err != nil {
+	claimed, err := s.claimNonce(r.Context(), rec.InstallationID, inst.PublicKey, outcome.ok.nonce, now, outcome.ok.expiry)
+	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
+	}
+	if !claimed {
+		s.writeErr(w, errNonceReplayed)
+		return errNonceReplayed.status
 	}
 	// PG-REV-2: idempotency is required for BOTH credential kinds. The owner's own retry
 	// is free (the installation key outlives the address), but a machine holding this
@@ -147,7 +160,13 @@ func (s *Server) revokeByOwnerSignature(w http.ResponseWriter, r *http.Request, 
 	// delete in ONE bbolt transaction (keyed by the verifier hash already on rec, not the
 	// address -- see storage.go's comment), so that later retry is idempotent too, and so a
 	// crash or write error between the two effects can never leave one without the other.
-	if err := s.store.deleteAddressAndTombstone(pushAddress, rec, now.UnixMilli()); err != nil {
+	var deleteErr error
+	if s.v2store != nil {
+		deleteErr = s.v2store.p.deleteAddressAndTombstone(r.Context(), pushAddress, rec, now)
+	} else {
+		deleteErr = s.store.deleteAddressAndTombstone(pushAddress, rec, now.UnixMilli())
+	}
+	if deleteErr != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
 	}

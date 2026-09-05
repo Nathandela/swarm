@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/pushgw"
 )
@@ -274,14 +275,10 @@ func TestRegister_IdempotencyKeyWrongLength_Returns400(t *testing.T) {
 	}
 }
 
-// TestRegister_IdempotencyKeyReplayedWithDifferentBody_RunsAttestationAndCanRefuse is the
-// CRITICAL fix: replaying a victim's Idempotency-Key with a DIFFERENT
-// installation_public_key/fcm_token must NOT return the victim's installation_id from the
-// idempotency cache. It must fall through to the normal, fail-closed attestation flow --
-// proven here by wiring the attestor to fail outright and confirming it is actually
-// called, and that the response is a refusal, not the victim's identity handed to a
-// stranger.
-func TestRegister_IdempotencyKeyReplayedWithDifferentBody_RunsAttestationAndCanRefuse(t *testing.T) {
+// A reused key with a different body is rejected from durable idempotency state before
+// Play Integrity. Besides preventing identity disclosure, this ordering is required for
+// standard Integrity tokens whose verdict can be cleared on a repeated decode.
+func TestRegister_IdempotencyKeyReplayedWithDifferentBody_ConflictsBeforeAttestation(t *testing.T) {
 	h := newHarness(t, nil)
 
 	_, pub1 := genInstallationKey(t)
@@ -315,12 +312,12 @@ func TestRegister_IdempotencyKeyReplayedWithDifferentBody_RunsAttestationAndCanR
 	})
 	attacker := h.doJSON("POST", "/v1/installations", body2, map[string]string{"Idempotency-Key": idem})
 
-	if attestCalls == 0 {
-		t.Fatalf("idempotency cache short-circuited attestation for a mismatched body under a replayed Idempotency-Key")
+	if attestCalls != 0 {
+		t.Fatalf("attestation calls = %d, want 0 for a durable body conflict", attestCalls)
 	}
-	requireStatus(t, attacker, http.StatusForbidden)
-	if e := decodeError(t, attacker); e.Code != "attestation_unavailable" {
-		t.Fatalf("code = %q, want attestation_unavailable", e.Code)
+	requireStatus(t, attacker, http.StatusConflict)
+	if e := decodeError(t, attacker); e.Code != "idempotency_conflict" {
+		t.Fatalf("code = %q, want idempotency_conflict", e.Code)
 	}
 }
 
@@ -358,5 +355,50 @@ func TestRegister_IdempotencyKeyReplayedWithSameBody_StillReturnsSameID(t *testi
 	decodeJSON(t, second, &secondOut)
 	if firstOut.InstallationID != secondOut.InstallationID {
 		t.Fatalf("byte-identical retry minted a different installation_id: %q vs %q", firstOut.InstallationID, secondOut.InstallationID)
+	}
+}
+
+func TestRegister_ClosedBetaRefusesBeforeAttestation(t *testing.T) {
+	attestCalls := 0
+	h := newHarness(t, func(cfg *pushgw.Config) {
+		cfg.RegistrationAdmission = func(string) bool { return false }
+	})
+	h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
+		attestCalls++
+		return pushgw.VerdictBinding{}, nil
+	})
+	_, pub := genInstallationKey(t)
+	body, _ := json.Marshal(map[string]any{
+		"installation_public_key": pub,
+		"fcm_token":               "fcm-token-closed-beta",
+		"attestation":             map[string]any{"kind": "play_integrity", "token": "verdict-closed-beta"},
+	})
+	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": fixedIdemKey("closed-beta")})
+	requireStatus(t, resp, http.StatusForbidden)
+	if e := decodeError(t, resp); e.Code != "beta_closed" || e.Retryable {
+		t.Fatalf("got code=%q retryable=%v, want beta_closed/false", e.Code, e.Retryable)
+	}
+	if attestCalls != 0 {
+		t.Fatalf("attestation calls=%d, want 0 before operator admission", attestCalls)
+	}
+}
+
+func TestRegister_AttestationPastAttemptExpiryCannotCommit(t *testing.T) {
+	h := newHarness(t, nil)
+	_, pub := genInstallationKey(t)
+	body, _ := json.Marshal(map[string]any{
+		"installation_public_key": pub,
+		"fcm_token":               "fcm-token-slow-attestation",
+		"attestation":             map[string]any{"kind": "play_integrity", "token": "verdict-slow-attestation"},
+	})
+	wantHash := jcsRequestHash(t, body)
+	h.attest.setFunc(func(context.Context, string) (pushgw.VerdictBinding, error) {
+		h.clock.advance(10 * time.Minute)
+		return pushgw.VerdictBinding{RequestHash: wantHash, LicensedBuild: true}, nil
+	})
+	resp := h.doJSON("POST", "/v1/installations", body, map[string]string{"Idempotency-Key": fixedIdemKey("slow-attestation")})
+	requireStatus(t, resp, http.StatusServiceUnavailable)
+	if e := decodeError(t, resp); e.Code != "service_unavailable" || !e.Retryable {
+		t.Fatalf("got code=%q retryable=%v, want service_unavailable/true", e.Code, e.Retryable)
 	}
 }

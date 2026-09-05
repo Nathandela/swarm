@@ -40,7 +40,7 @@ func (s *Server) handleRotate(w http.ResponseWriter, r *http.Request) int {
 		return spec.status
 	}
 
-	inst, found, err := s.store.getInstallation(installationID)
+	inst, found, err := s.getInstallation(r.Context(), installationID)
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
@@ -61,7 +61,12 @@ func (s *Server) handleRotate(w http.ResponseWriter, r *http.Request) int {
 		return outcome.err.status
 	}
 	now := s.now()
-	if !s.nonces.checkAndStore(installationID, outcome.ok.nonce, now, outcome.ok.expiry) {
+	claimed, err := s.claimNonce(r.Context(), installationID, inst.PublicKey, outcome.ok.nonce, now, outcome.ok.expiry)
+	if err != nil {
+		s.writeErr(w, errInternal)
+		return errInternal.status
+	}
+	if !claimed {
 		s.writeErr(w, errNonceReplayed)
 		return errNonceReplayed.status
 	}
@@ -69,10 +74,6 @@ func (s *Server) handleRotate(w http.ResponseWriter, r *http.Request) int {
 	// unconditionally -- written to the store immediately, exactly like allocate.go's
 	// touchInstallation call, so a LATER refusal in this same handler (an unknown-field
 	// body, an empty fcm_token) does not discard the reset.
-	if err := s.store.touchInstallation(installationID, now.UnixMilli()); err != nil {
-		s.writeErr(w, errInternal)
-		return errInternal.status
-	}
 
 	var req rotateRequest
 	dec := json.NewDecoder(bytes.NewReader(body))
@@ -82,7 +83,7 @@ func (s *Server) handleRotate(w http.ResponseWriter, r *http.Request) int {
 		return errMalformedRequest.status
 	}
 
-	tokenEnc, err := s.store.encrypt(req.FCMToken)
+	tokenEnc, keyVersion, err := s.encryptToken(req.FCMToken)
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
@@ -92,6 +93,19 @@ func (s *Server) handleRotate(w http.ResponseWriter, r *http.Request) int {
 	// resurrect an installation the 180-day inactivity sweep deleted between this handler's
 	// read and its write -- token and all, minus its addresses. updateInstallationIfPresent
 	// is a no-op, not a re-creation, if the row is already gone.
+	if s.v2store != nil {
+		updated, updateErr := s.v2store.p.rotateToken(r.Context(), installationID, tokenEnc, keyVersion, now)
+		if updateErr != nil {
+			s.writeErr(w, errInternal)
+			return errInternal.status
+		}
+		if !updated {
+			s.writeErr(w, errUnauthorized)
+			return errUnauthorized.status
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return http.StatusNoContent
+	}
 	updated, err := s.store.updateInstallationIfPresent(installationID, func(rec *installationRecord) {
 		rec.FCMTokenEnc = tokenEnc
 		// A fresh token clears PG-ROT-2's dead-mapping marker: this IS the operation that

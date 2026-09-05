@@ -21,6 +21,15 @@ type Config struct {
 	// DBPath is the single bbolt file's path. The gateway-local at-rest encryption key
 	// (PG-RET-5) is generated alongside it at DBPath+".key", 0600, on first boot.
 	DBPath string
+	// Repository and TokenKeys configure the v2 Firestore runtime. NewFirestoreServer
+	// requires them and never opens DBPath or generates key material.
+	Repository            Repository
+	TokenKeys             map[string][]byte
+	ActiveTokenKeyVersion string
+	RegistrationDigestKey []byte
+	// RegistrationAdmission is the operator-controlled closed-beta gate. The shared
+	// runtime requires it; callers should normally close over an immutable allowlist.
+	RegistrationAdmission func(installationPublicKey string) bool
 	// Sender is the FCM leg (spec section 3.5). Wire the real sender with NewFCMSender in
 	// production; tests use an in-memory fake.
 	Sender WakeSender
@@ -36,7 +45,9 @@ type Config struct {
 	Logger *slog.Logger
 	// TrustedProxies is PG-Q-4's rightmost-hop X-Forwarded-For trust list, CIDR strings.
 	// Empty (the default) means every request's quota-accounting source is its raw TCP
-	// peer address -- the safe default when the gateway is reached directly. Set this only
+	// peer address. On Cloud Run this deliberately collapses callers behind the platform
+	// proxy into a conservative shared bucket until hosted header evidence supports a
+	// narrower identity; arbitrary forwarded headers never expand quota. Set this only
 	// when the deployment sits behind a TLS-terminating reverse proxy that appends the
 	// real client to X-Forwarded-For (see cmd/swarm-pushgw's -trusted-proxies flag and its
 	// TLS-mode doc comment for the recorded deployment assumption this pairs with).
@@ -63,13 +74,15 @@ type DeploymentReadiness struct {
 
 // Server is the gateway's HTTP handler. It is safe for concurrent use.
 type Server struct {
-	store  *store
-	sender WakeSender
-	attest AttestationVerifier
-	now    func() time.Time
-	quotas QuotaConfig
-	logger *slog.Logger
-	ready  DeploymentReadiness
+	store                 *store
+	v2store               *v2Store
+	sender                WakeSender
+	attest                AttestationVerifier
+	registrationAdmission func(string) bool
+	now                   func() time.Time
+	quotas                QuotaConfig
+	logger                *slog.Logger
+	ready                 DeploymentReadiness
 
 	limiter        *limiter
 	nonces         *nonceCache
@@ -88,6 +101,41 @@ type Server struct {
 	retentionOK     atomic.Bool
 	retentionFailed atomic.Bool
 	requestMetrics  requestMetrics
+}
+
+// NewFirestoreServer is the v2 production constructor. It preserves the authenticated
+// HTTP API while replacing all mutable state with the injected shared repository.
+func NewFirestoreServer(cfg Config) (*Server, error) {
+	if cfg.Sender == nil {
+		return nil, errConfig("Sender is required")
+	}
+	if cfg.Attest == nil {
+		return nil, errConfig("Attest is required")
+	}
+	if cfg.RegistrationAdmission == nil {
+		return nil, errConfig("RegistrationAdmission is required")
+	}
+	quotas := cfg.Quotas.withDefaults()
+	if err := quotas.validate(); err != nil {
+		return nil, err
+	}
+	trustedProxies, err := parseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	st, err := newV2Store(cfg.Repository, cfg.ActiveTokenKeyVersion, cfg.TokenKeys, cfg.RegistrationDigestKey)
+	if err != nil {
+		return nil, err
+	}
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	return &Server{v2store: st, sender: cfg.Sender, attest: cfg.Attest, registrationAdmission: cfg.RegistrationAdmission, now: now, quotas: quotas, logger: logger, ready: cfg.Readiness, trustedProxies: trustedProxies}, nil
 }
 
 type requestMetricKey struct {
@@ -159,15 +207,30 @@ func NewServer(cfg Config) (*Server, error) {
 }
 
 // Close releases the underlying bbolt file.
-func (s *Server) Close() error { return s.store.close() }
+func (s *Server) Close() error {
+	if s.v2store != nil {
+		return s.v2store.close()
+	}
+	return s.store.close()
+}
 
 // RunRetention applies section 8.1's three durable retention rows, plus PG-RET-4's
 // hardening sweep of the three bounded in-memory caches (quota windows, registration and
 // wake idempotency), once, as of the server's current clock reading. Production wiring
 // (cmd/swarm-pushgw) calls it on a timer; tests call it directly after advancing a fake
 // clock.
-func (s *Server) RunRetention(_ context.Context) error {
+func (s *Server) RunRetention(ctx context.Context) error {
 	now := s.now()
+	if s.v2store != nil {
+		if err := s.v2store.p.runRetention(ctx, now); err != nil {
+			s.retentionFailed.Store(true)
+			return err
+		}
+		s.lastRetentionOK.Store(now.Unix())
+		s.retentionOK.Store(true)
+		s.retentionFailed.Store(false)
+		return nil
+	}
 	s.limiter.sweep(now)
 	s.regIdem.sweep(now)
 	s.wakeIdem.sweep(now)

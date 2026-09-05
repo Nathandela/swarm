@@ -1,6 +1,7 @@
 package pushgw
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -13,6 +14,48 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAdminSurfacesUseSharedRepository(t *testing.T) {
+	srv, err := NewFirestoreServer(Config{
+		Repository:            NewMemoryRepository(),
+		TokenKeys:             map[string][]byte{"v1": bytes.Repeat([]byte{1}, 32)},
+		ActiveTokenKeyVersion: "v1",
+		RegistrationDigestKey: bytes.Repeat([]byte{2}, 32),
+		RegistrationAdmission: func(string) bool { return true },
+		Sender:                opsSender{},
+		Attest:                opsAttestor{},
+		Readiness:             DeploymentReadiness{ProductionSender: true, ProductionAttestor: true, RequiredConfig: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.SetServing(true)
+	srv.SetRetentionWorkerRunning(true)
+	if got := adminRequest(t, srv, "/readyz").Code; got != http.StatusOK {
+		t.Fatalf("readyz=%d, want 200", got)
+	}
+	if got := adminRequest(t, srv, "/metrics").Code; got != http.StatusOK {
+		t.Fatalf("metrics=%d, want 200", got)
+	}
+}
+
+func TestFirestoreMetricsDoNotInventEmptyStoreCounts(t *testing.T) {
+	// No client is supplied: process metrics must not query Firestore, and unknown
+	// shared-store counts must not be presented as observed zeroes.
+	srv := &Server{v2store: &v2Store{p: &firestorePersistence{}}}
+	w := adminRequest(t, srv, "/metrics")
+	if w.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d", w.Code)
+	}
+	for _, name := range []string{"pushgw_database_bytes", "pushgw_installations", "pushgw_addresses", "pushgw_tombstones"} {
+		if strings.Contains(w.Body.String(), name) {
+			t.Errorf("unobserved Firestore store gauge %s was emitted", name)
+		}
+	}
+	if !strings.Contains(w.Body.String(), "pushgw_requests_total") {
+		t.Fatal("process request metrics disappeared with unavailable store gauges")
+	}
+}
 
 type opsSender struct{}
 

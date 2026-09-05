@@ -1,13 +1,18 @@
 package pushgw
 
 import (
+	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // wakeSize is PG-WAKE-2's pinned constant: WakeV1 is exactly 74 bytes.
@@ -59,7 +64,7 @@ func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) int {
 		capability = ""
 	}
 
-	rec, found, err := s.store.getAddress(pushAddress)
+	rec, found, err := s.getAddress(r.Context(), pushAddress)
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
@@ -78,9 +83,12 @@ func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) int {
 	// revokeByMachineCapability's own at-use window check (revoke.go) for the same reason:
 	// a durable stored deadline is only real if every reader of the record enforces it, not
 	// only the sweep that eventually deletes it.
-	if !rec.Bound && now.UnixMilli() > rec.UnboundExpiresMs {
+	if !rec.Bound && now.UnixMilli() >= rec.UnboundExpiresMs {
 		s.writeErr(w, errUnauthorized)
 		return errUnauthorized.status
+	}
+	if s.v2store != nil {
+		return s.handleWakeV2(w, r, envelope, pushAddress, rec, capability, now)
 	}
 	if ok, retryAfter := s.limiter.allow("wake-addr:"+pushAddress, s.quotas.WakesPerAddress, now); !ok {
 		spec := errQuotaExceeded(retryAfter)
@@ -168,6 +176,132 @@ func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) int {
 		s.writeErr(w, errInternal)
 		return errInternal.status
 	}
+}
+
+func (s *Server) handleWakeV2(w http.ResponseWriter, r *http.Request, envelope []byte, pushAddress string, rec addressRecord, capability string, now time.Time) int {
+	issuedAtMs := int64(binary.BigEndian.Uint64(envelope[26:34]))
+	issuedAt := time.UnixMilli(issuedAtMs)
+	deadline := issuedAt.Add(wakeWindow)
+	if !now.Before(deadline) || issuedAt.After(now.Add(expiryHorizon)) {
+		s.writeErr(w, errWakeMalformed)
+		return errWakeMalformed.status
+	}
+	installation, found, err := s.getInstallation(r.Context(), rec.InstallationID)
+	if err != nil {
+		s.writeErr(w, errInternal)
+		return errInternal.status
+	}
+	if !found {
+		s.writeErr(w, errUnauthorized)
+		return errUnauthorized.status
+	}
+	if installation.TokenDead {
+		s.writeErr(w, errPushTokenUnregistered)
+		return errPushTokenUnregistered.status
+	}
+	digest := sha256.Sum256(envelope)
+	attemptID := hex.EncodeToString(digest[:])
+	leaseBytes := make([]byte, 16)
+	if _, err := rand.Read(leaseBytes); err != nil {
+		s.writeErr(w, errInternal)
+		return errInternal.status
+	}
+	leaseID := hex.EncodeToString(leaseBytes)
+	claim, claimed, err := s.v2store.p.claimWake(r.Context(), attemptID, leaseID, pushAddress, hashSecret(capability), now, deadline, s.quotas.WakesPerAddress, "wake-src:"+s.sourceIP(r), s.quotas.WakesPerSourceIP)
+	if err != nil {
+		s.writeErr(w, errInternal)
+		return errInternal.status
+	}
+	if claim.Completed {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(claim.Status)
+		_, _ = w.Write(claim.Body)
+		return claim.Status
+	}
+	if !claimed {
+		switch claim.Denied {
+		case "unauthorized":
+			s.writeErr(w, errUnauthorized)
+			return errUnauthorized.status
+		case "token_dead":
+			s.writeErr(w, errPushTokenUnregistered)
+			return errPushTokenUnregistered.status
+		case "quota":
+			spec := errQuotaExceeded(claim.RetryAfter)
+			s.writeErr(w, spec)
+			return spec.status
+		default:
+			s.writeErr(w, errUpstreamUnavailable)
+			return errUpstreamUnavailable.status
+		}
+	}
+	fcmToken, err := s.decryptToken(claim.TokenEnc, claim.KeyVersion)
+	if err != nil {
+		s.writeErr(w, errInternal)
+		return errInternal.status
+	}
+	// Provider I/O is deliberately outside Firestore's retryable callback. A lease takeover
+	// may repeat these exact bytes after an acceptance/commit crash; attempts and the original
+	// five-minute deadline remain bounded in shared state.
+	providerNow := s.now()
+	remaining := min(deadline.Sub(providerNow), now.Add(wakeLease).Sub(providerNow))
+	if remaining <= 0 {
+		s.writeErr(w, errUpstreamUnavailable)
+		return errUpstreamUnavailable.status
+	}
+	providerCtx, cancelProvider := context.WithTimeout(r.Context(), remaining)
+	sendErr := s.sender.Send(providerCtx, fcmToken, envelope)
+	cancelProvider()
+	s.recordProviderOutcome(sendErr)
+	statusCode := http.StatusServiceUnavailable
+	var responseBody []byte
+	unregistered := false
+	switch {
+	case sendErr == nil:
+		statusCode = http.StatusOK
+		responseBody, _ = json.Marshal(wakeResponse{Status: "provider_accepted"})
+	case errors.Is(sendErr, ErrUnregistered):
+		statusCode, unregistered = errPushTokenUnregistered.status, true
+		responseBody, _ = json.Marshal(wireError{Code: errPushTokenUnregistered.code, Message: errPushTokenUnregistered.message, Retryable: errPushTokenUnregistered.retryable})
+	case errors.Is(sendErr, ErrUnavailable):
+		statusCode = http.StatusServiceUnavailable
+	case errors.Is(sendErr, ErrRefused):
+		statusCode = errUpstreamRefused.status
+		responseBody, _ = json.Marshal(wireError{Code: errUpstreamRefused.code, Message: errUpstreamRefused.message, Retryable: errUpstreamRefused.retryable})
+	default:
+		responseBody, _ = json.Marshal(wireError{Code: errInternal.code, Message: errInternal.message, Retryable: errInternal.retryable})
+	}
+	staleUnregistered, err := s.v2store.p.completeWake(r.Context(), attemptID, leaseID, claim.TokenGeneration, statusCode, responseBody, unregistered, s.now())
+	if err != nil {
+		s.writeErr(w, errInternal)
+		return errInternal.status
+	}
+	if staleUnregistered {
+		s.writeErr(w, errPushTokenUnregistered)
+		return errPushTokenUnregistered.status
+	}
+	if sendErr == nil {
+		// This reports the provider's acceptance, not a phone receipt or a late
+		// durable binding. completeWake deliberately ignores expired completions.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(responseBody)
+		return http.StatusOK
+	}
+	if errors.Is(sendErr, ErrUnregistered) {
+		s.writeErr(w, errPushTokenUnregistered)
+		return errPushTokenUnregistered.status
+	}
+	if errors.Is(sendErr, ErrUnavailable) {
+		s.writeErr(w, errUpstreamUnavailable)
+		return errUpstreamUnavailable.status
+	}
+	if errors.Is(sendErr, ErrRefused) {
+		s.writeErr(w, errUpstreamRefused)
+		return errUpstreamRefused.status
+	}
+	s.writeErr(w, errInternal)
+	return errInternal.status
 }
 
 // readWakeBody enforces PG-TR-3's wake row: a declared Content-Length other than 74 is

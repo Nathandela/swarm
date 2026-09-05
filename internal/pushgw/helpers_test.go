@@ -22,7 +22,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -148,7 +147,7 @@ type harness struct {
 	clock  *fakeClock
 	sender *fakeSender
 	attest *fakeAttestor
-	dbPath string
+	dbPath string // legacy storage tests; removed with the bbolt suite
 }
 
 // defaultTestQuotas sets every bucket generously high so quota tests are the only ones
@@ -161,7 +160,7 @@ func defaultTestQuotas() pushgw.QuotaConfig {
 		RegistrationsGlobal:        pushgw.RateLimit{Max: 1000, Window: time.Minute},
 		AllocationsPerSourceIP:     pushgw.RateLimit{Max: 1000, Window: time.Minute},
 		AllocationsGlobal:          pushgw.RateLimit{Max: 1000, Window: time.Minute},
-		AllocationsPerInstallation: 1000,
+		AllocationsPerInstallation: 20,
 	}
 }
 
@@ -170,28 +169,31 @@ func defaultTestQuotas() pushgw.QuotaConfig {
 // every test in this suite drives the REAL handler over REAL HTTP, never a mocked router.
 func newHarness(t *testing.T, mutate func(*pushgw.Config)) *harness {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "pushgw.db")
 	clk := newFakeClock()
 	snd := newFakeSender()
 	att := newFakeAttestor()
 	cfg := pushgw.Config{
-		DBPath: dbPath,
-		Sender: snd,
-		Attest: att,
-		Now:    clk.Now,
-		Quotas: defaultTestQuotas(),
+		Repository:            pushgw.NewMemoryRepository(),
+		TokenKeys:             map[string][]byte{"test-v1": bytes.Repeat([]byte{1}, 32)},
+		ActiveTokenKeyVersion: "test-v1",
+		RegistrationDigestKey: bytes.Repeat([]byte{2}, 32),
+		RegistrationAdmission: func(string) bool { return true },
+		Sender:                snd,
+		Attest:                att,
+		Now:                   clk.Now,
+		Quotas:                defaultTestQuotas(),
 	}
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	srv, err := pushgw.NewServer(cfg)
+	srv, err := pushgw.NewFirestoreServer(cfg)
 	if err != nil {
 		t.Fatalf("pushgw.NewServer: %v", err)
 	}
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 	t.Cleanup(func() { _ = srv.Close() })
-	return &harness{t: t, srv: srv, ts: ts, url: ts.URL, client: ts.Client(), clock: clk, sender: snd, attest: att, dbPath: dbPath}
+	return &harness{t: t, srv: srv, ts: ts, url: ts.URL, client: ts.Client(), clock: clk, sender: snd, attest: att}
 }
 
 // ---------------------------------------------------------------------------------------

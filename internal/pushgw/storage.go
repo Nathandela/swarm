@@ -33,28 +33,33 @@ var (
 // AttestationVerdictToken is deliberately absent -- PG-AUTH-12 forbids persisting it in
 // any form, hashed or otherwise.
 type installationRecord struct {
-	PublicKey     []byte `json:"public_key"`
-	FCMTokenEnc   []byte `json:"fcm_token_enc"`
-	CreatedAtMs   int64  `json:"created_at_ms"`
-	LastActiveMs  int64  `json:"last_active_ms"`
-	LicensedBuild bool   `json:"licensed_build"`
+	PublicKey     []byte `json:"public_key" firestore:"public_key"`
+	FCMTokenEnc   []byte `json:"fcm_token_enc" firestore:"fcm_token_enc"`
+	CreatedAtMs   int64  `json:"created_at_ms" firestore:"created_at_ms"`
+	LastActiveMs  int64  `json:"last_active_ms" firestore:"last_active_ms"`
+	LicensedBuild bool   `json:"licensed_build" firestore:"licensed_build"`
 	// TokenDead is PG-ROT-2's dead-mapping marker: set (and FCMTokenEnc cleared) when FCM
 	// reports the stored token UNREGISTERED. It is part of the closed "token mapping"
 	// stored field (PG-RET-10) -- it describes that mapping's own liveness, not a new
 	// category of datum. Cleared by the next successful PUT .../token (§3.2).
-	TokenDead bool `json:"token_dead"`
+	TokenDead bool `json:"token_dead" firestore:"token_dead"`
+	// V2 records the encryption-key version and a monotonic token generation. Provider
+	// outcomes compare the generation captured before FCM I/O, never ciphertext bytes.
+	TokenKeyVersion string `json:"token_key_version" firestore:"token_key_version"`
+	TokenGeneration int64  `json:"token_generation" firestore:"token_generation"`
+	AddressCount    int64  `json:"address_count" firestore:"address_count"`
 }
 
 // addressRecord is one row of the "addresses" bucket, keyed by push_address. Only the
 // SHA-256 verifiers of the two capabilities are stored (PG-AUTH-7); the raw 32 CSPRNG
 // bytes a client presents never touch disk.
 type addressRecord struct {
-	InstallationID    string `json:"installation_id"`
-	SubmitCapHash     string `json:"submit_cap_hash"`
-	MachineRevokeHash string `json:"machine_revoke_hash"`
-	CreatedAtMs       int64  `json:"created_at_ms"`
-	Bound             bool   `json:"bound"`
-	UnboundExpiresMs  int64  `json:"unbound_expires_ms"`
+	InstallationID    string `json:"installation_id" firestore:"installation_id"`
+	SubmitCapHash     string `json:"submit_cap_hash" firestore:"submit_cap_hash"`
+	MachineRevokeHash string `json:"machine_revoke_hash" firestore:"machine_revoke_hash"`
+	CreatedAtMs       int64  `json:"created_at_ms" firestore:"created_at_ms"`
+	Bound             bool   `json:"bound" firestore:"bound"`
+	UnboundExpiresMs  int64  `json:"unbound_expires_ms" firestore:"unbound_expires_ms"`
 }
 
 // tombstoneRecord is PG-REV-2 / PG-RET-3's bounded revocation tombstone. The bucket is
@@ -68,7 +73,7 @@ type addressRecord struct {
 // tombstone's bound exists to prevent. A durable retry already presents the capability
 // whose hash is the key, so no address lookup is needed to find its own tombstone.
 type tombstoneRecord struct {
-	RevokedAtMs int64 `json:"revoked_at_ms"`
+	RevokedAtMs int64 `json:"revoked_at_ms" firestore:"revoked_at_ms"`
 }
 
 // store wraps the single bbolt file plus the gateway-local at-rest encryption key.

@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const maxAddressesPerInstallation = 20
+
 // RateLimit is a fixed-window bucket: at most Max attempts per Window. The zero value
 // RateLimit{} is the sentinel "unset -- apply section 9's proposed default" (withDefaults);
 // any OTHER value must be a genuinely usable bucket, enforced by validate.
@@ -57,7 +59,7 @@ func (q QuotaConfig) withDefaults() QuotaConfig {
 		q.AllocationsGlobal = RateLimit{Max: 4000, Window: time.Hour}
 	}
 	if q.AllocationsPerInstallation == 0 {
-		q.AllocationsPerInstallation = 20
+		q.AllocationsPerInstallation = maxAddressesPerInstallation
 	}
 	return q
 }
@@ -84,6 +86,9 @@ func (q QuotaConfig) validate() error {
 	}
 	if q.AllocationsPerInstallation <= 0 {
 		return fmt.Errorf("pushgw: quota AllocationsPerInstallation is unusable (%d): must be positive", q.AllocationsPerInstallation)
+	}
+	if q.AllocationsPerInstallation > maxAddressesPerInstallation {
+		return fmt.Errorf("pushgw: quota AllocationsPerInstallation is %d: maximum is %d", q.AllocationsPerInstallation, maxAddressesPerInstallation)
 	}
 	return nil
 }
