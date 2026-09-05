@@ -1,0 +1,15 @@
+name = "swarm-relay-v2"
+main = "src/worker.mjs"
+compatibility_date = "2026-09-04"
+
+[[durable_objects.bindings]]
+name = "HOMES"
+class_name = "RelayHome"
+
+[[durable_objects.bindings]]
+name = "RENDEZVOUS"
+class_name = "RendezvousDirectory"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayHome", "RendezvousDirectory"]

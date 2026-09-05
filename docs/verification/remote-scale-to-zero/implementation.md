@@ -134,8 +134,17 @@ The actual SQLite cursor counters for 100 sequential append/deliver/ACK cycles w
 3,000 rows read, 1,600 rows written and 2,900 statements. First and hundredth append
 both measured 11 reads/11 writes; first and hundredth ACK both measured 19 reads/5
 writes. This is an active-traffic microprobe, not a bill estimate: idle/cleanup alarms,
-hosted eviction and retained-backlog work must also be measured. Root's subsequent
-alarm-query review remains in progress.
+hosted eviction and retained-backlog work must also be measured.
+
+That alarm review found global joins/grouping and a union-wide minimum expiry which
+scanned retained history. Sol's real-workerd RED measured 21 reads at one retained item
+versus 1,939 at 300 items across 32 streams. Indexed per-stream cleanup, the existing
+acknowledged-receipt counter and three indexed minimum-expiry queries replaced those
+scans. Root independently passed the stricter final fixture: one item/one stream used
+14 reads, while 300 items across all 64 directional streams used 203 reads; both used
+zero writes and nine statements. The exact earlier rendezvous expiry remained the next
+deadline. This establishes a bounded-stream cleanup cost, not constant cost or a hosted
+bill. Root's final combined Go/workerd runs passed in 1.942 s and 4.499 s.
 
 ## Ongoing review boundaries
 
