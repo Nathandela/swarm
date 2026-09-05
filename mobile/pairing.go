@@ -484,7 +484,12 @@ type pairTransport interface {
 	PeerSPKI() []byte
 }
 
-var relayV2DialPair = func(ctx context.Context, profile relayv2.Profile, ceremony string) (pairTransport, error) {
+var relayV2DialPair func(context.Context, relayv2.Profile, string) (pairTransport, error)
+
+func dialRelayV2Pair(ctx context.Context, profile relayv2.Profile, ceremony string) (pairTransport, error) {
+	if relayV2DialPair != nil {
+		return relayV2DialPair(ctx, profile, ceremony)
+	}
 	return relayv2.DialPair(ctx, profile, ceremony)
 }
 
@@ -538,14 +543,14 @@ func verifyPairingMachine(machine pairing.MachinePayload, presentedSPKI []byte) 
 // before pairing carries.
 func (a *App) pairingDial(ctx context.Context, relayURL, ceremony string) (pairTransport, error) {
 	verified := a.withPlatformTrust(relay.Security{AllowLoopbackCleartext: true})
-	conn, err := relayV2DialPair(ctx, relayv2.Profile{RelayURL: relayURL, Security: verified}, ceremony)
+	conn, err := dialRelayV2Pair(ctx, relayv2.Profile{RelayURL: relayURL, Security: verified}, ceremony)
 	if err == nil {
 		return conn, nil
 	}
 	if !originIsPrivate(relayURL) {
 		return nil, err
 	}
-	return relayV2DialPair(ctx, relayv2.Profile{RelayURL: relayURL, Security: relay.PairingSecurity()}, ceremony)
+	return dialRelayV2Pair(ctx, relayv2.Profile{RelayURL: relayURL, Security: relay.PairingSecurity()}, ceremony)
 }
 
 // join dials the confirmed destination and drives the device half of the handshake. base
