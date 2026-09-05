@@ -2,7 +2,7 @@
 
 Updated 2026-09-05. Source inspected: v0.13.27 / f1621618. This revision supersedes the compatibility-preserving migration plan in commit a9ef4d24.
 
-Owner decisions: there are **no current users**; backward compatibility must be dropped and cleaned up. Price and efficiency take priority over geographic residency. Bounded shared metadata is acceptable; security still matters. Initial audience is the owner and friends, not an unrestricted public service.
+Owner decisions: there are **no current users**; backward compatibility must be dropped and cleaned up. Use **one live environment**, developed and deployed directly from `main`; no standing staging environment or promotion pipeline. Price and efficiency take priority over geographic residency. Bounded shared metadata is acceptable; security still matters. Initial audience is the owner and friends, not an unrestricted public service.
 
 Status: implementation underway, not a deployed replacement. Existing local experiments are supporting evidence, not a completed v2 implementation. Follow-up: agents-tracker-wjp4. Architecture is recorded in [ADR-027](../adr/ADR-027-clean-remote-control-v2.md); current test and review evidence is in the [implementation journal](../verification/remote-scale-to-zero/implementation.md).
 
@@ -27,6 +27,10 @@ No v1 protocol support, old-client negotiation, polling fallback, dual backend, 
 
 No P2P or disposable-versus-durable history split in the first release. They are separate optimizations, not prerequisites for removing the VM bill. Do not move Android into a private repository as part of this project.
 
+No duplicate staging Worker, Cloud Run service, Firestore database, permanent staging
+credentials or staging-to-production promotion machinery. Local workerd, Firestore
+emulator and disposable test directories remain isolated from live state.
+
 Do not build anonymous public signup or public-fleet sophistication just for a small group. Owner-controlled admission is the preferred onboarding direction. Keep current attestation until a replacement enrollment contract is deliberately reviewed; “friends only” does not itself authenticate internet callers.
 
 ### What changed from the previous plan
@@ -44,6 +48,27 @@ Do not build anonymous public signup or public-fleet sophistication just for a s
 | Roll back to an old deployment/state | Repair or roll v2 code back with current v2 state; never silently reactivate v1 |
 
 These deletions reduce build and review scope. They do not turn local feasibility probes into production proof.
+
+### One live environment, incremental activation
+
+The delivery loop is TDD, implementation, independent review, local verification,
+integration on `main`, then direct deployment and bounded hosted smoke tests of that
+same live environment. "Live" names the sole deployment target; it does not certify
+unfinished features as production-ready. There is no separate staging resource set.
+
+For the first relay upload, keep admission unconfigured: v2 endpoints must reject
+requests before dispatching either Durable Object. A public banner proves only routing
+and TLS, not pairing or command readiness. Enable the fresh owner's machine only after
+the relevant authentication, client-wiring and hosted-abuse gates pass. Never deploy
+test allowlists, shortened lifetimes or disabled cleanup from the local suite.
+
+Run initial hosted experiments on fresh owner-only v2 state. Once useful state exists,
+keep synthetic tests in local/emulated stores; use an explicitly approved temporary
+recovery target only when a provider restore drill cannot be done safely in place.
+This is not a standing staging service. Do not reset live state merely to rerun tests.
+Cloud resource creation, public exposure and paid-plan changes retain their separate
+operator approval boundaries. The relay's [runbook](../../services/relay/README.md)
+records the concrete single-environment setup.
 
 ## 2. Target architecture
 
@@ -181,9 +206,9 @@ Use the actual service-issued run.app HTTPS URL in fresh configuration. No DNS m
 
 Test forwarded-header spoofing and source-rate-limit derivation even without Hosting. If reliable client IP is unavailable, change that limiter design; do not trust arbitrary X-Forwarded-For. Installation/capability/global quotas still apply. Bound unauthenticated work before expensive allocation/attestation.
 
-Use Secret Manager for stable versioned token-encryption material; never bake it into images or regenerate on startup. Test missing-secret fail-closed behavior, key rotation and recovery. Real Google ADC/Play Integrity/FCM calls remain a staging gate. [Service identity](https://docs.cloud.google.com/run/docs/securing/service-identity).
+Use Secret Manager for stable versioned token-encryption material; never bake it into images or regenerate on startup. Test missing-secret fail-closed behavior, key rotation and recovery. Real Google ADC/Play Integrity/FCM calls remain a hosted owner-pilot gate in the one live environment. [Service identity](https://docs.cloud.google.com/run/docs/securing/service-identity).
 
-Initial staging values: request-based billing, min instances 0, max instances 3, 1 vCPU/512 MiB, concurrency 8, 30-second outer deadline and shorter downstream deadlines. These are test inputs, not measured sizing. Max instances and alerts are not hard monetary limits.
+Initial live owner-pilot values: request-based billing, min instances 0, max instances 3, 1 vCPU/512 MiB, concurrency 8, 30-second outer deadline and shorter downstream deadlines. These are conservative starting inputs, not measured sizing. Max instances and alerts are not hard monetary limits.
 
 Logical expiry is enforced at use. Firestore TTL is asynchronous and does not cascade into subcollections; use bounded cleanup as required. Explicitly cost transaction retries, GC, backups and cold-start key fetches. [TTL](https://firebase.google.com/docs/firestore/ttl), [Firestore pricing](https://firebase.google.com/docs/firestore/pricing).
 
@@ -205,7 +230,7 @@ Once owner/friends create real v2 state, backups matter. Start with daily recove
 
 A restored database can resurrect revoked permissions. Keep serving fenced until authority reconciliation succeeds, or fail closed and require fresh pairing/enrollment. Preserve or reset v2 mailbox generation according to the restore contract; never accept stale ACKs as current authority.
 
-Provider PITR is useful but not sufficient proof of application recovery. Exercise a restore and key recovery on staging. [SQLite recovery](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/).
+Provider PITR is useful but not sufficient proof of application recovery. Exercise restore and key recovery without overwriting useful live state: start with disposable local state, then an explicitly approved temporary provider recovery target if required for hosted proof. Do not maintain a second environment just for this drill. [SQLite recovery](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/).
 
 An operational rollback means compatible v2 code with the current v2 store, or an explicitly approved fresh v2 reset. It never means pointing clients at a stale v1 database. No old-version support matrix is carried into the initial launch.
 
@@ -225,7 +250,7 @@ These are future implementation packages. The owner has resolved the no-users, n
 
 Build P1 first. A deployed vertical slice is more informative than completing two large ports independently and connecting them at the end. P2/P3 can then proceed in parallel behind the proven integration.
 
-P1 is not a security-light public demo. Before a real command or wake, implement bounded parsers/deadlines, real relay pairing/Ed25519/E2EE and revocation, installation signatures/capabilities, current Play Integrity verification, shared nonce/idempotency claims, conservative global admission, stable Secret Manager key custody and least-privilege runtime identity. Use isolated staging state and a fresh test installation; do not import old tokens/capabilities. Test direct-host/header spoofing and all exposed service/revision host forms, then select a trustworthy limiter design. Failure here stops P1. P2/P3 finish coverage, rotation/recovery, lifecycle, resource bounds and cleanup; they do not postpone the security boundary until after public exposure.
+P1 is not a security-light public demo. Before a real command or wake, implement bounded parsers/deadlines, real relay pairing/Ed25519/E2EE and revocation, installation signatures/capabilities, current Play Integrity verification, shared nonce/idempotency claims, conservative global admission, stable Secret Manager key custody and least-privilege runtime identity. Use fresh owner-only state in the one live environment and a fresh installation; do not import old tokens/capabilities or local fixture identities. Test direct-host/header spoofing and all exposed service/revision host forms, then select a trustworthy limiter design. Failure here stops P1. P2/P3 finish coverage, rotation/recovery, lifecycle, resource bounds and cleanup; they do not postpone the security boundary until after public exposure.
 
 The previous 33–56 engineer-day estimate included work now explicitly removed and is withdrawn as the commitment baseline. Re-estimate after P1 using remaining source work, not a guessed percentage discount. The runtime port, Android lifecycle, security and recovery work still exist.
 

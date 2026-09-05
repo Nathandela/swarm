@@ -595,3 +595,62 @@ The initial broad caller run passed conformance (251.650 s) and Android source g
 (107.016 s), failing mobile only on the now-corrected fixture IDs. Its final rerun and
 CI for this follow-up checkpoint are pending at source publication. Hosted Google/handset,
 explicit unresolved-registration recovery, and billing gates remain open.
+
+## One live environment and first-upload preflight
+
+The owner explicitly removed a standing staging environment: use one live v2 target,
+develop/review/test locally, integrate on `main`, and deploy that same target directly.
+The plan and ADR now say so. Local workerd/emulator stores remain isolated; a hosted
+restore drill may need a separately approved disposable target, not a permanent second
+backend. No compatibility or security guarantee was removed by this simplification.
+
+Cloudflare account email verification and the specifically approved Wrangler OAuth
+grant completed. A read-only `whoami --json` verified the intended account and exactly
+`account:read`, `workers_scripts:write`, and `offline_access`. The named profile
+`swarm-staging` is only the existing local login label, bound to the relay checkout;
+there is no staging Worker. Credentials use an encrypted file backed by macOS Keychain
+with owner-only `0600` permissions. No token or encryption key is recorded here, and
+the default auth profile was not replaced.
+
+Terra's TDD config check failed on the old Worker name, then passed with the sole live
+name `s`, explicit `workers_dev = true`, preview URLs disabled, two SQLite Durable
+Object bindings, and no environment, custom route, admission or local-test variables.
+The permanent WSS origin is `wss://s.nathan-delacretaz.workers.dev`: 37 bytes, within
+the existing 39-byte QR field. No custom hostname, account-subdomain change or extra
+deployment path is required. The runbook pins the local Wrangler binary, explicit
+profile and nonempty operator-held account ID; it separates offline validation from
+an authorized public upload and specifies complete WebSocket-upgrade refusal probes.
+
+Sol added a direct Worker characterization test with throwing Durable Object binding
+getters: missing/empty/malformed/partly malformed allowlists or a missing namespace
+return `503` on both v2 routes before either binding is accessed. The public root is
+state-free; an unknown machine with valid admission configuration gets `403` before
+home dispatch. Removing the admission guard in an isolated temporary mutant made the
+test fail. Runtime Worker code did not change.
+
+Verification for this slice:
+
+- Terra's full local relay suite on reserved port 8793 passed. Root's independent
+  suite on 8792 passed config/admission, actual workerd protocol/cost/alarm tests and
+  native Go integration (1.887 s) plus expired-receipt regression (4.307 s). The first
+  root run hit a sandbox denial opening a Go build-cache file; the permitted rerun
+  passed without weakening tests or changing code.
+- Root's fresh no-variable workerd on reserved port 8807 returned `200` at `/` and
+  `503` for complete WebSocket upgrades to well-formed `/v2/ws` and `/v2/pair` requests.
+  It declared only the two expected Durable Object bindings and stopped cleanly. An
+  earlier attempted root listener collided with Terra's 8793 test; its responses were
+  discarded and are not evidence for the no-variable configuration.
+- Root's pinned Wrangler offline dry-run passed: 52.74 KiB bundle / 11.07 KiB gzip,
+  two expected bindings, no upload. Sol independently passed a dry-run with an
+  intentionally unreachable Cloudflare API endpoint and telemetry disabled. This
+  proves local bundling/configuration, not hosted name availability, entitlements,
+  migration acceptance or TLS.
+- Root's pairing and terminal-QR race suites passed (21.780 s / 2.333 s); shell syntax
+  and diff whitespace checks passed. Sol independently reviewed config, tests, plan,
+  ADR and protocol changes with no remaining must-fix.
+
+No cloud Worker, Durable Object namespace, public route, paid upgrade or admission
+activation was created by this preflight. First public-resource creation remains an
+explicit operator action. Hosted abuse controls, authenticated namespace/home carriage
+in the real clients, real-device/Google calls, recovery, capacity and billing evidence
+remain open; `200/503` alone is not production readiness.

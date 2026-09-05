@@ -62,6 +62,12 @@ are useful implementation assets, not reasons to retain the old deployment.
    hibernation, actual Google identity, phone lifecycle, performance or billing.
    No public security-light demo and no claim of production readiness before the
    plan's gates pass.
+8. Maintain one live environment, with direct deployment from reviewed and tested
+   `main`. No standing staging resources, duplicate backend or promotion pipeline.
+   Keep automated workerd/emulator tests local and isolated. Initial live relay
+   admission stays closed until the active-use security and client-wiring gates pass;
+   a successful upload is not a readiness certificate. A provider recovery drill may
+   use a separately approved disposable target, never silently overwrite useful state.
 
 ## Consequences
 
