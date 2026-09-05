@@ -305,7 +305,7 @@ export class RelayHome {
       "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS members (phone_rid TEXT PRIMARY KEY, pub TEXT NOT NULL, generation TEXT NOT NULL, ceremony TEXT NOT NULL, status TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS retired (phone_rid TEXT NOT NULL, ceremony TEXT NOT NULL, PRIMARY KEY(phone_rid, ceremony))",
-      "CREATE TABLE IF NOT EXISTS streams (recipient TEXT NOT NULL, sender TEXT NOT NULL, generation TEXT NOT NULL, incarnation TEXT NOT NULL, next_cursor TEXT NOT NULL, ack_cursor TEXT NOT NULL, item_count INTEGER NOT NULL, item_bytes INTEGER NOT NULL, acked_receipts INTEGER NOT NULL, PRIMARY KEY(recipient, sender, generation))",
+      "CREATE TABLE IF NOT EXISTS streams (recipient TEXT NOT NULL, sender TEXT NOT NULL, generation TEXT NOT NULL, incarnation TEXT NOT NULL, next_cursor TEXT NOT NULL, ack_cursor TEXT NOT NULL, item_count INTEGER NOT NULL, item_bytes INTEGER NOT NULL, acked_receipts INTEGER NOT NULL, discard_old_incarnation TEXT, discard_through_cursor TEXT, PRIMARY KEY(recipient, sender, generation))",
       "CREATE TABLE IF NOT EXISTS items (recipient TEXT NOT NULL, sender TEXT NOT NULL, generation TEXT NOT NULL, cursor TEXT NOT NULL, msg_id TEXT NOT NULL, digest TEXT NOT NULL, ciphertext TEXT NOT NULL, size INTEGER NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(recipient, sender, generation, cursor))",
       "CREATE UNIQUE INDEX IF NOT EXISTS items_message ON items(recipient, sender, generation, msg_id)",
       "CREATE INDEX IF NOT EXISTS items_delivery ON items(recipient, sender, generation, cursor, expires_at)",
@@ -622,8 +622,9 @@ export class RelayHome {
       return this.row("SELECT incarnation,next_cursor,ack_cursor FROM streams WHERE recipient=? AND sender=? AND generation=?", recipient, peerSender, generation);
     });
     if (!(message.incarnation === "" && after === ZERO_KEY) && message.incarnation !== stream.incarnation) protocolError("incarnation_mismatch");
-    if (after < stream.ack_cursor || after > stream.next_cursor) protocolError("invalid_cursor");
-    const sub = { peer: message.peer_rid, recipient, sender: peerSender, generation, incarnation: stream.incarnation, sentHigh: after, sentCount: 0, sentBytes: 0 };
+    const blankRecovery = message.incarnation === "" && after === ZERO_KEY;
+    if ((!blankRecovery && after < stream.ack_cursor) || after > stream.next_cursor) protocolError("invalid_cursor");
+    const sub = { peer: message.peer_rid, recipient, sender: peerSender, generation, incarnation: stream.incarnation, sentHigh: blankRecovery ? stream.ack_cursor : after, sentCount: 0, sentBytes: 0 };
     ws.serializeAttachment({ ...attachment, sub });
     this.send(ws, "SUBSCRIBED", message.request_id, { peer_rid: message.peer_rid, generation: wireCursor(generation), incarnation: stream.incarnation, after: wireCursor(after) });
     await this.pump(ws);
@@ -704,6 +705,13 @@ export class RelayHome {
     const { sender, recipient } = attachment.role === "machine"
       ? { sender: message.peer_rid, recipient: attachment.machineRID }
       : { sender: attachment.machineRID, recipient: attachment.rid };
+    const current = this.row("SELECT incarnation,discard_old_incarnation,discard_through_cursor FROM streams WHERE recipient=? AND sender=? AND generation=?", recipient, sender, binding.generation);
+    if (!current) protocolError("incarnation_mismatch");
+    if (current.incarnation !== message.incarnation) {
+      if (current.discard_old_incarnation !== message.incarnation) protocolError("incarnation_mismatch");
+      this.send(ws, "DISCARDED", message.request_id, { peer_rid: message.peer_rid, generation: wireCursor(binding.generation), incarnation: current.incarnation, cursor: wireCursor(current.discard_through_cursor) });
+      return;
+    }
     const nextIncarnation = randomToken(16);
     const result = this.state.storage.transactionSync(() => {
       this.liveBinding(attachment, message.peer_rid, message.generation);
@@ -711,7 +719,7 @@ export class RelayHome {
       if (!stream || stream.incarnation !== message.incarnation) protocolError("incarnation_mismatch");
       const newlyAcked = this.row("SELECT COUNT(*) AS n FROM receipts WHERE recipient=? AND sender=? AND generation=? AND cursor>? AND cursor<=?", recipient, sender, binding.generation, stream.ack_cursor, stream.next_cursor).n;
       this.exec("UPDATE streams SET acked_receipts=acked_receipts+? WHERE recipient=? AND sender=? AND generation=?", newlyAcked, recipient, sender, binding.generation);
-      this.exec("UPDATE streams SET incarnation=?,ack_cursor=? WHERE recipient=? AND sender=? AND generation=?", nextIncarnation, stream.next_cursor, recipient, sender, binding.generation);
+      this.exec("UPDATE streams SET incarnation=?,ack_cursor=?,discard_old_incarnation=?,discard_through_cursor=? WHERE recipient=? AND sender=? AND generation=?", nextIncarnation, stream.next_cursor, stream.incarnation, stream.next_cursor, recipient, sender, binding.generation);
       this.deleteItems("DELETE FROM items WHERE rowid IN (SELECT rowid FROM items WHERE recipient=? AND sender=? AND generation=? LIMIT ?)", recipient, sender, binding.generation, CLEANUP_BATCH);
       this.pruneReceiptWindow(recipient, sender, binding.generation);
       return stream.next_cursor;
