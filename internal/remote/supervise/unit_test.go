@@ -437,6 +437,10 @@ func TestRender_ZeroBackoffStillThrottles(t *testing.T) {
 // entry is even NAMED like a credential.
 func TestUnits_CarryNoCredentials(t *testing.T) {
 	spec := testSpec(t)
+	// Directory names are not credential names (macOS itself uses /private/tmp).
+	spec.StateDir = filepath.Join(spec.StateDir, "private-workspace")
+	spec.RemoteSocket = filepath.Join(spec.StateDir, "remote.sock")
+	spec.LogPath = filepath.Join(spec.StateDir, "remote", "gateway.log")
 	keyPath := filepath.Join(spec.StateDir, "remote", "machine.key")
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
 		t.Fatalf("mkdir remote dir: %v", err)
@@ -464,9 +468,31 @@ func TestUnits_CarryNoCredentials(t *testing.T) {
 				t.Errorf("%s unit embeds machine.key material (%s encoding); units carry paths, never credentials", p, encoding)
 			}
 		}
-		for _, line := range strings.Split(string(out), "\n") {
-			if credName.MatchString(line) {
-				t.Errorf("%s unit line %q is named like a credential; PB-LIFE-4 forbids credentials in units", p, strings.TrimSpace(line))
+		var envNames []string
+		if p == PlatformLaunchd {
+			var pl plistBody
+			if err := xml.Unmarshal(out, &pl); err != nil {
+				t.Fatal(err)
+			}
+			var env struct {
+				Keys []string `xml:"key"`
+			}
+			if err := xml.Unmarshal([]byte(plistValue(pl.Dict.Raw, "EnvironmentVariables")), &env); err != nil {
+				t.Fatal(err)
+			}
+			envNames = env.Keys
+		} else {
+			for _, entry := range parseUnit(t, out)["Service"]["Environment"] {
+				name, _, _ := strings.Cut(strings.Trim(entry, `"`), "=")
+				envNames = append(envNames, name)
+			}
+		}
+		if len(envNames) == 0 {
+			t.Fatalf("%s parsed no environment names; credential-name check would be vacuous", p)
+		}
+		for _, name := range envNames {
+			if credName.MatchString(name) {
+				t.Errorf("%s environment entry %q is named like a credential; PB-LIFE-4 forbids credentials in units", p, name)
 			}
 		}
 		// The state dir must still be reachable -- by path.

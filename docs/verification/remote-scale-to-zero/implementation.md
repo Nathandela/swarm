@@ -163,6 +163,35 @@ marker. The current direction stores a fresh bootstrap namespace in the same reg
 authority commit as last-pairing removal. Reserved-path protection, crash/reopen,
 uncertain directory-fsync retry and existing multi-machine startup are acceptance gates.
 
+## Foundation integration checks
+
+The relay and push foundations were committed as `8c930032` and `89c6c98b`.
+Root's final push package/command race run passed in 7.818 s / 4.097 s;
+the actual Firestore emulator suite also passed with the race detector (13.604 s).
+The implementation worktree passed whole-repository build, vet and lint (zero
+issues). These checks preceded the next server-clock revision and do not certify it.
+
+A broad main-branch test run did **not** pass: its 240-second per-package limit
+expired in skeleton and mobile conformance; it also exposed a credential-name
+test that incorrectly treated `/private/tmp` as an environment variable name,
+and the expected unreachable v2 entry points. The credential test now parses
+actual environment names while retaining raw/hex/base64 secret-byte checks and
+an explicit nonempty-parser assertion. The isolated old-main SAS test passed
+on rerun (1.383 s); this is not a replacement for the complete suite.
+
+The existing bidirectional reachability ledger lists each unfinished v2 public
+entry point explicitly. An entry becoming production-reachable fails the gate
+until its exemption is removed. Neither this temporary ledger nor integration
+tests stand in for the missing phone/gateway callers or authenticated home-profile
+custody; P1/P4 remain open. The memory repository is a test fake, not a selected
+production backend.
+
+CI now includes a dedicated workerd and real-SDK Firestore-emulator job, because
+ordinary Go tests skip those integrations when the local services are absent.
+The job has read-only repository permissions and requires no cloud credentials.
+Its service commands passed locally; a hosted workflow run is still a separate
+verification result.
+
 ## Operator access and changes
 
 Read-only access verified the dedicated Google project `swarm-8404f` and enabled billing.

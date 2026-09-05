@@ -89,10 +89,45 @@ var b94HarnessPkgs = map[string]string{
 	b94Module + "/internal/adapter/fixtureio": "adapter characterization fixtures, loaded only by the conformance harness.",
 }
 
+// No v2 foundation test is production-wiring evidence. These individual exemptions
+// fail as soon as a caller becomes reachable; P1/P4 cannot close while they remain.
+const b94V2Foundation = "ADR-027 / agents-tracker-wjp4: native v2 foundation exercised against workerd; production phone/gateway caller wiring and authenticated home-profile custody are unfinished. Remove this exemption when that caller is wired; this does not certify P1/P4."
+
 // b94Allowed is the ledger: an exported symbol with no production caller, and WHY that is
 // acceptable. It is bidirectional -- an entry that becomes reachable fails too, so a symbol
 // that gets wired up cannot leave a stale exemption behind.
 var b94Allowed = map[string]string{
+	// ---- ADR-027 implementation checkpoint: deliberately not a shipped v2 path ----
+	"github.com/Nathandela/swarm/internal/pushgw.NewFirestoreRepository":           "agents-tracker-wjp4.1: Firestore foundation tested with the real SDK/emulator; production command cutover is separately paused pending scoped source approval. Remove when wired; not P1/P2 completion.",
+	"github.com/Nathandela/swarm/internal/pushgw.NewFirestoreServer":               "as NewFirestoreRepository: production startup remains unchanged until the separately paused cutover is authorized.",
+	"github.com/Nathandela/swarm/internal/pushgw.NewMemoryRepository":              "explicit conformance fake, never a production backend; moving to the package test build removes this entry.",
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Append":              b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Authorize":           b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Close":               b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Done":                b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.PeerSPKI":            b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Revoke":              b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Subscribe":           b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.ConsentMessage":           b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Dial":                     b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.DialPair":                 b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.HomeID":                   b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.MarshalConsent":           b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.NewMachinePairTransport":  b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.PairTransport.Claim":      b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.PairTransport.Close":      b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.PairTransport.Complete":   b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.PairTransport.Create":     b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.PairTransport.Created":    b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.PairTransport.PeerSPKI":   b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.PairTransport.Recv":       b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.PairTransport.Send":       b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.RoutingID":                b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Subscription.Ack":         b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Subscription.Discard":     b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Subscription.Incarnation": b94V2Foundation,
+	"github.com/Nathandela/swarm/internal/remote/relayv2.Subscription.Recv":        b94V2Foundation,
+
 	// ---- 2026-08-02 merge of main (v0.6 perf wave) into this line ------------------------
 	"github.com/Nathandela/swarm/internal/transcript.Writer.Write": "the io.Writer face of the transcript writer; the shim's hot path moved to WriteOwned (v0.6 perf: caller-owned buffer, no copy) and Write remains the copying general-purpose entry, exercised by the transcript package's own tests.",
 	"github.com/Nathandela/swarm/internal/testbin.Binaries.Build":  "test-support package from main: builds per-test binaries for e2e suites; production never builds test binaries, by definition.",

@@ -117,6 +117,44 @@ jobs:
       - name: Live-shim keystroke echo p95 gate (E14.4, N-2)
         run: go test -run '^TestE2E_LiveShimKeystrokeEchoLatencyP95$' -count=1 ./internal/e2e/
 
+  # These integration tests skip without their local services; ordinary go test
+  # is therefore not coverage for the v2 persistence/transport boundaries.
+  remote-v2:
+    name: remote v2 (workerd + Firestore emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            services/relay/package-lock.json
+            docs/verification/remote-scale-to-zero/push-probe/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned local-service tools
+        run: |
+          npm ci --prefix services/relay --no-audit --no-fund
+          npm ci --prefix docs/verification/remote-scale-to-zero/push-probe --ignore-scripts --no-audit --no-fund
+      - name: Native Worker, Go interoperability and SQLite cost bounds
+        working-directory: services/relay
+        run: npm test
+      - name: Transactional push with the actual Firestore SDK
+        working-directory: docs/verification/remote-scale-to-zero/push-probe
+        run: |
+          node run-bounded.mjs 180 ./node_modules/.bin/firebase emulators:exec \
+            --only firestore --project demo-swarm-push-probe --config firebase.json \
+            'cd ../../../.. && go test -race ./internal/pushgw -run TestFirestore -count=1 -timeout 120s -v'
+
   # E10.6: the darwin half. The pure CPU parsers run in the unit step (untagged, on
   # every runner), and the integration step exercises the REAL proc_pidinfo syscall
   # natively, so BOTH platform sampler paths are actually verified in CI.
