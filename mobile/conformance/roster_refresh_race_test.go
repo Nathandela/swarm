@@ -156,7 +156,7 @@ func TestRefreshRoster_DoesNotDiscardFreshTailBehindAnAckableOldReplay(t *testin
 		t.Fatalf("close phone before replay setup: %v", err)
 	}
 
-	store, err := phonecore.OpenStore(filepath.Join(h.Dir, phonecore.StateFileName), h.Machine,
+	store, err := phonecore.OpenStore(filepath.Join(h.CoreDir, phonecore.StateFileName), h.Machine,
 		h.Custody.wakeSealer(), h.Custody.contentSealer())
 	if err != nil {
 		t.Fatalf("open phone state: %v", err)

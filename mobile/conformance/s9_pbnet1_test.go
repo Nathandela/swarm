@@ -139,9 +139,6 @@ func TestPBNET1_TheFacadeDrivesTheRealClientFromPairingThroughAppend(t *testing.
 		t.Fatalf("swarmmobile.NewApp: %v", err)
 	}
 	t.Cleanup(func() { _ = app.Close() })
-	if err := app.Start(); err != nil {
-		t.Fatalf("App.Start: %v", err)
-	}
 
 	// NON-VACUITY, before anything else. If the phone can already reach the machine here,
 	// then "pair" is not a step in this test -- it is decoration on a phone that was
@@ -199,6 +196,7 @@ func TestPBNET1_TheFacadeDrivesTheRealClientFromPairingThroughAppend(t *testing.
 			MachineRelayAuthPub: mAuthPub,
 			RecipientPub:        machineID.RecipientPublic(),
 			MachineSignPub:      mSignPub,
+			MachineEndpointID:   testMachineID,
 			EpochID:             testEpochID,
 		},
 	})
@@ -263,6 +261,9 @@ func TestPBNET1_TheFacadeDrivesTheRealClientFromPairingThroughAppend(t *testing.
 	case <-pairDone:
 	case <-time.After(10 * time.Second):
 		t.Fatalf("the machine side of the pairing never returned")
+	}
+	if err := app.Start(); err != nil {
+		t.Fatalf("App.Start after pairing: %v", err)
 	}
 	mu.Lock()
 	out, perr := outcome, pairErr

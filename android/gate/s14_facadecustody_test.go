@@ -110,10 +110,15 @@ func TestS14_TheShippedFacadeSealsBothTiersUnderTheInjectedKEK(t *testing.T) {
 	if err := app.InstallContentKey(append([]byte(nil), contentKey...)); err != nil {
 		t.Fatalf("App.InstallContentKey: %v", err)
 	}
+	reg, err := phonecore.OpenMachineRegistry(dir)
+	if err != nil {
+		t.Fatalf("PB-SEC-1: opening the v2 registry the facade wrote: %v", err)
+	}
+	stateDir := reg.BootstrapDir()
 
 	// ---- device.key: the four device private scalars ----------------------------
 
-	deviceBlob, err := os.ReadFile(filepath.Join(dir, "device.key"))
+	deviceBlob, err := os.ReadFile(filepath.Join(stateDir, "device.key"))
 	if err != nil {
 		t.Fatalf("PB-SEC-1: reading the persisted device keys: %v", err)
 	}
@@ -169,7 +174,7 @@ func TestS14_TheShippedFacadeSealsBothTiersUnderTheInjectedKEK(t *testing.T) {
 
 	// ---- phone-state.json: the two epoch keys -----------------------------------
 
-	stateBlob, err := os.ReadFile(filepath.Join(dir, phonecore.StateFileName))
+	stateBlob, err := os.ReadFile(filepath.Join(stateDir, phonecore.StateFileName))
 	if err != nil {
 		t.Fatalf("PB-SEC-1: reading the persisted state blob: %v", err)
 	}
@@ -187,7 +192,7 @@ func TestS14_TheShippedFacadeSealsBothTiersUnderTheInjectedKEK(t *testing.T) {
 		t.Fatalf("App.Close: %v", err)
 	}
 	reopened, err := phonecore.Resume(phonecore.Config{
-		Dir: dir, Machine: "m",
+		Dir:           stateDir,
 		WakeSealer:    gateSealerOver(custody.wake),
 		ContentSealer: gateSealerOver(custody.content),
 	})

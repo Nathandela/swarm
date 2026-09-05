@@ -185,30 +185,30 @@ func (m *RegistryManager) Remove(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("phonecore: remove %q: %w", id, ErrMachineNotFound)
 	}
-	delete(m.clients, id)
-	for i, o := range m.order {
-		if o == id {
-			m.order = append(m.order[:i:i], m.order[i+1:]...)
-			break
-		}
-	}
 	// Stop the removed client BEFORE arbitration can promote a parked successor: the
 	// cap is a HARD bound, and stop-after-promote holds Cap+1 live connections in
 	// between the two.
 	stopErr := mc.c.Stop()
-	m.arbitrateLocked()
-	m.mu.Unlock()
-
-	// The durable forget proceeds even when Stop errored: the in-memory manager has
-	// already dropped the client, so returning early would leave the registry row and
-	// namespace behind and the "forgotten" pairing would reappear with its keys on the
-	// next launch (round 3's fail-closed rule for a generic MachineClient).
 	regErr := m.reg.RemoveMachine(id)
 	if errors.Is(regErr, ErrMachineNotFound) {
 		// A registry that never held the row (a client managed ahead of registration) is
 		// not a failed forget.
 		regErr = nil
 	}
+	// A pre-rename registry failure leaves the pairing durable, so retain its client,
+	// order and cap arbitration. A post-rename failure has already made the durable
+	// forget authoritative; only then may this manager hide the pairing.
+	if regErr == nil || atomicWriteCommitted(regErr) {
+		delete(m.clients, id)
+		for i, o := range m.order {
+			if o == id {
+				m.order = append(m.order[:i:i], m.order[i+1:]...)
+				break
+			}
+		}
+	}
+	m.arbitrateLocked()
+	m.mu.Unlock()
 	return errors.Join(stopErr, regErr)
 }
 

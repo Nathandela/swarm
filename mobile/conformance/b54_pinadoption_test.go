@@ -153,7 +153,18 @@ func b54PairOnce(t *testing.T, app *swarmmobile.App, qr string) {
 // dial site reads it from (App.handsetSecurity).
 func b54PersistedPin(t *testing.T, dir string, custody *testCustody) []byte {
 	t.Helper()
-	store, err := phonecore.OpenStore(dir+"/"+phonecore.StateFileName, testMachineID,
+	reg, err := phonecore.OpenMachineRegistry(dir)
+	if err != nil {
+		t.Fatalf("open machine registry: %v", err)
+	}
+	namespace := reg.BootstrapDir()
+	for _, entry := range reg.Entries() {
+		if entry.ID == testMachineID {
+			namespace = reg.MachineDir(entry.ID)
+			break
+		}
+	}
+	store, err := phonecore.OpenStore(namespace+"/"+phonecore.StateFileName, testMachineID,
 		custody.wakeSealer(), custody.contentSealer())
 	if err != nil {
 		t.Fatalf("open phone state: %v", err)

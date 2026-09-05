@@ -93,6 +93,8 @@ var b94HarnessPkgs = map[string]string{
 // fail as soon as a caller becomes reachable; P1/P4 cannot close while they remain.
 const b94V2Foundation = "ADR-027 / agents-tracker-wjp4: native v2 foundation exercised against workerd; production phone/gateway caller wiring and authenticated home-profile custody are unfinished. Remove this exemption when that caller is wired; this does not certify P1/P4."
 
+const b94PausedLegacyManager = "agents-tracker-wjp4.1: registry-only startup no longer calls this legacy manager; its separately refused source deletion awaits scoped approval. Retained only on the unfinished phone branch, not a v2 fallback or P4 completion. Delete the symbol and exemption together."
+
 // b94Allowed is the ledger: an exported symbol with no production caller, and WHY that is
 // acceptable. It is bidirectional -- an entry that becomes reachable fails too, so a symbol
 // that gets wired up cannot leave a stale exemption behind.
@@ -145,30 +147,18 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remote/crypto.NoiseSession.Rekey":          "Noise rekey, reachable only on a session the shipped mailbox tier does not open.",
 	"github.com/Nathandela/swarm/internal/remote/crypto.NoiseSession.Suite":          "as NoiseSession.Rekey.",
 
-	// ---- The ADR-018 MM4 rows are GONE, collected by the bidirectional arm ---------------
-	// The R1 skeleton's fifteen SingleMachineAdapter/SingleMachineManager rows were listed
-	// "deliberately unwired: mobile.App keeps its direct Core until R4's transactional
-	// migration makes the manager the production path", with the removal condition written
-	// into the block. R4 wired them (agents-tracker-hggx.5): mobile's machines surface
-	// (mobile/machines.go) builds the compatibility manager over the live Core, the first
-	// AddMachine runs MigrateSingletonToRegistry and rebuilds it as the real N-entry
-	// RegistryManager, and every adapter/manager method is reached through the
-	// MachineManager/MachineClient seam. The fence was bidirectional and this is the
-	// direction it was pointing.
-
-	// ---- internal/phonecore: the R4 registry's first-run constructor ---------------------
-	// The rest of the R4 multi-machine surface is reachable: mobile/machines.go opens the
-	// committed registry (OpenMachineRegistry), runs the transactional migration
-	// (MigrateSingletonToRegistry -- which is also the only way any SHIPPED install can
-	// acquire a registry, since every one of them predates multi-machine and holds
-	// singleton state), and drives RegistryManager over it. NewMachineRegistry is the
-	// FIRST-RUN N-entry construction -- a phone that pairs its first machine directly into
-	// a registry with no singleton to migrate -- and no production flow does that yet: the
-	// pair-only screen still lands the first pairing in the singleton layout. The
-	// two-machine isolation suite (r4_isolation_test.go) constructs fresh registries
-	// through it. The slice that moves first-run pairing onto the registry MUST delete
-	// this row.
-	"github.com/Nathandela/swarm/internal/phonecore.NewMachineRegistry": "ADR-018 MM6; first-run registry construction is gated on moving the pairing ceremony off the singleton layout (agents-tracker-hggx.5 leaves first-run on the compatibility path).",
+	// ---- Registry-only phone checkpoint, deliberately not integrated on main -----------
+	// NewMachineRegistry is now production-reachable, so its old exemption is gone.
+	// No root-set widening or fake production caller hides the paused deletion below.
+	"github.com/Nathandela/swarm/internal/phonecore.NewSingleMachineAdapter":            b94PausedLegacyManager,
+	"github.com/Nathandela/swarm/internal/phonecore.NewSingleMachineManager":            b94PausedLegacyManager,
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Add":           b94PausedLegacyManager,
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Close":         b94PausedLegacyManager,
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.ConnectionCap": b94PausedLegacyManager,
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Events":        b94PausedLegacyManager,
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.List":          b94PausedLegacyManager,
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Remove":        b94PausedLegacyManager,
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Select":        b94PausedLegacyManager,
 
 	// ---- internal/phonecore: the ADR-015 R3 push seams ------------------------------------
 	// NewGatewayClient's row is GONE because the symbol is now REACHABLE: mobile's

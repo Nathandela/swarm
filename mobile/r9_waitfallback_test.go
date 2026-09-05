@@ -254,8 +254,16 @@ func TestR9_AnOldRelayWithoutTheWaitCapabilitySelectsThePollFallback(t *testing.
 	custody := r4r3Custody{}
 	wake := custodySealer{tier: "wake", fetch: custody.WakeKEK}
 	content := custodySealer{tier: "content", fetch: custody.ContentKEK}
+	reg, err := phonecore.NewMachineRegistry(dir)
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	stateDir, err := reg.AddMachine(phonecore.MachineDescriptor{ID: machine})
+	if err != nil {
+		t.Fatalf("AddMachine: %v", err)
+	}
 	provision, err := phonecore.Resume(phonecore.Config{
-		Dir: dir, Machine: machine, WakeSealer: wake, ContentSealer: content,
+		Dir: stateDir, Machine: machine, WakeSealer: wake, ContentSealer: content,
 	})
 	if err != nil {
 		t.Fatalf("phonecore.Resume: %v", err)
@@ -301,7 +309,7 @@ func TestR9_AnOldRelayWithoutTheWaitCapabilitySelectsThePollFallback(t *testing.
 		t.Fatalf("authorize phone: %v", err)
 	}
 
-	store, err := phonecore.OpenStore(filepath.Join(dir, phonecore.StateFileName), machine, wake, content)
+	store, err := phonecore.OpenStore(filepath.Join(stateDir, phonecore.StateFileName), machine, wake, content)
 	if err != nil {
 		t.Fatalf("open phone state: %v", err)
 	}

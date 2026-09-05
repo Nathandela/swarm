@@ -44,7 +44,7 @@ func tlsFrontedRelay(t *testing.T, wsURL string) (wss string, spki []byte) {
 // DIAL rather than about re-running a handshake S16 already covers.
 func persistRelayPin(t *testing.T, h *harness, pin []byte) {
 	t.Helper()
-	store, err := phonecore.OpenStore(filepath.Join(h.Dir, phonecore.StateFileName), h.Machine,
+	store, err := phonecore.OpenStore(filepath.Join(h.CoreDir, phonecore.StateFileName), h.Machine,
 		h.Custody.wakeSealer(), h.Custody.contentSealer())
 	if err != nil {
 		t.Fatalf("open phone state: %v", err)

@@ -1,11 +1,6 @@
 package phonecore
 
-// MachineClient/MachineManager is the seam ADR-018 MM2-MM4 and playbook 6.4 name: a
-// per-pairing client and the one plural registry that owns them. This slice adds ONLY the
-// R1 compatibility adapter over the EXISTING single-machine Core -- SingleMachineAdapter
-// wraps *Core unchanged and SingleMachineManager holds exactly that one adapter as its sole
-// registry entry. Real N-entry state migration is MM6, scoped to R4, and is not this file's
-// job: every mutating registry op refuses behind ErrMultiMachineNotImplemented until then.
+// MachineClient/MachineManager is the per-pairing client seam and its plural registry.
 
 import (
 	"errors"
@@ -39,16 +34,16 @@ type MachineClient interface {
 	Events() <-chan Event
 }
 
-// adapterState is SingleMachineAdapter's lifecycle: distinct from the "running bool" the
+// clientState is CoreMachineClient's lifecycle: distinct from the "running bool" the
 // public Running() reports because relay's Stop contract (below) needs to tell "never
 // started" (still relay: nothing has been stopped) apart from "explicitly stopped" (stop
 // relaying), and both collapse to the same false if kept as one flag.
-type adapterState int
+type clientState int
 
 const (
-	adapterNeverStarted adapterState = iota
-	adapterRunning
-	adapterStopped
+	clientNeverStarted clientState = iota
+	clientRunning
+	clientStopped
 )
 
 // MachineDescriptor is one registry row (ADR-018 MM3).
@@ -80,58 +75,67 @@ type MachineManager interface {
 // ErrMachineNotFound is Select's refusal for an id the registry does not hold.
 var ErrMachineNotFound = errors.New("phonecore: no machine registered with that id")
 
-// ErrMultiMachineNotImplemented is the stable, errors.Is-checkable refusal every registry
-// MUTATION gives until MM6/R4 lands a real N-entry registry. It covers both directions: a
-// second Add (there is nowhere to put it) and a Remove of the sole entry (what a
-// zero-machine compatibility adapter would mean is equally undefined before then).
-var ErrMultiMachineNotImplemented = errors.New("phonecore: multi-machine registry mutation is not implemented until MM6/R4")
+// ErrMultiMachineNotImplemented remains only for the blocked historical
+// SingleMachineManager implementation. RegistryManager is the v2 implementation.
+var ErrMultiMachineNotImplemented = errors.New("phonecore: multi-machine registry mutation is not implemented")
 
-// SingleMachineAdapter is ADR-018 MM4's compatibility adapter: it wraps an EXISTING *Core
+// CoreMachineClient wraps one independently namespaced Core.
 // unchanged as a MachineClient. Start/Stop/Running never touch Core itself -- Core has no
 // Close (see core.go), so nothing destructive happens on either transition -- but Stop does
-// have one real effect: it tells the owning SingleMachineManager's relay to stop forwarding
-// this adapter's events (see stopped, below). Both Start and Stop are idempotent so a caller
+// have one real effect: it tells the owning registry relay to stop forwarding this client's
+// events (see stopped, below). Both Start and Stop are idempotent so a caller
 // never has to track whether it already called one.
-type SingleMachineAdapter struct {
+type CoreMachineClient struct {
 	id     string
 	core   *Core
 	events <-chan Event
 
 	mu     sync.Mutex
-	state  adapterState
+	state  clientState
 	stopCh chan struct{} // closed by Stop, reset to nil by Start; see stopSignal.
 }
 
-// NewSingleMachineAdapter constructs an adapter wrapping core under id, relaying events
+// NewCoreMachineClient constructs a client wrapping core under id, relaying events
 // unchanged from the given channel.
-func NewSingleMachineAdapter(id string, core *Core, events <-chan Event) *SingleMachineAdapter {
-	return &SingleMachineAdapter{id: id, core: core, events: events}
+func NewCoreMachineClient(id string, core *Core, events <-chan Event) *CoreMachineClient {
+	return &CoreMachineClient{id: id, core: core, events: events}
+}
+
+// SingleMachineAdapter is a temporary source alias pending removal of the obsolete
+// compatibility manager and its historical tests. New v2 code must use
+// NewCoreMachineClient and RegistryManager.
+type SingleMachineAdapter = CoreMachineClient
+
+// NewSingleMachineAdapter is kept only so the historical compatibility tests continue
+// compiling until their blocked manager deletion can be completed.
+func NewSingleMachineAdapter(id string, core *Core, events <-chan Event) *CoreMachineClient {
+	return NewCoreMachineClient(id, core, events)
 }
 
 // ID is the pairing's identity.
-func (a *SingleMachineAdapter) ID() string { return a.id }
+func (a *CoreMachineClient) ID() string { return a.id }
 
 // Core returns the EXACT *Core pointer this adapter was constructed with -- never a clone.
-func (a *SingleMachineAdapter) Core() *Core { return a.core }
+func (a *CoreMachineClient) Core() *Core { return a.core }
 
 // Events is the adapter's own event stream, unchanged from construction.
-func (a *SingleMachineAdapter) Events() <-chan Event { return a.events }
+func (a *CoreMachineClient) Events() <-chan Event { return a.events }
 
 // Start marks the adapter running. Idempotent, and reverses a prior Stop: the manager's
 // relay resumes forwarding this adapter's events once Start runs again. When undoing a
 // completed Stop it retires that cycle's stop signal, so a relay that later parks on
 // stopSignal() waits on a fresh, unclosed channel.
-func (a *SingleMachineAdapter) Start() error {
+func (a *CoreMachineClient) Start() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	// Retire the stop channel ONLY when undoing a completed Stop. A redundant Start on a
 	// running adapter must not orphan a channel the relay may already be parked on: nilling
 	// it here would make the NEXT Stop close a fresh channel nobody waits on, delivering a
 	// parked event after Stop returned (the fail-open class the stop signal exists to close).
-	if a.state == adapterStopped {
+	if a.state == clientStopped {
 		a.stopCh = nil
 	}
-	a.state = adapterRunning
+	a.state = clientRunning
 	return nil
 }
 
@@ -140,13 +144,13 @@ func (a *SingleMachineAdapter) Start() error {
 // abandons that in-flight event rather than delivering it after Stop has returned -- not just
 // events not yet dequeued, which the outer stopped() check alone would catch. Idempotent: a
 // second Stop is a no-op rather than a double-close panic.
-func (a *SingleMachineAdapter) Stop() error {
+func (a *CoreMachineClient) Stop() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.state == adapterStopped {
+	if a.state == clientStopped {
 		return nil
 	}
-	a.state = adapterStopped
+	a.state = clientStopped
 	if a.stopCh == nil {
 		a.stopCh = make(chan struct{})
 	}
@@ -155,22 +159,20 @@ func (a *SingleMachineAdapter) Stop() error {
 }
 
 // Running reports whether Start has run more recently than Stop.
-func (a *SingleMachineAdapter) Running() bool {
+func (a *CoreMachineClient) Running() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.state == adapterRunning
+	return a.state == clientRunning
 }
 
 // stopped reports whether Stop has been explicitly called and not since reversed by Start --
 // distinct from Running()==false, which is also true of the never-started state where the
-// manager's relay must still forward (see TestSingleMachineManager_AggregateStreamRelays...,
-// which never calls Start). Package-private: only the relay needs this half of the state,
-// and it reaches the concrete adapter type directly rather than through MachineClient (see
-// NewSingleMachineManager's doc for why the manager takes the concrete type at all).
-func (a *SingleMachineAdapter) stopped() bool {
+// manager's relay must still forward. Package-private: only the registry relay needs this
+// half of the state.
+func (a *CoreMachineClient) stopped() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.state == adapterStopped
+	return a.state == clientStopped
 }
 
 // stopSignal returns the channel Stop closes, lazily creating it if no Stop cycle has
@@ -178,7 +180,7 @@ func (a *SingleMachineAdapter) stopped() bool {
 // so a send already parked when Stop runs is abandoned instead of delivered late. Reading
 // this once per send attempt -- never caching the channel across attempts -- is what makes a
 // later Start's fresh channel (see Start) take effect for the next event relay tries to send.
-func (a *SingleMachineAdapter) stopSignal() <-chan struct{} {
+func (a *CoreMachineClient) stopSignal() <-chan struct{} {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.stopCh == nil {
@@ -187,8 +189,10 @@ func (a *SingleMachineAdapter) stopSignal() <-chan struct{} {
 	return a.stopCh
 }
 
-// SingleMachineManager is ADR-018 MM4's compatibility manager: it holds exactly the one
-// SingleMachineAdapter as its sole registry entry and relays that adapter's events onto the
+// SingleMachineManager is retained temporarily only for source compatibility while callers
+// move to RegistryManager. Production v2 construction uses RegistryManager exclusively.
+// It holds exactly one
+// CoreMachineClient and relays that client's events onto the
 // aggregate stream, qualified with its machine id.
 //
 // It takes the concrete *SingleMachineAdapter, not a MachineClient, because relay needs
@@ -199,7 +203,7 @@ func (a *SingleMachineAdapter) stopSignal() <-chan struct{} {
 // this join generic.
 type SingleMachineManager struct {
 	descriptor MachineDescriptor
-	adapter    *SingleMachineAdapter
+	adapter    *CoreMachineClient
 	events     chan MachineEvent
 
 	done      chan struct{}
@@ -209,7 +213,7 @@ type SingleMachineManager struct {
 // NewSingleMachineManager constructs a manager around adapter, displayed as displayName, and
 // starts relaying adapter's events onto the aggregate stream. Callers must call Close when
 // done with the manager, or the relay goroutine runs forever.
-func NewSingleMachineManager(displayName string, adapter *SingleMachineAdapter) *SingleMachineManager {
+func NewSingleMachineManager(displayName string, adapter *CoreMachineClient) *SingleMachineManager {
 	m := &SingleMachineManager{
 		descriptor: MachineDescriptor{ID: adapter.ID(), DisplayName: displayName},
 		adapter:    adapter,

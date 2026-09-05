@@ -64,6 +64,24 @@ func TestPBAPP9_EveryErrorTheFacadeReturnsCarriesAKnownClass(t *testing.T) {
 			foreign, got, unknown)
 	}
 
+	// A fresh bootstrap is a real App, but it cannot start the normal relay session until
+	// pairing commits. Lifecycle verbs stay out of the matrix below because they mutate its
+	// state, so classify this refusal directly instead of manufacturing a started-unpaired
+	// state the facade no longer permits.
+	fresh := s16FreshApp(t, "ws://127.0.0.1:1")
+	startErr := fresh.Start()
+	if startErr == nil {
+		t.Fatal("PB-APP-9: Start on a fresh install returned nil; want the not-paired refusal")
+	}
+	class, classErr := s16StringErr(t, classify.Call([]reflect.Value{reflect.ValueOf(startErr.Error())}))
+	if classErr != nil {
+		t.Fatalf("App.ErrorClass for fresh Start: %v", classErr)
+	}
+	if class != swarmmobile.ErrClassNotPaired {
+		t.Errorf("PB-APP-9: fresh App.Start classified as %q (%v), want %q",
+			class, startErr, swarmmobile.ErrClassNotPaired)
+	}
+
 	states := s16ErrorStates(t, h)
 	seen := map[string]bool{}
 	for _, st := range states {
@@ -124,33 +142,25 @@ func s16ErrorStates(t *testing.T, h *harness) []s16ErrorState {
 	// 1. NEVER STARTED, NEVER PAIRED: the first launch after install.
 	fresh := s16FreshApp(t, "ws://127.0.0.1:1")
 
-	// 2. STARTED BUT UNPAIRED: the same install with the relay unreachable. Every send verb
-	//    must refuse on the missing destination before it touches the wire.
-	unpaired := s16FreshApp(t, "ws://127.0.0.1:1")
-	if err := unpaired.Start(); err != nil {
-		t.Fatalf("Start on a fresh install: %v", err)
-	}
-
-	// 3. CLOSED: Android's lifecycle callback ran and a UI thread is still mid-call.
+	// 2. CLOSED: Android's lifecycle callback ran and a UI thread is still mid-call.
 	closed := s16FreshApp(t, "ws://127.0.0.1:1")
 	if err := closed.Close(); err != nil {
 		t.Fatalf("Close on a fresh install: %v", err)
 	}
 
-	// 4. SCREEN LOCKED: PB-KEY-7's purge. The content tier is gone and the wake tier is not.
+	// 3. SCREEN LOCKED: PB-KEY-7's purge. The content tier is gone and the wake tier is not.
 	locked := h.App
 	if err := locked.PurgeKeys(); err != nil {
 		t.Fatalf("PurgeKeys: %v", err)
 	}
 
-	// 5. CUSTODY REFUSING, both verdicts, on a phone that is otherwise complete. These are
+	// 4. CUSTODY REFUSING, both verdicts, on a phone that is otherwise complete. These are
 	//    the two identities PB-KEY-6 made distinguishable and PB-APP-10 must keep apart.
 	authRefused := s16CustodyApp(t, swarmmobile.KeyCustodyAuthRequired)
 	invalidated := s16CustodyApp(t, swarmmobile.KeyCustodyKeyInvalidated)
 
 	return []s16ErrorState{
 		{name: "fresh install, never started", app: fresh},
-		{name: "started, never paired", app: unpaired},
 		{name: "closed by the Android lifecycle", app: closed, closed: true},
 		{name: "screen locked (PB-KEY-7 purge)", app: locked},
 		{name: "custody refuses: authentication required", app: authRefused},

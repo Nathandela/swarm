@@ -49,8 +49,9 @@ type harness struct {
 	t   *testing.T
 	ctx context.Context
 
-	Dir string // the phone's state directory: device keys + phone-state.json
-	App *swarmmobile.App
+	Dir     string // the registry root passed to the facade
+	CoreDir string // this fixture's paired namespace: device keys + phone-state.json
+	App     *swarmmobile.App
 	// Custody is the Android Keystore stand-in every tier of this phone's key material at
 	// rest is sealed under (PB-KEY-9). A test drives its refusals to exercise PB-KEY-6.
 	Custody *testCustody
@@ -120,6 +121,7 @@ func newHarnessWithRelayConfig(t *testing.T, mutate func(*relay.Config)) *harnes
 		recv:    crypto.NewMailboxReceiver(),
 		granted: map[string]bool{},
 	}
+	h.CoreDir = pairedNamespace(t, h.Dir, h.Machine)
 
 	if h.Keys, err = crypto.NewEpochKeys(); err != nil {
 		t.Fatalf("epoch keys: %v", err)
@@ -141,7 +143,7 @@ func newHarnessWithRelayConfig(t *testing.T, mutate func(*relay.Config)) *harnes
 	// container sealed under different keys is one NewApp cannot open.
 	h.Custody = newTestCustody(t)
 	provision, err := phonecore.Resume(phonecore.Config{
-		Dir: h.Dir, Machine: h.Machine,
+		Dir: h.CoreDir, Machine: h.Machine,
 		WakeSealer:    h.Custody.wakeSealer(),
 		ContentSealer: h.Custody.contentSealer(),
 	})
@@ -189,6 +191,21 @@ func newHarnessWithRelayConfig(t *testing.T, mutate func(*relay.Config)) *harnes
 	return h
 }
 
+// pairedNamespace is the durable v2 shape for fixtures that begin after pairing: the facade
+// receives the registry root, while test-only state setup touches the selected namespace.
+func pairedNamespace(t *testing.T, root, id string) string {
+	t.Helper()
+	reg, err := phonecore.NewMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("new machine registry: %v", err)
+	}
+	dir, err := reg.AddMachine(phonecore.MachineDescriptor{ID: id})
+	if err != nil {
+		t.Fatalf("register fixture machine: %v", err)
+	}
+	return dir
+}
+
 // seedState writes the durable coordinates a paired phone holds after its first launch.
 //
 // THE MISSING SEAM, SAID LOUDLY. phonecore.State carries the phone's OWN RoutingID, the
@@ -205,7 +222,7 @@ func (h *harness) seedState(ks crypto.KeyStore, machineRelayAuthPub ed25519.Publ
 	// The SAME custody the facade opens this directory with (mobile/app.go, which now takes a
 	// KeyCustody and derives one sealer per tier from it). A different sealer here would seed
 	// a blob NewApp could not open.
-	store, err := phonecore.OpenStore(filepath.Join(h.Dir, phonecore.StateFileName), h.Machine,
+	store, err := phonecore.OpenStore(filepath.Join(h.CoreDir, phonecore.StateFileName), h.Machine,
 		h.Custody.wakeSealer(), h.Custody.contentSealer())
 	if err != nil {
 		h.t.Fatalf("open phone state: %v", err)

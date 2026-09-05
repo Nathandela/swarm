@@ -97,7 +97,18 @@ func ksvb1Offer(t *testing.T, m *b54Machine, hostname string) string {
 // held only in memory would satisfy an in-process read and come back empty on the next launch.
 func ksvb1PersistedName(t *testing.T, dir string, custody *testCustody) (name, endpoint string) {
 	t.Helper()
-	store, err := phonecore.OpenStore(dir+"/"+phonecore.StateFileName, testMachineID,
+	reg, err := phonecore.OpenMachineRegistry(dir)
+	if err != nil {
+		t.Fatalf("open machine registry: %v", err)
+	}
+	namespace := reg.BootstrapDir()
+	for _, entry := range reg.Entries() {
+		if entry.ID == testMachineID {
+			namespace = reg.MachineDir(entry.ID)
+			break
+		}
+	}
+	store, err := phonecore.OpenStore(namespace+"/"+phonecore.StateFileName, testMachineID,
 		custody.wakeSealer(), custody.contentSealer())
 	if err != nil {
 		t.Fatalf("open phone state: %v", err)

@@ -181,8 +181,16 @@ func s16UnpairedApp(t *testing.T, dir, relayURL string, custody swarmmobile.KeyC
 	if err != nil {
 		t.Fatalf("swarmmobile.NewApp: %v", err)
 	}
-	if err := app.Start(); err != nil {
-		t.Fatalf("App.Start: %v", err)
+	summary, err := app.StateSummary()
+	if err != nil {
+		t.Fatalf("StateSummary: %v", err)
+	}
+	// Fresh and crash-unresolved phones pair over their explicit rendezvous but must
+	// not start the normal relay session. Only a completed restored pairing starts it.
+	if summary.Paired {
+		if err := app.Start(); err != nil {
+			t.Fatalf("App.Start: %v", err)
+		}
 	}
 	t.Cleanup(func() { _ = app.Close() })
 	return app
@@ -535,6 +543,12 @@ func TestPBPAIR5_EveryTerminalStateIsExplicitAndDistinct(t *testing.T) {
 		app := open()
 		if got := s16PairAgainst(t, app, machineA); got != "paired" {
 			t.Fatalf("precondition: the first pairing settled in %q, want paired", got)
+		}
+		// A fresh phone cannot connect before pairing. Mirror Android's successful-pairing
+		// transition here: only once the authenticated pairing has landed may the relay drain
+		// start and adopt A's bootstrap grant.
+		if err := app.Start(); err != nil {
+			t.Fatalf("Start after first pairing: %v", err)
 		}
 		// A real epoch key from A, waited on DIRECTLY rather than through a proxy.
 		//

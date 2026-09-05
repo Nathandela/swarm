@@ -108,11 +108,16 @@ type App struct {
 	// stateDir is the phone's private state directory. The core owns phone-state.json and
 	// device.key inside it; the facade keeps PB-PAIR-4's pairing-attempt record beside them
 	// (see mobile/pairing.go persist for why that one is not a State field).
-	stateDir string
+	stateDir       string
+	pairingStateMu sync.Mutex
 	// coreDir is the directory a.core was actually resumed from: stateDir until the R4
-	// migration commits, the per-machine registry namespace afterwards. The machines
-	// surface keys on it so the live core is never resumed a second time (MM6 step 5).
+	// registry bootstrap selects a namespace. The machines surface keys on it so the live
+	// core is never resumed a second time.
 	coreDir string
+	// bootstrap is non-nil while the first registry namespace is unpaired or its
+	// remote acknowledgement remains unresolved. pinWithStagedPushBinding commits
+	// local authority before ACK; Pairing.finish clears this gate after ACK succeeds.
+	bootstrap *phonecore.MachineRegistry
 	// wakeSealer and contentSealer are the two tier sealers NewApp built over the
 	// KeyCustody. Retained because the R4 machines surface resumes ADDITIONAL per-machine
 	// namespaces under the same custody (machines.go); they hold the KEK fetcher, never
@@ -310,20 +315,7 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 	// which opens with no user present.
 	a.wakeSealer = custodySealer{tier: "wake", fetch: custody.WakeKEK}
 	a.contentSealer = custodySealer{tier: "content", fetch: custody.ContentKEK}
-	a.coreDir = cfg.StateDir
-	core, err := phonecore.Resume(phonecore.Config{
-		Dir:           cfg.StateDir,
-		Machine:       cfg.MachineID,
-		Ack:           &relayAcker{app: a},
-		WakeSealer:    a.wakeSealer,
-		ContentSealer: a.contentSealer,
-	})
-	if errors.Is(err, phonecore.ErrStateMigrated) {
-		// The R4 migration has committed: the singleton blob at StateDir is a rollback
-		// artefact and the pairing lives in its per-machine registry namespace (MM6
-		// step 5). Resume from there instead of standing up a second live sequencer.
-		core, err = a.resumeMigrated(cfg)
-	}
+	core, err := a.resumeRegistryCore(cfg)
 	if err != nil {
 		a.events.close()
 		return nil, err
@@ -402,6 +394,10 @@ func (a *App) Start() (err error) {
 	defer a.mu.Unlock()
 	if a.sess != nil {
 		return nil
+	}
+	if a.bootstrap != nil {
+		return classed(ErrClassNotPaired,
+			errors.New("swarmmobile: finish pairing before connecting to a machine"))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &session{ctx: ctx, cancel: cancel, done: make(chan struct{})}
@@ -864,6 +860,7 @@ func (a *App) StateSummary() (sum *StateSummary, err error) {
 	st := core.State()
 	a.mu.Lock()
 	reconciled, pending := a.reconciled, len(a.inflight)
+	pairingUnresolved := a.bootstrap != nil
 	ended := transportEndsPairing(a.connState, a.pairingGraceUntil, time.Now())
 	a.mu.Unlock()
 	return &StateSummary{
@@ -875,7 +872,7 @@ func (a *App) StateSummary() (sum *StateSummary, err error) {
 		PendingOps:     pending,
 		Restored:       len(st.MachineRelayAuthPub) == ed25519.PublicKeySize,
 		Reconciled:     reconciled,
-		Paired:         st.Machine != "" && !st.Disowned && !ended,
+		Paired:         st.Machine != "" && !st.Disowned && !ended && !pairingUnresolved,
 	}, nil
 }
 

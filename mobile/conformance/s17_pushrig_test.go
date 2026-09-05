@@ -185,6 +185,7 @@ type s17Rig struct {
 	ctx context.Context
 
 	Dir     string
+	CoreDir string
 	Custody *testCustody
 	App     *swarmmobile.App
 	Keys    crypto.EpochKeys
@@ -263,8 +264,9 @@ func s17NewRigWith(t *testing.T, keyless bool) *s17Rig {
 	// The phone's device custody, provisioned before the facade so the rig knows the phone's
 	// relay routing id -- which is the address the machine pushes to.
 	r.Custody = newTestCustody(t)
+	r.CoreDir = pairedNamespace(t, r.Dir, s17Machine)
 	provision, err := phonecore.Resume(phonecore.Config{
-		Dir: r.Dir, Machine: s17Machine,
+		Dir: r.CoreDir, Machine: s17Machine,
 		WakeSealer: r.Custody.wakeSealer(), ContentSealer: r.Custody.contentSealer(),
 	})
 	if err != nil {
@@ -343,7 +345,7 @@ func (r *s17Rig) dialMachine() {
 func (r *s17Rig) phonePub() ed25519.PublicKey {
 	r.t.Helper()
 	core, err := phonecore.Resume(phonecore.Config{
-		Dir: r.Dir, Machine: s17Machine,
+		Dir: r.CoreDir, Machine: s17Machine,
 		WakeSealer: r.Custody.wakeSealer(), ContentSealer: r.Custody.contentSealer(),
 	})
 	if err != nil {
@@ -358,7 +360,7 @@ func (r *s17Rig) phonePub() ed25519.PublicKey {
 func (r *s17Rig) phoneConsent() []byte {
 	r.t.Helper()
 	core, err := phonecore.Resume(phonecore.Config{
-		Dir: r.Dir, Machine: s17Machine,
+		Dir: r.CoreDir, Machine: s17Machine,
 		WakeSealer: r.Custody.wakeSealer(), ContentSealer: r.Custody.contentSealer(),
 	})
 	if err != nil {
@@ -369,7 +371,7 @@ func (r *s17Rig) phoneConsent() []byte {
 
 func (r *s17Rig) seedState(ks crypto.KeyStore) {
 	r.t.Helper()
-	store, err := phonecore.OpenStore(filepath.Join(r.Dir, phonecore.StateFileName), s17Machine,
+	store, err := phonecore.OpenStore(filepath.Join(r.CoreDir, phonecore.StateFileName), s17Machine,
 		r.Custody.wakeSealer(), r.Custody.contentSealer())
 	if err != nil {
 		r.t.Fatalf("open phone state: %v", err)

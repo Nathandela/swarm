@@ -289,6 +289,47 @@ original failed in CI but passed 50 local repetitions; after synchronization,
 100 race-enabled repetitions passed (13.492 s). No relay production behavior or
 compatibility policy changed in that fixture correction.
 
+## Phone foundation branch checkpoint
+
+The registry-only phone changes are checkpointed separately from main. This is
+deliberate: the current additional-machine UI still inserts an unauthenticated typed
+ID without a ceremony, while Android opens with an empty selected ID. Two entries
+therefore make the new constructor refuse an ambiguous restart. Selection also does
+not retarget the live App, and Android stores only one relay URL. These production
+caller gaps remain real; the foundation is not a working multi-machine release.
+
+The tested foundation uses fresh schema-3 registry state with independently named
+namespaces and a random persisted bootstrap namespace. It refuses old layouts rather
+than importing them. First authenticated pairing commits the exact namespace before
+ACK, and an existing pairing-attempt record durably gates unresolved completion across
+restart. Record writes use file sync, rename and directory sync; a shared mutex prevents
+stale progress writes from erasing a pending-ACK marker. Last-machine removal commits
+a newly generated bootstrap namespace in the same authority write. RegistryManager
+retains live bookkeeping on precommit failure but respects a committed removal after
+post-rename or cleanup errors. The latter manager-boundary tests were added after the
+fix, not represented as an observed RED.
+
+Fixture changes provision registry namespaces only when a scenario begins already
+paired. Fresh scenarios no longer Start before pairing. PBPAIR5 now starts its receive
+loop after the first authenticated pairing and before awaiting delivered authority;
+PBAPP9 directly checks the new NotPaired Start classification. The removed pre-pair
+normal-transport assertions describe a state the fresh lifecycle cannot enter; their
+post-pair online and delivered-pin checks remain. No conformance test function was
+deleted in this fixture revision.
+
+Sol's full non-race mobile run passed (mobile 101.248 s, conformance 271.388 s) using a
+writable module cache and a 600-second package timeout. Root passed focused bootstrap
+race tests (3.869 s), registry/removal race tests (5.851 s), and the complete verification
+package (15.952 s). The reachability gate caught the now-stale NewMachineRegistry
+exemption; it is removed on this branch. Nine now-unreachable old manager exports are
+listed individually only because their source deletion was separately refused and is
+still paused. They are not a v2 fallback, and this exception cannot certify P4.
+
+The next coherent caller slice needs atomic active-machine/per-pairing relay custody,
+authenticated additional-pairing staging, and Android selection/rebuild. Merely picking
+an arbitrary registry row on restart would hide the problem and could dial the wrong
+relay. Full concurrent per-machine event/connection wiring remains beyond that slice.
+
 ## Operator access and changes
 
 Read-only access verified the dedicated Google project `swarm-8404f` and enabled billing.

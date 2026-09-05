@@ -129,7 +129,7 @@ func TestRefreshRoster_RestartAfterDiscardBeforeCommandRetriesDurableRecovery(t 
 
 	durableRecovery := func() string {
 		t.Helper()
-		store, err := phonecore.OpenStore(filepath.Join(h.Dir, phonecore.StateFileName), h.Machine,
+		store, err := phonecore.OpenStore(filepath.Join(h.CoreDir, phonecore.StateFileName), h.Machine,
 			h.Custody.wakeSealer(), h.Custody.contentSealer())
 		if err != nil {
 			t.Fatalf("open phone state: %v", err)
@@ -208,7 +208,7 @@ func TestRefreshRoster_AConsumedBudgetCannotCompactAndStopBeforeReplacement(t *t
 
 	durableCursor := func() uint64 {
 		t.Helper()
-		store, err := phonecore.OpenStore(filepath.Join(h.Dir, phonecore.StateFileName), h.Machine,
+		store, err := phonecore.OpenStore(filepath.Join(h.CoreDir, phonecore.StateFileName), h.Machine,
 			h.Custody.wakeSealer(), h.Custody.contentSealer())
 		if err != nil {
 			t.Fatalf("open phone state: %v", err)

@@ -326,8 +326,14 @@ func s10FreshInstall(t *testing.T) (ctx context.Context, relayURL, dir string, o
 			t.Fatalf("swarmmobile.NewApp: %v", aerr)
 		}
 		t.Cleanup(func() { _ = app.Close() })
-		if serr := app.Start(); serr != nil {
-			t.Fatalf("App.Start: %v", serr)
+		summary, serr := app.StateSummary()
+		if serr != nil {
+			t.Fatalf("App.StateSummary: %v", serr)
+		}
+		if summary.Paired {
+			if serr := app.Start(); serr != nil {
+				t.Fatalf("App.Start: %v", serr)
+			}
 		}
 		return app
 	}
@@ -390,6 +396,9 @@ func runPairing(t *testing.T, app *swarmmobile.App, m *s10Machine) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatalf("the machine side of the pairing never returned")
+	}
+	if err := app.Start(); err != nil {
+		t.Fatalf("App.Start after pairing: %v", err)
 	}
 }
 

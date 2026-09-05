@@ -58,8 +58,9 @@ func d0b8NewStranded(t *testing.T) *d0b8Stranded {
 
 	dir := t.TempDir()
 	custody := newTestCustody(t)
+	coreDir := pairedNamespace(t, dir, testMachineID)
 	provision, err := phonecore.Resume(phonecore.Config{
-		Dir: dir, Machine: testMachineID,
+		Dir: coreDir, Machine: testMachineID,
 		WakeSealer: custody.wakeSealer(), ContentSealer: custody.contentSealer(),
 	})
 	if err != nil {
@@ -94,7 +95,7 @@ func d0b8NewStranded(t *testing.T) *d0b8Stranded {
 
 	// The pairing record the stranded handset actually holds -- a scoped ban is only answered to
 	// a phone that names its machine, and this is the coordinate a restart restores.
-	store, err := phonecore.OpenStore(filepath.Join(dir, phonecore.StateFileName), testMachineID,
+	store, err := phonecore.OpenStore(filepath.Join(coreDir, phonecore.StateFileName), testMachineID,
 		custody.wakeSealer(), custody.contentSealer())
 	if err != nil {
 		t.Fatalf("open the stranded phone's state: %v", err)

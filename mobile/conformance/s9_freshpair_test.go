@@ -100,8 +100,14 @@ func TestPBNET1_AFreshInstallsPairingSurvivesTheNextProcessStart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("swarmmobile.NewApp: %v", err)
 		}
-		if err := app.Start(); err != nil {
-			t.Fatalf("App.Start: %v", err)
+		summary, err := app.StateSummary()
+		if err != nil {
+			t.Fatalf("App.StateSummary: %v", err)
+		}
+		if summary.Paired {
+			if err := app.Start(); err != nil {
+				t.Fatalf("App.Start: %v", err)
+			}
 		}
 		return app
 	}
@@ -184,6 +190,7 @@ func TestPBNET1_AFreshInstallsPairingSurvivesTheNextProcessStart(t *testing.T) {
 			MachineRelayAuthPub: mAuthPub,
 			RecipientPub:        machineID.RecipientPublic(),
 			MachineSignPub:      mSignPub,
+			MachineEndpointID:   testMachineID,
 			EpochID:             testEpochID,
 		},
 	})
@@ -265,6 +272,9 @@ func TestPBNET1_AFreshInstallsPairingSurvivesTheNextProcessStart(t *testing.T) {
 	case <-pairDone:
 	case <-time.After(10 * time.Second):
 		t.Fatalf("the machine side of the pairing never returned")
+	}
+	if err := app.Start(); err != nil {
+		t.Fatalf("App.Start after pairing: %v", err)
 	}
 
 	// ---- PROCESS DEATH -----------------------------------------------------------

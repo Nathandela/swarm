@@ -169,25 +169,284 @@ func TestR4R2_ParkedClientEventsNeverReachTheAggregateStream(t *testing.T) {
 	}
 }
 
-// TestR4R2_NewMachineRegistry_RefusesARootHoldingAnUnmigratedSingleton: constructing an
-// empty registry over a root that still holds phone-state.json makes Resume refuse with
-// ErrStateMigrated (keyed off registry-file existence alone) while the registry names
-// ZERO machines -- the pairing is bricked with the old blob intact but unopenable. The
-// only correct doorway for such a root is the migration.
-func TestR4R2_NewMachineRegistry_RefusesARootHoldingAnUnmigratedSingleton(t *testing.T) {
+// TestRegistryOnly_LegacySingletonRequiresReset: v2 is a fresh registry, never a
+// migration. A root holding the old singleton layout must be refused explicitly so a
+// caller can direct the owner to reset and pair again; it must never be imported or
+// resumed by a registry helper.
+func TestRegistryOnly_LegacySingletonRequiresReset(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, StateFileName), []byte(`{"sealed":"blob"}`), 0o600); err != nil {
 		t.Fatalf("planting the singleton blob: %v", err)
 	}
 
-	if _, err := NewMachineRegistry(root); err == nil {
-		t.Fatalf("NewMachineRegistry constructed an EMPTY live registry over a root that still "+
-			"holds an unmigrated %s; Resume now answers ErrStateMigrated while the registry "+
-			"names no machine -- migrate, never construct", StateFileName)
+	if _, err := NewMachineRegistry(root); !errors.Is(err, ErrLegacyStateResetRequired) {
+		t.Fatalf("NewMachineRegistry error = %v, want ErrLegacyStateResetRequired", err)
+	}
+	if _, err := OpenMachineRegistry(root); !errors.Is(err, ErrLegacyStateResetRequired) {
+		t.Fatalf("OpenMachineRegistry error = %v, want ErrLegacyStateResetRequired", err)
 	}
 	if _, err := os.Stat(registryPath(root)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the refused construction left a registry file behind (stat: %v); the old "+
-			"singleton must remain the sole authority", err)
+		t.Errorf("the refused construction left a registry file behind (stat: %v)", err)
+	}
+}
+
+// TestRegistryOnly_FreshEmptyRegistrySurvivesReopen: a first-run v2 root is a live,
+// empty registry rather than a singleton state file or a special one-machine adapter.
+func TestRegistryOnly_FreshEmptyRegistrySurvivesReopen(t *testing.T) {
+	root := t.TempDir()
+	reg, err := NewMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	if got := reg.Entries(); len(got) != 0 {
+		t.Fatalf("fresh registry entries = %v, want empty", got)
+	}
+	reopened, err := OpenMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("OpenMachineRegistry: %v", err)
+	}
+	if got := reopened.Entries(); len(got) != 0 {
+		t.Fatalf("reopened fresh registry entries = %v, want empty", got)
+	}
+}
+
+// TestRegistryOnly_BootstrapCommitSurvivesReopen proves the first authenticated
+// pairing turns the staging directory into exactly one registry authority without a
+// directory move. A restart resolves the same namespace, so keys and cursors remain
+// with that pairing rather than returning to a root singleton.
+func TestRegistryOnly_BootstrapCommitSurvivesReopen(t *testing.T) {
+	root := t.TempDir()
+	reg, err := NewMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	staging, err := reg.EnsureBootstrap()
+	if err != nil {
+		t.Fatalf("EnsureBootstrap: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "sentinel"), []byte("fresh-key-state"), 0o600); err != nil {
+		t.Fatalf("write staging sentinel: %v", err)
+	}
+	if err := reg.CommitBootstrap(MachineDescriptor{ID: "m-a", DisplayName: "laptop"}); err != nil {
+		t.Fatalf("CommitBootstrap: %v", err)
+	}
+	reopened, err := OpenMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("OpenMachineRegistry: %v", err)
+	}
+	entries := reopened.Entries()
+	if len(entries) != 1 || entries[0].ID != "m-a" {
+		t.Fatalf("reopened entries = %v, want exactly m-a", entries)
+	}
+	if got := reopened.MachineDir("m-a"); got != staging {
+		t.Fatalf("reopened machine namespace = %q, want committed staging namespace %q", got, staging)
+	}
+	if data, err := os.ReadFile(filepath.Join(reopened.MachineDir("m-a"), "sentinel")); err != nil || string(data) != "fresh-key-state" {
+		t.Fatalf("committed namespace did not retain fresh state: data=%q err=%v", data, err)
+	}
+}
+
+// TestRegistryOnly_ForgettingLastBootstrapPairingDoesNotReuseItsState ensures a
+// later fresh install gets a new empty staging directory, not the old pairing's keys
+// or cursor files under a familiar path.
+func TestRegistryOnly_ForgettingLastBootstrapPairingDoesNotReuseItsState(t *testing.T) {
+	root := t.TempDir()
+	reg, err := NewMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	staging, err := reg.EnsureBootstrap()
+	if err != nil {
+		t.Fatalf("EnsureBootstrap: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "old-key"), []byte("must-not-return"), 0o600); err != nil {
+		t.Fatalf("write old pairing state: %v", err)
+	}
+	if err := reg.CommitBootstrap(MachineDescriptor{ID: "m-a"}); err != nil {
+		t.Fatalf("CommitBootstrap: %v", err)
+	}
+	if err := reg.RemoveMachine("m-a"); err != nil {
+		t.Fatalf("RemoveMachine: %v", err)
+	}
+	if _, err := os.Stat(staging); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("forgotten namespace stat = %v, want not exist", err)
+	}
+	reopened, err := OpenMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("OpenMachineRegistry: %v", err)
+	}
+	fresh, err := reopened.EnsureBootstrap()
+	if err != nil {
+		t.Fatalf("EnsureBootstrap after forget: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fresh, "old-key")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fresh bootstrap inherited forgotten state: stat=%v", err)
+	}
+}
+
+// TestRegistryOnly_FailedBootstrapCommitLeavesRecoverableUnregisteredState models the
+// pre-ack boundary: the authenticated core may already have its machine identity, but
+// a failed registry authority flip leaves no entry. On restart it remains staging for
+// an explicit re-pair/commit, never a silently registered or connected machine.
+func TestRegistryOnly_FailedBootstrapCommitLeavesRecoverableUnregisteredState(t *testing.T) {
+	root := t.TempDir()
+	reg, err := NewMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	staging, err := reg.EnsureBootstrap()
+	if err != nil {
+		t.Fatalf("EnsureBootstrap: %v", err)
+	}
+	wake, content := s14aNewSealer(t), s14aNewSealer(t)
+	core, err := Resume(Config{Dir: staging, WakeSealer: wake, ContentSealer: content})
+	if err != nil {
+		t.Fatalf("Resume staging: %v", err)
+	}
+	if err := core.Mutate(func(st *State) { st.Machine = "m-a"; st.RelayCursor = 17 }); err != nil {
+		t.Fatalf("durably pin staging core: %v", err)
+	}
+
+	// Force only the authority write path unavailable. CommitBootstrap returns this
+	// error to pairing.RunDevice, which therefore sends no acknowledgement.
+	reg.root = filepath.Join(root, "unavailable-root")
+	if err := reg.CommitBootstrap(MachineDescriptor{ID: "m-a"}); err == nil {
+		t.Fatal("CommitBootstrap succeeded through an unavailable authority path")
+	}
+	reg.root = root
+
+	reopened, err := OpenMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("OpenMachineRegistry after failed commit: %v", err)
+	}
+	if got := reopened.Entries(); len(got) != 0 {
+		t.Fatalf("failed commit registered %v; no registry entry may exist before the acknowledgement", got)
+	}
+	recovered, err := Resume(Config{Dir: reopened.BootstrapDir(), WakeSealer: wake, ContentSealer: content})
+	if err != nil {
+		t.Fatalf("Resume recoverable staging core: %v", err)
+	}
+	if st := recovered.State(); st.Machine != "m-a" || st.RelayCursor != 17 {
+		t.Fatalf("recoverable staging state = machine %q cursor %d, want m-a/17", st.Machine, st.RelayCursor)
+	}
+}
+
+// TestRegistryOnly_ReservedBootstrapNameCannotDeleteLivePairing keeps an authenticated
+// id from colliding with the internal staging namespace. AddMachine must reject before
+// it reaches RemoveAll, because after first pairing that path contains live keys.
+func TestRegistryOnly_ReservedBootstrapNameCannotDeleteLivePairing(t *testing.T) {
+	reg, err := NewMachineRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	staging, err := reg.EnsureBootstrap()
+	if err != nil {
+		t.Fatalf("EnsureBootstrap: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "live-key"), []byte("do-not-delete"), 0o600); err != nil {
+		t.Fatalf("write live staging state: %v", err)
+	}
+	if err := reg.CommitBootstrap(MachineDescriptor{ID: "m-a"}); err != nil {
+		t.Fatalf("CommitBootstrap: %v", err)
+	}
+	if _, err := reg.AddMachine(MachineDescriptor{ID: ".staging"}); err == nil {
+		t.Fatal("AddMachine accepted the reserved bootstrap namespace")
+	}
+	if data, err := os.ReadFile(filepath.Join(staging, "live-key")); err != nil || string(data) != "do-not-delete" {
+		t.Fatalf("reserved ID altered the live pairing namespace: data=%q err=%v", data, err)
+	}
+}
+
+// TestRegistryOnly_PostRenameCommitErrorKeepsTheInMemoryRegistry proves a directory
+// fsync failure after rename is not treated as an uncommitted Add. Retrying after that
+// rollback would create a second namespace/sequencer for the same pairing.
+func TestRegistryOnly_PostRenameCommitErrorKeepsTheInMemoryRegistry(t *testing.T) {
+	reg, err := NewMachineRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	oldSync := syncPhonecoreDir
+	syncPhonecoreDir = func(string) error { return errors.New("injected directory fsync failure") }
+	t.Cleanup(func() { syncPhonecoreDir = oldSync })
+	if _, err := reg.AddMachine(MachineDescriptor{ID: "m-a"}); !atomicWriteCommitted(err) {
+		t.Fatalf("AddMachine error = %v, want committed post-rename error", err)
+	}
+	if got := reg.Entries(); len(got) != 1 || got[0].ID != "m-a" {
+		t.Fatalf("in-memory entries after committed error = %v, want exactly m-a", got)
+	}
+	if _, err := reg.AddMachine(MachineDescriptor{ID: "m-a"}); err == nil {
+		t.Fatal("retry after committed error created a second m-a pairing")
+	}
+}
+
+func TestRegistryOnly_UncertainBootstrapCommitRetriesExactAuthority(t *testing.T) {
+	reg, err := NewMachineRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	if _, err := reg.EnsureBootstrap(); err != nil {
+		t.Fatalf("EnsureBootstrap: %v", err)
+	}
+	d := MachineDescriptor{ID: "m-a"}
+	oldSync := syncPhonecoreDir
+	syncPhonecoreDir = func(string) error { return errors.New("injected directory fsync failure") }
+	if err := reg.CommitBootstrap(d); !errors.Is(err, ErrBootstrapCommitUncertain) {
+		t.Fatalf("CommitBootstrap error = %v, want ErrBootstrapCommitUncertain", err)
+	}
+	syncPhonecoreDir = oldSync
+	if err := reg.CommitBootstrap(d); err != nil {
+		t.Fatalf("exact bootstrap retry did not confirm authority: %v", err)
+	}
+	if got := reg.Entries(); len(got) != 1 || got[0] != d {
+		t.Fatalf("entries after retry = %v, want exactly %v", got, d)
+	}
+}
+
+// TestRegistryOnly_LastForgetCrashCannotResurrectBootstrapState models the committed
+// RemoveMachine record followed by process death before namespace deletion. Reopen must
+// remove the retired staging directory before a fresh bootstrap can create new keys.
+func TestRegistryOnly_LastForgetCrashCannotResurrectBootstrapState(t *testing.T) {
+	root := t.TempDir()
+	reg, err := NewMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	staging, err := reg.EnsureBootstrap()
+	if err != nil {
+		t.Fatalf("EnsureBootstrap: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "revoked-key"), []byte("must-die"), 0o600); err != nil {
+		t.Fatalf("write bootstrap state: %v", err)
+	}
+	if err := reg.CommitBootstrap(MachineDescriptor{ID: "m-a"}); err != nil {
+		t.Fatalf("CommitBootstrap: %v", err)
+	}
+
+	// Persist exactly RemoveMachine's authority state, but omit its following remove to
+	// simulate a crash in the commit-to-delete window.
+	reg.mu.Lock()
+	reg.entries = nil
+	reg.bootstrap, err = newBootstrapNamespace()
+	if err != nil {
+		reg.mu.Unlock()
+		t.Fatalf("new bootstrap namespace: %v", err)
+	}
+	if err := reg.commitLocked(); err != nil {
+		reg.mu.Unlock()
+		t.Fatalf("commit simulated forget: %v", err)
+	}
+	reg.mu.Unlock()
+
+	reopened, err := OpenMachineRegistry(root)
+	if err != nil {
+		t.Fatalf("OpenMachineRegistry after crash: %v", err)
+	}
+	fresh, err := reopened.EnsureBootstrap()
+	if err != nil {
+		t.Fatalf("EnsureBootstrap after crash: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fresh, "revoked-key")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fresh bootstrap resurrected forgotten state: stat=%v", err)
 	}
 }
 

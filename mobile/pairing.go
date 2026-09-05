@@ -43,6 +43,10 @@ const (
 	pairPairing            = "pairing"    // the handshake is running; a SAS may be derived
 	pairConfirming         = "confirming" // the user compared the two displays and said yes
 	pairPaired             = "paired"
+	// pairBootstrapCommitted is internal crash-recovery state: the first machine is
+	// locally authoritative, but RunDevice has not yet returned from sending its ACK.
+	// PairingState presents it as failed so it does not expand the mobile state surface.
+	pairBootstrapCommitted = "bootstrap_committed_pending_ack"
 
 	// The five terminal states PB-PAIR-5 enumerates, plus the two the flow already had.
 	pairDeclined    = "declined"     // the machine operator refused at their own SAS gate
@@ -330,7 +334,11 @@ func (a *App) beginWith(core *phonecore.Core, payload pairing.QRPayload) (*Pairi
 	if _, err := core.KeyStore().NoiseStatic(); err != nil {
 		return nil, err
 	}
-	pr.persist(pairConfirmDestination)
+	// A retry must not erase a locally committed bootstrap whose ACK is unresolved.
+	// Every other attempt needs its first durable record before a connection can start.
+	if err := a.beginPairingState(); err != nil {
+		return nil, err
+	}
 	return pr, nil
 }
 
@@ -692,7 +700,18 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 	// used to be re-asked after it is now asked once, here.
 	if p.state == pairCancelled || p.state == pairSASMismatch || p.state == pairOriginMismatch {
 		if landed {
+			if clearErr := p.app.writePairingState(""); clearErr != nil {
+				p.state = pairFailed
+				p.err = errors.Join(errLateCancel, classed(ErrClassInternal, fmt.Errorf(
+					"swarmmobile: pairing completed but its recovery record could not be cleared: %w", clearErr)))
+				p.mu.Unlock()
+				p.app.preserveBootstrapCompletion()
+				return
+			}
+			p.app.completeBootstrapPairing()
 			p.state, p.err = pairPaired, errLateCancel
+			p.mu.Unlock()
+			return
 		}
 		p.mu.Unlock()
 		p.persistState()
@@ -700,12 +719,21 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 	}
 	var next string
 	var failErr error
+	resolved := false
 	switch {
 	case landed:
 		// The durable pin and the machine's enrolment both happened inside RunDevice, so no
 		// observer of this label can see a world where the effects have not landed (ADR-007
 		// B58) -- and there is no window left between the two in which they could disagree.
-		next = pairPaired
+		if clearErr := p.app.writePairingState(""); clearErr != nil {
+			next = pairFailed
+			failErr = classed(ErrClassInternal, fmt.Errorf(
+				"swarmmobile: pairing completed but its recovery record could not be cleared: %w", clearErr))
+		} else {
+			p.app.completeBootstrapPairing()
+			next = pairPaired
+			resolved = true
+		}
 	case errors.Is(err, errDifferentMachine):
 		// The handshake authenticated a machine that is not the one this phone is pinned to.
 		// The commit refused it, so nothing is pinned AND nothing was acknowledged: the pairing
@@ -751,7 +779,13 @@ func (p *Pairing) finish(out *pairing.DeviceOutcome, err error, ctx context.Cont
 	}
 	p.mu.Unlock()
 
-	p.persistState()
+	if !resolved {
+		if landed {
+			p.app.preserveBootstrapCompletion()
+		} else {
+			p.persistState()
+		}
+	}
 }
 
 // cancelHandshake tears down whatever the attempt is holding. Safe before the dial.
@@ -828,48 +862,132 @@ const pairingStateFile = "pairing-attempt"
 // StillLoad then requires the pinned v4 and v5 blobs -- written before this field existed -- to
 // restore that same fullState(). A new top-level field can only satisfy both by being spliced
 // into fixtures that never carried it, which would falsify the one artifact proving forward
-// migration works. The alternative was to weaken a shipped guard, and this record does not earn
-// that: it is a UX coordinate, not a replay guard. Nothing in it is user content or key
-// material -- no pairing secret, no Noise static, no SAS -- so PB-STATE-9 assigns it no tier,
-// exactly as it assigns none to the staleness marks, and it is written in the clear beside the
-// blob rather than inside it.
+// migration works. The alternative was to weaken a shipped guard. This record is now also the
+// fail-closed gate between the first registry commit and remote ACK completion, but contains no
+// user content or key material -- no pairing secret, Noise static or SAS -- so PB-STATE-9 assigns
+// it no tier and it remains in the clear beside the blob rather than inside it.
 //
 // paired and cancelled are RESOLVED and clear the record: after a success the phone simply is
 // paired, and a cancellation is the user saying there is nothing to resume. Every other
 // terminal state is kept, because the next launch has something to explain.
 func (p *Pairing) persist(state string) {
+	p.app.persistPairingState(state)
+}
+
+func (a *App) persistPairingState(state string) {
+	a.pairingStateMu.Lock()
+	defer a.pairingStateMu.Unlock()
+	// Once the first registry authority has committed, no failure or cancellation can
+	// prove whether its ACK reached the machine. Keep that recovery gate until the normal
+	// success path above has observed RunDevice return and clears it explicitly.
+	current, err := a.readPairingStateLocked()
+	if err != nil {
+		return
+	}
+	if current == pairBootstrapCommitted && state != pairPaired {
+		return
+	}
 	if state == pairPaired || state == pairCancelled {
 		state = ""
 	}
-	// Best effort by design: a failed write must not take down a handshake that is otherwise
-	// fine. What it costs is the next launch's explanation, not the pairing.
-	_ = p.app.writePairingState(state)
+	// Intermediate labels are best effort: beginWith made the first record mandatory,
+	// and the committed-bootstrap value above is never overwritten here. Authority
+	// creation and successful resolution use checked writes directly.
+	_ = a.writePairingStateLocked(state)
 }
 
-// writePairingState replaces the record atomically, or removes it when there is nothing
-// outstanding. Atomically because the process is killed without warning: a half-written record
-// would be read by the next launch as a state nothing produced.
+var syncPairingStateDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
+}
+
+var renamePairingState = os.Rename
+
+// writePairingState durably replaces the record, or durably removes it when resolved.
+// Both the file and parent-directory entry must survive process or power loss: this file
+// gates whether a locally committed first pairing may connect after restart.
 func (a *App) writePairingState(state string) error {
+	a.pairingStateMu.Lock()
+	defer a.pairingStateMu.Unlock()
+	return a.writePairingStateLocked(state)
+}
+
+func (a *App) writePairingStateLocked(state string) error {
 	if a.stateDir == "" {
 		return classed(ErrClassInternal,
 			errors.New("swarmmobile: no state directory; the App was not built by NewApp"))
 	}
 	path := filepath.Join(a.stateDir, pairingStateFile)
 	if state == "" {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		err := os.Remove(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
 			return classed(ErrClassInternal, err)
 		}
-		return nil
+		return classed(ErrClassInternal, syncPairingStateDir(a.stateDir))
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(state), 0o600); err != nil {
+	tmp, err := os.CreateTemp(a.stateDir, ".pairing-attempt-*")
+	if err != nil {
 		return classed(ErrClassInternal, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		_ = tmp.Close()
 		return classed(ErrClassInternal, err)
 	}
-	return nil
+	if _, err := tmp.Write([]byte(state)); err != nil {
+		_ = tmp.Close()
+		return classed(ErrClassInternal, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return classed(ErrClassInternal, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return classed(ErrClassInternal, err)
+	}
+	if err := renamePairingState(tmpName, path); err != nil {
+		return classed(ErrClassInternal, err)
+	}
+	return classed(ErrClassInternal, syncPairingStateDir(a.stateDir))
+}
+
+func (a *App) readPairingState() (string, error) {
+	a.pairingStateMu.Lock()
+	defer a.pairingStateMu.Unlock()
+	return a.readPairingStateLocked()
+}
+
+func (a *App) readPairingStateLocked() (string, error) {
+	if a.stateDir == "" {
+		return "", classed(ErrClassInternal,
+			errors.New("swarmmobile: no state directory; the App was not built by NewApp"))
+	}
+	raw, err := os.ReadFile(filepath.Join(a.stateDir, pairingStateFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", classed(ErrClassInternal, err)
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
+func (a *App) beginPairingState() error {
+	a.pairingStateMu.Lock()
+	defer a.pairingStateMu.Unlock()
+	current, err := a.readPairingStateLocked()
+	if err != nil || current == pairBootstrapCommitted {
+		return err
+	}
+	return a.writePairingStateLocked(pairConfirmDestination)
 }
 
 // PairedDeviceName is the name this phone gave itself when it paired -- the string the
@@ -933,14 +1051,14 @@ func (a *App) PairingState() (state string, err error) {
 	if _, err = a.ready(); err != nil {
 		return "", err
 	}
-	raw, rerr := os.ReadFile(filepath.Join(a.stateDir, pairingStateFile))
-	if rerr != nil {
-		if os.IsNotExist(rerr) {
-			return "", nil
-		}
-		return "", classed(ErrClassInternal, rerr)
+	state, err = a.readPairingState()
+	if err != nil {
+		return "", err
 	}
-	return strings.TrimSpace(string(raw)), nil
+	if state == pairBootstrapCommitted {
+		return pairFailed, nil
+	}
+	return state, nil
 }
 
 // originIsPrivate classifies a destination URL's host as private/LAN without touching the
@@ -1133,6 +1251,9 @@ func (a *App) pinWithStagedPushBinding(out *pairing.DeviceOutcome, staged *phone
 	// directory all produced a phone that said it was paired and held none of the machine
 	// coordinates a pairing exists to pin.
 	if err != nil {
+		return err
+	}
+	if err := a.commitBootstrapPairing(); err != nil {
 		return err
 	}
 	if afterDurable != nil {

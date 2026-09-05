@@ -1,17 +1,9 @@
 package swarmmobile
 
-// The R4 multi-machine surface (ADR-018 MM3/MM4/MM6/MM7, bead agents-tracker-hggx.5):
-// the machine switcher, add/switch/forget computer, and the global inbox, served by the
-// MachineManager seam rather than by the scalar single-machine App state.
-//
-// TWO MANAGER SHAPES, ONE INTERFACE. A phone that has never migrated holds one pairing
-// in the singleton state directory: its manager is the SingleMachineManager
-// compatibility adapter over the one live Core. The first AddMachine is what runs
-// MM6's TRANSACTIONAL migration (phonecore.MigrateSingletonToRegistry): the singleton
-// moves into a per-machine registry namespace, the App's own core is re-resumed from
-// that namespace, and the manager is rebuilt as the real N-entry RegistryManager. From
-// then on every pairing is an independent namespace with its own keys, seq spaces,
-// cursors and push address -- no cross-machine bleed (MM2).
+// The multi-machine surface is served by a v2 registry from first launch. A fresh
+// unpaired phone owns only its reserved staging namespace; after authenticated pairing
+// commits it becomes a normal registry entry. Every pairing has an independent
+// namespace with its own keys, seq spaces, cursors and push address.
 //
 // WHAT THIS SLICE DOES NOT DO, stated rather than implied (the physical
 // three-machines-two-relays exit is the owner's; docs/verification/r4-multimachine.md
@@ -35,6 +27,10 @@ import (
 // concurrency cap"). Connections beyond it are parked by the deterministic
 // least-recently-viewed policy and their rows render their last-sync age.
 const foregroundConnectionCap = 3
+
+var commitBootstrapAuthority = func(reg *phonecore.MachineRegistry, d phonecore.MachineDescriptor) error {
+	return reg.CommitBootstrap(d)
+}
 
 // MachineInfo is one machine-switcher row: the four facts of playbook 4.2:198 -- name,
 // reachability, last successful sync, needs-input count -- keyed by machine id.
@@ -164,26 +160,14 @@ func (a *App) ensureMachinesLocked() (*machinesRuntime, error) {
 		return a.machines, nil
 	}
 	reg, err := phonecore.OpenMachineRegistry(a.stateDir)
-	switch {
-	case err == nil:
-		rt, err := a.registryRuntimeLocked(reg)
-		if err != nil {
-			return nil, err
-		}
-		a.machines = rt
-	case errors.Is(err, phonecore.ErrRegistryNotLive):
-		st := a.core.State()
-		if st.Machine == "" {
-			return nil, classed(ErrClassNotPaired,
-				errors.New("swarmmobile: no paired machine to manage; pair this phone first"))
-		}
-		adapter := phonecore.NewSingleMachineAdapter(st.Machine, a.core, nil)
-		mgr := phonecore.NewSingleMachineManager(st.MachineName, adapter)
-		a.machines = &machinesRuntime{mgr: mgr, cores: map[string]*phonecore.Core{st.Machine: a.core}}
-		go drainAggregate(mgr.Events())
-	default:
+	if err != nil {
 		return nil, err
 	}
+	rt, err := a.registryRuntimeLocked(reg)
+	if err != nil {
+		return nil, err
+	}
+	a.machines = rt
 	return a.machines, nil
 }
 
@@ -216,7 +200,7 @@ func (a *App) registryRuntimeLocked(reg *phonecore.MachineRegistry) (*machinesRu
 			}
 		}
 		rt.cores[d.ID] = core
-		if err := rmgr.Add(d, phonecore.NewSingleMachineAdapter(d.ID, core, nil)); err != nil {
+		if err := rmgr.Add(d, phonecore.NewCoreMachineClient(d.ID, core, nil)); err != nil {
 			_ = rmgr.Close()
 			return nil, err
 		}
@@ -269,14 +253,26 @@ func (a *App) resumeOwnNamespace(dir, machineID string) (*phonecore.Core, error)
 	return core, nil
 }
 
-// resumeMigrated resolves NewApp's ErrStateMigrated: the registry names the pairing's
-// namespace, and Config.MachineID (or the sole entry) says which one this App is.
-func (a *App) resumeMigrated(cfg *Config) (*phonecore.Core, error) {
+// resumeRegistryCore creates a first-run v2 registry or resumes a registered namespace.
+// It never resumes StateDir itself: a root phone-state.json is legacy state and is refused
+// by OpenMachineRegistry/NewMachineRegistry rather than silently imported.
+func (a *App) resumeRegistryCore(cfg *Config) (*phonecore.Core, error) {
 	reg, err := phonecore.OpenMachineRegistry(cfg.StateDir)
+	if errors.Is(err, phonecore.ErrRegistryNotLive) {
+		reg, err = phonecore.NewMachineRegistry(cfg.StateDir)
+	}
 	if err != nil {
 		return nil, err
 	}
 	entries := reg.Entries()
+	if len(entries) == 0 {
+		dir, err := reg.EnsureBootstrap()
+		if err != nil {
+			return nil, err
+		}
+		a.bootstrap = reg
+		return a.resumeOwnNamespace(dir, "")
+	}
 	id := cfg.MachineID
 	if id == "" {
 		if len(entries) != 1 {
@@ -297,6 +293,17 @@ func (a *App) resumeMigrated(cfg *Config) (*phonecore.Core, error) {
 		return nil, classed(ErrClassNotFound,
 			fmt.Errorf("swarmmobile: machine %q is not in the registry", id))
 	}
+	if len(entries) == 1 && reg.IsBootstrapMachine(id) {
+		attempt, err := a.readPairingState()
+		if err != nil {
+			return nil, err
+		}
+		if attempt == pairBootstrapCommitted {
+			// The registry rename is local authority only. Until RunDevice records
+			// successful ACK completion, retain the bootstrap gate across restarts.
+			a.bootstrap = reg
+		}
+	}
 	return a.resumeOwnNamespace(reg.MachineDir(id), id)
 }
 
@@ -315,44 +322,28 @@ func (a *App) Machines() (list *MachineList, err error) {
 		return nil, err
 	}
 	out := &MachineList{cap: rt.mgr.ConnectionCap()}
-	if rt.rmgr != nil {
-		for _, row := range rt.rmgr.Rows() {
-			out.items = append(out.items, MachineInfo{
-				ID:             row.ID,
-				DisplayName:    row.DisplayName,
-				Connected:      row.Connected,
-				Stale:          row.Stale,
-				LastSyncUnixMs: row.LastSyncUnixMs,
-				NeedsInput:     needsInputCount(rt.cores[row.ID]),
-			})
-		}
-		// The pairings whose namespace refused to resume are ROWS, not holes: the
-		// aggregate surface says WHICH row is broken (machines.recovery, MM8).
-		for id, b := range rt.broken {
-			out.items = append(out.items, MachineInfo{
-				ID:           id,
-				DisplayName:  b.displayName,
-				Stale:        true,
-				Broken:       true,
-				BrokenReason: b.reason,
-			})
-		}
-		sort.Slice(out.items, func(i, j int) bool { return out.items[i].ID < out.items[j].ID })
-		return out, nil
-	}
-	// Single-machine compatibility path: the one row is rendered from the live App's own
-	// facts -- its connection state and the durable last-heard instant.
-	for _, d := range rt.mgr.List() {
-		connected := a.connState == "connected"
+	for _, row := range rt.rmgr.Rows() {
 		out.items = append(out.items, MachineInfo{
-			ID:             d.ID,
-			DisplayName:    d.DisplayName,
-			Connected:      connected,
-			Stale:          !connected,
-			LastSyncUnixMs: a.core.State().LastHeardAt,
-			NeedsInput:     needsInputCount(rt.cores[d.ID]),
+			ID:             row.ID,
+			DisplayName:    row.DisplayName,
+			Connected:      row.Connected,
+			Stale:          row.Stale,
+			LastSyncUnixMs: row.LastSyncUnixMs,
+			NeedsInput:     needsInputCount(rt.cores[row.ID]),
 		})
 	}
+	// The pairings whose namespace refused to resume are ROWS, not holes: the
+	// aggregate surface says WHICH row is broken (machines.recovery, MM8).
+	for id, b := range rt.broken {
+		out.items = append(out.items, MachineInfo{
+			ID:           id,
+			DisplayName:  b.displayName,
+			Stale:        true,
+			Broken:       true,
+			BrokenReason: b.reason,
+		})
+	}
+	sort.Slice(out.items, func(i, j int) bool { return out.items[i].ID < out.items[j].ID })
 	return out, nil
 }
 
@@ -393,9 +384,7 @@ func (a *App) SelectMachine(machineID string) (err error) {
 	if _, err := rt.mgr.Select(machineID); err != nil {
 		return classed(ErrClassNotFound, err)
 	}
-	if rt.rmgr != nil {
-		rt.rmgr.MarkViewed(machineID)
-	}
+	rt.rmgr.MarkViewed(machineID)
 	return nil
 }
 
@@ -424,15 +413,9 @@ func (a *App) AddMachine(machineID, displayName string) (err error) {
 		return err
 	}
 	d := phonecore.MachineDescriptor{ID: machineID, DisplayName: displayName}
-	if rt.rmgr == nil {
-		// The compatibility manager refuses every registry mutation by design; that
-		// refusal is the R4 migration trigger.
-		if err := rt.mgr.Add(d, nil); !errors.Is(err, phonecore.ErrMultiMachineNotImplemented) {
-			return err
-		}
-		if rt, err = a.migrateToRegistryLocked(rt); err != nil {
-			return err
-		}
+	if a.bootstrap != nil {
+		return classed(ErrClassNotPaired,
+			errors.New("swarmmobile: pair the first computer before adding another"))
 	}
 	dir, err := rt.reg.AddMachine(d)
 	if err != nil {
@@ -442,7 +425,7 @@ func (a *App) AddMachine(machineID, displayName string) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := rt.rmgr.Add(d, phonecore.NewSingleMachineAdapter(machineID, core, nil)); err != nil {
+	if err := rt.rmgr.Add(d, phonecore.NewCoreMachineClient(machineID, core, nil)); err != nil {
 		return err
 	}
 	rt.cores[machineID] = core
@@ -452,33 +435,63 @@ func (a *App) AddMachine(machineID, displayName string) (err error) {
 // migrateToRegistryLocked runs MM6's transactional migration and rebuilds the manager
 // registry-backed, re-resuming the App's own core from its namespace. Caller holds
 // a.mu, with no live session.
+//
+//nolint:unused // Compatibility removal is paused pending explicit approval.
 func (a *App) migrateToRegistryLocked(old *machinesRuntime) (*machinesRuntime, error) {
-	reg, err := phonecore.MigrateSingletonToRegistry(phonecore.MigrationConfig{
-		Root:          a.stateDir,
-		WakeSealer:    a.wakeSealer,
-		ContentSealer: a.contentSealer,
-	})
+	return nil, classed(ErrClassInvalidRequest,
+		errors.New("swarmmobile: legacy state migration was removed; reset and pair again"))
+}
+
+// commitBootstrapPairing flips the fresh staging namespace into the authenticated
+// machine's registry entry. pinWithStagedPushBinding calls it only after the pairing
+// facts are durably sealed and before the wire acknowledgement, so an error cannot
+// enrol the machine without a durable v2 authority record.
+func (a *App) commitBootstrapPairing() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.bootstrap == nil {
+		return nil
+	}
+	st := a.core.State()
+	if st.Machine == "" {
+		return classed(ErrClassPairingFailed,
+			errors.New("swarmmobile: pairing did not authenticate a machine id"))
+	}
+	d := phonecore.MachineDescriptor{ID: st.Machine, DisplayName: st.MachineName}
+	// This record must precede the registry authority flip: after the flip, a crash
+	// before or during ACK cannot be distinguished and must restart fail-closed.
+	if err := a.writePairingState(pairBootstrapCommitted); err != nil {
+		return err
+	}
+	err := commitBootstrapAuthority(a.bootstrap, d)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	entries := reg.Entries()
-	if len(entries) != 1 {
-		return nil, classed(ErrClassInternal,
-			fmt.Errorf("swarmmobile: migration committed %d registry entries, want 1", len(entries)))
+	a.coreDir = a.bootstrap.MachineDir(st.Machine)
+	if a.machines != nil {
+		_ = a.machines.mgr.Close()
+		a.machines = nil
 	}
-	core, err := a.resumeOwnNamespace(reg.MachineDir(entries[0].ID), entries[0].ID)
-	if err != nil {
-		return nil, err
+	// Keep bootstrap armed until Pairing.finish has observed a successful ACK and
+	// durably cleared the recovery record. It gates this process as well as restart.
+	return nil
+}
+
+func (a *App) completeBootstrapPairing() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.bootstrap = nil
+}
+
+func (a *App) preserveBootstrapCompletion() {
+	a.mu.Lock()
+	pending := a.bootstrap != nil
+	a.mu.Unlock()
+	if pending {
+		// A failed delete may have removed the directory entry before its fsync
+		// failed. Put the conservative marker back; the reported error remains.
+		_ = a.writePairingState(pairBootstrapCommitted)
 	}
-	_ = old.mgr.Close()
-	a.machines = nil
-	a.core = core
-	rt, err := a.registryRuntimeLocked(reg)
-	if err != nil {
-		return nil, err
-	}
-	a.machines = rt
-	return rt, nil
 }
 
 // ForgetMachine is the PHONE-side removal of one pairing (playbook 4.9): that machine's
@@ -495,15 +508,6 @@ func (a *App) ForgetMachine(machineID string) (err error) {
 	rt, err := a.ensureMachinesLocked()
 	if err != nil {
 		return err
-	}
-	if rt.rmgr == nil {
-		if err := rt.mgr.Remove(machineID); errors.Is(err, phonecore.ErrMultiMachineNotImplemented) {
-			return classed(ErrClassInvalidRequest,
-				errors.New("swarmmobile: the only pairing is ended by revoke/unpair, not forget"))
-		} else if err != nil {
-			return err
-		}
-		return nil
 	}
 	if rt.cores[machineID] == a.core {
 		return classed(ErrClassInvalidRequest,

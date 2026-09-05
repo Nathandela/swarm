@@ -679,7 +679,18 @@ func pbPair4Marked(marks, name string) bool {
 // App in the way. A pin that is not here is a pin the phone does not have.
 func pbPair4DurableState(t *testing.T, dir string) phonecore.State {
 	t.Helper()
-	store, err := phonecore.OpenStore(filepath.Join(dir, phonecore.StateFileName), testMachineID,
+	reg, err := phonecore.OpenMachineRegistry(dir)
+	if err != nil {
+		t.Fatalf("open the phone's machine registry: %v", err)
+	}
+	namespace := reg.BootstrapDir()
+	for _, entry := range reg.Entries() {
+		if entry.ID == testMachineID {
+			namespace = reg.MachineDir(entry.ID)
+			break
+		}
+	}
+	store, err := phonecore.OpenStore(filepath.Join(namespace, phonecore.StateFileName), testMachineID,
 		custodySealer{key: pbPair4KEK(0x5a)}, custodySealer{key: pbPair4KEK(0xa5)})
 	if err != nil {
 		t.Fatalf("open the phone's durable state: %v", err)

@@ -90,7 +90,7 @@ func (p *pinTap) dialsOver(d time.Duration) int {
 // state a handset restored from a previous pairing comes back in.
 func seedPinInto(t *testing.T, dir string, custody *testCustody, pin []byte) {
 	t.Helper()
-	store, err := phonecore.OpenStore(filepath.Join(dir, phonecore.StateFileName), testMachineID,
+	store, err := phonecore.OpenStore(filepath.Join(pairedNamespace(t, dir, testMachineID), phonecore.StateFileName), testMachineID,
 		custody.wakeSealer(), custody.contentSealer())
 	if err != nil {
 		t.Fatalf("open phone state: %v", err)
@@ -243,87 +243,24 @@ func TestB58_TheFirstPairingSurvivesAPinningOnlyPlatform(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = app.Close() })
 
-	seen := &connWatch{}
-	if err := app.SetEventListener(seen); err != nil {
-		t.Fatalf("SetEventListener: %v", err)
-	}
-
 	machine := newB58Machine(t, relayURL, wss)
 	p := s16BeginConfirmed(t, app, machine.offer(t, spki))
 	s16AwaitSAS(t, p)
 
-	if err := app.Start(); err != nil {
-		t.Fatalf("App.Start: %v", err)
+	if err := app.Start(); err == nil {
+		t.Fatal("an unpaired phone started a machine relay session before the pairing committed")
 	}
-	eventually(t, "a phone with no pin on a pinning-only platform never reported "+
-		"relay_untrusted; the platform override did not reach the dial, so this test is not "+
-		"exercising ErrPinRequired at all", func() bool {
-		st, err := app.ConnectionState()
-		return err == nil && st == "relay_untrusted"
-	})
-
-	// THE DISCRIMINATOR IS THE `connecting` EVENT, and choosing it is the whole test.
-	//
-	// Two observables that suggest themselves both fail here. A dial count is blind: an
-	// ErrPinRequired refusal is decided from the policy BEFORE a socket opens, so nothing
-	// reaches the tap whether the loop lives or dies. And "does it come online" is VACUOUS --
-	// measured, not assumed: with the guard removed this test passed three times out of three,
-	// because rearmAfterPairing restarts the dead loop and wins its race on an idle machine.
-	//
-	// What separates the two worlds is HOW it comes back. A surviving loop is mid-generation,
-	// so its next iteration goes straight to online. A loop that DIED and was rearmed starts a
-	// fresh generation, whose first act is setConn(connConnecting). So a `connecting` event
-	// after the verdict is proof the loop ended -- exactly what must not happen during a
-	// pairing, and exactly what rearm papers over afterwards.
 	if err := p.Confirm(); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
 	s16AwaitState(t, p, "paired")
+	if err := app.Start(); err != nil {
+		t.Fatalf("App.Start after pairing: %v", err)
+	}
 
 	eventually(t, "the phone never came online after its FIRST pairing delivered the relay pin "+
 		"on a pinning-only platform", func() bool {
 		st, err := app.ConnectionState()
 		return err == nil && st == "online"
 	})
-
-	if n := seen.connectingAfterVerdict(); n > 0 {
-		t.Fatalf("the transport loop reported `connecting` %d time(s) after the pin verdict, "+
-			"which only a FRESH generation does -- so the loop ended during the pairing and "+
-			"rearmAfterPairing restarted it. That rearm is a race it can lose: it polls the dead "+
-			"generation's channel once, non-blockingly, and nothing else ever relaunches the "+
-			"loop. On a first pairing this is the ordinary path (ADR-007 B57)", n)
-	}
-}
-
-// connWatch records the connection states the facade reports, so a test can tell a loop that
-// SURVIVED from one that died and was restarted underneath it.
-type connWatch struct {
-	mu     sync.Mutex
-	states []string
-}
-
-func (w *connWatch) OnEvent(e *swarmmobile.Event) {
-	if e == nil || e.Kind != "connection" {
-		return
-	}
-	w.mu.Lock()
-	w.states = append(w.states, e.State)
-	w.mu.Unlock()
-}
-
-// connectingAfterVerdict counts `connecting` reports that follow the first pin verdict. A
-// generation already running never emits one; only a newly launched one does.
-func (w *connWatch) connectingAfterVerdict() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	n, seenVerdict := 0, false
-	for _, st := range w.states {
-		switch {
-		case st == "relay_untrusted":
-			seenVerdict = true
-		case seenVerdict && st == "connecting":
-			n++
-		}
-	}
-	return n
 }

@@ -29,6 +29,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/phonecore"
 )
 
 // TestPBNET4_TheRunLoopSchedulesSection60sBackoff drives App.run against a relay endpoint
@@ -59,11 +61,28 @@ func TestPBNET4_TheRunLoopSchedulesSection60sBackoff(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
+	stateDir := t.TempDir()
+	custody := r4r3Custody{}
+	reg, err := phonecore.NewMachineRegistry(stateDir)
+	if err != nil {
+		t.Fatalf("NewMachineRegistry: %v", err)
+	}
+	machineDir, err := reg.AddMachine(phonecore.MachineDescriptor{ID: "m-a"})
+	if err != nil {
+		t.Fatalf("AddMachine: %v", err)
+	}
+	if _, err := phonecore.Resume(phonecore.Config{
+		Dir: machineDir, Machine: "m-a",
+		WakeSealer:    custodySealer{tier: "wake", fetch: custody.WakeKEK},
+		ContentSealer: custodySealer{tier: "content", fetch: custody.ContentKEK},
+	}); err != nil {
+		t.Fatalf("provision v2 namespace: %v", err)
+	}
 	app, err := NewApp(&Config{
-		StateDir:  t.TempDir(),
+		StateDir:  stateDir,
 		MachineID: "m-a",
 		RelayURL:  "ws" + strings.TrimPrefix(srv.URL, "http"),
-	}, r4r3Custody{})
+	}, custody)
 	if err != nil {
 		t.Fatalf("NewApp: %v", err)
 	}

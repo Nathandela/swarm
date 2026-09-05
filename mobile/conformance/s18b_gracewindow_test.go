@@ -97,11 +97,12 @@ func TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace(t *tes
 
 	dir := t.TempDir()
 	custody := newTestCustody(t)
+	coreDir := pairedNamespace(t, dir, testMachineID)
 
 	// Provision the phone's device keys first, so the machine can name its routing id before
 	// the facade ever opens the directory. This is the same order newHarness uses.
 	provision, err := phonecore.Resume(phonecore.Config{
-		Dir: dir, Machine: testMachineID,
+		Dir: coreDir, Machine: testMachineID,
 		WakeSealer: custody.wakeSealer(), ContentSealer: custody.contentSealer(),
 	})
 	if err != nil {
@@ -149,7 +150,7 @@ func TestPBSTATE10_ThePostPairingGraceWindowSurvivesADialThatLosesTheRace(t *tes
 	// written at pairing; it is how the phone reaches its machine after any restart, which is
 	// the same restart this test is simulating. The fixture was modelling something LESS than
 	// the handset the requirement is about.
-	store, err := phonecore.OpenStore(filepath.Join(dir, phonecore.StateFileName), testMachineID,
+	store, err := phonecore.OpenStore(filepath.Join(coreDir, phonecore.StateFileName), testMachineID,
 		custody.wakeSealer(), custody.contentSealer())
 	if err != nil {
 		t.Fatalf("open the stranded phone's state: %v", err)

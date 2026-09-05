@@ -656,11 +656,11 @@ func TestPBKEY7_PurgeDropsTheAppCachesEvenWhenTheDurableWriteFails(t *testing.T)
 	})
 
 	// A full disk or a read-only app data directory, from in here.
-	if err := os.Chmod(h.Dir, 0o500); err != nil {
+	if err := os.Chmod(h.CoreDir, 0o500); err != nil {
 		t.Fatalf("making the state dir read-only: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(h.Dir, 0o700) })
-	if f, err := os.CreateTemp(h.Dir, ".probe-*"); err == nil {
+	t.Cleanup(func() { _ = os.Chmod(h.CoreDir, 0o700) })
+	if f, err := os.CreateTemp(h.CoreDir, ".probe-*"); err == nil {
 		name := f.Name()
 		_ = f.Close()
 		_ = os.Remove(name)

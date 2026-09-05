@@ -148,3 +148,115 @@ func TestR4R3_RegistryManagerRemove_ForgetsDurablyEvenWhenStopFails(t *testing.T
 		t.Errorf("the forgotten namespace %s survived Remove", dir)
 	}
 }
+
+func TestRegistryManagerRemove_PrecommitFailureKeepsLiveManager(t *testing.T) {
+	reg, err := NewMachineRegistry(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"m-a", "m-b"} {
+		if _, err := reg.AddMachine(MachineDescriptor{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mgr, err := NewRegistryManager(reg, ManagerOptions{Cap: 1, Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	a := &r4CountingClient{id: "m-a", events: make(chan Event), peak: &r4Peak{}}
+	b := &r4CountingClient{id: "m-b", events: make(chan Event), peak: a.peak}
+	if err := mgr.Add(MachineDescriptor{ID: "m-a"}, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Add(MachineDescriptor{ID: "m-b"}, b); err != nil {
+		t.Fatal(err)
+	}
+	root := reg.root
+	blocked := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg.root = blocked
+	if err := mgr.Remove("m-b"); err == nil {
+		t.Fatal("Remove succeeded through precommit failure")
+	}
+	reg.root = root
+	if _, err := mgr.Select("m-b"); err != nil {
+		t.Fatalf("precommit failure hid live client: %v", err)
+	}
+	if got := mgr.List(); len(got) != 2 || got[1].ID != "m-b" {
+		t.Fatalf("order after precommit failure = %v", got)
+	}
+	if got := mgr.ConnectedIDs(); len(got) != 1 || got[0] != "m-b" {
+		t.Fatalf("arbitration after failure = %v", got)
+	}
+}
+
+func TestRegistryManagerRemove_PostRenameFailureRemainsRemoved(t *testing.T) {
+	reg, err := NewMachineRegistry(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := MachineDescriptor{ID: "m-a"}
+	if _, err := reg.AddMachine(d); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := NewRegistryManager(reg, ManagerOptions{Cap: 1, Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	client := &r4CountingClient{id: d.ID, events: make(chan Event), peak: &r4Peak{}}
+	if err := mgr.Add(d, client); err != nil {
+		t.Fatal(err)
+	}
+	oldSync := syncPhonecoreDir
+	syncPhonecoreDir = func(string) error { return errors.New("injected post-rename fsync failure") }
+	t.Cleanup(func() { syncPhonecoreDir = oldSync })
+	err = mgr.Remove(d.ID)
+	if !atomicWriteCommitted(err) {
+		t.Fatalf("Remove error = %v, want committed post-rename error", err)
+	}
+	if _, err := mgr.Select(d.ID); !errors.Is(err, ErrMachineNotFound) {
+		t.Fatalf("post-rename failure resurrected manager client: %v", err)
+	}
+	if got := reg.Entries(); len(got) != 0 {
+		t.Fatalf("post-rename failure resurrected registry entries: %v", got)
+	}
+	if err := mgr.Remove(d.ID); !errors.Is(err, ErrMachineNotFound) {
+		t.Fatalf("second Remove = %v, want not found", err)
+	}
+}
+
+func TestRegistryManagerRemove_CleanupFailureRemainsRemoved(t *testing.T) {
+	reg, err := NewMachineRegistry(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := MachineDescriptor{ID: "m-a"}
+	if _, err := reg.AddMachine(d); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := NewRegistryManager(reg, ManagerOptions{Cap: 1, Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	if err := mgr.Add(d, &r4CountingClient{id: d.ID, events: make(chan Event), peak: &r4Peak{}}); err != nil {
+		t.Fatal(err)
+	}
+	oldRemove := removeRegistryNamespace
+	removeRegistryNamespace = func(string) error { return errors.New("injected namespace cleanup failure") }
+	t.Cleanup(func() { removeRegistryNamespace = oldRemove })
+	err = mgr.Remove(d.ID)
+	if !atomicWriteCommitted(err) {
+		t.Fatalf("Remove error = %v, want committed cleanup error", err)
+	}
+	if _, err := mgr.Select(d.ID); !errors.Is(err, ErrMachineNotFound) {
+		t.Fatalf("cleanup failure retained removed manager client: %v", err)
+	}
+	if got := reg.Entries(); len(got) != 0 {
+		t.Fatalf("cleanup failure resurrected registry entries: %v", got)
+	}
+}

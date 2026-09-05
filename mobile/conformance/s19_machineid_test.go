@@ -47,8 +47,14 @@ func TestS19_ARealPairingTeachesTheHandsetWhichMachineItPairedWith(t *testing.T)
 			t.Fatalf("swarmmobile.NewApp: %v", err)
 		}
 		t.Cleanup(func() { _ = app.Close() })
-		if err := app.Start(); err != nil {
-			t.Fatalf("App.Start: %v", err)
+		summary, err := app.StateSummary()
+		if err != nil {
+			t.Fatalf("App.StateSummary: %v", err)
+		}
+		if summary.Paired {
+			if err := app.Start(); err != nil {
+				t.Fatalf("App.Start: %v", err)
+			}
 		}
 		return app
 	}
