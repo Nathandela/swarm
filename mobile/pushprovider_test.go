@@ -111,8 +111,8 @@ func TestConfigurePushRegistration_UsesPlatformAuthorityAndLeavesNoGoPrivateKey(
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"installation_id":"abcdefghijklmnopqrstuv","refresh_before":"2030-01-01T00:00:00Z"}`))
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/installations/abcdefghijklmnopqrstuv/token":
+			_, _ = w.Write([]byte(`{"installation_id":"YWJjZGVmZ2hpamtsbW5vcA","refresh_before":"2030-01-01T00:00:00Z"}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/installations/YWJjZGVmZ2hpamtsbW5vcA/token":
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "unexpected", http.StatusNotFound)
@@ -151,7 +151,7 @@ func TestConfigurePushRegistration_UsesPlatformAuthorityAndLeavesNoGoPrivateKey(
 		t.Fatalf("platform signer calls after rotation = %d, want %d", len(canonicals), beforeRotation+1)
 	}
 	if got := string(canonicals[len(canonicals)-1]); !strings.HasPrefix(got,
-		"swarm-pg-v1|PUT|/v1/installations/abcdefghijklmnopqrstuv/token|") {
+		"swarm-pg-v1|PUT|/v1/installations/YWJjZGVmZ2hpamtsbW5vcA/token|") {
 		t.Fatalf("rotation canonical = %q", got)
 	}
 }
@@ -179,7 +179,7 @@ func TestConfigurePushRegistration_RegistrationUsesPlatformSigner(t *testing.T) 
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"installation_id":"abcdefghijklmnopqrstuv","refresh_before":"2030-01-01T00:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"installation_id":"YWJjZGVmZ2hpamtsbW5vcA","refresh_before":"2030-01-01T00:00:00Z"}`))
 	}))
 	defer server.Close()
 
@@ -203,7 +203,7 @@ func TestConfigurePushRegistration_RegistrationUsesPlatformSigner(t *testing.T) 
 	default:
 		t.Fatal("registration returned successfully without a proof-checked POST")
 	}
-	if got := app.core.PushInstallationID(); got != "abcdefghijklmnopqrstuv" {
+	if got := app.core.PushInstallationID(); got != "YWJjZGVmZ2hpamtsbW5vcA" {
 		t.Fatalf("durable installation ID = %q", got)
 	}
 }

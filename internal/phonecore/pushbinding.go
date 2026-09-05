@@ -142,9 +142,9 @@ type pushData struct {
 	// what makes a stale snapshot DETECTABLE at this seam at all -- without it, a queued
 	// caller's older token and a genuine rotation are the same PUT.
 	LastFCMToken string `json:"last_fcm_token,omitempty"`
-	// PendingRegister is a registration whose outcome is UNKNOWN (every attempt lost the
-	// response). It is persisted BEFORE the first POST and replayed verbatim by the next
-	// call: pushgw's idempotency cache is keyed on (Idempotency-Key, body), so only this
+	// PendingRegister is a registration whose outcome is UNKNOWN (a response was lost,
+	// invalid or ambiguous). It is persisted BEFORE the first POST and replayed verbatim
+	// by the next call: the idempotency record binds (Idempotency-Key, body), so only this
 	// exact pair maps a maybe-processed POST back onto the installation it minted.
 	PendingRegister *pendingRegisterRec `json:"pending_register,omitempty"`
 	// InstallationKey is the durable P-256 installation private key in SEC1 DER
@@ -733,32 +733,25 @@ func (c *Core) EnsurePushRegistration(ctx context.Context, client *GatewayClient
 	// processed POST answers with the installation it already minted.
 	if pending != nil {
 		reg, err := client.registerPrepared(ctx, preparedRegister(*pending), true)
-		switch {
-		case err == nil:
-			if perr := c.persistPushIdentity(reg.InstallationID, pending.FCMToken); perr != nil {
+		if err != nil {
+			// No later refusal can disprove an earlier commit. Keep the exact pair,
+			// even when its attestation or the server's idempotency window has expired.
+			return PushRegistration{}, err
+		}
+		if perr := c.persistPushIdentity(reg.InstallationID, pending.FCMToken); perr != nil {
+			return PushRegistration{}, perr
+		}
+		if pending.FCMToken != tok {
+			// The token moved while the outcome was unresolved: one ordinary rotate
+			// brings the resolved installation to the current token.
+			if rerr := client.RotateToken(ctx, reg.InstallationID, tok); rerr != nil {
+				return PushRegistration{}, rerr
+			}
+			if perr := c.persistPushIdentity(reg.InstallationID, tok); perr != nil {
 				return PushRegistration{}, perr
 			}
-			if pending.FCMToken != tok {
-				// The token moved while the outcome was unresolved: one ordinary rotate
-				// brings the resolved installation to the current token.
-				if rerr := client.RotateToken(ctx, reg.InstallationID, tok); rerr != nil {
-					return PushRegistration{}, rerr
-				}
-				if perr := c.persistPushIdentity(reg.InstallationID, tok); perr != nil {
-					return PushRegistration{}, perr
-				}
-			}
-			return reg, nil
-		case errors.Is(err, errRegisterOutcomeUnknown):
-			// Still unresolved: the pair stays durable for the next call.
-			return PushRegistration{}, err
-		default:
-			// A DEFINITIVE refusal: the pair will never mint (its verdict token may
-			// simply have aged out). Clear it and register fresh below.
-			if cerr := c.clearPendingRegister(); cerr != nil {
-				return PushRegistration{}, cerr
-			}
 		}
+		return reg, nil
 	}
 
 	prep, err := client.prepareRegister(tok)

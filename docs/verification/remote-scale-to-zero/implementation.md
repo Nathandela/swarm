@@ -545,4 +545,53 @@ handset/hosted latency claims. Admission still permits a legitimate key holder t
 fresh registrations subject to attestation and quotas; there is no per-key uniqueness
 constraint or invitation-secret lifecycle. Hosted ingress/device/recovery/billing gates,
 the remaining mobile multi-machine caller work and the separately paused bbolt recovery
-source deletion remain open. CI for this source checkpoint has not yet been run here.
+source deletion remain open. The immutable proof checkpoint `0dc1801d` subsequently passed
+all 14 jobs in CI run `33960749099`, including full Go race, Android AAR/Gradle and the
+remote-v2 runtime/emulator lane; both container runs `33960749114` and `33960749070` passed.
+
+## Registration response uncertainty: follow-up before main integration
+
+A further read-only review found a pre-existing caller bug, unchanged by the proof commit:
+any received HTTP response was treated as definitive. A truncated or malformed `201`, or
+an ambiguous `500/503` after commit, could discard the saved request and orphan the minted
+installation. A later refusal could even make pending replay start a fresh registration
+in the same call. The decoder also accepted empty/noncanonical installation IDs.
+
+Root held main integration and assigned the bounded correction to Sol under
+agents-tracker-wjp4.4. TDD reproduced these failures against responses captured after a real
+gateway commit. Review added duplicate/wrong-case fields, missing/invalid refresh time,
+oversized bodies, content type and canonical base64 cases. A small standard-library flat
+decoder now accepts only the two required response fields and a valid 16-byte ID; no
+dependency or general-purpose JSON framework was added. A first definitive refusal can
+still clear a never-committed attempt, but prior uncertainty survives every later failure.
+Root removed the now-unreachable pending-refusal-to-fresh-registration branch.
+
+Root's independent HTTP experiment sends only half the declared Content-Length after the
+gateway commits. Actual `net/http` returns `io.ErrUnexpectedEOF`; the phone retains its
+attempt and, after restart, recovers the captured original ID using identical body/key
+and one attestation. This supplements, rather than replaces, the mutated-response tests.
+
+Review also challenged retry after the ten-minute shared record expires. The production
+verifier already rejects verdicts older than two minutes, allowing 30 seconds of future
+skew. A saved final body therefore cannot authorize a fresh installation after its result
+expires. The controlled-clock test uses the real verifier with only Google's decode seam
+faked, and runs against both memory and actual Firestore emulation: cached replay returns
+the original ID without another decode; expired replay is refused, leaving one original
+installation. The command gate pins the production freshness/window relationship. No
+handset-clock field, new durable schema or invitation lifecycle is needed. This does not
+promise result recovery after ten minutes; unresolved attempts remain pending for explicit
+recovery instead of silently re-attesting and creating another identity.
+
+The stricter decoder exposed noncanonical IDs in two existing mobile fake gateways.
+Terra reproduced seven failing caller tests and corrected only the fixture ID plus its
+matching paths/assertions, preserving production validation and the pairing safety gates.
+Root independently passed three repetitions of the affected mobile races (9.687 s), three
+registration proof/outcome/TCP-fault repetitions (19.148 s), and whole build/vet/lint (zero
+issues). Sol passed full phonecore race (43.065 s). Root's full separate Firestore emulator
+race passed push/command/pushreg in 15.171 / 5.948 / 2.386 s; after tightening the verdict
+to maximum future skew, three more actual-emulator expiry repetitions passed in 9.376 /
+3.803 s. Sol's final full emulator push/command races passed in 19.681 / 5.326 s.
+The initial broad caller run passed conformance (251.650 s) and Android source gates
+(107.016 s), failing mobile only on the now-corrected fixture IDs. Its final rerun and
+CI for this follow-up checkpoint are pending at source publication. Hosted Google/handset,
+explicit unresolved-registration recovery, and billing gates remain open.

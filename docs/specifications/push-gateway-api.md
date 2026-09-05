@@ -262,6 +262,11 @@ Three credential kinds, deliberately distinct, never interchangeable.
   Play-signed application, SHALL recompute the hash above from the received body and refuse on
   mismatch, and SHALL refuse registration with `attestation_invalid` when the app-recognition
   verdict is not the licensed Play-signed build.
+  The v2 production verifier accepts a verdict at most two minutes old, with at most
+  30 seconds of future skew, measured against server time. Their sum SHALL remain shorter
+  than PG-REG-2's ten-minute idempotency window: once that record expires, the exact saved
+  verdict cannot authorize a second installation. Completed retries are resolved before
+  attestation re-verification; the phone SHALL NOT replace the token inside a pending body.
 - **PG-AUTH-12** (Ubiquitous) Attestation is an **authenticity and abuse signal, never an identity**
   (playbook `:560-561`). The gateway SHALL NOT persist the integrity token, any device identifier it
   contains, or any Google account identifier. It MAY persist a boolean verdict class and a timestamp
@@ -449,6 +454,13 @@ paths:
   `409 idempotency_conflict`; an invalid proof is refused before that lookup. Without
   this, a response lost on a flaky handset network yields two durable installations for one app
   install, and the abandoned one holds a live token until its 180-day expiry.
+  A received HTTP response alone does not establish success or prove that an earlier attempt
+  never committed. The phone SHALL retain the exact prepared body/key after transport loss,
+  an unreadable or invalid success response, or an ambiguous server response. Once an attempt
+  may have committed, later refusals (including expired attestation) SHALL NOT cause automatic
+  fresh registration. Only a bounded, contract-valid `201` resolves that pending identity.
+  Recovery of the original result is guaranteed only within the idempotency retention window;
+  unresolved attempts outside it require explicit recovery rather than silent re-enrollment.
 - **PG-REG-3** (Ubiquitous) Registrations SHALL be bounded per source and globally (playbook
   `:559-560`); the refusal is `quota_exceeded`, never a silent success.
 

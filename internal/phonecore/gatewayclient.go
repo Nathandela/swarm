@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"sync"
@@ -79,9 +80,10 @@ type PushAllocation struct {
 }
 
 // ErrAttestationRefused is PG-AUTH-13's typed refusal: the device is not recognised as
-// the licensed Play-signed build, registration is refused, and the honest app state is
-// "foreground updates only" -- never a half-enrolled durable identity.
-var ErrAttestationRefused = errors.New("phonecore: push gateway refused the app attestation; no installation enrolled")
+// the licensed Play-signed build. As a first definitive response it leaves the app in
+// the honest "foreground updates only" state. After an earlier unknown response it is
+// wrapped with errRegisterOutcomeUnknown instead, because a prior commit remains possible.
+var ErrAttestationRefused = errors.New("phonecore: push gateway refused the app attestation")
 
 // errGatewayUnauthorized is the gateway's UNDISCRIMINATED 401 (spec section 4, code
 // `unauthorized`): an unknown installation, a signature that did not verify, a capability
@@ -117,21 +119,25 @@ const codeRequestExpired = "request_expired"
 // up on a dead network, not about correctness.
 const registerAttempts = 3
 
+const registerResponseMax = 64 * 1024
+
 // registerBackoff spaces the bounded attempts: 250ms then 500ms between the three. A
 // loop with no backoff lands every attempt in milliseconds, which on a dead radio is
 // spending the whole bound before the network can possibly come back. The waits select
 // on ctx.Done so a cancelled caller is not held hostage.
 const registerBackoff = 250 * time.Millisecond
 
-// errRegisterOutcomeUnknown marks a register whose every attempt lost the RESPONSE: the
-// gateway may or may not have minted the installation. The caller
+// errRegisterOutcomeUnknown marks a register whose result cannot prove that no commit
+// occurred: the response was lost, a success response was invalid, or the gateway returned
+// an unexpected/5xx status. The caller
 // (EnsurePushRegistration) keeps the prepared (Idempotency-Key, body) pair durable so
 // the NEXT call replays it -- inside pushgw's retention window that replay is answered
 // with the installation already minted, which is what stops a lost response from
 // orphaning an installation that holds a live FCM token for 180 days (PG-REG-2). A
-// DEFINITIVE gateway refusal is never wrapped in this: the outcome is known, the
-// prepared pair is dead.
-var errRegisterOutcomeUnknown = errors.New("phonecore: register outcome unknown (no response received); the prepared registration must be replayed")
+// DEFINITIVE first-attempt gateway refusal is never wrapped in this: the outcome is known,
+// the prepared pair is dead. Once an earlier attempt is unknown, a later refusal cannot
+// prove that earlier attempt did not commit.
+var errRegisterOutcomeUnknown = errors.New("phonecore: register outcome unknown; the prepared registration must be replayed")
 
 // requestExpiryWindow is how far ahead a signed request's expiry is set: comfortably
 // inside PG-AUTH-3's 120-second horizon.
@@ -269,10 +275,14 @@ func (g *GatewayClient) registerPrepared(ctx context.Context, prep preparedRegis
 			outcomeUnknown = true
 			continue
 		}
+		status := resp.StatusCode
 		reg, err := g.decodeRegisterResponse(resp)
 		if err != nil {
-			// A response ARRIVED: the outcome is definitive, the prepared pair is dead.
-			return PushRegistration{}, err
+			// Only a first, explicit application refusal proves this prepared pair did
+			// not commit. A malformed success or unexpected status may have crossed a
+			// commit boundary, and no later response can disprove an earlier lost one.
+			return PushRegistration{}, registerAttemptError(err,
+				outcomeUnknown || !definitiveRegisterRefusal(status))
 		}
 		g.mu.Lock()
 		g.installationID = reg.InstallationID
@@ -280,6 +290,16 @@ func (g *GatewayClient) registerPrepared(ctx context.Context, prep preparedRegis
 		return reg, nil
 	}
 	return PushRegistration{}, fmt.Errorf("%w: %w", errRegisterOutcomeUnknown, lastErr)
+}
+
+func definitiveRegisterRefusal(status int) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden,
+		http.StatusConflict, http.StatusRequestEntityTooLarge, http.StatusTooManyRequests:
+		return true
+	default:
+		return false
+	}
 }
 
 func registerAttemptError(err error, outcomeUnknown bool) error {
@@ -305,19 +325,60 @@ func (g *GatewayClient) Register(ctx context.Context, fcmToken string) (PushRegi
 
 func (g *GatewayClient) decodeRegisterResponse(resp *http.Response) (PushRegistration, error) {
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, registerResponseMax+1))
 	if err != nil {
 		return PushRegistration{}, err
 	}
+	if len(raw) > registerResponseMax {
+		return PushRegistration{}, errors.New("phonecore: register response exceeds size limit")
+	}
 	if resp.StatusCode != http.StatusCreated {
 		return PushRegistration{}, gatewayError(resp.StatusCode, raw)
+	}
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return PushRegistration{}, errors.New("phonecore: register response has wrong content type")
 	}
 	var body struct {
 		InstallationID string `json:"installation_id"`
 		RefreshBefore  string `json:"refresh_before"`
 	}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		return PushRegistration{}, fmt.Errorf("phonecore: register response: %w", err)
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	opening, err := dec.Token()
+	if err != nil || opening != json.Delim('{') {
+		return PushRegistration{}, errors.New("phonecore: register response is not one JSON object")
+	}
+	seenID, seenRefresh := false, false
+	for dec.More() {
+		field, err := dec.Token()
+		if err != nil {
+			return PushRegistration{}, errors.New("phonecore: register response is malformed")
+		}
+		switch field {
+		case "installation_id":
+			if seenID || dec.Decode(&body.InstallationID) != nil {
+				return PushRegistration{}, errors.New("phonecore: register response has invalid installation_id")
+			}
+			seenID = true
+		case "refresh_before":
+			if seenRefresh || dec.Decode(&body.RefreshBefore) != nil {
+				return PushRegistration{}, errors.New("phonecore: register response has invalid refresh_before")
+			}
+			seenRefresh = true
+		default:
+			return PushRegistration{}, errors.New("phonecore: register response has an unknown field")
+		}
+	}
+	closing, err := dec.Token()
+	if err != nil || closing != json.Delim('}') || !seenID || !seenRefresh {
+		return PushRegistration{}, errors.New("phonecore: register response is missing required fields")
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return PushRegistration{}, errors.New("phonecore: register response is not one JSON object")
+	}
+	id, err := base64.RawURLEncoding.DecodeString(body.InstallationID)
+	if err != nil || len(id) != 16 || base64.RawURLEncoding.EncodeToString(id) != body.InstallationID {
+		return PushRegistration{}, errors.New("phonecore: register installation_id is not 16 canonical base64url bytes")
 	}
 	refresh, err := time.Parse(time.RFC3339, body.RefreshBefore)
 	if err != nil {

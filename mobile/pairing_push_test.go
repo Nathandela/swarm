@@ -35,10 +35,10 @@ func (g *pairingPushGateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/installations":
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"installation_id":"abcdefghijklmnopqrstuv","refresh_before":"2030-01-01T00:00:00Z"}`))
-	case r.Method == http.MethodPut && r.URL.Path == "/v1/installations/abcdefghijklmnopqrstuv/token":
+		_, _ = w.Write([]byte(`{"installation_id":"YWJjZGVmZ2hpamtsbW5vcA","refresh_before":"2030-01-01T00:00:00Z"}`))
+	case r.Method == http.MethodPut && r.URL.Path == "/v1/installations/YWJjZGVmZ2hpamtsbW5vcA/token":
 		w.WriteHeader(http.StatusNoContent)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/installations/abcdefghijklmnopqrstuv/addresses":
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/installations/YWJjZGVmZ2hpamtsbW5vcA/addresses":
 		g.allocated++
 		g.addr[0] = byte(g.allocated)
 		w.Header().Set("Content-Type", "application/json")
