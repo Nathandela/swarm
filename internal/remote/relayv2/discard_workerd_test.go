@@ -48,6 +48,9 @@ func TestWorkerdDiscardRetryRecovery(t *testing.T) {
 	if _, err := machine.Append(ctx, binding, "before-discard", []byte("before")); err != nil {
 		t.Fatalf("Append before discard: %v", err)
 	}
+	if _, err := machine.Append(ctx, binding, "queued-before-discard", []byte("queued-old")); err != nil {
+		t.Fatalf("Append queued old delivery: %v", err)
+	}
 	before, err := sub.Recv(ctx)
 	if err != nil {
 		t.Fatalf("Recv before discard: %v", err)
@@ -57,36 +60,56 @@ func TestWorkerdDiscardRetryRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discard: %v", err)
 	}
-	if checkpoint.Cursor != before.Cursor || checkpoint.Incarnation == sub.Incarnation() {
+	if checkpoint.Cursor <= before.Cursor || checkpoint.Incarnation == sub.Incarnation() {
 		t.Fatalf("Discard checkpoint = %+v, previous incarnation = %q", checkpoint, sub.Incarnation())
+	}
+	select {
+	case <-phone.Done():
+	default:
+		t.Fatal("successful discard left queued old-incarnation deliveries on a usable connection")
 	}
 	if _, err := machine.Append(ctx, binding, "intervening-before-retry", []byte("intervening")); err != nil {
 		t.Fatalf("Append before exact retry: %v", err)
 	}
-	retry, err := sub.Discard(ctx)
+	retryConn := dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
+	retry, err := retryConn.Discard(ctx, phoneBinding, sub.Incarnation())
 	if err != nil {
 		t.Fatalf("exact DISCARD retry: %v", err)
 	}
 	if retry != checkpoint {
 		t.Fatalf("exact DISCARD retry = %+v, want %+v", retry, checkpoint)
 	}
+	select {
+	case <-retryConn.Done():
+	default:
+		t.Fatal("successful exact discard retry left its connection usable")
+	}
 
-	recovered, err := phone.Subscribe(ctx, phoneBinding, checkpoint)
+	recoveredConn := dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
+	recovered, err := recoveredConn.Subscribe(ctx, phoneBinding, checkpoint)
 	if err != nil {
 		t.Fatalf("Subscribe after discard: %v", err)
 	}
 	intervening, err := recovered.Recv(ctx)
-	if err != nil || string(intervening.Ciphertext) != "intervening" {
-		t.Fatalf("intervening mail after exact retry = (%+v, %v)", intervening, err)
+	if err != nil || intervening.Cursor <= checkpoint.Cursor || string(intervening.Ciphertext) != "intervening" {
+		t.Fatalf("first mail after exact retry = (%+v, %v), want only post-discard tail", intervening, err)
 	}
 	if err := recovered.Ack(ctx, intervening.Cursor); err != nil {
 		t.Fatalf("Ack intervening mail: %v", err)
 	}
+	progressed := Checkpoint{Incarnation: checkpoint.Incarnation, Cursor: intervening.Cursor}
 	if _, err := machine.Append(ctx, binding, "pending-before-retry", []byte("pending")); err != nil {
 		t.Fatalf("Append pending before retry: %v", err)
 	}
-	if retry, err = sub.Discard(ctx); err != nil || retry != checkpoint {
+	recoveredConn.Close()
+	retryConn = dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
+	if retry, err = retryConn.Discard(ctx, phoneBinding, sub.Incarnation()); err != nil || retry != checkpoint {
 		t.Fatalf("DISCARD retry after new subscription/ACK = (%+v, %v), want %+v", retry, err, checkpoint)
+	}
+	recoveredConn = dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
+	recovered, err = recoveredConn.Subscribe(ctx, phoneBinding, progressed)
+	if err != nil {
+		t.Fatalf("Subscribe after post-ACK discard retry: %v", err)
 	}
 	pending, err := recovered.Recv(ctx)
 	if err != nil || string(pending.Ciphertext) != "pending" {
@@ -95,7 +118,7 @@ func TestWorkerdDiscardRetryRecovery(t *testing.T) {
 	if err := recovered.Ack(ctx, pending.Cursor); err != nil {
 		t.Fatalf("Ack pending mail: %v", err)
 	}
-	phone.Close()
+	recoveredConn.Close()
 
 	// A blank checkpoint is recovery-only: it echoes after=0 but starts at durable ACK.
 	reconnected := dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
@@ -115,9 +138,7 @@ func TestWorkerdDiscardRetryRecovery(t *testing.T) {
 	reconnected.Close()
 	staleIncarnation := dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
 	defer staleIncarnation.Close()
-	_, err = staleIncarnation.call(ctx, "DISCARDED", map[string]any{
-		"v": 2, "type": "DISCARD", "peer_rid": machineRID, "generation": formatUint64(phoneBinding.Generation), "incarnation": "AAAAAAAAAAAAAAAAAAAAAA",
-	})
+	_, err = staleIncarnation.Discard(ctx, phoneBinding, "AAAAAAAAAAAAAAAAAAAAAA")
 	var protocol *ProtocolError
 	if !errors.As(err, &protocol) || protocol.Code != "incarnation_mismatch" {
 		t.Fatalf("arbitrary stale incarnation = %v, want incarnation_mismatch", err)
@@ -128,9 +149,7 @@ func TestWorkerdDiscardRetryRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replace binding: %v", err)
 	}
-	_, err = machine.call(ctx, "DISCARDED", map[string]any{
-		"v": 2, "type": "DISCARD", "peer_rid": phoneRID, "generation": formatUint64(binding.Generation), "incarnation": checkpoint.Incarnation,
-	})
+	_, err = machine.Discard(ctx, binding, checkpoint.Incarnation)
 	protocol = nil
 	if !errors.As(err, &protocol) || protocol.Code != "stale_generation" {
 		t.Fatalf("stale generation = %v, want stale_generation", err)
@@ -138,9 +157,7 @@ func TestWorkerdDiscardRetryRecovery(t *testing.T) {
 	if err := control.Revoke(ctx, currentBinding); err != nil {
 		t.Fatalf("Revoke current binding: %v", err)
 	}
-	_, err = machine.call(ctx, "DISCARDED", map[string]any{
-		"v": 2, "type": "DISCARD", "peer_rid": phoneRID, "generation": formatUint64(currentBinding.Generation), "incarnation": "AAAAAAAAAAAAAAAAAAAAAA",
-	})
+	_, err = machine.Discard(ctx, currentBinding, "AAAAAAAAAAAAAAAAAAAAAA")
 	protocol = nil
 	if !errors.As(err, &protocol) || protocol.Code != "stale_generation" {
 		t.Fatalf("revoked binding DISCARD = %v, want stale_generation", err)

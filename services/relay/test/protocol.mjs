@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey, createPublicKey, hkdfSync, sign } from "node:crypto";
+import { RelayHome } from "../src/worker.mjs";
 
 const HTTP = process.env.RELAY_HTTP || "http://127.0.0.1:8790";
 const WS = HTTP.replace(/^http/, "ws");
@@ -63,6 +64,24 @@ const phone = identity(32);
 assert.equal(machine.rid, "88564c8ede170d2ed321e21e61354184", "existing Go HKDF vector remains exact");
 assert.equal(home(machine.rid), "cc634f54c634813fc554848c78763e63b3dbdff50975c0d789de730e5570beaa", "home KDF vector");
 
+// Keep the barrier's critical ordering under a deterministic unit fence. The
+// workerd assertion below separately covers the same behavior end to end.
+{
+  const order = [];
+  const peer = "0".repeat(32);
+  const generation = "00000000000000000001";
+  const incarnation = "A".repeat(22);
+  const relay = new RelayHome({}, {});
+  relay.requireStream = () => {};
+  relay.liveBinding = () => ({ generation });
+  relay.pump = async () => { order.push("DELIVER"); };
+  relay.send = (_ws, type) => { order.push(type); };
+  await relay.probe({}, { purpose: "stream", sub: { peer, generation, incarnation } }, {
+    v: 2, type: "PROBE", request_id: "probe-order", peer_rid: peer, generation: "1", incarnation,
+  });
+  assert.deepEqual(order, ["DELIVER", "PROBED"], "PROBE pumps queued mail before completing its barrier");
+}
+
 const denied = await fetch(`${HTTP}/v2/ws?machine_rid=${"0".repeat(32)}`);
 assert.equal(denied.status, 403, "allowlist rejects before arbitrary home dispatch");
 
@@ -93,9 +112,11 @@ const authorized = await waitFor(m, (x) => x.request_id === "authorize-1");
 assert.equal(authorized.type, "AUTHORIZED");
 assert.equal(authorized.generation, "1");
 
-const p = await open(`/v2/ws?machine_rid=${machine.rid}`);
+let p = await open(`/v2/ws?machine_rid=${machine.rid}`);
 const pauth = await authenticate(p, phone, "phone");
 assert.equal(pauth.generation, "1");
+send(p, { type: "PROBE", request_id: "probe-before-subscribe", peer_rid: machine.rid, generation: "1", incarnation: "A".repeat(22) });
+assert.equal((await waitFor(p, (x) => x.request_id === "probe-before-subscribe")).code, "not_subscribed");
 send(p, { type: "SUBSCRIBE", request_id: "sub-1", peer_rid: machine.rid, generation: "1", incarnation: "", after: "0" });
 const subscribed = await waitFor(p, (x) => x.request_id === "sub-1");
 assert.equal(subscribed.type, "SUBSCRIBED");
@@ -108,7 +129,29 @@ send(ms, { type: "APPEND", request_id: "append-1", peer_rid: phone.rid, generati
 const appended = await waitFor(ms, (x) => x.request_id === "append-1");
 assert.equal(appended.cursor, "1");
 assert.equal(appended.deduped, false);
-assert.equal((await waitFor(p, (x) => x.type === "DELIVER")).ciphertext, "AAECAwQ");
+// Do not wait for DELIVER first: PROBED itself is the end-to-end synchronization point.
+send(p, { type: "PROBE", request_id: "probe-1", peer_rid: machine.rid, generation: "1", incarnation });
+const probed = await waitFor(p, (x) => x.request_id === "probe-1");
+assert.equal(probed.type, "PROBED");
+const deliveryIndex = p.messages.findIndex((x) => x.type === "DELIVER" && x.msg_id === "msg-one");
+assert.ok(deliveryIndex >= 0 && deliveryIndex < p.messages.findIndex((x) => x.request_id === "probe-1"), "PROBED is ordered after the delivery it barriers");
+assert.equal(p.messages[deliveryIndex].ciphertext, "AAECAwQ");
+send(p, { type: "PROBE", request_id: "probe-wrong-peer", peer_rid: phone.rid, generation: "1", incarnation });
+assert.equal((await waitFor(p, (x) => x.request_id === "probe-wrong-peer")).code, "invalid_peer");
+send(p, { type: "PROBE", request_id: "probe-stale-generation", peer_rid: machine.rid, generation: "2", incarnation });
+assert.equal((await waitFor(p, (x) => x.request_id === "probe-stale-generation")).code, "stale_generation");
+send(p, { type: "PROBE", request_id: "probe-stale-incarnation", peer_rid: machine.rid, generation: "1", incarnation: "B".repeat(22) });
+assert.equal((await waitFor(p, (x) => x.request_id === "probe-stale-incarnation")).code, "incarnation_mismatch");
+
+// PROBE is a read-only barrier: without an ACK, reconnecting at the same checkpoint
+// receives the exact item again.
+p.ws.close();
+await waitUntil(() => p.ws.readyState >= WebSocket.CLOSING);
+p = await open(`/v2/ws?machine_rid=${machine.rid}`);
+assert.equal((await authenticate(p, phone, "phone")).generation, "1");
+send(p, { type: "SUBSCRIBE", request_id: "sub-after-probe", peer_rid: machine.rid, generation: "1", incarnation, after: "0" });
+assert.equal((await waitFor(p, (x) => x.request_id === "sub-after-probe")).type, "SUBSCRIBED");
+assert.equal((await waitFor(p, (x) => x.type === "DELIVER" && x.msg_id === "msg-one")).ciphertext, "AAECAwQ", "PROBE must not compact delivery custody");
 const deliveredBeforeResubscribe = p.messages.filter((x) => x.type === "DELIVER" && x.msg_id === "msg-one").length;
 send(p, { type: "SUBSCRIBE", request_id: "repeat-sub", peer_rid: machine.rid, generation: "1", incarnation, after: "0" });
 assert.equal((await waitFor(p, (x) => x.request_id === "repeat-sub")).code, "already_subscribed");
@@ -147,6 +190,10 @@ send(p, { type: "DISCARD", request_id: "discard", peer_rid: machine.rid, generat
 const discarded = await waitFor(p, (x) => x.request_id === "discard");
 assert.equal(discarded.type, "DISCARDED");
 assert.notEqual(discarded.incarnation, incarnation);
+p.ws.close();
+await waitUntil(() => p.ws.readyState >= WebSocket.CLOSING);
+p = await open(`/v2/ws?machine_rid=${machine.rid}`);
+assert.equal((await authenticate(p, phone, "phone")).generation, "1");
 send(p, { type: "SUBSCRIBE", request_id: "stale-incarnation", peer_rid: machine.rid, generation: "1", incarnation, after: "1" });
 assert.equal((await waitFor(p, (x) => x.request_id === "stale-incarnation")).code, "incarnation_mismatch");
 send(p, { type: "SUBSCRIBE", request_id: "sub-after-discard", peer_rid: machine.rid, generation: "1", incarnation: discarded.incarnation, after: discarded.cursor });
@@ -184,6 +231,8 @@ assert.equal((await waitFor(m, (x) => x.type === "PAIR_FRAME")).ciphertext, "bm9
 
 send(m, { type: "REVOKE", request_id: "revoke", peer_rid: phone.rid, generation: "1" });
 assert.equal((await waitFor(m, (x) => x.request_id === "revoke")).type, "REVOKED");
+send(ms, { type: "PROBE", request_id: "probe-revoked", peer_rid: phone.rid, generation: "1", incarnation: afterDiscardSub.incarnation });
+assert.equal((await waitFor(ms, (x) => x.request_id === "probe-revoked")).code, "stale_generation");
 await new Promise((r) => setTimeout(r, 50));
 assert.ok(p.ws.readyState >= WebSocket.CLOSING, "revoke closes old phone socket");
 

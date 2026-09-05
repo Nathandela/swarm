@@ -568,6 +568,36 @@ func (s *Subscription) Recv(ctx context.Context) (Delivery, error) {
 	return s.decodeDelivery(queued)
 }
 
+// Probe returns every delivery ordered before the Worker's read-only mailbox
+// barrier. The caller must be the subscription's sole reader.
+func (s *Subscription) Probe(ctx context.Context) ([]Delivery, error) {
+	frame, err := s.conn.call(ctx, "PROBED", map[string]any{
+		"v": 2, "type": "PROBE", "peer_rid": s.peer, "generation": formatUint64(s.binding.Generation), "incarnation": s.incarnation,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if frame.PeerRID != s.peer || frame.Generation != formatUint64(s.binding.Generation) || frame.Incarnation != s.incarnation {
+		return nil, errors.New("relay v2: invalid probe response")
+	}
+	var deliveries []Delivery
+	for {
+		queued, ok, err := s.tryTake()
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return deliveries, nil
+		}
+		delivery, err := s.decodeDelivery(queued)
+		s.conn.releaseDelivery(queued.size)
+		if err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+}
+
 func (s *Subscription) take(ctx context.Context) (queuedFrame, error) {
 	select {
 	case queued := <-s.conn.deliveries:
@@ -627,18 +657,31 @@ func (s *Subscription) Ack(ctx context.Context, cursor uint64) error {
 	return nil
 }
 
-func (s *Subscription) Discard(ctx context.Context) (Checkpoint, error) {
-	frame, err := s.conn.call(ctx, "DISCARDED", map[string]any{
-		"v": 2, "type": "DISCARD", "peer_rid": s.peer, "generation": formatUint64(s.binding.Generation), "incarnation": s.incarnation,
+func (c *Conn) Discard(ctx context.Context, binding Binding, incarnation string) (Checkpoint, error) {
+	if c.purpose != PurposeStream || !validIncarnation(incarnation) {
+		return Checkpoint{}, errors.New("relay v2: invalid discard")
+	}
+	peer, err := c.bindingPeer(binding)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	frame, err := c.call(ctx, "DISCARDED", map[string]any{
+		"v": 2, "type": "DISCARD", "peer_rid": peer, "generation": formatUint64(binding.Generation), "incarnation": incarnation,
 	})
 	if err != nil {
 		return Checkpoint{}, err
 	}
 	cursor, err := parseUint64(frame.Cursor)
-	if err != nil || !validIncarnation(frame.Incarnation) || frame.Incarnation == s.incarnation || frame.PeerRID != s.peer || frame.Generation != formatUint64(s.binding.Generation) {
+	if err != nil || !validIncarnation(frame.Incarnation) || frame.Incarnation == incarnation || frame.PeerRID != peer || frame.Generation != formatUint64(binding.Generation) {
 		return Checkpoint{}, errors.New("relay v2: invalid discard response")
 	}
-	return Checkpoint{Incarnation: frame.Incarnation, Cursor: cursor}, nil
+	checkpoint := Checkpoint{Incarnation: frame.Incarnation, Cursor: cursor}
+	c.Close()
+	return checkpoint, nil
+}
+
+func (s *Subscription) Discard(ctx context.Context) (Checkpoint, error) {
+	return s.conn.Discard(ctx, s.binding, s.incarnation)
 }
 
 type PairTransport struct {
@@ -942,6 +985,7 @@ var responseFields = map[string]map[string]bool{
 	"AUTHORIZED":    fields("phone_rid", "generation"), "APPENDED": fields("peer_rid", "generation", "cursor", "deduped"),
 	"SUBSCRIBED": fields("peer_rid", "generation", "incarnation", "after"),
 	"DELIVER":    fields("peer_rid", "generation", "incarnation", "cursor", "msg_id", "ciphertext"),
+	"PROBED":     fields("peer_rid", "generation", "incarnation"),
 	"ACKED":      fields("peer_rid", "generation", "incarnation", "cursor"),
 	"DISCARDED":  fields("peer_rid", "generation", "incarnation", "cursor"), "REVOKED": fields("peer_rid"),
 	"PAIR_CREATED": fields("ceremony", "expires_at"), "PAIR_CLAIMED": fields("ceremony"),
@@ -954,6 +998,7 @@ var requiredResponseFields = map[string]map[string]bool{
 	"AUTHORIZED":    fields("phone_rid", "generation"), "APPENDED": fields("peer_rid", "generation", "cursor", "deduped"),
 	"SUBSCRIBED": fields("peer_rid", "generation", "incarnation", "after"),
 	"DELIVER":    fields("peer_rid", "generation", "incarnation", "cursor", "msg_id", "ciphertext"),
+	"PROBED":     fields("peer_rid", "generation", "incarnation"),
 	"ACKED":      fields("peer_rid", "generation", "incarnation", "cursor"),
 	"DISCARDED":  fields("peer_rid", "generation", "incarnation", "cursor"), "REVOKED": fields("peer_rid"),
 	"PAIR_CREATED": fields("ceremony", "expires_at"), "PAIR_CLAIMED": fields("ceremony"),

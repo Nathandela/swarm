@@ -366,6 +366,7 @@ export class RelayHome {
         case "AUTHORIZE": return await this.authorize(ws, attachment, message);
         case "APPEND": return await this.append(ws, attachment, message);
         case "SUBSCRIBE": return await this.subscribe(ws, attachment, message);
+        case "PROBE": return await this.probe(ws, attachment, message);
         case "ACK": return await this.ack(ws, attachment, message);
         case "DISCARD": return await this.discard(ws, attachment, message);
         case "REVOKE": return await this.revoke(ws, attachment, message);
@@ -665,6 +666,21 @@ export class RelayHome {
     }
     this.recordCost(rows);
     ws.serializeAttachment({ ...attachment, sub });
+  }
+
+  async probe(ws, attachment, message) {
+    exact(message, ["generation", "incarnation", "peer_rid"]);
+    this.requireStream(attachment);
+    const binding = this.liveBinding(attachment, message.peer_rid, message.generation);
+    const sub = attachment.sub;
+    if (!sub || sub.peer !== message.peer_rid || sub.generation !== binding.generation) protocolError("not_subscribed");
+    if (message.incarnation !== sub.incarnation) protocolError("incarnation_mismatch");
+    await this.pump(ws);
+    this.send(ws, "PROBED", message.request_id, {
+      peer_rid: message.peer_rid,
+      generation: wireCursor(sub.generation),
+      incarnation: sub.incarnation,
+    });
   }
 
   async ack(ws, attachment, message) {
