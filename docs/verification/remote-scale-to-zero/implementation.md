@@ -807,3 +807,30 @@ own writable cache to remove cache-write warnings from the first successful run.
 
 This is a native client API foundation, not the production mobile/gateway cutover.
 The broader agents-tracker-wjp4.8 task remains in progress.
+
+## Remote-v2 work-branch checkpoint
+
+The following reviewed commits are on `work/remote-v2-generation`, not `main`:
+`04cfee0a`, `9bc0ddc5`, `8db6eaa8`, `fb4c8f6d`, `79f4afa2`, `5d6af07c`,
+`89ba1cae`, `bef8ad70`, and `fede1961`. They bind inbound checkpoints to a
+server-authorized relay home/phone/generation; move gateway custody, discard recovery,
+mobile pairing and gateway generations to relay v2; remove the corresponding reachability
+exemptions; make phone checkpoint activation and pairing commit atomic; and add a
+non-destructive relay-mail probe before recovery.
+
+Root independently observed `go test -race` results of 35.681 s for `internal/remotegw`,
+2.639 s, 2.384 s and 2.365 s for relay-v2 checkpoints, and 39.895 s and 48.016 s for
+phonecore checkpoints. The isolated local-workerd suite was green, including actual
+pairing, discard/retry recovery, the destructive-recovery probe, alarm, expiry and rate
+controls. These are local worker/process checks, not hosted evidence.
+
+Review found and fixed stale-authority checkpoint reuse, missing full-retained-batch
+accounting, idempotent-discard replay gaps, a dynamic pairing dial that defeated the
+reachability check, and a custody-store fallback that could restore a retired checkpoint.
+The tests now cover the corresponding authority, batch, retry, static-call and wrapped-store
+cases.
+
+This does not claim a production cutover: the mobile relay-v2 stream/data plane and the S19
+end-to-end suite remain open, as do hosted deployment/CI evidence and a connected-device
+test. No hosted deployment or physical-device result is recorded for this work-branch
+checkpoint.
