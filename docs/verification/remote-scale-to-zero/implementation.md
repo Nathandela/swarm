@@ -217,6 +217,24 @@ that parent's deadline. Contention is a plausible explanation, not proof of
 the failed process's exact timing; the adjacent other-instance log line was
 not established as its cause. No daemon production code was changed.
 
+## Dependency security checkpoint
+
+The push container scan on `97a436f9` rejected gRPC v1.67.3 with three advisories.
+Terra upgraded to v1.83.1, the patched version for
+[CVE-2026-84304](https://github.com/advisories/GHSA-vp52-pcj8-j9qc), also beyond the
+fixes for [GO-2026-4762](https://pkg.go.dev/vuln/GO-2026-4762) and
+[GHSA-hrxh-6v49-42gf](https://github.com/grpc/grpc-go/security/advisories/GHSA-hrxh-6v49-42gf).
+Root checked the upstream advisories/release. This is dependency remediation;
+the scanner result alone does not prove all affected server paths were exposed
+by this application. No ignore rule or security-check bypass was added.
+
+The ordinary Go minimum-version graph also selects Firestore v1.21.0:
+gRPC v1.83.1 requires gax-go/v2 v2.17.0, whose genproto requirement selects
+Firestore v1.21.0. This was not a blanket latest-version upgrade. The repository
+Go floor remains 1.25.0. Terra passed module verification, whole-repository build
+and vet; the clock revision's tests were still in progress at this checkpoint,
+so clean-main package/emulator and the new container scan remain separate results.
+
 ## Operator access and changes
 
 Read-only access verified the dedicated Google project `swarm-8404f` and enabled billing.
