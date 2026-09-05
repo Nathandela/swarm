@@ -1,5 +1,15 @@
 # Swarm push gateway — API, `WakeV1`, and wake-obligation contract
 
+**V2 amendment (2026-09-05):** [ADR-027](../adr/ADR-027-clean-remote-control-v2.md)
+supersedes this document's process-local-only replay/idempotency requirement (PG-RET-4),
+closed durable metadata set (PG-RET-10), and legacy migration/transport requirements
+(PG-MIG). V2 uses fresh Firestore state and bounded shared transactional authority;
+there is no old-client or old-origin fallback. Existing authentication, attestation,
+capability, encrypted-wake, expiry and log-safety guarantees remain binding. `WakeV1`
+and `/v1/` may remain the sole push format/API, not a compatibility mode. Implementation
+and hosted verification status are tracked in the
+[replacement plan](remote-scale-to-zero-plan.md).
+
 **Spec ID**: 0003
 **Status**: Draft — binds at Wave R3 implementation
 **Author**: Nathan Delacrétaz (with Claude)

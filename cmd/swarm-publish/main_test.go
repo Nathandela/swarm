@@ -17,6 +17,7 @@ import (
 )
 
 const testFirebaseAppID = "1:733314021126:android:ff6e016cffe98782535087"
+const testCloudRunPushGatewayURL = "https://swarm-push-abc123-uc.a.run.app"
 
 type provenanceFixture struct {
 	Schema                       int    `json:"schema"`
@@ -43,7 +44,7 @@ func writeAABWithProvenance(t *testing.T, content []byte, projectID string) stri
 		CloudProjectNumber:           "733314021126",
 		PackageName:                  "dev.swarm.phone",
 		MobileSDKAppID:               testFirebaseAppID,
-		PushGatewayURL:               "https://push-swarm.dsfactory.org",
+		PushGatewayURL:               testCloudRunPushGatewayURL,
 		PlaySigningCertificateSHA256: "hz8YTGhTTgpYccjMiQDrhx5HcddqRsTu1HRcmhhknmU",
 		AABSHA256:                    hex.EncodeToString(sum[:]),
 	})
@@ -57,11 +58,60 @@ func writeAABWithProvenance(t *testing.T, content []byte, projectID string) stri
 }
 
 func verifyProductionFirebaseProvenanceForTest(aab, packageName string) error {
-	bundle, err := openVerifiedProductionFirebaseBundle(aab, packageName)
+	bundle, err := openVerifiedProductionFirebaseBundle(aab, packageName, testCloudRunPushGatewayURL)
 	if bundle != nil {
 		_ = bundle.Close()
 	}
 	return err
+}
+
+func TestProductionFirebaseProvenanceRequiresExpectedCloudRunOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin string
+		wantOK       bool
+	}{
+		{"non-deterministic service URL", "https://service-identifier.a.run.app", true},
+		{"deterministic service URL", "https://service-123456789012.europe-west1.run.app", true},
+		{"empty", "", false},
+		{"leading whitespace", " https://service-identifier.a.run.app", false},
+		{"trailing whitespace", "https://service-identifier.a.run.app ", false},
+		{"cleartext", "http://service-identifier.a.run.app", false},
+		{"suffix confusion", "https://service-identifier.a.run.app.attacker.invalid", false},
+		{"malformed DNS", "https://service_identifier.a.run.app", false},
+		{"uppercase hostname", "https://SERVICE.a.run.app", false},
+		{"trailing DNS dot", "https://service-identifier.a.run.app.", false},
+		{"credentials", "https://user@service-identifier.a.run.app", false},
+		{"empty port", "https://service-identifier.a.run.app:", false},
+		{"explicit HTTPS port", "https://service-identifier.a.run.app:443", false},
+		{"non-default port", "https://service-identifier.a.run.app:8443", false},
+		{"path", "https://service-identifier.a.run.app/v1", false},
+		{"empty query", "https://service-identifier.a.run.app?", false},
+		{"query", "https://service-identifier.a.run.app?debug=1", false},
+		{"empty fragment", "https://service-identifier.a.run.app#", false},
+		{"fragment", "https://service-identifier.a.run.app#debug", false},
+		{"oversized label", "https://" + strings.Repeat("a", 64) + ".run.app", false},
+		{"oversized hostname", "https://" + strings.Repeat("a.", 126) + "run.app", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateProductionPushGatewayURL(tc.origin)
+			if (err == nil) != tc.wantOK {
+				t.Fatalf("validateProductionPushGatewayURL(%q) = %v, wantOK=%t", tc.origin, err, tc.wantOK)
+			}
+		})
+	}
+
+	aab := writeAABWithProvenance(t, []byte("wrong configured endpoint"), "swarm-8404f")
+	bundle, err := openVerifiedProductionFirebaseBundle(
+		aab,
+		"dev.swarm.phone",
+		"https://another-service.a.run.app",
+	)
+	if bundle != nil {
+		_ = bundle.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "push_gateway_url") {
+		t.Fatalf("different valid expected origin error = %v, want a push_gateway_url refusal", err)
+	}
 }
 
 // TestProductionFirebaseProvenanceAcceptsTheExactBundle is the positive control:
@@ -81,7 +131,11 @@ func TestProductionFirebaseProvenanceAcceptsTheExactBundle(t *testing.T) {
 func TestVerifiedBundleDescriptorSurvivesAPathReplacement(t *testing.T) {
 	const original = "fresh production bundle"
 	aab := writeAABWithProvenance(t, []byte(original), "swarm-8404f")
-	bundle, err := openVerifiedProductionFirebaseBundle(aab, "dev.swarm.phone")
+	bundle, err := openVerifiedProductionFirebaseBundle(
+		aab,
+		"dev.swarm.phone",
+		testCloudRunPushGatewayURL,
+	)
 	if err != nil {
 		t.Fatalf("openVerifiedProductionFirebaseBundle: %v", err)
 	}
@@ -183,6 +237,7 @@ func TestRunRejectsMissingProvenanceBeforeReadingTheCredential(t *testing.T) {
 		"--aab", aab,
 		"--key", filepath.Join(t.TempDir(), "also-missing.json"),
 		"--package", "dev.swarm.phone",
+		"--push-gateway-url", testCloudRunPushGatewayURL,
 		"--track", "internal",
 	})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "provenance") {
@@ -208,6 +263,7 @@ func TestRunRequiresEveryFlag(t *testing.T) {
 		"no aab":          {"--key", key, "--package", "dev.swarm.phone", "--track", "internal"},
 		"no key":          {"--aab", aab, "--package", "dev.swarm.phone", "--track", "internal"},
 		"no package":      {"--aab", aab, "--key", key, "--track", "internal"},
+		"no push gateway": {"--aab", aab, "--key", key, "--package", "dev.swarm.phone", "--track", "internal"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := run(context.Background(), args); err == nil {
@@ -231,7 +287,8 @@ func TestRunRejectsAnUnknownTrack(t *testing.T) {
 	}
 
 	err := run(context.Background(), []string{
-		"--aab", aab, "--key", key, "--package", "dev.swarm.phone", "--track", "prodcution",
+		"--aab", aab, "--key", key, "--package", "dev.swarm.phone",
+		"--push-gateway-url", testCloudRunPushGatewayURL, "--track", "prodcution",
 	})
 	if err == nil {
 		t.Fatal("run accepted the track \"prodcution\"")
@@ -254,7 +311,8 @@ func TestRunRejectsABrokenCredentialWithoutLeakingIt(t *testing.T) {
 	}
 
 	err := run(context.Background(), []string{
-		"--aab", aab, "--key", key, "--package", "dev.swarm.phone", "--track", "internal",
+		"--aab", aab, "--key", key, "--package", "dev.swarm.phone",
+		"--push-gateway-url", testCloudRunPushGatewayURL, "--track", "internal",
 	})
 	if err == nil {
 		t.Fatal("run accepted an unparseable credential")
@@ -272,7 +330,8 @@ func TestRunRejectsAMissingCredentialFile(t *testing.T) {
 
 	err := run(context.Background(), []string{
 		"--aab", aab, "--key", filepath.Join(dir, "absent.json"),
-		"--package", "dev.swarm.phone", "--track", "internal",
+		"--package", "dev.swarm.phone", "--push-gateway-url", testCloudRunPushGatewayURL,
+		"--track", "internal",
 	})
 	if err == nil {
 		t.Fatal("run returned nil for a missing credential file")

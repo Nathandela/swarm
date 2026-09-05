@@ -13,7 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"regexp"
+	"strings"
 )
 
 const (
@@ -24,11 +27,31 @@ const (
 	productionCloudProjectNumber = "733314021126"
 	productionFirebasePackage    = "dev.swarm.phone"
 	productionFirebaseAppID      = "1:733314021126:android:ff6e016cffe98782535087"
-	productionPushGatewayURL     = "https://push-swarm.dsfactory.org"
 	// Play Console is authoritative for this App signing certificate. It is deliberately
 	// not the upload certificate that signs the submitted AAB.
 	productionPlaySigningCertificateSHA256 = "hz8YTGhTTgpYccjMiQDrhx5HcddqRsTu1HRcmhhknmU"
 )
+
+var cloudRunDNSHostname = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+// validateProductionPushGatewayURL accepts Cloud Run's provider-issued run.app service
+// origins, whose service-identifier format Cloud Run deliberately leaves flexible. Identity
+// comes from the exact operator-supplied value compared below, not from this DNS suffix.
+func validateProductionPushGatewayURL(raw string) error {
+	if raw == "" || strings.TrimSpace(raw) != raw {
+		return errors.New("push gateway URL must be a non-empty canonical origin")
+	}
+	u, err := url.ParseRequestURI(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
+		u.Port() != "" || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return errors.New("push gateway URL must be a bare HTTPS origin")
+	}
+	host := u.Hostname()
+	if host != u.Host || len(host) > 253 || !strings.HasSuffix(host, ".run.app") || !cloudRunDNSHostname.MatchString(host) || strings.Contains(raw, "#") {
+		return errors.New("push gateway URL must use a canonical Cloud Run run.app hostname")
+	}
+	return nil
+}
 
 type firebaseProvenance struct {
 	Schema                       int    `json:"schema"`
@@ -47,10 +70,13 @@ type firebaseProvenance struct {
 // runs before credential parsing: a local artifact mistake must not read a Play
 // key or open an edit on Google's side. Keeping the descriptor open also makes a
 // later rename or replacement of aabPath unable to change the uploaded artifact.
-func openVerifiedProductionFirebaseBundle(aabPath, packageName string) (_ *os.File, resultErr error) {
+func openVerifiedProductionFirebaseBundle(aabPath, packageName, expectedPushGatewayURL string) (_ *os.File, resultErr error) {
 	if packageName != productionFirebasePackage {
 		return nil, fmt.Errorf("firebase provenance: --package=%q, want production package %q",
 			packageName, productionFirebasePackage)
+	}
+	if err := validateProductionPushGatewayURL(expectedPushGatewayURL); err != nil {
+		return nil, fmt.Errorf("firebase provenance: --push-gateway-url: %w", err)
 	}
 
 	bundle, err := os.Open(aabPath)
@@ -106,13 +132,18 @@ func openVerifiedProductionFirebaseBundle(aabPath, packageName string) (_ *os.Fi
 		{"cloud_project_number", provenance.CloudProjectNumber, productionCloudProjectNumber},
 		{"package_name", provenance.PackageName, productionFirebasePackage},
 		{"mobilesdk_app_id", provenance.MobileSDKAppID, productionFirebaseAppID},
-		{"push_gateway_url", provenance.PushGatewayURL, productionPushGatewayURL},
 		{"play_signing_certificate_sha256", provenance.PlaySigningCertificateSHA256, productionPlaySigningCertificateSHA256},
 	} {
 		if fact.got != fact.want {
 			return nil, fmt.Errorf("firebase provenance: %s=%q, want production value %q",
 				fact.name, fact.got, fact.want)
 		}
+	}
+	if provenance.PushGatewayURL != expectedPushGatewayURL {
+		return nil, errors.New("firebase provenance: push_gateway_url does not match --push-gateway-url")
+	}
+	if err := validateProductionPushGatewayURL(provenance.PushGatewayURL); err != nil {
+		return nil, fmt.Errorf("firebase provenance: push_gateway_url: %w", err)
 	}
 	if provenance.Schema != 2 {
 		return nil, fmt.Errorf("firebase provenance: schema=%d, want 2", provenance.Schema)

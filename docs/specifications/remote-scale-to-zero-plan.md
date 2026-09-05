@@ -4,7 +4,7 @@ Updated 2026-09-05. Source inspected: v0.13.27 / f1621618. This revision superse
 
 Owner decisions: there are **no current users**; backward compatibility must be dropped and cleaned up. Price and efficiency take priority over geographic residency. Bounded shared metadata is acceptable; security still matters. Initial audience is the owner and friends, not an unrestricted public service.
 
-Status: revised implementation strategy, not a deployed replacement. Existing local experiments are supporting evidence, not a completed v2 implementation. Follow-up: agents-tracker-wjp4.
+Status: implementation underway, not a deployed replacement. Existing local experiments are supporting evidence, not a completed v2 implementation. Follow-up: agents-tracker-wjp4. Architecture is recorded in [ADR-027](../adr/ADR-027-clean-remote-control-v2.md); current test and review evidence is in the [implementation journal](../verification/remote-scale-to-zero/implementation.md).
 
 ## 1. Decision
 
@@ -263,4 +263,4 @@ Implementation cleanup is complete only when source, tests, release config, depl
 
 The [private mobile repository assessment](../research/mobile-private-repository.md) remains a separate decision. Given the owner’s clarified privacy priority, defer the split; it does not improve this runtime cost model.
 
-No provider resources, production code, repository visibility or user data were changed by this planning revision. GitHub publication remains separately approval-gated following the prior safety rejection.
+The planning revision itself changed no provider resources, production code, repository visibility or user data. The owner subsequently authorized implementation and direct integration on main; tool-level publication and cloud permission checks still apply. The implementation journal records actual changes separately from this plan.

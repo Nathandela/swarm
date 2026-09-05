@@ -1,4 +1,5 @@
 import groovy.json.JsonSlurper
+import java.net.URI
 import java.security.MessageDigest
 
 plugins {
@@ -159,17 +160,82 @@ fun operatorSetting(name: String): String? =
 fun releaseSigningSetting(suffix: String): String? = operatorSetting("SWARM_RELEASE_$suffix")
 
 val releaseKeystore: String? = releaseSigningSetting("KEYSTORE")
-val productionPushGatewayURL = "https://push-swarm.dsfactory.org"
 // Play Console's App signing key certificate, not the separate upload certificate. Google
 // returns this SHA-256 digest in base64url form in appIntegrity.
 val productionPlaySigningCertificateSHA256 =
     "hz8YTGhTTgpYccjMiQDrhx5HcddqRsTu1HRcmhhknmU"
-val configuredPushGatewayURL = operatorSetting("SWARM_PUSH_GATEWAY_URL") ?: ""
+// Unlike operatorSetting's human-friendly signing values, this is parser input: preserve
+// whitespace so the release-origin contract rejects it rather than silently normalising it.
+val configuredPushGatewayURL =
+    (findProperty("SWARM_PUSH_GATEWAY_URL") as String? ?: System.getenv("SWARM_PUSH_GATEWAY_URL")) ?: ""
+val cloudRunDNSHostname = Regex(
+    """^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$""",
+)
 
-fun validatedProductionPushConfig() {
-    check(configuredPushGatewayURL == productionPushGatewayURL) {
-        "A Play release requires SWARM_PUSH_GATEWAY_URL=$productionPushGatewayURL. " +
-            "Refusing to publish a foreground-only or wrong-gateway bundle."
+fun validatedProductionPushGatewayURL(raw: String): String {
+    check(raw.isNotEmpty()) {
+        "A Play release requires an explicitly configured SWARM_PUSH_GATEWAY_URL. " +
+            "Refusing to publish a foreground-only bundle."
+    }
+    check(raw == raw.trim()) {
+        "SWARM_PUSH_GATEWAY_URL must not have surrounding whitespace."
+    }
+    val u = try {
+        URI(raw)
+    } catch (error: Exception) {
+        throw GradleException("SWARM_PUSH_GATEWAY_URL must be a Cloud Run HTTPS origin.", error)
+    }
+    val host = u.host
+    check(
+            u.scheme == "https" &&
+            host?.endsWith(".run.app") == true &&
+            host.matches(cloudRunDNSHostname) &&
+            host.length <= 253 &&
+            u.userInfo == null &&
+            u.port == -1 &&
+            u.rawAuthority == host &&
+            u.rawPath.isNullOrEmpty() &&
+            u.rawQuery == null &&
+            u.rawFragment == null,
+    ) {
+        "SWARM_PUSH_GATEWAY_URL must be a bare HTTPS Cloud Run origin."
+    }
+    return raw
+}
+
+fun validatedProductionPushConfig(): String =
+    validatedProductionPushGatewayURL(configuredPushGatewayURL)
+
+val verifyProductionPushOriginContract = tasks.register("verifyProductionPushOriginContract") {
+    description = "Checks the accepted Cloud Run push-origin contract in the Gradle DSL."
+    doLast {
+        listOf(
+            "https://service-identifier.a.run.app",
+            "https://service-123456789012.europe-west1.run.app",
+        ).forEach(::validatedProductionPushGatewayURL)
+        listOf(
+            "",
+            " https://service-identifier.a.run.app",
+            "https://service-identifier.a.run.app ",
+            "http://service-identifier.a.run.app",
+            "https://service-identifier.a.run.app.attacker.invalid",
+            "https://service_identifier.a.run.app",
+            "https://SERVICE.a.run.app",
+            "https://service-identifier.a.run.app.",
+            "https://user@service-identifier.a.run.app",
+            "https://service-identifier.a.run.app:",
+            "https://service-identifier.a.run.app:443",
+            "https://service-identifier.a.run.app:8443",
+            "https://service-identifier.a.run.app/v1",
+            "https://service-identifier.a.run.app?",
+            "https://service-identifier.a.run.app#",
+            "https://${"a".repeat(64)}.run.app",
+            "https://${List(126) { "a" }.joinToString(".")}.run.app",
+        ).forEach { origin ->
+            check(runCatching { validatedProductionPushGatewayURL(origin) }.isFailure) {
+                "accepted invalid Cloud Run push origin"
+            }
+        }
     }
 }
 
@@ -236,6 +302,7 @@ val writeProductionFirebaseProvenance = tasks.register("writeProductionFirebaseP
     outputs.file(productionFirebaseProvenance)
     doLast {
         val firebaseConfig = validatedProductionFirebaseConfig()
+        val productionPushGatewayURL = validatedProductionPushConfig()
         val bundleFile = productionFirebaseAAB.get().asFile
         check(bundleFile.isFile) {
             "signReleaseBundle completed without ${bundleFile.path}; refusing to write " +

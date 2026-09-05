@@ -237,6 +237,8 @@ export SWARM_RELEASE_KEYSTORE="$HOME/.keystores/swarm-upload.jks"
 export SWARM_RELEASE_KEYSTORE_PASSWORD='...'
 export SWARM_RELEASE_KEY_ALIAS='swarm-upload'
 export SWARM_RELEASE_KEY_PASSWORD='...'
+# The exact provider-issued, bare HTTPS URL shown by `gcloud run services describe`.
+export SWARM_PUSH_GATEWAY_URL='https://your-service-identifier.run.app'
 
 ./build-aar.sh             # rebuild the gomobile AAR first
 ./gradlew :app:bundleRelease

@@ -239,11 +239,14 @@ go run ./cmd/swarm-publish \
   --aab android/app/build/outputs/bundle/release/app-release.aab \
   --key /absolute/path/to/play-service-account.json \
   --package dev.swarm.phone \
+  --push-gateway-url "$SWARM_PUSH_GATEWAY_URL" \
   --track alpha \
   --dry-run
 ```
 
-With explicit approval to publish, repeat the identical command without `--dry-run`. Before either
+`SWARM_PUSH_GATEWAY_URL` must be the exact bare `https://…run.app` URL reported for the new Cloud
+Run service; it is required for both `bundleRelease` and publication. With explicit approval to
+publish, repeat the identical command without `--dry-run`. Before either
 command, re-check Play's current target API level requirement —
 `docs/ops/play-closed-testing-application.md` flags that the floor moves every August and this
 project sits on the pinned value in `android/toolchain.env`.

@@ -38,6 +38,7 @@ func run(ctx context.Context, args []string) error {
 	aab := fs.String("aab", "", "path to the .aab to upload (required)")
 	key := fs.String("key", "", "path to the service-account JSON credential (required)")
 	pkg := fs.String("package", "", "applicationId to publish, e.g. dev.swarm.phone (required)")
+	pushGatewayURL := fs.String("push-gateway-url", "", "expected bare HTTPS Cloud Run push origin (required)")
 	track := fs.String("track", "internal", "Play track: "+strings.Join(tracks, ", "))
 	dryRun := fs.Bool("dry-run", false, "do everything except commit the edit")
 	if err := fs.Parse(args); err != nil {
@@ -47,6 +48,7 @@ func run(ctx context.Context, args []string) error {
 		{"--aab", *aab},
 		{"--key", *key},
 		{"--package", *pkg},
+		{"--push-gateway-url", *pushGatewayURL},
 	} {
 		if required.value == "" {
 			return fmt.Errorf("swarm-publish: %s is required", required.flag)
@@ -55,7 +57,7 @@ func run(ctx context.Context, args []string) error {
 	if !validTrack(*track) {
 		return fmt.Errorf("swarm-publish: unknown track %q; want one of %s", *track, strings.Join(tracks, ", "))
 	}
-	bundle, err := openVerifiedProductionFirebaseBundle(*aab, *pkg)
+	bundle, err := openVerifiedProductionFirebaseBundle(*aab, *pkg, *pushGatewayURL)
 	if err != nil {
 		return fmt.Errorf("swarm-publish: %w", err)
 	}

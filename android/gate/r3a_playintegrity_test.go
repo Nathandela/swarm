@@ -9,11 +9,10 @@ import (
 
 func TestR3A_PlayIntegrityProductionProvenanceIsPinned(t *testing.T) {
 	root := repoRoot(t)
-	build := readPlayFile(t, filepath.Join(root, "android", "app", "build.gradle.kts"))
+	build := kotlinCodeOnly(readPlayFile(t, filepath.Join(root, "android", "app", "build.gradle.kts")))
 	for _, want := range []string{
 		`com.google.android.play:integrity:1.6.0`,
 		`733314021126`,
-		`https://push-swarm.dsfactory.org`,
 		`cloud_project_number`,
 		`push_gateway_url`,
 		`play_signing_certificate_sha256`,
@@ -29,6 +28,41 @@ func TestR3A_PlayIntegrityProductionProvenanceIsPinned(t *testing.T) {
 		if !strings.Contains(raw, "com.google.android.play") {
 			t.Errorf("%s does not account for the Play Integrity SDK", tracked)
 		}
+	}
+}
+
+// TestR2_ReleasePushOriginRequiresTheConfiguredCloudRunOrigin keeps the direct v2
+// provider URL a release-time, operator-controlled coordinate. Pairing is not allowed to
+// select it, and a generic HTTPS URL is not enough: Cloud Run has a bare HTTPS origin with
+// no credentials, route, query, fragment, or explicit port.
+func TestR2_ReleasePushOriginRequiresTheConfiguredCloudRunOrigin(t *testing.T) {
+	root := repoRoot(t)
+	build := kotlinCodeOnly(readPlayFile(t, filepath.Join(root, "android", "app", "build.gradle.kts")))
+	for _, want := range []string{
+		`SWARM_PUSH_GATEWAY_URL`,
+		`findProperty("SWARM_PUSH_GATEWAY_URL")`,
+		`fun validatedProductionPushGatewayURL(raw: String)`,
+		`URI(`,
+		`u.scheme == "https"`,
+		`host?.endsWith(".run.app") == true`,
+		`host.matches(cloudRunDNSHostname)`,
+		`host.length <= 253`,
+		`u.userInfo == null`,
+		`u.port == -1`,
+		`u.rawAuthority == host`,
+		`u.rawPath.isNullOrEmpty()`,
+		`u.rawQuery == null`,
+		`u.rawFragment == null`,
+		`tasks.register("verifyProductionPushOriginContract")`,
+		`runCatching { validatedProductionPushGatewayURL(origin) }.isFailure`,
+		`"push_gateway_url": "$productionPushGatewayURL"`,
+	} {
+		if !strings.Contains(build, want) {
+			t.Errorf("app build has no v2 Cloud Run release-origin guard %q", want)
+		}
+	}
+	if strings.Contains(build, "push-swarm.dsfactory.org") {
+		t.Error("app build still pins the retired push-swarm.dsfactory.org release origin")
 	}
 }
 

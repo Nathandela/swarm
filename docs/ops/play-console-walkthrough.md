@@ -250,6 +250,7 @@ android/app/build/outputs/bundle/release/app-release.aab
      --aab android/app/build/outputs/bundle/release/app-release.aab \
      --key /absolute/path/to/play-service-account.json \
      --package dev.swarm.phone \
+     --push-gateway-url "$SWARM_PUSH_GATEWAY_URL" \
      --track alpha \
      --dry-run
    ```
