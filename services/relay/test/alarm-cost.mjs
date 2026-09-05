@@ -45,7 +45,8 @@ async function authenticate(peer, who, role, purpose) {
   peer.ws.send(JSON.stringify({ v: 2, type: "AUTH_INIT", request_id: `init-${purpose}`, role, purpose, pub: b64(who.pub) }));
   const challenge = await waitFor(peer, (message) => message.type === "CHALLENGE");
   peer.ws.send(JSON.stringify({ v: 2, type: "AUTH_PROVE", request_id: `prove-${purpose}`, signature: b64(sign(null, authMessage(challenge.nonce, who.rid, challenge.home, role, purpose), who.key)) }));
-  assert.equal((await waitFor(peer, (message) => message.request_id === `prove-${purpose}`)).type, "AUTHENTICATED");
+  const result = await waitFor(peer, (message) => message.request_id === `prove-${purpose}`);
+  assert.equal(result.type, "AUTHENTICATED", JSON.stringify(result));
 }
 async function request(peer, type, requestID, fields = {}) {
   peer.ws.send(JSON.stringify({ v: 2, type, request_id: requestID, ...fields }));

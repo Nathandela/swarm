@@ -192,6 +192,31 @@ The job has read-only repository permissions and requires no cloud credentials.
 Its service commands passed locally; a hosted workflow run is still a separate
 verification result.
 
+The first hosted run of the new job (`33952727197`, commit `97a436f9`) passed
+the Worker protocol checks, then failed because `rg` was absent on the Linux
+runner. The shell harness now uses POSIX `grep -F` for its two log assertions
+and retains the normal content-addressed Go build cache; `-count=1` and fresh
+Worker storage still make each integration execution fresh. The failure was
+not ignored, and the Firestore step in that run was skipped, not passed.
+
+Root's local harness review also observed one authentication refusal during the
+32-phone cost fixture under shared load, then a successful rerun. That fixture
+had inherited a 250 ms challenge lifetime intended for the unrelated expiry
+negative control. Cost/retention fixtures now use the production 30-second
+challenge lifetime; the protocol expiry control keeps a shortened one-second
+lifetime and still asserts closure. Authentication failures include their exact
+response in future diagnostics. This changes test setup, not production timing.
+The final stable rerun passed (Go/workerd 1.784 s / 4.542 s), with unchanged
+100-cycle counters and alarm reads of 14 / 203.
+
+The longer main test run exposed a separate daemon survival timeout: its
+subprocess had launched zero of three agents at the 20-second fixture bound.
+Terra's sterile isolated rerun passed (test 4.42 s, package 7.367 s). The host
+re-executes TestMain's two Go builds before reaching its first launch, inside
+that parent's deadline. Contention is a plausible explanation, not proof of
+the failed process's exact timing; the adjacent other-instance log line was
+not established as its cause. No daemon production code was changed.
+
 ## Operator access and changes
 
 Read-only access verified the dedicated Google project `swarm-8404f` and enabled billing.

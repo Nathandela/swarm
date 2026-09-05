@@ -6,12 +6,13 @@ start_worker() {
   state=$1
   retention=$2
   disable_alarms=$3
+  challenge_ttl=$4
   log="$scratch/$state.log"
   XDG_CONFIG_HOME="$scratch/config" WRANGLER_LOG_PATH="$scratch/debug-$state" \
     ./node_modules/.bin/wrangler dev --local --persist-to "$scratch/$state" --port "$port" \
       --var OPERATOR_NAMESPACE:local-test \
       --var ALLOWED_MACHINE_RIDS:88564c8ede170d2ed321e21e61354184 \
-      --var CHALLENGE_TTL_MS:250 --var RENDEZVOUS_TTL_MS:1000 --var RETENTION_MS:"$retention" \
+      --var CHALLENGE_TTL_MS:"$challenge_ttl" --var RENDEZVOUS_TTL_MS:1000 --var RETENTION_MS:"$retention" \
       --var TEST_DISABLE_ALARMS:"$disable_alarms" \
       --var TEST_COST_METRICS:1 \
       >"$log" 2>&1 &
@@ -27,18 +28,19 @@ start_worker() {
   done
 }
 
-start_worker state 60000 0
+# Only the protocol expiry control needs an accelerated authentication lifetime.
+start_worker state 60000 0 1000
 RELAY_HTTP="http://127.0.0.1:$port" node test/protocol.mjs
-rg 'RELAY_V2_COST' "$log"
-RELAY_V2_HTTP="http://127.0.0.1:$port" GOCACHE="$scratch/gocache" \
+grep -F 'RELAY_V2_COST' "$log"
+RELAY_V2_HTTP="http://127.0.0.1:$port" \
   go test ../../internal/remote/relayv2 -run TestWorkerd -count=1
 kill "$wrangler"
 wait "$wrangler" || :
-start_worker alarm-state 60000 1
+start_worker alarm-state 60000 1 30000
 RELAY_HTTP="http://127.0.0.1:$port" node test/alarm-cost.mjs
-rg 'RELAY_V2_ALARM_COST' "$log"
+grep -F 'RELAY_V2_ALARM_COST' "$log"
 kill "$wrangler"
 wait "$wrangler" || :
-start_worker expiry-state 3000 1
-RELAY_V2_EXPIRY_HTTP="http://127.0.0.1:$port" GOCACHE="$scratch/gocache" \
+start_worker expiry-state 3000 1 30000
+RELAY_V2_EXPIRY_HTTP="http://127.0.0.1:$port" \
   go test ../../internal/remote/relayv2 -run TestExpiredReceipt -count=1
