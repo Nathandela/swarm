@@ -34,11 +34,25 @@ type opaqueProfileStore struct{ st State }
 func (s *opaqueProfileStore) Load() State { return s.st }
 func (s *opaqueProfileStore) Save(st State) error {
 	st.phoneBinding = s.st.phoneBinding
+	if st.relayGen < s.st.relayGen {
+		st.RelayCursor = s.st.RelayCursor
+		st.RelayIncarnation = s.st.RelayIncarnation
+		st.relayGen = s.st.relayGen
+	}
 	s.st = st
 	return nil
 }
 func (s *opaqueProfileStore) ActivatePhoneBinding(st State) error { s.st = st; return nil }
 func (s *opaqueProfileStore) CommitPhonePairing(st State) error   { s.st = st; return nil }
+func (s *opaqueProfileStore) ReplacePhoneCheckpoint(st State) error {
+	next, err := nextRelayGeneration(s.st.relayGen, st.relayGen)
+	if err != nil {
+		return err
+	}
+	st.relayGen = next
+	s.st = st
+	return nil
+}
 func (s *opaqueProfileStore) PurgeKeys() error {
 	s.st.Keys = crypto.EpochKeys{}
 	s.st.Sessions, s.st.Snapshots, s.st.Items = nil, nil, nil

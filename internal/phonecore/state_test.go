@@ -238,10 +238,10 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 	// own test so there is no assertion in this slice that a state-less implementation
 	// could satisfy.
 	//
-	// UNEXPORTED fields are either custody bookkeeping, or trust-bound authorities callers
-	// must not be able to manufacture through Save/Mutate. They are skipped by this generic
-	// fixture: bookkeeping is asserted not to survive below, while the authenticated profile's
-	// populated restart path is driven through Reconcile in TestLastProfileAndComposerSurviveProcessDeath.
+	// UNEXPORTED fields are custody coordinates or trust-bound authorities callers must not
+	// manufacture through Save/Mutate. They are skipped by this generic fixture and covered
+	// by their dedicated transition tests; the authenticated profile's populated restart path
+	// is driven through Reconcile in TestLastProfileAndComposerSurviveProcessDeath.
 	fv := reflect.ValueOf(want)
 	for i := 0; i < fv.NumField(); i++ {
 		if !fv.Type().Field(i).IsExported() {
@@ -284,8 +284,8 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 		}
 	}
 
-	// The other half of the exemption above: custody's bookkeeping must NOT come back from
-	// disk. purgeGen counts the lock purges THIS process has taken, and a restored one would
+	// purgeGen must NOT come back from disk. It counts the lock purges THIS process has taken,
+	// and a restored one would
 	// make a fresh process refuse the first Save of every caller holding a legitimate
 	// snapshot.
 	//
@@ -739,6 +739,12 @@ var stateV23Fixture = func() string {
 		`"relay_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","phone_binding":{"home":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","phone_rid":"0123456789abcdef0123456789abcdef","generation":"7","active":true}`, 1)
 }()
 
+var stateV24Fixture = func() string {
+	fixture := strings.Replace(stateV23Fixture, `"schema_version":23`, `"schema_version":24`, 1)
+	return strings.Replace(fixture, `"relay_incarnation":"AAAAAAAAAAAAAAAAAAAAAA"`,
+		`"relay_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","relay_generation":5`, 1)
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -760,6 +766,7 @@ var stateFixtures = map[int]string{
 	21: stateV21Fixture,
 	22: stateV22Fixture,
 	23: stateV23Fixture,
+	24: stateV24Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

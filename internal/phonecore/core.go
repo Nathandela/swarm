@@ -518,6 +518,13 @@ func (c *Core) stateForPersistLocked(st State) State {
 	// Phone binding authority has dedicated activation/retirement verbs. An ordinary Save may
 	// carry a stale private snapshot but cannot restore a retired generation through it.
 	st.phoneBinding = c.st.phoneBinding
+	// Checkpoint namespace transitions advance relayGen. Preserve their exact cursor and
+	// incarnation against a stale whole-State writer even when Store is an injected wrapper.
+	if st.relayGen < c.st.relayGen {
+		st.RelayCursor = c.st.RelayCursor
+		st.RelayIncarnation = c.st.RelayIncarnation
+		st.relayGen = c.st.relayGen
+	}
 	// The profile is authenticated for the State identity that held it when Reconcile
 	// succeeded. A whole-state adoption that changes either half of that identity cannot
 	// carry the authority across with it. This runs above Store so the rule also holds for

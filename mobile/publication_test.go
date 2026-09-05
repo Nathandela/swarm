@@ -106,6 +106,10 @@ func (s *publicationMemoryStore) CommitPhonePairing(st phonecore.State) error {
 	return s.Save(st)
 }
 
+func (s *publicationMemoryStore) ReplacePhoneCheckpoint(st phonecore.State) error {
+	return s.Save(st)
+}
+
 func (s *publicationMemoryStore) PurgeKeys() error {
 	s.mu.Lock()
 	s.state.PendingPublications = nil

@@ -58,6 +58,10 @@ func (c *countingStore) CommitPhonePairing(s State) error {
 	c.saves++
 	return c.inner.CommitPhonePairing(s)
 }
+func (c *countingStore) ReplacePhoneCheckpoint(s State) error {
+	c.saves++
+	return c.inner.ReplacePhoneCheckpoint(s)
+}
 func (c *countingStore) PurgeKeys() error                   { return c.inner.PurgeKeys() }
 func (c *countingStore) UnsealContent() error               { return c.inner.UnsealContent() }
 func (c *countingStore) RewindRelayCursor() error           { return c.inner.RewindRelayCursor() }
@@ -96,6 +100,13 @@ func (f *failAfterNStore) CommitPhonePairing(s State) error {
 	}
 	return f.inner.CommitPhonePairing(s)
 }
+func (f *failAfterNStore) ReplacePhoneCheckpoint(s State) error {
+	f.saves++
+	if f.saves > f.n {
+		return errStoreDied
+	}
+	return f.inner.ReplacePhoneCheckpoint(s)
+}
 func (f *failAfterNStore) PurgeKeys() error                   { return f.inner.PurgeKeys() }
 func (f *failAfterNStore) UnsealContent() error               { return f.inner.UnsealContent() }
 func (f *failAfterNStore) RewindRelayCursor() error           { return f.inner.RewindRelayCursor() }
@@ -110,11 +121,25 @@ type memStore struct{ st State }
 func (m *memStore) Load() State { return m.st }
 func (m *memStore) Save(s State) error {
 	s.phoneBinding = m.st.phoneBinding
+	if s.relayGen < m.st.relayGen {
+		s.RelayCursor = m.st.RelayCursor
+		s.RelayIncarnation = m.st.RelayIncarnation
+		s.relayGen = m.st.relayGen
+	}
 	m.st = s
 	return nil
 }
 func (m *memStore) ActivatePhoneBinding(s State) error { m.st = s; return nil }
 func (m *memStore) CommitPhonePairing(s State) error   { m.st = s; return nil }
+func (m *memStore) ReplacePhoneCheckpoint(s State) error {
+	next, err := nextRelayGeneration(m.st.relayGen, s.relayGen)
+	if err != nil {
+		return err
+	}
+	s.relayGen = next
+	m.st = s
+	return nil
+}
 func (m *memStore) PurgeKeys() error {
 	m.st.Keys = crypto.EpochKeys{}
 	m.st.Snapshots, m.st.Sessions = nil, nil

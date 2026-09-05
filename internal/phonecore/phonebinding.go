@@ -80,6 +80,9 @@ func (c *Core) ActivatePhoneBinding(next PhoneBinding) error {
 	st.phoneBinding = next
 	if !sameScope || current.Generation != next.Generation {
 		st.RelayCursor, st.RelayIncarnation = 0, ""
+		if err := c.advanceRelayGenerationLocked(&st); err != nil {
+			return err
+		}
 	}
 	st = c.stateForPersistLocked(st)
 	st.phoneBinding = next
@@ -111,6 +114,74 @@ func (c *Core) SetPhoneIncarnation(binding PhoneBinding, incarnation string) err
 	return c.persistLocked(st)
 }
 
+// RecoverPhoneIncarnation atomically resets a checkpoint rejected by Subscribe, but only
+// while the exact active relay authority and the checkpoint that failed still own it.
+func (c *Core) RecoverPhoneIncarnation(binding PhoneBinding, expected string) error {
+	if !validPhoneIncarnation(expected) {
+		return ErrRelayIncarnationChanged
+	}
+	c.router.acceptMu.Lock()
+	defer c.router.acceptMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.st.phoneBinding != binding || !binding.Active {
+		return ErrPhoneBindingChanged
+	}
+	if c.st.RelayCursor == 0 && c.st.RelayIncarnation == "" {
+		return nil
+	}
+	if c.st.RelayIncarnation != expected {
+		return ErrRelayIncarnationChanged
+	}
+	st := c.stateForPersistLocked(c.st.clone())
+	st.RelayCursor, st.RelayIncarnation = 0, ""
+	if err := c.advanceRelayGenerationLocked(&st); err != nil {
+		return err
+	}
+	err := c.store.ReplacePhoneCheckpoint(st.clone())
+	if err != nil && !atomicWriteCommitted(err) {
+		return err
+	}
+	c.st = loadCoreState(c.store)
+	return err
+}
+
+// AdoptPhoneDiscard replaces the old mailbox namespace with the checkpoint returned by a
+// successful native DISCARD. This is one durable boundary: composing rewind, incarnation,
+// and Save would lose the exact-old authorization after the first write, so a crash retry
+// could only finish by accepting an unbound intermediate checkpoint.
+func (c *Core) AdoptPhoneDiscard(binding PhoneBinding, oldIncarnation, newIncarnation string, through uint64) error {
+	if !validPhoneIncarnation(oldIncarnation) || !validPhoneIncarnation(newIncarnation) || oldIncarnation == newIncarnation {
+		return ErrRelayIncarnationChanged
+	}
+	c.router.acceptMu.Lock()
+	defer c.router.acceptMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.st.phoneBinding != binding || !binding.Active {
+		return ErrPhoneBindingChanged
+	}
+	// A post-rename failure reports an error even though the checkpoint landed. Exact target
+	// recognition makes retry idempotent without weakening the old-incarnation fence.
+	if c.st.RelayIncarnation == newIncarnation && c.st.RelayCursor >= through {
+		return nil
+	}
+	if c.st.RelayIncarnation != oldIncarnation {
+		return ErrRelayIncarnationChanged
+	}
+	st := c.stateForPersistLocked(c.st.clone())
+	st.RelayCursor, st.RelayIncarnation = through, newIncarnation
+	if err := c.advanceRelayGenerationLocked(&st); err != nil {
+		return err
+	}
+	err := c.store.ReplacePhoneCheckpoint(st.clone())
+	if err != nil && !atomicWriteCommitted(err) {
+		return err
+	}
+	c.st = loadCoreState(c.store)
+	return err
+}
+
 // CommitPhonePairing makes the new pin, optional staged push ownership, old-checkpoint
 // reset, and retirement of the old relay generation one durable transaction. The caller
 // stops and joins the old transport before entering this method. fn runs with Core.mu held
@@ -120,6 +191,11 @@ func (c *Core) CommitPhonePairing(staged *PushAddress, fn func(*State)) error {
 	c.mu.Lock()
 
 	st := c.st.clone()
+	if err := c.advanceRelayGenerationLocked(&st); err != nil {
+		c.mu.Unlock()
+		c.router.acceptMu.Unlock()
+		return err
+	}
 	if staged != nil {
 		enc := EncodePushAddress(*staged)
 		if st.pairingPushOwned != "" && st.pairingPushOwned != enc {
@@ -155,6 +231,15 @@ func (c *Core) CommitPhonePairing(staged *PushAddress, fn func(*State)) error {
 	c.rebind()
 	c.router.acceptMu.Unlock()
 	return err
+}
+
+func (c *Core) advanceRelayGenerationLocked(st *State) error {
+	next, err := nextRelayGeneration(c.st.relayGen, 0)
+	if err != nil {
+		return err
+	}
+	st.relayGen = next
+	return nil
 }
 
 // AcceptPhoneDelivery is the only relay-v2 receive entry point. acceptMu prevents a pairing

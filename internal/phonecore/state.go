@@ -211,10 +211,11 @@ import (
 // canonical home; dropping either can redirect or strand the pairing after process death.
 //
 // v23 adds phone_binding: the exact relay-v2 home, phone RID and server-issued generation,
-// plus whether pairing has retired it. The inactive generation is a rollback floor scoped
-// to those exact two identities; dropping it lets a restored relay generation revive an
-// authorization the owner replaced.
-const StateSchemaVersion = 23
+// including the inactive rollback floor.
+//
+// v24 adds relay_generation, fencing stale whole-State writers after a checkpoint namespace
+// replacement, including writers that outlive and reopen the Store process which performed it.
+const StateSchemaVersion = 24
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -226,8 +227,19 @@ var (
 	ErrCorruptState = errors.New("phonecore: corrupt phone-state file")
 	// ErrFutureSchema refuses a blob from a newer build (an upgrade then a downgrade, or a
 	// restored backup). Never a silent reinterpretation.
-	ErrFutureSchema = errors.New("phonecore: phone-state file schema is newer than this build")
+	ErrFutureSchema             = errors.New("phonecore: phone-state file schema is newer than this build")
+	errRelayGenerationExhausted = errors.New("phonecore: relay checkpoint generation exhausted")
 )
+
+func nextRelayGeneration(current, requested uint64) (uint64, error) {
+	if requested > current {
+		return requested, nil
+	}
+	if current == ^uint64(0) {
+		return 0, errRelayGenerationExhausted
+	}
+	return current + 1, nil
+}
 
 // Bucket identifies ONE machine -> phone receive stream by exactly the coordinate
 // crypto.MailboxReceiver keys its own high-water map by: the envelope's sender key id and
@@ -454,10 +466,9 @@ type State struct {
 	// an unbounded freshness window with one stamp.
 	LastHeardAt int64
 
-	// relayGen is custody's in-process generation for the explicit relay continuity
-	// rewind. A State snapshot from before RewindRelayCursor carries an older value and
-	// cannot restore the retired cursor/incarnation if its Save finishes afterwards.
-	// It is intentionally not persisted: no writer survives the process that owns it.
+	// relayGen is custody's durable generation for explicit relay continuity changes. A
+	// State snapshot from before a rewind, binding transition, or DISCARD adoption carries
+	// an older value and cannot restore the retired cursor/incarnation after a Store reopen.
 	relayGen uint64
 
 	// purgeGen is the purge counter this snapshot was taken at. It is custody's own
@@ -547,6 +558,12 @@ type Store interface {
 	// replay-guard merge must reject.
 	ActivatePhoneBinding(State) error
 	CommitPhonePairing(State) error
+	// ReplacePhoneCheckpoint atomically resets or replaces a live relay-v2 checkpoint,
+	// including the new incarnation and through-cursor returned by DISCARD. Ordinary Save
+	// cannot express this because both coordinates may legitimately move below their monotonic
+	// old values. Core supplies the advanced opaque custody generation in State; external
+	// implementations only need to persist that whole State atomically.
+	ReplacePhoneCheckpoint(State) error
 	// PurgeKeys is PB-KEY-7's REVOKE/UNPAIR purge: it destroys BOTH tier keys and everything
 	// sealed under either of them, in memory and at rest, and RECORDS THE UNPAIR durably
 	// (State.Disowned).
@@ -705,6 +722,7 @@ type stateFile struct {
 	GrantSeq                  uint64         `json:"grant_seq"`
 	RelayCursor               uint64         `json:"relay_cursor"`
 	RelayIncarnation          string         `json:"relay_incarnation,omitempty"`
+	RelayGeneration           uint64         `json:"relay_generation,omitempty"`
 	PhoneBinding              PhoneBinding   `json:"phone_binding,omitzero"`
 	DiscardRecoveryGeneration uint64         `json:"discard_recovery_generation,omitempty"`
 	DiscardRecoveryCompleted  uint64         `json:"discard_recovery_completed,omitempty"`
@@ -1273,9 +1291,13 @@ func (s *fileStore) RewindRelayCursor() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous := s.st.clone()
+	next, err := nextRelayGeneration(s.st.relayGen, 0)
+	if err != nil {
+		return err
+	}
 	s.st.RelayCursor = 0
 	s.st.RelayIncarnation = ""
-	s.st.relayGen++
+	s.st.relayGen = next
 	if err := s.saveLocked(s.st.clone()); err != nil {
 		if !atomicWriteCommitted(err) {
 			s.st = previous
@@ -1299,6 +1321,26 @@ func (s *fileStore) SetRelayIncarnation(incarnation string) error {
 	return nil
 }
 
+// ReplacePhoneCheckpoint is the file store's atomic native checkpoint transition.
+func (s *fileStore) ReplacePhoneCheckpoint(st State) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.st.clone()
+	next, err := nextRelayGeneration(s.st.relayGen, st.relayGen)
+	if err != nil {
+		return err
+	}
+	s.st.RelayCursor, s.st.RelayIncarnation = st.RelayCursor, st.RelayIncarnation
+	s.st.relayGen, st.relayGen = next, next
+	if err := s.saveLocked(st); err != nil {
+		if !atomicWriteCommitted(err) {
+			s.st = previous
+		}
+		return err
+	}
+	return nil
+}
+
 // CommitPhonePairing is Save with custody-authorized checkpoint retirement. Updating s.st
 // first makes the ordinary monotonic merge preserve every other replay guard while allowing
 // this one explicit cursor reset in the same atomic state-file rename as the pairing pin.
@@ -1306,10 +1348,14 @@ func (s *fileStore) CommitPhonePairing(st State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous := s.st.clone()
+	next, err := nextRelayGeneration(s.st.relayGen, st.relayGen)
+	if err != nil {
+		return err
+	}
 	s.st.RelayCursor, s.st.RelayIncarnation = 0, ""
-	s.st.relayGen++
+	s.st.relayGen = next
 	s.st.phoneBinding = st.phoneBinding
-	st.RelayCursor, st.RelayIncarnation, st.relayGen = 0, "", s.st.relayGen
+	st.RelayCursor, st.RelayIncarnation, st.relayGen = 0, "", next
 	if err := s.saveLocked(st); err != nil {
 		if !atomicWriteCommitted(err) {
 			s.st = previous
@@ -1327,9 +1373,14 @@ func (s *fileStore) ActivatePhoneBinding(st State) error {
 	if st.phoneBinding.Home != previous.phoneBinding.Home ||
 		st.phoneBinding.PhoneRID != previous.phoneBinding.PhoneRID ||
 		st.phoneBinding.Generation != previous.phoneBinding.Generation {
+		next, err := nextRelayGeneration(s.st.relayGen, st.relayGen)
+		if err != nil {
+			s.st = previous
+			return err
+		}
 		s.st.RelayCursor, s.st.RelayIncarnation = 0, ""
-		s.st.relayGen++
-		st.RelayCursor, st.RelayIncarnation, st.relayGen = 0, "", s.st.relayGen
+		s.st.relayGen = next
+		st.RelayCursor, st.RelayIncarnation, st.relayGen = 0, "", next
 	}
 	if err := s.saveLocked(st); err != nil {
 		if !atomicWriteCommitted(err) {
@@ -1648,6 +1699,7 @@ func (s *fileStore) load() error {
 		GrantSeq:                  f.GrantSeq,
 		RelayCursor:               f.RelayCursor,
 		RelayIncarnation:          f.RelayIncarnation,
+		relayGen:                  f.RelayGeneration,
 		phoneBinding:              f.PhoneBinding,
 		DiscardRecoveryGeneration: f.DiscardRecoveryGeneration,
 		DiscardRecoveryCompleted:  f.DiscardRecoveryCompleted,
@@ -1670,6 +1722,7 @@ func (s *fileStore) load() error {
 	// incarnation. Native relay-v2 never subscribes from that checkpoint.
 	if f.SchemaVersion < 23 {
 		st.RelayCursor, st.RelayIncarnation = 0, ""
+		st.relayGen = 0
 	}
 	applySendSeq(&st, f.LegacySendSeq)
 	if err := applyReceive(&st, f.LegacyReceive); err != nil {
@@ -1919,6 +1972,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		GrantSeq:                  st.GrantSeq,
 		RelayCursor:               st.RelayCursor,
 		RelayIncarnation:          st.RelayIncarnation,
+		RelayGeneration:           st.relayGen,
 		PhoneBinding:              st.phoneBinding,
 		DiscardRecoveryGeneration: st.DiscardRecoveryGeneration,
 		DiscardRecoveryCompleted:  st.DiscardRecoveryCompleted,
