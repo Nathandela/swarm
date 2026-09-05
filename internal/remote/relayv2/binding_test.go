@@ -79,3 +79,62 @@ func TestInvalidAuthenticatedGenerationReturnsNoConnection(t *testing.T) {
 		t.Fatalf("Dial with zero authenticated generation = (%v, %v), want nil connection and generation error", conn, err)
 	}
 }
+
+func TestSubscribeRejectsIncarnationSubstitution(t *testing.T) {
+	want := "AAAAAAAAAAAAAAAAAAAAAA"
+	other := "AQAAAAAAAAAAAAAAAAAAAA"
+	for name, tc := range map[string]struct {
+		incarnation string
+		wantErr     bool
+	}{
+		"matching":    {want, false},
+		"substituted": {other, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ws, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer ws.CloseNow()
+				_, body, err := ws.Read(r.Context())
+				if err != nil {
+					return
+				}
+				var request struct {
+					RequestID   string `json:"request_id"`
+					Incarnation string `json:"incarnation"`
+				}
+				if json.Unmarshal(body, &request) != nil || request.Incarnation != want {
+					return
+				}
+				response, _ := json.Marshal(map[string]any{
+					"v": 2, "type": "SUBSCRIBED", "request_id": request.RequestID,
+					"peer_rid": testPhoneRID, "generation": "7", "incarnation": tc.incarnation, "after": "4",
+				})
+				_ = ws.Write(r.Context(), websocket.MessageText, response)
+			}))
+			defer server.Close()
+			conn, err := dialRaw(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			conn.role, conn.purpose, conn.machineRID, conn.rid = RoleMachine, PurposeStream, testMachineRID, testMachineRID
+			binding := Binding{MachineRID: testMachineRID, PeerRID: testPhoneRID, Generation: 7}
+			_, err = conn.Subscribe(context.Background(), binding, Checkpoint{Incarnation: want, Cursor: 4})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Subscribe response incarnation %q = %v, wantErr=%v", tc.incarnation, err, tc.wantErr)
+			}
+			if tc.wantErr && err.Error() != "relay v2: invalid subscription response" {
+				t.Fatalf("substituted incarnation error = %q", err)
+			}
+		})
+	}
+}
+
+func TestSubscriptionRejectsZeroAckBeforeCallingConnection(t *testing.T) {
+	if err := (&Subscription{}).Ack(context.Background(), 0); err == nil {
+		t.Fatal("zero ACK reached the connection")
+	}
+}

@@ -36,6 +36,7 @@ const (
 	maxQueuedEventBytes = 1 << 20
 	maxCiphertextBytes  = (maxMessage - 1024) * 3 / 4
 	maxPendingRequests  = 64
+	maxDeliveryFrames   = 64
 	defaultCallTimeout  = 10 * time.Second
 	defaultDialTimeout  = 10 * time.Second
 )
@@ -93,6 +94,21 @@ type ProtocolError struct{ Code string }
 
 func (e *ProtocolError) Error() string { return "relay v2: " + e.Code }
 
+func (e *ProtocolError) Is(target error) bool {
+	switch e.Code {
+	case "mailbox_full", "cleanup_pending", "rate_limited":
+		return target == relay.ErrQuotaExceeded
+	case "consent_retired":
+		return target == relay.ErrConsentRetired
+	case "invalid_consent":
+		return target == relay.ErrConsentMalformed
+	case "not_authorized", "stale_generation":
+		return target == relay.ErrNotAuthorized
+	default:
+		return false
+	}
+}
+
 type wireFrame struct {
 	V           int    `json:"v"`
 	Type        string `json:"type"`
@@ -133,12 +149,13 @@ type Conn struct {
 	done      chan struct{}
 	nextID    atomic.Uint64
 
-	queueMu       sync.Mutex
-	deliveryBytes int
-	pairBytes     int
-	deliveries    chan queuedFrame
-	pairFrames    chan queuedFrame
-	peerSPKI      []byte
+	queueMu        sync.Mutex
+	deliveryBytes  int
+	deliveryFrames int
+	pairBytes      int
+	deliveries     chan queuedFrame
+	pairFrames     chan queuedFrame
+	peerSPKI       []byte
 }
 
 type queuedFrame struct {
@@ -248,7 +265,7 @@ func dialRaw(ctx context.Context, endpoint string, hc *http.Client) (*Conn, erro
 	readCtx, cancel := context.WithCancel(context.Background())
 	c := &Conn{
 		ws: ws, ctx: readCtx, cancel: cancel, pending: make(map[string]chan wireFrame), done: make(chan struct{}),
-		writeGate: make(chan struct{}, 1), deliveries: make(chan queuedFrame, 64), pairFrames: make(chan queuedFrame, 8),
+		writeGate: make(chan struct{}, 1), deliveries: make(chan queuedFrame, maxDeliveryFrames), pairFrames: make(chan queuedFrame, 8),
 	}
 	c.writeGate <- struct{}{}
 	go c.readLoop()
@@ -336,12 +353,13 @@ func (c *Conn) fail(err error) {
 func (c *Conn) enqueueDelivery(item queuedFrame) bool {
 	c.queueMu.Lock()
 	defer c.queueMu.Unlock()
-	if c.deliveryBytes+item.size > maxQueuedEventBytes {
+	if c.deliveryFrames >= maxDeliveryFrames || c.deliveryBytes+item.size > maxQueuedEventBytes {
 		return false
 	}
 	select {
 	case c.deliveries <- item:
 		c.deliveryBytes += item.size
+		c.deliveryFrames++
 		return true
 	default:
 		return false
@@ -366,6 +384,7 @@ func (c *Conn) enqueuePair(item queuedFrame) bool {
 func (c *Conn) releaseDelivery(size int) {
 	c.queueMu.Lock()
 	c.deliveryBytes -= size
+	c.deliveryFrames--
 	c.queueMu.Unlock()
 }
 
@@ -491,7 +510,8 @@ func (c *Conn) Subscribe(ctx context.Context, binding Binding, checkpoint Checkp
 		return nil, err
 	}
 	after, err := parseUint64(frame.After)
-	if err != nil || after != checkpoint.Cursor || frame.PeerRID != peer || frame.Generation != formatUint64(binding.Generation) || !validIncarnation(frame.Incarnation) {
+	if err != nil || after != checkpoint.Cursor || frame.PeerRID != peer || frame.Generation != formatUint64(binding.Generation) || !validIncarnation(frame.Incarnation) ||
+		(checkpoint.Incarnation != "" && frame.Incarnation != checkpoint.Incarnation) {
 		return nil, errors.New("relay v2: invalid subscription response")
 	}
 	return &Subscription{conn: c, binding: binding, peer: peer, incarnation: frame.Incarnation}, nil
@@ -540,27 +560,60 @@ type Subscription struct {
 func (s *Subscription) Incarnation() string { return s.incarnation }
 
 func (s *Subscription) Recv(ctx context.Context) (Delivery, error) {
+	queued, err := s.take(ctx)
+	if err != nil {
+		return Delivery{}, err
+	}
+	defer s.conn.releaseDelivery(queued.size)
+	return s.decodeDelivery(queued)
+}
+
+func (s *Subscription) take(ctx context.Context) (queuedFrame, error) {
 	select {
 	case queued := <-s.conn.deliveries:
-		s.conn.releaseDelivery(queued.size)
-		frame := queued.frame
-		cursor, err := parseUint64(frame.Cursor)
-		if err != nil || frame.PeerRID != s.peer || frame.Generation != formatUint64(s.binding.Generation) || frame.Incarnation != s.incarnation || !validIncarnation(frame.Incarnation) || !token.MatchString(frame.MessageID) {
-			return Delivery{}, errors.New("relay v2: invalid delivery")
-		}
-		ciphertext, err := decode64(frame.Ciphertext, -1)
-		if err != nil || len(ciphertext) == 0 || len(ciphertext) > maxCiphertextBytes {
-			return Delivery{}, errors.New("relay v2: invalid delivery ciphertext")
-		}
-		return Delivery{Cursor: cursor, MessageID: frame.MessageID, Ciphertext: ciphertext}, nil
+		return queued, nil
 	case <-ctx.Done():
-		return Delivery{}, ctx.Err()
+		return queuedFrame{}, ctx.Err()
 	case <-s.conn.done:
-		return Delivery{}, s.conn.connectionError()
+		return queuedFrame{}, s.conn.connectionError()
 	}
 }
 
+func (s *Subscription) tryTake() (queuedFrame, bool, error) {
+	select {
+	case queued := <-s.conn.deliveries:
+		return queued, true, nil
+	default:
+	}
+	select {
+	case <-s.conn.done:
+		return queuedFrame{}, false, s.conn.connectionError()
+	default:
+		return queuedFrame{}, false, nil
+	}
+}
+
+func (s *Subscription) decodeDelivery(queued queuedFrame) (Delivery, error) {
+	frame := queued.frame
+	cursor, err := parseUint64(frame.Cursor)
+	if err != nil || cursor == 0 || frame.PeerRID != s.peer || frame.Generation != formatUint64(s.binding.Generation) || frame.Incarnation != s.incarnation || !validIncarnation(frame.Incarnation) || !token.MatchString(frame.MessageID) {
+		err = errors.New("relay v2: invalid delivery")
+		s.conn.fail(err)
+		return Delivery{}, err
+	}
+	ciphertext, err := decode64(frame.Ciphertext, -1)
+	if err != nil || len(ciphertext) == 0 || len(ciphertext) > maxCiphertextBytes {
+		err = errors.New("relay v2: invalid delivery ciphertext")
+		s.conn.fail(err)
+		return Delivery{}, err
+	}
+	return Delivery{Cursor: cursor, MessageID: frame.MessageID, Ciphertext: ciphertext}, nil
+}
+
 func (s *Subscription) Ack(ctx context.Context, cursor uint64) error {
+	if cursor == 0 {
+		return errors.New("relay v2: zero ack")
+	}
 	frame, err := s.conn.call(ctx, "ACKED", map[string]any{
 		"v": 2, "type": "ACK", "peer_rid": s.peer, "generation": formatUint64(s.binding.Generation), "incarnation": s.incarnation, "cursor": formatUint64(cursor),
 	})
