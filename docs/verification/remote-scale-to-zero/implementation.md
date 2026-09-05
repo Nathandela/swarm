@@ -325,6 +325,17 @@ exemption; it is removed on this branch. Nine now-unreachable old manager export
 listed individually only because their source deletion was separately refused and is
 still paused. They are not a v2 fallback, and this exception cannot certify P4.
 
+Terra's final full phone race gate also passed: phonecore 44.265 s, mobile 71.413 s,
+and mobile/conformance 251.283 s, with exit zero. This used the sterile hook environment,
+checked-in Android toolchain environment and writable module/build caches; no Gradle
+or AAR rebuild was part of that run. The earlier unusable runner invocation is not
+counted as evidence. This final race result still does not resolve the caller gaps above.
+
+The phone foundation is local commit `5c130460`. Its push was explicitly rejected by
+the safety reviewer because publishing mobile internals to the public repository was
+not covered by the general push approval. A fresh scoped approval was requested, and
+no alternate push/merge route was attempted. Reviewed main remains at `33608f35`.
+
 The next coherent caller slice needs atomic active-machine/per-pairing relay custody,
 authenticated additional-pairing staging, and Android selection/rebuild. Merely picking
 an arbitrary registry row on restart would hide the problem and could dial the wrong
