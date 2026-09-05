@@ -28,6 +28,13 @@ guard is not treated as runtime evidence; local platform tests are not hosted ev
 | Native relay first red test | Agent reported missing Worker entrypoint | Before implementation |
 | Native relay first workerd test | Agent reported initial auth/pair/mailbox/revoke success | Root review found security/lifecycle gaps; not accepted as final green |
 | Firestore first red test | Agent reported missing official Firestore module | Before implementation |
+| Firestore emulator checkpoint | Root independently passed five real-SDK tests in 7.883 s: shared nonce, registration retry/body conflict, registration transaction conflict, wake lease/token-generation CAS, one registration provider owner | Local emulator, not actual IAM/FCM/Play Integrity |
+
+The endpoint review also reproduced a rejected-credential leak through Java URI's
+exception cause: the Gradle contract matrix failed with `invalid origin credential
+leaked through exception cause`. Removing the raw-input parser cause made the same
+matrix pass (`BUILD SUCCESSFUL`, two tasks, 36 s). The input was a public test sentinel,
+not an operator secret.
 
 The first review requested transaction-bound relay authorization, canonical base64url,
 pairing/resource limits, production/test configuration separation and alarm progress.

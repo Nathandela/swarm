@@ -182,8 +182,9 @@ fun validatedProductionPushGatewayURL(raw: String): String {
     }
     val u = try {
         URI(raw)
-    } catch (error: Exception) {
-        throw GradleException("SWARM_PUSH_GATEWAY_URL must be a Cloud Run HTTPS origin.", error)
+    } catch (_: Exception) {
+        // URI's exception embeds its input, which may include rejected credentials.
+        throw GradleException("SWARM_PUSH_GATEWAY_URL must be a Cloud Run HTTPS origin.")
     }
     val host = u.host
     check(
@@ -231,10 +232,15 @@ val verifyProductionPushOriginContract = tasks.register("verifyProductionPushOri
             "https://service-identifier.a.run.app#",
             "https://${"a".repeat(64)}.run.app",
             "https://${List(126) { "a" }.joinToString(".")}.run.app",
+            "https://user:origin-contract-secret@bad host.run.app",
         ).forEach { origin ->
-            check(runCatching { validatedProductionPushGatewayURL(origin) }.isFailure) {
+            val failure = runCatching { validatedProductionPushGatewayURL(origin) }.exceptionOrNull()
+            check(failure != null) {
                 "accepted invalid Cloud Run push origin"
             }
+            check(generateSequence(failure) { it.cause }.none {
+                it.message?.contains("origin-contract-secret") == true
+            }) { "invalid origin credential leaked through exception cause" }
         }
     }
 }
