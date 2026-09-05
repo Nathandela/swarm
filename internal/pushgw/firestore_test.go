@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,8 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/Nathandela/swarm/internal/pushreg"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // These tests use the pinned emulator runner documented under
@@ -95,6 +98,36 @@ func TestFirestoreHealthCheckIsReadOnly(t *testing.T) {
 	}
 	if _, err := repo.col("metadata").Doc("health").Get(ctx); err == nil {
 		t.Fatal("health check persisted its probe document")
+	}
+}
+
+func TestFirestoreMissingTransactionSnapshotHasServerReadTime(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("requires Firestore emulator")
+	}
+	ctx := context.Background()
+	client, err := firestore.NewClient(ctx, "demo-swarm-push-probe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	ref := client.Collection("go-read-time-" + time.Now().Format("150405000000000")).Doc("missing")
+	var readTime time.Time
+	if err := client.RunTransaction(ctx, func(_ context.Context, tx *firestore.Transaction) error {
+		snap, getErr := tx.Get(ref)
+		if status.Code(getErr) != codes.NotFound {
+			return fmt.Errorf("missing transaction get: %w", getErr)
+		}
+		if snap == nil || snap.Exists() {
+			return errors.New("missing transaction get did not return a missing snapshot")
+		}
+		readTime = snap.ReadTime
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if readTime.IsZero() {
+		t.Fatal("missing transaction snapshot has zero server ReadTime")
 	}
 }
 
@@ -430,28 +463,129 @@ func TestFirestoreWakeLeaseCASAndTokenGeneration(t *testing.T) {
 	}
 }
 
-func TestFirestoreWakeExpiryFencesProviderCompletion(t *testing.T) {
+func TestFirestoreWakeClaimUsesServerReadTime(t *testing.T) {
 	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
 		t.Skip("requires Firestore emulator")
 	}
-	client, err := firestore.NewClient(context.Background(), "demo-swarm-push-probe")
+	ctx := context.Background()
+	client, err := firestore.NewClient(ctx, "demo-swarm-push-probe")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = client.Close() }()
-	testWakeExpiryFencesProviderCompletion(t, newFirestorePersistence(client, "go-wake-expiry-"+time.Now().Format("150405000000000")))
+	repo := newFirestorePersistence(client, "go-wake-clock-"+time.Now().Format("150405000000000"))
+	clockRef := repo.col("metadata").Doc("clock")
+	if _, err := clockRef.Set(ctx, map[string]any{"marker": true}); err != nil {
+		t.Fatal(err)
+	}
+	clockSnap, err := clockRef.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverNow := clockSnap.ReadTime
+	if err := repo.putInstallation(ctx, "installation", installationRecord{FCMTokenEnc: []byte("token"), TokenGeneration: 1, LastActiveMs: serverNow.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	address := addressRecord{InstallationID: "installation", SubmitCapHash: hashSecret("cap"), Bound: true}
+	if created, err := repo.putAddressIfBelowLimit(ctx, "address", "installation", address, 10, serverNow); err != nil || !created {
+		t.Fatalf("create address=%v err=%v", created, err)
+	}
+	callerNow := serverNow.Add(-24 * time.Hour)
+	limit := RateLimit{Max: 100, Window: time.Hour}
+	deadline := serverNow.Add(time.Minute)
+	if _, claimed, err := repo.claimWake(ctx, "live", "lease", "address", hashSecret("cap"), callerNow, deadline, limit, "source-live", limit); err != nil || !claimed {
+		t.Fatalf("live claim claimed=%v err=%v", claimed, err)
+	}
+	wakeSnap, err := repo.col("wake_attempts").Doc("live").Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wake wakeAttemptRecord
+	if err := wakeSnap.DataTo(&wake); err != nil {
+		t.Fatal(err)
+	}
+	if leaseRemaining := time.UnixMilli(wake.LeaseUntilMs).Sub(wakeSnap.ReadTime); leaseRemaining < wakeLease-2*time.Second || leaseRemaining > wakeLease+time.Second {
+		t.Fatalf("lease is not anchored to Firestore time: remaining=%v", leaseRemaining)
+	}
+	expiredDeadline := serverNow.Add(-time.Second)
+	claim, claimed, err := repo.claimWake(ctx, "expired", "lease", "address", hashSecret("cap"), callerNow, expiredDeadline, limit, "source-expired", limit)
+	if err != nil || claimed || claim.Denied != "malformed" {
+		t.Fatalf("expired server-time claim=%+v claimed=%v err=%v", claim, claimed, err)
+	}
 }
 
-func TestFirestoreWakeProviderDeadlineAndLateAcceptance(t *testing.T) {
+func TestFirestoreWakeCompletionUsesServerReadTime(t *testing.T) {
 	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
 		t.Skip("requires Firestore emulator")
 	}
-	client, err := firestore.NewClient(context.Background(), "demo-swarm-push-probe")
+	ctx := context.Background()
+	client, err := firestore.NewClient(ctx, "demo-swarm-push-probe")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = client.Close() }()
-	testWakeProviderDeadlineAndLateAcceptance(t, newFirestorePersistence(client, "go-wake-late-"+time.Now().Format("150405000000000")))
+	repo := newFirestorePersistence(client, "go-wake-complete-clock-"+time.Now().Format("150405000000000"))
+	clockRef := repo.col("metadata").Doc("clock")
+	if _, err := clockRef.Set(ctx, map[string]any{"marker": true}); err != nil {
+		t.Fatal(err)
+	}
+	clockSnap, err := clockRef.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverNow := clockSnap.ReadTime
+	if err := repo.putInstallation(ctx, "installation", installationRecord{FCMTokenEnc: []byte("token"), TokenGeneration: 1, LastActiveMs: serverNow.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.col("addresses").Doc("address").Set(ctx, addressRecord{InstallationID: "installation", SubmitCapHash: hashSecret("cap"), UnboundExpiresMs: serverNow.Add(time.Minute).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	expired := wakeAttemptRecord{InstallationID: "installation", Address: "address", TokenGeneration: 1, State: "claimed", LeaseID: "lease", LeaseUntilMs: serverNow.Add(time.Minute).UnixMilli(), ExpiresAtMs: serverNow.Add(-time.Second).UnixMilli()}
+	if _, err := repo.col("wake_attempts").Doc("expired-accept").Set(ctx, expired); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.completeWake(ctx, "expired-accept", "lease", 1, http.StatusOK, []byte("late"), false, serverNow.Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	gotAddress, found, err := repo.getAddress(ctx, "address")
+	if err != nil || !found || gotAddress.Bound {
+		t.Fatalf("expired completion bound address: found=%v address=%+v err=%v", found, gotAddress, err)
+	}
+	wakeSnap, err := repo.col("wake_attempts").Doc("expired-accept").Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wakeSnap.DataTo(&expired); err != nil {
+		t.Fatal(err)
+	}
+	if expired.State != "claimed" || string(expired.Body) != "" {
+		t.Fatalf("expired completion changed attempt: %+v", expired)
+	}
+
+	if _, err := repo.col("wake_attempts").Doc("expired-lease-unregistered").Set(ctx, wakeAttemptRecord{InstallationID: "installation", TokenGeneration: 1, State: "claimed", LeaseID: "lease", LeaseUntilMs: serverNow.Add(-time.Second).UnixMilli(), ExpiresAtMs: serverNow.Add(time.Minute).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.completeWake(ctx, "expired-lease-unregistered", "lease", 1, http.StatusGone, nil, true, serverNow.Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	installation, found, err := repo.getInstallation(ctx, "installation")
+	if err != nil || !found || installation.TokenDead || string(installation.FCMTokenEnc) != "token" {
+		t.Fatalf("expired completion changed token: found=%v installation=%+v err=%v", found, installation, err)
+	}
+
+	if _, err := repo.col("addresses").Doc("expired-address").Set(ctx, addressRecord{InstallationID: "installation", SubmitCapHash: hashSecret("cap"), UnboundExpiresMs: serverNow.Add(-time.Second).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.col("wake_attempts").Doc("expired-allocation").Set(ctx, wakeAttemptRecord{InstallationID: "installation", Address: "expired-address", TokenGeneration: 1, State: "claimed", LeaseID: "lease", LeaseUntilMs: serverNow.Add(time.Minute).UnixMilli(), ExpiresAtMs: serverNow.Add(time.Minute).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.completeWake(ctx, "expired-allocation", "lease", 1, http.StatusOK, []byte("accepted"), false, serverNow.Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	gotAddress, found, err = repo.getAddress(ctx, "expired-address")
+	if err != nil || !found || gotAddress.Bound {
+		t.Fatalf("expired allocation was bound: found=%v address=%+v err=%v", found, gotAddress, err)
+	}
 }
 
 func TestFirestoreRegistrationClaimHasOneProviderOwner(t *testing.T) {
@@ -572,10 +706,8 @@ func TestFirestoreServerWakeCancellationKeepsBoundedClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = client.Close() }()
-	repository, err := NewFirestoreRepository(client, "go-handler-wake-"+time.Now().Format("150405000000000"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	persistence := newFirestorePersistence(client, "go-handler-wake-"+time.Now().Format("150405000000000"))
+	var repository Repository = persistence
 	key := bytes.Repeat([]byte{4}, 32)
 	digestKey := bytes.Repeat([]byte{5}, 32)
 	sender := &countingFirestoreSender{firstStarted: make(chan struct{})}
@@ -627,12 +759,18 @@ func TestFirestoreServerWakeCancellationKeepsBoundedClaim(t *testing.T) {
 	if response := post(ctx, second); response.Code != http.StatusBadGateway {
 		t.Fatalf("wake during lease status=%d body=%s", response.Code, response.Body.String())
 	}
-	later := now.Add(wakeLease + time.Second)
-	third := newServer(later)
+	attempts, err := persistence.col("wake_attempts").Documents(ctx).GetAll()
+	if err != nil || len(attempts) != 1 {
+		t.Fatalf("wake attempts=%d err=%v", len(attempts), err)
+	}
+	if _, err := attempts[0].Ref.Update(ctx, []firestore.Update{{Path: "lease_until_ms", Value: attempts[0].ReadTime.Add(-time.Second).UnixMilli()}}); err != nil {
+		t.Fatal(err)
+	}
+	third := newServer(now)
 	if response := post(ctx, third); response.Code != http.StatusOK {
 		t.Fatalf("takeover wake status=%d body=%s", response.Code, response.Body.String())
 	}
-	fourth := newServer(later)
+	fourth := newServer(now)
 	if response := post(ctx, fourth); response.Code != http.StatusOK {
 		t.Fatalf("completed retry status=%d body=%s", response.Code, response.Body.String())
 	}

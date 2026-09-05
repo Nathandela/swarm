@@ -106,6 +106,81 @@ func TestWakeProviderDeadlineAndLateAcceptance(t *testing.T) {
 	testWakeProviderDeadlineAndLateAcceptance(t, NewMemoryRepository())
 }
 
+type serverTimedClaimRepository struct {
+	Repository
+	serverNow         time.Time
+	claims            int
+	completeDeadline  time.Time
+	completeHasExpiry bool
+}
+
+func (r *serverTimedClaimRepository) claimWake(ctx context.Context, id, leaseID, addr, capHash string, _ time.Time, deadline time.Time, addrLimit RateLimit, sourceKey string, sourceLimit RateLimit) (wakeClaim, bool, error) {
+	r.claims++
+	claim, claimed, err := r.Repository.claimWake(ctx, id, leaseID, addr, capHash, r.serverNow, deadline, addrLimit, sourceKey, sourceLimit)
+	if claimed {
+		claim.LeaseUntilMs = r.serverNow.Add(wakeLease).UnixMilli()
+		claim.ProviderBudget = wakeLease
+	}
+	return claim, claimed, err
+}
+
+func (r *serverTimedClaimRepository) completeWake(ctx context.Context, id, leaseID string, generation int64, status int, body []byte, unregistered bool, now time.Time) (bool, error) {
+	r.completeDeadline, r.completeHasExpiry = ctx.Deadline()
+	return r.Repository.completeWake(ctx, id, leaseID, generation, status, body, unregistered, now)
+}
+
+func TestWakeProviderDeadlineIgnoresProcessClockSkew(t *testing.T) {
+	for i, skew := range []time.Duration{-24 * time.Hour, 24 * time.Hour} {
+		t.Run(skew.String(), func(t *testing.T) {
+			serverNow := time.Now().UTC()
+			processNow := serverNow.Add(skew)
+			repository := NewMemoryRepository()
+			wrapped := &serverTimedClaimRepository{Repository: repository, serverNow: serverNow}
+			var providerDeadline time.Time
+			sender := deadlineWakeSender(func(ctx context.Context, _ string, _ []byte) error {
+				var ok bool
+				providerDeadline, ok = ctx.Deadline()
+				remaining := time.Until(providerDeadline)
+				if !ok || remaining > wakeLease || remaining < wakeLease-2*time.Second {
+					t.Fatalf("provider deadline=%v present=%v, want at most the 15s server lease despite process skew", providerDeadline, ok)
+				}
+				return ErrUnavailable
+			})
+			srv, err := NewFirestoreServer(Config{Repository: wrapped, TokenKeys: map[string][]byte{"v1": bytes.Repeat([]byte{1}, 32)}, ActiveTokenKeyVersion: "v1", RegistrationDigestKey: bytes.Repeat([]byte{2}, 32), RegistrationAdmission: func(string) bool { return true }, Sender: sender, Attest: firestoreTestAttestor{}, Now: func() time.Time { return processNow }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			enc, version, err := srv.v2store.encrypt("fcm-token")
+			if err != nil {
+				t.Fatal(err)
+			}
+			rawAddress := bytes.Repeat([]byte{byte(i + 3)}, 16)
+			address := encodeAddress(rawAddress)
+			if err := repository.putInstallation(context.Background(), address, installationRecord{FCMTokenEnc: enc, TokenKeyVersion: version, TokenGeneration: 1, LastActiveMs: serverNow.UnixMilli()}); err != nil {
+				t.Fatal(err)
+			}
+			if created, err := repository.putAddressIfBelowLimit(context.Background(), address, address, addressRecord{InstallationID: address, SubmitCapHash: hashSecret("cap"), UnboundExpiresMs: serverNow.Add(time.Minute).UnixMilli()}, 20, serverNow); err != nil || !created {
+				t.Fatalf("create=%v err=%v", created, err)
+			}
+			envelope := make([]byte, wakeSize)
+			envelope[0], envelope[1] = wakeVersion, wakeType
+			copy(envelope[2:18], rawAddress)
+			binary.BigEndian.PutUint64(envelope[26:34], uint64(serverNow.UnixMilli()))
+			req := httptest.NewRequest(http.MethodPost, "/v1/wakes", bytes.NewReader(envelope))
+			req.Header.Set("Content-Type", "application/octet-stream")
+			req.Header.Set("Authorization", "Swarm-Capability cap")
+			response := httptest.NewRecorder()
+			srv.ServeHTTP(response, req)
+			if response.Code != errUpstreamUnavailable.status || wrapped.claims != 1 {
+				t.Fatalf("status=%d claims=%d body=%s", response.Code, wrapped.claims, response.Body.String())
+			}
+			if !wrapped.completeHasExpiry || !wrapped.completeDeadline.Equal(providerDeadline) {
+				t.Fatalf("completion deadline=%v present=%v, want provider operation deadline %v", wrapped.completeDeadline, wrapped.completeHasExpiry, providerDeadline)
+			}
+		})
+	}
+}
+
 func testWakeProviderDeadlineAndLateAcceptance(t *testing.T, repo Repository) {
 	t.Helper()
 	for i, remaining := range []time.Duration{time.Second, wakeWindow} {
@@ -227,7 +302,7 @@ func testWakeExpiryFencesProviderCompletion(t *testing.T, repo Repository) {
 	}
 	for _, attemptID := range []string{id, "never_claimed"} {
 		claim, claimed, err := repo.claimWake(ctx, attemptID, "retry", id, hashSecret("cap"), deadline, deadline, limit, id, limit)
-		if err != nil || claimed || claim.Completed || claim.Denied != "exhausted" {
+		if err != nil || claimed || claim.Completed || claim.Denied != "malformed" {
 			t.Errorf("expired attempt %s: claim=%+v claimed=%v err=%v", attemptID, claim, claimed, err)
 		}
 	}

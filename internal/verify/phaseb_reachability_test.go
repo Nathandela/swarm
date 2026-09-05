@@ -100,7 +100,6 @@ var b94Allowed = map[string]string{
 	// ---- ADR-027 implementation checkpoint: deliberately not a shipped v2 path ----
 	"github.com/Nathandela/swarm/internal/pushgw.NewFirestoreRepository":           "agents-tracker-wjp4.1: Firestore foundation tested with the real SDK/emulator; production command cutover is separately paused pending scoped source approval. Remove when wired; not P1/P2 completion.",
 	"github.com/Nathandela/swarm/internal/pushgw.NewFirestoreServer":               "as NewFirestoreRepository: production startup remains unchanged until the separately paused cutover is authorized.",
-	"github.com/Nathandela/swarm/internal/pushgw.NewMemoryRepository":              "explicit conformance fake, never a production backend; moving to the package test build removes this entry.",
 	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Append":              b94V2Foundation,
 	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Authorize":           b94V2Foundation,
 	"github.com/Nathandela/swarm/internal/remote/relayv2.Conn.Close":               b94V2Foundation,

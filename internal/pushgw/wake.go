@@ -75,6 +75,9 @@ func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) int {
 	}
 
 	now := s.now()
+	if s.v2store != nil {
+		return s.handleWakeV2(w, r, envelope, pushAddress, rec, capability, now)
+	}
 	// PG-ALLOC-2 / §8.1 row 1, enforced AT USE, not only by the lazy retention sweep:
 	// RunRetention runs on an operator-configured timer (an hour, by default, in
 	// cmd/swarm-pushgw), so a wake landing between the ten-minute unbound deadline and the
@@ -86,9 +89,6 @@ func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) int {
 	if !rec.Bound && now.UnixMilli() >= rec.UnboundExpiresMs {
 		s.writeErr(w, errUnauthorized)
 		return errUnauthorized.status
-	}
-	if s.v2store != nil {
-		return s.handleWakeV2(w, r, envelope, pushAddress, rec, capability, now)
 	}
 	if ok, retryAfter := s.limiter.allow("wake-addr:"+pushAddress, s.quotas.WakesPerAddress, now); !ok {
 		spec := errQuotaExceeded(retryAfter)
@@ -182,23 +182,6 @@ func (s *Server) handleWakeV2(w http.ResponseWriter, r *http.Request, envelope [
 	issuedAtMs := int64(binary.BigEndian.Uint64(envelope[26:34]))
 	issuedAt := time.UnixMilli(issuedAtMs)
 	deadline := issuedAt.Add(wakeWindow)
-	if !now.Before(deadline) || issuedAt.After(now.Add(expiryHorizon)) {
-		s.writeErr(w, errWakeMalformed)
-		return errWakeMalformed.status
-	}
-	installation, found, err := s.getInstallation(r.Context(), rec.InstallationID)
-	if err != nil {
-		s.writeErr(w, errInternal)
-		return errInternal.status
-	}
-	if !found {
-		s.writeErr(w, errUnauthorized)
-		return errUnauthorized.status
-	}
-	if installation.TokenDead {
-		s.writeErr(w, errPushTokenUnregistered)
-		return errPushTokenUnregistered.status
-	}
 	digest := sha256.Sum256(envelope)
 	attemptID := hex.EncodeToString(digest[:])
 	leaseBytes := make([]byte, 16)
@@ -207,6 +190,7 @@ func (s *Server) handleWakeV2(w http.ResponseWriter, r *http.Request, envelope [
 		return errInternal.status
 	}
 	leaseID := hex.EncodeToString(leaseBytes)
+	claimStarted := time.Now()
 	claim, claimed, err := s.v2store.p.claimWake(r.Context(), attemptID, leaseID, pushAddress, hashSecret(capability), now, deadline, s.quotas.WakesPerAddress, "wake-src:"+s.sourceIP(r), s.quotas.WakesPerSourceIP)
 	if err != nil {
 		s.writeErr(w, errInternal)
@@ -220,6 +204,9 @@ func (s *Server) handleWakeV2(w http.ResponseWriter, r *http.Request, envelope [
 	}
 	if !claimed {
 		switch claim.Denied {
+		case "malformed":
+			s.writeErr(w, errWakeMalformed)
+			return errWakeMalformed.status
 		case "unauthorized":
 			s.writeErr(w, errUnauthorized)
 			return errUnauthorized.status
@@ -243,15 +230,17 @@ func (s *Server) handleWakeV2(w http.ResponseWriter, r *http.Request, envelope [
 	// Provider I/O is deliberately outside Firestore's retryable callback. A lease takeover
 	// may repeat these exact bytes after an acceptance/commit crash; attempts and the original
 	// five-minute deadline remain bounded in shared state.
-	providerNow := s.now()
-	remaining := min(deadline.Sub(providerNow), now.Add(wakeLease).Sub(providerNow))
+	// ProviderBudget is derived from Firestore's server ReadTime. Subtract the
+	// entire local monotonic claim round trip so no process-wall-clock skew can
+	// extend either the durable lease or the original wake obligation.
+	remaining := claim.ProviderBudget - time.Since(claimStarted)
 	if remaining <= 0 {
 		s.writeErr(w, errUpstreamUnavailable)
 		return errUpstreamUnavailable.status
 	}
-	providerCtx, cancelProvider := context.WithTimeout(r.Context(), remaining)
-	sendErr := s.sender.Send(providerCtx, fcmToken, envelope)
-	cancelProvider()
+	operationCtx, cancelOperation := context.WithTimeout(r.Context(), remaining)
+	defer cancelOperation()
+	sendErr := s.sender.Send(operationCtx, fcmToken, envelope)
 	s.recordProviderOutcome(sendErr)
 	statusCode := http.StatusServiceUnavailable
 	var responseBody []byte
@@ -271,7 +260,7 @@ func (s *Server) handleWakeV2(w http.ResponseWriter, r *http.Request, envelope [
 	default:
 		responseBody, _ = json.Marshal(wireError{Code: errInternal.code, Message: errInternal.message, Retryable: errInternal.retryable})
 	}
-	staleUnregistered, err := s.v2store.p.completeWake(r.Context(), attemptID, leaseID, claim.TokenGeneration, statusCode, responseBody, unregistered, s.now())
+	staleUnregistered, err := s.v2store.p.completeWake(operationCtx, attemptID, leaseID, claim.TokenGeneration, statusCode, responseBody, unregistered, s.now())
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status

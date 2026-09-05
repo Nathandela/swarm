@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"sync"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -72,6 +71,8 @@ type wakeClaim struct {
 	TokenEnc        []byte
 	KeyVersion      string
 	TokenGeneration int64
+	LeaseUntilMs    int64
+	ProviderBudget  time.Duration
 	Completed       bool
 	Status          int
 	Body            []byte
@@ -79,8 +80,8 @@ type wakeClaim struct {
 	RetryAfter      int
 }
 
-// Repository is the transaction-level domain seam. Firestore is the sole production
-// implementation; NewMemoryRepository is an explicitly injected test fake.
+// Repository is the transaction-level domain seam. Firestore is its sole production
+// implementation; tests inject a package-local fake.
 type Repository interface {
 	close() error
 	healthCheck(context.Context) error
@@ -225,6 +226,19 @@ func decodeSnapshot[T any](snap *firestore.DocumentSnapshot) (T, bool, error) {
 		return out, false, err
 	}
 	return out, true, nil
+}
+
+func latestReadTime(snaps ...*firestore.DocumentSnapshot) (time.Time, error) {
+	var latest time.Time
+	for _, snap := range snaps {
+		if snap == nil || snap.ReadTime.IsZero() {
+			return time.Time{}, errors.New("pushgw: Firestore snapshot has no server read time")
+		}
+		if snap.ReadTime.After(latest) {
+			latest = snap.ReadTime
+		}
+	}
+	return latest, nil
 }
 func (f *firestorePersistence) getInstallation(ctx context.Context, id string) (installationRecord, bool, error) {
 	snap, err := f.col("installations").Doc(id).Get(ctx)
@@ -586,35 +600,26 @@ func (f *firestorePersistence) allow(ctx context.Context, key string, rl RateLim
 	})
 	return
 }
-func loadRate(tx *firestore.Transaction, ref *firestore.DocumentRef, rl RateLimit, now time.Time) (rateWindowRecord, bool, error) {
-	snap, err := tx.Get(ref)
-	var window rateWindowRecord
-	if err == nil && snap.Exists() {
-		if err = snap.DataTo(&window); err != nil {
-			return window, false, err
-		}
-	} else if err != nil && status.Code(err) != codes.NotFound {
-		return window, false, err
-	}
+func takeRate(window rateWindowRecord, rl RateLimit, now time.Time) (rateWindowRecord, bool) {
 	if now.UnixMilli() >= window.ExpiresAtMs {
 		window = rateWindowRecord{ExpiresAtMs: now.Add(rl.Window).UnixMilli()}
 	}
 	if window.Count >= int64(rl.Max) {
-		return window, false, nil
+		return window, false
 	}
 	window.Count++
-	return window, true, nil
+	return window, true
 }
 func (f *firestorePersistence) claimWake(ctx context.Context, id, leaseID, addr, capHash string, now, deadline time.Time, addrLimit RateLimit, sourceKey string, sourceLimit RateLimit) (out wakeClaim, claimed bool, err error) {
-	if !now.Before(deadline) {
-		return wakeClaim{Denied: "exhausted"}, false, nil
-	}
 	addrRef := f.col("addresses").Doc(addr)
 	wakeRef := f.col("wake_attempts").Doc(id)
 	addrQuota := f.col("rate_windows").Doc(rateDocID("wake-addr:" + addr))
 	sourceQuota := f.col("rate_windows").Doc(rateDocID(sourceKey))
+	var committedDeadline time.Time
+	var commit firestore.CommitResponse
 	err = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		out, claimed = wakeClaim{}, false
+		attemptDeadline := deadline
 		addrSnap, txErr := tx.Get(addrRef)
 		if txErr != nil {
 			return txErr
@@ -623,7 +628,9 @@ func (f *firestorePersistence) claimWake(ctx context.Context, id, leaseID, addr,
 		if txErr = addrSnap.DataTo(&address); txErr != nil {
 			return txErr
 		}
-		if !verifierEquals(address.SubmitCapHash, capHash) || (!address.Bound && now.UnixMilli() >= address.UnboundExpiresMs) {
+		// Capability mismatch needs no server-clock decision. Reject it before
+		// fetching durable attempt, installation, or quota state.
+		if !verifierEquals(address.SubmitCapHash, capHash) {
 			out.Denied = "unauthorized"
 			return nil
 		}
@@ -633,23 +640,7 @@ func (f *firestorePersistence) claimWake(ctx context.Context, id, leaseID, addr,
 			if txErr = wakeSnap.DataTo(&attempt); txErr != nil {
 				return txErr
 			}
-			if now.UnixMilli() >= attempt.ExpiresAtMs {
-				out.Denied = "exhausted"
-				return nil
-			}
-			if attempt.State == "completed" {
-				out = wakeClaim{Completed: true, Status: attempt.Status, Body: attempt.Body}
-				return nil
-			}
-			if attempt.Attempts >= maxWakeAttempts {
-				out.Denied = "exhausted"
-				return nil
-			}
-			if now.UnixMilli() < attempt.LeaseUntilMs {
-				out.Denied = "busy"
-				return nil
-			}
-			deadline = time.UnixMilli(attempt.ExpiresAtMs)
+			attemptDeadline = time.UnixMilli(attempt.ExpiresAtMs)
 		} else if txErr != nil && status.Code(txErr) != codes.NotFound {
 			return txErr
 		}
@@ -662,7 +653,41 @@ func (f *firestorePersistence) claimWake(ctx context.Context, id, leaseID, addr,
 		if txErr = instSnap.DataTo(&installation); txErr != nil {
 			return txErr
 		}
-		if installationExpired(installation.LastActiveMs, now) {
+		quotaSnaps, txErr := tx.GetAll([]*firestore.DocumentRef{addrQuota, sourceQuota})
+		if txErr != nil {
+			return txErr
+		}
+		txNow, txErr := latestReadTime(addrSnap, wakeSnap, instSnap, quotaSnaps[0], quotaSnaps[1])
+		if txErr != nil {
+			return txErr
+		}
+		if !txNow.Before(deadline) || deadline.Add(-wakeWindow).After(txNow.Add(expiryHorizon)) {
+			out.Denied = "malformed"
+			return nil
+		}
+		if !txNow.Before(attemptDeadline) {
+			out.Denied = "exhausted"
+			return nil
+		}
+		if !address.Bound && txNow.UnixMilli() >= address.UnboundExpiresMs {
+			out.Denied = "unauthorized"
+			return nil
+		}
+		if wakeSnap.Exists() {
+			if attempt.State == "completed" {
+				out = wakeClaim{Completed: true, Status: attempt.Status, Body: attempt.Body}
+				return nil
+			}
+			if attempt.Attempts >= maxWakeAttempts {
+				out.Denied = "exhausted"
+				return nil
+			}
+			if txNow.UnixMilli() < attempt.LeaseUntilMs {
+				out.Denied = "busy"
+				return nil
+			}
+		}
+		if installationExpired(installation.LastActiveMs, txNow) {
 			out.Denied = "unauthorized"
 			return nil
 		}
@@ -670,20 +695,25 @@ func (f *firestorePersistence) claimWake(ctx context.Context, id, leaseID, addr,
 			out.Denied = "token_dead"
 			return nil
 		}
-		addrWindow, ok, txErr := loadRate(tx, addrQuota, addrLimit, now)
-		if txErr != nil {
-			return txErr
+		var addrWindow, sourceWindow rateWindowRecord
+		if quotaSnaps[0].Exists() {
+			if txErr = quotaSnaps[0].DataTo(&addrWindow); txErr != nil {
+				return txErr
+			}
 		}
+		addrWindow, ok := takeRate(addrWindow, addrLimit, txNow)
 		if !ok {
-			out.Denied, out.RetryAfter = "quota", retrySeconds(addrWindow.ExpiresAtMs, now)
+			out.Denied, out.RetryAfter = "quota", retrySeconds(addrWindow.ExpiresAtMs, txNow)
 			return nil
 		}
-		sourceWindow, ok, txErr := loadRate(tx, sourceQuota, sourceLimit, now)
-		if txErr != nil {
-			return txErr
+		if quotaSnaps[1].Exists() {
+			if txErr = quotaSnaps[1].DataTo(&sourceWindow); txErr != nil {
+				return txErr
+			}
 		}
+		sourceWindow, ok = takeRate(sourceWindow, sourceLimit, txNow)
 		if !ok {
-			out.Denied, out.RetryAfter = "quota", retrySeconds(sourceWindow.ExpiresAtMs, now)
+			out.Denied, out.RetryAfter = "quota", retrySeconds(sourceWindow.ExpiresAtMs, txNow)
 			return nil
 		}
 		if txErr = tx.Set(addrQuota, addrWindow); txErr != nil {
@@ -692,16 +722,36 @@ func (f *firestorePersistence) claimWake(ctx context.Context, id, leaseID, addr,
 		if txErr = tx.Set(sourceQuota, sourceWindow); txErr != nil {
 			return txErr
 		}
-		attempt = wakeAttemptRecord{InstallationID: address.InstallationID, Address: addr, TokenGeneration: installation.TokenGeneration, State: "claimed", Attempts: attempt.Attempts + 1, LeaseUntilMs: now.Add(wakeLease).UnixMilli(), LeaseID: leaseID, ExpiresAtMs: deadline.UnixMilli()}
+		leaseUntil := txNow.Add(wakeLease).UnixMilli()
+		attempt = wakeAttemptRecord{InstallationID: address.InstallationID, Address: addr, TokenGeneration: installation.TokenGeneration, State: "claimed", Attempts: attempt.Attempts + 1, LeaseUntilMs: leaseUntil, LeaseID: leaseID, ExpiresAtMs: attemptDeadline.UnixMilli()}
 		if txErr = tx.Set(wakeRef, attempt); txErr != nil {
 			return txErr
 		}
-		out = wakeClaim{TokenEnc: installation.FCMTokenEnc, KeyVersion: installation.TokenKeyVersion, TokenGeneration: installation.TokenGeneration}
+		out = wakeClaim{
+			TokenEnc:        installation.FCMTokenEnc,
+			KeyVersion:      installation.TokenKeyVersion,
+			TokenGeneration: installation.TokenGeneration,
+			LeaseUntilMs:    leaseUntil,
+			ProviderBudget:  min(time.UnixMilli(leaseUntil).Sub(txNow), attemptDeadline.Sub(txNow)),
+		}
+		committedDeadline = attemptDeadline
 		claimed = true
 		return nil
-	})
+	}, firestore.WithCommitResponseTo(&commit))
 	if status.Code(err) == codes.NotFound {
 		return wakeClaim{Denied: "unauthorized"}, false, nil
+	}
+	if err == nil && claimed {
+		commitTime := commit.CommitTime()
+		if commitTime.IsZero() {
+			return wakeClaim{}, false, errors.New("pushgw: Firestore claim commit has no server time")
+		}
+		if !commitTime.Before(committedDeadline) {
+			return wakeClaim{Denied: "exhausted"}, false, nil
+		}
+		if !commitTime.Before(time.UnixMilli(out.LeaseUntilMs)) {
+			return wakeClaim{Denied: "busy"}, false, nil
+		}
 	}
 	return
 }
@@ -717,10 +767,7 @@ func (f *firestorePersistence) completeWake(ctx context.Context, id, leaseID str
 		if txErr = snap.DataTo(&attempt); txErr != nil {
 			return txErr
 		}
-		// A provider response is not authority to extend the original obligation.
-		// Late acceptance may have happened externally, but cannot bind an expired
-		// allocation, mutate a token, or reopen retries after this deadline.
-		if attempt.TokenGeneration != generation || attempt.LeaseID != leaseID || attempt.State != "claimed" || now.UnixMilli() >= attempt.ExpiresAtMs {
+		if attempt.TokenGeneration != generation || attempt.LeaseID != leaseID || attempt.State != "claimed" {
 			return nil
 		}
 		var (
@@ -729,36 +776,62 @@ func (f *firestorePersistence) completeWake(ctx context.Context, id, leaseID str
 			staleTokenVerdict bool
 			addressRef        *firestore.DocumentRef
 			markAddressBound  bool
+			instSnap          *firestore.DocumentSnapshot
+			addressSnap       *firestore.DocumentSnapshot
 		)
 		if unregistered {
 			instRef = f.col("installations").Doc(attempt.InstallationID)
-			instSnap, instErr := tx.Get(instRef)
-			if instErr == nil {
+			instSnap, txErr = tx.Get(instRef)
+			if txErr == nil {
 				var installation installationRecord
-				if instErr = instSnap.DataTo(&installation); instErr != nil {
-					return instErr
+				if txErr = instSnap.DataTo(&installation); txErr != nil {
+					return txErr
 				}
 				if installation.TokenGeneration == generation {
 					markTokenDead = true
 				} else {
 					staleTokenVerdict = true
 				}
-			} else if status.Code(instErr) != codes.NotFound {
-				return instErr
+			} else if status.Code(txErr) != codes.NotFound {
+				return txErr
 			}
 		}
 		if httpStatus == 200 {
 			addressRef = f.col("addresses").Doc(attempt.Address)
-			addressSnap, addressErr := tx.Get(addressRef)
-			if addressErr == nil && addressSnap.Exists() {
+			addressSnap, txErr = tx.Get(addressRef)
+			if txErr == nil && addressSnap.Exists() {
 				var address addressRecord
-				if addressErr = addressSnap.DataTo(&address); addressErr != nil {
-					return addressErr
+				if txErr = addressSnap.DataTo(&address); txErr != nil {
+					return txErr
 				}
-				markAddressBound = address.Bound || now.UnixMilli() < address.UnboundExpiresMs
-			} else if addressErr != nil && status.Code(addressErr) != codes.NotFound {
-				return addressErr
+				markAddressBound = address.InstallationID == attempt.InstallationID
+			} else if txErr != nil && status.Code(txErr) != codes.NotFound {
+				return txErr
 			}
+		}
+		readSnaps := []*firestore.DocumentSnapshot{snap}
+		if instSnap != nil {
+			readSnaps = append(readSnaps, instSnap)
+		}
+		if addressSnap != nil {
+			readSnaps = append(readSnaps, addressSnap)
+		}
+		txNow, txErr := latestReadTime(readSnaps...)
+		if txErr != nil {
+			return txErr
+		}
+		// The latest transactional server read is the exact authority boundary.
+		// Firestore exposes commit time only after writes, so this deliberately does
+		// not claim an impossible commit-time predicate for completion side effects.
+		if txNow.UnixMilli() >= attempt.ExpiresAtMs || txNow.UnixMilli() >= attempt.LeaseUntilMs {
+			return nil
+		}
+		if markAddressBound {
+			var address addressRecord
+			if txErr = addressSnap.DataTo(&address); txErr != nil {
+				return txErr
+			}
+			markAddressBound = address.Bound || txNow.UnixMilli() < address.UnboundExpiresMs
 		}
 		if markTokenDead {
 			if txErr = tx.Update(instRef, []firestore.Update{{Path: "fcm_token_enc", Value: nil}, {Path: "token_dead", Value: true}}); txErr != nil {
@@ -771,12 +844,12 @@ func (f *firestorePersistence) completeWake(ctx context.Context, id, leaseID str
 			}
 		}
 		if staleTokenVerdict {
-			attempt.LeaseUntilMs = now.UnixMilli()
+			attempt.LeaseUntilMs = txNow.UnixMilli()
 			staleUnregistered = true
 			return tx.Set(wakeRef, attempt)
 		}
 		if httpStatus == 503 {
-			attempt.LeaseUntilMs = now.UnixMilli()
+			attempt.LeaseUntilMs = txNow.UnixMilli()
 			return tx.Set(wakeRef, attempt)
 		}
 		attempt.State, attempt.Status, attempt.Body = "completed", httpStatus, body
@@ -952,354 +1025,6 @@ func (f *firestorePersistence) deleteExpiredInstallations(ctx context.Context, n
 		})
 		if err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-// memoryRepository is a concurrency-correct fake, not a production backend.
-type memoryRepository struct {
-	mu                  sync.Mutex
-	installations       map[string]installationRecord
-	addresses           map[string]addressRecord
-	tombs               map[string]tombstoneRecord
-	regs                map[string]registrationRecord
-	nonces              map[string]int64
-	wakes               map[string]wakeAttemptRecord
-	rates               map[string]rateWindowRecord
-	registrationLookups int
-}
-
-func NewMemoryRepository() Repository {
-	return &memoryRepository{installations: map[string]installationRecord{}, addresses: map[string]addressRecord{}, tombs: map[string]tombstoneRecord{}, regs: map[string]registrationRecord{}, nonces: map[string]int64{}, wakes: map[string]wakeAttemptRecord{}, rates: map[string]rateWindowRecord{}}
-}
-func (m *memoryRepository) close() error                      { return nil }
-func (m *memoryRepository) healthCheck(context.Context) error { return nil }
-func (m *memoryRepository) putInstallation(_ context.Context, id string, rec installationRecord) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, exists := m.installations[id]; exists {
-		return errors.New("installation exists")
-	}
-	m.installations[id] = rec
-	return nil
-}
-func (m *memoryRepository) getInstallation(_ context.Context, id string) (installationRecord, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.installations[id]
-	return rec, ok, nil
-}
-func (m *memoryRepository) claimNonceAndTouch(_ context.Context, id string, expectedPublicKey []byte, nonce string, now, expiry time.Time) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.installations[id]
-	if !ok || !bytes.Equal(rec.PublicKey, expectedPublicKey) || installationExpired(rec.LastActiveMs, now) {
-		return false, nil
-	}
-	key := id + "\x00" + nonce
-	if old, found := m.nonces[key]; found && now.UnixMilli() < old {
-		return false, nil
-	}
-	if ceiling := now.Add(expiryHorizon); expiry.Before(ceiling) {
-		expiry = ceiling
-	}
-	m.nonces[key] = expiry.UnixMilli()
-	rec.LastActiveMs = now.UnixMilli()
-	m.installations[id] = rec
-	return true, nil
-}
-func (m *memoryRepository) lookupRegistration(_ context.Context, key, digest string, now time.Time) (registrationResult, bool, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.registrationLookups++
-	rec, ok := m.regs[key]
-	if !ok || now.UnixMilli() >= rec.ExpiresAtMs {
-		return registrationResult{}, false, false, nil
-	}
-	if rec.BodyDigest != digest {
-		return registrationResult{}, false, true, nil
-	}
-	if rec.State != "completed" {
-		return registrationResult{}, false, false, nil
-	}
-	return registrationResult{rec.InstallationID, rec.RefreshBefore}, true, false, nil
-}
-func (m *memoryRepository) claimRegistration(_ context.Context, key, digest, candidate, leaseID string, now time.Time) (registrationResult, bool, bool, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.regs[key]
-	if ok && now.UnixMilli() < rec.ExpiresAtMs {
-		if rec.BodyDigest != digest {
-			return registrationResult{}, false, false, true, nil
-		}
-		if rec.State == "completed" {
-			return registrationResult{rec.InstallationID, rec.RefreshBefore}, false, false, false, nil
-		}
-		if now.UnixMilli() < rec.LeaseUntilMs {
-			return registrationResult{}, false, true, false, nil
-		}
-	}
-	expires := rec.ExpiresAtMs
-	if expires <= now.UnixMilli() {
-		expires = now.Add(registrationWindow).UnixMilli()
-	}
-	m.regs[key] = registrationRecord{BodyDigest: digest, InstallationID: candidate, ExpiresAtMs: expires, State: "pending", LeaseID: leaseID, LeaseUntilMs: now.Add(registrationLease).UnixMilli()}
-	return registrationResult{}, true, false, false, nil
-}
-func (m *memoryRepository) completeRegistration(_ context.Context, key, digest, leaseID string, installation installationRecord, now time.Time) (registrationResult, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.regs[key]
-	if !ok || rec.BodyDigest != digest || rec.LeaseID != leaseID || rec.State != "pending" || now.UnixMilli() >= rec.ExpiresAtMs {
-		return registrationResult{}, false, nil
-	}
-	if _, exists := m.installations[rec.InstallationID]; exists {
-		return registrationResult{}, false, errors.New("installation exists")
-	}
-	refresh := now.Add(installationWindow).UTC().Format(time.RFC3339)
-	m.installations[rec.InstallationID] = installation
-	rec.State, rec.RefreshBefore, rec.LeaseUntilMs = "completed", refresh, 0
-	m.regs[key] = rec
-	return registrationResult{rec.InstallationID, refresh}, true, nil
-}
-func (m *memoryRepository) releaseRegistration(_ context.Context, key, leaseID string, now time.Time) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.regs[key]
-	if ok && rec.State == "pending" && rec.LeaseID == leaseID {
-		rec.LeaseUntilMs = now.UnixMilli()
-		m.regs[key] = rec
-	}
-	return nil
-}
-func (m *memoryRepository) registerOrReturn(_ context.Context, key, digest, candidate string, rec installationRecord, now time.Time) (registrationResult, bool, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if old, ok := m.regs[key]; ok && now.UnixMilli() < old.ExpiresAtMs {
-		if old.BodyDigest != digest {
-			return registrationResult{}, false, true, nil
-		}
-		return registrationResult{old.InstallationID, old.RefreshBefore}, false, false, nil
-	}
-	refresh := now.Add(installationWindow).UTC().Format(time.RFC3339)
-	m.installations[candidate] = rec
-	m.regs[key] = registrationRecord{BodyDigest: digest, InstallationID: candidate, RefreshBefore: refresh, ExpiresAtMs: now.Add(registrationWindow).UnixMilli(), State: "completed"}
-	return registrationResult{candidate, refresh}, true, false, nil
-}
-func (m *memoryRepository) rotateToken(_ context.Context, id string, enc []byte, version string, now time.Time) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.installations[id]
-	if !ok {
-		return false, nil
-	}
-	if installationExpired(rec.LastActiveMs, now) {
-		return false, nil
-	}
-	if rec.TokenGeneration == math.MaxInt64 {
-		return false, errors.New("pushgw: token generation exhausted")
-	}
-	rec.FCMTokenEnc, rec.TokenKeyVersion, rec.TokenDead = enc, version, false
-	rec.TokenGeneration++
-	rec.LastActiveMs = now.UnixMilli()
-	m.installations[id] = rec
-	return true, nil
-}
-func (m *memoryRepository) putAddressIfBelowLimit(_ context.Context, addr, id string, rec addressRecord, limit int, now time.Time) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	installation, ok := m.installations[id]
-	if !ok || installationExpired(installation.LastActiveMs, now) || installation.AddressCount >= int64(limit) {
-		return false, nil
-	}
-	m.addresses[addr] = rec
-	installation.AddressCount++
-	m.installations[id] = installation
-	return true, nil
-}
-func (m *memoryRepository) getAddress(_ context.Context, id string) (addressRecord, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.addresses[id]
-	return rec, ok, nil
-}
-func (m *memoryRepository) deleteAddressAndTombstone(_ context.Context, addr string, rec addressRecord, now time.Time) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	current, ok := m.addresses[addr]
-	if !ok || current.MachineRevokeHash != rec.MachineRevokeHash {
-		return nil
-	}
-	delete(m.addresses, addr)
-	m.tombs[rec.MachineRevokeHash] = tombstoneRecord{RevokedAtMs: now.UnixMilli()}
-	installation := m.installations[rec.InstallationID]
-	if installation.AddressCount > 0 {
-		installation.AddressCount--
-		m.installations[rec.InstallationID] = installation
-	}
-	return nil
-}
-func (m *memoryRepository) getTombstone(_ context.Context, key string) (tombstoneRecord, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.tombs[key]
-	return rec, ok, nil
-}
-func (m *memoryRepository) allow(_ context.Context, key string, rl RateLimit, now time.Time) (bool, int, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	window := m.rates[key]
-	if now.UnixMilli() >= window.ExpiresAtMs {
-		window = rateWindowRecord{ExpiresAtMs: now.Add(rl.Window).UnixMilli()}
-	}
-	if window.Count >= int64(rl.Max) {
-		return false, retrySeconds(window.ExpiresAtMs, now), nil
-	}
-	window.Count++
-	m.rates[key] = window
-	return true, 0, nil
-}
-func (m *memoryRepository) claimWake(_ context.Context, id, leaseID, addr, capHash string, now, deadline time.Time, addrLimit RateLimit, sourceKey string, sourceLimit RateLimit) (wakeClaim, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !now.Before(deadline) {
-		return wakeClaim{Denied: "exhausted"}, false, nil
-	}
-	address, ok := m.addresses[addr]
-	if !ok || !verifierEquals(address.SubmitCapHash, capHash) || (!address.Bound && now.UnixMilli() >= address.UnboundExpiresMs) {
-		return wakeClaim{Denied: "unauthorized"}, false, nil
-	}
-	if attempt, ok := m.wakes[id]; ok {
-		if now.UnixMilli() >= attempt.ExpiresAtMs {
-			return wakeClaim{Denied: "exhausted"}, false, nil
-		}
-		if attempt.State == "completed" {
-			return wakeClaim{Completed: true, Status: attempt.Status, Body: attempt.Body}, false, nil
-		}
-		if attempt.Attempts >= maxWakeAttempts {
-			return wakeClaim{Denied: "exhausted"}, false, nil
-		}
-		if now.UnixMilli() < attempt.LeaseUntilMs {
-			return wakeClaim{Denied: "busy"}, false, nil
-		}
-		deadline = time.UnixMilli(attempt.ExpiresAtMs)
-	}
-	installation, ok := m.installations[address.InstallationID]
-	if !ok {
-		return wakeClaim{Denied: "unauthorized"}, false, nil
-	}
-	if installationExpired(installation.LastActiveMs, now) {
-		return wakeClaim{Denied: "unauthorized"}, false, nil
-	}
-	if installation.TokenDead {
-		return wakeClaim{Denied: "token_dead"}, false, nil
-	}
-	type quotaUpdate struct {
-		key    string
-		window rateWindowRecord
-	}
-	updates := make([]quotaUpdate, 0, 2)
-	for _, quota := range []struct {
-		key  string
-		rate RateLimit
-	}{{"wake-addr:" + addr, addrLimit}, {sourceKey, sourceLimit}} {
-		window := m.rates[quota.key]
-		if now.UnixMilli() >= window.ExpiresAtMs {
-			window = rateWindowRecord{ExpiresAtMs: now.Add(quota.rate.Window).UnixMilli()}
-		}
-		if window.Count >= int64(quota.rate.Max) {
-			return wakeClaim{Denied: "quota", RetryAfter: retrySeconds(window.ExpiresAtMs, now)}, false, nil
-		}
-		window.Count++
-		updates = append(updates, quotaUpdate{quota.key, window})
-	}
-	for _, update := range updates {
-		m.rates[update.key] = update.window
-	}
-	attempt := m.wakes[id]
-	attempt = wakeAttemptRecord{InstallationID: address.InstallationID, Address: addr, TokenGeneration: installation.TokenGeneration, State: "claimed", Attempts: attempt.Attempts + 1, LeaseUntilMs: now.Add(wakeLease).UnixMilli(), LeaseID: leaseID, ExpiresAtMs: deadline.UnixMilli()}
-	m.wakes[id] = attempt
-	return wakeClaim{TokenEnc: installation.FCMTokenEnc, KeyVersion: installation.TokenKeyVersion, TokenGeneration: installation.TokenGeneration}, true, nil
-}
-func (m *memoryRepository) completeWake(_ context.Context, id, leaseID string, generation int64, httpStatus int, body []byte, unregistered bool, now time.Time) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	attempt, ok := m.wakes[id]
-	if !ok || attempt.TokenGeneration != generation || attempt.LeaseID != leaseID || attempt.State != "claimed" || now.UnixMilli() >= attempt.ExpiresAtMs {
-		return false, nil
-	}
-	if unregistered {
-		installation, found := m.installations[attempt.InstallationID]
-		if found && installation.TokenGeneration == generation {
-			installation.FCMTokenEnc = nil
-			installation.TokenDead = true
-			m.installations[attempt.InstallationID] = installation
-		} else if found {
-			attempt.LeaseUntilMs = now.UnixMilli()
-			m.wakes[id] = attempt
-			return true, nil
-		}
-	}
-	if httpStatus == 200 {
-		if address, found := m.addresses[attempt.Address]; found && (address.Bound || now.UnixMilli() < address.UnboundExpiresMs) {
-			address.Bound = true
-			m.addresses[attempt.Address] = address
-		}
-	}
-	if httpStatus == 503 {
-		attempt.LeaseUntilMs = now.UnixMilli()
-		m.wakes[id] = attempt
-		return false, nil
-	}
-	attempt.State, attempt.Status, attempt.Body = "completed", httpStatus, append([]byte(nil), body...)
-	m.wakes[id] = attempt
-	return false, nil
-}
-func (m *memoryRepository) runRetention(_ context.Context, now time.Time) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	nowMs := now.UnixMilli()
-	for key, expiry := range m.nonces {
-		if nowMs >= expiry {
-			delete(m.nonces, key)
-		}
-	}
-	for key, rec := range m.regs {
-		if nowMs >= rec.ExpiresAtMs {
-			delete(m.regs, key)
-		}
-	}
-	for key, rec := range m.wakes {
-		if nowMs >= rec.ExpiresAtMs {
-			delete(m.wakes, key)
-		}
-	}
-	for key, rec := range m.rates {
-		if nowMs >= rec.ExpiresAtMs {
-			delete(m.rates, key)
-		}
-	}
-	for key, rec := range m.tombs {
-		if nowMs-rec.RevokedAtMs > tombstoneWindow.Milliseconds() {
-			delete(m.tombs, key)
-		}
-	}
-	for key, rec := range m.addresses {
-		if !rec.Bound && nowMs >= rec.UnboundExpiresMs {
-			delete(m.addresses, key)
-			m.tombs[rec.MachineRevokeHash] = tombstoneRecord{RevokedAtMs: nowMs}
-		}
-	}
-	for id, rec := range m.installations {
-		if installationExpired(rec.LastActiveMs, now) {
-			delete(m.installations, id)
-			for address, binding := range m.addresses {
-				if binding.InstallationID == id {
-					delete(m.addresses, address)
-					m.tombs[binding.MachineRevokeHash] = tombstoneRecord{RevokedAtMs: nowMs}
-				}
-			}
 		}
 	}
 	return nil

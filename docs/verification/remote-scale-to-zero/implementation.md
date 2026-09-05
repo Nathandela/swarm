@@ -109,8 +109,9 @@ across a provider call; they do not contact FCM or prove cross-host clock agreem
 
 The original wake deadline remains the envelope's issued-at time plus five minutes.
 The handler allows up to two minutes of future issued-at clock skew, so the maximum
-accepted deadline can be seven minutes from gateway receipt. Transaction retries still
-use process-supplied timestamps; shared-clock and retry-boundary review remains open.
+accepted deadline can be seven minutes from gateway receipt. At this checkpoint,
+transaction retries still used process timestamps; the later server-clock review below
+replaces that wake-path limitation, without claiming registration clocks are complete.
 
 Root also reproduced fabricated empty-store metrics: the v2 admin handler exported
 zero installation/address/tombstone/database gauges without observing Firestore.
@@ -234,6 +235,44 @@ Firestore v1.21.0. This was not a blanket latest-version upgrade. The repository
 Go floor remains 1.25.0. Terra passed module verification, whole-repository build
 and vet; the clock revision's tests were still in progress at this checkpoint,
 so clean-main package/emulator and the new container scan remain separate results.
+
+## Server-clock wake review
+
+After the dependency update, root independently passed clean-main push, command and
+native relay race tests (6.070 s / 4.555 s / 2.656 s) and the actual Firestore v1.21
+emulator race suite (12.042 s). The push-container workflow `33953707223` then passed,
+including its vulnerability scan. The dedicated local-service CI job in `33953202959`
+also passed; that run's overall suite still failed an existing disconnected-peer
+fixture and is not recorded as wholly green.
+
+Sol's next wake revision first reproduced stale-clock claims/completions in the actual
+emulator. Wake expiry, future timestamp skew, unbound allocation expiry, token state
+and quota checks now use the latest transaction snapshot's server ReadTime. The v2
+handler no longer rejects a valid server-time wake using a skewed process clock or a
+stale installation/token pre-read. Invalid capabilities still stop after their address
+read, before attempt, installation or quota reads.
+
+Direct production-method tests force an aborted first commit through the actual SDK
+against a small gRPC test server: retry-local deadline reset, fresh-read expiry on
+claim/completion, abandoned first-attempt writes, bad-capability read count, and a
+lease already expired at commit. The real emulator separately verifies ReadTime on
+missing snapshots and skewed callers. These are distinct evidence sources; the gRPC
+test server is not presented as the Firestore service.
+
+Provider and completion calls share one monotonic operation deadline derived from the
+server budget minus the entire local claim round trip. Tests cover process clocks
+24 hours behind/ahead and identical provider/completion deadlines. Claim CommitTime
+additionally suppresses provider submission if the durable lease or original obligation
+has already expired. Root independently passed the final full push package with the
+actual emulator and race detector (17.525 s); Sol's run passed in 19.812 s, and the
+independent Sol review found no remaining must-fix after its focused race run (6.088 s).
+
+The exact guarantee is authority checked at latest transactional ReadTime plus bounded
+client execution, **not** an atomic wall-clock predicate at Firestore commit. A client
+timeout cannot prove a commit did not land, and rejecting provider ownership after a
+late claim commit does not undo attempt/quota writes. Registration/other repository
+clock paths, real IAM and FCM remain separate gates. The memory repository now exists
+only in the Go test build; it is not an alternate production backend.
 
 ## Operator access and changes
 
