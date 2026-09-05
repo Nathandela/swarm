@@ -7,7 +7,6 @@ package remotegw
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,38 +15,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
-
-func TestInboundState_MigratesV1WithUnknownIncarnationAndWritesV2(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "inbound-state.json")
-	legacy := `{"schema_version":1,"machine":"machine-1","cursor":3,"streams":[{"sender":"0102030405060708","epoch":7,"seq":11}]}`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	st, err := OpenInboundState(path, "machine-1")
-	if err != nil {
-		t.Fatalf("OpenInboundState(v1): %v", err)
-	}
-	ck := st.Load()
-	stream := InboundStream{Sender: [8]byte{1, 2, 3, 4, 5, 6, 7, 8}, Epoch: 7}
-	if ck.Cursor != 3 || ck.Incarnation != "" || ck.Highest[stream] != 11 {
-		t.Fatalf("v1 migration = %+v, want cursor/high-water preserved with unknown incarnation", ck)
-	}
-	ck.Incarnation = "0123456789abcdef0123456789abcdef"
-	if err := st.Save(ck); err != nil {
-		t.Fatalf("Save migrated checkpoint: %v", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var written inboundFile
-	if err := json.Unmarshal(data, &written); err != nil {
-		t.Fatal(err)
-	}
-	if written.SchemaVersion != 2 || written.Incarnation != ck.Incarnation {
-		t.Fatalf("migrated file schema=%d incarnation=%q, want v2 with binding", written.SchemaVersion, written.Incarnation)
-	}
-}
 
 func TestInboundState_FutureSchemaFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "future.json")
@@ -288,7 +255,7 @@ func TestInboundState_RewindCursorPreservesReplayHighWaters(t *testing.T) {
 	if err := state.Save(InboundCheckpoint{Cursor: 53, Highest: map[InboundStream]uint64{stream: 11}}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := state.RewindCursor(); err != nil {
+	if err := state.RewindCursor(RelayAuthority{}); err != nil {
 		t.Fatalf("RewindCursor: %v", err)
 	}
 	if got := state.Load(); got.Cursor != 0 || got.Highest[stream] != 11 {

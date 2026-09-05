@@ -113,7 +113,7 @@ type memInboundState struct {
 func (s *memInboundState) Load() InboundCheckpoint {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := InboundCheckpoint{Cursor: s.ck.Cursor, Incarnation: s.ck.Incarnation, Highest: make(map[InboundStream]uint64, len(s.ck.Highest))}
+	out := InboundCheckpoint{Cursor: s.ck.Cursor, Incarnation: s.ck.Incarnation, Highest: make(map[InboundStream]uint64, len(s.ck.Highest)), Relay: s.ck.Relay}
 	for k, v := range s.ck.Highest {
 		out.Highest[k] = v
 	}
@@ -126,6 +126,9 @@ func (s *memInboundState) Save(ck InboundCheckpoint) error {
 	s.saves++
 	if s.failSave != nil {
 		return s.failSave
+	}
+	if ck.Relay != s.ck.Relay {
+		return errRelayAuthorityChanged
 	}
 	s.ck.Cursor = ck.Cursor
 	if ck.Incarnation != "" {
@@ -142,11 +145,35 @@ func (s *memInboundState) Save(ck InboundCheckpoint) error {
 	return nil
 }
 
-func (s *memInboundState) RewindCursor() error {
+func (s *memInboundState) BindRelay(authority RelayAuthority) error {
+	if !validRelayAuthority(authority) {
+		return errors.New("remotegw: invalid relay authority")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ck.Relay == authority {
+		return nil
+	}
+	if s.ck.Relay.Home == authority.Home && s.ck.Relay.PhoneRID == authority.PhoneRID && s.ck.Relay.Generation > authority.Generation {
+		return errors.New("remotegw: relay generation regressed")
+	}
+	if s.failSave != nil {
+		return s.failSave
+	}
+	s.ck.Relay = authority
+	s.ck.Cursor = 0
+	s.ck.Incarnation = ""
+	return nil
+}
+
+func (s *memInboundState) RewindCursor(authority RelayAuthority) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failSave != nil {
 		return s.failSave
+	}
+	if authority != s.ck.Relay {
+		return errRelayAuthorityChanged
 	}
 	s.ck.Cursor = 0
 	s.ck.Incarnation = ""

@@ -192,6 +192,7 @@ type CommandBridge struct {
 	mu          sync.Mutex
 	cursor      uint64
 	incarnation string
+	authority   RelayAuthority
 	highest     map[InboundStream]uint64 // in-memory mirror of the persisted per-stream high-water
 	// cursorRecovery is true only after this connection received the relay's explicit
 	// continuity-reset verdict. It authorises authenticated stale-envelope compaction while
@@ -245,6 +246,7 @@ func NewCommandBridge(cfg CommandBridgeConfig) *CommandBridge {
 	}
 	b.cursor = ck.Cursor
 	b.incarnation = ck.Incarnation
+	b.authority = ck.Relay
 	if mailbox, ok := cfg.Mailbox.(mailboxIncarnationState); ok {
 		mailbox.SetMailboxIncarnation(ck.Incarnation)
 	}
@@ -358,7 +360,7 @@ func (b *CommandBridge) readMailboxPage(ctx context.Context) ([]relay.Item, erro
 func (b *CommandBridge) rewindMailboxCursor() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := b.inbound.RewindCursor(); err != nil {
+	if err := b.inbound.RewindCursor(b.authority); err != nil {
 		return fmt.Errorf("rewind relay mailbox cursor: %w", err)
 	}
 	b.cursor = 0
@@ -386,7 +388,7 @@ func (b *CommandBridge) adoptMailboxIncarnation() error {
 	}
 	previous := b.incarnation
 	b.incarnation = incarnation
-	ck := InboundCheckpoint{Cursor: b.cursor, Incarnation: b.incarnation, Highest: make(map[InboundStream]uint64, len(b.highest))}
+	ck := InboundCheckpoint{Cursor: b.cursor, Incarnation: b.incarnation, Highest: make(map[InboundStream]uint64, len(b.highest)), Relay: b.authority}
 	for st, seq := range b.highest {
 		ck.Highest[st] = seq
 	}
@@ -497,6 +499,9 @@ func (b *CommandBridge) consumeDurableReplay(it relay.Item) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	durable := b.inbound.Load()
+	if durable.Relay != b.authority {
+		return errRelayAuthorityChanged
+	}
 	if high, ok := durable.Highest[frame.Stream]; !ok || frame.Seq > high {
 		return fmt.Errorf("replay seq %d is not covered by a durable high-water", frame.Seq)
 	}
@@ -871,8 +876,7 @@ func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
 	}
 	if redriven, err := b.redrivePendingReply(ctx, frame.Command.OperationID); redriven {
 		if err != nil {
-			b.restoreReceiverFromCheckpoint()
-			return retainedCommandError{err: err}
+			return retainedCommandError{err: errors.Join(err, b.restoreReceiverFromCheckpoint())}
 		}
 		return b.consume(frame, it.Cursor)
 	}
@@ -892,8 +896,7 @@ func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
 			// before returning; otherwise the very retry promised here is rejected stale in
 			// this gateway generation. processBatch recognises the wrapper and stops the page,
 			// so no later command can commit a cursor beyond this retained item.
-			b.restoreReceiverFromCheckpoint()
-			return retainedCommandError{err: err}
+			return retainedCommandError{err: errors.Join(err, b.restoreReceiverFromCheckpoint())}
 		}
 		if consumeErr := b.consume(frame, it.Cursor); consumeErr != nil {
 			return errors.Join(err, consumeErr)
@@ -917,8 +920,11 @@ func (r retainedCommandError) Unwrap() error { return r.err }
 // durable consume() actually committed. OpenMailboxFrame authenticates before mutating this
 // receiver, but routeCommand has external failure points after that mutation; reconstructing it
 // is the local rollback that makes a retained envelope retryable in the same process.
-func (b *CommandBridge) restoreReceiverFromCheckpoint() {
+func (b *CommandBridge) restoreReceiverFromCheckpoint() error {
 	ck := b.inbound.Load()
+	if ck.Relay != b.authority {
+		return errRelayAuthorityChanged
+	}
 	recv := crypto.NewMailboxReceiver()
 	highest := make(map[InboundStream]uint64, len(ck.Highest))
 	for st, seq := range ck.Highest {
@@ -931,6 +937,7 @@ func (b *CommandBridge) restoreReceiverFromCheckpoint() {
 	b.incarnation = ck.Incarnation
 	b.highest = highest
 	b.mu.Unlock()
+	return nil
 }
 
 // refusedCommand marks a refusal this build can never take back: the reply IS sealed and the
@@ -966,7 +973,7 @@ func (b *CommandBridge) consume(frame MailboxFrame, cursor uint64) error {
 func (b *CommandBridge) saveCheckpoint() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	ck := InboundCheckpoint{Cursor: b.cursor, Incarnation: b.incarnation, Highest: make(map[InboundStream]uint64, len(b.highest))}
+	ck := InboundCheckpoint{Cursor: b.cursor, Incarnation: b.incarnation, Highest: make(map[InboundStream]uint64, len(b.highest)), Relay: b.authority}
 	for st, seq := range b.highest {
 		ck.Highest[st] = seq
 	}
