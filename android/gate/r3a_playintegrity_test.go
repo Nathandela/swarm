@@ -54,7 +54,9 @@ func TestR2_ReleasePushOriginRequiresTheConfiguredCloudRunOrigin(t *testing.T) {
 		`u.rawQuery == null`,
 		`u.rawFragment == null`,
 		`tasks.register("verifyProductionPushOriginContract")`,
-		`runCatching { validatedProductionPushGatewayURL(origin) }.isFailure`,
+		`runCatching { validatedProductionPushGatewayURL(origin) }.exceptionOrNull()`,
+		`check(failure != null)`,
+		`generateSequence(failure) { it.cause }`,
 		`"push_gateway_url": "$productionPushGatewayURL"`,
 	} {
 		if !strings.Contains(build, want) {
