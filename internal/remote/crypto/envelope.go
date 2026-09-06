@@ -13,9 +13,8 @@ import (
 
 // Wire constants (R-CRY.9).
 const (
-	VersionV1    uint8 = 0x01
-	TypeMailbox  uint8 = 0x01 // session content, under the content key
-	TypePushWake uint8 = 0x02 // content-free wake, under the wake key
+	VersionV1   uint8 = 0x01
+	TypeMailbox uint8 = 0x01 // session content, under the content key
 )
 
 // headerLen is the fixed byte length of a marshalled header (fields + nonce)
@@ -26,7 +25,7 @@ const headerLen = 62
 var (
 	// ErrUnknownVersion rejects a future/unknown wire version.
 	ErrUnknownVersion = errors.New("crypto: unknown envelope version")
-	// ErrUnknownType rejects a type outside {mailbox, push-wake} at parse.
+	// ErrUnknownType rejects any non-mailbox type at parse.
 	ErrUnknownType = errors.New("crypto: unknown envelope type")
 	// ErrTruncated rejects a buffer too short to hold a full header + tag.
 	ErrTruncated = errors.New("crypto: truncated envelope")
@@ -35,8 +34,7 @@ var (
 	// ErrStaleAge rejects a mailbox event whose authenticated issued_at is
 	// older than the receiver's max age (A5 bounded-age).
 	ErrStaleAge = errors.New("crypto: mailbox event exceeds max age")
-	// ErrWrongKeyType rejects opening an envelope whose type does not match the
-	// typed key used (wake key vs content key — A15).
+	// ErrWrongKeyType rejects opening an envelope whose type is not mailbox.
 	ErrWrongKeyType = errors.New("crypto: envelope type does not match key type")
 )
 
@@ -114,24 +112,9 @@ func SealMailbox(k ContentKey, h EnvelopeHeader, plaintext []byte) (*Envelope, e
 }
 
 // OpenMailbox opens type-0x01 session content under the content key; any other
-// type is refused (a wake payload cannot be opened as content).
+// type is refused.
 func OpenMailbox(k ContentKey, e *Envelope) ([]byte, error) {
 	if e.Header.Type != TypeMailbox {
-		return nil, ErrWrongKeyType
-	}
-	return e.open([32]byte(k))
-}
-
-// SealWake seals a content-free wake (type 0x02) under the wake key (A15 / F10).
-func SealWake(k WakeKey, h EnvelopeHeader, plaintext []byte) (*Envelope, error) {
-	h.Type = TypePushWake
-	return seal([32]byte(k), h, plaintext)
-}
-
-// OpenWake opens a type-0x02 wake under the wake key; any other type is refused
-// (mailbox content cannot be opened with the NSE-readable wake key).
-func OpenWake(k WakeKey, e *Envelope) ([]byte, error) {
-	if e.Header.Type != TypePushWake {
 		return nil, ErrWrongKeyType
 	}
 	return e.open([32]byte(k))
@@ -172,7 +155,7 @@ func ParseEnvelope(b []byte) (*Envelope, error) {
 	if b[0] != VersionV1 {
 		return nil, ErrUnknownVersion
 	}
-	if b[1] != TypeMailbox && b[1] != TypePushWake {
+	if b[1] != TypeMailbox {
 		return nil, ErrUnknownType
 	}
 	if len(b) < headerLen+chacha20poly1305.Overhead {
@@ -243,8 +226,7 @@ func (r *MailboxReceiver) clockNow() time.Time {
 // returns the AEAD error and does not advance the tracker. When maxAge > 0 an
 // authenticated-but-too-old issued_at is ErrStaleAge.
 func (r *MailboxReceiver) Accept(key ContentKey, e *Envelope) (*MailboxResult, error) {
-	// The mailbox carries session content (type 0x01) under the content key only;
-	// a wake payload (type 0x02) must never enter the mailbox path (F10/A15).
+	// The mailbox carries session content (type 0x01) under the content key only.
 	if e.Header.Type != TypeMailbox {
 		return nil, ErrWrongKeyType
 	}

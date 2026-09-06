@@ -73,14 +73,14 @@ type WakeRetryScheduler struct {
 	stopped  bool // Stop was called: armed timers fire as no-ops, ending the retry tail
 }
 
-// The scheduler is a drop-in gatewayObligationDriver (and superseder, and provisional
-// triggerer), so service.go can wire it AS the TransportRouter's gateway arm: every
-// live trigger's Drive then arms the retry loop, not only the startup redrive. Pinned
-// so a dropped method is a compile error.
+// The scheduler is the direct notifier provider (and pre-appender, superseder, and
+// provisional triggerer), so every live trigger's Drive arms the retry loop. Pinned so a
+// dropped method is a compile error.
 var (
-	_ gatewayObligationDriver     = (*WakeRetryScheduler)(nil)
-	_ gatewayObligationSuperseder = (*WakeRetryScheduler)(nil)
-	_ gatewayProvisionalTriggerer = (*WakeRetryScheduler)(nil)
+	_ PushTriggerer                 = (*WakeRetryScheduler)(nil)
+	_ obligationPreAppender         = (*WakeRetryScheduler)(nil)
+	_ provisionalObligationAppender = (*WakeRetryScheduler)(nil)
+	_ obligationSuperseder          = (*WakeRetryScheduler)(nil)
 )
 
 // NewWakeRetryScheduler returns a scheduler for cfg.Address's obligation machine.
@@ -101,27 +101,49 @@ func NewWakeRetryScheduler(cfg WakeRetryConfig) *WakeRetryScheduler {
 // Kick drives the address's live obligation now and schedules the retry tail.
 func (s *WakeRetryScheduler) Kick(ctx context.Context) { _ = s.drive(ctx) }
 
-// Trigger delegates to the machine, satisfying gatewayObligationDriver.
+// Trigger delegates to the durable wake machine.
 func (s *WakeRetryScheduler) Trigger() error { return s.cfg.Machine.Trigger() }
 
+// PushTrigger is the notifier's post-append provider call: mint/coalesce an obligation,
+// then drive it now while retaining the scheduler's retry tail on failure.
+func (s *WakeRetryScheduler) PushTrigger(ctx context.Context) error {
+	if err := s.Trigger(); err != nil {
+		return err
+	}
+	return s.Drive(ctx)
+}
+
+// PreAppendObligation records the durable wake intent before its mailbox record.
+func (s *WakeRetryScheduler) PreAppendObligation() error { return s.Trigger() }
+
 // TriggerProvisional delegates to the machine, so the deferred-wake pre-append's
-// identity report (TransportRouter.PreAppendProvisionalObligation) reaches through
-// this wrapper unchanged.
+// identity report reaches the notifier's deferred-wake cancellation unchanged.
 func (s *WakeRetryScheduler) TriggerProvisional() (uint64, error) {
 	return s.cfg.Machine.TriggerProvisional()
 }
 
+// PreAppendProvisionalObligation records and identifies deferred wake intent.
+func (s *WakeRetryScheduler) PreAppendProvisionalObligation() (uint64, bool, error) {
+	seq, err := s.TriggerProvisional()
+	return seq, err == nil, err
+}
+
 // Drive is Kick with the machine's own Drive error surfaced, so a caller that reports
-// push-path failures (TransportRouter -> PushNotifier.Err) still sees them.
+// push-path failures still reach PushNotifier.Err.
 func (s *WakeRetryScheduler) Drive(ctx context.Context) error { return s.drive(ctx) }
 
 // Supersede delegates to the machine, so the deferred-wake cancellation path
-// (TransportRouter.SupersedeObligation) reaches through this wrapper unchanged. An
+// reaches through this wrapper unchanged. An
 // armed retry timer for a superseded obligation is left to fire: it finds a terminal
 // record, submits nothing, and stops -- the same self-healing no-op as any other
 // terminal outcome.
 func (s *WakeRetryScheduler) Supersede(wakeSeq uint64, ownAppends int, reason string) error {
 	return s.cfg.Machine.Supersede(wakeSeq, ownAppends, reason)
+}
+
+// SupersedeObligation is the notifier's deferred-wake cancellation seam.
+func (s *WakeRetryScheduler) SupersedeObligation(wakeSeq uint64, ownAppends int, reason string) error {
+	return s.Supersede(wakeSeq, ownAppends, reason)
 }
 
 // Stop ends the retry tail: armed timers still fire (they are never cancelled, per the

@@ -1,9 +1,8 @@
 package remotegw
 
 // WakeV1 (ADR-015 P8, docs/specifications/push-gateway-api.md §5): the wake shape
-// swarm-remote submits to the push gateway. It is added BESIDE the frozen mailbox
-// envelope (internal/remote/crypto), never by editing it -- that package stays
-// read-only from this wave.
+// swarm-remote submits to the push gateway. It is separate from the mailbox
+// envelope in internal/remote/crypto.
 
 import (
 	"crypto/rand"
@@ -24,20 +23,19 @@ type PushAddress [16]byte
 const WakeV1Size = 1 + 1 + 16 + 8 + 8 + 24 + 16 // 74
 
 // WakeV1Type is the wake envelope's type byte (PG-WAKE-3, spec §5.1 offset 1): a value
-// distinct from crypto.TypeMailbox (0x01) and the legacy crypto.TypePushWake (0x02), so
-// the three shapes are separable before any AEAD is touched.
+// distinct from crypto.TypeMailbox (0x01) and the retired wake type (0x02), so
+// current and retired shapes are separable before any AEAD is touched.
 const WakeV1Type uint8 = 0x03
 
 // WakeV1Expiry is the wake's DERIVED, non-carried expiry (PG-WAKE-6/7): issued_at plus
-// five minutes, narrowed from the legacy 78-byte wake's ten. It matches the five-minute
-// FCM TTL, so nothing outlives the delivery window it bounds.
+// five minutes. It matches the FCM TTL, so nothing outlives the delivery window it bounds.
 const WakeV1Expiry = 5 * time.Minute
 
 // wakeV1Domain is the domain-separation prefix of the canonical AAD (spec §5.3,
 // PG-WAKE-8/9): "swarm-wake-v1" || version || push_address || wake_seq || issued_at ||
 // expires_at || nonce. It is deliberately NOT crypto.EnvelopeHeader.aad() with fields
 // renamed -- that shape excludes recipient_key_id and never binds the nonce, both of
-// which this AAD does, so a WakeV1 tag never opens under the mailbox/legacy-wake AAD.
+// which this AAD does, so a WakeV1 tag never opens under the mailbox envelope AAD.
 const wakeV1Domain = "swarm-wake-v1"
 
 // SealWakeV1 seals one WakeV1 envelope: an EMPTY plaintext under key, with a fresh

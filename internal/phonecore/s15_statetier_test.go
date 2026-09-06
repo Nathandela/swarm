@@ -18,10 +18,10 @@
 // PB-STATE-9 splits the state by tier and says why in its own words: "One undifferentiated
 // 'sealed' would let the implementer pick whichever tier passes."
 //
-//   - WAKE tier: what the wake path must read WHILE LOCKED -- the push token and the dedup
-//     coordinate (State.WakeReplay, PB-PUSH-3's persisted replay coordinate). The wake path
-//     runs with no user present, so everything under this tier is reachable without the
-//     biometric. That is why the tier is narrow.
+//   - WAKE tier: what the wake path must read WHILE LOCKED -- the push token and the
+//     reserved schema-26 WakeReplay coordinate. The wake path runs with no user present,
+//     so everything under this tier is reachable without the biometric. That is why the
+//     tier is narrow.
 //   - CONTENT tier: send-seq, receive high-waters, and the decrypted caches.
 //
 // Its acceptance is "a locked-device process can read only the wake-tier state".
@@ -591,9 +591,9 @@ func TestS15_ALockedProcessReadsOnlyTheWakeTierState(t *testing.T) {
 			"while locked (PB-PUSH-9)", st.PushToken, s15PushToken)
 	}
 	if st.WakeReplay != s15WakeReplay {
-		t.Errorf("PB-STATE-9: a locked process reads WakeReplay %d, want %d. The dedup coordinate is "+
-			"WAKE tier: a push replay window that cannot be consulted while locked is not a replay "+
-			"window at all (PB-PUSH-3)", st.WakeReplay, s15WakeReplay)
+		t.Errorf("PB-STATE-9: a locked process reads reserved WakeReplay %d, want %d; "+
+			"schema-26 bytes must remain stable until a deliberate checkpoint bump",
+			st.WakeReplay, s15WakeReplay)
 	}
 	if st.Keys.WakeKey != s15State().Keys.WakeKey {
 		t.Error("PB-KEY-2: a locked process cannot read the epoch wake key, so it cannot open the push " +

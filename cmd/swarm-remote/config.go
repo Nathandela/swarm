@@ -8,9 +8,6 @@ package main
 
 import (
 	"crypto/ed25519"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -43,14 +40,9 @@ type gatewayParams struct {
 	// Profile is ADR-016 "profile"'s first real publisher: the machine's relay TLS policy,
 	// host and pin, built from the SAME relaycfg.Config the dial policy above reads, and
 	// carried into remotegw.ServiceConfig.Profile so every reconcile record publishes it.
-	Profile     protocol.RemoteProfileV1
-	PhoneTarget string
-	Key         crypto.ContentKey
-	// WakeKey is the content-free key the push trigger seals its wakes under (PB-PUSH-0).
-	// machineid.Load already materialises it in this process -- marshal/unmarshal read one
-	// buffer holding both signing privates, the content key AND this -- so resolving it
-	// here is dropping a `_` rather than admitting a new secret (ADR-007 B19).
-	WakeKey        crypto.WakeKey
+	Profile        protocol.RemoteProfileV1
+	PhoneTarget    string
+	Key            crypto.ContentKey
 	EpochID        uint32
 	RecipientKeyID [8]byte
 	SenderKeyID    [8]byte
@@ -70,11 +62,6 @@ type gatewayParams struct {
 	// resetting to 1 and being stale-dropped.
 	JournalSeq remotegw.SeqSource
 	ReplySeq   remotegw.SeqSource
-	// PushSeq is the third outbound stream's durable seq: the wake's replay coordinate
-	// (PB-PUSH-3). It is separate because a wake is sealed under a different key and
-	// checked by a different receiver on the phone; sharing the journal counter would have
-	// the two streams stale-drop each other.
-	PushSeq remotegw.SeqSource
 	// PushPrefs is the durable record of which transitions may wake the paired device
 	// (PB-PUSH-8, PB-PUSH-10). Without it the gateway refuses the push_prefs verb and
 	// suppresses every wake, so it is resolved here rather than left to a default.
@@ -194,10 +181,6 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	if err != nil {
 		return gatewayParams{}, fmt.Errorf("open outbound reply seq: %w", err)
 	}
-	pushSeq, err := remotegw.OpenSeqSource(filepath.Join(remoteDir, "outbound-push.seq"))
-	if err != nil {
-		return gatewayParams{}, fmt.Errorf("open outbound push seq: %w", err)
-	}
 	// The push preference is opened, not read, here: LoadPrefs re-reads on every wake so a
 	// setting the phone changes mid-run takes effect on the next transition. A record that
 	// exists but cannot be parsed surfaces at that read as an error AND a suppression --
@@ -228,22 +211,14 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	if err != nil {
 		return gatewayParams{}, fmt.Errorf("open inbound state: %w", err)
 	}
-	// ADR-015 P9/P12: negotiated pairings consume the registry's atomic Push binding.
-	// Pre-conveyance records may still use the optional compatibility sidecar; if neither
-	// exists, PushGateway stays nil and the service remains foreground/legacy-compatible.
+	// ADR-015 P9/P12: only the registry's validated atomic Push binding may supply gateway
+	// authority. A record without one is foreground-only; obsolete sidecars are ignored.
 	var pushGateway *remotegw.PushGatewayConfig
-	if rec.Push == nil {
-		pushGateway, err = resolvePushGatewayConfig(remoteDir)
-	} else {
+	if rec.Push != nil {
 		pushGateway, err = resolveRegistryPushGatewayConfig(remoteDir, *rec.Push)
-	}
-	if err != nil {
-		return gatewayParams{}, err
-	}
-	if rec.Push == nil && pushGateway != nil {
-		// Backward-compatible hand-provisioned sidecars predate conveyed per-pairing
-		// keys and retain their historical epoch-key behavior until re-pair migration.
-		pushGateway.WakeKey = id.EpochKeys().WakeKey
+		if err != nil {
+			return gatewayParams{}, err
+		}
 	}
 
 	return gatewayParams{
@@ -270,14 +245,12 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		// supplied a non-canonical routing id then cannot make the gateway misroute the grant.
 		PhoneTarget:        relayv2.RoutingID(ed25519.PublicKey(rec.RelayAuthPub)),
 		Key:                id.EpochKeys().ContentKey,
-		WakeKey:            id.EpochKeys().WakeKey,
 		EpochID:            id.EpochID(),
 		GrantSeq:           id.GrantSeq(),
 		RecipientKeyID:     crypto.KeyID(rec.RecipientPub),
 		SenderKeyID:        crypto.KeyID(id.RecipientPublic()),
 		JournalSeq:         journalSeq,
 		ReplySeq:           replySeq,
-		PushSeq:            pushSeq,
 		PushPrefs:          pushPrefs,
 		Outbox:             outbox,
 		Inbound:            inbound,
@@ -308,130 +281,11 @@ func loadRelayConfig(stateDir string) (relaycfg.Config, error) {
 	return cfg, nil
 }
 
-// pushGatewayFile is the legacy <StateDir>/remote/push-gateway.json compatibility shape.
-// New pairings convey a complete PushBinding into the atomic device registry and never
-// write this file. A validated registry binding is the migration commit: runtime adopts
-// gateway transport from it and durably retires this older split source.
-type pushGatewayFile struct {
-	GatewayURL       string `json:"gateway_url"`
-	SubmitCapability string `json:"submit_capability"`
-	// MachineRevokeCapability is the pairing's machine-revoke capability (spec 2.2/3.4,
-	// distinct from submit -- PG-AUTH-9), presented as "Swarm-Revoke <cap>" by the R4
-	// revoke producer (bead agents-tracker-u37c). OPTIONAL: every push-gateway.json
-	// provisioned before the producer existed carries only the first two capabilities,
-	// and refusing such a file would take down the working wake path to add a revoke
-	// path. Empty means the producer cannot run and discloses that instead.
-	MachineRevokeCapability string `json:"machine_revoke_capability,omitempty"`
-	// PushAddress is PG-ALLOC-1's 16 opaque bytes, hex-encoded (32 hex characters).
-	PushAddress string `json:"push_address"`
-}
-
-// validateGatewayURL fails closed on a gateway_url that would otherwise reach
-// HTTPWakeSubmitter.SubmitWake only to be refused THERE as a plain (therefore
-// unconditionally retryable, see wakesubmitter.go's header) error -- turning a bad
-// config into a push path that silently retries forever without ever delivering,
-// instead of a startup refusal (PG-TR-1's https-only check is otherwise enforced only
-// per request, never at load). It also rejects a path, query or fragment: SubmitWake
-// builds the request URL as TrimRight(BaseURL, "/") + "/v1/wakes", so an operator who
-// already included the spec's /v1 prefix in gateway_url would silently get
-// /v1/v1/wakes with no error anywhere.
-func validateGatewayURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("gateway_url is not a valid URL: %w", err)
-	}
-	if u.Scheme != "https" {
-		return fmt.Errorf("gateway_url must use https (PG-TR-1), got %q", raw)
-	}
-	if u.Host == "" {
-		return fmt.Errorf("gateway_url has no host: %q", raw)
-	}
-	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("gateway_url must be a bare origin with no path, query or fragment "+
-			"-- SubmitWake appends /v1/wakes itself -- got %q", raw)
-	}
-	return nil
-}
-
-// parsePushGatewayFile reads and validates <remoteDir>/push-gateway.json WITHOUT
-// opening any durable store, so the revoke redrive can consult it in a quiescent state
-// dir. present=false with a nil error is the missing-file case: every pairing's state
-// until it migrates.
-func parsePushGatewayFile(remoteDir string) (pushGatewayFile, remotegw.PushAddress, bool, error) {
-	var f pushGatewayFile
-	var addr remotegw.PushAddress
-	data, err := os.ReadFile(filepath.Join(remoteDir, "push-gateway.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return f, addr, false, nil
-	}
-	if err != nil {
-		return f, addr, false, fmt.Errorf("read push-gateway.json: %w", err)
-	}
-	if err := json.Unmarshal(data, &f); err != nil {
-		return f, addr, false, fmt.Errorf("parse push-gateway.json: %w", err)
-	}
-	if f.GatewayURL == "" || f.SubmitCapability == "" || f.PushAddress == "" {
-		return f, addr, false, fmt.Errorf("push-gateway.json present but missing a required field " +
-			"(gateway_url, submit_capability, push_address)")
-	}
-	if err := validateGatewayURL(f.GatewayURL); err != nil {
-		return f, addr, false, fmt.Errorf("push-gateway.json: %w", err)
-	}
-	raw, err := hex.DecodeString(f.PushAddress)
-	if err != nil || len(raw) != len(addr) {
-		return f, addr, false, fmt.Errorf("push-gateway.json: push_address must be %d hex-encoded bytes", len(addr))
-	}
-	copy(addr[:], raw)
-	return f, addr, true, nil
-}
-
-// resolvePushGatewayConfig reads the optional push-gateway.json and, only if present,
-// opens the three durable stores the wake-obligation machine needs (a dedicated wake_seq
-// file, distinct from PushSeq -- see remotegw.PushGatewayConfig.WakeSeq's doc comment for
-// why sharing one would be wrong). A missing file returns (nil, nil): this is NOT an
-// error, it is every pairing's state until it migrates.
-func resolvePushGatewayConfig(remoteDir string) (*remotegw.PushGatewayConfig, error) {
-	f, addr, present, err := parsePushGatewayFile(remoteDir)
-	if err != nil {
-		return nil, err
-	}
-	if !present {
-		return nil, nil
-	}
-
-	wakeSeq, err := remotegw.OpenSeqSource(filepath.Join(remoteDir, "outbound-wake.seq"))
-	if err != nil {
-		return nil, fmt.Errorf("open outbound wake seq: %w", err)
-	}
-	obligations, err := remotegw.OpenObligationStore(filepath.Join(remoteDir, "wake-obligations.json"))
-	if err != nil {
-		return nil, fmt.Errorf("open wake-obligation store: %w", err)
-	}
-	transport, err := remotegw.OpenTransportStore(filepath.Join(remoteDir, "push-transport.json"))
-	if err != nil {
-		return nil, fmt.Errorf("open push-transport store: %w", err)
-	}
-	return &remotegw.PushGatewayConfig{
-		GatewayURL:              f.GatewayURL,
-		SubmitCapability:        f.SubmitCapability,
-		MachineRevokeCapability: f.MachineRevokeCapability,
-		Address:                 addr,
-		Transport:               transport,
-		Obligations:             obligations,
-		WakeSeq:                 wakeSeq,
-	}, nil
-}
-
 // resolveRegistryPushGatewayConfig derives every authority-bearing runtime coordinate from
-// the validated sole registry row. A legacy sidecar is retired only after that row exists
-// and validates: the registry commit is the migration point, so a crash before it preserves
-// the old source while a crash after it can safely repeat this idempotent retirement.
+// the validated sole registry row.
 func resolveRegistryPushGatewayConfig(remoteDir string, push device.PushBinding) (*remotegw.PushGatewayConfig, error) {
 	if err := device.ValidatePushBinding(push); err != nil {
 		return nil, fmt.Errorf("registry push binding: %w", err)
-	}
-	if err := retireLegacyPushGatewayFile(remoteDir); err != nil {
-		return nil, err
 	}
 	var addr remotegw.PushAddress
 	copy(addr[:], push.Address)
@@ -445,42 +299,9 @@ func resolveRegistryPushGatewayConfig(remoteDir string, push device.PushBinding)
 	if err != nil {
 		return nil, fmt.Errorf("open wake-obligation store: %w", err)
 	}
-	transport, err := remotegw.OpenTransportStore(filepath.Join(remoteDir, "push-transport.json"))
-	if err != nil {
-		return nil, fmt.Errorf("open push-transport store: %w", err)
-	}
-	if err := transport.SetTransport(remotegw.TransportGateway); err != nil {
-		return nil, fmt.Errorf("adopt registry push transport: %w", err)
-	}
 	return &remotegw.PushGatewayConfig{
 		GatewayURL: push.GatewayURL, SubmitCapability: push.SubmitCapability,
-		MachineRevokeCapability: push.MachineRevokeCapability, WakeKey: wake,
-		Address: addr, Transport: transport, Obligations: obligations, WakeSeq: wakeSeq,
+		WakeKey: wake,
+		Address: addr, Obligations: obligations, WakeSeq: wakeSeq,
 	}, nil
-}
-
-func retireLegacyPushGatewayFile(remoteDir string) error {
-	path := filepath.Join(remoteDir, "push-gateway.json")
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect superseded push-gateway.json: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return errors.New("superseded push-gateway.json is not a regular file")
-	}
-	if err := os.Remove(path); err != nil {
-		return fmt.Errorf("retire superseded push-gateway.json: %w", err)
-	}
-	dir, err := os.Open(remoteDir)
-	if err != nil {
-		return fmt.Errorf("open remote directory after retiring push-gateway.json: %w", err)
-	}
-	defer func() { _ = dir.Close() }()
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("sync remote directory after retiring push-gateway.json: %w", err)
-	}
-	return nil
 }

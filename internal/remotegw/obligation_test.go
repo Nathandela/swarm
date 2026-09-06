@@ -539,7 +539,7 @@ func TestObligation_DriveDoesNotStampASubmitOutcomeOntoASupersededObligation(t *
 // self-heal: coalescing into a live-looking (pending/in_flight) record whose five minutes
 // have already elapsed would durably record a trigger that nothing may ever re-mint for,
 // if this Trigger call is not always immediately followed by a Drive -- a property only
-// TransportRouter's own calling convention happens to guarantee today, not one this
+// WakeRetryScheduler's direct calling convention happens to guarantee today, not one this
 // method's contract may assume of every future caller.
 func TestObligation_TriggerDoesNotCoalesceIntoAnAlreadyExpiredObligation(t *testing.T) {
 	h := newObligationHarness(t)

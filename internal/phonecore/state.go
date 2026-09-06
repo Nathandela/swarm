@@ -173,17 +173,20 @@ type State struct {
 	// current again -- a flag that could only be set would replace an unpairable phone with a
 	// permanently unpairable one. What protects it from a writer that has not noticed the
 	// revoke is the purge stamp rather than a merge rule; see Save and disown.
-	Disowned         bool
-	RoutingID        string            // this phone's relay routing id
-	EpochID          uint32            // current epoch the content key belongs to
-	Keys             crypto.EpochKeys  // wake + content keys for EpochID
-	SendSeq          map[uint32]uint64 // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
-	Receive          map[Bucket]uint64 // per-(sender,epoch) receive high-water (replay guard)
-	GrantEpoch       uint32            // highest accepted grant epoch (PB-STATE-4(c))
-	GrantSeq         uint64            // highest accepted grant seq for GrantEpoch
-	WakeReplay       uint64            // highest accepted push-wake counter
-	RelayCursor      uint64            // relay mailbox read cursor the next poll resumes from
-	RelayIncarnation string            // durable identity of the relay mailbox RelayCursor belongs to
+	Disowned   bool
+	RoutingID  string            // this phone's relay routing id
+	EpochID    uint32            // current epoch the content key belongs to
+	Keys       crypto.EpochKeys  // wake + content keys for EpochID
+	SendSeq    map[uint32]uint64 // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
+	Receive    map[Bucket]uint64 // per-(sender,epoch) receive high-water (replay guard)
+	GrantEpoch uint32            // highest accepted grant epoch (PB-STATE-4(c))
+	GrantSeq   uint64            // highest accepted grant seq for GrantEpoch
+	// WakeReplay is the reserved replay coordinate of the retired 78-byte wake format.
+	// Schema 26 keeps it byte-for-byte until a deliberate checkpoint bump can remove it;
+	// no current receiver reads or advances it.
+	WakeReplay       uint64
+	RelayCursor      uint64 // relay mailbox read cursor the next poll resumes from
+	RelayIncarnation string // durable identity of the relay mailbox RelayCursor belongs to
 	// phoneBinding is private so only the server-authenticated relay-v2 activation seam can
 	// advance it and only the pairing transaction can retire it into a generation floor.
 	phoneBinding PhoneBinding
@@ -416,8 +419,9 @@ type Store interface {
 	// guard survives any purge, so the first lock would have landed the phone in PB-KEY-3's
 	// terminal state. ADR-007 B133 deletes the lock and makes revoke/unpair the trigger, and
 	// the same fact reads the other way: being unable to get back in without the machine is
-	// what a revoke IS, and re-pairing mints fresh keys. The monotonic replay guards
-	// (GrantEpoch/GrantSeq, WakeReplay) are the exception and survive; see dropAllKeyMaterial.
+	// what a revoke IS, and re-pairing mints fresh keys. Monotonic replay coordinates
+	// (GrantEpoch/GrantSeq and the reserved WakeReplay field) are the exception and survive;
+	// see dropAllKeyMaterial.
 	// The clause is stated HERE and not only at the implementation because this interface is
 	// what a SECOND implementation gets written against.
 	//
@@ -575,7 +579,8 @@ type stateFile struct {
 
 // wakeContainer is the plaintext of stateFile.WakeState.
 type wakeContainer struct {
-	PushToken  string `json:"push_token,omitempty"`
+	PushToken string `json:"push_token,omitempty"`
+	// WakeReplay is retained only to preserve schema-26 bytes until a checkpoint bump.
 	WakeReplay uint64 `json:"wake_replay,omitempty"`
 }
 
@@ -1009,7 +1014,7 @@ func dropContentMaterial(st State) State {
 // PushToken goes with it, which is PB-PUSH-9's "deletion on revoke" done at the durable layer:
 // left behind it is a provider-visible identifier for a device its owner disowned.
 //
-// GrantEpoch/GrantSeq and WakeReplay deliberately SURVIVE, and this is the one thing a
+// GrantEpoch/GrantSeq and the reserved WakeReplay coordinate deliberately SURVIVE, and this is the one thing a
 // "destroy everything" reading gets wrong. They are strictly monotonic replay guards, and
 // rolling a replay guard BACK is never the safe direction -- a purged watermark accepts a
 // captured frame the phone has already consumed. They are also plaintext counters rather than

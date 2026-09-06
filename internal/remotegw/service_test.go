@@ -227,15 +227,10 @@ func TestService_CommandLoopDrainsQueuedCommand(t *testing.T) {
 	}
 }
 
-// --- ADR-015 P9/P12: PushGateway wiring at the Service seam --------------------------
+// --- Provider-gateway wiring at the Service seam -------------------------------------
 
-// TestNewService_PushGatewayConfiguredWrapsPusherInTransportRouter pins the production
-// wiring the R3 GREEN review found missing: with cfg.PushGateway set, PushConfig.Pusher
-// (PushNotifier's send seam) is a *TransportRouter over the relay's own PushTriggerer,
-// not the relay pusher directly -- so selection between legacy_relay and gateway becomes
-// exclusive (P12) the moment a pairing migrates, rather than never becoming reachable at
-// all because nothing in cmd/swarm-remote ever constructed the router.
-func TestNewService_PushGatewayConfiguredWrapsPusherInTransportRouter(t *testing.T) {
+// TestNewService_PushGatewayConfiguredWiresTheDirectScheduler pins the only provider path.
+func TestNewService_PushGatewayConfiguredWiresTheDirectScheduler(t *testing.T) {
 	mb := &pushCapableMailbox{}
 	svc := NewService(ServiceConfig{
 		Relay: mb,
@@ -243,32 +238,39 @@ func TestNewService_PushGatewayConfiguredWrapsPusherInTransportRouter(t *testing
 			GatewayURL:       "https://push.example.com",
 			SubmitCapability: "test-cap",
 			Address:          testPushAddress(0xF0),
+			WakeKey:          testWakeKey(),
 		},
 	})
-	router, ok := svc.notifier.cfg.Pusher.(*TransportRouter)
+	scheduler, ok := svc.notifier.cfg.Pusher.(*WakeRetryScheduler)
 	if !ok {
-		t.Fatalf("PushConfig.Pusher = %T, want *TransportRouter when PushGateway is configured", svc.notifier.cfg.Pusher)
-	}
-	if router.Legacy != PushTriggerer(mb) {
-		t.Fatal("TransportRouter.Legacy is not the relay's own PushTriggerer -- a rollback to " +
-			"legacy_relay would silently stop firing push_trigger at all")
+		t.Fatalf("PushConfig.Pusher = %T, want *WakeRetryScheduler when PushGateway is configured", svc.notifier.cfg.Pusher)
 	}
 	if svc.wakeMachine == nil {
 		t.Fatal("Service.wakeMachine is nil despite PushGateway being configured")
 	}
+	sub := &fakeSubmitter{}
+	svc.wakeMachine.cfg.Submitter = sub
+	if err := scheduler.PushTrigger(context.Background()); err != nil {
+		t.Fatalf("PushTrigger: %v", err)
+	}
+	if got := len(sub.all()); got != 1 {
+		t.Fatalf("gateway submissions = %d, want 1", got)
+	}
+	if mb.pushes != 0 {
+		t.Fatalf("relay push spy fired %d times with a gateway binding, want 0", mb.pushes)
+	}
 }
 
-// TestNewService_NoPushGatewayLeavesThePusherUntouched pins the other half: the default
-// (PushGateway nil on a foreground/legacy record) must keep the relay's PushTriggerer
-// wired directly, with no TransportRouter in the way.
-func TestNewService_NoPushGatewayLeavesThePusherUntouched(t *testing.T) {
+// TestNewService_NoPushGatewayIsForegroundOnly proves a relay that happens to expose an
+// old push seam cannot be selected without a current provider binding.
+func TestNewService_NoPushGatewayIsForegroundOnly(t *testing.T) {
 	mb := &pushCapableMailbox{}
 	svc := NewService(ServiceConfig{Relay: mb})
-	if _, ok := svc.notifier.cfg.Pusher.(*TransportRouter); ok {
-		t.Fatal("PushConfig.Pusher is a *TransportRouter with no PushGateway configured, want the legacy path untouched")
+	if svc.notifier.cfg.Pusher != nil {
+		t.Fatalf("PushConfig.Pusher = %v, want nil foreground-only sender", svc.notifier.cfg.Pusher)
 	}
-	if svc.notifier.cfg.Pusher != PushTriggerer(mb) {
-		t.Fatalf("PushConfig.Pusher = %v, want the relay client directly", svc.notifier.cfg.Pusher)
+	if mb.pushes != 0 {
+		t.Fatalf("relay push spy fired %d times without a PushGateway binding, want 0", mb.pushes)
 	}
 	if svc.wakeMachine != nil {
 		t.Fatal("Service.wakeMachine is non-nil with no PushGateway configured")
@@ -276,7 +278,7 @@ func TestNewService_NoPushGatewayLeavesThePusherUntouched(t *testing.T) {
 }
 
 // TestService_RedrivePendingWakeObligationsIsANoOpWithoutPushGateway pins that calling
-// the redrive hook on an unmigrated (legacy_relay-only) service is safe and cheap, since
+// the redrive hook on a foreground-only service is safe and cheap, since
 // cmd/swarm-remote calls it unconditionally at startup.
 func TestService_RedrivePendingWakeObligationsIsANoOpWithoutPushGateway(t *testing.T) {
 	svc := NewService(ServiceConfig{Relay: &pushCapableMailbox{}})
@@ -305,8 +307,7 @@ func TestService_RedrivePendingWakeObligationsSubmitsAPendingObligationAtStartup
 
 	sub := &fakeSubmitter{}
 	svc := NewService(ServiceConfig{
-		Relay:   &pushCapableMailbox{},
-		WakeKey: testWakeKey(),
+		Relay: &pushCapableMailbox{},
 		PushGateway: &PushGatewayConfig{
 			GatewayURL: "https://push.example.com", SubmitCapability: "cap", Address: addr,
 			Obligations: obligations,

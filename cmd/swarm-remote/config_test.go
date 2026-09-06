@@ -24,7 +24,6 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relayv2"
-	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
 // writeMachineIdentity provisions <stateDir>/remote/machine.key exactly as
@@ -45,7 +44,7 @@ func writeMachineIdentity(t *testing.T, stateDir string) *machineid.Identity {
 	return id
 }
 
-func TestResolveGatewayParams_RegistryPushBindingOwnsFreshWakeKeyAndGatewayTransportAcrossRestart(t *testing.T) {
+func TestResolveGatewayParams_RegistryPushBindingOwnsFreshWakeKeyAcrossRestart(t *testing.T) {
 	stateDir := t.TempDir()
 	id := writeMachineIdentity(t, stateDir)
 	writeRelayURL(t, stateDir, "ws://127.0.0.1:9999")
@@ -81,10 +80,6 @@ func TestResolveGatewayParams_RegistryPushBindingOwnsFreshWakeKeyAndGatewayTrans
 		epochWake := id.EpochKeys().WakeKey
 		if bytes.Equal(params.PushGateway.WakeKey[:], epochWake[:]) {
 			t.Fatalf("launch %d reused the epoch wake key", launch)
-		}
-		transport, err := params.PushGateway.Transport.Transport()
-		if err != nil || transport != remotegw.TransportGateway {
-			t.Fatalf("launch %d transport = (%q,%v), want gateway", launch, transport, err)
 		}
 	}
 }

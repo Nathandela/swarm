@@ -1118,3 +1118,78 @@ No cloud resource or index was created. Hosted admission remains closed and no A
 was connected. A public GitHub push was rejected by the publication safety gate; no retry via
 another path was made and no source publication is claimed. Live IAM/FCM/attestation, handset
 lifecycle, recovery and billing gates remain outstanding.
+
+## Registry-only push and current wake format
+
+After explicit publication approval, `47785270` was pushed non-force to public main.
+GitHub CI run `34022360908` passed all 14 jobs, including Android, Workerd, Firestore,
+lint and release checks; the push-gateway container run `34022360866` also passed.
+This supersedes the preceding publication-blocked status, not the outstanding hosted gates.
+
+Push now has two structural configurations: a validated registry binding constructs the
+gateway sender; no binding means foreground-only. The redundant transport selector and
+legacy relay sender are removed. Obsolete sidecars and the old push sequence file are
+ignored without modification. The retry scheduler directly supplies the notifier's
+reserve-before-append, provisional supersession and post-append drive operations.
+Current encrypted WakeV1 sequences, preferences, durable obligations and retry bounds remain.
+The remote sender no longer carries an unused machine-revoke capability; the authenticated
+registry and daemon's self-contained revoke custody still do.
+
+The foreground regression uses real configuration, file-backed pending custody and an HTTPS
+receiver: removing the registry binding causes zero requests and byte-identical custody;
+restoring that binding sends the exact stored envelope once. This stronger replacement was
+added, passed and independently reviewed before the obsolete transport-store test was removed.
+Root's repeated race check passed. Operator copy and current push/budget documentation now
+describe the v2 routes instead of claiming the relay stores provider tokens.
+
+The phone accepts only the 74-byte per-address WakeV1 format. A genuine, independently
+constructed retired 78-byte AEAD fixture failed the new refusal test before implementation;
+the new path refuses it without changing its reserved legacy replay coordinate. The old
+receiver and encoder are removed, while mailbox key separation and current wake authentication,
+TTL, replay and address isolation checks remain. The schema-26 legacy replay field is reserved,
+not rewritten or repurposed; removing that disk field is a separate checkpoint-version change.
+
+Canonical daemon revoke production code remains unchanged. New current-path regressions
+cover pre-commit staging failure leaving registry and epoch intact, exact bodyless HTTPS
+DELETE authority, 401/429/503 retaining custody across reopen, and recovery after actual epoch
+rotation with byte-identical retry followed by 204 cleanup. The phone/gateway contract now
+performs two actual HTTP deletes; the old second obligation drive was already done and therefore
+did not test the gateway tombstone. All handset revoke/drop/restart/no-readoption assertions
+remain. Independent review returned GO for these replacements; root's focused races passed
+(skeleton 5.451 s, phonecore 5.095 s). Current terminal-refusal retention is deliberately
+unchanged; its recovery limitation remains tracked by `agents-tracker-c2fa`.
+
+During this slice, full crypto/phonecore/mobile/gateway/remote-binary races passed
+(3.126 / 59.854 / 59.928 / 37.907 / 39.650 s), build passed and lint reported zero issues.
+The local Workerd suite also passed earlier in the slice; its gated visible-latency benchmark
+was not run. Final post-review gates are recorded below when available. No hosted resources
+were changed, admission remains closed, and no physical-handset acceptance is claimed.
+
+After the replacement tests passed root verification and independent review, the normal
+safety gate still rejected deletion of the dormant `RevokeObligationStore`/machine tail in
+`internal/remotegw/revokeproducer.go`, classifying it as removal of shared security/recovery
+code beyond the approval's scope. Nothing from that patch was applied; no bypass or alternate
+deletion was attempted. The live HTTP helper, old store and old store tests all remain.
+Consequently B94 still reports six unreachable exports, and this slice is not integrated
+into main. `agents-tracker-ppes` records the precise remaining approval boundary.
+
+Final post-review five-package races passed (crypto 3.469 s, phonecore 46.505 s,
+mobile 47.282 s, gateway 39.963 s, remote CLI 39.288 s); lint again reported zero issues.
+The new locked-content test encounters an actual `ErrKeyAuthRequired` from a persisted
+content blob, accepts the current per-address wake, then refuses replay after another locked
+restart. Independent Terra review returned GO; existing tier tests still prove content
+keys and caches are withheld. No changes were made to the protected push backup files.
+
+The owner then explicitly approved removing the named obsolete revoke store/machine while
+retaining the current HTTP revoker and daemon recovery. The normal patch succeeded: the
+dormant implementation and its store-only tests are removed, with current-path replacement
+tests and the live HTTP wire test retained. Full `internal/verify`, including B94 and the
+budget fences, now passes (37.955 s), without allowlist or root-set changes. Build and lint
+pass. Post-removal full races pass for crypto/phonecore/mobile/gateway/remote CLI
+(3.736 / 61.298 / 61.802 / 52.857 / 40.127 s), and canonical daemon custody races pass
+(3.685 s). This supersedes the preceding integration blocker.
+
+The final caller audit separately identified old pairing-wire hello/consent compatibility
+branches. `agents-tracker-7jvo` tracks their current-only replacement; foreground-only v2
+pairing remains a supported mode, not a reason to retain old wire parsing. The overall
+migration and hosted/handset gates remain open.

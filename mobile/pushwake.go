@@ -14,10 +14,9 @@ package swarmmobile
 // WHAT THIS VERB IS FOR. Three things, in order, and every one of them is a refusal the app
 // cannot make for itself:
 //
-//  1. Is this wake genuine? Only a wake key answers -- the per-pairing key for a 74-byte
-//     WakeV1 (ADR-015 P7), the epoch key for the legacy shape -- and both live in the Go core.
-//  2. Is it fresh, and is it new? The TTL and replay window of whichever receiver the shape
-//     selects (phonecore.AcceptWakeV1 / AcceptWake).
+//  1. Is this wake genuine? Only the per-pairing key for a 74-byte WakeV1 answers, and it
+//     lives in the Go core (ADR-015 P7).
+//  2. Is it fresh, and is it new? AcceptWakeV1 owns the TTL and per-address replay window.
 //  3. May the app render anything beyond the constant? Only if the CONTENT tier is open,
 //     which on a wake means the user has authenticated since the last lock (PB-KEY-2).
 //
@@ -40,8 +39,8 @@ import (
 //
 // It is owned HERE rather than in Kotlin for the reason PB-SAS-1 gives for the emoji table --
 // a second copy in Kotlin is a copy that drifts, and this one drifts towards saying more.
-// There is nothing in the payload to render even if the app wanted to: the wake is a constant
-// 78 bytes over an EMPTY plaintext with both key ids zeroed (ADR-007 B20). So the reachable
+// There is nothing in the payload to render even if the app wanted to: WakeV1 is a constant
+// 74 bytes over an EMPTY plaintext. So the reachable
 // defect is not a leaky payload, it is an app that goes and FETCHES content to fill the
 // notification in, and a constant with no inputs is the shape that cannot.
 const WakeNotificationText = "Swarm has an update for you."
@@ -111,21 +110,12 @@ func (a *App) HandlePushWake(payload string) (alert *WakeAlert, err error) {
 		return nil, classed(ErrClassInvalidRequest, fmt.Errorf(
 			"swarmmobile: the push payload is not the standard base64 the FCM data block carries: %w", derr))
 	}
-	// ROUTED BY WIRE SHAPE (Wave R3 scope 3): the 74-byte WakeV1 envelope goes to the
-	// per-pairing receiver (AcceptWakeV1: the pairing's phone-minted wake key, the 5-minute
-	// bound, the durable per-address coordinate -- PG-WAKE-13), everything else stays on
-	// the legacy epoch-key path, which P12 keeps until the migration retires it. Length is
-	// the honest discriminator: the two generations are size-pinned on both ends (74 vs
-	// 78), and a 74-byte buffer fed to the legacy parser could only ever be refused.
-	accept := core.AcceptWake
-	if len(raw) == phonecore.WakeV1Size {
-		accept = core.AcceptWakeV1
-	}
-	if werr := accept(raw); werr != nil {
-		// The class split is the same on both paths: no key held for the address is the
-		// WAITING verdict (a just-paired phone whose binding has not landed self-heals);
-		// everything else -- forged, replayed, expired, revoked, malformed -- is a wake
-		// this phone will not act on.
+	// WakeV1 is the sole accepted push format. AcceptWakeV1 rejects every other decoded
+	// shape before AEAD verification and durably counts the refusal.
+	if werr := core.AcceptWakeV1(raw); werr != nil {
+		// No key held for the address is the WAITING verdict (a just-paired phone whose
+		// binding has not landed self-heals); everything else -- forged, replayed, expired,
+		// revoked, malformed -- is a wake this phone will not act on.
 		if errors.Is(werr, phonecore.ErrNoWakeKey) {
 			return nil, classed(ErrClassAwaitingKey, werr)
 		}

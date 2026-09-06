@@ -910,7 +910,7 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 
 	_, _ = fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
 	if purge == relayPurgeDone {
-		_, _ = fmt.Fprintln(stdout, "relay state purged: its mailbox, its push token and its route are gone from the relay")
+		_, _ = fmt.Fprintln(stdout, "relay state purged: its mailbox and its route are gone from the relay")
 	}
 	// PB-STATE-10: the revoke is the MIDDLE of a four-step recovery, not the end of a
 	// job. An owner who stops here has a machine with no device and a handset that
@@ -934,7 +934,7 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 		if resolveErr != nil {
 			_, _ = fmt.Fprintf(stderr, "remote revoke: recording the refusal failed: %v\n", resolveErr)
 		} else if matched {
-			_, _ = fmt.Fprintf(stderr, "remote revoke: the handset keeps its relay mailbox, its push wake and "+
+			_, _ = fmt.Fprintf(stderr, "remote revoke: the handset keeps its relay mailbox and "+
 				"its route (routing id %s). Nothing will re-present a refused purge; cleaning that state up "+
 				"at the relay is now a manual task.\n", routingID)
 		} else {
@@ -962,7 +962,7 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 			return 1
 		}
 		_, _ = fmt.Fprintf(stderr, "remote revoke: this machine holds no relay identity (%v), so the relay half "+
-			"of this revocation could not run. The handset keeps its relay mailbox, its push wake and its "+
+			"of this revocation could not run. The handset keeps its relay mailbox and its "+
 			"route (routing id %s) at the owed relay until a restored identity drives the recorded purge, "+
 			"or it is cleaned up there by hand.\n", purgeErr, routingID)
 	default:
@@ -1066,14 +1066,14 @@ func retirePurgeObligation(stateDir, routingID, attemptID string) (bool, error) 
 // review R2-3), and a paired machine's drive never dials.
 func reportDeferredPurge(routingID string, obligated bool, stderr io.Writer) {
 	if obligated {
-		_, _ = fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox, "+
-			"its push wake and its route (routing id %s). The purge is recorded durably and is driven on this "+
+		_, _ = fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox "+
+			"and its route (routing id %s). The purge is recorded durably and is driven on this "+
 			"machine's next relay dial: `swarm remote pair` drives it (and refuses to proceed until it "+
 			"lands), and so does a later `swarm remote revoke` that reaches the relay.\n", routingID)
 		return
 	}
-	_, _ = fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox, its "+
-		"push wake and its route (routing id %s). No deferral is recorded for it, and this verb cannot "+
+	_, _ = fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox "+
+		"and its route (routing id %s). No deferral is recorded for it, and this verb cannot "+
 		"re-address the device: the local record naming that routing id is already gone.\n", routingID)
 }
 
@@ -1250,9 +1250,8 @@ const (
 )
 
 // purgeRelayState is the RELAY half of PB-STATE-10's "purge machine and relay state":
-// it empties the revoked handset's mailbox and drops its push token, via the relay's own
-// device_revoke op -- which until this slice had no production caller anywhere in the
-// tree, so the requirement's third step was performed by nothing.
+// it removes the revoked handset's mailbox and authorization through native v2 REVOKE.
+// Push-address deletion is separately held by the daemon's durable revoke custody.
 //
 // Without it the stranded mailbox keeps whatever the gateway appended while the phone
 // was silent, up to the relay's 7-day retention. A handset that recovers WITHOUT a full
@@ -2062,7 +2061,7 @@ func reportRelayPurgeState(stateDir string, stdout io.Writer) {
 	}
 	for _, ob := range resolved {
 		_, _ = fmt.Fprintf(stdout, "relay purge REFUSED: routing id %s at %s -- %s; that relay still "+
-			"holds the device's mailbox, push wake and route (manual cleanup)\n",
+			"holds the device's mailbox and route (manual cleanup)\n",
 			ob.RoutingID, ob.RelayURL, ob.Refusal)
 	}
 }

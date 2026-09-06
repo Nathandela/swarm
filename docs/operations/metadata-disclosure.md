@@ -1,5 +1,24 @@
 # Metadata disclosure — what the relay operator and the push provider actually observe
 
+## Current v2 scope
+
+ADR-027 supersedes the legacy relay descriptions below. The sole v2 relay has no FCM token
+map, provider credentials or push-trigger operation. Its durable metadata includes routing and
+membership identities, revoked ceremony markers, stream generations/cursors, append receipts,
+ciphertext sizes and expiry, pairing rendezvous and quota bookkeeping. Connection timing and
+network metadata remain observable; encrypted content is not a promise of metadata privacy.
+The [v2 plan](../specifications/remote-scale-to-zero-plan.md) defines retention and authority
+requirements, and [relay source](../../services/relay/src/worker.mjs) defines the implemented
+storage. Push tokens and bounded transactional replay/quota state belong to the separate
+Firestore-backed gateway, not the relay. Foreground-only operation makes no background-delivery
+promise. Hosted admission is still closed; this is a source/architecture disclosure, not evidence
+of handset delivery or measured provider retention.
+
+Sections 1–2c below are historical v1 analysis, retained to explain the earlier disclosure
+corrections. Their token buckets, proxy quota maps, 78-byte relay wakes and compatibility window
+are not current deployment instructions or v2 behavior. Later gateway/provider analysis is
+subject to the v2 plan's replacement of process-local metadata with bounded shared Firestore state.
+
 **Scope: PB-OPS-3.** ADR-007 D11 states the rule this document obeys: *"the exposure is
 documented, retention is bounded, logs carry no bodies, and the 'managed hosting leaks nothing'
 claim is withdrawn."* D11 also forbids claiming **less** exposure than exists, which is why several

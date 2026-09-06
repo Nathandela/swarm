@@ -1,21 +1,16 @@
 // FAILING-FIRST (TDD RED, GG-5) for Wave R3 round 3, the review's production-reachability
 // finding, receipt half: "FCM message receipt must verify the WakeV1 envelope (74 bytes,
-// AAD-covered) with the pairing's wake key before acting" (scope 3's hard requirement) was
-// true of NO shipped path -- SwarmMessagingService -> App.HandlePushWake fed every payload
-// to the legacy epoch-key receiver (AcceptWake, 78 bytes, 10m TTL), so a WakeV1 arriving
-// at a real handset was refused as a parse error and never counted by the v1 counter.
+// AAD-covered) with the pairing's wake key before acting" (scope 3's hard requirement).
 //
 // WHAT IS UNDER TEST: HandlePushWake -- the ONE facade verb the FirebaseMessagingService
-// calls -- must route by wire shape: the 74-byte WakeV1 envelope goes to the per-pairing
-// receiver (Core.AcceptWakeV1, PG-WAKE-13), everything else stays on the legacy path
-// unchanged (P12 keeps the epoch receiver until the migration retires it; the legacy
-// conformance suite in mobile/conformance pins that half). The producer is the REAL
-// machine-side remotegw.SealWakeV1, so the routed path is proven against the bytes a
-// machine actually submits.
+// calls -- accepts only the 74-byte WakeV1 envelope through the per-pairing receiver
+// (Core.AcceptWakeV1, PG-WAKE-13). The producer is the REAL machine-side
+// remotegw.SealWakeV1, so the path is proven against the bytes a machine actually submits.
 package swarmmobile
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +18,7 @@ import (
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remotegw"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // r3ar3App is an App over one in-memory phone core, as the push-woken Android process
@@ -47,6 +43,61 @@ func r3ar3SealV1(t *testing.T, key crypto.WakeKey, addr phonecore.PushAddress, s
 		t.Fatalf("remotegw.SealWakeV1: %v", err)
 	}
 	return base64.StdEncoding.EncodeToString(env)
+}
+
+// retiredWakePayload builds the genuine 78-byte type-0x02 envelope the removed relay
+// path used to send. It reproduces that retired wire locally so this refusal gate does
+// not keep the production SealWake API alive merely to test that its output is rejected.
+func retiredWakePayload(t *testing.T, key crypto.WakeKey, epoch uint32, seq uint64, issuedAt time.Time) string {
+	t.Helper()
+	issuedMS := issuedAt.UnixMilli()
+	nonce := make([]byte, chacha20poly1305.NonceSizeX)
+	for i := range nonce {
+		nonce[i] = byte(0x80 + i)
+	}
+	aad := []byte{crypto.VersionV1, 0x02}
+	aad = binary.BigEndian.AppendUint32(aad, epoch)
+	aad = binary.BigEndian.AppendUint64(aad, seq)
+	aad = append(aad, make([]byte, 8)...) // retired sender_key_id
+	aad = binary.BigEndian.AppendUint64(aad, uint64(issuedMS))
+	aead, err := chacha20poly1305.NewX(key[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := aead.Seal(nil, nonce, nil, aad)
+	raw := []byte{crypto.VersionV1, 0x02}
+	raw = binary.BigEndian.AppendUint32(raw, epoch)
+	raw = binary.BigEndian.AppendUint64(raw, seq)
+	raw = append(raw, make([]byte, 16)...) // retired recipient/sender key ids
+	raw = binary.BigEndian.AppendUint64(raw, uint64(issuedMS))
+	raw = append(raw, nonce...)
+	raw = append(raw, tag...)
+	if len(raw) != 78 {
+		t.Fatalf("retired wake fixture length = %d, want 78", len(raw))
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func TestHandlePushWake_RefusesRetired78ByteWakeWithoutMutatingItsReservedCoordinate(t *testing.T) {
+	app := r3ar3App(t)
+	key := crypto.WakeKey{0x61, 0x62, 0x63}
+	const epoch = uint32(7)
+	if err := app.core.Mutate(func(st *phonecore.State) {
+		st.Machine = "retired-wake-fixture"
+		st.EpochID = epoch
+		st.Keys.WakeKey = key
+		st.WakeReplay = 41
+	}); err != nil {
+		t.Fatalf("seed retired wake state: %v", err)
+	}
+
+	_, err := app.HandlePushWake(retiredWakePayload(t, key, epoch, 42, time.Now()))
+	if err == nil || !strings.HasPrefix(err.Error(), ErrClassInvalidRequest+": ") {
+		t.Fatalf("retired 78-byte wake error = %v, want %s refusal", err, ErrClassInvalidRequest)
+	}
+	if got := app.core.State().WakeReplay; got != 41 {
+		t.Fatalf("reserved legacy wake coordinate mutated to %d, want 41", got)
+	}
 }
 
 // TestR3AR3_HandlePushWake_RoutesTheWakeV1EnvelopeToTheV1Receiver: the shipped FCM

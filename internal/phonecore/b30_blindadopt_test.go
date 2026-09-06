@@ -15,7 +15,7 @@ package phonecore
 // and the drain consumes it through MailboxRouter.AcceptCommit -> installGrant.
 //
 // WHAT IS ACTUALLY LOST, measured rather than assumed. fileStore.mergeGuards raises the
-// REPLAY-GUARD coordinates monotonically -- SendSeq, Receive, GrantEpoch/GrantSeq, WakeReplay,
+// REPLAY-GUARD coordinates monotonically -- SendSeq, Receive, GrantEpoch/GrantSeq,
 // RelayCursor -- so durable custody refuses to rewind any of them and no seq is ever
 // re-issued. What it does NOT protect is everything adopted as given, and two of those are
 // epoch-scoped: State.EpochID and State.Keys. App.pin ZEROES the keys itself when the pairing

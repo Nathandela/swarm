@@ -3,38 +3,28 @@ package phonecore
 // FAILING-FIRST (TDD RED, GG-5) for Wave R4 deliverable 4's machine-side revoke
 // PRODUCER -- bead agents-tracker-u37c: "phonecore.HonorMachineRevoke exists and is
 // tested, but no machine-side path produces the revoke message to the phone." This file
-// pins the END-TO-END SHAPE the producer closes: THE MACHINE PRODUCES (a durable
-// obligation presents the machine-revoke capability at the gateway, deleting the
-// pairing's push address, retried across process death, idempotent through the PG-REV-2
-// tombstone, independent of the local epoch rotation the revoke performs), and THE
-// PHONE HONORS (the already-shipped HonorMachineRevoke arm severs the local binding
-// forever). ADR-015 P6; playbook 3.2 (:146-147): "Machine-side device revocation uses
-// the machine-revoke capability and retries deletion durably after local epoch
-// rotation."
+// pins the phone-and-gateway half: THE MACHINE presents the machine-revoke capability,
+// the real gateway deletes the pairing's push address and accepts the PG-REV-2 tombstoned
+// retry, and THE PHONE HONORS (the already-shipped HonorMachineRevoke arm severs the
+// local binding forever). Canonical daemon custody tests own persistence across machine
+// process death and epoch rotation.
 //
 // THE GATEWAY IN EVERY TEST IS THE REAL internal/pushgw SERVER, in process, exactly as
 // the R3 suite runs it (fixtures in r3a_installation_test.go). No mock of the contract.
 //
-// THE CONTRACT UNDER TEST (undefined in internal/remotegw today; its unit half lives in
-// internal/remotegw/r4_revokeproducer_test.go):
+// THE CONTRACT UNDER TEST:
 //
 //   - remotegw.HTTPAddressRevoker{BaseURL, MachineRevokeCapability, Client}: DELETE
 //     /v1/addresses/{addr} bearing "Swarm-Revoke <capability>", no body.
-//   - remotegw.OpenRevokeObligationStore(path): the durable custody of the one revoke
-//     obligation, byte-file-backed like OpenObligationStore.
-//   - remotegw.NewRevokeObligationMachine(remotegw.RevokeObligationConfig{...}): Record
-//     durably registers the obligation; Drive presents it and classifies the outcome --
-//     2xx/tombstoned-204 terminal, transport failure and 5xx retryable.
+//   - canonical daemon custody tests cover durable recovery before and after a failed
+//     delete; this test drives the live HTTP helper twice against the real gateway,
+//     including the gateway's tombstoned 204 retry.
 //
-// NOTE ON B94: wiring the producer is also what deletes agents-tracker-u37c's
-// disclosure in the R3 evidence; the GREEN slice must ledger that alongside the
-// phonecore MM4 rows (internal/verify/phaseb_reachability_test.go:114-133).
 
 import (
 	"context"
 	"errors"
 	"net/http"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -45,10 +35,9 @@ import (
 // in one pass against the real gateway.
 //
 //  1. The phone registers, allocates, and adopts the binding (the pairing's local half).
-//  2. The MACHINE records a durable revoke obligation and drives it: the gateway deletes
-//     the address, and the machine's own submit capability is dead from that moment.
-//  3. A durable retry after a simulated machine process death re-presents the SAME
-//     delete and the tombstone answers 204 -- terminal, not an error.
+//  2. The MACHINE's live HTTP helper drives the revoke: the gateway deletes the address,
+//     and the machine's own submit capability is dead from that moment.
+//  3. A second HTTP request re-presents the SAME delete and the tombstone answers 204.
 //  4. The PHONE honors the revoke: the binding is severed forever, wakes under the dead
 //     key are dropped and counted, the severance survives phone process death, and the
 //     address can never be re-adopted.
@@ -71,27 +60,13 @@ func TestR4_RevokeProducer_EndToEnd_MachineProducesPhoneHonors(t *testing.T) {
 		t.Fatalf("binding wake: status %d, want 200", status)
 	}
 
-	// 2. Machine half: the durable producer. Record BEFORE driving -- the obligation is
-	// custody, not a fire-and-forget HTTP call.
-	dir := t.TempDir()
-	store, err := remotegw.OpenRevokeObligationStore(filepath.Join(dir, "revoke-obligation.json"))
-	if err != nil {
-		t.Fatalf("OpenRevokeObligationStore: %v", err)
+	// 2. Machine half: the live HTTP helper. Canonical daemon custody owns durable
+	// recovery; this test proves the helper's request reaches the real gateway contract.
+	revoker := &remotegw.HTTPAddressRevoker{
+		BaseURL: hs.URL, MachineRevokeCapability: alloc.MachineRevokeCapability, Client: hs.Client(),
 	}
-	machine := remotegw.NewRevokeObligationMachine(remotegw.RevokeObligationConfig{
-		Store: store,
-		Revoker: &remotegw.HTTPAddressRevoker{
-			BaseURL:                 hs.URL,
-			MachineRevokeCapability: alloc.MachineRevokeCapability,
-			Client:                  hs.Client(),
-		},
-		Address: remotegw.PushAddress(alloc.Address),
-	})
-	if err := machine.Record(); err != nil {
-		t.Fatalf("recording the revoke obligation: %v", err)
-	}
-	if err := machine.Drive(context.Background()); err != nil {
-		t.Fatalf("driving the revoke obligation against the live gateway: %v", err)
+	if err := revoker.RevokeAddress(context.Background(), remotegw.PushAddress(alloc.Address)); err != nil {
+		t.Fatalf("driving the revoke against the live gateway: %v", err)
 	}
 
 	// The pairing's submit capability is dead at the gateway: nothing further forwards.
@@ -102,25 +77,9 @@ func TestR4_RevokeProducer_EndToEnd_MachineProducesPhoneHonors(t *testing.T) {
 		t.Errorf("gateway forwarded %d wakes after the revoke, want still 1", got)
 	}
 
-	// 3. Machine process death: a fresh store over the same file must still know the
-	// obligation, and re-driving it hits the tombstone's idempotent 204 -- a durable
-	// retry across an exit is the obligation's whole reason to exist.
-	store2, err := remotegw.OpenRevokeObligationStore(filepath.Join(dir, "revoke-obligation.json"))
-	if err != nil {
-		t.Fatalf("reopening the revoke-obligation store: %v", err)
-	}
-	machine2 := remotegw.NewRevokeObligationMachine(remotegw.RevokeObligationConfig{
-		Store: store2,
-		Revoker: &remotegw.HTTPAddressRevoker{
-			BaseURL:                 hs.URL,
-			MachineRevokeCapability: alloc.MachineRevokeCapability,
-			Client:                  hs.Client(),
-		},
-		Address: remotegw.PushAddress(alloc.Address),
-	})
-	if err := machine2.Drive(context.Background()); err != nil {
-		t.Fatalf("the durable retry after process death failed: %v (PG-REV-2's tombstone makes "+
-			"the re-presented delete a 204, not an error)", err)
+	// 3. The gateway's machine-revoke tombstone accepts a real second request.
+	if err := revoker.RevokeAddress(context.Background(), remotegw.PushAddress(alloc.Address)); err != nil {
+		t.Fatalf("the tombstoned machine revoke retry failed: %v", err)
 	}
 
 	// 4. Phone honors: the aftermath HonorMachineRevoke already owns, now reachable end

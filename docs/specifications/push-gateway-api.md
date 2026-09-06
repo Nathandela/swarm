@@ -59,7 +59,7 @@ measurement. The Firebase facts in §12 are the only observed facts here.
 The wire contract between three parties that do not trust each other symmetrically:
 
 - **Android** (`dev.swarm.phone`) → gateway: register, rotate token, allocate address, revoke address.
-- **`swarm-remote`** → gateway: submit wake, revoke address.
+- **Machine** → gateway: `swarm-remote` submits wakes; daemon-owned durable custody revokes addresses.
 - **gateway** → **FCM**: one data-only high-priority message carrying the opaque `WakeV1` bytes.
 
 Plus the `WakeV1` envelope itself, which the gateway forwards and never opens, and the durable
@@ -946,7 +946,7 @@ does not, ADR-015 wins and §14 records the difference.
 | Offset | Bytes | Field | Encoding |
 |---:|---:|---|---|
 | 0 | 1 | `version` | `0x01` |
-| 1 | 1 | `type` | `0x03` — a **new** value, distinct from `TypeMailbox` 0x01 and the legacy `TypePushWake` 0x02 (`internal/remote/crypto/envelope.go:15-19`) |
+| 1 | 1 | `type` | `0x03` — distinct from `TypeMailbox` 0x01 and the retired wake type 0x02 |
 | 2 | 16 | `push_address` | the raw 16 opaque bytes of PG-ALLOC-1 |
 | 18 | 8 | `wake_seq` | uint64 big-endian |
 | 26 | 8 | `issued_at` | int64 big-endian, Unix milliseconds |
@@ -958,16 +958,15 @@ does not, ADR-015 wins and §14 records the difference.
   over a zero-length plaintext. There is no ciphertext, only a tag.
 - **PG-WAKE-2** (Ubiquitous) The size SHALL be exactly 74 bytes, pinned as one constant with schema
   tests that fail when it moves, and derivable from this table so a reviewer can recompute it rather
-  than trust it (ADR-015 P8). `PushWakeEnvelopeSize` moves from 78 to 74
-  (`internal/remotegw/push.go:20-29`); its doc comment's argument — that a conceded size disclosure
-  "is benign only while it is CONSTANT" — is untouched, and this is a one-time move of the pin, not a
-  licence for the size to depend on anything.
-- **PG-WAKE-3** (Ubiquitous) The type byte SHALL be checked and the three shapes separated **before**
-  any AEAD is touched, exactly as `crypto.OpenWake` refuses a type-0x01 envelope today. The domain
+  than trust it (ADR-015 P8). `WakeV1Size` in `internal/remotegw/wakev1.go` pins the sole current
+  provider envelope. The retired 78-byte relay wake is not generated alongside it; removing that
+  unused work does not permit the current wire size to vary with session content.
+- **PG-WAKE-3** (Ubiquitous) The type byte SHALL be checked and retired/non-wake shapes refused **before**
+  any AEAD is touched, as `phonecore.AcceptWakeV1` does today. The domain
   string in the AAD is the second, cryptographic half of that separation and is not a substitute for
   the first.
-- **PG-WAKE-4** (Ubiquitous) `WakeV1` is added **beside** the frozen mailbox envelope, never by
-  editing it. `crypto.EnvelopeHeader`, its `aad()` and that function's deliberate
+- **PG-WAKE-4** (Ubiquitous) `WakeV1` is separate from the mailbox envelope.
+  `crypto.EnvelopeHeader`, its `aad()` and that function's deliberate
   `recipient_key_id` exclusion (`envelope.go:43-68`), `SealMailbox`/`OpenMailbox`, the XChaCha nonce
   rules and the mailbox seq discipline are not edited by anything in this document.
 - **PG-WAKE-5** (Ubiquitous) There are **no key-id fields** on this shape, so B20's "key ids zeroed"
@@ -975,18 +974,16 @@ does not, ADR-015 wins and §14 records the difference.
   forbidden: `aad()` excludes `recipient_key_id`, so half the address would sit outside the
   authenticator, mutable by relay, gateway or provider without breaking the tag — and an
   unauthenticated address selects which high-water coordinate the phone compares against, which is
-  the pin-the-window lever `internal/phonecore/wake.go:87-95` exists to deny.
+  the pin-the-window lever `internal/phonecore/pushbinding.go` denies by authenticating before advancing.
 
 ### 5.2 `expires_at` is derived, not carried
 
 - **PG-WAKE-6** (Ubiquitous) `expires_at = issued_at + 300000` milliseconds. It is computed
   identically by both sides, bound in the AAD, and **absent from the wire**.
-- **PG-WAKE-7** (Ubiquitous) Five minutes, not ten. This narrows `WakeMaxAge`
-  (`internal/phonecore/wake.go:34-42`) from `10 * time.Minute` to `5 * time.Minute` and matches the
-  five-minute FCM TTL the playbook sets for the high-priority data wake (`:303`). The comment above
-  that constant survives verbatim at five minutes: narrowing the bound strengthens exactly the
-  property it defends. The persisted counter is unchanged — it is what actually rejects a replay;
-  the expiry is only the outer bound.
+- **PG-WAKE-7** (Ubiquitous) `WakeV1MaxAge` is five minutes
+  (`internal/phonecore/pushbinding.go`), matching the five-minute FCM TTL the playbook sets for the
+  high-priority data wake (`:303`). The persisted per-address counter rejects replays; the expiry is
+  the outer bound.
 
   *Recorded divergence*: playbook `:535-536` lists a five-minute expiry among the fields `WakeV1`
   "carries". ADR-015 P8 keeps every item of that list on the wire **except** `expires_at`, pins the
@@ -1048,18 +1045,16 @@ AAD = "swarm-wake-v1"          (13 bytes, ASCII, no terminator)
   Step 3 before step 4 is the whole contract. A receiver that advanced the coordinate before
   authenticating would hand any party on the path a one-packet permanent denial of service: an
   unopenable envelope carrying seq 2^63 pins the window at the top and every genuine wake afterwards
-  is refused as a replay (`internal/phonecore/wake.go:67-79`). The address is a routing field, as the
+  is refused as a replay (`internal/phonecore/pushbinding.go`). The address is a routing field, as the
   epoch id was; it selects **which** coordinate to compare, and comparing is still step 4. Selecting
   on it is safe only because it is fully AAD-covered (PG-WAKE-5).
-- **PG-WAKE-14** (Ubiquitous) The old step 2 — "require the wake to name the epoch this phone holds a
-  key for" (`wake.go:64-73`, `:130-133`) — is **removed**, not retargeted. Its defence at `wake.go:87-95`
-  rests on "the wake key is per epoch and a revoke rotates it", which ADR-015 P7 makes false. The
-  property it protected is preserved by whole-address revocation instead: a revoked address is deleted
-  at the gateway and its successor is a *different* `push_address` with its own high-water, so no
+- **PG-WAKE-14** (Ubiquitous) Whole-address revocation preserves isolation without an epoch field:
+  a revoked address is deleted at the gateway and its successor is a *different* `push_address` with its own high-water, so no
   coordinate is shared across generations for a stale wake to pin.
-- **PG-WAKE-15** (Ubiquitous) `State.WakeReplay` becomes **one coordinate per `push_address`**. With
-  ADR-018's N pairings that is a table, and one machine's wake SHALL NOT advance another machine's
-  coordinate.
+- **PG-WAKE-15** (Ubiquitous) The push-binding store holds **one coordinate per `push_address`**.
+  With ADR-018's N pairings that is a table, and one machine's wake SHALL NOT advance another
+  machine's coordinate. `State.WakeReplay` is only a reserved schema-26 field until a deliberate
+  checkpoint bump removes it; no current receiver reads or advances it.
 - **PG-WAKE-16** (Ubiquitous) `wake_seq` SHALL be per-pairing, durable on the machine, and strictly
   increasing. It starts at 1; the phone's high-water starts at 0; acceptance requires
   `wake_seq > high_water`. Gaps are legal, and a gap SHALL NOT be treated as loss or as a repair
@@ -1448,26 +1443,27 @@ the playbook or ADR-015; §13.4 puts them to the owner.
 
 ---
 
-## 10. Migration and the R1 fixture
+## 10. V2 push selection and historical R1 fixture
 
 ### 10.1 `push_transport`
 
-- **PG-MIG-1** (Ubiquitous) Each pairing SHALL persist exactly one of `legacy_relay`, `gateway`,
-  `foreground_only` (playbook `:955-957`).
-- **PG-MIG-2** (Event-driven) WHEN a machine leaves `legacy_relay`, it SHALL do so only after **all
-  four**: Android gateway registration, address allocation, authenticated pairing-update
-  acknowledgement, and a **successful gateway test wake**. The fourth is the migration instance of
-  PG-ALLOC-2's binding event, which every pairing owes; this requirement adds the other three and the
-  atomicity, not the test wake itself. The transition SHALL be atomic; rollback selects one
-  transport, never both.
-- **PG-MIG-3** (State-driven) WHILE the compatibility window is open, revocation attempts both legacy
-  and gateway deletion idempotently, and the wake sequence plus the selected state forbid double
-  delivery.
+ADR-027 replaces PG-MIG-1..3: the only modes are `gateway` and `foreground_only`.
+There is no relay push arm, compatibility window, sidecar credential import or transport rollback
+to v1. No separate transport-selection file is needed: obsolete sidecars are ignored without
+being imported, rewritten or deleted. A pairing without an authenticated gateway binding is
+foreground-only; gateway delivery requires the
+validated registry binding, including the successful allocation-binding test wake (PG-ALLOC-2).
+Durable wake obligations and daemon-owned per-device revoke custody remain required. Removing
+the legacy sidecar does not permit losing a pending revoke when its registry row is deleted.
+
 - **PG-MIG-4** (Ubiquitous) `foreground_only` is a user-choosable state with honest copy: the app
   SHALL say "foreground updates only" and SHALL NOT imply reliable background delivery
   (playbook `:148-149`).
 
-### 10.2 The fixture R1 owes
+### 10.2 Historical R1 fixture (not a v2 compatibility requirement)
+
+The migration/legacy fixtures below document the retired design. They must not require restoring
+a removed v1 path; retain or port their independent safety assertions to the current transport.
 
 R1's deliverable list ends with "migration fixture" (playbook `:698`). This document **specifies** it;
 it does not contain it, and no part of it has been generated or run.
@@ -1486,7 +1482,7 @@ it does not contain it, and no part of it has been generated or run.
   | `wakev1-mutations.json` | One mutated copy per header field, each expected to fail to open, plus a type-byte mutation expected to fail the pre-AEAD shape check | Playbook `:540-541`'s mandatory header-mutation test |
   | `wakev1-replay.json` | Two wakes at seq N and N-1 against a high-water of N | Rollback and replay refusal |
   | `transport-migration.json` | A pairing record in each of the three `push_transport` states, plus the four-precondition transition and a rollback | PG-MIG-1..3, including that rollback selects exactly one transport |
-  | `legacy-78.json` | One legacy type-0x02 78-byte wake with zeroed key ids | That the legacy shape still parses under `legacy_relay` and is rejected by the `WakeV1` parser |
+  | `legacy-78.json` | One retired type-0x02 78-byte wake with zeroed key ids | That the retired shape is rejected by the current `WakeV1` receiver |
   | `errors.json` | Every code of §4 with its status and `retryable` | PG-ERR-1's closed vocabulary and §6.4's transition mapping |
 
 - **PG-FIX-3** (Ubiquitous) The golden vectors SHALL be generated by an implementation and then

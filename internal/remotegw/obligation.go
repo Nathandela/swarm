@@ -21,14 +21,11 @@ package remotegw
 // NOTE ON PG-OBL-2's ORDERING: PG-OBL-2 requires the obligation recorded "before or
 // atomically with" mailbox publication. Trigger below is the durable write with no
 // network call that makes the "before" half possible, and PushNotifier.Event
-// (push.go's preAppendObligation) now calls it -- through TransportRouter.
-// PreAppendObligation, pushtransport.go -- BEFORE n.inner.Event(rec) publishes, for a
-// gateway-transport pairing specifically. The legacy_relay path's own ordering guarantee
-// ("the wake follows a SUCCESSFUL append", push.go:Event) is untouched: preAppendObligation
-// is a no-op unless the Pusher implements the optional pre-append capability AND the
-// live selection is TransportGateway. Filed and closed as bd issue
+// (push.go's preAppendObligation) now calls it through WakeRetryScheduler's direct
+// provider seam BEFORE n.inner.Event(rec) publishes. It is a no-op only when the
+// foreground-only Service has no Pusher. Filed and closed as bd issue
 // agents-tracker-hggx.4.2; see push.go's Event/preAppendObligation/peekWakeDisposition and
-// pushtransport.go's TransportRouter.PreAppendObligation for the full mechanism, and
+// WakeRetryScheduler.PreAppendObligation for the full mechanism, and
 // TestPushNotifier_GatewayTransportAppendsTheObligationBeforePublishingTheMailboxRecord
 // (push_obligation_order_test.go) for the regression proof.
 
@@ -169,7 +166,7 @@ type WakeObligationConfig struct {
 // increment (and Attempts, if a restart-driven Drive raced in) is never clobbered. driving
 // is a same-process guard, separate from the persisted state: it stops two goroutines
 // (e.g. push.go's deferred-wake timer and an immediate trigger both landing on
-// TransportRouter for the same address) from starting a SECOND concurrent submit for an
+// another scheduler for the same address) from starting a SECOND concurrent submit for an
 // obligation the first already marked in_flight -- the persisted in_flight state alone
 // cannot distinguish "a submit is running right now" from "a submit was interrupted by a
 // crash and needs re-driving", which restart re-drive (PG-OBL-8) still must do.
@@ -201,7 +198,7 @@ type supersedeRequest struct {
 // errNilObligationSeq is returned when a WakeObligationMachine is asked to mint a wake
 // with no configured SeqSource. Failing closed here -- rather than the nil-pointer panic
 // a missing interface would otherwise produce on the first mint -- matches the rest of
-// this package's custody discipline (errCorruptObligationStore, errCorruptTransportStore):
+// this package's custody discipline (errCorruptObligationStore):
 // a misassembled machine must refuse to mint, not crash the process that owns every other
 // live session's journal bridge.
 var errNilObligationSeq = errors.New("remotegw: wake-obligation machine has no durable Seq configured")
@@ -226,8 +223,8 @@ func NewWakeObligationMachine(cfg WakeObligationConfig) *WakeObligationMachine {
 // runs. Coalescing into an expired record here would durably record a trigger that Drive
 // (whenever it next runs) would otherwise correctly re-mint for anyway, so this is the
 // same outcome reached earlier rather than a new rule -- and it holds even if a caller
-// invokes Trigger without an immediate Drive after it, which TransportRouter always does,
-// but which is not a property Trigger itself may assume of every future caller.
+// invokes Trigger without an immediate Drive after it, which PushTrigger does after
+// publication, but which is not a property Trigger itself may assume of every future caller.
 //
 // OBSERVATION, SPEC-MANDATED RATHER THAN A DEFECT HERE: coalescing into an in_flight
 // obligation (the branch below fires for in_flight exactly as for pending) means a

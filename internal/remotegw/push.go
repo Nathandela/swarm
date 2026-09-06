@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -17,34 +16,20 @@ import (
 // is invisible until the owner is waiting on a session the phone never mentioned.
 const DefaultPushWindow = 30 * time.Second
 
-// PushWakeEnvelopeSize is the exact, INVARIANT size of every wake that leaves this
-// machine: crypto's 62-byte cleartext header plus a 16-byte AEAD tag over an EMPTY
-// plaintext.
-//
-// It is pinned as a constant because size is the one property PB-PUSH-3 concedes the push
-// provider observes, and a conceded disclosure is benign only while it is CONSTANT. A wake
-// that grew with the session name, or with how many transitions were coalesced into it,
-// would be a covert channel -- and the ADR's honesty claim would quietly stop being true
-// with nothing failing anywhere (ADR-007 B20).
-const PushWakeEnvelopeSize = 78
-
-// defaultPushTimeout bounds one push_trigger round trip. The trigger is issued from the
-// gateway's journal read loop, so an unbounded call against a hung relay would stall the
-// journal the wake exists to announce.
+// defaultPushTimeout bounds one provider round trip. The trigger is issued from the
+// gateway's journal read loop, so an unbounded call would stall the journal it announces.
 const defaultPushTimeout = 5 * time.Second
 
-// PushTriggerer is the optional legacy wake seam. Tests substitute a recorder; the native
-// relay-v2 mailbox does not implement it.
+// PushTriggerer is the optional current provider wake seam. WakeV1 construction and its
+// durable replay coordinate live behind this call in WakeObligationMachine.
 type PushTriggerer interface {
-	PushTrigger(ctx context.Context, target string, env []byte) error
+	PushTrigger(ctx context.Context) error
 }
 
 // obligationPreAppender is an OPTIONAL capability of PushConfig.Pusher (ADR-015 P9,
 // PG-OBL-2): a Pusher that must durably record its intent to wake BEFORE the mailbox
-// record announcing it is published implements it. *TransportRouter is the only
-// implementation (pushtransport.go), and only its gateway leg does real work --
-// legacy_relay's ordering guarantee is already "publish then push" (unaffected: see
-// Event below), and foreground_only has nothing durable to record.
+// record announcing it is published implements it. WakeRetryScheduler is the only
+// production implementation.
 type obligationPreAppender interface {
 	PreAppendObligation() error
 }
@@ -55,7 +40,7 @@ type obligationPreAppender interface {
 // later cancellation can be scoped to exactly the provisional record this deferral
 // created -- and never to whatever obligation happens to be live at fire time, which
 // PG-OBL-5's coalescing routinely makes a record carrying other sessions' hand-offs.
-// *TransportRouter is the only implementation.
+// *WakeRetryScheduler is the only production implementation.
 type provisionalObligationAppender interface {
 	PreAppendProvisionalObligation() (seq uint64, ok bool, err error)
 }
@@ -70,7 +55,7 @@ type provisionalObligationAppender interface {
 // itself make is refused downstream). ownAppends is how many pre-appends the cycle being
 // cancelled made onto that record, which is what tells the machine a coalesce apart from
 // a foreign one -- see WakeObligationMachine.Supersede.
-// *TransportRouter is the only implementation, and only its gateway leg does real work.
+// *WakeRetryScheduler is the only production implementation.
 type obligationSuperseder interface {
 	SupersedeObligation(wakeSeq uint64, ownAppends int, reason string) error
 }
@@ -84,23 +69,14 @@ const wakeOutcomePreferenceSuppressed = "preference_suppressed"
 
 // PushConfig configures a PushNotifier.
 //
-// It carries a WakeKey and NO content key, and that is PB-PUSH-0's "the content key is
-// never used" expressed as a type rather than as a review note. Read literally the
-// requirement said "the gateway holds the wake key only", which is unimplementable -- the
-// gateway MUST hold the content key, since RelaySink seals every journal frame with it and
-// CommandBridge opens every phone command with it. What is enforceable, and what the
-// criterion protects, is that the PUSH PATH holds the wake key only, so no content key is
-// even in scope where a wake is built (ADR-007 B19). Do not widen this struct to take an
-// EpochKeys "for convenience": a test reads its fields reflectively and will fail.
+// It carries neither a wake key nor a content key: WakeObligationMachine owns WakeV1
+// sealing, while RelaySink and CommandBridge own content keys outside this path. Do not
+// widen this struct with keys "for convenience"; a test reads it reflectively.
 type PushConfig struct {
-	Pusher  PushTriggerer    // relay push seam (nil => the gateway simply does not push)
-	Target  string           // the phone's relay routing id
-	WakeKey crypto.WakeKey   // K_wake (PB-KEY-2, A15): content-free by construction
-	EpochID uint32           // the epoch the wake key belongs to
-	Now     func() time.Time // wake issued-at clock (nil => time.Now)
-	Seq     SeqSource        // DURABLE wake replay coordinate (nil => in-memory, non-durable)
-	Prefs   PushPrefsSource  // the user's push preference (nil => fail closed, no wake)
-	Window  time.Duration    // per-session coalescing window (0 => DefaultPushWindow)
+	Pusher PushTriggerer    // provider wake seam (nil => foreground-only)
+	Now    func() time.Time // wake issued-at clock (nil => time.Now)
+	Prefs  PushPrefsSource  // the user's push preference (nil => fail closed, no wake)
+	Window time.Duration    // per-session coalescing window (0 => DefaultPushWindow)
 	// After schedules f to run after d: the DEFERRED-WAKE timer seam of ADR-010 §4(b)
 	// (nil => time.AfterFunc). It is a seam because the deferral is the one push-path
 	// behaviour that happens with NO journal record to drive it, so a test holding only a
@@ -115,7 +91,7 @@ const recordTypeInteraction = "interaction"
 
 // PushNotifier is the gateway-side push trigger (PB-PUSH-0): an OutboundSink that passes
 // the journal through unchanged and, on the transitions an owner is waiting on, ADDITIONALLY
-// wakes the phone with a content-free envelope sealed under the wake key.
+// wakes the phone through its configured provider.
 //
 // It sits BETWEEN the coalescing sink and the RelaySink -- CoalescingSink{Inner:
 // PushNotifier{inner: RelaySink}} -- and the position matters twice. Outside the coalescer
@@ -146,9 +122,8 @@ type PushNotifier struct {
 	lastWake map[string]time.Time
 	// deferred holds the sessions whose interaction wake the window suppressed, and
 	// deferArmed whether the single timer that serves them is already scheduled
-	// (ADR-010 §4(b)). One wake serves every session in the set: the envelope is a
-	// constant-size empty plaintext (PushWakeEnvelopeSize), so coalescing wakes discloses
-	// nothing and loses nothing.
+	// (ADR-010 §4(b)). One locator-free WakeV1 serves every session in the set, so
+	// coalescing wakes disclose no journal content and lose nothing.
 	deferred   map[string]struct{}
 	deferArmed bool
 	// deferredSeq is the wake_seq of the PROVISIONAL obligation the deferred-wake
@@ -188,14 +163,11 @@ func NewPushNotifier(inner OutboundSink, cfg PushConfig) *PushNotifier {
 	if window <= 0 {
 		window = DefaultPushWindow
 	}
-	if cfg.Seq == nil {
-		cfg.Seq, _ = OpenSeqSource("") // in-memory, cannot error
-	}
 	after := cfg.After
 	if after == nil {
 		// ponytail: the timer is never cancelled and never held. At most one is armed at a
-		// time and it fires a content-free wake at most one window later, so a gateway
-		// shutting down leaves one pending 78-byte send -- cheaper than a lifecycle this
+		// time and it fires at most one window later, so a gateway shutting down leaves one
+		// pending provider trigger -- cheaper than a lifecycle this
 		// type does not otherwise have.
 		after = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
 	}
@@ -366,9 +338,9 @@ func (n *PushNotifier) setErr(err error) {
 // in which every push goes out unfiltered.
 var errNoPushPrefs = errors.New("remotegw: push suppressed: no preference custody configured")
 
-// preAppendObligation durably records (TransportRouter.PreAppendObligation ->
+// preAppendObligation durably records (WakeRetryScheduler.PreAppendObligation ->
 // WakeObligationMachine.Trigger) the wake this Event call is about to publish, BEFORE
-// the mailbox append -- PG-OBL-2, for a gateway-transport pairing only. A Trigger
+// the mailbox append -- PG-OBL-2, for a bound gateway pairing only. A Trigger
 // failure is reported through Err() and otherwise swallowed: PG-OBL-3 forbids a
 // push-path failure from ever blocking or failing the mailbox record, and maybeWake's
 // own send() (moments later, after the publish) makes its own Trigger+Drive attempt
@@ -488,30 +460,13 @@ func (n *PushNotifier) peekWakeDisposition(rec protocol.JournalRecord, cache *pr
 // so, sends the wake -- now, or at the end of the window that suppressed it. It never
 // returns an error: see Event.
 //
-// send is a closure rather than a method for one deliberate reason: relay's PB-PUSH-3
-// producer ledger (internal/remote/relay/pbpush3_producers_test.go) enumerates every
-// FUNCTION that hands a payload to the push provider, so that a new producer fails by name.
-// The deferred wake is not a new producer -- same seal, same empty plaintext, same constant
-// 78 bytes -- and keeping its one PushTrigger call inside this function keeps that ledger
-// accurate rather than merely quiet.
-//
-// NOTE, NOT A DISCLOSURE: send always seals the LEGACY 78-byte envelope (sealWake,
-// consuming cfg.Seq) before calling Pusher.PushTrigger, even for a `gateway` or
-// `foreground_only` pairing whose TransportRouter discards that envelope outright
-// (pushtransport.go: only legacy_relay's leg ever forwards it). The sealed bytes never
-// leave this process, so nothing is exposed -- but it does mean cfg.Seq (PushSeq)
-// advances, and a seal is spent, for every wake a migrated pairing never actually sends
-// over legacy_relay. Do not read PushSeq's value as a count of legacy wakes sent.
+// send is a closure so immediate and deferred transitions share the exact same provider
+// trigger.
 func (n *PushNotifier) maybeWake(rec protocol.JournalRecord, cache *prefsCache) {
 	send := func() {
-		env, err := n.sealWake()
-		if err != nil {
-			n.setErr(err)
-			return
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), defaultPushTimeout)
 		defer cancel()
-		if err := n.cfg.Pusher.PushTrigger(ctx, n.cfg.Target, env); err != nil {
+		if err := n.cfg.Pusher.PushTrigger(ctx); err != nil {
 			n.setErr(err)
 		}
 	}
@@ -604,9 +559,9 @@ func (n *PushNotifier) maybeWake(rec protocol.JournalRecord, cache *prefsCache) 
 				// bd agents-tracker-hggx.4.4) must now be superseded -- durably, honestly,
 				// and scoped to exactly that record by its remembered wake_seq -- or a
 				// later redrive would submit a wake the preference forbids. A no-op for
-				// any Pusher without the capability (the legacy paths, which pre-appended
-				// nothing), and skipped entirely when no identity was recorded: cancelling
-				// "whatever is live" would destroy other sessions' coalesced hand-offs.
+				// any Pusher without the capability, and skipped entirely when no identity
+				// was recorded: cancelling "whatever is live" would destroy other sessions'
+				// coalesced hand-offs.
 				// provAppends is how many pre-appends THIS cycle made onto that record --
 				// two window-suppressed interactions in one window make two, the second
 				// coalescing into the first's record -- so the machine can cancel a record
@@ -786,38 +741,4 @@ func (n *PushNotifier) loadPrefs(cache *prefsCache) (PushPrefs, error) {
 		cache.prefs, cache.err, cache.loaded = prefs, err, true
 	}
 	return prefs, err
-}
-
-// sealWake builds the content-free wake: an EMPTY plaintext under the wake key, carrying a
-// durable monotonic seq and a real issued_at, with BOTH key ids left at zero.
-//
-// The zero key ids are the part that is easy to get wrong and impossible to notice.
-// crypto.Envelope.Marshal emits a 62-byte CLEARTEXT header, so reusing the mailbox header
-// shape verbatim would hand the push provider recipient_key_id and sender_key_id in the
-// clear -- two stable identifiers linking every wake to one machine/device pair for the
-// life of the epoch, which is strictly more than the "token, timing, size" PB-PUSH-3
-// promises (ADR-007 B20). The wake needs neither: the relay routes it by the push_trigger
-// target, and the phone opens it with the one wake key it holds.
-//
-// issued_at is stamped here, at the producer. The field is AAD-covered, so leaving it unset
-// AUTHENTICATES a zero and every receiver computes an age of decades -- the exact failure
-// SealControlReply hit once already. The seq comes from a DURABLE source for the mirror-image
-// reason: a per-process counter restarts at 1 on every gateway restart, and the phone's
-// persisted replay coordinate (PB-STATE-1) would then reject every wake after one.
-func (n *PushNotifier) sealWake() ([]byte, error) {
-	seq, err := n.cfg.Seq.Next()
-	if err != nil {
-		return nil, err
-	}
-	env, err := crypto.SealWake(n.cfg.WakeKey, crypto.EnvelopeHeader{
-		Version:  crypto.VersionV1,
-		EpochID:  n.cfg.EpochID,
-		Seq:      seq,
-		IssuedAt: n.now().UnixMilli(),
-		// RecipientKeyID and SenderKeyID stay ZERO. See above.
-	}, nil)
-	if err != nil {
-		return nil, err
-	}
-	return env.Marshal(), nil
 }

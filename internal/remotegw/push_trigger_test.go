@@ -17,7 +17,9 @@ package remotegw
 // DEFERRED and is not touched, weakened, or partially claimed by anything below.
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"reflect"
 	"strings"
@@ -32,38 +34,30 @@ import (
 
 // --- fakes -----------------------------------------------------------------
 
-// pushCall is one trigger the notifier handed to the relay seam.
-type pushCall struct {
-	target string
-	env    []byte
-}
-
-// fakePusher is the relay push seam. It is the SENDER: PB-PUSH-8 requires a disabled
+// fakePusher is the provider seam. It is the SENDER: PB-PUSH-8 requires a disabled
 // preference to produce ZERO calls here, because a call is exactly what makes the push
-// provider observe token, timing and size.
+// provider observe the token, timing, fixed size, and opaque push address.
 type fakePusher struct {
 	mu    sync.Mutex
-	calls []pushCall
+	calls int
 	err   error
 }
 
-func (f *fakePusher) PushTrigger(_ context.Context, target string, env []byte) error {
+func (f *fakePusher) PushTrigger(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
-	f.calls = append(f.calls, pushCall{target: target, env: append([]byte(nil), env...)})
+	f.calls++
 	return nil
 }
 
-func (f *fakePusher) all() []pushCall {
+func (f *fakePusher) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]pushCall(nil), f.calls...)
+	return f.calls
 }
-
-func (f *fakePusher) count() int { return len(f.all()) }
 
 // recordingSink is the OutboundSink the notifier wraps: it records what still reached
 // the sealing/appending layer, so a test can prove the push path never displaced the
@@ -219,18 +213,10 @@ func newPushHarnessWith(t *testing.T, prefs PushPrefs) *pushHarness {
 	inner := &recordingSink{}
 	sp := &stubPrefs{prefs: prefs}
 	clk := newTestClock()
-	seq, err := OpenSeqSource("")
-	if err != nil {
-		t.Fatalf("OpenSeqSource: %v", err)
-	}
 	n := NewPushNotifier(inner, PushConfig{
-		Pusher:  pusher,
-		Target:  "phone-routing-id",
-		WakeKey: testWakeKey(),
-		EpochID: 7,
-		Now:     clk.Now,
-		Seq:     seq,
-		Prefs:   sp,
+		Pusher: pusher,
+		Now:    clk.Now,
+		Prefs:  sp,
 	})
 	return &pushHarness{notifier: n, pusher: pusher, inner: inner, prefs: sp, clk: clk}
 }
@@ -258,9 +244,6 @@ func TestPBPUSH0_TransitionIntoNeedsInputFiresExactlyOnePush(t *testing.T) {
 
 	if got := h.pusher.count(); got != 1 {
 		t.Fatalf("push count after working -> needs_input: got %d, want 1", got)
-	}
-	if got := h.pusher.all()[0].target; got != "phone-routing-id" {
-		t.Fatalf("push target: got %q, want the phone routing id", got)
 	}
 	// The journal record itself must still have been delivered: the push is an
 	// ADDITIONAL wake, never a substitute for the frame the phone reads on reconnect.
@@ -435,30 +418,78 @@ func TestPBPUSH0_CoalescingWindowIsPerSessionNotGlobal(t *testing.T) {
 
 // --- PB-PUSH-0: key separation ----------------------------------------------
 
-// TestPBPUSH0_WakeIsSealedUnderTheWakeKeyAndOpaqueToTheContentKey is PB-PUSH-0's
-// "the content key is never used" criterion, driven both ways: the wake OPENS under the
-// wake key and is REFUSED under the content key. crypto's typed keys (A15/F10) make the
-// wrong-key direction a hard ErrWrongKeyType rather than a silent AEAD failure.
-func TestPBPUSH0_WakeIsSealedUnderTheWakeKeyAndOpaqueToTheContentKey(t *testing.T) {
-	h := newPushHarness(t)
+type wakeV1NotifierHarness struct {
+	notifier  *PushNotifier
+	submitter *fakeSubmitter
+	clock     *testClock
+	address   PushAddress
+}
+
+// newWakeV1NotifierHarness follows the production path after transport cleanup:
+// PushNotifier -> WakeRetryScheduler -> WakeObligationMachine -> WakeSubmitter. It lets
+// notifier tests inspect the exact provider bytes without reintroducing the retired
+// relay-envelope seam.
+func newWakeV1NotifierHarness(t *testing.T, seq SeqSource) *wakeV1NotifierHarness {
+	t.Helper()
+	if seq == nil {
+		var err error
+		seq, err = OpenSeqSource("")
+		if err != nil {
+			t.Fatalf("OpenSeqSource: %v", err)
+		}
+	}
+	store, err := OpenObligationStore("")
+	if err != nil {
+		t.Fatalf("OpenObligationStore: %v", err)
+	}
+	clk := newTestClock()
+	sub := &fakeSubmitter{}
+	addr := testPushAddress(0xB0)
+	machine := NewWakeObligationMachine(WakeObligationConfig{
+		Store: store, Submitter: sub, WakeKey: testWakeKey(), Address: addr,
+		Seq: seq, Now: clk.Now,
+	})
+	scheduler := NewWakeRetryScheduler(WakeRetryConfig{
+		Machine: machine, Store: store, Address: addr, Now: clk.Now,
+		Prefs: &stubPrefs{prefs: PushPrefs{Version: 1, NeedsInput: true, Finished: true}},
+	})
+	n := NewPushNotifier(&recordingSink{}, PushConfig{
+		Pusher: scheduler, Now: clk.Now,
+		Prefs: &stubPrefs{prefs: PushPrefs{Version: 1, NeedsInput: true, Finished: true}},
+	})
+	return &wakeV1NotifierHarness{notifier: n, submitter: sub, clock: clk, address: addr}
+}
+
+func (h *wakeV1NotifierHarness) event(t *testing.T, cursor uint64, session string, group status.Group) {
+	t.Helper()
+	if err := h.notifier.Event(protocol.JournalRecord{
+		Cursor: cursor, SessionID: session, Type: "status", Group: group,
+	}); err != nil {
+		t.Fatalf("Event(%s, %s): %v", session, group, err)
+	}
+}
+
+// TestPBPUSH0_WakeV1IsSealedUnderTheWakeKeyAndOpaqueToTheContentKey preserves the
+// key-separation proof on the current provider path. The submitted WakeV1 opens under
+// the pairing wake key and not under bytes originating from a content key.
+func TestPBPUSH0_WakeV1IsSealedUnderTheWakeKeyAndOpaqueToTheContentKey(t *testing.T) {
+	h := newWakeV1NotifierHarness(t, nil)
 	h.event(t, 1, "m/s1", status.GroupNeedsInput)
 
-	calls := h.pusher.all()
+	calls := h.submitter.all()
 	if len(calls) != 1 {
-		t.Fatalf("push count: got %d, want 1", len(calls))
+		t.Fatalf("provider submissions: got %d, want 1", len(calls))
 	}
-	env, err := crypto.ParseEnvelope(calls[0].env)
+	plain, err := wakeV1ManualOpen(t, testWakeKey(), calls[0])
 	if err != nil {
-		t.Fatalf("ParseEnvelope: %v", err)
+		t.Fatalf("open WakeV1 with pairing wake key: %v", err)
 	}
-	if env.Header.Type != crypto.TypePushWake {
-		t.Fatalf("wake envelope type = %#x, want TypePushWake (%#x)", env.Header.Type, crypto.TypePushWake)
+	if len(plain) != 0 {
+		t.Fatalf("WakeV1 plaintext = %q, want empty", plain)
 	}
-	if _, err := crypto.OpenWake(testWakeKey(), env); err != nil {
-		t.Fatalf("OpenWake with the wake key: %v", err)
-	}
-	if _, err := crypto.OpenMailbox(testContentKey(), env); !errors.Is(err, crypto.ErrWrongKeyType) {
-		t.Fatalf("OpenMailbox(content key) on a wake = %v, want ErrWrongKeyType", err)
+	wrongKey := crypto.WakeKey(testContentKey())
+	if _, err := wakeV1ManualOpen(t, wrongKey, calls[0]); err == nil {
+		t.Fatal("WakeV1 opened under bytes from the content key")
 	}
 }
 
@@ -476,11 +507,9 @@ func TestPBPUSH0_WakeIsSealedUnderTheWakeKeyAndOpaqueToTheContentKey(t *testing.
 // NOT A RED TEST beyond the compile step: it is a FENCE and passes as soon as PushConfig
 // exists in the right shape. Its value is prospective.
 func TestPBPUSH0_PushConfigCarriesNoContentKey(t *testing.T) {
-	// Positive control: an EMPTY struct would satisfy the two "must not carry" assertions
-	// below for free, so first prove the configuration is the real one by requiring the
-	// key the push path DOES need.
-	if !hasFieldOfType(PushConfig{}, func(v any) bool { _, ok := v.(crypto.WakeKey); return ok }) {
-		t.Fatal("control: PushConfig carries no crypto.WakeKey, so the assertions below prove nothing")
+	// Positive control: the component that seals WakeV1 must carry the typed wake key.
+	if !hasFieldOfType(WakeObligationConfig{}, func(v any) bool { _, ok := v.(crypto.WakeKey); return ok }) {
+		t.Fatal("control: WakeObligationConfig carries no crypto.WakeKey, so the assertions below prove nothing")
 	}
 	assertNoFieldOfType(t, PushConfig{}, "crypto.ContentKey", func(v any) bool {
 		_, ok := v.(crypto.ContentKey)
@@ -494,31 +523,31 @@ func TestPBPUSH0_PushConfigCarriesNoContentKey(t *testing.T) {
 
 // --- PB-PUSH-3: the payload schema ------------------------------------------
 
-// TestPBPUSH3_WakeEnvelopeIsExactlyTheFixedContentFreeSize pins the schema by SIZE,
-// which is the one property the push provider is conceded to observe (token, timing,
-// size). A fixed size is therefore not cosmetic: a variable-length wake would make the
-// size itself a covert channel -- longer for a longer session name, or for more
+// TestPBPUSH3_WakeV1EnvelopeIsExactlyTheFixedContentFreeSize pins the current schema by SIZE,
+// which is one property the push provider is conceded to observe (alongside token,
+// timing, and opaque address). A fixed size is therefore not cosmetic: a variable-length
+// wake would make the size itself a covert channel -- longer for a longer session name, or for more
 // transitions coalesced -- and PB-PUSH-3's disclosure statement would become false
 // without a single test failing.
-func TestPBPUSH3_WakeEnvelopeIsExactlyTheFixedContentFreeSize(t *testing.T) {
-	h := newPushHarness(t)
+func TestPBPUSH3_WakeV1EnvelopeIsExactlyTheFixedContentFreeSize(t *testing.T) {
+	h := newWakeV1NotifierHarness(t, nil)
 	// Deliberately loud identifiers: a leak has something recognisable to leak.
 	h.event(t, 1, "build-box-17.local/refactor-the-auth-middleware", status.GroupNeedsInput)
-	h.clk.advance(2 * DefaultPushWindow)
+	h.clock.advance(2 * DefaultPushWindow)
 	h.event(t, 2, "m/x", status.GroupWorking)
 	h.event(t, 3, "m/x", status.GroupNeedsInput)
 
-	calls := h.pusher.all()
+	calls := h.submitter.all()
 	if len(calls) != 2 {
-		t.Fatalf("push count: got %d, want 2", len(calls))
+		t.Fatalf("provider submissions: got %d, want 2", len(calls))
 	}
-	for i, c := range calls {
-		if len(c.env) != PushWakeEnvelopeSize {
-			t.Fatalf("push %d envelope size = %d, want the fixed PushWakeEnvelopeSize %d", i, len(c.env), PushWakeEnvelopeSize)
+	for i, env := range calls {
+		if len(env) != WakeV1Size {
+			t.Fatalf("push %d envelope size = %d, want WakeV1Size %d", i, len(env), WakeV1Size)
 		}
 	}
-	if len(calls[0].env) != len(calls[1].env) {
-		t.Fatalf("wake size varies with the session it describes (%d vs %d): size is disclosed to the provider", len(calls[0].env), len(calls[1].env))
+	if len(calls[0]) != len(calls[1]) {
+		t.Fatalf("wake size varies with the session it describes (%d vs %d): size is disclosed to the provider", len(calls[0]), len(calls[1]))
 	}
 }
 
@@ -527,93 +556,83 @@ func TestPBPUSH3_WakeEnvelopeIsExactlyTheFixedContentFreeSize(t *testing.T) {
 // label appears anywhere in the bytes that leave the machine.
 func TestPBPUSH3_WakePlaintextIsEmptyAndNamesNothing(t *testing.T) {
 	const session = "build-box-17.local/refactor-the-auth-middleware"
-	h := newPushHarness(t)
+	h := newWakeV1NotifierHarness(t, nil)
 	h.event(t, 1, session, status.GroupNeedsInput)
 
-	calls := h.pusher.all()
+	calls := h.submitter.all()
 	if len(calls) != 1 {
-		t.Fatalf("push count: got %d, want 1", len(calls))
+		t.Fatalf("provider submissions: got %d, want 1", len(calls))
 	}
-	env, err := crypto.ParseEnvelope(calls[0].env)
+	plain, err := wakeV1ManualOpen(t, testWakeKey(), calls[0])
 	if err != nil {
-		t.Fatalf("ParseEnvelope: %v", err)
-	}
-	plain, err := crypto.OpenWake(testWakeKey(), env)
-	if err != nil {
-		t.Fatalf("OpenWake: %v", err)
+		t.Fatalf("open WakeV1: %v", err)
 	}
 	if len(plain) != 0 {
 		t.Fatalf("wake plaintext = %q (%d bytes), want empty: a content-free wake carries no fields at all", plain, len(plain))
 	}
 	for _, secret := range []string{
 		session, "build-box-17.local", "refactor-the-auth-middleware",
-		string(status.GroupNeedsInput), "needs_input", "phone-routing-id",
+		string(status.GroupNeedsInput), "needs_input",
 	} {
-		if strings.Contains(string(calls[0].env), secret) {
-			t.Fatalf("wake envelope contains %q -- the provider must learn only token, timing and size", secret)
+		if strings.Contains(string(calls[0]), secret) {
+			t.Fatalf("wake envelope contains %q -- the provider must learn no session content", secret)
 		}
 	}
 }
 
-// TestPBPUSH3_WakeHeaderCarriesNoStableEndpointIdentifiers covers the part of the
-// envelope that is NOT encrypted. crypto.Envelope.Marshal writes a 62-byte CLEARTEXT
-// header, so recipient_key_id and sender_key_id would reach the push provider in the
-// clear if the mailbox header were reused verbatim -- stable pseudonymous identifiers
-// that let the provider link every wake to one machine/device pair for the life of the
-// epoch, which is strictly more than "token, timing, size".
-func TestPBPUSH3_WakeHeaderCarriesNoStableEndpointIdentifiers(t *testing.T) {
-	h := newPushHarness(t)
+// TestPBPUSH3_WakeV1CarriesOnlyItsOpaqueAddressNotMailboxKeyIDs proves that notifier
+// output uses the current 74-byte shape. Its sole routing identifier is the gateway-
+// minted opaque address; the retired mailbox-style recipient/sender key-id slots do not
+// exist in this wire object.
+func TestPBPUSH3_WakeV1CarriesOnlyItsOpaqueAddressNotMailboxKeyIDs(t *testing.T) {
+	h := newWakeV1NotifierHarness(t, nil)
 	h.event(t, 1, "m/s1", status.GroupNeedsInput)
 
-	calls := h.pusher.all()
+	calls := h.submitter.all()
 	if len(calls) != 1 {
-		t.Fatalf("push count: got %d, want 1", len(calls))
+		t.Fatalf("provider submissions: got %d, want 1", len(calls))
 	}
-	env, err := crypto.ParseEnvelope(calls[0].env)
-	if err != nil {
-		t.Fatalf("ParseEnvelope: %v", err)
+	env := calls[0]
+	if len(env) != WakeV1Size || env[0] != crypto.VersionV1 || env[1] != WakeV1Type {
+		t.Fatalf("provider bytes are not WakeV1: len=%d version/type=%x", len(env), env[:min(len(env), 2)])
 	}
-	if env.Header.RecipientKeyID != ([8]byte{}) {
-		t.Fatalf("wake header recipient_key_id = %x, want zero (it is cleartext to the push provider and the wake needs no routing id)", env.Header.RecipientKeyID)
-	}
-	if env.Header.SenderKeyID != ([8]byte{}) {
-		t.Fatalf("wake header sender_key_id = %x, want zero (cleartext, and a stable machine identifier across the epoch)", env.Header.SenderKeyID)
+	if !bytes.Equal(env[2:18], h.address[:]) {
+		t.Fatalf("WakeV1 address = %x, want configured opaque address %x", env[2:18], h.address)
 	}
 }
 
 // TestPBPUSH3_WakeCarriesAMonotonicReplayCoordinate pins the replay/expiry gating half
-// of PB-PUSH-3. §6.0 gives the wake a 10-minute TTL "with the replay coordinate
-// persisted per PB-STATE-1", so each wake must carry a strictly increasing seq and a
+// of PB-PUSH-3. WakeV1 has a five-minute TTL and a durable per-pairing replay
+// coordinate, so each wake must carry a strictly increasing seq and a
 // real issued_at. A zero issued_at is the specific failure SealControlReply already hit
 // once: the field is AAD-covered, so leaving it unset AUTHENTICATES a zero and every
 // receiver computes an age of decades.
 func TestPBPUSH3_WakeCarriesAMonotonicReplayCoordinate(t *testing.T) {
-	h := newPushHarness(t)
+	h := newWakeV1NotifierHarness(t, nil)
 	h.event(t, 1, "m/s1", status.GroupNeedsInput)
-	h.clk.advance(2 * DefaultPushWindow)
+	firstIssuedAt := h.clock.Now().UnixMilli()
+	h.clock.advance(2 * DefaultPushWindow)
 	h.event(t, 2, "m/s1", status.GroupWorking)
 	h.event(t, 3, "m/s1", status.GroupNeedsInput)
 
-	calls := h.pusher.all()
+	calls := h.submitter.all()
 	if len(calls) != 2 {
-		t.Fatalf("push count: got %d, want 2", len(calls))
+		t.Fatalf("provider submissions: got %d, want 2", len(calls))
 	}
 	var seqs []uint64
-	for i, c := range calls {
-		env, err := crypto.ParseEnvelope(c.env)
-		if err != nil {
-			t.Fatalf("ParseEnvelope(%d): %v", i, err)
+	for i, env := range calls {
+		seq := binary.BigEndian.Uint64(env[18:26])
+		issuedAt := int64(binary.BigEndian.Uint64(env[26:34]))
+		if issuedAt == 0 {
+			t.Fatalf("wake %d issued_at is zero: the five-minute TTL is uncheckable and the value is AAD-authenticated as a zero", i)
 		}
-		if env.Header.IssuedAt == 0 {
-			t.Fatalf("wake %d issued_at is zero: the 10-minute TTL is uncheckable and the value is AAD-authenticated as a zero", i)
+		if i == 0 && issuedAt != firstIssuedAt {
+			t.Fatalf("wake 0 issued_at = %d, want configured clock %d", issuedAt, firstIssuedAt)
 		}
-		if got, want := env.Header.IssuedAt, h.clk.Now().UnixMilli(); i == 1 && got != want {
+		if got, want := issuedAt, h.clock.Now().UnixMilli(); i == 1 && got != want {
 			t.Fatalf("wake %d issued_at = %d, want the configured clock %d", i, got, want)
 		}
-		if env.Header.EpochID != 7 {
-			t.Fatalf("wake %d epoch = %d, want 7", i, env.Header.EpochID)
-		}
-		seqs = append(seqs, env.Header.Seq)
+		seqs = append(seqs, seq)
 	}
 	if seqs[0] == 0 {
 		t.Fatalf("first wake seq is 0: a receiver cannot distinguish it from an unset field")
@@ -637,29 +656,13 @@ func TestPBPUSH3_WakeSeqDoesNotRestartAfterAGatewayRestart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenSeqSource: %v", err)
 		}
-		pusher := &fakePusher{}
-		clk := newTestClock()
-		n := NewPushNotifier(&recordingSink{}, PushConfig{
-			Pusher:  pusher,
-			Target:  "phone-routing-id",
-			WakeKey: testWakeKey(),
-			EpochID: 7,
-			Now:     clk.Now,
-			Seq:     seq,
-			Prefs:   &stubPrefs{prefs: PushPrefs{Version: 1, NeedsInput: true, Finished: true}},
-		})
-		if err := n.Event(protocol.JournalRecord{Cursor: 1, SessionID: "m/s1", Type: "status", Group: status.GroupNeedsInput}); err != nil {
-			t.Fatalf("Event: %v", err)
-		}
-		calls := pusher.all()
+		h := newWakeV1NotifierHarness(t, seq)
+		h.event(t, 1, "m/s1", status.GroupNeedsInput)
+		calls := h.submitter.all()
 		if len(calls) != 1 {
-			t.Fatalf("push count: got %d, want 1", len(calls))
+			t.Fatalf("provider submissions: got %d, want 1", len(calls))
 		}
-		env, err := crypto.ParseEnvelope(calls[0].env)
-		if err != nil {
-			t.Fatalf("ParseEnvelope: %v", err)
-		}
-		return env.Header.Seq
+		return binary.BigEndian.Uint64(calls[0][18:26])
 	}
 
 	before := firstSeq()
@@ -673,11 +676,11 @@ func TestPBPUSH3_WakeSeqDoesNotRestartAfterAGatewayRestart(t *testing.T) {
 
 // TestPBPUSH5_PushFailureNeverFailsTheJournalRecord pins that the push path is strictly
 // additive. Gateway.deliver gates its durable cursor on the sink's error, so returning a
-// push failure from Event would stall the journal cursor on a relay push outage and turn
+// push failure from Event would stall the journal cursor on a provider outage and turn
 // a lost convenience into a stalled bridge. The error must still be LOUD via Err().
 func TestPBPUSH5_PushFailureNeverFailsTheJournalRecord(t *testing.T) {
 	h := newPushHarness(t)
-	h.pusher.err = errors.New("relay refused push_trigger")
+	h.pusher.err = errors.New("provider wake failed")
 
 	if err := h.notifier.Event(protocol.JournalRecord{
 		Cursor: 1, SessionID: "m/s1", Type: "status", Group: status.GroupNeedsInput,
@@ -693,20 +696,12 @@ func TestPBPUSH5_PushFailureNeverFailsTheJournalRecord(t *testing.T) {
 }
 
 // TestPBPUSH5_NoPusherConfiguredLeavesTheCorePathsUntouched pins "the system works
-// without push": a gateway assembled with no push transport at all still bridges the
+// without push": a foreground-only gateway still bridges the
 // journal, returns no error, and does not panic.
 func TestPBPUSH5_NoPusherConfiguredLeavesTheCorePathsUntouched(t *testing.T) {
 	inner := &recordingSink{}
-	seq, err := OpenSeqSource("")
-	if err != nil {
-		t.Fatalf("OpenSeqSource: %v", err)
-	}
 	n := NewPushNotifier(inner, PushConfig{
-		Target:  "phone-routing-id",
-		WakeKey: testWakeKey(),
-		EpochID: 7,
-		Seq:     seq,
-		Prefs:   &stubPrefs{prefs: PushPrefs{Version: 1, NeedsInput: true, Finished: true}},
+		Prefs: &stubPrefs{prefs: PushPrefs{Version: 1, NeedsInput: true, Finished: true}},
 	}) // Pusher deliberately nil
 
 	if err := n.Snapshot([]protocol.JournalRecord{{Cursor: 1, SessionID: "m/s1", Group: status.GroupWorking}}, 1); err != nil {
@@ -860,17 +855,9 @@ func TestPBPUSH8_AbsentPreferenceSourceFailsClosed(t *testing.T) {
 	build := func(prefs PushPrefsSource) *fakePusher {
 		t.Helper()
 		pusher := &fakePusher{}
-		seq, err := OpenSeqSource("")
-		if err != nil {
-			t.Fatalf("OpenSeqSource: %v", err)
-		}
 		n := NewPushNotifier(&recordingSink{}, PushConfig{
-			Pusher:  pusher,
-			Target:  "phone-routing-id",
-			WakeKey: testWakeKey(),
-			EpochID: 7,
-			Seq:     seq,
-			Prefs:   prefs,
+			Pusher: pusher,
+			Prefs:  prefs,
 		})
 		if err := n.Event(protocol.JournalRecord{Cursor: 1, SessionID: "m/s1", Type: "status", Group: status.GroupNeedsInput}); err != nil {
 			t.Fatalf("Event: %v", err)
@@ -896,12 +883,11 @@ func TestPBPUSH8_AbsentPreferenceSourceFailsClosed(t *testing.T) {
 // provider observes -- the exact "requirement satisfiable while the defect ships" shape
 // PB-PUSH-10 was written to close.
 //
-// Everything in the second half is rebuilt from the on-disk path: a new prefs handle, a
-// new seq source, a new notifier. Nothing is carried over in memory.
+// Everything in the second half is rebuilt from the on-disk path: a new prefs handle
+// and a new notifier. Nothing is carried over in memory.
 func TestPBPUSH10_DisabledPreferenceStillSuppressesAtTheSenderAfterARestart(t *testing.T) {
 	dir := t.TempDir()
 	prefsPath := dir + "/push-prefs.json"
-	seqPath := dir + "/wake.seq"
 
 	// Run 1: the user turns both toggles off.
 	prefs, err := OpenPushPrefs(prefsPath)
@@ -913,7 +899,7 @@ func TestPBPUSH10_DisabledPreferenceStillSuppressesAtTheSenderAfterARestart(t *t
 	}
 
 	// Run 2: a whole new gateway process reads the same state dir.
-	if got := restartAndDrive(t, prefsPath, seqPath); got != 0 {
+	if got := restartAndDrive(t, prefsPath); got != 0 {
 		t.Fatalf("push count after a gateway restart with a disabled preference: got %d, want 0 at the SENDER", got)
 	}
 
@@ -927,7 +913,7 @@ func TestPBPUSH10_DisabledPreferenceStillSuppressesAtTheSenderAfterARestart(t *t
 	if err := prefsOn.SavePrefs(PushPrefs{Version: 6, NeedsInput: true, Finished: true}); err != nil {
 		t.Fatalf("SavePrefs(enable): %v", err)
 	}
-	if got := restartAndDrive(t, prefsPath, seqPath); got != 3 {
+	if got := restartAndDrive(t, prefsPath); got != 3 {
 		t.Fatalf("control: after a restart with an ENABLED preference the sender produced %d pushes, want 3", got)
 	}
 }
@@ -936,26 +922,18 @@ func TestPBPUSH10_DisabledPreferenceStillSuppressesAtTheSenderAfterARestart(t *t
 // nothing carried over in memory, which is what "after a gateway restart" has to mean --
 // drives three push-worthy transitions well apart in time, and reports how many triggers
 // reached the sender.
-func restartAndDrive(t *testing.T, prefsPath, seqPath string) int {
+func restartAndDrive(t *testing.T, prefsPath string) int {
 	t.Helper()
 	prefs, err := OpenPushPrefs(prefsPath)
 	if err != nil {
 		t.Fatalf("OpenPushPrefs(restart): %v", err)
 	}
-	seq, err := OpenSeqSource(seqPath)
-	if err != nil {
-		t.Fatalf("OpenSeqSource(restart): %v", err)
-	}
 	pusher := &fakePusher{}
 	clk := newTestClock()
 	n := NewPushNotifier(&recordingSink{}, PushConfig{
-		Pusher:  pusher,
-		Target:  "phone-routing-id",
-		WakeKey: testWakeKey(),
-		EpochID: 7,
-		Now:     clk.Now,
-		Seq:     seq,
-		Prefs:   prefs,
+		Pusher: pusher,
+		Now:    clk.Now,
+		Prefs:  prefs,
 	})
 	for i, g := range []status.Group{
 		status.GroupNeedsInput, status.GroupReadyForReview, status.GroupCompleted,
@@ -975,8 +953,7 @@ func restartAndDrive(t *testing.T, prefsPath, seqPath string) int {
 // TestPBPUSH0_ServiceWiresTheNotifierIntoTheLiveJournalPath is the class-(v) guard. A
 // notifier that is constructed, configured and unit-tested but never inserted into the
 // sink chain the Gateway delivers to would pass every test above while no push is ever
-// produced in production -- which is precisely the state the tree is in today (zero
-// non-test callers of PushTrigger anywhere).
+// produced in production.
 //
 // It reaches into the composed chain on purpose: the assertion is about STRUCTURE, and
 // only the structure distinguishes "wired" from "built and dropped".
@@ -987,9 +964,12 @@ func TestPBPUSH0_ServiceWiresTheNotifierIntoTheLiveJournalPath(t *testing.T) {
 		Relay:        mb,
 		PhoneTarget:  "phone-routing-id",
 		Key:          testContentKey(),
-		WakeKey:      testWakeKey(),
 		EpochID:      7,
 		PushPrefs:    &stubPrefs{prefs: PushPrefs{Version: 1, NeedsInput: true, Finished: true}},
+		PushGateway: &PushGatewayConfig{
+			GatewayURL: "https://push.example.com", SubmitCapability: "test-cap",
+			Address: testPushAddress(0xFA), WakeKey: testWakeKey(),
+		},
 	})
 
 	notifier := svc.PushNotifier()
@@ -1012,16 +992,13 @@ func TestPBPUSH0_ServiceWiresTheNotifierIntoTheLiveJournalPath(t *testing.T) {
 		t.Fatalf("the push notifier wraps %T, want the *RelaySink that seals and appends", notifier.inner)
 	}
 
-	// The relay client is BOTH the mailbox and the push transport: a Service that
-	// silently left Pusher nil would degrade to no push with nothing failing.
+	// A configured provider binding must reach the notifier; without the binding the
+	// foreground-only service intentionally leaves Pusher nil.
 	if notifier.cfg.Pusher == nil {
-		t.Fatal("the notifier has no push transport: NewService did not wire cfg.Relay as the pusher")
+		t.Fatal("the notifier has no provider scheduler")
 	}
-	if notifier.cfg.Target != "phone-routing-id" {
-		t.Fatalf("notifier target = %q, want the phone routing id", notifier.cfg.Target)
-	}
-	if notifier.cfg.WakeKey != testWakeKey() {
-		t.Fatal("the notifier was not given the configured wake key")
+	if notifier.cfg.Pusher != PushTriggerer(svc.wakeRetry) {
+		t.Fatalf("notifier pusher = %T, want the service's WakeRetryScheduler", notifier.cfg.Pusher)
 	}
 }
 
@@ -1033,11 +1010,7 @@ func TestPBPUSH0_ServiceWiresTheNotifierIntoTheLiveJournalPath(t *testing.T) {
 // re-read the journal from 0 and re-flood the mailbox (PB-GW-8).
 func TestPBPUSH0_NotifierPassesThroughTheWrappedSinkContracts(t *testing.T) {
 	inner := &recordingSink{cursor: 4242}
-	seq, err := OpenSeqSource("")
-	if err != nil {
-		t.Fatalf("OpenSeqSource: %v", err)
-	}
-	n := NewPushNotifier(inner, PushConfig{Target: "t", WakeKey: testWakeKey(), EpochID: 7, Seq: seq})
+	n := NewPushNotifier(inner, PushConfig{})
 
 	var namer machineNamer = n
 	namer.SetMachine("endpoint-9")
@@ -1051,14 +1024,14 @@ func TestPBPUSH0_NotifierPassesThroughTheWrappedSinkContracts(t *testing.T) {
 	}
 }
 
-// pushCapableMailbox is what the production relay client is: a Mailbox AND a push
-// transport on one connection.
+// pushCapableMailbox deliberately exposes the old-looking push method as well as a
+// mailbox. NewService must ignore it and wire only the current gateway scheduler.
 type pushCapableMailbox struct {
 	fakeMailbox
 	pushes int
 }
 
-func (p *pushCapableMailbox) PushTrigger(_ context.Context, _ string, _ []byte) error {
+func (p *pushCapableMailbox) PushTrigger(context.Context) error {
 	p.pushes++
 	return nil
 }
@@ -1165,19 +1138,11 @@ func newApprovalPushHarness(t *testing.T, prefs PushPrefs) (*pushHarness, *fakeT
 	sp := &stubPrefs{prefs: prefs}
 	clk := newTestClock()
 	ft := &fakeTimer{}
-	seq, err := OpenSeqSource("")
-	if err != nil {
-		t.Fatalf("OpenSeqSource: %v", err)
-	}
 	n := NewPushNotifier(inner, PushConfig{
-		Pusher:  pusher,
-		Target:  "phone-routing-id",
-		WakeKey: testWakeKey(),
-		EpochID: 7,
-		Now:     clk.Now,
-		Seq:     seq,
-		Prefs:   sp,
-		After:   ft.after,
+		Pusher: pusher,
+		Now:    clk.Now,
+		Prefs:  sp,
+		After:  ft.after,
 	})
 	return &pushHarness{notifier: n, pusher: pusher, inner: inner, prefs: sp, clk: clk}, ft
 }
@@ -1269,7 +1234,7 @@ func TestADR010_SuppressedInteractionWakeIsDeferredNotDropped(t *testing.T) {
 }
 
 // TestADR010_OneDeferredWakeServesEveryPendingRequest pins the coalescing §4(b) explicitly
-// allows: the envelope is a constant-size empty plaintext (PushWakeEnvelopeSize), so one
+// allows: the envelope is a constant-size empty-plaintext WakeV1, so one
 // wake serving three pending requests discloses nothing extra and loses nothing -- and three
 // separate wakes would burn the FCM quota ADR-007 B16 names as the cost of dropping the
 // socket.

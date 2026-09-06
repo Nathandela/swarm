@@ -11,9 +11,8 @@
 //   - (*Core).AcceptWakeV1 -- PG-WAKE-13's five-step order against the 74-byte envelope.
 //   - (*Core).WakeDrops -- the scope's "an unverifiable wake is dropped and counted, never
 //     acted on": a monotonic count of refused wakes, advanced on every refusal.
-//   - phonecore.WakeV1MaxAge = 5 minutes -- PG-WAKE-7's narrowed bound (the v1 receiver's
-//     own constant; the legacy 10-minute WakeMaxAge belongs to the type-0x02 path and is
-//     not weakened or touched here).
+//   - phonecore.WakeV1MaxAge = 5 minutes -- PG-WAKE-7's bound, matching the FCM
+//     delivery horizon.
 //
 // THE PRODUCER IS THE REAL MACHINE-SIDE SEALER. Every genuine envelope in this file is
 // sealed by internal/remotegw.SealWakeV1 -- the code swarm-remote ships -- so the two
@@ -96,7 +95,7 @@ func TestR3A_WakeV1MaxAgeIsFiveMinutes(t *testing.T) {
 	}
 }
 
-// TestR3A_AcceptWakeV1_AcceptsTheMachinesSealAndAdvancesDurably: the happy path plus the
+// TestR3A_AcceptWakeV1_AcceptsTheMachinesSealAndAdvancesDurably is PB-PUSH-3's happy path plus the
 // two properties that make it a wake path at all -- the coordinate advances, and it
 // advances DURABLY (atomically persisted before routing, PG-WAKE-13 step 5), so a replay
 // after process death is still a replay.
@@ -125,6 +124,41 @@ func TestR3A_AcceptWakeV1_AcceptsTheMachinesSealAndAdvancesDurably(t *testing.T)
 	// A later seq from the same machine is still fine.
 	if err := restarted.AcceptWakeV1(r3aSeal(t, key, addr, 2, time.Now())); err != nil {
 		t.Fatalf("seq 2 after restart: %v", err)
+	}
+}
+
+// TestR3A_AcceptWakeV1_WorksWithContentTierLocked pins the actual current wake
+// custody: the per-address key and high-water live in push-state.sealed under the
+// wake sealer, so biometric-gated content may remain closed for the entire receipt.
+func TestR3A_AcceptWakeV1_WorksWithContentTierLocked(t *testing.T) {
+	phone := &r3aPhone{dir: t.TempDir(), wake: s14aNewSealer(t), content: s14aNewSealer(t)}
+	seed := phone.resume(t)
+	addr, key := r3aBinding(t, seed, 0xA9)
+	if err := seed.Mutate(func(st *State) {
+		// Force a real content-tier blob so the restarted process must encounter the
+		// simulated biometric refusal rather than merely finding no content to open.
+		st.Keys.ContentKey = crypto.ContentKey{0xC1}
+	}); err != nil {
+		t.Fatalf("seed content tier: %v", err)
+	}
+
+	phone.content.openErr = crypto.ErrKeyAuthRequired
+	opensBefore := phone.content.opens
+	locked := phone.resume(t)
+	if phone.content.opens == opensBefore {
+		t.Fatal("locked resume never attempted to open the content tier; the test did not exercise biometric refusal")
+	}
+
+	env := r3aSeal(t, key, addr, 1, time.Now())
+	if err := locked.AcceptWakeV1(env); err != nil {
+		t.Fatalf("AcceptWakeV1 with content tier locked: %v", err)
+	}
+
+	// Process death must neither need the content tier nor reset the push-state
+	// high-water: the identical envelope remains a replay after reopening.
+	restarted := phone.resume(t)
+	if err := restarted.AcceptWakeV1(env); !errors.Is(err, ErrWakeReplay) {
+		t.Fatalf("replay after locked restart: got %v, want ErrWakeReplay", err)
 	}
 }
 
@@ -233,9 +267,8 @@ func TestR3A_AcceptWakeV1_AnUnopenableEnvelopeCannotPinTheWindow(t *testing.T) {
 }
 
 // TestR3A_AcceptWakeV1_ShapesAreSeparatedBeforeTheAEAD: PG-WAKE-3. A type-0x01 (mailbox)
-// or type-0x02 (legacy wake) byte at offset 1 is refused on shape, and the legacy
-// 78-byte envelope is not accepted by the v1 opener either -- the two wake generations
-// are separate paths under P12's compatibility window, never one lenient parser.
+// or retired type-0x02 byte at offset 1 is refused on shape, and a retired 78-byte
+// envelope is not accepted either.
 func TestR3A_AcceptWakeV1_ShapesAreSeparatedBeforeTheAEAD(t *testing.T) {
 	phone := &r3aPhone{dir: t.TempDir(), wake: s14aNewSealer(t), content: s14aNewSealer(t)}
 	core := phone.resume(t)
@@ -250,7 +283,7 @@ func TestR3A_AcceptWakeV1_ShapesAreSeparatedBeforeTheAEAD(t *testing.T) {
 		}
 	}
 
-	// A legacy-sized (78-byte) buffer is refused outright -- over-length is not parsed.
+	// A retired 78-byte buffer is refused outright -- over-length is not parsed.
 	legacySized := append(append([]byte(nil), env...), 0, 0, 0, 0)
 	if err := core.AcceptWakeV1(legacySized); err == nil {
 		t.Fatal("a 78-byte buffer was accepted by the 74-byte v1 opener")

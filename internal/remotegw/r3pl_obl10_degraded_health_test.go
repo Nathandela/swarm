@@ -79,18 +79,11 @@ func driveObligationTo(t *testing.T, addr PushAddress, state ObligationState) Ob
 	return store
 }
 
-// newObligationHealthService assembles a migrated (gateway-transport) Service over the
+// newObligationHealthService assembles a current gateway-bound Service over the
 // given obligation store for addr -- the configuration in which the obligation's
 // terminal state IS the pairing's push health.
 func newObligationHealthService(t *testing.T, addr PushAddress, store ObligationStore) *Service {
 	t.Helper()
-	ts, err := OpenTransportStore("")
-	if err != nil {
-		t.Fatalf("OpenTransportStore: %v", err)
-	}
-	if err := ts.SetTransport(TransportGateway); err != nil {
-		t.Fatalf("SetTransport(gateway): %v", err)
-	}
 	return NewService(ServiceConfig{
 		Relay:       &scriptedMailbox{},
 		PhoneTarget: "phone",
@@ -98,7 +91,6 @@ func newObligationHealthService(t *testing.T, addr PushAddress, store Obligation
 			GatewayURL:       "https://gateway.invalid",
 			SubmitCapability: "test-submit-capability",
 			Address:          addr,
-			Transport:        ts,
 			Obligations:      store,
 		},
 	})

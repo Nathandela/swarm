@@ -148,8 +148,9 @@ confirm and record that the shipped config has no such field (ADR-015 P1).
 
 **`[UNRUN]` PH-DEV-6. Three machines.** M1, M2, M3, each with `swarm remote init` completed and
 `swarm-remote` on `PATH`. Record for each: OS and version, swarm SHA, relay assignment, and — after
-pairing — the persisted `push_transport` value, which must be `gateway` for every pairing in this
-gate (`legacy_relay` means §D is testing the transport this gate exists to replace).
+pairing — the authenticated registry push binding, whose transport must be `gateway` for every
+pairing in this gate. An absent binding means foreground-only and cannot satisfy the
+background-wake rows. Old transport-selection sidecars are not evidence of current configuration.
 
 **`[UNRUN]` PH-DEV-7. Cellular service on both handsets.** A live cellular data plan on Device A and
 Device B. Without it §F cannot run and `PH-LAUNCH-1`'s over-cellular clause cannot be honoured.

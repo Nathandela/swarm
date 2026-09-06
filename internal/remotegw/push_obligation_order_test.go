@@ -3,7 +3,7 @@ package remotegw
 // Regression tests for the BLOCKING PG-OBL-2 finding of the R3 GREEN review (bd
 // agents-tracker-hggx.4.2): for a gateway-transport pairing, the durable wake obligation
 // must be appended BEFORE the mailbox record it announces is published, not after.
-// TransportRouter.PreAppendObligation (pushtransport.go) plus PushNotifier.Event's
+// WakeRetryScheduler.PreAppendObligation plus PushNotifier.Event's
 // pre-publish hook (push.go's preAppendObligation/wouldWakeNow) are what these tests pin.
 //
 // Both doubles below append to one SHARED, ordered log rather than independent call
@@ -36,8 +36,7 @@ func (s *orderLoggingSink) Event(protocol.JournalRecord) error {
 }
 func (s *orderLoggingSink) Terminal(protocol.TerminalViewV1) error { return nil }
 
-// orderLoggingGateway is a gatewayObligationDriver double standing in for a REAL
-// WakeObligationMachine's Trigger/Drive, appending to the SAME shared log.
+// orderLoggingGateway is a direct provider double, appending to the shared log.
 type orderLoggingGateway struct {
 	mu  *sync.Mutex
 	log *[]string
@@ -55,37 +54,25 @@ func (g *orderLoggingGateway) Drive(context.Context) error {
 	*g.log = append(*g.log, "drive")
 	return nil
 }
-
-// orderLoggingLegacyPusher is the relay's push_trigger seam, logging into the same
-// shared log, so the legacy path's ordering can be checked against the same log shape.
-type orderLoggingLegacyPusher struct {
-	mu  *sync.Mutex
-	log *[]string
+func (g *orderLoggingGateway) PushTrigger(ctx context.Context) error {
+	if err := g.Trigger(); err != nil {
+		return err
+	}
+	return g.Drive(ctx)
 }
-
-func (p *orderLoggingLegacyPusher) PushTrigger(context.Context, string, []byte) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	*p.log = append(*p.log, "legacy")
-	return nil
-}
+func (g *orderLoggingGateway) PreAppendObligation() error { return g.Trigger() }
 
 // newOrderingHarness wires a PushNotifier whose sink appends "publish" to mu/log --
 // the SAME mu/log the caller's router-driving doubles append to -- so the two are
 // directly comparable in one ordered sequence. It delivers no record itself; the caller
 // does, once router is fully assembled.
-func newOrderingHarness(t *testing.T, mu *sync.Mutex, log *[]string, router PushTriggerer) *PushNotifier {
+func newOrderingHarness(t *testing.T, mu *sync.Mutex, log *[]string, pusher PushTriggerer) *PushNotifier {
 	t.Helper()
 	sink := &orderLoggingSink{mu: mu, log: log}
 	sp := &stubPrefs{prefs: PushPrefs{Version: 1, NeedsInput: true, Finished: true}}
 	clk := newTestClock()
-	seq, err := OpenSeqSource("")
-	if err != nil {
-		t.Fatalf("OpenSeqSource: %v", err)
-	}
 	return NewPushNotifier(sink, PushConfig{
-		Pusher: router, Target: "phone-routing-id", WakeKey: testWakeKey(), EpochID: 7,
-		Now: clk.Now, Seq: seq, Prefs: sp,
+		Pusher: pusher, Now: clk.Now, Prefs: sp,
 	})
 }
 
@@ -98,15 +85,7 @@ func TestPushNotifier_GatewayTransportAppendsTheObligationBeforePublishingTheMai
 	var mu sync.Mutex
 	var log []string
 	gw := &orderLoggingGateway{mu: &mu, log: &log}
-	ts, err := OpenTransportStore("")
-	if err != nil {
-		t.Fatalf("OpenTransportStore: %v", err)
-	}
-	if err := ts.SetTransport(TransportGateway); err != nil {
-		t.Fatalf("SetTransport(gateway): %v", err)
-	}
-	router := &TransportRouter{Transport: ts, Legacy: &orderLoggingLegacyPusher{mu: &mu, log: &log}, Gateway: gw}
-	n := newOrderingHarness(t, &mu, &log, router)
+	n := newOrderingHarness(t, &mu, &log, gw)
 
 	if err := n.Event(protocol.JournalRecord{Cursor: 1, SessionID: "m/s1", Type: "status", Group: status.GroupNeedsInput}); err != nil {
 		t.Fatalf("Event(needs_input): %v", err)
@@ -124,24 +103,12 @@ func TestPushNotifier_GatewayTransportAppendsTheObligationBeforePublishingTheMai
 	}
 }
 
-// TestPushNotifier_LegacyRelayTransportOrderIsUnaffectedByThePreAppendHook is the
-// non-regression control: legacy_relay's ordering guarantee ("publish then push") is
-// untouched by preAppendObligation existing, because TransportRouter.PreAppendObligation
-// is a no-op for any transport but gateway.
-func TestPushNotifier_LegacyRelayTransportOrderIsUnaffectedByThePreAppendHook(t *testing.T) {
+// TestPushNotifier_ForegroundOnlyDoesNotCreateAnObligation preserves the ordering safety
+// control for the remaining no-provider route.
+func TestPushNotifier_ForegroundOnlyDoesNotCreateAnObligation(t *testing.T) {
 	var mu sync.Mutex
 	var log []string
-	legacy := &orderLoggingLegacyPusher{mu: &mu, log: &log}
-	gw := &orderLoggingGateway{mu: &mu, log: &log}
-	ts, err := OpenTransportStore("")
-	if err != nil {
-		t.Fatalf("OpenTransportStore: %v", err)
-	}
-	if err := ts.SetTransport(TransportLegacyRelay); err != nil {
-		t.Fatalf("SetTransport(legacy_relay): %v", err)
-	}
-	router := &TransportRouter{Transport: ts, Legacy: legacy, Gateway: gw}
-	n := newOrderingHarness(t, &mu, &log, router)
+	n := newOrderingHarness(t, &mu, &log, nil)
 
 	if err := n.Event(protocol.JournalRecord{Cursor: 1, SessionID: "m/s1", Type: "status", Group: status.GroupNeedsInput}); err != nil {
 		t.Fatalf("Event(needs_input): %v", err)
@@ -151,9 +118,8 @@ func TestPushNotifier_LegacyRelayTransportOrderIsUnaffectedByThePreAppendHook(t 
 	got := append([]string(nil), log...)
 	mu.Unlock()
 
-	want := []string{"publish", "legacy"}
+	want := []string{"publish"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("call order = %v, want %v -- a legacy_relay pairing must still publish before it "+
-			"pushes, and the obligation machine must never be touched at all", got, want)
+		t.Fatalf("call order = %v, want %v -- foreground_only must not create an obligation", got, want)
 	}
 }

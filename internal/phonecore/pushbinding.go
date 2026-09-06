@@ -6,12 +6,11 @@ package phonecore
 // WHY A SEPARATE DURABLE FILE. State (state.go) is the pinned, versioned schema of the
 // pre-gateway coordinates, and its field set is fenced in both directions
 // (TestStateSchemaVersion_IsPinnedToTheDurableFieldSet). The push-binding table is a NEW
-// per-address record set -- wake key, high-water, revocation verdict -- that the
-// migration (P12) runs BESIDE the legacy scalar WakeReplay, not instead of it, so it
-// lives in its own sealed container: <dir>/push-state.sealed, under the WAKE tier KEK,
+// per-address record set -- wake key, high-water, revocation verdict. The current
+// protocol keeps per-address replay high-waters in this table, so it lives in
+// its own sealed container: <dir>/push-state.sealed, under the WAKE tier KEK,
 // because the wake path is the one path that must read it with no user present and the
-// content tier locked (PB-KEY-2). The legacy AcceptWake/WakeMaxAge path (wake.go) is not
-// weakened, renamed or retargeted by anything here.
+// content tier locked (PB-KEY-2).
 
 import (
 	"bytes"
@@ -32,14 +31,12 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// WakeV1MaxAge is PG-WAKE-7's bound for the v1 receiver: five minutes, matching the FCM
-// TTL -- an expiry longer than the TTL is a replay window with no delivery behind it. It
-// is a NEW constant beside the legacy type-0x02 path's WakeMaxAge (10m), which P12 keeps
-// until the migration retires it.
+// WakeV1MaxAge is PG-WAKE-7's bound for the receiver: five minutes, matching the FCM
+// TTL -- an expiry longer than the TTL is a replay window with no delivery behind it.
 const WakeV1MaxAge = 5 * time.Minute
 
 // The WakeV1 wire shape (spec section 5.1): one pinned size, a type byte distinct from
-// the mailbox (0x01) and legacy wake (0x02) shapes, and the canonical AAD's domain
+// the mailbox (0x01) and retired wake (0x02) shapes, and the canonical AAD's domain
 // string. These mirror internal/remotegw's producer constants; the cross-check that the
 // two sides agree is r3a_wakev1_test.go opening the real producer's seal.
 //
@@ -51,9 +48,8 @@ const WakeV1MaxAge = 5 * time.Minute
 // blocks: what holds them together is r3a_wakev1_test.go opening the REAL producer's
 // seal, so moving either side alone fails loudly there. Never "fix" one side alone; the
 // twin comment obligation on remotegw's block is recorded in the round-2 evidence.
-// WakeV1Size is exported for the ONE routing decision the facade owns: the FCM receipt
-// (mobile.HandlePushWake) routes a payload of exactly this size to AcceptWakeV1 and
-// everything else to the legacy receiver. It is the same pinned copy, not a third.
+// WakeV1Size is exported so callers and conformance tests can pin the one accepted wire
+// shape. It is the same pinned copy, not a third.
 const (
 	WakeV1Size         = 74
 	wakeV1Type   uint8 = 0x03
@@ -69,6 +65,17 @@ const (
 const wakeV1MaxFutureSkew = 2 * time.Minute
 
 var (
+	// ErrWakeReplay refuses a wake at or below the persisted per-address replay coordinate.
+	ErrWakeReplay = errors.New("phonecore: push wake replays or reorders the persisted wake coordinate")
+
+	// ErrWakeExpired refuses a wake whose authenticated issued_at is outside WakeV1MaxAge.
+	ErrWakeExpired = errors.New("phonecore: push wake is outside the replay window")
+
+	// ErrNoWakeKey refuses a wake at a phone that has no key for its addressed pairing. It
+	// remains distinct from authentication failure because an incomplete pairing can heal;
+	// a forged wake cannot.
+	ErrNoWakeKey = errors.New("phonecore: the phone holds no wake key for this pairing")
+
 	// ErrPushAddressRevoked refuses re-adopting an address a machine-side revoke severed
 	// (ADR-015 P6, PG-WAKE-14): the successor of a revoked address is a DIFFERENT address
 	// with its own high-water, so re-adoption is the pin-the-window lever handed back to

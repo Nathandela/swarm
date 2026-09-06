@@ -180,18 +180,17 @@ func TestEpochGrant_ReplaySurvivesRestart(t *testing.T) {
 	}
 }
 
-// F10 — the mailbox receiver requires a ContentKey and refuses a non-mailbox
-// (type 0x02 wake) envelope, so a wake payload cannot enter the session-content
-// path and a WakeKey cannot be passed where a ContentKey is required.
-func TestMailbox_RejectsWakeType(t *testing.T) {
+// F10 — the mailbox receiver requires a ContentKey and refuses every non-mailbox
+// envelope before attempting authentication.
+func TestMailbox_RejectsNonMailboxType(t *testing.T) {
 	keys := testEpochKeys()
-	wake, err := SealWake(keys.WakeKey, testHeader(), []byte("activity"))
-	if err != nil {
-		t.Fatalf("SealWake: %v", err)
+	nonMailbox := &Envelope{Header: EnvelopeHeader{Type: 0x02}}
+	if _, err := OpenMailbox(keys.ContentKey, nonMailbox); !errors.Is(err, ErrWrongKeyType) {
+		t.Fatalf("OpenMailbox(non-mailbox envelope) err = %v, want ErrWrongKeyType", err)
 	}
 	r := NewMailboxReceiver()
-	if _, err := r.Accept(keys.ContentKey, wake); !errors.Is(err, ErrWrongKeyType) {
-		t.Fatalf("Accept(wake envelope) err = %v, want ErrWrongKeyType", err)
+	if _, err := r.Accept(keys.ContentKey, nonMailbox); !errors.Is(err, ErrWrongKeyType) {
+		t.Fatalf("Accept(non-mailbox envelope) err = %v, want ErrWrongKeyType", err)
 	}
 }
 
@@ -335,9 +334,8 @@ func TestMailbox_StaleByAgeRejected(t *testing.T) {
 	}
 }
 
-// F10 — content and wake keys are distinct types; content sealed under the
-// content key cannot be opened with the wake key via the typed API, and the
-// type byte is forced by the sealing helper.
+// F10 — content and wake keys are distinct types and independently generated;
+// content sealed under the content key cannot be opened with the wake key.
 func TestTypedKeys_ContentNotOpenableWithWakeKey(t *testing.T) {
 	keys, err := NewEpochKeys()
 	if err != nil {
@@ -354,8 +352,8 @@ func TestTypedKeys_ContentNotOpenableWithWakeKey(t *testing.T) {
 	if cEnv.Header.Type != TypeMailbox {
 		t.Errorf("SealMailbox set type %#x, want 0x01", cEnv.Header.Type)
 	}
-	if _, err := OpenWake(keys.WakeKey, cEnv); err == nil {
-		t.Error("OpenWake opened content sealed under the content key")
+	if _, err := cEnv.open([32]byte(keys.WakeKey)); err == nil {
+		t.Error("wake key opened content sealed under the content key")
 	}
 	pt, err := OpenMailbox(keys.ContentKey, cEnv)
 	if err != nil {
@@ -364,30 +362,21 @@ func TestTypedKeys_ContentNotOpenableWithWakeKey(t *testing.T) {
 	if string(pt) != "session transcript" {
 		t.Errorf("content round-trip = %q", pt)
 	}
-
-	wEnv, err := SealWake(keys.WakeKey, testHeader(), []byte("activity"))
-	if err != nil {
-		t.Fatalf("SealWake: %v", err)
-	}
-	if wEnv.Header.Type != TypePushWake {
-		t.Errorf("SealWake set type %#x, want 0x02", wEnv.Header.Type)
-	}
-	if _, err := OpenMailbox(keys.ContentKey, wEnv); err == nil {
-		t.Error("OpenMailbox opened a wake payload")
-	}
 }
 
-// F12 — an unknown envelope type (not 0x01/0x02) is rejected at parse.
+// F12 — the retired wake type is rejected at parse; only mailbox envelopes remain.
 func TestEnvelope_UnknownTypeRejected(t *testing.T) {
 	key := fill(0x9c)
 	env, err := seal(key, testHeader(), []byte("x"))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
-	raw := env.Marshal()
-	raw[1] = 0x7f // neither TypeMailbox nor TypePushWake
-	if _, err := ParseEnvelope(raw); !errors.Is(err, ErrUnknownType) {
-		t.Fatalf("ParseEnvelope(unknown type) err = %v, want ErrUnknownType", err)
+	for _, typ := range []byte{0x02, 0x7f} {
+		raw := env.Marshal()
+		raw[1] = typ
+		if _, err := ParseEnvelope(raw); !errors.Is(err, ErrUnknownType) {
+			t.Errorf("ParseEnvelope(type %#x) err = %v, want ErrUnknownType", typ, err)
+		}
 	}
 }
 

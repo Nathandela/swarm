@@ -4,11 +4,7 @@ package remotegw
 // tests for `WakeV1` (docs/specifications/push-gateway-api.md §5, ADR-015 P8).
 //
 // WHAT THIS FILE PINS. The 74-byte wire shape, its canonical AAD tuple, and the
-// producer-side seal. It does NOT pin the receiver (`internal/phonecore`, READ-ONLY,
-// a later slice) and does NOT touch `internal/remote/crypto` (READ-ONLY per the task:
-// the mailbox envelope and the legacy 78-byte type-0x02 wake are frozen there and stay
-// frozen -- P8 delta 1 explicitly adds WakeV1 BESIDE them, never by editing them). The
-// new shape therefore lives in THIS package, sealed directly against
+// producer-side seal. The shape lives in THIS package, sealed directly against
 // golang.org/x/crypto/chacha20poly1305 the same way crypto.seal does, under the
 // already-exported crypto.WakeKey.
 //
@@ -113,10 +109,11 @@ func (errWakeV1ShapeRefusedT) Error() string {
 // NOT A RED TEST beyond the compile step (same shape as
 // TestPBPUSH0_PushConfigCarriesNoContentKey, push_trigger_test.go:465-477): it is a
 // FENCE on the constant's VALUE and passes as soon as WakeV1Type exists at 0x03.
-func TestWakeV1_TypeByteIsDistinctFromMailboxAndLegacyWake(t *testing.T) {
-	if WakeV1Type == crypto.TypeMailbox || WakeV1Type == crypto.TypePushWake {
+func TestWakeV1_TypeByteIsDistinctFromMailboxAndRetiredWake(t *testing.T) {
+	const retiredPushWakeType uint8 = 0x02
+	if WakeV1Type == crypto.TypeMailbox || WakeV1Type == retiredPushWakeType {
 		t.Fatalf("WakeV1Type = %#x collides with an existing type byte (mailbox=%#x, legacy wake=%#x)",
-			WakeV1Type, crypto.TypeMailbox, crypto.TypePushWake)
+			WakeV1Type, crypto.TypeMailbox, retiredPushWakeType)
 	}
 }
 
@@ -278,7 +275,8 @@ func TestWakeV1_AADIsNotTheMailboxHeaderAADRenamed(t *testing.T) {
 	// the method is unexported and internal/remote/crypto is READ-ONLY for this task.
 	var senderKeyID [8]byte
 	legacyAAD := make([]byte, 0, 30)
-	legacyAAD = append(legacyAAD, crypto.VersionV1, crypto.TypePushWake)
+	const retiredPushWakeType uint8 = 0x02
+	legacyAAD = append(legacyAAD, crypto.VersionV1, retiredPushWakeType)
 	legacyAAD = binary.BigEndian.AppendUint32(legacyAAD, 0) // epoch
 	legacyAAD = binary.BigEndian.AppendUint64(legacyAAD, 5) // seq
 	legacyAAD = append(legacyAAD, senderKeyID[:]...)

@@ -20,7 +20,7 @@ package remotegw
 // happen: it must not read `delivered`/`provider_accepted`, and it must not stay
 // non-terminal (a later redrive would then submit a wake the preference forbids).
 //
-// These tests exercise ONLY symbols that already exist (PushNotifier, TransportRouter,
+// These tests exercise ONLY symbols that already exist (PushNotifier, WakeRetryScheduler,
 // WakeObligationMachine, the file-backed stores); they fail at ASSERTION level against
 // the current implementation because the provisional pre-append does not exist yet.
 // This file contains NO implementation.
@@ -36,7 +36,7 @@ import (
 )
 
 // deferredGapHarness wires the real gateway-transport push path -- PushNotifier ->
-// TransportRouter -> WakeObligationMachine -- over FILE-BACKED obligation and wake_seq
+// WakeRetryScheduler -> WakeObligationMachine -- over FILE-BACKED obligation and wake_seq
 // stores, so a crash can be simulated the way the crash-matrix tests model it: abandon
 // every live object and reopen the same durable files.
 type deferredGapHarness struct {
@@ -78,21 +78,11 @@ func newDeferredGapHarness(t *testing.T) *deferredGapHarness {
 		Store: store, Submitter: h.sub, WakeKey: testWakeKey(), Address: h.addr,
 		Seq: wakeSeq, Now: h.clk.Now,
 	})
-	ts, err := OpenTransportStore("")
-	if err != nil {
-		t.Fatalf("OpenTransportStore: %v", err)
-	}
-	if err := ts.SetTransport(TransportGateway); err != nil {
-		t.Fatalf("SetTransport(gateway): %v", err)
-	}
-	pushSeq, err := OpenSeqSource("")
-	if err != nil {
-		t.Fatalf("OpenSeqSource(push): %v", err)
-	}
+	scheduler := NewWakeRetryScheduler(WakeRetryConfig{
+		Machine: machine, Store: store, Address: h.addr, Now: h.clk.Now, Prefs: h.prefs,
+	})
 	h.n = NewPushNotifier(h.sink, PushConfig{
-		Pusher: &TransportRouter{Transport: ts, Gateway: machine},
-		Target: "phone-routing-id", WakeKey: testWakeKey(), EpochID: 7,
-		Now: h.clk.Now, Seq: pushSeq, Prefs: h.prefs, After: h.ft.after,
+		Pusher: scheduler, Now: h.clk.Now, Prefs: h.prefs, After: h.ft.after,
 	})
 	return h
 }

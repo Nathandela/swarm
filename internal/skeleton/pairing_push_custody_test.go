@@ -1,13 +1,16 @@
 package skeleton
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -40,9 +43,11 @@ func machinePushRecord(gatewayURL string, addressByte, submitByte, revokeByte by
 }
 
 func TestMachinePushCustody_CrashAfterAcceptanceBeforeRegistryRevokesOnRestart(t *testing.T) {
-	var gotPath, gotAuth string
+	var gotPath, gotAuth, gotMethod string
+	var gotBody []byte
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		gotPath, gotAuth, gotMethod = r.URL.Path, r.Header.Get("Authorization"), r.Method
+		gotBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
@@ -76,8 +81,52 @@ func TestMachinePushCustody_CrashAfterAcceptanceBeforeRegistryRevokesOnRestart(t
 	if !strings.HasSuffix(gotPath, base64.RawURLEncoding.EncodeToString(push.Address)) {
 		t.Fatalf("DELETE path = %q, want exact staged address", gotPath)
 	}
+	if gotMethod != http.MethodDelete {
+		t.Fatalf("revoke method = %q, want DELETE", gotMethod)
+	}
 	if gotAuth != "Swarm-Revoke "+push.MachineRevokeCapability {
 		t.Fatalf("Authorization = %q, want exact staged revoke capability", gotAuth)
+	}
+	if len(gotBody) != 0 {
+		t.Fatalf("revoke body = %q, want empty", gotBody)
+	}
+}
+
+func TestMachinePushCustody_HTTPFailuresRetainAuthorityAcrossRestart(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			calls := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			stateDir := t.TempDir()
+			push := machinePushRecord(server.URL, byte(status), 0x42, 0x52)
+			store, err := openMachinePushCustody(stateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Stage("pending-device", push); err != nil {
+				t.Fatal(err)
+			}
+			if err := reconcileMachinePushCustody(context.Background(), store, nil, server.Client()); err == nil {
+				t.Fatalf("gateway %d cleared custody", status)
+			}
+			if calls != 1 {
+				t.Fatalf("gateway %d saw %d requests, want 1", status, calls)
+			}
+
+			restarted, err := openMachinePushCustody(stateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, ok := restarted.Pending()
+			if !ok || !samePushBinding(got.Push, push) {
+				t.Fatalf("gateway %d lost or changed revoke authority after restart: %+v, %v", status, got, ok)
+			}
+		})
 	}
 }
 
@@ -362,5 +411,137 @@ func TestRevokeDevice_OfflineAfterRegistryDeletionRedrivesSelfContainedCustodyOn
 	}
 	if _, ok := restarted.Pending(); ok {
 		t.Fatal("confirmed restart revoke remained pending")
+	}
+}
+
+// A gateway 5xx is a failed delivery, never permission to discard the self-contained
+// revoke authority. The retry must use the exact binding staged before epoch rotation.
+func TestRevokeDevice_Gateway5xxRetainsExactCustodyAcrossEpochRotation(t *testing.T) {
+	type request struct {
+		method, path, auth string
+		body               []byte
+	}
+	var mu sync.Mutex
+	status := http.StatusServiceUnavailable
+	var requests []request
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read revoke body: %v", err)
+		}
+		mu.Lock()
+		requests = append(requests, request{r.Method, r.URL.Path, r.Header.Get("Authorization"), body})
+		code := status
+		mu.Unlock()
+		w.WriteHeader(code)
+	}))
+	defer server.Close()
+
+	stateDir := t.TempDir()
+	before := writeTestIdentity(t, stateDir, "push-custody-retry")
+	registry, err := device.Open(filepath.Join(stateDir, "devices"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := validDeviceRecord(t)
+	push := machinePushRecord(server.URL, 0x3C, 0x4C, 0x5C)
+	rec.Push = &push
+	if err := registry.AddSole(rec); err != nil {
+		t.Fatal(err)
+	}
+	custody, err := openMachinePushCustody(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &coreAPI{stateDir: stateDir, devices: registry, pushRevokeCustody: custody, pushHTTPClient: server.Client()}
+	removed, err := api.RevokeDevice(rec.DeviceID)
+	if !removed || err == nil {
+		t.Fatalf("5xx revoke = (%v,%v), want committed local removal plus retryable error", removed, err)
+	}
+	if api.pairing == nil || api.pairing.EpochID <= before.EpochID() {
+		t.Fatalf("revoke did not rotate the epoch before preserving retry custody")
+	}
+	if _, ok := custody.Pending(); !ok {
+		t.Fatal("5xx cleanup discarded the exact revoke custody")
+	}
+
+	mu.Lock()
+	if len(requests) != 1 {
+		mu.Unlock()
+		t.Fatalf("5xx revoke made %d requests, want 1", len(requests))
+	}
+	first := requests[0]
+	status = http.StatusNoContent
+	mu.Unlock()
+
+	restarted, err := openMachinePushCustody(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileMachinePushCustody(context.Background(), restarted, registry, server.Client()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := restarted.Pending(); ok {
+		t.Fatal("confirmed 204 retry remained pending")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("retry made %d requests, want 2", len(requests))
+	}
+	second := requests[1]
+	if first.method != second.method || first.path != second.path || first.auth != second.auth || !bytes.Equal(first.body, second.body) {
+		t.Fatalf("retry changed staged revoke authority: first=%+v second=%+v", first, second)
+	}
+	if first.method != http.MethodDelete || len(first.body) != 0 {
+		t.Fatalf("current revoke wire = method %q body %q, want bodyless DELETE", first.method, first.body)
+	}
+	if want := "/v1/addresses/" + base64.RawURLEncoding.EncodeToString(push.Address); first.path != want {
+		t.Fatalf("revoke path = %q, want %q", first.path, want)
+	}
+	if want := "Swarm-Revoke " + push.MachineRevokeCapability; first.auth != want {
+		t.Fatalf("revoke authorization = %q, want %q", first.auth, want)
+	}
+}
+
+func TestRevokeDevice_PreCommitPushCustodyStageFailureKeepsRegistryAndEpoch(t *testing.T) {
+	stateDir := t.TempDir()
+	before := writeTestIdentity(t, stateDir, "push-custody-stage-failure")
+	registry, err := device.Open(filepath.Join(stateDir, "devices"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := validDeviceRecord(t)
+	push := machinePushRecord("https://push.example", 0x3D, 0x4D, 0x5D)
+	rec.Push = &push
+	if err := registry.AddSole(rec); err != nil {
+		t.Fatal(err)
+	}
+	custody, err := openMachinePushCustody(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force persistLocked to fail before it can create its temporary file: machine.key is
+	// a regular file, not a custody directory. This exercises RevokeDevice's pre-commit
+	// Stage failure path rather than a post-rename durability ambiguity.
+	custody.path = filepath.Join(stateDir, "remote", remoteIdentityFile, "revoke.json")
+	api := &coreAPI{stateDir: stateDir, devices: registry, pushRevokeCustody: custody}
+	removed, err := api.RevokeDevice(rec.DeviceID)
+	if removed || err == nil {
+		t.Fatalf("stage failure revoke = (%v,%v), want retained registry and error", removed, err)
+	}
+	if got, ok := registry.Get(rec.DeviceID); !ok || got.Push == nil || !samePushBinding(*got.Push, push) {
+		t.Fatalf("stage failure changed registry authority: %+v, %v", got, ok)
+	}
+	after, err := loadPairingConfig(stateDir)
+	if err != nil || after == nil {
+		t.Fatalf("load identity after stage failure: cfg=%v err=%v", after, err)
+	}
+	if after.EpochID != before.EpochID() {
+		t.Fatalf("stage failure rotated epoch from %d to %d", before.EpochID(), after.EpochID)
+	}
+	if _, ok := custody.Pending(); ok {
+		t.Fatal("pre-commit stage failure left partial revoke custody")
 	}
 }

@@ -5,7 +5,7 @@
 //
 // Header (big-endian), 54 bytes before ciphertext:
 //
-//	version:u8=0x01 | type:u8 (0x01 mailbox / 0x02 push-wake) | epoch_id:u32 |
+//	version:u8=0x01 | type:u8=0x01 (mailbox) | epoch_id:u32 |
 //	seq:u64 | recipient_key_id:8 | sender_key_id:8 | nonce:24 | ciphertext:N
 //
 // AAD = the header EXCLUDING recipient_key_id, so the ciphertext under a shared
@@ -13,7 +13,7 @@
 //
 // FROZEN CONTRACT (subset):
 //
-//	const ( VersionV1 uint8 = 0x01; TypeMailbox uint8 = 0x01; TypePushWake uint8 = 0x02 )
+//	const ( VersionV1 uint8 = 0x01; TypeMailbox uint8 = 0x01 )
 //	type EnvelopeHeader struct { Version, Type uint8; EpochID uint32; Seq uint64; RecipientKeyID, SenderKeyID [8]byte }
 //	type Envelope struct { Header EnvelopeHeader; Nonce [24]byte; Ciphertext []byte }
 //	func seal(key [32]byte, h EnvelopeHeader, plaintext []byte) (*Envelope, error)

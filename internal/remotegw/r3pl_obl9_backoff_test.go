@@ -40,11 +40,16 @@ package remotegw
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 // stampedSubmit is one submit attempt with the virtual-clock time it happened at, so
@@ -102,6 +107,31 @@ type retryHarness struct {
 	sched *WakeRetryScheduler
 }
 
+// preAppendProbeSink observes the durable store at the exact publish boundary.
+type preAppendProbeSink struct {
+	store ObligationStore
+	addr  PushAddress
+	sub   *clockStampingSubmitter
+	saw   bool
+}
+
+func (s *preAppendProbeSink) Snapshot([]protocol.JournalRecord, uint64) error { return nil }
+func (s *preAppendProbeSink) Terminal(protocol.TerminalViewV1) error          { return nil }
+func (s *preAppendProbeSink) Event(protocol.JournalRecord) error {
+	ob, ok, err := s.store.Get(s.addr)
+	if err != nil {
+		return err
+	}
+	if !ok || !ob.nonTerminal() {
+		return errors.New("missing pre-append wake obligation")
+	}
+	if got := len(s.sub.all()); got != 0 {
+		return fmt.Errorf("provider submitted before mailbox publish: %d calls", got)
+	}
+	s.saw = true
+	return nil
+}
+
 func newRetryHarness(t *testing.T, base time.Duration, outcomes ...error) *retryHarness {
 	t.Helper()
 	h := &retryHarness{
@@ -123,6 +153,27 @@ func newRetryHarness(t *testing.T, base time.Duration, outcomes ...error) *retry
 		Now: h.clk.Now, After: h.ft.after, BaseDelay: base,
 	})
 	return h
+}
+
+// The scheduler is the sole current provider path. Over the existing in-memory harness
+// it records intent before the real publish boundary, then submits only after that
+// boundary succeeds; file-backed crash durability remains covered by deferred-gap tests.
+func TestOBL9_SchedulerIsTheDirectNotifierPusher(t *testing.T) {
+	h := newRetryHarness(t, time.Second)
+	probe := &preAppendProbeSink{store: h.store, addr: h.addr, sub: h.sub}
+	n := NewPushNotifier(probe, PushConfig{
+		Pusher: h.sched,
+		Prefs:  &stubPrefs{prefs: PushPrefs{Version: 1, NeedsInput: true, Finished: true}},
+	})
+	if err := n.Event(protocol.JournalRecord{Cursor: 1, SessionID: "m/s1", Type: "status", Group: status.GroupNeedsInput}); err != nil {
+		t.Fatalf("Event: %v", err)
+	}
+	if got := len(h.sub.all()); got != 1 {
+		t.Fatalf("provider submissions = %d, want 1", got)
+	}
+	if !probe.saw {
+		t.Fatal("mailbox publish did not observe a durable pre-append obligation")
+	}
 }
 
 // pump fires scheduled retry timers in order -- advancing the virtual clock by each

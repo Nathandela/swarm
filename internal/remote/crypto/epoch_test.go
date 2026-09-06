@@ -2,7 +2,7 @@
 // content key split.
 //
 // Each epoch delivers TWO independent keys (A15): a WAKE key (after-first-
-// unlock, NSE-readable, decrypts ONLY content-free type-0x02 push wakes) and a
+// unlock, NSE-readable, and intentionally unable to decrypt session content) and a
 // CONTENT key (biometric-gated, NOT NSE-readable, NOT derivable from the wake
 // key, decrypts type-0x01 mailbox session content). The grant is sealed with
 // box.SealAnonymous (crypto_box_seal-compatible) to the device RECIPIENT X25519
@@ -154,22 +154,11 @@ var (
 	}
 )
 
-// TestNSE_WakeKeyDecryptsNoSessionContent pins A15/R-CRY.13: the wake key opens
-// content-free type-0x02 push wakes but cannot open type-0x01 session content
-// (that is under the separate content key). A once-unlocked phone, whose NSE
-// holds only the wake key, yields no session history.
+// TestNSE_WakeKeyDecryptsNoSessionContent pins A15/R-CRY.13: the wake key cannot
+// open type-0x01 session content held under the separate content key. A
+// once-unlocked phone whose NSE holds only the wake key yields no session history.
 func TestNSE_WakeKeyDecryptsNoSessionContent(t *testing.T) {
 	keys := testEpochKeys()
-
-	wakeHdr := testHeader()
-	wakeHdr.Type = TypePushWake
-	wakeEnv, err := seal(keys.WakeKey, wakeHdr, []byte("activity on machine X"))
-	if err != nil {
-		t.Fatalf("seal(wake): %v", err)
-	}
-	if _, err := wakeEnv.open(keys.WakeKey); err != nil {
-		t.Errorf("NSE wake key failed to open a push-wake payload: %v", err)
-	}
 
 	contentHdr := testHeader()
 	contentHdr.Type = TypeMailbox
@@ -192,16 +181,14 @@ func TestContentKey_BiometricGatedNotNSEReadable(t *testing.T) {
 		t.Fatal("wake and content keys must be independent, not equal")
 	}
 
-	// A content envelope must not open under the wake key even if an attacker
-	// relabels its type to 0x02 to fool the NSE.
+	// A content envelope must not open under the independent wake key.
 	h := testHeader()
 	h.Type = TypeMailbox
 	env, err := seal(keys.ContentKey, h, []byte("transcript"))
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
-	env.Header.Type = TypePushWake
 	if _, err := env.open(keys.WakeKey); err == nil {
-		t.Fatal("wake key opened relabelled content; content key is derivable/shared")
+		t.Fatal("wake key opened content; content key is derivable/shared")
 	}
 }
