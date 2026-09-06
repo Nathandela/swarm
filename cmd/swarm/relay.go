@@ -1,70 +1,50 @@
 package main
 
-// `swarm relay doctor <wss-url>` (playbook 4.1/6.5): proves DNS resolution,
-// TCP+TLS (reporting the policy actually applied), WebSocket upgrade,
-// protocol version compatibility, an ephemeral authenticated mailbox
-// round-trip, and the relay's own storage health against a self-hosted relay
-// -- everything an operator needs before pointing `swarm remote init
-// --relay-url` at it.
-//
-// The mailbox round-trip and storage steps need an operator-minted
-// diagnostic capability (relay.MintDiagnosticCapability), which needs the
-// SAME operator secret file the relay was booted with (relay_config's
-// operator_secret_file / EnsureOperatorSecret). This CLI only reads that
-// file locally and mints the capability itself -- there is no network call
-// that hands one out, so the public protocol gains no privileged
-// unauthenticated endpoint (playbook 6.5).
-//
-// R2 review MEDIUM: playbook 6.5 requires the doctor to print an actionable
-// STORAGE result too -- the mailbox round-trip alone cannot: its diagnostic
-// route is deliberately per-connection memory (diag.go), so it never touches
-// the relay's bbolt store and would report ok even against a relay whose
-// disk is full. The storage step rides the SAME diag_open capability and
-// asks diag_status, which runs the relay's own store.healthCheck()/
-// diskFreeBytes checks -- the identical checks /readyz reports -- and
-// returns the verdict over the ordinary public wss:// connection, since a
-// remote operator running this CLI typically has no admin_listen access.
+// `swarm relay doctor` proves the configured machine's relay-v2 path: DNS,
+// TCP+TLS under relay.json's exact pin policy, the v2 edge marker, then a
+// machine-authenticated pairing rendezvous exchanging locally AES-GCM-sealed
+// bytes in both directions. It deliberately creates no phone member or
+// retirement record, and finishes the rendezvous even when a later step fails.
 
 import (
 	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
-	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 const relayUsage = `usage: swarm relay <command>
 
-  swarm relay doctor   diagnose a self-hosted relay deployment
+  swarm relay doctor   diagnose this machine's configured relay-v2 path
 `
 
-const relayDoctorUsage = `usage: swarm relay doctor [flags] <wss-url>
+const relayDoctorUsage = `usage: swarm relay doctor [flags]
 
-  proves DNS resolution, TCP+TLS (reporting the policy actually applied),
-  WebSocket upgrade, protocol version compatibility, an ephemeral
-  authenticated mailbox round-trip, and storage health (playbook 4.1/6.5).
-  See docs/operations/relay-runbook.md §12 for a walkthrough.
+  proves DNS resolution, TCP+TLS, authenticated relay-v2 control, and an
+  encrypted ephemeral pairing-rendezvous round-trip using this machine's
+  configured relay identity and relay.json.
 
-  --relay-pin <pin>              base64 SHA-256 SPKI pin (see the relay
-                                  runbook); omit to dial under system trust
-                                  roots
-  --operator-secret-file <path>  the relay's operator secret file, needed for
-                                  the mailbox round-trip and storage steps
   --timeout <duration>           per-step network timeout (default 10s)
 `
+
+const relayV2Marker = "swarm relay v2"
 
 // runRelay is the `swarm relay` role: it dispatches to a relay-operator verb.
 func runRelay(args []string, stdout, stderr io.Writer) int {
@@ -86,38 +66,19 @@ func runRelay(args []string, stdout, stderr io.Writer) int {
 func runRelayDoctor(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("relay doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	pin := fs.String("relay-pin", "", "base64 SHA-256 SPKI pin (see the relay runbook)")
-	secretFile := fs.String("operator-secret-file", "", "path to the relay's operator secret file")
 	timeout := fs.Duration("timeout", 10*time.Second, "per-step network timeout")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	rest := fs.Args()
-	if len(rest) != 1 {
+	if len(rest) != 0 {
 		_, _ = fmt.Fprint(stderr, relayDoctorUsage)
 		return 2
-	}
-	rawURL := rest[0]
-
-	sec, err := (relaycfg.Config{RelayURL: rawURL, SPKIPin: *pin}).Security()
-	if err != nil {
-		// R2 review LOW: relaycfg.Config.Pin's error text names relay.json --
-		// correct for the three real config readers that field actually comes
-		// from, but --relay-pin here never touches that file. Blaming it would
-		// send an operator chasing the wrong config after a truncated or
-		// CRLF-mangled `relay.pin.b64` (docs/operations/relay-runbook.md §12).
-		if errors.Is(err, relay.ErrPinMalformed) {
-			_, _ = fmt.Fprint(stderr, "relay doctor: --relay-pin is not base64 of a "+
-				"32-byte SHA-256 digest (see docs/operations/relay-runbook.md section 3)\n")
-			return 1
-		}
-		_, _ = fmt.Fprintf(stderr, "relay doctor: %v\n", err)
-		return 1
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*(*timeout))
 	defer cancel()
-	steps := runRelayDoctorChecks(ctx, rawURL, sec, *secretFile, *timeout)
+	steps := runRelayDoctorChecks(ctx, remoteStateDir(), *timeout)
 
 	allOK := true
 	for _, st := range steps {
@@ -132,15 +93,9 @@ func runRelayDoctor(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// Doctor step statuses. R2 review MEDIUM (doc-vs-behavior): a THIRD, neutral
-// status -- distinct from ok/fail -- for a step that was deliberately not
-// attempted (docs/operations/relay-runbook.md section 12's documented
-// network-only workflow: omit --operator-secret-file). Only statusFail turns
-// the exit code nonzero; a skip does not, matching what the runbook promises.
 const (
 	statusOK   = "ok"
 	statusFail = "fail"
-	statusSkip = "skip"
 )
 
 // doctorStep is one diagnostic check's outcome, with an actionable remedy in
@@ -154,20 +109,33 @@ type doctorStep struct {
 // runRelayDoctorChecks runs every step independently (a DNS failure does not
 // prevent the TCP+TLS step from attempting and reporting its own result) and
 // returns them in the playbook's order.
-func runRelayDoctorChecks(ctx context.Context, rawURL string, sec relay.Security, operatorSecretFile string, timeout time.Duration) []doctorStep {
-	u, err := url.Parse(rawURL)
+func runRelayDoctorChecks(ctx context.Context, stateDir string, timeout time.Duration) []doctorStep {
+	cfg, found, err := relaycfg.Load(stateDir)
 	if err != nil {
-		return []doctorStep{{"url", statusFail, fmt.Sprintf("%q is not a valid URL: %v", rawURL, err)}}
+		return []doctorStep{{"Configuration", statusFail, "load configured relay state: " + err.Error()}}
+	}
+	if !found || cfg.RelayURL == "" {
+		return []doctorStep{{"Configuration", statusFail, "relay.json is absent or has no relay URL; run swarm remote init first"}}
+	}
+	sec, err := cfg.Security()
+	if err != nil {
+		return []doctorStep{{"Configuration", statusFail, fmt.Sprintf("relay.json TLS policy: %v", err)}}
+	}
+	id, err := machineid.Load(filepath.Join(stateDir, "remote", remoteIdentityFile))
+	if err != nil {
+		return []doctorStep{{"Configuration", statusFail, fmt.Sprintf("load machine relay identity: %v", err)}}
+	}
+	u, err := url.Parse(cfg.RelayURL)
+	if err != nil {
+		return []doctorStep{{"Configuration", statusFail, fmt.Sprintf("%q is not a valid relay URL: %v", cfg.RelayURL, err)}}
 	}
 	// R2 review LOW: a bare hostname (the likeliest operator typo -- forgetting
 	// wss://) parses with an empty Scheme and Hostname, and every step below
 	// then fails on an opaque "lookup :" / "unsupported url scheme \"\"" with
 	// no mention of the actual fix. Catching it here, before any step runs,
 	// names the fix once instead of five confusing ways.
-	if u.Scheme != "ws" && u.Scheme != "wss" {
-		return []doctorStep{{"url", statusFail, fmt.Sprintf(
-			"%q has no ws:// or wss:// scheme; did you mean wss://%s ? (see docs/operations/relay-runbook.md section 3)",
-			rawURL, rawURL)}}
+	if u.Scheme != "ws" && u.Scheme != "wss" && u.Scheme != "http" && u.Scheme != "https" {
+		return []doctorStep{{"Configuration", statusFail, fmt.Sprintf("relay URL %q has no ws://, wss://, http://, or https:// scheme", cfg.RelayURL)}}
 	}
 
 	bounded := func(fn func(context.Context) doctorStep) doctorStep {
@@ -181,25 +149,15 @@ func runRelayDoctorChecks(ctx context.Context, rawURL string, sec relay.Security
 		return doctorCheckDNS(c, u.Hostname())
 	}))
 	steps = append(steps, bounded(func(c context.Context) doctorStep {
-		return doctorCheckTCPTLS(c, u, sec, rawURL)
+		return doctorCheckTCPTLS(c, cfg.RelayURL, sec)
 	}))
-	ws, proto := bounded2(ctx, timeout, func(c context.Context) (doctorStep, doctorStep) {
-		return doctorCheckWSAndProtocol(c, rawURL, sec)
-	})
-	steps = append(steps, ws, proto)
-	mailbox, storage := bounded2(ctx, timeout, func(c context.Context) (doctorStep, doctorStep) {
-		return doctorCheckMailboxAndStorage(c, rawURL, sec, operatorSecretFile)
-	})
-	steps = append(steps, mailbox, storage)
+	steps = append(steps, bounded(func(c context.Context) doctorStep {
+		return doctorCheckRelayV2Edge(c, cfg.RelayURL, sec)
+	}))
+	steps = append(steps, bounded(func(c context.Context) doctorStep {
+		return doctorCheckRelayV2(c, cfg, sec, id)
+	}))
 	return steps
-}
-
-// bounded2 is bounded's shape for a step that produces two results from one
-// bounded connection (WebSocket upgrade + protocol version share a dial).
-func bounded2(ctx context.Context, timeout time.Duration, fn func(context.Context) (doctorStep, doctorStep)) (doctorStep, doctorStep) {
-	c, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	return fn(c)
 }
 
 // doctorCheckDNS resolves host, the first proven step (playbook 4.1).
@@ -227,8 +185,12 @@ func doctorCheckDNS(ctx context.Context, host string) doctorStep {
 // doctorCheckTCPTLS proves the TCP connect and, under an encrypted scheme,
 // the TLS handshake under the EXACT policy a real machine/phone dial would
 // apply -- and reports which policy that was.
-func doctorCheckTCPTLS(ctx context.Context, u *url.URL, sec relay.Security, rawURL string) doctorStep {
+func doctorCheckTCPTLS(ctx context.Context, rawURL string, sec relay.Security) doctorStep {
 	const name = "TCP+TLS"
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return doctorStep{name, statusFail, fmt.Sprintf("invalid relay URL: %v", err)}
+	}
 	tlsCfg, err := sec.Resolve(rawURL)
 	if err != nil {
 		return doctorStep{name, statusFail, fmt.Sprintf("transport policy: %v", err)}
@@ -312,165 +274,132 @@ func doctorPolicyName(sec relay.Security, tlsCfg *tls.Config) string {
 	return "system trust roots"
 }
 
-// doctorCheckWSAndProtocol dials the websocket upgrade under sec and
-// negotiates the protocol version on the same connection, since a failed
-// upgrade leaves nothing to negotiate over.
-func doctorCheckWSAndProtocol(ctx context.Context, rawURL string, sec relay.Security) (ws, proto doctorStep) {
-	const wsName, protoName = "WebSocket upgrade", "Protocol version"
-	conn, err := relay.DialRawSecure(ctx, rawURL, sec)
+// doctorCheckRelayV2Edge only proves that this endpoint advertises the v2
+// service. It is deliberately not a readiness check: authenticated control and
+// the rendezvous exchange below prove the usable relay path.
+func doctorCheckRelayV2Edge(ctx context.Context, rawURL string, sec relay.Security) doctorStep {
+	const name = "Relay-v2 edge"
+	u, err := url.Parse(rawURL)
 	if err != nil {
-		return doctorStep{wsName, statusFail, fmt.Sprintf("%v", err)},
-			doctorStep{protoName, statusFail, "skipped: no connection"}
+		return doctorStep{name, statusFail, fmt.Sprintf("invalid relay URL: %v", err)}
 	}
-	defer func() { _ = conn.Close() }()
-	ws = doctorStep{wsName, statusOK, "101 Switching Protocols"}
-
-	version, _, err := conn.Hello(ctx, relay.ProtocolVersion, []string{"mailbox"})
+	switch u.Scheme {
+	case "ws":
+		u.Scheme = "http"
+	case "wss":
+		u.Scheme = "https"
+	case "http", "https":
+	default:
+		return doctorStep{name, statusFail, fmt.Sprintf("unsupported relay URL scheme %q", u.Scheme)}
+	}
+	u.Path, u.RawQuery, u.Fragment = "/", "", ""
+	tlsCfg, err := sec.Resolve(rawURL)
 	if err != nil {
-		return ws, doctorStep{protoName, statusFail, fmt.Sprintf("hello: %v", err)}
+		return doctorStep{name, statusFail, fmt.Sprintf("transport policy: %v", err)}
 	}
-	if version != relay.ProtocolVersion {
-		return ws, doctorStep{protoName, statusFail, fmt.Sprintf(
-			"relay negotiated version %d; this CLI speaks %d", version, relay.ProtocolVersion)}
+	transport := &http.Transport{TLSClientConfig: tlsCfg}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Transport:     transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	return ws, doctorStep{protoName, statusOK, fmt.Sprintf("negotiated version %d", version)}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return doctorStep{name, statusFail, fmt.Sprintf("build request: %v", err)}
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return doctorStep{name, statusFail, fmt.Sprintf("GET /: %v", err)}
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, int64(len(relayV2Marker)+1)))
+	if err != nil || response.StatusCode != http.StatusOK || string(body) != relayV2Marker {
+		return doctorStep{name, statusFail, "GET / did not return the swarm relay v2 marker"}
+	}
+	return doctorStep{name, statusOK, "GET / returned swarm relay v2"}
 }
 
-// doctorCheckMailboxAndStorage is the R2 doctor capability (playbook 6.5): an
-// ephemeral relay-auth identity authenticates, opens a diagnostic route with
-// an operator-minted capability, then proves two INDEPENDENT things over
-// it -- storage health (diag_status) and a mailbox round-trip of
-// locally-encrypted random bytes -- before deleting the route. They are
-// independent because the round-trip's diagnostic route is per-connection
-// memory (diag.go) and never touches the relay's bbolt store: it can succeed
-// against a relay whose disk is full (R2 review MEDIUM), which is exactly
-// what the separate Storage step exists to catch.
-func doctorCheckMailboxAndStorage(ctx context.Context, rawURL string, sec relay.Security, operatorSecretFile string) (mailbox, storage doctorStep) {
-	const mbName, stName = "Mailbox round-trip", "Storage"
-	// R2 review MEDIUM (doc-vs-behavior): omitting --operator-secret-file is
-	// the documented, legitimate network-only workflow
-	// (docs/operations/relay-runbook.md section 12) -- these two steps report
-	// "skip", not "fail", and a skip does not turn the exit code nonzero. A
-	// flag that WAS given but turns out broken (unreadable file, empty file,
-	// wrong secret, unreachable relay) is a real failure below, never a skip:
-	// the operator asked for the check and it did not run.
-	if operatorSecretFile == "" {
-		reason := "no --operator-secret-file given; pass the relay's " +
-			"operator secret file to mint a diagnostic capability (docs/operations/relay-runbook.md §12)"
-		return doctorStep{mbName, statusSkip, reason}, doctorStep{stName, statusSkip, "skipped: " + reason}
-	}
-	fail := func(reason string) (doctorStep, doctorStep) {
-		return doctorStep{mbName, statusFail, reason}, doctorStep{stName, statusFail, "skipped: " + reason}
-	}
-	secretDoc, err := os.ReadFile(operatorSecretFile)
+// doctorCheckRelayV2 proves the configured machine can authenticate, create a
+// one-shot rendezvous, and exchange opaque encrypted frames. Pairing state is
+// always finished by the machine control connection; it never creates a member
+// or a retirement record.
+func doctorCheckRelayV2(ctx context.Context, cfg relaycfg.Config, sec relay.Security, id *machineid.Identity) doctorStep {
+	const name = "Relay-v2 rendezvous"
+	machineRID := relayv2.RoutingID(id.RelayAuthPublic())
+	profile := relayv2.Profile{RelayURL: cfg.RelayURL, MachineRID: machineRID, OperatorNamespace: cfg.OperatorNamespace, Security: sec}
+	control, err := relayv2.Dial(ctx, profile, relayv2.Auth{PublicKey: id.RelayAuthPublic(), Sign: func(message []byte) ([]byte, error) {
+		return id.RelayAuthSign(message), nil
+	}, Role: relayv2.RoleMachine, Purpose: relayv2.PurposeControl})
 	if err != nil {
-		return fail(fmt.Sprintf("read --operator-secret-file: %v", err))
+		return doctorStep{name, statusFail, fmt.Sprintf("machine-control authentication: %v", err)}
 	}
-
-	// Generated BEFORE minting: the capability is bound to this identity's
-	// routing id (R2 review LOW, design -- relay.MintDiagnosticCapability's
-	// rid parameter), so it verifies only when THIS keypair goes on to
-	// authenticate below.
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return fail(fmt.Sprintf("generate ephemeral identity: %v", err))
+	defer control.Close()
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return doctorStep{name, statusFail, fmt.Sprintf("generate ceremony: %v", err)}
 	}
-	capability, err := relay.MintDiagnosticCapability(bytes.TrimSpace(secretDoc), time.Now(), relay.RoutingID(pub))
-	if err != nil {
-		if errors.Is(err, relay.ErrDiagnosticsDisabled) {
-			// R2 review LOW (misattribution): an empty/whitespace-only local
-			// file must not blame the RELAY's configuration -- the relay is
-			// very likely fine; the same treatment the --relay-pin fix above
-			// already gives a locally malformed pin.
-			return fail(fmt.Sprintf(
-				"--operator-secret-file %q is empty (this is a problem with the LOCAL file, not the relay's configuration)",
-				operatorSecretFile))
+	ceremony := hex.EncodeToString(raw[:])
+	machine := relayv2.NewMachinePairTransport(control)
+	if err := machine.Create(ctx, ceremony); err != nil {
+		return doctorStep{name, statusFail, fmt.Sprintf("pair create: %v", err)}
+	}
+	finished := false
+	defer func() {
+		if !finished {
+			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = machine.Complete(cleanup, ceremony)
 		}
-		return fail(fmt.Sprintf("mint diagnostic capability: %v", err))
-	}
-
-	auth := relay.ClientAuth{
-		RelayAuthPub: pub,
-		Sign:         func(challenge []byte) ([]byte, error) { return ed25519.Sign(priv, challenge), nil },
-	}
-	cl, err := relay.DialSecure(ctx, rawURL, auth, sec)
+	}()
+	claimant, err := relayv2.DialPair(ctx, relayv2.Profile{RelayURL: cfg.RelayURL, Security: sec}, ceremony)
 	if err != nil {
-		return fail(fmt.Sprintf("authenticated dial: %v", err))
+		return doctorStep{name, statusFail, fmt.Sprintf("pair claimant dial: %v", err)}
 	}
-	defer func() { _ = cl.Close() }()
-
-	if err := cl.DiagOpen(ctx, capability); err != nil {
-		reason := fmt.Sprintf(
-			"diag_open: %v (check --operator-secret-file matches the relay's operator_secret_file)", err)
-		return doctorStep{mbName, statusFail, reason}, doctorStep{stName, statusFail, "skipped: diag_open did not succeed"}
+	defer claimant.Close()
+	if err := claimant.Claim(ctx, ceremony); err != nil {
+		return doctorStep{name, statusFail, fmt.Sprintf("pair claim: %v", err)}
 	}
-
-	if status, err := cl.DiagStatus(ctx); err != nil {
-		storage = doctorStep{stName, statusFail, fmt.Sprintf("diag_status: %v", err)}
-	} else {
-		storage = doctorStorageStep(status)
+	if err := doctorPairExchange(ctx, machine, claimant); err != nil {
+		return doctorStep{name, statusFail, err.Error()}
 	}
-	mailbox = doctorMailboxRoundTrip(ctx, cl)
-	return mailbox, storage
+	if err := machine.Complete(ctx, ceremony); err != nil {
+		return doctorStep{name, statusFail, fmt.Sprintf("pair finish: %v", err)}
+	}
+	finished = true
+	select {
+	case <-control.Done():
+		return doctorStep{name, statusFail, "machine-control connection was superseded during the probe"}
+	default:
+	}
+	return doctorStep{name, statusOK, "machine control authenticated; encrypted pairing frames exchanged and retired"}
 }
 
-// doctorStorageStep turns a diag_open reply's storage snapshot into an
-// actionable step: the relay's own store.healthCheck()/free-disk verdict
-// (relay's checkStorage, health.go), the same one /readyz reports.
-func doctorStorageStep(status relay.DiagStatus) doctorStep {
-	const name = "Storage"
-	if !status.StoreOK {
-		return doctorStep{name, statusFail, fmt.Sprintf(
-			"persistence store not writable: %s (check the relay host's disk and the bbolt file's permissions)",
-			status.StoreError)}
-	}
-	if status.DiskCheckEnabled && !status.DiskOK {
-		if status.DiskError != "" {
-			return doctorStep{name, statusFail, fmt.Sprintf("disk free-space check failed: %s", status.DiskError)}
+func doctorPairExchange(ctx context.Context, machine, claimant *relayv2.PairTransport) error {
+	for _, direction := range []struct {
+		from, to *relayv2.PairTransport
+		name     string
+	}{{machine, claimant, "machine-to-claimant"}, {claimant, machine, "claimant-to-machine"}} {
+		plain := make([]byte, 32)
+		if _, err := rand.Read(plain); err != nil {
+			return fmt.Errorf("generate %s payload: %w", direction.name, err)
 		}
-		return doctorStep{name, statusFail, fmt.Sprintf(
-			"low disk space: %d bytes free, want >= %d (see quotas.disk_free_min_bytes in the relay runbook)",
-			status.DiskFreeBytes, status.DiskFreeMinBytes)}
+		ciphertext, key, err := doctorSeal(plain)
+		if err != nil {
+			return fmt.Errorf("encrypt %s payload: %w", direction.name, err)
+		}
+		if err := direction.from.Send(ctx, ciphertext); err != nil {
+			return fmt.Errorf("send %s payload: %w", direction.name, err)
+		}
+		got, err := direction.to.Recv(ctx)
+		if err != nil {
+			return fmt.Errorf("receive %s payload: %w", direction.name, err)
+		}
+		opened, err := doctorOpen(got, key)
+		if err != nil || !bytes.Equal(opened, plain) {
+			return fmt.Errorf("%s payload did not decrypt exactly", direction.name)
+		}
 	}
-	if !status.DiskCheckEnabled {
-		return doctorStep{name, statusOK, "store writable; disk-space alarm disabled (quotas.disk_free_min_bytes <= 0)"}
-	}
-	return doctorStep{name, statusOK, fmt.Sprintf(
-		"store writable; %d bytes free (>= %d)", status.DiskFreeBytes, status.DiskFreeMinBytes)}
-}
-
-// doctorMailboxRoundTrip proves the ALREADY-OPEN diagnostic route works:
-// round-trips locally-encrypted random bytes through it and deletes the
-// route, proving the relay only ever handled opaque ciphertext.
-func doctorMailboxRoundTrip(ctx context.Context, cl *relay.Client) doctorStep {
-	const name = "Mailbox round-trip"
-	plaintext := make([]byte, 32)
-	if _, err := rand.Read(plaintext); err != nil {
-		return doctorStep{name, statusFail, fmt.Sprintf("generate random payload: %v", err)}
-	}
-	ciphertext, key, err := doctorSeal(plaintext)
-	if err != nil {
-		return doctorStep{name, statusFail, fmt.Sprintf("encrypt diagnostic payload: %v", err)}
-	}
-	if err := cl.DiagAppend(ctx, ciphertext); err != nil {
-		return doctorStep{name, statusFail, fmt.Sprintf("diag_append: %v", err)}
-	}
-	items, err := cl.DiagRead(ctx)
-	if err != nil {
-		return doctorStep{name, statusFail, fmt.Sprintf("diag_read: %v", err)}
-	}
-	if len(items) != 1 {
-		return doctorStep{name, statusFail, fmt.Sprintf("diag_read returned %d item(s), want exactly 1", len(items))}
-	}
-	got, err := doctorOpen(items[0].Envelope, key)
-	if err != nil || !bytes.Equal(got, plaintext) {
-		return doctorStep{name, statusFail, "the round-tripped bytes did not decrypt to the sent payload"}
-	}
-	if err := cl.DiagClose(ctx); err != nil {
-		return doctorStep{name, statusFail, fmt.Sprintf("diag_close: %v", err)}
-	}
-	return doctorStep{name, statusOK, fmt.Sprintf(
-		"%d bytes round-tripped through an ephemeral, single-use diagnostic route", len(plaintext))}
+	return nil
 }
 
 // doctorSeal AES-256-GCM-encrypts plaintext under a freshly generated,

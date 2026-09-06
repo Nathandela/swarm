@@ -945,3 +945,26 @@ rate limiting. An earlier full-suite attempt stopped on the already isolated loa
 expired-cutoff timing test; the fresh rerun passed it and the remaining suite. Independent Sol
 security/crash/concurrency review returned GO with no blocking finding. These are local checks;
 hosted admission remains closed and no physical-phone result is claimed.
+
+## Configured relay-v2 doctor
+
+`swarm relay doctor` now accepts no relay URL, pin or operator-secret arguments. It loads the same
+`relay.json` and machine identity as remote control, proves DNS and TCP+TLS under the configured
+policy, checks the exact `swarm relay v2` edge marker, then authenticates a machine-control
+connection and completes a fresh relay-v2 pairing rendezvous. Random payloads are AES-GCM sealed
+locally and exchanged in both directions; the relay sees only ciphertext. The ceremony is finished
+on success and by a bounded best-effort cleanup after any post-create failure, with relay expiry as
+the final crash fallback. The path uses only PAIR operations, so it creates no phone membership or
+retirement state and requires no Worker diagnostic RPC, persistent diagnostic phone or privileged
+diagnostic credential.
+
+Focused command race tests cover rejection of legacy arguments, missing configured state, exact
+configured pin enforcement, and refusal of cross-origin and HTTPS-to-HTTP marker redirects. The
+redirect cases first failed because the default client followed them, then passed after redirects
+were disabled. A fresh complete local-workerd suite passed on port 19069, including
+two consecutive doctor runs while a live machine stream remained connected, as well as the existing
+pairing, operator-revoke, mobile, recovery, expiry, alarm and rate gates. Command/relay-v2 vet, shell
+syntax and whitespace checks also passed. The root marker remains an edge/version signal rather than
+a readiness or backup/restore claim. The doctor can supersede another simultaneous machine-control
+ceremony, so the runbook requires an otherwise idle control plane. These are local checks; hosted
+admission remains closed and no physical-phone result is claimed.

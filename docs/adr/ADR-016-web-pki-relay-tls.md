@@ -163,13 +163,13 @@ The phone renders an expert-policy relay with a persistent marker in machine hea
 
 **B58 ruling (1) is retained in full**: a transport verdict reached while a pairing is in flight is not terminal (`mobile/relay.go:408-422`, `:2795-2798`). Web PKI makes the ordinary first pairing succeed rather than race, but a name-mismatched or untrusted relay reaches the same verdict during the same pairing, and removing the brace because the common case improved is exactly the regression this clause exists to prevent. `TestB58_TheFirstPairingSurvivesAPinningOnlyPlatform` (`mobile/conformance/b58_pairingterminal_test.go:229`) keeps running against the expert policy.
 
-**The machine side owes the same verdict before a handset is asked for it.** The playbook has `swarm relay doctor <url>` prove "DNS, WebSocket upgrade, **TLS policy**, protocol compatibility" (`playbook:179-180`, contract at `:504-507`) and R2 requires "clear diagnostics for DNS/TLS/WebSocket/pin failures" (`playbook:721`). Under this ADR that is a named obligation, not a category:
-
-- The doctor **prints which policy is in force** for the configured URL (`webpki` or `pinned_spki`, and why — flag, IP literal, or default), because a silently-wrong policy is the failure this whole ADR is about.
-- The doctor dials under **the same policy the phone will**, never a relaxed one, and reports the presented chain's issuer, SANs, and validity window.
-- On a `webpki` host it **fails** — not warns — when the chain does not verify, when the leaf's SAN does not cover the configured host, or when the certificate is outside its validity window. The SAN case is the one that matters: it is the misconfiguration a handset would otherwise discover as `relay_name_mismatch` after the operator has already been asked to scan.
-- On a `pinned_spki` host it prints the computed SPKI and reports whether it matches the configured current pin and pin-next (W5), so an unacknowledged rotation is visible before promotion.
-- The doctor's states use the same vocabulary as the table above, so the operator's terminal and the user's handset name the same fault.
+**The machine side owes the same verdict before a handset is asked for it.** After
+`swarm remote init`, `swarm relay doctor` reads the configured URL and TLS policy from
+`relay.json`; it accepts no URL or pin override. Its TCP+TLS step uses the same resolved
+`relay.Security` policy as the production dial, fails on Web-PKI hostname/chain/expiry or
+configured-pin errors, and prints the policy, issuer and expiry. It never retries under a weaker
+policy. The later authenticated relay-v2 rendezvous proves the usable path; the root marker alone
+is only version reachability.
 
 ### W9. Rollback and N/N-1 are decided, not assumed
 

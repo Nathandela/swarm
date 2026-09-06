@@ -141,8 +141,10 @@ environment is void.
 **`[UNRUN]` PH-DEV-5. Two relays.** Provision `relay-org` (which will host machines M1 and M2) and
 `relay-alt` (M3) from the released R2 bundle. For each: record the URL, the TLS policy in force
 (`web_pki` is the default, ADR-016 W1), the certificate issuer and expiry, and the full output of
-`swarm relay doctor <url>`. Neither relay holds a push credential; confirm and record that the shipped
-config has no such field (ADR-015 P1).
+`swarm relay doctor` run from each relay-assigned machine after `swarm remote init`. Record the
+configured-state v2 checks (including the marker as version reachability, not readiness) and ensure
+no pairing/control ceremony is concurrent with the probe. Neither relay holds a push credential;
+confirm and record that the shipped config has no such field (ADR-015 P1).
 
 **`[UNRUN]` PH-DEV-6. Three machines.** M1, M2, M3, each with `swarm remote init` completed and
 `swarm-remote` on `PATH`. Record for each: OS and version, swarm SHA, relay assignment, and — after

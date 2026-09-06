@@ -173,10 +173,11 @@ milestones land together.
 The normal route is:
 
 1. The developer deploys `swarm-relay` to an always-on host through the supported deployment bundle.
-2. `swarm relay doctor <url>` proves DNS, WebSocket upgrade, TLS policy, protocol compatibility, and
-   an ephemeral authenticated mailbox round-trip. The R2 provisioning check separately proves
-   restart, backup, and restore persistence.
-3. The developer runs `swarm remote init --relay-url <wss-url>` once on each computer.
+2. The developer runs `swarm remote init --relay-url <wss-url>` once on each computer.
+3. `swarm relay doctor` reads that machine's configured relay state and
+   proves DNS, configured TLS/pinning, the relay-v2 edge marker (not readiness), and an ephemeral
+   encrypted pairing-rendezvous exchange. It creates no phone member or retirement; backup/restore
+   validation remains a separate operator check.
 4. The developer opens the Android app and chooses **Add computer**.
 5. `swarm remote pair` displays a QR code and manual fallback. The phone and machine compare the SAS;
    the terminal requires local confirmation.
@@ -505,10 +506,10 @@ Ship a supported deployment bundle, not only a prose VPS runbook:
 - A trusted-proxy policy that accepts forwarding headers only from the Compose loopback proxy, then
   keys source quotas by the validated external address. Adversarial tests prove spoofed headers and
   one client cannot consume another client's budget.
-- `swarm relay doctor` that uses an operator-created, short-lived diagnostic capability to create an
-  ephemeral route, round-trip random encrypted bytes, delete it, and print actionable DNS/TLS/WSS/
-  storage results. The normal public protocol gains no privileged unauthenticated doctor endpoint;
-  restart/restore checks are separate operator steps.
+- Configured-state-only `swarm relay doctor`: no URL, pin, or operator-secret flags. It uses the
+  machine control identity and a fresh bounded relay-v2 pairing ceremony to exchange encrypted
+  bytes, finishes it on success or best effort on failure, and creates no member/retirement state.
+  Its root marker is version reachability, never readiness; restart/restore checks remain separate.
 - Upgrade documentation and N/N-1 protocol compatibility; no "latest" image in generated config.
 
 The relay remains usable without push credentials because push no longer lives there.

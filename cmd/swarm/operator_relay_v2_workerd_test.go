@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"os"
@@ -8,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	remotecrypto "github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
+	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 	"github.com/Nathandela/swarm/internal/remote/relaypurge"
 	"github.com/Nathandela/swarm/internal/remote/relayv2"
@@ -151,4 +154,48 @@ func TestOperatorRelayV2RevokeAndDeferredRetry(t *testing.T) {
 		t.Fatalf("stale purge revoked replacement generation: %v", err)
 	}
 	current.Close()
+}
+
+func TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream(t *testing.T) {
+	baseURL := os.Getenv("OPERATOR_RELAY_V2_HTTP")
+	if baseURL == "" {
+		t.Skip("OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate")
+	}
+	stateDir := t.TempDir()
+	operatorV2Identity(t, stateDir)
+	if err := relaycfg.Save(stateDir, relaycfg.Config{RelayURL: baseURL, OperatorNamespace: "local-test", TLSPolicy: relaycfg.PolicyWebPKI}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := machineid.Load(filepath.Join(stateDir, "remote", remoteIdentityFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	stream, err := relayv2.Dial(ctx, relayv2.Profile{RelayURL: baseURL,
+		MachineRID: relayv2.RoutingID(id.RelayAuthPublic()), OperatorNamespace: "local-test",
+		Security: relay.Security{AllowLoopbackCleartext: true}}, relayv2.Auth{PublicKey: id.RelayAuthPublic(),
+		Sign: func(message []byte) ([]byte, error) { return id.RelayAuthSign(message), nil },
+		Role: relayv2.RoleMachine, Purpose: relayv2.PurposeStream})
+	if err != nil {
+		t.Fatalf("open live machine stream: %v", err)
+	}
+	defer stream.Close()
+	t.Setenv(daemon.EnvStateDir, stateDir)
+	for run := 1; run <= 2; run++ {
+		var stdout, stderr bytes.Buffer
+		if code := runRelay([]string{"doctor"}, &stdout, &stderr); code != 0 {
+			t.Fatalf("doctor run %d = %d, stdout=%s stderr=%s", run, code, stdout.String(), stderr.String())
+		}
+		for _, step := range []string{"DNS resolution", "TCP+TLS", "Relay-v2 edge", "Relay-v2 rendezvous"} {
+			if got := doctorStepStatus(t, stdout.String(), step); got != statusOK {
+				t.Fatalf("doctor run %d step %q = %q, output=%s", run, step, got, stdout.String())
+			}
+		}
+		select {
+		case <-stream.Done():
+			t.Fatal("doctor control probe superseded the live machine stream")
+		default:
+		}
+	}
 }

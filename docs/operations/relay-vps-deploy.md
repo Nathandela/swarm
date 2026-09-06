@@ -607,16 +607,19 @@ and refusal reasons only; it contains no relay identity, mailbox, token, source 
 
 ### 14b. The generated operator secret
 
-**Added by wave R2 (playbook §6.5), 2026-08-15.** If `operator_secret_file` is set (the shipped
-example points it at the same state directory/named volume as `db_path`) and the file does not yet
-exist, the relay generates a high-entropy secret at first boot and persists it there at `0600`. It
-is diagnostic/admin authority for the `swarm relay doctor` capability — **not** a substitute for
-Web-PKI server authentication (playbook §6.5) — and is never logged. Leave `operator_secret_file`
-out of your config entirely to keep diagnostics disabled. `docs/operations/relay-runbook.md` §12
-has the doctor command itself — run it once you've deployed to prove DNS/TCP+TLS/WebSocket/protocol/
-mailbox/storage all work end to end, rather than trusting §§8-10 above in isolation. The storage
-step (`diag_status`) reports the SAME store-writable/free-disk verdict `/readyz` reports above, over
-the public `wss://` connection, for an operator who has no `admin_listen` access to this host.
+**Added by wave R2 (playbook §6.5), 2026-08-15; doctor migration amended for relay-v2.** If
+`operator_secret_file` is set (the shipped example points it at the same state directory/named
+volume as `db_path`) and the file does not yet exist, the relay generates a high-entropy secret at
+first boot and persists it there at `0600`. It is never a substitute for Web-PKI server
+authentication and is never logged. It is **not** an input to `swarm relay doctor`.
+
+After `swarm remote init` has written the machine's relay URL, namespace, TLS policy/pin, and
+machine identity, run `swarm relay doctor` with no URL, pin, or operator-secret flag. It proves
+configured DNS/TCP+TLS, the relay-v2 root marker as version reachability (not readiness), and a
+bounded encrypted pairing-rendezvous exchange using the machine control identity. The ceremony
+creates no phone member, mailbox, consent, or retirement record; it finishes best effort on a
+failure and otherwise expires by its bounded TTL. The root marker and rendezvous are not a
+replacement for this host's `/readyz` storage/disk check; use `healthcheck` above for readiness.
 
 ---
 

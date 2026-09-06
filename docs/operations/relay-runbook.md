@@ -501,82 +501,31 @@ failure exercises exactly the code path a real `ENOSPC` would hit.
 
 ## 12. `swarm relay doctor`: diagnose a deployment end to end
 
-**Added by wave R2 (playbook §6.5), 2026-08-15 — not part of the §0-§10 transcript above.**
-`swarm relay doctor <wss-url>` (a `swarm`-binary subcommand, not `swarm-relay`) runs every check
-§§6-10 above walk through by hand — DNS resolution, the TCP+TLS handshake under the EXACT policy a
-real machine dial applies (reporting which policy that was), the WebSocket upgrade, protocol
-version compatibility, an authenticated mailbox round-trip, and the relay's own storage health —
-in one command, against a relay that is already running:
+`swarm relay doctor` is a `swarm`-binary command that uses the configured local machine state; it
+takes **no URL, pin, or operator-secret argument**. Run `swarm remote init` first, then run:
 
 ```bash
-swarm relay doctor --relay-pin "$(cat relay.pin.b64)" \
-  --operator-secret-file operator.secret \
-  wss://relay-swarm.dsfactory.org
+swarm relay doctor
 ```
 
-Omit `--relay-pin` to dial under system trust roots (the ADR-016 `webpki` policy
-`docs/operations/relay-vps-deploy.md` §11 steers toward); pass it to reproduce exactly what a
-machine on the expert `pinned_spki` policy does — §3/§8a above compute the same value.
+The command reads `<stateDir>/remote/relay.json` and the machine relay identity. It therefore dials
+the exact configured URL, operator namespace, TLS policy, and SPKI pin that remote control uses.
+It reports DNS resolution, TCP+TLS, and a bounded `GET /` check for the exact `swarm relay v2`
+marker. That marker establishes edge/version reachability only; it is **not** a readiness claim.
 
-`--operator-secret-file` must point at the SAME file `operator_secret_file` names in the relay's
-own config (`docs/operations/relay-vps-deploy.md` §14b) — the doctor reads it **locally** and
-**mints** a short-lived (≤ 5 min), single-use\* diagnostic capability itself. There is no network
-call that hands one out, so `swarm relay doctor` adds **no privileged unauthenticated endpoint**
-to the public protocol (playbook §6.5) — this is the doctor rule §14a and §14b of the VPS deploy
-doc already reference. Presenting that capability over the relay's ordinary authenticated
-connection surface (`diag_open`) unlocks a new SCOPED op family — `diag_open`/`diag_status`/
-`diag_append`/`diag_read`/`diag_close` — that can only create, use, and delete the **caller's own**
-ephemeral diagnostic route: it can never read a real mailbox and never enumerates a routing id
-(`internal/remote/relay/diag.go`; the adversarial fences are in `internal/remote/relay/diag_test.go`).
-`diag_status` reports the SAME store-writable/free-disk verdict `/readyz` reports (§14a) — it exists
-because a remote operator running this CLI typically has no `admin_listen` access, only the public
-`wss://` one. Omit `--operator-secret-file` to run every step except the mailbox round-trip and
-storage checks — useful when you only have network access to the relay, not its host. Both report
-`skip`, not `fail`, when the flag is simply omitted, and a `skip` does not turn the exit code
-nonzero — this is a legitimate, exit-`0` diagnostic run, not a degraded one. A flag that **was**
-given but turns out broken (an unreadable or empty `--operator-secret-file`, a wrong secret, an
-unreachable relay) still reports `fail` on both steps and a nonzero exit: the operator asked for the
-check and it did not run.
+The usable-path proof authenticates the configured machine with relay-v2 control purpose, creates a
+fresh 16-byte pairing ceremony, lets an ephemeral claimant claim it, and exchanges locally
+AES-GCM-encrypted random bytes in both directions before finishing the ceremony. This touches the
+Worker's rendezvous storage but creates **no phone member, mailbox, consent, or retirement record**.
+After a successful create, every failure path makes a bounded best-effort `PAIR_FINISH`; normal TTL
+expiry is the final cleanup if the relay cannot be reached.
 
-\* "Single-use" is enforced in the relay process's memory only (`Server.diagUsedNonces`); a restart
-forgets every spent capability. The blast radius of a post-restart replay is a fresh, empty,
-per-connection diagnostic route — never real mailbox content — so this is accepted rather than made
-durable; see the comment on `DiagnosticCapabilityTTL` in `internal/remote/relay/diag.go`. Each minted
-capability is also bound to the ONE relay-auth identity `swarm relay doctor` generates for that run
-(`RoutingID`-keyed) — an endpoint the capability is ever shown to (a typo'd URL, a hijacked DNS
-record) cannot replay it against the real relay under an identity of its own, since it never holds
-that ephemeral identity's private key.
-
-Each of the six steps prints its own `ok`/`fail`/`skip` line with an actionable remedy; the command
-exits `0` unless a step actually **fails** — a `skip`ped step (only Mailbox round-trip and Storage,
-and only when `--operator-secret-file` is omitted) does not affect the exit code:
-
-```
-DNS resolution       ok   relay-swarm.dsfactory.org -> 203.0.113.7
-TCP+TLS              ok   policy: system trust roots; issuer="R3" not-after=2026-11-01T00:00:00Z
-WebSocket upgrade     ok   101 Switching Protocols
-Protocol version     ok   negotiated version 1
-Mailbox round-trip    ok   32 bytes round-tripped through an ephemeral, single-use diagnostic route
-Storage              ok   store writable; 42817728512 bytes free (>= 1073741824)
-```
-
-Network-only (`--operator-secret-file` omitted), against the same healthy relay, still exits `0`:
-
-```
-DNS resolution       ok   relay-swarm.dsfactory.org -> 203.0.113.7
-TCP+TLS              ok   policy: system trust roots; issuer="R3" not-after=2026-11-01T00:00:00Z
-WebSocket upgrade     ok   101 Switching Protocols
-Protocol version     ok   negotiated version 1
-Mailbox round-trip    skip no --operator-secret-file given; pass the relay's operator secret file...
-Storage               skip skipped: no --operator-secret-file given; pass the relay's operator...
-```
-
-A `TCP+TLS` failure under system trust roots is a **real** certificate problem (expired, wrong SAN,
-untrusted issuer, or — most often — ACME never having issued; see §12's troubleshooting list in
-`relay-vps-deploy.md`) — never a false failure from the doctor itself: this step builds and reports
-the SAME `tls.Config` a real machine dial resolves via `relay.Security.Resolve`
-(`cmd/swarm/relay.go`), naming the server it verifies against exactly as a real dial would rather
-than aborting on a bare config before certificate validation ever runs.
+Every printed step must be `ok`; any failure exits nonzero. A TLS failure is a real configured-policy
+failure (certificate, hostname, pin, or route), not a fallback to a weaker policy. The probe opens a
+short machine **control-purpose** connection. It does not supersede a machine stream connection, but
+it can collide with another concurrent control-purpose ceremony; the command reports a detected
+supersession rather than claiming success. Run it when no pairing or other control ceremony is in
+progress.
 
 ---
 

@@ -115,6 +115,15 @@ else
   sed -n '1,200p' "$log"
   exit 1
 fi
+if output=$(OPERATOR_RELAY_V2_HTTP="http://127.0.0.1:$port" \
+  go test ../../cmd/swarm -run '^TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream$' -count=1 -timeout=45s -v 2>&1); then
+	printf '%s\n' "$output"
+	case "$output" in *"--- PASS: TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream"*) :;; *) exit 1;; esac
+else
+	printf '%s\n' "$output"
+	sed -n '1,200p' "$log"
+	exit 1
+fi
 stop_worker
 start_worker alarm-state 60000 1 30000 1000 1
 RELAY_HTTP="http://127.0.0.1:$port" node test/alarm-cost.mjs
