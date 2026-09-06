@@ -13,6 +13,7 @@ package skeleton
 // ahead of it.
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -22,6 +23,21 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/shim"
 )
+
+func TestSocketBindUmasksPreserveOwnerDirectoryTraversal(t *testing.T) {
+	for _, path := range []string{"../daemon/singleton.go", "../shim/server.go"} {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !bytes.Contains(src, []byte("syscall.Umask(0o077)")) {
+			t.Errorf("%s does not bind under umask 0077; a process-global 0177 mask turns a concurrent mkdir(0700) into an untraversable 0600 directory", path)
+		}
+		if bytes.Contains(src, []byte("syscall.Umask(0o177)")) {
+			t.Errorf("%s retains the unsafe umask 0177 bind", path)
+		}
+	}
+}
 
 func TestHookDrainer_CrashAfterGapJournalBeforeCheckpointDoesNotDuplicateBoundary(t *testing.T) {
 	stateDir := t.TempDir()

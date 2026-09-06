@@ -44,12 +44,13 @@ func releaseLock(f *os.File) error {
 }
 
 // bindSocket unlinks any stale socket file (safe only because the caller already
-// holds the lock — S12) and binds the daemon UDS created private (0600) from the
-// start. A tight umask brackets the bind to close the chmod-after-bind TOCTOU
-// window (mirrors the shim's listen).
+// holds the lock — S12) and binds the daemon UDS owner-only from the start. A
+// 0077 umask preserves owner execute on directories another goroutine creates
+// concurrently; 0177 would turn mkdir(0700) into an untraversable 0600 directory.
+// The explicit chmod below narrows the socket itself from 0700 to exact 0600.
 func bindSocket(path string) (net.Listener, error) {
 	_ = os.Remove(path) // unlink a stale socket from a crashed prior daemon
-	old := syscall.Umask(0o177)
+	old := syscall.Umask(0o077)
 	l, err := net.Listen("unix", path)
 	syscall.Umask(old)
 	if err != nil {

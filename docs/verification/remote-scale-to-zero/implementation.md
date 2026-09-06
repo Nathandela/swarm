@@ -1259,3 +1259,19 @@ for `dev.swarm.phone` version code `40`. This confirms Play API publication, not
 review completion or availability on the handset. The owner must update the app and use
 Settings → Show push enrollment key to provide the public admission value. No private
 key export, live registration, FCM delivery or end-to-end remote readiness is claimed.
+
+## Socket-startup permission race uncovered by release CI
+
+`agents-tracker-ujcm` traced the journal startup failure to the process-global `0177`
+umask around daemon/shim Unix-socket creation. Concurrent `mkdir(0700)` could become
+`0600`, denying traversal before opening the first journal segment. Both bind sites now
+use `0077`: sockets remain owner-only from creation and the existing explicit chmod
+still establishes exact `0600` before returning. No group/other exposure is introduced.
+The regression failed both old production call sites before implementation and rejects
+retaining the unsafe mask. The original failing hook-gap scenario plus the regression
+passed ten repetitions (18.711 s), and their race-enabled run passed (6.783 s). Existing
+daemon/shim final-mode security selectors passed. Independent Sol and Terra reviews
+returned GO; root build, touched-package vet and lint passed (zero lint issues).
+This later Go fix is not part of the already-uploaded Android code-40 enrollment bundle.
+Desktop publication still requires the normal full release workflow; focused local tests
+are not represented as completion of that gate.

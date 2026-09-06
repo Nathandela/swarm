@@ -127,15 +127,14 @@ func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcri
 }
 
 // listen unlinks any stale socket, binds the UDS with the socket created
-// private (0600) from the start, and re-tightens its mode as a fallback. A
-// tight umask around the bind closes the TOCTOU window in which a chmod-after-
-// bind would leave the socket briefly group/other-accessible.
+// owner-only from the start, then narrows it to exact 0600. The 0077 umask
+// preserves owner execute on directories another goroutine creates concurrently;
+// 0177 would turn mkdir(0700) into an untraversable 0600 directory.
 func listen(path string) (net.Listener, error) {
 	_ = os.Remove(path) // clear a stale socket from a prior crash
-	// syscall.Umask is process-global; this brackets it tightly around the bind
-	// and assumes one-shim-per-process (the production model — a shim process
-	// owns exactly one session), so no concurrent file creation races the window.
-	old := syscall.Umask(0o177)
+	// syscall.Umask is process-global; this brackets it tightly around the bind.
+	// The mask must remain safe for concurrent directory creation.
+	old := syscall.Umask(0o077)
 	l, err := net.Listen("unix", path)
 	syscall.Umask(old)
 	if err != nil {
