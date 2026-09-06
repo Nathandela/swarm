@@ -48,6 +48,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/remote/device"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/skeleton"
 )
 
@@ -119,6 +120,10 @@ func seedDevice(t *testing.T, stateDir, name string, cap device.Capability) stri
 	if _, err := rand.Read(pub); err != nil {
 		t.Fatalf("generate command-signing pubkey: %v", err)
 	}
+	relayPub := make([]byte, ed25519.PublicKeySize)
+	if _, err := rand.Read(relayPub); err != nil {
+		t.Fatalf("generate relay-auth pubkey: %v", err)
+	}
 	id := device.DeviceIDFor(pub)
 
 	reg, err := device.Open(filepath.Join(stateDir, "devices"))
@@ -129,13 +134,14 @@ func seedDevice(t *testing.T, stateDir, name string, cap device.Capability) stri
 		DeviceID:       id,
 		Name:           name,
 		NoiseStaticPub: make([]byte, 32),
-		RelayAuthPub:   make([]byte, 32),
+		RelayAuthPub:   relayPub,
 		CommandSignPub: pub,
 		RecipientPub:   make([]byte, 32),
-		RoutingID:      []byte{1, 2, 3, 4},
+		RoutingID:      []byte(relayv2.RoutingID(relayPub)),
 		Capability:     cap,
 		PairedAt:       time.Now().Truncate(time.Second),
 		GrantedEpoch:   1,
+		ConsentSig:     []byte("synthetic relay-v2 consent"),
 	}
 	if err := reg.Add(rec); err != nil {
 		t.Fatalf("device registry Add: %v", err)

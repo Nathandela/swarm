@@ -3,7 +3,7 @@ resource "google_compute_resource_policy" "daily_snapshots" {
   region  = var.region
   name    = "swarm-daily-snapshots"
 
-  description = "Daily encrypted off-VM recovery points for Swarm relay and push gateway data disks"
+  description = "Daily encrypted off-VM recovery points for the Swarm push gateway data disk"
 
   snapshot_schedule_policy {
     schedule {
@@ -29,18 +29,6 @@ resource "google_compute_resource_policy" "daily_snapshots" {
   }
 }
 
-resource "google_compute_disk" "relay_data" {
-  project = var.project_id
-  zone    = var.zone
-  name    = "swarm-relay-data"
-  type    = "pd-balanced"
-  size    = 20
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
 resource "google_compute_disk" "pushgw_data" {
   project = var.project_id
   zone    = var.zone
@@ -51,13 +39,6 @@ resource "google_compute_disk" "pushgw_data" {
   lifecycle {
     prevent_destroy = true
   }
-}
-
-resource "google_compute_disk_resource_policy_attachment" "relay" {
-  project = var.project_id
-  zone    = var.zone
-  name    = google_compute_resource_policy.daily_snapshots.name
-  disk    = google_compute_disk.relay_data.name
 }
 
 resource "google_compute_disk_resource_policy_attachment" "pushgw" {

@@ -81,7 +81,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // injectPairing wires the coreAPI pairing seam with a test identity generated exactly
@@ -147,11 +147,11 @@ func phoneConsentFor(ks crypto.KeyStore, rendezvousID [16]byte) pairing.DeviceCo
 		// ADR-007 B47: bound to THIS ceremony by the rendezvous id the QR carried, so the
 		// credential a revoke retires cannot be replayed back into authority.
 		ceremonyID := hex.EncodeToString(rendezvousID[:])
-		sig, err := ks.SignRelayAuth(relay.ConsentMessage(ceremonyID, relay.RoutingID(m.MachineRelayAuthPub)))
+		sig, err := ks.SignRelayAuth(relayv2.ConsentMessage(ceremonyID, relayv2.RoutingID(m.MachineRelayAuthPub)))
 		if err != nil {
 			return nil, err
 		}
-		return relay.MarshalConsent(ceremonyID, sig), nil
+		return relayv2.MarshalConsent(ceremonyID, sig), nil
 	}
 }
 

@@ -63,6 +63,8 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
+const relayV2AppendBudgetPerMinute = 600
+
 // renderDebounceRate mirrors internal/daemon/terminalrender.go's renderDebounceWindow. It
 // is duplicated rather than imported because internal/daemon does not export it; if that
 // constant moves, this test's premise (~62 snapshots/s) moves with it.
@@ -168,7 +170,7 @@ func TestRelaySink_SustainedPeekStaysUnderAppendBudget(t *testing.T) {
 	start := clk.Now()
 	key := budgetTestKey()
 	sender := [8]byte{9, 10, 11, 12, 13, 14, 15, 16}
-	app := &quotaAppender{now: clk.Now, perMin: relay.DefaultConfig().Quotas.MailboxAppendPerMin}
+	app := &quotaAppender{now: clk.Now, perMin: relayV2AppendBudgetPerMinute}
 
 	inner := NewRelaySink(RelayConfig{
 		Appender:    app,
@@ -780,7 +782,7 @@ func TestItemAdmission_SustainedTranscriptStaysUnderAppendBudget(t *testing.T) {
 	clk := newVClock()
 	start := clk.Now()
 	key := budgetTestKey()
-	app := &quotaAppender{now: clk.Now, perMin: relay.DefaultConfig().Quotas.MailboxAppendPerMin}
+	app := &quotaAppender{now: clk.Now, perMin: relayV2AppendBudgetPerMinute}
 	inner := NewRelaySink(RelayConfig{
 		Appender:    app,
 		Target:      "phone-routing-id",
@@ -986,7 +988,7 @@ func TestAppendBudget_ItemReleasesAndSnapshotsShareOneCeiling(t *testing.T) {
 	clk := newVClock()
 	start := clk.Now()
 	key := budgetTestKey()
-	app := &quotaAppender{now: clk.Now, perMin: relay.DefaultConfig().Quotas.MailboxAppendPerMin}
+	app := &quotaAppender{now: clk.Now, perMin: relayV2AppendBudgetPerMinute}
 	inner := NewRelaySink(RelayConfig{
 		Appender:    app,
 		Target:      "phone-routing-id",

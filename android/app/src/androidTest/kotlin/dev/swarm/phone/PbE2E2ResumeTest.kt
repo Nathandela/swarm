@@ -21,9 +21,9 @@ import org.junit.runner.RunWith
  * WHY force-stop AND NOT A PROCESS KILL. force-stop also puts the package in the STOPPED state,
  * so no implicit broadcast -- BOOT_COMPLETED included -- reaches the app until a person launches
  * it by hand. A runbook that killed the process instead would satisfy every other word of the
- * requirement and skip the clause it was upgraded for. The kill itself is
- * scripts/pbe2e2-emulator-smoke.sh's, because only adb can issue it; this is the assertion
- * afterwards.
+ * requirement and skip the clause it was upgraded for. The physical-device runner issues the
+ * kill through adb; this is the assertion afterwards. It remains a physical-device run because
+ * PB-KEY-8 requires a hardware-backed Keystore and an emulator cannot satisfy that requirement.
  *
  * IT IS ASSERTED THROUGH THE PRODUCT, not through the facade. Nothing off the device can see the
  * phone's durable blob, and nothing inside the facade can show that the SCREEN came back holding

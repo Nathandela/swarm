@@ -96,7 +96,7 @@ func TestAuthorizeRelayV2SendsPersistedPhoneAuthorityAndClosesControl(t *testing
 			serverErr <- err
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		if err := answerNativeMachineAuth(r.Context(), ws, p, "control"); err != nil {
 			serverErr <- err
 			return
@@ -168,7 +168,7 @@ func TestConnectRelayV2PersistsBindingAndIncarnationBeforeReturningMailbox(t *te
 			serverErr <- err
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		if err := answerNativeMachineAuth(r.Context(), ws, p, "stream"); err != nil {
 			serverErr <- err
 			return

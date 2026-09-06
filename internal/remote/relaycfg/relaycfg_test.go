@@ -113,7 +113,7 @@ func TestRelayCfg_SecurityWithoutAPinIsTheMachinePolicy(t *testing.T) {
 	if len(sec.PinnedSPKISHA256) != 0 || len(sec.PinnedCert) != 0 {
 		t.Fatalf("an unpinned config produced a pinned policy: %+v", sec)
 	}
-	if _, err := relay.DialRawSecure(t.Context(), "ws://127.0.0.1:1/", sec); errors.Is(err, relay.ErrCleartextRefused) {
+	if _, err := sec.Resolve("ws://127.0.0.1:1/"); errors.Is(err, relay.ErrCleartextRefused) {
 		t.Fatalf("an unpinned machine config refused a loopback relay: %v", err)
 	}
 }
@@ -164,7 +164,7 @@ func TestRelayCfg_APinnedMachineRefusesCleartext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Security: %v", err)
 	}
-	if _, err := relay.DialRawSecure(t.Context(), "ws://127.0.0.1:1/", sec); !errors.Is(err, relay.ErrCleartextRefused) {
+	if _, err := sec.Resolve("ws://127.0.0.1:1/"); !errors.Is(err, relay.ErrCleartextRefused) {
 		t.Fatalf("a pinned machine dialed cleartext: got %v, want ErrCleartextRefused", err)
 	}
 }

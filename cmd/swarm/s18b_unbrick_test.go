@@ -5,7 +5,7 @@ package main
 // THE REQUIREMENT, and why it is one requirement rather than three bugs. PB-STATE-4 fails
 // closed on corrupt durable state and the phone tells its user to pair again; PB-KEY-3
 // establishes that a re-pair is REFUSED while a device is registered, because BeginPairing
-// fail-fasts on a non-empty registry (internal/skeleton/pairing.go, single-device v1). So
+// fail-fasts on a non-empty registry (internal/skeleton/pairing.go, single-device policy). So
 // the phone advises the one act the machine will not permit, and the handset's only exit is
 // physical access to the machine. Three distinct on-device states arrive at that same wall:
 //
@@ -49,37 +49,13 @@ package main
 //   - `swarm remote pair`'s already-paired refusal names `swarm remote devices` (how to
 //     learn the id) and `swarm remote revoke <device-id>` (the step that unblocks it);
 //   - `swarm remote revoke` names `swarm remote pair` as the next step;
-//   - the revoke PURGES the stranded device's relay-side state (its mailbox and its push
-//     token), which today no production path does at all: relay.Client.DeviceRevoke has no
-//     non-test caller anywhere in the tree;
+//   - the revoke PURGES the stranded device's relay-v2 state;
 //   - and the purge does NOT permanently ban the handset's relay-auth key, or the flow
 //     trades one brick for another.
-//
-// VACUOUS-PASS PROBE, run before this file was handed over. Two stubs, both reverted:
-//
-//	(1) NO-OP (today's tree): 6 of 7 fail. The one passer is
-//	    TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset, labelled at its own doc
-//	    comment as a fence rather than coverage.
-//	(2) COSMETIC ONLY -- the three refusal/confirmation messages rewritten to name the verbs,
-//	    with no behaviour changed anywhere: 3 of 7 pass. The two newly-passing tests are the
-//	    per-link discoverability units, which is correct (a message that names the next step
-//	    IS what they measure). Everything behavioural stays red: both purges, the error class,
-//	    and the chain, which still fails because `swarm remote devices` does not name the
-//	    revoke that follows it.
-//
-// A THIRD PROBE, on the fence specifically, because a fence that cannot fail is worthless.
-// Purging the stranded device's relay state via relay.Client.DeviceRevoke -- the obvious
-// implementation, and the only one in the tree -- makes
-// TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset FAIL at "revoked": the same
-// transaction that empties the mailbox writes the routing id into a `revoked` bucket nothing
-// ever clears. The trap is real and the fence catches it.
 
 import (
 	"bytes"
-	"context"
-	"crypto/ed25519"
 	"crypto/rand"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -91,9 +67,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/remote/device"
-	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remotegw"
 	"github.com/Nathandela/swarm/internal/skeleton"
 	swarmmobile "github.com/Nathandela/swarm/mobile"
@@ -121,7 +95,6 @@ func (c *s18bCustody) ContentKEK() ([]byte, error) { return append([]byte(nil), 
 // s18bRig is one machine (provisioned identity + relay + live daemon) and one phone, wired
 // through the real relay -- the fixture every test below starts from.
 type s18bRig struct {
-	relay    *relay.Server
 	relayURL string
 	stateDir string // the MACHINE's state dir
 	phoneDir string // the PHONE's state dir ("app data")
@@ -135,6 +108,11 @@ type s18bRig struct {
 // No device is paired yet; s18bPairPhone does that.
 func s18bNewRig(t *testing.T) *s18bRig {
 	t.Helper()
+	relayURL := os.Getenv("OPERATOR_RELAY_V2_HTTP")
+	if relayURL == "" {
+		t.Skip("OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate")
+	}
+	relayURL = "ws" + strings.TrimPrefix(relayURL, "http")
 
 	// Off the real system: the CLI's supervisor seam is faked and swarm-remote is resolved
 	// from a temp dir, so `remote init`/`pair`/`revoke` never reach launchd or systemd.
@@ -142,12 +120,12 @@ func s18bNewRig(t *testing.T) *s18bRig {
 	fakeGatewayBinaryOnPath(t)
 
 	rig := &s18bRig{
+		relayURL: relayURL,
 		stateDir: shortStateDir(t),
 		phoneDir: t.TempDir(),
 		custody:  newS18bCustody(t),
 	}
-	rig.relay, rig.relayURL = s18bFreshRelay(t)
-
+	operatorV2Identity(t, rig.stateDir)
 	// The environment dialClient/EnsureDaemon and every verb read. Set BEFORE `remote init`,
 	// which resolves its state dir the same way.
 	sock := filepath.Join(rig.stateDir, "daemon.sock")
@@ -161,7 +139,7 @@ func s18bNewRig(t *testing.T) *s18bRig {
 	t.Setenv("TERM", "dumb")
 
 	var out, errOut bytes.Buffer
-	if exit := runRemote([]string{"init", "--relay-url", rig.relayURL, "--relay-namespace", "owner"}, &out, &errOut); exit != 0 {
+	if exit := runRemote([]string{"init", "--relay-url", rig.relayURL, "--relay-namespace", "local-test"}, &out, &errOut); exit != 0 {
 		t.Fatalf("swarm remote init exit = %d, want 0; stderr=%q", exit, errOut.String())
 	}
 
@@ -177,24 +155,6 @@ func s18bNewRig(t *testing.T) *s18bRig {
 	}
 	t.Cleanup(func() { _ = sk.Close() })
 	return rig
-}
-
-// s18bFreshRelay is a real relay over a fresh store: an install that has never paired.
-func s18bFreshRelay(t *testing.T) (*relay.Server, string) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	cfg := relay.DefaultConfig()
-	cfg.DBPath = filepath.Join(t.TempDir(), "relay.db")
-	srv, err := relay.New(cfg)
-	if err != nil {
-		t.Fatalf("relay.New: %v", err)
-	}
-	if err := srv.Start(ctx); err != nil {
-		t.Fatalf("relay start: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
-	return srv, srv.URL()
 }
 
 // s18bApp opens the phone over its state directory without connecting. A fresh v2 registry
@@ -397,7 +357,7 @@ func s18bOnlyDeviceID(t *testing.T) string {
 		t.Fatalf("`swarm remote devices` listed no device; got:\n%s", out.String())
 	}
 	if len(lines) > 2 {
-		t.Fatalf("`swarm remote devices` listed %d devices, want exactly 1 (single-device v1); got:\n%s",
+		t.Fatalf("`swarm remote devices` listed %d devices, want exactly 1; got:\n%s",
 			len(lines)-1, out.String())
 	}
 	id := strings.Fields(lines[1])
@@ -434,28 +394,6 @@ func (r *s18bRig) s18bDeviceRecord(t *testing.T, deviceID string) device.Record 
 		t.Fatalf("device %s is not in the registry at %s", deviceID, r.stateDir)
 	}
 	return rec
-}
-
-// s18bMachineRelayClient dials the relay AS THE MACHINE, with the relay-auth identity
-// `swarm remote init` provisioned -- the same identity cmd/swarm-remote's gateway uses, so
-// anything this client can do to the relay is something the owner's machine can do.
-func (r *s18bRig) s18bMachineRelayClient(t *testing.T) *relay.Client {
-	t.Helper()
-	id, err := machineid.Load(filepath.Join(r.stateDir, "remote", remoteIdentityFile))
-	if err != nil {
-		t.Fatalf("machineid.Load: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	t.Cleanup(cancel)
-	cl, err := relay.Dial(ctx, r.relayURL, relay.ClientAuth{
-		RelayAuthPub: id.RelayAuthPublic(),
-		Sign:         func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
-	})
-	if err != nil {
-		t.Fatalf("machine relay.Dial: %v", err)
-	}
-	t.Cleanup(func() { _ = cl.Close() })
-	return cl
 }
 
 // s18bCorruptPhoneState makes the phone's durable blob unreadable, which is PB-STATE-4's
@@ -595,8 +533,8 @@ func TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery(t *testin
 // TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice.
 //
 // This is the wall. The owner, told by the handset to pair again, runs `swarm remote pair`
-// and is refused -- correctly, per PB-KEY-3 and single-device v1. What they are told today is
-// "a device is already paired; revoke it first (single-device v1)", which names no command
+// and is refused -- correctly, per PB-KEY-3 and the single-device policy. What they are told is
+// "a device is already paired; revoke it first", which names no command
 // and no way to learn the device id the command needs. An operator who does not already know
 // the verb has nowhere to go, and the requirement's acceptance clause forbids exactly that.
 func TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice(t *testing.T) {
@@ -611,7 +549,7 @@ func TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice(t *tes
 	exit := runRemotePair(nil, strings.NewReader("y\n"), &stdout, &stderr)
 	if exit == 0 {
 		t.Fatal("`swarm remote pair` succeeded while a device was still registered; " +
-			"single-device v1 requires it to be refused (PB-KEY-3)")
+			"the single-device policy requires it to be refused (PB-KEY-3)")
 	}
 	shown := stdout.String() + stderr.String()
 	s18bRequireNames(t, "the already-paired pair refusal", shown, "devices", "revoke")
@@ -653,71 +591,6 @@ func TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery(t *testing.T) {
 }
 
 // ---- step 3b: "purge machine and relay state" --------------------------------------
-
-// TestPBSTATE10_RevokePurgesTheStrandedDeviceRelayState.
-//
-// The requirement names TWO purges and the machine half already happens: RevokeDevice rotates
-// the epoch, removes the registry record and deletes the sealed grant sidecar. The relay half
-// happens NOWHERE. relay.Client.DeviceRevoke exists, is documented as "de-authorizes target's
-// relay-auth registration and purges its relay-side mailbox", and has no caller outside tests
-// anywhere in this repository -- the defect class where a requirement is satisfiable while the
-// defect ships, because the capability exists as a function nobody invokes.
-//
-// WHY IT IS NOT COSMETIC. The stranded handset stopped acking, so the gateway's appends sit in
-// its mailbox until the 7-day retention cap. A recovered phone that keeps its device key --
-// which is every recovery that is not a full app-data wipe, including the REVOKED -> re_pair
-// path the error taxonomy already blesses -- comes back on the SAME routing id, reads that
-// mailbox, and finds frames sealed under an epoch the revoke rotated away. They cannot be
-// opened, and a mailbox that cannot be drained is a mailbox that fills to its depth cap and
-// refuses the new session's appends.
-//
-// Asserted at the relay's own store (Server.MailboxDepth), not at a phone-visible symptom
-// that other mechanisms might mask.
-func TestPBSTATE10_RevokePurgesTheStrandedDeviceRelayState(t *testing.T) {
-	rig := s18bNewRig(t)
-	app, _ := rig.s18bPairPhone(t)
-	if err := app.Close(); err != nil {
-		t.Fatalf("App.Close: %v", err)
-	}
-	rig.s18bMachineAppendsToPhone(t, 3)
-	if got := rig.relay.MailboxDepth(rig.phoneRID); got == 0 {
-		t.Fatalf("the fixture did not put anything in the stranded phone's relay mailbox; " +
-			"a purge assertion over an empty mailbox would pass no matter what production does")
-	}
-	rig.s18bCorruptPhoneState(t)
-
-	var out, errOut bytes.Buffer
-	if exit := runRemote([]string{"revoke", rig.deviceID}, &out, &errOut); exit != 0 {
-		t.Fatalf("`swarm remote revoke %s` exit = %d, want 0; stderr=%q", rig.deviceID, exit, errOut.String())
-	}
-
-	if got := rig.relay.MailboxDepth(rig.phoneRID); got != 0 {
-		t.Errorf("PB-STATE-10: after `swarm remote revoke` the stranded device's relay mailbox "+
-			"still holds %d item(s). The requirement's third step is \"purge machine AND RELAY "+
-			"state\"; relay.Client.DeviceRevoke is the only thing in the tree that performs it and "+
-			"nothing outside tests calls it", got)
-	}
-}
-
-// s18bMachineAppendsToPhone puts n frames in the stranded phone's relay mailbox as the
-// gateway does -- the machine authenticates to the relay with its own relay-auth identity,
-// authorizes the device, and appends. The payload is opaque to the relay, so plain bytes are
-// honest here: the relay stores envelopes it cannot read.
-func (r *s18bRig) s18bMachineAppendsToPhone(t *testing.T, n int) {
-	t.Helper()
-	cl := r.s18bMachineRelayClient(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	rec := r.s18bDeviceRecord(t, r.deviceID)
-	if err := cl.AuthorizeDevice(ctx, ed25519.PublicKey(rec.RelayAuthPub), rec.ConsentSig); err != nil {
-		t.Fatalf("machine AuthorizeDevice: %v", err)
-	}
-	for i := 0; i < n; i++ {
-		if _, err := cl.MailboxAppend(ctx, r.phoneRID, []byte(fmt.Sprintf("sealed-frame-%d", i))); err != nil {
-			t.Fatalf("machine mailbox append %d: %v", i, err)
-		}
-	}
-}
 
 // TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody.
 //
@@ -787,22 +660,8 @@ func TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody(t *testing.T) {
 
 // TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset.
 //
-// PASSES TODAY, AND THAT IS NOT COVERAGE -- labelled so no evidence line counts it as earned.
-// Nothing currently purges relay state, so nothing currently bans anything either.
-//
-// It is a FENCE over the obvious implementation of the test above. relay.Client.DeviceRevoke
-// is the one call in the tree that purges a device's mailbox, and it does so through
-// store.revokeAndPurge, which in the SAME transaction writes the target's routing id into the
-// `revoked` bucket. Nothing ever clears that bucket -- not handleAuthorizeDevice, not a fresh
-// pairing, nothing -- and the relay's auth path refuses a revoked routing id outright. The
-// phone's relay-auth key lives in device.key and is generated ONCE per install, so a handset
-// that recovers WITHOUT a full app-data wipe comes back on the same routing id.
-//
-// That handset is not hypothetical: it is the REVOKED -> re_pair row the error taxonomy
-// already ships (mobile/error_taxonomy.tsv), and it is the shape of the recovery for the two
-// PB-STATE-10 cases whose durable blob is intact -- an invalidated key and a lost grant. If
-// the relay purge bans the routing id, this test goes red and the fix has traded one brick
-// for another.
+// The relay-v2 cleanup retires one pairing generation, not the phone's permanent key. This
+// fence proves a handset whose local key survives can receive a fresh generation.
 //
 // The pairing here reuses the phone's EXISTING state directory (no clear), so device.key and
 // therefore the relay-auth key are the ones the revoke acted on.
@@ -810,7 +669,6 @@ func TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset(t *testing.T) {
 	rig := s18bNewRig(t)
 	app, _ := rig.s18bPairPhone(t)
 	strandedID, strandedRID := rig.deviceID, rig.phoneRID
-	rig.s18bMachineAppendsToPhone(t, 3)
 	if err := app.Close(); err != nil {
 		t.Fatalf("App.Close: %v", err)
 	}
@@ -836,11 +694,8 @@ func TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset(t *testing.T) {
 			"Leftover machine state the new session cannot get past lands here", sum.Restored, sum.EpochID)
 	}
 
-	// AND IT MUST REACH THE RELAY. This is the assertion the ban would trip, and the reason
-	// StateSummary alone is not enough: pairing rides the rendezvous, which is UNAUTHENTICATED
-	// (relay.DialRaw), so a handset whose relay-auth registration is permanently revoked pairs
-	// perfectly and then never connects. Asserting only "it paired" would be a guard that
-	// cannot fail for the very defect this fence exists to catch.
+	// Pairing completion alone is insufficient: the replacement generation must authenticate
+	// and reach the relay-v2 stream.
 	s18bAwaitOnline(t, recovered)
 }
 
@@ -928,7 +783,7 @@ func s18bAwaitOnline(t *testing.T, app *swarmmobile.App) {
 // recovered handset comes back on a NEW relay routing id and cannot observe the stranded
 // one's leftover state at all. That is not a hole in the chain, it is the boundary of what a
 // wiped handset can see -- the two purges are owned by
-// TestPBSTATE10_RevokePurgesTheStrandedDeviceRelayState and
+// services/relay/test/protocol.mjs (unacknowledged custody and on-disk purge) and
 // TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody, and the same-routing-id case by
 // TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset. All four have to be green.
 func TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold(t *testing.T) {
@@ -958,6 +813,14 @@ func TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold(t *testin
 			strandedID, listOut.String())
 	}
 	told = listOut.String() + listErr.String()
+	outboxPath := filepath.Join(rig.stateDir, "remote", "outbound-journal.outbox")
+	outbox, err := remotegw.OpenOutbox(outboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.Reserve(1, []byte("sealed-under-the-revoked-epoch")); err != nil {
+		t.Fatal(err)
+	}
 
 	// 3. REVOKE / UNREGISTER, named by the listing the operator just read.
 	s18bRequireNames(t, "the device listing", told, "revoke")
@@ -966,6 +829,13 @@ func TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold(t *testin
 		t.Fatalf("`swarm remote revoke %s` exit = %d, want 0; stderr=%q", strandedID, exit, revErr.String())
 	}
 	told = revOut.String() + revErr.String()
+	after, err := remotegw.OpenOutbox(outboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := after.Pending(); err != nil || len(pending) != 0 {
+		t.Fatalf("outbound custody after revoke = %d pending, %v", len(pending), err)
+	}
 
 	// 4. RE-PAIR, named by the revoke. The phone's app data is cleared first because that is
 	// what a corrupt blob leaves the user -- and clearing it is NOT what unblocks the machine,
@@ -986,4 +856,5 @@ func TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold(t *testin
 			"epoch=%d. The chain has to end in a WORKING re-pair, not merely an accepted one",
 			sum.Restored, sum.EpochID)
 	}
+	s18bAwaitOnline(t, recovered)
 }

@@ -1025,3 +1025,50 @@ server-originated deliveries or local channel drains; its 64-frame/1 MiB in-flig
 client's matching queue bounds still enforce slow-consumer backpressure. B94 remains deliberately
 RED on exactly 52 relay-v1 exports, with no new relay-v2 reachability failure. These are local
 Workerd/process results, not hosted or physical-phone evidence; hosted admission remains closed.
+
+## Relay-v1 source retirement and replacement coverage
+
+The obsolete Go relay server, RPC codec/client, bbolt mailbox store, relay binary/container
+publication, VPS/TLS terminator and emulator-only pairing harness are removed. Shared TLS policy,
+semantic errors and reconnect behavior remain; FCM delivery now accepts ciphertext bytes directly
+without importing the deleted relay server. Operator pairing/revoke/recovery and binary pin tests
+exercise the native v2 path. The Android capability and hardware-backed Keystore gates remain;
+only the existence check for the removed emulator runner was retired.
+
+GCP changes are source-only: the relay VM/disk/address/runtime-identity declarations are removed,
+while Pushgw and shared infrastructure remain. Retained Pushgw IAM instance keys are unchanged,
+avoiding gratuitous grant replacement in a future plan. Terraform format and validation pass.
+No Terraform apply, live resource deletion, or resulting billing reduction is claimed. The
+operator runbook distinguishes Durable Object storage from the retired bbolt deployment.
+
+Independent Sol review rejected initially missing replacement coverage. The resulting tests
+exercise actual `DialPair` TLS handshakes (untrusted refusal, pairing-bootstrap SPKI capture,
+distinct-key isolation, defensive copies, wrong pins and TLS-to-cleartext redirect refusal),
+and actual network dial/call cancellation and internal deadlines. The nightly stress selector
+now targets those v2 tests and checks every expected test name before running. The local Workerd
+protocol gate seeds unacknowledged mailbox data and reads its real SQLite files read-only:
+items, receipts and streams must exist before revoke and be gone immediately after `REVOKED`,
+before any reauthorization can mask a missing purge.
+
+The history-page size oracle now measures v2 APPEND JSON/base64url ciphertext and both native
+ciphertext and WebSocket message limits. Budget traceability recognizes Worker test files and
+plural citations with a parser regression test. Machine-to-phone **visible-render latency** is
+explicitly still unmeasured; the earlier phone-to-PTY benchmark is not evidence for that direction.
+
+Local evidence during this slice: repository-wide compile and build, `go vet ./...`, full
+`internal/verify` (including B94, now green without new allowlisting), Android gates, relay security,
+relay-v2, relay config, push and Pushgw tests/races passed. Full gateway, mobile and remote-binary
+races passed (35.462 s, 52.818 s, 38.778 s respectively). The complete local Workerd suite passed,
+including operator recovery, revoke/deferred retry, mobile pairing, hostile-phone controls,
+input/composer paths, doctor and bounded cleanup cost. The protected Pushgw backup files are
+unchanged. This remains local evidence: hosted admission is closed and physical-phone acceptance,
+live infrastructure retirement and the plan's remaining push/runtime gates are not complete.
+
+Final review returned GO after the missing coverage was added. `golangci-lint run` reports zero
+issues and `goreleaser check` passes. A Workerd repeat during whole-repository compilation/testing
+exceeded the existing 12-second burst fixture deadline; the final complete repeat passed after
+that heavy load subsided (including the bidirectional on-disk purge checks). The broad Go run
+also exposed inherited `SWARM_SHIM_HOOK_SOCK` interference and sandbox-denied `ps`/`pgrep` in
+process-integration tests. Rerunning `cmd/swarm`, `internal/e2e` and `internal/hookclient` with that
+environment variable unset and approved process-inspection permissions passed all three packages
+(40.560 s / 26.736 s / 3.011 s). No assertions were disabled to accommodate those environment failures.

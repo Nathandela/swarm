@@ -1674,7 +1674,7 @@ func (s *fileStore) load() error {
 		return fmt.Errorf("%w: %s: malformed operator namespace", ErrCorruptState, path)
 	}
 	if f.RelayIncarnation != "" && !validPersistedRelayIncarnation(f.RelayIncarnation) &&
-		!(f.SchemaVersion < 23 && validRecoveryToken(f.RelayIncarnation)) {
+		(f.SchemaVersion >= 23 || !validRecoveryToken(f.RelayIncarnation)) {
 		return fmt.Errorf("%w: %s: malformed relay mailbox incarnation", ErrCorruptState, path)
 	}
 	if err := validatePhoneBindingState(f.PhoneBinding); err != nil {
@@ -1702,7 +1702,7 @@ func (s *fileStore) load() error {
 		return fmt.Errorf("%w: %s: malformed discard recovery checkpoint", ErrCorruptState, path)
 	}
 	if f.DiscardRecoveryIncarnation != "" && !validPersistedRelayIncarnation(f.DiscardRecoveryIncarnation) &&
-		!(f.SchemaVersion < 23 && validRecoveryToken(f.DiscardRecoveryIncarnation)) {
+		(f.SchemaVersion >= 23 || !validRecoveryToken(f.DiscardRecoveryIncarnation)) {
 		return fmt.Errorf("%w: %s: malformed discard recovery incarnation", ErrCorruptState, path)
 	}
 	// Before v3 the two epoch keys were CLEARTEXT in these same fields. Reading them as

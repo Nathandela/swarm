@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
@@ -20,13 +21,9 @@ import (
 // TestPBNET2_APinningOnlyPlatformRefusesAnUnpinnedDial is residual 1.9's resolution, executed.
 // The refusal is decided before any packet, so the dead port never matters.
 func TestPBNET2_APinningOnlyPlatformRefusesAnUnpinnedDial(t *testing.T) {
-	wss, _ := startTLSRelay(t)
-	pub, priv := newRelayAuthKey(t)
-
 	sec := relay.WithTrustRootSource(relay.Security{}, relay.TrustRootsPinned)
-	c, err := relay.DialSecure(testCtx(t), wss, authFor(pub, priv), sec)
+	_, err := sec.Resolve("wss://relay.example/v2/ws")
 	if err == nil {
-		_ = c.Close()
 		t.Fatalf("a pinning-only platform dialed a relay with NO pin configured. That is the " +
 			"unverified fallback residual 1.9 exists to forbid")
 	}
@@ -40,18 +37,15 @@ func TestPBNET2_APinningOnlyPlatformRefusesAnUnpinnedDial(t *testing.T) {
 // implementation that refused every dial on Android would pass the test above and ship a
 // handset that reaches nothing.
 func TestPBNET2_APinningOnlyPlatformAcceptsThePinnedRelay(t *testing.T) {
-	wss, der := startTLSRelay(t)
-	pub, priv := newRelayAuthKey(t)
+	cert := issueRelayCert(t, renewalKey(t), time.Now().Add(time.Hour))
+	wss := startTLSRelayWithCert(t, cert)
 
-	sec := relay.WithTrustRootSource(relay.Security{PinnedCert: der}, relay.TrustRootsPinned)
-	c, err := relay.DialSecure(testCtx(t), wss, authFor(pub, priv), sec)
+	sec := relay.WithTrustRootSource(relay.Security{PinnedCert: cert.Certificate[0]}, relay.TrustRootsPinned)
+	c, err := probeTLS(wss, sec)
 	if err != nil {
 		t.Fatalf("a pinning-only platform refused the relay whose certificate it pinned: %v", err)
 	}
 	defer func() { _ = c.Close() }()
-	if c.RoutingID() != relay.RoutingID(pub) {
-		t.Fatalf("routing id mismatch after a pinned dial on a pinning-only platform")
-	}
 }
 
 // TestB45_ThePairingPolicyCanBootstrapOnAPinningOnlyPlatform is the deadlock B45 resolves,
@@ -59,10 +53,11 @@ func TestPBNET2_APinningOnlyPlatformAcceptsThePinnedRelay(t *testing.T) {
 // first test proves is refused, is admitted for the pairing dial -- which is the only way the
 // pin it would have checked can ever reach the phone.
 func TestB45_ThePairingPolicyCanBootstrapOnAPinningOnlyPlatform(t *testing.T) {
-	wss, _ := startTLSRelay(t)
+	cert := issueRelayCert(t, renewalKey(t), time.Now().Add(time.Hour))
+	wss := startTLSRelayWithCert(t, cert)
 
 	sec := relay.WithTrustRootSource(relay.PairingSecurity(), relay.TrustRootsPinned)
-	conn, err := relay.DialRawSecure(testCtx(t), wss, sec)
+	conn, err := probeTLS(wss, sec)
 	if err != nil {
 		t.Fatalf("the pairing dial was refused on a pinning-only platform: %v.\n"+
 			"That is ADR-007 B45's deadlock: the dial that FETCHES the pin cannot itself be "+
@@ -80,7 +75,7 @@ func TestB45_ThePairingPolicyStillRefusesCleartext(t *testing.T) {
 		"ws://10.0.0.7:8080/",
 		"ws://localhost:8080/",
 	} {
-		if _, err := relay.DialRawSecure(testCtx(t), target, relay.PairingSecurity()); !errors.Is(err, relay.ErrCleartextRefused) {
+		if _, err := relay.PairingSecurity().Resolve(target); !errors.Is(err, relay.ErrCleartextRefused) {
 			t.Errorf("%s: pairing policy returned %v, want ErrCleartextRefused", target, err)
 		}
 	}
@@ -91,12 +86,13 @@ func TestB45_ThePairingPolicyStillRefusesCleartext(t *testing.T) {
 // ever relax the DEFAULT and never an explicit pin. Without this, composing the two would
 // silently downgrade a pinned dial.
 func TestB45_APinOutranksTheUnverifiedFlag(t *testing.T) {
-	wss, _ := startTLSRelay(t)
-	other := selfSignedDER(t)
+	cert := issueRelayCert(t, renewalKey(t), time.Now().Add(time.Hour))
+	wss := startTLSRelayWithCert(t, cert)
+	other := issueRelayCert(t, renewalKey(t), time.Now().Add(time.Hour))
 
 	sec := relay.PairingSecurity()
-	sec.PinnedCert = other
-	if _, err := relay.DialRawSecure(testCtx(t), wss, sec); !errors.Is(err, relay.ErrPinMismatch) {
+	sec.PinnedCert = other.Certificate[0]
+	if _, err := probeTLS(wss, sec); !errors.Is(err, relay.ErrPinMismatch) {
 		t.Fatalf("a pin composed with the unverified flag was ignored: got %v, want ErrPinMismatch", err)
 	}
 }
@@ -106,21 +102,17 @@ func TestB45_APinOutranksTheUnverifiedFlag(t *testing.T) {
 const trustRootReleaseProgram = `package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	// A desktop is TrustRootsSystem. If the override were honoured here, this unpinned
-	// dial would be refused with ErrPinRequired instead of failing at the dead port.
+	// A desktop is TrustRootsSystem. If the override were honoured here, resolution
+	// would be refused with ErrPinRequired.
 	sec := relay.WithTrustRootSource(relay.Security{}, relay.TrustRootsPinned)
-	_, err := relay.DialSecure(ctx, "wss://127.0.0.1:1/", relay.ClientAuth{}, sec)
+	_, err := sec.Resolve("wss://127.0.0.1:1/")
 	if errors.Is(err, relay.ErrPinRequired) {
 		fmt.Print("HONOURED")
 		return
@@ -139,7 +131,7 @@ func TestPBNET2_TheTrustRootOverrideIsInertInAReleaseBuild(t *testing.T) {
 
 	// The same call inside this test binary IS honoured, or the tests above prove nothing.
 	sec := relay.WithTrustRootSource(relay.Security{}, relay.TrustRootsPinned)
-	if _, err := relay.DialSecure(testCtx(t), "wss://127.0.0.1:1/", relay.ClientAuth{}, sec); !errors.Is(err, relay.ErrPinRequired) {
+	if _, err := sec.Resolve("wss://127.0.0.1:1/"); !errors.Is(err, relay.ErrPinRequired) {
 		t.Fatalf("the override is inert inside a test binary, so the pinning-only tests above "+
 			"are not exercising the branch they claim: %v", err)
 	}

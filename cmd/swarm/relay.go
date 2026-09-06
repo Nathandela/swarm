@@ -311,7 +311,7 @@ func doctorCheckRelayV2Edge(ctx context.Context, rawURL string, sec relay.Securi
 	if err != nil {
 		return doctorStep{name, statusFail, fmt.Sprintf("GET /: %v", err)}
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(response.Body, int64(len(relayV2Marker)+1)))
 	if err != nil || response.StatusCode != http.StatusOK || string(body) != relayV2Marker {
 		return doctorStep{name, statusFail, "GET / did not return the swarm relay v2 marker"}

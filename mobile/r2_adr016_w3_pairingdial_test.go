@@ -37,7 +37,7 @@ func w3TLSFrontedRelay(t *testing.T) string {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		<-r.Context().Done()
 	}))
 	t.Cleanup(front.Close)

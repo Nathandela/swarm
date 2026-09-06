@@ -96,7 +96,7 @@ func TestSubscribeRejectsIncarnationSubstitution(t *testing.T) {
 				if err != nil {
 					return
 				}
-				defer ws.CloseNow()
+				defer func() { _ = ws.CloseNow() }()
 				_, body, err := ws.Read(r.Context())
 				if err != nil {
 					return

@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,36 +37,16 @@ import (
 
 func b34TLSFrontedRelay(t *testing.T) (wssURL string, cert *x509.Certificate) {
 	t.Helper()
-	rcfg := relay.DefaultConfig()
-	rcfg.Listen = "127.0.0.1:0"
-	rcfg.TLSMode = "off"
-	rcfg.DBPath = filepath.Join(t.TempDir(), "relay.db")
-	srv, err := relay.New(rcfg)
-	if err != nil {
-		t.Fatalf("relay.New: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	if err := srv.Start(ctx); err != nil {
-		t.Fatalf("relay start: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
-
-	target, err := url.Parse(strings.Replace(srv.URL(), "ws://", "http://", 1))
-	if err != nil {
-		t.Fatalf("parse relay url: %v", err)
-	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
 	front := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v2/ws" {
-			proxy.ServeHTTP(w, r)
+			http.NotFound(w, r)
 			return
 		}
 		ws, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		var init struct {
 			RequestID string `json:"request_id"`
 			Pub       string `json:"pub"`

@@ -32,25 +32,12 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 )
 
-// startTLSFrontedRelay stands up the real relay behind a TLS terminator, which is the
-// deployment docs/operations/relay-runbook.md describes: the relay itself speaks ws://,
-// and a front terminates TLS for everyone who reaches it over a network.
-func startTLSFrontedRelay(ctx context.Context, t *testing.T) (wssURL string, cert *x509.Certificate, accepted <-chan string) {
+// startTLSFrontedRelay places TLS in front of the native-v2 test relay. This exercises the
+// same /v2/ws dial path as the sidecar, without retaining the removed relay-v1 server.
+func startTLSFrontedRelay(t *testing.T) (wssURL string, cert *x509.Certificate, accepted <-chan string) {
 	t.Helper()
-	rcfg := relay.DefaultConfig()
-	rcfg.Listen = "127.0.0.1:0"
-	rcfg.TLSMode = "off"
-	rcfg.DBPath = filepath.Join(t.TempDir(), "relay.db")
-	srv, err := relay.New(rcfg)
-	if err != nil {
-		t.Fatalf("relay.New: %v", err)
-	}
-	if err := srv.Start(ctx); err != nil {
-		t.Fatalf("relay start: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
-
-	target, err := url.Parse(strings.Replace(srv.URL(), "ws://", "http://", 1))
+	tap, _ := startCutTapRelay(t, 0)
+	target, err := url.Parse(strings.Replace(tap.url(), "ws://", "http://", 1))
 	if err != nil {
 		t.Fatalf("parse relay url: %v", err)
 	}
@@ -86,7 +73,7 @@ func otherPin() string {
 func TestPBOPS5_TheGatewayHonoursTheConfiguredPin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	wss, cert, accepted := startTLSFrontedRelay(ctx, t)
+	wss, cert, accepted := startTLSFrontedRelay(t)
 
 	// ---- control: the MATCHING pin passes TLS admission --------------------
 	// run() fails after the dial -- there is no daemon behind this sidecar -- so the
@@ -138,7 +125,7 @@ func TestPBOPS5_TheGatewayHonoursTheConfiguredPin(t *testing.T) {
 // in. resolveGatewayParams is the sidecar's own assembly, and this asserts the pin
 // survives it.
 func TestPBOPS5_TheGatewayResolvesItsPinFromRelayJSON(t *testing.T) {
-	_, cert, _ := startTLSFrontedRelay(t.Context(), t)
+	_, cert, _ := startTLSFrontedRelay(t)
 	pin := spkiPinOf(cert)
 
 	stateDir := t.TempDir()

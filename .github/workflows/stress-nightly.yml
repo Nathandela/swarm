@@ -5,7 +5,7 @@ name: stress-nightly
 # exist and run at -count=1 in ci.yml's `go test -race ./...`; this lane is the elevated-count
 # regression detector (the r0 stress recipe's role, docs/verification/r0-flake-rootcause.md,
 # promoted from a documented local script to a scheduled job). Counts follow the r0 precedent
-# (N=20) for the four fast areas; the two wall-clock-bound areas (relay dial deadlines,
+# (N=20) for the four fast areas; the two wall-clock-bound areas (relay-v2 deadlines,
 # conformance callback windows: ~20s per iteration regardless of CPU) run at 10 so the whole
 # job stays under ~40 minutes. Every -run selector below was verified against `go test -list`
 # to match its named test functions (evidence: docs/verification/r9-red/stress-lane-red.txt)
@@ -41,11 +41,16 @@ jobs:
           -run '^TestCloseVsResizeRace$'
           ./internal/shim/
 
-      - name: Gateway cancellation (internal/remote/relay, PB-NET-7 + dial deadlines)
-        run: >
-          go test -race -count=10 -timeout 30m
-          -run '^(TestPBNET7_TheCallersCancellationWinsOverTheTransportBound|TestPBNET7_DialHonoursItsCallersContext|TestDialDeadline_EveryStageOfTheDialIsBoundedWithoutACallerDeadline|TestDialDeadline_TheWholeDialFitsTheRelaysOwnPreAuthWindow|TestDialDeadline_EveryExportedDialInheritsTheBound)$'
-          ./internal/remote/relay/
+      - name: Relay-v2 cancellation and internal deadlines
+        run: |
+          tests='TestRelayV2DialHonorsCallerCancellation TestRelayV2CallHonorsCallerCancellation TestRelayV2DialHasInternalDeadline TestRelayV2CallHasInternalDeadline'
+          listed=$(go test -list '^TestRelayV2(Dial|Call)(HonorsCallerCancellation|HasInternalDeadline)$' ./internal/remote/relayv2/)
+          for test in $tests; do
+            printf '%s\n' "$listed" | grep -qx "$test"
+          done
+          go test -race -count=10 -timeout 30m \
+            -run '^TestRelayV2(Dial|Call)(HonorsCallerCancellation|HasInternalDeadline)$' \
+            ./internal/remote/relayv2/
 
       - name: Reconnect (internal/remotegw, outbox restart + inbound replay classes)
         run: >

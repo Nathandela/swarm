@@ -25,7 +25,6 @@ package gate
 // Doze and hardware Keystore attestation stay deferred, and an emulator is not a handset.
 
 import (
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -124,32 +123,6 @@ func TestPBE2E2_TheModuleHasAnInstrumentedSourceSet(t *testing.T) {
 	if !anyKotlinUnder(t, dir) {
 		t.Errorf("PB-E2E-2: %s holds no Kotlin, so the instrumented source set compiles nothing",
 			mustRel(t, dir))
-	}
-}
-
-// TestPBE2E2_TheRunbookExistsAndIssuesTheForceStop pins the acceptance criterion PB-E2E-2
-// actually states: a REPRODUCIBLE RUNBOOK, plus the one step that was upgraded into the
-// requirement on purpose.
-//
-// The force-stop is not interchangeable with a process kill and the requirement says why: it
-// also puts the package in the STOPPED state, so no implicit broadcast -- BOOT_COMPLETED
-// included -- reaches the app until a person launches it by hand. A runbook that killed the
-// process instead would satisfy every other word of the requirement and skip the clause it was
-// upgraded for.
-func TestPBE2E2_TheRunbookExistsAndIssuesTheForceStop(t *testing.T) {
-	path := filepath.Join(repoRoot(t), "scripts", "pbe2e2-emulator-smoke.sh")
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("PB-E2E-2: no runbook at %s: %v", mustRel(t, path), err)
-	}
-	if !strings.Contains(string(body), "am force-stop") {
-		t.Errorf("PB-E2E-2: %s never issues `adb shell am force-stop`; a plain process kill "+
-			"leaves the package out of the STOPPED state, which is the clause this requirement "+
-			"was upgraded to cover", mustRel(t, path))
-	}
-	if info, serr := statFile(path); serr == nil && info.Mode()&0o111 == 0 {
-		t.Errorf("PB-E2E-2: %s is not executable, so the runbook is not runnable as written",
-			mustRel(t, path))
 	}
 }
 

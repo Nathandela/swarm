@@ -17,7 +17,7 @@ func TestSubscriptionProbeReturnsDeliveriesOrderedBeforeBarrier(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		_, body, err := ws.Read(r.Context())
 		if err != nil {
 			return
@@ -68,7 +68,7 @@ func TestSubscriptionProbeRejectsSubstitutedResponse(t *testing.T) {
 				if err != nil {
 					return
 				}
-				defer ws.CloseNow()
+				defer func() { _ = ws.CloseNow() }()
 				_, body, err := ws.Read(r.Context())
 				if err != nil {
 					return
@@ -106,7 +106,7 @@ func TestConnectionDiscardAcceptsRetiredSubscriptionIncarnation(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		_, body, err := ws.Read(r.Context())
 		if err != nil {
 			return

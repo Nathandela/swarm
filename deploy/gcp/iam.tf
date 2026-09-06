@@ -1,11 +1,3 @@
-resource "google_service_account" "relay" {
-  project      = var.project_id
-  account_id   = "swarm-relay-runtime"
-  display_name = "Swarm Relay Runtime"
-
-  depends_on = [google_project_service.required["iam.googleapis.com"]]
-}
-
 resource "google_service_account" "pushgw" {
   project      = var.project_id
   account_id   = "swarm-push-runtime"
@@ -30,24 +22,7 @@ resource "google_project_iam_custom_role" "pushgw_runtime" {
 
 locals {
   runtime_telemetry_members = {
-    relay  = google_service_account.relay.member
     pushgw = google_service_account.pushgw.member
-  }
-
-  operator_attached_service_accounts = {
-    relay  = google_service_account.relay.name
-    pushgw = google_service_account.pushgw.name
-  }
-
-  # OS Login requires an operator to have Service Account User on the service
-  # account attached to the target VM. Build the full operator x VM identity
-  # product so access does not accidentally depend on a project Owner grant.
-  operator_service_account_users = {
-    for pair in setproduct(var.operator_members, keys(local.operator_attached_service_accounts)) :
-    "${pair[1]}:${pair[0]}" => {
-      member             = pair[0]
-      service_account_id = local.operator_attached_service_accounts[pair[1]]
-    }
   }
 }
 
@@ -93,9 +68,10 @@ resource "google_project_iam_member" "operator_os_login" {
 }
 
 resource "google_service_account_iam_member" "operator_service_account_user" {
-  for_each = local.operator_service_account_users
+  # Preserve retained Pushgw state addresses when retiring the relay identity.
+  for_each = { for member in var.operator_members : "pushgw:${member}" => member }
 
-  service_account_id = each.value.service_account_id
+  service_account_id = google_service_account.pushgw.name
   role               = "roles/iam.serviceAccountUser"
-  member             = each.value.member
+  member             = each.value
 }

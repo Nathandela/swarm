@@ -171,9 +171,9 @@ that, `adb uninstall dev.swarm.phone` first.
    (`build.gradle.kts:285-303`). The app logs `push unavailable: no Firebase project is configured
    for this build` under the tag `SwarmPush` (`push/PushTokens.kt:35`, `:85`).
 
-Pairing from here is `swarm remote init` then `swarm remote pair` on the machine —
-`docs/operations/operator-runbook.md` §1-§3. The handset needs to reach a relay: LAN setup is
-`docs/operations/relay-runbook.md`, public is `docs/operations/relay-vps-deploy.md`.
+Pairing from here is `swarm remote init` then `swarm remote pair` on the machine. The one
+supported endpoint is the Cloudflare relay-v2 Worker; its admission must already authorize the
+machine. Follow the [remote-control operator runbook](operator-runbook.md).
 
 ### Build the machine side from THIS branch too, not from a release
 
@@ -187,10 +187,8 @@ having the agent never see it) is in two halves, and only one of them ships in t
   tick, is `internal/remotegw` — reached by `cmd/swarm-remote`, and **not in the AAR's tree at
   all**.
 
-A new handset against an old gateway therefore sends two frames the relay's batched delivery
-recombines into one read tick, which is the case the CLI reads as a paste. You get the original bug
-back, from a phone that contains the fix. Build all three binaries from this branch first
-(`docs/operations/operator-runbook.md` §1) and put them on `PATH` before `swarm remote init`.
+A new handset against an old gateway can reintroduce the old input-timing bug. Build both machine
+binaries from this branch and put them on `PATH` before `swarm remote init`.
 
 ---
 

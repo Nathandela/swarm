@@ -64,19 +64,6 @@ resource "google_compute_firewall" "iap_ssh" {
   }
 }
 
-resource "google_compute_address" "relay" {
-  project      = var.project_id
-  region       = var.region
-  name         = "swarm-relay-ip"
-  address      = "34.65.198.161"
-  address_type = "EXTERNAL"
-  network_tier = "PREMIUM"
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
 resource "google_compute_address" "pushgw" {
   project      = var.project_id
   region       = var.region

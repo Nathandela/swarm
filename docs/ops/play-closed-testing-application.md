@@ -577,13 +577,9 @@ during that pass:
   7-day cap (`internal/remote/relay/config.go:106`, `server.go:1803` `SweepRetention`), not
   merely "as long as needed" — the published page states the figure.
 
-The relay-operator blank below (`[WHO OPERATES IT]`) is resolved on the published page as
-"whoever operates the computer you pair with" — the codebase has no central relay service; a
-machine's owner runs `swarm-relay` themselves and provisions the URL via `swarm remote init`
-(`internal/remote/relaycfg/relaycfg.go`, `docs/operations/relay-runbook.md`). **If the closed
-test in fact routes testers through a relay the developer operates centrally**, that is a
-one-sentence addition the published page still needs — confirm before relying on this policy
-for real testers.
+The relay-operator blank below (`[WHO OPERATES IT]`) must name the operator of the sole Cloudflare
+relay-v2 Worker. The old self-hosted `swarm-relay` explanation is retired. Confirm the intended
+operator before relying on this policy for real testers.
 
 Host at a stable public URL (GitHub Pages is fine). Replace the bracketed fields.
 

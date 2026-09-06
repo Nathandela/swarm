@@ -536,14 +536,6 @@ func (a *App) setConn(state string) {
 	}
 }
 
-// currentConn reads the state without the ready()/barrier wrapping ConnectionState carries:
-// it is consulted from inside the transport loop, which is not an entry point.
-func (a *App) currentConn() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.connState
-}
-
 func (a *App) setStream(stream *phoneStream) {
 	a.mu.Lock()
 	a.stream = stream

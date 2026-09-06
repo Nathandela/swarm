@@ -62,10 +62,9 @@ var unfencedBudgets = map[string]string{
 	"Resync rate": "mobile/app.go resyncBudget implements both halves (<= 1 per stream per 5 s, " +
 		"<= 12 per 5 min) and no test drives either. The relay decides when a stream looks broken " +
 		"enough to ask for a repair, so this is a budget the declared adversary meters against",
-	"Inbound drain rate (reads + acks), each hop": "the READS half's token bucket is fenced only " +
-		"in internal/remote/transport, a package whose Session has zero production constructions " +
-		"(ADR-007 B94/B121) -- so what is measured is not what the shipped phone runs. The ACKS " +
-		"half is fenced in production and cited",
+	"Echo latency, machine -> phone visible, local relay": "The retired v1 measurement does not " +
+		"prove v2 machine-to-phone visible latency. The v2 phone-to-PTY benchmark measures the " +
+		"opposite direction; a separate visible-render measurement remains required.",
 }
 
 // budgetRow is one row of section 6.0.
@@ -80,8 +79,8 @@ type budgetRow struct {
 
 var (
 	budgetIDPattern    = regexp.MustCompile(`PB-[A-Z0-9]+-\d+`)
-	budgetFencePattern = regexp.MustCompile(`\*\*fence:\*\*\s*(.+?)\s*\|?$`)
-	budgetPathPattern  = regexp.MustCompile(`[\w./-]+_test\.go`)
+	budgetFencePattern = regexp.MustCompile(`\*\*fences?:\*\*\s*(.+?)\s*\|?$`)
+	budgetPathPattern  = regexp.MustCompile(`(?:[\w./-]+_test\.go|services/relay/test/[\w.-]+\.mjs)`)
 	markdownNoise      = regexp.MustCompile("[*`]")
 )
 
@@ -227,6 +226,14 @@ func namesAny(body string, ids []string) bool {
 		}
 	}
 	return false
+}
+
+func TestBudgetFencesRecognizeWorkerTestsAndPluralCitations(t *testing.T) {
+	rows := parseBudgetRows(budgetSectionStart + "\n" +
+		"| Worker bound | 1 | PB-NET-5 **fences:** services/relay/test/protocol.mjs, internal/remotegw/drainack_test.go |\n" + budgetSectionEnd)
+	if len(rows) != 1 || len(rows[0].fences) != 2 || rows[0].fences[0] != "services/relay/test/protocol.mjs" || rows[0].fences[1] != "internal/remotegw/drainack_test.go" {
+		t.Fatalf("Worker/Go citations not preserved: %+v", rows)
+	}
 }
 
 // TestPBDOC7_TheBudgetRuleRejectsAnUnownedOrUnfencedRow shows the rule failing on inputs built

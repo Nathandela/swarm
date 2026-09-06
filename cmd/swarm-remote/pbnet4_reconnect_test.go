@@ -41,9 +41,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
+
+const testRelayFrameLimit = 1 << 20
 
 // cutTap is a websocket proxy in front of the relay harness. It counts DIALS (one per
 // upgrade request, so a redial is visible even when it fails during the handshake),
@@ -76,7 +77,7 @@ func newCutTap(t *testing.T, upstreamWS string, killAfter time.Duration) *cutTap
 			return
 		}
 		defer func() { _ = down.CloseNow() }()
-		down.SetReadLimit(relay.MaxFrame + 64)
+		down.SetReadLimit(testRelayFrameLimit + 64)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -93,7 +94,7 @@ func newCutTap(t *testing.T, upstreamWS string, killAfter time.Duration) *cutTap
 			return
 		}
 		defer func() { _ = up.CloseNow() }()
-		up.SetReadLimit(relay.MaxFrame + 64)
+		up.SetReadLimit(testRelayFrameLimit + 64)
 
 		// The severance has to reach the SOCKETS: cancelling the copy contexts alone
 		// leaves both peers holding an open connection that simply goes quiet, which is a
@@ -176,7 +177,7 @@ func startCutTapRelay(t *testing.T, killAfter time.Duration) (*cutTap, <-chan st
 		if err != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		read := func() map[string]any {
 			_, body, err := ws.Read(r.Context())
 			if err != nil {

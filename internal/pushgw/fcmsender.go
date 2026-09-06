@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/Nathandela/swarm/internal/remote/push"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // WakeSender is the FCM leg's seam (spec section 3.5, ADR-015 P2). The gateway never
@@ -32,8 +31,7 @@ type VerdictBinding struct {
 }
 
 // fcmSenderAdapter adapts the real internal/remote/push.FCM sender (ADR-015 P2's
-// relocated asset) to WakeSender. It is the only place in this package that imports
-// internal/remote/push or internal/remote/relay.
+// relocated asset) to WakeSender.
 type fcmSenderAdapter struct {
 	fcm *push.FCM
 }
@@ -45,14 +43,13 @@ func NewFCMSender(fcm *push.FCM) WakeSender {
 	return &fcmSenderAdapter{fcm: fcm}
 }
 
-// Send forwards envelope unchanged (PG-SUB-1): relay.PushPayload.Ciphertext carries the
-// exact 74 received octets, with no Alert (a wake is content-free by construction).
+// Send forwards the exact opaque envelope unchanged (PG-SUB-1).
 func (a *fcmSenderAdapter) Send(ctx context.Context, fcmToken string, envelope []byte) error {
-	err := a.fcm.Push(ctx, fcmToken, relay.PushPayload{Ciphertext: envelope})
+	err := a.fcm.Push(ctx, fcmToken, envelope)
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, relay.ErrPushUnregistered) {
+	if errors.Is(err, push.ErrUnregistered) {
 		return ErrUnregistered
 	}
 	// push.FCM already exhausts its own bounded retry budget for retryable failures

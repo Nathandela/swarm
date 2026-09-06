@@ -1,6 +1,6 @@
 package remotegw
 
-// The command-IN receive uses a bounded local context to periodically recheck its parent. The
+// PB-NET-7: the command-IN receive uses a bounded local context to periodically recheck its parent. The
 // local expiry is benign idle, not a relay health or heartbeat verdict.
 
 import (

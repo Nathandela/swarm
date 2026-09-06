@@ -341,8 +341,8 @@ is the whole reason PB-NET-2 refuses cleartext outside the loopback carve-out. T
 > correction was made**, and had been since ADR-007 B34/B37 applied the policy. The stale text is
 > replaced rather than annotated in place because it described a missing safeguard that exists:
 > a reader acting on it would have gone looking for a hole that was already closed, and
-> `relay-runbook.md` §0 already carried the correct account — two operator documents in the same
-> directory disagreeing about a security property.
+> the then-current relay runbook already carried the correct account — two operator documents in
+> the same directory disagreed about a security property.
 
 Every dial path now carries a `relay.Security`, verified at HEAD:
 
@@ -363,9 +363,9 @@ Three limits that remain, stated because D11 forbids reading the table above as 
   pin provisioned still gets TLS and the cleartext refusal, but validates against platform trust
   roots alone — so it is protected from a passive observer and from cleartext downgrade, not from a
   CA that mis-issues for the relay's name.
-- **Loopback cleartext is admitted on every path**, deliberately: a `ws://127.0.0.1:PORT`
-  connection has no on-path position for an observer to occupy. It is the gateway's normal
-  configuration (`relay-runbook.md` §0).
+- **Loopback cleartext was admitted for the retired local relay**, deliberately: a
+  `ws://127.0.0.1:PORT` connection has no on-path position for an observer to occupy. The sole
+  relay-v2 Worker uses Web PKI instead.
 - **Traffic volume and timing are visible to a network observer regardless of TLS, at both hops.**
 
 ---

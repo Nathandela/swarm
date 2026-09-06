@@ -65,6 +65,11 @@ func TestReleasePublishesOnlyImmutableTagImagesWithProvenance(t *testing.T) {
 	if len(wf.Permissions) != 1 || wf.Permissions["contents"] != "read" {
 		t.Fatalf("release workflow default permissions = %#v, want only contents:read", wf.Permissions)
 	}
+	for _, retired := range []string{"swarm-relay", "deploy/relay", "relay-container.yml", "relay_image"} {
+		if strings.Contains(raw, retired) {
+			t.Errorf("release workflow still references retired relay-v1 infrastructure %q", retired)
+		}
+	}
 
 	publish, ok := wf.Jobs["publish_containers"]
 	if !ok {
@@ -87,7 +92,6 @@ func TestReleasePublishesOnlyImmutableTagImagesWithProvenance(t *testing.T) {
 	}
 
 	wantBuilds := map[string]string{
-		"relay_image":  "deploy/relay/Dockerfile",
 		"pushgw_image": "deploy/pushgw/Dockerfile",
 	}
 	builds := make(map[string]step)
@@ -131,10 +135,7 @@ func TestReleasePublishesOnlyImmutableTagImagesWithProvenance(t *testing.T) {
 		if !strings.Contains(tags, "${{ github.ref_name }}") || strings.Contains(strings.ToLower(tags), "latest") || strings.Contains(tags, "\n") {
 			t.Errorf("%s tags = %q; want exactly the release ref and no aliases", id, tags)
 		}
-		image := "ghcr.io/nathandela/swarm-" + strings.TrimSuffix(strings.TrimPrefix(id, "relay_"), "_image")
-		if id == "relay_image" {
-			image = "ghcr.io/nathandela/swarm-relay"
-		}
+		image := "ghcr.io/nathandela/swarm-" + strings.TrimSuffix(id, "_image")
 		if !attestations[image] {
 			t.Errorf("%s has no registry-pushed build provenance bound to its digest", image)
 		}
@@ -143,7 +144,6 @@ func TestReleasePublishesOnlyImmutableTagImagesWithProvenance(t *testing.T) {
 
 func TestPRContainerGatesCannotPublish(t *testing.T) {
 	for _, path := range []string{
-		"../../.github/workflows/relay-container.yml",
 		"../../.github/workflows/pushgw-container.yml",
 	} {
 		raw := read(t, path)

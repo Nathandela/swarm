@@ -1,19 +1,12 @@
 package supervise
 
-// FAILING-FIRST tests for slice S4 — PB-LIFE-6 and PB-OPS-4: swarm-remote and swarm-relay
-// are buildable RELEASE artifacts.
+// RELEASE artifact checks for the owner CLI, its local gateway, and the public push gateway.
 //
 // This lives beside the unit generator on purpose. A supervision unit whose ExecStart
 // points at a binary the release pipeline never builds is a unit that cannot run on any
 // machine but the one it was developed on: PB-LIFE-1 and PB-LIFE-6 are the same
 // requirement seen from two ends. So the assertions below tie the generated unit's
 // executable name to a real entry in the release matrix.
-//
-// VERIFIED STATE TODAY (RED): .goreleaser.yaml declares exactly one build, `./cmd/swarm`,
-// and its header comment says "swarm is the ONLY release artifact ... swarm-char and
-// swarm-fake-agent are dev/test tools and are never built by this pipeline" -- a comment
-// that does not even mention swarm-relay, which is a real deployable. Both statements
-// have to change together, or the next reader trusts the comment over the config.
 //
 // No YAML dependency is added for this: the module has none today, and a release manifest
 // is not worth one. The scan below is deliberately shallow -- it reads the top-level
@@ -104,11 +97,11 @@ func scanGoreleaser(t *testing.T, path string) (builds []releaseBuild, archived 
 	return builds, archived
 }
 
-// TestGoreleaser_ShipsGatewayAndRelay is PB-LIFE-6 + PB-OPS-4: the release matrix builds
-// swarm-remote, swarm-relay, and swarm-pushgw, each from its real main package, each landing in an
+// TestGoreleaser_ShipsGatewayAndPushGateway checks the release matrix builds swarm-remote and
+// swarm-pushgw from their real main packages, each landing in an
 // archive. The gateway's binary name must match the name the supervision unit's ExecStart
 // will carry, or a released machine installs a unit pointing at nothing.
-func TestGoreleaser_ShipsGatewayAndRelay(t *testing.T) {
+func TestGoreleaser_ShipsGatewayAndPushGateway(t *testing.T) {
 	root := repoRoot(t)
 	path := filepath.Join(root, ".goreleaser.yaml")
 	builds, archived := scanGoreleaser(t, path)
@@ -121,7 +114,6 @@ func TestGoreleaser_ShipsGatewayAndRelay(t *testing.T) {
 	want := map[string]string{
 		"swarm":        "./cmd/swarm",
 		"swarm-remote": "./cmd/swarm-remote",
-		"swarm-relay":  "./cmd/swarm-relay",
 		"swarm-pushgw": "./cmd/swarm-pushgw",
 	}
 	for id, main := range want {
@@ -169,6 +161,11 @@ func TestGoreleaser_ShipsGatewayAndRelay(t *testing.T) {
 			t.Errorf("%s still says %q, which contradicts the build list it now carries", filepath.Base(path), stale)
 		}
 	}
+	for _, retired := range []string{"swarm-relay", "cmd/swarm-relay"} {
+		if strings.Contains(string(raw), retired) {
+			t.Errorf("%s still references retired relay-v1 artifact %q", filepath.Base(path), retired)
+		}
+	}
 }
 
 // TestReleaseBinaries_BuildStatically is PB-OPS-4's "buildable" half, under the release
@@ -177,7 +174,7 @@ func TestGoreleaser_ShipsGatewayAndRelay(t *testing.T) {
 // surface for the first time during a release.
 func TestReleaseBinaries_BuildStatically(t *testing.T) {
 	out := t.TempDir()
-	for _, pkg := range []string{"swarm", "swarm-remote", "swarm-relay", "swarm-pushgw"} {
+	for _, pkg := range []string{"swarm", "swarm-remote", "swarm-pushgw"} {
 		t.Run(pkg, func(t *testing.T) {
 			cmd := exec.Command("go", "build", "-o", filepath.Join(out, pkg), "github.com/Nathandela/swarm/cmd/"+pkg)
 			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")

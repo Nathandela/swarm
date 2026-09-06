@@ -1,4 +1,4 @@
-// Package push implements the FCM v1 sender behind relay.PushSink (PB-PUSH-2): it turns
+// Package push implements the FCM v1 sender (PB-PUSH-2): it turns
 // a generic alert plus an opaque ciphertext envelope into an HTTP/2 request Google's
 // messaging API accepts, and turns Google's answers back into the two verdicts the relay
 // acts on — retry, or prune this token.

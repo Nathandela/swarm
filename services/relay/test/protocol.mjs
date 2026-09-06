@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey, createPublicKey, hkdfSync, sign } from "node:crypto";
 import { RelayHome } from "../src/worker.mjs";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 const HTTP = process.env.RELAY_HTTP || "http://127.0.0.1:8790";
 const WS = HTTP.replace(/^http/, "ws");
@@ -61,6 +64,24 @@ async function authenticate(peer, who, role, purpose = "stream") {
 const send = (peer, message) => peer.ws.send(JSON.stringify({ v: 2, ...message }));
 const machine = identity(0);
 const phone = identity(32);
+
+// Read the actual local Workerd store, not an alternate storage implementation.
+// Checking before reauthorization matters: AUTHORIZE also purges old mail.
+function bindingStorage() {
+  const root = process.env.RELAY_TEST_STATE;
+  assert.ok(root, "the protocol gate requires its fresh local Workerd state directory");
+  for (const file of readdirSync(root, { recursive: true }).filter((name) => name.endsWith(".sqlite"))) {
+    const db = new DatabaseSync(join(root, file), { readOnly: true });
+    try {
+      if (!db.prepare("SELECT name FROM sqlite_master WHERE name='members'").get()) continue;
+      if (!db.prepare("SELECT 1 FROM members WHERE phone_rid=?").get(phone.rid)) continue;
+      return Object.fromEntries(["items", "receipts", "streams"].map((table) => [table,
+        db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE (recipient=? AND sender=?) OR (recipient=? AND sender=?)`)
+          .get(phone.rid, machine.rid, machine.rid, phone.rid).n]));
+    } finally { db.close(); }
+  }
+  assert.fail("no Workerd database contains the authenticated test binding");
+}
 assert.equal(machine.rid, "88564c8ede170d2ed321e21e61354184", "existing Go HKDF vector remains exact");
 assert.equal(home(machine.rid), "cc634f54c634813fc554848c78763e63b3dbdff50975c0d789de730e5570beaa", "home KDF vector");
 
@@ -164,6 +185,7 @@ send(p, { type: "SUBSCRIBE", request_id: "sub-after-probe", peer_rid: machine.ri
 assert.equal((await waitFor(p, (x) => x.request_id === "sub-after-probe")).type, "SUBSCRIBED");
 assert.equal((await waitFor(p, (x) => x.type === "DELIVER" && x.msg_id === "msg-one")).ciphertext, "AAECAwQ", "PROBE must not compact delivery custody");
 const deliveredBeforeResubscribe = p.messages.filter((x) => x.type === "DELIVER" && x.msg_id === "msg-one").length;
+// PB-NET-5(c): one active subscription per stream; a second must be refused.
 send(p, { type: "SUBSCRIBE", request_id: "repeat-sub", peer_rid: machine.rid, generation: "1", incarnation, after: "0" });
 assert.equal((await waitFor(p, (x) => x.request_id === "repeat-sub")).code, "already_subscribed");
 await new Promise((r) => setTimeout(r, 50));
@@ -244,8 +266,17 @@ assert.equal((await waitFor(pairPhone, (x) => x.request_id === "pair-claim")).ty
 send(pairPhone, { type: "PAIR_SEND", request_id: "pair-send", ceremony: pairCeremony, ciphertext: "bm9pc2UtbXNnMQ" });
 assert.equal((await waitFor(m, (x) => x.type === "PAIR_FRAME")).ciphertext, "bm9pc2UtbXNnMQ");
 
+// PB-STATE-10: leave a known committed delivery unacknowledged before revoking.
+send(ms, { type: "APPEND", request_id: "stranded-append", peer_rid: phone.rid, generation: "1", msg_id: "stranded-revoke", ciphertext: "c3RyYW5kZWQ" });
+assert.equal((await waitFor(ms, (x) => x.request_id === "stranded-append")).type, "APPENDED");
+await waitFor(p, (x) => x.type === "DELIVER" && x.msg_id === "stranded-revoke");
+send(p, { type: "APPEND", request_id: "stranded-command", peer_rid: machine.rid, generation: "1", msg_id: "stranded-command", ciphertext: "Y29tbWFuZA" });
+assert.equal((await waitFor(p, (x) => x.request_id === "stranded-command")).type, "APPENDED");
+const beforeRevoke = bindingStorage();
+for (const table of ["items", "receipts", "streams"]) assert.ok(beforeRevoke[table] > 0, `${table} must exist before revoke`);
 send(m, { type: "REVOKE", request_id: "revoke", peer_rid: phone.rid, generation: "1" });
 assert.equal((await waitFor(m, (x) => x.request_id === "revoke")).type, "REVOKED");
+assert.deepEqual(bindingStorage(), { items: 0, receipts: 0, streams: 0 }, "REVOKED must follow durable removal of unacknowledged custody and retry state");
 send(ms, { type: "PROBE", request_id: "probe-revoked", peer_rid: phone.rid, generation: "1", incarnation: afterDiscardSub.incarnation });
 assert.equal((await waitFor(ms, (x) => x.request_id === "probe-revoked")).code, "stale_generation");
 await new Promise((r) => setTimeout(r, 50));

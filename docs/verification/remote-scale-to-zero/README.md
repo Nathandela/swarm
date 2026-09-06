@@ -15,7 +15,6 @@ or acceptance requirements to retain in v2. No new hosted tests are claimed by t
 |---|---|---|---|
 | Relay | Actual local Wrangler 4.129.0/workerd, hibernating WebSocket API and SQLite-backed storage | Authenticated fixture routing, commit-before-forward, catch-up, ACK fence, revoke, staggered retention, uint64 controls | Production Ed25519 auth, forced eviction, hosted latency/billing, complete quotas/bounded catch-up |
 | Push | Actual Firestore emulator 1.22.0; firebase-tools 15.29.0; client 7.11.6 | One concurrent nonce/registration winner; body conflict refusal; allocation cap; stale token CAS; transaction callback retry and duplicate side-effect negative | Real IAM/attestation/FCM, exact-once provider delivery, production contention/latency/quota behavior |
-| Interop | Actual Go relay functions → Node 22 WebCrypto | Same HKDF RID, Ed25519 auth/consent verification, context/tamper refusal, framing and uint64 precision hazard | Full workerd production protocol implementation or exhaustive fuzzing |
 | Migration | Deterministic JavaScript authority model | Frozen source rejection, stale epoch refusal, immutable export, post-mutation rollback refusal including revoke-only, incarnation distinction | Disk persistence, distributed atomic cutover, actual export/import or disaster restore |
 | Existing Go | Selected repository tests against unchanged Go application | Backup/cursor/revoke and command/input/push-binding contracts still pass in baseline | Whole repository release gate, new backend equivalence, physical handset behavior |
 | Economics | Pure asserted arithmetic | Empty-wait write amplification and illustrative private-CI/payback calculations | Actual workload, account free allowances or monthly bill |
@@ -34,7 +33,6 @@ The first dependency/emulator download needs network access. Tests use loopback 
 fake external providers; they neither need nor use live Google/Cloudflare credentials.
 
 ```sh
-node docs/verification/remote-scale-to-zero/interop/check.mjs
 node docs/verification/remote-scale-to-zero/cost-sensitivity.mjs
 node docs/verification/remote-scale-to-zero/migration-probe/migration_fence_model.mjs
 node docs/verification/remote-scale-to-zero/push-probe/test-run-bounded.mjs
@@ -46,11 +44,6 @@ npm run test:all
 # In a fresh shell at repository root:
 sh docs/verification/remote-scale-to-zero/push-probe/run-local.sh
 ```
-
-On a restricted filesystem, set `GOCACHE` to a writable task-specific directory before
-running the interop/Go commands. This investigation used
-`GOCACHE=/private/tmp/swarm-plan.QDFqaJ/go-cache`. The initial default-cache attempt was
-denied by sandbox permissions; the same test passed with that isolated cache.
 
 The copied relay probe was rerun using the exact pinned Wrangler binary from the earlier
 scratch install through `RELAY_PROBE_WRANGLER`; it did not copy its dependency cache into
@@ -65,12 +58,6 @@ retention remains server policy. This is a test-harness correction, not evidence
 production latency or an invitation to shorten retention.
 
 ### Representative successful outputs
-
-Root Go/WebCrypto interop:
-
-```json
-{"goWebCryptoHKDF":true,"ed25519Auth":true,"ed25519Consent":true,"wrongContextRejected":true,"tamperRejected":true,"actualGoFrameDecoded":true,"malformedFramesRejected":true,"uint64NumberLossDetected":true,"decimalStorageOrdering":true}
-```
 
 Sol's actual emulator concurrency run:
 

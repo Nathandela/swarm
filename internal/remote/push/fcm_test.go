@@ -30,8 +30,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // --- fake provider -----------------------------------------------------------
@@ -211,12 +209,7 @@ func newFCMHarness(t *testing.T, fake *fakeFCM) *fcmHarness {
 	return &fcmHarness{sender: sender, fake: fake, clk: clk}
 }
 
-func testPayload() relay.PushPayload {
-	return relay.PushPayload{
-		Alert:      relay.GenericPushAlert,
-		Ciphertext: []byte{0xDE, 0xAD, 0xBE, 0xEF},
-	}
-}
+func testPayload() []byte { return []byte{0xDE, 0xAD, 0xBE, 0xEF} }
 
 // --- PB-PUSH-2: the request the sender emits --------------------------------
 
@@ -276,7 +269,7 @@ func TestPBPUSH2_SendPostsAHighPriorityDataOnlyMessage(t *testing.T) {
 }
 
 // TestPBPUSH3_SenderCarriesTheOpaqueCiphertextAndNothingElse is PB-PUSH-3 enforced at
-// the transport. The sender is handed a relay.PushPayload and must not enrich it: the
+// the transport. The sender is handed opaque ciphertext and must not enrich it: the
 // only variable content that may leave this process is the opaque envelope the gateway
 // sealed.
 func TestPBPUSH3_SenderCarriesTheOpaqueCiphertextAndNothingElse(t *testing.T) {
@@ -307,13 +300,13 @@ func TestPBPUSH3_SenderCarriesTheOpaqueCiphertextAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("message.data.e is not base64: %v", err)
 	}
-	if string(got) != string(testPayload().Ciphertext) {
-		t.Fatalf("delivered ciphertext = %x, want the sealed envelope %x", got, testPayload().Ciphertext)
+	if string(got) != string(testPayload()) {
+		t.Fatalf("delivered ciphertext = %x, want the sealed envelope %x", got, testPayload())
 	}
 	// The generic alert is a constant the APP renders; it must not be shipped as
 	// provider-visible text.
 	body, _ := json.Marshal(sends[0].body)
-	if strings.Contains(string(body), relay.GenericPushAlert) {
+	if strings.Contains(string(body), "You have a new secure message.") {
 		t.Fatalf("the request carries the alert text: %s", body)
 	}
 }
@@ -446,7 +439,7 @@ func TestPBPUSH2_RetriesAreBounded(t *testing.T) {
 	if err == nil {
 		t.Fatal("Push returned nil against a permanently failing provider")
 	}
-	if errors.Is(err, relay.ErrPushUnregistered) {
+	if errors.Is(err, ErrUnregistered) {
 		t.Fatal("a 5xx was classified as UNREGISTERED: a transient outage would prune every token the relay holds")
 	}
 	n := len(h.fake.sends())
@@ -485,8 +478,8 @@ func TestPBPUSH2_UnregisteredMapsToThePruningSentinel(t *testing.T) {
 	h := newFCMHarness(t, fake)
 
 	err := h.sender.Push(context.Background(), "dead-token", testPayload())
-	if !errors.Is(err, relay.ErrPushUnregistered) {
-		t.Fatalf("Push on an UNREGISTERED token = %v, want relay.ErrPushUnregistered", err)
+	if !errors.Is(err, ErrUnregistered) {
+		t.Fatalf("Push on an UNREGISTERED token = %v, want ErrUnregistered", err)
 	}
 	if got := len(h.fake.sends()); got != 1 {
 		t.Fatalf("send attempts for UNREGISTERED: got %d, want 1 (never retried)", got)
@@ -506,7 +499,7 @@ func TestPBPUSH2_OtherNotFoundIsNotAPruningSignal(t *testing.T) {
 	if err == nil {
 		t.Fatal("Push returned nil for a 404")
 	}
-	if errors.Is(err, relay.ErrPushUnregistered) {
+	if errors.Is(err, ErrUnregistered) {
 		t.Fatal("a 404 without an UNREGISTERED errorCode was classified as a dead token: a project misconfiguration would prune every registered handset")
 	}
 }
@@ -615,15 +608,6 @@ func TestPBPUSH5_ContextCancellationIsHonoured(t *testing.T) {
 	if err := h.sender.Push(ctx, "tok", testPayload()); err == nil {
 		t.Fatal("Push returned nil with an already-cancelled context")
 	}
-}
-
-// TestPBPUSH2_SenderSatisfiesTheRelaySeam is the compile-time link between this package
-// and the transport it implements. Without it the sender could drift from the interface
-// and nothing would notice until assembly.
-//
-// NOT A RED TEST: it is a compile-time fence and passes the moment both types exist.
-func TestPBPUSH2_SenderSatisfiesTheRelaySeam(t *testing.T) {
-	var _ relay.PushSink = (*FCM)(nil)
 }
 
 func TestPBPUSH2_AuthorizedClientModeUsesExplicitProject(t *testing.T) {

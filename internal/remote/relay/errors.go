@@ -2,29 +2,10 @@ package relay
 
 import (
 	"errors"
-	"fmt"
 )
 
-// Sentinel errors returned by Client/Conn operations. Each maps to a stable wire
-// error code so a caller can errors.Is against it after a round-trip. Every
-// over-limit or refusal is a CLEAN error, never resource exhaustion (R-REL.8).
-// ErrRelayAnswered marks an error that IS the relay's answer -- an error frame the
-// relay composed and sent -- as opposed to a transport, timeout or decode failure
-// AROUND the exchange. It exists for errors.Is only and is never returned bare:
-// decodeError wraps every answer it manufactures so a caller deciding "did the relay
-// answer no, or did the exchange fail?" tests this sentinel instead of inferring the
-// answer from what the error is not -- a fallthrough that classified a truncated or
-// oversized reply frame as a substantive refusal (SH5 round-3 review F1).
-var ErrRelayAnswered = errors.New("relay: the relay answered")
-
-// answeredError is the wrapper decodeError attaches. Its Error() string is the
-// inner error's, unchanged, so no operator text or test assertion moves; Unwrap
-// keeps every sentinel reachable through errors.Is.
-type answeredError struct{ err error }
-
-func (a answeredError) Error() string        { return a.err.Error() }
-func (a answeredError) Unwrap() error        { return a.err }
-func (a answeredError) Is(target error) bool { return target == ErrRelayAnswered }
+// Shared semantic sentinels returned by relay-v2 consumers. Every over-limit or refusal is a
+// clean error, never resource exhaustion (R-REL.8).
 
 var (
 	// ErrQuotaExceeded is a clean refusal past a rate/quota cap.
@@ -101,56 +82,3 @@ var (
 	// must not depend on which of the two won the race.
 	ErrConnClosed = errors.New("relay: connection closed")
 )
-
-// wire error codes. The client maps a received code back to the sentinel above.
-const (
-	codeBadRequest                = "bad_request"
-	codeQuotaExceeded             = "quota_exceeded"
-	codeNotAuthorized             = "not_authorized"
-	codePeerCapabilityUnavailable = "peer_capability_unavailable"
-	codeRevoked                   = "revoked"
-	codeDuplicateConn             = "duplicate_connection"
-	codeWaitInProgress            = "wait_in_progress"
-	codeMailboxCursorReset        = "mailbox_cursor_reset"
-	codeRendezvousFull            = "rendezvous_full"
-	codeRendezvousTTL             = "rendezvous_expired"
-	codeRendezvousUsed            = "rendezvous_burned"
-	codeRendezvousExists          = "rendezvous_exists"
-	codeAuthFailed                = "auth_failed"
-	codeUnsupported               = "unsupported"
-	codeConsentRetired            = "consent_retired"
-)
-
-// codeToErr maps a wire error code to its sentinel. An unrecognised code becomes
-// a generic error carrying the server message.
-var codeToErr = map[string]error{
-	codeQuotaExceeded:             ErrQuotaExceeded,
-	codeNotAuthorized:             ErrNotAuthorized,
-	codePeerCapabilityUnavailable: ErrPeerCapabilityUnavailable,
-	codeRevoked:                   ErrRevoked,
-	codeDuplicateConn:             ErrDuplicateConnection,
-	codeWaitInProgress:            ErrWaitInProgress,
-	codeMailboxCursorReset:        ErrMailboxCursorResetRequired,
-	codeRendezvousFull:            ErrRendezvousFull,
-	codeRendezvousTTL:             ErrRendezvousExpired,
-	codeRendezvousUsed:            ErrRendezvousBurned,
-	codeRendezvousExists:          ErrRendezvousExists,
-	codeConsentRetired:            ErrConsentRetired,
-}
-
-// errorBody is the JSON shape of an r_error reply.
-type errorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message,omitempty"`
-}
-
-// errForCode maps a wire error code to its sentinel, or to a generic error
-// naming the code. A MsgWaitReply carries its refusal as a code rather than as
-// an r_error frame (it must reach the parked waiter, not the request queue), so
-// both reply shapes resolve to the same sentinel through here.
-func errForCode(code string) error {
-	if e, ok := codeToErr[code]; ok {
-		return e
-	}
-	return fmt.Errorf("relay: %s", code)
-}

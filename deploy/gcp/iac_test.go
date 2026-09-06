@@ -56,7 +56,7 @@ func requireContains(t *testing.T, src string, wants ...string) {
 	}
 }
 
-func TestTerraformPinsTheExistingProductionTopology(t *testing.T) {
+func TestTerraformKeepsOnlyThePushGatewayProductionTopology(t *testing.T) {
 	tf := terraform(t)
 	requireContains(t, tf,
 		`backend "gcs"`,
@@ -70,30 +70,34 @@ func TestTerraformPinsTheExistingProductionTopology(t *testing.T) {
 		`private_ip_google_access = true`,
 	)
 
-	for name, address := range map[string]string{
-		"relay":  "34.65.198.161",
-		"pushgw": "34.65.34.57",
-	} {
-		block := resourceBlock(t, tf, "google_compute_address", name)
-		requireContains(t, block, `address      = "`+address+`"`, `network_tier = "PREMIUM"`)
-	}
+	address := resourceBlock(t, tf, "google_compute_address", "pushgw")
+	requireContains(t, address, `address      = "34.65.34.57"`, `network_tier = "PREMIUM"`)
 
-	for name, instance := range map[string]string{
-		"relay":  "swarm-relay-prod",
-		"pushgw": "swarm-pushgw-prod",
+	pushgw := resourceBlock(t, tf, "google_compute_instance", "pushgw")
+	requireContains(t, pushgw,
+		`name                      = "swarm-pushgw-prod"`,
+		`machine_type              = "e2-small"`,
+		`deletion_protection       = true`,
+		`enable_secure_boot          = true`,
+		`enable_vtpm                 = true`,
+		`enable_integrity_monitoring = true`,
+		`"enable-oslogin"       = "TRUE"`,
+		`"block-project-ssh-keys" = "TRUE"`,
+		`prevent_destroy = true`,
+	)
+
+	for _, retired := range []string{
+		`google_compute_instance" "relay`,
+		`google_compute_address" "relay`,
+		`google_service_account" "relay`,
+		`output "relay_instance"`,
+		`swarm-relay-prod`,
+		`swarm-relay-ip`,
+		`34.65.198.161`,
 	} {
-		block := resourceBlock(t, tf, "google_compute_instance", name)
-		requireContains(t, block,
-			`name                      = "`+instance+`"`,
-			`machine_type              = "e2-small"`,
-			`deletion_protection       = true`,
-			`enable_secure_boot          = true`,
-			`enable_vtpm                 = true`,
-			`enable_integrity_monitoring = true`,
-			`"enable-oslogin"       = "TRUE"`,
-			`"block-project-ssh-keys" = "TRUE"`,
-			`prevent_destroy = true`,
-		)
+		if strings.Contains(tf, retired) {
+			t.Errorf("Terraform still contains retired relay-v1 infrastructure %q", retired)
+		}
 	}
 }
 
@@ -116,10 +120,9 @@ func TestFirewallAllowsOnlyPublicWebAndIAPSSH(t *testing.T) {
 	}
 }
 
-func TestRuntimeIdentitiesAreDedicatedAndLeastPrivilege(t *testing.T) {
+func TestRuntimeIdentityIsDedicatedAndLeastPrivilege(t *testing.T) {
 	tf := terraform(t)
 	requireContains(t, tf,
-		`account_id   = "swarm-relay-runtime"`,
 		`account_id   = "swarm-push-runtime"`,
 		`role_id     = "swarmPushGatewayRuntime"`,
 		`permissions = ["cloudmessaging.messages.create"]`,
@@ -133,6 +136,7 @@ func TestRuntimeIdentitiesAreDedicatedAndLeastPrivilege(t *testing.T) {
 		`scopes = [ "cloud-platform", "https://www.googleapis.com/auth/playintegrity", ]`,
 	)
 	for _, forbidden := range []string{
+		`swarm-relay-runtime`,
 		`roles/owner`,
 		`roles/editor`,
 		`roles/secretmanager.secretAccessor`,
@@ -144,29 +148,25 @@ func TestRuntimeIdentitiesAreDedicatedAndLeastPrivilege(t *testing.T) {
 	}
 }
 
-func TestEveryOperatorCanUseBothAttachedRuntimeIdentities(t *testing.T) {
+func TestEveryOperatorCanUseThePushGatewayRuntimeIdentity(t *testing.T) {
 	tf := terraform(t)
 	requireContains(t, tf,
-		`operator_attached_service_accounts = {`,
-		`relay  = google_service_account.relay.name`,
-		`pushgw = google_service_account.pushgw.name`,
-		`for pair in setproduct(var.operator_members, keys(local.operator_attached_service_accounts))`,
+		`for_each = var.operator_members`,
+		`service_account_id = google_service_account.pushgw.name`,
 	)
 	binding := resourceBlock(t, tf, "google_service_account_iam_member", "operator_service_account_user")
 	requireContains(t, binding,
-		`for_each = local.operator_service_account_users`,
-		`service_account_id = each.value.service_account_id`,
+		`for_each = { for member in var.operator_members : "pushgw:${member}" => member }`,
+		`service_account_id = google_service_account.pushgw.name`,
 		`role               = "roles/iam.serviceAccountUser"`,
-		`member             = each.value.member`,
+		`member             = each.value`,
 	)
 }
 
 func TestDataDisksAndSnapshotsAreDurableAndEUResident(t *testing.T) {
 	tf := terraform(t)
-	for _, name := range []string{"relay_data", "pushgw_data"} {
-		block := resourceBlock(t, tf, "google_compute_disk", name)
-		requireContains(t, block, `type = "pd-balanced"`, `size = 20`, `prevent_destroy = true`)
-	}
+	block := resourceBlock(t, tf, "google_compute_disk", "pushgw_data")
+	requireContains(t, block, `type = "pd-balanced"`, `size = 20`, `prevent_destroy = true`)
 	policy := resourceBlock(t, tf, "google_compute_resource_policy", "daily_snapshots")
 	requireContains(t, policy,
 		`start_time      = "03:00"`,
@@ -175,16 +175,25 @@ func TestDataDisksAndSnapshotsAreDurableAndEUResident(t *testing.T) {
 		`storage_locations = ["eu"]`,
 	)
 	requireContains(t, tf,
-		`resource "google_compute_disk_resource_policy_attachment" "relay"`,
 		`resource "google_compute_disk_resource_policy_attachment" "pushgw"`,
 	)
+	for _, retired := range []string{
+		`google_compute_disk" "relay_data`,
+		`google_compute_disk_resource_policy_attachment" "relay`,
+		`swarm-relay-data`,
+		`operator_attached_service_accounts`,
+		`operator_service_account_users`,
+	} {
+		if strings.Contains(tf, retired) {
+			t.Errorf("Terraform still contains retired relay-v1 storage %q", retired)
+		}
+	}
 }
 
 func TestDNSIsAnExplicitExternalOutputAndDocsAreOperational(t *testing.T) {
 	tf := terraform(t)
 	requireContains(t, tf,
 		`output "dns_a_records"`,
-		`"relay-swarm.dsfactory.org."`,
 		`"push-swarm.dsfactory.org."`,
 	)
 	if strings.Contains(tf, "google_dns_") {
@@ -193,32 +202,33 @@ func TestDNSIsAnExplicitExternalOutputAndDocsAreOperational(t *testing.T) {
 
 	doc := read(t, "../../docs/operations/gcp-production-iac.md")
 	requireContains(t, doc,
-		"terraform init -backend-config=backend.hcl",
-		"terraform plan",
-		"terraform import",
-		"Do not run `terraform apply` before",
-		"container-images.json",
-		"@sha256:",
-		`export RELAY_VERSION="${release}"`,
-		`export PUSHGW_VERSION="${release}"`,
-		"gh attestation verify",
-		"--tunnel-through-iap",
-		"exactly four least-privilege IAM grants per operator",
+		"source change does **not** change any live cloud resource",
+		"Cloudflare Worker and Durable Object infrastructure",
+		"swarm-pushgw-prod",
+		"swarm-pushgw-data",
+		"swarm-pushgw-ip",
+		"swarm-push-runtime",
+		"swarm-public",
+		"swarm-daily-snapshots",
+		"exactly three least-privilege IAM grants per principal",
 		"roles/iam.serviceAccountUser",
-		`operator_service_account_user["relay:user:operator@example.com"]`,
-		`operator_service_account_user["pushgw:user:operator@example.com"]`,
 		"terraform output -json dns_a_records",
 		"deletion protection",
-		"restore drill",
-		"Required ADC authorization probe",
-		"https://fcm.googleapis.com/v1/projects/swarm-8404f/messages:send",
-		"https://playintegrity.googleapis.com/v1/dev.swarm.phone:decodeIntegrityToken",
-		`test "${fcm_status}" != 401`,
-		`test "${play_status}" != 403`,
-		"gcloud compute instances stop swarm-pushgw-prod",
-		"gcloud compute instances set-service-account swarm-pushgw-prod",
-		"gcloud compute instances start swarm-pushgw-prod",
+		"daily at 03:00 UTC",
+		"push-gateway-deploy.md",
+		"push-gateway-runbook.md",
 	)
+	for _, retired := range []string{
+		"swarm-relay",
+		"relay-swarm.dsfactory.org",
+		"container-images.json",
+		"RELAY_VERSION",
+		"deploy/relay",
+	} {
+		if strings.Contains(doc, retired) {
+			t.Errorf("GCP operator documentation still contains retired relay-v1 deployment detail %q", retired)
+		}
+	}
 	if strings.Contains(strings.ToLower(doc), ":latest") {
 		t.Fatal("operator documentation suggests a mutable latest deployment")
 	}

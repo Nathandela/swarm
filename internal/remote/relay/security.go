@@ -9,10 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"net/url"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 )
@@ -108,7 +106,7 @@ func TrustRootSourceFor(goos string) TrustRootSource {
 // because no platform we ship to declares TrustRootsEmbedded.
 func EmbeddedTrustRoots() []byte { return nil }
 
-// Security is the per-connection transport-security policy for DialSecure.
+// Security is the per-connection transport-security policy resolved by relay-v2 clients.
 // The zero value is the default policy: TLS verified against the platform's
 // stated trust-root source, cleartext refused.
 type Security struct {
@@ -165,10 +163,6 @@ type Security struct {
 	// its own. A configured pin still wins over it (tlsConfig), so it can only ever be a
 	// relaxation of the DEFAULT, never of an explicit one.
 	unverifiedTLS bool
-	// observer records the SPKI the peer presented on an unverified dial (ADR-007 B48).
-	// It is unexported and populated only by DialRawSecure, so a Security value cannot be
-	// assembled to spy on a dial it does not own, and a nil observer records nothing.
-	observer *spkiObserver
 	// trustRoots overrides the platform's stated trust-root source, and is honoured ONLY
 	// inside a test binary -- see WithTrustRootSource, which is the only thing that sets
 	// it. It exists because the branch it reaches was unreachable in every test that
@@ -283,19 +277,18 @@ func (s Security) trustRootSource() TrustRootSource {
 // who set this on a real deployment would gain the ability to speak cleartext to their own
 // machine and nothing else.
 //
-// WHY IT HAS TO EXIST. The relay server is ws://-only (server.go sets "ws://"+addr), the
-// gateway sidecar is a release binary, and the S19 exit demonstration builds and spawns
-// that binary against a real ws://127.0.0.1 relay. Without the exception, local
-// development and the exit demonstration both require a TLS terminator and a pin that has
-// no channel yet -- and the alternative, an environment variable a deployment could set,
-// would be exactly the general kill switch B37 rules out.
+// WHY IT HAS TO EXIST. The local Workerd test endpoint is ws://, while the gateway sidecar
+// is a release binary. Without the exception, local development and the native relay-v2
+// integration gates would require a TLS terminator and a pin solely for a same-host hop.
+// An environment variable a deployment could set would instead be the general kill switch
+// B37 rules out.
 func MachineSecurity() Security { return Security{loopbackInRelease: true} }
 
 // resolve decides whether rawURL may be dialed under this policy and, if so,
 // with what TLS configuration (nil means "plain ws://" or "platform defaults").
-// Every refusal happens here, and it is re-asked for every hop: the first refusal
-// happens before a socket is opened, and a redirect is answered with the same
-// question rather than followed blindly (see checkRedirect).
+// Every refusal happens here. relay-v2 calls it for the initial target before opening a
+// socket and again from its redirect hook, so a redirect is answered with the same question
+// rather than followed blindly.
 func (s Security) resolve(rawURL string) (*tls.Config, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -372,21 +365,15 @@ func (s Security) tlsConfig(host string) (*tls.Config, error) {
 		// RECORDED, and msg2 then carries the machine's own RelaySPKIPin to compare it
 		// against. A network attacker terminating this TLS cannot make the two agree,
 		// because the real machine authored the pin and the attacker cannot reach msg2's
-		// contents. See Conn.PeerSPKI.
-		obs := s.observer
+		// contents. relay-v2 records the peer certificate on the connection that owns it.
 		return &tls.Config{
 			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: true, //nolint:gosec // B45: the pairing peer is authenticated by Noise + SAS, not by TLS
-			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-				obs.record(rawCerts)
-				return nil // recording only: this dial verifies nothing, by construction
-			},
 		}, nil
 	}
 	if s.pinned() {
 		pinnedDER := append([]byte(nil), s.PinnedCert...)
 		pinnedSPKI := append([]byte(nil), s.PinnedSPKISHA256...)
-		obs := s.observer
 		// Verification is replaced, not disabled: the presented chain must contain
 		// exactly the pinned certificate or exactly the pinned public key, so an
 		// equally self-signed impostor is refused where a bare InsecureSkipVerify
@@ -395,11 +382,6 @@ func (s Security) tlsConfig(host string) (*tls.Config, error) {
 			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: true, //nolint:gosec // replaced by the pin check below
 			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-				// ADR-016 W3 review fix: B48's capture is not scoped to the unverified
-				// pairing dial -- "Conn.PeerSPKI records the presented SPKI on every
-				// dial it owns, unchanged" -- so it is recorded here too, before the
-				// pin comparison below can refuse, so a mismatch is still observed.
-				obs.record(rawCerts)
 				for _, raw := range rawCerts {
 					if len(pinnedDER) > 0 && bytes.Equal(raw, pinnedDER) {
 						return nil
@@ -424,24 +406,13 @@ func (s Security) tlsConfig(host string) (*tls.Config, error) {
 			},
 		}, nil
 	}
-	obs := s.observer
 	switch s.trustRootSource() {
 	case TrustRootsEmbedded:
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(EmbeddedTrustRoots()) {
 			return nil, errors.New("relay: embedded trust roots are unusable")
 		}
-		return &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			RootCAs:    pool,
-			// ADR-016 W3 review fix: recording only -- Go's own chain verification
-			// against RootCAs already ran before this hook is called, so returning nil
-			// here changes nothing about the verdict.
-			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-				obs.record(rawCerts)
-				return nil
-			},
-		}, nil
+		return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}, nil
 	case TrustRootsPlatformDelegate:
 		// ABSENCE FAILS CLOSED (ADR-016 W2): no verifier installed is refused exactly like
 		// TrustRootsPinned with no pin, decided here rather than lazily inside the
@@ -456,26 +427,13 @@ func (s Security) tlsConfig(host string) (*tls.Config, error) {
 			//nolint:gosec // W2: chain trust is delegated below; Go still checks hostname+validity itself
 			InsecureSkipVerify: true,
 			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-				// ADR-016 W3 review fix: recorded before the delegate is even asked, so
-				// a rejection still leaves an observation behind (B48's capture, as the
-				// pinned branch above does).
-				obs.record(rawCerts)
 				return verifyPlatformDelegate(verifier, host, rawCerts)
 			},
 		}, nil
 	case TrustRootsPinned:
 		return nil, ErrPinRequired
 	default:
-		return &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			// ADR-016 W3 review fix: recording only, exactly as the embedded-roots
-			// branch above -- Go's own verification against the system pool already ran
-			// before this hook is called.
-			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-				obs.record(rawCerts)
-				return nil
-			},
-		}, nil
+		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
 	}
 }
 
@@ -514,68 +472,10 @@ func pemChain(rawCerts [][]byte) []byte {
 	return buf.Bytes()
 }
 
-// spkiObserver records the SHA-256 SubjectPublicKeyInfo digest of the leaf certificate a
-// peer presented on ONE dial, so an unverified pairing dial can be compared against the
-// pin msg2 delivers (ADR-007 B48). It records the first certificate in the presented
-// chain -- the leaf -- because that is the key the peer proved possession of, and it is
-// the same value relaycfg pins and MachinePayload.RelaySPKIPin carries.
-type spkiObserver struct {
-	mu   sync.Mutex
-	spki []byte
-}
-
-func (o *spkiObserver) record(rawCerts [][]byte) {
-	if o == nil || len(rawCerts) == 0 {
-		return
-	}
-	cert, err := x509.ParseCertificate(rawCerts[0])
-	if err != nil {
-		return // an undecodable certificate yields no observation, never a wrong one
-	}
-	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.spki = sum[:]
-}
-
-func (o *spkiObserver) get() []byte {
-	if o == nil {
-		return nil
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return append([]byte(nil), o.spki...)
-}
-
 // isLoopbackLiteral reports whether host is a loopback IP literal. A name is
 // never accepted: resolution is not part of the carve-out, so "localhost" cannot
 // be pointed somewhere else.
 func isLoopbackLiteral(host string) bool {
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-// httpClient returns the websocket dial client for a resolved TLS configuration.
-// A client is built even when cfg is nil (the loopback cleartext carve-out): the
-// default client would carry no redirect policy, and coder/websocket's own
-// CheckRedirect FOLLOWS every hop after rewriting ws->http and wss->https
-// (dial.go:90-101), which is how a wss:// dial ends up in cleartext.
-func (s Security) httpClient(cfg *tls.Config) *http.Client {
-	c := &http.Client{CheckRedirect: s.checkRedirect}
-	if cfg != nil {
-		c.Transport = &http.Transport{TLSClientConfig: cfg}
-	}
-	return c
-}
-
-// checkRedirect re-runs the policy on the hop a redirect points at, so a relay
-// cannot answer a wss:// upgrade with "302 -> ws://" and serve the rest of the
-// session in cleartext. The payloads stay sealed either way, but the routing
-// metadata a cleartext hop exposes is precisely what PB-NET-2 bans.
-//
-// The pin needs no equivalent hop check: VerifyPeerCertificate lives on the
-// Transport, so it is applied to every TLS hop this client makes.
-func (s Security) checkRedirect(req *http.Request, _ []*http.Request) error {
-	_, err := s.resolve(req.URL.String())
-	return err
 }

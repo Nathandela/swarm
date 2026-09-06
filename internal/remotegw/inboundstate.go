@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
-
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // InboundStream identifies one phone -> machine mailbox stream by exactly the coordinate
@@ -333,7 +331,7 @@ func validLowerHex(value string, size int) bool {
 
 func validCheckpointIncarnation(authority RelayAuthority, incarnation string) bool {
 	if authority == (RelayAuthority{}) {
-		return relay.ValidMailboxIncarnation(incarnation)
+		return validLowerHex(incarnation, 32)
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(incarnation)
 	return err == nil && len(raw) == 16 && base64.RawURLEncoding.EncodeToString(raw) == incarnation

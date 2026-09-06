@@ -44,7 +44,7 @@ start_worker() {
 
 # Only the protocol expiry control needs an accelerated authentication lifetime.
 start_worker state 60000 0 1000 1000 1
-RELAY_HTTP="http://127.0.0.1:$port" node test/protocol.mjs
+RELAY_HTTP="http://127.0.0.1:$port" RELAY_TEST_STATE="$scratch/state" node test/protocol.mjs
 grep -F 'RELAY_V2_COST' "$log"
 if RELAY_V2_HTTP="http://127.0.0.1:$port" \
   go test ../../internal/remote/relayv2 -run '^TestWorkerdNoiseMailboxReconnectReplayAndRevoke$' -count=1 -timeout=30s; then
@@ -86,8 +86,21 @@ else
   sed -n '1,200p' "$log"
   exit 1
 fi
+stop_worker
+start_worker operator-recovery-state 60000 0 30000 60000 0
 if output=$(OPERATOR_RELAY_V2_HTTP="http://127.0.0.1:$port" \
-  go test ../../cmd/swarm -run '^TestOperatorRelayV2RevokeAndDeferredRetry$' -count=1 -timeout=45s -v 2>&1); then
+	go test ../../cmd/swarm -run '^TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold$' -count=1 -timeout=90s -v 2>&1); then
+	printf '%s\n' "$output"
+	case "$output" in *"--- PASS: TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold"*) :;; *) exit 1;; esac
+else
+	printf '%s\n' "$output"
+	sed -n '1,200p' "$log"
+	exit 1
+fi
+stop_worker
+start_worker operator-state 60000 0 30000 60000 0
+if output=$(OPERATOR_RELAY_V2_HTTP="http://127.0.0.1:$port" \
+	go test ../../cmd/swarm -run '^TestOperatorRelayV2RevokeAndDeferredRetry$' -count=1 -timeout=45s -v 2>&1); then
 	printf '%s\n' "$output"
 	case "$output" in *"--- PASS: TestOperatorRelayV2RevokeAndDeferredRetry"*) :;; *) exit 1;; esac
 else

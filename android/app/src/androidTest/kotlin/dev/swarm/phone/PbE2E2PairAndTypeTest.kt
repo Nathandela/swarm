@@ -27,9 +27,10 @@ import org.junit.runner.RunWith
  * The sixth clause -- one real `adb shell am force-stop` mid-session -- is the runbook's, because
  * only adb can issue it; [PbE2E2ResumeTest] is what runs after it.
  *
- * IT IS DRIVEN BY scripts/pbe2e2-emulator-smoke.sh AND NOT BY `./gradlew test`. It needs a relay,
- * a daemon and a minted pairing QR, all of which the runbook stands up on the host; run on its
- * own it fails at the first missing instrumentation argument, which is the honest outcome.
+ * IT REQUIRES A PHYSICAL-DEVICE RUNNER, not `./gradlew test`. It needs a relay, a daemon and a
+ * minted pairing QR; run on its own it fails at the first missing instrumentation argument,
+ * which is the honest outcome. PB-KEY-8's hardware-backed Keystore requirement remains in
+ * force, so an emulator is not a substitute.
  *
  * WHAT IT DOES NOT CLAIM. PB-E2E-5 stays deferred: the QR arrives through PB-PAIR-2's
  * manual-entry path rather than through the camera, so nothing here is evidence that a physical
@@ -50,7 +51,7 @@ import org.junit.runner.RunWith
  * weakens the control PB-SEC-1's at-rest claim rests on so a demonstration can pass. This
  * whole tier -- this class, PbE2E2ResumeTest, and any future connectedAndroidTest that
  * constructs the runtime -- is coverage that can only execute on a physical handset, which is
- * PB-E2E-5's deferred gate. scripts/pbe2e2-emulator-smoke.sh carries the full measurement.
+ * PB-E2E-5's deferred gate.
  */
 @RunWith(AndroidJUnit4::class)
 class PbE2E2PairAndTypeTest {

@@ -33,7 +33,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // TestMachineIdentity_RelayAuthSignVerifiesUnderPublic pins the sign/verify
@@ -111,9 +111,9 @@ func TestMachineIdentity_RelayAuthSignBuildsClientAuth(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	auth := relay.ClientAuth{
-		RelayAuthPub: id.RelayAuthPublic(),
-		Sign:         func(ch []byte) ([]byte, error) { return id.RelayAuthSign(ch), nil },
+	auth := relayv2.Auth{
+		PublicKey: id.RelayAuthPublic(),
+		Sign:      func(ch []byte) ([]byte, error) { return id.RelayAuthSign(ch), nil },
 	}
 
 	challenge := []byte("client-auth-challenge")
@@ -121,7 +121,7 @@ func TestMachineIdentity_RelayAuthSignBuildsClientAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClientAuth.Sign: %v", err)
 	}
-	if !ed25519.Verify(auth.RelayAuthPub, challenge, sig) {
-		t.Error("signature from a relay.ClientAuth built with RelayAuthSign does not verify under RelayAuthPub")
+	if !ed25519.Verify(auth.PublicKey, challenge, sig) {
+		t.Error("signature from relayv2.Auth built with RelayAuthSign does not verify under PublicKey")
 	}
 }

@@ -122,7 +122,7 @@ func TestInvalidDeliveryFailsConnection(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		body, _ := json.Marshal(map[string]any{
 			"v": 2, "type": "DELIVER", "request_id": "delivery-1", "peer_rid": testPhoneRID,
 			"generation": "7", "incarnation": testIncarnation, "cursor": "1", "msg_id": "m1", "ciphertext": "not+cannonical",
@@ -166,7 +166,7 @@ func TestMailboxMessageIDIsExactCiphertextSHA256(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		_, body, err := ws.Read(r.Context())
 		if err != nil {
 			return

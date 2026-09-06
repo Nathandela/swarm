@@ -30,24 +30,17 @@ jobs:
     name: gates (ci.yml, reused)
     uses: ./.github/workflows/ci.yml
 
-  # The container lane is a publish gate too (committee round 4, codex blocker 2):
-  # relay-container.yml has no tag trigger and the branch ruleset covers only
-  # refs/heads/main, so without this reuse a release tag published unscanned.
-  container:
-    name: container (relay-container.yml, reused)
-    uses: ./.github/workflows/relay-container.yml
-
   container_pushgw:
     name: container (pushgw-container.yml, reused)
     uses: ./.github/workflows/pushgw-container.yml
 
   # This is the ONLY job in the repository allowed to write packages. The PR/branch
   # container workflows above build and scan with contents:read only. Publication is
-  # reachable solely from release.yml's tag trigger, after both exact Dockerfiles pass
+  # reachable solely from release.yml's tag trigger, after the exact Dockerfile passes
   # their vulnerability and hardening gates.
   publish_containers:
-    name: publish immutable relay + pushgw images
-    needs: [gates, container, container_pushgw]
+    name: publish immutable pushgw image
+    needs: [gates, container_pushgw]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -79,32 +72,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and publish swarm-relay
-        id: relay_image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deploy/relay/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          # One immutable alias only. Deliberately no latest, branch, or moving major tag.
-          tags: ghcr.io/nathandela/swarm-relay:${{ github.ref_name }}
-          build-args: |
-            VERSION=${{ github.ref_name }}
-            COMMIT=${{ github.sha }}
-            DATE=${{ steps.release_metadata.outputs.date }}
-          provenance: false
-          sbom: true
-          cache-from: type=gha,scope=release-relay
-          cache-to: type=gha,mode=max,scope=release-relay
-
-      - name: Attest swarm-relay digest
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ghcr.io/nathandela/swarm-relay
-          subject-digest: ${{ steps.relay_image.outputs.digest }}
-          push-to-registry: true
 
       - name: Build and publish swarm-pushgw
         id: pushgw_image
@@ -141,7 +108,6 @@ jobs:
             '  "release": "${{ github.ref_name }}",' \
             '  "commit": "${{ github.sha }}",' \
             '  "images": {' \
-            '    "relay": "ghcr.io/nathandela/swarm-relay@${{ steps.relay_image.outputs.digest }}",' \
             '    "pushgw": "ghcr.io/nathandela/swarm-pushgw@${{ steps.pushgw_image.outputs.digest }}"' \
             '  }' \
             '}' > release-metadata/container-images.json
@@ -156,7 +122,7 @@ jobs:
 
   publish:
     name: publish (goreleaser release)
-    needs: [gates, container, container_pushgw, publish_containers]
+    needs: [gates, container_pushgw, publish_containers]
     runs-on: ubuntu-latest
     permissions:
       contents: write

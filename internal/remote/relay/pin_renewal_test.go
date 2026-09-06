@@ -24,11 +24,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -91,21 +91,30 @@ func spkiPin(t *testing.T, cert tls.Certificate) []byte {
 	return sum[:]
 }
 
-// startTLSRelayWithCert fronts the REAL relay with a TLS terminator serving cert, and
-// returns the wss:// URL. It is startTLSRelay with the certificate under the test's control,
-// which is the only way a renewal (two certificates, one key) can be expressed at all.
+// startTLSRelayWithCert serves one TLS endpoint with the certificate under test.
 func startTLSRelayWithCert(t *testing.T, cert tls.Certificate) string {
 	t.Helper()
-	_, plain := startRelay(t, nil)
-	target, err := url.Parse(strings.Replace(plain, "ws://", "http://", 1))
-	if err != nil {
-		t.Fatalf("parse relay url: %v", err)
-	}
-	front := httptest.NewUnstartedServer(httputil.NewSingleHostReverseProxy(target))
+	front := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	front.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	front.StartTLS()
 	t.Cleanup(front.Close)
 	return strings.Replace(front.URL, "https://", "wss://", 1)
+}
+
+func probeTLS(rawURL string, sec relay.Security) (io.Closer, error) {
+	cfg, err := sec.Resolve(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	transport := &http.Transport{TLSClientConfig: cfg, DisableKeepAlives: true}
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	response, err := client.Get(strings.Replace(rawURL, "wss://", "https://", 1))
+	if err != nil {
+		return nil, err
+	}
+	return response.Body, nil
 }
 
 // TestPBOPS5_DERPinIsBrokenByRenewal is the hazard itself, as a passing assertion rather
@@ -121,10 +130,7 @@ func TestPBOPS5_DERPinIsBrokenByRenewal(t *testing.T) {
 	renewed := issueRelayCert(t, key, time.Now().Add(180*24*time.Hour))
 
 	wss := startTLSRelayWithCert(t, renewed)
-	pub, priv := newRelayAuthKey(t)
-
-	c, err := relay.DialSecure(testCtx(t), wss, authFor(pub, priv),
-		relay.Security{PinnedCert: today.Certificate[0]})
+	c, err := probeTLS(wss, relay.Security{PinnedCert: today.Certificate[0]})
 	if c != nil {
 		_ = c.Close()
 	}
@@ -144,10 +150,7 @@ func TestPBOPS5_SPKIPinSurvivesRenewalWithTheSameKey(t *testing.T) {
 	renewed := issueRelayCert(t, key, time.Now().Add(180*24*time.Hour))
 
 	wss := startTLSRelayWithCert(t, renewed)
-	pub, priv := newRelayAuthKey(t)
-
-	c, err := relay.DialSecure(testCtx(t), wss, authFor(pub, priv),
-		relay.Security{PinnedSPKISHA256: spkiPin(t, today)})
+	c, err := probeTLS(wss, relay.Security{PinnedSPKISHA256: spkiPin(t, today)})
 	if err != nil {
 		t.Fatalf("SPKI pin taken before the renewal refused the reissued certificate: %v", err)
 	}
@@ -163,10 +166,7 @@ func TestPBOPS5_SPKIPinRefusesAnUnrelatedCertificate(t *testing.T) {
 	impostor := issueRelayCert(t, renewalKey(t), time.Now().Add(90*24*time.Hour))
 
 	wss := startTLSRelayWithCert(t, impostor)
-	pub, priv := newRelayAuthKey(t)
-
-	c, err := relay.DialSecure(testCtx(t), wss, authFor(pub, priv),
-		relay.Security{PinnedSPKISHA256: spkiPin(t, ours)})
+	c, err := probeTLS(wss, relay.Security{PinnedSPKISHA256: spkiPin(t, ours)})
 	if c != nil {
 		_ = c.Close()
 	}
@@ -187,10 +187,7 @@ func TestPBOPS5_SPKIPinIsBrokenByARenewalThatROTATESTheKey(t *testing.T) {
 	rekeyed := issueRelayCert(t, renewalKey(t), time.Now().Add(180*24*time.Hour))
 
 	wss := startTLSRelayWithCert(t, rekeyed)
-	pub, priv := newRelayAuthKey(t)
-
-	c, err := relay.DialSecure(testCtx(t), wss, authFor(pub, priv),
-		relay.Security{PinnedSPKISHA256: spkiPin(t, today)})
+	c, err := probeTLS(wss, relay.Security{PinnedSPKISHA256: spkiPin(t, today)})
 	if c != nil {
 		_ = c.Close()
 	}
@@ -221,15 +218,13 @@ func TestPBOPS5_ErrPinRequiredNamesTheRenewalSafeForm(t *testing.T) {
 func TestPBOPS5_AnSPKIPinAloneSatisfiesTheAndroidPinRequirement(t *testing.T) {
 	cert := issueRelayCert(t, renewalKey(t), time.Now().Add(90*24*time.Hour))
 	wss := startTLSRelayWithCert(t, cert)
-	pub, priv := newRelayAuthKey(t)
-
 	for name, sec := range map[string]relay.Security{
 		"SPKI pin only": {PinnedSPKISHA256: spkiPin(t, cert)},
 		"DER pin only":  {PinnedCert: cert.Certificate[0]},
 		"both pins":     {PinnedCert: cert.Certificate[0], PinnedSPKISHA256: spkiPin(t, cert)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			c, err := relay.DialSecure(testCtx(t), wss, authFor(pub, priv), sec)
+			c, err := probeTLS(wss, sec)
 			if err != nil {
 				t.Fatalf("%s was refused: %v", name, err)
 			}

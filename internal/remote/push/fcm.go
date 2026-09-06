@@ -5,18 +5,17 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
-// FCM is the shipped relay.PushSink.
-var _ relay.PushSink = (*FCM)(nil)
+// ErrUnregistered reports that a token no longer belongs to a live installation.
+var ErrUnregistered = errors.New("push: token is no longer registered with the provider")
 
 // DefaultFCMBaseURL is Google's messaging endpoint. Tests point BaseURL at a loopback
 // httptest.Server instead; nothing in this package ever reaches Google.
@@ -33,7 +32,7 @@ const DefaultMaxAttempts = 3
 // the retry path without putting a real sleep in the suite. What bounds a retry storm is
 // DefaultMaxAttempts (and, above it, the relay's own per-target push quota), never the
 // delay — so a caller that forgets this gets three back-to-back HTTP round trips, not a
-// spin. cmd/swarm-relay passes it.
+// spin. cmd/swarm-pushgw passes it.
 const DefaultRetryDelay = 500 * time.Millisecond
 
 // defaultRequestTimeout bounds one HTTP round trip.
@@ -126,9 +125,9 @@ func NewFCM(cfg FCMConfig) (*FCM, error) {
 // It retries only what is worth retrying: a 5xx or a transport failure is the provider
 // having a bad moment, while a 4xx is a request Google will refuse identically forever and
 // retrying it is quota spent to reproduce a refusal. The one 4xx with a consequence is
-// UNREGISTERED, which is reported as relay.ErrPushUnregistered so the relay can prune.
-func (f *FCM) Push(ctx context.Context, token string, p relay.PushPayload) error {
-	body, err := f.marshalMessage(token, p)
+// UNREGISTERED, which is reported as ErrUnregistered so the gateway can prune.
+func (f *FCM) Push(ctx context.Context, token string, ciphertext []byte) error {
+	body, err := f.marshalMessage(token, ciphertext)
 	if err != nil {
 		return err
 	}
@@ -172,15 +171,13 @@ func (f *FCM) Push(ctx context.Context, token string, p relay.PushPayload) error
 //     name can subscribe to.
 //
 // The data block carries ONE key. Every additional key is metadata handed to the provider,
-// and PB-PUSH-3 concedes only token, timing and size. p.Alert in particular is NEVER sent:
-// it is a constant the app renders locally, and shipping it would be provider-visible text
-// describing why the phone is being woken.
-func (f *FCM) marshalMessage(token string, p relay.PushPayload) ([]byte, error) {
+// and PB-PUSH-3 concedes only token, timing and size.
+func (f *FCM) marshalMessage(token string, ciphertext []byte) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"message": map[string]any{
 			"token":   token,
 			"android": map[string]any{"priority": "high"},
-			"data":    map[string]any{"e": base64.StdEncoding.EncodeToString(p.Ciphertext)},
+			"data":    map[string]any{"e": base64.StdEncoding.EncodeToString(ciphertext)},
 		},
 	})
 }
@@ -239,7 +236,7 @@ func classify(status int, body []byte) (retryable bool, err error) {
 	_ = json.Unmarshal(body, &envelope) // a body we cannot parse simply yields no errorCode
 	for _, d := range envelope.Error.Details {
 		if d.ErrorCode == "UNREGISTERED" {
-			return false, fmt.Errorf("push: send returned %d: %w", status, relay.ErrPushUnregistered)
+			return false, fmt.Errorf("push: send returned %d: %w", status, ErrUnregistered)
 		}
 	}
 	if status >= 500 {

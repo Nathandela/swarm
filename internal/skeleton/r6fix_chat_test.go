@@ -32,6 +32,7 @@ package skeleton
 // an owner-typed "yes" was stamped source=phone with the phone's operation_id.
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -43,7 +44,6 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -495,8 +495,9 @@ func TestR6Fix_AnchorlessHistoryReturnsTheNewestRetainedPage(t *testing.T) {
 
 // TestR6Fix_AnchorlessMaximalRecordsFitASealedRelayAppend is the byte-bound half of the
 // newest-page protocol. Fifty records can each be near daemon.MaxItemBytes; count-bounded
-// alone that is roughly 800 KiB of plaintext, and the relay append base64s the encrypted
-// envelope into a 1 MiB frame. The page must shrink at an item boundary before sealing.
+// alone that is roughly 800 KiB of plaintext, and relay-v2 APPEND base64url-encodes the
+// encrypted envelope into one 1 MiB WebSocket message. The page must shrink at an item
+// boundary before sealing.
 func TestR6Fix_AnchorlessMaximalRecordsFitASealedRelayAppend(t *testing.T) {
 	const records = 50
 	all := make([]protocol.JournalRecord, 0, records)
@@ -540,14 +541,24 @@ func TestR6Fix_AnchorlessMaximalRecordsFitASealedRelayAppend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal bounded page: %v", err)
 	}
+	digest := sha256.Sum256(env)
 	appendFrame, err := json.Marshal(map[string]any{
-		"target": strings.Repeat("f", 64), "envelope": env,
+		"v": 2, "type": "APPEND", "request_id": "c4",
+		"peer_rid": strings.Repeat("f", 32), "generation": "1",
+		"msg_id":     base64.RawURLEncoding.EncodeToString(digest[:]),
+		"ciphertext": base64.RawURLEncoding.EncodeToString(env),
 	})
 	if err != nil {
-		t.Fatalf("marshal relay append: %v", err)
+		t.Fatalf("marshal relay-v2 APPEND: %v", err)
 	}
-	if len(appendFrame) > relay.MaxFrame-1 {
-		t.Fatalf("bounded history becomes a %d-byte relay append, over MaxFrame payload %d (envelope base64=%d)",
-			len(appendFrame), relay.MaxFrame-1, base64.StdEncoding.EncodedLen(len(env)))
+	const relayV2MaxMessage = 1 << 20
+	const relayV2MaxCiphertext = (relayV2MaxMessage - 1024) * 3 / 4
+	if len(env) > relayV2MaxCiphertext {
+		t.Fatalf("bounded history seals to %d bytes, over relay-v2 APPEND ciphertext limit %d",
+			len(env), relayV2MaxCiphertext)
+	}
+	if len(appendFrame) > relayV2MaxMessage {
+		t.Fatalf("bounded history becomes a %d-byte relay-v2 APPEND message, over limit %d (ciphertext base64url=%d)",
+			len(appendFrame), relayV2MaxMessage, base64.RawURLEncoding.EncodedLen(len(env)))
 	}
 }
