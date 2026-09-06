@@ -9,6 +9,7 @@ package relaypurge
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
@@ -17,8 +18,8 @@ import (
 
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // StorePath is the one obligation file both binaries share, beside u37c's
@@ -35,6 +36,7 @@ const driveOpTimeout = 10 * time.Second
 // substantive-refusal resolution below can never fire on it: only an ANSWER can be
 // substantive.
 var errDriveTransient = errors.New("relaypurge: transient drive failure")
+var errAttemptSuperseded = errors.New("relaypurge: attempt superseded")
 
 // DriveMachineObligations drives every deferred relay purge this machine owes
 // (ADR-007 D9, SH5) and returns how many are STILL owed afterwards -- `swarm remote
@@ -45,9 +47,9 @@ var errDriveTransient = errors.New("relaypurge: transient drive failure")
 //
 //   - LIVE PAIRING: the registry is re-read FRESH for each obligation immediately
 //     before it is acted on; an obligation whose routing id belongs to a registered
-//     device is retired WITHOUT purging (u37c round 3: the routing id is per-install,
-//     so a re-paired handset returns on the id a stale obligation names). Routing ids
-//     compare by the canonical derivation relay.RoutingID(RelayAuthPub), never the
+//     device is kept UNDIALED (u37c round 3: the routing id is per-install, so a
+//     re-paired handset returns on the id a stale obligation names). Routing ids
+//     compare by the canonical derivation relayv2.RoutingID(RelayAuthPub), never the
 //     self-reported record field.
 //   - PAIRED MACHINE NEVER DIALS (checked AFTER the dial-free rulings: mismatch and
 //     deprovisioning retire loudly regardless of pairing state, since they present
@@ -111,7 +113,7 @@ func DriveMachineObligations(stateDir string, logf func(format string, args ...a
 			if id, err := machineid.Load(filepath.Join(stateDir, "remote", "machine.key")); err != nil {
 				provisionErr = err
 			} else {
-				currentMachineRID = string(relay.RoutingID(id.RelayAuthPublic()))
+				currentMachineRID = relayv2.RoutingID(id.RelayAuthPublic())
 			}
 		case !errors.Is(err, os.ErrNotExist):
 			provisionErr = err
@@ -127,11 +129,25 @@ func DriveMachineObligations(stateDir string, logf func(format string, args ...a
 					"re-paired handset", ob.RoutingID, err)
 				return err
 			}
-			if live {
-				logf("deferred relay purge for routing id %s retired without running: a device on "+
-					"that routing id is paired again, and the purge would sever the live pairing",
-					ob.RoutingID)
+			if len(ob.PhonePub) != ed25519.PublicKeySize || len(ob.Consent) == 0 {
+				reason := "legacy relay-v1 cleanup evidence is incomplete; manual cleanup required"
+				matched, err := store.Resolve(ob.RoutingID, ob.AttemptID, reason)
+				if err != nil {
+					pendingLeft++
+					logf("deferred relay purge for routing id %s: legacy cleanup could not be recorded (%v); kept", ob.RoutingID, err)
+					return err
+				}
+				if !matched {
+					pendingLeft++
+					return errAttemptSuperseded
+				}
+				logf("deferred relay purge for routing id %s RESOLVED WITHOUT landing: %s at %s", ob.RoutingID, reason, ob.RelayURL)
 				return nil
+			}
+			if live {
+				pendingLeft++
+				logf("deferred relay purge for routing id %s NOT driven: a device on that routing id is paired; kept to avoid severing the live pairing", ob.RoutingID)
+				return errors.New("a device is paired; dial deferred")
 			}
 			if provisionErr != nil {
 				pendingLeft++
@@ -169,46 +185,34 @@ func DriveMachineObligations(stateDir string, logf func(format string, args ...a
 					"supersede it; it is driven at the next zero-device relay moment", ob.RoutingID)
 				return errors.New("a device is paired; dial deferred")
 			}
-			switch err := purgeAtRelay(stateDir, currentURL, ob.RoutingID); {
+			switch err := purgeAtRelay(stateDir, currentURL, ob); {
 			case err == nil:
 				logf("deferred relay purge landed for routing id %s", ob.RoutingID)
 				return nil
-			case errors.Is(err, relay.ErrQuotaExceeded), errors.Is(err, relay.ErrDuplicateConnection):
+			case errors.Is(err, errDriveTransient), relayV2Code(err, "rate_limited"),
+				relayV2Code(err, "cleanup_pending"), relayV2Code(err, "mailbox_full"):
 				// Answers that clear by themselves: kept for the next drive.
 				pendingLeft++
 				return err
-			case errors.Is(err, relay.ErrNotAuthorized):
-				// The relay holds no pairing with that routing id UNDER THE DIALING
-				// IDENTITY. That settles the obligation only when the dialing identity
-				// is provably the one that owed it (post-commit codex #1): an
-				// obligation recorded without an identity binding (an unreadable
-				// machine.key at record time) could belong to a previous identity
-				// whose pairing survives, so it retires LOUDLY as unverifiable
-				// instead of silently as settled.
-				if ob.MachineRID != "" && ob.MachineRID == currentMachineRID {
-					logf("deferred relay purge for routing id %s settled: the relay holds no pairing "+
-						"for it", ob.RoutingID)
-					return nil
-				}
-				logf("deferred relay purge for routing id %s retired UNVERIFIED: the relay holds no "+
-					"pairing for it under this machine's current identity, but the obligation carries "+
-					"no identity binding -- if the machine identity changed since the revoke, the old "+
-					"pairing may survive at %s; verify there by hand", ob.RoutingID, ob.RelayURL)
+			case relayV2Code(err, "consent_retired"), relayV2Code(err, "stale_generation"):
+				// The exact old ceremony is retired after a successful revoke and when a
+				// newer pairing supersedes it. Either outcome proves this obligation must
+				// not touch a current generation.
+				logf("deferred relay purge for routing id %s settled: its relay-v2 ceremony is retired", ob.RoutingID)
 				return nil
-			case errors.Is(err, relay.ErrRelayAnswered):
-				// A SUBSTANTIVE refusal: the relay is reachable and answering no, and
-				// nothing this machine re-presents changes that answer -- re-presenting
-				// a dead request on every drive forever is a wedge, not durability
-				// (u37c's own Refusal resolution; round-2 Opus R2-1 reproduced the
-				// pair lockout the wedge causes, and round-2 codex #3 demanded the
-				// unlanded purge stay on the record -- the RESOLVED TOMBSTONE serves
-				// both: excluded from Pending, reason preserved in the store). The
-				// relay-side state survives and is named.
-				if rerr := store.Resolve(ob.RoutingID, err.Error()); rerr != nil {
+			case relayv2.IsPermanentAuthorizeRefusal(err):
+				// Permanent AUTHORIZE refusals cannot succeed on retry. Preserve the
+				// refusal as a tombstone without keeping the pair gate wedged forever.
+				matched, rerr := store.Resolve(ob.RoutingID, ob.AttemptID, err.Error())
+				if rerr != nil {
 					pendingLeft++
 					logf("deferred relay purge for routing id %s: refusal could not be recorded "+
 						"(%v); kept", ob.RoutingID, rerr)
 					return rerr
+				}
+				if !matched {
+					pendingLeft++
+					return errAttemptSuperseded
 				}
 				logf("deferred relay purge for routing id %s RESOLVED WITHOUT landing -- the relay "+
 					"refused it (%v). Nothing will re-present it; the relay still holds that "+
@@ -216,24 +220,27 @@ func DriveMachineObligations(stateDir string, logf func(format string, args ...a
 					"manual task", ob.RoutingID, err)
 				return nil
 			default:
-				// Everything else -- errDriveTransient's pre-answer failures, a
-				// timeout, a dead connection, a reply that would not DECODE (a
-				// truncated or oversized frame, a version-skewed relay) -- is NOT an
-				// answer, and only an answer may tombstone (round-3 review F1:
-				// substantive is an ALLOWLIST anchored on relay.ErrRelayAnswered,
-				// never a fallthrough).
+				// Unknown, runtime, transport, and decoding errors may clear later.
+				// Default to pending; permanent refusals are an explicit allowlist.
 				pendingLeft++
 				return err
 			}
 		})
-	if err != nil {
-		logf("deferred relay purge still pending: %v", err)
-	}
+	return finishMachineDrive(store, pendingLeft, err, logf)
+}
+
+func finishMachineDrive(store *Store, pendingLeft int, driveErr error, logf func(format string, args ...any)) int {
 	// The returned count is a FRESH read, not the loop's counter: an obligation a
 	// concurrent revoke recorded mid-drive must gate `swarm remote pair` too (round-2
 	// codex #4). The loop counter stands in only if the re-read itself fails.
 	if fresh, ferr := store.Pending(); ferr == nil {
+		if driveErr != nil && len(fresh) > 0 {
+			logf("deferred relay purge still pending: %v", driveErr)
+		}
 		return len(fresh)
+	}
+	if driveErr != nil {
+		logf("deferred relay purge still pending: %v", driveErr)
 	}
 	if pendingLeft == 0 {
 		pendingLeft = 1
@@ -249,7 +256,7 @@ func registryHolds(stateDir, routingID string) (live, others bool, err error) {
 		return false, false, err
 	}
 	for _, rec := range reg.List() {
-		if len(rec.RelayAuthPub) != 0 && string(relay.RoutingID(rec.RelayAuthPub)) == routingID {
+		if len(rec.RelayAuthPub) != 0 && relayv2.RoutingID(rec.RelayAuthPub) == routingID {
 			live = true
 		} else {
 			others = true
@@ -262,7 +269,11 @@ func registryHolds(stateDir, routingID string) (live, others bool, err error) {
 // device_revoke -- the same identity, transport policy and no-Peer decision as
 // cmd/swarm's withMachineRelay (ADR-007 B34/B49), rebuilt here so the gateway can
 // drive without importing the CLI.
-func purgeAtRelay(stateDir, relayURL, routingID string) error {
+func purgeAtRelay(stateDir, relayURL string, ob Obligation) error {
+	if len(ob.PhonePub) != ed25519.PublicKeySize || len(ob.Consent) == 0 ||
+		relayv2.RoutingID(ed25519.PublicKey(ob.PhonePub)) != ob.RoutingID {
+		return errors.New("relaypurge: stored relay-v2 evidence does not match routing id")
+	}
 	cfg, found, err := relaycfg.Load(stateDir)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errDriveTransient, err)
@@ -280,17 +291,31 @@ func purgeAtRelay(stateDir, relayURL, routingID string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), driveOpTimeout)
 	defer cancel()
-	cl, err := relay.DialSecure(ctx, relayURL, relay.ClientAuth{
-		RelayAuthPub: id.RelayAuthPublic(),
-		Sign:         func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
-	}, sec)
+	cl, err := relayv2.Dial(ctx, relayv2.Profile{
+		RelayURL: relayURL, MachineRID: relayv2.RoutingID(id.RelayAuthPublic()),
+		OperatorNamespace: cfg.OperatorNamespace, Security: sec,
+	}, relayv2.Auth{PublicKey: id.RelayAuthPublic(),
+		Sign: func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
+		Role: relayv2.RoleMachine, Purpose: relayv2.PurposeControl})
 	if err != nil {
 		// The relay never answered: unreachable is the CANONICAL transient.
 		return fmt.Errorf("%w: %v", errDriveTransient, err)
 	}
-	defer func() { _ = cl.Close() }()
-	if err := cl.DeviceRevoke(ctx, routingID); err != nil {
-		return fmt.Errorf("device_revoke %s: %w", routingID, err)
+	defer cl.Close()
+	binding, err := cl.Authorize(ctx, ed25519.PublicKey(ob.PhonePub), ob.Consent)
+	if err != nil {
+		return fmt.Errorf("authorize prior ceremony %s: %w", ob.RoutingID, err)
+	}
+	if binding.PeerRID != ob.RoutingID {
+		return errors.New("relaypurge: stored phone key does not match routing id")
+	}
+	if err := cl.Revoke(ctx, binding); err != nil {
+		return fmt.Errorf("revoke %s generation %d: %w", ob.RoutingID, binding.Generation, err)
 	}
 	return nil
+}
+
+func relayV2Code(err error, code string) bool {
+	var protocolErr *relayv2.ProtocolError
+	return errors.As(err, &protocolErr) && protocolErr.Code == code
 }

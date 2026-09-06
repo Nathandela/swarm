@@ -7,6 +7,7 @@ package skeleton
 // cannot slip past.
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -23,7 +24,8 @@ func TestSH5_BeginPairingRefusesWhileARelayPurgeIsOwed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("relaypurge.Open: %v", err)
 	}
-	if err := store.Record("ab12cd34ab12cd34ab12cd34ab12cd34", "wss://relay.example", ""); err != nil {
+	attempt, err := store.Record("ab12cd34ab12cd34ab12cd34ab12cd34", "wss://relay.example", "", bytes.Repeat([]byte{1}, 32), []byte("consent"))
+	if err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
@@ -40,7 +42,7 @@ func TestSH5_BeginPairingRefusesWhileARelayPurgeIsOwed(t *testing.T) {
 	}
 
 	// And once the obligation is gone, the same daemon pairs normally.
-	if err := store.Retire("ab12cd34ab12cd34ab12cd34ab12cd34"); err != nil {
+	if _, err := store.Retire("ab12cd34ab12cd34ab12cd34ab12cd34", attempt.AttemptID); err != nil {
 		t.Fatalf("Retire: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -917,3 +917,31 @@ inspection failures came from inherited whole-suite environment or sandbox-denie
 hook packages pass in isolation with the leaked socket variable absent. Several PB-STATE-10 command
 tests still construct the removed relay-v1 pairing fixture and are therefore cleanup work, not green
 v2 evidence. The same broad run did pass the full skeleton package in 468.232 s.
+
+## Native operator pairing and revoke control
+
+Operator pairing, immediate revoke and deferred purge now use relay v2 machine-control
+connections exclusively. Pairing authorizes the phone generation on the same authenticated
+control connection before reporting success. Revoke preserves the phone public key and exact
+consent ceremony as public cleanup evidence, re-authorizes that retired ceremony to recover its
+binding, then revokes only the returned generation. A later re-pair therefore cannot be touched by
+an old cleanup attempt.
+
+The cleanup ledger is write-ahead and every write has a fresh random attempt ID. Retire and resolve
+operations match both routing ID and attempt ID, so a stale pairing response, immediate command or
+driver snapshot cannot settle a newer same-phone obligation. Live-device obligations remain
+pending and undialed. An ambiguous AUTHORIZE response leaves cleanup evidence; a positively
+acknowledged AUTHORIZE is not rolled back for a later ledger I/O error; a clean token supersession
+aborts pairing. Legacy relay-v1 rows without v2 evidence are resolved loudly to a retained
+manual-cleanup tombstone instead of wedging the pair gate. Only `invalid_consent`, `member_limit`,
+`retirement_limit` and `generation_exhausted` are permanent AUTHORIZE refusals; runtime, session,
+transport, decoding and unknown errors remain retryable.
+
+Focused race tests passed for skeleton pairing, relay-purge storage/driver, relay-v2 and the command
+operator paths; relevant vet and whitespace checks passed. A fresh complete local-workerd suite on
+port 19059 passed native pairing authorization, immediate revoke, response-loss retry, deferred
+purge, old-consent isolation after re-pair, mobile pairing, discard recovery, expiry, alarms and
+rate limiting. An earlier full-suite attempt stopped on the already isolated load-sensitive
+expired-cutoff timing test; the fresh rerun passed it and the remaining suite. Independent Sol
+security/crash/concurrency review returned GO with no blocking finding. These are local checks;
+hosted admission remains closed and no physical-phone result is claimed.

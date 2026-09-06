@@ -21,6 +21,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaypurge"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -115,6 +116,48 @@ type pairingConfig struct {
 	// for the transport it drives the machine leg on (a relay adapter in prod; an
 	// in-memory transport in tests).
 	NewRendezvous func(ctx context.Context, id [16]byte) (pairing.RendezvousTransport, error)
+}
+
+type relayPairAuthorizer interface {
+	Authorize(context.Context, ed25519.PublicKey, []byte) (relayv2.Binding, error)
+}
+
+// relayPairCleanupOutcome separates the ACK outcome from a local WAL cleanup. Once
+// AUTHORIZE has acknowledged, an I/O error may mean the rename committed but its
+// directory sync did not; either way pairing must stay up and a surviving WAL is
+// safe behind the live-registry guard. A clean false result is different: a newer
+// revoke replaced this exact attempt, so this pairing must not claim it settled.
+func relayPairCleanupOutcome(matched bool, err error) error {
+	if err != nil {
+		return nil
+	}
+	if !matched {
+		return errors.New("authorization cleanup was superseded by a newer revoke")
+	}
+	return nil
+}
+
+func authorizeRelayPair(ctx context.Context, stateDir string, cfg *pairingConfig, authorizer relayPairAuthorizer, phonePub ed25519.PublicKey, consent []byte) error {
+	phoneRID := relayv2.RoutingID(phonePub)
+	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
+	if err != nil {
+		return fmt.Errorf("record authorization cleanup: %w", err)
+	}
+	attempt, err := store.Record(phoneRID, cfg.RelayURL, relayv2.RoutingID(cfg.RelayAuthPub), phonePub, consent)
+	if err != nil {
+		return fmt.Errorf("record authorization cleanup: %w", err)
+	}
+	if _, err := authorizer.Authorize(ctx, phonePub, consent); err != nil {
+		return err // ambiguous commit: the write-ahead obligation remains
+	}
+	matched, err := store.Retire(phoneRID, attempt.AttemptID)
+	if err := relayPairCleanupOutcome(matched, err); err != nil {
+		return err
+	}
+	// A failed cleanup can follow a successful on-disk retire (for example, a
+	// post-rename directory-sync error). Pairing already has the relay ACK, and
+	// any surviving WAL is safe: the live-registry guard keeps it undialed.
+	return nil
 }
 
 // BeginPairing makes coreAPI a protocol.PairingHost (slice A3.3-d): it hosts a REAL
@@ -425,6 +468,17 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			if err := grant.Save(a.registryDir(), res.Record.DeviceID, res.Grant); err != nil {
 				_, _ = a.devices.Remove(res.Record.DeviceID)
 				return protocol.PairResult{Err: fmt.Errorf("persist epoch grant: %w", err)}
+			}
+			// Production relay-v2 pairing keeps the authenticated machine-control socket
+			// through this commit. Open the route before reporting success, so the phone
+			// never depends on a later gateway process to create its first generation.
+			if authorizer, ok := transport.(relayPairAuthorizer); ok {
+				if err := authorizeRelayPair(pairCtx, a.stateDir, cfg, authorizer,
+					ed25519.PublicKey(outcome.Device.DeviceRelayAuthPub), outcome.Device.ConsentSig); err != nil {
+					_ = grant.Delete(a.registryDir(), res.Record.DeviceID)
+					_, _ = a.devices.Remove(res.Record.DeviceID)
+					return protocol.PairResult{Err: fmt.Errorf("authorize relay generation: %w", err)}
+				}
 			}
 			return protocol.PairResult{
 				DeviceID:   res.Record.DeviceID,

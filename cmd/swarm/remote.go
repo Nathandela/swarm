@@ -29,10 +29,10 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/qrterm"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 	"github.com/Nathandela/swarm/internal/remote/relayhome"
 	"github.com/Nathandela/swarm/internal/remote/relaypurge"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/remote/supervise"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
@@ -881,7 +881,8 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 	// FAIL CLOSED on a registry READ ERROR, before anything destructive (round-3
 	// codex #1): with the routing id unreadable, the relay half could neither run nor
 	// be deferred, and the old behavior reported exit-0 success over exactly that.
-	if _, _, err := deviceRecordErr(stateDir, deviceID); err != nil {
+	rec, _, err := deviceRecordErr(stateDir, deviceID)
+	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "remote revoke: the device registry could not be read (%v); "+
 			"revoking now would lose the relay half unrecoverably -- fix the registry and re-run.\n", err)
 		return 1
@@ -894,17 +895,17 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 	// delete and a later record loses the purge forever, the 2026-08-21 incident's
 	// shape). If the relay half then LANDS, the obligation is retired in the same
 	// run; if RevokeDevice itself fails, the stale obligation names a routing id the
-	// registry still holds, and the next drive's live-pairing guard retires it. Only
+	// registry still holds, and the next drive's live-pairing guard keeps it undialed. Only
 	// a failed record is disclosed and tolerated: refusing to revoke a lost handset
 	// because a bookkeeping write failed would invert the priorities.
-	obligation := recordPurgeObligation(stateDir, routingID, stderr)
+	obligation, attemptID := recordPurgeObligation(stateDir, routingID, rec.RelayAuthPub, rec.ConsentSig, stderr)
 
 	if err := client.RevokeDevice(deviceID); err != nil {
 		_, _ = fmt.Fprintf(stderr, "remote revoke: %v\n", err)
 		return 1
 	}
 	stopGatewayIfQuiescent(stderr)
-	purge, purgeErr := purgeRelayState(stateDir, routingID)
+	purge, purgeErr := purgeRelayState(stateDir, routingID, rec.RelayAuthPub, rec.ConsentSig)
 	purgeOutboundCustody(stateDir, stderr)
 
 	_, _ = fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
@@ -919,24 +920,25 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 	switch purge {
 	case relayPurgeRefused:
 		_, _ = fmt.Fprintf(stderr, "remote revoke: the relay REFUSED to purge this device's relay-side state: %v\n", purgeErr)
+		if obligation != purgeObligationRecorded {
+			_, _ = fmt.Fprintf(stderr, "remote revoke: this refusal could not be recorded for retry; the handset's relay-side state requires manual cleanup.\n")
+			return 1
+		}
 		// A SUBSTANTIVE refusal from a reachable relay: nothing this machine
 		// re-presents changes the answer, so the obligation is resolved NOW as a
 		// tombstone -- excluded from the pair gate (round-2 Opus R2-1: the wedge
 		// bricked pairing), reason preserved on file (round-2 codex #3: the unlanded
 		// purge stays on the record; u37c's Done+Refusal shape). The relay-side state
 		// survives, and the operator line says exactly that.
-		if resolvePurgeObligation(stateDir, routingID, purgeErr, stderr) {
+		matched, resolveErr := resolvePurgeObligation(stateDir, routingID, attemptID, purgeErr, stderr)
+		if resolveErr != nil {
+			_, _ = fmt.Fprintf(stderr, "remote revoke: recording the refusal failed: %v\n", resolveErr)
+		} else if matched {
 			_, _ = fmt.Fprintf(stderr, "remote revoke: the handset keeps its relay mailbox, its push wake and "+
 				"its route (routing id %s). Nothing will re-present a refused purge; cleaning that state up "+
 				"at the relay is now a manual task.\n", routingID)
 		} else {
-			// The tombstone write failed, so the obligation is STILL PENDING and the
-			// next drive will re-present it (and gate pairing). Say that, not the
-			// resolved-world sentence (post-commit codex #4).
-			_, _ = fmt.Fprintf(stderr, "remote revoke: the handset keeps its relay mailbox, its push wake and "+
-				"its route (routing id %s). Recording the refusal failed, so the purge stays PENDING and is "+
-				"re-presented on this machine's next relay dial (`swarm remote pair` refuses until it "+
-				"settles).\n", routingID)
+			_, _ = fmt.Fprintf(stderr, "remote revoke: a newer relay cleanup attempt is pending for routing id %s; its outcome is not claimed here.\n", routingID)
 		}
 	case relayPurgePending:
 		// The wording distinguishes never-reached from answered-but-clearing (a rate
@@ -967,7 +969,17 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 		// The relay half LANDED (or there was nothing of ours to purge): the
 		// obligation recorded above is settled, and -- the relay being provably
 		// reachable right now -- so is any OLDER deferral still on file.
-		retirePurgeObligation(stateDir, routingID, stderr)
+		if obligation == purgeObligationRecorded {
+			matched, retireErr := retirePurgeObligation(stateDir, routingID, attemptID)
+			if retireErr != nil {
+				_, _ = fmt.Fprintf(stderr, "remote revoke: retiring the settled purge obligation failed: %v\n", retireErr)
+				return 1
+			}
+			if !matched {
+				_, _ = fmt.Fprintf(stderr, "remote revoke: a newer relay cleanup attempt is pending for routing id %s; this command does not claim it settled.\n", routingID)
+				return 1
+			}
+		}
 		driveRelayPurgeObligations(stateDir, stderr)
 		return 0
 	}
@@ -993,62 +1005,57 @@ const (
 // The obligation carries the relay URL and machine identity it is owed under (reviews
 // D2, codex #2): after a relay cutover or an identity change the purge must not
 // "land" elsewhere and read as success.
-func recordPurgeObligation(stateDir, routingID string, stderr io.Writer) purgeObligationOutcome {
+func recordPurgeObligation(stateDir, routingID string, phonePub, consent []byte, stderr io.Writer) (purgeObligationOutcome, string) {
 	if routingID == "" || stateDir == "" {
-		return purgeObligationNotApplicable
+		return purgeObligationNotApplicable, ""
 	}
 	cfg, found, err := relaycfg.Load(stateDir)
 	if err != nil || !found || cfg.RelayURL == "" {
 		// Not relay-provisioned: there is no relay-side state to owe a purge of.
-		return purgeObligationNotApplicable
+		return purgeObligationNotApplicable, ""
 	}
 	machineRID := ""
 	if id, err := machineid.Load(filepath.Join(stateDir, "remote", remoteIdentityFile)); err == nil {
-		machineRID = string(relay.RoutingID(id.RelayAuthPublic()))
+		machineRID = relayv2.RoutingID(id.RelayAuthPublic())
 	}
 	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
+	var attempt relaypurge.Obligation
 	if err == nil {
-		err = store.Record(routingID, cfg.RelayURL, machineRID)
+		attempt, err = store.Record(routingID, cfg.RelayURL, machineRID, phonePub, consent)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "remote revoke: recording the deferred purge FAILED (%v); if the relay "+
 			"half of this revocation does not land below, nothing will retry it.\n", err)
-		return purgeObligationFailed
+		return purgeObligationFailed, ""
 	}
-	return purgeObligationRecorded
+	return purgeObligationRecorded, attempt.AttemptID
 }
 
 // resolvePurgeObligation tombstones the obligation for routingID after a substantive
 // relay refusal: Pending no longer gates on it, the reason stays on file.
-func resolvePurgeObligation(stateDir, routingID string, reason error, stderr io.Writer) bool {
-	if routingID == "" || stateDir == "" {
-		return true
+func resolvePurgeObligation(stateDir, routingID, attemptID string, reason error, stderr io.Writer) (bool, error) {
+	if routingID == "" || attemptID == "" || stateDir == "" {
+		return false, nil
 	}
 	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
-	if err == nil {
-		err = store.Resolve(routingID, fmt.Sprintf("%v", reason))
-	}
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "remote revoke: recording the refusal failed: %v\n", err)
-		return false
+		return false, err
 	}
-	return true
+	return store.Resolve(routingID, attemptID, fmt.Sprintf("%v", reason))
 }
 
 // retirePurgeObligation settles the obligation for routingID after an acknowledged
 // (or moot) relay purge. Best-effort: a failure leaves a stale obligation the next
 // drive's live-pairing or not-authorized handling resolves, and is still reported.
-func retirePurgeObligation(stateDir, routingID string, stderr io.Writer) {
-	if routingID == "" || stateDir == "" {
-		return
+func retirePurgeObligation(stateDir, routingID, attemptID string) (bool, error) {
+	if routingID == "" || attemptID == "" || stateDir == "" {
+		return false, nil
 	}
 	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
-	if err == nil {
-		err = store.Retire(routingID)
-	}
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "remote revoke: retiring the settled purge obligation failed: %v\n", err)
+		return false, err
 	}
+	return store.Retire(routingID, attemptID)
 }
 
 // reportDeferredPurge is the one honest sentence the PENDING arm owes: what the
@@ -1132,7 +1139,7 @@ func deviceRoutingID(stateDir, deviceID string) string {
 	if !ok || len(rec.RelayAuthPub) == 0 {
 		return ""
 	}
-	return string(relay.RoutingID(ed25519.PublicKey(rec.RelayAuthPub)))
+	return relayv2.RoutingID(ed25519.PublicKey(rec.RelayAuthPub))
 }
 
 // errRelayNotProvisioned means this machine has no relay identity or no relay URL, so
@@ -1140,6 +1147,7 @@ func deviceRoutingID(stateDir, deviceID string) string {
 // rather than as a failure: `swarm remote init` without --relay-url is a supported
 // state, and a local-only machine must not be told its relay work failed.
 var errRelayNotProvisioned = errors.New("this machine is not provisioned for a relay")
+var errMachineRelayDial = errors.New("relay-v2 machine-control dial failed")
 
 // withMachineRelay runs fn against an authenticated relay connection opened with THIS
 // MACHINE's own relay-auth identity -- the same identity cmd/swarm-remote's gateway
@@ -1158,13 +1166,13 @@ var errRelayNotProvisioned = errors.New("this machine is not provisioned for a r
 // The connection is short-lived on purpose. The relay supersedes an older connection for
 // the same routing id, so a long-lived CLI client would sever a gateway that came up
 // underneath it.
-func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) error) error {
+func withMachineRelay(stateDir string, fn func(context.Context, *relayv2.Conn) error) error {
 	if stateDir == "" {
 		return errRelayNotProvisioned
 	}
 	cfg, found, err := relaycfg.Load(stateDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errMachineRelayDial, err)
 	}
 	idPath := filepath.Join(stateDir, "remote", remoteIdentityFile)
 	if !found || cfg.RelayURL == "" || !statFileExists(idPath) {
@@ -1198,14 +1206,16 @@ func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) e
 	// rides the sealed command plane to the gateway instead. A ban standing against this
 	// machine is therefore an attacker's, and the owner sitting at this terminal does not
 	// need the relay to tell them their machine is theirs.
-	cl, err := relay.DialSecure(ctx, cfg.RelayURL, relay.ClientAuth{
-		RelayAuthPub: id.RelayAuthPublic(),
-		Sign:         func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
-	}, sec)
+	cl, err := relayv2.Dial(ctx, relayv2.Profile{
+		RelayURL: cfg.RelayURL, MachineRID: relayv2.RoutingID(id.RelayAuthPublic()),
+		OperatorNamespace: cfg.OperatorNamespace, Security: sec,
+	}, relayv2.Auth{PublicKey: id.RelayAuthPublic(),
+		Sign: func(challenge []byte) ([]byte, error) { return id.RelayAuthSign(challenge), nil },
+		Role: relayv2.RoleMachine, Purpose: relayv2.PurposeControl})
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errMachineRelayDial, err)
 	}
-	defer func() { _ = cl.Close() }()
+	defer cl.Close()
 	return fn(ctx, cl)
 }
 
@@ -1257,70 +1267,57 @@ const (
 //
 // IT REPORTS ITS OUTCOME RATHER THAN SWALLOWING IT (ADR-007 B120 F3): the caller's exit
 // code is a claim about this call, so this call has to answer whether the relay agreed.
-func purgeRelayState(stateDir, routingID string) (relayPurgeVerdict, error) {
+func purgeRelayState(stateDir, routingID string, phonePub, consent []byte) (relayPurgeVerdict, error) {
 	if routingID == "" {
 		return relayPurgeNone, nil
 	}
+	if len(phonePub) != ed25519.PublicKeySize || len(consent) == 0 ||
+		relayv2.RoutingID(ed25519.PublicKey(phonePub)) != routingID {
+		return relayPurgePending, errors.New("relay-v2 purge evidence does not match the device routing id")
+	}
 	presented := false
-	err := withMachineRelay(stateDir, func(ctx context.Context, cl *relay.Client) error {
+	err := withMachineRelay(stateDir, func(ctx context.Context, cl *relayv2.Conn) error {
 		// presented marks that the DIAL (auth included) succeeded and the purge op
 		// itself went out: an ANSWER received before this point -- an auth_init
 		// refusal, a revoked machine registration -- is not the relay refusing the
 		// PURGE, and must not read as one (round-3 codex #4).
+		binding, err := cl.Authorize(ctx, ed25519.PublicKey(phonePub), consent)
+		if err != nil {
+			return err
+		}
+		if binding.PeerRID != routingID {
+			return errors.New("relay v2 authorized a different phone")
+		}
 		presented = true
-		return cl.DeviceRevoke(ctx, routingID)
+		return cl.Revoke(ctx, binding)
 	})
 	switch {
 	case err == nil:
 		return relayPurgeDone, nil
 	case errors.Is(err, errRelayNotProvisioned):
 		return relayPurgeUnprovisioned, err
-	case presented && errors.Is(err, relay.ErrNotAuthorized):
+	case errors.Is(err, errMachineRelayDial):
+		return relayPurgePending, err
+	case relayV2Code(err, "consent_retired"), presented && relayV2Code(err, "stale_generation"):
 		return relayPurgeNone, nil
-	case errors.Is(err, relay.ErrQuotaExceeded), errors.Is(err, relay.ErrDuplicateConnection):
+	case relayV2Code(err, "rate_limited"), relayV2Code(err, "cleanup_pending"), relayV2Code(err, "mailbox_full"):
 		// Answers that clear BY THEMSELVES -- a rate window lapses, a superseding
 		// connection ends -- so treating them as refusals abandoned a purge a
 		// minute's patience delivers (SH5 review). The gateway's own outage
 		// classifier draws the same line (cmd/swarm-remote).
 		return relayPurgePending, err
-	case presented && errors.Is(err, relay.ErrRelayAnswered):
-		// The relay ANSWERED THE PURGE, and the answer was no. Substantive is an
-		// ALLOWLIST anchored on the one place answers are decoded
-		// (relay.ErrRelayAnswered, SH5 round-3 F1) AND on the purge having been
-		// presented -- a reply that failed to DECODE, or an answer to the handshake
-		// rather than to device_revoke, falls to pending, never to a permanent
-		// refusal.
+	case relayv2.IsPermanentAuthorizeRefusal(err):
+		// Permanent AUTHORIZE refusals cannot be fixed by retrying the same evidence.
+		// Runtime, session, and unknown protocol errors stay pending.
 		return relayPurgeRefused, err
 	default:
 		return relayPurgePending, err
 	}
 }
 
-// authorizeAtRelay opens the machine -> device mailbox route for a device that has just
-// paired, and -- ADR-007 B22 -- LIFTS any ban a previous revoke left on its routing id.
-//
-// IT IS PART OF PAIRING AND NOT ONLY OF GATEWAY STARTUP, which is the change. The gateway
-// authorizes on every connect (cmd/swarm-remote/deliver.go), so before this the route
-// existed from whenever a supervised process happened to boot. That was survivable for a
-// FIRST pairing and is not for a RE-pairing: the recovered handset comes back on the same
-// routing id, and it is banned until this op runs. Pairing is the moment the owner grants
-// this device access, so it is where the grant is made -- and the gateway's own call
-// stays, idempotently, for every reconnect after.
-func authorizeAtRelay(stateDir, deviceID string, stderr io.Writer) {
-	rec, ok := deviceRecord(stateDir, deviceID)
-	// The consent is as load-bearing as the key: without it the relay refuses the
-	// authorize outright (ADR-007 B38), so a record missing one is a device this
-	// machine can open no route to, and there is nothing to attempt.
-	if !ok || len(rec.RelayAuthPub) != ed25519.PublicKeySize || len(rec.ConsentSig) == 0 {
-		return
-	}
-	err := withMachineRelay(stateDir, func(ctx context.Context, cl *relay.Client) error {
-		return cl.AuthorizeDevice(ctx, ed25519.PublicKey(rec.RelayAuthPub), rec.ConsentSig)
-	})
-	if err != nil && !errors.Is(err, errRelayNotProvisioned) {
-		_, _ = fmt.Fprintf(stderr, "remote pair: the device is paired, but the machine could not open its "+
-			"relay route: %v\n", err)
-	}
+func relayV2Code(err error, code string) bool {
+	var protocolErr *relayv2.ProtocolError
+	return errors.As(err, &protocolErr) && protocolErr.Code == code
 }
 
 // purgeOutboundCustody is the MACHINE half of the same step, at the one piece of
@@ -1564,12 +1561,6 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 		name = res.DeviceID
 	}
 	_, _ = fmt.Fprintf(stdout, "paired %s\n", name)
-
-	// PB-STATE-10 / ADR-007 B22: open this device's relay route NOW rather than at whatever
-	// moment a supervised gateway happens to boot. It is also what lifts the relay ban a
-	// previous `swarm remote revoke` left on a handset that recovers on the same routing id,
-	// so it runs BEFORE the gateway is ensured -- the phone is already dialling.
-	authorizeAtRelay(remoteStateDir(), res.DeviceID, stderr)
 
 	// PB-LIFE-2: the phone that just paired has a gateway to talk to, with no second
 	// command and no reboot. This is also what runs the epoch grant delivery

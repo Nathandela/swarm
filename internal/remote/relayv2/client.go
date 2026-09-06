@@ -110,6 +110,21 @@ func (e *ProtocolError) Is(target error) bool {
 	}
 }
 
+// IsPermanentAuthorizeRefusal reports AUTHORIZE answers that cannot succeed on
+// retry with the same pairing evidence. Every other protocol answer is retryable.
+func IsPermanentAuthorizeRefusal(err error) bool {
+	var protocolErr *ProtocolError
+	if !errors.As(err, &protocolErr) {
+		return false
+	}
+	switch protocolErr.Code {
+	case "invalid_consent", "member_limit", "retirement_limit", "generation_exhausted":
+		return true
+	default:
+		return false
+	}
+}
+
 type wireFrame struct {
 	V           int    `json:"v"`
 	Type        string `json:"type"`
@@ -814,6 +829,15 @@ func (p *PairTransport) Complete(ctx context.Context, ceremony string) error {
 		return errors.New("relay v2: pair finish mismatch")
 	}
 	return nil
+}
+
+// Authorize promotes the authenticated phone outcome on the same machine-control
+// connection that hosted pairing. The daemon calls it before reporting pair success.
+func (p *PairTransport) Authorize(ctx context.Context, phonePub ed25519.PublicKey, consent []byte) (Binding, error) {
+	if !p.machine {
+		return Binding{}, errors.New("relay v2: phone pairing transport cannot authorize")
+	}
+	return p.conn.Authorize(ctx, phonePub, consent)
 }
 
 func RoutingID(pub ed25519.PublicKey) string {

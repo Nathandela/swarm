@@ -26,7 +26,21 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
 	"github.com/Nathandela/swarm/internal/remote/relaypurge"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
+
+func TestImmediateRelayV2RefusalClassificationRetriesRuntimeErrors(t *testing.T) {
+	for _, code := range []string{"internal_error", "invalid_session", "rate_limited", "unknown"} {
+		if relayv2.IsPermanentAuthorizeRefusal(&relayv2.ProtocolError{Code: code}) {
+			t.Fatalf("%s was classified as terminal", code)
+		}
+	}
+	for _, code := range []string{"invalid_consent", "member_limit", "retirement_limit", "generation_exhausted"} {
+		if !relayv2.IsPermanentAuthorizeRefusal(&relayv2.ProtocolError{Code: code}) {
+			t.Fatalf("%s was not classified as terminal", code)
+		}
+	}
+}
 
 // sh5Pending is the store's pending list, fatally unwrapped.
 func sh5Pending(t *testing.T, stateDir string) []relaypurge.Obligation {
@@ -91,64 +105,32 @@ func TestSH5_AnUnreachedRelayPurgeIsRecordedAsADurableObligation(t *testing.T) {
 	}
 }
 
-// TestSH5_TheNextRelayDialDrivesThePendingPurge pins the drive half against the world
-// the record half leaves behind, arranged directly: the device is gone from the local
-// registry, the obligation is durable, the relay is reachable again and still holds the
-// revoked handset's mailbox. One drive must empty that mailbox and retire the obligation.
-func TestSH5_TheNextRelayDialDrivesThePendingPurge(t *testing.T) {
-	rig := b1NewRig(t, nil)
-
-	reg, err := device.Open(filepath.Join(rig.stateDir, "devices"))
-	if err != nil {
-		t.Fatalf("device.Open: %v", err)
-	}
-	if _, err := reg.Remove(rig.rec.DeviceID); err != nil {
-		t.Fatalf("remove the device to arrange the post-revoke registry: %v", err)
-	}
-	if err := sh5Store(t, rig.stateDir).Record(rig.routingID, sh5RelayURL(t, rig.stateDir), ""); err != nil {
-		t.Fatalf("record the obligation: %v", err)
-	}
-
-	var errOut bytes.Buffer
-	if left := driveRelayPurgeObligations(rig.stateDir, &errOut); left != 0 {
-		t.Errorf("driveRelayPurgeObligations reported %d still pending on a reachable relay; stderr:\n%s",
-			left, errOut.String())
-	}
-
-	if got := rig.relay.MailboxDepth(rig.routingID); got != 0 {
-		t.Errorf("the revoked handset's relay mailbox holds %d item(s) after the drive, want 0: "+
-			"the deferred purge is the thing D9 promised; stderr:\n%s", got, errOut.String())
-	}
-	if pending := sh5Pending(t, rig.stateDir); len(pending) != 0 {
-		t.Errorf("the obligation survived an acknowledged purge: %+v", pending)
-	}
-}
-
 // TestSH5_ADriveNeverPurgesARoutingIDThatIsPairedAgain is u37c round 3's lesson applied
 // here: the routing id is per-install, so the SAME handset re-paired comes back on the
 // routing id a stale obligation names. Driving the purge then would empty the LIVE
-// pairing's mailbox and ban its route while reporting success. The obligation must be
-// retired -- durably, with a word to the operator -- and the mailbox left alone.
+// pairing's mailbox and ban its route while reporting success. The obligation must stay
+// pending and undialed until an operator can settle it safely.
 func TestSH5_ADriveNeverPurgesARoutingIDThatIsPairedAgain(t *testing.T) {
 	rig := b1NewRig(t, nil) // the device is IN the registry: the re-paired world
 
-	if err := sh5Store(t, rig.stateDir).Record(rig.routingID, sh5RelayURL(t, rig.stateDir), ""); err != nil {
+	if _, err := sh5Store(t, rig.stateDir).Record(rig.routingID, sh5RelayURL(t, rig.stateDir), "", rig.rec.RelayAuthPub, rig.rec.ConsentSig); err != nil {
 		t.Fatalf("record the stale obligation: %v", err)
 	}
 
 	var errOut bytes.Buffer
-	driveRelayPurgeObligations(rig.stateDir, &errOut)
+	if left := driveRelayPurgeObligations(rig.stateDir, &errOut); left != 1 {
+		t.Fatalf("live obligation left=%d, want 1; stderr:\n%s", left, errOut.String())
+	}
 
 	if got := rig.relay.MailboxDepth(rig.routingID); got != b1MailboxItems {
 		t.Errorf("the drive touched a LIVE routing id's mailbox: depth %d, want %d untouched",
 			got, b1MailboxItems)
 	}
-	if pending := sh5Pending(t, rig.stateDir); len(pending) != 0 {
-		t.Errorf("the stale obligation must be RETIRED, not left to fire on the next "+
-			"zero-device start against the same live pairing: %+v", pending)
+	if pending := sh5Pending(t, rig.stateDir); len(pending) != 1 {
+		t.Errorf("the live obligation must be kept, not retired: %+v", pending)
 	}
-	if !strings.Contains(strings.ToLower(errOut.String()), "paired again") {
-		t.Errorf("the retirement is owed a reason on the operator channel; stderr:\n%s",
+	if !strings.Contains(strings.ToLower(errOut.String()), "not driven") {
+		t.Errorf("the safety deferral is owed a reason on the operator channel; stderr:\n%s",
 			errOut.String())
 	}
 }
@@ -253,7 +235,7 @@ func TestSH5_AnObligationAgainstAnotherRelayIsRetiredLoudlyNotLanded(t *testing.
 	if _, err := reg.Remove(rig.rec.DeviceID); err != nil {
 		t.Fatalf("arrange the post-revoke registry: %v", err)
 	}
-	if err := sh5Store(t, rig.stateDir).Record(rig.routingID, "wss://old-relay.example", ""); err != nil {
+	if _, err := sh5Store(t, rig.stateDir).Record(rig.routingID, "wss://old-relay.example", "", rig.rec.RelayAuthPub, rig.rec.ConsentSig); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 
@@ -276,19 +258,6 @@ func TestSH5_AnObligationAgainstAnotherRelayIsRetiredLoudlyNotLanded(t *testing.
 	}
 }
 
-// TestSH5_AnAckedRevokeLeavesNoObligationBehind: the obligation is recorded before the
-// destructive act on EVERY revoke, so the acked arm must settle it in the same run --
-// a leftover would fire pointlessly (and loudly) at the next pair.
-func TestSH5_AnAckedRevokeLeavesNoObligationBehind(t *testing.T) {
-	rig := b1NewRig(t, nil)
-	if exit, out := rig.b1Revoke(t); exit != 0 {
-		t.Fatalf("acked revoke exit = %d; output:\n%s", exit, out)
-	}
-	if pending := sh5Pending(t, rig.stateDir); len(pending) != 0 {
-		t.Errorf("an acknowledged revoke left its obligation on file: %+v", pending)
-	}
-}
-
 // TestSH5_APairedMachineNeverDialsForAForeignObligation pins the rule that preserves
 // withMachineRelay's invariant: while ANY device is registered, the gateway owns this
 // machine's single relay connection, so a drive finding a non-live obligation keeps it
@@ -296,7 +265,7 @@ func TestSH5_AnAckedRevokeLeavesNoObligationBehind(t *testing.T) {
 func TestSH5_APairedMachineNeverDialsForAForeignObligation(t *testing.T) {
 	rig := b1NewRig(t, nil) // the device stays registered: a paired machine
 	foreign := strings.Repeat("ab", 16)
-	if err := sh5Store(t, rig.stateDir).Record(foreign, sh5RelayURL(t, rig.stateDir), ""); err != nil {
+	if _, err := sh5Store(t, rig.stateDir).Record(foreign, sh5RelayURL(t, rig.stateDir), "", rig.rec.RelayAuthPub, rig.rec.ConsentSig); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 
@@ -318,87 +287,6 @@ func TestSH5_APairedMachineNeverDialsForAForeignObligation(t *testing.T) {
 	}
 }
 
-// TestSH5_ASubstantiveRefusalResolvesTheObligationLoudly (round-2 review R2-1, the
-// semantics that replaced keeps-on-file): a reachable relay answering bad_request has
-// ANSWERED, and nothing this machine re-presents changes the answer -- an obligation
-// kept forever would brick `swarm remote pair` permanently (reproduced by the round-2
-// reviewer). The refusal resolves the obligation in the same run, and the operator is
-// told the relay-side cleanup is now a manual task.
-func TestSH5_ASubstantiveRefusalResolvesTheObligationLoudly(t *testing.T) {
-	rig := b1NewRig(t, func(t *testing.T, upstream string) string {
-		return sh5RefusingFront(t, upstream, `{"code":"bad_request","message":"relay: store failure"}`)
-	})
-
-	exit, out := rig.b1Revoke(t)
-
-	if exit == 0 {
-		t.Errorf("a refused purge must exit nonzero; output:\n%s", out)
-	}
-	if !strings.Contains(out, "refused") {
-		t.Errorf("the refusal is owed its name; output:\n%s", out)
-	}
-	if pending := sh5Pending(t, rig.stateDir); len(pending) != 0 {
-		t.Errorf("a substantive refusal must RESOLVE the obligation, not leave it to refuse "+
-			"every future `swarm remote pair`: %+v", pending)
-	}
-	resolved, err := sh5Store(t, rig.stateDir).Resolved()
-	if err != nil || len(resolved) != 1 || resolved[0].Refusal == "" {
-		t.Errorf("the refusal must stay ON FILE as a tombstone with its reason (round-2 codex "+
-			"#3): got %+v, %v", resolved, err)
-	}
-	if !strings.Contains(out, "manual task") {
-		t.Errorf("the operator is owed the manual-cleanup truth; output:\n%s", out)
-	}
-
-	// And pairing is NOT bricked: the gate the pair verb runs first reports zero
-	// owed. Asserting on the gate rather than a real ceremony keeps this instant and
-	// discriminating (round-4 review: the ceremony probe cost 60s and its compound
-	// assertion could pass vacuously).
-	var gateOut bytes.Buffer
-	if left := driveRelayPurgeObligations(rig.stateDir, &gateOut); left != 0 {
-		t.Errorf("a RESOLVED obligation still gates pairing (left=%d); stderr:\n%s",
-			left, gateOut.String())
-	}
-}
-
-// TestSH5_ADriveResolvesASubstantiveRefusalInsteadOfWedging pins the drive-time half of
-// the same ruling: an obligation whose purge the relay refuses substantively is
-// resolved loudly with the reason, so pendingLeft is zero and pairing is not blocked.
-func TestSH5_ADriveResolvesASubstantiveRefusalInsteadOfWedging(t *testing.T) {
-	rig := b1NewRig(t, func(t *testing.T, upstream string) string {
-		return sh5RefusingFront(t, upstream, `{"code":"bad_request","message":"relay: store failure"}`)
-	})
-	reg, err := device.Open(filepath.Join(rig.stateDir, "devices"))
-	if err != nil {
-		t.Fatalf("device.Open: %v", err)
-	}
-	if _, err := reg.Remove(rig.rec.DeviceID); err != nil {
-		t.Fatalf("arrange the post-revoke registry: %v", err)
-	}
-	if err := sh5Store(t, rig.stateDir).Record(rig.routingID, sh5RelayURL(t, rig.stateDir), ""); err != nil {
-		t.Fatalf("record: %v", err)
-	}
-
-	var errOut bytes.Buffer
-	left := driveRelayPurgeObligations(rig.stateDir, &errOut)
-
-	if left != 0 {
-		t.Errorf("a substantively refused obligation still counts as owed (left=%d): the pair "+
-			"gate would refuse forever against a relay that is answering; stderr:\n%s",
-			left, errOut.String())
-	}
-	if pending := sh5Pending(t, rig.stateDir); len(pending) != 0 {
-		t.Errorf("the refused obligation must be resolved, not kept: %+v", pending)
-	}
-	if resolved, err := sh5Store(t, rig.stateDir).Resolved(); err != nil || len(resolved) != 1 {
-		t.Errorf("the drive-time refusal must tombstone with its reason: %+v, %v", resolved, err)
-	}
-	if !strings.Contains(errOut.String(), "RESOLVED WITHOUT landing") {
-		t.Errorf("the resolution is owed its reason on the operator channel; stderr:\n%s",
-			errOut.String())
-	}
-}
-
 // TestSH5_AMismatchedObligationRetiresLoudlyEvenOnAPairedMachine (round-2 codex #5):
 // the mismatch ruling presents nothing to any relay, so the paired-machine-never-dials
 // gate must not shadow it -- a mismatched obligation would otherwise sit forever on a
@@ -406,7 +294,7 @@ func TestSH5_ADriveResolvesASubstantiveRefusalInsteadOfWedging(t *testing.T) {
 func TestSH5_AMismatchedObligationRetiresLoudlyEvenOnAPairedMachine(t *testing.T) {
 	rig := b1NewRig(t, nil) // device registered: a paired machine
 	foreign := strings.Repeat("cd", 16)
-	if err := sh5Store(t, rig.stateDir).Record(foreign, "wss://old-relay.example", ""); err != nil {
+	if _, err := sh5Store(t, rig.stateDir).Record(foreign, "wss://old-relay.example", "", rig.rec.RelayAuthPub, rig.rec.ConsentSig); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 
@@ -470,13 +358,14 @@ func TestSH5_StatusSurfacesTheDeferredPurgeLedger(t *testing.T) {
 	rig.routingID = "aa" + rig.routingID[2:]
 	refusedID := "bb" + rig.routingID[2:]
 	st := sh5Store(t, rig.stateDir)
-	if err := st.Record(rig.routingID, sh5RelayURL(t, rig.stateDir), ""); err != nil {
+	if _, err := st.Record(rig.routingID, sh5RelayURL(t, rig.stateDir), "", rig.rec.RelayAuthPub, rig.rec.ConsentSig); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	if err := st.Record(refusedID, sh5RelayURL(t, rig.stateDir), ""); err != nil {
+	refusedAttempt, err := st.Record(refusedID, sh5RelayURL(t, rig.stateDir), "", rig.rec.RelayAuthPub, rig.rec.ConsentSig)
+	if err != nil {
 		t.Fatalf("record second: %v", err)
 	}
-	if err := st.Resolve(refusedID, "relay: store failure"); err != nil {
+	if _, err := st.Resolve(refusedID, refusedAttempt.AttemptID, "relay: store failure"); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 
@@ -506,7 +395,7 @@ func TestSH5_AProvisioningReadErrorKeepsTheObligation(t *testing.T) {
 	if _, err := reg.Remove(rig.rec.DeviceID); err != nil {
 		t.Fatalf("arrange registry: %v", err)
 	}
-	if err := sh5Store(t, rig.stateDir).Record(rig.routingID, sh5RelayURL(t, rig.stateDir), ""); err != nil {
+	if _, err := sh5Store(t, rig.stateDir).Record(rig.routingID, sh5RelayURL(t, rig.stateDir), "", rig.rec.RelayAuthPub, rig.rec.ConsentSig); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	relayJSON := filepath.Join(rig.stateDir, "remote", "relay.json")
@@ -544,8 +433,8 @@ func TestSH5_AnObligationUnderAPreviousMachineIdentityRetiresLoudly(t *testing.T
 	if _, err := reg.Remove(rig.rec.DeviceID); err != nil {
 		t.Fatalf("arrange registry: %v", err)
 	}
-	if err := sh5Store(t, rig.stateDir).Record(rig.routingID, sh5RelayURL(t, rig.stateDir),
-		strings.Repeat("ef", 16)); err != nil {
+	if _, err := sh5Store(t, rig.stateDir).Record(rig.routingID, sh5RelayURL(t, rig.stateDir),
+		strings.Repeat("ef", 16), rig.rec.RelayAuthPub, rig.rec.ConsentSig); err != nil {
 		t.Fatalf("record under the previous identity: %v", err)
 	}
 

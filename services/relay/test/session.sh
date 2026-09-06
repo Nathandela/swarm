@@ -86,6 +86,15 @@ else
   sed -n '1,200p' "$log"
   exit 1
 fi
+if output=$(OPERATOR_RELAY_V2_HTTP="http://127.0.0.1:$port" \
+  go test ../../cmd/swarm -run '^TestOperatorRelayV2RevokeAndDeferredRetry$' -count=1 -timeout=45s -v 2>&1); then
+	printf '%s\n' "$output"
+	case "$output" in *"--- PASS: TestOperatorRelayV2RevokeAndDeferredRetry"*) :;; *) exit 1;; esac
+else
+	printf '%s\n' "$output"
+	sed -n '1,200p' "$log"
+	exit 1
+fi
 stop_worker
 start_worker mobile-state 60000 0 30000 60000 0
 if output=$(MOBILE_RELAY_V2_HTTP="http://127.0.0.1:$port" \

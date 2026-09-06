@@ -8,9 +8,9 @@
 // Two guards ride with the obligation, both taught by review:
 //
 //   - the routing id is per-install, so the SAME handset re-paired returns on the id a
-//     stale obligation names; a driver must retire such an obligation WITHOUT purging
-//     (u37c round 3's defect class) -- DriveMachineObligations' per-obligation
-//     registry check;
+//     stale obligation names; a driver must keep that obligation undialed rather than
+//     risk purging a live pairing (u37c round 3's defect class) --
+//     DriveMachineObligations' per-obligation registry check;
 //   - the obligation names the RELAY it is owed against: after `swarm remote init
 //     --relay-url` re-points the machine, a purge "landing" at the new relay would be a
 //     lie -- the old relay's mailbox and route survive -- so a driver must compare
@@ -25,6 +25,8 @@ package relaypurge
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +41,14 @@ import (
 type Obligation struct {
 	RoutingID string `json:"routing_id"`
 	RelayURL  string `json:"owed_relay_url"`
+	// AttemptID identifies this exact write-ahead attempt. A later revoke replaces
+	// a pending same-RID attempt; stale cleanup may never settle the replacement.
+	AttemptID string `json:"attempt_id,omitempty"`
+	// PhonePub and Consent are public pairing evidence, not secrets. Keeping the
+	// exact retired ceremony lets a retry recover the current generation through
+	// idempotent AUTHORIZE without ever guessing or touching a later pairing.
+	PhonePub []byte `json:"phone_pub"`
+	Consent  []byte `json:"consent"`
 	// MachineRID is the relay routing id of the machine identity that owes the purge
 	// (round-3 codex #2): only that identity can present it. A drive under a
 	// DIFFERENT identity (machine.key lost and regenerated) must not let the new
@@ -86,29 +96,34 @@ func Open(path string) (*Store, error) {
 // keeping the older one let a stale obligation be retired by the mismatch ruling while
 // the purge genuinely owed at the current relay vanished (round-2 review, Fable
 // defect 4).
-func (s *Store) Record(routingID, relayURL, machineRID string) error {
+func (s *Store) Record(routingID, relayURL, machineRID string, phonePub, consent []byte) (Obligation, error) {
 	if routingID == "" {
-		return errors.New("relaypurge: refusing to record an empty routing id")
+		return Obligation{}, errors.New("relaypurge: refusing to record an empty routing id")
 	}
-	return s.mutate(func(obs []Obligation) ([]Obligation, bool) {
+	if len(phonePub) != 32 || len(consent) == 0 {
+		return Obligation{}, errors.New("relaypurge: refusing to record incomplete relay-v2 evidence")
+	}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return Obligation{}, fmt.Errorf("relaypurge: generate attempt id: %w", err)
+	}
+	record := Obligation{
+		RoutingID: routingID, RelayURL: relayURL, MachineRID: machineRID,
+		AttemptID: hex.EncodeToString(raw[:]),
+		PhonePub:  append([]byte(nil), phonePub...), Consent: append([]byte(nil), consent...),
+		RecordedAt: time.Now(),
+	}
+	err := s.mutate(func(obs []Obligation) ([]Obligation, bool) {
 		for i, ob := range obs {
 			if ob.RoutingID != routingID || ob.Resolved {
 				continue
 			}
-			if ob.RelayURL == relayURL && ob.MachineRID == machineRID {
-				return obs, false
-			}
-			// The newest owed relay AND identity are the ones a purge can still land
-			// under (round-2 Fable 4; round-3 codex #2).
-			obs[i].RelayURL = relayURL
-			obs[i].MachineRID = machineRID
+			obs[i] = record
 			return obs, true
 		}
-		return append(obs, Obligation{
-			RoutingID: routingID, RelayURL: relayURL, MachineRID: machineRID,
-			RecordedAt: time.Now(),
-		}), true
+		return append(obs, record), true
 	})
+	return record, err
 }
 
 // Pending returns the obligations still owed, in recording order. Resolved
@@ -135,18 +150,21 @@ func (s *Store) Pending() ([]Obligation, error) {
 // Resolve marks the obligation for routingID as terminally refused, preserving the
 // reason as a tombstone. It stays on file (excluded from Pending) for
 // resolvedRetention, then prunes.
-func (s *Store) Resolve(routingID, reason string) error {
-	return s.mutate(func(obs []Obligation) ([]Obligation, bool) {
+func (s *Store) Resolve(routingID, attemptID, reason string) (bool, error) {
+	changed := false
+	err := s.mutate(func(obs []Obligation) ([]Obligation, bool) {
 		for i, ob := range obs {
-			if ob.RoutingID == routingID && !ob.Resolved {
+			if ob.RoutingID == routingID && ob.AttemptID == attemptID && !ob.Resolved {
 				obs[i].Resolved = true
 				obs[i].Refusal = reason
 				obs[i].ResolvedAt = time.Now()
+				changed = true
 				return obs, true
 			}
 		}
 		return obs, false
 	})
+	return changed, err
 }
 
 // Resolved returns the tombstones on file: obligations terminally refused, with
@@ -198,16 +216,23 @@ func pruneResolved(obs []Obligation) ([]Obligation, bool) {
 // tombstone is deliberately not touched: Drive retires on a nil act, and an act that
 // just Resolved returns nil -- removing the tombstone it created would erase the
 // record Resolve exists to keep.
-func (s *Store) Retire(routingID string) error {
-	return s.mutate(func(obs []Obligation) ([]Obligation, bool) {
+func (s *Store) Retire(routingID, attemptID string) (bool, error) {
+	matched := false
+	err := s.mutate(func(obs []Obligation) ([]Obligation, bool) {
 		kept := obs[:0]
 		for _, ob := range obs {
-			if ob.RoutingID != routingID || ob.Resolved {
+			if ob.RoutingID != routingID || ob.AttemptID != attemptID {
+				kept = append(kept, ob)
+				continue
+			}
+			matched = true
+			if ob.Resolved {
 				kept = append(kept, ob)
 			}
 		}
 		return kept, len(kept) != len(obs)
 	})
+	return matched, err
 }
 
 // lock takes the interprocess mutation lock: a sidecar .lock file, because the data
@@ -351,8 +376,10 @@ func Drive(ctx context.Context, s *Store, act func(context.Context, Obligation) 
 			keep(err)
 			continue
 		}
-		if err := s.Retire(ob.RoutingID); err != nil {
+		if matched, err := s.Retire(ob.RoutingID, ob.AttemptID); err != nil {
 			keep(err)
+		} else if !matched {
+			keep(errAttemptSuperseded)
 		}
 	}
 	return firstErr

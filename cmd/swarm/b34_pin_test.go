@@ -16,7 +16,10 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
@@ -24,11 +27,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
+	"github.com/coder/websocket"
 )
 
 func b34TLSFrontedRelay(t *testing.T) (wssURL string, cert *x509.Certificate) {
@@ -52,7 +58,47 @@ func b34TLSFrontedRelay(t *testing.T) (wssURL string, cert *x509.Certificate) {
 	if err != nil {
 		t.Fatalf("parse relay url: %v", err)
 	}
-	front := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(target))
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	front := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/ws" {
+			proxy.ServeHTTP(w, r)
+			return
+		}
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.CloseNow()
+		var init struct {
+			RequestID string `json:"request_id"`
+			Pub       string `json:"pub"`
+		}
+		_, body, err := ws.Read(r.Context())
+		if err != nil || json.Unmarshal(body, &init) != nil {
+			return
+		}
+		pub, err := base64.RawURLEncoding.DecodeString(init.Pub)
+		if err != nil {
+			return
+		}
+		machineRID := relayv2.RoutingID(pub)
+		challenge, _ := json.Marshal(map[string]any{"v": 2, "type": "CHALLENGE", "request_id": init.RequestID,
+			"nonce": base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
+			"home":  relayv2.HomeID("owner", machineRID), "expires_at": fmt.Sprintf("%d", time.Now().Add(time.Minute).UnixMilli())})
+		if ws.Write(r.Context(), websocket.MessageText, challenge) != nil {
+			return
+		}
+		var prove struct {
+			RequestID string `json:"request_id"`
+		}
+		_, body, err = ws.Read(r.Context())
+		if err != nil || json.Unmarshal(body, &prove) != nil {
+			return
+		}
+		authed, _ := json.Marshal(map[string]any{"v": 2, "type": "AUTHENTICATED", "request_id": prove.RequestID,
+			"rid": machineRID, "role": "machine", "purpose": "control", "home": relayv2.HomeID("owner", machineRID)})
+		_ = ws.Write(r.Context(), websocket.MessageText, authed)
+	}))
 	t.Cleanup(front.Close)
 	return strings.Replace(front.URL, "https://", "wss://", 1), front.Certificate()
 }
@@ -152,8 +198,8 @@ func TestPBOPS5_TheCLIOwnerConnectionHonoursTheConfiguredPin(t *testing.T) {
 	// ---- control: the matching pin completes the relay-auth handshake ------
 	reached := false
 	stateDir := b34StateDir(t, relaycfg.Config{RelayURL: wss, OperatorNamespace: "owner", SPKIPin: b34SPKIPin(cert)})
-	if err := withMachineRelay(stateDir, func(_ context.Context, cl *relay.Client) error {
-		reached = cl.RoutingID() != ""
+	if err := withMachineRelay(stateDir, func(_ context.Context, cl *relayv2.Conn) error {
+		reached = cl != nil
 		return nil
 	}); err != nil {
 		t.Fatalf("the MATCHING pin was refused, so this rig cannot demonstrate anything: %v", err)
@@ -168,7 +214,7 @@ func TestPBOPS5_TheCLIOwnerConnectionHonoursTheConfiguredPin(t *testing.T) {
 	stateDir = b34StateDir(t, relaycfg.Config{
 		RelayURL: wss, OperatorNamespace: "owner", SPKIPin: base64.StdEncoding.EncodeToString(wrongSum[:]),
 	})
-	err := withMachineRelay(stateDir, func(context.Context, *relay.Client) error {
+	err := withMachineRelay(stateDir, func(context.Context, *relayv2.Conn) error {
 		called = true
 		return nil
 	})
