@@ -103,6 +103,102 @@ assert.equal(home(machine.rid), "cc634f54c634813fc554848c78763e63b3dbdff50975c0d
   assert.deepEqual(order, ["DELIVER", "PROBED"], "PROBE pumps queued mail before completing its barrier");
 }
 
+// A Durable Object can still enumerate a socket that has started closing. A
+// send can also race a close, so one dead subscriber must not fail the append
+// which wakes every matching subscriber or advance that subscriber's cursor.
+{
+  const peer = "0".repeat(32);
+  const generation = "00000000000000000001";
+  const incarnation = "A".repeat(22);
+  const recipient = "recipient";
+  const sender = "sender";
+  const item = { cursor: generation, msg_id: "race", ciphertext: "AA", size: 258 };
+  const sub = () => ({ peer, recipient, sender, generation, incarnation, sentHigh: "00000000000000000000", sentCount: 0, sentBytes: 0 });
+  let closingReads = 0;
+  const closing = {
+    readyState: WebSocket.CLOSING,
+    deserializeAttachment: () => { closingReads++; return { phase: "authed", sub: sub() }; },
+    send: () => assert.fail("closing socket was sent a delivery"),
+  };
+  let raceAttachment = { phase: "authed", sub: sub() };
+  let raceClosed = 0;
+  let raceSerialized = 0;
+  const race = {
+    readyState: WebSocket.OPEN,
+    deserializeAttachment: () => raceAttachment,
+    send: () => { throw new Error("closed during send"); },
+    close: (code, reason) => { assert.equal(code, 1011); assert.equal(reason, "delivery failed"); raceClosed++; },
+    serializeAttachment: () => { raceSerialized++; },
+  };
+  let healthyAttachment = { phase: "authed", sub: sub() };
+  const delivered = [];
+  const healthy = {
+    readyState: WebSocket.OPEN,
+    deserializeAttachment: () => healthyAttachment,
+    send: (raw) => delivered.push(JSON.parse(raw)),
+    serializeAttachment: (next) => { healthyAttachment = next; },
+  };
+  const relay = new RelayHome({
+    getWebSockets: () => [closing, race, healthy],
+    storage: { sql: { exec: () => [item] } },
+  }, {});
+  relay.liveBinding = () => ({ generation });
+  relay.row = () => ({ incarnation });
+  relay.recordCost = () => {};
+  await relay.pumpSubscribers(recipient, sender, generation);
+  assert.equal(closingReads, 0, "closing sockets are skipped before their attachment is read");
+  assert.equal(raceClosed, 1, "an OPEN socket which closes during send is retired");
+  assert.equal(raceSerialized, 0, "a failed delivery does not advance the race socket");
+  assert.equal(raceAttachment.sub.sentHigh, "00000000000000000000", "a failed delivery keeps the race socket retryable");
+  assert.deepEqual(delivered.map((frame) => frame.type), ["DELIVER"], "a dead subscriber does not starve a healthy one");
+  assert.equal(healthyAttachment.sub.sentHigh, generation);
+
+  const storageFailure = new RelayHome({ storage: { sql: { exec: () => { throw new Error("storage failed"); } } } }, {});
+  storageFailure.liveBinding = () => ({ generation });
+  storageFailure.row = () => ({ incarnation });
+  await assert.rejects(storageFailure.pump(healthy), /storage failed/, "only delivery send races are absorbed");
+
+  const serializationFailure = new RelayHome({ storage: { sql: { exec: () => [item] } } }, {});
+  serializationFailure.liveBinding = () => ({ generation });
+  serializationFailure.row = () => ({ incarnation });
+  serializationFailure.recordCost = () => {};
+  await assert.rejects(serializationFailure.pump({
+    deserializeAttachment: () => ({ phase: "authed", sub: sub() }),
+    send: () => {},
+    serializeAttachment: () => { throw new Error("attachment failed"); },
+  }), /attachment failed/, "attachment persistence failures remain visible");
+
+  const responses = [];
+  const stale = {
+    readyState: WebSocket.OPEN,
+    deserializeAttachment: () => ({ phase: "authed", sub: sub() }),
+    send: () => { throw new Error("closed during send"); },
+    close: () => {},
+  };
+  const caller = {
+    deserializeAttachment: () => ({ phase: "authed", purpose: "stream" }),
+    serializeAttachment: () => {},
+    send: (raw) => responses.push(JSON.parse(raw).type),
+    close: () => {},
+  };
+  class SendRaceProbe extends RelayHome {
+    meter(_ws, attachment) { return attachment; }
+    async append(ws, _attachment, message) {
+      this.send(ws, "APPENDED", message.request_id);
+      await this.pumpSubscribers(recipient, sender, generation);
+    }
+    liveBinding() { return { generation }; }
+    row() { return { incarnation }; }
+    recordCost() {}
+  }
+  const handler = new SendRaceProbe({
+    getWebSockets: () => [stale],
+    storage: { sql: { exec: () => [item] } },
+  }, {});
+  await handler.webSocketMessage(caller, JSON.stringify({ v: 2, type: "APPEND", request_id: "append-race" }));
+  assert.deepEqual(responses, ["APPENDED"], "a stale delivery socket cannot add an ERROR after APPENDED");
+}
+
 const denied = await fetch(`${HTTP}/v2/ws?machine_rid=${"0".repeat(32)}`);
 assert.equal(denied.status, 403, "allowlist rejects before arbitrary home dispatch");
 

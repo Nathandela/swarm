@@ -638,6 +638,7 @@ export class RelayHome {
 
   async pumpSubscribers(recipient, sender, generation) {
     for (const ws of this.state.getWebSockets()) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
       const a = ws.deserializeAttachment();
       if (a?.phase === "authed" && a.sub?.recipient === recipient && a.sub?.sender === sender && a.sub?.generation === generation) await this.pump(ws);
     }
@@ -664,7 +665,14 @@ export class RelayHome {
     );
     for (const item of rows) {
       if (sub.sentCount > 0 && sub.sentBytes + item.size > MAX_INFLIGHT_BYTES) break;
-      this.send(ws, "DELIVER", `delivery-${wireCursor(item.cursor)}`, { peer_rid: sub.peer, generation: wireCursor(sub.generation), incarnation: sub.incarnation, cursor: wireCursor(item.cursor), msg_id: item.msg_id, ciphertext: item.ciphertext });
+      const requestID = `delivery-${wireCursor(item.cursor)}`;
+      const fields = { peer_rid: sub.peer, generation: wireCursor(sub.generation), incarnation: sub.incarnation, cursor: wireCursor(item.cursor), msg_id: item.msg_id, ciphertext: item.ciphertext };
+      try {
+        this.send(ws, "DELIVER", requestID, fields);
+      } catch {
+        try { ws.close(1011, "delivery failed"); } catch {}
+        return;
+      }
       sub.sentHigh = item.cursor;
       sub.sentCount++;
       sub.sentBytes += item.size;

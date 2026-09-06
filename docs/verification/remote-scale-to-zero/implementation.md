@@ -1486,3 +1486,30 @@ gates passed: complete mobile race suite (47.878 s), vet, lint (zero issues), an
 Android source gates (11.963 s). The affected Kotlin `PhoneStartupRoutingTest` passed
 through Gradle (1m14s). This message fix is source-only; the tested phone remains the
 already published code 41 rather than a newly rebuilt release.
+
+### Cellular delivery: stale subscriber isolation
+
+The owner's next cellular send exposed a gateway reconnect loop at cursor 11 with
+`relay v2: unsolicited response`. USB diagnostics confirmed the phone's default route
+was validated cellular, not Wi-Fi. A deterministic probe against the preceding Worker
+reproduced a dead subscriber throwing during delivery after an APPEND success: the
+handler emitted both APPENDED and ERROR for one request. The strict Go client correctly
+rejected that second terminal reply. This is a reproduced failure mechanism; the exact
+exception inside the original live Worker was not logged.
+
+The shared delivery pump now skips non-OPEN subscribers and isolates only a delivery
+send exception, closing that subscriber without advancing its persisted cursor. Cursor
+conversion, SQL and attachment persistence remain outside the catch. No protocol
+validation, durable receipt, acknowledgement or retry fence was weakened. Cloudflare
+documents that [getWebSockets can include closing sockets](https://developers.cloudflare.com/durable-objects/api/state/).
+Regression checks cover the closing filter, OPEN-to-closed send race, unchanged failed
+subscriber state, continued delivery to another subscriber and propagation of storage
+and attachment failures. Hosted deployment and physical round-trip results follow
+separately; local reproduction alone is not proof that the owner's send works.
+
+The implementation lane's final full Workerd suite passed on port 8794, and independent
+Sol review returned GO. Root's relay-v2 race suite passed (12.775 s); deployment-config
+and offline Wrangler upload checks passed with the existing bindings. The stale-send
+handler regression observes exactly one APPENDED response after the fix versus the
+archived Worker's APPENDED plus ERROR. No client binary or Android rebuild is required
+for this server-side change.
