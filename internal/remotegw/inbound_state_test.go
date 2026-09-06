@@ -43,7 +43,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // retainingRelay is the ADVERSARIAL relay of §4.6: it serves the machine's inbox and
@@ -53,7 +52,7 @@ import (
 // restart safety silently rests on.
 type retainingRelay struct {
 	mu      sync.Mutex
-	inbox   []relay.Item
+	inbox   []mailboxItem
 	acked   []uint64
 	replies [][]byte
 }
@@ -61,13 +60,13 @@ type retainingRelay struct {
 func (r *retainingRelay) add(cursor uint64, env []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.inbox = append(r.inbox, relay.Item{Cursor: cursor, Envelope: env})
+	r.inbox = append(r.inbox, mailboxItem{Cursor: cursor, Envelope: env})
 }
 
-func (r *retainingRelay) MailboxRead(_ context.Context, cursor uint64) ([]relay.Item, error) {
+func (r *retainingRelay) MailboxRead(_ context.Context, cursor uint64) ([]mailboxItem, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var out []relay.Item
+	var out []mailboxItem
 	for _, it := range r.inbox {
 		if it.Cursor > cursor {
 			out = append(out, it)
@@ -78,7 +77,7 @@ func (r *retainingRelay) MailboxRead(_ context.Context, cursor uint64) ([]relay.
 
 // MailboxWait is the S6b low-latency seam, answered from the retained inbox so this
 // fake's "an ack the gateway cannot verify" behaviour is unchanged.
-func (r *retainingRelay) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+func (r *retainingRelay) MailboxWait(ctx context.Context, cursor uint64) ([]mailboxItem, bool, error) {
 	items, err := r.MailboxRead(ctx, cursor)
 	return items, false, err
 }

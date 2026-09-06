@@ -11,7 +11,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // publicationMailbox can stop the first append before it reaches relay custody. That
@@ -38,11 +37,11 @@ func newPublicationMailbox() *publicationMailbox {
 	}
 }
 
-func (m *publicationMailbox) MailboxRead(context.Context, uint64) ([]relay.Item, error) {
+func (m *publicationMailbox) MailboxRead(context.Context, uint64) ([]mailboxItem, error) {
 	return nil, nil
 }
 
-func (m *publicationMailbox) MailboxWait(context.Context, uint64) ([]relay.Item, bool, error) {
+func (m *publicationMailbox) MailboxWait(context.Context, uint64) ([]mailboxItem, bool, error) {
 	return nil, false, nil
 }
 

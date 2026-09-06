@@ -1144,9 +1144,9 @@ func (a *App) probeWebPKI(ctx context.Context, _ string) error {
 	// REVIEW-ROUND FIX: bounded on ITS OWN deadline rather than inheriting whatever the
 	// drain goroutine's ctx happens to carry -- this runs on that goroutine synchronously,
 	// so an unbounded probe would block message draining for as long as the relay stays
-	// silent. relay.DefaultDialTimeout is the same bound the relay-v2 connect phase applies;
+	// silent. relayv2.DefaultDialTimeout is the same bound the relay-v2 connect phase applies;
 	// this makes it explicit rather than incidental.
-	ctx, cancel := context.WithTimeout(ctx, relay.DefaultDialTimeout)
+	ctx, cancel := context.WithTimeout(ctx, relayv2.DefaultDialTimeout)
 	defer cancel()
 	target, _ := a.destination()
 	if target == "" {

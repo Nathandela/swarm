@@ -9,12 +9,11 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
-// mailboxAppender is the narrow relay seam the durable publisher needs. *relay.Client is the
-// production implementation; keeping the seam at one append makes commit-unknown crash tests
-// deterministic without replacing the relay protocol.
+// mailboxAppender is the narrow relay seam the durable publisher needs. Keeping the seam at one
+// append makes commit-unknown crash tests deterministic without replacing the relay protocol.
 type mailboxAppender interface {
 	MailboxAppend(context.Context, string, []byte) (uint64, error)
 }
@@ -170,7 +169,7 @@ func (a *App) preparePublicationLocked(
 	st := core.State()
 	if st.Disowned || len(st.MachineRelayAuthPub) != ed25519.PublicKeySize ||
 		sc.epoch != st.EpochID || sc.key != st.Keys.ContentKey ||
-		sc.target != relay.RoutingID(ed25519.PublicKey(st.MachineRelayAuthPub)) ||
+		sc.target != relayv2.RoutingID(ed25519.PublicKey(st.MachineRelayAuthPub)) ||
 		p.Command.Machine != st.Machine {
 		return errPublicationIdentityChanged
 	}
@@ -286,7 +285,7 @@ func (a *App) flushPendingPublicationsLocked(ctx context.Context, sc sendCtx) er
 		}
 		st := core.State()
 		if len(st.MachineRelayAuthPub) != ed25519.PublicKeySize ||
-			pending.Target != relay.RoutingID(ed25519.PublicKey(st.MachineRelayAuthPub)) ||
+			pending.Target != relayv2.RoutingID(ed25519.PublicKey(st.MachineRelayAuthPub)) ||
 			!bytes.Equal(pending.AuthorityPub, st.MachineRelayAuthPub) {
 			return errPublicationIdentityChanged
 		}
@@ -322,7 +321,7 @@ func (a *App) flushPendingPublicationsLocked(ctx context.Context, sc sendCtx) er
 		a.publicationAuthorityMu.Lock()
 		st = core.State()
 		if len(st.MachineRelayAuthPub) != ed25519.PublicKeySize ||
-			pending.Target != relay.RoutingID(ed25519.PublicKey(st.MachineRelayAuthPub)) ||
+			pending.Target != relayv2.RoutingID(ed25519.PublicKey(st.MachineRelayAuthPub)) ||
 			!bytes.Equal(pending.AuthorityPub, st.MachineRelayAuthPub) ||
 			pending.Machine != st.Machine || pending.EpochID != st.EpochID ||
 			pending.EpochID != sc.epoch || pending.Target != sc.target || st.Disowned {

@@ -24,7 +24,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -60,7 +59,7 @@ func TestS10_TheBridgeRoutesJournalResyncToTheResyncer(t *testing.T) {
 		DeviceCommandAuth: protocol.DeviceCommandAuth{Action: protocol.ActionJournalResync, Machine: "m1"},
 		ResyncCursor:      42,
 	}
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, resync)},
 		{Cursor: 2, Envelope: sealedCmd(t, key, 2, protocol.DeviceCommandAuth{
 			Action: protocol.ActionKill, Session: "m1/s1", OperationID: "op-kill", DeviceID: "d1", Sig: "sig-k"})},
@@ -110,7 +109,7 @@ func TestBridgeRoutesSealedDiscardedBacklogProofToRosterRefresh(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 17)
 	}
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1,
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1,
 		protocol.RemoteCommand{
 			DeviceCommandAuth:    protocol.DeviceCommandAuth{Action: protocol.ActionJournalResync, Machine: "m1"},
 			ResyncCursor:         42,
@@ -141,7 +140,7 @@ func TestS10_ABridgeWithNoResyncerDoesNotWedgeTheLoop(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 13)
 	}
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1,
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1,
 		protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{Action: protocol.ActionJournalResync}})}}}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox: mb, Forwarder: &fakeForwarder{}, Key: key, EpochID: 1, ReplyTarget: "phone",

@@ -12,8 +12,28 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/wire"
 )
+
+type refuseNthAppender struct {
+	refuse int
+
+	mu     sync.Mutex
+	calls  int
+	stored [][]byte
+}
+
+func (a *refuseNthAppender) MailboxAppend(_ context.Context, _ string, env []byte) (uint64, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls++
+	if a.calls == a.refuse {
+		return 0, relay.ErrQuotaExceeded
+	}
+	a.stored = append(a.stored, append([]byte(nil), env...))
+	return uint64(len(a.stored)), nil
+}
 
 type reseedCapture struct {
 	mu        sync.Mutex

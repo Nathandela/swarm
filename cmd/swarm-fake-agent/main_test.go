@@ -95,14 +95,23 @@ func TestParseArgsRejectsMalformedStdinLogFlag(t *testing.T) {
 		{name: "missing script", args: []string{"--stdin-log", "/tmp/stdin.bin"}},
 		{name: "empty path", args: []string{"--stdin-log", "", "script.txt"}},
 		{name: "empty script", args: []string{"--stdin-log", "/tmp/stdin.bin", ""}},
+		{name: "raw flag only", args: []string{"--raw-stdin-log"}},
+		{name: "raw missing script", args: []string{"--raw-stdin-log", "/tmp/stdin.bin"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if scriptPath, stdinLog, ok := parseArgs(tt.args); ok {
+			if scriptPath, stdinLog, _, ok := parseArgs(tt.args); ok {
 				t.Fatalf("parseArgs(%q) = script %q log %q ok; want malformed invocation rejected",
 					tt.args, scriptPath, stdinLog)
 			}
 		})
+	}
+}
+
+func TestParseArgsRawStdinLogRequestsRawTTYAndAudit(t *testing.T) {
+	script, logPath, raw, ok := parseArgs([]string{"--raw-stdin-log", "/tmp/stdin.bin", "script.txt"})
+	if !ok || script != "script.txt" || logPath != "/tmp/stdin.bin" || !raw {
+		t.Fatalf("raw stdin-log parse = script=%q log=%q raw=%t ok=%t", script, logPath, raw, ok)
 	}
 }
 

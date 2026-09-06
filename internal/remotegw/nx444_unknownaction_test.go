@@ -36,7 +36,6 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // TestNx444_AnUnknownActionIsRefusedWithASealedReply is the defect itself: a command whose
@@ -55,7 +54,7 @@ func TestNx444_AnUnknownActionIsRefusedWithASealedReply(t *testing.T) {
 	}
 	// Sealed as a bare tuple: an action with no arm has no body this build could read anyway,
 	// and opForAction refuses it before anything is forwarded.
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealedCmd(t, key, 1, cmd)}}}
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: sealedCmd(t, key, 1, cmd)}}}
 	fwd := &fakeForwarder{}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,
@@ -111,7 +110,7 @@ func TestNx444_ABodylessLaunchIsRefusedWithASealedReply(t *testing.T) {
 		DeviceID:    "d1",
 		Sig:         "device-signature",
 	}
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealedCmd(t, key, 1, cmd)}}}
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: sealedCmd(t, key, 1, cmd)}}}
 	fwd := &fakeForwarder{}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,

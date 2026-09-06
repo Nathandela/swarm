@@ -29,7 +29,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // r6Forwarder records every forwarded command, composer bodies included.
@@ -86,7 +85,7 @@ func r6Bridge(t *testing.T, key crypto.ContentKey, fwd CommandForwarder, envs ..
 	t.Helper()
 	mb := &fakeMailbox{}
 	for i, e := range envs {
-		mb.inbox = append(mb.inbox, relay.Item{Cursor: uint64(i + 1), Envelope: e})
+		mb.inbox = append(mb.inbox, mailboxItem{Cursor: uint64(i + 1), Envelope: e})
 	}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,

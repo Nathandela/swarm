@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 func TestM03_UnknownActionIsConsumedAndSealedNeverLeftPending(t *testing.T) {
@@ -43,7 +42,7 @@ func TestM03_UnknownActionIsConsumedAndSealedNeverLeftPending(t *testing.T) {
 		Sig:         "device-signature",
 	}
 	const itemCursor = uint64(9)
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: itemCursor, Envelope: sealedCmd(t, key, 1, cmd)}}}
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: itemCursor, Envelope: sealedCmd(t, key, 1, cmd)}}}
 	fwd := &fakeForwarder{}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,

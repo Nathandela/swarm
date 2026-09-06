@@ -48,9 +48,8 @@ type ServiceConfig struct {
 	SenderKeyID    [8]byte // this machine's routing key id
 	// NOTE: there is deliberately NO command-IN poll cadence here. PB-NET-5 requires
 	// the old 500 ms poll to be DROPPED, not tuned: the command loop is driven by the
-	// relay's bounded server-side wait (CommandBridge.Run), and re-introducing an
-	// interval field would re-introduce the failure ADR-007:461 calls "unusable for
-	// live typing".
+	// relay-v2 subscription's blocking delivery receive (CommandBridge.Run). An interval
+	// field would re-introduce the failure ADR-007:461 calls "unusable for live typing".
 	ReconnectDelay time.Duration    // journal reconnect backoff (default 1s)
 	LeaseAwait     time.Duration    // how long take_control waits for the lease grant (default 5s)
 	Now            func() time.Time // envelope issued-at clock (nil => time.Now)
@@ -510,7 +509,7 @@ func (s *Service) wakeObligationErr() error {
 }
 
 // Progressed reports whether traffic actually crossed the relay link during this runtime's
-// life: the command loop's bounded wait completed at least once, which takes an answer from
+// life: the command loop received at least one pushed delivery, which takes traffic from
 // the relay and cannot be faked by a socket that is merely up.
 //
 // IT IS THE RECONNECT BACKOFF'S RESET CONDITION, and that is the whole reason it is not

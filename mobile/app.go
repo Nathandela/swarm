@@ -25,7 +25,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // journalLogSize bounds the in-memory journal read model. The DURABLE model is the
@@ -324,7 +324,7 @@ func (a *App) setDestination(pub []byte) {
 		return
 	}
 	a.machinePub = ed25519.PublicKey(append([]byte(nil), pub...))
-	a.machineTarget = relay.RoutingID(a.machinePub)
+	a.machineTarget = relayv2.RoutingID(a.machinePub)
 }
 
 // destination is the machine's relay mailbox and the key it was derived from.

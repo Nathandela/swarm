@@ -36,6 +36,7 @@ package remotegw
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -44,6 +45,78 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
+
+// An Event with a pending outbox reservation must retry the exact sealed bytes in the
+// same live sink, regardless of whether the first error is a transport failure or a
+// relay-authored refusal. Re-sealing would either duplicate the record at a fresh seq or
+// create two rival ciphertexts at one seq.
+func TestRelaySink_LiveEventRetryReplaysReservedEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"delivery unknown", errReplyLost},
+		{"relay-authored refusal", relay.ErrQuotaExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &storeThenRefuseAppender{sentinel: tc.err, refuseOn: 1}
+			sink, _ := outboxTestSink(t, app, "", "")
+			rec := protocol.JournalRecord{Cursor: 7, SessionID: "m/s1", Type: "launched"}
+
+			if err := sink.Event(rec); !errors.Is(err, tc.err) {
+				t.Fatalf("first Event error = %v, want %v", err, tc.err)
+			}
+			if err := sink.Event(rec); err != nil {
+				t.Fatalf("live Event retry: %v", err)
+			}
+
+			attempts := app.all()
+			if len(attempts) != 2 {
+				t.Fatalf("append attempts = %d, want 2", len(attempts))
+			}
+			if string(attempts[0]) != string(attempts[1]) {
+				t.Fatal("live Event retry re-sealed instead of replaying the reserved envelope verbatim")
+			}
+			first, err := crypto.ParseEnvelope(attempts[0])
+			if err != nil {
+				t.Fatalf("parse first attempt: %v", err)
+			}
+			second, err := crypto.ParseEnvelope(attempts[1])
+			if err != nil {
+				t.Fatalf("parse retry: %v", err)
+			}
+			if first.Header.Seq != second.Header.Seq {
+				t.Fatalf("retry seq = %d, want original %d", second.Header.Seq, first.Header.Seq)
+			}
+
+			receiver := crypto.NewMailboxReceiver()
+			accepted := 0
+			for i, env := range []*crypto.Envelope{first, second} {
+				result, err := receiver.Accept(budgetTestKey(), env)
+				if result != nil && result.Gap {
+					t.Fatalf("attempt %d reported a sequence gap", i+1)
+				}
+				if errors.Is(err, crypto.ErrStaleSeq) {
+					continue
+				}
+				if err != nil {
+					t.Fatalf("accept attempt %d: %v", i+1, err)
+				}
+				var got protocol.JournalRecord
+				if err := json.Unmarshal(result.Plaintext, &got); err != nil {
+					t.Fatalf("decode attempt %d: %v", i+1, err)
+				}
+				if got.Cursor != rec.Cursor || got.SessionID != rec.SessionID || got.Type != rec.Type {
+					t.Fatalf("accepted record = %+v, want %+v", got, rec)
+				}
+				accepted++
+			}
+			if accepted != 1 {
+				t.Fatalf("accepted semantic records = %d, want 1", accepted)
+			}
+		})
+	}
+}
 
 // storeThenRefuseAppender is the ADVERSARY RELAY at the one seam the gateway talks to it
 // through: it STORES every envelope it is handed and answers the nominated call with one of

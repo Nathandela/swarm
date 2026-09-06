@@ -30,7 +30,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // routedInput records one frame the router handed to the lease plane, with the
@@ -134,7 +133,7 @@ func TestCommandBridge_RoutesInputVsCommand(t *testing.T) {
 		Action: protocol.OpTakeControlEnd, Session: "m/s1", OperationID: "op-tce", DeviceID: "d1", Sig: "sig-tce",
 	}}
 
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-kill", DeviceID: "d1", Sig: "sig-k"})},
 		{Cursor: 2, Envelope: sealRemoteCmd(t, key, 2, takeCtrl)},
 		{Cursor: 3, Envelope: sealInputEnv(t, key, 3, inputFrameWire{T: "data", Session: "m/s1", Data: []byte("ls -la\r")})},
@@ -226,7 +225,7 @@ func TestCommandBridge_DroppedTakeControlDoesNotMisrouteInput(t *testing.T) {
 
 	// The take_control(B) at seq 3 is DROPPED by the adversarial relay: it is never
 	// appended, so the mailbox jumps from seq 2 straight to B's keystroke at seq 4.
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeA)},
 		{Cursor: 2, Envelope: sealInputEnv(t, key, 2, inputFrameWire{T: "data", Session: "m/sA", Data: []byte("keyA\r")})},
 		{Cursor: 3, Envelope: sealInputEnv(t, key, 4, inputFrameWire{T: "data", Session: "m/sB", Data: []byte("keyB\r")})},
@@ -300,7 +299,7 @@ func TestCommandBridge_RoutesInputByEmbeddedSessionNotFocus(t *testing.T) {
 		Action: protocol.ActionTakeControl, Session: "m/sB", OperationID: "op-tcB", DeviceID: "d1", Sig: "sig-tcB",
 	}}
 
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeA)},
 		{Cursor: 2, Envelope: sealRemoteCmd(t, key, 2, takeB)},
 		{Cursor: 3, Envelope: sealInputEnv(t, key, 3, inputFrameWire{T: "data", Session: "m/sA", Data: []byte("toA\r")})},
@@ -355,7 +354,7 @@ func TestCommandBridge_DropsInputWithNoSession(t *testing.T) {
 		Action: protocol.ActionTakeControl, Session: "m/sA", OperationID: "op-tcA", DeviceID: "d1", Sig: "sig-tcA",
 	}}
 
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeA)},
 		{Cursor: 2, Envelope: sealInputEnv(t, key, 2, inputFrameWire{T: "data", Data: []byte("orphan\r")})}, // no Session
 	}}

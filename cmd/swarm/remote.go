@@ -1133,7 +1133,7 @@ func deviceRecordErr(stateDir, deviceID string) (device.Record, bool, error) {
 // gateway's C5 re-audit already calls it "self-reported (unverifiable)", deriving its
 // own route the same way as here. A purge or a live-pairing guard keyed on a
 // self-reported value can be steered by the value's author (SH5 review, codex #5);
-// relay.RoutingID(RelayAuthPub) is what the relay itself keys the mailbox by.
+// relayv2.RoutingID(RelayAuthPub) is what the relay itself keys the mailbox by.
 func deviceRoutingID(stateDir, deviceID string) string {
 	rec, ok := deviceRecord(stateDir, deviceID)
 	if !ok || len(rec.RelayAuthPub) == 0 {

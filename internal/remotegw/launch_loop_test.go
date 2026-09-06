@@ -18,7 +18,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 func sealedRemote(t *testing.T, key crypto.ContentKey, seq uint64, rc protocol.RemoteCommand) []byte {
@@ -67,7 +66,7 @@ func TestCommandBridge_ForwardsLaunchWithSpec(t *testing.T) {
 		Sig:         "sig",
 		ContentHash: protocol.LaunchContentHash(launch),
 	}
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealedRemote(t, key, 1, protocol.RemoteCommand{DeviceCommandAuth: auth, Launch: launch})},
 	}}
 	fwd := &fakeForwarder{}

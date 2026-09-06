@@ -11,24 +11,26 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/remote/transport"
 )
 
 // The gateway is a CommandForwarder via ForwardCommand. Pinned at compile time.
 var _ CommandForwarder = (*Gateway)(nil)
 
+type mailboxItem = relayv2.Item
+
 // Mailbox is the relay seam the command loop needs: read the machine's own inbox
 // (commands the phone appended to the machine's routing id) and append sealed
 // replies to the phone's mailbox.
 type Mailbox interface {
-	MailboxRead(ctx context.Context, cursor uint64) ([]relay.Item, error)
-	// MailboxWait is the low-latency inbound seam (PB-NET-5, ADR-007 B7): it
-	// blocks SERVER-side until an item past cursor exists and returns that bounded
-	// page, so the command loop is driven by arrivals instead of by a cadence. It
+	MailboxRead(ctx context.Context, cursor uint64) ([]relayv2.Item, error)
+	// MailboxWait blocks on the relay-v2 subscription's pushed-delivery channel until
+	// an item past cursor exists, so the command loop is driven by arrivals. It
 	// is on THIS interface rather than an optional side interface a call site
 	// type-asserts, because an optional wait would silently fall back to polling —
 	// which is exactly the phone-side-only fix PB-NET-5 forbids.
-	MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error)
+	MailboxWait(ctx context.Context, cursor uint64) ([]relayv2.Item, bool, error)
 	MailboxAppend(ctx context.Context, target string, env []byte) (uint64, error)
 	MailboxAck(ctx context.Context, cursor uint64) error
 }
@@ -134,10 +136,9 @@ type CommandBridgeConfig struct {
 	// field exists so a test can reach the timed-out path without sitting out the real
 	// budget, which is how the outbound half is already tested.
 	WaitTimeout time.Duration
-	// RetainedRetryWait is the cancellable no-progress backoff after an authenticated
-	// command remains in relay custody (nil => exponential production backoff). It is a
-	// seam for deterministic Run tests; production callers leave it nil.
-	RetainedRetryWait func(context.Context, int) error
+	// StalledRetryWait is the cancellable backoff after a page makes no cursor progress
+	// (nil => exponential production backoff). It is a seam for deterministic Run tests.
+	StalledRetryWait func(context.Context, int) error
 	// replyPublication is shared with the production RelaySink. It orders the complete
 	// reply publication against any reconcile that publishes ReplySeq.Issued().
 	replyPublication *replyPublicationFence
@@ -151,7 +152,7 @@ type CommandBridgeConfig struct {
 // journal-OUT with the command-IN direction.
 //
 // The read cursor advances ONLY through items the bridge actually HANDLED (see
-// processBatch): the relay mints relay.Item.Cursor and nothing authenticates it, so a
+// processBatch): relay-v2 mints Item.Cursor and nothing authenticates it, so a
 // cursor read off an item that could not be opened is a value the bridge has no evidence
 // for. A malformed item is still stepped over by the next one that opens, so a poisoned
 // envelope can neither wedge the loop nor be retried forever; per-item failures are
@@ -261,11 +262,8 @@ func (b *CommandBridge) Err() error {
 	return b.pollErr
 }
 
-// RelayReplies counts the bounded waits the RELAY ANSWERED -- and, on the round-4
-// compatibility poll arm, the bounded reads it answered -- not the ops issued, and not
-// the frames that came back in them. An idle but healthy link produces one per
-// server-side wait ceiling (or one per poll cadence); a relay that completes the
-// handshake and then goes quiet produces none, however long its socket stays up.
+// RelayReplies counts completed delivery receives, not the frames in each batch. An idle
+// subscription produces none; a live delivery proves the relay stream carried traffic.
 //
 // It is the gateway's evidence of PROGRESS, which is what the reconnect backoff resets on
 // (Service.Progressed). A count is deliberately cheaper than a timestamp: nothing here
@@ -324,7 +322,7 @@ func (b *CommandBridge) pollOnce(ctx context.Context) (int, error) {
 // the relay's explicit sentinel is the only honest evidence that lowering that coordinate
 // is required. Retry exactly once from zero so a broken or hostile relay cannot turn the
 // repair signal into an unbounded local loop.
-func (b *CommandBridge) readMailboxPage(ctx context.Context) ([]relay.Item, error) {
+func (b *CommandBridge) readMailboxPage(ctx context.Context) ([]relayv2.Item, error) {
 	items, err := b.cfg.Mailbox.MailboxRead(ctx, b.Cursor())
 	if !errors.Is(err, relay.ErrMailboxCursorResetRequired) {
 		if err == nil {
@@ -395,7 +393,7 @@ func (b *CommandBridge) adoptMailboxIncarnation() error {
 //
 // THE CURSOR IS NOT READ OFF THE ITEMS HERE, and that is the fence.
 // This used to take the batch maximum from every item BEFORE handle(), so a relay -- which
-// MINTS relay.Item.Cursor and is the declared adversary -- needed no key at all: six bytes of
+// MINTS relay-v2 Item.Cursor and is the declared adversary -- needed no key at all: six bytes of
 // garbage beside a cursor of its choosing moved the durable resume point past every real
 // command, and the ack that followed ordered the relay to compact away the backlog it had
 // just made undeliverable. The resume point now moves ONLY through consume, i.e. only for an
@@ -406,14 +404,14 @@ func (b *CommandBridge) adoptMailboxIncarnation() error {
 // MAXIMUM over handled items rather than a contiguous prefix: an item that can never open
 // (garbage, or a frame sealed under a superseded epoch) is stepped over by the next item that
 // does, and only one sitting at the mailbox TAIL is re-read -- the same bounded cost the
-// phone's drain already accepts for the same reason, paced by transport.DrainPacer.
+// phone's drain already accepts for the same reason.
 //
 // What this does NOT fence is the VALUE a HANDLED item carries: that is the relay's own
 // coordinate and nothing authenticates it, so a relay that rewrites the cursor of a genuine
 // phone-sealed frame still moves the resume point. Bounding that needs a limit on how far a
 // cursor may move per page, which no requirement states; it is recorded as a residual rather
 // than invented here.
-func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (int, uint64, []error) {
+func (b *CommandBridge) processBatch(ctx context.Context, items []relayv2.Item) (int, uint64, []error) {
 	processed := 0
 	var errs []error
 	before := b.Cursor()
@@ -474,7 +472,7 @@ func (b *CommandBridge) completeCursorRecovery() {
 // only the relay-owned storage cursor when the signed stream/seq is at or below the durable
 // replay high-water. This is what lets a post-reset rewind compact a page made entirely of
 // already-applied commands without repeating any daemon or PTY side effect.
-func (b *CommandBridge) consumeDurableReplay(it relay.Item) error {
+func (b *CommandBridge) consumeDurableReplay(it relayv2.Item) error {
 	env, err := crypto.ParseEnvelope(it.Envelope)
 	if err != nil {
 		return fmt.Errorf("parse replay: %w", err)
@@ -511,18 +509,13 @@ func (b *CommandBridge) consumeDurableReplay(it relay.Item) error {
 // Run drives the command-IN path until ctx is cancelled, returning ctx.Err(). Each receive is
 // bounded locally at idleRecheckInterval so an idle stream periodically rechecks its parent.
 //
-// There is NO poll cadence, and dropping it is half of PB-NET-5, not a detail: the fixed
-// 500 ms command-IN poll this replaces is what ADR-007:461 calls "unusable for live
-// typing", and a phone-side-only fix passes the letter of the acceptance criterion while
-// typing stays 500 ms-gated. Tuning the interval down is not the fix either -- it trades
-// the latency failure for a quota one, since a 100 ms poll is 10 reads/s against §6.0's
-// 3 reads/s per hop.
+// There is NO poll cadence. Relay-v2 SUBSCRIBE pushes deliveries on the websocket, and
+// MachineMailbox.MailboxWait only drains that client's local channel, so it must re-park
+// immediately after processing. Pacing those receives as if each were relay-v1's metered
+// mailbox_wait adds a fixed 333 ms gate without saving one network operation.
 //
-// The same §6.0 budget and the same adaptive pacer bind BOTH hops, so this loop uses the
-// transport package's DrainPacer and AckBatcher rather than restating either. Acks ride
-// the batcher, off the delivery path: a relay ack is one synchronous bolt fsync (p50
-// 30.8 ms / max 129.2 ms measured) and taking one between an item's arrival and the next
-// wait would put most of the p50 input budget on the keystroke path.
+// Acks still ride AckBatcher off the delivery path because ACK is an explicit metered
+// relay-v2 message and synchronous storage operation.
 //
 // Wait errors are non-fatal (a transient relay error should not tear the bridge down) but
 // they are not swallowed: the first is stashed for Err(), so a bridge that is dropping
@@ -536,14 +529,10 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 	go func() { defer close(acksDone); acks.Run(ackCtx) }()
 	defer func() { stopAcks(); <-acksDone }()
 
-	pacer := transport.NewDrainPacer()
-	retainedAttempts := 0
+	stalledAttempts := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
-		}
-		if err := pacer.Pace(ctx); err != nil {
-			return ctx.Err()
 		}
 		// ONE deadline per wait, and it is cancelled rather than deferred: a defer in this
 		// loop would accumulate one live timer per cycle for the life of the bridge.
@@ -552,7 +541,6 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 		items, _, err := b.cfg.Mailbox.MailboxWait(waitCtx, b.Cursor())
 		waitExpired := waitCtx.Err() != nil
 		cancelWait()
-		pacer.Observe(len(items))
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -585,8 +573,8 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 			b.setErr(err)
 			continue
 		}
-		// The relay ANSWERED. Recorded before the batch is handled, because what this
-		// counts is the link carrying traffic, not the gateway liking what arrived.
+		// The subscription delivered. Record it before the batch is handled, because this
+		// counts the link carrying traffic, not the gateway liking what arrived.
 		b.mu.Lock()
 		b.replies++
 		b.mu.Unlock()
@@ -602,15 +590,14 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 			b.setErr(batchErr)
 		}
 		var retained retainedCommandError
-		if errors.As(batchErr, &retained) {
-			retainedAttempts++
-			// This page made no progress through the retained command. MailboxWait will
-			// therefore return the same item immediately; without an explicit backoff it
-			// spends DrainPacer's initially-full minute bucket in a burst and hammers both
-			// the daemon idempotency path and the already-failing reply append. The wait is
+		if errors.As(batchErr, &retained) || (batchErr != nil && maxCursor == 0) {
+			stalledAttempts++
+			// This page made no progress. MailboxWait will therefore return the retained
+			// item immediately; without an explicit backoff malformed input spins locally,
+			// while a retained command hammers the daemon and failing reply append. The wait is
 			// outside replyMu, so lease-sever notices remain free to redrive the pending
 			// exact envelope while this command sleeps.
-			if err := b.waitRetainedRetry(ctx, retainedAttempts); err != nil {
+			if err := b.waitStalledRetry(ctx, stalledAttempts); err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
@@ -618,13 +605,13 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 			}
 			continue
 		}
-		retainedAttempts = 0
+		stalledAttempts = 0
 	}
 }
 
-func (b *CommandBridge) waitRetainedRetry(ctx context.Context, attempt int) error {
-	if b.cfg.RetainedRetryWait != nil {
-		return b.cfg.RetainedRetryWait(ctx, attempt)
+func (b *CommandBridge) waitStalledRetry(ctx context.Context, attempt int) error {
+	if b.cfg.StalledRetryWait != nil {
+		return b.cfg.StalledRetryWait(ctx, attempt)
 	}
 	exponent := attempt - 1
 	if exponent < 0 {
@@ -696,7 +683,7 @@ func (b *CommandBridge) setErr(err error) {
 //     idempotency suppresses the duplicate; watch/unwatch is idempotent per session and
 //     simply converges. Once the persist lands the window CLOSES -- the next restart
 //     refuses the retained frame at the guard.
-func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
+func (b *CommandBridge) handle(ctx context.Context, it relayv2.Item) error {
 	frame, err := OpenMailboxFrame(b.recv, b.cfg.Key, it.Envelope)
 	if err != nil {
 		return fmt.Errorf("open frame: %w", err)

@@ -6,12 +6,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"sync"
-
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
+// Item is one opaque mailbox delivery on a relay-v2 subscription.
+type Item struct {
+	Cursor   uint64
+	Envelope []byte
+}
+
 type retainedDelivery struct {
-	item relay.Item
+	item Item
 	size int
 }
 
@@ -33,16 +37,16 @@ func NewMachineMailbox(sub *Subscription) (*MachineMailbox, error) {
 
 func (m *MachineMailbox) Done() <-chan struct{} { return m.sub.conn.Done() }
 
-func (m *MachineMailbox) MailboxRead(ctx context.Context, cursor uint64) ([]relay.Item, error) {
+func (m *MachineMailbox) MailboxRead(ctx context.Context, cursor uint64) ([]Item, error) {
 	items, _, err := m.collect(ctx, cursor, false)
 	return items, err
 }
 
-func (m *MachineMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+func (m *MachineMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]Item, bool, error) {
 	return m.collect(ctx, cursor, true)
 }
 
-func (m *MachineMailbox) collect(ctx context.Context, cursor uint64, wait bool) ([]relay.Item, bool, error) {
+func (m *MachineMailbox) collect(ctx context.Context, cursor uint64, wait bool) ([]Item, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -70,9 +74,9 @@ func (m *MachineMailbox) collect(ctx context.Context, cursor uint64, wait bool) 
 			return nil, false, err
 		}
 	}
-	items := make([]relay.Item, len(m.retained))
+	items := make([]Item, len(m.retained))
 	for i, retained := range m.retained {
-		items[i] = relay.Item{Cursor: retained.item.Cursor, Envelope: append([]byte(nil), retained.item.Envelope...)}
+		items[i] = Item{Cursor: retained.item.Cursor, Envelope: append([]byte(nil), retained.item.Envelope...)}
 	}
 	return items, false, nil
 }
@@ -84,7 +88,7 @@ func (m *MachineMailbox) retain(queued queuedFrame) error {
 		return err
 	}
 	m.retained = append(m.retained, retainedDelivery{
-		item: relay.Item{Cursor: delivery.Cursor, Envelope: delivery.Ciphertext}, size: queued.size,
+		item: Item{Cursor: delivery.Cursor, Envelope: delivery.Ciphertext}, size: queued.size,
 	})
 	return nil
 }

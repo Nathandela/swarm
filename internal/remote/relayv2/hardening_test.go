@@ -79,7 +79,7 @@ func TestSlowConsumerCannotBlockResponsePump(t *testing.T) {
 }
 
 func TestClientBounds(t *testing.T) {
-	if defaultCallTimeout <= 0 || defaultDialTimeout <= 0 || maxPendingRequests <= 0 || maxPendingRequests > 64 {
+	if defaultCallTimeout <= 0 || DefaultDialTimeout <= 0 || maxPendingRequests <= 0 || maxPendingRequests > 64 {
 		t.Fatal("client request/dial bounds are missing or excessive")
 	}
 }

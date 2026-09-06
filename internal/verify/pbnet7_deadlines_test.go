@@ -110,7 +110,7 @@ func pbnet7Body(src string, body *ast.BlockStmt) string {
 func TestPBNET7_NativeRelayV2RequestsHaveSection60Bounds(t *testing.T) {
 	src, funcs := pbnet7Client(t)
 	if !strings.Contains(src, "defaultCallTimeout  = 10 * time.Second") ||
-		!strings.Contains(src, "defaultDialTimeout  = 10 * time.Second") {
+		!strings.Contains(src, "DefaultDialTimeout = 10 * time.Second") {
 		t.Fatal("PB-NET-7: relay-v2 no longer declares the section 6.0 ten-second call and dial ceilings")
 	}
 
@@ -125,9 +125,9 @@ func TestPBNET7_NativeRelayV2RequestsHaveSection60Bounds(t *testing.T) {
 
 	dialRaw := require("dialRaw")
 	if !pbnet7Calls(dialRaw.body, "context", "WithTimeout") ||
-		!strings.Contains(pbnet7Body(src, dialRaw.body), "defaultDialTimeout") ||
+		!strings.Contains(pbnet7Body(src, dialRaw.body), "DefaultDialTimeout") ||
 		!pbnet7Calls(dialRaw.body, "websocket", "Dial") {
-		t.Fatal("PB-NET-7: relay-v2 dialRaw no longer bounds websocket setup with defaultDialTimeout")
+		t.Fatal("PB-NET-7: relay-v2 dialRaw no longer bounds websocket setup with DefaultDialTimeout")
 	}
 
 	call := require("(*Conn).call")

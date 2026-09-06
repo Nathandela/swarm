@@ -8,14 +8,11 @@ package remotegw_test
 // their fence, and internal/verify/phaseb_budget_test.go requires a cited fence to name the
 // requirement it is cited for -- a citation that names nothing can point anywhere.
 //
-// WHAT WAS ALREADY COVERED AND WHY IT IS NOT THIS. transport/drainbudget_test.go pins
-// MaxDrainReadsPerSec and MaxDrainAcksPerSec and the arithmetic against the relay's OpsPerMin
-// window. Those are the NUMBERS the batcher is built from. Nothing asserted what the batcher
-// DOES with them -- and the numbers being fenced is what made this easy to miss, because the
-// file reads as coverage of the pacer and is coverage of its inputs.
+// transport/drainbudget_test.go pins the metered ACK ceiling; these tests pin what the
+// batcher does with it.
 //
-// WHY THE FENCE LIVES HERE. internal/remotegw is the only production constructor of either
-// type (command_loop.go:309,317). A fence placed with the consumer follows the requirement's
+// WHY THE FENCE LIVES HERE. internal/remotegw is the production constructor. A fence placed
+// with the consumer follows the requirement's
 // live hop if the implementation is moved or renamed again, which this package's own history
 // says is the likelier event; placed beside the implementation it would have to be rescued a
 // third time. The SUBJECT is still AckBatcher -- this is not re-pointing the assertion at a

@@ -28,7 +28,6 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // downForwarder is the daemon being unreachable, which is the one refusal shape that a
@@ -54,7 +53,7 @@ func TestF3_ARefusedCommandIsConsumedSoTheMailboxDrains(t *testing.T) {
 		Sig:         "device-signature",
 	}
 	const cursor = uint64(7)
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: cursor, Envelope: sealedCmd(t, key, 1, cmd)}}}
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: cursor, Envelope: sealedCmd(t, key, 1, cmd)}}}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,
 		Forwarder:   &fakeForwarder{},
@@ -126,7 +125,7 @@ func TestF3_AForwardFailureIsStillRetried(t *testing.T) {
 		DeviceID:    "d1",
 		Sig:         "device-signature",
 	}
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 3, Envelope: sealedCmd(t, key, 1, cmd)}}}
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 3, Envelope: sealedCmd(t, key, 1, cmd)}}}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,
 		Forwarder:   downForwarder{},

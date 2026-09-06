@@ -54,13 +54,13 @@ func (c *grantRetryConn) MailboxAppend(_ context.Context, _ string, env []byte) 
 	return uint64(call), err
 }
 
-func (c *grantRetryConn) MailboxRead(ctx context.Context, _ uint64) ([]relay.Item, error) {
+func (c *grantRetryConn) MailboxRead(ctx context.Context, _ uint64) ([]relayv2.Item, error) {
 	c.markWaitStarted()
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
 
-func (c *grantRetryConn) MailboxWait(ctx context.Context, _ uint64) ([]relay.Item, bool, error) {
+func (c *grantRetryConn) MailboxWait(ctx context.Context, _ uint64) ([]relayv2.Item, bool, error) {
 	c.markWaitStarted()
 	<-ctx.Done()
 	return nil, false, ctx.Err()

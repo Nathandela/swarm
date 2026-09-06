@@ -22,7 +22,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/grant"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // errNoBootstrap is returned when NewFromMailbox scans the mailbox and finds no
@@ -35,12 +35,14 @@ var errNoBootstrap = errors.New("phonesim: no epoch_grant_bootstrap frame in mai
 // relay (codex#7); a non-advancing page terminates it instead.
 var errStuckPage = errors.New("phonesim: relay page did not advance past cursor")
 
-// mailbox is the slice of *relay.Client the phone consumes: PAGED reads to drain its
+type mailboxItem = relayv2.Item
+
+// mailbox is the slice of a relay-v2 phone mailbox the phone consumes: PAGED reads to drain its
 // mailbox, appends to reach the machine, and acks to compact what it has drained. Taking
 // an interface (not the concrete client) lets a test drive the phone with a scripted relay
 // -- the untrusted adversary controlling what each read returns.
 type mailbox interface {
-	MailboxReadPage(ctx context.Context, cursor uint64, limit int) ([]relay.Item, bool, error)
+	MailboxReadPage(ctx context.Context, cursor uint64, limit int) ([]relayv2.Item, bool, error)
 	MailboxAppend(ctx context.Context, target string, env []byte) (uint64, error)
 	MailboxAck(ctx context.Context, cursor uint64) error
 }
@@ -53,7 +55,7 @@ type Config struct {
 	KeyStore       crypto.KeyStore    // phone key custody (Noise/relay-auth/command-signing)
 	MachineSignPub []byte             // machine Ed25519 grant-signing pub pinned at pairing
 	Grant          *crypto.EpochGrant // sealed initial epoch grant delivered by the machine
-	Relay          mailbox            // the phone's authenticated relay connection (*relay.Client in production)
+	Relay          mailbox            // the phone's authenticated relay-v2 mailbox
 	MachineTarget  string             // machine mailbox routing id (where commands are appended)
 	Machine        string             // machine endpoint id, signed into each command tuple
 }

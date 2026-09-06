@@ -32,7 +32,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // ackRecordingMailbox wraps fakeMailbox and additionally records every
@@ -55,7 +54,7 @@ func TestCommandBridge_PollOnceAcksConsumedItems(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 3)
 	}
-	mb := &ackRecordingMailbox{fakeMailbox: fakeMailbox{inbox: []relay.Item{
+	mb := &ackRecordingMailbox{fakeMailbox: fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-1", DeviceID: "d1", Sig: "s1"})},
 		{Cursor: 2, Envelope: sealedCmd(t, key, 2, protocol.DeviceCommandAuth{Action: protocol.ActionDelete, Session: "m/s2", OperationID: "op-2", DeviceID: "d1", Sig: "s2"})},
 	}}}
@@ -84,22 +83,22 @@ func TestCommandBridge_PollOnceAcksConsumedItems(t *testing.T) {
 	}
 }
 
-// ackPurgingItem pairs a relay.Item with the cursor it lives at, so
+// ackPurgingItem pairs a mailboxItem with the cursor it lives at, so
 // ackPurgingMailbox can delete by cursor the same way the real relay store's
 // ackItems does (internal/remote/relay/store.go).
 type ackPurgingMailbox struct {
 	mu     sync.Mutex
-	inbox  []relay.Item
+	inbox  []mailboxItem
 	acked  []uint64
 	target string
 }
 
 // MailboxRead mirrors relay.Client.MailboxRead: items with cursor strictly
 // greater than the given cursor, from whatever remains in the durable store.
-func (m *ackPurgingMailbox) MailboxRead(_ context.Context, cursor uint64) ([]relay.Item, error) {
+func (m *ackPurgingMailbox) MailboxRead(_ context.Context, cursor uint64) ([]mailboxItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []relay.Item
+	var out []mailboxItem
 	for _, it := range m.inbox {
 		if it.Cursor > cursor {
 			out = append(out, it)
@@ -111,7 +110,7 @@ func (m *ackPurgingMailbox) MailboxRead(_ context.Context, cursor uint64) ([]rel
 // MailboxWait is the S6b low-latency seam, answered from the same durable store
 // MailboxRead reads, so the purge-on-ack behaviour this fake exists to model is
 // identical whichever way the bridge fetches.
-func (m *ackPurgingMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+func (m *ackPurgingMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]mailboxItem, bool, error) {
 	items, err := m.MailboxRead(ctx, cursor)
 	return items, false, err
 }
@@ -145,7 +144,7 @@ func TestCommandBridge_RestartDoesNotReplayAckedCommands(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 5)
 	}
-	mb := &ackPurgingMailbox{inbox: []relay.Item{
+	mb := &ackPurgingMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-1", DeviceID: "d1", Sig: "s1"})},
 	}}
 	// A single forwarder shared across both bridge instances -- the assertion

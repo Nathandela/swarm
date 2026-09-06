@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // Material is deterministic construction material for tests/KATs, mirroring
@@ -88,9 +88,9 @@ func Generate(hostname string) (*Identity, error) {
 // no I/O, cannot fail).
 func NewFromMaterial(hostname string, m Material) *Identity {
 	relayPub := m.RelayAuthPriv.Public().(ed25519.PublicKey)
-	// relay.RoutingID always returns valid lowercase hex, so decoding it back
+	// relayv2.RoutingID always returns valid lowercase hex, so decoding it back
 	// to bytes cannot fail.
-	routingID, _ := hex.DecodeString(relay.RoutingID(relayPub))
+	routingID, _ := hex.DecodeString(relayv2.RoutingID(relayPub))
 	return &Identity{
 		hostname:        hostname,
 		noiseStaticPriv: m.NoiseStaticPriv,
@@ -192,7 +192,7 @@ func (id *Identity) NextGrantSeq(floor uint64) uint64 {
 func (id *Identity) Hostname() string { return id.hostname }
 
 // RoutingID returns a copy of the relay's opaque routing handle for this
-// machine, derived from the relay-auth public key (relay.RoutingID).
+// machine, derived from the relay-auth public key (relayv2.RoutingID).
 func (id *Identity) RoutingID() []byte { return append([]byte(nil), id.routingID...) }
 
 // String is a redacted representation: hostname, public-key fingerprints, and

@@ -24,7 +24,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // PollOnce keeps older same-package tests focused on one mailbox batch while the
@@ -35,15 +34,15 @@ func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) { return b.po
 // records sealed replies the bridge sends back to the phone.
 type fakeMailbox struct {
 	mu      sync.Mutex
-	inbox   []relay.Item
+	inbox   []mailboxItem
 	replies [][]byte
 	target  string
 }
 
-func (f *fakeMailbox) MailboxRead(_ context.Context, cursor uint64) ([]relay.Item, error) {
+func (f *fakeMailbox) MailboxRead(_ context.Context, cursor uint64) ([]mailboxItem, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []relay.Item
+	var out []mailboxItem
 	for _, it := range f.inbox {
 		if it.Cursor > cursor {
 			out = append(out, it)
@@ -55,7 +54,7 @@ func (f *fakeMailbox) MailboxRead(_ context.Context, cursor uint64) ([]relay.Ite
 // MailboxWait is the S6b low-latency seam. This fake models no blocking: it answers
 // from whatever is already in the inbox, which is what its tests (which drive PollOnce
 // directly) need to keep meaning exactly what they meant before.
-func (f *fakeMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+func (f *fakeMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]mailboxItem, bool, error) {
 	items, err := f.MailboxRead(ctx, cursor)
 	return items, false, err
 }
@@ -112,7 +111,7 @@ func TestCommandBridge_PollOpensForwardsAndSealsReply(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 7)
 	}
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-1", DeviceID: "d1", Sig: "s1"})},
 		{Cursor: 2, Envelope: sealedCmd(t, key, 2, protocol.DeviceCommandAuth{Action: protocol.ActionDelete, Session: "m/s2", OperationID: "op-2", DeviceID: "d1", Sig: "s2"})},
 	}}
@@ -180,7 +179,7 @@ func TestCommandBridge_MalformedEnvelopeSkippedNotWedged(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 7)
 	}
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: []byte("not-a-valid-envelope")},
 		{Cursor: 2, Envelope: sealedCmd(t, key, 2, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-2", DeviceID: "d1", Sig: "s2"})},
 	}}

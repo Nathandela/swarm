@@ -17,11 +17,11 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 func TestB46_TheAnnouncedPairingWindowNeverOutlivesTheRelaySlot(t *testing.T) {
-	slot := relay.DefaultConfig().RendezvousTTL
+	slot := relayv2.PairingTTL
 
 	for _, tc := range []struct {
 		name string

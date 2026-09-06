@@ -28,7 +28,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // TestCommandBridge_ReplayedCommandEnvelopeRejectedNotForwarded: the relay
@@ -47,7 +46,7 @@ func TestCommandBridge_ReplayedCommandEnvelopeRejectedNotForwarded(t *testing.T)
 		Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-1", DeviceID: "d1", Sig: "s1",
 	})
 	// The SAME sealed envelope, replayed by the relay at a later storage cursor.
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: raw},
 		{Cursor: 2, Envelope: raw},
 	}}
@@ -94,7 +93,7 @@ func TestCommandBridge_ReorderedCommandEnvelopeRejected(t *testing.T) {
 	envSeq1 := sealedCmd(t, key, 1, protocol.DeviceCommandAuth{
 		Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-seq1", DeviceID: "d1", Sig: "s1",
 	})
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: envSeq2}, // relay delivers the higher seq first
 		{Cursor: 2, Envelope: envSeq1}, // stale seq arrives second
 	}}

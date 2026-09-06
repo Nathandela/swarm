@@ -316,7 +316,7 @@ func watchDegraded(ctx context.Context, svc *remotegw.Service) {
 // re-proving them. Everything else -- a refused quota, an unreachable host, a relay that
 // answers nothing, a link that dropped -- is an OUTAGE and is retried on the backoff.
 //
-// Note what is NOT here: context.DeadlineExceeded. A dial that hits relay.DefaultDialTimeout
+// Note what is NOT here: context.DeadlineExceeded. A dial that hits relayv2.DefaultDialTimeout
 // reports exactly that, and it is the single most ordinary transient condition on the list.
 // The caller's own ctx is consulted directly instead, which is the only context that means
 // "stop".

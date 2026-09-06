@@ -30,7 +30,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // TestLeaseRouter_RequiresGeneration is the adversarial pin (9 rule 5) for the seam
@@ -116,7 +115,7 @@ func TestCommandBridge_TakeControlSealsALeaseConfirmation(t *testing.T) {
 	takeCtrl := protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{
 		Action: protocol.ActionTakeControl, Session: "m/s1", OperationID: "op-tc", DeviceID: "d1", Sig: "sig-tc",
 	}}
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeCtrl)}}}
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeCtrl)}}}
 	leases := &confirmingLeaseRouter{gen: 42}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,
@@ -172,7 +171,7 @@ func TestCommandBridge_FailedTakeControlSealsAnErrorNotSilence(t *testing.T) {
 	takeCtrl := protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{
 		Action: protocol.ActionTakeControl, Session: "m/s1", OperationID: "op-tc", DeviceID: "d1", Sig: "sig-tc",
 	}}
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeCtrl)}}}
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeCtrl)}}}
 	leases := &confirmingLeaseRouter{err: errors.New("timed out awaiting the lease grant")}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,

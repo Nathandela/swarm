@@ -11,7 +11,7 @@ package swarmmobile_test
 // short by three fields:
 //
 //  1. MachineRelayAuthPub -- the machine's relay-auth public key. The phone derives the
-//     machine's relay ROUTING id from it (relay.RoutingID), which is the mailbox target
+//     machine's relay ROUTING id from it (relayv2.RoutingID), which is the mailbox target
 //     every command and keystroke is appended to, and it is also what the phone must
 //     AuthorizeDevice for anything to be delivered. State records the machine's ENDPOINT
 //     id, its Noise static and its grant-signing key -- who the machine IS -- and nothing

@@ -12,7 +12,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // fakeTerminalWatchRouter records Watch/Unwatch so the routing is unit-tested without a
@@ -52,7 +51,7 @@ func TestCommandBridge_RoutesTerminalWatch(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 3)
 	}
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{Action: protocol.ActionTerminalWatch, Session: "m/s1"}})},
 		{Cursor: 2, Envelope: sealRemoteCmd(t, key, 2, protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{Action: protocol.ActionTerminalUnwatch, Session: "m/s1"}})},
 	}}

@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 var (
@@ -201,7 +199,7 @@ func TestCommandBridgeRefusesCustodyAfterRelayAuthorityChanges(t *testing.T) {
 func TestCommandBridgeDurableReplayIsBoundToCapturedRelayAuthority(t *testing.T) {
 	key := inboundKey(41)
 	stream := InboundStream{Epoch: 7}
-	item := relay.Item{Cursor: 5, Envelope: sealAt(t, key, 7, 1, killCmd("m/s", "op"))}
+	item := mailboxItem{Cursor: 5, Envelope: sealAt(t, key, 7, 1, killCmd("m/s", "op"))}
 
 	newState := func(t *testing.T) *memInboundState {
 		t.Helper()

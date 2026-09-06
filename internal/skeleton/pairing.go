@@ -19,7 +19,6 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/enroll"
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaypurge"
 	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/remotegw"
@@ -31,16 +30,14 @@ import (
 // IT WAS 3 MINUTES AGAINST A 60-SECOND SLOT (ADR-007 B46). The old comment called this
 // expiry "advisory... the daemon's real gate is the mandatory SAS confirm, not a wall
 // clock". The SAS is indeed the gate for what a pairing MEANS, and it decides nothing
-// about whether the rendezvous still exists: past relay.Config.RendezvousTTL the slot is
+// about whether the rendezvous still exists: past relayv2.PairingTTL the slot is
 // purged, and this daemon went on printing an expiry two minutes into that gap with the
 // QR still on the owner's screen. That gap is the interval an expired rendezvous id can
 // be re-created in (B47b, fenced at the relay by burnRendezvous) -- so the announcement
 // is brought back inside the thing it announces rather than left to be caught downstream.
 //
-// The bound is the DEFAULT relay config's TTL because that is the only value a machine
-// can know: the deployed relay's own setting is not on any wire the daemon reads, and the
-// phone transcribes the same 60 s constant (mobile/pairing.go). Announcing SHORTER than a
-// relay that was tuned longer costs a retry; announcing longer is the defect above.
+// The bound is the native relay-v2 slot shared with the phone. Announcing shorter costs a
+// retry; announcing longer is the defect above.
 const defaultPairTTL = 3 * time.Minute
 
 // pairWindow is the announced expiry for a requested TTL: the request, or the daemon
@@ -49,7 +46,7 @@ func pairWindow(requested time.Duration) time.Duration {
 	if requested <= 0 {
 		requested = defaultPairTTL
 	}
-	if slot := relay.DefaultConfig().RendezvousTTL; requested > slot {
+	if slot := relayv2.PairingTTL; requested > slot {
 		return slot
 	}
 	return requested

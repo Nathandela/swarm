@@ -33,6 +33,7 @@
 package skeleton
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -138,6 +139,43 @@ func launchFakeWithOptions(t *testing.T, sk *Daemon, script string, options ...s
 		}
 	})
 	return m
+}
+
+func TestLaunchFakeWithRawStdinLogObservesNonSubmitBytes(t *testing.T) {
+	sk := assemble(t)
+	logPath := filepath.Join(t.TempDir(), "raw-stdin.bin")
+	meta := launchFakeWithOptions(t, sk, "ask raw?\nexit 0\n", "--raw-stdin-log", logPath)
+	client := dialClient(t, sk)
+	att, err := client.Attach(protocol.NamespacedID(sk.api.endpointID, meta.ID))
+	if err != nil {
+		t.Fatalf("attach raw fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = att.Detach() })
+	if ok, got := awaitFrames(att, "raw?", 10*time.Second); !ok {
+		t.Fatalf("raw fixture did not reach its stdin read: %q", got)
+	}
+	want := []byte("raw-input-16byte")
+	if len(want) != 16 {
+		t.Fatalf("test payload = %d bytes, want 16", len(want))
+	}
+	if err := att.Input(want); err != nil {
+		t.Fatalf("write non-submit bytes: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, readErr := os.ReadFile(logPath); readErr == nil && bytes.Equal(got, want) {
+			if err := att.Input([]byte("\n")); err != nil {
+				t.Fatalf("release raw fixture: %v", err)
+			}
+			if !waitSessionExited(t, sk, meta.ID, 10*time.Second) {
+				t.Fatal("raw fixture did not exit after its explicit newline")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got, readErr := os.ReadFile(logPath)
+	t.Fatalf("raw stdin log = %q (err=%v), want exact non-submit bytes %q", got, readErr, want)
 }
 
 func dialClient(t *testing.T, sk *Daemon, caps ...string) *protocol.Client {

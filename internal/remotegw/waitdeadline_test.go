@@ -8,8 +8,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // silentWaitCall is one observed MailboxWait: when it was issued, and the deadline (if any) the
@@ -26,11 +24,11 @@ type silentWaitMailbox struct {
 	calls []silentWaitCall
 }
 
-func (m *silentWaitMailbox) MailboxRead(context.Context, uint64) ([]relay.Item, error) {
+func (m *silentWaitMailbox) MailboxRead(context.Context, uint64) ([]mailboxItem, error) {
 	return nil, nil
 }
 
-func (m *silentWaitMailbox) MailboxWait(ctx context.Context, _ uint64) ([]relay.Item, bool, error) {
+func (m *silentWaitMailbox) MailboxWait(ctx context.Context, _ uint64) ([]mailboxItem, bool, error) {
 	dl, ok := ctx.Deadline()
 	m.mu.Lock()
 	m.calls = append(m.calls, silentWaitCall{issued: time.Now(), deadline: dl, bounded: ok})
@@ -120,8 +118,6 @@ const waitObservationSlack = 2 * time.Second
 // immediately starts the next receive without latching Err or applying error retry backoff.
 func TestInboundWait_LocalDeadlineIsIdleRecheck(t *testing.T) {
 	mb := &silentWaitMailbox{}
-	// Leave room above DrainPacer's idle spacing so this measures only the error-retry
-	// backoff, not the normal read-rate ceiling.
 	b := NewCommandBridge(CommandBridgeConfig{Mailbox: mb, WaitTimeout: 400 * time.Millisecond})
 	stop := runBridge(t, b)
 	defer stop()

@@ -62,7 +62,6 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // s7bEpoch is the epoch every frame in this file is sealed under.
@@ -335,7 +334,7 @@ func TestS7bBoundedAge_IsEnforcedOnTheProductionBridgePath(t *testing.T) {
 	key := s7bKey()
 	wall := time.Now()
 
-	mb := &fakeMailbox{inbox: []relay.Item{
+	mb := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: s7bSealInputAt(t, key, 61, wall.Add(-11*time.Minute))},
 		{Cursor: 2, Envelope: s7bSealInputAt(t, key, 62, wall)},
 	}}

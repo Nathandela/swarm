@@ -1,6 +1,6 @@
 package remotegw
 
-// The relay MINTS relay.Item.Cursor -- the field's own doc calls it "the relay's own
+// The relay MINTS mailboxItem.Cursor -- the field's own doc calls it "the relay's own
 // monotonic storage cursor (UNTRUSTED ordering)" -- and the bridge adopts it as its DURABLE
 // resume point. processBatch took the batch maximum from EVERY item it read, BEFORE handle()
 // and regardless of whether the envelope opened, so a relay needed no key at all: six bytes

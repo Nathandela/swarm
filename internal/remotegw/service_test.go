@@ -27,14 +27,13 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // scriptedMailbox serves a fixed inbox and records appends; MailboxRead honours the
 // cursor so a drained item is not re-served.
 type scriptedMailbox struct {
 	mu      sync.Mutex
-	inbox   []relay.Item
+	inbox   []mailboxItem
 	appends [][]byte
 }
 
@@ -42,20 +41,20 @@ type scriptedMailbox struct {
 // hangingAppender blocks the journal/replay side until that append context is cancelled.
 type serviceHangingMailbox struct{ *hangingAppender }
 
-func (m *serviceHangingMailbox) MailboxRead(context.Context, uint64) ([]relay.Item, error) {
+func (m *serviceHangingMailbox) MailboxRead(context.Context, uint64) ([]mailboxItem, error) {
 	return nil, nil
 }
 
-func (m *serviceHangingMailbox) MailboxWait(context.Context, uint64) ([]relay.Item, bool, error) {
+func (m *serviceHangingMailbox) MailboxWait(context.Context, uint64) ([]mailboxItem, bool, error) {
 	return nil, false, nil
 }
 
 func (m *serviceHangingMailbox) MailboxAck(context.Context, uint64) error { return nil }
 
-func (m *scriptedMailbox) MailboxRead(_ context.Context, cursor uint64) ([]relay.Item, error) {
+func (m *scriptedMailbox) MailboxRead(_ context.Context, cursor uint64) ([]mailboxItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []relay.Item
+	var out []mailboxItem
 	for _, it := range m.inbox {
 		if it.Cursor > cursor {
 			out = append(out, it)
@@ -67,7 +66,7 @@ func (m *scriptedMailbox) MailboxRead(_ context.Context, cursor uint64) ([]relay
 // MailboxWait is the S6b low-latency seam. The scripted inbox is finite, so a wait
 // that blocked would stall Service.Run's command loop after the script is drained;
 // answering immediately keeps this fake's shape (serve the script, then nothing).
-func (m *scriptedMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+func (m *scriptedMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]mailboxItem, bool, error) {
 	items, err := m.MailboxRead(ctx, cursor)
 	return items, false, err
 }
@@ -175,7 +174,7 @@ func TestService_CommandLoopDrainsQueuedCommand(t *testing.T) {
 	for i := range key {
 		key[i] = byte(i + 2)
 	}
-	mb := &scriptedMailbox{inbox: []relay.Item{
+	mb := &scriptedMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-1", DeviceID: "d", Sig: "s"})},
 	}}
 	fwd := &fakeForwarder{}

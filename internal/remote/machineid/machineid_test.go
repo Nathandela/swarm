@@ -40,7 +40,7 @@
 //	func (id *Identity) EpochID() uint32                        // -> pairingConfig.EpochID
 //	func (id *Identity) GrantSeq() uint64                       // -> pairingConfig.GrantSeq
 //	func (id *Identity) Hostname() string                       // -> pairingConfig.Hostname
-//	func (id *Identity) RoutingID() []byte                      // -> pairingConfig.RoutingID (derived from the relay-auth pubkey, see relay.RoutingID)
+//	func (id *Identity) RoutingID() []byte                      // -> pairingConfig.RoutingID (derived from the relay-auth pubkey, see relayv2.RoutingID)
 //
 // Save/Load persist ALL of the above losslessly in a SINGLE 0600 file
 // (temp+Sync+rename, mirroring crypto's unexported writeSecretFile — it is NOT
@@ -68,6 +68,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // fill returns a 32-byte array of the repeated byte b: deterministic,
@@ -180,6 +181,9 @@ func TestMachineIdentity_GenerateSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(reloaded.RoutingID(), id.RoutingID()) {
 		t.Errorf("RoutingID changed across Save/Load: got %x, want %x", reloaded.RoutingID(), id.RoutingID())
+	}
+	if got, want := hex.EncodeToString(reloaded.RoutingID()), relayv2.RoutingID(wantRelayPub); got != want {
+		t.Errorf("RoutingID = %q, want canonical relay-v2 derivation %q", got, want)
 	}
 }
 

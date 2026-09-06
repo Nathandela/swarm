@@ -107,9 +107,21 @@ else
   exit 1
 fi
 if output=$(SKELETON_RELAY_V2_HTTP="http://127.0.0.1:$port" \
-  go test ../../internal/skeleton -run '^TestS19_' -count=1 -timeout=60s -v 2>&1); then
+  go test ../../internal/skeleton -run '^Test(S18|PBSEC[67]|S19_|S19Workerd_|PBE2E1_|ApproveRoundTripE2E_)' -count=1 -timeout=180s -v 2>&1); then
   printf '%s\n' "$output"
-  case "$output" in *"--- PASS: TestS19_ARefusedLeaseReportsTheDaemonsReason"*) :;; *) exit 1;; esac
+  for required in \
+    TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval \
+    TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway \
+    TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved \
+    TestPBSEC7_TheDeviceLossChainRunsEndToEnd \
+    TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke \
+    TestS19_ARefusedLeaseReportsTheDaemonsReason \
+    TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY \
+    TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning \
+    TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn
+  do
+    case "$output" in *"--- PASS: $required"*) :;; *) exit 1;; esac
+  done
 else
   printf '%s\n' "$output"
   sed -n '1,200p' "$log"

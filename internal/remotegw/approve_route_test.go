@@ -28,7 +28,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // sealedApproveCmd seals an approve RemoteCommand the way the phone core does: the signed
@@ -82,7 +81,7 @@ func approveBridge(t *testing.T, key crypto.ContentKey, fwd CommandForwarder, en
 	t.Helper()
 	mb := &fakeMailbox{}
 	for i, e := range envs {
-		mb.inbox = append(mb.inbox, relay.Item{Cursor: uint64(i + 1), Envelope: e})
+		mb.inbox = append(mb.inbox, mailboxItem{Cursor: uint64(i + 1), Envelope: e})
 	}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,

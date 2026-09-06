@@ -55,7 +55,7 @@ func (m *legacyIncarnationMailbox) MailboxIncarnation() string {
 	return m.incarnation
 }
 
-func (m *legacyIncarnationMailbox) MailboxRead(ctx context.Context, cursor uint64) ([]relay.Item, error) {
+func (m *legacyIncarnationMailbox) MailboxRead(ctx context.Context, cursor uint64) ([]mailboxItem, error) {
 	m.mu.Lock()
 	m.reads = append(m.reads, cursor)
 	incarnation := m.incarnation
@@ -69,7 +69,7 @@ func (m *legacyIncarnationMailbox) MailboxRead(ctx context.Context, cursor uint6
 	return m.fakeMailbox.MailboxRead(ctx, cursor)
 }
 
-func (m *waitCursorResetMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+func (m *waitCursorResetMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]mailboxItem, bool, error) {
 	m.mu.Lock()
 	m.calls++
 	call := m.calls
@@ -92,7 +92,7 @@ func (m *cursorResetMailbox) MailboxAck(_ context.Context, cursor uint64) error 
 	return nil
 }
 
-func (m *cursorResetMailbox) MailboxRead(ctx context.Context, cursor uint64) ([]relay.Item, error) {
+func (m *cursorResetMailbox) MailboxRead(ctx context.Context, cursor uint64) ([]mailboxItem, error) {
 	m.reads = append(m.reads, cursor)
 	if cursor > 1 {
 		return nil, relay.ErrMailboxCursorResetRequired
@@ -109,7 +109,7 @@ func TestCommandBridge_AuthenticatesAndCompactsReplaysAfterRewind(t *testing.T) 
 	inbound := &memInboundState{ck: InboundCheckpoint{
 		Cursor: 53, Highest: map[InboundStream]uint64{stream: 1},
 	}}
-	mb := &cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []relay.Item{{
+	mb := &cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []mailboxItem{{
 		Cursor: 1,
 		Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{
 			Action: protocol.ActionKill, Session: "m/old", OperationID: "old", DeviceID: "d1", Sig: "s1",
@@ -146,7 +146,7 @@ func TestCommandBridge_PollOnceRecoversAResetRelayMailbox(t *testing.T) {
 		Cursor:  53,
 		Highest: map[InboundStream]uint64{stream: 1},
 	}}
-	mb := &cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []relay.Item{{
+	mb := &cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []mailboxItem{{
 		Cursor: 1,
 		Envelope: sealedCmd(t, key, 2, protocol.DeviceCommandAuth{
 			Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-2", DeviceID: "d1", Sig: "s2",
@@ -182,7 +182,7 @@ func TestCommandBridge_LegacyEqualHighWaterCheckpointRewindsBeforeIncarnationAdo
 		Cursor:  3, // numerically equal to the modeled replacement mailbox high-water
 		Highest: map[InboundStream]uint64{},
 	}}
-	mb := &legacyIncarnationMailbox{fakeMailbox: fakeMailbox{inbox: []relay.Item{{
+	mb := &legacyIncarnationMailbox{fakeMailbox: fakeMailbox{inbox: []mailboxItem{{
 		Cursor: 1,
 		Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{
 			Action: protocol.ActionKill, Session: "m/migrated", OperationID: "migrated", DeviceID: "d1", Sig: "s1",
@@ -217,7 +217,7 @@ func TestCommandBridge_RunRecoversAResetRelayMailboxWait(t *testing.T) {
 	inbound := &memInboundState{ck: InboundCheckpoint{
 		Cursor: 53, Highest: map[InboundStream]uint64{stream: 1},
 	}}
-	mb := &waitCursorResetMailbox{cursorResetMailbox: cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []relay.Item{{
+	mb := &waitCursorResetMailbox{cursorResetMailbox: cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []mailboxItem{{
 		Cursor: 1,
 		Envelope: sealedCmd(t, key, 2, protocol.DeviceCommandAuth{
 			Action: protocol.ActionKill, Session: "m/wait", OperationID: "op-wait", DeviceID: "d1", Sig: "s2",
@@ -263,7 +263,7 @@ func TestCommandBridge_RecoverySurvivesMixedStaleFreshStalePage(t *testing.T) {
 			Action: protocol.ActionKill, Session: "m/" + op, OperationID: op, DeviceID: "d1", Sig: op,
 		})
 	}
-	mb := &cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []relay.Item{
+	mb := &cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: cmd(1, "old-1")},
 		{Cursor: 2, Envelope: cmd(3, "fresh")},
 		{Cursor: 3, Envelope: cmd(2, "old-2")},
@@ -310,7 +310,7 @@ func TestCommandBridge_RecoveryCompactsAuthenticatedOldReplayDespiteAge(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	mb := &cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: env.Marshal()}}}}
+	mb := &cursorResetMailbox{fakeMailbox: fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: env.Marshal()}}}}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox: mb, Forwarder: &fakeForwarder{}, Key: key, EpochID: 1, ReplyTarget: "phone", Inbound: inbound,
 	})

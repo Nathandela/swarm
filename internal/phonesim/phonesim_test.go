@@ -21,7 +21,6 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/grant"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -33,18 +32,18 @@ const testEpoch = uint32(1)
 // means one unbounded page. It is the untrusted adversary: it decides what each read hands
 // back.
 type fakeRelay struct {
-	items    []relay.Item // cursor-ascending
+	items    []mailboxItem // cursor-ascending
 	pageSize int
 	acked    uint64
 	appends  [][]byte
 }
 
-func (f *fakeRelay) MailboxReadPage(_ context.Context, cursor uint64, limit int) ([]relay.Item, bool, error) {
+func (f *fakeRelay) MailboxReadPage(_ context.Context, cursor uint64, limit int) ([]mailboxItem, bool, error) {
 	n := limit
 	if n <= 0 {
 		n = f.pageSize
 	}
-	var rem []relay.Item
+	var rem []mailboxItem
 	for _, it := range f.items {
 		if it.Cursor > cursor {
 			rem = append(rem, it)
@@ -131,7 +130,7 @@ func TestPhone_ObserveThenReadReply_ReturnsReplyAndKeepsJournal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal control reply: %v", err)
 	}
-	fake := &fakeRelay{items: []relay.Item{
+	fake := &fakeRelay{items: []mailboxItem{
 		{Cursor: 1, Envelope: journal},
 		{Cursor: 2, Envelope: reply},
 	}}
@@ -175,7 +174,7 @@ func TestPhone_NewFromMailbox_FindsBootstrapOnLaterPage(t *testing.T) {
 	// pageSize 2 with two non-bootstrap head frames puts the real bootstrap on page TWO.
 	fake := &fakeRelay{
 		pageSize: 2,
-		items: []relay.Item{
+		items: []mailboxItem{
 			{Cursor: 1, Envelope: []byte("not-a-bootstrap-1")},
 			{Cursor: 2, Envelope: []byte("not-a-bootstrap-2")},
 			{Cursor: 3, Envelope: bootstrap},
@@ -203,7 +202,7 @@ func TestPhone_NewFromMailbox_SkipsPoisonBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal poison bootstrap: %v", err)
 	}
-	fake := &fakeRelay{items: []relay.Item{
+	fake := &fakeRelay{items: []mailboxItem{
 		{Cursor: 1, Envelope: poison},
 		{Cursor: 2, Envelope: bootstrap},
 	}}
@@ -238,7 +237,7 @@ func TestPhone_NewFromMailbox_SkipsPoisonBootstrap(t *testing.T) {
 // has_more blindly against this relay, or the scan spins forever.
 type stuckRelay struct{}
 
-func (stuckRelay) MailboxReadPage(_ context.Context, _ uint64, _ int) ([]relay.Item, bool, error) {
+func (stuckRelay) MailboxReadPage(_ context.Context, _ uint64, _ int) ([]mailboxItem, bool, error) {
 	return nil, true, nil // empty page, has_more=true forever: no item ever advances the cursor
 }
 func (stuckRelay) MailboxAppend(_ context.Context, _ string, _ []byte) (uint64, error) { return 0, nil }
@@ -313,7 +312,7 @@ func TestPhone_Drain_DetectsGapAndDoesNotAckPastIt(t *testing.T) {
 	// seq 1 then seq 3: seq 2 is the frame the relay dropped.
 	first := sealJournal(t, key, 1, protocol.JournalRecord{Cursor: 1, SessionID: "sess-A"})
 	afterGap := sealJournal(t, key, 3, protocol.JournalRecord{Cursor: 2, SessionID: "sess-B"})
-	fake := &fakeRelay{items: []relay.Item{
+	fake := &fakeRelay{items: []mailboxItem{
 		{Cursor: 1, Envelope: first},
 		{Cursor: 2, Envelope: afterGap},
 	}}
@@ -380,7 +379,7 @@ func TestPhone_Drain_GapSurvivesDecodeFailure(t *testing.T) {
 	}
 	afterGap := env.Marshal()
 
-	fake := &fakeRelay{items: []relay.Item{
+	fake := &fakeRelay{items: []mailboxItem{
 		{Cursor: 1, Envelope: first},
 		{Cursor: 2, Envelope: afterGap},
 	}}
@@ -415,7 +414,7 @@ type gateRelay struct {
 	calls   int32
 }
 
-func (g *gateRelay) MailboxReadPage(ctx context.Context, cursor uint64, limit int) ([]relay.Item, bool, error) {
+func (g *gateRelay) MailboxReadPage(ctx context.Context, cursor uint64, limit int) ([]mailboxItem, bool, error) {
 	if atomic.AddInt32(&g.calls, 1) == 1 {
 		close(g.entered)
 		<-g.release
@@ -435,7 +434,7 @@ func TestPhone_Drain_SerializesConcurrentSweeps(t *testing.T) {
 	key := keys.ContentKey
 	journal := sealJournal(t, key, 1, protocol.JournalRecord{Cursor: 1, SessionID: "sess-A"})
 	fake := &gateRelay{
-		fakeRelay: fakeRelay{items: []relay.Item{{Cursor: 1, Envelope: journal}}},
+		fakeRelay: fakeRelay{items: []mailboxItem{{Cursor: 1, Envelope: journal}}},
 		entered:   make(chan struct{}),
 		release:   make(chan struct{}),
 	}

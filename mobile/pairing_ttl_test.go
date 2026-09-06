@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/remote/pairing"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 )
 
 // PB-PAIR-4 / section 6.0: the native relay-v2 Worker expires a ceremony
@@ -17,6 +18,9 @@ import (
 func TestPBPAIR4_LocalPairingDeadlineIsOneMinuteFromDisplay(t *testing.T) {
 	if pairingTTL != time.Minute {
 		t.Fatalf("pairingTTL = %v, want the section 6.0/native relay-v2 pairing window %v", pairingTTL, time.Minute)
+	}
+	if pairingTTL != relayv2.PairingTTL {
+		t.Fatalf("pairingTTL = %v, want relayv2.PairingTTL %v", pairingTTL, relayv2.PairingTTL)
 	}
 	_, file, _, _ := runtime.Caller(0)
 	worker, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(file)), "services", "relay", "src", "worker.mjs"))

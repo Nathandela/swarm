@@ -53,10 +53,10 @@ func newLinkMailbox() *linkMailbox { return &linkMailbox{done: make(chan struct{
 // with nothing outstanding.
 func (m *linkMailbox) Done() <-chan struct{} { return m.done }
 
-// MailboxWait parks like the real bounded server-side wait, then reports the connection
+// MailboxWait parks like the real relay-v2 subscription receive, then reports the connection
 // closed once the link dies -- so the command loop is in exactly the state production is
 // in: erroring, backing off, and retrying a client that will never answer again.
-func (m *linkMailbox) MailboxWait(ctx context.Context, _ uint64) ([]relay.Item, bool, error) {
+func (m *linkMailbox) MailboxWait(ctx context.Context, _ uint64) ([]mailboxItem, bool, error) {
 	select {
 	case <-ctx.Done():
 		return nil, false, ctx.Err()

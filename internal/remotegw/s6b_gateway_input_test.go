@@ -1,35 +1,5 @@
-// Slice S6b — FAILING-FIRST (TDD RED, GG-5) tests for PB-NET-5's SECOND hop: the
-// gateway's command-IN path. PB-NET-5 is explicit that a phone-side-only fix is
-// not acceptable — "It must also drop the gateway's 500 ms command-IN poll
-// (service.go:27), which ADR-007:461 calls 'unusable for live typing'; a
-// phone-side-only fix passes v1's criterion while typing stays 500 ms-gated
-// (fable F4)". ADR B7 repeats it: "The change covers both hops".
-//
-// These tests are a BEHAVIOURAL RED, not a compile-level one, on purpose. Another
-// slice (S7b) is writing tests in this package concurrently; a file full of
-// undefined symbols would break their build too. Everything here compiles against
-// today's tree and FAILS on observed behaviour:
-//
-//   - ServiceConfig still carries a PollInterval field defaulted to 500 ms
-//     (service.go:34, :85-87).
-//   - CommandBridge.Run drives a time.Ticker and calls PollOnce
-//     (command_loop.go:227-240), so it issues MailboxRead requests on an idle
-//     mailbox and delivers a keystroke only on the next tick.
-//
-// THE CONTRACT they freeze:
-//
-//   - The Mailbox seam gains MailboxWait(ctx, cursor) ([]relay.Item, bool, error)
-//     with the same signature relay.Client grows in S6b, and the command loop
-//     drives it instead of a cadence. s6bWaitMailbox below already implements it,
-//     so it satisfies the widened interface the moment the implementer widens it.
-//   - No fixed command-IN poll cadence survives on ServiceConfig.
-//
-// Deliberately NOT frozen: CommandBridge.Run's exact signature. The call sites
-// below pass today's interval argument so this file compiles now; the implementer
-// is expected to DELETE that parameter and update these three call sites. That is
-// the only change to this file an implementer may make — the assertions are frozen.
-//
-// This file contains NO implementation.
+// PB-NET-5 gateway input checks: relay-v2 push delivery, durable checkpointing,
+// low latency, and batched acknowledgements.
 package remotegw
 
 import (
@@ -47,20 +17,15 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // --- fixtures (s6b-prefixed: S7b is writing in this package concurrently) ----
 
-// s6bWaitMailbox is a Mailbox that can serve BOTH shapes, so one fake measures the
-// regression and the fix. MailboxRead answers immediately (today's poll);
-// MailboxWait blocks until an item past the cursor exists, the ceiling elapses, or
-// the context is done (S6b's live tail). Every call is counted, and each delivery
-// is timestamped, so the assertions are about observed traffic rather than about
-// an interface a stub could satisfy vacuously.
+// s6bWaitMailbox models relay-v2's pushed delivery queue. MailboxWait blocks locally
+// until an item is pushed, its receive deadline expires, or the context ends.
 type s6bWaitMailbox struct {
 	mu      sync.Mutex
-	items   []relay.Item
+	items   []mailboxItem
 	next    uint64
 	reads   int
 	waits   int
@@ -68,9 +33,7 @@ type s6bWaitMailbox struct {
 	replies [][]byte
 	wake    chan struct{}
 
-	// maxWait is this fake's stand-in for relay Config.MaxServerWait. It is short
-	// so an idle test is fast; the production 25 s value is pinned in the relay
-	// package's own tests.
+	// maxWait keeps an idle fake fast.
 	maxWait time.Duration
 }
 
@@ -82,15 +45,15 @@ func s6bNewMailbox() *s6bWaitMailbox {
 func (m *s6bWaitMailbox) push(env []byte) {
 	m.mu.Lock()
 	m.next++
-	m.items = append(m.items, relay.Item{Cursor: m.next, Envelope: env})
+	m.items = append(m.items, mailboxItem{Cursor: m.next, Envelope: env})
 	w := m.wake
 	m.wake = make(chan struct{})
 	m.mu.Unlock()
 	close(w)
 }
 
-func (m *s6bWaitMailbox) since(cursor uint64) []relay.Item {
-	var out []relay.Item
+func (m *s6bWaitMailbox) since(cursor uint64) []mailboxItem {
+	var out []mailboxItem
 	for _, it := range m.items {
 		if it.Cursor > cursor {
 			out = append(out, it)
@@ -99,17 +62,15 @@ func (m *s6bWaitMailbox) since(cursor uint64) []relay.Item {
 	return out
 }
 
-func (m *s6bWaitMailbox) MailboxRead(_ context.Context, cursor uint64) ([]relay.Item, error) {
+func (m *s6bWaitMailbox) MailboxRead(_ context.Context, cursor uint64) ([]mailboxItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reads++
 	return m.since(cursor), nil
 }
 
-// MailboxWait is the S6b seam. It is present on the fake before the production
-// interface requires it, which is what lets this file compile today and fail on
-// behaviour: against today's bridge it is simply never called.
-func (m *s6bWaitMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]relay.Item, bool, error) {
+// MailboxWait models a blocking local delivery receive.
+func (m *s6bWaitMailbox) MailboxWait(ctx context.Context, cursor uint64) ([]mailboxItem, bool, error) {
 	m.mu.Lock()
 	m.waits++
 	if out := m.since(cursor); len(out) > 0 {
@@ -281,14 +242,13 @@ func TestS6B_GatewayExposesNoFixedCommandPollCadence(t *testing.T) {
 		}
 	}
 	if len(offenders) > 0 {
-		t.Fatalf("ServiceConfig still carries a fixed command-IN poll cadence: %v. PB-NET-5 requires the 500 ms poll to be DROPPED, not tuned: ADR-007:461 calls it 'unusable for live typing', and a shorter interval only trades the latency failure for a quota failure against §6.0's <=3 reads/s per hop", offenders)
+		t.Fatalf("ServiceConfig still carries a fixed command-IN poll cadence: %v; relay-v2 pushes deliveries and needs no poll", offenders)
 	}
 }
 
 // TestS6B_GatewayCommandLoopWaitsInsteadOfPolling is the same fence at runtime:
 // over a quiet window on an IDLE mailbox, a wait-driven bridge issues at most a
-// couple of requests and NO periodic reads, while today's ticker issues one read
-// per interval forever whether or not anything arrived.
+// one blocking receive and NO periodic reads.
 func TestS6B_GatewayCommandLoopWaitsInsteadOfPolling(t *testing.T) {
 	const quiet = 1500 * time.Millisecond
 
@@ -310,16 +270,138 @@ func TestS6B_GatewayCommandLoopWaitsInsteadOfPolling(t *testing.T) {
 
 	reads, waits, acks := mb.counts()
 	if reads > 0 {
-		t.Fatalf("the command loop issued %d polling MailboxRead requests over %v on an IDLE mailbox (waits=%d acks=%d); PB-NET-5 requires the fixed command-IN poll to be replaced by a bounded server-side wait, on BOTH hops", reads, quiet, waits, acks)
+		t.Fatalf("the command loop issued %d polling MailboxRead requests over %v on an IDLE mailbox (waits=%d acks=%d); relay-v2 must block on its pushed-delivery channel", reads, quiet, waits, acks)
 	}
 	if waits == 0 {
-		t.Fatalf("the command loop issued no MailboxWait at all over %v; the gateway hop must park a bounded wait, not go idle", quiet)
-	}
-	// §6.0: <=3 reads/s per hop. An idle window should cost far less than that.
-	if maxReq := int(3*quiet.Seconds()) + 1; reads+waits > maxReq {
-		t.Fatalf("the command loop issued %d inbound requests over %v on an IDLE mailbox, want <=%d (§6.0: <=3 reads/s per hop)", reads+waits, quiet, maxReq)
+		t.Fatalf("the command loop issued no MailboxWait over %v; the gateway must park a local subscription receive", quiet)
 	}
 }
+
+// TestRelayV2GatewayDoesNotPaceAlreadyPushedDeliveries protects the relay-v2 receive
+// shape: SUBSCRIBE pushes deliveries over one websocket, so MailboxWait drains a local
+// channel and does not spend a metered relay operation. Delaying that drain by the retired
+// relay-v1 3-reads/s budget adds a fixed 333 ms to interactive input for no quota saving.
+func TestRelayV2GatewayDoesNotPaceAlreadyPushedDeliveries(t *testing.T) {
+	mb := &pushedDeliveryMailbox{
+		items: []mailboxItem{
+			{Cursor: 1, Envelope: s6bInput(t, 1, "m/s1", []byte("a"))},
+			{Cursor: 2, Envelope: s6bInput(t, 2, "m/s1", []byte("b"))},
+		},
+		waited: make(chan time.Time, 2),
+	}
+	b := NewCommandBridge(CommandBridgeConfig{Mailbox: mb, Key: s6bKey(), EpochID: 1})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+
+	first := <-mb.waited
+	select {
+	case second := <-mb.waited:
+		if delay := second.Sub(first); delay >= 250*time.Millisecond {
+			t.Fatalf("second already-pushed delivery was held for %v; relay-v2 receives are local channel drains, not metered relay reads", delay)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("second already-pushed delivery was held behind the retired 333 ms relay-read pacer")
+	}
+}
+
+type pushedDeliveryMailbox struct {
+	mu     sync.Mutex
+	items  []mailboxItem
+	waited chan time.Time
+	next   int
+}
+
+func (m *pushedDeliveryMailbox) MailboxRead(context.Context, uint64) ([]mailboxItem, error) {
+	return nil, nil
+}
+
+func (m *pushedDeliveryMailbox) MailboxWait(ctx context.Context, _ uint64) ([]mailboxItem, bool, error) {
+	m.mu.Lock()
+	if m.next < len(m.items) {
+		item := m.items[m.next]
+		m.next++
+		m.mu.Unlock()
+		m.waited <- time.Now()
+		return []mailboxItem{item}, false, nil
+	}
+	m.mu.Unlock()
+	<-ctx.Done()
+	return nil, false, ctx.Err()
+}
+
+func (*pushedDeliveryMailbox) MailboxAppend(context.Context, string, []byte) (uint64, error) {
+	return 1, nil
+}
+
+func (*pushedDeliveryMailbox) MailboxAck(context.Context, uint64) error { return nil }
+
+// Removing the obsolete receive pacer must not turn a hostile retained tail into a
+// CPU spin. The malformed item cannot advance the authenticated cursor, so the bridge
+// backs off that zero-progress page while healthy pushed deliveries remain unpaced.
+func TestRelayV2GatewayBacksOffAnUnconsumablePushedTail(t *testing.T) {
+	mb := &poisonTailMailbox{}
+	stalled := make(chan int, 1)
+	b := NewCommandBridge(CommandBridgeConfig{
+		Mailbox: mb,
+		StalledRetryWait: func(ctx context.Context, attempt int) error {
+			select {
+			case stalled <- attempt:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+	select {
+	case attempt := <-stalled:
+		if attempt != 1 {
+			t.Fatalf("first zero-progress backoff attempt = %d, want 1", attempt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unconsumable pushed tail never entered zero-progress backoff")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("bridge did not stop from zero-progress backoff")
+	}
+
+	mb.mu.Lock()
+	waits := mb.waits
+	mb.mu.Unlock()
+	if waits != 1 {
+		t.Fatalf("an unconsumable pushed tail was received %d times before its first backoff, want 1", waits)
+	}
+}
+
+type poisonTailMailbox struct {
+	mu    sync.Mutex
+	waits int
+}
+
+func (*poisonTailMailbox) MailboxRead(context.Context, uint64) ([]mailboxItem, error) {
+	return nil, nil
+}
+
+func (m *poisonTailMailbox) MailboxWait(context.Context, uint64) ([]mailboxItem, bool, error) {
+	m.mu.Lock()
+	m.waits++
+	m.mu.Unlock()
+	return []mailboxItem{{Cursor: 1, Envelope: []byte("malformed")}}, false, nil
+}
+
+func (*poisonTailMailbox) MailboxAppend(context.Context, string, []byte) (uint64, error) {
+	return 1, nil
+}
+
+func (*poisonTailMailbox) MailboxAck(context.Context, uint64) error { return nil }
 
 // TestS6B_GatewayInputLatencyIsNotPollGated measures the gateway hop itself: from
 // a sealed input frame landing in the machine's mailbox to the lease plane
@@ -334,23 +416,10 @@ func TestS6B_GatewayCommandLoopWaitsInsteadOfPolling(t *testing.T) {
 // 100 ms leaves ~5x headroom.
 //
 // Today's 500 ms ticker delivers each sample uniformly across [0, 500) ms, so a
-// single sample could pass by luck. This asserts the MEDIAN after a discarded
-// warm-up, which keeps that anti-luck property decisively -- a 500 ms poll yields
+// single sample could pass by luck. This asserts the MEDIAN over a burst, which keeps
+// that anti-luck property decisively -- a 500 ms poll yields
 // a median near 250 ms and fails by 2.5x -- while applying §6.0's own harness
-// discipline ("20-sample warm-up discarded", median of runs) instead of a hard
-// per-sample max over 8 unwarmed samples.
-//
-// The warm-up is not cosmetic and not a weakening. §6.0's drain ceiling is a
-// SUSTAINED-REGIME average served by an adaptive drain: it starts spaced (the safe
-// assumption, since a tail dying quota-refused mid-session is worse than latency)
-// and drops the spacing only after consecutive spaced reads return no batch. The
-// first reads of any burst are therefore regime PROBES and are not representative
-// of the steady state this bound describes. Without a warm-up this test and
-// TestS6B_GatewayDrainStaysInsideTheBudget are JOINTLY INFEASIBLE -- measured, the
-// latency test needed >=8 un-spaced reads inside ~0.15 s while the drain test
-// forbids more than ~3, and the two meet exactly at 3.63 vs 3.64 req/s with an
-// empty feasible band between them. Neither can be satisfied by tuning; the
-// unwarmed statistic was the defect.
+// discipline instead of a hard per-sample maximum.
 func TestS6B_GatewayInputLatencyIsNotPollGated(t *testing.T) {
 	const (
 		bound = 100 * time.Millisecond
@@ -411,13 +480,7 @@ func TestS6B_GatewayInputLatencyIsNotPollGated(t *testing.T) {
 	}
 }
 
-// s6bHopWarmup / s6bHopSamples shape ONE measurement. The warm-up rationale is on
-// TestS6B_GatewayInputLatencyIsNotPollGated above: the first reads of a burst are the
-// adaptive drain's regime probes, not its steady state.
-const (
-	s6bHopWarmup  = 4
-	s6bHopSamples = 20
-)
+const s6bHopSamples = 20
 
 // s6bMeasureHopLatency runs ONE measurement: a fresh bridge over a fresh mailbox, one
 // sealed input frame at a time, timed from the push to the lease plane's own stamp. It
@@ -457,28 +520,16 @@ func s6bMeasureHopLatency(t *testing.T) ([]time.Duration, string) {
 }
 
 // s6bMedianAndWorst reduces one measurement to the two statistics the bound is stated in,
-// over the steady-state samples only.
+// over all samples.
 func s6bMedianAndWorst(lats []time.Duration) (median, worst time.Duration) {
-	steady := append([]time.Duration(nil), lats[s6bHopWarmup:]...)
+	steady := append([]time.Duration(nil), lats...)
 	sort.Slice(steady, func(i, j int) bool { return steady[i] < steady[j] })
 	return steady[len(steady)/2], steady[len(steady)-1]
 }
 
-// TestS6B_GatewayDrainStaysInsideTheBudget is §6.0's "<=3 reads/s AND batched acks
-// <=1/s per routing id" applied to the GATEWAY hop — "the same arithmetic applies
-// to the gateway hop once PB-NET-5 removes its 500 ms poll (120/min today)".
-//
-// It is the same regression as on the phone hop: a wait that returns on the first
-// item and acks it costs 2 metered relay ops per keystroke, which at 8 frames/s is
-// 960/min against OpsPerMin=600.
-//
-// The two halves fail at different times, deliberately. The ACK bound is RED today
-// (a 500 ms poll acks its batch every tick — 6 acks in 3.1 s against a 1/s budget).
-// The READ bound cannot be RED today for the reason this slice exists: a 500 ms
-// poll is only 2 reads/s, comfortably inside 3/s, because it is slow. It is a
-// FORWARD fence — it fails the moment the poll is replaced by a wait that returns
-// on the first item, which is precisely the naive fix.
-func TestS6B_GatewayDrainStaysInsideTheBudget(t *testing.T) {
+// TestS6B_GatewayAcksStayInsideTheBudget checks the one metered operation left on
+// relay-v2's pushed receive path. Local delivery-channel drains need no rate limit.
+func TestS6B_GatewayAcksStayInsideTheBudget(t *testing.T) {
 	// §6.0: input frame rate <= 8 frames/s sustained, i.e. one frame per 125 ms.
 	const (
 		frames = 24
@@ -510,15 +561,11 @@ func TestS6B_GatewayDrainStaysInsideTheBudget(t *testing.T) {
 	cancel()
 	<-done
 
-	reads, waits, acks := mb.counts()
+	_, _, acks := mb.counts()
 	secs := elapsed.Seconds()
-	maxReads := int(3*secs) + 2
 	maxAcks := int(1*secs) + 2
 
-	if reads+waits > maxReads {
-		t.Fatalf("the gateway issued %d inbound requests (reads=%d waits=%d) over %.1fs draining %d frames, want <=%d (§6.0: <=3 reads/s per hop). One request per keystroke is 8/s, i.e. 480/min of the relay's 600/min OpsPerMin window before acks are counted at all", reads+waits, reads, waits, secs, frames, maxReads)
-	}
 	if acks > maxAcks {
-		t.Fatalf("the gateway issued %d acks over %.1fs, want <=%d (§6.0: batched acks <=1/s per routing id). mailbox_ack meters against OpsPerMin (relay/server.go:798); an un-batched ack per keystroke adds another 480/min", acks, secs, maxAcks)
+		t.Fatalf("the gateway issued %d ACKs over %.1fs, want <=%d; relay-v2 meters ACK messages", acks, secs, maxAcks)
 	}
 }

@@ -10,7 +10,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 var errReplyDeliveryUnknown = errors.New("reply delivery unknown")
@@ -87,7 +86,7 @@ func TestCommandBridge_ReplyAppendFailureRetriesExactEnvelopeBeforeLaterCommand(
 		key[i] = byte(i + 31)
 	}
 	mb := &replyRetryMailbox{
-		fakeMailbox: fakeMailbox{inbox: []relay.Item{
+		fakeMailbox: fakeMailbox{inbox: []mailboxItem{
 			{Cursor: 1, Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/one", OperationID: "op-1", DeviceID: "d1", Sig: "s1"})},
 			{Cursor: 2, Envelope: sealedCmd(t, key, 2, protocol.DeviceCommandAuth{Action: protocol.ActionDelete, Session: "m/two", OperationID: "op-2", DeviceID: "d1", Sig: "s2"})},
 		}},
@@ -143,7 +142,7 @@ func TestCommandBridge_ReplyAppendFailureRestartsFromUnchangedCheckpoint(t *test
 		key[i] = byte(i + 47)
 	}
 	mb := &replyRetryMailbox{
-		fakeMailbox: fakeMailbox{inbox: []relay.Item{{
+		fakeMailbox: fakeMailbox{inbox: []mailboxItem{{
 			Cursor: 1,
 			Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{
 				Action: protocol.ActionKill, Session: "m/one", OperationID: "op-restart", DeviceID: "d1", Sig: "s1",
@@ -224,7 +223,7 @@ func TestCommandBridge_RunBacksOffAndRedrivesPendingReplyWithoutReforwarding(t *
 	for i := range key {
 		key[i] = byte(i + 71)
 	}
-	mb := &retainedRunMailbox{fakeMailbox: fakeMailbox{inbox: []relay.Item{{
+	mb := &retainedRunMailbox{fakeMailbox: fakeMailbox{inbox: []mailboxItem{{
 		Cursor: 1,
 		Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{
 			Action: protocol.ActionKill, Session: "m/one", OperationID: "op-run", DeviceID: "d1", Sig: "s1",
@@ -235,7 +234,7 @@ func TestCommandBridge_RunBacksOffAndRedrivesPendingReplyWithoutReforwarding(t *
 	release := make(chan struct{}, 1)
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox: mb, Forwarder: fwd, Key: key, EpochID: 1, ReplyTarget: "phone",
-		RetainedRetryWait: func(ctx context.Context, attempt int) error {
+		StalledRetryWait: func(ctx context.Context, attempt int) error {
 			select {
 			case waits <- attempt:
 			case <-ctx.Done():

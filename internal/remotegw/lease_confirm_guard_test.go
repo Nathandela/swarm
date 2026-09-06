@@ -22,7 +22,6 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 var errReplyAppendRefused = errors.New("relay refused the reply append")
@@ -51,7 +50,7 @@ func TestCommandBridge_SeveredLeaseIsRefusedNotConfirmedAtGenerationZero(t *test
 	takeCtrl := protocol.RemoteCommand{DeviceCommandAuth: protocol.DeviceCommandAuth{
 		Action: protocol.ActionTakeControl, Session: "m/s1", OperationID: "op-tc", DeviceID: "d1", Sig: "sig-tc",
 	}}
-	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeCtrl)}}}
+	mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeCtrl)}}}
 	// gen 0: Begin returned nil, but the lease is already gone by the time the bridge
 	// asks for its generation (LeaseManager.watch removed the conn).
 	leases := &confirmingLeaseRouter{gen: 0}
@@ -101,7 +100,7 @@ func TestCommandBridge_FailedRefusalSealSurfacesLocally(t *testing.T) {
 	}}
 	beginErr := errors.New("timed out awaiting the lease grant")
 	mb := &appendFailingMailbox{fakeMailbox: fakeMailbox{
-		inbox: []relay.Item{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeCtrl)}},
+		inbox: []mailboxItem{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1, takeCtrl)}},
 	}}
 	b := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     mb,

@@ -38,7 +38,10 @@ const (
 	maxPendingRequests  = 64
 	maxDeliveryFrames   = 64
 	defaultCallTimeout  = 10 * time.Second
-	defaultDialTimeout  = 10 * time.Second
+	// DefaultDialTimeout bounds relay-v2 websocket setup.
+	DefaultDialTimeout = 10 * time.Second
+	// PairingTTL is the native Worker's default lifetime for one pairing ceremony.
+	PairingTTL = 60 * time.Second
 )
 
 type Role string
@@ -269,7 +272,7 @@ func Dial(ctx context.Context, profile Profile, auth Auth) (*Conn, error) {
 }
 
 func dialRaw(ctx context.Context, endpoint string, hc *http.Client) (*Conn, error) {
-	dialCtx, cancelDial := context.WithTimeout(ctx, defaultDialTimeout)
+	dialCtx, cancelDial := context.WithTimeout(ctx, DefaultDialTimeout)
 	defer cancelDial()
 	var options *websocket.DialOptions
 	if hc != nil {

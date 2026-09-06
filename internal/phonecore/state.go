@@ -293,7 +293,7 @@ type State struct {
 	MachineSignPub []byte // machine Ed25519 grant-signing public key pinned at pairing
 	// MachineRelayAuthPub is the machine's relay-auth Ed25519 public key, pinned at
 	// pairing. Everything above records who the machine IS; this is the only coordinate
-	// that says how to REACH it: relay.RoutingID(MachineRelayAuthPub) is the mailbox every
+	// that says how to REACH it: relayv2.RoutingID(MachineRelayAuthPub) is the mailbox every
 	// command and keystroke is appended to, and it is what the phone authorizes so the
 	// machine may append back. Without it a restored phone holds a valid content key, a
 	// valid send-seq and no destination -- and nothing fails loudly.
@@ -637,7 +637,7 @@ type Store interface {
 	// position. This is the ONE act that may, and it says so at the seam rather than by
 	// slipping a zero past a merge rule.
 	//
-	// IT IS SAFE BECAUSE THE CURSOR IS NOT THE GUARD. The relay MINTS it (relay.Item.Cursor,
+	// IT IS SAFE BECAUSE THE CURSOR IS NOT THE GUARD. Relay-v2 mints it (Item.Cursor,
 	// "untrusted ordering") and it is only an optimisation -- do not re-read what has been
 	// read. What actually refuses a redelivered frame is the durable per-bucket seq
 	// high-water (State.Receive) plus the grant watermark, both authenticated and both

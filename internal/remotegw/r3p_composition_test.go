@@ -37,7 +37,6 @@ import (
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // r3pLeaseRouter is the LeaseRouter the bridge routes through, forwarding Input to a REAL
@@ -83,10 +82,10 @@ func TestR3PComposition_TypingALineAndEnterArrivesAsTwoSpacedWrites(t *testing.T
 	for i := range key {
 		key[i] = byte(i + 7)
 	}
-	items := make([]relay.Item, 0, len(frames))
+	items := make([]mailboxItem, 0, len(frames))
 	for i, f := range frames {
 		seq := uint64(i + 1)
-		items = append(items, relay.Item{
+		items = append(items, mailboxItem{
 			Cursor:   seq,
 			Envelope: sealInputEnv(t, key, seq, inputFrameWire{T: f.T, Session: f.Session, Data: f.Data}),
 		})

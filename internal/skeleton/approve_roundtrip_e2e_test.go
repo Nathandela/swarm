@@ -89,6 +89,7 @@ func TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval(t *testing.T) {
 	if !ok {
 		t.Fatalf("owner Launch returned %q, which is not a namespaced id", sessionID)
 	}
+	awaitGrid(t, rig.sk, localID, editDialogGrid.lastRow)
 
 	// The machine raises a real pending permission through the production capture path.
 	replayClaudeCorpus(t, rig.sk, localID, "claude-edit-permissionrequest-run1.json")

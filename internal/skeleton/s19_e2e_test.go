@@ -384,15 +384,26 @@ func (r *s19Rig) observeRendezvousCreate() {
 		if err != nil {
 			return nil, err
 		}
-		return &s19CreateObserver{RendezvousTransport: rt, done: func() { once.Do(func() { close(r.created) }) }}, nil
+		authorizer, ok := rt.(relayPairAuthorizer)
+		if !ok {
+			return nil, fmt.Errorf("S19 relay rendezvous does not expose pairing authorization")
+		}
+		return &s19CreateObserver{
+			RendezvousTransport: rt,
+			relayPairAuthorizer: authorizer,
+			done:                func() { once.Do(func() { close(r.created) }) },
+		}, nil
 	}
 }
 
 // s19CreateObserver forwards a real RendezvousTransport and signals when Create returns.
 type s19CreateObserver struct {
 	pairing.RendezvousTransport
+	relayPairAuthorizer
 	done func()
 }
+
+var _ relayPairAuthorizer = (*s19CreateObserver)(nil)
 
 func (o *s19CreateObserver) Create(ctx context.Context, id string) error {
 	err := o.RendezvousTransport.Create(ctx, id)
@@ -488,6 +499,10 @@ func (r *s19Rig) Pair() {
 	if err := r.app.Start(); err != nil {
 		t.Fatalf("App.Start: %v", err)
 	}
+	r.Eventually("pairing opened the phone relay route before gateway startup", func() bool {
+		state, err := r.app.ConnectionState()
+		return err == nil && state == "online"
+	})
 }
 
 // awaitPhoneSAS polls the phone's SAS and FAILS FAST on a terminal pairing state, so a

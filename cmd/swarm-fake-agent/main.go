@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/fakeagent"
+	"github.com/charmbracelet/x/term"
 )
 
 func main() {
@@ -22,9 +23,9 @@ func main() {
 // When enabled, every byte the scripted agent consumes from stdin is copied to a
 // private file before Run interprets it.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	scriptPath, stdinLog, ok := parseArgs(args)
+	scriptPath, stdinLog, raw, ok := parseArgs(args)
 	if !ok {
-		_, _ = fmt.Fprintln(stderr, "usage: swarm-fake-agent [--stdin-log PATH] <script-path|->")
+		_, _ = fmt.Fprintln(stderr, "usage: swarm-fake-agent [--stdin-log PATH|--raw-stdin-log PATH] <script-path|->")
 		return 2
 	}
 
@@ -40,6 +41,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		defer func() { _ = f.Close() }()
 		script = f
+	}
+	if raw {
+		state, rawErr := term.MakeRaw(os.Stdin.Fd())
+		if rawErr != nil {
+			_, _ = fmt.Fprintln(stderr, rawErr)
+			return 2
+		}
+		defer func() { _ = term.Restore(os.Stdin.Fd(), state) }()
 	}
 
 	steps, err := fakeagent.Parse(script)
@@ -85,15 +94,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 // parseArgs preserves the original one-positional-argument interface and adds
 // one opt-in prefix. As before, trailing arguments are ignored by the fixture.
-func parseArgs(args []string) (scriptPath, stdinLog string, ok bool) {
+func parseArgs(args []string) (scriptPath, stdinLog string, raw, ok bool) {
 	if len(args) == 0 {
-		return "", "", false
+		return "", "", false, false
 	}
-	if args[0] != "--stdin-log" {
-		return args[0], "", true
+	if args[0] != "--stdin-log" && args[0] != "--raw-stdin-log" {
+		return args[0], "", false, true
 	}
 	if len(args) < 3 || args[1] == "" || args[2] == "" {
-		return "", "", false
+		return "", "", false, false
 	}
-	return args[2], args[1], true
+	return args[2], args[1], args[0] == "--raw-stdin-log", true
 }

@@ -24,7 +24,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // TestGateway_OutboundSeqSurvivesRestart drives the JOURNAL/TERMINAL stream (RelaySink,
@@ -125,7 +124,7 @@ func TestGateway_ReplySeqSurvivesRestart(t *testing.T) {
 		})
 	}
 
-	mb1 := &fakeMailbox{inbox: []relay.Item{
+	mb1 := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealedCmd(t, key, 1, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s1", OperationID: "op-1", DeviceID: "d", Sig: "s"})},
 		{Cursor: 2, Envelope: sealedCmd(t, key, 2, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s2", OperationID: "op-2", DeviceID: "d", Sig: "s"})},
 	}}
@@ -149,7 +148,7 @@ func TestGateway_ReplySeqSurvivesRestart(t *testing.T) {
 	}
 
 	// Restart: a fresh bridge from the SAME persisted reply-seq state.
-	mb2 := &fakeMailbox{inbox: []relay.Item{
+	mb2 := &fakeMailbox{inbox: []mailboxItem{
 		{Cursor: 1, Envelope: sealedCmd(t, key, 5, protocol.DeviceCommandAuth{Action: protocol.ActionKill, Session: "m/s3", OperationID: "op-3", DeviceID: "d", Sig: "s"})},
 	}}
 	b2 := newBridge(mb2)

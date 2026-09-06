@@ -129,15 +129,13 @@ var errRelayUnreachable = classed(ErrClassPairingFailed, errors.New(
 // pairingTTL is how long the phone will wait on a rendezvous before declaring
 // rendezvous_timeout.
 //
-// §6.0 pins it at 60 s to match the relay's authoritative RendezvousTTL. It is transcribed
-// here rather than read from relay.DefaultConfig() because that is the SERVER's default and
-// the phone is talking to a relay whose configuration it cannot see; what the phone can
-// guarantee is that its own deadline is never LATER than the pinned one, since a phone still
-// waiting on a rendezvous the relay has already destroyed can only ever fail.
+// §6.0 pins it at 60 s to match the native relay-v2 pairing slot. A phone still waiting on a
+// ceremony the Worker has already destroyed can only ever fail, so this local deadline must
+// never be later than the slot.
 //
 // Without a declared deadline the handshake blocks on RendezvousRecv forever and
 // rendezvous_timeout is a state nothing can reach.
-const pairingTTL = 60 * time.Second
+const pairingTTL = relayv2.PairingTTL
 
 // DeviceName is what this phone calls itself when it enrols with a machine: the DeviceName
 // field of the pairing payload, sent once in msg3 and thereafter the label the machine's own
@@ -615,7 +613,7 @@ func (p *Pairing) join(base context.Context) {
 		MachineStaticPub: payload.MachineStaticPub,
 		Payload: pairing.DevicePayload{
 			DeviceName:           DeviceName,
-			DeviceRoutingID:      []byte(relay.RoutingID(ks.RelayAuthPublic())),
+			DeviceRoutingID:      []byte(relayv2.RoutingID(ks.RelayAuthPublic())),
 			DeviceRelayAuthPub:   ks.RelayAuthPublic(),
 			RecipientPub:         ks.RecipientPublic(),
 			DeviceCommandSignPub: ks.CommandSigningPublic(),

@@ -23,7 +23,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relayv2"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
@@ -32,11 +32,11 @@ import (
 // method is an unused no-op that exists solely to satisfy the interface.
 type noopMailbox struct{}
 
-func (noopMailbox) MailboxRead(_ context.Context, _ uint64) ([]relay.Item, error) {
+func (noopMailbox) MailboxRead(_ context.Context, _ uint64) ([]relayv2.Item, error) {
 	return nil, nil
 }
 
-func (noopMailbox) MailboxWait(_ context.Context, _ uint64) ([]relay.Item, bool, error) {
+func (noopMailbox) MailboxWait(_ context.Context, _ uint64) ([]relayv2.Item, bool, error) {
 	return nil, false, nil
 }
 

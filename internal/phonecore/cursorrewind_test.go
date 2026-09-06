@@ -1,6 +1,6 @@
 package phonecore
 
-// The relay MINTS State.RelayCursor -- relay.Item.Cursor is "the relay's own monotonic
+// Relay-v2 mints State.RelayCursor -- Item.Cursor is "the relay's own monotonic
 // storage cursor (UNTRUSTED ordering)" -- and the phone adopts it as the durable point its
 // next read resumes from. fileStore.mergeGuards raises it monotonically, grouped with the
 // replay guards, so nothing that goes through Save can ever lower it. That is right for an

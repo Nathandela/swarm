@@ -321,7 +321,7 @@ func TestPublicationPrepare_ProductionComposerAndReadsUseTheSharedAuthorityFence
 	helper = helper[start : start+end]
 	for _, required := range []string{
 		"a.publicationAuthorityMu.Lock()", "st := core.State()", "sc.epoch != st.EpochID",
-		"sc.key != st.Keys.ContentKey", "relay.RoutingID", "core.PreparePublication",
+		"sc.key != st.Keys.ContentKey", "relayv2.RoutingID", "core.PreparePublication",
 	} {
 		if !strings.Contains(helper, required) {
 			t.Errorf("publication authority fence omits %q", required)

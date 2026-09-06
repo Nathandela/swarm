@@ -41,7 +41,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // recordingForwarder captures every forwarded RemoteCommand IN FULL (unlike fakeForwarder,
@@ -139,7 +138,7 @@ func TestR1RefusalOps_ForwardedToDaemonNeverGatewayLocallyRefused(t *testing.T) 
 					Session: "m/s1", SessionInstance: "inst-a", Profile: schema.CurrentProfileVersion,
 				}
 			}
-			mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealAt(t, key, 1, 1, cmd)}}}
+			mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: sealAt(t, key, 1, 1, cmd)}}}
 			fwd := &recordingForwarder{reply: protocol.Control{
 				Op: protocol.OpError, ErrorCode: protocol.CodeNotImplemented, Error: o.action + ": not implemented yet",
 			}}
@@ -178,7 +177,7 @@ func TestR1RefusalOps_TerminalInputAndKeepaliveStayUnmappedGenericRefusal(t *tes
 			cmd := protocol.DeviceCommandAuth{
 				Action: action, Session: "m/s1", OperationID: "op-" + action, DeviceID: "d1", Sig: "device-signature",
 			}
-			mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealedCmd(t, key, 1, cmd)}}}
+			mb := &fakeMailbox{inbox: []mailboxItem{{Cursor: 1, Envelope: sealedCmd(t, key, 1, cmd)}}}
 			fwd := &fakeForwarder{}
 			b := NewCommandBridge(CommandBridgeConfig{
 				Mailbox: mb, Forwarder: fwd, Key: key, EpochID: 1, ReplyTarget: "phone-routing-id",

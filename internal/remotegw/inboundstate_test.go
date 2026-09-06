@@ -12,8 +12,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 func TestInboundState_FutureSchemaFailsClosed(t *testing.T) {
@@ -207,13 +205,13 @@ type readFailingMailbox struct{}
 
 var errPollFailed = errors.New("relay unreachable")
 
-func (readFailingMailbox) MailboxRead(context.Context, uint64) ([]relay.Item, error) {
+func (readFailingMailbox) MailboxRead(context.Context, uint64) ([]mailboxItem, error) {
 	return nil, errPollFailed
 }
 
 // MailboxWait fails too: a wait IS a read on this seam, and this fake exists to be
 // the cheapest stand-in for "every inbound fetch fails".
-func (readFailingMailbox) MailboxWait(context.Context, uint64) ([]relay.Item, bool, error) {
+func (readFailingMailbox) MailboxWait(context.Context, uint64) ([]mailboxItem, bool, error) {
 	return nil, false, errPollFailed
 }
 func (readFailingMailbox) MailboxAppend(context.Context, string, []byte) (uint64, error) {

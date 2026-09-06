@@ -992,3 +992,36 @@ syntax and whitespace checks also passed. The root marker remains an edge/versio
 a readiness or backup/restore claim. The doctor can supersede another simultaneous machine-control
 ceremony, so the runbook requires an otherwise idle control plane. These are local checks; hosted
 admission remains closed and no physical-phone result is claimed.
+
+## Relay-v2 gateway coverage and latency
+
+The gateway mailbox contract now owns relay-v2 `Item` values directly. Machine and mobile routing
+IDs, dial timeout and pairing lifetime use the relay-v2 definitions, and the remaining security and
+S19 vertical fixtures run against actual local Workerd rather than an in-process relay-v1 server.
+Obsolete relay-v1 E2Es were deleted only after their unique retry, pairing, command, composer,
+launch-policy and terminal-watch behavior was retained on the live relay-v2 path.
+
+The first complete 3-run, 200-sample Workerd benchmark was correctly RED at p50 208.624875 ms
+(p95 281.218375 ms, p99 471.299209 ms). Tracing showed `CommandBridge.Run` was applying the retired
+3-reads/s relay-v1 `DrainPacer` to `MachineMailbox.MailboxWait`, even though relay-v2 `SUBSCRIBE`
+already pushes `DELIVER` frames and that method only drains the client's bounded local channel.
+Removing that dead pacer changes no Worker operation, quota, replay or durability rule. ACK remains
+off the delivery path and coalesced to at most 1/s. A generalized exponential backoff now covers any
+non-empty page that makes no authenticated cursor progress, preventing a malformed retained tail
+from becoming a local CPU spin.
+
+A submitted-line diagnostic then measured p50 159.23025 ms and exposed a separate oracle error: it
+included the terminal's 150 ms anti-paste/submit behavior rather than stopping at PTY input. The
+final fixture uses an explicit private raw-stdin log and 1-16 byte non-submit payloads, with a fresh
+phone, machine, gateway process, terminal and checkpoint per run. Its median of three 200-sample
+runs passed at p50 23.094125 ms, p95 30.503584 ms and p99 36.609291 ms; every run also proved a
+non-empty production gateway inbound checkpoint.
+
+The complete local `npm test` Workerd suite exited zero after the change. Focused relay-v2,
+transport, fake-agent, skeleton and gateway replay/durability/ACK tests, including race runs, also
+passed; the deterministic hostile-tail test observes exactly one receive before its first backoff.
+Independent security review returned GO: Workerd meters authenticated client messages, not
+server-originated deliveries or local channel drains; its 64-frame/1 MiB in-flight bounds and the
+client's matching queue bounds still enforce slow-consumer backpressure. B94 remains deliberately
+RED on exactly 52 relay-v1 exports, with no new relay-v2 reachability failure. These are local
+Workerd/process results, not hosted or physical-phone evidence; hosted admission remains closed.
