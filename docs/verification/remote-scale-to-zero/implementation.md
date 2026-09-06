@@ -1072,3 +1072,12 @@ also exposed inherited `SWARM_SHIM_HOOK_SOCK` interference and sandbox-denied `p
 process-integration tests. Rerunning `cmd/swarm`, `internal/e2e` and `internal/hookclient` with that
 environment variable unset and approved process-inspection permissions passed all three packages
 (40.560 s / 26.736 s / 3.011 s). No assertions were disabled to accommodate those environment failures.
+
+The broad skeleton run exposed a separate raw-input fixture race: its startup prompt could
+already be in the attachment snapshot while the test waited only for future frames. Terra
+reproduced this failure even with the hook environment unset (two passes and one failure),
+so it was not classified as an environment failure. The readiness test now accepts the initial
+snapshot, exercises a subsequent live prompt, then deliberately reattaches late and proves
+the prompt is in the snapshot before checking that non-submit bytes reach the raw stdin log.
+Production input handling and the shared live-frame-only helper are unchanged.
+The corrected test passed 20 repeated runs and five race runs (9.05 s and 7.83 s).

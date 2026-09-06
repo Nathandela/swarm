@@ -144,27 +144,49 @@ func launchFakeWithOptions(t *testing.T, sk *Daemon, script string, options ...s
 func TestLaunchFakeWithRawStdinLogObservesNonSubmitBytes(t *testing.T) {
 	sk := assemble(t)
 	logPath := filepath.Join(t.TempDir(), "raw-stdin.bin")
-	meta := launchFakeWithOptions(t, sk, "ask raw?\nexit 0\n", "--raw-stdin-log", logPath)
+	meta := launchFakeWithOptions(t, sk, "ask ready?\nask raw?\nexit 0\n", "--raw-stdin-log", logPath)
 	client := dialClient(t, sk)
 	att, err := client.Attach(protocol.NamespacedID(sk.api.endpointID, meta.ID))
 	if err != nil {
 		t.Fatalf("attach raw fixture: %v", err)
 	}
 	t.Cleanup(func() { _ = att.Detach() })
+	if !snapContains(t, att.Snapshot(), "ready?") {
+		if ok, got := awaitFrames(att, "ready?", 10*time.Second); !ok {
+			t.Fatalf("raw fixture did not reach its first stdin read: %q", got)
+		}
+	}
+	if err := att.Input([]byte("\n")); err != nil {
+		t.Fatalf("release first raw fixture prompt: %v", err)
+	}
 	if ok, got := awaitFrames(att, "raw?", 10*time.Second); !ok {
-		t.Fatalf("raw fixture did not reach its stdin read: %q", got)
+		t.Fatalf("raw fixture did not reach its second stdin read: %q", got)
+	}
+	if err := att.Detach(); err != nil {
+		t.Fatalf("detach before late attach: %v", err)
+	}
+
+	lateClient := dialClient(t, sk)
+	late, err := lateClient.Attach(protocol.NamespacedID(sk.api.endpointID, meta.ID))
+	if err != nil {
+		t.Fatalf("late attach raw fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = late.Detach() })
+	if !snapContains(t, late.Snapshot(), "raw?") {
+		t.Fatal("late raw fixture snapshot did not contain its already-written prompt")
 	}
 	want := []byte("raw-input-16byte")
 	if len(want) != 16 {
 		t.Fatalf("test payload = %d bytes, want 16", len(want))
 	}
-	if err := att.Input(want); err != nil {
+	if err := late.Input(want); err != nil {
 		t.Fatalf("write non-submit bytes: %v", err)
 	}
+	want = append([]byte("\n"), want...)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if got, readErr := os.ReadFile(logPath); readErr == nil && bytes.Equal(got, want) {
-			if err := att.Input([]byte("\n")); err != nil {
+			if err := late.Input([]byte("\n")); err != nil {
 				t.Fatalf("release raw fixture: %v", err)
 			}
 			if !waitSessionExited(t, sk, meta.ID, 10*time.Second) {
