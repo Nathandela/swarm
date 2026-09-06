@@ -4,7 +4,7 @@ Updated 2026-09-05. Source inspected: v0.13.27 / f1621618. This revision superse
 
 Owner decisions: there are **no current users**; backward compatibility must be dropped and cleaned up. Use **one live environment**, developed and deployed directly from `main`; no standing staging environment or promotion pipeline. Price and efficiency take priority over geographic residency. Bounded shared metadata is acceptable; security still matters. Initial audience is the owner and friends, not an unrestricted public service.
 
-Status: implementation underway; the sole relay is deployed with admission closed, not usable as a completed replacement. Existing local experiments are supporting evidence, not a completed v2 implementation. Follow-up: agents-tracker-wjp4. Architecture is recorded in [ADR-027](../adr/ADR-027-clean-remote-control-v2.md); current test and review evidence is in the [implementation journal](../verification/remote-scale-to-zero/implementation.md).
+Status: implementation underway; owner-only relay admission was activated on 2026-09-06 and hosted machine authentication/encrypted rendezvous checks passed. Physical-phone foreground acceptance and the real push backend remain pending; this is not a completed replacement or a completed P1. Follow-up: agents-tracker-wjp4. Architecture is recorded in [ADR-027](../adr/ADR-027-clean-remote-control-v2.md); current test and review evidence is in the [implementation journal](../verification/remote-scale-to-zero/implementation.md).
 
 ## 1. Decision
 

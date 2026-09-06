@@ -1275,3 +1275,50 @@ returned GO; root build, touched-package vet and lint passed (zero lint issues).
 This later Go fix is not part of the already-uploaded Android code-40 enrollment bundle.
 Desktop publication still requires the normal full release workflow; focused local tests
 are not represented as completion of that gate.
+
+## Owner-only foreground relay activation
+
+Under `agents-tracker-h8wh`, the owner explicitly requested completion of the foreground
+relay setup. Release run `34043636815` completed successfully for `1b31e835`; installed
+Swarm and its Homebrew-linked gateway are both from `0.13.29`. Independent Terra
+verification reran the isolated Workerd suite on port 19429 successfully, including
+authentication, replay/revoke, native Noise pairing, mailbox/discard recovery, mobile
+wiring, hostile input, doctor, alarms and pre-auth limits. Deployment-config and
+fail-closed admission checks passed. The optional latency benchmark remained skipped.
+
+Local preflight found zero paired devices, an empty relay-purge ledger and mode `0600`
+on the existing machine key. No old phone state, grants, cursors or mailboxes were
+imported. The fresh configured home namespace is `owner-v2-20260906`; the public machine
+RID is `a7b386f0977e91482329bdb5157e5937`. Sol reviewed identity reuse under these
+zero-device/zero-obligation conditions. `swarm remote init` configured the sole WSS
+origin with explicit WebPKI and no push gateway; it retained the machine identity.
+The obsolete config remains recoverable as `relay.json.pre-v2-restart-backup` and is
+not read or restored into the new configuration.
+
+The existing keyring-backed OAuth profile was bound to the current checkout; its
+account matched the original deployment. No new OAuth scopes, billing upgrade or
+environment was requested. Current code was first deployed with admission closed as
+version `abbd3933-f40f-4e1e-abed-5741400e45a5`; the hosted owner route still returned
+503 before activation. One atomic secret-bulk update then set the two public admission
+identifiers as operator-managed secret-text bindings. The active version became
+`0ea5acc9-2687-4074-8083-c5d76c89dd1b`, with the same script etag, two original DO
+namespaces and 60/60 native limiter, exactly two secret names and no test bindings or
+preview URL. Only this computer is admitted; key-possession authentication remains
+mandatory.
+
+Hosted checks returned root 200, admitted plain machine route 426, and a distinct
+well-formed machine route 403. `swarm relay doctor` passed DNS, certificate validation,
+edge identity and real machine-control authentication, exchanged encrypted pairing
+frames both ways and retired its transient ceremony. These are bounded hosted probes,
+not a synthetic phone enrollment or a user command. The daemon restarted successfully
+with this configuration; doctor reports running `0.13.29`, 39 persisted sessions and
+zero degraded sessions. Remote status reports identity plus relay configured, zero
+paired devices and device-derived remote OFF, as expected before pairing.
+
+The installed `swarm remote pair` then reached real hosted `pair_start`, advertised the
+correct relay and produced the QR step. Its single-use QR/secret was suppressed from
+the verification transcript; no device was approved. Physical-phone SAS confirmation,
+foreground command/stream/reconnect acceptance, background push and P1 completion are
+not claimed by this setup checkpoint. The unused CLI ceremony expired normally with
+the explicit closed-window refusal (exit 1); subsequent status still showed zero
+paired devices. This expected expiry is not a failed relay setup or successful pairing.

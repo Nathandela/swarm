@@ -55,8 +55,9 @@ CLOUDFLARE_AUTH_USE_KEYRING=true \
   ./node_modules/.bin/wrangler deploy --profile swarm-staging --no-autoconfig
 ```
 
-After an authorized upload, the only bounded smoke checks are the public root
-and deliberate empty-admission refusal:
+For the initial admission-closed upload, use the public root and deliberate
+empty-admission refusal checks below. Once owner admission is activated, use the
+owner-pilot checks in the next section instead:
 
 ```sh
 test "$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' https://s.nathan-delacretaz.workers.dev/)" = 200
@@ -70,7 +71,50 @@ done
 ```
 
 This repository does not deploy by itself, create paid upgrades, create
-secrets, or activate admission. The initial Worker has no
+secrets, or activate admission. The initial Worker had no
 `OPERATOR_NAMESPACE` or `ALLOWED_MACHINE_RIDS`: it rejects v2 traffic before
 Durable Object state is opened. Passing these 200/503 checks is not a
 production-ready claim; active-use security and client gates remain separate.
+
+## Owner-only foreground pilot
+
+Owner admission was explicitly activated on 2026-09-06. The sole live namespace is
+`owner-v2-20260906`; only the owner's machine is admitted. These two runtime values
+are operator-managed `secret_text` bindings, not checked-in defaults or test variables.
+They are public identifiers, not authentication credentials: the machine must still
+prove possession of its relay-auth key. Do not change the namespace once useful state
+exists: that selects a different authority home, not a harmless label.
+
+Before first activation, verify zero paired devices, an empty relay-purge ledger,
+private machine-key permissions and the local/CI authentication and abuse gates.
+Configure the machine using `swarm remote init --relay-url
+wss://s.nathan-delacretaz.workers.dev --relay-namespace owner-v2-20260906
+--relay-tls-policy webpki`. Omit the push origin for foreground-only setup; an existing
+same-relay push origin is preserved by init, so inspect existing configuration first.
+Reload the daemon configuration using its normal session-adopting restart.
+Successful init prints a redacted identity containing `routing:<32 lowercase hex>`.
+Use that exact routing value for `ALLOWED_MACHINE_RIDS`, not a shortened key fingerprint.
+
+For an explicitly authorized admission update, supply JSON containing only
+`OPERATOR_NAMESPACE` and `ALLOWED_MACHINE_RIDS` to pinned `wrangler secret bulk --name s
+--profile swarm-staging` through stdin, with the same explicit account and keyring
+environment as deployment above. Use one request for both values. Never admit local
+fixture identities. Secret changes create a deployed version; ordinary code deployments
+preserve the secret bindings without `--keep-vars`. Verify the resulting version has
+exactly these two secret names, the two original Durable Objects and the rate limiter,
+with preview URLs disabled and no test bindings.
+To close admission in an emergency, atomically set both secret values to JSON `null`
+using the same bulk command and verify the active version returns 503 on v2 routes.
+Retain the exact namespace for recovery; never substitute a new home to bypass revocation.
+
+After activation, plain HTTP requests (no Upgrade header) must return `200` at `/`,
+`426` at `/v2/ws?machine_rid=<admitted-RID>`, and `403` for a different valid RID.
+Those admission probes do not access Durable Objects. Then `swarm relay doctor` must
+pass DNS, TLS, edge identity and authenticated encrypted rendezvous exchange/cleanup.
+The doctor creates a short-lived ceremony but does not enroll a phone.
+
+Finally run `swarm remote pair`, scan with the updated phone app, and independently
+compare the SAS emoji on both devices before approving. Physical-phone command,
+stream and reconnect checks remain separate from doctor/QR readiness. Background
+notifications require the push deployment and phone enrollment; foreground-only
+readiness is not completion of the full remote migration.
