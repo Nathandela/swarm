@@ -584,13 +584,14 @@ func (p *Pairing) join(base context.Context) {
 	ceremony := hex.EncodeToString(payload.RendezvousID[:])
 	conn, err := app.pairingDial(ctx, payload.RelayURL, ceremony)
 	if err != nil {
-		// THE STAGE IS THE CLASSIFICATION (agents-tracker-n4vs): nothing has crossed the
-		// wire yet, so whatever the dial's own error says -- refused, no route, a connect
-		// timeout on a black-holed LAN address, a listener that is not TLS -- the fact the
-		// user can act on is that this phone could not reach the relay. The sentinel is
-		// attached HERE because only this site knows no handshake byte was spent; finish()
-		// knows the vocabulary, not the stage.
-		err = classed(ErrClassPairingFailed, fmt.Errorf("%w: %w", errRelayUnreachable, err))
+		// THE STAGE IS THE CLASSIFICATION (agents-tracker-n4vs): a relay that explicitly
+		// says this ceremony is missing was reached and asks for a fresh QR. Every other
+		// pre-handshake failure -- refused, no route, connect timeout, or non-TLS listener --
+		// says the phone could not reach the relay. finish() knows the vocabulary; this site
+		// knows the stage.
+		if relayV2PairState(err) != pairExpired {
+			err = classed(ErrClassPairingFailed, fmt.Errorf("%w: %w", errRelayUnreachable, err))
+		}
 		p.finish(nil, err, ctx)
 		return
 	}

@@ -113,6 +113,14 @@ func (e *ProtocolError) Is(target error) bool {
 	}
 }
 
+type dialStatusError struct {
+	status int
+	err    error
+}
+
+func (e *dialStatusError) Error() string { return e.err.Error() }
+func (e *dialStatusError) Unwrap() error { return e.err }
+
 // IsPermanentAuthorizeRefusal reports AUTHORIZE answers that cannot succeed on
 // retry with the same pairing evidence. Every other protocol answer is retryable.
 func IsPermanentAuthorizeRefusal(err error) bool {
@@ -278,8 +286,11 @@ func dialRaw(ctx context.Context, endpoint string, hc *http.Client) (*Conn, erro
 	if hc != nil {
 		options = &websocket.DialOptions{HTTPClient: hc}
 	}
-	ws, _, err := websocket.Dial(dialCtx, endpoint, options)
+	ws, response, err := websocket.Dial(dialCtx, endpoint, options)
 	if err != nil {
+		if response != nil {
+			err = &dialStatusError{status: response.StatusCode, err: err}
+		}
 		return nil, fmt.Errorf("relay v2: dial: %w", err)
 	}
 	ws.SetReadLimit(maxMessage)
@@ -736,6 +747,10 @@ func DialPair(ctx context.Context, profile Profile, ceremony string) (*PairTrans
 	}
 	c, err := dialRaw(ctx, endpoint, hc)
 	if err != nil {
+		var statusErr *dialStatusError
+		if errors.As(err, &statusErr) && statusErr.status == http.StatusNotFound {
+			return nil, &ProtocolError{Code: "pairing_not_found"}
+		}
 		return nil, err
 	}
 	c.peerSPKI = observer.get()

@@ -1322,3 +1322,26 @@ foreground command/stream/reconnect acceptance, background push and P1 completio
 not claimed by this setup checkpoint. The unused CLI ceremony expired normally with
 the explicit closed-window refusal (exit 1); subsequent status still showed zero
 paired devices. This expected expiry is not a failed relay setup or successful pairing.
+
+## Pairing HTTP-expiry classification
+
+`agents-tracker-2tqi` traced one misleading phone state to the relay-v2 HTTP upgrade
+boundary. The Worker answers `/v2/pair` with 404 when a ceremony is missing or expired,
+but the Go client discarded that response status and mobile wrapped every failed upgrade
+as `relay_unreachable`. The failing-first test observed the generic `expected handshake
+response status code 101 but got 404` error and mobile state `relay_unreachable`, wanted
+`expired`. `DialPair` now maps only its own HTTP 404 to the existing typed
+`pairing_not_found` outcome; HTTP 403, TLS/connect failures and an ordinary authenticated
+`Dial` receiving HTTP 404 remain non-expiry errors.
+
+The focused GREEN run passed for relay-v2 and mobile (0.967 s / 1.068 s); complete package
+tests passed (11.122 s / 31.303 s), the focused race run passed (2.213 s / 2.375 s), and
+`go vet ./internal/remote/relayv2 ./mobile` passed. Root lint reported zero issues.
+Independent Sol review reran the focused tests including TLS hardening and returned GO.
+
+This correction does **not** explain or fix the fresh physical-phone failure: a newly
+generated code confirmed after approximately 8.5 seconds still reached
+`relay_unreachable`, well inside the 60-second ceremony lifetime. That live failure
+remains under investigation (`agents-tracker-gxy0`); this checkpoint establishes only
+that a genuine missing/expired ceremony now tells the user to obtain a fresh QR instead
+of incorrectly suggesting home Wi-Fi.

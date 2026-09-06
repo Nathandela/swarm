@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -50,6 +51,58 @@ func TestSecurityRejectsRoutableCleartext(t *testing.T) {
 	}
 	if _, _, err := secureHTTPClient(relay.Security{AllowLoopbackCleartext: true}, "ws://127.0.0.1:8790/v2/ws"); err != nil {
 		t.Fatalf("explicit test-only loopback policy rejected: %v", err)
+	}
+}
+
+func TestDialPairClassifiesOnlyMissingCeremonyHTTPStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		code   string
+	}{
+		{status: http.StatusNotFound, code: "pairing_not_found"},
+		{status: http.StatusForbidden},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, http.StatusText(tc.status), tc.status)
+			}))
+			defer server.Close()
+
+			_, err := DialPair(testDialContext(t), testPairProfile(server.URL), strings.Repeat("e", 32))
+			if err == nil {
+				t.Fatalf("DialPair HTTP %d unexpectedly succeeded", tc.status)
+			}
+			var protocolErr *ProtocolError
+			if tc.code == "" {
+				if errors.As(err, &protocolErr) {
+					t.Fatalf("DialPair HTTP %d = %v, must not be a pairing protocol outcome", tc.status, err)
+				}
+				return
+			}
+			if !errors.As(err, &protocolErr) || protocolErr.Code != tc.code {
+				t.Fatalf("DialPair HTTP %d = %v, want ProtocolError{%q}", tc.status, err, tc.code)
+			}
+		})
+	}
+
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	_, err := Dial(testDialContext(t), Profile{
+		RelayURL:          server.URL,
+		MachineRID:        testMachineRID,
+		OperatorNamespace: "local-test",
+		Security:          relay.Security{AllowLoopbackCleartext: true},
+	}, Auth{
+		Role: RoleMachine, Purpose: PurposeControl,
+		PublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize),
+		Sign:      func([]byte) ([]byte, error) { return nil, nil },
+	})
+	if err == nil {
+		t.Fatal("ordinary authenticated Dial HTTP 404 unexpectedly succeeded")
+	}
+	var protocolErr *ProtocolError
+	if errors.As(err, &protocolErr) {
+		t.Fatalf("ordinary authenticated Dial HTTP 404 = %v, must not become a pairing expiry", err)
 	}
 }
 

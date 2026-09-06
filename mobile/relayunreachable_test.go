@@ -11,6 +11,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -66,5 +68,37 @@ func TestJoin_AnUnreachableRelayReachesTheStateThroughTheRealDial(t *testing.T) 
 	}
 	if p.err == nil || !errors.Is(p.err, errRelayUnreachable) {
 		t.Fatalf("the routed error does not carry the unreachable sentinel: %v", p.err)
+	}
+}
+
+func TestJoin_HTTPPairingStatusChoosesActionableState(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		state  string
+	}{
+		{status: http.StatusNotFound, state: pairExpired},
+		{status: http.StatusForbidden, state: pairRelayUnreachable},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, http.StatusText(tc.status), tc.status)
+			}))
+			defer server.Close()
+			p := &Pairing{
+				app:       &App{},
+				state:     pairPairing,
+				deadline:  time.Now().Add(30 * time.Second),
+				payload:   pairing.QRPayload{RelayURL: server.URL},
+				confirmed: make(chan struct{}),
+			}
+
+			p.join(context.Background())
+
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.state != tc.state {
+				t.Fatalf("join after HTTP %d landed on %q, want %q", tc.status, p.state, tc.state)
+			}
+		})
 	}
 }
