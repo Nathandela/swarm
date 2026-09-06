@@ -1193,3 +1193,20 @@ The final caller audit separately identified old pairing-wire hello/consent comp
 branches. `agents-tracker-7jvo` tracks their current-only replacement; foreground-only v2
 pairing remains a supported mode, not a reason to retain old wire parsing. The overall
 migration and hosted/handset gates remain open.
+
+## Release-gate expiry fixture correction
+
+The owner requested publishable builds. Tag `v0.13.28` at `c243a844` triggered release
+run `34041177618`, but the remote-v2 gate failed before publication. The cutoff-expiry
+fixture gave every item only 100 ms of retention, including the fresh item that had to
+survive DISCARD, an exact retry and reconnection. A deliberate 250 ms scheduling delay
+reproduced the same 12-second receive deadline failure locally.
+
+`agents-tracker-u964` changes only the fixture: 3-second retention, a 3.5-second wait
+followed by a live empty PROBE proving cutoff expiry, and a late fresh append. The
+250 ms regression delay remains, as do exact DISCARD retry and delivery after reconnect.
+No production timing or gate assertion is removed. Independent Terra review returned GO.
+Both Sol and root ran the complete Workerd suite successfully; root's expiry case passed
+in 3.84 s, the hostile-phone/input suite in 66.632 s, and full internal verification in
+13.049 s. The gated latency benchmark remains unrun. The failed tag is not moved or
+represented as a published release; the correction will use a new immutable release tag.

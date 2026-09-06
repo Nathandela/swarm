@@ -214,15 +214,27 @@ func TestWorkerdDiscardRecoverySurvivesCutoffExpiry(t *testing.T) {
 	}
 	oldIncarnation := sub.Incarnation()
 	phone.Close() // crash after the phone durably records oldIncarnation/cutoff.Cursor
-	time.Sleep(750 * time.Millisecond)
+	// session.sh gives this fixture 3 s retention. The barrier below proves the
+	// cutoff really expired; the wait is not the assertion.
+	time.Sleep(3500 * time.Millisecond)
+
+	first := dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
+	firstSub, err := first.Subscribe(ctx, phoneBinding, Checkpoint{Incarnation: oldIncarnation})
+	if err != nil {
+		t.Fatalf("subscribe after cutoff expiry: %v", err)
+	}
+	expired, err := firstSub.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe expired cutoff: %v", err)
+	}
+	if len(expired) != 0 {
+		t.Fatalf("cutoff item survived past retention: %+v", expired)
+	}
 	if _, err := machine.Append(ctx, binding, "fresh-before-expired-discard", []byte("fresh")); err != nil {
 		t.Fatalf("append fresh tail after cutoff expiry: %v", err)
 	}
-
-	first := dialForTest(t, ctx, profile, privateAuth(phonePub, phonePriv, RolePhone, PurposeStream))
-	if _, err := first.Subscribe(ctx, phoneBinding, Checkpoint{Incarnation: oldIncarnation}); err != nil {
-		t.Fatalf("subscribe after cutoff expiry: %v", err)
-	}
+	// Cover the scheduling delay that expired a 100 ms "fresh" fixture on the release runner.
+	time.Sleep(250 * time.Millisecond)
 	replacement, err := first.Discard(ctx, phoneBinding, oldIncarnation, cutoff.Cursor)
 	if err != nil {
 		t.Fatalf("discard expired durable cutoff: %v", err)

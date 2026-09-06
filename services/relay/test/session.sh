@@ -65,7 +65,7 @@ else
   exit 1
 fi
 stop_worker
-start_worker discard-expiry-state 100 0 30000 60000 0
+start_worker discard-expiry-state 3000 0 30000 60000 0
 if output=$(RELAY_V2_EXPIRY_HTTP="http://127.0.0.1:$port" \
   go test ../../internal/remote/relayv2 -run '^TestWorkerdDiscardRecoverySurvivesCutoffExpiry$' -count=1 -timeout=30s -v 2>&1); then
 	printf '%s\n' "$output"
