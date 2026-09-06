@@ -1253,3 +1253,9 @@ The guarded publisher's alpha dry run uploaded code 40 and staged the track succ
 without committing edit `05361589781516772263`; this alone is not publication evidence.
 The separate main CI run `34042410030` failed the journal hook-gap recovery test during
 startup with a permission-denied error; desktop release remains gated pending diagnosis.
+
+The guarded publisher then successfully committed alpha edit `06722971016813427595`
+for `dev.swarm.phone` version code `40`. This confirms Play API publication, not Google
+review completion or availability on the handset. The owner must update the app and use
+Settings → Show push enrollment key to provide the public admission value. No private
+key export, live registration, FCM delivery or end-to-end remote readiness is claimed.
