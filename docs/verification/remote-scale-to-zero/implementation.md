@@ -1513,3 +1513,36 @@ and offline Wrangler upload checks passed with the existing bindings. The stale-
 handler regression observes exactly one APPENDED response after the fix versus the
 archived Worker's APPENDED plus ERROR. No client binary or Android rebuild is required
 for this server-side change.
+
+Commit `b1e0596b` was pushed to main and deployed to the same Worker `s` as version
+`5574e6a0-69a0-4018-b7a4-039f2c1322e0` (created 20:12:01 UTC). Version inspection
+confirmed the original two Durable Objects, native limiter and exactly the two existing
+operator secret bindings; no preview, new namespace, admission change or phone rebuild.
+The second independent full Workerd harness also passed on port 8795. Root's parallel
+suite on 19431 passed, although its initial protocol read preceded the final extra test
+assertions; the two final implementation/review lanes cover those assertions.
+
+Root created only disposable session `ep-da00228d/cdwhc6ydzfxymzk3`, named
+`Cellular acceptance 20260906`, with a no-tools one-line-response prompt. ADB observed
+validated cellular as the default route, with Wi-Fi off. At 20:13:05 UTC root tapped
+Send once for `Reply exactly CELLULAR_PONG_20260906_2013`. The desktop reported remote
+activity at 20:13:06.060779 UTC; the exact reply appeared in the desktop session and
+the phone transcript (observed by 20:13:22 UTC). These are observation bounds, not a
+latency percentile or an instrumented end-to-end benchmark.
+
+Root then enabled Wi-Fi and verified it became the validated default network, disabled
+it again and verified a new validated cellular default. Without re-pairing or restarting
+the app, one Send at 20:14:47 UTC requested `HANDOVER_PONG_20260906_2015`. The matching
+reply appeared on both desktop and phone. Each unique prompt and reply appeared once
+in the inspected disposable conversation. The gateway log stopped growing after one
+old expired-mailbox-frame notice at 20:12:41 UTC and did not resume the unsolicited
+response loop during either exchange or the Wi-Fi/cellular transition. This supports
+two successful foreground smoke samples, not the >=200-sample PH-NET latency gate.
+
+The phone still displayed `Missing messages · Reload`, including after a normal Reload
+press; initial cold-open had shown no messages until new activity loaded history.
+That remaining transcript-history issue is tracked separately and is not dismissed as
+cosmetic. Root stopped only the disposable session afterward, returned the phone to its
+inbox, and left Wi-Fi off as initially found. The existing pairing remains ON with one
+phone. Background push/Doze, broader history/stream tests and full migration acceptance
+are not closed by these two successful sends.
