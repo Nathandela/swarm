@@ -1081,3 +1081,7 @@ snapshot, exercises a subsequent live prompt, then deliberately reattaches late 
 the prompt is in the snapshot before checking that non-submit bytes reach the raw stdin log.
 Production input handling and the shared live-frame-only helper are unchanged.
 The corrected test passed 20 repeated runs and five race runs (9.05 s and 7.83 s).
+The clean-environment full skeleton run, started before that test fix, completed in 377.027 s
+with only this same readiness failure; all its other tests passed. A single all-packages green
+run after the fixture fix is not claimed: the evidence combines the broad run, the corrected
+environment reruns, and the repeated/race verification of the sole remaining fixture change.
