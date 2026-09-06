@@ -1345,3 +1345,31 @@ generated code confirmed after approximately 8.5 seconds still reached
 remains under investigation (`agents-tracker-gxy0`); this checkpoint establishes only
 that a genuine missing/expired ceremony now tells the user to obtain a fresh QR instead
 of incorrectly suggesting home Wi-Fi.
+
+## Physical-phone relay dial diagnosis
+
+The Samsung handset independently completed a default-platform TLS handshake to the live
+Worker. Its accepted leaf certificate used an EC public key; Android's
+`X509TrustManagerExtensions` accepted the same chain with both the previously suspected
+`RSA` authentication type and the leaf's `EC` algorithm. A separate probe loaded the
+actual `RelayTrustImpl` class from the Play-installed APK and passed that same leaf-first
+PEM chain through its hostname and platform-verifier path successfully. This evidence
+does not support the proposed authentication-type explanation, so no TLS code was changed.
+
+The fresh pairing attempt still failed immediately after destination confirmation, about
+8.5 seconds after machine pairing began, without reaching SAS. A temporary native Android
+Go probe using the production relay-v2 client, a 10-second bound and the public live-leaf
+SPKI pin then failed DNS lookup against `[::1]:53`. That binary was built with
+`CGO_ENABLED=0`; the shipped `libgojni.so` is cgo-linked, so the result demonstrates only
+that the pure-Go diagnostic used a different Android resolver path. It is not
+evidence that the Play build has the same fault and no app fix is claimed from it.
+
+The same bounded probe has therefore been rebuilt with Go 1.26.5, `CGO_ENABLED=1` and the
+repository-pinned Android NDK r27.2/API-21 arm64 compiler, matching the shipped AAR's
+resolver mode. Its execution is pending restoration of authorized USB debugging. The
+probe reads the ephemeral ceremony on standard input, authenticates the exact public SPKI
+obtained from the phone's platform-validated TLS connection,
+redacts the ceremony and URL query from failures, and closes immediately after websocket
+upgrade without sending `PAIR_CLAIM`; it neither relaxes authentication nor claims a
+rendezvous. Until that differential run completes, the actual Go Android dial failure
+remains unresolved.
