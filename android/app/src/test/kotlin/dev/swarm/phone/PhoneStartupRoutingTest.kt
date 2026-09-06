@@ -161,6 +161,14 @@ class PhoneStartupRoutingTest {
         )
         assertEquals(ErrorState.STATE_CORRUPT, corrupt.state)
         assertEquals(Remedy.CLEAR_DATA_AND_RE_PAIR, corrupt.remedy)
+        assertTrue(
+            "a legacy phone root can have no registration, so revocation must be conditional",
+            corrupt.message.contains("if this phone is listed"),
+        )
+        assertTrue(
+            "the recovery still ends in pairing after the optional machine-side cleanup",
+            corrupt.message.contains("`swarm remote pair`"),
+        )
 
         val offline = routeStartupFailure(IllegalStateException("swarm/offline: no relay connection"))
         assertEquals(ErrorState.OFFLINE, offline.state)

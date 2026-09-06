@@ -169,11 +169,10 @@ enum class Remedy {
     RE_PAIR,
 
     /**
-     * PB-STATE-10's owner-side recovery, and it is its OWN remedy because it is TWO acts and
-     * neither alone works: the user clears the app's data, and the OWNER unregisters this
-     * device at the machine. [RE_PAIR] alone is the brick -- `swarm remote pair` is refused
-     * while the device is still registered (single-device v1), so the advice cannot be
-     * carried out and the only exit is physical access to the machine.
+     * PB-STATE-10's owner-side recovery. The user clears the app's data, then checks whether
+     * this phone is registered at the machine and unregisters it only if listed. [RE_PAIR]
+     * alone is the brick for a listed device -- `swarm remote pair` is refused while it remains
+     * registered -- but a legacy root can fail before any registration exists.
      *
      * It is deliberately NOT one of [RoutedError.offersPairing]'s two: there is no App to
      * offer a pairing flow from -- the durable blob failed Resume, which is how the user got
@@ -284,9 +283,9 @@ object ErrorRouter {
         SwarmErrorTokens.STATE_CORRUPT to RoutedError(
             ErrorState.STATE_CORRUPT, Remedy.CLEAR_DATA_AND_RE_PAIR,
             "This phone's saved state cannot be read, so it has stopped rather than guess. " +
-                "Clear this app's data, then on your computer run `swarm remote devices` to " +
-                "find this device and `swarm remote revoke <device-id>` to unregister it -- " +
-                "`swarm remote pair` is refused until you do -- and pair again.",
+                "Clear this app's data. Then on your computer run `swarm remote devices`; if " +
+                "this phone is listed, run `swarm remote revoke <device-id>` to unregister it. " +
+                "Finally run `swarm remote pair` and pair again.",
         ),
         SwarmErrorTokens.DEVICE_UNSUPPORTED to RoutedError(
             ErrorState.DEVICE_UNSUPPORTED, Remedy.REPORT_BUG,

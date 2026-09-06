@@ -66,12 +66,62 @@ func TestRegistryOnly_NewAppBootstrapsUnderRegistry(t *testing.T) {
 // the mobile entry point; it must not silently resume or migrate a root phone-state.
 func TestRegistryOnly_NewAppRefusesLegacyRoot(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, phonecore.StateFileName), []byte("old"), 0o600); err != nil {
+	path := filepath.Join(dir, phonecore.StateFileName)
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
 		t.Fatalf("write legacy state: %v", err)
 	}
 	_, err := NewApp(&Config{StateDir: dir}, r4r3Custody{})
 	if !errors.Is(err, phonecore.ErrLegacyStateResetRequired) {
 		t.Fatalf("NewApp error = %v, want ErrLegacyStateResetRequired", err)
+	}
+}
+
+// TestRegistryOnly_NewAppRefusesLegacyBootstrapStateWithoutRewrite is the actual pre-v26
+// checkpoint path: a current bootstrap is written first, then its schema is retired. NewApp
+// must keep the sentinel/class and leave the refused checkpoint intact for explicit reset.
+func TestRegistryOnly_NewAppRefusesLegacyBootstrapStateWithoutRewrite(t *testing.T) {
+	dir := t.TempDir()
+	custody := r4r3Custody{}
+	first, err := NewApp(&Config{StateDir: dir}, custody)
+	if err != nil {
+		t.Fatalf("first NewApp: %v", err)
+	}
+	if err := first.core.Mutate(func(st *phonecore.State) { st.RelayCursor = 1 }); err != nil {
+		t.Fatalf("persist current bootstrap state: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close current bootstrap App: %v", err)
+	}
+	reg, err := phonecore.OpenMachineRegistry(dir)
+	if err != nil {
+		t.Fatalf("OpenMachineRegistry: %v", err)
+	}
+	path := filepath.Join(reg.BootstrapDir(), phonecore.StateFileName)
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read current bootstrap state: %v", err)
+	}
+	legacy := bytes.Replace(current, []byte(`"schema_version":26`), []byte(`"schema_version":25`), 1)
+	if bytes.Equal(legacy, current) {
+		t.Fatal("current bootstrap fixture did not contain schema 26")
+	}
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatalf("write legacy bootstrap state: %v", err)
+	}
+
+	_, err = NewApp(&Config{StateDir: dir}, custody)
+	if !errors.Is(err, phonecore.ErrLegacyStateResetRequired) {
+		t.Fatalf("NewApp error = %v, want ErrLegacyStateResetRequired", err)
+	}
+	if got := classifyMessage(err.Error()); got != ErrClassStateCorrupt {
+		t.Fatalf("NewApp legacy bootstrap class = %q, want %q", got, ErrClassStateCorrupt)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read legacy bootstrap state after NewApp: %v", err)
+	}
+	if !bytes.Equal(after, legacy) {
+		t.Fatal("NewApp changed a refused legacy bootstrap checkpoint; reset must stay explicit")
 	}
 }
 

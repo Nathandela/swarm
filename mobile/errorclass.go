@@ -88,9 +88,9 @@ const (
 	// simply never been paired (or its pairing left no destination behind).
 	ErrClassNotPaired = "swarm/not-paired"
 
-	// ErrClassStateCorrupt is phonecore.ErrCorruptState: the durable blob will not load, so
-	// PB-STATE-4 fails closed and Resume refuses. It is the OWNER-RECOVERABLE fail-closed
-	// state (PB-STATE-10) and it had no class of its own until S18b, which put it in
+	// ErrClassStateCorrupt is phonecore.ErrCorruptState or a pre-v2 state/registry reset: the
+	// durable blob will not load, so PB-STATE-4 fails closed and Resume refuses. It is the
+	// OWNER-RECOVERABLE fail-closed state (PB-STATE-10) and it had no class of its own until S18b, which put it in
 	// ErrClassInternal -- whose remedy is report_bug and whose own definition is "never the
 	// user's fault and never has a user action". A recoverable state routed to "report a bug"
 	// is the brick expressed as a screen: the one thing the user is told to do is the one
@@ -301,14 +301,12 @@ func classifyMessage(msg string) string {
 // remedy string -- the message is the entire product for a user in this state, and on Android
 // it is what PhoneStartup.Unavailable carries into the log and the bug report.
 //
-// IT NAMES THE MACHINE-SIDE STEPS because the user's own act is not sufficient. Clearing the
-// app's data removes the blob that will not load; `swarm remote pair` is then still REFUSED,
-// because BeginPairing fail-fasts while this device is registered (single-device v1). A
-// remedy that stopped at "pair again" is advice that cannot be carried out, which is the
-// brick this requirement is named for.
+// IT NAMES THE MACHINE-SIDE STEPS because a registered device must be removed before pairing
+// again, but a legacy root can fail before any registration exists. Clearing the app's data
+// removes the blob that will not load; inspect the machine and revoke only a listed device.
 const stateCorruptRecovery = "recovery: clear this app's data, then on the machine run " +
-	"`swarm remote devices` to find this device, `swarm remote revoke <device-id>` to " +
-	"unregister it, and `swarm remote pair` to pair again"
+	"`swarm remote devices`; if this phone is listed, run `swarm remote revoke <device-id>` to " +
+	"unregister it; finally run `swarm remote pair` to pair again"
 
 // stampErrorClass is the OUTBOUND totality guarantee: no error leaves this facade without a
 // class, whether or not this package constructed it.
@@ -346,7 +344,9 @@ func stampErrorClass(err error) error {
 		// ErrKeyAuthRequired before B133 and still does, because the reason a content KEK does
 		// not open on a handset with no authentication left IS one of the two above.
 		return classed(ErrClassRepairRequired, err)
-	case errors.Is(err, phonecore.ErrCorruptState):
+	case errors.Is(err, phonecore.ErrCorruptState),
+		errors.Is(err, phonecore.ErrLegacyStateResetRequired),
+		errors.Is(err, phonecore.ErrLegacyRegistryResetRequired):
 		return classed(ErrClassStateCorrupt, fmt.Errorf("%w. %s", err, stateCorruptRecovery))
 	case errors.Is(err, relay.ErrRevoked), errors.Is(err, relay.ErrConsentRetired):
 		// ErrConsentRetired IS A REVOCATION IN THE RELAY'S OWN WORDS (agents-tracker-ksvb.5).

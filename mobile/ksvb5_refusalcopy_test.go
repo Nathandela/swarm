@@ -135,6 +135,24 @@ func TestStampErrorClass_TheRelaySentinelsAreMatchedByIdentityAndNotByText(t *te
 	}
 }
 
+func TestStampErrorClass_LegacyPhoneStateResetIsRecoverableStateCorruption(t *testing.T) {
+	for _, sentinel := range []error{
+		phonecore.ErrLegacyStateResetRequired,
+		phonecore.ErrLegacyRegistryResetRequired,
+	} {
+		stamped := stampErrorClass(fmt.Errorf("resume phone state: %w", sentinel))
+		if !errors.Is(stamped, sentinel) {
+			t.Errorf("stampErrorClass(%v) lost sentinel identity", sentinel)
+		}
+		if got := classifyMessage(stamped.Error()); got != ErrClassStateCorrupt {
+			t.Errorf("stampErrorClass(%v) classified as %q, want %q", sentinel, got, ErrClassStateCorrupt)
+		}
+		if !strings.Contains(stamped.Error(), stateCorruptRecovery) {
+			t.Errorf("stampErrorClass(%v) omitted the existing recovery", sentinel)
+		}
+	}
+}
+
 // ---- the specific cause as the generic one ----------------------------------------------
 
 // TestPayloadFromShortCode_TheThreeCausesAreThreeClasses.

@@ -1440,3 +1440,49 @@ to the existing internal track, and Console confirmed **Accessible aux testeurs 
 for release 24 at 21:30 local time on September 6. Actual handset update and pairing
 acceptance remain separate gates. [Google's testing-track rules](https://support.google.com/googleplay/android-developer/answer/9845334),
 [reusing an uploaded bundle](https://support.google.com/googleplay/android-developer/answer/9859348).
+
+### Physical owner pairing and foreground connection, September 6
+
+Play installed code 41 / 0.13.30 on the Samsung A26. The preserved phone data initially
+produced an INTERNAL startup refusal. Under the approved clean migration, root cleared
+only `dev.swarm.phone` app data; this irreversibly removed its old local settings and
+keys, without uninstalling the Play-signed package or changing the computer identity.
+Fresh startup immediately restored onboarding. The exact old private blob was not
+inspected: legacy state refusal is reproducible in synthetic tests, but opening an old
+app alone does not necessarily persist such a blob, so that precise on-device cause
+is inferred rather than directly observed.
+
+The local ADB pairing harness initially captured only the first 80-character wrapped
+CLI line. That attempt's malformed-code error was a harness defect, not a relay failure.
+Requesting a 200-column CLI display and waiting for the complete line corrected it.
+Root then confirmed the expected Worker destination, compared all six displayed emoji
+on phone and computer, and approved both matching displays. The real CLI exited zero;
+`swarm remote status` reported ON and exactly one enrolled phone.
+
+The phone next waited for sync because the desktop gateway refused the old schema-2
+`remote/inbound-state.json`. Independent review confirmed this checkpoint belonged to
+the retired mailbox population and lacked v2 relay-authority binding. Root moved only
+that file to `remote/inbound-state.json.pre-v2-20260906` (recoverable, same directory).
+Identity, new device registration, outbound sequence files/outbox and purge obligations
+were preserved. Supervisor retry created schema 3 with `relay_authority`. The phone
+then displayed MacBookPro online and the real session list. An actual app force-stop
+and reopen retained the pairing and restored the online list; opening a live session
+reached its detail screen and composer without sending input to the existing agent.
+The normal Refresh control left the machine online and advanced the gateway's inbound
+cursor from 7 to 9, providing evidence of authenticated phone-to-computer traffic;
+this is not a mutating session-command acceptance test.
+
+The installation's public enrollment key is now available through the normal Settings
+control. No private key was exported. Push deployment, a harmless command round trip,
+live content streaming, network handover and background/Doze acceptance remain separate
+unproven gates; this evidence does not close full physical acceptance.
+
+The accompanying recovery-message fix maps both legacy reset sentinels to the existing
+state-reset remedy, with conditional revocation only if the phone is actually listed.
+No automatic reset or compatibility reader was added. Failing-first classification
+tests and a real saved-bootstrap schema-26-to-25 fixture check the class, sentinel
+identity and unchanged refused bytes. Independent Sol review returned GO. Final root
+gates passed: complete mobile race suite (47.878 s), vet, lint (zero issues), and full
+Android source gates (11.963 s). The affected Kotlin `PhoneStartupRoutingTest` passed
+through Gradle (1m14s). This message fix is source-only; the tested phone remains the
+already published code 41 rather than a newly rebuilt release.
