@@ -104,6 +104,7 @@ class SettingsSurface(
      * other one.
      */
     private val dispatch: VerbDispatch = VerbDispatch.background(),
+    private val enrollmentKey: () -> String = runtime::pushEnrollmentKey,
 ) {
 
     /**
@@ -131,7 +132,7 @@ class SettingsSurface(
      * rows above it sat 12 dp in. Spending the step where the view is BUILT covers both hosts once:
      * `screenAir` sets an absolute margin, so a second call cannot double it.
      */
-    private val outcome = notice(activity, "", NoticeKind.ERROR).apply { screenAir() }
+    internal val outcome = notice(activity, "", NoticeKind.ERROR).apply { screenAir() }
 
     private val needsInput = touchFilteredSwitch(PushToggle.FIRST)
     private val finished = touchFilteredSwitch(PushToggle.SECOND)
@@ -255,6 +256,29 @@ class SettingsSurface(
         },
     )
 
+    /** Public-only installation authority, shown only after this defended explicit press. */
+    internal val showEnrollmentKey: TextView = SecureWindow.gate(
+        ctaButton(activity, "", CtaKind.MORE).apply {
+            announceAsButton()
+            setOnClickListener {
+                enrollmentKeyDisplay.text = ""
+                enrollmentKeyDisplay.visibility = View.GONE
+                try {
+                    enrollmentKeyDisplay.text = enrollmentKey()
+                    enrollmentKeyDisplay.visibility = View.VISIBLE
+                } catch (_: Exception) {
+                    say(PressFeedback.ofRefusal("Enrollment key is unavailable on this phone."))
+                }
+            }
+        },
+    )
+
+    internal val enrollmentKeyDisplay: TextView = notice(activity, "").apply {
+        setTextIsSelectable(true)
+        visibility = View.GONE
+        screenAir()
+    }
+
     /** What the panel last drew, so a redraw that changes nothing rebuilds nothing. */
     private var drawn: SettingsPanel? = null
 
@@ -316,6 +340,7 @@ class SettingsSurface(
             // AND THE CHANNEL REDIRECT IS THE FIFTH (agents-tracker-2yfn), for the fourth's reason
             // exactly: it authorises nothing and it LEAVES THE APP.
             openChannelSettings,
+            showEnrollmentKey,
         )
 
     /**
@@ -832,6 +857,8 @@ class SettingsSurface(
                 replaceFor = ::replaceFor,
                 redirectFor = ::redirectFor,
                 deliveryRedirectFor = ::deliveryRedirectFor,
+                enrollmentFor = ::enrollmentFor,
+                enrollmentDisplay = enrollmentKeyDisplay,
                 below = outcome,
                 status = statusSlot(),
                 onOpenMachines = onOpenMachines,
@@ -894,6 +921,13 @@ class SettingsSurface(
         return openChannelSettings
     }
 
+    /** The owner-enrollment control, wearing the model's label. See [redirectFor]. */
+    private fun enrollmentFor(label: String): View {
+        (showEnrollmentKey.parent as? ViewGroup)?.removeView(showEnrollmentKey)
+        showEnrollmentKey.text = label
+        return showEnrollmentKey
+    }
+
     private fun detachControls() {
         for (control in listOf(
             needsInput,
@@ -901,6 +935,8 @@ class SettingsSurface(
             replace,
             openNotificationSettings,
             openChannelSettings,
+            showEnrollmentKey,
+            enrollmentKeyDisplay,
             outcome,
         )) {
             (control.parent as? ViewGroup)?.removeView(control)

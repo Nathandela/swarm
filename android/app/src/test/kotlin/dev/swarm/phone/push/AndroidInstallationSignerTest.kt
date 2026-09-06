@@ -3,9 +3,28 @@ package dev.swarm.phone.push
 import java.math.BigInteger
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class AndroidInstallationSignerTest {
+    @Test
+    fun `owner enrollment key is canonical unpadded base64url of SEC1 public key`() {
+        val publicKey = byteArrayOf(0x04) + ByteArray(32) { it.toByte() } +
+            ByteArray(32) { (255 - it).toByte() }
+
+        val encoded = installationPublicKeyBase64URL(publicKey)
+
+        assertEquals(87, encoded.length)
+        assertFalse(encoded.contains('='))
+        assertArrayEquals(publicKey, java.util.Base64.getUrlDecoder().decode(encoded))
+    }
+
+    @Test
+    fun `owner enrollment key refuses non SEC1 public material`() {
+        expectIllegalArgument { installationPublicKeyBase64URL(ByteArray(65)) }
+        expectIllegalArgument { installationPublicKeyBase64URL(byteArrayOf(0x04)) }
+    }
+
     @Test
     fun `DER high S is normalized into fixed width P1363`() {
         val n = BigInteger("FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", 16)

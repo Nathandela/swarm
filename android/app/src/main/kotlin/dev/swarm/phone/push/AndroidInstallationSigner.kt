@@ -9,6 +9,7 @@ import java.security.PrivateKey
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
+import java.util.Base64
 import swarmmobile.PushInstallationSigner
 
 private const val INSTALLATION_KEY_ALIAS = "swarm.push.installation.p256.v1"
@@ -56,6 +57,14 @@ class AndroidInstallationSigner : PushInstallationSigner {
         check(unsigned.size <= 32) { "P-256 coordinate exceeds 32 bytes" }
         return ByteArray(32 - unsigned.size) + unsigned
     }
+}
+
+/** Public-only owner admission material, in the gateway's canonical wire spelling. */
+internal fun installationPublicKeyBase64URL(publicKey: ByteArray): String {
+    require(publicKey.size == 65 && publicKey[0] == 0x04.toByte()) {
+        "installation public key must be an uncompressed P-256 SEC1 point"
+    }
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(publicKey)
 }
 
 internal object P256Signatures {

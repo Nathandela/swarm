@@ -98,6 +98,22 @@ class SettingsPanelViewTest {
     }
 
     @Test
+    fun `owner enrollment is an explicit supplied action`() {
+        val action = View(context)
+        val root = settingsPanelView(
+            context = context,
+            panel = panel(),
+            rowFor = { stubControl(context) },
+            enrollmentFor = { label ->
+                assertEquals(SettingsPanelScreen.SHOW_ENROLLMENT_KEY, label)
+                action
+            },
+        )
+
+        assertSame(action, root.kitRequire(SettingsTag.ENROLLMENT_SHOW))
+    }
+
+    @Test
     fun `the title is drawn by the nav header and carries no live counter`() {
         val nav = view(panel()).kitRequire(SettingsTag.NAV)
 

@@ -128,6 +128,9 @@ object SettingsTag {
      */
     const val DELIVERY_REDIRECT = "settings.delivery.redirect"
 
+    /** Explicit export of public-only owner enrollment material. */
+    const val ENROLLMENT_SHOW = "settings.owner.enrollment.show"
+
     /**
      * agents-tracker-nx44.3's CONNECTION row -- derivation row 11's machine row, on this screen.
      *
@@ -224,6 +227,8 @@ fun settingsPanelView(
     replaceFor: (PairedMachineRow) -> View = { row -> denyChip(context, row.replaceLabel) },
     redirectFor: (String) -> View = { label -> ctaButton(context, label, CtaKind.MORE) },
     deliveryRedirectFor: (String) -> View = { label -> ctaButton(context, label, CtaKind.MORE) },
+    enrollmentFor: (String) -> View = { label -> ctaButton(context, label, CtaKind.MORE) },
+    enrollmentDisplay: View? = null,
     below: View? = null,
     status: View? = null,
     onOpenMachines: (() -> Unit)? = null,
@@ -339,6 +344,11 @@ fun settingsPanelView(
             deliveryRedirectFor(label).apply { tag = SettingsTag.DELIVERY_REDIRECT }.screenAir(),
         )
     }
+
+    column.addView(enrollmentFor(panel.enrollmentDisplayLabel).apply {
+        tag = SettingsTag.ENROLLMENT_SHOW
+    }.screenAir())
+    enrollmentDisplay?.let { column.addView(it) }
 
     // (4) REPLACE THIS COMPUTER, LAST. The pairing row is the one destructive control on the
     // screen (replacing revokes this device), so it trails everything a person reads and sets.

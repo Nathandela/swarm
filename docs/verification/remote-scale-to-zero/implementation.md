@@ -1210,3 +1210,46 @@ Both Sol and root ran the complete Workerd suite successfully; root's expiry cas
 in 3.84 s, the hostile-phone/input suite in 66.632 s, and full internal verification in
 13.049 s. The gated latency benchmark remains unrun. The failed tag is not moved or
 represented as a published release; the correction will use a new immutable release tag.
+
+## Private push URL and owner-enrollment bootstrap
+
+The existing Play/Firebase browser login and local publishing/signing setup were verified
+without printing credentials. The published app is `dev.swarm.phone`; its existing closed
+testing entry was visible in Play Console. The new production push service did not yet
+exist, and the Play release build correctly required an actual provider-issued URL.
+
+Owner admission also exposed a setup gap: the app's Keystore installation public key was
+available internally, but no owner-facing action could reveal it before registration.
+USB alone is not a supported way to extract app-UID Keystore state from a Play release.
+`agents-tracker-929c` adds an explicit public-only enrollment display; server admission is
+not weakened and no fixture identity is admitted.
+
+To allocate the final URL without enabling registration, `agents-tracker-kn18` created
+one private service `swarm-pushgw-v2` in `swarm-8404f/us-central1`. Revision
+`swarm-pushgw-v2-00001-7s4` runs Google's official hello image at digest
+`sha256:4229c16c0c549905376c79943d0c122a728901330d10a080ec8ceb52e3f21f3e`,
+under the new `swarm-push-bootstrap` identity with no project role grants or secret mounts.
+Minimum instances are zero, maximum one, CPU is request-throttled and startup CPU boost
+is disabled. The service IAM policy has no invoker grants; unauthenticated HTTPS returned
+403. This is a private placeholder, **not a functioning push gateway or a readiness pass**.
+
+Cloud Run returned `https://swarm-pushgw-v2-733314021126.us-central1.run.app`; its status
+also lists `https://swarm-pushgw-v2-my4glayhpa-uc.a.run.app`. The former is the explicit
+build/publication origin. Keep this same service and region when replacing the placeholder
+with the gated Swarm image, scoped runtime identity, Firestore and pinned secret versions.
+Do not expose the placeholder. Full registration/FCM testing remains blocked until the
+owner supplies the real public installation key and the real service passes its negative
+and readiness gates. The first Play bundle is enrollment bootstrap only, not an invitation
+for friends or evidence of working remote control.
+
+The owner-enrollment candidate is Android `0.13.29` / version code `40`. Root ran
+`:app:testDebugUnitTest :app:lintDebug :app:bundleRelease` successfully; independent Terra
+inspection counted 1,751 tests across 216 XML reports with zero failures/errors, and lint
+reported zero errors (33 warnings). Fresh `android/gate` and `cmd/swarm-publish` tests also
+passed. The signed AAB SHA-256 is
+`f2e81b47d5be3f5c16dc2c215261c00789cfb0573b54df949bfec5be07cd27a6`; schema-2 provenance
+matches this artifact, the production Firebase identity and the reserved origin above.
+The guarded publisher's alpha dry run uploaded code 40 and staged the track successfully
+without committing edit `05361589781516772263`; this alone is not publication evidence.
+The separate main CI run `34042410030` failed the journal hook-gap recovery test during
+startup with a permission-denied error; desktop release remains gated pending diagnosis.

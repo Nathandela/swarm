@@ -118,6 +118,8 @@ data class SettingsPanel(
      * filter and an identity that survives a redraw are the surface's.
      */
     val deliveryRedirectLabel: String? = null,
+    /** Explicit owner action for copying this installation's public admission key. */
+    val enrollmentDisplayLabel: String = SettingsPanelScreen.SHOW_ENROLLMENT_KEY,
 ) {
     /**
      * The section headings top to bottom, which is where "the pairing section leads" is a fact
@@ -336,6 +338,7 @@ data class SettingsRow(
 )
 
 object SettingsPanelScreen {
+    const val SHOW_ENROLLMENT_KEY = "Show push enrollment key"
 
     /**
      * Inventory C6.2's recorded copy: `Needs your decision` and `Task done`.

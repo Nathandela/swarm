@@ -281,6 +281,11 @@ class PhoneRuntime(private val context: Context) {
         }
     }
 
+    /** Public owner-admission key for the installation identity already used by registration. */
+    internal fun pushEnrollmentKey(): String = AndroidInstallationSigner().let {
+        dev.swarm.phone.push.installationPublicKeyBase64URL(it.publicKey())
+    }
+
     /**
      * ADR-016 W2's production wiring: install a real [RelayTrustImpl] over the DEFAULT
      * [TrustManagerFactory] -- the platform's own verifier, reading the Conscrypt APEX store
