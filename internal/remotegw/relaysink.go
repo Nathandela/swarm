@@ -10,17 +10,10 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
-	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
-// The production relay client is a MailboxAppender: the gateway forwards sealed
-// envelopes through it. This assertion pins the seam so a relay-client signature
-// change is caught at compile time.
-var _ MailboxAppender = (*relay.Client)(nil)
-
-// MailboxAppender stores an opaque envelope in a target's relay mailbox. The relay
-// Client (internal/remote/relay) satisfies it; the gateway depends only on this narrow
-// seam so the sink is testable without a live relay.
+// MailboxAppender stores an opaque envelope in a target's relay mailbox. The gateway
+// depends only on this narrow seam so the sink is testable without a live relay.
 type MailboxAppender interface {
 	MailboxAppend(ctx context.Context, target string, env []byte) (uint64, error)
 }
@@ -86,7 +79,7 @@ type RelaySink struct {
 	// parent is the owning Service generation's lifetime. A standalone RelaySink leaves it
 	// nil and appendLocked uses Background plus AppendTimeout; Service.Run binds it before
 	// replay or live delivery so shutdown also cancels an append already blocked in the
-	// relay client. It is protected by mu, which appendLocked's caller already holds.
+	// relay-v2 mailbox stream. It is protected by mu, which appendLocked's caller already holds.
 	parent context.Context
 	// reuse holds a seq whose frame PROVABLY never crossed the process boundary -- the
 	// marshal, the seal or the outbox reservation failed, all of them BEFORE the append --

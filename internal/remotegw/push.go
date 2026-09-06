@@ -33,9 +33,8 @@ const PushWakeEnvelopeSize = 78
 // journal the wake exists to announce.
 const defaultPushTimeout = 5 * time.Second
 
-// PushTriggerer is the relay seam a wake goes out through: the relay looks up the target's
-// registered push token and hands the opaque envelope to its PushSink. *relay.Client
-// satisfies it, which is why the gateway needs no second connection for push.
+// PushTriggerer is the optional legacy wake seam. Tests substitute a recorder; the native
+// relay-v2 mailbox does not implement it.
 type PushTriggerer interface {
 	PushTrigger(ctx context.Context, target string, env []byte) error
 }

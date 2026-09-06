@@ -946,6 +946,30 @@ expired-cutoff timing test; the fresh rerun passed it and the remaining suite. I
 security/crash/concurrency review returned GO with no blocking finding. These are local checks;
 hosted admission remains closed and no physical-phone result is claimed.
 
+## Relay-v1 gateway compatibility removal
+
+The gateway now enters its native relay-v2 `MailboxWait` path directly. The unused relay-v1
+`Client` compile assertions, capability hello negotiation, 500 ms compatibility polling arm and
+its v1 integration test were deleted. `PollOnce` is production-private with a test-only forwarding
+shim for the existing same-package batch invariants. The two remaining external-package E2Es that
+called that obsolete helper through relay-v1 fixtures were deleted rather than restoring a dead
+production export.
+
+Relay-v2 `MailboxWait` blocks on a local delivery channel rather than a 25-second server long poll.
+Its local 35-second deadline is therefore only a benign idle recheck: expiry immediately receives
+again without latching degradation or taking the error retry backoff. The old server-wait/request
+timeout composition claim and test were removed. A genuine half-open detector would require a
+relay-v2 probe or heartbeat and is not claimed by this timer.
+
+RED evidence included B94 first stopping on its obsolete relay-v1 `DialSecure` facade control,
+then reporting the dead v1 surface after the control moved to relay-v2 `PhoneBinding`; the private
+`PollOnce` change also exposed and removed the two external v1 fixture callers. The idle-recheck
+test initially observed the 250 ms error backoff and then passed after the benign-expiry branch.
+Full races passed for `internal/remotegw` (36.057 s), relay-v2 (3.029 s), `cmd/swarm-remote`
+(38.233 s), and mobile (40.147 s). A whole-repository compile-only test passed. B94 now reaches its
+intended verdict and remains deliberately RED on exactly 52 relay-v1 exports, with no gateway
+export or obsolete allowlist row; deleting those exports is the next migration slice.
+
 ## Configured relay-v2 doctor
 
 `swarm relay doctor` now accepts no relay URL, pin or operator-secret arguments. It loads the same

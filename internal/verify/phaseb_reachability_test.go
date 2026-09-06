@@ -94,9 +94,9 @@ var b94HarnessPkgs = map[string]string{
 // that gets wired up cannot leave a stale exemption behind.
 var b94Allowed = map[string]string{
 	// ---- ADR-027 implementation checkpoint: deliberately not a shipped v2 path ----
-	"github.com/Nathandela/swarm/internal/pushgw.NewServer":                        "ADR-027 / agents-tracker-wjp4.2: old local-store constructor is now used only by push unit and two phonecore HTTP fixtures. No production command calls it or offers a backend selector. Port those fixtures to the repository seam and delete this constructor/remaining old branches before P4; not runtime parity or P4 completion.",
-	"github.com/Nathandela/swarm/internal/pushgw.Backup":                           "agents-tracker-wjp4.1: old command route removed; deletion of recovery implementation/tests was separately refused and awaits exact owner approval. Source retained without a production command caller, not a v2 backup or P4 completion.",
-	"github.com/Nathandela/swarm/internal/pushgw.Restore":                          "as Backup: old recovery source/guard deletion explicitly paused; no command route or v2 restore claim. Remove symbol and exemption only with the required approval.",
+	"github.com/Nathandela/swarm/internal/pushgw.NewServer": "ADR-027 / agents-tracker-wjp4.2: old local-store constructor is now used only by push unit and two phonecore HTTP fixtures. No production command calls it or offers a backend selector. Port those fixtures to the repository seam and delete this constructor/remaining old branches before P4; not runtime parity or P4 completion.",
+	"github.com/Nathandela/swarm/internal/pushgw.Backup":    "agents-tracker-wjp4.1: old command route removed; deletion of recovery implementation/tests was separately refused and awaits exact owner approval. Source retained without a production command caller, not a v2 backup or P4 completion.",
+	"github.com/Nathandela/swarm/internal/pushgw.Restore":   "as Backup: old recovery source/guard deletion explicitly paused; no command route or v2 restore claim. Remove symbol and exemption only with the required approval.",
 
 	// ---- 2026-08-02 merge of main (v0.6 perf wave) into this line ------------------------
 	"github.com/Nathandela/swarm/internal/transcript.Writer.Write": "the io.Writer face of the transcript writer; the shim's hot path moved to WriteOwned (v0.6 perf: caller-owned buffer, no copy) and Write remains the copying general-purpose entry, exercised by the transcript package's own tests.",
@@ -145,23 +145,6 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remotegw.Service.Gateway":       "accessor exposing an assembled sub-component to tests.",
 	"github.com/Nathandela/swarm/internal/remotegw.Service.CommandBridge": "as Service.Gateway.",
 	"github.com/Nathandela/swarm/internal/remotegw.Service.PushNotifier":  "as Service.Gateway.",
-
-	// ---- internal/remote/relay: R2 bundle test seams ---------------------------------------
-	"github.com/Nathandela/swarm/internal/remote/relay.Server.AdminURL":  "accessor for the ephemeral admin listen address; the health/doctor suites dial it, production reads admin_listen from its own config.",
-	"github.com/Nathandela/swarm/internal/remote/relay.WithDiskFreeFunc": "disk-space injection seam for the low-disk /readyz test; production uses the real statfs path.",
-
-	// ---- internal/remote/relay: deliberately test-only, already fenced --------------------
-	// client.go says of Dial: "NO production caller may reach it, which internal/remote/
-	// transport's productiondial_test.go enforces at the call site." This agrees with that
-	// fence from the other direction, which is the corroboration worth having.
-	"github.com/Nathandela/swarm/internal/remote/relay.Dial":                "policy-free dial, documented at client.go:429 as having no production caller; productiondial_test.go fences the call site.",
-	"github.com/Nathandela/swarm/internal/remote/relay.DialRaw":             "as Dial.",
-	"github.com/Nathandela/swarm/internal/remote/relay.Server.URL":          "in-process test relay's address; 83 test files. cmd/swarm-relay listens on a configured address instead.",
-	"github.com/Nathandela/swarm/internal/remote/relay.Server.MailboxDepth": "test assertion helper over server state.",
-	"github.com/Nathandela/swarm/internal/remote/relay.WithClock":           "injection option; the shipped binary takes the real clock.",
-	"github.com/Nathandela/swarm/internal/remote/relay.WithLogWriter":       "injection option; the shipped binary logs to its own sink.",
-	"github.com/Nathandela/swarm/internal/remote/relay.WithSourceKeyFunc":   "injection option for rate-key attribution in tests.",
-	"github.com/Nathandela/swarm/internal/remote/relay.WriteConfigFile":     "config writer with no shipped caller: cmd/swarm-relay READS a config an operator authored. RECORDED AS A GAP -- the runbook tells operators to write it by hand.",
 
 	// ---- internal/phonecore ----------------------------------------------------------------
 	"github.com/Nathandela/swarm/internal/phonecore.AcceptGrant":                   "grant acceptance reachable in production through MailboxRouter.AcceptCommit, not through this entry point.",
@@ -268,7 +251,7 @@ func TestB94_EveryExportedSymbolIsReachableFromProduction(t *testing.T) {
 	for _, q := range []string{
 		b94Module + "/internal/phonecore.SealInputData",
 		b94Module + "/internal/phonecore.SealCommandEnvelope",
-		b94Module + "/internal/remote/relay.DialSecure",
+		b94Module + "/internal/remote/relayv2.PhoneBinding",
 	} {
 		if !b94Reachable(reach, q) {
 			t.Fatalf("B94 CONTROL FAILED: %s is reachable only through the gomobile facade and reads "+

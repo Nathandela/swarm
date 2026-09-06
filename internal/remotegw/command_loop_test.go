@@ -8,7 +8,7 @@
 // THE CONTRACT these tests freeze (undefined symbols -> compile-fail RED):
 //   - type CommandBridge; func NewCommandBridge(CommandBridgeConfig) *CommandBridge
 //   - CommandBridgeConfig{ Mailbox; Forwarder; Key; EpochID; ReplyTarget }
-//   - (*CommandBridge).PollOnce(ctx) (processed int, err error): reads items past
+//   - (*CommandBridge).pollOnce(ctx) (processed int, err error): reads items past
 //     the durable cursor, opens+forwards each, seals+appends the reply to
 //     ReplyTarget, advances the cursor, and returns how many it processed.
 //   - A malformed/wrong-key envelope is skipped (fail-closed per item) without
@@ -26,6 +26,10 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
+
+// PollOnce keeps older same-package tests focused on one mailbox batch while the
+// production helper remains private.
+func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) { return b.pollOnce(ctx) }
 
 // fakeMailbox is an in-memory Mailbox: Read returns items past a cursor; Append
 // records sealed replies the bridge sends back to the phone.

@@ -103,7 +103,7 @@ func (b *CommandBridge) sealReplyForOperation(ctx context.Context, operationID s
 	if err != nil {
 		return err
 	}
-	// A prior MailboxAppend error is delivery-unknown: relay.Client reports the same
+	// A prior MailboxAppend error is delivery-unknown: the relay reports the same
 	// error when the store committed but the response was lost. Re-append the exact
 	// sealed bytes before allocating any later seq. A duplicate is harmless because the
 	// phone's receiver stale-drops it; re-sealing would not be harmless because it spends

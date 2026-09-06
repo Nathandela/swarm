@@ -19,7 +19,7 @@ import (
 // relay in production and a fake one in tests.
 type ServiceConfig struct {
 	DaemonSocket string           // the daemon remote.sock the journal bridge dials
-	Relay        Mailbox          // the relay client (machine mailbox read + phone mailbox append)
+	Relay        Mailbox          // the relay-v2 machine mailbox (read + phone append)
 	Forwarder    CommandForwarder // optional override; nil => the built-in Gateway forwards commands
 	PhoneTarget  string           // the phone's relay routing id (journal + reply target)
 	// Machine is this machine's endpoint id, stamped on every reconcile record. A phone
@@ -144,9 +144,9 @@ var ErrDeviceRevoked = errors.New("remotegw: paired device revoked; gateway exit
 // redialled, while a dead link is an outage and must be.
 var ErrRelayGone = errors.New("remotegw: relay connection lost")
 
-// LinkWatcher is the relay client's LIVENESS seam: a channel closed when the connection
-// dies underneath its holder. *relay.Client satisfies it (its read pump closes Done when
-// the socket breaks), and it is the ONLY way to learn of a drop while idle -- a loop that
+// LinkWatcher is the relay connection's LIVENESS seam: a channel closed when the connection
+// dies underneath its holder. The relay-v2 machine mailbox satisfies it, and it is the ONLY
+// way to learn of a drop while idle -- a loop that
 // notices only when a request fails cannot see a link that dies with nothing outstanding.
 //
 // It is optional, like PushTriggerer: a Mailbox that cannot report liveness (every
@@ -158,7 +158,7 @@ type LinkWatcher interface {
 
 // Service is the supervised gateway runtime (R-GW.1): it composes the journal-OUT
 // bridge (Gateway.RunJournal delivering to a RelaySink that seals and appends to the
-// phone's mailbox) and the command-IN loop (CommandBridge polling the machine's
+// phone's mailbox) and the command-IN loop (CommandBridge waiting on the machine's
 // mailbox) over one relay connection. It is the body of the cmd/swarm-remote sidecar
 // process; a crash leaves the daemon and its sessions untouched (S1) and the runtime
 // resumes journal delivery from its last durable cursor.
@@ -239,7 +239,7 @@ func NewService(cfg ServiceConfig) *Service {
 	// terminal flush would die silently; the notifier forwards SetMachine and
 	// DeliveredCursor so the coalescer still reaches the sink through it.
 	//
-	// The relay client is BOTH the mailbox and the push transport, so the pusher is
+	// The configured mailbox may also provide the legacy push transport, so the pusher is
 	// discovered from cfg.Relay rather than configured separately. A Mailbox that cannot
 	// push (every unit-test fake) leaves it nil, which is the supported no-push
 	// configuration -- not an error.
