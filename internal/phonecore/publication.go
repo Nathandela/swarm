@@ -251,16 +251,6 @@ func validatePendingPublicationAuthority(publications []PendingPublication, auth
 	return nil
 }
 
-func migratePendingPublicationAuthority(publications []PendingPublication, authorityPub []byte) []PendingPublication {
-	out := clonePendingPublications(publications)
-	for i := range out {
-		if len(out[i].AuthorityPub) == 0 {
-			out[i].AuthorityPub = slices.Clone(authorityPub)
-		}
-	}
-	return out
-}
-
 func publicationsForIdentity(st *State, machine string, epoch uint32, authorityPub []byte) {
 	for i := range st.PendingPublications {
 		p := &st.PendingPublications[i]

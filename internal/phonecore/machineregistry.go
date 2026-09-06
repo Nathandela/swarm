@@ -31,8 +31,9 @@ var (
 	// ErrRegistryNotLive means this root has no registry yet.
 	ErrRegistryNotLive = errors.New("phonecore: no live machine registry at this root")
 
-	// ErrLegacyStateResetRequired refuses a v1 singleton root. There is no migration.
-	ErrLegacyStateResetRequired = errors.New("phonecore: legacy singleton state requires reset and fresh pairing")
+	// ErrLegacyStateResetRequired refuses a phone state from before the v2 baseline.
+	// There is no migration; the blob is left untouched for an explicit reset.
+	ErrLegacyStateResetRequired = errors.New("phonecore: legacy phone state requires reset and fresh pairing")
 
 	// ErrLegacyRegistryResetRequired refuses a registry written by the retired layout.
 	ErrLegacyRegistryResetRequired = errors.New("phonecore: legacy machine registry requires reset and fresh pairing")

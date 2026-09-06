@@ -51,7 +51,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -416,32 +415,8 @@ func TestState_GrantWatermarkRefusesAReplayedGrantAfterRestart(t *testing.T) {
 	}
 }
 
-// stateV1Fixture is the PINNED v1 on-disk blob (§9 rule 4). PB-STATE-5 requires a forward
-// migration path, and the only mechanical way to inspect one is to keep a byte-literal of
-// each shipped version. When StateSchemaVersion is raised this literal MUST keep its v1
-// coordinates intact -- that is the migration artifact, and it cannot be satisfied by
-// regenerating the fixture from the current code. A later security invariant may still
-// refuse an active legacy pairing rather than invent missing authority.
-const stateV1Fixture = `{
-  "schema_version": 1,
-  "machine": "m1",
-  "routing_id": "rid-m1",
-  "epoch_id": 7,
-  "send_seq": [{"epoch": 7, "ceiling": 512}],
-  "receive": [{"sender": "090a0b0c0d0e0f10", "epoch": 7, "seq": 42}],
-  "grant_epoch": 7,
-  "grant_seq": 2,
-  "wake_replay": 91,
-  "relay_cursor": 17
-}`
-
-// stateV4FixtureKEK is the fixture's PINNED tier KEK. Every other test in this package mints
-// a random KEK per run, which is right for them and impossible here: a byte literal cannot
-// carry a ciphertext whose key is generated at run time, and the two sealed key fields have
-// to be IN the literal or the field-set tie below has a hole exactly where PB-KEY-9 lives.
-// So the fixture pins the KEK and the ciphertext together. It seals nothing but this
-// fixture's two throwaway epoch keys.
-var stateV4FixtureKEK = func() []byte {
+// stateCurrentFixtureKEK is the pinned tier KEK for the synthetic current-schema fixture.
+var stateCurrentFixtureKEK = func() []byte {
 	kek := make([]byte, 32)
 	for i := range kek {
 		kek[i] = byte(0x5A + i)
@@ -449,490 +424,58 @@ var stateV4FixtureKEK = func() []byte {
 	return kek
 }()
 
-// stateV4Fixture is the PINNED v4 on-disk blob: byte-for-byte what this build writes for
-// fullState(), with the two epoch keys sealed under stateV4FixtureKEK.
-//
-// It does a SECOND job the v1 literal cannot. StateSchemaVersion was reverted from 4 to 3 in
-// a mutation with the whole repository still green: nothing tied the constant to the field
-// set it stamps, so the next durable field added without a bump would ship silently and a
-// build one version back would drop it -- which for a send-seq ceiling or a receive
-// high-water means a replay guard reset to zero, the exact hole the version exists to close.
-// This literal is the tie: it must keep LOADING (which a downgrade of the constant refuses,
-// ErrFutureSchema) and it must keep carrying EVERY durable field (which a new field without
-// a bump breaks). Raising the version therefore forces a new literal beside this one.
-//
-// v2 and v3 have no literal, and neither can be produced honestly here. A v2 blob carrying
-// either epoch key is REFUSED outright by load() -- its cleartext keys read as sealed blobs
-// are the silent reinterpretation the v3 bump exists to prevent -- so the only v2 literal
-// that could load is one with the coordinates the bump was about removed, which pins
-// nothing. A v3 blob is this literal minus stale_streams alone.
-const stateV4Fixture = `{
-  "schema_version": 4,
-  "machine": "m1",
-  "machine_static": "oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=",
-  "machine_sign_pub": "srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=",
-  "machine_relay_auth_pub": "w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=",
-  "routing_id": "rid-m1",
-  "epoch_id": 7,
-  "push_token": "fcm-token-m1",
-  "push_preference": {"alerts": true, "mentions": true},
-  "reconciled_epoch": 7,
-  "wake_key": "AQIDBAUGBwgJCgsMUjnRQtz97KtVbLtHTf4/N++9li4rV9S30xkVq4qvx6jpwus/7bgP0NJzPAB5ADWz",
-  "content_key": "AQIDBAUGBwgJCgsMMVS+L7+Yi842EcQ6LptYUozQ+UNIMrPSsERK9ikKYA2Hx40/KrnqG7mZ4mEWFuJ9",
-  "send_seq": [{"epoch": 6, "ceiling": 1024}, {"epoch": 7, "ceiling": 512}],
-  "receive": [
-    {"sender": "0000000000000000", "epoch": 7, "seq": 5},
-    {"sender": "090a0b0c0d0e0f10", "epoch": 7, "seq": 42}
-  ],
-  "grant_epoch": 7,
-  "grant_seq": 2,
-  "wake_replay": 91,
-  "relay_cursor": 17,
-  "sessions": [{"SessionID": "m1/s1", "Group": "running", "Present": true}],
-  "snapshots": [{"Session": "m1/s1", "Lines": ["$ ls"], "Cols": 80, "Rows": 24}],
-  "pending_ops": [
-    {
-      "op": "kill",
-      "session_id": "m1/s1",
-      "cmd": {
-        "Action": "", "ContentHash": null, "DeviceID": "",
-        "ExpiresAt": "0001-01-01T00:00:00Z", "Machine": "",
-        "OperationID": "op-pending", "Session": "", "Sig": ""
-      }
-    }
-  ],
-  "op_outcomes": {"op-done": {"op": "ok", "operation_id": "op-done", "endpoint_id": ""}},
-  "stale": [{"sender": "0000000000000000", "epoch": 7}],
-  "stale_streams": ["journal"]
-}`
+// stateV26Fixture is the byte-literal current relay-v2 checkpoint. It keeps the schema
+// stamp tied to every top-level field and sealed-container coordinate this build writes.
+const stateV26Fixture = `{"schema_version":26,"machine":"m1","machine_name":"nathans-mbp","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","operator_namespace":"owner","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","relay_tls_policy":"pinned_spki","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"last_profile":null,"pairing_push_owned":"AQIDBAUGBwgJCgsMDQ4PEA","wake_key":"wxIn8aKOxBJMwj19x7gRj24/V2u9zReMnuX7rnMjma/ErTIK7/FhYC1GbXhanGjSYOdoz5xhO5x5JWgP","content_key":"2OqBct584ZZJTQs75xBA6/3R1jGyPO7vMA/Tq9ihIZofvhQg7DUTNFuYPqsMS0ZLs+47HpJ8UCZCQnUp","wake_state":"6tzAvVKLUGaFYZyF91njodGhY9UfsJXZh/9DtCnSCkoZ2SiYXFcDSJz2L7sGPYjS/cK7HFTeiwBj809In1DrVTabgi04VfTkGag=","content_kept":"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","content_purgeable":"yjUxZbiMHHTc8KQSkhuOiV6iz4uxBpna49PQD2GvELNcJQR4n7gzuNUevRoxG1NjTZqnWyG/T0yzD9yyt7alxk82pGbT4CFVzJcPLGfgBdlM/t0kR/9XK7Tt3RGCb7KGPtGRt6rFQmgGojpWvHaZFUhNz8aVG2zvHWVmudFuD475+OhuGyNk+UffXELl3OGfDfkWi1uWlYhrjfWMJIOA/W+TjmlPDDQnjM6iybwX+9Xn15IRZDDK83KGfqUlvIgsgnh526nSVJ0TVLsXbOTiKXZ8Jpmhmo8F1K+GiE+7X5gCzUJ6nNUHBNG6FP2p9Dv08Q+/0UuqpJ5EERXqsJh0Az0y/L46LnUXPrJ4bty+Lhh3+8zOukHGykwAVfEgau0qEgQ/67IvJkCtvYCRu7ebXnH4j2ACnLIno+aLzf/FS1kq8da9yuTIzEeAJP8Q6Y9um3Jin3jgpwqrZu2S1y+3tI3TniTZIrmapgaJ+KLdZcuFTy1sD9kuaYqQTtbCGWs6GHKgRPIW09JvZUVmJYZYxkUfEU9BmMpQssUMpgQQKiqMO6aJqWh2RKR181Ihtxg5kV5AXRxkFMUh6gUH3qWB0Uurjlum2g32ErgKe9FA2MGrC/753dXFFmcxeaaJP7y8DcqOz4SsANz2IytwFpRUwot1SS1Sc4oj8vl/h7TKj3zWV8ZOtBwr+2OofFxKuGRasNolF2sPEa+fjzVuje9FJ0zjLVXHqmOYBuXG41ZTGJAuagMeR/5myrtj6LRfpDqbuPFlmuG+Cxn+/IszC0nGnVcCZ6Wob09umA4wZ0EB+iSfV9zSJ+55mnbOmqb+nMemWiAuAXoZDp5xSXxF/USjgGZIEpsuexgVsHDCSwDJE44+cXbTIPF7k9dE/BY9RRiMDxhvfMSAsubwB/ke+RAdmXbwStgF6SbESWn3pt21WC9GnNSQatBTkTyoZUVxrcoYQpwCoIzQYE0IoMLvM5pJgLs01ij3jtgVokAlykvrCW0HyYqkXb//SFbhb1X3w46Dc5YBO7RMDCIV4FCKB/QVDCo6JyyNMjfkCAZ3paz+a5SXx+N0HRRtsIqiUtDWsXyux34obuBcd3x7w7NEdLiUS0bxfzO58aRwydarcvD+rd7G/c0WOfuPfz/hG+RatO5/MCgQ9WUyvn2olXDS+z8eJd49Ms7PWJM4M4ngTMHEstWHjr9XbnXATE2MMQuzBGCR9iXl+UQbsJLOp9VSOMdFNObTPz0DckY8ldAg2H5H","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"relay_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","relay_generation":5,"phone_binding":{"home":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","phone_rid":"0123456789abcdef0123456789abcdef","generation":"7","active":true},"discard_recovery_generation":3,"discard_recovery_completed":2,"discard_recovery_token":"fedcba9876543210fedcba9876543210","discard_recovery_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","discard_recovery_cursor":18,"roster_revision":23,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
 
-// stateFixtures is the pinned literal for each version that HAS one, keyed by version. The
-// map is what makes the version bump mechanical: TestStateSchemaVersion_IsPinnedToTheDurable
-// FieldSet demands an entry for whatever StateSchemaVersion currently is.
-// stateV5Fixture is the PINNED v5 blob: byte-for-byte what this build writes for fullState()
-// under stateV4FixtureKEK. v5 is S15's tier split -- eight formerly-cleartext fields now live in
-// three sealed containers (wake_state, content_kept, content_purgeable), which is exactly why the
-// literal must move with the version: a reader that stops understanding one of those containers
-// loses the coordinates inside it silently.
-const stateV5Fixture = `{"schema_version":5,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"RjJsKH8CxMYtEXUWrZFkAkpjXGQ7hIkUPW/rzAbFy0kLLGc2wmXcgEC987gxBteYR/mcVf1u8frgvuO5","content_key":"wgouA8IY8MNVJCdwyCkQjGtUFAc2pamA0Yl3ZIt//gPI2jBrZBOPo2btAzYsCQmQMvcI0IaObW1OzG6U","wake_state":"+jz9/kWzl25ZC56kWyDWjYI2Cb7iWCzpFDWQRjXojrCFrhOviRF5Iz0Iug8GLlbu5J7TqhH0Monc6yyPQA4EIfZOJgdJi5/h1Bw=","content_kept":"a3Bo9WGcGJ8fWEHQzTs+BmpWrOTeQHt9l13CGWZyVwz6Tgm5mOmRO2TX8LJz5iXESvYNj61WUypfDs1Ipxa+fWoeRlJBz4XelSETSfrkkE/YqlHbB6q6A2DlVu9xNaeHrtEp1camraZ2o48SFOXIouQ7Cu4vp75JhiXm4ddash3AyGjnFnUzz3iWsBOzUcir56wxT0wmiPKtepFC3V80BbMs2ToXx/oTISZm4H8RHu54pcnpE9BG4DjvhHWoaaNxlvSAzbIL2PlX/5AdU9vaLRlTl5mp6P1qVfsjHpuOLJ0PHcHcPgXN8Ujh4jS/bu/QaWLF2pYbk/rNJM6zmiNqn/ZGjiBeefcR5NJeK4Ywu1eVd19HBt8PBJg0cJsDYPahjUTQBNvUxEMhchAhd9vl1a/PcehqI7M5hVUXBeBDETYGYhei0X8RmTwrewhE89i6m/2jCknwImtN4TXEO1+B51WXkFJz6stRIA14Tj6N9wKzmdWZGIXrPa2kHPPtoilzyxIUCXuq9mEiDOUSngL0wgKWndGT","content_purgeable":"MmJl/G15AxXKAe9XJNm1g2GO1vdJpo3Re5+1qA91RaRFoVLvNE3dxcO6jI2Dtrhu6PsyktWS9XlCH3rq67zub9t/ILdXWUR2X8USXE7zKckfmJkiRMdGGDQNTH/8TLzx3n1/AEEkIyJkv0HMwQwmN6l40nmATM4kqSSxQhOQ61CVwMJFxwzQDKJmSmAeKkgKYz5Bv7CPb83SJNTSC+ZSYiMJBEf6QijTn9NjNfunzrlcemEgBD9jT8m76KqlwUYBPtewrKqb0KQiqd1Aec6td6gzHnCEvXtyYrYp0RiZzyzckCjXD0omWKQe/9ktQIDb4uD3iq4aDpU=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
-
-// sealedTags are the durable field names that S15 moved INSIDE a sealed container, so they
-// cannot appear as top-level keys in the pinned literal -- that is the point of sealing them.
-// They are still tied to the version: the container carrying them is itself a pinned key below,
-// and TestStateStore_PinnedSealedFixturesStillLoad opens every pinned version through the fixture
-// KEK and compares each restored coordinate against fullState(). So a field dropped from a sealed
-// container fails THERE rather than here.
-//
-// Listing them explicitly, rather than skipping any absent tag, is what preserves the
-// BOTH-DIRECTIONS property. If the check simply ignored a missing tag, absence would become
-// SELF-JUSTIFYING: the next durable field added without a version bump would not appear in the
-// literal, and the test would read that as "must be sealed" and pass -- the very defect this fence
-// exists to catch, reintroduced one level up and harder to see. Every declared tag must be
-// accounted for in exactly one place: present in the literal, or named here.
-var sealedTags = map[string]bool{
-	"push_token": true, "wake_replay": true,
-	"send_seq": true, "receive": true, "pending_ops": true,
-	"sessions": true, "snapshots": true, "op_outcomes": true,
-}
-
-// stateV6Fixture is the PINNED v6 blob. v6 adds PushPreference.Version -- the device-supplied
-// monotonic counter the machine gates a push_prefs update on (PB-PUSH-10) -- INSIDE the
-// existing push_preference object, so the top-level tag set is unchanged and the check below
-// would not have noticed it. That is exactly why the version had to move: a build one version
-// back drops the counter, it restarts at 1 on the next Save, and the machine then refuses every
-// preference update as a replay while the settings screen shows the user's new value.
-//
-// It is the v5 literal with the stamp raised, which is what this build writes for fullState():
-// the field is omitempty and fullState()'s counter is zero, so the two blobs' cleartext differs
-// in the stamp alone. The counter's own round trip is pinned separately, by
-// TestStateStore_PushPreferenceVersionSurvivesARestart, because no fixture can carry it while
-// the v5 literal must go on restoring the same fullState().
-const stateV6Fixture = `{"schema_version":6,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"RjJsKH8CxMYtEXUWrZFkAkpjXGQ7hIkUPW/rzAbFy0kLLGc2wmXcgEC987gxBteYR/mcVf1u8frgvuO5","content_key":"wgouA8IY8MNVJCdwyCkQjGtUFAc2pamA0Yl3ZIt//gPI2jBrZBOPo2btAzYsCQmQMvcI0IaObW1OzG6U","wake_state":"+jz9/kWzl25ZC56kWyDWjYI2Cb7iWCzpFDWQRjXojrCFrhOviRF5Iz0Iug8GLlbu5J7TqhH0Monc6yyPQA4EIfZOJgdJi5/h1Bw=","content_kept":"a3Bo9WGcGJ8fWEHQzTs+BmpWrOTeQHt9l13CGWZyVwz6Tgm5mOmRO2TX8LJz5iXESvYNj61WUypfDs1Ipxa+fWoeRlJBz4XelSETSfrkkE/YqlHbB6q6A2DlVu9xNaeHrtEp1camraZ2o48SFOXIouQ7Cu4vp75JhiXm4ddash3AyGjnFnUzz3iWsBOzUcir56wxT0wmiPKtepFC3V80BbMs2ToXx/oTISZm4H8RHu54pcnpE9BG4DjvhHWoaaNxlvSAzbIL2PlX/5AdU9vaLRlTl5mp6P1qVfsjHpuOLJ0PHcHcPgXN8Ujh4jS/bu/QaWLF2pYbk/rNJM6zmiNqn/ZGjiBeefcR5NJeK4Ywu1eVd19HBt8PBJg0cJsDYPahjUTQBNvUxEMhchAhd9vl1a/PcehqI7M5hVUXBeBDETYGYhei0X8RmTwrewhE89i6m/2jCknwImtN4TXEO1+B51WXkFJz6stRIA14Tj6N9wKzmdWZGIXrPa2kHPPtoilzyxIUCXuq9mEiDOUSngL0wgKWndGT","content_purgeable":"MmJl/G15AxXKAe9XJNm1g2GO1vdJpo3Re5+1qA91RaRFoVLvNE3dxcO6jI2Dtrhu6PsyktWS9XlCH3rq67zub9t/ILdXWUR2X8USXE7zKckfmJkiRMdGGDQNTH/8TLzx3n1/AEEkIyJkv0HMwQwmN6l40nmATM4kqSSxQhOQ61CVwMJFxwzQDKJmSmAeKkgKYz5Bv7CPb83SJNTSC+ZSYiMJBEf6QijTn9NjNfunzrlcemEgBD9jT8m76KqlwUYBPtewrKqb0KQiqd1Aec6td6gzHnCEvXtyYrYp0RiZzyzckCjXD0omWKQe/9ktQIDb4uD3iq4aDpU=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
-
-// stateV7Fixture is the PINNED v7 blob: what this build writes for fullState() under
-// stateV4FixtureKEK. v7 adds relay_spki_pin (ADR-007 B33/B34), the ONE coordinate a handset
-// cannot re-learn without re-pairing -- msg2 is its only channel, because the QR has no room
-// for it -- so a build that stops reading it leaves a pinning-only platform unable to dial
-// and unable to say why.
-const stateV7Fixture = `{"schema_version":7,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"EBaE3Bdu6rALf4KpmJgkUQ8vhYzj3JKs4Yuotx7gzLUv+Kwvcoi0tGTXcIKc9dZtz5f8xj6IPS45mCDn","content_key":"HAAHxTrbcrBi5XRWefLS34Fo3cP4wAYLtjS9yZgNK9l1tGcL6Dq9HVgF/KQmWx1xW8hyY0/9lmTeI1zz","wake_state":"KtkliB1bq/J5u7IxtFcKrN3dZISvExKteu91vzErxFE/TtU0fFdKBAvuEvWxm1oRdsZegekXuCd5tp2K/1fcjXmNbgMdlUS3f+E=","content_kept":"BcyyV6bCHEHoCl7SFwz9x9QIMmxWPIGWV0lpCgBcK415TC20pUECSPq2grb2II89LaUd2qU66o125A8vWd6QCOZs4A3IcxOuTbUgF13NfXt/cPWpZ0VdAAgrEYlZ1vIlLrQlqzLEcvqLvjLcKqNNQ2Bmyf33um0aGCB8U5cW7PPuHcKKoJ65QBMkml+BHXt8JA50mtS0Ts7uq1gMm6XjayvslgaxHY2WPH1QK911QY76IiEW5m9tpmWLqNGRFfv1Obhk9ztlo2ts5VyWOizaZNJuZ29dBS/bjw8ppHOGvXBRrh23JTAKxh1ZmmsxQF/20QLNouiV/V1qP0zMFuBqzlfuXn9kB8nHZdjb3iwlabWXSQN+rIOyPOjygpyMcNE3j38+PXBuVlx+G+9AwCHTLbVV2TuuY5xabcbbcCiYcVCAOaXbr8Fcl3ooRLjZ7cwl8zhYnJuQEGf5JhjX0suTSqcZd4O4XbHokHcsBbg6Wdn9oQwoLKOjRz7u00kblx1GO2DfiY5AHMyYw8jOpfkfhKAN1u1F","content_purgeable":"FtMqSl/uWSWlKM5N5GWhsvtgpRiiq9mnLBbFxUlcC+nCGkUUD1TQ1YzP7JaMOGDR0o0EcEOBjaD+X3k+jrnkj36Myicx+IID3GsSjEeHL0ANciRIEfPSZN1a6FHeRc8U+0d34P5RCJ+7zGhdb+6MAHM7myzKc6oegCZIvAXy5S+i0Py7umWaz81nnuZlyYUzwbAgOLBuC7HsfgB0CM0ISsqiO7qPqUd639EOGB4whjF9sSz3eN2nv7x162XEvGWc/4GX/Bu8IwtT+qtfB5pqWKwo4oRjc0XS434JxUhXMWGUzMhoJVuodgNUvNQ4kApFWIkbXBulavM=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"]}`
-
-// stateV8Fixture is the PINNED v8 blob: what this build writes for fullState() under
-// stateV4FixtureKEK. v8 adds last_heard_at, PB-APP-11's freshness coordinate -- the newest
-// authenticated machine timestamp the phone has accepted. A build one version back drops it,
-// so the next launch reports a machine that has said nothing for hours as live and renders its
-// restored sessions and grids as current, which is the one thing PB-APP-8 forbids and which
-// nothing else on the handset can notice: a withholding relay leaves no gap, answers every
-// poll, and is itself the source of the only other liveness signal (ADR-007 B121).
-const stateV8Fixture = `{"schema_version":8,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"hPJbGpYBeXu34Ub3WP7aZ1tJB3D9iqeNhT7TTnXIrK8P6sGdWFuy9xwbpRW/FKCR/wpjAXP90vcitbQn","content_key":"AwfT5hR5qtbhxGZGYrz1UpBREKgZZVwBzdZmlhwnh2qOuTgH9Q3eyHgd44QB+lOOeLEmB81RHtQQpwKR","wake_state":"phivocSvyexkNimLclLozrWLhBwtNKBR62NlSbpfQcBdKBhO74q0qkZJcTUcOjWdY0KaiaoE4NxUGeCmL3S3ih0t2q9Gm5yLUlA=","content_kept":"HbPSffp/swWt4sNhdsxM9ee7HiedO/iID0toRsT86lpBWOqe9ML1U9ncv2oRm1n6dG5kuKmBwpsaUzCVfTEQMB+7bXqHFBshprbXQQlTfS5cme/FPEw9bkNyT/+0FYzwPlQ6F+UfWK+WWVG3ZZwRWYQ+zENzfS74A+i9Nzc5iGCEghYBo7lb2tuQKY/DHl+y1Aj6ruvdGoCrNKEi3vn56XKu25rC0Psep1D0zDqM2sbmKP7L8IAy3sC1BkLBvUgM4Vl3OvSHSWOMVXTe4jI/nP1UMeSrMGdhzjshlFVbKHm7wcVZTyuA98abyZboLTCI4tBJroNAYLaP/OfCm7y5r+uIJDtAKUtbEVpzc0txeUY4m2reVLLlhkZFJ4Xg7D8YEJ0+L8yC6qI03YcAp+/938pxOvLPfNvkjjPBv8xvE2tYOWfSSx2fA00nkR7rX+aqsHNE2TaEnWIeFd3hRR5V+4Sqctjw/E2KLxuE75e3DUuG8D8Zn08fap9ES9T8uk5IeOKIPXPt/J3r2tRC7Tr155XP1fBD","content_purgeable":"ERUT6HrGCfcR6YOQS1tqoSkPQeY6gqI2WmJmXriI9Sfe43f1NJvy2BRrb/ZE2HBb/HUd1R79v8BNvfae5lyrH2wfGx3snbMQmwRd84ZwY7wugMa4PQyMaaEVBiPgHYrCwyFejONtYOS9sGZZMd0tnOXwt1XZuSa7JTv6k27VSnM4cq1EJY8jj3zHPW49kICbZPCmSIjYg+7nx38leMjPSb6gcj43WxxRzly9B/ic/7mTRDhjsulfp1NlK4xa0XwiaJEtPIU3ljxSKTTFEsK9/bQflwAYdVVIOsMa3UAWIpBjSZzyxqieOBdYeLukrLTM62iqnjOEVF8=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
-
-// stateV9Fixture is the PINNED v9 blob: what this build writes for fullState() under
-// stateV4FixtureKEK. v9 adds disowned, PB-KEY-7's record that the OWNER ended this registration
-// (ADR-007 B133). A build one version back drops it, and what comes up is agents-tracker-d0b8
-// exactly: a phone that believes it is paired, holding no key of either tier, in a four-tab shell
-// reading a roster from a machine that deregistered it, with the pairing entry point on the one
-// screen the presentation gate will not show. Every other coordinate a pairing pinned survives a
-// revoke by design -- one of them is what the blob is FILTERED on -- so this field is the only
-// thing that can carry the fact.
-const stateV9Fixture = `{"schema_version":9,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"9A8+xA7qCVgjeQmNLMlmphMYLglEdfmvDlMC3Z0xyKFQHKICgvCTC6Y/qtXno2uPRkgFAcj9ZXIaKd6+","content_key":"z+o0S1vblLNcliSxEpKgiX7c2HbabSse8BoxlDiXvcUBsQVIo5yIAtZ7+bt6HKWKAQQ3RrqBCUADAwU5","wake_state":"VIaWolwwUV1eygdw8dkwzyTAurcQEJtZd0cqh0nyTblN5TlnH6LyZNgZhI4Mz1zg3YgfiplYONEZzoyBEkzjQXMXggGtV5/F3qE=","content_kept":"WQtT1MV2/CT6tSlSemtn/ksK7RnblCFENQi35DzNuYeGHAwxfn4344S3cXRFqyb4+rPy34Sgihgp8/sCpC4TMtPhen+Ha0l7F9VXfFW5hhNTtvYBUYehUJNue+3/KZLqsq60CeZ9yJDf2yYI9oh6VFpfFx/FMOxQRDNckAdVRW0MRJ1bPXTyFUr3A18kbPzVfiZo8u5xkpE/+iJ0q/skNXdFJ8eXJDDQc99XvzTITGl+uvQL72lE7BfT5gIF9Y3iWUWEPri8HTdoEtKLdaeaW2SZgSEILwa0rOCLVPVFqCAd+JRADLZ20jT7GVwD79w5or5cGXArfNXVw9K9XRL0NCxy55u2gpJZsc7pCre8PCGAMXA9Skwf+GJQq5qek8JKYqZXy302wOyiK8jGvZV1aHxOWOAalSK7dEjYUF07RSKGbg6CfXazHESNF+zbJatzrcQm+h/zfh+tE1VCwSefzHelOAIIlA0juS1Rzel99z18/rAyN7/Np27/nNGUjHpvEmTa6OSsFjA3V4uv/YXtDGK0MY1f","content_purgeable":"dSBXI9e9MQVcUcwpfuPkaRP4vT1ADKOIT+8I7umnrMV77yqworL08cH/jGP3ZGHgMZprckW5eGpZjmJ1cdF/iQ5F+wapazgFwEmCZkHVy/tp9r6lvSt1aviIopZfIaGUzLLRxAWhJIl+O+RMIVyFv1CsXySA8/zlh+llDJ1iq3U3vtIXbnx2wf6AtfV7bMp+pSQIQoW0B9mTF9cKSjGoy+XKOt8j0SzIYK2XVYJJCvOGl/MD0u7QOgSHV02zyQWAYYnumpdUDl2qvPzjERxbnBgHQZPT6/oRtZ2au5w8JImOwfcmxKDRt0KnGd9LSdcmtXZP8APK6/BXjeklrQmD9EGxAQ==","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
-
-// stateV10Fixture is the PINNED v10 blob: what this build writes for fullState() under
-// stateV4FixtureKEK. v10 adds machine_name, the hostname the machine published in the pairing
-// payload (agents-tracker-ksvb.1) -- the phone's only source for what a person calls the computer
-// it is bound to, since the endpoint id is `ep-` plus four bytes of a hash of a directory.
-//
-// ITS BUMP IS THE MECHANICAL ONE AND SAYS SO. v7's pin, v8's clock and v9's revoke each named a
-// specific brick a downgrade produced; this field's downgrade produces a machine rendered by its
-// endpoint id, which is exactly what shipped before it and is not a lie. The version moves anyway
-// because the tie between the constant and the durable field set is unconditional on purpose:
-// see StateSchemaVersion's own paragraph.
-const stateV10Fixture = `{"schema_version":10,"machine":"m1","machine_name":"nathans-mbp","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"PmfgMwX6Uns8zJLuUA9mAtiU5jNx+YsH6Pr8oKj4Kb2wPrM9U3Wu9zHzj05lkCRlpyXqx/YQB4DkbRYn","content_key":"NlluJ6V31SU/CpV62DvokkATJsxs6eForsyF4/V1VA+oYpH/QJXIWIdOXSvYdUQe7huMVPjJvlyja9IC","wake_state":"oFDW8MQcwJa4DD29//q9dhMq8+LApZFF7N+purtiCUBb3SPMEfmPzLj4OZ/mE15bhn886KHvOtpsQIKQ8kVyiu9K2vIn35X/Pug=","content_kept":"oxITQCQRAB5hSLdI+3/9i8IdXjRZ45C3HVuNCsKIL05lg1HDz6rcK3qPu50tiDJccn58TCkpm8Uu758qcF2NBEqOnU0DjeBefiFgyH0Huts8AaECGOmfzjWPpxO6FCPApGaxVVQMLWtLSvUVkqDJfmtzqua7Z3oyQleLKAec17JgDvq1X+WfEh7o8Ck3Bd4AoZ+XcDy681SvkjllmNlZkDFYuYGTmsP8FSxNUciyGL9iSRiADxrkwajmYgh9Eb8tDyzLmislEwUDJeXKbGWOCBT6uS/GuPNIcmQiv54hY84+N/2e07RTNYTOJQmUzqNfY8UL0dyHKmI9ceChmO3grVdCTqMQTFFZtOPa9iQQLcDIO3k5oWWZ5xcsJP3ThE1QViP/QEqoSw1eHgdETiDa5BFAcmouBrXjxzWAaJBEJJAaO5DLRdjis0sYCzlCEW/G7zHFcUK1hO/+k3uO6zNRWXRtrcLnaFLy7lBe2FjVEMuE85jre3CrRqc2a5TXmgoLm1QcKMBqOwj9RWB5jz1sX/yhp5Ha","content_purgeable":"HCJqYRqSKBXvaEQ0MR8py30GK33SvI9Ut5On8ZHctwzlnpMoNDYdS1+cpKcpprGQtST2QeaFMhqJYU2difDE50YE8ShreL8U8JpvB6vqoPKBHi+/dcUacMo8vQcRJ7ZD8w2JJ2y73lgu93ZFGNONvKVUX3rrj6ygl90p6OT/xXxdxLk6RBetRY2QRx9bmAQ4aaZL/E2ywXa1wMx2VHQUrcxu0Y0QxyrrzsBgTJXQ+WImeJmqPg2D2pOkmiAdg2ivC52wKEOoUfLh4j5KI0Da9b4y/nho+zI8LaJd1J72bwIjAns9Y8qeJhzLYEqdSC7tJJDBAVxAiDRVZ/EZxlraAtxnXt0/++Cz7xtfuHM=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
-
-// stateV12Fixture is the PINNED v12 blob: what this build writes for fullState() under
-// stateV4FixtureKEK. v12 IS THE MERGE OF TWO INDEPENDENT v10s and the literal is where that
-// becomes checkable: main minted v10 for machine_name (agents-tracker-ksvb.1) while the
-// interaction-program branch minted v10 for items -- the phone's TRANSCRIPT -- and then v11 for
-// Item.LastCursor, its per-item fold high water. No shipped build ever wrote the union, so no
-// older literal can stand in for it.
-//
-// It is CAPTURED, not regenerated, and it has to be: persistState seals with a fresh AEAD nonce
-// per write (state.go), so the file is not byte-stable from v5 on -- a literal can only ever be a
-// recording of one write. The two branch v10 literals are deliberately NOT both kept: they pin
-// different field sets under one number, and a map cannot carry that.
-//
-// What a downgrade costs is the union of both bumps. Dropping machine_name renders the machine by
-// its endpoint id, which is what shipped before and is not a lie. Dropping items empties the
-// transcript permanently -- the receive high-water is durable, so the relay refuses to redeliver
-// the frames that built it (crypto.ErrStaleSeq) -- and takes any pending approval card with it
-// (IS-LIFE-3). Dropping LastCursor is worse than either because it is silent: the first repair
-// after that launch re-folds records already folded, concatenating each increment twice
-// (IS-DELTA-1), and what the user reads is prose, and wrong.
-const stateV12Fixture = `{"schema_version":12,"machine":"m1","machine_name":"nathans-mbp","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"foz43PX1gRLgN2TdFCccQ4jELrDM4zKOCrdYzswqIzyo0nueNhfJq362MUODyDfQiGyYlhEMRjK0iOQu","content_key":"/TfZWg3cGcevtGTUXouSdSjnO49NfLdWHply6YPkVbkZ5VN0VyGx2J4w8pmRrlQam2TSZcvGZn1S7vL0","wake_state":"tgH4O3Z2cDqiKVD+ywzQMhNEvGJ1QtZzwqbwBqARsZdYW3Oil/P2efseTrLQig8QpXTg3C19qJ2jJy7cPKDNJCGh44D9xtsPvvM=","content_kept":"yK2Arrg/RiCNM9Qe/kAl0xA0yI2/l5UvLN7hNinbeuBw9DYrqem2Cu9dC25L1bRBGj0Myjjw3HE7NVMosPAsGIJoOfpoOTBOA24UmOkz0aQksCV3Lta1Tk/BF0prIg2h3dnV5dEV8Y8qOaA1SnDPa2ljyZXr7DhcSMEV/YExJlq+aEyQu0iP/hndOVlY2DoLPAq5ZVpxWwTSxSW+Ljspenz5PaGZ7G4VcI1L+kbYPY2I/n14nF6Cb0YjB66ZdcVnHdeCdSfFhr1a2vCSxWdPOyfLc5LsSwnYDS6RZKDXoit1E9nR6vONDjjd0D4E0lIkI9yw0uuTZSXsZKbwroGstkWIxbJvgyLVbhBZECN5vXv8cF8bqJCFTsknCESVZNDH9kzQoQAswgbqqdhoX8pTGW4aoB5PuvadGJGAqeUeKY8kbIMRru7YOj44+OH1BmswEboFDrjw/F4T3JGlbAy4FyyehuLPusUb4U8hU9FuM1da3OLigmEzkZmX4agQaSkl5KtAi3UY4mi/sFsruXk65DL+MzDz","content_purgeable":"MHJeU/Egku4tPsnRHLmBSRcCw9mxRQI82BUJuxY1d5Lm/mLx5DV8/TusrsZTDzyAybStYY3Lg6nkLI99bbd45NGdGDAR7gQJG7uKjwBKSC7w6y73y7fIHRL+C2urqBLZkf3c0mQGg+hOEKhQJde/rl+5EY24B5ORWncZv56h2Nir2X09zfgfsKa0WSgES1nZtBY3TUgQgr4/HRz63OJr0hMLTTKcZshjv7oh82njhYkOBUdZAr4+iYGuiPjzchs8+2/4gFFkE5mW0ipNIZAPbNg/yrByuj+01zTvPZ94tE9J9q+wqVbKe8PVKoMFpV3FYEK2k48AJp06qM350JpdCpCgm1x0NlfHdD/mx9opMGnn/uJk9A2VyP/AIAXDOE3qJ2DYtoEjd6R8e/JUdy0w5n1AxWa2VDXuehsVYUxiIzWKxaHeHKcH4MqkHaH2kYKwcNawonMfCGugsNo7fVYJDDNBgT/Kcj2Gl3+sP9CRVQCiHa0ZbqRI2PLlE97b1Rqwioomwhny7y1kBk9VR49X+cezssvyjl3SeIVA0K7S3wiPrJ9bV2U/GfrFFoqtt0kDkpCTSdzpdXZoOySGUQCD7b72oZVEHg181171615jluZC9I8efDfFv+BPYvNgnASg0rPduI9ynGP71bRN5Y5j4VQnWFlTpZLQgb82/ErlW8+ofXPpF0M6ZxrOBzSbhABeyipmL+23C/l1tuEetinkBlTEQNbmpdDlmmyxSmGAemaoNQyfLs3pHYr6nTh1BaA24+KJFvd7bA==","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
-
-// stateV13Fixture is the PINNED v13 blob: what this build writes for fullState() under
-// stateV4FixtureKEK. v13 adds relay_tls_policy (ADR-016 W1), independent of relay_spki_pin
-// -- a build one version back drops the policy and reads the retained pin as the whole of
-// verification again, exactly the defect W3's scoping exists to retire.
-const stateV13Fixture = `{"schema_version":13,"machine":"m1","machine_name":"nathans-mbp","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","relay_tls_policy":"pinned_spki","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"wxIn8aKOxBJMwj19x7gRj24/V2u9zReMnuX7rnMjma/ErTIK7/FhYC1GbXhanGjSYOdoz5xhO5x5JWgP","content_key":"2OqBct584ZZJTQs75xBA6/3R1jGyPO7vMA/Tq9ihIZofvhQg7DUTNFuYPqsMS0ZLs+47HpJ8UCZCQnUp","wake_state":"6tzAvVKLUGaFYZyF91njodGhY9UfsJXZh/9DtCnSCkoZ2SiYXFcDSJz2L7sGPYjS/cK7HFTeiwBj809In1DrVTabgi04VfTkGag=","content_kept":"ob6D9eQNRVmkgHh4jphA4tsgH3BpOD1BkzIjbmf1zZI/MPqimovt71IX+S3BjBjiuOBvlVTm54YuFQSki6KRfrNt1mR5DI9Dd/fEcSbZkqTrAMNYO16rfQxMz+7n3Ij1SjoGN/kUH9b8VR09EFZasBs3X/mZzSHk0KIypYl9BkDBMWfJglPnyuWZ5acsAuNaPGEb+lHS5puEC6gUzEmm2O1dynDa+TvbZ0+QK3EohpL+sDvnEUVyxC4Jr/31MdMuNzBOnXJI9GObWep7XyB4wRTY8Yxu3L4TK3rw6qfUKIXCj4KcD4xRl3nO1Kf4pdA2j5DrBfM+mbLqVatXaK7gVrrrNGwzMmWR6Ah/F1sJtOXv2UJUJWR8zPfQirYYjwjmH9NDf9beALB8XyQWP/uoCPJvWFPRZw78+2g2Xr9Eo27xDTBrcMsG4NHDm5fwDt2OrL0r6fggV9K2qraNbuX4Spo7XLk9tkdgNymv1lwJ5fq0OSpy6w0YFxrr03y+k2ZCZZt9yQYfcKzjI8eaOkat/kIs/l5w","content_purgeable":"RpMmNMQRtQ3ELy5wWO1josrrF6G0rD1D+HFHOZL5IDIzfjiCdC7R2AZvtJgBbyK0yV/n23Z65rKHXog35poDU20moMXZpWp3woEnmSfOV8+K8Egmpuef3ESZzxvyrE8Wr8bMr1T0XiyaRn4Iiz6rMvLxsNzb+uri3PzXqBFY+3ixq4EkhJkvsO+XA+Go1/FK9efZ8pdqsM92kZ2i/cB5xU9Xzfq2UyPy1N6VpTSkvY71KNTEuaXCvdp8t9eLX7bBrJyZmR4Y6xFDUprN1okGlCJ0baYocLP3uUVvA84WYTJftie4dbgv4IEspoKVLj8fM2CzYemiixr2L9cX0hBfIMCGN4PcOi5wBP+djJ2nE8VVsOTdNwrF8vpI1Zjvt3KvpKfSVaRMCdM8l0GoTPoZ6IYjId81ltyHGbVtCDpiVbxkdkEXlQiS1iA1jw3T0jLrYBLdMLk0RNt0JMIOnZz6Zgskahru6vMrB7TjZl+DWRZR4N47UFFbMofkY45JTFfjPc4fhXrVsc3heRZOpXhEMASrttIor6/tMf5SX5f5SHHAlfQTxKJvGVJtybb2PPJ2PqQ09fsE6bW+ihoLVjwh58aShWN2/Oh0e+QXmMOS7tCg+HaVChnRAKyyi4YqQIzW5AXPnbanTAWoANDqzWOeea9tqwVTCDy2Rten2s1lQy1ihpS/+9MSVmQu/y9ZapkP5q6hQL9fzoov0XvNPyrI9hXlVru2+fEING/kzSwMvOc+NRiMJOXd0Uhw2BSlse35A/vBg8d/Jw==","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
-
-// stateV14Fixture adds the durable proof that an authoritative roster, including an empty one,
-// has committed. It is cleartext because it is a synchronization coordinate, not roster content.
-const stateV14Fixture = `{"schema_version":14,"machine":"m1","machine_name":"nathans-mbp","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","relay_tls_policy":"pinned_spki","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"wxIn8aKOxBJMwj19x7gRj24/V2u9zReMnuX7rnMjma/ErTIK7/FhYC1GbXhanGjSYOdoz5xhO5x5JWgP","content_key":"2OqBct584ZZJTQs75xBA6/3R1jGyPO7vMA/Tq9ihIZofvhQg7DUTNFuYPqsMS0ZLs+47HpJ8UCZCQnUp","wake_state":"6tzAvVKLUGaFYZyF91njodGhY9UfsJXZh/9DtCnSCkoZ2SiYXFcDSJz2L7sGPYjS/cK7HFTeiwBj809In1DrVTabgi04VfTkGag=","content_kept":"ob6D9eQNRVmkgHh4jphA4tsgH3BpOD1BkzIjbmf1zZI/MPqimovt71IX+S3BjBjiuOBvlVTm54YuFQSki6KRfrNt1mR5DI9Dd/fEcSbZkqTrAMNYO16rfQxMz+7n3Ij1SjoGN/kUH9b8VR09EFZasBs3X/mZzSHk0KIypYl9BkDBMWfJglPnyuWZ5acsAuNaPGEb+lHS5puEC6gUzEmm2O1dynDa+TvbZ0+QK3EohpL+sDvnEUVyxC4Jr/31MdMuNzBOnXJI9GObWep7XyB4wRTY8Yxu3L4TK3rw6qfUKIXCj4KcD4xRl3nO1Kf4pdA2j5DrBfM+mbLqVatXaK7gVrrrNGwzMmWR6Ah/F1sJtOXv2UJUJWR8zPfQirYYjwjmH9NDf9beALB8XyQWP/uoCPJvWFPRZw78+2g2Xr9Eo27xDTBrcMsG4NHDm5fwDt2OrL0r6fggV9K2qraNbuX4Spo7XLk9tkdgNymv1lwJ5fq0OSpy6w0YFxrr03y+k2ZCZZt9yQYfcKzjI8eaOkat/kIs/l5w","content_purgeable":"RpMmNMQRtQ3ELy5wWO1josrrF6G0rD1D+HFHOZL5IDIzfjiCdC7R2AZvtJgBbyK0yV/n23Z65rKHXog35poDU20moMXZpWp3woEnmSfOV8+K8Egmpuef3ESZzxvyrE8Wr8bMr1T0XiyaRn4Iiz6rMvLxsNzb+uri3PzXqBFY+3ixq4EkhJkvsO+XA+Go1/FK9efZ8pdqsM92kZ2i/cB5xU9Xzfq2UyPy1N6VpTSkvY71KNTEuaXCvdp8t9eLX7bBrJyZmR4Y6xFDUprN1okGlCJ0baYocLP3uUVvA84WYTJftie4dbgv4IEspoKVLj8fM2CzYemiixr2L9cX0hBfIMCGN4PcOi5wBP+djJ2nE8VVsOTdNwrF8vpI1Zjvt3KvpKfSVaRMCdM8l0GoTPoZ6IYjId81ltyHGbVtCDpiVbxkdkEXlQiS1iA1jw3T0jLrYBLdMLk0RNt0JMIOnZz6Zgskahru6vMrB7TjZl+DWRZR4N47UFFbMofkY45JTFfjPc4fhXrVsc3heRZOpXhEMASrttIor6/tMf5SX5f5SHHAlfQTxKJvGVJtybb2PPJ2PqQ09fsE6bW+ihoLVjwh58aShWN2/Oh0e+QXmMOS7tCg+HaVChnRAKyyi4YqQIzW5AXPnbanTAWoANDqzWOeea9tqwVTCDy2Rten2s1lQy1ihpS/+9MSVmQu/y9ZapkP5q6hQL9fzoov0XvNPyrI9hXlVru2+fEING/kzSwMvOc+NRiMJOXd0Uhw2BSlse35A/vBg8d/Jw==","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"roster_revision":23,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
-
-// stateV15Fixture adds the relay mailbox incarnation beside its durable cursor. The new
-// coordinate is cleartext synchronization metadata, so v15 deliberately retains v14's
-// sealed tier bytes and adds only the top-level field.
-var stateV15Fixture = func() string {
-	fixture := strings.Replace(stateV14Fixture, `"schema_version":14`, `"schema_version":15`, 1)
-	return strings.Replace(fixture, `"relay_cursor":17`, `"relay_cursor":17,"relay_incarnation":"0123456789abcdef0123456789abcdef"`, 1)
-}()
-
-// stateV16Fixture adds the pending discard-recovery checkpoint. The token is opaque
-// synchronization metadata, not mailbox content, and is available before content unlock so
-// a restarted transport can finish the already-authorized recovery.
-var stateV16Fixture = func() string {
-	fixture := strings.Replace(stateV15Fixture, `"schema_version":15`, `"schema_version":16`, 1)
-	return strings.Replace(fixture, `"relay_incarnation":"0123456789abcdef0123456789abcdef"`,
-		`"relay_incarnation":"0123456789abcdef0123456789abcdef","discard_recovery_generation":3,"discard_recovery_completed":2,"discard_recovery_token":"fedcba9876543210fedcba9876543210"`, 1)
-}()
-
-// stateV17Fixture adds the authenticated RemoteProfile checkpoint. This fullState fixture has
-// never successfully reconciled, so the current writer records the explicit null state; the
-// process-death regression in r2_adr016_lastprofile_test.go pins the populated-object path.
-var stateV17Fixture = func() string {
-	fixture := strings.Replace(stateV16Fixture, `"schema_version":16`, `"schema_version":17`, 1)
-	return strings.Replace(fixture, `"reconciled_epoch":7`, `"reconciled_epoch":7,"last_profile":null`, 1)
-}()
-
-// stateV18ContentKept is the pinned content_kept ciphertext produced for fullState() under
-// stateV4FixtureKEK. v18 adds pending_publications inside this container; pinning the new
-// ciphertext is what prevents a future reader from silently dropping the exact-envelope
-// journal while still decoding every unchanged top-level field.
-const stateV18ContentKept = `I89HMfDPCoeDfPrb/t7rm+b8U0ALVdeZ0qwygq4bDIqfNqwIx7fMAuFS8tN/sfUvvLZK9CBAOBNjGuGeTfmOnb/h36/ZVYaPl5NxG+wv1C4/PO721NTi4621UWbIqrhBobi6JkJ1cgKmQr/oNPbe4LN4dSdc7iT+zRPnMCesOkd4LSGk0sqch7TaYHoEN23i9vBNUlJHmBbbBCj4N9cjKRW+AgxTURsy7hT/9pic82VALyqKRjD/t42PKXYsB7hhLoKyAQh6hVkyL4+UR0347qvlUa8FnQI94ITRttP6Nr5z2JP54Bi7NqCMvCWCcDxcF/RdlI+DZLFtoHjOU9gTGIqlEyijLDnCzDEi2Acdz4rgYGgZDcn+Fz2asUgq2Uup/X3GdAAPlm8eECrATk6a7IHQNxBhjx0nDKwL/G7JfoWIkh1AmKC2LOgdqlANQDndK4I4iT9+mjeOGxvX031Os6MA3OATTh45mnIgIi39G3NsAS9zLDy6apbssewxEgHENYzNMR6V6RF9rZ2btWgHx9Gyzp1uGhdVOyYaxHgoMSAEDHQpP00eDkTm+Jgdj3YCjrOxt7EVmZGPj/YBgvgceuCla3yjzIL2wkIpDXuYDmY8gyWADlqb2wYHekbbDSC8DNdK9+YLNAOqrrvppKDOKEYLsvpBlkzwQ7bnimVPfDr6NjncPbJj/DukyJ9O6rDGlLao69GGDaF3MDT7gOK05GVuGwHIYv5HlsyjswdipJqB7jTtMiMpbFZLHo2zJtFTvE2Aia5SfL38ZkLxzlheVA+k2AHjoOq411FEcAUlwXBO3lUp9zfYuSLO/GJuHw1YOH6PVjGneZEHAUAkT+f6h8h38/Szu3xwMYfNqcSWi0lHfvn/pybvxPVDoqHFviaQs/JFIYg3z5dqnagylF/H7sYlPXQz9+WdvjBZeKWZH7VgB7w6q66lOUWUzRkQ6ftt83lAPCoumr2s0sXy9HzroWw2bjkZ1lr86xvu8vl3FTrIoa9aiJKHRmz0X4Qt03n5c/PjWFpeNQHXZGuV/M3RiBSn1rCOkgwitUs8ncztK6ohZrbsuV4ePpEn0dlA80Ar3pkt4dxxNlxXqLSI8Og90Lwat6QiOFhhodqzLFz0HZVq/waXA2isnmYCEq0r79OIo+UPhN8TIlwCykkUrN/nEldW/FnC/B0b1tnlbb6N8vFQFWL1Gf1O7K3BKpx+4l7k5PtVEj6kFnjB+kOiKRABYzZoFv8Nk8ATN1p/gs+7GYMizuWHjZvClqXKRkH66rXQ4pwoIQhiSyU5Sifa+n0p8luG7mCPTYg2h0TztavFhlj6G/0zBbAvqi0Ge5D4rZUqrz6cm811Xs4tx1N1Y23pduUmQjp8kFz/hMqY+MFD21vae0tvi/pCYOxXlLwx`
-
-var stateV18Fixture = func() string {
-	fixture := strings.Replace(stateV17Fixture, `"schema_version":17`, `"schema_version":18`, 1)
-	const field = `"content_kept":"`
-	start := strings.Index(fixture, field)
-	if start < 0 {
-		panic("stateV17Fixture has no content_kept field")
-	}
-	start += len(field)
-	end := strings.IndexByte(fixture[start:], '"')
-	if end < 0 {
-		panic("stateV17Fixture content_kept field is unterminated")
-	}
-	return fixture[:start] + stateV18ContentKept + fixture[start+end:]
-}()
-
-// stateV19 adds the exact machine relay-auth public key beside each pending publication.
-// The pinned ciphertext proves the authority binding survives custody; v18 remains below to
-// exercise the migration which attaches its already-authenticated top-level machine key.
-const stateV19ContentKept = `F0a4R8SXL56JXgD3N3BFRmnIRLlrvseK15Eb8NZXgkfxI4CFI1l4IQd9Yoyg7BRcQEPX811/RQH1YzuxyFjrUY+ZaIqOFM5KFwcoM+V+9DdjjRcB3EUNFAjeLlVoZG96ERReDlKlwMCVKyCxqfy2+LsDE9JJFoIuftV6F2cxKgISa6Htee40wHagTP9lUzUT3ULt0WqWcr0NJUCk29kpBVS/ssL+ZN6cQs2bVVuvTgzRuRQpirFgDsRq1tmDPX74m1u1iRWb0wwo9G0Jw5GSNHmdnNzLhLBsXAIFFh+lq2CRYI37MhJ9y5/H0pbF9wi17x7/v7NXXZ51mjpb4qPQEId+3Pws3wY74huGX5jSgYiPtfBaZusylrcQ0JzGW9SNuDhDT8mcDjvVw6IVmVUJ/fqUIMNczg2NhVMQdEGcGFE3i/sQgXnFYF+PEqDe/UGF1tUbtNkWuB3bcWV8ymlnmoW9qhfbuKR+x0T5fYLAZbicg8jrXd2VfTkaRsitRq1N2Jd8tJXwNX3fQpnSI4xsBnfRGgJHIs4hCyKtqY8130V0NekoLPXto6gVA0qrVLGJCAaWnzBkbCHxry8+ZqtMYDfotIw2u+HVjRS5Smn2pCr3SU3PP4IkYpW+FbumF5RG1l+rw51mLgBov+dwprzf+X8aDWReOlAExcXLIpLcezlITXq1c0srDDah5E2I1iEAEm2L6m7rRCnYut9jQAs49aW8u2FRN629FhafS1w0R6dmI2m3Dwypvicz2KOZf3KEj/tJ+HpScOYlqf8N808juvD+Xu+rQQQKzGl5aEOJNrBakMCjxnVgAM6eVTLDWmLbxS72NL7IlTMf8+Inpn9cTg1SWqv041H+Yywrk9nPpBt2xTdAhE1pyS5uvhqnp8skpt2Y40vFNSWS66LiCyKr33QqUfEYoWRbosPu1GZTCokbHJkqBef/5+NUB2srwlxBCr/aavurXFrcYA+exBF2qSzlYumMUIkluhkqGh8N4j286k/QarBUC5VlCTCDw+lt5emrEaHRyIKTHKvpHhAe/TOEmWqF1GQQGj0dYk5QcGaMBbd+hTjpUOoMPaeShIYu3gsEvEwGu0nUzpoCykj5A3Og3HLX8mJT11UYG3QtbYXO1rOAttlsKTvDkqbbugvOUqJyR8MNeTczWRVfNC3V5RpRz/uV73UXGQC28VJNaoZDbekdhzivE+vTrdE0aKJ25OuBLsT44ToALrr61irZGuRCT5s9ye9LIy1NZ9vkBWwxdXTu7EDll/vslAk9eAiFTFohVFaCBoyI2ljc7Z1eNrF30+tNdkjOY5PsXLSzmdR5QZeqN/B9jgI0K8GphCSs1hf2bl9eB2/7oRDHQQckQtYbVmwbxaezggDhxdUyGSAOWYUCbHD8fCYJuWGxSvM78zaIA4TcV5fpivkYlC2kKJ9D3s7xQqMimvuuEVDOra+9WiVXstK3xkQF8qdZK3/Xy4x0Ixn1meoJ65F6`
-
-var stateV19Fixture = func() string {
-	fixture := strings.Replace(stateV18Fixture, `"schema_version":18`, `"schema_version":19`, 1)
-	const field = `"content_kept":"`
-	start := strings.Index(fixture, field)
-	if start < 0 {
-		panic("stateV18Fixture has no content_kept field")
-	}
-	start += len(field)
-	end := strings.IndexByte(fixture[start:], '"')
-	if end < 0 {
-		panic("stateV18Fixture content_kept field is unterminated")
-	}
-	return fixture[:start] + stateV19ContentKept + fixture[start+end:]
-}()
-
-// stateV20Fixture adds the write-ahead ownership phase for the exact staged push address
-// whose machine pin committed in the same phone-state transaction. It is based on the real
-// v19 publication-authority fixture so an upgrade cannot preserve one durable contract by
-// silently dropping the other.
-var stateV20Fixture = func() string {
-	fixture := strings.Replace(stateV19Fixture, `"schema_version":19`, `"schema_version":20`, 1)
-	return strings.Replace(fixture, `"last_profile":null`,
-		`"last_profile":null,"pairing_push_owned":"AQIDBAUGBwgJCgsMDQ4PEA"`, 1)
-}()
-
-// v20 belongs to the pairing branch's combined pin/push-ownership phase. v21 is this branch's
-// independent addition of history_floor/history_capped inside content_purgeable. Reusing v19's
-// publication fixture shape is no longer sufficient because v21 also pins terminal result
-// ordering inside content_kept. Both new ciphertexts are independently captured under the
-// fixture KEK so older migration literals remain immutable.
-const stateV21ContentKept = `IoNW2F99xiNYvUYSI9iJszA4Sed7pxgPfRjhN6ptCTiDZQBz0ROIgeGbvTsLC/vbsyRoNio3KVAE5hdQOX63LN0usNow2W2kO/102m2vP7B9tMNoNaQIjkSPBpPo/+o9wb2w029AEu/A2Shs3+tnkxyTpPB9hYUSfcJkwn92JkNFbKBeCYnY9MZ0Igg5+WwHNiTVcchSJHHQU2Wlp4SdiGBMPpLcLEI8BHhV6Jm14+eUoB9OyrxxYzKpQOLIr6aWuj+H804FNF94oENydD5FBmL1wAQNChUyE8qhrlqpZa/CW2ato2GI0rvtV9vI7MV7u8wDX+A50jH9Gmd+NaMdk7CUcRgGmP4QLkjkzUnhfdyyJ+ATcahHBK6pYRBz4ePnIkX+hvZixNcmr+v2uS6lGfLC1Zg93tLiAyU1GOmJysikoCqQ7W8eukd/flnlVHOSUyaEOHsvzsE4aDjt4/+NzaLwLCTylq62pcUiMGdHYF2mb3qOPMngyTy+7QOSlAEvJJMviD0e+vt3OjMKfbTdtszsFYXMITPR9UUbFmUsXAYR8ujlQ0a1E8dlx+GQ9Spkg0fwpK8OdgV6vGdtbiZXJoYri+43aM77EtaAx7kbEr1l1ze90rLyKeZY2FSPOMbDPv+VFT4T6o0wBBKf8IRWQOi/AB5UKASqGj0bUgdfH3AA82GBB+cIOPqcMDGZDcwszQd/Rx85QOnJu77Y6V+0eYWnxfvaiTctafjY+cgY6S6qHgoRctfMZG681AP/jY1X9AuUxiIta4bkaK8NmILGgZ+8qiaOAEc5ienGYN1a7mrt52LC6mRcILTKj7bz4J1BQSSQDWcI2o6tpKAK70F2Z+zIhnxSAtxl/IBDaDEcxnVtYFBbYL8MQH5zZbji5X1AMFqXrkJldSSQjSm5yIKVURL3KBMBopc0yKiDYuruX3STTDsPlr2ffdeRFtMeWgnC2EoMTNd1kcD9je8w+2eqm1mtRPLHVp/XfpuPOeJf61Efk7c5Bs5lLLfxALbdoQmzVWYTzo4BeUPrazTKoPiEaQMk9v/aIeK/FuQDsZH9prOUGHC505nHwc0GddmHztGXtQtYvooOsNat9sBWgzA0R5FKD/hQKxsvNStOxjKajewefoX8y/oghceE+NJfDKBepxTbrdT6kjvf6fCWNEvklllbgSiChX5Q2APBtYYh0I99V8x1f6Dyjx5ounhObqrqv2upQcVdV+t32WDOpcxNTaE+CRJCq8a0GJTK1hqHbUekgBbi11Ks63+M4bzGqwrds/cAwkG7XSAl4wQbYs0/+TRiruC5UMGN+bpfHtsEHrIRh43b8/aITnjYFUtJDA0CL6MHQfxAZoBgXZLKbLFYRh67KfPw2+Zq36Uu7YRZH5zCWJk9uJivPwC5xE+MxO8gchoBQZ6vznIvc5LL4pxmr7QQ7CZbuXVX7Zc7iyolVcVYNAQdE4wVN/LtdslQzHuYZLBNlri2oGR6cCzAgXfFFZF7R0VsITNJCuqEUC3zANOP2CVK4m36BGTKemc4IxIKHuzWAkdwwBffwcQ5SYkJGxfe8hv4zQw9DMDWlR0+L7dR2lMRtShZdjiVEgk+Nxzi6jG7fnWGs40AAYeivIw9U1F3o3TiPQAd8sEKpMubM7r2mzUNKZLty57sKdmHBc0gGW0E7Ty4UcSHAwolra/W4q51/EXYMAB1peq3gf+x8YOZv3GRG1X1bLwHfAbNRRjwpcI2dqFFbn3Ot2ejrcyGhI7OywW0JyzTsaK7038cD2wVmugHrNOR8+j+WvZ9x7b8iGCgiXNVXDeq+9FSoxok0TeDu6bWC2M3hU2J5n+CGSkw40veh3tZHMtApsmAr5ROLNarHMOQGSVousVliEEFi+k+bo5ly8x7FsRKdljiqh/SWsrGQiZa2E4H9qyN9TAGIKn9GhlzGloAUJzi4C6yojAMUo6uv5wHdIFZ+B3a7GP7etjnqvnh1+GXgnf6WLfMGqnRDgH4dOFfCSlaQT1lkdF0JUdnI/7Gn14hRp3YawSIEgyLvl4q+PXwgcPgAtjGyBGb6Djbz0qdS5lKGrBak+oegD6dEklpJ381Y5axNn+8niZjsPbdJgLmoGBfUwL9abk32eUxDmKG5CosZMiHV/HaLc+R9ahoYo8tAuqAjTG55pMZwb5yJ7DSNuj0Ee6dL3no8jjbtgc/LoycIvZ4VxldnVkyQ9uoWNpHXaFFK63UWFOua5V540csF9lAFqItLflxt13N3Nu1+/8CGm0yGyYN9bXOeXRNBe8D4WIF25ly+BXtzKO1Hb14/bKVD2/KM8P7b3cHaBMG50fe0uGoXAByAjnQmcWkduEYlXP0w//ZenSwEqWne797mLJ+hTEve52886R28PSAgg==`
-
-const stateV21ContentPurgeable = `yjUxZbiMHHTc8KQSkhuOiV6iz4uxBpna49PQD2GvELNcJQR4n7gzuNUevRoxG1NjTZqnWyG/T0yzD9yyt7alxk82pGbT4CFVzJcPLGfgBdlM/t0kR/9XK7Tt3RGCb7KGPtGRt6rFQmgGojpWvHaZFUhNz8aVG2zvHWVmudFuD475+OhuGyNk+UffXELl3OGfDfkWi1uWlYhrjfWMJIOA/W+TjmlPDDQnjM6iybwX+9Xn15IRZDDK83KGfqUlvIgsgnh526nSVJ0TVLsXbOTiKXZ8Jpmhmo8F1K+GiE+7X5gCzUJ6nNUHBNG6FP2p9Dv08Q+/0UuqpJ5EERXqsJh0Az0y/L46LnUXPrJ4bty+Lhh3+8zOukHGykwAVfEgau0qEgQ/67IvJkCtvYCRu7ebXnH4j2ACnLIno+aLzf/FS1kq8da9yuTIzEeAJP8Q6Y9um3Jin3jgpwqrZu2S1y+3tI3TniTZIrmapgaJ+KLdZcuFTy1sD9kuaYqQTtbCGWs6GHKgRPIW09JvZUVmJYZYxkUfEU9BmMpQssUMpgQQKiqMO6aJqWh2RKR181Ihtxg5kV5AXRxkFMUh6gUH3qWB0Uurjlum2g32ErgKe9FA2MGrC/753dXFFmcxeaaJP7y8DcqOz4SsANz2IytwFpRUwot1SS1Sc4oj8vl/h7TKj3zWV8ZOtBwr+2OofFxKuGRasNolF2sPEa+fjzVuje9FJ0zjLVXHqmOYBuXG41ZTGJAuagMeR/5myrtj6LRfpDqbuPFlmuG+Cxn+/IszC0nGnVcCZ6Wob09umA4wZ0EB+iSfV9zSJ+55mnbOmqb+nMemWiAuAXoZDp5xSXxF/USjgGZIEpsuexgVsHDCSwDJE44+cXbTIPF7k9dE/BY9RRiMDxhvfMSAsubwB/ke+RAdmXbwStgF6SbESWn3pt21WC9GnNSQatBTkTyoZUVxrcoYQpwCoIzQYE0IoMLvM5pJgLs01ij3jtgVokAlykvrCW0HyYqkXb//SFbhb1X3w46Dc5YBO7RMDCIV4FCKB/QVDCo6JyyNMjfkCAZ3paz+a5SXx+N0HRRtsIqiUtDWsXyux34obuBcd3x7w7NEdLiUS0bxfzO58aRwydarcvD+rd7G/c0WOfuPfz/hG+RatO5/MCgQ9WUyvn2olXDS+z8eJd49Ms7PWJM4M4ngTMHEstWHjr9XbnXATE2MMQuzBGCR9iXl+UQbsJLOp9VSOMdFNObTPz0DckY8ldAg2H5H`
-
-var stateV21Fixture = func() string {
-	fixture := strings.Replace(stateV20Fixture, `"schema_version":20`, `"schema_version":21`, 1)
-	const keptField = `"content_kept":"`
-	keptStart := strings.Index(fixture, keptField)
-	if keptStart < 0 {
-		panic("stateV20Fixture has no content_kept field")
-	}
-	keptStart += len(keptField)
-	keptEnd := strings.IndexByte(fixture[keptStart:], '"')
-	if keptEnd < 0 {
-		panic("stateV20Fixture content_kept field is unterminated")
-	}
-	fixture = fixture[:keptStart] + stateV21ContentKept + fixture[keptStart+keptEnd:]
-	const field = `"content_purgeable":"`
-	start := strings.Index(fixture, field)
-	if start < 0 {
-		panic("stateV20Fixture has no content_purgeable field")
-	}
-	start += len(field)
-	end := strings.IndexByte(fixture[start:], '"')
-	if end < 0 {
-		panic("stateV20Fixture content_purgeable field is unterminated")
-	}
-	return fixture[:start] + stateV21ContentPurgeable + fixture[start+end:]
-}()
-
-var stateV22Fixture = func() string {
-	fixture := strings.Replace(stateV21Fixture, `"schema_version":21`, `"schema_version":22`, 1)
-	return strings.Replace(fixture, `"machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=",`,
-		`"machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","operator_namespace":"owner",`, 1)
-}()
-
-var stateV23Fixture = func() string {
-	fixture := strings.Replace(stateV22Fixture, `"schema_version":22`, `"schema_version":23`, 1)
-	return strings.Replace(fixture, `"relay_incarnation":"0123456789abcdef0123456789abcdef"`,
-		`"relay_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","phone_binding":{"home":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","phone_rid":"0123456789abcdef0123456789abcdef","generation":"7","active":true}`, 1)
-}()
-
-var stateV24Fixture = func() string {
-	fixture := strings.Replace(stateV23Fixture, `"schema_version":23`, `"schema_version":24`, 1)
-	return strings.Replace(fixture, `"relay_incarnation":"AAAAAAAAAAAAAAAAAAAAAA"`,
-		`"relay_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","relay_generation":5`, 1)
-}()
-
-var stateV25Fixture = func() string {
-	fixture := strings.Replace(stateV24Fixture, `"schema_version":24`, `"schema_version":25`, 1)
-	return strings.Replace(fixture, `"discard_recovery_token":"fedcba9876543210fedcba9876543210"`,
-		`"discard_recovery_token":"fedcba9876543210fedcba9876543210","discard_recovery_incarnation":"AAAAAAAAAAAAAAAAAAAAAA"`, 1)
-}()
-
-var stateV26Fixture = func() string {
-	fixture := strings.Replace(stateV25Fixture, `"schema_version":25`, `"schema_version":26`, 1)
-	return strings.Replace(fixture, `"discard_recovery_incarnation":"AAAAAAAAAAAAAAAAAAAAAA"`,
-		`"discard_recovery_incarnation":"AAAAAAAAAAAAAAAAAAAAAA","discard_recovery_cursor":18`, 1)
-}()
-
-var stateFixtures = map[int]string{
-	1:  stateV1Fixture,
-	4:  stateV4Fixture,
-	5:  stateV5Fixture,
-	6:  stateV6Fixture,
-	7:  stateV7Fixture,
-	8:  stateV8Fixture,
-	9:  stateV9Fixture,
-	10: stateV10Fixture,
-	12: stateV12Fixture,
-	13: stateV13Fixture,
-	14: stateV14Fixture,
-	15: stateV15Fixture,
-	16: stateV16Fixture,
-	17: stateV17Fixture,
-	18: stateV18Fixture,
-	19: stateV19Fixture,
-	20: stateV20Fixture,
-	21: stateV21Fixture,
-	22: stateV22Fixture,
-	23: stateV23Fixture,
-	24: stateV24Fixture,
-	25: stateV25Fixture,
-	26: stateV26Fixture,
-}
-
-// TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
-// half that catches a DOWNGRADE of the constant: a build stamping 3 refuses this blob with
-// ErrFutureSchema before a single coordinate is read.
-//
-// It restores through the fixture's PINNED KEK -- a real AEAD, the same s14aSealer every
-// other test here uses, over a key that is a literal rather than fresh entropy. That is what
-// lets the two sealed fields live in the byte literal at all.
+// TestStateStore_PinnedSealedFixturesStillLoad pins every current v2 coordinate through
+// the byte-literal sealed fixture. A reader that drops a top-level or container field fails.
 func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
-	// EVERY pinned version from v4 on, not just the newest -- this exercises the migration path:
-	// a v4 blob must still yield every coordinate it carries after those fields moved inside
-	// sealed containers. Iterating the map is what makes the sealed-tag exemption above honest --
-	// a field dropped from a container has no top-level tag to miss, and fails HERE instead.
-	//
-	// The comparison is version-aware, and it MUST be. An earlier version of this test compared
-	// every fixture against the CURRENT fullState(), which is right only while every pinned version
-	// is current: the moment a durable field is added, an old blob cannot restore a coordinate that
-	// did not exist when it was written, and the only ways to go green are to splice the key into a
-	// literal that never carried it -- falsifying the very artifact that proves migration works --
-	// or to weaken this guard. An implementer hit exactly that wall and correctly refused both.
-	//
-	// So: the CURRENT version must equal fullState() exactly. An older active pairing without
-	// the authenticated namespace is refused; every other older version restores each coordinate
-	// ITS OWN literal carries. A field the old blob carries and this build drops is the defect.
-	for _, version := range sortedFixtureVersions() {
-		if version < 4 {
-			continue // v1 predates the KEK and has its own test below
-		}
-		version := version
-		t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "phone-state.json")
-			if err := os.WriteFile(path, []byte(stateFixtures[version]), 0o600); err != nil {
-				t.Fatalf("write fixture: %v", err)
-			}
-			kek := &s14aSealer{kek: stateV4FixtureKEK}
-			st, err := OpenStore(path, "m1", kek, kek)
-			if version >= 4 && version <= 8 {
-				if !errors.Is(err, ErrCorruptState) {
-					t.Fatalf("OpenStore on active pre-namespace v%d fixture = %v, want ErrCorruptState", version, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("OpenStore on the pinned v%d fixture: %v (a shipped schema version must keep "+
-					"loading; if StateSchemaVersion was lowered, this blob is now from the future)", version, err)
-			}
-
-			// Which coordinates should this literal restore? Exactly the ones it carries: a
-			// top-level json key, or a field sealed into a container the literal has.
-			var blob map[string]any
-			if err := json.Unmarshal([]byte(stateFixtures[version]), &blob); err != nil {
-				t.Fatalf("decode the pinned v%d fixture: %v", version, err)
-			}
-			carries := func(tag string) bool {
-				if _, ok := blob[tag]; ok {
-					return true
-				}
-				if !sealedTags[tag] {
-					return false
-				}
-				for _, container := range []string{"wake_state", "content_kept", "content_purgeable"} {
-					if _, ok := blob[container]; ok {
-						return true
-					}
-				}
-				return false
-			}
-
-			want, got := fullState(), st.Load()
-			wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
-			rt := reflect.TypeOf(stateFile{})
-			tagOf := map[string]string{}
-			for i := 0; i < rt.NumField(); i++ {
-				tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
-				tagOf[rt.Field(i).Name] = tag
-			}
-			for i := 0; i < wv.NumField(); i++ {
-				name := wv.Type().Field(i).Name
-				if !wv.Type().Field(i).IsExported() {
-					continue
-				}
-				if version != StateSchemaVersion && !carries(tagOf[name]) {
-					continue // added after this version was pinned; legitimately absent
-				}
-				if version < 23 && (name == "RelayCursor" || name == "RelayIncarnation") {
-					if !gv.Field(i).IsZero() {
-						t.Errorf("the pinned v%d fixture retained retired relay-v1 State.%s = %#v", version, name, gv.Field(i).Interface())
-					}
-					continue
-				}
-				if version < 26 && (name == "DiscardRecoveryGeneration" || name == "DiscardRecoveryCompleted" ||
-					name == "DiscardRecoveryToken" || name == "DiscardRecoveryIncarnation" || name == "DiscardRecoveryCursor") {
-					if !gv.Field(i).IsZero() {
-						t.Errorf("the pinned v%d fixture retained retired relay-v1 State.%s = %#v", version, name, gv.Field(i).Interface())
-					}
-					continue
-				}
-				if !durableStateFieldEqual(name, wv.Field(i).Interface(), gv.Field(i).Interface()) {
-					t.Errorf("the pinned v%d fixture restored State.%s = %#v; want %#v. A coordinate the "+
-						"literal carries and this build no longer reads is a durable field dropped without "+
-						"a schema bump", version, name, gv.Field(i).Interface(), wv.Field(i).Interface())
-				}
-			}
-		})
-	}
-}
-
-// A v20 install may be killed after the machine pin and exact staged-address ownership
-// commit but before the separate push-store disposition. The first unrelated current write must
-// carry that private write-ahead phase forward; dropping it would make startup revoke the
-// address the completed pairing owns.
-func TestStateStore_V20PairingOwnershipSurvivesCurrentUnrelatedSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), StateFileName)
-	if err := os.WriteFile(path, []byte(stateV20Fixture), 0o600); err != nil {
-		t.Fatalf("write v20 fixture: %v", err)
+	if err := os.WriteFile(path, []byte(stateV26Fixture), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
 	}
-	kek := &s14aSealer{kek: stateV4FixtureKEK}
+	kek := &s14aSealer{kek: stateCurrentFixtureKEK}
 	store, err := OpenStore(path, "m1", kek, kek)
 	if err != nil {
-		t.Fatalf("open v20 fixture: %v", err)
+		t.Fatalf("OpenStore on current v2 fixture: %v", err)
+	}
+	want, got := fullState(), store.Load()
+	wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
+	for i := 0; i < wv.NumField(); i++ {
+		name := wv.Type().Field(i).Name
+		if wv.Type().Field(i).IsExported() && !durableStateFieldEqual(name, wv.Field(i).Interface(), gv.Field(i).Interface()) {
+			t.Errorf("current v2 fixture restored State.%s = %#v; want %#v", name, gv.Field(i).Interface(), wv.Field(i).Interface())
+		}
+	}
+}
+
+// Pairing push ownership is a current v2 crash boundary, not a legacy migration.
+func TestStateStore_PairingOwnershipSurvivesCurrentUnrelatedSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), StateFileName)
+	if err := os.WriteFile(path, []byte(stateV26Fixture), 0o600); err != nil {
+		t.Fatalf("write current fixture: %v", err)
+	}
+	kek := &s14aSealer{kek: stateCurrentFixtureKEK}
+	store, err := OpenStore(path, "m1", kek, kek)
+	if err != nil {
+		t.Fatalf("open current fixture: %v", err)
 	}
 	const owned = "AQIDBAUGBwgJCgsMDQ4PEA"
 	if got := store.(*fileStore).st.pairingPushOwned; got != owned {
-		t.Fatalf("loaded v20 ownership = %q, want %q", got, owned)
+		t.Fatalf("loaded ownership = %q, want %q", got, owned)
 	}
-
 	state := store.Load()
-	state.PushPreference.Version++ // unrelated durable mutation
+	state.PushPreference.Version++
 	if err := store.Save(state); err != nil {
-		t.Fatalf("rewrite v20 state as current: %v", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var persisted stateFile
-	if err := json.Unmarshal(data, &persisted); err != nil {
-		t.Fatal(err)
-	}
-	if persisted.SchemaVersion != StateSchemaVersion || persisted.PairingPushOwned != owned {
-		t.Fatalf("rewritten checkpoint = (v%d,%q), want (v%d,%q)",
-			persisted.SchemaVersion, persisted.PairingPushOwned, StateSchemaVersion, owned)
+		t.Fatalf("unrelated current save: %v", err)
 	}
 	restarted, err := OpenStore(path, "m1", kek, kek)
 	if err != nil {
-		t.Fatalf("reopen rewritten current state: %v", err)
+		t.Fatalf("reopen current state: %v", err)
 	}
 	if got := restarted.(*fileStore).st.pairingPushOwned; got != owned {
-		t.Fatalf("restarted current ownership = %q, want %q", got, owned)
+		t.Fatalf("restarted ownership = %q, want %q", got, owned)
 	}
 }
 
@@ -946,13 +489,7 @@ func TestStateStore_V20PairingOwnershipSurvivesCurrentUnrelatedSave(t *testing.T
 // build can no longer decode, which is a coordinate silently dropped on every load of an
 // existing blob.
 func TestStateSchemaVersion_IsPinnedToTheDurableFieldSet(t *testing.T) {
-	fixture, ok := stateFixtures[StateSchemaVersion]
-	if !ok {
-		t.Fatalf("StateSchemaVersion is %d and stateFixtures pins no literal for it (it pins %v). "+
-			"PB-STATE-5's forward-migration path is only mechanical if every shipped version keeps "+
-			"a byte-literal that must go on loading, so raising the version means pinning the blob "+
-			"the new version writes", StateSchemaVersion, sortedFixtureVersions())
-	}
+	fixture := stateV26Fixture
 	var blob map[string]any
 	if err := json.Unmarshal([]byte(fixture), &blob); err != nil {
 		t.Fatalf("decode the pinned v%d fixture: %v", StateSchemaVersion, err)
@@ -967,7 +504,7 @@ func TestStateSchemaVersion_IsPinnedToTheDurableFieldSet(t *testing.T) {
 				rt.Field(i).Name)
 		}
 		tags[tag] = true
-		if _, present := blob[tag]; !present && !sealedTags[tag] {
+		if _, present := blob[tag]; !present {
 			t.Errorf("the durable field %q is absent from the pinned v%d fixture. Either it is NEW "+
 				"-- in which case StateSchemaVersion must be raised and a literal for the new version "+
 				"pinned, or a build one version back drops it silently and a replay guard comes back "+
@@ -984,40 +521,6 @@ func TestStateSchemaVersion_IsPinnedToTheDurableFieldSet(t *testing.T) {
 	}
 }
 
-func sortedFixtureVersions() []int {
-	out := make([]int, 0, len(stateFixtures))
-	for v := range stateFixtures {
-		out = append(out, v)
-	}
-	sort.Ints(out)
-	return out
-}
-
-// TestStateStore_PinnedV1FixtureStillLoads is the forward-migration guard (PB-STATE-5).
-func TestStateStore_PinnedV1FixtureStillLoads(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "phone-state.json")
-	if err := os.WriteFile(path, []byte(stateV1Fixture), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	st, err := OpenStore(path, "m1", s14aNewSealer(t), s14aNewSealer(t))
-	if err != nil {
-		t.Fatalf("OpenStore on the pinned v1 fixture: %v (a shipped schema version must keep loading)", err)
-	}
-	got := st.Load()
-	if got.EpochID != 7 || got.RelayCursor != 0 || got.WakeReplay != 91 {
-		t.Errorf("v1 fixture loaded as epoch=%d cursor=%d wake_replay=%d; want 7/0/91 (the retired transport cursor cannot seed relay-v2)", got.EpochID, got.RelayCursor, got.WakeReplay)
-	}
-	if got.SendSeq[7] != 512 {
-		t.Errorf("v1 fixture send-seq ceiling for epoch 7 = %d; want 512", got.SendSeq[7])
-	}
-	if got.Receive[journalBucket(7)] != 42 {
-		t.Errorf("v1 fixture receive high-water for the journal bucket = %d; want 42", got.Receive[journalBucket(7)])
-	}
-	if got.GrantEpoch != 7 || got.GrantSeq != 2 {
-		t.Errorf("v1 fixture grant watermark = (%d,%d); want (7,2)", got.GrantEpoch, got.GrantSeq)
-	}
-}
-
 // TestStateStore_UnknownFutureSchemaFailsClosed is PB-STATE-5's other half. A blob written
 // by a NEWER app build (an upgrade, then a downgrade, or a restored backup) carries
 // coordinates this build cannot interpret. Reading it with the current decoder would
@@ -1025,7 +528,7 @@ func TestStateStore_PinnedV1FixtureStillLoads(t *testing.T) {
 // high-water means resetting a replay guard to zero. Refuse it instead.
 func TestStateStore_UnknownFutureSchemaFailsClosed(t *testing.T) {
 	var blob map[string]any
-	if err := json.Unmarshal([]byte(stateV1Fixture), &blob); err != nil {
+	if err := json.Unmarshal([]byte(stateV26Fixture), &blob); err != nil {
 		t.Fatalf("decode fixture: %v", err)
 	}
 	blob["schema_version"] = StateSchemaVersion + 1
@@ -1040,6 +543,58 @@ func TestStateStore_UnknownFutureSchemaFailsClosed(t *testing.T) {
 	}
 	if _, err := OpenStore(path, "m1", s14aNewSealer(t), s14aNewSealer(t)); !errors.Is(err, ErrFutureSchema) {
 		t.Fatalf("OpenStore on schema version %d = %v; want ErrFutureSchema (never a silent reinterpretation)", StateSchemaVersion+1, err)
+	}
+}
+
+func TestStateStore_PreV2SchemasRequireResetWithoutOpeningOrRewritingState(t *testing.T) {
+	for version := 1; version <= 25; version++ {
+		t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, StateFileName)
+			wake, content := s14aNewSealer(t), s14aNewSealer(t)
+			store, err := OpenStore(path, "m1", wake, content)
+			if err != nil {
+				t.Fatalf("create current store: %v", err)
+			}
+			st := store.Load()
+			st.MachineName = "data that reset must not erase"
+			if err := store.Save(st); err != nil {
+				t.Fatalf("seed current state: %v", err)
+			}
+
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var blob map[string]any
+			if err := json.Unmarshal(raw, &blob); err != nil {
+				t.Fatal(err)
+			}
+			blob["schema_version"] = version
+			legacy, err := json.Marshal(blob)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, legacy, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			wake.opens, content.opens = 0, 0
+
+			_, err = OpenStore(path, "m1", wake, content)
+			if !errors.Is(err, ErrLegacyStateResetRequired) {
+				t.Fatalf("OpenStore on pre-v2 schema %d = %v, want ErrLegacyStateResetRequired", version, err)
+			}
+			if wake.opens != 0 || content.opens != 0 {
+				t.Fatalf("pre-v2 refusal opened sealed state: wake=%d content=%d", wake.opens, content.opens)
+			}
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if !bytes.Equal(after, legacy) {
+				t.Fatal("pre-v2 refusal rewrote or erased the user's state")
+			}
+		})
 	}
 }
 
@@ -1064,7 +619,7 @@ func TestStateStore_CorruptFailsClosedButAForeignMachineIsMerelyEmpty(t *testing
 
 	// (a) Another machine's blob: empty, not an error, so a re-pair is possible.
 	foreign := filepath.Join(dir, "foreign.json")
-	if err := os.WriteFile(foreign, []byte(stateV1Fixture), 0o600); err != nil {
+	if err := os.WriteFile(foreign, []byte(stateV26Fixture), 0o600); err != nil {
 		t.Fatalf("write foreign blob: %v", err)
 	}
 	st, err := OpenStore(foreign, "some-other-machine", s14aNewSealer(t), s14aNewSealer(t))
@@ -1101,7 +656,7 @@ func TestStateStore_CorruptFailsClosedButAForeignMachineIsMerelyEmpty(t *testing
 
 func TestStateStore_MalformedRelayIncarnationFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "malformed-incarnation.json")
-	body := `{"schema_version":15,"machine":"m1","relay_cursor":3,"relay_incarnation":"NOT-CANONICAL"}`
+	body := `{"schema_version":26,"machine":"m1","relay_cursor":3,"relay_incarnation":"NOT-CANONICAL"}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

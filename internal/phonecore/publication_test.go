@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -717,21 +715,6 @@ func TestPendingPublications_SurviveRestartAndRevokePurgesThem(t *testing.T) {
 	}
 	if got := again.PendingPublications(); len(got) != 0 {
 		t.Fatalf("revoked phone restored pending publications: %+v", got)
-	}
-}
-
-func TestPendingPublications_V17MigratesToAnEmptyJournal(t *testing.T) {
-	path := filepath.Join(t.TempDir(), StateFileName)
-	if err := os.WriteFile(path, []byte(stateV17Fixture), 0o600); err != nil {
-		t.Fatalf("write v17 fixture: %v", err)
-	}
-	kek := &s14aSealer{kek: stateV4FixtureKEK}
-	store, err := OpenStore(path, "m1", kek, kek)
-	if err != nil {
-		t.Fatalf("OpenStore v17: %v", err)
-	}
-	if got := store.Load().PendingPublications; len(got) != 0 {
-		t.Fatalf("v17 invented pending publications: %+v", got)
 	}
 }
 

@@ -148,12 +148,22 @@ jobs:
       - name: Native Worker, Go interoperability and SQLite cost bounds
         working-directory: services/relay
         run: RELAY_TEST_PORT=8916 RELAY_TEST_BUDGET_SECONDS=180 npm test
+      - name: Bounded runner propagates failures and cleans child processes
+        working-directory: docs/verification/remote-scale-to-zero/push-probe
+        run: |
+          node test-run-bounded.mjs
+          sh test-ci-firestore-go.sh
+          set +e
+          node run-bounded.mjs 10 node -e 'process.exit(7)'
+          status=$?
+          set -e
+          test "$status" -eq 7
       - name: Transactional push with the actual Firestore SDK
         working-directory: docs/verification/remote-scale-to-zero/push-probe
         run: |
           node run-bounded.mjs 180 ./node_modules/.bin/firebase emulators:exec \
             --only firestore --project demo-swarm-push-probe --config firebase.json \
-            'cd ../../../.. && go test -race ./internal/pushgw ./cmd/swarm-pushgw -count=1 -timeout 120s -v'
+            'cd ../../../.. && sh docs/verification/remote-scale-to-zero/push-probe/ci-firestore-go.sh'
 
   # E10.6: the darwin half. The pure CPU parsers run in the unit step (untagged, on
   # every runner), and the integration step exercises the REAL proc_pidinfo syscall

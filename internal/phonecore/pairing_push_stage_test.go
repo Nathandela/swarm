@@ -1,10 +1,7 @@
 package phonecore
 
 import (
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -132,44 +129,6 @@ func TestPairingPushOwnership_CommitsWithPinAndRecoversAcrossRestart(t *testing.
 	}
 	if got := again.PendingPushBindingRevocations(); len(got) != 0 {
 		t.Fatalf("completed binding still pending revoke: %x", got)
-	}
-}
-
-func TestPairingPushOwnership_V19MigratesWithNoInventedOwnership(t *testing.T) {
-	dir := t.TempDir()
-	wake, content := s14aNewSealer(t), s14aNewSealer(t)
-	core, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := core.Save(State{Machine: "ep-existing"}); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, StateFileName)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var blob map[string]any
-	if err := json.Unmarshal(data, &blob); err != nil {
-		t.Fatal(err)
-	}
-	blob["schema_version"] = float64(19)
-	delete(blob, "pairing_push_owned")
-	data, err = json.Marshal(blob)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	restarted, err := Resume(Config{Dir: dir, WakeSealer: wake, ContentSealer: content})
-	if err != nil {
-		t.Fatalf("resume pre-field v19 state: %v", err)
-	}
-	if _, ok, err := restarted.PairingPushOwnership(); err != nil || ok {
-		t.Fatalf("v19 migration invented pairing push ownership: (%v,%v)", ok, err)
 	}
 }
 

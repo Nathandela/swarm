@@ -389,11 +389,9 @@ func (a *App) SelectMachine(machineID string) (err error) {
 }
 
 // AddMachine registers a NEW pairing beside the existing ones ("The new computer
-// appears without replacing existing pairings", playbook 4.1). On a phone still holding
-// singleton state this is what runs MM6's transactional migration first; the App's own
-// core then resumes from its per-machine namespace and the old blob stays
-// rollback-readable. The new machine's namespace is created awaiting its pairing
-// ceremony. Refused while the app is running: the migration must not race a live drain.
+// appears without replacing existing pairings", playbook 4.1). The new machine's
+// namespace is created awaiting its pairing ceremony. Refused while the app is
+// running so registry changes cannot race a live connection.
 func (a *App) AddMachine(machineID, displayName string) (err error) {
 	defer barrier(&err)
 	if _, err = a.ready(); err != nil {
@@ -406,7 +404,7 @@ func (a *App) AddMachine(machineID, displayName string) (err error) {
 	defer a.mu.Unlock()
 	if a.sess != nil {
 		return classed(ErrClassInvalidRequest,
-			errors.New("swarmmobile: stop the app before adding a computer; the state migration must not race a live connection"))
+			errors.New("swarmmobile: stop the app before adding a computer; registry changes must not race a live connection"))
 	}
 	rt, err := a.ensureMachinesLocked()
 	if err != nil {
@@ -430,16 +428,6 @@ func (a *App) AddMachine(machineID, displayName string) (err error) {
 	}
 	rt.cores[machineID] = core
 	return nil
-}
-
-// migrateToRegistryLocked runs MM6's transactional migration and rebuilds the manager
-// registry-backed, re-resuming the App's own core from its namespace. Caller holds
-// a.mu, with no live session.
-//
-//nolint:unused // Compatibility removal is paused pending explicit approval.
-func (a *App) migrateToRegistryLocked(old *machinesRuntime) (*machinesRuntime, error) {
-	return nil, classed(ErrClassInvalidRequest,
-		errors.New("swarmmobile: legacy state migration was removed; reset and pair again"))
 }
 
 // commitBootstrapPairing flips the fresh staging namespace into the authenticated

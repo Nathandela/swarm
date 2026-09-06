@@ -24,7 +24,7 @@ import (
 
 func TestStateStore_SessionAgentAndNameSurviveARestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), StateFileName)
-	kek := &s14aSealer{kek: stateV4FixtureKEK}
+	kek := &s14aSealer{kek: stateCurrentFixtureKEK}
 
 	store, err := OpenStore(path, "m1", kek, kek)
 	if err != nil {
@@ -43,7 +43,7 @@ func TestStateStore_SessionAgentAndNameSurviveARestart(t *testing.T) {
 
 	// A REAL restart: a second store built from the file alone, so nothing in memory can supply
 	// an answer.
-	reopened, err := OpenStore(path, "m1", &s14aSealer{kek: stateV4FixtureKEK}, &s14aSealer{kek: stateV4FixtureKEK})
+	reopened, err := OpenStore(path, "m1", &s14aSealer{kek: stateCurrentFixtureKEK}, &s14aSealer{kek: stateCurrentFixtureKEK})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

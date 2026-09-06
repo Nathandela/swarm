@@ -24,7 +24,7 @@ import (
 
 func TestStateStore_PushPreferenceVersionSurvivesARestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), StateFileName)
-	kek := &s14aSealer{kek: stateV4FixtureKEK}
+	kek := &s14aSealer{kek: stateCurrentFixtureKEK}
 
 	store, err := OpenStore(path, "m1", kek, kek)
 	if err != nil {

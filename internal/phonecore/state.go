@@ -31,197 +31,17 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/relayhome"
 )
 
-// StateSchemaVersion stamps the on-disk blob. A blob stamped with a HIGHER version was
-// written by a newer build and is refused (ErrFutureSchema) rather than decoded with this
-// build's field set: silently dropping a coordinate it does not know means resetting a
-// send-seq ceiling or a receive high-water to zero, which is exactly the replay hole this
-// file closes. Every shipped version keeps a byte-literal fixture in state_test.go. An
-// older ACTIVE pairing that lacks a newly required authenticated authority coordinate is
-// deliberately refused rather than inferred; disowned/unpaired fixtures still exercise
-// the mechanical migration path (PB-STATE-5).
-//
-// v2 adds the coordinates the gomobile facade (S8) is the first consumer to need:
-// MachineRelayAuthPub, PushToken, PushPreference and ReconciledEpoch. The bump is what
-// makes a downgrade fail closed -- a v1 build decoding a v2 blob would drop
-// MachineRelayAuthPub and leave the phone with a valid content key, a valid send-seq and
-// no destination, with nothing failing loudly.
-//
-// v3 seals wake_key and content_key under their PB-KEY-2 tier KEKs (PB-KEY-9). The field
-// SET is unchanged, which is exactly why the bump is required: a v2 build would read v3's
-// sealed bytes AS the key and encrypt every frame under a wrong one, silently. A v2 blob is
-// refused here for the mirror reason -- its cleartext key read as a sealed blob is the same
-// confusion one direction over.
-//
-// v4 adds stale_streams, the per-REPAIR-CHANNEL staleness PB-SYNC-1 splits out of the
-// per-BUCKET flags (see State.StaleStreams). The bump is what makes the downgrade fail
-// closed: a v3 build decoding a v4 blob would drop the field and report a channel it KNOWS
-// has a hole in it as live, which is the one thing PB-APP-8 forbids.
-//
-// v5 moves the STATE PB-STATE-9 assigns a tier to out of the cleartext fields and into three
-// sealed containers -- wake_state, content_kept and content_purgeable (see stateFile). v3
-// sealed the two epoch KEYS and nothing else, so a locked handset still held the decrypted
-// journal, the server-rendered terminal grids and the command outcomes as plain JSON at rest.
-// The bump is required in both directions: a v4 build decoding a v5 blob would find no
-// send_seq and no receive array and start from an empty replay guard -- the exact reset this
-// file exists to refuse -- so it must fail closed instead, and a v5 build reading a v4 blob
-// must know to take those fields from the cleartext and reseal them on the next Save.
-//
-// v6 adds PushPreference.Version, the DEVICE-supplied monotonic counter PB-PUSH-10 makes the
-// machine refuse a preference update without. The field sits inside an existing container's
-// object rather than at the top level, which is precisely why the bump is not optional: the
-// top-level tag set is unchanged, so nothing else would notice, and a build one version back
-// would drop the counter and restart it at 1 on the next Save. The machine refuses anything
-// that does not STRICTLY exceed what it holds (remotegw.filePushPrefs.SavePrefs, because the
-// relay may replay a frame from before the user turned pushes off) -- so a counter that
-// restarts means every toggle from that moment on is silently refused, forever, while the
-// settings screen shows the user's new value. A brick with no visible symptom.
-// v7 adds relay_spki_pin, the relay certificate's SubjectPublicKeyInfo hash the phone pins
-// at pairing (ADR-007 B33/B34). It has no other channel: the pairing QR cannot carry it
-// (MaxRelayURLLen = 39 already leaves one byte of slack in the v6-L symbol), so msg2
-// delivers it once and this file is the only place it survives to the next dial. The bump is
-// what makes a downgrade fail LOUDLY rather than quietly: a v6 build reading a v7 blob would
-// drop the pin, and a handset whose platform trust-root source is TrustRootsPinned would then
-// refuse every dial with no way for the user to tell a lost pin from a hostile relay.
-//
-// v8 adds last_heard_at, PB-APP-11's freshness coordinate: the newest authenticated machine
-// timestamp this phone has accepted. The bump is required for v4's reason exactly one channel
-// over -- a build one version back drops the field, so the next launch reports a machine that
-// has said nothing for hours as live and renders its restored sessions and grids as current.
-// That is the lie PB-APP-8 forbids, and the whole point of the coordinate is that NOTHING ELSE
-// on the phone can notice the condition: a withholding relay leaves no gap, answers every poll,
-// and is itself the source of the only other liveness signal (ADR-007 B121).
-// v9 adds disowned, the record that the OWNER ended this registration (PB-KEY-7's revoke, ADR-007
-// B133). The bump is required for the same reason v8's was, and the failure it prevents is the
-// worse one: a build one version back drops the field, so the first launch on it comes up
-// believing the phone is paired -- in the four-tab scaffold, holding no key of either tier,
-// reading a roster from a machine that deregistered it, with the pairing entry point on a screen
-// the presentation gate will not show. That is agents-tracker-d0b8 restored by a downgrade, and it
-// is unrecoverable short of clearing the app's data. The field is omitempty, so an INSTALLED v8
-// blob loads as not-disowned, which is the correct reading of a phone that was paired and never
-// revoked.
-//
-// v10 adds items, the phone's TRANSCRIPT (ADR-009's structured chat, interaction.go). It sits
-// INSIDE content_purgeable rather than at the top level -- it is a decrypted machine-sealed
-// cache, the same class as sessions and snapshots and the most revealing of the three -- so the
-// top-level tag set is unchanged and TestStateSchemaVersion_IsPinnedToTheDurableFieldSet alone
-// would not have noticed it. The bump is required all the same, and PinnedSealedFixturesStillLoad
-// is what makes it mechanical: a build one version back drops the container's new field, so the
-// transcript comes back EMPTY after the SIGKILL Android hands out routinely -- and because the
-// receive high-water is durable, the relay's redelivery of the frames that built it is refused
-// (crypto.ErrStaleSeq). The loss is permanent rather than re-fetchable, and it takes any pending
-// approval card the machine is still blocked on with it (IS-LIFE-3).
-//
-// It does NOT bump journal.SchemaVersion or the item's own `v`, which IS-COMPAT-3 forbids. Those
-// two are the WIRE's versions; this one stamps a file only this build writes and only this build
-// reads.
-//
-// v11 adds Item.LastCursor, the per-item fold high water (interaction.go). It sits one level
-// deeper again -- inside the items array inside content_purgeable -- and the bump is required for
-// the reason every one above it was, with the failure landing on the TRANSCRIPT's contents rather
-// than its presence: a build one version back drops the high water, so the first repair after that
-// launch folds records the phone had already folded, concatenating each increment twice
-// (IS-DELTA-1) and re-collapsing the item's fields to older values. What the user then reads is
-// prose, and wrong, with nothing on any surface marked damaged.
-// v12 adds machine_name, the hostname the machine published in the pairing payload
-// (agents-tracker-ksvb.1). ITS BUMP IS MECHANICAL RATHER THAN ARGUED FROM A FAILURE, and saying
-// so is more honest than inventing one: unlike v7's pin, v8's clock and v9's revoke, a build one
-// version back drops this field and the screens fall back to the endpoint id -- which is what
-// they render today, is a fact, and is not a lie about anything. Nothing breaks.
-//
-// The bump happens anyway because the rule is unconditional and its value is in being
-// unconditional: TestStateSchemaVersion_IsPinnedToTheDurableFieldSet ties the constant to the
-// durable field set in both directions precisely so nobody has to be right, field by field,
-// about which additions are survivable. A rule with an exemption for "harmless" fields is a rule
-// whose next application is an argument, and pairing is the only channel this coordinate has --
-// so a downgrade that dropped it silently would restore the very "ep- plus a hash" the bead
-// exists to remove, with no on-device way to tell that from a machine that published no name.
-// An INSTALLED v9 blob loads with an empty name, which is the correct reading of a phone that
-// paired before the field existed: it is not named, so the endpoint id renders.
-//
-// v12 IS A MERGE ARTEFACT, and saying so keeps the lineage readable: two lines minted a v10
-// independently -- the transcript above (v10/v11, interaction-program branch), and machine_name
-// below (main) -- so the merged blob carries a field set neither line ever wrote alone. The
-// constant is one past the higher of the two, both narratives are kept verbatim because each
-// still states the failure its own bump was for, and the pinned v12 literal in state_test.go
-// is what makes the union mechanical.
-//
-// v13 adds relay_tls_policy, ADR-016 W1's named relay TLS policy ("webpki" or
-// "pinned_spki"), independent of relay_spki_pin (W1's own mutation control: a pin's
-// presence must never imply pinned_spki and a pin's absence must never imply webpki --
-// see W4.4/W9 below). The bump is required for v7's own reason one field over: a build one
-// version back drops the policy and reads the retained pin as the whole of verification
-// again (W3's "consulted iff pinned_spki" collapses to "consulted", the exact defect this
-// ADR exists to retire) on a handset that believes it migrated to webpki.
-//
-// THE COMMIT NEVER CLEARS relay_spki_pin (ADR-016 W4.4): a webpki phone retains the pin it
-// was last paired or migrated with, and simply stops reading it. So this bump adds a field;
-// it does not remove or reinterpret one, and the v12 fixture's pin survives unchanged into
-// v13's.
-//
-// v14 adds roster_revision, the durable proof that an authoritative roster reseed
-// committed. Row count and relay cursor cannot prove that event: a valid authoritative
-// roster may be empty at cursor zero, indistinguishable from a paired phone still awaiting
-// its first snapshot. A build one version back drops this proof and returns after restart
-// to calling that state synchronized-empty, so the schema and its pinned literal advance
-// together.
-//
-// v15 adds relay_incarnation, the durable identity of the mailbox log that minted
-// RelayCursor. Dropping it turns the cursor back into an unqualified number and can skip
-// restored items when a replacement log's numeric high-water catches up.
-//
-// v16 adds the crash-safe discard-recovery generation, completion and opaque token. A build
-// one version back drops the only proof that a destructive mailbox transaction still owes an
-// authoritative fast-forward roster after process death.
-//
-// v17 adds last_profile, the exact machine-authored RemoteProfileV1 accepted by the most recent
-// successful Reconcile. Cached session capability records already survive Android process death;
-// without their matching profile they all fail closed to the status card after every SIGKILL,
-// until another reconcile frame happens to arrive. The profile is private inside State so no
-// caller can manufacture this authenticated authority through Save or Mutate. The version bump
-// makes downgrade fail closed instead of silently dropping the predicate that decides whether a
-// restored session may expose chat or terminal control.
-//
-// v18 adds pending_publications, the crash-safe exact-envelope journal for composer sends and
-// interaction reads. It lives inside content_kept, so a v17 build would silently drop it on its
-// next Save and lose operations whose relay delivery is unknown. That is a user-visible lost send,
-// so downgrade must fail closed rather than decode the rest of the blob.
-//
-// v19 binds each pending publication to the exact machine relay-auth public key from which its
-// Target was derived. The v18 migration retains the operation and attaches the durable current
-// public key; the mobile publisher independently recomputes Target from that key before sending,
-// so a malformed legacy target remains inert rather than being guessed or re-targeted.
-//
-// v20 adds pairing_push_owned, the exact staged push address whose ownership was accepted in
-// the SAME durable state transaction as the machine pin. The push binding itself lives in the
-// wake-tier push store, but that separate file cannot classify the pin->disposition crash
-// boundary: without this write-ahead phase, a SIGKILL after the pin and before a sidecar marker
-// leaves startup unable to decide whether to keep or revoke that allocation. A v19 build would
-// silently drop this ownership decision on its next rewrite, so the bump is mandatory.
-//
-// v21 adds history_floor and history_capped beside the durable transcript, plus each terminal
-// pending publication's result_order. An interaction-read reply advances the receive high-water
-// in the same transaction that folds its page/detail and the two history facts; without them a
-// crash after that commit permanently loses the payload because the restored high-water refuses
-// the retained reply as a replay. Result order is independent of logical FIFO position, so a
-// long-lived admitted send whose answer arrives late is not immediately evicted as the “oldest”
-// visible result. Pre-v21 terminal rows decode with zero and are conservatively oldest.
-//
-// v22 adds operator_namespace beside the machine relay-auth public key. The namespace and
-// that key are the two authenticated inputs a relay-v2 reconnect must use to recompute its
-// canonical home; dropping either can redirect or strand the pairing after process death.
-//
-// v23 adds phone_binding: the exact relay-v2 home, phone RID and server-issued generation,
-// including the inactive rollback floor.
-//
-// v24 adds relay_generation, fencing stale whole-State writers after a checkpoint namespace
-// replacement, including writers that outlive and reopen the Store process which performed it.
-//
-// v25 adds discard_recovery_incarnation, separating an owed DISCARD from an already-adopted
-// recovery that only awaits its token-bearing authoritative roster.
-//
-// v26 adds discard_recovery_cursor, binding that destructive intent and every crash retry to
-// the one authenticated retained head. A retry must never infer a cutoff after queue expiry.
-const StateSchemaVersion = 26
+// StateSchemaVersion stamps the current relay-v2 checkpoint format. Schemas below
+// firstV2StateSchemaVersion are deliberately refused without being decrypted or rewritten;
+// higher schemas fail closed because they may carry replay or authority coordinates this build
+// does not understand. The pinned current fixture in state_test.go keeps the stamp and field
+// set moving together.
+const (
+	// firstV2StateSchemaVersion is the oldest phone checkpoint this v2-only build may
+	// interpret. Older blobs are retained unchanged for an explicit reset and fresh pairing.
+	firstV2StateSchemaVersion = 26
+	StateSchemaVersion        = 26
+)
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -703,16 +523,16 @@ type stateFile struct {
 	LastProfile *schema.RemoteProfileV1 `json:"last_profile"`
 	// PairingPushOwned is cleartext synchronization metadata, not authority: the address is
 	// public and the wake key/capabilities remain sealed in push-state. It has no omitempty so
-	// the pinned durable-field-set fixture mechanically covers its presence in schema v20.
+	// the pinned current fixture mechanically covers its presence.
 	PairingPushOwned string `json:"pairing_push_owned"`
 
-	// WakeKey and ContentKey are SEALED blobs from v3 on, each under its own tier KEK
+	// WakeKey and ContentKey are SEALED blobs, each under its own tier KEK
 	// (PB-KEY-9): one file cannot be opened two ways, and a content key the push path can
 	// reach collapses the tier split the design exists for (PB-KEY-2).
 	WakeKey    []byte `json:"wake_key,omitempty"`
 	ContentKey []byte `json:"content_key,omitempty"`
 
-	// WakeState is the wake tier's STATE, sealed under the wake KEK from v5 on: the push
+	// WakeState is the wake tier's STATE, sealed under the wake KEK: the push
 	// token and the push dedup coordinate. It is a container rather than two sealed scalars
 	// because the tier is opened once, at load, and a per-field seal would multiply the
 	// Keystore round trips by the field count for no gain.
@@ -751,20 +571,6 @@ type stateFile struct {
 	// cleartext for the same reason the staleness sets are: it records how old the content
 	// is, which is not the content, and a locked handset must not lose it.
 	LastHeardAt int64 `json:"last_heard_at,omitempty"`
-
-	// Everything below is READ ONLY, and only from a blob written before v5. These fields
-	// carried the tiered state in the clear up to v4; a v5 Save writes none of them and puts
-	// the same coordinates in the containers above. They are kept so an upgraded app loads an
-	// installed blob rather than starting from an empty replay guard (PB-STATE-5's forward
-	// migration), and the reseal happens on the first Save after the upgrade.
-	LegacyPushToken  string                    `json:"push_token,omitempty"`
-	LegacyWakeReplay uint64                    `json:"wake_replay,omitempty"`
-	LegacySendSeq    []sendSeqRecord           `json:"send_seq,omitempty"`
-	LegacyReceive    []receiveRecord           `json:"receive,omitempty"`
-	LegacySessions   []CachedSession           `json:"sessions,omitempty"`
-	LegacySnapshots  []Snapshot                `json:"snapshots,omitempty"`
-	LegacyPendingOps []QueuedOp                `json:"pending_ops,omitempty"`
-	LegacyOpOutcomes map[string]schema.Control `json:"op_outcomes,omitempty"`
 }
 
 // wakeContainer is the plaintext of stateFile.WakeState.
@@ -786,9 +592,9 @@ type keptContainer struct {
 }
 
 // purgeableContainer is the plaintext of stateFile.ContentPurgeable: the decrypted caches
-// PB-KEY-7 names, and nothing else. The TRANSCRIPT joined them in v10 -- it is machine-sealed
-// content this phone decrypted, exactly like the sessions and grids beside it, and it is the
-// most revealing of the set.
+// PB-KEY-7 names, and nothing else. The transcript is machine-sealed content this phone
+// decrypted, exactly like the sessions and grids beside it, and is the most revealing of the
+// set.
 type purgeableContainer struct {
 	Sessions      []CachedSession           `json:"sessions,omitempty"`
 	Snapshots     []Snapshot                `json:"snapshots,omitempty"`
@@ -826,12 +632,6 @@ type fileStore struct {
 	path    string
 	machine string
 	st      State
-	// legacyPendingAuthority records that a carried v18 kept container predates the exact
-	// routing-authority binding. If custody opens it later, migration attaches this store's
-	// already-authenticated MachineRelayAuthPub before validation; mobile still recomputes
-	// and checks the opaque Target before any append.
-	legacyPendingAuthority bool
-
 	// wake and content are PB-KEY-2's tier KEKs. The two epoch keys are sealed under
 	// SEPARATE ones because a single file cannot be gated two ways.
 	wake, content         Sealer
@@ -901,9 +701,10 @@ type sealedTier struct {
 // stale-drop its first frames and an error would refuse to start at all. An EMPTY machineID
 // is an unpaired caller with no expectation, and adopts whatever the blob describes.
 //
-// A missing file is first run. Anything unparseable or unversioned is ErrCorruptState and a
-// newer schema is ErrFutureSchema: both fail closed, because starting from an empty
-// checkpoint would leave the replay guard blind and re-open every retained frame.
+// A missing file is first run. Anything unparseable or unversioned is ErrCorruptState, a
+// pre-v2 schema is ErrLegacyStateResetRequired, and a newer schema is ErrFutureSchema. Each
+// refusal leaves the blob untouched because starting from an empty checkpoint would leave the
+// replay guard blind and re-open every retained frame.
 //
 // machineID is also the INITIALISER, not only the filter, and that is load-bearing rather
 // than tidy. Every path that ends with no blob adopted -- first run, and the different-machine
@@ -1070,11 +871,9 @@ func (s *fileStore) saveLocked(st State) error {
 		s.wakeTier, s.contentTier = wake, content
 		s.wakeState, s.kept, s.purgeable = wakeState, kept, purgeable
 		s.st = merged
-		s.legacyPendingAuthority = false
 		return persistErr
 	}
 	s.st = merged
-	s.legacyPendingAuthority = false
 	return nil
 }
 
@@ -1505,9 +1304,6 @@ func (s *fileStore) adoptKeptContainer(st *State, plain []byte) error {
 	if err := json.Unmarshal(plain, &c); err != nil {
 		return fmt.Errorf("%w: %s: content state container: %v", ErrCorruptState, s.path, err)
 	}
-	if s.legacyPendingAuthority {
-		c.PendingPublications = migratePendingPublicationAuthority(c.PendingPublications, st.MachineRelayAuthPub)
-	}
 	if err := validatePendingPublicationAuthority(c.PendingPublications, st.MachineRelayAuthPub); err != nil {
 		return fmt.Errorf("%w: %s: pending publications: %v", ErrCorruptState, s.path, err)
 	}
@@ -1659,7 +1455,9 @@ func (s *fileStore) load() error {
 	if f.SchemaVersion < 1 {
 		return fmt.Errorf("%w: %s: unversioned blob", ErrCorruptState, path)
 	}
-	s.legacyPendingAuthority = f.SchemaVersion < 19
+	if f.SchemaVersion < firstV2StateSchemaVersion {
+		return fmt.Errorf("%w: %s: schema version %d predates v2", ErrLegacyStateResetRequired, path, f.SchemaVersion)
+	}
 	if machineID != "" && f.Machine != machineID {
 		// Another machine's blob: discarded wholesale, and the state OpenStore constructed
 		// stands -- same reasoning as the first-run return above. The re-pair that follows must
@@ -1673,8 +1471,7 @@ func (s *fileStore) load() error {
 	}); err != nil {
 		return fmt.Errorf("%w: %s: malformed operator namespace", ErrCorruptState, path)
 	}
-	if f.RelayIncarnation != "" && !validPersistedRelayIncarnation(f.RelayIncarnation) &&
-		(f.SchemaVersion >= 23 || !validRecoveryToken(f.RelayIncarnation)) {
+	if f.RelayIncarnation != "" && !validPersistedRelayIncarnation(f.RelayIncarnation) {
 		return fmt.Errorf("%w: %s: malformed relay mailbox incarnation", ErrCorruptState, path)
 	}
 	if err := validatePhoneBindingState(f.PhoneBinding); err != nil {
@@ -1689,34 +1486,14 @@ func (s *fileStore) load() error {
 		}
 	}
 	pendingRecovery := f.DiscardRecoveryGeneration > f.DiscardRecoveryCompleted
-	// Before v25 a pending recovery could only still owe its destructive call: the
-	// legacy adoption kept the same incarnation. Preserve that exact coordinate when
-	// opening a pinned older fixture; never guess for a current-schema file.
-	if pendingRecovery && f.SchemaVersion >= 23 && f.SchemaVersion < 25 && f.DiscardRecoveryIncarnation == "" {
-		f.DiscardRecoveryIncarnation = f.RelayIncarnation
-	}
 	if pendingRecovery != (f.DiscardRecoveryToken != "") ||
-		(f.SchemaVersion >= 23 && pendingRecovery != (f.DiscardRecoveryIncarnation != "")) ||
-		(f.SchemaVersion >= 26 && pendingRecovery != (f.DiscardRecoveryCursor != 0)) ||
+		pendingRecovery != (f.DiscardRecoveryIncarnation != "") ||
+		pendingRecovery != (f.DiscardRecoveryCursor != 0) ||
 		(f.DiscardRecoveryToken != "" && !validRecoveryToken(f.DiscardRecoveryToken)) {
 		return fmt.Errorf("%w: %s: malformed discard recovery checkpoint", ErrCorruptState, path)
 	}
-	if f.DiscardRecoveryIncarnation != "" && !validPersistedRelayIncarnation(f.DiscardRecoveryIncarnation) &&
-		(f.SchemaVersion >= 23 || !validRecoveryToken(f.DiscardRecoveryIncarnation)) {
+	if f.DiscardRecoveryIncarnation != "" && !validPersistedRelayIncarnation(f.DiscardRecoveryIncarnation) {
 		return fmt.Errorf("%w: %s: malformed discard recovery incarnation", ErrCorruptState, path)
-	}
-	// Before v3 the two epoch keys were CLEARTEXT in these same fields. Reading them as
-	// sealed blobs would be exactly the silent reinterpretation the version guard exists
-	// to refuse, so a pre-seal blob that carries either one is refused outright. Checked
-	// AFTER the machine test: another machine's blob is discarded wholesale either way,
-	// and erroring on it would brick the re-pair that case exists to keep working.
-	// The remedy named here is the one the user can actually reach. "Re-pair the device" is
-	// not: this error fails Resume, so the app never starts and never offers a re-pair. Only
-	// clearing the app's data removes the blob that is refusing to load, and re-pairing is
-	// what happens after that, not instead of it.
-	if f.SchemaVersion < 3 && (len(f.WakeKey) > 0 || len(f.ContentKey) > 0) {
-		return fmt.Errorf("%w: %s: schema version %d holds unsealed epoch keys (PB-SEC-1); clear the app's "+
-			"data to discard them, then pair again", ErrCorruptState, path, f.SchemaVersion)
 	}
 
 	st := State{
@@ -1748,39 +1525,6 @@ func (s *fileStore) load() error {
 		DiscardRecoveryCursor:      f.DiscardRecoveryCursor,
 		RosterRevision:             f.RosterRevision,
 		LastHeardAt:                f.LastHeardAt,
-		// The pre-v5 cleartext copies. A v5 blob carries none of them (the same coordinates
-		// arrive from the sealed containers below), so this is the forward migration and not a
-		// second source: an installed v4 blob loads with its replay guard intact and the first
-		// Save after the upgrade seals it. The cleartext copy stays on disk until that Save,
-		// which is inherent to migrating a file rather than rewriting it at load.
-		PushToken:  f.LegacyPushToken,
-		WakeReplay: f.LegacyWakeReplay,
-		Sessions:   f.LegacySessions,
-		Snapshots:  f.LegacySnapshots,
-		PendingOps: f.LegacyPendingOps,
-		OpOutcomes: f.LegacyOpOutcomes,
-	}
-	// A pre-v23 cursor belongs to the retired relay-v1 mailbox and its 32-hex
-	// incarnation. Native relay-v2 never subscribes from that checkpoint.
-	if f.SchemaVersion < 23 {
-		st.RelayCursor, st.RelayIncarnation = 0, ""
-		st.relayGen = 0
-		// Relay-v1 recovery cannot be resumed against relay-v2: its opaque
-		// incarnation is a different protocol coordinate. Retire the destructive
-		// intent explicitly while preserving the rest of the installed state.
-		st.DiscardRecoveryGeneration, st.DiscardRecoveryCompleted = 0, 0
-		st.DiscardRecoveryToken, st.DiscardRecoveryIncarnation, st.DiscardRecoveryCursor = "", "", 0
-	}
-	// A pre-v26 recovery did not bind the destructive request to an exact queue
-	// cutoff. Retire that unshipped WIP intent; inferring RelayCursor+1 could delete
-	// a fresh head after the stale item expires. A new authenticated PROBE may begin it.
-	if f.SchemaVersion >= 23 && f.SchemaVersion < 26 {
-		st.DiscardRecoveryGeneration, st.DiscardRecoveryCompleted = 0, 0
-		st.DiscardRecoveryToken, st.DiscardRecoveryIncarnation, st.DiscardRecoveryCursor = "", "", 0
-	}
-	applySendSeq(&st, f.LegacySendSeq)
-	if err := applyReceive(&st, f.LegacyReceive); err != nil {
-		return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
 	}
 	// The WAKE tier is the one the push path opens -- that is its whole purpose -- so one
 	// that will not open means this blob is not ours, and starting from an empty checkpoint
@@ -1857,9 +1601,7 @@ func decodeBucket(sender string, epoch uint32) (Bucket, error) {
 	return b, nil
 }
 
-// applySendSeq folds one set of send-seq records into st, highest ceiling per epoch wins.
-// It is shared by the sealed container and the pre-v5 cleartext array so a migrated blob and
-// a current one cannot decode by two different rules.
+// applySendSeq folds sealed send-seq records into st; the highest ceiling per epoch wins.
 func applySendSeq(st *State, recs []sendSeqRecord) {
 	if len(recs) == 0 {
 		return
@@ -1934,9 +1676,6 @@ func (s *fileStore) loadContentState(st *State, f stateFile, path string) error 
 		var c keptContainer
 		if err := json.Unmarshal(plain, &c); err != nil {
 			return fmt.Errorf("%w: %s: content state container: %v", ErrCorruptState, path, err)
-		}
-		if f.SchemaVersion < 19 {
-			c.PendingPublications = migratePendingPublicationAuthority(c.PendingPublications, st.MachineRelayAuthPub)
 		}
 		applySendSeq(st, c.SendSeq)
 		if err := applyReceive(st, c.Receive); err != nil {

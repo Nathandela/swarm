@@ -15,11 +15,13 @@ package swarmmobile
 // BELOW the seam that had the defect; this test drives the mobile seam itself.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
@@ -174,10 +176,10 @@ func r4r3KEK(tier string) []byte {
 }
 
 // r4r3TwoMachineApp provisions a two-machine v2 registry world -- machine m-a
-// (the App's own pairing) plus machine m-b -- then corrupts ONLY m-b's durable blob and
-// builds the App over it. This is production's key world exactly: ONE at-rest KEK pair
-// shared across every namespace, the App's own custodySealers.
-func r4r3TwoMachineApp(t *testing.T) (*App, string) {
+// (the App's own pairing) plus machine m-b -- then applies breakB only to m-b's durable
+// blob before building the App over it. This is production's key world exactly: ONE
+// at-rest KEK pair shared across every namespace, the App's own custodySealers.
+func r4r3TwoMachineApp(t *testing.T, breakB func(string) error) (*App, string) {
 	t.Helper()
 	dir := t.TempDir()
 	custody := r4r3Custody{}
@@ -216,10 +218,10 @@ func r4r3TwoMachineApp(t *testing.T) (*App, string) {
 	if err := coreB.Mutate(func(st *phonecore.State) { st.MachineName = "laptop b" }); err != nil {
 		t.Fatalf("persisting m-b's namespace: %v", err)
 	}
-	// ...then corrupt ONLY that blob: Keystore invalidation, backup exclusion, a bad
-	// flash -- MM8's per-machine failure, scoped to one pairing by construction.
-	if err := os.WriteFile(filepath.Join(dirB, "phone-state.json"), []byte("not json"), 0o600); err != nil {
-		t.Fatalf("corrupting m-b's blob: %v", err)
+	// ...then break ONLY that blob: Keystore invalidation, backup exclusion, an old
+	// schema, or a bad flash -- MM8's per-machine failure, scoped to one pairing by construction.
+	if err := breakB(filepath.Join(dirB, phonecore.StateFileName)); err != nil {
+		t.Fatalf("breaking m-b's blob: %v", err)
 	}
 
 	app, err := NewApp(&Config{StateDir: dir, MachineID: "m-a"}, custody)
@@ -236,7 +238,9 @@ func r4r3TwoMachineApp(t *testing.T) (*App, string) {
 // and the broken pairing still forgettable. Never a wholesale state-corrupt failure
 // whose only remedy destroys every pairing.
 func TestR4R3_OneBrokenNamespaceDoesNotDegradeTheOthers(t *testing.T) {
-	app, stateDir := r4r3TwoMachineApp(t)
+	app, stateDir := r4r3TwoMachineApp(t, func(path string) error {
+		return os.WriteFile(path, []byte("not json"), 0o600)
+	})
 
 	list, err := app.Machines()
 	if err != nil {
@@ -310,5 +314,79 @@ func TestR4R3_OneBrokenNamespaceDoesNotDegradeTheOthers(t *testing.T) {
 	}
 	if n, _ := list.Count(); n != 1 {
 		t.Errorf("after the forget Machines serves %d row(s), want 1", n)
+	}
+}
+
+// TestR4R3_LegacyNamespaceIsBrokenForgettableAndNeverRewritten makes the v2-only
+// boundary visible at the mobile seam: a pre-v26 machine is a single broken row, not a
+// migration candidate or a whole-app failure. Its bytes are untouched until the user
+// explicitly forgets that one machine.
+func TestR4R3_LegacyNamespaceIsBrokenForgettableAndNeverRewritten(t *testing.T) {
+	var legacyPath string
+	var legacyBytes []byte
+	app, stateDir := r4r3TwoMachineApp(t, func(path string) error {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		legacyBytes = bytes.Replace(b, []byte(`"schema_version":26`), []byte(`"schema_version":25`), 1)
+		if bytes.Equal(legacyBytes, b) {
+			t.Fatal("legacy fixture did not contain current schema 26")
+		}
+		legacyPath = path
+		return os.WriteFile(path, legacyBytes, 0o600)
+	})
+
+	list, err := app.Machines()
+	if err != nil {
+		t.Fatalf("Machines with one legacy namespace: %v", err)
+	}
+	n, err := list.Count()
+	if err != nil {
+		t.Fatalf("Count legacy rows: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("Machines with one legacy namespace served %d rows, want healthy m-a and broken m-b", n)
+	}
+	rows := map[string]*MachineInfo{}
+	for i := 0; i < n; i++ {
+		m, err := list.At(i)
+		if err != nil {
+			t.Fatalf("At(%d) legacy rows: %v", i, err)
+		}
+		rows[m.ID] = m
+	}
+	if a := rows["m-a"]; a == nil || a.Broken {
+		t.Errorf("healthy current machine m-a rendered %+v", a)
+	}
+	b := rows["m-b"]
+	if b == nil || !b.Broken || !b.Stale || b.Connected ||
+		!strings.Contains(b.BrokenReason, "reset") || !strings.Contains(b.BrokenReason, "fresh pairing") {
+		t.Errorf("legacy machine m-b rendered %+v; want a stale broken row explaining reset and fresh pairing", b)
+	}
+	if _, err := app.GlobalInbox(); err != nil {
+		t.Errorf("GlobalInbox with one legacy namespace: %v", err)
+	}
+	if err := app.SelectMachine("m-b"); err == nil {
+		t.Error("SelectMachine accepted the legacy namespace instead of its broken row")
+	}
+	if err := app.SelectMachine("m-a"); err != nil {
+		t.Errorf("SelectMachine healthy current m-a: %v", err)
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || !bytes.Equal(got, legacyBytes) {
+		t.Errorf("legacy namespace changed before explicit forget: got %q (err=%v), want original bytes", got, err)
+	}
+	if err := app.ForgetMachine("m-b"); err != nil {
+		t.Fatalf("ForgetMachine legacy m-b: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Errorf("legacy namespace survived explicit forget: stat=%v", err)
+	}
+	reg, err := phonecore.OpenMachineRegistry(stateDir)
+	if err != nil {
+		t.Fatalf("OpenMachineRegistry after forgetting legacy m-b: %v", err)
+	}
+	if entries := reg.Entries(); len(entries) != 1 || entries[0].ID != "m-a" {
+		t.Errorf("registry after forgetting legacy m-b = %v, want only healthy m-a", entries)
 	}
 }

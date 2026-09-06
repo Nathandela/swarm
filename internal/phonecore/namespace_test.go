@@ -70,42 +70,6 @@ func TestCurrentPairedStateRejectsInvalidOperatorNamespace(t *testing.T) {
 	}
 }
 
-func TestLegacyPairedStateRejectsMissingOperatorNamespaceAtFirstLoad(t *testing.T) {
-	dir := t.TempDir()
-	wake, content := phoneTestSealer(0x11), phoneTestSealer(0x22)
-	core, err := Resume(Config{Dir: dir, Machine: "machine-a", WakeSealer: wake, ContentSealer: content})
-	if err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	if err := core.Mutate(func(st *State) {
-		st.OperatorNamespace = "owner"
-		st.MachineRelayAuthPub = bytes.Repeat([]byte{0x33}, ed25519.PublicKeySize)
-	}); err != nil {
-		t.Fatalf("Mutate: %v", err)
-	}
-	path := filepath.Join(dir, StateFileName)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var blob map[string]any
-	if err := json.Unmarshal(raw, &blob); err != nil {
-		t.Fatal(err)
-	}
-	blob["schema_version"] = float64(21)
-	delete(blob, "operator_namespace")
-	raw, err = json.Marshal(blob)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Resume(Config{Dir: dir, Machine: "machine-a", WakeSealer: wake, ContentSealer: content}); err == nil {
-		t.Fatal("Resume accepted a pre-v22 active pairing with no authenticated namespace")
-	}
-}
-
 func TestSaveRefusesInvalidActiveNamespaceWithoutAdvancingDiskOrMemory(t *testing.T) {
 	for _, namespace := range []string{"", "Owner"} {
 		t.Run(namespace, func(t *testing.T) {

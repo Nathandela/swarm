@@ -95,6 +95,26 @@ Logical expiry and transactional authorization remain enforced during requests.
 The deployment must prove cleanup scheduling and backlog drain before launch; no schedule
 has been installed by this source change.
 
+The unbound-address retention query combines `bound == false` with
+`unbound_expires_ms <= cutoff`. Production Firestore requires a composite index for
+that equality/range combination; emulator success does not establish index readiness.
+After approval to provision the selected namespace, create its collection-scoped index:
+
+```sh
+gcloud firestore indexes composite create \
+  --project=swarm-8404f --database='(default)' \
+  --collection-group="${SWARM_FIRESTORE_NAMESPACE:?set the approved namespace}_addresses" \
+  --query-scope=collection \
+  --field-config=field-path=bound,order=ascending \
+  --field-config=field-path=unbound_expires_ms,order=ascending
+```
+
+Wait for the index to be ready and run the real bounded `retention` command against
+disposable data in that namespace before admitting use. Do not grant index-management
+permissions to the serving runtime; this is deployment-time operator work.
+[Query requirements](https://firebase.google.com/docs/firestore/query-data/queries),
+[index command](https://docs.cloud.google.com/sdk/gcloud/reference/firestore/indexes/composite/create).
+
 Readiness is not an FCM/Play send probe and must not depend on an idle worker's heartbeat.
 A successful Firestore readiness read does not prove write IAM, real attestation or FCM
 delivery. Keep admin reads infrequent and include them in the operation-cost accounting.

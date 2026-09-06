@@ -1085,3 +1085,36 @@ The clean-environment full skeleton run, started before that test fix, completed
 with only this same readiness failure; all its other tests passed. A single all-packages green
 run after the fixture fix is not claimed: the evidence combines the broad run, the corrected
 environment reruns, and the repeated/race verification of the sole remaining fixture change.
+
+## Current-only phone checkpoints and stricter Firestore CI
+
+The phone now refuses checkpoint schemas 1 through 25 with an explicit reset/fresh-pairing
+error before opening either sealed tier or rewriting the file. Schema 26 is the first supported
+v2 baseline; future versions still fail closed. Old schema conversion branches and migration-only
+fixtures are removed. The current sealed fixture, durable-field-set pin, publication authority,
+replay and exact discard-recovery checks remain. A mobile regression proves one old namespace
+is broken and unselectable while its healthy sibling remains usable; only explicit ForgetMachine
+removes the old namespace. An unused singleton-migration facade stub is also removed.
+
+TDD evidence: the mobile isolation test failed before the version guard and passed afterward.
+Independent Terra review returned GO. Root's full phonecore/mobile race runs passed (137.087 s /
+160.803 s), full `internal/verify` passed (66.571 s), and focused `go vet` passed. Sol's final
+phonecore suite and focused race passed, as did repeated current/legacy and mobile isolation
+checks. The refusal test independently pins all 25 rejected versions and checks zero sealer
+opens plus byte-identical disk contents; it does not derive its range from the production floor.
+
+The existing Firestore-emulator CI job is strengthened, not replaced or narrowed. It still runs
+the full pushgw and pushgw-command race suites and additionally requires five named emulator
+tests to report PASS. Sol ran the complete emulator-backed command successfully. A fake-go
+control accepts all five PASS anchors, independently rejects each missing or skipped anchor,
+and rejects a nonzero command even with pass-looking output. Root repeated that control and
+the bounded-runner lifecycle test: timeout 124, external termination 143, no stubborn surviving
+grandchildren. CI also checks propagation of exit status 7.
+
+Read-only inventory of project `swarm-8404f` found no Firestore database, Cloud Run service or
+Secret Manager secret. The deployment runbook now identifies the composite index needed by
+the actual unbound-address retention query; emulator success is not production-index proof.
+No cloud resource or index was created. Hosted admission remains closed and no Android device
+was connected. A public GitHub push was rejected by the publication safety gate; no retry via
+another path was made and no source publication is claimed. Live IAM/FCM/attestation, handset
+lifecycle, recovery and billing gates remain outstanding.
