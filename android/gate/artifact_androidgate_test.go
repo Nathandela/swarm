@@ -171,33 +171,20 @@ func TestPBTOOL2_OneCommandProducesAnAARWithEveryDeclaredABI(t *testing.T) {
 	assertAARContents(t, aar, declaredABIs(t, env))
 }
 
-// findAAR locates the artifact the build command produced. It insists on exactly
-// one: two AARs from different runs would let the inspection assert against a
-// stale artifact that predates the change under test.
+// findAAR selects the default interactive/debug AAR. Release owns a separate
+// generated path, so scanning all Android outputs would make two intentional
+// artifacts look like stale ambiguity.
 func findAAR(t *testing.T) string {
 	t.Helper()
-	var found []string
-	_ = filepath.WalkDir(androidRoot(t), func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !d.IsDir() && strings.HasSuffix(path, ".aar") {
-			found = append(found, path)
-		}
-		return nil
-	})
-	switch len(found) {
-	case 0:
-		t.Fatalf("PB-TOOL-2: the build command exited 0 but produced no .aar under %s. "+
-			"An exit-status check is vacuous here: gobind exits 0 while silently dropping "+
-			"bind-illegal exports", mustRel(t, androidRoot(t)))
-	case 1:
-		return found[0]
-	default:
-		t.Fatalf("PB-TOOL-2: %d AARs under android/: %v. The inspection cannot tell which "+
-			"one the build just produced", len(found), found)
+	path := builtAARPath(t)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("PB-TOOL-2: the build command exited 0 but did not produce usable default AAR %s: %v", mustRel(t, path), err)
 	}
-	return ""
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		t.Fatalf("PB-TOOL-2: the build command exited 0 but default AAR %s is not a non-empty regular file", mustRel(t, path))
+	}
+	return path
 }
 
 // TestPBTOOL4_GradlewRunsWithoutSystemGradle. The scrubbed PATH is the whole

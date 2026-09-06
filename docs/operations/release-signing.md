@@ -169,10 +169,13 @@ unsigned artifact.
 cd android
 . ./toolchain.env    # nothing Android is on PATH without this
 test -s app/google-services.json
-./build-aar.sh       # rebuilds the gomobile AAR the app module links; the release build's
-                      # preBuild task (requireSwarmAar) refuses to proceed without it
 ./gradlew :app:bundleRelease
 ```
+
+The release AAR dependency automatically runs `build-aar.sh` before its consumers.
+It rebuilds on every release invocation: an existing ignored `swarm.aar` is not evidence
+that its native code matches the current source. Debug builds retain the explicit
+`./build-aar.sh` workflow. Do not skip the release producer with Gradle task exclusions.
 
 `bundleRelease` depends on `requireProductionFirebaseConfig`. It fails before producing the Play
 artifact if the file is absent or if its project, package or Firebase app id is not the production

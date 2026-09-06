@@ -37,7 +37,22 @@ for abi in $(echo "$SWARM_AAR_ABIS" | tr ',' ' '); do
     targets="${targets:+$targets,}$goplatform"
 done
 
-out="$here/app/libs/swarm.aar"
+case "$#" in
+    0) out="$here/app/libs/swarm.aar" ;;
+    1)
+        case "$1" in
+            /*) out=$1 ;;
+            *)
+                echo "build-aar.sh: optional output path requires an absolute output path" >&2
+                exit 2
+                ;;
+        esac
+        ;;
+    *)
+        echo "usage: $0 [output.aar]" >&2
+        exit 2
+        ;;
+esac
 mkdir -p "$(dirname -- "$out")"
 
 cd "$repo"

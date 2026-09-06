@@ -360,6 +360,18 @@ tasks.matching { it.name == "bundleRelease" }.configureEach {
 // ---------------------------------------------------------------------------
 
 val swarmAar = layout.projectDirectory.file("libs/swarm.aar")
+val releaseSwarmAar = layout.buildDirectory.file("generated/release-swarm-aar/swarm.aar")
+
+// Release bundles must never reuse the ignored AAR left by a previous local
+// build. Its file dependency owns this producer, so Gradle schedules the bind
+// before any release consumer can transform or package libgojni.so.
+val rebuildReleaseSwarmAar = tasks.register<Exec>("rebuildReleaseSwarmAar") {
+    description = "Rebuilds the gomobile AAR for every Play release."
+    workingDir(rootProject.projectDir.parentFile)
+    commandLine("./android/build-aar.sh", releaseSwarmAar.get().asFile.absolutePath)
+    outputs.file(releaseSwarmAar)
+    outputs.upToDateWhen { false }
+}
 
 val requireSwarmAar = tasks.register("requireSwarmAar") {
     description = "Checks that the gomobile AAR has been built."
@@ -371,7 +383,7 @@ val requireSwarmAar = tasks.register("requireSwarmAar") {
     }
 }
 
-tasks.named("preBuild") { dependsOn(requireSwarmAar) }
+tasks.matching { it.name == "preDebugBuild" }.configureEach { dependsOn(requireSwarmAar) }
 
 // ---------------------------------------------------------------------------
 // PB-RUN-3 / PB-RUN-4: the policy tables the Go gate validates are put on the unit-test
@@ -568,8 +580,8 @@ android {
         // on, so a build from a branch behind main emits a LOWER code than one already
         // published and Play refuses it for a reason that has nothing to do with the change.
         // A number a person types is a number a person can reconcile with the Console.
-        versionCode = 40
-        versionName = "0.13.29"
+        versionCode = 41
+        versionName = "0.13.30"
 
         // PB-E2E-2. Without this the module has no instrumented test task at all and
         // `connectedAndroidTest` is a no-op that reports success -- so the exit demonstration's
@@ -734,7 +746,8 @@ kotlin {
 // ---------------------------------------------------------------------------
 
 dependencies {
-    implementation(files(swarmAar))
+    debugImplementation(files(swarmAar))
+    releaseImplementation(files(releaseSwarmAar).builtBy(rebuildReleaseSwarmAar))
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.firebase:firebase-messaging:24.1.2")
     implementation("com.google.android.play:integrity:1.6.0")

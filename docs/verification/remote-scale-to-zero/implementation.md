@@ -1373,3 +1373,41 @@ redacts the ceremony and URL query from failures, and closes immediately after w
 upgrade without sending `PAIR_CLAIM`; it neither relaxes authentication nor claims a
 rendezvous. Until that differential run completes, the actual Go Android dial failure
 remains unresolved.
+
+## Stale native library identified in Play code 40
+
+After USB debugging returned, the matching cgo-enabled Android probe passed the live
+relay-v2 WebSocket upgrade with the platform-validated SPKI, closing without a claim.
+The installed app still failed with fresh codes confirmed after 9.3 and 9.8 seconds,
+including after an app-process restart that preserved its data. A bounded, redacted
+Worker tail showed the app requesting `/` (HTTP 200), not `/v2/pair`.
+
+The Play-installed arm64 `libgojni.so` has SHA-256
+`56fe2b8d6f54aa38490b0ed9b57bcd076f3db64b462a4de2b7fefd5846170ff9`.
+It is byte-for-byte identical to the local ignored AAR built on September 5, before
+the September 6 bundle. It contains legacy `relay.DialRawSecure` / `relay.DialSecure`
+symbols and no `relayv2` client symbols. Current source uses `relayv2.DialPair`.
+Thus the published Android version changed while its native transport remained old;
+the existing Gradle check proved only that an AAR existed. Independent Sol review
+confirmed the artifact comparison. No TLS or DNS source change is warranted.
+
+The correction under `agents-tracker-gxy0` is a mandatory native-library producer in
+the release build graph and a fresh Play upload. The prior shipped-JNI scratch probe
+was stopped without a result once this artifact evidence established the cause.
+Phone pairing and foreground acceptance remain open until the corrected app is installed
+and exercised; finding the cause is not a successful end-to-end test.
+
+The failing-first release regression gate rejected the old existence-only dependency.
+Release packaging now consumes its own generated AAR through a Gradle `builtBy`
+producer that always rebuilds; the debug artifact remains separate, preventing a
+combined debug/release build from racing over one file. The builder's optional output
+argument is absolute-only and its default path is unchanged. The artifact gate now
+selects that exact default path rather than scanning both intentional outputs.
+Independent Sol review returned GO. The code-41/version-0.13.30 identity test was
+observed RED against code 40 and GREEN after the bump.
+
+Root passed the complete Android source gate (12.157 s), Android gate lint (zero
+issues), and the tagged native rebuild/ABI test (30.036 s). The newly built arm64
+library contains `relayv2.DialPair`. Complete relay-v2/mobile/Play/publisher tests,
+race tests and vet also passed. Signed-bundle construction and physical acceptance
+are tracked separately from these source and artifact checks.
