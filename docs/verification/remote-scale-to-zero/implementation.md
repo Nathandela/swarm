@@ -1411,3 +1411,32 @@ issues), and the tagged native rebuild/ABI test (30.036 s). The newly built arm6
 library contains `relayv2.DialPair`. Complete relay-v2/mobile/Play/publisher tests,
 race tests and vet also passed. Signed-bundle construction and physical acceptance
 are tracked separately from these source and artifact checks.
+
+The authoritative combined `lint test :app:bundleRelease` invocation succeeded in
+9m18s. Both debug and release variants ran 1,751 tests with zero failures/errors;
+lint passed. The executed graph rebuilt the generated release AAR before its native
+consumers, then signed the bundle and regenerated its schema-2 provenance sidecar.
+The signed bundle SHA-256 is
+`e28a1ce77c763d0970c4bc1f385970e347e595a8336a8bd1d320e669a7e5eada`.
+Its arm64 native library exactly matches both newly built AARs at SHA-256
+`a716fc7549abe61c9f9f2b2cc2d20b1999e359089a17202fab82c62907b1770d`
+and contains `relayv2.DialPair`. `jarsigner` verified the JAR signature (with the
+self-signed upload-certificate and ZIP entry-order warnings); Google Play's guarded
+dry run accepted code 41 on `alpha` without committing the edit. That rehearsal is
+not publication or evidence that the handset has updated.
+
+CI run `34054071507` passed on source commit `a3fdff07`, including full Go tests,
+performance/soak checks, remote-v2 Workerd/Firestore, Android builds and tagged artifact
+assertions. The guarded publisher then committed code 41 to `alpha` in edit
+`09234984996869814072`. Play Console showed that alpha release under review.
+
+The handset's Play listing identified its account as an internal tester, whereas the
+existing internal track still served code 30 / 0.13.15. Internal testers receive the
+internal-track build, not closed-alpha builds. Root reused the already uploaded and
+provenance-verified code 41 through Console's **Add from library** control; no second
+AAB upload or tester-enrollment change occurred. The review showed only code 41 / 0.13.30
+and non-blocking missing deobfuscation/native-debug-symbol warnings. Root published it
+to the existing internal track, and Console confirmed **Accessible aux testeurs internes**
+for release 24 at 21:30 local time on September 6. Actual handset update and pairing
+acceptance remain separate gates. [Google's testing-track rules](https://support.google.com/googleplay/android-developer/answer/9845334),
+[reusing an uploaded bundle](https://support.google.com/googleplay/android-developer/answer/9859348).

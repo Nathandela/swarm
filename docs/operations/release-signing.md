@@ -234,7 +234,8 @@ the exact shell/invocation that ran `bundleRelease`.
 Creating the app and closed-testing track in Play Console (which also enrolls it in mandatory Play
 App Signing) is covered by `docs/ops/play-console-walkthrough.md`. The Console's manual AAB upload
 control is not an allowed release path: it does not consume the provenance sidecar. After the app
-and `alpha` track exist, rehearse with:
+and the intended testing track exist, rehearse with the owner's current `internal`
+track:
 
 ```bash
 cd .. # run the publisher from the repository root
@@ -243,7 +244,7 @@ go run ./cmd/swarm-publish \
   --key /absolute/path/to/play-service-account.json \
   --package dev.swarm.phone \
   --push-gateway-url "$SWARM_PUSH_GATEWAY_URL" \
-  --track alpha \
+  --track internal \
   --dry-run
 ```
 
@@ -253,3 +254,11 @@ publish, repeat the identical command without `--dry-run`. Before either
 command, re-check Play's current target API level requirement —
 `docs/ops/play-closed-testing-application.md` flags that the floor moves every August and this
 project sits on the pinned value in `android/toolchain.env`.
+
+Verify the tester's track before uploading. An opted-in internal tester does not receive
+closed-alpha releases. If a verified version was already uploaded to another track,
+reuse that exact version through Console's **Add from library** control; do not re-upload
+the same version code or rebuild different bytes under it. Record the guarded upload's
+bundle hash and version code alongside the track promotion.
+[Testing-track eligibility](https://support.google.com/googleplay/android-developer/answer/9845334),
+[reusing uploaded bundles](https://support.google.com/googleplay/android-developer/answer/9859348).
