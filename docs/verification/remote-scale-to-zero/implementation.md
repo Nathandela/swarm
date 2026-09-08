@@ -1679,3 +1679,31 @@ Sol independently approved desktop tag `v0.13.31` at exact pushed commit
 `8cfdb170b8847874e14c2cf0abbe59b0ff63ec75`. Its gated Release workflow `34279547212`
 reruns CI and container checks before publishing. Artifact verification follows only
 after it finishes; creating a tag is not a completed desktop publication.
+
+Release `34279547212` completed successfully. GitHub published
+[v0.13.31](https://github.com/Nathandela/swarm/releases/tag/v0.13.31) at 21:32:14 UTC,
+with all ten expected assets: three desktop archives, four push-gateway archives,
+checksums, the checksum signature and the container manifest. Root read back the
+generated Homebrew cask at 0.13.31; its Darwin archive digest matches GitHub's asset
+digest `3dcb09e5de5e2c11948393daee0e7be1c2df3bcb9f81cf68409c63b530375f23`.
+Both `swarm` and `swarm-remote` remain declared binaries. This turn published packages
+only: no local daemon restart, handset install, new backend image deployment or public
+push ingress change was performed. Device acceptance and real push activation remain
+separate work when the owner provides phone access.
+
+Independent post-publication verification downloaded all seven archives and matched
+every entry in `checksums.txt`; its Ed25519 signature verifies against the compiled
+release trust key. Every desktop archive contains both binaries and the compatibility
+card; every push-gateway archive contains its binary. All three Homebrew platform hashes
+match the signed checksums. `container-images.json` names schema 1, release v0.13.31,
+the exact tag commit and push image digest
+`sha256:d8145ab22fd80bd6748a26244986c3c537e6489d388d40090d0a100c4d14756a`.
+
+The audit found a nonblocking metadata defect, tracked as `agents-tracker-whh7`:
+`compat.json` has an empty informational version because the before hook relies on an
+unset tag environment variable. Its shimwire/protocol/schema fields are correct.
+Activation checks those compatibility fields and separately validates the binary's own
+version against the staged tag; it does not consume the card's version field. The
+published tag/assets were not rewritten. Fix forward with an explicit tag argument,
+empty-value rejection and an actual archived-version assertion. Publication is complete;
+this recorded defect is not a claim that the metadata gate was fully adequate.
