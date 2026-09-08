@@ -487,38 +487,74 @@ func TestR7R4_AUserWhoThinksLongerThanTheJoinDeadlineIsNEVERPermanentlyDegraded(
 	}
 }
 
-// TestR7R4_AThreadThatHadALREADYRunTurnsBeforeTheJoinIsAnHonestGap is Ruling 1's OTHER arm, and
-// it is the case round 3's heuristic had exactly backwards.
-//
-// A rollout that ALREADY EXISTS at the first resume attempt proves the thread has already run a
-// turn -- and a client that has not resumed does not receive that thread's item stream
-// (RECORDED: the R1 observer received the stream only AFTER joining). So this daemon holds a
-// transcript that begins mid-conversation, and history must say so. That is a `codex resume`
-// -shaped session; round 3 gapped the FRESH one and stayed silent on this one.
-//
-// MUTATION FENCE: drop the priorHistory arm from joinSessionBackend and this test fails.
-func TestR7R4_AThreadThatHadALREADYRunTurnsBeforeTheJoinIsAnHonestGap(t *testing.T) {
+// TestR7R4_AFreshThreadWithAnExistingRolloutDoesNotInventPriorHistory pins current Codex
+// behavior: thread/started creates the rollout before this observer resumes. The daemon saw the
+// thread birth and has no pre-launch resume intent, so rollout existence alone cannot prove a
+// missing transcript prefix.
+func TestR7R4_AFreshThreadWithAnExistingRolloutDoesNotInventPriorHistory(t *testing.T) {
 	r := newR7R4Rig(t, fakeCodexThreadID)
-	r.srv.setRollout(true) // the thread has history: its rollout file exists already
+	r.srv.setRollout(true)
+	go r.join()
+
+	r.awaitSink(t, 10*time.Second)
+	awaitTrue(t, 10*time.Second, "the immediate resume never became subscribed", r.subscribed)
+	r.noGap(t, "the daemon observed this fresh thread before release, so a rollout alone cannot prove an unseen prefix")
+	if r.sk.sessionDegraded(r.local) {
+		t.Fatal("a fresh, healthy session was degraded because its new thread already had a rollout")
+	}
+}
+
+// TestR7R4_AResumedThreadWithPreLaunchIdentityKeepsTheHonestGap preserves the other arm: a
+// provider identity persisted before go-ahead is an explicit request to attach an existing
+// conversation. Its already-created rollout therefore means the transcript begins after work
+// this daemon did not observe.
+func TestR7R4_AResumedThreadWithPreLaunchIdentityKeepsTheHonestGap(t *testing.T) {
+	r := newR7R4Rig(t, fakeCodexThreadID)
+	if err := r.sk.core.SetConversationID(r.local, fakeCodexThreadID); err != nil {
+		t.Fatalf("seed explicit resume identity: %v", err)
+	}
+	r.srv.setRollout(true)
 	go r.join()
 
 	gaps := r7AwaitGap(t, r.sk, r.local)
 	if len(gaps) == 0 {
-		t.Fatal("the daemon joined a thread that had ALREADY run turns and said nothing. It never " +
-			"read those turns -- a client receives a thread's items only after it resumes -- so " +
-			"this transcript begins mid-conversation, which is the tear ADR-017 forbids bridging " +
-			"silently")
+		t.Fatal("an explicit resume joined an existing provider conversation without recording its unseen prefix")
 	}
 	if reason, _ := gaps[0]["reason"].(string); reason != gapBackendPriorHistory {
 		t.Errorf("the gap's reason is %q, want %q; a reason nobody can distinguish is a gap "+
 			"nobody can explain", reason, gapBackendPriorHistory)
 	}
-	// The tear is in the HISTORY, not in the channel: this backend is healthy and its sink works.
 	r.awaitSink(t, 10*time.Second)
 	if r.sk.sessionDegraded(r.local) {
-		t.Error("a session whose backend is healthy was durably degraded because its transcript " +
-			"is missing older history. The gap is a boundary record; the degrade is a capability " +
-			"verdict, and the capability is intact")
+		t.Error("a resumed session whose backend is healthy was degraded; its history boundary does not remove its sink")
+	}
+}
+
+// A transient missing-rollout reply changes only when the stream becomes subscribable; it
+// cannot erase the explicit resume identity captured before go-ahead.
+func TestR7R4_AResumedThreadThatBecomesSubscribableLaterKeepsTheHonestGap(t *testing.T) {
+	r := newR7R4Rig(t, fakeCodexThreadID)
+	if err := r.sk.core.SetConversationID(r.local, fakeCodexThreadID); err != nil {
+		t.Fatalf("seed explicit resume identity: %v", err)
+	}
+	go r.join()
+	r.awaitSink(t, 10*time.Second)
+
+	awaitTrue(t, 10*time.Second, "the explicit resume never made its first missing-rollout attempt", func() bool {
+		return r.srv.counted("thread/resume") > 0
+	})
+	r.srv.setRollout(true)
+	awaitTrue(t, 10*time.Second, "the explicit resume never subscribed after its rollout became available", r.subscribed)
+
+	gaps := r7AwaitGap(t, r.sk, r.local)
+	if len(gaps) != 1 {
+		t.Fatalf("delayed explicit resume emitted %d history boundaries, want exactly one", len(gaps))
+	}
+	if reason, _ := gaps[0]["reason"].(string); reason != gapBackendPriorHistory {
+		t.Fatalf("delayed explicit resume gap reason = %q, want %q", reason, gapBackendPriorHistory)
+	}
+	if r.sk.sessionDegraded(r.local) {
+		t.Fatal("a delayed but successful explicit resume lost its healthy message sink")
 	}
 }
 

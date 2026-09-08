@@ -325,7 +325,7 @@ func TestR7R3_TheRecordedRolloutRaceIsRETRIEDWithoutClaimingAnythingWasMissed(t 
 		threadID: "01a00339-a80e-72a0-966f-116427b6b9ce", conn: conn,
 	}
 	sk.backend.mu.Unlock()
-	sk.subscribeSessionThread("r7r3-rollout", conn, "01a00339-a80e-72a0-966f-116427b6b9ce")
+	sk.subscribeSessionThread("r7r3-rollout", conn, "01a00339-a80e-72a0-966f-116427b6b9ce", "", "", false)
 
 	if !sk.backendSubscribed("r7r3-rollout") {
 		t.Fatal("the subscription loop gave up on the recorded pre-first-turn race. The rollout " +

@@ -1020,12 +1020,11 @@ const (
 	// ordinary healthy session, because the phone derives the composer from the transcript
 	// (`structuredChat = !transcript.structureTorn`) and reads ANY gap as "no message sink".
 	//
-	// A resume that succeeds ON THE FIRST ATTEMPT is the honest case: the rollout already
-	// existed, so the thread has already run at least one turn, and a client receives a
-	// thread's items only AFTER it resumes -- so those turns are history this daemon could
-	// not read, and the transcript really does begin mid-conversation. That is a
-	// `codex resume`-shaped session, and it gets a gap and NO durable degrade: the tear is in
-	// the HISTORY, while the channel is healthy.
+	// Current Codex may create a rollout for a freshly announced thread before this observer
+	// resumes, so rollout existence is not sufficient evidence. The launch path emits this gap
+	// only when its metadata named a provider conversation before go-ahead: that is an explicit
+	// `codex resume`-shaped request, whose earlier stream this daemon did not read. The tear is
+	// in HISTORY while the channel remains healthy, so it does not durably degrade the sink.
 	gapBackendPriorHistory = "backend_prior_history"
 )
 

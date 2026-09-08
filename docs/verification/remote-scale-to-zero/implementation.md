@@ -1546,3 +1546,76 @@ cosmetic. Root stopped only the disposable session afterward, returned the phone
 inbox, and left Wi-Fi off as initially found. The existing pairing remains ON with one
 phone. Background push/Doze, broader history/stream tests and full migration acceptance
 are not closed by these two successful sends.
+
+### September 8: history classification and private push runtime
+
+The history investigation found a false boundary at the birth of the disposable Codex
+session, before the cellular exchange. Current Codex can create its rollout before the
+observer's initial resume; immediate resume success is not proof of earlier missed turns.
+Launch now snapshots the provider conversation identity before go-ahead. Fresh launches
+do not invent prior history; explicit resumes retain a boundary on both immediate and
+delayed subscription success. Delayed completion carries the original instance fence.
+The fresh-rollout and delayed-resume regressions were executed RED against isolated
+pre-fix source, then GREEN with the fix. Sol and Terra reviewed the complementary paths.
+Android removes the permanent gap's misleading Reload action, not the durable gap;
+the separate conversation refresh still reads retained history. Live cold-open acceptance
+is still pending: ADB reported no device on September 8. No phone reset or pairing edit
+was performed in this work.
+
+Root provisioned the existing project's previously absent `(default)` Firestore database:
+Native, Standard, `us-central1`, delete protection enabled, free-tier eligible, PITR off.
+The fresh serving namespace is `push-v2-owner-pilot`; collection-scoped composite index
+`CICAgOjXh4EK` is READY (`bound ASC`, `unbound_expires_ms ASC`). Daily backup schedule
+`35b38175-a37d-4951-b9d8-cd5e69074ac3` retains copies for 14 days. Configuring a schedule
+does not prove a completed backup or a revocation-safe restore.
+
+The new runtime identity is `swarm-push-v2-runtime@swarm-8404f.iam.gserviceaccount.com`.
+An initial project-wide datastore grant was rejected by the safety reviewer; the applied
+grant instead conditions `roles/datastore.user` on the exact newly created database
+resource name. This is database isolation, not collection-level IAM. The identity also
+has the existing custom role containing only `cloudmessaging.messages.create`, plus
+secret-level read access to the two new secrets. Old runtime identities received no
+new grants. Google documents this [database-scoped IAM condition](https://firebase.google.com/docs/firestore/manage-databases).
+
+`swarm-push-v2-token-keyring:1` holds independently generated AES and registration-HMAC
+keys; they were generated in memory and sent to Secret Manager through stdin, never
+printed or written to the checkout. `swarm-push-v2-admission:1` contains the owner's
+installation public key verified through Settings on September 6. Reconfirm it on the
+phone before activation. Mount paths are `/var/run/secrets/swarm-keyring/keyring.json`
+and `/var/run/secrets/swarm-admission/admission.json`: Cloud Run rejected the initial
+attempt to mount different secrets in the same directory; separate directories deployed.
+
+Private service revision `swarm-pushgw-v2-00002-7pl` replaced the hello placeholder using
+`ghcr.io/nathandela/swarm-pushgw@sha256:93e794cb572d7974d3b3dd8bb2c0d1aba16ab477bd440feb60de0e5dc3d2e902`.
+The serving URL remains `https://swarm-pushgw-v2-733314021126.us-central1.run.app`.
+It uses request billing, min 0/max 3, 1 CPU/512 MiB, concurrency 8, 30-second timeout,
+no CPU boost, real ADC, explicit namespace and no emulator/dev mode. Platform anonymous
+invocation remains disabled. Successful startup proves the mounted configuration and
+initial Firestore read, not real Play Integrity, FCM or transactional write acceptance.
+
+The `_Default` logging sink gained only `swarm-push-v2-request-paths`, matching this
+service, region and `run.googleapis.com/requests`. It prevents automatic raw URL
+retention while preserving application logs and platform metrics; other sink settings
+were retained. This uses the provider's [request-log exclusion facility](https://docs.cloud.google.com/run/docs/logging).
+
+The same pinned image, identity and secret versions back `swarm-pushgw-v2-retention`,
+one task, zero retries, 60-second task timeout. Scheduler
+`swarm-pushgw-v2-retention-hourly` invokes it at minute 17 each UTC hour, with a
+60-second request deadline and no retries. Its separate identity
+`swarm-push-retention-scheduler` has invoker only on that job, no data/secret grants.
+Hosted execution and cleanup-backlog evidence must be recorded separately from creation.
+
+Independent canonical verification used Java 21.0.12, Go 1.25.0 and Firestore emulator
+1.22.0. Full race packages passed (`internal/pushgw` 16.189 s, command 5.457 s); all five
+mandatory shared-store/retention tests explicitly passed. The anti-vacuity shell checks,
+bounded child-process tests and transaction-retry experiment also passed. The experiment
+observed two transaction callbacks but one provider send outside them. No real phone
+attestation or push delivery is inferred from these emulator results.
+
+Root's complete skeleton package passed in 380.500 s; the focused R7R4/subscription
+race gate passed in 53.580 s, with vet and lint clean. The first full-package attempt
+hit its five-minute test timeout and sandbox module-cache warnings; a normal-access
+rerun with a 15-minute limit passed. Retention execution
+`swarm-pushgw-v2-retention-9jf4x` completed successfully at 19:45:57 UTC. This verifies
+one real bounded pass over initially empty state, not seeded backlog deletion or a
+recovery drill. The private service IAM policy contains no invoker grants.

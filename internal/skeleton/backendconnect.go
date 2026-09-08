@@ -198,6 +198,16 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		}
 		return
 	}
+	// A native provider identity that exists BEFORE go-ahead is the only evidence that this
+	// launch intentionally resumes earlier work. thread/started subsequently persists the fresh
+	// thread id too, so reading this after release would turn every fresh rollout into a false
+	// history boundary.
+	preexistingConversation := false
+	if d.core != nil {
+		if m, ok := d.core.Get(id); ok {
+			preexistingConversation = m.ConversationID != ""
+		}
+	}
 	// THE GO-AHEAD, sent before there is a thread: the agent is the party that creates it.
 	if aerr := d.core.SendBackendAttach(id, ch.AgentArgs); aerr != nil {
 		log.Printf("skeleton: release session %s with its backend: %v", id, aerr)
@@ -209,15 +219,15 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
-	// THE FIRST RESUME ATTEMPT IS THE ONE THAT CARRIES INFORMATION (review round 4, RULING 1),
-	// and it is the only place the daemon can learn whether it is joining history.
+	// THE PRE-GO-AHEAD IDENTITY carries the history classification; the first resume only joins
+	// the item stream. Current Codex creates a rollout when a fresh thread starts, before this
+	// observer resumes, so immediate resume success alone no longer proves unseen turns.
 	//
-	//	it FAILED with `no rollout found` -> the thread has run NO TURN (the rollout file is
-	//	  created when the first turn starts, RECORDED r1-codex-gate.md:112-115). There is
-	//	  nothing to miss, so there is no gap: retry, quietly, for as long as the session lives.
-	//	it SUCCEEDED immediately            -> a rollout ALREADY EXISTED, so this thread has
-	//	  already run at least one turn, and a client receives a thread's items only AFTER it
-	//	  resumes -- so those turns are history this daemon could not read. THAT is the gap.
+	//	it FAILED with `no rollout found` -> no resumable item stream is available yet. Retry,
+	//	  quietly, for as long as the session lives; provider versions differ on when a fresh
+	//	  rollout becomes resumable.
+	//	it SUCCEEDED immediately            -> subscribe immediately. A durable boundary is
+	//	  emitted only when this launch explicitly named a prior conversation before go-ahead.
 	//	anything else                       -> this daemon will never read this thread.
 	subscribed, serr := d.resumeThreadOnce(conn, threadID)
 	if serr != nil && !isMissingRollout(serr) {
@@ -242,11 +252,14 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		if !d.markBackendSubscribedForFeed(id, feed.epoch) {
 			return
 		}
-		// RULING 1's honest arm, and the only success path that still emits a gap.
-		d.emitBackendGapForInstance(id, expectedInstance, gapBackendPriorHistory)
+		if preexistingConversation {
+			// An explicit native resume joined an existing provider conversation after its
+			// earlier stream had begun, so preserve the honest durable boundary.
+			d.emitBackendGapForInstance(id, expectedInstance, gapBackendPriorHistory)
+		}
 		return
 	}
-	go d.subscribeSessionThread(id, conn, threadID, feed.epoch)
+	go d.subscribeSessionThread(id, conn, threadID, feed.epoch, expectedInstance, preexistingConversation)
 }
 
 // rejoinSessionBackend is §R7.7 CASE 2: the daemon went away and came back, and the shim and
@@ -343,7 +356,7 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 		d.markBackendSubscribedForFeed(id, feed.epoch)
 		return
 	}
-	go d.subscribeSessionThread(id, conn, threadID, feed.epoch)
+	go d.subscribeSessionThread(id, conn, threadID, feed.epoch, expectedInstance, false)
 }
 
 // awaitAdoptedThread blocks until the pump has seen the agent's `thread/started`, or the
@@ -369,9 +382,8 @@ func (d *Daemon) awaitAdoptedThread(id string, within time.Duration) (string, bo
 //
 // ONE ATTEMPT, and the retry policy lives with its callers, because the two callers want
 // different things from the SAME error. `no rollout found for thread id` means WAIT rather
-// than FAIL -- the rollout file is created when the thread's first turn starts, and until then
-// no resume can succeed however well-formed. Every OTHER error is terminal: a transport fault
-// retried forever is a session that hangs instead of degrading.
+// than FAIL: no resumable item stream is available yet. Every OTHER error is terminal: a
+// transport fault retried forever is a session that hangs instead of degrading.
 //
 // It takes the backendConn INTERFACE rather than the concrete client so its rule can be driven
 // by behaviour: which errors are retried is a control-flow property, and a source-grep for the
@@ -406,10 +418,10 @@ const backendSubscribeMaxBackoff = 5 * time.Second
 //
 // WHAT IT REPLACES, AND WHY. Round 3 bounded the join by d.backendDeadline() (45 s in
 // production) and answered the timeout with noteBackendUnavailable -- markSessionDegraded,
-// which ADR-017 makes ONE-WAY and DURABLE. But `no rollout found` is returned until the
-// thread's FIRST TURN STARTS, and a fresh session has no turn until the owner types: "no turn
-// within 45 s" proves nothing except that the user is thinking. A user who thought for
-// 45 seconds got a PERMANENTLY degraded session while the app-server was perfectly healthy.
+// which ADR-017 makes ONE-WAY and DURABLE. But `no rollout found` only says no resumable item
+// stream is available yet; provider versions differ on when a fresh rollout reaches that state.
+// A bounded wait therefore permanently degraded a healthy session merely because its stream
+// became resumable later.
 //
 // WHAT BOUNDS IT NOW: the session itself. The loop exits when the session's backend
 // registration is gone -- which forgetBackend does on endSession, on noteBackendLost, and from
@@ -421,11 +433,7 @@ const backendSubscribeMaxBackoff = 5 * time.Second
 // reason OTHER than the recorded rollout race will never succeed, so this daemon holds a sink
 // whose item stream can never arrive: the composer would keep working while the transcript
 // never moved, which is the silent bridge ADR-017 forbids.
-func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID string, feedEpoch ...string) {
-	expectedFeed := ""
-	if len(feedEpoch) > 0 {
-		expectedFeed = feedEpoch[0]
-	}
+func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, expectedFeed, expectedInstance string, priorHistory bool) {
 	wait := backendReadyInterval
 	for {
 		timer := time.NewTimer(wait)
@@ -435,7 +443,12 @@ func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID st
 		}
 		ok, err := d.resumeThreadOnce(conn, threadID)
 		if ok {
-			d.markBackendSubscribedForFeed(id, expectedFeed)
+			if !d.markBackendSubscribedForFeed(id, expectedFeed) {
+				return
+			}
+			if priorHistory {
+				d.emitBackendGapForInstance(id, expectedInstance, gapBackendPriorHistory)
+			}
 			return
 		}
 		if !d.backendFeedCurrent(id, expectedFeed) {

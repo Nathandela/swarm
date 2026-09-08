@@ -236,6 +236,42 @@ An operational rollback means compatible v2 code with the current v2 store, or a
 
 ## 7. Work packages and go/no-go gates
 
+### Next owner release: history and background push (September 6)
+
+The release builds on Play code 41 / 0.13.30 and the tested cellular relay fix
+`b1e0596b`; reserve the next version only when packaging. The machine identity and
+conversation history are useful v2 state and must be preserved. Keep the working
+foreground pairing until real push registration succeeds; push binding then requires
+the supported explicit revoke and fresh SAS-confirmed pair, not a registry edit.
+Do not attribute an observed symptom to an unreachable code path or erase a genuine
+history gap to make the screen look healthy.
+
+| Track | Failing-first evidence and implementation boundary | Release evidence |
+|---|---|---|
+| History | Trace cold-open, newest/earlier reads and structured-gap provenance through daemon, Go facade and Android; reproduce a reachable defect before changing the shared path. Preserve authenticated gaps and distinguish recoverable omissions from permanent missing history. | First open loads retained history without sending a message; Reload converges when recovery is possible; pagination has no unintended omissions/duplicates; genuine gaps remain truthful; reconnect and process recreation preserve state. |
+| Push runtime | Audit existing production implementation and run shared-store, proof, replay, quota, token-rotation, revoke and cleanup tests before replacing the private placeholder. Use the existing service, default Firestore in us-central1, fresh explicit collection namespace, pinned non-root image and Secret Manager versions. | Real runtime IAM, startup and bounded cleanup succeed; anonymous/forged requests fail before allocation/provider work; no secrets or message content enter logs. |
+| Phone enrollment | Use the owner's existing installation public key only after confirming it still matches the installed app. Determine the supported transition from foreground-only pairing; do not invent or import a push binding. | Actual Play Integrity and FCM registration, signed binding, token refresh and revocation work through normal client flows; foreground chat remains usable when push is unavailable. |
+| Background experience | Trigger only bounded harmless events in disposable sessions; test notification permission, background, screen-off, Doze and network transition separately. Force-stop is a distinct Android limitation, not a promised wake case. | A real content-free wake produces the appropriate notification and tap destination; no duplicate semantic effect; failed or delayed delivery is reported rather than counted as success. |
+| Release | Sol owns diagnosis/design and independent review; Terra owns agreed implementation/test files. Root reviews the final diffs, deployment authority and physical evidence. Each defect follows RED, minimal implementation, GREEN and independent review. | Full affected Go tests/race/vet/lint, Android tests/lint, fresh release AAR and signed-bundle provenance pass. Re-run cellular composer/reply after the combined changes, then publish the exact validated bundle to the owner's internal track. |
+
+Provision the one push service privately first; public invocation is an explicit final
+ingress step after configuration and negative-auth checks, not a second environment.
+Use a fresh runtime identity, database-scoped Firestore IAM and access only to its two
+version-pinned secrets, mounted in separate Cloud Run directories. Do not empower an
+old host by adding these grants to its service account. Exclude only this service's
+automatic request-URL logs; retain safe application logs and platform metrics.
+Use request billing, min 0, bounded max instances, no keep-warm requests and scheduled
+bounded retention. Define daily recovery copies and 14-day retention with retained key
+versions before calling the backend complete. Never overwrite serving state in a restore
+drill. Record cloud mutations, identities, image/secret versions and measured results in
+the implementation journal; track remaining work in beads (`ay67`, `kn18`, `ky45` and
+linked findings), not as implied completed release gates.
+
+Device absence does not block code, emulator or private backend work. Physical history,
+attestation, push and lifecycle gates require the owner phone again. If a missing account
+grant, signing credential or supported enrollment transition requires a new user choice,
+report that specific blocker; do not weaken admission or attestation to bypass it.
+
 These are future implementation packages. The owner has resolved the no-users, no-compatibility, location and shared-metadata decisions. Record their consequences in ADRs/specs; do not ask the owner to repeat them.
 
 | Phase | Work | Exit gate |

@@ -170,7 +170,7 @@ func TestResumeThreadExcludesHistoricalTurnsOnTheInitialAndRetryCalls(t *testing
 	}
 	sk.backend.live["large-resume"] = &sessionBackend{threadID: threadID, conn: client}
 	sk.backend.mu.Unlock()
-	sk.subscribeSessionThread("large-resume", client, threadID)
+	sk.subscribeSessionThread("large-resume", client, threadID, "", "", false)
 	if !sk.backendSubscribed("large-resume") {
 		t.Fatal("retry did not establish the live thread subscription")
 	}

@@ -660,7 +660,7 @@ func TestSubscribeSessionThread_ObsoleteMissingRolloutFeedStopsWhenReplaced(t *t
 	subscriptionDone := make(chan struct{})
 	go func() {
 		defer close(subscriptionDone)
-		r.sk.subscribeSessionThread(r.local, oldConn, rejoinPersistedTarget, oldFeed.epoch)
+		r.sk.subscribeSessionThread(r.local, oldConn, rejoinPersistedTarget, oldFeed.epoch, instance, false)
 	}()
 	select {
 	case n := <-oldConn.seen:
