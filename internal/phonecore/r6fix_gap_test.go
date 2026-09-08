@@ -96,6 +96,33 @@ func TestR6Fix_AStructuredGapIsAFirstClassTranscriptElement(t *testing.T) {
 	}
 }
 
+// TestR6Fix_AHistoryPageCarriesAndKeepsTheStructuredGap exercises the actual page reducer.
+// A subsequent older page may add context around a proven boundary, but cannot bridge it away.
+func TestR6Fix_AHistoryPageCarriesAndKeepsTheStructuredGap(t *testing.T) {
+	s := NewItemStore()
+	const sess = "m1/s1"
+	ts := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	if !s.ApplyPage([]schema.JournalRecord{
+		gapRecord(sess, 2, ts, "daemon history unavailable"),
+		gapItemRecord(sess, 3, "01JNEW", KindAgentMessage, "newer retained message"),
+	}) {
+		t.Fatal("history page was refused")
+	}
+	if !s.ApplyPage([]schema.JournalRecord{
+		gapItemRecord(sess, 1, "01JOLD", KindUserMessage, "older retained message"),
+	}) {
+		t.Fatal("later history page was refused")
+	}
+
+	got := s.Session(sess)
+	if len(got) != 3 || got[1].Kind != KindStructuredGap {
+		t.Fatalf("history pages = %+v, want old item, durable gap, newer item", got)
+	}
+	if !got[1].Backfilled {
+		t.Fatal("history-page gap lost its reader-owned region")
+	}
+}
+
 // TestR6Fix_ARedeliveredGapFoldsToOneElement pins the identity rule. Identity is the emission
 // instant carried IN the payload, not the cursor: ADR-014 §2 says a reconciliation
 // legitimately re-delivers records at NEW cursors, so a cursor-keyed gap would grow a second

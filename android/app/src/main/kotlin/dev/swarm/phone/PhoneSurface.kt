@@ -3456,7 +3456,6 @@ class PhoneSurface(
                 // R4's answer rides the patch path too: a decision rebuilt without it loses its
                 // buttons the moment the agent writes one more line.
                 onDecision = ::answerDecision,
-                onRepair = ::reloadConversation,
             )
         ) {
             detailDrawn = panel
@@ -3513,7 +3512,6 @@ class PhoneSurface(
                 // in the order the wire sent them, and IS-APR-4 keeps the verdict machine-side.
                 // The screen draws them; only this surface may reach `App.Approve` from one.
                 onDecision = ::answerDecision,
-                onRepair = ::reloadConversation,
             ),
         )
     }
@@ -3525,9 +3523,6 @@ class PhoneSurface(
      * private field or accidentally inspecting only the pinned composer.
      */
     internal fun drawnDetailContent(): View = contentHost
-
-    /** Route both stale-notice and in-transcript gap Reload through one bounded session read. */
-    private fun reloadConversation(control: View) = press(control, ::conversationReloadPlan)
 
     /**
      * The conversation's fixed header, rebuilt only when what it says has changed.

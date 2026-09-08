@@ -86,14 +86,12 @@ class TranscriptViewTest {
     private fun view(
         panel: TranscriptPanel = panel(),
         onApproval: ((String) -> Unit)? = null,
-        onRepair: ((View) -> Unit)? = null,
         onOutput: ((String) -> Unit)? = null,
         onDiff: ((String) -> Unit)? = null,
     ): View = transcriptView(
         context = context,
         panel = panel,
         onApproval = onApproval,
-        onRepair = onRepair,
         onOutput = onOutput,
         onDiff = onDiff,
     )
@@ -407,27 +405,19 @@ class TranscriptViewTest {
         )
     }
 
-    /**
-     * The repair rides on the divider, and only where there is one to ride to.
-     *
-     * `gapDivider`'s own row: "the whole line is the control", which is why the label carries the
-     * word rather than a span nothing can size. And `navHeaderDrill(back = null)`'s ruling, spent
-     * for the fourth time in this file: a control with no destination behind it is worse than no
-     * control at all (agents-tracker-2yb).
-     */
     @Test
-    fun `the repair is on the tear, and a tear with nowhere to go is not a control`() {
-        var repaired = 0
-        val torn = panel(listOf(block(kind = "structured_gap", line = "records missing · repair", gap = true)))
+    fun `a permanent tear is never a reload control`() {
+        val torn = panel(listOf(block(kind = "structured_gap", line = "Missing messages", gap = true)))
 
-        val wired = view(torn, onRepair = { repaired++ })
-        wired.kitRequire(TranscriptTag.GAP).performClick()
-        assertEquals("the tear carries no repair, so the one place a reader meets the gap is the one place they cannot act on it", 1, repaired)
-
+        val wired = view(torn)
+        val tear = wired.kitRequire(TranscriptTag.GAP)
         assertFalse(
-            "the tear is offered as tappable with no repair behind it, which is a control that " +
-                "looks like a control and does not act",
-            view(torn).kitRequire(TranscriptTag.GAP).isClickable,
+            "a permanent gap accepts a tap despite having no repair action",
+            tear.performClick(),
+        )
+        assertFalse(
+            "a permanent gap is a boundary record, not an action that promises repair",
+            tear.isClickable,
         )
     }
 

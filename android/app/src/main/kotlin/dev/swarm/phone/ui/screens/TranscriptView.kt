@@ -62,8 +62,8 @@ import dev.swarm.phone.ui.kit.sessionList
  * **A PROVEN TEAR IS A RULE AND NOT A PARAGRAPH** (ADR-017 T2 rule 2, redrawn). `notice(ERROR)`
  * says the right thing in the right voice and takes the width of the reading column to say it --
  * between two rows of a conversation, which is something a reader has to finish before they can
- * carry on reading. `gapDivider` is that same statement at 48 dp of height with its own repair on
- * it, which is the component's own recorded derivation rather than a resemblance.
+ * carry on reading. `gapDivider` is that same statement at 48 dp of height, a permanent boundary
+ * rather than a false repair action.
  *
  * **A FILE CHANGE IS A CHIP AND ITS DIFF OPENS ELSEWHERE** (owner ruling R9). The unified diff used
  * to be poured into the reading column unconditionally, so a refactor touching nine files cost nine
@@ -206,7 +206,7 @@ object TranscriptTag {
      * and the conversation would let a test find either and assert the other. What changed is the
      * component and not the voice -- `gapDivider` is `notice(ERROR)` "minus the paragraph", the
      * same `--p-err` ink and the same machine-talking-about-its-own-state register, at a fraction
-     * of the height and carrying its own repair.
+     * of the height.
      */
     const val GAP = "transcript.gap"
 
@@ -240,8 +240,6 @@ object TranscriptTag {
  * @param onDecision the answer, called with the block's `item_id` and the decision the reader
  *  pressed -- `ApprovalDecision` and not a label, because `App.Approve` names the `id` and a
  *  surface that sent back the words it drew would be re-deriving the machine's own key from copy.
- * @param onRepair ADR-017's repair, reachable ON the tear. `gapDivider`'s own row: the whole line
- *  is the control, because "an inline span cannot carry a 48 dp target".
  * @param onOutput R8's overflow, called with the `item_id` whose [TranscriptRoute.Output] the
  *  reader asked to see whole. The host holds the panel, so it can reach the route's text without
  *  this file handing a body back through a callback.
@@ -253,7 +251,6 @@ fun transcriptView(
     onApproval: ((String) -> Unit)? = null,
     onToolTap: ((String) -> Unit)? = null,
     onDetail: ((View, String) -> Unit)? = null,
-    onRepair: ((View) -> Unit)? = null,
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
@@ -282,7 +279,7 @@ fun transcriptView(
             panel.blocks.forEach { block ->
                 transcriptBlockViews(
                     context, block, onApproval, onToolTap, onDetail,
-                    onRepair, onOutput, onDiff, onDecision,
+                    onOutput, onDiff, onDecision,
                 ).forEach(::addView)
             }
         },
@@ -319,7 +316,6 @@ internal fun transcriptBlockViews(
     onApproval: ((String) -> Unit)? = null,
     onToolTap: ((String) -> Unit)? = null,
     onDetail: ((View, String) -> Unit)? = null,
-    onRepair: ((View) -> Unit)? = null,
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
@@ -336,11 +332,6 @@ internal fun transcriptBlockViews(
             // a proven discontinuity ends up reading as something the agent said.
             block.gap -> gapDivider(context, block.line).apply {
                 tag = TranscriptTag.GAP
-                // ONE AFFORDANCE PER OPERATION, and it is HERE rather than in the overflow menu:
-                // two routes to one live-only act are two pending states competing over which is
-                // in flight. No repair wired, no control -- the tear is still drawn, because the
-                // discontinuity is a fact whether or not this build can mend it.
-                onRepair?.let { repair -> setOnClickListener { control -> repair(control) } }
             }
             // THE READER'S OWN WORDS, ON THE READER'S OWN SIDE. A bubble rather than a row, and
             // its own tag rather than a flag on [TranscriptTag.BLOCK] -- the reasoning APPROVAL

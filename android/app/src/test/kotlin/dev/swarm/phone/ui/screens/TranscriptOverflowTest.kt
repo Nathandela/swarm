@@ -316,10 +316,10 @@ class TranscriptOverflowTest {
         assertTrue("the tear is not marked, so it renders as an ordinary row", block.gap)
         assertEquals(
             "the tear still reads as a paragraph in the middle of the conversation. A reader at " +
-                "a discontinuity needs to know the record is not continuous and how to repair " +
-                "it; three sentences of explanation is a notice they must finish before the " +
+                "a discontinuity needs to know the record is not continuous; three sentences of " +
+                "explanation is a notice they must finish before the " +
                 "conversation resumes",
-            "Missing messages · Reload",
+            "Missing messages",
             block.line,
         )
         assertFalse(

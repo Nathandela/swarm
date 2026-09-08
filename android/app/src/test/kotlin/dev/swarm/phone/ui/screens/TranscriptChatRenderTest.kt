@@ -336,11 +336,11 @@ class TranscriptChatRenderTest {
      * AMENDED BY THE SIGNED DRAWING (2026-08-26): the tear is a rule with a word on it.
      *
      * TWO CHANGES, AND THEY ARE DIFFERENT KINDS. The sentence is REDUCED -- the paragraph's three
-     * facts are argued down to "records missing · repair" in `TranscriptScreen.GAP_LINE`, where
+     * facts are argued down to "Missing messages" in `TranscriptScreen.GAP_LINE`, where
      * the counter-argument is recorded beside the argument it answers. The machine's own spool
      * reason is DELETED from the block, and that is a real loss recorded as one: it was drawn in
-     * a mono well under the tear, and the drawing gives the tear ONE line, in position, carrying
-     * its own repair. A block of spool diagnosis beneath it is the paragraph again in the
+     * a mono well under the tear, and the drawing gives the tear ONE line in position. A block of
+     * spool diagnosis beneath it is the paragraph again in the
      * machine's voice, read out mid-conversation to someone who wants the conversation back. The
      * reason is still journalled; it is no longer drawn between two messages.
      */
@@ -354,10 +354,9 @@ class TranscriptChatRenderTest {
             block.line == "structured_gap",
         )
         assertEquals(
-            "the tear does not say the record is missing records, or does not carry its own " +
-                "repair -- and a tear a reader cannot act on where they found it is the notice " +
-                "standing above the conversation that this slice was filed to remove",
-            "Missing messages · Reload",
+            "the tear does not say the record is missing, or it promises a reload that cannot " +
+                "repair a durable boundary",
+            "Missing messages",
             block.line,
         )
         assertEquals(

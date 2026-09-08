@@ -1619,3 +1619,31 @@ rerun with a 15-minute limit passed. Retention execution
 `swarm-pushgw-v2-retention-9jf4x` completed successfully at 19:45:57 UTC. This verifies
 one real bounded pass over initially empty state, not seeded backlog deletion or a
 recovery drill. The private service IAM policy contains no invoker grants.
+
+Independent hosted negative-auth probes used an operator identity token only in memory:
+health returned 200; an unsupported API version returned 404; malformed JSON, wrong
+content type and gzip content encoding returned 400; a non-admitted key returned 403
+with and without spoofed forwarding headers. The admitted owner public key without
+`Swarm-Registration-Proof` returned 401 `unauthorized`, nonretryable. Source ordering
+places these rejects before registration claims, quota documents and Play verification;
+no real attestation verdict or installation was consumed. Header rejection alone is not
+a quota-source experiment; the deployed no-trusted-proxies configuration supplies the
+source-IP policy. Service-wide maximum instances is 3 despite the revision's subordinate
+default maximum of 20. The stale placeholder description is only metadata; the installed
+gcloud update command rejected `--description`, so that annotation has not been changed.
+
+Scheduler last-attempt status was successful at 19:48:20 UTC. Its execution
+`swarm-pushgw-v2-retention-c6x2c` completed with one successful task at 19:50:20 UTC,
+proving the schedule's job-scoped OAuth invocation as well as the manual pass.
+Real enrollment, provider delivery, seeded cleanup backlog, backup restore and device
+lifecycle acceptance remain open; the service is still private and the working
+foreground pairing has not been revoked.
+
+Final Android verification passed all 1,751 unit tests across 216 fresh XML reports
+(zero failures/errors/skips), plus `lintDebug`, in 4m23s. The full source-wiring gate
+passed after removing only assertions that required the obsolete permanent-gap repair
+callback; bounded newest-page refresh, cold-open and global link-repair fences remain.
+The real Go `ApplyPage` regression verifies a backfilled structured gap survives a later
+older page in transcript order; root's complete phonecore race suite passed in 42.130 s.
+The superficial panel-only history test was removed during root review. No release
+version was bumped and no new phone bundle or desktop binary has been installed yet.

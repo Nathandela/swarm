@@ -7,8 +7,8 @@ import (
 )
 
 // TestConversationReloadUsesBoundedNewestHistory fences the full Android call path that
-// replaces a potentially multi-megabyte whole-journal reseed. Both the stale notice's Reload
-// control and an in-transcript gap must reach one claimed, session-scoped latest-page read.
+// replaces a potentially multi-megabyte whole-journal reseed. The stale notice's Reload
+// control must reach one claimed, session-scoped latest-page read.
 func TestConversationReloadUsesBoundedNewestHistory(t *testing.T) {
 	path := phoneSurfacePath(t)
 	surface := string(readFileOrFail(t, path, "conversation reload wiring"))
@@ -50,22 +50,9 @@ func TestConversationReloadUsesBoundedNewestHistory(t *testing.T) {
 		t.Errorf("cold-open hands Result<T> to an Op reader instead of unwrapping and claiming it:\n%s", open)
 	}
 
-	detail := reachableInFile(t, path, "drawDetail", 2)
-	if !strings.Contains(detail, "onRepair = ::reloadConversation") {
-		t.Errorf("conversation gap Reload is not wired to the bounded conversation repair:\n%s", detail)
-	}
-
-	reload := reachableInFile(t, path, "reloadConversation", 2)
-	if !strings.Contains(surface, "private fun reloadConversation(control: View)") ||
-		!strings.Contains(reload, "press(control, ::conversationReloadPlan)") ||
-		strings.Contains(reload, "resyncControl.performClick") {
-		t.Errorf("gap Reload does not dispatch against the row the reader actually pressed:\n%s", reload)
-	}
 }
 
-// TestConversationReloadSurvivesIncrementalRedraw protects both repair affordances: the stale
-// control remains above the transcript, and a gap inserted or rebound by the streaming patch
-// keeps the callback that turns its own row into the pressed control.
+// TestConversationReloadSurvivesIncrementalRedraw keeps the stale control above the transcript.
 func TestConversationReloadSurvivesIncrementalRedraw(t *testing.T) {
 	repo := repoRoot(t)
 	viewPath := filepath.Join(repo, "android/app/src/main/kotlin/dev/swarm/phone/ui/screens/SessionDetailView.kt")
@@ -73,17 +60,8 @@ func TestConversationReloadSurvivesIncrementalRedraw(t *testing.T) {
 	if !strings.Contains(view, "if (panel.offersResync) column.addView(resync.tagged(DetailTag.RESYNC)") {
 		t.Error("the top stale Reload control is no longer composed beside its stale notice")
 	}
-	if strings.Count(view, "onRepair = onRepair") < 3 ||
-		!strings.Contains(view, "onRepair: ((View) -> Unit)?") ||
-		!strings.Contains(view, "onDetail, onRepair, onOutput") {
-		t.Error("the gap Reload handler is lost on a transcript rebuild, insert, or rebind")
-	}
 
 	surfacePath := phoneSurfacePath(t)
-	surface := string(readFileOrFail(t, surfacePath, "global stale honesty"))
-	if strings.Count(surface, "onRepair = ::reloadConversation") < 2 {
-		t.Error("PhoneSurface does not preserve gap Reload on both initial composition and patch")
-	}
 	detail := reachableInFile(t, surfacePath, "detailPanel", 1)
 	if !strings.Contains(detail, "journalStale = chat.stale") {
 		t.Error("a bounded conversation page is being presented as proof that global journal staleness cleared")

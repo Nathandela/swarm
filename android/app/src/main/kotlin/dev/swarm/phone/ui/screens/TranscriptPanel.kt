@@ -1048,9 +1048,9 @@ object TranscriptScreen {
                 // the daemon's own reason -- "hook spool gap at seq 41" -- in a mono block under
                 // the tear, on the argument that it is machine-authored diagnosis and IS-TOOL-3's
                 // posture carries it verbatim. That argument survives; what changed is the place.
-                // The drawing gives the tear ONE line, "at the place the record tore, carrying
-                // its own repair", and a mono block of spool diagnosis beneath it is the
-                // paragraph this row was just reduced FROM, restated in the machine's voice.
+                // The drawing gives the tear ONE line at the place the record tore; a mono block
+                // of spool diagnosis beneath it is the paragraph this row was just reduced FROM,
+                // restated in the machine's voice.
                 // The reason is not lost to the app -- it is journalled -- it is no longer read
                 // out mid-conversation to someone who wants the conversation back.
                 gap = true,
@@ -1373,17 +1373,12 @@ object TranscriptScreen {
      * conversation, and three sentences there is something a reader must finish before they can
      * carry on reading -- which is the shape of the notice this whole slice was filed to remove
      * (the owner's screen was 640-720 dp of chrome before one message). What is left is what a
-     * reader at a discontinuity actually needs: that records are missing, and the way to repair
-     * it. It is drawn thin and in position, so the FACT is carried by where it is rather than by
-     * how much it says.
-     *
-     * THE REPAIR RIDES IN THE SAME LABEL because the divider is one target: `gapDivider` takes a
-     * label and the whole rule is tappable. Two spans here would be a second affordance to aim
-     * at, on the thinnest row on the screen.
+     * reader at a discontinuity actually needs: that records are missing. It is drawn thin and in
+     * position, so the FACT is carried by where it is rather than by how much it says. A durable
+     * gap cannot be repaired by rereading retained history.
      */
     private const val GAP_MISSING = "Missing messages"
-    private const val GAP_REPAIR = "Reload"
-    private val GAP_LINE = joined(GAP_MISSING, GAP_REPAIR)
+    private const val GAP_LINE = GAP_MISSING
 
     /**
      * What a decision this build cannot draw says instead of dead-ending.
