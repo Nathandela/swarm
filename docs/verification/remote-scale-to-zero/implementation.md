@@ -1647,3 +1647,35 @@ The real Go `ApplyPage` regression verifies a backfilled structured gap survives
 older page in transcript order; root's complete phonecore race suite passed in 42.130 s.
 The superficial panel-only history test was removed during root review. No release
 version was bumped and no new phone bundle or desktop binary has been installed yet.
+
+### Owner-authorized 0.13.31 package publication
+
+The owner explicitly authorized releasing packages before providing phone access.
+Main's history/Android commit `fcfc3193` passed CI `34271678650` and the container gate
+`34271678676`. Play API inventory confirmed code 41 / 0.13.30 on both alpha and internal,
+with no code 42 uploaded. The next release is 0.13.31 / code 42; commits `3844afe6`
+and `8cfdb170` advance the build identity and its regression pin. The complete Android
+source gate passed in 12.199 s. The pinned target SDK is 36, satisfying the current
+[Play target API requirement](https://support.google.com/googleplay/android-developer/answer/11926878).
+
+Terra rebuilt the signed bundle through the existing `bundleRelease` dependency graph
+(3m43s, 29 executed tasks), including a fresh release AAR. Root and Terra verified the
+adjacent schema-2 provenance against the exact AAB hash:
+`264bacff421b2b88ce9c5487320e9f3786ac3a1ffc7b0773f1d8bc5047bfec46`.
+The manifest decoded from the AAB names `dev.swarm.phone`, version 42 / 0.13.31;
+`jarsigner` verified its upload-key signature. Both native libraries in the signed bundle
+match the fresh AAR byte for byte: arm64
+`c4d2b04e205eb008544aed9934bacaaa7310fadeb8b05e5be939dc53aa8ca39e`, x86_64
+`12f3bd39e01ff225ccab9ad7ee91db54fd7eca1eb53303911cc18a5b40c49b3f`.
+
+The guarded publisher's internal-track rehearsal succeeded in uncommitted edit
+`04226375007692935264`. Publication then committed edit `15274654946711257188`.
+Independent API readback reports internal release 0.13.31, status `completed`, code 42,
+and the exact same AAB SHA-256. Alpha remains on 41; no production-track release was
+created. No manually uploaded or locally signed replacement APK was installed on the
+phone, and no claim of Play propagation to that device is made.
+
+Sol independently approved desktop tag `v0.13.31` at exact pushed commit
+`8cfdb170b8847874e14c2cf0abbe59b0ff63ec75`. Its gated Release workflow `34279547212`
+reruns CI and container checks before publishing. Artifact verification follows only
+after it finishes; creating a tag is not a completed desktop publication.
