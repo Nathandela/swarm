@@ -1707,3 +1707,67 @@ version against the staged tag; it does not consume the card's version field. Th
 published tag/assets were not rewritten. Fix forward with an explicit tag argument,
 empty-value rejection and an actual archived-version assertion. Publication is complete;
 this recorded defect is not a claim that the metadata gate was fully adequate.
+
+### Physical 0.13.31 acceptance resumed (2026-09-09)
+
+The owner reconnected the authorized SM-A266B over USB. Google Play updated the
+existing installation from code 41 to code 42 / 0.13.31; package-manager readback
+confirmed the version. No uninstall, app-data clear or custody purge was performed.
+The installed CLI and running daemon both report 0.13.31. The phone's active default
+network is validated LTE, with Wi-Fi disabled.
+
+On launch the phone showed the plain first-run pairing screen while the desktop
+still retained its September 6 registration. Source review found no pairing-state
+migration between these versions. The screen establishes successful core startup
+but absent/unusable local pairing state, and cannot distinguish absent machine state, durable
+disowning or an unresolved bootstrap; it does not prove the Play update lost data.
+The cause is unresolved. The supported recovery removed only the old sole-device
+registration and successfully purged its relay route/mailbox, preserving computer
+identity and desktop sessions. Initial manual pairing attempts expired and failed
+closed; matching symbols alone are not a completed pairing.
+
+An independent read-only cloud audit found the private push service healthy on its
+existing immutable image, unchanged IAM and enabled secret versions. Its composite
+index is ready, the latest eight hourly retention runs succeeded, and the first
+daily backup is ready. These checks do not establish registration, FCM delivery,
+seeded retention backlog drain or restore correctness. Public ingress and real
+installation enrollment remain separate acceptance steps.
+
+The supported ceremony subsequently succeeded using a disposable ADB/CLI helper
+that checked the exact relay destination and all six decoded verification symbols
+before confirming on either side. Initial helper attempts failed closed on XML
+numeric-entity decoding and a changed foreground screen; neither granted access.
+The successful ceremony retained the same device public identity and the phone's
+Settings enrollment public key still matched the September 6 allowlist entry.
+App process replacement retained the restored pairing.
+
+The first disposable session, `ep-da00228d/n7yhtj2avutabl2s`, was not a valid cold-history
+sample: `TERM=dumb` triggered a Codex confirmation before thread creation. The daemon's
+approximately 45-second observer readiness window expired before that prompt was
+answered, leaving a truthful `backend_unavailable` marker and structured capabilities
+disabled even though the later PTY response succeeded. This late-thread adoption
+limitation is tracked as `agents-tracker-tnx3`; no marker or capability was hand-edited.
+Separately, the CLI can leave an expired SAS prompt visible until input arrives;
+`agents-tracker-3wgw` tracks that presentation defect without relaxing the ceremony TTL.
+
+A second disposable session, `ep-da00228d/ctrvdfecpom54cxu`, launched with
+`TERM=xterm-256color` and acquired its provider conversation identity normally.
+Before any phone-originated message, its first phone detail open displayed both the
+original prompt and the existing `HISTORY_READY_B_20260909` response. The phone then
+sent `Reply exactly PHONE_LTE_ACK_20260909`; desktop peek and fresh phone UI both
+showed `PHONE_LTE_ACK_20260909`. Wi-Fi remained disabled and the active default network
+was LTE. After another force-stop/relaunch and opening the same session, a fresh UI
+assertion confirmed both response tokens persisted and no `Missing messages` marker
+appeared. This establishes this foreground/cold-open/process-replacement sample,
+not a latency percentile, genuine-gap physical test, reboot or background-wake result.
+
+The attempt to grant `allUsers` only `roles/run.invoker` on `swarm-pushgw-v2` was
+rejected by the execution security reviewer pending explicit authorization of that
+exact public-ingress change. It was not retried or bypassed; the service remains
+private, and no real installation registration, FCM delivery or push-binding pairing
+is claimed. Application admission, request signatures and Play Integrity would remain
+required after platform ingress approval.
+
+Cleanup stopped only the two disposable acceptance sessions above, retaining their
+history, and removed only this test's two temporary phone UI dumps. The phone was
+left paired on its inbox; no ordinary user session was stopped.
