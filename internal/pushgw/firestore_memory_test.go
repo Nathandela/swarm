@@ -66,7 +66,19 @@ func (m *memoryRepository) lookupRegistration(_ context.Context, key, digest str
 	defer m.mu.Unlock()
 	m.registrationLookups++
 	rec, ok := m.regs[key]
-	if !ok || now.UnixMilli() >= rec.ExpiresAtMs {
+	if ok && rec.DigestRevision != registrationDigestRevision {
+		return registrationResult{}, false, false, errors.New("pushgw: unsupported registration digest revision")
+	}
+	if ok && rec.State != "pending" && rec.State != "completed" {
+		return registrationResult{}, false, false, errors.New("pushgw: invalid registration state")
+	}
+	if ok && rec.State == "pending" && rec.ExpiresAtMs <= 0 {
+		return registrationResult{}, false, false, errors.New("pushgw: pending registration missing expiry")
+	}
+	if ok && rec.State == "completed" && rec.ExpiresAtMs != 0 {
+		return registrationResult{}, false, false, errors.New("pushgw: completed registration has expiry")
+	}
+	if !ok || (rec.State != "completed" && now.UnixMilli() >= rec.ExpiresAtMs) {
 		return registrationResult{}, false, false, nil
 	}
 	if rec.BodyDigest != digest {
@@ -75,18 +87,52 @@ func (m *memoryRepository) lookupRegistration(_ context.Context, key, digest str
 	if rec.State != "completed" {
 		return registrationResult{}, false, false, nil
 	}
-	return registrationResult{rec.InstallationID, rec.RefreshBefore}, true, false, nil
+	inst, ok := m.installations[rec.InstallationID]
+	if !ok || inst.RegistrationID != key {
+		return registrationResult{}, false, false, errors.New("pushgw: completed registration missing installation")
+	}
+	if installationExpired(inst.LastActiveMs, now) {
+		return registrationResult{}, false, false, nil
+	}
+	touchedMs := max(inst.LastActiveMs, now.UnixMilli())
+	refresh := time.UnixMilli(touchedMs).Add(installationWindow).UTC().Format(time.RFC3339)
+	inst.LastActiveMs, rec.RefreshBefore = touchedMs, refresh
+	m.installations[rec.InstallationID], m.regs[key] = inst, rec
+	return registrationResult{rec.InstallationID, refresh}, true, false, nil
 }
 func (m *memoryRepository) claimRegistration(_ context.Context, key, digest, candidate, leaseID string, now time.Time) (registrationResult, bool, bool, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	rec, ok := m.regs[key]
-	if ok && now.UnixMilli() < rec.ExpiresAtMs {
+	if ok && rec.DigestRevision != registrationDigestRevision {
+		return registrationResult{}, false, false, false, errors.New("pushgw: unsupported registration digest revision")
+	}
+	if ok && rec.State != "pending" && rec.State != "completed" {
+		return registrationResult{}, false, false, false, errors.New("pushgw: invalid registration state")
+	}
+	if ok && rec.State == "pending" && rec.ExpiresAtMs <= 0 {
+		return registrationResult{}, false, false, false, errors.New("pushgw: pending registration missing expiry")
+	}
+	if ok && rec.State == "completed" && rec.ExpiresAtMs != 0 {
+		return registrationResult{}, false, false, false, errors.New("pushgw: completed registration has expiry")
+	}
+	if ok && (rec.State == "completed" || now.UnixMilli() < rec.ExpiresAtMs) {
 		if rec.BodyDigest != digest {
 			return registrationResult{}, false, false, true, nil
 		}
 		if rec.State == "completed" {
-			return registrationResult{rec.InstallationID, rec.RefreshBefore}, false, false, false, nil
+			inst, found := m.installations[rec.InstallationID]
+			if !found || inst.RegistrationID != key {
+				return registrationResult{}, false, false, false, errors.New("pushgw: completed registration missing installation")
+			}
+			if installationExpired(inst.LastActiveMs, now) {
+				return registrationResult{}, false, true, false, nil
+			}
+			touchedMs := max(inst.LastActiveMs, now.UnixMilli())
+			refresh := time.UnixMilli(touchedMs).Add(installationWindow).UTC().Format(time.RFC3339)
+			inst.LastActiveMs, rec.RefreshBefore = touchedMs, refresh
+			m.installations[rec.InstallationID], m.regs[key] = inst, rec
+			return registrationResult{rec.InstallationID, refresh}, false, false, false, nil
 		}
 		if now.UnixMilli() < rec.LeaseUntilMs {
 			return registrationResult{}, false, true, false, nil
@@ -96,22 +142,32 @@ func (m *memoryRepository) claimRegistration(_ context.Context, key, digest, can
 	if expires <= now.UnixMilli() {
 		expires = now.Add(registrationWindow).UnixMilli()
 	}
-	m.regs[key] = registrationRecord{BodyDigest: digest, InstallationID: candidate, ExpiresAtMs: expires, State: "pending", LeaseID: leaseID, LeaseUntilMs: now.Add(registrationLease).UnixMilli()}
+	m.regs[key] = registrationRecord{BodyDigest: digest, DigestRevision: registrationDigestRevision, InstallationID: candidate, ExpiresAtMs: expires, State: "pending", LeaseID: leaseID, LeaseUntilMs: now.Add(registrationLease).UnixMilli()}
 	return registrationResult{}, true, false, false, nil
 }
 func (m *memoryRepository) completeRegistration(_ context.Context, key, digest, leaseID string, installation installationRecord, now time.Time) (registrationResult, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	rec, ok := m.regs[key]
-	if !ok || rec.BodyDigest != digest || rec.LeaseID != leaseID || rec.State != "pending" || now.UnixMilli() >= rec.ExpiresAtMs {
+	if ok && rec.DigestRevision != registrationDigestRevision {
+		return registrationResult{}, false, errors.New("pushgw: unsupported registration digest revision")
+	}
+	if ok && rec.State == "completed" {
+		return registrationResult{}, false, nil
+	}
+	if ok && (rec.State != "pending" || rec.ExpiresAtMs <= 0 || rec.LeaseUntilMs <= 0) {
+		return registrationResult{}, false, errors.New("pushgw: invalid pending registration")
+	}
+	if !ok || rec.BodyDigest != digest || rec.LeaseID != leaseID || rec.State != "pending" || now.UnixMilli() >= rec.ExpiresAtMs || now.UnixMilli() >= rec.LeaseUntilMs {
 		return registrationResult{}, false, nil
 	}
 	if _, exists := m.installations[rec.InstallationID]; exists {
 		return registrationResult{}, false, errors.New("installation exists")
 	}
+	installation.RegistrationID = key
 	refresh := now.Add(installationWindow).UTC().Format(time.RFC3339)
 	m.installations[rec.InstallationID] = installation
-	rec.State, rec.RefreshBefore, rec.LeaseUntilMs = "completed", refresh, 0
+	rec.State, rec.RefreshBefore, rec.LeaseUntilMs, rec.ExpiresAtMs = "completed", refresh, 0, 0
 	m.regs[key] = rec
 	return registrationResult{rec.InstallationID, refresh}, true, nil
 }
@@ -124,20 +180,6 @@ func (m *memoryRepository) releaseRegistration(_ context.Context, key, leaseID s
 		m.regs[key] = rec
 	}
 	return nil
-}
-func (m *memoryRepository) registerOrReturn(_ context.Context, key, digest, candidate string, rec installationRecord, now time.Time) (registrationResult, bool, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if old, ok := m.regs[key]; ok && now.UnixMilli() < old.ExpiresAtMs {
-		if old.BodyDigest != digest {
-			return registrationResult{}, false, true, nil
-		}
-		return registrationResult{old.InstallationID, old.RefreshBefore}, false, false, nil
-	}
-	refresh := now.Add(installationWindow).UTC().Format(time.RFC3339)
-	m.installations[candidate] = rec
-	m.regs[key] = registrationRecord{BodyDigest: digest, InstallationID: candidate, RefreshBefore: refresh, ExpiresAtMs: now.Add(registrationWindow).UnixMilli(), State: "completed"}
-	return registrationResult{candidate, refresh}, true, false, nil
 }
 func (m *memoryRepository) rotateToken(_ context.Context, id string, enc []byte, version string, now time.Time) (bool, error) {
 	m.mu.Lock()
@@ -325,6 +367,15 @@ func (m *memoryRepository) runRetention(_ context.Context, now time.Time) error 
 		}
 	}
 	for key, rec := range m.regs {
+		if rec.DigestRevision != registrationDigestRevision {
+			return errors.New("pushgw: unsupported registration digest revision")
+		}
+		if rec.State == "completed" {
+			continue
+		}
+		if rec.State != "pending" || rec.ExpiresAtMs <= 0 {
+			return errors.New("pushgw: invalid registration state during retention")
+		}
 		if nowMs >= rec.ExpiresAtMs {
 			delete(m.regs, key)
 		}
@@ -352,7 +403,12 @@ func (m *memoryRepository) runRetention(_ context.Context, now time.Time) error 
 	}
 	for id, rec := range m.installations {
 		if installationExpired(rec.LastActiveMs, now) {
+			reg, ok := m.regs[rec.RegistrationID]
+			if !ok || reg.DigestRevision != registrationDigestRevision || reg.State != "completed" || reg.InstallationID != id {
+				return errors.New("pushgw: installation registration authority mismatch")
+			}
 			delete(m.installations, id)
+			delete(m.regs, rec.RegistrationID)
 			for address, binding := range m.addresses {
 				if binding.InstallationID == id {
 					delete(m.addresses, address)

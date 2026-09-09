@@ -21,13 +21,14 @@ import (
 )
 
 const (
-	registrationWindow = 10 * time.Minute
-	registrationLease  = 30 * time.Second
-	wakeWindow         = 5 * time.Minute
-	wakeLease          = 15 * time.Second
-	maxWakeAttempts    = 3
-	gcBatchSize        = 100
-	installationWindow = 180 * 24 * time.Hour
+	registrationDigestRevision = 2
+	registrationWindow         = 10 * time.Minute
+	registrationLease          = 30 * time.Second
+	wakeWindow                 = 5 * time.Minute
+	wakeLease                  = 15 * time.Second
+	maxWakeAttempts            = 3
+	gcBatchSize                = 100
+	installationWindow         = 180 * 24 * time.Hour
 )
 
 func installationExpired(lastActiveMs int64, now time.Time) bool {
@@ -35,10 +36,13 @@ func installationExpired(lastActiveMs int64, now time.Time) bool {
 }
 
 type registrationRecord struct {
+	// BodyDigest is the attestation-token-free registration RequestHash. It binds an
+	// idempotency key to immutable logical intent while allowing fresh Play evidence.
 	BodyDigest     string `firestore:"body_digest"`
+	DigestRevision int    `firestore:"digest_revision"`
 	InstallationID string `firestore:"installation_id"`
 	RefreshBefore  string `firestore:"refresh_before"`
-	ExpiresAtMs    int64  `firestore:"expires_at_ms"`
+	ExpiresAtMs    int64  `firestore:"expires_at_ms,omitempty"`
 	State          string `firestore:"state"`
 	LeaseID        string `firestore:"lease_id"`
 	LeaseUntilMs   int64  `firestore:"lease_until_ms"`
@@ -92,7 +96,6 @@ type Repository interface {
 	claimRegistration(context.Context, string, string, string, string, time.Time) (registrationResult, bool, bool, bool, error)
 	completeRegistration(context.Context, string, string, string, installationRecord, time.Time) (registrationResult, bool, error)
 	releaseRegistration(context.Context, string, string, time.Time) error
-	registerOrReturn(context.Context, string, string, string, installationRecord, time.Time) (registrationResult, bool, bool, error)
 	rotateToken(context.Context, string, []byte, string, time.Time) (bool, error)
 	putAddressIfBelowLimit(context.Context, string, string, addressRecord, int, time.Time) (bool, error)
 	getAddress(context.Context, string) (addressRecord, bool, error)
@@ -299,27 +302,72 @@ func (f *firestorePersistence) claimNonceAndTouch(ctx context.Context, id string
 	return accepted, err
 }
 func (f *firestorePersistence) lookupRegistration(ctx context.Context, key, digest string, now time.Time) (registrationResult, bool, bool, error) {
-	snap, err := f.col("registration_attempts").Doc(key).Get(ctx)
+	var out registrationResult
+	var found, mismatch bool
+	err := f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		out, found, mismatch = registrationResult{}, false, false
+		snap, err := tx.Get(f.col("registration_attempts").Doc(key))
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var rec registrationRecord
+		if err = snap.DataTo(&rec); err != nil {
+			return err
+		}
+		if rec.DigestRevision != registrationDigestRevision {
+			return errors.New("pushgw: unsupported registration digest revision")
+		}
+		if rec.State != "pending" && rec.State != "completed" {
+			return errors.New("pushgw: invalid registration state")
+		}
+		if rec.State == "pending" && rec.ExpiresAtMs <= 0 {
+			return errors.New("pushgw: pending registration missing expiry")
+		}
+		if rec.State == "completed" && rec.ExpiresAtMs != 0 {
+			return errors.New("pushgw: completed registration has expiry")
+		}
+		if rec.State != "completed" && rec.ExpiresAtMs != 0 && now.UnixMilli() >= rec.ExpiresAtMs {
+			return nil
+		}
+		if rec.BodyDigest != digest {
+			mismatch = true
+			return nil
+		}
+		if rec.State != "completed" {
+			return nil
+		}
+		instSnap, err := tx.Get(f.col("installations").Doc(rec.InstallationID))
+		if err != nil {
+			return err
+		}
+		var inst installationRecord
+		if err = instSnap.DataTo(&inst); err != nil {
+			return err
+		}
+		if inst.RegistrationID != key {
+			return errors.New("pushgw: registration authority mismatch")
+		}
+		if installationExpired(inst.LastActiveMs, now) {
+			return nil
+		}
+		touchedMs := max(inst.LastActiveMs, now.UnixMilli())
+		refresh := time.UnixMilli(touchedMs).Add(installationWindow).UTC().Format(time.RFC3339)
+		if err = tx.Update(instSnap.Ref, []firestore.Update{{Path: "last_active_ms", Value: touchedMs}}); err != nil {
+			return err
+		}
+		if err = tx.Update(snap.Ref, []firestore.Update{{Path: "refresh_before", Value: refresh}}); err != nil {
+			return err
+		}
+		out, found = registrationResult{rec.InstallationID, refresh}, true
+		return nil
+	})
 	if status.Code(err) == codes.NotFound {
-		return registrationResult{}, false, false, nil
+		err = errors.New("pushgw: completed registration missing installation")
 	}
-	if err != nil {
-		return registrationResult{}, false, false, err
-	}
-	var rec registrationRecord
-	if err := snap.DataTo(&rec); err != nil {
-		return registrationResult{}, false, false, err
-	}
-	if now.UnixMilli() >= rec.ExpiresAtMs {
-		return registrationResult{}, false, false, nil
-	}
-	if rec.BodyDigest != digest {
-		return registrationResult{}, false, true, nil
-	}
-	if rec.State != "completed" {
-		return registrationResult{}, false, false, nil
-	}
-	return registrationResult{rec.InstallationID, rec.RefreshBefore}, true, false, nil
+	return out, found, mismatch, err
 }
 func (f *firestorePersistence) claimRegistration(ctx context.Context, key, digest, candidate, leaseID string, now time.Time) (out registrationResult, won, busy, mismatch bool, err error) {
 	ref := f.col("registration_attempts").Doc(key)
@@ -331,13 +379,48 @@ func (f *firestorePersistence) claimRegistration(ctx context.Context, key, diges
 			if txErr = snap.DataTo(&rec); txErr != nil {
 				return txErr
 			}
-			if now.UnixMilli() < rec.ExpiresAtMs {
+			if rec.DigestRevision != registrationDigestRevision {
+				return errors.New("pushgw: unsupported registration digest revision")
+			}
+			if rec.State != "pending" && rec.State != "completed" {
+				return errors.New("pushgw: invalid registration state")
+			}
+			if rec.State == "pending" && rec.ExpiresAtMs <= 0 {
+				return errors.New("pushgw: pending registration missing expiry")
+			}
+			if rec.State == "completed" && rec.ExpiresAtMs != 0 {
+				return errors.New("pushgw: completed registration has expiry")
+			}
+			if rec.State == "completed" || now.UnixMilli() < rec.ExpiresAtMs {
 				if rec.BodyDigest != digest {
 					mismatch = true
 					return nil
 				}
 				if rec.State == "completed" {
-					out = registrationResult{rec.InstallationID, rec.RefreshBefore}
+					instSnap, e := tx.Get(f.col("installations").Doc(rec.InstallationID))
+					if e != nil {
+						return e
+					}
+					var inst installationRecord
+					if e = instSnap.DataTo(&inst); e != nil {
+						return e
+					}
+					if inst.RegistrationID != key {
+						return errors.New("pushgw: registration authority mismatch")
+					}
+					if installationExpired(inst.LastActiveMs, now) {
+						busy = true
+						return nil
+					}
+					touchedMs := max(inst.LastActiveMs, now.UnixMilli())
+					refresh := time.UnixMilli(touchedMs).Add(installationWindow).UTC().Format(time.RFC3339)
+					if e = tx.Update(instSnap.Ref, []firestore.Update{{Path: "last_active_ms", Value: touchedMs}}); e != nil {
+						return e
+					}
+					if e = tx.Update(ref, []firestore.Update{{Path: "refresh_before", Value: refresh}}); e != nil {
+						return e
+					}
+					out = registrationResult{rec.InstallationID, refresh}
 					return nil
 				}
 				if now.UnixMilli() < rec.LeaseUntilMs {
@@ -352,7 +435,7 @@ func (f *firestorePersistence) claimRegistration(ctx context.Context, key, diges
 		if expires <= now.UnixMilli() {
 			expires = now.Add(registrationWindow).UnixMilli()
 		}
-		rec = registrationRecord{BodyDigest: digest, InstallationID: candidate, ExpiresAtMs: expires, State: "pending", LeaseID: leaseID, LeaseUntilMs: now.Add(registrationLease).UnixMilli()}
+		rec = registrationRecord{BodyDigest: digest, DigestRevision: registrationDigestRevision, InstallationID: candidate, ExpiresAtMs: expires, State: "pending", LeaseID: leaseID, LeaseUntilMs: now.Add(registrationLease).UnixMilli()}
 		if txErr = tx.Set(ref, rec); txErr == nil {
 			won = true
 		}
@@ -372,14 +455,24 @@ func (f *firestorePersistence) completeRegistration(ctx context.Context, key, di
 		if txErr = snap.DataTo(&rec); txErr != nil {
 			return txErr
 		}
-		if rec.BodyDigest != digest || rec.LeaseID != leaseID || rec.State != "pending" || now.UnixMilli() >= rec.ExpiresAtMs {
+		if rec.DigestRevision != registrationDigestRevision {
+			return errors.New("pushgw: unsupported registration digest revision")
+		}
+		if rec.State == "completed" {
 			return nil
 		}
+		if rec.State != "pending" || rec.ExpiresAtMs <= 0 || rec.LeaseUntilMs <= 0 {
+			return errors.New("pushgw: invalid pending registration")
+		}
+		if rec.BodyDigest != digest || rec.LeaseID != leaseID || rec.State != "pending" || now.UnixMilli() >= rec.ExpiresAtMs || now.UnixMilli() >= rec.LeaseUntilMs {
+			return nil
+		}
+		installation.RegistrationID = key
 		refresh := now.Add(installationWindow).UTC().Format(time.RFC3339)
 		if txErr = tx.Create(f.col("installations").Doc(rec.InstallationID), installation); txErr != nil {
 			return txErr
 		}
-		rec.State, rec.RefreshBefore, rec.LeaseUntilMs = "completed", refresh, 0
+		rec.State, rec.RefreshBefore, rec.LeaseUntilMs, rec.ExpiresAtMs = "completed", refresh, 0, 0
 		if txErr = tx.Set(ref, rec); txErr == nil {
 			out, completed = registrationResult{rec.InstallationID, refresh}, true
 		}
@@ -407,40 +500,6 @@ func (f *firestorePersistence) releaseRegistration(ctx context.Context, key, lea
 		}
 		return nil
 	})
-}
-func (f *firestorePersistence) registerOrReturn(ctx context.Context, key, digest, candidate string, rec installationRecord, now time.Time) (out registrationResult, created, mismatch bool, err error) {
-	ref := f.col("registration_attempts").Doc(key)
-	inst := f.col("installations").Doc(candidate)
-	err = f.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		out, created, mismatch = registrationResult{}, false, false
-		snap, txErr := tx.Get(ref)
-		if txErr == nil && snap.Exists() {
-			var old registrationRecord
-			if txErr = snap.DataTo(&old); txErr != nil {
-				return txErr
-			}
-			if now.UnixMilli() < old.ExpiresAtMs {
-				if old.BodyDigest != digest {
-					mismatch = true
-					return nil
-				}
-				out = registrationResult{old.InstallationID, old.RefreshBefore}
-				return nil
-			}
-		} else if txErr != nil && status.Code(txErr) != codes.NotFound {
-			return txErr
-		}
-		refresh := now.Add(installationWindow).UTC().Format(time.RFC3339)
-		if txErr = tx.Create(inst, rec); txErr != nil {
-			return txErr
-		}
-		if txErr = tx.Set(ref, registrationRecord{BodyDigest: digest, InstallationID: candidate, RefreshBefore: refresh, ExpiresAtMs: now.Add(registrationWindow).UnixMilli(), State: "completed"}); txErr != nil {
-			return txErr
-		}
-		out, created = registrationResult{candidate, refresh}, true
-		return nil
-	})
-	return
 }
 func (f *firestorePersistence) rotateToken(ctx context.Context, id string, enc []byte, version string, now time.Time) (updated bool, err error) {
 	ref := f.col("installations").Doc(id)
@@ -888,9 +947,24 @@ func (f *firestorePersistence) deleteExpired(ctx context.Context, collection, fi
 			if err != nil {
 				return err
 			}
-			value, err := current.DataAt(field)
-			if err != nil {
-				return err
+			if collection == "registration_attempts" {
+				var rec registrationRecord
+				if err := current.DataTo(&rec); err != nil {
+					return err
+				}
+				if rec.DigestRevision != registrationDigestRevision {
+					return errors.New("pushgw: unsupported registration digest revision")
+				}
+				if rec.State == "completed" {
+					return nil
+				}
+				if rec.State != "pending" || rec.ExpiresAtMs <= 0 {
+					return errors.New("pushgw: invalid registration state during retention")
+				}
+			}
+			value, present := current.Data()[field]
+			if !present {
+				return nil
 			}
 			expires, ok := value.(int64)
 			if ok && expires <= before {
@@ -1005,7 +1079,25 @@ func (f *firestorePersistence) deleteExpiredInstallations(ctx context.Context, n
 					return e
 				}
 			}
+			if installation.RegistrationID == "" {
+				return errors.New("pushgw: installation missing registration authority")
+			}
+			regRef := f.col("registration_attempts").Doc(installation.RegistrationID)
+			regSnap, err := tx.Get(regRef)
+			if err != nil {
+				return err
+			}
+			var registration registrationRecord
+			if err = regSnap.DataTo(&registration); err != nil {
+				return err
+			}
+			if registration.DigestRevision != registrationDigestRevision || registration.State != "completed" || registration.InstallationID != instRef.ID {
+				return errors.New("pushgw: installation registration authority mismatch")
+			}
 			if err = tx.Delete(instRef); err != nil {
+				return err
+			}
+			if err = tx.Delete(regRef); err != nil {
 				return err
 			}
 			for i, address := range addresses {

@@ -131,7 +131,7 @@ const registerBackoff = 250 * time.Millisecond
 // occurred: the response was lost, a success response was invalid, or the gateway returned
 // an unexpected/5xx status. The caller
 // (EnsurePushRegistration) keeps the prepared (Idempotency-Key, body) pair durable so
-// the NEXT call replays it -- inside pushgw's retention window that replay is answered
+// the NEXT call replays it -- while the installation remains active that replay is answered
 // with the installation already minted, which is what stops a lost response from
 // orphaning an installation that holds a live FCM token for 180 days (PG-REG-2). A
 // DEFINITIVE first-attempt gateway refusal is never wrapped in this: the outcome is known,
@@ -198,10 +198,8 @@ func registrationRequestHash(body registerBody) ([32]byte, error) {
 	return pushreg.RequestHash(body.InstallationPublicKey, body.FCMToken)
 }
 
-// preparedRegister is one registration attempt's durable identity: the Idempotency-Key
-// and the exact bytes it keys. A replay -- within one call or from the NEXT call after a
-// lost response -- must present this pair verbatim to recover the installation already
-// minted; reusing the key with different bytes is an idempotency conflict.
+// preparedRegister preserves one logical registration intent across lost responses.
+// Only the short-lived attestation may change; the key, signer and FCM token cannot.
 type preparedRegister struct {
 	IdemKey  string
 	Body     []byte
@@ -209,9 +207,7 @@ type preparedRegister struct {
 }
 
 // prepareRegister builds one registration's (key, body) pair: the attested body and a
-// fresh Idempotency-Key. Attestation runs here, once per prepared pair -- the verdict
-// token is bound to the body's requestHash, so re-attesting a replay would CHANGE the
-// body and defeat the idempotency it exists for.
+// fresh Idempotency-Key. Each prepared body is persisted before it is sent.
 func (g *GatewayClient) prepareRegister(fcmToken string) (preparedRegister, error) {
 	rb := registerBody{
 		InstallationPublicKey: base64.RawURLEncoding.EncodeToString(g.signer.PublicKey()),
@@ -236,6 +232,36 @@ func (g *GatewayClient) prepareRegister(fcmToken string) (preparedRegister, erro
 		return preparedRegister{}, err
 	}
 	return preparedRegister{IdemKey: idemKey, Body: body, FCMToken: fcmToken}, nil
+}
+
+// refreshPreparedRegister replaces only the attestation of a refused pending request.
+// Validate durable state before asking Android for a new verdict; never repair corrupt
+// state by silently registering a different identity or token.
+func (g *GatewayClient) refreshPreparedRegister(prep preparedRegister) (preparedRegister, error) {
+	var rb registerBody
+	dec := json.NewDecoder(bytes.NewReader(prep.Body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&rb); err != nil {
+		return preparedRegister{}, fmt.Errorf("phonecore: invalid pending registration: %w", err)
+	}
+	var extra any
+	key, keyErr := base64.RawURLEncoding.DecodeString(prep.IdemKey)
+	if dec.Decode(&extra) != io.EOF || keyErr != nil || len(key) != 16 ||
+		base64.RawURLEncoding.EncodeToString(key) != prep.IdemKey ||
+		rb.InstallationPublicKey != base64.RawURLEncoding.EncodeToString(g.signer.PublicKey()) ||
+		rb.FCMToken == "" || rb.FCMToken != prep.FCMToken || rb.Attestation.Kind != "play_integrity" {
+		return preparedRegister{}, errors.New("phonecore: invalid pending registration identity")
+	}
+	hash, err := registrationRequestHash(rb)
+	if err != nil {
+		return preparedRegister{}, err
+	}
+	rb.Attestation.Token, err = g.attest(hash)
+	if err != nil {
+		return preparedRegister{}, fmt.Errorf("phonecore: app attestation: %w", err)
+	}
+	prep.Body, err = json.Marshal(rb)
+	return prep, err
 }
 
 // registerPrepared POSTs one prepared registration, retrying a lost response with the

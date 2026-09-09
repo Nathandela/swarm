@@ -30,7 +30,7 @@ func (d *registrationExpiryDecoder) Decode(context.Context, string, string) (Pla
 	return d.payload, nil
 }
 
-func TestRegistrationExpiry_OldVerdictCannotMintSecondInstallation(t *testing.T) {
+func TestRegistrationExpiry_CompletedAuthorityOutlivesAttemptWindow(t *testing.T) {
 	t.Run("memory", func(t *testing.T) {
 		repository := NewMemoryRepository().(*memoryRepository)
 		testRegistrationExpiry(t, repository, func(t *testing.T, originalID string) {
@@ -141,11 +141,12 @@ func testRegistrationExpiry(t *testing.T, repository Repository, assertOriginal 
 	}
 	defer func() { _ = server.Close() }()
 
+	key := idempotencyKey
 	post := func() *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "/v1/installations", bytes.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Idempotency-Key", idempotencyKey)
-		request.Header.Set("Swarm-Registration-Proof", firestoreTestRegistrationProof(t, privateKey, idempotencyKey, body))
+		request.Header.Set("Idempotency-Key", key)
+		request.Header.Set("Swarm-Registration-Proof", firestoreTestRegistrationProof(t, privateKey, key, body))
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
 		return response
@@ -178,23 +179,36 @@ func testRegistrationExpiry(t *testing.T, repository Repository, assertOriginal 
 		t.Fatalf("cached replay decode calls=%d, want 1", decoder.calls)
 	}
 
-	// Once the idempotency row expires, the exact saved body reaches attestation again.
-	// Production's two-minute verdict-age policy is shorter than that ten-minute row, so
-	// the old verdict cannot authorize a second installation.
+	// The short-lived attempt window has elapsed, but a completed registration remains
+	// the authority for this idempotency key until its installation expires. Resolve it
+	// before attestation so an old verdict can neither wedge the phone nor mint another.
 	now = serverStart.Add(registrationWindow)
-	expired := post()
-	if expired.Code != http.StatusForbidden {
-		t.Fatalf("expired replay status=%d body=%s, want 403", expired.Code, expired.Body.String())
+	afterWindow := decodeCreated(post())
+	if afterWindow.InstallationID != first.InstallationID {
+		t.Fatalf("post-window replay installation=%q, want original %q", afterWindow.InstallationID, first.InstallationID)
 	}
-	var refusal wireError
-	if err := json.Unmarshal(expired.Body.Bytes(), &refusal); err != nil {
-		t.Fatal(err)
-	}
-	if refusal.Code != "attestation_invalid" {
-		t.Fatalf("expired replay refusal=%q, want attestation_invalid", refusal.Code)
-	}
-	if decoder.calls != 2 {
-		t.Fatalf("expired replay decode calls=%d, want 2", decoder.calls)
+	if decoder.calls != 1 {
+		t.Fatalf("post-window replay decode calls=%d, want 1", decoder.calls)
 	}
 	assertOriginal(t, first.InstallationID)
+
+	// A new verdict changes the signed wire body, not the logical intent or receipt.
+	body = bytes.Replace(body, []byte(verdictToken), []byte("fresh-verdict"), 1)
+	if refreshed := decodeCreated(post()); refreshed.InstallationID != first.InstallationID || decoder.calls != 1 {
+		t.Fatal("fresh attestation failed to recover the original receipt without verification")
+	}
+	savedBody := body
+	body = bytes.Replace(body, []byte(fcmToken), []byte("another-fcm-token"), 1)
+	if changed := post(); changed.Code != http.StatusConflict || decoder.calls != 1 {
+		t.Fatalf("changed intent status=%d decoder calls=%d, want conflict without verification", changed.Code, decoder.calls)
+	}
+	body = savedBody
+	assertOriginal(t, first.InstallationID)
+
+	// Same signer with a different intentional registration remains a distinct random ID.
+	key = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, 16))
+	decoder.payload.RequestDetails.TimestampMillis = now.UnixMilli()
+	if separate := decodeCreated(post()); separate.InstallationID == first.InstallationID || decoder.calls != 2 {
+		t.Fatal("different idempotency key did not create a separately attested installation")
+	}
 }

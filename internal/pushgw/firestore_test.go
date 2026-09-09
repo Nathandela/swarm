@@ -523,28 +523,6 @@ func TestFirestoreSecretsAreNotPersistedInPlaintext(t *testing.T) {
 	}
 }
 
-func TestFirestoreRegistrationIdempotencyRejectsBodyMismatch(t *testing.T) {
-	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
-		t.Skip("requires Firestore emulator")
-	}
-	ctx := context.Background()
-	client, err := firestore.NewClient(ctx, "demo-swarm-push-probe")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = client.Close() }()
-	repo := newFirestorePersistence(client, "go-idempotency-"+time.Now().Format("150405.000000000"))
-	now := time.Now().UTC()
-	first, created, mismatch, err := repo.registerOrReturn(ctx, "key", "body-a", "one", installationRecord{}, now)
-	if err != nil || !created || mismatch || first.InstallationID != "one" {
-		t.Fatalf("first=%+v created=%v mismatch=%v err=%v", first, created, mismatch, err)
-	}
-	got, created, mismatch, err := repo.registerOrReturn(ctx, "key", "body-b", "two", installationRecord{}, now)
-	if err != nil || created || !mismatch || got.InstallationID != "" {
-		t.Fatalf("mismatch got=%+v created=%v mismatch=%v err=%v", got, created, mismatch, err)
-	}
-}
-
 func TestFirestoreWakeLeaseCASAndTokenGeneration(t *testing.T) {
 	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
 		t.Skip("requires Firestore emulator")
@@ -807,7 +785,10 @@ func TestFirestoreRetentionRechecksAndCascadesBoundedly(t *testing.T) {
 	repo := newFirestorePersistence(client, "go-gc-"+time.Now().Format("150405000000000"))
 	now := time.Now().UTC()
 	old := now.Add(-181 * 24 * time.Hour)
-	if err := repo.putInstallation(ctx, "inactive", installationRecord{LastActiveMs: old.UnixMilli()}); err != nil {
+	if err := repo.putInstallation(ctx, "inactive", installationRecord{RegistrationID: "inactive-registration", LastActiveMs: old.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.col("registration_attempts").Doc("inactive-registration").Set(ctx, registrationRecord{BodyDigest: "inactive", DigestRevision: registrationDigestRevision, InstallationID: "inactive", State: "completed"}); err != nil {
 		t.Fatal(err)
 	}
 	bound := addressRecord{InstallationID: "inactive", SubmitCapHash: hashSecret("bound"), MachineRevokeHash: hashSecret("bound-revoke"), Bound: true, UnboundExpiresMs: now.Add(-time.Hour).UnixMilli()}
@@ -818,7 +799,10 @@ func TestFirestoreRetentionRechecksAndCascadesBoundedly(t *testing.T) {
 	if _, err := repo.col("installations").Doc("inactive").Update(ctx, []firestore.Update{{Path: "address_count", Value: int64(1)}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.putInstallation(ctx, "active", installationRecord{LastActiveMs: now.UnixMilli()}); err != nil {
+	if err := repo.putInstallation(ctx, "active", installationRecord{RegistrationID: "active-registration", LastActiveMs: now.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.col("registration_attempts").Doc("active-registration").Set(ctx, registrationRecord{BodyDigest: "active", DigestRevision: registrationDigestRevision, InstallationID: "active", State: "completed"}); err != nil {
 		t.Fatal(err)
 	}
 	unbound := addressRecord{InstallationID: "active", SubmitCapHash: hashSecret("unbound"), MachineRevokeHash: hashSecret("unbound-revoke"), Bound: false, UnboundExpiresMs: now.Add(-time.Second).UnixMilli()}

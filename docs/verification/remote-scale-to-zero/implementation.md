@@ -1815,3 +1815,74 @@ and `TestRegisterOutcome_FirstDefinitiveRefusalStillClearsPreparedPair` (PASS, 2
 storage; its Firestore variant was skipped without an emulator, not counted as green.
 Any refreshable-attestation proposal must still prevent a second installation after
 the original idempotency result expires; a fresh token alone is not sufficient recovery.
+
+### Registration recovery implementation checkpoint (2026-09-09)
+
+Work: `agents-tracker-75xt`; design and release gates are in the
+[recovery plan](../../specifications/push-registration-recovery-plan.md).
+Root coordinated a Sol backend implementation, Terra client tests and a separate
+Sol adversarial review. The initial phone regression failed on the old client:
+pre-commit transport loss followed by restart and an expired verdict remained
+outcome-unknown indefinitely. It now recovers with the same idempotency key,
+signer and FCM intent, one fresh attestation and one committed installation.
+This uses the existing in-process client gateway fixture; it is not evidence
+of production Firestore semantics or the first live Google refusal's cause.
+
+The production store now retains a completed registration receipt with its
+installation, rather than expiring it after ten minutes. Idempotency compares the
+existing canonical attestation request hash while installation-key proof still
+binds actual wire bytes. Digest revision 2 rejects incompatible stored records.
+Pending attempts retain bounded expiry and lease ownership. Completed recovery
+transactionally refreshes activity; retention deletes the matching receipt with
+its installation and addresses. No new collection or service was introduced.
+
+Review-driven fixes include transaction-retry output resets, monotonic activity
+refresh, expired-lease completion refusal, corrupt-linkage failure, and rollback
+of in-memory pending/identity changes after uncommitted disk-write failures.
+Recovered receipts always reconcile the current token through the existing signed
+PUT: a receipt alone does not prove that FCM has not marked the token dead. A failed
+PUT leaves the recovered ID durable so restart retries the same installation.
+
+Root checks on the implementation:
+
+- `go build ./...` and `go vet ./...`: pass with writable isolated Go caches.
+- Focused `golangci-lint` for phonecore, pushgw and pushreg: zero issues.
+- Combined `go test -race` for phonecore, pushgw, pushreg and cmd/swarm-pushgw:
+  pass (53.302 s, 7.730 s, 2.685 s and 4.222 s respectively).
+- Mobile, Android source gate, phonesim and remotegw suites: pass (33.714 s,
+  14.495 s, 1.394 s and 27.512 s).
+- Shell syntax and `git diff --check`: pass.
+
+Sol also ran actual Firestore-emulator race cases for stale lease refusal,
+missing installation linkage, atomic receipt cleanup and replay activity refresh;
+all four memory and Firestore variants passed. The production post-ten-minute
+replay returns the original ID without another verifier call. CI now requires
+the Firestore subtest PASS markers rather than accepting an emulator skip.
+Sequential retention checks do not claim a deliberately forced simultaneous
+query-versus-completion interleaving; that remains a release verification gap.
+
+The final cleanup removes the unused `registerOrReturn` interface method, both
+implementations and its obsolete exclusive test. Live handler checks instead pin
+same-intent/new-attestation recovery after ten minutes, changed-FCM conflict and
+distinct intentional registrations by the same signer. Retention rejects unknown
+digest revisions without deleting either linked half. The stronger repeated-refusal
+phone test proves the refreshed body, not just its key, survives restart.
+Independent Sol checkpoint review: GO, with the forced interleaving gate still open.
+
+Root negative control: the new completed-receipt expiry regression was compiled
+against HEAD's old backend and test repository using an isolated Go overlay in
+`/private/tmp`. It failed as expected with `403 attestation_invalid` where recovery
+requires `201` (1.588 s). Working-tree source was never reverted for this experiment.
+
+After cleanup and the added handler/revision checks, root reran the complete
+Firestore emulator CI script under its bounded Firebase runner: exit 0, all required
+PASS markers present, and clean emulator shutdown. This run includes actual
+Firestore variants of the unknown-revision retention checks. It is stronger than
+the earlier focused run, but still does not force the outstanding GC interleaving.
+
+This checkpoint changes no live cloud resource, phone state, installed binary or
+Play release. The new digest semantics require the fenced clean namespace cutover
+specified in the plan; they must not be deployed over the existing exact-body
+records. A fresh native Android build, hosted 201 recovery, push-enabled pairing,
+provider-accepted wake and observed background/LTE delivery remain release and
+physical acceptance gates. Foreground pairing and phone keys remain untouched.

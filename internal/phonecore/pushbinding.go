@@ -150,9 +150,8 @@ type pushData struct {
 	// caller's older token and a genuine rotation are the same PUT.
 	LastFCMToken string `json:"last_fcm_token,omitempty"`
 	// PendingRegister is a registration whose outcome is UNKNOWN (a response was lost,
-	// invalid or ambiguous). It is persisted BEFORE the first POST and replayed verbatim
-	// by the next call: the idempotency record binds (Idempotency-Key, body), so only this
-	// exact pair maps a maybe-processed POST back onto the installation it minted.
+	// invalid or ambiguous). It is persisted BEFORE each prepared POST. Replays retain
+	// the idempotency key and logical intent; only a refused attestation may be refreshed.
 	PendingRegister *pendingRegisterRec `json:"pending_register,omitempty"`
 	// InstallationKey is the durable P-256 installation private key in SEC1 DER
 	// (installationkey.go), sealed here under the WAKE tier like everything else in this
@@ -736,27 +735,38 @@ func (c *Core) EnsurePushRegistration(ctx context.Context, client *GatewayClient
 	}
 
 	// A prior call's registration with an UNKNOWN outcome is replayed verbatim first:
-	// same Idempotency-Key, byte-identical body. Inside pushgw's retention window a
-	// processed POST answers with the installation it already minted.
+	// same Idempotency-Key, byte-identical body. A completed receipt answers with the
+	// active installation it already minted without another Play verification.
 	if pending != nil {
 		reg, err := client.registerPrepared(ctx, preparedRegister(*pending), true)
+		if errors.Is(err, ErrAttestationRefused) {
+			// Completed registrations resolve without decoding Play again. A refusal
+			// permits one fresh verdict for the SAME intent, never a fresh identity.
+			prep, refreshErr := client.refreshPreparedRegister(preparedRegister(*pending))
+			if refreshErr != nil {
+				return PushRegistration{}, registerAttemptError(refreshErr, true)
+			}
+			if persistErr := c.storePendingRegister(prep); persistErr != nil {
+				return PushRegistration{}, registerAttemptError(persistErr, true)
+			}
+			reg, err = client.registerPrepared(ctx, prep, true)
+		}
 		if err != nil {
-			// No later refusal can disprove an earlier commit. Keep the exact pair,
-			// even when its attestation or the server's idempotency window has expired.
+			// No later refusal can disprove an earlier commit. Keep the pending intent.
 			return PushRegistration{}, err
 		}
 		if perr := c.persistPushIdentity(reg.InstallationID, pending.FCMToken); perr != nil {
 			return PushRegistration{}, perr
 		}
-		if pending.FCMToken != tok {
-			// The token moved while the outcome was unresolved: one ordinary rotate
-			// brings the resolved installation to the current token.
-			if rerr := client.RotateToken(ctx, reg.InstallationID, tok); rerr != nil {
-				return PushRegistration{}, rerr
-			}
-			if perr := c.persistPushIdentity(reg.InstallationID, tok); perr != nil {
-				return PushRegistration{}, perr
-			}
+		// The receipt proves identity, not current token health: FCM may have marked
+		// even an unchanged token dead while the result was unknown. Reconcile through
+		// the existing signed operation before reporting ready. The ID is already
+		// durable, so a failed rotate resumes this same installation on the next call.
+		if rerr := client.RotateToken(ctx, reg.InstallationID, tok); rerr != nil {
+			return PushRegistration{}, rerr
+		}
+		if perr := c.persistPushIdentity(reg.InstallationID, tok); perr != nil {
+			return PushRegistration{}, perr
 		}
 		return reg, nil
 	}
@@ -802,18 +812,32 @@ func (c *Core) PushFCMToken() string {
 func (c *Core) persistPushIdentity(id, tok string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	oldID, oldToken, pending := c.push.data.InstallationID, c.push.data.LastFCMToken, c.push.data.PendingRegister
 	c.push.data.InstallationID = id
 	c.push.data.LastFCMToken = tok
 	c.push.data.PendingRegister = nil
-	return c.push.persist()
+	if err := c.push.persist(); err != nil {
+		if !atomicWriteCommitted(err) {
+			c.push.data.InstallationID, c.push.data.LastFCMToken, c.push.data.PendingRegister = oldID, oldToken, pending
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Core) storePendingRegister(prep preparedRegister) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	before := c.push.data.PendingRegister
 	rec := pendingRegisterRec(prep)
 	c.push.data.PendingRegister = &rec
-	return c.push.persist()
+	if err := c.push.persist(); err != nil {
+		if !atomicWriteCommitted(err) {
+			c.push.data.PendingRegister = before
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Core) clearPendingRegister() error {

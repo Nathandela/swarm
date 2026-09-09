@@ -106,10 +106,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 		s.writeErr(w, errUnauthorized)
 		return errUnauthorized.status
 	}
+	wantHash, err := pushreg.RequestHash(req.InstallationPublicKey, req.FCMToken)
+	if err != nil {
+		s.writeErr(w, errInternal)
+		return errInternal.status
+	}
 
-	// A byte-identical retry returns the completed result without spending quota or
-	// replaying attestation. Reusing the key for another body is a durable conflict.
+	// A retry of the same logical registration returns the completed result without
+	// spending quota or replaying attestation. The shared store's digest excludes only
+	// the short-lived attestation token; changing the key or FCM token still conflicts.
 	bodySum := sha256.Sum256(body)
+	logicalDigest := hex.EncodeToString(wantHash[:])
 	cacheKey := hashSecret(idemKey) + ":" + hex.EncodeToString(bodySum[:])
 	now := s.now()
 	if s.v2store == nil {
@@ -117,7 +124,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 			return s.writeJSON(w, http.StatusCreated, registerResponse{InstallationID: e.installationID, RefreshBefore: e.refreshBefore})
 		}
 	} else {
-		result, found, mismatch, lookupErr := s.v2store.p.lookupRegistration(r.Context(), s.v2store.idempotencyID(idemKey), hex.EncodeToString(bodySum[:]), now)
+		result, found, mismatch, lookupErr := s.v2store.p.lookupRegistration(r.Context(), s.v2store.idempotencyID(idemKey), logicalDigest, now)
 		if lookupErr != nil {
 			s.writeErr(w, errInternal)
 			return errInternal.status
@@ -164,7 +171,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 	}
 	leaseID := hex.EncodeToString(leaseBytes)
 	if s.v2store != nil {
-		result, won, busy, mismatch, claimErr := s.v2store.p.claimRegistration(r.Context(), s.v2store.idempotencyID(idemKey), hex.EncodeToString(bodySum[:]), installationID, leaseID, now)
+		result, won, busy, mismatch, claimErr := s.v2store.p.claimRegistration(r.Context(), s.v2store.idempotencyID(idemKey), logicalDigest, installationID, leaseID, now)
 		if claimErr != nil {
 			s.writeErr(w, errInternal)
 			return errInternal.status
@@ -182,14 +189,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 		}
 	}
 
-	wantHash, err := pushreg.RequestHash(req.InstallationPublicKey, req.FCMToken)
-	if err != nil {
-		if s.v2store != nil {
-			_ = s.v2store.p.releaseRegistration(r.Context(), s.v2store.idempotencyID(idemKey), leaseID, s.now())
-		}
-		s.writeErr(w, errInternal)
-		return errInternal.status
-	}
 	binding, err := s.attest.Verify(r.Context(), req.Attestation.Token)
 	if err != nil {
 		if s.v2store != nil {
@@ -230,7 +229,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 		TokenGeneration: 1,
 	}
 	if s.v2store != nil {
-		result, completed, commitErr := s.v2store.p.completeRegistration(r.Context(), s.v2store.idempotencyID(idemKey), hex.EncodeToString(bodySum[:]), leaseID, rec, commitNow)
+		rec.RegistrationID = s.v2store.idempotencyID(idemKey)
+		result, completed, commitErr := s.v2store.p.completeRegistration(r.Context(), s.v2store.idempotencyID(idemKey), logicalDigest, leaseID, rec, commitNow)
 		if commitErr != nil {
 			s.writeErr(w, errInternal)
 			return errInternal.status

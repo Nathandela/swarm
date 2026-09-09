@@ -80,8 +80,8 @@ func TestRegisterHTTPFault_TruncatedCommittedResponseReplaysAfterRestart(t *test
 		t.Fatal("restart did not recover the original committed installation")
 	}
 	requests := rt.recorded()
-	if len(requests) != 2 || requests[0].method != http.MethodPost || requests[1].method != http.MethodPost {
-		t.Fatalf("HTTP requests = %d, want two registration POSTs", len(requests))
+	if len(requests) != 3 || requests[0].method != http.MethodPost || requests[1].method != http.MethodPost || requests[2].method != http.MethodPut {
+		t.Fatalf("HTTP requests = %d, want two registration POSTs then one token PUT", len(requests))
 	}
 	if requests[0].idempotencyKey != requests[1].idempotencyKey || !bytes.Equal(requests[0].body, requests[1].body) {
 		t.Fatal("restart changed the prepared body or idempotency key")

@@ -8,6 +8,9 @@ Status: implementation underway; owner-only relay admission was activated on 202
 
 ## 1. Decision
 
+The next push-enrollment repair is specified in the
+[registration recovery plan](push-registration-recovery-plan.md).
+
 Build one clean v2 remote-control system, then retire the unused v1 system. This is a **replacement**, not a live-user migration.
 
 Target:
@@ -175,9 +178,9 @@ Keep a domain-level repository boundary in internal/pushgw, but implement only F
 
 Domain operations include AuthenticateAndTouch, RegisterOrReturn, AllocateAddress, RotateToken, RevokeAddress, ClaimWakeAttempt, CompleteWakeAttempt and bounded expiry cleanup. Define new error/status behavior directly; no emulation of historical cache quirks.
 
-Collections: installations, addresses, revocation tombstones, registration attempts, nonce claims, wake attempts and rate windows. Retain the existing starting lifetimes where sensible: unbound address 10 minutes, nonce 120 seconds, registration idempotency 10 minutes, wake obligation five minutes, revocation tombstone/idempotency retention seven days, installation expiry after 180 days without authenticated refresh. Tombstones are security/retry state, not optional telemetry.
+Collections: installations, addresses, revocation tombstones, registration attempts, nonce claims, wake attempts and rate windows. Lifetimes: unbound address 10 minutes, nonce 120 seconds, pending registration 10 minutes, completed registration receipt co-retained with its installation, wake obligation five minutes, revocation tombstone/idempotency retention seven days, installation expiry after 180 days without authenticated refresh. Tombstones are security/retry state, not optional telemetry.
 
-Use HMAC(idempotency_key) as registration record identity; compare a stored body digest transactionally. Same key/different body is conflict, not a second installation. Authentication/replay state must be shared across instances. Recheck key generation at the commit boundary.
+Use HMAC(idempotency_key) as registration record identity; compare the existing canonical attestation request hash transactionally. Same key/different logical intent is conflict, not a second installation; the attestation token may refresh. Authentication/replay state must be shared across instances. Recheck key generation at the commit boundary.
 
 Firestore callbacks can retry: never send FCM or perform attestation inside a retryable transaction. The emulator deliberately reproduced duplicate external sends from that mistake. [Transactions](https://firebase.google.com/docs/firestore/manage-data/transactions).
 

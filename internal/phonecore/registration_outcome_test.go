@@ -239,7 +239,7 @@ func TestRegisterOutcome_CommittedUncertainResponsePreservesExactReplay(t *testi
 				t.Fatalf("replay ID=%q durable=%q, want originally minted %q", reg.InstallationID, restarted.PushInstallationID(), mintedID)
 			}
 			requests := replayTransport.recorded()
-			if len(requests) != 1 || requests[0].idempotencyKey != pending.IdemKey || !bytes.Equal(requests[0].body, pending.Body) {
+			if len(requests) != 2 || requests[0].method != http.MethodPost || requests[0].idempotencyKey != pending.IdemKey || !bytes.Equal(requests[0].body, pending.Body) || requests[1].method != http.MethodPut || !strings.HasPrefix(requests[1].path, "/v1/installations/") {
 				t.Fatalf("replay changed or duplicated pending request: %+v", requests)
 			}
 			if attestCalls != 1 {
@@ -251,13 +251,14 @@ func TestRegisterOutcome_CommittedUncertainResponsePreservesExactReplay(t *testi
 
 func TestRegisterOutcome_PriorUnknownSurvivesEveryLaterNonSuccess(t *testing.T) {
 	for _, tt := range []struct {
-		name   string
-		status int
-		body   string
+		name          string
+		status        int
+		body          string
+		refreshAttest bool
 	}{
 		{name: "internal", status: http.StatusInternalServerError, body: `{"code":"internal","retryable":true}`},
 		{name: "in progress", status: http.StatusServiceUnavailable, body: `{"code":"service_unavailable","retryable":true}`},
-		{name: "later attestation refusal", status: http.StatusForbidden, body: `{"code":"attestation_invalid","retryable":false}`},
+		{name: "later attestation refusal", status: http.StatusForbidden, body: `{"code":"attestation_invalid","retryable":false}`, refreshAttest: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			hs := r3aGateway(t, &r3aSender{}, &r3aAttestVerifier{licensed: true})
@@ -293,7 +294,11 @@ func TestRegisterOutcome_PriorUnknownSurvivesEveryLaterNonSuccess(t *testing.T) 
 				t.Fatalf("later response=%v, want earlier outcome to remain unknown", err)
 			}
 			requests := refusal.recorded()
-			if len(requests) != 1 || requests[0].idempotencyKey != pending.IdemKey || !bytes.Equal(requests[0].body, pending.Body) {
+			if tt.refreshAttest {
+				if len(requests) != 2 || requests[0].idempotencyKey != pending.IdemKey || !bytes.Equal(requests[0].body, pending.Body) || requests[1].idempotencyKey != pending.IdemKey || !bytes.Equal(requests[1].body, pending.Body) {
+					t.Fatalf("attestation refusal did not make one same-intent fresh retry: %+v", requests)
+				}
+			} else if len(requests) != 1 || requests[0].idempotencyKey != pending.IdemKey || !bytes.Equal(requests[0].body, pending.Body) {
 				t.Fatalf("later response minted or changed registration: %+v", requests)
 			}
 			restarted.mu.Lock()
@@ -302,8 +307,12 @@ func TestRegisterOutcome_PriorUnknownSurvivesEveryLaterNonSuccess(t *testing.T) 
 				t.Error("later response discarded or changed prior outcome-unknown registration")
 			}
 			restarted.mu.Unlock()
-			if attestCalls != 1 {
-				t.Fatalf("attestation calls=%d, want no fresh body after later response", attestCalls)
+			wantAttests := 1
+			if tt.refreshAttest {
+				wantAttests++
+			}
+			if attestCalls != wantAttests {
+				t.Fatalf("attestation calls=%d, want %d", attestCalls, wantAttests)
 			}
 		})
 	}

@@ -47,16 +47,22 @@ are useful implementation assets, not reasons to retain the old deployment.
    PG-RET-4 and the closed durable field set in PG-RET-10 of the
    [push API](../specifications/push-gateway-api.md). Permitted additional fields are
    token generation, encryption key version, keyed nonce/idempotency digests, request
-   body digests, quota counters/windows, wake attempt identity/state/lease/deadline/
+   body/logical-intent digests, installation-to-registration receipt linkage,
+   quota counters/windows, wake attempt identity/state/lease/deadline/
    outcome, and expiry. No plaintext FCM tokens, raw capabilities, signatures,
    attestation tokens or session content may be persisted in these records or logs.
    Existing encrypted token custody remains required.
-6. Initial lifetimes are 120 seconds for nonce claims, ten minutes for registration
-   idempotency, five minutes for wake obligations and seven days for revocation
+6. Lifetimes are 120 seconds for nonce claims, ten minutes for pending registration
+   attempts, five minutes for wake obligations and seven days for revocation
    tombstones. Enforce logical expiry at use, with bounded physical cleanup. Perform
    attestation and FCM calls outside retryable transactions; complete attempts by
    compare-and-swap against attempt and token generation. A provider-accepted send
    followed by a crash remains ambiguous, not exactly-once delivery.
+   Completed registration receipts instead co-retain with their installations until
+   atomic inactivity cleanup. Idempotency binds the canonical logical request hash,
+   permitting a fresh attestation for the same intent without another installation.
+   The [recovery plan](../specifications/push-registration-recovery-plan.md) specifies
+   the clean namespace cutover; exact-body digest records are not reinterpreted in place.
 7. Prove the minimum secure end-to-end slice before calling the independent ports
    complete. Local workerd/emulator tests are necessary but do not prove hosted
    hibernation, actual Google identity, phone lifecycle, performance or billing.

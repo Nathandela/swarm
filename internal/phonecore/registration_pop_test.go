@@ -238,9 +238,15 @@ func TestRegisterProof_SigningFailureAfterLostResponsePreservesExactDurableRepla
 			reg.InstallationID, mintedID, healed.PushInstallationID())
 	}
 	requests := rt.recorded()
-	last := requests[len(requests)-1]
-	if last.idempotencyKey != pending.IdemKey || !bytes.Equal(last.body, pending.Body) {
+	if len(requests) != before+2 {
+		t.Fatalf("healed replay made %d requests, want exact POST and token PUT", len(requests)-before)
+	}
+	replay := requests[before]
+	if replay.method != http.MethodPost || replay.idempotencyKey != pending.IdemKey || !bytes.Equal(replay.body, pending.Body) {
 		t.Error("healed replay changed the durable Idempotency-Key or exact final body")
+	}
+	if rotate := requests[before+1]; rotate.method != http.MethodPut || !strings.HasPrefix(rotate.path, "/v1/installations/") {
+		t.Error("healed replay did not reconcile the current token through the recovered identity")
 	}
 	if attestCalls != 1 {
 		t.Errorf("attestation calls = %d, want one across lost response, restart failure, and exact replay", attestCalls)

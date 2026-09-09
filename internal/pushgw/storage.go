@@ -33,11 +33,12 @@ var (
 // AttestationVerdictToken is deliberately absent -- PG-AUTH-12 forbids persisting it in
 // any form, hashed or otherwise.
 type installationRecord struct {
-	PublicKey     []byte `json:"public_key" firestore:"public_key"`
-	FCMTokenEnc   []byte `json:"fcm_token_enc" firestore:"fcm_token_enc"`
-	CreatedAtMs   int64  `json:"created_at_ms" firestore:"created_at_ms"`
-	LastActiveMs  int64  `json:"last_active_ms" firestore:"last_active_ms"`
-	LicensedBuild bool   `json:"licensed_build" firestore:"licensed_build"`
+	RegistrationID string `json:"registration_id,omitempty" firestore:"registration_id"`
+	PublicKey      []byte `json:"public_key" firestore:"public_key"`
+	FCMTokenEnc    []byte `json:"fcm_token_enc" firestore:"fcm_token_enc"`
+	CreatedAtMs    int64  `json:"created_at_ms" firestore:"created_at_ms"`
+	LastActiveMs   int64  `json:"last_active_ms" firestore:"last_active_ms"`
+	LicensedBuild  bool   `json:"licensed_build" firestore:"licensed_build"`
 	// TokenDead is PG-ROT-2's dead-mapping marker: set (and FCMTokenEnc cleared) when FCM
 	// reports the stored token UNREGISTERED. It is part of the closed "token mapping"
 	// stored field (PG-RET-10) -- it describes that mapping's own liveness, not a new

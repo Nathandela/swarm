@@ -263,10 +263,12 @@ Three credential kinds, deliberately distinct, never interchangeable.
   mismatch, and SHALL refuse registration with `attestation_invalid` when the app-recognition
   verdict is not the licensed Play-signed build.
   The v2 production verifier accepts a verdict at most two minutes old, with at most
-  30 seconds of future skew, measured against server time. Their sum SHALL remain shorter
-  than PG-REG-2's ten-minute idempotency window: once that record expires, the exact saved
-  verdict cannot authorize a second installation. Completed retries are resolved before
-  attestation re-verification; the phone SHALL NOT replace the token inside a pending body.
+  30 seconds of future skew, measured against server time. Completed retries are resolved
+  before attestation re-verification for the linked installation's active lifetime.
+  After `attestation_invalid`, the phone MAY refresh only the attestation token once
+  per Ensure call, preserving the idempotency key and logical request hash. It SHALL
+  persist the refreshed body before signing and sending it; an unknown result never
+  authorizes discarding the intent or minting another idempotency key.
 - **PG-AUTH-12** (Ubiquitous) Attestation is an **authenticity and abuse signal, never an identity**
   (playbook `:560-561`). The gateway SHALL NOT persist the integrity token, any device identifier it
   contains, or any Google account identifier. It MAY persist a boolean verdict class and a timestamp
@@ -448,19 +450,23 @@ paths:
   installation-key-signed operation (§3.3), because the two objects have different lifetimes
   (ADR-015 P5).
 - **PG-REG-2** (Ubiquitous) A proven, still-admitted registration with the same `Idempotency-Key`
-  and byte-identical body inside the key's retention window SHALL return the same
+  and logical request hash (PG-AUTH-11) while the linked installation is active SHALL return the same
   `installation_id` rather than mint a second one, without another attestation verification
-  or quota debit. The same key with a different, validly proven body is
+  or quota debit. The same retained key with a different, validly proven logical intent is
   `409 idempotency_conflict`; an invalid proof is refused before that lookup. Without
   this, a response lost on a flaky handset network yields two durable installations for one app
   install, and the abandoned one holds a live token until its 180-day expiry.
   A received HTTP response alone does not establish success or prove that an earlier attempt
-  never committed. The phone SHALL retain the exact prepared body/key after transport loss,
+  never committed. The phone SHALL retain the prepared intent/key after transport loss,
   an unreadable or invalid success response, or an ambiguous server response. Once an attempt
   may have committed, later refusals (including expired attestation) SHALL NOT cause automatic
   fresh registration. Only a bounded, contract-valid `201` resolves that pending identity.
-  Recovery of the original result is guaranteed only within the idempotency retention window;
-  unresolved attempts outside it require explicit recovery rather than silent re-enrollment.
+  Completed receipts SHALL remain linked to their installations and be deleted atomically
+  with them at inactivity cleanup. Recovery transactionally refreshes activity and returns
+  the current refresh-before floor. Missing or corrupt linkage fails closed. Logically
+  expired installations awaiting physical cleanup return unavailable rather than being
+  revived or replaced. After atomic cleanup, fresh attestation may authorize a new random
+  installation ID; a delayed old provider result cannot affect that new installation.
 - **PG-REG-3** (Ubiquitous) Registrations SHALL be bounded per source and globally (playbook
   `:559-560`); the refusal is `quota_exceeded`, never a silent success.
 
@@ -824,7 +830,7 @@ components:
       schema:
         type: string
         pattern: '^[A-Za-z0-9_-]{22}$'
-        description: 16 CSPRNG bytes, base64url unpadded. Client-generated, retained 10 minutes.
+        description: 16 CSPRNG bytes, base64url unpadded. Client-generated; pending attempts retained 10 minutes, completed receipts co-retained with installations.
   schemas:
     InstallationId:
       type: string
@@ -1375,13 +1381,16 @@ P11's three edits; **this document does not edit that file** and does not claim 
   |---|---|---|
   | Request nonce claims (PG-AUTH-4) | 120 s, PG-AUTH-3's expiry horizon | Digest of installation id plus nonce; expiry |
   | Wake attempts (PG-SUB-4, ADR-027) | 5 min, bounded by the original wake deadline | Request/target digest, installation/address ids, token generation, state, attempt count, lease id/deadline, expiry and bounded gateway response status/body; never the wake payload |
-  | Registration attempts (§3.6, PG-REG-2) | **10 minutes** | `HMAC-SHA256(Idempotency-Key)` document id; exact-body SHA-256 digest, installation id, refresh-before, expiry, state, lease id and lease-until |
+  | Registration attempts (§3.6, PG-REG-2) | Pending: **10 minutes**; completed: linked installation lifetime | `HMAC-SHA256(Idempotency-Key)` document id; logical PG-AUTH-11 digest and revision 2, installation id, refresh-before, pending expiry, state, lease id and lease-until; installation retains the receipt id |
   | Quota windows (§9) | The configured bounded rate window | Bucket digest, count and expiry |
 
   Registration's separate HMAC key is stable injected secret material. No raw
   idempotency key, request body, attestation token or registration proof is stored by
   the gateway. Registration attempts use a 30-second provider-owner lease inside the
-  ten-minute identity window; a takeover does not create a new identity window.
+  ten-minute pending window; a takeover inside that window does not extend it.
+  Completion atomically creates the installation and removes the receipt's independent
+  expiry. Pending cleanup rechecks that completion has not removed that expiry. Installation
+  cleanup deletes only its matching completed receipt in the same transaction.
   Provider work is outside retryable transactions. Wake claim/complete state permits
   bounded at-least-once submission, not an exactly-once provider guarantee.
 
