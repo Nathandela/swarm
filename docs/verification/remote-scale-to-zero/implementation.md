@@ -1771,3 +1771,47 @@ required after platform ingress approval.
 Cleanup stopped only the two disposable acceptance sessions above, retaining their
 history, and removed only this test's two temporary phone UI dumps. The phone was
 left paired on its inbox; no ordinary user session was stopped.
+
+### Approved public push ingress and real enrollment refusal (2026-09-09)
+
+After the preceding exact IAM question, the owner explicitly approved the change.
+The operator successfully granted `allUsers` only `roles/run.invoker` on
+`swarm-pushgw-v2` in `swarm-8404f`, `us-central1`. No runtime, secret or datastore
+permission changed. Unauthenticated HTTPS probes returned health 200, unknown API
+version 404 and malformed registration 400. Application admission, installation
+signatures and Play Integrity remain enforced; platform-public invocation is not
+anonymous registration.
+
+The existing Play code 42 app was restarted to retry enrollment, and Android's
+notification permission was granted through its normal dialog. Sanitized application
+logs recorded real `installation_register` attempts returning 403 at
+19:17:12, 19:17:18, 19:17:49 and 19:19:50 UTC. The phone's failure identifies
+`ErrAttestationRefused` (`attestation_invalid`), wrapped as an outcome-unknown
+registration whose saved request must be replayed. The later operator-generated 400
+is not phone enrollment evidence. No 201 or FCM success was observed.
+
+Independent review confirmed the deployed project, package and Play signing certificate
+match the code 42 release. Count-only Firestore aggregation in `push-v2-owner-pilot`
+returned zero installations and one registration attempt, without exporting document
+IDs or contents. These reads support no committed installation at observation time;
+they are not an atomic recovery authorization or proof of the original failure cause.
+
+The strongest source-level candidate is an outcome-unknown `PendingRegister`: it embeds
+one verdict, while retries preserve its exact body indefinitely and the verifier allows
+only a two-minute verdict age. A later refusal cannot safely disprove a prior lost commit.
+Google also documents that repeatedly decoding a Standard token can clear its recognition
+and licensing verdicts ([automatic replay protection](https://developer.android.com/google/play/integrity/standard#automatic_replay_protection)).
+The phone's original unknown outcome and decoded verdict were not observed, so neither
+token expiry nor replay protection is claimed as the proven first live refusal cause.
+Recovery needs an explicit, tested protocol that preserves lost-commit and duplicate-
+prevention guarantees; no pending state, app data or private key was cleared to get past
+the refusal. The existing foreground pairing remains intact. Push-enabled re-pairing,
+provider-accepted wake and background delivery remain unverified.
+
+Sol reproduced the durable replay behavior with the existing focused phonecore tests
+`TestRegisterOutcome_PriorUnknownSurvivesEveryLaterNonSuccess/later_attestation_refusal`
+and `TestRegisterOutcome_FirstDefinitiveRefusalStillClearsPreparedPair` (PASS, 2.631 s).
+`TestRegistrationExpiry_OldVerdictCannotMintSecondInstallation` also passed for memory
+storage; its Firestore variant was skipped without an emulator, not counted as green.
+Any refreshable-attestation proposal must still prevent a second installation after
+the original idempotency result expires; a fresh token alone is not sufficient recovery.
