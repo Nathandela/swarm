@@ -301,12 +301,12 @@ func Run(cfg Config) (agentExit int, err error) {
 		if goAheadTimeout <= 0 {
 			goAheadTimeout = defaultBackendGoAheadTimeout
 		}
-		agentArgs, ok := srv.waitBackendGoAhead(goAheadTimeout)
+		attach, ok := srv.waitBackendGoAhead(goAheadTimeout)
 		if !ok {
 			log.Printf("shim: no backend_attach arrived within %s; launching the agent DEGRADED "+
 				"(no backend arguments appended)", goAheadTimeout)
 		}
-		argv := append(append([]string(nil), cfg.Argv...), agentArgs...)
+		argv := backendAgentArgv(cfg.Argv, attach.AgentCommandArgs, attach.AgentArgs)
 		cmd = &exec.Cmd{
 			Path:        argv[0],
 			Args:        argv,

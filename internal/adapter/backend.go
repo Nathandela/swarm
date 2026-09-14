@@ -27,6 +27,8 @@ import (
 type BackendSpec struct {
 	// SocketPath is the per-session backend endpoint, inside the session state dir.
 	SocketPath string
+	// AgentArgv is the already composed standalone command, including argv[0].
+	AgentArgv []string
 }
 
 // BackendPlan is the adapter's pure description of the side process, plus the arguments
@@ -43,6 +45,9 @@ type BackendPlan struct {
 	// AgentArgs are appended VERBATIM to the agent's own argv so it attaches to the
 	// backend the core started. Empty is legal.
 	AgentArgs []string
+	// AgentCommandArgs optionally replaces argv[1:] when the backend is attached.
+	// An unavailable backend always uses the original standalone command.
+	AgentCommandArgs []string
 }
 
 // BackendSource is the OPTIONAL extension a CLI whose structured plane lives in a side
@@ -112,7 +117,7 @@ func CheckBackendPlan(src BackendSource, spec BackendSpec) error {
 //
 //   - 9a: Program resolves through HostProber.LookPath, and a Program containing a path
 //     separator is refused OUTRIGHT before any lookup.
-//   - 9c: no element of Args/AgentArgs (after stripping an optional `unix://`) names an
+//   - 9c: no element of Args/AgentArgs/AgentCommandArgs (after stripping an optional `unix://`) names an
 //     ABSOLUTE path outside the session dir. This is the one check a malicious or merely
 //     buggy adapter cannot talk its way past, because the core performs it on data it does
 //     not trust.
@@ -137,15 +142,16 @@ func ResolveBackend(src BackendSource, prober HostProber, spec BackendSpec, sess
 		return BackendPlan{}, false, fmt.Errorf("backend Program %q does not resolve on PATH: %w", plan.Program, err)
 	}
 	dir := filepath.Clean(sessionDir)
-	for _, arg := range append(append([]string(nil), plan.Args...), plan.AgentArgs...) {
+	for _, arg := range append(append(append([]string(nil), plan.Args...), plan.AgentArgs...), plan.AgentCommandArgs...) {
 		if err := checkContained(arg, dir); err != nil {
 			return BackendPlan{}, false, err
 		}
 	}
 	out := BackendPlan{
-		Program:   resolved,
-		Args:      append([]string(nil), plan.Args...),
-		AgentArgs: append([]string(nil), plan.AgentArgs...),
+		Program:          resolved,
+		Args:             append([]string(nil), plan.Args...),
+		AgentArgs:        append([]string(nil), plan.AgentArgs...),
+		AgentCommandArgs: append([]string(nil), plan.AgentCommandArgs...),
 	}
 	return out, true, nil
 }

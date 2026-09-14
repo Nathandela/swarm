@@ -20,7 +20,7 @@ import (
 
 func TestLaunchPersistsTheBackendPlanRefusal(t *testing.T) {
 	cfg := daemonConfig(t)
-	cfg.BackendPlanner = func(agentType, sessionDir, socketPath string, agentEnv []string) (*BackendSpec, error) {
+	cfg.BackendPlanner = func(agentType, sessionDir, socketPath string, agentEnv, agentArgv []string) (*BackendSpec, error) {
 		return nil, errors.New(`backend Program "codex" does not resolve on PATH`)
 	}
 	d := openDaemon(t, cfg)

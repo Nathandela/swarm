@@ -114,11 +114,14 @@ func seedSessionOptions(t *testing.T, stateDir, local, stamp, convID string, tur
 // sleep, restoring them when the test ends.
 func withReloginSeams(t *testing.T, identity string) {
 	t.Helper()
-	prevID, prevAgents, prevSleep := reloginIdentity, reloginAgents, reloginSleep
+	prevID, prevAgents, prevSleep, prevSession := reloginIdentity, reloginAgents, reloginSleep, reloginSessionIdentity
 	reloginIdentity = func(string) string { return identity }
+	reloginSessionIdentity = func(string, []string) string { return identity }
 	reloginAgents = func() []string { return []string{"codex"} }
 	reloginSleep = func(time.Duration) {}
-	t.Cleanup(func() { reloginIdentity, reloginAgents, reloginSleep = prevID, prevAgents, prevSleep })
+	t.Cleanup(func() {
+		reloginIdentity, reloginAgents, reloginSleep, reloginSessionIdentity = prevID, prevAgents, prevSleep, prevSession
+	})
 }
 
 func TestReloginLeavesStampedRowsToTheEnabledWatcher(t *testing.T) {
@@ -319,5 +322,27 @@ func TestReloginHoldsWhenCredentialsAreUnknown(t *testing.T) {
 	}
 	if len(c.killed) != 0 {
 		t.Fatalf("killed %v with unknown credentials; nothing may be judged", c.killed)
+	}
+}
+
+func TestReloginLaunchRetainsOriginalHistory(t *testing.T) {
+	c := &fakeReloginClient{views: []protocol.SessionView{{ID: "ep-t/s1", Agent: "codex", Status: status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionNone}}}}
+	_, skipped, err := reloginRecycle(c, c.views[0])
+	if err != nil || skipped || len(c.launched) != 1 || len(c.deleted) != 0 {
+		t.Fatalf("resume err=%v skipped=%v launches=%d deletes=%v", err, skipped, len(c.launched), c.deleted)
+	}
+}
+
+func TestReloginHoldsForeignSessionStore(t *testing.T) {
+	withReloginSeams(t, reloginIDCurrent)
+	reloginSessionIdentity = func(string, []string) string { return reloginIDOld }
+	dir := t.TempDir()
+	c := &fakeReloginClient{views: []protocol.SessionView{seedSession(t, dir, "s1", reloginIDOld, "conversation", status.TurnIdle)}}
+	var out, errb bytes.Buffer
+	if code := runRelogin([]string{"--force"}, dialTo(c), dir, &out, &errb); code != 0 {
+		t.Fatalf("exit=%d: %s", code, errb.String())
+	}
+	if len(c.killed) != 0 || !strings.Contains(out.String(), "different or unreadable") {
+		t.Fatalf("foreign store not held: %s", out.String())
 	}
 }

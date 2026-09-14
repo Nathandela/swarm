@@ -133,7 +133,7 @@ const tombstoneTTL = 10 * time.Second
 
 func newGeneralModel(sessions []protocol.SessionView) generalModel {
 	m := generalModel{
-		sessions: append([]protocol.SessionView(nil), sessions...),
+		sessions: protocol.VisibleDiscussions(sessions),
 		grouping: groupByStatus,
 		ordering: orderByArrival,
 	}
@@ -395,6 +395,32 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	}
 	// Remember what is selected before the regroup shifts the flat indices.
 	selID := m.selectedID()
+	if s.RosterHidden {
+		m.remove(s.ID)
+		return nil
+	}
+	if s.SupersededBy != "" {
+		// Keep the selected source until its successor arrives. Source and child
+		// events can be queued in either order; removing early makes the row flicker.
+		if _, ready := m.sessionByID(s.SupersededBy); ready {
+			m.remove(s.ID)
+			if selID == s.ID {
+				m.restoreSel(s.SupersededBy)
+			}
+		}
+		return nil
+	}
+	for _, id := range s.Supersedes {
+		for i := range m.sessions {
+			if m.sessions[i].ID == id {
+				m.sessions = append(m.sessions[:i], m.sessions[i+1:]...)
+				if selID == id {
+					selID = s.ID
+				}
+				break
+			}
+		}
+	}
 
 	var oldGroup status.Group
 	found := false

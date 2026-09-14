@@ -238,3 +238,13 @@ func writeBackendInfo(sessionDir string, b *backendProc, socketPath string) erro
 	// pre-exist from a prior incarnation with a looser mode; re-tighten explicitly.
 	return os.Chmod(filepath.Join(sessionDir, BackendFile), 0o600)
 }
+
+// The original command remains intact if startup degrades to no backend. The
+// alternate arguments never replace the executable chosen by the launch policy.
+func backendAgentArgv(original, backendArgs, attachArgs []string) []string {
+	argv := append([]string(nil), original...)
+	if len(attachArgs) > 0 && len(backendArgs) > 0 {
+		argv = append(argv[:1:1], backendArgs...)
+	}
+	return append(argv, attachArgs...)
+}

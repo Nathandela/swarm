@@ -21,7 +21,7 @@ package main
 //
 // The report is local reads (the doctor precedent: meta.json + the credentials
 // file); the recycle drives exactly the protocol ops the TUI's manual Ctrl+X +
-// r gesture drives (Kill, Launch with resume_from, Delete). Because those two
+// r gesture drives (Kill, Launch with resume_from). Because those two
 // halves MUST describe the same daemon, the verb refuses a socket whose
 // endpoint id is not the one derived from the local state dir (audit M4:
 // SWARM_DAEMON_SOCK can point anywhere).
@@ -43,22 +43,21 @@ import (
 )
 
 // reloginClient is the narrow daemon surface the recycle drives; *protocol.Client
-// satisfies it as-is (the agentClient precedent, plus Delete for the locked
-// one-row-per-conversation rule and EndpointID for the coherence check).
+// satisfies it as-is (the agentClient precedent plus EndpointID for coherence).
 type reloginClient interface {
 	EndpointID() string
 	List() ([]protocol.SessionView, error)
 	Kill(id string) error
 	Launch(protocol.LaunchReq) (id, name string, err error)
-	Delete(id string) error
 }
 
 // Package-level seams (the persist.writeTemp precedent) so runRelogin is testable
 // with no adapter registry reads and no real clock.
 var (
-	reloginIdentity = skeleton.CurrentAuthIdentity
-	reloginAgents   = skeleton.AuthProbedAgents
-	reloginSleep    = time.Sleep
+	reloginIdentity        = skeleton.CurrentAuthIdentity
+	reloginSessionIdentity = skeleton.AuthIdentityForEnv
+	reloginAgents          = skeleton.AuthProbedAgents
+	reloginSleep           = time.Sleep
 )
 
 // reloginExitWait bounds the wait for a killed session's exit to be recorded
@@ -146,6 +145,10 @@ func runRelogin(args []string, dial func() (reloginClient, error), stateDir stri
 			metaless++
 			continue
 		}
+		if reloginSessionIdentity(v.Agent, m.Env) != id {
+			_, _ = fmt.Fprintf(stdout, "hold      %s  %s: different or unreadable session credentials; automatic recovery cannot judge this store\n", v.ID, v.Name)
+			continue
+		}
 		stamp := m.AuthIdentity
 		stale := stamp != id // empty stamps included: unverifiable, judged only by the human
 		if !stale && !*force {
@@ -156,10 +159,9 @@ func runRelogin(args []string, dial func() (reloginClient, error), stateDir stri
 			_, _ = fmt.Fprintf(stdout, "deferred  %s  %s: mid-turn or awaiting input; rerun when it is quiet\n", v.ID, v.Name)
 		case m.ConversationID == "":
 			_, _ = fmt.Fprintf(stdout, "manual    %s  %s: no captured conversation id; restart it yourself\n", v.ID, v.Name)
-		case m.LaunchOptions[protocol.OptionWorktree] == "true":
-			// Audit C1: a resume cannot follow the conversation into its
-			// worktree, and the delete would remove the checkout with force.
-			_, _ = fmt.Fprintf(stdout, "manual    %s  %s: worktree-isolated; recycle it yourself when its work is committed\n", v.ID, v.Name)
+		case m.LaunchOptions[protocol.OptionWorktree] == "true" && m.AgentCwd == "":
+			// A legacy isolated session needs its saved checkout before resume.
+			_, _ = fmt.Fprintf(stdout, "manual    %s  %s: worktree-isolated without a saved checkout; recover it manually\n", v.ID, v.Name)
 		case stale && stamp != "" && !watcherOff:
 			_, _ = fmt.Fprintf(stdout, "watcher   %s  %s: stale; the daemon recycles it within %s\n", v.ID, v.Name, authWatchIntervalHuman)
 		case stale && stamp == "" && !watcherOff && !*force:
@@ -176,7 +178,7 @@ func runRelogin(args []string, dial func() (reloginClient, error), stateDir stri
 				_, _ = fmt.Fprintf(stdout, "deferred  %s  %s: went busy since the roster was read; rerun when it is quiet\n", v.ID, v.Name)
 			default:
 				acted++
-				_, _ = fmt.Fprintf(stdout, "recycled  %s -> %s  %s\n", v.ID, newID, v.Name)
+				_, _ = fmt.Fprintf(stdout, "started   %s -> %s  %s (resume readiness not yet verified)\n", v.ID, newID, v.Name)
 			}
 		}
 	}
@@ -214,11 +216,11 @@ func reloginMeta(stateDir, namespacedID string) (persist.Meta, bool) {
 	return m, true
 }
 
-// reloginRecycle is one session's kill -> wait-ended -> resume -> delete, the
+// reloginRecycle is one session's kill -> wait-ended -> resume, the
 // exact TUI gesture. The roster is refetched immediately before the kill (the
 // classification above may be many seconds old by the time a long sweep reaches
 // this row): a session that went busy is SKIPPED, never killed. A failed resume
-// keeps the ended row (never Delete without a successful replacement).
+// keeps the ended row; even a successful launch retains its history.
 func reloginRecycle(c reloginClient, v protocol.SessionView) (newID string, skipped bool, err error) {
 	views, err := c.List()
 	if err != nil {
@@ -275,9 +277,6 @@ func reloginRecycle(c reloginClient, v protocol.SessionView) (newID string, skip
 	})
 	if err != nil {
 		return "", false, fmt.Errorf("resume: %w (the ended row remains for a manual resume)", err)
-	}
-	if err := c.Delete(v.ID); err != nil {
-		return newID, false, fmt.Errorf("delete the stale row: %w", err)
 	}
 	return newID, false, nil
 }

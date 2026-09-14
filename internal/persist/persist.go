@@ -97,6 +97,8 @@ type Meta struct {
 	// unreadable at launch -- both gate conservatively (never auto-recycled).
 	AuthIdentity string `json:"auth_identity,omitempty"`
 	ExitCode     *int   `json:"exit_code"`
+	// RosterHidden archives an ended historical attempt without deleting its files.
+	RosterHidden bool   `json:"roster_hidden,omitempty"`
 	ResumedFrom  string `json:"resumed_from"`
 	SpawnedFrom  string `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
 	SpawnIntent  string `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is

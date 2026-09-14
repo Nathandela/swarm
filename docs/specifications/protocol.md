@@ -197,6 +197,9 @@ alongside the group.
 | `last_activity` | time            | timestamp of the session's last activity                      |
 | `created_at`    | time            | session creation timestamp                                    |
 | `summary`       | string          | V-4 one-line last-output summary                              |
+| `roster_hidden` | bool | ended attempt archived from the visible roster; raw metadata and files remain available by ID |
+| `supersedes` | array of strings | namespaced historical resume attempt IDs to remove from the visible roster; persisted history remains available by ID |
+| `superseded_by` | string | namespaced visible successor for a historical attempt event; roster clients remove/ignore this event row, while session-scoped consumers retain its original ID and status |
 | `spawned_from`  | string          | local id of the session that spawned this one; absent when none (ADR-010 D4) |
 | `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
 | `backend_plan_error` | string     | the persisted reason this session launched with no backend although its adapter declared one (the agent's PTY runs; nothing serves the attach channel); absent on a healthy session and on rows from an older daemon (lifecycle R1) |
@@ -1155,3 +1158,5 @@ negotiated `context-guard-settings` capability. Their additive bodies are
 The only accepted schema version is 1 and the threshold is an inclusive integer 40..95.
 Remote-tier callers are refused before body or backend access. A stale CAS is
 `stale_revision`; a missing or untrustworthy backend/document is `unavailable`.
+
+Resume roster projection groups explicit resume lineage (including shared missing ancestors), keeps the newest ended attempt or all running attempts, and leaves independent launches and handoffs separate. `list` returns all raw rows with projection annotations, retaining exact-ID lookup compatibility; `event` also retains actual session identity. The TUI and `swarm ls` apply the shared visibility filter. Clients must apply these annotations to avoid duplicate live rows. This projection does not alter the durable journal or phone journal reducer, which continue to expose raw session history.

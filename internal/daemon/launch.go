@@ -138,11 +138,12 @@ type shimSpawnConfig struct {
 	// and a restarted daemon recovers the whole session from this 0600 file; BackendProgram
 	// in particular is the RESOLVED absolute path, so a restart never re-resolves a bare
 	// name through a PATH that may now point at a different CLI version.
-	BackendProgram    string   `json:"backend_program,omitempty"`
-	BackendArgs       []string `json:"backend_args,omitempty"`
-	BackendAgentArgs  []string `json:"backend_agent_args,omitempty"`
-	BackendSocketPath string   `json:"backend_socket_path,omitempty"`
-	BackendEnv        []string `json:"backend_env,omitempty"`
+	BackendProgram          string   `json:"backend_program,omitempty"`
+	BackendArgs             []string `json:"backend_args,omitempty"`
+	BackendAgentArgs        []string `json:"backend_agent_args,omitempty"`
+	BackendAgentCommandArgs []string `json:"backend_agent_command_args,omitempty"`
+	BackendSocketPath       string   `json:"backend_socket_path,omitempty"`
+	BackendEnv              []string `json:"backend_env,omitempty"`
 }
 
 // HookChannel names one session's structured-capture channel: the shim-owned hook
@@ -582,7 +583,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	// adapter and could not.
 	backendSock := backendSocketPath(d.cfg.StateDir, id)
 	if spec.Backend == nil && d.cfg.BackendPlanner != nil {
-		plan, perr := d.cfg.BackendPlanner(spec.AgentType, dir, backendSock, spec.ClientEnv)
+		plan, perr := d.cfg.BackendPlanner(spec.AgentType, dir, backendSock, spec.ClientEnv, spec.Argv)
 		if perr != nil {
 			// A backend failure is a failure for the BACKEND only (playbook §6.1's posture):
 			// the session still launches, degraded, exactly as a pre-R7 session of the same
@@ -599,6 +600,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		lc.BackendProgram = spec.Backend.Program
 		lc.BackendArgs = append([]string(nil), spec.Backend.Args...)
 		lc.BackendAgentArgs = append([]string(nil), spec.Backend.AgentArgs...)
+		lc.BackendAgentCommandArgs = append([]string(nil), spec.Backend.AgentCommandArgs...)
 		lc.BackendSocketPath = backendSock
 		lc.BackendEnv = append([]string(nil), spec.Backend.Env...)
 	}

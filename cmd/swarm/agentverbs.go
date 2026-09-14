@@ -62,6 +62,8 @@ func runLS(args []string, c agentClient, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	sessions = protocol.VisibleDiscussions(sessions)
+
 	if *asJSON {
 		if sessions == nil {
 			sessions = []protocol.SessionView{} // an empty roster is [], never null

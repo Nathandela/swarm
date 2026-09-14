@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -61,6 +62,10 @@ func TestAuthRecyclePostRenameSyncFailureRetainsEmbargoAndRepersistsBeforeKill(t
 	d := &Daemon{}
 	w.withRecycleFence = d.withAuthRecycleFence
 	w.withClaimedRecycleFence = d.withClaimedAuthRecycleFence
+	w.withResumeFence = d.withAuthResumeFence
+	w.clearRecycle = d.clearAuthRecycle
+	ready := false
+	w.ready = func(persist.Meta) bool { return ready }
 
 	writes := 0
 	w.writeState = func(string, []byte) (bool, error) {
@@ -77,10 +82,23 @@ func TestAuthRecyclePostRenameSyncFailureRetainsEmbargoAndRepersistsBeforeKill(t
 		t.Fatalf("uncertain claim killed=%v state=%v embargo=%v", f.killed, w.state.Killed, d.composerRecycleInFlight("s1"))
 	}
 
-	if retry := w.recycle("codex", m); retry {
-		t.Fatal("confirmed redrive did not complete")
+	if retry := w.recycle("codex", m); !retry {
+		t.Fatal("confirmed redrive treated process launch as recovery")
 	}
 	if writes < 2 || len(f.killed) != 1 || len(f.launched) != 1 {
 		t.Fatalf("redrive writes=%d kills=%v launches=%d, want >=2/1/1", writes, f.killed, len(f.launched))
+	}
+	if !w.state.Killed["s1"] || !d.composerRecycleInFlight("s1") || w.state.Candidates["s1"] != "fresh1" {
+		t.Fatal("launch lost the durable claim or embargo before readiness")
+	}
+	w.state.Pending["codex"] = []string{"s1"}
+	w.workPending("codex", identityB)
+	if !w.state.Killed["s1"] || !d.composerRecycleInFlight("s1") || len(f.launched) != 1 {
+		t.Fatal("unready observation lost the claim or spawned a duplicate")
+	}
+	ready = true
+	w.workPending("codex", identityB)
+	if w.state.Killed["s1"] || d.composerRecycleInFlight("s1") || len(w.state.Pending["codex"]) != 0 || len(f.launched) != 1 || len(f.deleted) != 0 {
+		t.Fatal("verified readiness failed to settle exactly once while retaining history")
 	}
 }

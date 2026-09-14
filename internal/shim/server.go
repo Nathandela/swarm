@@ -449,12 +449,12 @@ func (s *server) noteGoAhead(ctrl shimwire.Control) {
 // between spawning this shim and dialing the backend must not leave the owner with a terminal
 // that never starts, so a go-ahead that never arrives SPAWNS THE AGENT ANYWAY -- degraded (no
 // AgentArgs, therefore no --remote) and logged.
-func (s *server) waitBackendGoAhead(d time.Duration) ([]string, bool) {
+func (s *server) waitBackendGoAhead(d time.Duration) (shimwire.Control, bool) {
 	select {
 	case ctrl := <-s.goAhead:
-		return ctrl.AgentArgs, true
+		return ctrl, true
 	case <-time.After(d):
-		return nil, false
+		return shimwire.Control{}, false
 	}
 }
 

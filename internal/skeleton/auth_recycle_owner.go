@@ -121,5 +121,10 @@ func (d *Daemon) ownerDelete(local string) error {
 	if _, ok := d.core.Get(local); !ok {
 		return d.core.Delete(local)
 	}
-	return d.withOwnerSessionEnd(local, func() error { return d.core.Delete(local) })
+	return d.withOwnerSessionEnd(local, func() error {
+		if d.api != nil {
+			return d.api.deleteDiscussion(local)
+		}
+		return d.core.Delete(local)
+	})
 }

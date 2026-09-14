@@ -600,6 +600,42 @@ func (d *Daemon) SetTag(id, tag string) error {
 	return nil
 }
 
+// SetRosterHidden archives an ended attempt without removing its history or checkout.
+func (d *Daemon) SetRosterHidden(id string, hidden bool) error {
+	d.writeMu.Lock()
+	d.mu.Lock()
+	sess, ok := d.sessions[id]
+	var m persist.Meta
+	if ok {
+		m = sess.meta
+	}
+	d.mu.Unlock()
+	if !ok {
+		d.writeMu.Unlock()
+		return fmt.Errorf("daemon: unknown session %q", id)
+	}
+	if m.RosterHidden == hidden {
+		d.writeMu.Unlock()
+		return nil
+	}
+	if hidden && m.Status.Process == status.ProcessRunning {
+		d.writeMu.Unlock()
+		return fmt.Errorf("daemon: cannot hide running session %q", id)
+	}
+	m.RosterHidden = hidden
+	m.SchemaVersion = persist.SchemaVersion
+	m.Env = persist.FilterEnv(m.Env)
+	written, err := d.saveMetaLocked(&m)
+	d.writeMu.Unlock()
+	if err != nil || !written {
+		return err
+	}
+	if d.cfg.onMetaSave != nil {
+		d.cfg.onMetaSave(m)
+	}
+	return nil
+}
+
 // Close is a clean shutdown: stop serving and release the singleton (flock +
 // socket). Running shims are independent and survive; their monitors are stopped
 // without finalizing them. The lock is released so a fresh daemon can take over.

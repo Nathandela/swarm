@@ -114,14 +114,18 @@ func signalShim(sock, sig string) error {
 //
 // agentArgs is appended to the agent argv VERBATIM by the shim. EMPTY IS THE ORDINARY CASE:
 // it means "go ahead, I am connected, and I am not handing you a thread id".
-func sendBackendAttach(sock string, agentArgs []string) error {
+func sendBackendAttach(sock string, agentArgs []string, commandArgs ...[]string) error {
 	conn, _, err := dialShimHello(sock)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 
-	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeBackendAttach, AgentArgs: agentArgs})
+	ctrl := shimwire.Control{Type: shimwire.TypeBackendAttach, AgentArgs: agentArgs}
+	if len(commandArgs) > 0 {
+		ctrl.AgentCommandArgs = commandArgs[0]
+	}
+	body, err := shimwire.Encode(ctrl)
 	if err != nil {
 		return err
 	}

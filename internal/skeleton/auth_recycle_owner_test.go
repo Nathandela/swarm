@@ -205,6 +205,7 @@ func TestOwnerEndAfterAuthSignalIsRefusedAndReplacementRemainsOwed(t *testing.T)
 	if len(f.launched) != 1 {
 		t.Fatalf("auth-owned session was replaced %d time(s), want 1", len(f.launched))
 	}
+	w.tick() // Observe transport readiness after launch.
 	if len(w.state.Killed) != 0 || len(w.state.Pending["codex"]) != 0 {
 		t.Fatalf("completed auth replacement left state killed=%v pending=%v", w.state.Killed, w.state.Pending)
 	}

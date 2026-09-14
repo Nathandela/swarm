@@ -15,6 +15,9 @@ package skeleton
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+
+	"github.com/Nathandela/swarm/internal/daemon"
 	"strings"
 	"testing"
 )
@@ -46,12 +49,15 @@ func TestBackendPlanResolvesAgainstTheLaunchEnvNotTheDaemons(t *testing.T) {
 	sock := filepath.Join(sessionDir, "codex.sock")
 	agentEnv := []string{"PATH=" + bin, "HOME=" + t.TempDir()}
 
-	spec, err := d.planSessionBackend("codex", sessionDir, sock, agentEnv)
+	spec, err := d.planSessionBackend("codex", sessionDir, sock, agentEnv, []string{"codex", "resume", "thread", "--sandbox", "read-only"})
 	if err != nil {
 		t.Fatalf("planSessionBackend with a resolving launch env: %v", err)
 	}
 	if spec == nil {
 		t.Fatal("planSessionBackend planned no backend although the launch env resolves codex")
+	}
+	if !reflect.DeepEqual(spec.AgentCommandArgs, []string{"resume", "thread"}) {
+		t.Fatalf("planned remote resume args = %v", spec.AgentCommandArgs)
 	}
 	if want := filepath.Join(bin, "codex"); spec.Program != want {
 		t.Fatalf("backend program = %q, want the launch env's %q", spec.Program, want)
@@ -71,7 +77,7 @@ func TestBackendPlanFailsWhenTheLaunchEnvCannotResolve(t *testing.T) {
 	sock := filepath.Join(sessionDir, "codex.sock")
 	agentEnv := []string{"PATH=" + filepath.Join(t.TempDir(), "empty")}
 
-	_, err := d.planSessionBackend("codex", sessionDir, sock, agentEnv)
+	_, err := d.planSessionBackend("codex", sessionDir, sock, agentEnv, nil)
 	if err == nil {
 		t.Fatal("planSessionBackend consulted an env other than the supplied launch env")
 	}
@@ -90,11 +96,23 @@ func TestBackendPlanWithNoLaunchEnvFallsBackToDaemonPolicy(t *testing.T) {
 	sessionDir := t.TempDir()
 	sock := filepath.Join(sessionDir, "codex.sock")
 
-	spec, err := d.planSessionBackend("codex", sessionDir, sock, nil)
+	spec, err := d.planSessionBackend("codex", sessionDir, sock, nil, nil)
 	if err != nil {
 		t.Fatalf("planSessionBackend with nil env against a resolving daemon PATH: %v", err)
 	}
 	if spec == nil {
 		t.Fatal("nil launch env must fall back to daemon policy, which resolves codex here")
+	}
+}
+
+func TestBackendResumeCommandArgsRequiresCharacterizedRunningVersion(t *testing.T) {
+	ch := daemon.BackendChannel{AgentCommandArgs: []string{"resume", "thread"}}
+	for _, userAgent := range []string{"", "swarm/0.147.0 (linux)", "swarm/0.153.0", "swarm/0.155.0", "swarm/0.154.0-alpha", "swarm/0.154.0+build", "unknown"} {
+		if got := backendResumeCommandArgs(ch, userAgent); got != nil {
+			t.Fatalf("%q selected uncharacterized resume args: %v", userAgent, got)
+		}
+	}
+	if got := backendResumeCommandArgs(ch, "swarm/0.154.0 (Linux)"); !reflect.DeepEqual(got, ch.AgentCommandArgs) {
+		t.Fatalf("characterized running version args = %v", got)
 	}
 }

@@ -89,6 +89,7 @@ func TestResumeNeverChainsReservedKeys(t *testing.T) {
 		"script":                "/tmp/fake-script",
 		"model":                 "gpt-5.6-sol",
 	})
+	src.AgentCwd = t.TempDir()
 	spec := daemon.LaunchSpec{
 		AgentType: "codex",
 		Cwd:       "/work",
@@ -108,27 +109,6 @@ func TestResumeNeverChainsReservedKeys(t *testing.T) {
 	}
 	if got.ResumedFrom != local {
 		t.Errorf("ResumedFrom = %q; want %q", got.ResumedFrom, local)
-	}
-}
-
-// TestOneLiveResumePerSource pins the audit M1 dedup's pure half: a source
-// with a RUNNING resumed child yields that child; an ended child, a child of
-// another agent, or a child of another source never matches.
-func TestOneLiveResumePerSource(t *testing.T) {
-	running := persist.Meta{ID: "child1", AgentType: "codex", ResumedFrom: "src",
-		Status: status.Status{Process: status.ProcessRunning}}
-	ended := persist.Meta{ID: "child0", AgentType: "codex", ResumedFrom: "src",
-		Status: status.Status{Process: status.ProcessExited}}
-	otherAgent := persist.Meta{ID: "child2", AgentType: "claude", ResumedFrom: "src",
-		Status: status.Status{Process: status.ProcessRunning}}
-	otherSource := persist.Meta{ID: "child3", AgentType: "codex", ResumedFrom: "elsewhere",
-		Status: status.Status{Process: status.ProcessRunning}}
-
-	if got, ok := runningResumeOf([]persist.Meta{ended, otherAgent, otherSource, running}, "codex", "src"); !ok || got.ID != "child1" {
-		t.Fatalf("runningResumeOf = %v/%v; want the running child1", got.ID, ok)
-	}
-	if _, ok := runningResumeOf([]persist.Meta{ended, otherAgent, otherSource}, "codex", "src"); ok {
-		t.Fatal("a source with no RUNNING resumed child must not dedup; the ended child is resumable again")
 	}
 }
 

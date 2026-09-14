@@ -83,7 +83,7 @@ func (e errBackendProbe) Error() string { return string(e) }
 //
 // An adapter that proves no BackendSource answers (nil, nil), which is the ORDINARY case and
 // never a defect: most CLIs need no backend at all.
-func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string, agentEnv []string) (*daemon.BackendSpec, error) {
+func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string, agentEnv, agentArgv []string) (*daemon.BackendSpec, error) {
 	ad, ok := registry.New(agentType)
 	if !ok {
 		return nil, nil
@@ -92,7 +92,7 @@ func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string, ag
 	if !ok {
 		return nil, nil // ADR-010 §5's posture: absence is a signal, not a defect
 	}
-	spec := adapter.BackendSpec{SocketPath: socketPath}
+	spec := adapter.BackendSpec{SocketPath: socketPath, AgentArgv: agentArgv}
 	// Obligation 8, checked before anything is resolved: a DECLARED backend that names no
 	// program is a session whose agent attaches to a socket nobody serves.
 	if err := adapter.CheckBackendPlan(src, spec); err != nil {
@@ -107,9 +107,10 @@ func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string, ag
 		return nil, err
 	}
 	return &daemon.BackendSpec{
-		Program:   plan.Program,
-		Args:      plan.Args,
-		AgentArgs: plan.AgentArgs,
+		Program:          plan.Program,
+		Args:             plan.Args,
+		AgentArgs:        plan.AgentArgs,
+		AgentCommandArgs: plan.AgentCommandArgs,
 	}, nil
 }
 
@@ -209,7 +210,7 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		}
 	}
 	// THE GO-AHEAD, sent before there is a thread: the agent is the party that creates it.
-	if aerr := d.core.SendBackendAttach(id, ch.AgentArgs); aerr != nil {
+	if aerr := d.core.SendBackendAttach(id, ch.AgentArgs, backendResumeCommandArgs(ch, feed.userAgent)); aerr != nil {
 		log.Printf("skeleton: release session %s with its backend: %v", id, aerr)
 	}
 	threadID, ok := d.awaitAdoptedThread(id, d.backendDeadline())
@@ -722,4 +723,19 @@ func rebuildFrame(method string, id, params json.RawMessage) []byte {
 		return nil
 	}
 	return out
+}
+
+// Only the characterized Codex version restores the server's saved permissions on
+// remote resume. Earlier versions sent the TUI defaults instead. This version is
+// from the live backend handshake, not a PATH probe or persisted session metadata.
+func backendResumeCommandArgs(ch daemon.BackendChannel, userAgent string) []string {
+	ad, ok := registry.New("codex")
+	if !ok {
+		return nil
+	}
+	version, ok := ad.ParseVersion(userAgent)
+	if !ok || version != "0.154.0" {
+		return nil
+	}
+	return ch.AgentCommandArgs
 }

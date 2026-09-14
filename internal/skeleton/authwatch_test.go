@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +90,11 @@ func (f *authFake) launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		Name: spec.Name, Cwd: spec.Cwd, AuthIdentity: f.identity,
 		Status: status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionNone},
 	}
+	source := strings.TrimPrefix(spec.Options[protocol.OptionResumeFrom], "ep-test01/")
+	m.ResumedFrom = source
+	if parent := f.sessions[source]; parent != nil {
+		m.ConversationID = parent.ConversationID
+	}
 	f.add(m)
 	return m, nil
 }
@@ -115,6 +121,7 @@ func testWatcher(t *testing.T, f *authFake) *authWatcher {
 		exitWait: time.Second, exitPoll: time.Millisecond,
 		state:   authWatchState{Identities: map[string]string{}, Pending: map[string][]string{}, Killed: map[string]bool{}},
 		settled: true,
+		ready:   func(persist.Meta) bool { return true },
 		warned:  map[string]bool{},
 		stop:    make(chan struct{}),
 	}
@@ -180,9 +187,10 @@ func TestReloginRecyclesAnIdleStaleSession(t *testing.T) {
 	if spec.Name != "n-s1" || spec.Cwd != "/work/s1" || spec.AgentType != "codex" {
 		t.Errorf("the resumed session lost its identity: %+v", spec)
 	}
-	if len(f.deleted) != 1 || f.deleted[0] != "s1" {
-		t.Errorf("deleted %v; want the stale row s1 (the owner's one-row-per-conversation rule)", f.deleted)
+	if len(f.deleted) != 0 {
+		t.Errorf("deleted %v; source history must be retained", f.deleted)
 	}
+	w.tick() // A separate observation, not launch success, establishes readiness.
 	if len(w.state.Pending["codex"]) != 0 {
 		t.Errorf("pending %v after a completed recycle; want empty", w.state.Pending["codex"])
 	}
@@ -260,9 +268,10 @@ func TestAKillTimeoutKeepsTheResumeOwed(t *testing.T) {
 	// The exit lands late; the next tick completes the owed resume.
 	f.sessions["s1"].Status.Process = status.ProcessExited
 	w.tick()
-	if len(f.launched) != 1 || len(f.deleted) != 1 {
+	if len(f.launched) != 1 || len(f.deleted) != 0 {
 		t.Fatalf("after the late exit: launched %d deleted %v; want the owed resume to complete", len(f.launched), f.deleted)
 	}
+	w.tick() // Observe the replacement.
 	if len(w.state.Killed) != 0 {
 		t.Fatalf("killed marks %v after completion; want none", w.state.Killed)
 	}
@@ -286,8 +295,8 @@ func TestACrashBetweenKillAndResumeIsCompletedByTheNextIncarnation(t *testing.T)
 	if len(f.launched) != 1 {
 		t.Fatalf("launched %d; the next incarnation must complete the owed resume", len(f.launched))
 	}
-	if len(f.deleted) != 1 || f.deleted[0] != "s1" {
-		t.Fatalf("deleted %v; want the stale row removed after the owed resume", f.deleted)
+	if len(f.deleted) != 0 {
+		t.Fatalf("deleted %v; source history must be retained", f.deleted)
 	}
 }
 
@@ -673,6 +682,10 @@ func TestAKillErrorThatStillExitsRemainsOwedAndResumes(t *testing.T) {
 	if len(f.killed) != 1 || len(f.launched) != 1 {
 		t.Fatalf("ambiguous delivered signal kills=%v launches=%d, want 1/1", f.killed, len(f.launched))
 	}
+	if !w.state.Killed["s1"] || w.state.Candidates["s1"] == "" {
+		t.Fatal("spawn cleared its claim before a readiness observation")
+	}
+	w.tick() // Verify the replacement on a separate observation.
 	if w.state.Killed["s1"] {
 		t.Fatal("completed replacement retained its old kill claim")
 	}
@@ -741,5 +754,168 @@ func TestCredentialsReadIsConservative(t *testing.T) {
 	}
 	if _, err := readCredentials(ok); err != nil {
 		t.Fatalf("a small regular file was refused: %v", err)
+	}
+}
+
+func TestAuthReplacementExitDoesNotDeleteHistoryOrRetry(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "conversation"))
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.tick()
+	if !w.state.Killed["s1"] || w.state.Candidates["s1"] != "fresh1" {
+		t.Fatal("spawn was prematurely considered recovery")
+	}
+	f.sessions["fresh1"].Status.Process = status.ProcessExited
+	w.state = loadAuthWatchState(w.stateDir)
+	for range 3 {
+		w.tick()
+	}
+	if len(f.launched) != 1 || len(f.deleted) != 0 || f.sessions["s1"] == nil {
+		t.Fatalf("launches=%d deleted=%v; failed recovery must retain history without retries", len(f.launched), f.deleted)
+	}
+	if len(w.state.Killed) != 0 || len(w.state.Pending["codex"]) != 0 {
+		t.Fatal("failed replacement left a permanent source embargo")
+	}
+}
+
+func TestAuthReplacementRequiresLiveReadiness(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "conversation"))
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	ready := false
+	w.ready = func(persist.Meta) bool { return ready }
+	w.tick()
+	w.tick()
+	if !w.state.Killed["s1"] || len(f.launched) != 1 {
+		t.Fatal("unready replacement completed or duplicated")
+	}
+	ready = true
+	w.tick()
+	if w.state.Killed["s1"] || len(f.deleted) != 0 {
+		t.Fatal("ready replacement did not settle while retaining history")
+	}
+}
+
+func TestAuthReplacementCrashBeforeCandidateSaveFindsFailedChild(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "conversation"))
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.tick()
+	w.state.Candidates = nil // durable child exists, watcher state write was lost
+	f.sessions["fresh1"].Status.Process = status.ProcessExited
+	w.tick()
+	if len(f.launched) != 1 || len(w.state.Killed) != 0 {
+		t.Fatal("crash recovery relaunched the failed child")
+	}
+}
+
+func TestAuthReplacementReadinessTimeoutReleasesClaim(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "conversation"))
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.ready = nil
+	w.tick()
+	f.sessions["fresh1"].CreatedAt = time.Now().Add(-3 * time.Minute)
+	w.tick()
+	if w.state.Killed["s1"] || len(f.deleted) != 0 {
+		t.Fatal("timeout must release source claim without deleting history")
+	}
+}
+
+func TestAuthWorktreeWithSavedCheckoutCanRecover(t *testing.T) {
+	f := newAuthFake(identityB)
+	m := runningCodex("s1", identityA, status.TurnIdle, "conversation")
+	m.LaunchOptions = map[string]string{protocol.OptionWorktree: "true"}
+	m.AgentCwd = "/work/isolated"
+	f.add(m)
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.tick()
+	if len(f.launched) != 1 || len(f.deleted) != 0 {
+		t.Fatal("saved checkout must allow recovery without deleting work")
+	}
+}
+
+func TestAnotherLoginDuringAuthRecoveryRecyclesReplacementOnce(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "conversation"))
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.tick()
+	f.identity = "account-C"
+	w.tick()
+	w.tick()
+	if len(f.launched) != 2 || len(f.deleted) != 0 || len(w.state.Killed) != 0 {
+		t.Fatalf("second login launches=%d deleted=%v claims=%v", len(f.launched), f.deleted, w.state.Killed)
+	}
+}
+
+func TestAuthWatcherHoldsForeignOrUnreadableSessionStore(t *testing.T) {
+	for _, scoped := range []string{identityA, ""} {
+		t.Run(scoped, func(t *testing.T) {
+			f := newAuthFake(identityB)
+			f.add(runningCodex("s1", identityA, status.TurnIdle, "conversation"))
+			w := testWatcher(t, f)
+			w.state.Identities["codex"] = identityA
+			w.sessionIdentity = func(string, []string) string { return scoped }
+			w.tick()
+			w.tick()
+			if len(f.killed) != 0 || len(f.launched) != 0 {
+				t.Fatal("foreign or unreadable credential store was recycled")
+			}
+		})
+	}
+}
+
+func TestAuthIdentityForEnvRejectsUnsupportedCodexHome(t *testing.T) {
+	if got := AuthIdentityForEnv("codex", []string{"CODEX_HOME=/other/credentials"}); got != "" {
+		t.Fatal("unsupported credential override was treated as default HOME")
+	}
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{"account_id":"foreign"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := AuthIdentityForEnv("codex", []string{"HOME=" + home})
+	if got == "" || got != AuthIdentityForHome("codex", home) {
+		t.Fatal("saved HOME did not select its own credential store")
+	}
+}
+
+func TestArchivedSourceCancelsCrashOwedResume(t *testing.T) {
+	f := newAuthFake(identityB)
+	source := runningCodex("s1", identityA, status.TurnIdle, "conversation")
+	source.Status.Process = status.ProcessExited
+	source.RosterHidden = true // owner deleted replacement before candidate state was saved
+	f.add(source)
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityB
+	w.state.Pending["codex"] = []string{"s1"}
+	w.state.Killed["s1"] = true
+	if err := w.saveState(); err != nil {
+		t.Fatal(err)
+	}
+	w.state = loadAuthWatchState(w.stateDir)
+	w.tick()
+	if len(f.launched) != 0 || len(w.state.Killed) != 0 || len(w.state.Pending["codex"]) != 0 {
+		t.Fatal("owner-archived discussion resurrected from stale kill claim")
+	}
+}
+
+func TestArchiveRecheckedAtResumeBoundary(t *testing.T) {
+	f := newAuthFake(identityB)
+	source := runningCodex("s1", identityA, status.TurnIdle, "conversation")
+	source.Status.Process = status.ProcessExited
+	f.add(source)
+	w := testWatcher(t, f)
+	f.sessions[source.ID].RosterHidden = true
+	if w.resumeEnded("codex", source) || len(f.launched) != 0 {
+		t.Fatal("stale source snapshot overrode owner archive")
 	}
 }

@@ -127,6 +127,8 @@ type Control struct {
 	// own argv verbatim before it spawns it. Absent on every other message type, and absent
 	// on a bare go-ahead -- omitempty keeps an old shim's decode identical either way.
 	AgentArgs []string `json:"agent_args,omitempty"` // backend_attach
+	// AgentCommandArgs replaces argv[1:] only when a backend is attached.
+	AgentCommandArgs []string `json:"agent_command_args,omitempty"` // backend_attach
 	// SubmitTransaction is an OPTIONAL hello capability advertised by the SHIM: it
 	// will answer TypeSubmit atomically. An old shim never sets it, so a new daemon
 	// degrades to today's two unlocked writes (G-D) and the merge stays possible until

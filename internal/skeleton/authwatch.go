@@ -10,7 +10,7 @@ package skeleton
 // because you have since logged out or signed in to another account" until its
 // processes are RESTARTED. The manual fix was Ctrl+X (kill) then `r` (resume) on
 // every affected row. This component performs exactly that gesture, from exactly
-// the same primitives (Kill; Launch carrying OptionResumeFrom; Delete), when it
+// the same primitives (Kill; Launch carrying OptionResumeFrom), when it
 // detects the account change.
 //
 // WHY IT LIVES HERE. Like the supervisor it needs the assembly's seams -- the
@@ -51,11 +51,9 @@ package skeleton
 // on an idle turn -- is DEFERRED until quiet (the watcher never interrupts);
 // a session that never captured a conversation id is left running and warned
 // once (killing it would destroy the only thing a manual resume needs too); a
-// WORKTREE-ISOLATED session is never auto-recycled at all (the resume cannot
-// follow the conversation into its checkout, and the auto-delete would `git
-// worktree remove --force` uncommitted agent work -- audit C1); after a
-// successful resume the stale row is DELETED so the board keeps one row per
-// conversation. The resumed session gets the source's OWN saved environment
+// WORKTREE-ISOLATED session must have its saved checkout before auto-recycle.
+// Source history is retained; persisted lineage lets the board show one row
+// per conversation. The resumed session gets the source's OWN saved environment
 // and lineage (SpawnedFrom/Supervision), not the daemon's.
 //
 // THE FIRST TICK AFTER DAEMON START NEVER KILLS. Reconciled sessions are
@@ -175,8 +173,18 @@ func AuthIdentityForHome(agentType, home string) string {
 // daemon's own, so a session with a per-session HOME is stamped with the
 // account its codex will really load (audit M6).
 func launchAuthIdentity(agentType string, env []string) string {
+	return AuthIdentityForEnv(agentType, env)
+}
+
+// AuthIdentityForEnv probes the credential store selected by the saved session HOME.
+// CODEX_HOME is not in the persisted environment allowlist; legacy overrides
+// are uncharacterized and must hold recovery rather than select the wrong store.
+func AuthIdentityForEnv(agentType string, env []string) string {
 	home := ""
 	for _, kv := range env {
+		if agentType == "codex" && strings.HasPrefix(kv, "CODEX_HOME=") && kv != "CODEX_HOME=" {
+			return ""
+		}
 		if strings.HasPrefix(kv, "HOME=") {
 			home = kv[len("HOME="):]
 		}
@@ -218,12 +226,14 @@ type authWatchState struct {
 	Identities map[string]string   `json:"identities"`
 	Pending    map[string][]string `json:"pending,omitempty"`
 	Killed     map[string]bool     `json:"killed,omitempty"`
+	Candidates map[string]string   `json:"candidates,omitempty"`
 }
 
 // authRecycleCoordination is the assembly-owned serialization around the pure
 // watcher's actions. Fresh and claimed fences are distinct because only a
 // durable pre-crash claim may consume a restored embargo.
 type authRecycleCoordination struct {
+	ready   func(persist.Meta) bool
 	restore func(local string)
 	clear   func(local string)
 	fresh   func(local string, attempt func() error) error
@@ -235,17 +245,19 @@ type authRecycleCoordination struct {
 // (production: the coreAPI's Kill/Launch/Delete and the core's roster; fakes in
 // tests), so the sweep logic is unit-testable with no daemon and no socket.
 type authWatcher struct {
-	stateDir   string
-	endpointID string
-	interval   time.Duration
-	agents     []string
-	identity   func(agentType string) string
-	list       func() []persist.Meta
-	get        func(local string) (persist.Meta, bool)
-	kill       func(local string) error
-	launch     func(daemon.LaunchSpec) (persist.Meta, error)
-	remove     func(local string) error
-	resolve    func(name string, env []string) (string, error)
+	stateDir        string
+	endpointID      string
+	interval        time.Duration
+	agents          []string
+	identity        func(agentType string) string
+	sessionIdentity func(agentType string, env []string) string
+	list            func() []persist.Meta
+	get             func(local string) (persist.Meta, bool)
+	kill            func(local string) error
+	launch          func(daemon.LaunchSpec) (persist.Meta, error)
+	remove          func(local string) error
+	ready           func(persist.Meta) bool
+	resolve         func(name string, env []string) (string, error)
 	// unsafe covers every live authority/effect fact absent from persisted Status:
 	// owner/remote controls, ContextGuard effects, unresolved composer/direct
 	// input, and an already-committed recycle. withRecycleFence queues the final
@@ -294,9 +306,10 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 	coord authRecycleCoordination) *authWatcher {
 	w := &authWatcher{
 		stateDir: stateDir, endpointID: endpointID, interval: authWatchInterval,
-		agents: agents, identity: identity,
+		agents: agents, identity: identity, sessionIdentity: AuthIdentityForEnv,
 		list: list, get: get, kill: kill, launch: launch, remove: remove,
 		unsafe:         unsafe,
+		ready:          coord.ready,
 		restoreRecycle: coord.restore, clearRecycle: coord.clear,
 		withRecycleFence: coord.fresh, withClaimedRecycleFence: coord.claimed,
 		withResumeFence: coord.resume,
@@ -482,7 +495,7 @@ func (w *authWatcher) tickAgent(agent string) {
 		// of this agent not launched under the new identity, EMPTY STAMPS
 		// INCLUDED (a pre-ADR-024 launch predates the change by construction).
 		for _, m := range w.list() {
-			if m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != id {
+			if !m.RosterHidden && m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != id {
 				w.addPending(agent, m.ID)
 			}
 		}
@@ -493,7 +506,7 @@ func (w *authWatcher) tickAgent(agent string) {
 	// (a re-login while the daemon was down, or before this build first ran,
 	// left stamps disagreeing with the current identity): sweep them in too.
 	for _, m := range w.list() {
-		if m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != "" && m.AuthIdentity != id {
+		if !m.RosterHidden && m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != "" && m.AuthIdentity != id {
 			dirty = w.addPending(agent, m.ID) || dirty
 		}
 	}
@@ -523,6 +536,7 @@ func (w *authWatcher) addPending(agent, local string) bool {
 // forget clears every per-session record when an entry leaves the pending set.
 func (w *authWatcher) forget(local string) {
 	delete(w.state.Killed, local)
+	delete(w.state.Candidates, local)
 	delete(w.unconfirmedClaims, local)
 	if w.clearRecycle != nil {
 		w.clearRecycle(local)
@@ -562,12 +576,19 @@ func (w *authWatcher) workPending(agent, id string) {
 		case !ok:
 			// Deleted entirely -- nothing left to resume.
 			w.forget(local)
+		case m.RosterHidden:
+			// An owner archived this discussion; even a pre-crash kill claim
+			// cannot authorize bringing it back.
+			w.forget(local)
+		case w.sessionIdentity != nil && w.sessionIdentity(agent, m.Env) != id:
+			w.once("authscope:"+local, "authwatch: %s session %s uses different or unreadable session credentials; holding automatic recovery", agent, local)
+			keep = append(keep, local)
 		case m.Status.Process != status.ProcessRunning && w.state.Killed[local]:
 			// OUR kill: the resume is owed (audit H1). A crash or an exit-wait
 			// timeout between the kill and the resume lands here on a later tick
 			// -- or in the next incarnation -- and completes the gesture. The
 			// daemon-side resume dedup makes a replay after a crash-between-
-			// launch-and-delete idempotent.
+			// launch-and-state-write idempotent.
 			if w.resumeClaimed(agent, m) {
 				keep = append(keep, local)
 			} else {
@@ -579,11 +600,9 @@ func (w *authWatcher) workPending(agent, id string) {
 		case m.AuthIdentity == id:
 			// Already relaunched under the current account.
 			w.forget(local)
-		case m.LaunchOptions[protocol.OptionWorktree] == "true":
-			// Worktree-isolated (audit C1): an automatic resume cannot follow the
-			// conversation into its checkout, and the auto-delete would `git
-			// worktree remove --force` uncommitted agent work. Manual only.
-			w.once("worktree:"+local, "authwatch: %s session %s (%s) holds stale credentials but is worktree-isolated; recycle it manually", agent, local, m.Name)
+		case m.LaunchOptions[protocol.OptionWorktree] == "true" && m.AgentCwd == "":
+			// A legacy isolated session without its saved checkout cannot safely resume.
+			w.once("worktree:"+local, "authwatch: %s session %s (%s) is worktree-isolated without a saved checkout; recycle it manually", agent, local, m.Name)
 			keep = append(keep, local)
 		case m.Status.Turn != status.TurnIdle || m.Status.Interaction != status.InteractionNone:
 			// Mid-turn, unclassified, or sitting on a permission prompt (an
@@ -626,7 +645,7 @@ func (w *authWatcher) workPending(agent, id string) {
 }
 
 // recycle performs the owner's manual gesture -- claim, kill, wait for the exit
-// to be recorded, resume-as-new-session, delete the stale row -- and reports
+// to be recorded, resume-as-new-session, verify the replacement -- and reports
 // whether the session should stay pending (true = retry next tick).
 func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 	local := m.ID
@@ -652,7 +671,8 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 		cur, ok := w.get(local)
 		if !ok || cur.Status.Process != status.ProcessRunning ||
 			cur.Status.Turn != status.TurnIdle || cur.Status.Interaction != status.InteractionNone ||
-			w.sessionUnsafe(local) {
+			w.sessionUnsafe(local) ||
+			w.sessionIdentity != nil && w.sessionIdentity(agent, cur.Env) != w.identity(agent) {
 			return errAuthRecycleUnsafe
 		}
 		// THE CLAIM: record the kill as ours -- durably -- immediately before
@@ -744,12 +764,54 @@ func (w *authWatcher) resumeClaimed(agent string, m persist.Meta) (retry bool) {
 	return retry
 }
 
-// resumeEnded is the second half of the gesture, also entered directly for an
-// owed resume (a session we killed whose replacement never launched): launch
-// the replacement from the source's own environment and lineage, then delete
-// the stale row.
+// resumeEnded starts at most one replacement and observes it on a later tick.
+// Retain the source history even after readiness; roster lineage hides old attempts.
 func (w *authWatcher) resumeEnded(agent string, m persist.Meta) (retry bool) {
 	local := m.ID
+	if current, ok := w.get(local); !ok || current.RosterHidden {
+		return false // Owner deletion/archive wins even after the pending snapshot.
+	}
+	if w.state.Candidates == nil {
+		w.state.Candidates = map[string]string{}
+	}
+	candidate := w.state.Candidates[local]
+	if candidate == "" {
+		// Recover the launch-to-state-write crash window from durable lineage,
+		// including failed children: retrying a deterministic exit must not loop.
+		var latest persist.Meta
+		for _, child := range w.list() {
+			if child.ResumedFrom == local && (latest.ID == "" || child.CreatedAt.After(latest.CreatedAt) || child.CreatedAt.Equal(latest.CreatedAt) && child.ID > latest.ID) {
+				latest = child
+			}
+		}
+		candidate = latest.ID
+	}
+	if candidate != "" {
+		w.state.Candidates[local] = candidate
+		fresh, ok := w.get(candidate)
+		if !ok || fresh.Status.Process != status.ProcessRunning {
+			log.Printf("authwatch: replacement %s for %s did not remain running; history retained, manual resume required", candidate, local)
+			return false
+		}
+		if fresh.AuthIdentity != w.identity(agent) {
+			// A further login is handled by the replacement's own stale stamp.
+			return false
+		}
+		if fresh.ConversationID != "" && fresh.ConversationID != m.ConversationID {
+			log.Printf("authwatch: replacement %s has a different conversation; history retained, manual recovery required", candidate)
+			return false
+		}
+		if fresh.ConversationID == "" || w.ready == nil || !w.ready(fresh) {
+			if !fresh.CreatedAt.IsZero() && time.Since(fresh.CreatedAt) >= 2*time.Minute {
+				log.Printf("authwatch: replacement %s readiness timed out; history retained, manual recovery required", candidate)
+				return false
+			}
+			w.once("starting:"+local, "authwatch: replacement %s for %s is awaiting conversation transport readiness", candidate, local)
+			return true
+		}
+		log.Printf("authwatch: resumed %s session %s -> %s (%s): conversation transport ready; history retained", agent, local, candidate, m.Name)
+		return false
+	}
 	fresh, err := w.launch(daemon.LaunchSpec{
 		AgentType: agent,
 		Name:      m.Name, // the resumed row keeps its label (the TUI resume precedent)
@@ -772,14 +834,12 @@ func (w *authWatcher) resumeEnded(agent string, m persist.Meta) (retry bool) {
 		log.Printf("authwatch: resume %s session %s (%s): %v -- the ended row remains for a manual resume", agent, local, m.Name, err)
 		return false
 	}
-	// The owner's locked rule: after a successful resume the stale row is
-	// deleted -- one row per conversation. The new row's ResumedFrom keeps the
-	// lineage; a delete failure leaves a visible ended row, which is benign.
-	if err := w.remove(local); err != nil {
-		log.Printf("authwatch: delete recycled %s session %s: %v", agent, local, err)
+	w.state.Candidates[local] = fresh.ID
+	if err := w.saveState(); err != nil {
+		log.Printf("authwatch: persist replacement %s for %s: %v", fresh.ID, local, err)
 	}
-	log.Printf("authwatch: recycled %s session %s -> %s (%s): credentials changed account", agent, local, fresh.ID, m.Name)
-	return false
+	log.Printf("authwatch: started replacement %s for %s; awaiting conversation transport readiness", fresh.ID, local)
+	return true
 }
 
 var errAuthRecycleObligationRetained = errors.New("authwatch: recycle obligation retained")

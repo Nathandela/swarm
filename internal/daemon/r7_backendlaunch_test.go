@@ -151,6 +151,7 @@ func TestR7BackendLaunch_ADeclaredBackendReachesTheShimLaunchConfigByWireName(t 
 	}
 	sock := backendSocketPath(d.cfg.StateDir, m.ID)
 	spec.Backend = r7BackendSpec(sock)
+	spec.Backend.AgentCommandArgs = []string{"resume", "thread"}
 
 	m2, err := d.Launch(spec)
 	if err != nil {
@@ -158,7 +159,7 @@ func TestR7BackendLaunch_ADeclaredBackendReachesTheShimLaunchConfigByWireName(t 
 	}
 	raw := r7ReadLaunchConfig(t, d, m2.ID)
 
-	for _, key := range []string{"backend_program", "backend_args", "backend_agent_args", "backend_socket_path"} {
+	for _, key := range []string{"backend_program", "backend_args", "backend_agent_args", "backend_agent_command_args", "backend_socket_path"} {
 		if _, ok := raw[key]; !ok {
 			t.Errorf("%s carries no %q key for a session launched WITH a backend; a restarted daemon "+
 				"recovers the whole session from this file and cannot invent what is not in it",

@@ -615,6 +615,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.authw = newAuthWatcher(cfg.StateDir, epID, AuthProbedAgents(), CurrentAuthIdentity,
 		d.api.List, d.core.Get, d.core.Kill, d.api.Launch, d.core.Delete,
 		authRecycleUnsafeSource, authRecycleCoordination{
+			ready:   d.authRecoveryReady,
 			restore: d.restoreAuthRecycle,
 			clear:   d.clearAuthRecycle,
 			fresh:   d.withAuthRecycleFence,

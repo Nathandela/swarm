@@ -1,6 +1,6 @@
 # ADR-024: A provider re-login recycles its stranded sessions automatically
 
-- Status: Accepted (owner decisions 2026-09-01: fully automatic; defer mid-turn; delete the stale row after a verified resume; codex first over a generic seam)
+- Status: Accepted; amended 2026-09-14 below (automatic recovery, defer mid-turn, retain source history, Codex first over a generic seam)
 - Date: 2026-09-01
 - Source: the 2026-09-01 incident — every codex session started before that morning's account switch answered each prompt with "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again."
 - Affects: `internal/adapter` (new optional extension `AuthProbe`), `internal/adapter/codex` (probe + resume option flags), `internal/persist` (`Meta.AuthIdentity`), `internal/daemon` (`LaunchSpec.AuthIdentity`, launch stamp), `internal/skeleton` (`authwatch.go`; launch identity stamp; resume option merge in `composeLaunchSpec`), `cmd/swarm` (`relogin`)
@@ -154,3 +154,74 @@ Two facts shape the detection design:
 - Claude and the other providers gain nothing until someone characterizes their
   credentials layout with an `AuthProbe` — deliberately, per the absence-is-the-signal
   rule.
+
+## Amendment — 2026-09-14: retain history and distinguish launch from recovery
+
+This amendment supersedes the original automatic source deletion, direct-child-only
+resume deduplication, blanket worktree exclusion, and unconditional permission-flag
+forwarding decisions above. The earlier incident observations remain historical
+evidence, not acceptance evidence for the current implementation.
+
+**Recovery keeps history.** The watcher persists the replacement candidate and checks
+it on a later tick. Success requires a running replacement under the current account,
+the expected conversation ID, and a live backend subscription for that thread and
+session incarnation. A PID or a successful launch RPC is insufficient. An exited
+candidate, wrong conversation, or readiness timeout stops automatic retries with a
+logged manual-recovery reason; the source and replacement files remain intact. This
+proves conversation transport readiness, not a successful authenticated model turn.
+The manual `swarm relogin` command reports `started`, explicitly without claiming
+verified resume readiness.
+
+**One displayed discussion can contain several retained attempts.** Projection follows
+explicit `ResumedFrom` lineage, including shared missing-parent anchors; independent
+launches and handoffs do not merge because their names or conversation IDs match.
+Conflicting nonempty conversation identities remain separate, even when a saved
+resume edge or missing ancestor links them; a wrong-thread recovery cannot hide its
+source. The newest ended attempt represents the discussion unless a running attempt exists.
+Multiple running actors remain visible. Resume requests serialize their lookup and
+launch and reuse an existing running member of the validated lineage/conversation.
+Raw protocol lists and events keep each attempt's real ID, so exact-ID commands such
+as `swarm watch` and handoff lookup continue to address the requested attempt.
+`supersedes`, `superseded_by`, and `roster_hidden` annotate visibility; the TUI and
+`swarm ls` apply the shared filter. TUI selection follows the replacement, including
+source/replacement event reordering. Historical IDs remain usable for diagnostics;
+they are not aliases that redirect every operation to the newest process.
+
+Deleting the displayed attempt first archives its ended predecessors using durable
+`RosterHidden` metadata, then performs the requested deletion. It does not delete
+those predecessors' files or checkouts. The projection cannot conceal a running
+actor. Deletion that would remove a checkout still used by retained sessions is
+refused. An explicit resume from retained history can create a new visible attempt.
+
+**Resume preserves the execution context.** The source's saved environment chooses
+the executable and credential store; its effective checkout, name, tag, launch
+options, and handoff metadata carry forward. A missing saved worktree path or missing
+checkout is refused. Known isolated checkouts can therefore resume without automatic
+worktree removal. Metadata inheritance occurs at resume time; editing a historical
+attempt does not rename or retag every other attempt. The watcher holds sessions
+whose credential store is unreadable or differs from the watched daemon account,
+including uncharacterized legacy `CODEX_HOME` overrides. Controller ownership,
+active turns, interactions, and unresolved input/effects continue to defer recycling.
+
+**Codex permission handling is specific to the local backend attachment.** The
+characterized Codex 0.154.0 path is `codex resume <thread-id> --remote unix://...`:
+Swarm's local app-server socket is handled by Codex's remote-workspace startup path.
+Its permission-override rejection does not establish that the conversation is a
+cloud task. For this attachment only, the backend plan removes the composed
+`--sandbox` and `-c sandbox_workspace_write.network_access=true` arguments from the
+TUI resume command. Model and other arguments remain; the backend retains its
+policy configuration and Codex restores the saved thread permission profile.
+Fresh launches and standalone fallback retain their complete permission arguments.
+Compatibility with other Codex versions requires characterization, rather than
+classifying a conversation from this error string.
+
+**Remaining boundaries.** Same-account logout/login still requires the explicit
+`swarm relogin --force` assertion because stable account identity does not change.
+Old clients that ignore the additive visibility fields still display raw attempts.
+The phone's durable journal and reducer also remain raw: this change does not claim
+one-row continuity on that surface or alter its atomic snapshot/cursor contract.
+Already-disconnected lineage fragments cannot be reconstructed from names alone.
+Recovery does not transfer an attached terminal or controller lease to a new session
+ID, nor does it guarantee another account can access every saved conversation.
+A live account-switch test that completes an authenticated turn remains a separate
+acceptance gate from automated recovery and projection tests.

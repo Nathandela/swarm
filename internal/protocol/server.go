@@ -552,6 +552,7 @@ func (s *Server) fanoutLoop() {
 // NewServer(d, "")) still marshals individually, since each connection's
 // endpoint id — and therefore its namespaced session id — differs there.
 func (s *Server) distribute(m persist.Meta) {
+	hidden, successor := s.projectEvent(&m)
 	group := status.Derive(m.Status)
 	// Sampled ONCE per event, not per subscriber: the controller lease is a property
 	// of the session, so every subscriber's row must agree, and the shared-marshal
@@ -562,7 +563,7 @@ func (s *Server) distribute(m persist.Meta) {
 
 	var shared []byte
 	if s.endpointID != "" {
-		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: s.stampView(s.endpointID, m, group, controlled, pending, sentAt)})
+		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampSuperseded(s.stampView(s.endpointID, m, group, controlled, pending, sentAt), hidden, successor)})
 	}
 
 	s.subMu.Lock()
@@ -570,7 +571,7 @@ func (s *Server) distribute(m persist.Meta) {
 	for sc := range s.subs {
 		body := shared
 		if body == nil {
-			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: s.stampView(sc.endpointID, m, group, controlled, pending, sentAt)})
+			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampSuperseded(s.stampView(sc.endpointID, m, group, controlled, pending, sentAt), hidden, successor)})
 			if body == nil {
 				continue // Control marshaling cannot fail in practice; skip defensively
 			}
@@ -1419,9 +1420,14 @@ func (s *Server) supportedCaps() []string {
 
 func (cc *clientConn) handleList() {
 	metas := cc.srv.d.List()
+	_, hidden := persist.ProjectDiscussions(metas)
+	successors := discussionSuccessors(hidden)
 	views := make([]SessionView, 0, len(metas))
 	for _, m := range metas {
-		views = append(views, *cc.stampView(m, status.Derive(m.Status)))
+		m.RosterHidden = m.RosterHidden && m.Status.Process != status.ProcessRunning
+		view := cc.stampView(m, status.Derive(m.Status))
+		stampSuperseded(view, hidden[m.ID], successors[m.ID])
+		views = append(views, *view)
 	}
 	_ = cc.writeControl(Control{Op: OpList, EndpointID: cc.endpointID, Sessions: views})
 }
@@ -3384,6 +3390,7 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		sentAt = &at
 	}
 	return &SessionView{
+		RosterHidden:   m.RosterHidden,
 		EndpointID:     endpointID,
 		ID:             NamespacedID(endpointID, m.ID),
 		Agent:          m.AgentType,

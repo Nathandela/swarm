@@ -39,10 +39,11 @@ const backendSocketFile = "codex.sock"
 // it, so a restarted daemon never re-resolves a bare name through a PATH that may now point at
 // a different version.
 type BackendSpec struct {
-	Program   string
-	Args      []string
-	AgentArgs []string
-	Env       []string
+	Program          string
+	Args             []string
+	AgentArgs        []string
+	AgentCommandArgs []string
+	Env              []string
 }
 
 // BackendChannel names one session's backend endpoint, recovered from the 0600
@@ -50,8 +51,9 @@ type BackendSpec struct {
 // outlive daemons (ADR-001), so a daemon that restarted under a still-running shim must find
 // exactly what it minted at launch.
 type BackendChannel struct {
-	SocketPath string
-	AgentArgs  []string
+	SocketPath       string
+	AgentArgs        []string
+	AgentCommandArgs []string
 }
 
 // backendSocketPath is the per-session backend UDS path.
@@ -73,7 +75,7 @@ func (d *Daemon) SessionBackend(id string) (BackendChannel, bool) {
 	if json.Unmarshal(data, &lc) != nil || lc.BackendSocketPath == "" {
 		return BackendChannel{}, false
 	}
-	return BackendChannel{SocketPath: lc.BackendSocketPath, AgentArgs: lc.BackendAgentArgs}, true
+	return BackendChannel{SocketPath: lc.BackendSocketPath, AgentArgs: lc.BackendAgentArgs, AgentCommandArgs: lc.BackendAgentCommandArgs}, true
 }
 
 // backendAliveAt reports whether the backend recorded in sessionDir's backend.json is THAT
@@ -170,8 +172,8 @@ func (d *Daemon) reapOrphanBackend(id string) {
 
 // SendBackendAttach releases a shim that is waiting for the daemon's go-ahead before it spawns
 // its agent. The assembly calls it once it is a connected client of the session's backend.
-func (d *Daemon) SendBackendAttach(id string, agentArgs []string) error {
-	return sendBackendAttach(shimSocketPath(d.cfg.StateDir, id), agentArgs)
+func (d *Daemon) SendBackendAttach(id string, agentArgs []string, commandArgs ...[]string) error {
+	return sendBackendAttach(shimSocketPath(d.cfg.StateDir, id), agentArgs, commandArgs...)
 }
 
 // BackendPlanner is the seam through which the ASSEMBLY supplies a session's backend plan
@@ -192,4 +194,4 @@ func (d *Daemon) SendBackendAttach(id string, agentArgs []string) error {
 // daemon's env in that case planned no backend for a session whose agent ran fine. A nil
 // agentEnv (a caller predating the launch path, or a test) lets the assembly fall back to
 // daemon policy.
-type BackendPlanner func(agentType, sessionDir, socketPath string, agentEnv []string) (*BackendSpec, error)
+type BackendPlanner func(agentType, sessionDir, socketPath string, agentEnv, agentArgv []string) (*BackendSpec, error)

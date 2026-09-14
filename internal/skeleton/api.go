@@ -647,6 +647,38 @@ func (a *coreAPI) Delete(id string) error {
 	if a.deleteFn != nil {
 		return a.deleteFn(id)
 	}
+	return a.deleteDiscussion(id)
+}
+
+// The owner lifecycle fence must be acquired before the resume mutex, matching
+// withAuthResumeFence -> Launch. Reversing those locks deadlocks a racing delete.
+func (a *coreAPI) deleteDiscussion(id string) error {
+	a.externalResumeMu.Lock()
+	defer a.externalResumeMu.Unlock()
+	roster := a.core.List()
+	for _, child := range roster {
+		if child.ResumedFrom == id {
+			return fmt.Errorf("delete: session %q is retained history for %q; delete the current discussion instead", id, child.ID)
+		}
+	}
+	if source, ok := a.core.Get(id); ok && source.LaunchOptions[protocol.OptionWorktree] == "true" && source.AgentCwd != "" {
+		for _, other := range roster {
+			if other.ID != id && other.ProviderCwd() == source.AgentCwd {
+				return fmt.Errorf("delete: checkout is still used by retained session %q; delete would remove its work", other.ID)
+			}
+		}
+	}
+	// Deleting the visible attempt archives its older attempts; it must not make
+	// an old row reappear or destroy historical transcripts and checkout ownership.
+	_, supersedes := persist.ProjectDiscussions(roster)
+	for _, previous := range supersedes[id] {
+		if _, exists := a.core.Get(previous); exists {
+			if err := a.core.SetRosterHidden(previous, true); err != nil {
+				return err
+			}
+		}
+	}
+	a.pokeWatch()
 	return a.core.Delete(id)
 }
 func (a *coreAPI) Rename(id, name string) error {
@@ -956,6 +988,17 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
 func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
+	// A resume continues the source's credential store and executable environment,
+	// even when requested from a different terminal or the phone.
+	if src := spec.Options[protocol.OptionResumeFrom]; src != "" {
+		_, source, err := validateResumeSource(src, spec.AgentType, a.endpointID, a.core.Get)
+		if err != nil {
+			return persist.Meta{}, err
+		}
+		if len(source.Env) > 0 {
+			spec.ClientEnv = append([]string(nil), source.Env...)
+		}
+	}
 	// The launch ENVIRONMENT is resolved before argv, because argv depends on it: the
 	// adapter's argv[0] is a bare binary name resolved against the AGENT's own PATH
 	// (lookPathIn). A remote/preset launch carries no client env by design (ADR-007 D8
@@ -1032,7 +1075,13 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		// below so two concurrent resumes cannot interleave scan and spawn.
 		a.externalResumeMu.Lock()
 		defer a.externalResumeMu.Unlock()
-		if existing, ok := runningResumeOf(a.core.List(), spec.AgentType, local); ok {
+		// Refresh after legacy identity recovery; deduplicate by conversation,
+		// not just the immediate parent (siblings and deeper retries share it).
+		source, sourceExists := a.core.Get(local)
+		if !sourceExists || source.RosterHidden {
+			return persist.Meta{}, fmt.Errorf("resume: source discussion was deleted or archived")
+		}
+		if existing, ok := runningConversation(a.core.List(), source); ok {
 			return existing, nil
 		}
 	}
@@ -1170,6 +1219,9 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if !adapter.IsCanonicalConversationID(conversationID) {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: external conversation identity is invalid")
 		}
+		if spec.AgentType == "codex" && spec.Options["sandbox"] != "" {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: Codex restores the saved conversation permission policy; external resume cannot override sandbox")
+		}
 		ad, ok := registry.New(spec.AgentType)
 		if !ok {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: agent %q has no adapter that can resume", spec.AgentType)
@@ -1199,6 +1251,25 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if err != nil {
 			return daemon.LaunchSpec{}, err
 		}
+		if spec.AgentType == "codex" && spec.Options["sandbox"] != "" {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: Codex restores the saved conversation permission policy; change sandbox in the resumed conversation instead")
+		}
+		if srcMeta.LaunchOptions[protocol.OptionWorktree] == "true" && srcMeta.AgentCwd == "" {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: source worktree path was not captured; refusing to resume in another checkout")
+		}
+		if cwd := srcMeta.ProviderCwd(); cwd != "" && (spec.AgentType == "codex" || srcMeta.AgentCwd != "") {
+			spec.Cwd = cwd
+		}
+		if srcMeta.AgentCwd != "" {
+			if fi, err := os.Stat(srcMeta.AgentCwd); err != nil || !fi.IsDir() {
+				return daemon.LaunchSpec{}, fmt.Errorf("resume: source checkout %q is no longer available", srcMeta.AgentCwd)
+			}
+		}
+		if spec.Name == "" {
+			spec.Name = srcMeta.Name
+		}
+		spec.Tag = srcMeta.Tag
+		spec.SpawnedFrom, spec.SpawnIntent, spec.Supervision = srcMeta.SpawnedFrom, srcMeta.SpawnIntent, srcMeta.Supervision
 		// The source's persisted launch options ride along beneath the request's
 		// own (request keys win), so a resumed session keeps its --model and
 		// --sandbox flags: the TUI's resume request carries ONLY resume_from, and
@@ -1592,17 +1663,6 @@ func mergeResumeOptions(req, src map[string]string) map[string]string {
 	return merged
 }
 
-// runningResumeOf finds the RUNNING session that already resumed local, if one
-// exists -- the pure half of the one-live-resume-per-source rule above.
-func runningResumeOf(roster []persist.Meta, agentType, local string) (persist.Meta, bool) {
-	for _, m := range roster {
-		if m.AgentType == agentType && m.ResumedFrom == local && m.Status.Process == status.ProcessRunning {
-			return m, true
-		}
-	}
-	return persist.Meta{}, false
-}
-
 func validateResumeSource(src, agentType, endpointID string, getSource func(local string) (persist.Meta, bool)) (string, persist.Meta, error) {
 	local, m, err := resolveSourceSession("resume", src, endpointID, getSource)
 	if err != nil {
@@ -1770,6 +1830,7 @@ type rosterSnap struct {
 	status             status.Status
 	name               string
 	tag                string
+	rosterHidden       bool
 	controlled         bool
 	supervisionPending bool
 	// backendPlanError joins the key because launch persists it in phase TWO,
@@ -1797,7 +1858,7 @@ func (a *coreAPI) watch() {
 		for _, m := range a.core.List() {
 			present[m.ID] = struct{}{}
 			guard, hasGuard := a.ContextGuardView(m.ID)
-			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID), backendPlanError: m.BackendPlanError, contextGuard: guard, hasContextGuard: hasGuard}
+			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, rosterHidden: m.RosterHidden, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID), backendPlanError: m.BackendPlanError, contextGuard: guard, hasContextGuard: hasGuard}
 			if prev, ok := seen[m.ID]; ok && prev == cur {
 				continue
 			}

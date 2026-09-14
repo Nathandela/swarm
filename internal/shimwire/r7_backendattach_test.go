@@ -83,3 +83,18 @@ func TestR7BackendAttach_AnOldShimToleratesTheVerbRatherThanErroring(t *testing.
 		t.Errorf("decoded type %q", out.Type)
 	}
 }
+
+func TestBackendAttachRoundTripsAlternateCommand(t *testing.T) {
+	in := Control{Type: TypeBackendAttach, AgentArgs: []string{"--remote", "unix:///session/codex.sock"}, AgentCommandArgs: []string{"resume", "thread"}}
+	raw, err := Encode(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(out.AgentCommandArgs, " ") != "resume thread" {
+		t.Fatalf("alternate command lost: %s", raw)
+	}
+}

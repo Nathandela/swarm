@@ -24,8 +24,8 @@ import "github.com/Nathandela/swarm/internal/adapter"
 const backendScheme = "unix://"
 
 // Backend describes the per-session `codex app-server`. It is pure, total and
-// deterministic: it reads only spec.SocketPath and composes two fixed argv shapes around it,
-// so a pathological path yields a pathological plan rather than a panic -- and the CORE's
+// deterministic: it uses the socket and composed agent command without performing I/O.
+// A pathological path yields a pathological plan rather than a panic -- and the CORE's
 // containment check (adapter.ResolveBackend, obligation 9c) is what refuses it.
 //
 // Codex is the ONE adapter in the tree that needs a backend, which is why ok is
@@ -35,8 +35,38 @@ func (codexAdapter) Backend(spec adapter.BackendSpec) (adapter.BackendPlan, bool
 	// The recorded argv plus the sandbox override: the app-server is the process that
 	// executes the agent's commands, so its sandbox is the one the swarm CLI runs under.
 	return adapter.BackendPlan{
-		Program:   binary,
-		Args:      []string{"app-server", "--listen", endpoint, "-c", sandboxNetworkOverride},
-		AgentArgs: []string{"--remote", endpoint},
+		Program:          binary,
+		Args:             []string{"app-server", "--listen", endpoint, "-c", sandboxNetworkOverride},
+		AgentArgs:        []string{"--remote", endpoint},
+		AgentCommandArgs: remoteResumeArgs(spec.AgentArgv),
 	}, true
+}
+
+// Codex 0.154.0 treats --remote over our local socket as a remote workspace.
+// Its TUI rejects permission overrides on resume and restores the server's saved
+// permission profile instead (tui/src/app/startup.rs and app_server_session.rs).
+// Only remove the two permission flags Swarm composes, only for that attachment.
+// Fresh launches and a failed-backend standalone fallback keep their full policy.
+func remoteResumeArgs(argv []string) []string {
+	if len(argv) < 3 || argv[1] != "resume" {
+		return nil
+	}
+	args := append([]string(nil), argv[1:3]...)
+	for i := 3; i < len(argv); i++ {
+		if i+1 < len(argv) {
+			switch argv[i] {
+			case "--sandbox":
+				i++
+				continue
+			case "-c", "--model":
+				if argv[i] != "-c" || argv[i+1] != sandboxNetworkOverride {
+					args = append(args, argv[i], argv[i+1])
+				}
+				i++
+				continue
+			}
+		}
+		args = append(args, argv[i])
+	}
+	return args
 }

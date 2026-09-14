@@ -140,3 +140,41 @@ func TestR7CodexBackend_NoKeystrokeSeamEverOnCodex(t *testing.T) {
 			"or turn/steer and NEVER a keystroke (playbook §8.2)")
 	}
 }
+
+func TestBackendResumeInheritsServerPermissionsWithoutChangingStandalone(t *testing.T) {
+	ad := codexAdapter{}
+	for _, sandbox := range []string{"read-only", "workspace-write", "danger-full-access"} {
+		t.Run(sandbox, func(t *testing.T) {
+			argv, err := ad.Resume(adapter.ResumeSpec{ConversationID: "019943d4-85d0-7000-8000-000000000000", Options: map[string]string{"model": "gpt-6-astra", "sandbox": sandbox}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := strings.Join(argv, "\x00")
+			plan, _ := ad.Backend(adapter.BackendSpec{SocketPath: r7Sock, AgentArgv: argv})
+			want := "resume\x00019943d4-85d0-7000-8000-000000000000\x00-c\x00check_for_update_on_startup=false\x00--model\x00gpt-6-astra"
+			if got := strings.Join(plan.AgentCommandArgs, "\x00"); got != want {
+				t.Fatalf("backend resume args = %q, want %q", got, want)
+			}
+			if strings.Join(argv, "\x00") != before || !strings.Contains(before, "--sandbox\x00"+sandbox) || !strings.Contains(before, sandboxNetworkOverride) {
+				t.Fatal("standalone fallback permission flags changed")
+			}
+			if !strings.Contains(strings.Join(plan.Args, "\x00"), sandboxNetworkOverride) {
+				t.Fatal("backend lost its workspace network policy")
+			}
+		})
+	}
+	fresh, _ := ad.Command(adapter.LaunchSpec{Options: map[string]string{"sandbox": "workspace-write"}})
+	plan, _ := ad.Backend(adapter.BackendSpec{SocketPath: r7Sock, AgentArgv: fresh})
+	if plan.AgentCommandArgs != nil {
+		t.Fatal("fresh launch must retain its explicit permission flags")
+	}
+}
+
+func TestBackendResumeDoesNotInterpretModelValueAsAFlag(t *testing.T) {
+	argv, _ := (codexAdapter{}).Resume(adapter.ResumeSpec{ConversationID: "thread", Options: map[string]string{"model": "--sandbox", "sandbox": "read-only"}})
+	got := remoteResumeArgs(argv)
+	want := []string{"resume", "thread", "-c", "check_for_update_on_startup=false", "--model", "--sandbox"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("model value interpreted as a flag: %v", got)
+	}
+}

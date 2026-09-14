@@ -238,6 +238,10 @@ type AgentInstanceRef struct {
 // namespaced id + endpoint id + the daemon-computed status Group (E6.9 — clients
 // never call status.Derive), alongside the three raw status dimensions.
 type SessionView struct {
+	// Resume projection affects roster visibility, never the raw event identity.
+	RosterHidden   bool          `json:"roster_hidden,omitempty"`
+	Supersedes     []string      `json:"supersedes,omitempty"`
+	SupersededBy   string        `json:"superseded_by,omitempty"`
 	EndpointID     string        `json:"endpoint_id"`
 	ID             string        `json:"id"` // namespaced: <endpoint_id>/<local>
 	Agent          string        `json:"agent"`
