@@ -47,7 +47,7 @@ start_worker state 60000 0 1000 1000 1
 RELAY_HTTP="http://127.0.0.1:$port" RELAY_TEST_STATE="$scratch/state" node test/protocol.mjs
 grep -F 'RELAY_V2_COST' "$log"
 if RELAY_V2_HTTP="http://127.0.0.1:$port" \
-  go test ../../internal/remote/relayv2 -run '^TestWorkerdNoiseMailboxReconnectReplayAndRevoke$' -count=1 -timeout=30s; then
+  go test ../../internal/remote/relayv2 -run '^TestWorkerdNoiseMailboxReconnectReplayAndRevoke$' -count=1 -timeout=60s; then
   :
 else
   sed -n '1,200p' "$log"

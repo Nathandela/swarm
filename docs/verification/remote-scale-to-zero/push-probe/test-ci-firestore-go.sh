@@ -10,6 +10,14 @@ for test_name in \
 	TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch \
 	TestFirestoreWakeLeaseCASAndTokenGeneration \
 	TestFirestoreRetentionRechecksAndCascadesBoundedly \
+	TestRegistrationExpiry_CompletedAuthorityOutlivesAttemptWindow/firestore \
+	TestRegistrationAuthority_StaleLeaseCannotComplete/firestore \
+	TestRegistrationAuthority_CorruptCompletedHalfFailsClosed/firestore \
+	TestRegistrationAuthority_RetentionDeletesExactCompletedHalf/firestore \
+	TestRegistrationAuthority_ReplayTouchesBeforeRetention/firestore \
+	TestRegistrationAuthority_RejectsUnknownDigestRevision/firestore \
+	TestRegistrationAuthority_RetentionRejectsUnknownRevision/pending/firestore \
+	TestRegistrationAuthority_RetentionRejectsUnknownRevision/completed/firestore \
 	TestRetentionSubcommandRunsOneBoundedFirestoreSweep
 do
 	if [ "${MODE:-pass}" = missing ] && [ "$test_name" = "${TARGET:-}" ]; then
@@ -33,6 +41,14 @@ for test_name in \
 	TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch \
 	TestFirestoreWakeLeaseCASAndTokenGeneration \
 	TestFirestoreRetentionRechecksAndCascadesBoundedly \
+	TestRegistrationExpiry_CompletedAuthorityOutlivesAttemptWindow/firestore \
+	TestRegistrationAuthority_StaleLeaseCannotComplete/firestore \
+	TestRegistrationAuthority_CorruptCompletedHalfFailsClosed/firestore \
+	TestRegistrationAuthority_RetentionDeletesExactCompletedHalf/firestore \
+	TestRegistrationAuthority_ReplayTouchesBeforeRetention/firestore \
+	TestRegistrationAuthority_RejectsUnknownDigestRevision/firestore \
+	TestRegistrationAuthority_RetentionRejectsUnknownRevision/pending/firestore \
+	TestRegistrationAuthority_RetentionRejectsUnknownRevision/completed/firestore \
 	TestRetentionSubcommandRunsOneBoundedFirestoreSweep
 do
 	for mode in skip missing

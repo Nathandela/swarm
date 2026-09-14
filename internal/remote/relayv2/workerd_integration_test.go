@@ -20,7 +20,9 @@ func TestWorkerdNoiseMailboxReconnectReplayAndRevoke(t *testing.T) {
 	if baseURL == "" {
 		t.Skip("RELAY_V2_HTTP is set by services/relay/test/run.sh")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	// The 257-message replay-window check needs CI headroom while staying below
+	// the fixture's 60-second retention, so expiry cannot substitute for eviction.
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	machinePub, machinePriv := deterministicKey(0)
