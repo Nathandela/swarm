@@ -147,7 +147,9 @@ jobs:
           npm ci --prefix docs/verification/remote-scale-to-zero/push-probe --ignore-scripts --no-audit --no-fund
       - name: Native Worker, Go interoperability and SQLite cost bounds
         working-directory: services/relay
-        run: RELAY_TEST_PORT=8916 RELAY_TEST_BUDGET_SECONDS=180 npm test
+        # Cold compilation and repeated workerd startup need headroom; individual
+        # test deadlines and the 15-minute job cap remain enforced.
+        run: RELAY_TEST_PORT=8916 RELAY_TEST_BUDGET_SECONDS=300 npm test
       - name: Bounded runner propagates failures and cleans child processes
         working-directory: docs/verification/remote-scale-to-zero/push-probe
         run: |
