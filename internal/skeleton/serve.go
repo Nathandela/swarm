@@ -560,16 +560,17 @@ func Serve(cfg Config) (*Daemon, error) {
 	// nil, and the durable record is what a re-arm would have kept anyway. A record dir
 	// that cannot be opened aborts assembly like every other component's store.
 	// The shared unsafe predicate covers live facts persisted Status cannot:
-	// controller leases, ContextGuard effects, ambiguous composer outcomes, and
-	// durable direct-input drafts/submits. The supervisor additionally blocks on
-	// recycle itself; authwatch uses the committed-only recycle view so a restored
+	// controller leases, ContextGuard effects, and ambiguous composer outcomes.
+	// Drafts/submits only block supervisor delivery:
+	// an account change intentionally discards unsent editor text during reload.
+	// Authwatch uses the committed-only recycle view so a restored
 	// durable claim can redrive without self-refusal.
 	baseUnsafeSource := func(local string) bool {
 		return d.anyControlled(local) || d.contextGuardCompactionInFlight(local) ||
-			d.composerOutcomeUnresolved(local) || d.directInputUnresolved(local)
+			d.composerOutcomeUnresolved(local)
 	}
 	supervisorUnsafeSource := func(local string) bool {
-		return baseUnsafeSource(local) || d.composerRecycleInFlight(local)
+		return baseUnsafeSource(local) || d.directInputUnresolved(local) || d.composerRecycleInFlight(local)
 	}
 	// A successfully signalled in-process recycle is unsafe to begin again while
 	// Core still reports Running. Restored claims deliberately carry

@@ -376,6 +376,8 @@ jobs:
           go-version: '1.25'
       - name: Set up the Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Install the pinned platform, build-tools and NDK
         run: |
           . android/toolchain.env

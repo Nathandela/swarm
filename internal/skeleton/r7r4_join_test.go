@@ -67,7 +67,8 @@ type r7r4Server struct {
 	mu sync.Mutex
 	// announce is the thread id sent as `thread/started` once a client has completed
 	// `initialized`. Empty means the agent never created a thread.
-	announce string
+	announce             string
+	suppressAnnouncement bool
 	// rolloutExists gates `thread/resume` on the RECORDED pre-first-turn failure. It is
 	// flipped by a `turn/start`, which is exactly when the real app-server creates the
 	// rollout file (r1-codex-gate.md:112-115).
@@ -125,14 +126,14 @@ func (s *r7r4Server) handle(ctx context.Context, ws *websocket.Conn, data []byte
 	}
 	s.mu.Lock()
 	s.calls = append(s.calls, fr.Method)
-	announce, rollout, hard := s.announce, s.rolloutExists, s.hardErr
+	announce, rollout, hard, suppress := s.announce, s.rolloutExists, s.hardErr, s.suppressAnnouncement
 	s.mu.Unlock()
 
 	switch fr.Method {
 	case "initialize":
 		s.reply(ctx, ws, fr.ID, `{"userAgent":{"name":"codex"}}`)
 	case "initialized":
-		if announce != "" {
+		if announce != "" && !suppress {
 			// The AGENT creates the session's one thread; the server announces it to every
 			// attached client (RECORDED: frame-samples.json frame 4, received by an observer
 			// that started none of its own).
@@ -527,6 +528,23 @@ func TestR7R4_AResumedThreadWithPreLaunchIdentityKeepsTheHonestGap(t *testing.T)
 	r.awaitSink(t, 10*time.Second)
 	if r.sk.sessionDegraded(r.local) {
 		t.Error("a resumed session whose backend is healthy was degraded; its history boundary does not remove its sink")
+	}
+}
+
+func TestResumedBackendWithoutThreadAnnouncement(t *testing.T) {
+	r := newR7R4Rig(t, fakeCodexThreadID)
+	if err := r.sk.core.SetConversationID(r.local, fakeCodexThreadID); err != nil {
+		t.Fatal(err)
+	}
+	r.srv.suppressAnnouncement = true
+	r.srv.setRollout(true)
+	r.join()
+	m, _ := r.sk.core.Get(r.local)
+	if !r.sk.authRecoveryReady(m) {
+		t.Fatal("resumed conversation never became ready without a thread/started notification")
+	}
+	if code, err := r.send(t, "continue", "resume-no-announcement"); err != nil || code != "" {
+		t.Fatalf("resumed composer refused input: %s %v", code, err)
 	}
 }
 

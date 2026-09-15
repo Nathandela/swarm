@@ -11,6 +11,27 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
+func TestAuthRecycleIgnoresDirectInputUncertainty(t *testing.T) {
+	r := newR7ComposerRig(t, true)
+	if err := r.att.Detach(); err != nil {
+		t.Fatal(err)
+	}
+	for _, class := range []protocol.DirectInputClass{protocol.DirectInputDraft, protocol.DirectInputSubmitted} {
+		if err := r.sk.markDirectInputUnresolved(r.local, class); err != nil {
+			t.Fatal(err)
+		}
+		if !r.sk.directInputUnresolved(r.local) {
+			t.Fatal("input uncertainty must remain available to the supervisor")
+		}
+		if !r.sk.sup.controlled(r.local) {
+			t.Fatal("supervisor delivery must still wait for unresolved terminal input")
+		}
+		if r.sk.authw.sessionUnsafe(r.local) {
+			t.Fatalf("%s input blocked account-change recovery", class)
+		}
+	}
+}
+
 // TestAuthRecycleComposerUncertaintyUsesTheAuthoritativeTuple pins the safety
 // predicate the auth watcher and supervisor share. Merely finding an existing
 // lane is not unsafe, and an old uncertainty bit must not wedge recycling after

@@ -201,7 +201,15 @@ worktree removal. Metadata inheritance occurs at resume time; editing a historic
 attempt does not rename or retag every other attempt. The watcher holds sessions
 whose credential store is unreadable or differs from the watched daemon account,
 including uncharacterized legacy `CODEX_HOME` overrides. Controller ownership,
-active turns, interactions, and unresolved input/effects continue to defer recycling.
+active turns, interactions, and unresolved provider effects continue to defer recycling.
+
+**Account changes reload discussions even with terminal drafts (2026-09-15).**
+The owner explicitly accepts losing unsent editor text when switching accounts.
+Durable direct-input draft/submit markers therefore do not defer auth recovery;
+they still protect automatic supervisor delivery. No terminal input is replayed.
+On native resume, Swarm waits for the saved conversation ID to appear in Codex's
+loaded threads and subscribes to that exact thread. It does not require a new
+`thread/started` announcement for an existing conversation.
 
 **Codex permission handling is specific to the local backend attachment.** The
 characterized Codex 0.154.0 path is `codex resume <thread-id> --remote unix://...`:

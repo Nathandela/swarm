@@ -213,10 +213,24 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	if aerr := d.core.SendBackendAttach(id, ch.AgentArgs, backendResumeCommandArgs(ch, feed.userAgent)); aerr != nil {
 		log.Printf("skeleton: release session %s with its backend: %v", id, aerr)
 	}
-	threadID, ok := d.awaitAdoptedThread(id, d.backendDeadline())
+	var threadID string
+	var ok bool
+	if preexistingConversation {
+		// Codex resume need not broadcast thread/started. Wait for the TUI to
+		// load the saved conversation, using the same ownership check as rejoin.
+		for deadline := time.Now().Add(d.backendDeadline()); time.Now().Before(deadline); {
+			if threadID, err = d.discoverRejoinThread(id, expectedInstance, conn); err == nil {
+				ok = true
+				break
+			}
+			time.Sleep(backendReadyInterval)
+		}
+	} else {
+		threadID, ok = d.awaitAdoptedThread(id, d.backendDeadline())
+	}
 	if !ok {
 		_ = conn.Close()
-		log.Printf("skeleton: session %s never announced a thread within %s", id, d.backendDeadline())
+		log.Printf("skeleton: session %s did not expose its conversation within %s", id, d.backendDeadline())
 		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
 	}
@@ -236,6 +250,13 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		log.Printf("skeleton: session %s could not join thread %s: %v", id, threadID, serr)
 		d.noteBackendUnavailableForInstance(id, expectedInstance)
 		return
+	}
+	if preexistingConversation {
+		if _, current := d.rejoinIdentityIsCurrent(id, expectedInstance, threadID); !current {
+			_ = conn.Close()
+			d.noteBackendUnavailableForInstance(id, expectedInstance)
+			return
+		}
 	}
 	// RULING 2: THE MESSAGE SINK IS THE CONNECTION, NOT THE SUBSCRIPTION. Registered here --
 	// as soon as the connection is initialized and usable for turn/start -- and NOT after the
