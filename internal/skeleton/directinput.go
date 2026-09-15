@@ -1,8 +1,8 @@
 package skeleton
 
 // Direct-input uncertainty is the durable bridge between terminal-shaped input
-// and auth recycling. SessionStream.Input cannot report whether an errored write
-// consumed bytes, and plain text may remain indefinitely in the provider's local
+// and automatic supervisor delivery. SessionStream.Input cannot report whether
+// an errored write consumed bytes, and plain text may remain in the provider's local
 // editor without changing Core status. Protocol therefore records Draft at its
 // last pre-write boundary. Only an explicit Enter/Submit whose Input returned
 // success advances to Submitted; even then, a later changed authoritative status
@@ -164,7 +164,7 @@ func (d *Daemon) markDirectInputUnresolvedAt(local string, class protocol.Direct
 		committed, err := write(path, record)
 		if committed {
 			// Rename is visible now. Publish the marker even when the following
-			// directory Sync failed: allowing auth to observe false after the
+			// directory Sync failed: allowing delivery to observe false after the
 			// input fence releases would be the dangerous interpretation.
 			d.directInput.unresolved[local] = record
 			d.directInput.pendingDurability[local] = err != nil
@@ -218,7 +218,7 @@ func writeDirectInputRecord(path string, record directInputRecord) (committed bo
 	return true, nil
 }
 
-// directInputUnresolved is intentionally no-create: an auth safety read for an
+// directInputUnresolved is intentionally no-create: a safety read for an
 // unknown/retired session neither creates a composer lane nor authors state.
 func (d *Daemon) directInputUnresolved(local string) bool {
 	d.directInput.mu.Lock()
