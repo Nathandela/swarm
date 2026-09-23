@@ -112,7 +112,9 @@ func TestBackendResumeCommandArgsRequiresCharacterizedRunningVersion(t *testing.
 			t.Fatalf("%q selected uncharacterized resume args: %v", userAgent, got)
 		}
 	}
-	if got := backendResumeCommandArgs(ch, "swarm/0.154.0 (Linux)"); !reflect.DeepEqual(got, ch.AgentCommandArgs) {
-		t.Fatalf("characterized running version args = %v", got)
+	for _, userAgent := range []string{"swarm/0.154.0 (Linux)", "swarm/0.156.1 (Linux)"} {
+		if got := backendResumeCommandArgs(ch, userAgent); !reflect.DeepEqual(got, ch.AgentCommandArgs) {
+			t.Fatalf("%q characterized running version args = %v", userAgent, got)
+		}
 	}
 }

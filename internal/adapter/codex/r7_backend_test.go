@@ -161,12 +161,18 @@ func TestBackendResumeInheritsServerPermissionsWithoutChangingStandalone(t *test
 			if !strings.Contains(strings.Join(plan.Args, "\x00"), sandboxNetworkOverride) {
 				t.Fatal("backend lost its workspace network policy")
 			}
+			if !strings.Contains(strings.Join(plan.Args, "\x00"), "sandbox_mode="+sandbox) {
+				t.Fatalf("resume backend lost the source sandbox %q: %v", sandbox, plan.Args)
+			}
 		})
 	}
 	fresh, _ := ad.Command(adapter.LaunchSpec{Options: map[string]string{"sandbox": "workspace-write"}})
 	plan, _ := ad.Backend(adapter.BackendSpec{SocketPath: r7Sock, AgentArgv: fresh})
 	if plan.AgentCommandArgs != nil {
 		t.Fatal("fresh launch must retain its explicit permission flags")
+	}
+	if strings.Contains(strings.Join(plan.Args, "\x00"), "sandbox_mode=") {
+		t.Fatal("fresh backend must not override its sandbox from the agent command")
 	}
 }
 
@@ -176,5 +182,17 @@ func TestBackendResumeDoesNotInterpretModelValueAsAFlag(t *testing.T) {
 	want := []string{"resume", "thread", "-c", "check_for_update_on_startup=false", "--model", "--sandbox"}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("model value interpreted as a flag: %v", got)
+	}
+	plan, _ := (codexAdapter{}).Backend(adapter.BackendSpec{SocketPath: r7Sock, AgentArgv: argv})
+	if !strings.Contains(strings.Join(plan.Args, "\x00"), "sandbox_mode=read-only") {
+		t.Fatalf("resume backend interpreted model value as sandbox: %v", plan.Args)
+	}
+}
+
+func TestBackendResumeUnknownSandboxFailsClosed(t *testing.T) {
+	argv, _ := (codexAdapter{}).Resume(adapter.ResumeSpec{ConversationID: "thread", Options: map[string]string{"sandbox": "future-mode"}})
+	plan, _ := (codexAdapter{}).Backend(adapter.BackendSpec{SocketPath: r7Sock, AgentArgv: argv})
+	if plan.AgentCommandArgs != nil {
+		t.Fatalf("unknown sandbox must retain original resume flags: %v", plan.AgentCommandArgs)
 	}
 }
