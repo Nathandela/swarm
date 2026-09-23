@@ -212,13 +212,21 @@ loaded threads and subscribes to that exact thread. It does not require a new
 `thread/started` announcement for an existing conversation.
 
 **Codex permission handling is specific to the local backend attachment.** The
-characterized Codex 0.154.0 path is `codex resume <thread-id> --remote unix://...`:
+characterized Codex 0.154.0 and 0.156.1 path is
+`codex resume <thread-id> --remote unix://...`:
 Swarm's local app-server socket is handled by Codex's remote-workspace startup path.
 Its permission-override rejection does not establish that the conversation is a
 cloud task. For this attachment only, the backend plan removes the composed
 `--sandbox` and `-c sandbox_workspace_write.network_access=true` arguments from the
-TUI resume command. Model and other arguments remain; the backend retains its
-policy configuration and Codex restores the saved thread permission profile.
+TUI resume command. Model and other arguments remain. On resume, the backend
+also receives the source launch sandbox as its `sandbox_mode` default when that
+mode was recorded. Codex 0.156.1 restores saved named permission profiles, but
+legacy threads without a saved profile use the backend defaults. Passing the
+recorded mode to the backend prevents those threads silently becoming read-only.
+Saved named profiles still take precedence, including their network restrictions.
+When no source sandbox was recorded (including external conversation imports),
+Codex uses its current server configuration; Swarm does not infer a historical
+policy. See [0.156.1 verification](../verification/auth-recovery/2026-09-23.md).
 Fresh launches and standalone fallback retain their complete permission arguments.
 Compatibility with other Codex versions requires characterization, rather than
 classifying a conversation from this error string.

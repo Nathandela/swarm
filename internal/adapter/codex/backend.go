@@ -32,19 +32,33 @@ const backendScheme = "unix://"
 // unconditionally true here and false everywhere else.
 func (codexAdapter) Backend(spec adapter.BackendSpec) (adapter.BackendPlan, bool) {
 	endpoint := backendScheme + spec.SocketPath
-	// The recorded argv plus the sandbox override: the app-server is the process that
-	// executes the agent's commands, so its sandbox is the one the swarm CLI runs under.
+	args := []string{"app-server", "--listen", endpoint, "-c", sandboxNetworkOverride}
+	if len(spec.AgentArgv) >= 3 && spec.AgentArgv[1] == "resume" {
+		for i := 3; i+1 < len(spec.AgentArgv); i++ {
+			switch spec.AgentArgv[i] {
+			case "-c", "--model":
+				i++
+			case "--sandbox":
+				if supportedSandboxMode(spec.AgentArgv[i+1]) {
+					args = append(args, "-c", "sandbox_mode="+spec.AgentArgv[i+1])
+				}
+				i++
+			}
+		}
+	}
+	// The app-server executes the agent's commands. Legacy resumed threads use its
+	// sandbox default, so carry forward the source's explicit mode when known.
 	return adapter.BackendPlan{
 		Program:          binary,
-		Args:             []string{"app-server", "--listen", endpoint, "-c", sandboxNetworkOverride},
+		Args:             args,
 		AgentArgs:        []string{"--remote", endpoint},
 		AgentCommandArgs: remoteResumeArgs(spec.AgentArgv),
 	}, true
 }
 
-// Codex 0.154.0 treats --remote over our local socket as a remote workspace.
-// Its TUI rejects permission overrides on resume and restores the server's saved
-// permission profile instead (tui/src/app/startup.rs and app_server_session.rs).
+// Codex 0.154.0 and 0.156.1 treat --remote over our local socket as a remote workspace.
+// Its TUI rejects permission overrides on resume. The backend must carry the
+// source sandbox because legacy threads otherwise use its default on resume.
 // Only remove the two permission flags Swarm composes, only for that attachment.
 // Fresh launches and a failed-backend standalone fallback keep their full policy.
 func remoteResumeArgs(argv []string) []string {
@@ -56,6 +70,9 @@ func remoteResumeArgs(argv []string) []string {
 		if i+1 < len(argv) {
 			switch argv[i] {
 			case "--sandbox":
+				if !supportedSandboxMode(argv[i+1]) {
+					return nil
+				}
 				i++
 				continue
 			case "-c", "--model":
@@ -69,4 +86,8 @@ func remoteResumeArgs(argv []string) []string {
 		args = append(args, argv[i])
 	}
 	return args
+}
+
+func supportedSandboxMode(mode string) bool {
+	return mode == "read-only" || mode == "workspace-write" || mode == "danger-full-access"
 }
