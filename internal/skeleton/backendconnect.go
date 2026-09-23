@@ -746,8 +746,8 @@ func rebuildFrame(method string, id, params json.RawMessage) []byte {
 	return out
 }
 
-// Only the characterized Codex version restores the server's saved permissions on
-// remote resume. Earlier versions sent the TUI defaults instead. This version is
+// Only characterized Codex versions restore the server's saved permissions on
+// remote resume. Earlier versions sent the TUI defaults instead. The version is
 // from the live backend handshake, not a PATH probe or persisted session metadata.
 func backendResumeCommandArgs(ch daemon.BackendChannel, userAgent string) []string {
 	ad, ok := registry.New("codex")
@@ -755,7 +755,7 @@ func backendResumeCommandArgs(ch daemon.BackendChannel, userAgent string) []stri
 		return nil
 	}
 	version, ok := ad.ParseVersion(userAgent)
-	if !ok || version != "0.154.0" {
+	if !ok || version != "0.154.0" && version != "0.156.1" {
 		return nil
 	}
 	return ch.AgentCommandArgs
