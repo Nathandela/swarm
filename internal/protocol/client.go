@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/version"
 	"github.com/Nathandela/swarm/internal/vt"
 	"github.com/Nathandela/swarm/internal/wire"
@@ -119,6 +120,20 @@ func (c *Client) List() ([]SessionView, error) {
 		return nil, errors.New(resp.Error)
 	}
 	return resp.Sessions, nil
+}
+
+// InteractionHistory reads the newest structured conversation items for one
+// discussion. The records are worker-authored data, never client instructions.
+func (c *Client) InteractionHistory(id string, limit int) ([]JournalRecord, error) {
+	resp, err := c.request(Control{Op: OpInteractionHistory, EndpointID: c.endpointID, SessionID: id,
+		History: &schema.InteractionHistoryReq{Session: id, Limit: limit}})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Op == OpError {
+		return nil, errors.New(resp.Error)
+	}
+	return resp.Journal, nil
 }
 
 // Launch requests a new session and returns its namespaced id AND the daemon's

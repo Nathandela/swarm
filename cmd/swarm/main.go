@@ -59,9 +59,11 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|doctor|relogin|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|doctor|relogin|upgrade|version]
 
   swarm            open the TUI
+  swarm --pilot    enter a private pilot context and show the discussion roster
+  swarm pilot      operate discussions (--context <path> roster|open|view|send|await|create|resume|exit)
   swarm daemon     run the session daemon
   swarm shim       run the PTY-owning shim process
   swarm hook       post a hook event to the daemon
@@ -111,6 +113,16 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "--pilot":
+		if len(args) != 1 {
+			_, _ = fmt.Fprint(stderr, usage)
+			return misuseExit
+		}
+		return dispatchAgentVerb(func(_ []string, c agentClient, out, errOut io.Writer) int {
+			return runPilotEntry(c, out, errOut)
+		}, nil, []string{protocol.CapJournal}, stdout, stderr)
+	case "pilot":
+		return dispatchPilot(args[1:], stdout, stderr)
 	case "daemon":
 		return runDaemon(args[1:], stdout, stderr)
 	case "shim":

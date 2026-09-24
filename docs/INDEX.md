@@ -6,6 +6,7 @@
 - [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
 ## Operations
+- [Pilot a Swarm conversation](operations/pilot.md) — caller-scoped `swarm --pilot` guidance and commands
 - [Remote-control operator runbook](operations/operator-runbook.md) — provision, pair, revoke and diagnose the one Cloudflare relay-v2 Worker
 - [Metadata disclosure](operations/metadata-disclosure.md) — the register of who observes what: the relay operator, the push provider, the gateway, a network observer, and (§5) a second model vendor, the one entry that receives session content rather than metadata (PB-OPS-3)
 - [Physical-handset gate](operations/physical-handset-gate.md) — **every step UNRUN**: the playbook 11.2 matrix as 95 executable PH-* rows (rewritten 2026-08-15 for gateway push, multi-machine, presets)
