@@ -18,6 +18,9 @@ func main() {
 	tag := flag.String("tag", os.Getenv("GORELEASER_CURRENT_TAG"), "release tag (defaults to GORELEASER_CURRENT_TAG)")
 	out := flag.String("out", "compat.json", "file to write")
 	flag.Parse()
+	if *tag == "" {
+		fatal("releasemanifest: release tag is required")
+	}
 	data, err := json.MarshalIndent(upgrade.CurrentManifest(*tag), "", "  ")
 	if err != nil {
 		fatal("releasemanifest: %v", err)

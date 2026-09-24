@@ -7,10 +7,10 @@ before:
     - go mod tidy
     # The release's compatibility card (lifecycle R3): compat.json carries the
     # wire/schema constants this build was compiled with, emitted from the same
-    # source constants the binary runs on (scripts/releasemanifest reads
-    # GORELEASER_CURRENT_TAG). It ships INSIDE the swarm archive, so the signed
+    # source constants the binary runs on (the hook passes GoReleaser's tag
+    # explicitly). It ships INSIDE the swarm archive, so the signed
     # checksum covers it; activation gates on it with pure disk reads.
-    - go run ./scripts/releasemanifest --out compat.json
+    - go run ./scripts/releasemanifest --tag '{{ .Tag }}' --out compat.json
 
 # Three deployables ship from this pipeline:
 #
