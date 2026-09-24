@@ -41,6 +41,7 @@ type pilotEnvelope struct {
 	Context         string          `json:"context,omitempty"`
 	TrustedGuidance string          `json:"trusted_guidance"`
 	Receipt         string          `json:"receipt,omitempty"`
+	WorkState       string          `json:"work_state,omitempty"`
 	WorkerData      json.RawMessage `json:"worker_data,omitempty"`
 	Outbound        any             `json:"outbound,omitempty"`
 }
@@ -207,6 +208,7 @@ func runPilot(args []string, c agentClient, stdout, stderr io.Writer) int {
 	case "resume":
 		env.Receipt = "resumed"
 	case "await":
+		env.WorkState = pilotWorkState(data.Bytes())
 		if code == watchTimeoutExit {
 			env.Receipt = "waiting"
 		} else {
@@ -221,6 +223,27 @@ func runPilot(args []string, c agentClient, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return code
+}
+
+// work_state describes only the daemon-observed process/turn. Finished means
+// the process exited; it never asserts that the worker completed the task.
+func pilotWorkState(data []byte) string {
+	var result struct {
+		State protocol.SessionView `json:"state"`
+	}
+	if json.Unmarshal(data, &result) != nil {
+		return "unknown"
+	}
+	switch {
+	case result.State.Status.Process == status.ProcessExited:
+		return "finished"
+	case result.State.Status.Process == status.ProcessLost:
+		return "unknown"
+	case result.State.Status.Process == status.ProcessRunning && result.State.Group == status.GroupWorking:
+		return "working"
+	default:
+		return "waiting"
+	}
 }
 
 func pilotMisuse(stderr io.Writer, msg string) int {
@@ -538,7 +561,12 @@ func pilotAwait(path string, args []string, remaining time.Duration, c agentClie
 			}
 			return pilotAwaitReceipt(c, ev.Session, replied, stdout, stderr)
 		case <-deadline.C:
-			_ = pilotJSON(stdout, stderr, map[string]string{"discussion_id": id, "status": "no_fresh_reply_confirmed"})
+			current, err := pilotTarget(c, id)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "pilot: await: %v\n", err)
+				return 1
+			}
+			_ = pilotJSON(stdout, stderr, map[string]any{"state": current, "status": "no_fresh_reply_confirmed"})
 			return watchTimeoutExit
 		}
 	}

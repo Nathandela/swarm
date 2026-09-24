@@ -426,3 +426,38 @@ func TestPilotSendFailsBeforeWorkerWriteWhenPendingMarkerCannotPersist(t *testin
 		t.Fatalf("failed pending marker still sent to worker: exit=%d out=%q", code, out)
 	}
 }
+
+func TestPilotAwaitReportsObservedWorkStateWithoutClaimingTaskSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		group   status.Group
+		process status.Process
+		want    string
+	}{
+		{"working", status.GroupWorking, status.ProcessRunning, "working"},
+		{"ready", status.GroupReadyForReview, status.ProcessRunning, "waiting"},
+		{"exited", status.GroupCompleted, status.ProcessExited, "finished"},
+		{"lost", status.GroupCompleted, status.ProcessLost, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFakeSteerClient()
+			row := view("local/ami", "codex", "AMI", tc.group)
+			row.Status.Process = tc.process
+			row.GroupEnteredAt = time.Now().Add(-time.Minute)
+			c.sessions = []protocol.SessionView{row}
+			context := enterPilotForTest(t, c)
+			code, out, errs := pilotCall(c, "--context", context, "await", row.ID, "--timeout", "1ms")
+			var envelope struct {
+				Receipt    string                     `json:"receipt"`
+				WorkState  string                     `json:"work_state"`
+				WorkerData map[string]json.RawMessage `json:"worker_data"`
+			}
+			if err := json.Unmarshal([]byte(out), &envelope); err != nil || code != watchTimeoutExit || envelope.Receipt != "waiting" || envelope.WorkState != tc.want {
+				t.Fatalf("await state: exit=%d out=%q err=%q parse=%v", code, out, errs, err)
+			}
+			if _, claimed := envelope.WorkerData["task_success"]; claimed {
+				t.Fatal("process state was presented as task success")
+			}
+		})
+	}
+}
