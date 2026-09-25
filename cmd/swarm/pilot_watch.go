@@ -5,16 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"io"
 	"math"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
+	"golang.org/x/sys/unix"
 )
 
 type pilotJournalClient interface {
@@ -25,9 +26,15 @@ type pilotJournalClient interface {
 // checkpoints a cursor only after consuming its line; this command stores no ack.
 func runPilotWatch(path string, args []string, c agentClient, stdout, stderr io.Writer) int {
 	var after uint64
+	var afterProvided, once, timeoutProvided bool
+	timeout := watchDefaultTimeout
 	ids := make(map[string]bool)
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--after" {
+			if afterProvided {
+				return pilotMisuse(stderr, "watch --after specified more than once")
+			}
+			afterProvided = true
 			if i+1 >= len(args) {
 				return pilotMisuse(stderr, "watch --after needs a cursor")
 			}
@@ -37,6 +44,22 @@ func runPilotWatch(path string, args []string, c agentClient, stdout, stderr io.
 			}
 			after = value
 			i++
+		} else if args[i] == "--once" {
+			if once {
+				return pilotMisuse(stderr, "watch --once specified more than once")
+			}
+			once = true
+		} else if args[i] == "--timeout" {
+			if timeoutProvided || i+1 >= len(args) {
+				return pilotMisuse(stderr, "watch --timeout needs one positive duration")
+			}
+			timeoutProvided = true
+			value, err := time.ParseDuration(args[i+1])
+			if err != nil || value <= 0 {
+				return pilotMisuse(stderr, "watch --timeout needs one positive duration")
+			}
+			timeout = value
+			i++
 		} else if args[i] == "" || args[i][0] == '-' {
 			return pilotMisuse(stderr, "watch needs explicit discussion IDs [--after cursor]")
 		} else {
@@ -45,6 +68,9 @@ func runPilotWatch(path string, args []string, c agentClient, stdout, stderr io.
 	}
 	if len(ids) == 0 {
 		return pilotMisuse(stderr, "watch needs explicit discussion IDs")
+	}
+	if timeoutProvided && !once {
+		return pilotMisuse(stderr, "watch --timeout requires --once")
 	}
 	ctxInfo, err := readPilotContext(path, c)
 	if err != nil {
@@ -84,6 +110,13 @@ func runPilotWatch(path string, args []string, c agentClient, stdout, stderr io.
 	defer stopSignals()
 	ctx, cancel := context.WithDeadline(signalCtx, ctxInfo.Expires)
 	defer cancel()
+	watchCtx := ctx
+	stopWatch := func() {}
+	if once {
+		watchCtx, stopWatch = context.WithTimeout(ctx, timeout)
+	}
+	defer stopWatch()
+	outputCtx := watchCtx
 	watchOutput, pollableOutput, closeOutput, err := pilotWatchOutput(stdout)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "pilot: watch stdout: %v\n", err)
@@ -99,16 +132,13 @@ func runPilotWatch(path string, args []string, c agentClient, stdout, stderr io.
 		}
 	}()
 	from := after
-	if after == 0 {
+	if !afterProvided {
 		// A fresh watch needs only the atomic roster/head. The high cursor avoids
 		// replaying years of history; -1 avoids readFromLocked's from+1 overflow.
 		from = math.MaxUint64 - 1
 	}
-	resume, live, err := journal.JournalSubscribeFrom(ctx, from)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "pilot: watch: %v\n", err)
-		return 1
-	}
+	var resume protocol.JournalResume
+	var live <-chan protocol.JournalRecord
 	lastCursor := after
 	emit := func(receipt string, cursor uint64, data any) bool {
 		unlock, err := lockPilot(path)
@@ -142,7 +172,7 @@ func runPilotWatch(path string, args []string, c agentClient, stdout, stderr io.
 			return false
 		}
 		line = append(line, '\n')
-		if err := writePilotWatchLine(ctx, stdout, line, pollableOutput); err != nil {
+		if err := writePilotWatchLine(outputCtx, stdout, line, pollableOutput); err != nil {
 			_, _ = fmt.Fprintf(stderr, "pilot: watch: %v\n", err)
 			return false
 		}
@@ -151,6 +181,22 @@ func runPilotWatch(path string, args []string, c agentClient, stdout, stderr io.
 		}
 		return true
 	}
+	timedOut := func() bool { return once && watchCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil }
+	finishWait := func() int {
+		receiptCtx, stopReceipt := context.WithTimeout(ctx, 5*time.Second)
+		outputCtx = receiptCtx
+		ok := emit("waiting", lastCursor, map[string]string{"reason": "timeout"})
+		stopReceipt()
+		if ok {
+			return watchTimeoutExit
+		}
+		return 1
+	}
+	resume, live, err = journal.JournalSubscribeFrom(watchCtx, from)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "pilot: watch: %v\n", err)
+		return 1
+	}
 	roster := make([]protocol.JournalRecord, 0)
 	for _, rec := range resume.Roster {
 		if record, ok := normalize(rec); ok {
@@ -158,32 +204,48 @@ func runPilotWatch(path string, args []string, c agentClient, stdout, stderr io.
 		}
 	}
 	snapshotCursor := resume.Cursor
-	if after != 0 {
+	if afterProvided {
 		snapshotCursor = after
 	}
 	if !emit("snapshot", snapshotCursor, roster) {
 		return 1
 	}
-	if resume.FullResync || after > resume.Cursor {
+	if resume.FullResync || afterProvided && after > resume.Cursor {
 		if !emit("history_gap", resume.Cursor, map[string]any{"full_resync": resume.FullResync, "cursor_ahead": after > resume.Cursor}) {
 			return 1
 		}
-	} else if after != 0 {
+		if once {
+			return 0
+		}
+	} else if afterProvided {
 		for _, rec := range resume.Events {
-			if record, ok := normalize(rec); ok && pilotWatchRelevant(record) && !emit("event", record.Cursor, record) {
-				return 1
+			if record, ok := normalize(rec); ok && pilotWatchRelevant(record) {
+				if !emit("event", record.Cursor, record) {
+					return 1
+				}
+				if once {
+					return 0
+				}
 			}
 		}
+		// Every backlog record has now been inspected; the atomic boundary is safe.
+		lastCursor = resume.Cursor
 	}
 	for {
 		select {
-		case <-ctx.Done():
+		case <-watchCtx.Done():
+			if timedOut() {
+				return finishWait()
+			}
 			if _, err := readPilotContext(path, c); err == nil {
-				_ = emit("disconnected", lastCursor, map[string]string{"reason": ctx.Err().Error()})
+				_ = emit("disconnected", lastCursor, map[string]string{"reason": watchCtx.Err().Error()})
 			}
 			return 1
 		case rec, open := <-live:
 			if !open {
+				if timedOut() {
+					return finishWait()
+				}
 				_ = emit("disconnected", lastCursor, map[string]string{"reason": "journal connection closed"})
 				return 1
 			}
@@ -191,6 +253,12 @@ func runPilotWatch(path string, args []string, c agentClient, stdout, stderr io.
 				if !emit("event", record.Cursor, record) {
 					return 1
 				}
+				if once {
+					return 0
+				}
+			}
+			if rec.Cursor > lastCursor {
+				lastCursor = rec.Cursor
 			}
 		}
 	}

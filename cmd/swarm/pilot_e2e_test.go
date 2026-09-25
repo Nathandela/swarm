@@ -211,6 +211,106 @@ func TestPilotRealCLIControlsTwoWorkersWithoutChangingOrdinaryCLI(t *testing.T) 
 			}
 		}
 	})
+	t.Run("one-shot watch waits for an event and replays from a saved cursor", func(t *testing.T) {
+		quietScript := filepath.Join(t.TempDir(), "quiet-worker.txt")
+		if err := os.WriteFile(quietScript, []byte("idle 60s\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var watched []string
+		for range 2 {
+			id, _, err := c.Launch(protocol.LaunchReq{Agent: "fake", Cwd: t.TempDir(),
+				Options: map[string]string{"script": quietScript}, Env: []string{"PATH=" + os.Getenv("PATH")}, Cols: 80, Rows: 24})
+			if err != nil {
+				t.Fatal(err)
+			}
+			watched = append(watched, id)
+		}
+		entry, err := run("--pilot")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var info struct {
+			Context string `json:"context"`
+		}
+		if err := json.Unmarshal([]byte(entry), &info); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = run("pilot", "--context", info.Context, "exit") })
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, swarmBin, "pilot", "--context", info.Context, "watch", watched[0], watched[1], "--once", "--timeout", "5s")
+		cmd.Env = append(append(os.Environ(), env...), "TMPDIR="+tmp)
+		pipe, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		lines := make(chan json.RawMessage, 4)
+		done := make(chan error, 1)
+		go func() {
+			scan := bufio.NewScanner(pipe)
+			scan.Buffer(make([]byte, 4096), 2<<20)
+			for scan.Scan() {
+				lines <- append(json.RawMessage(nil), scan.Bytes()...)
+			}
+			close(lines)
+			done <- cmd.Wait()
+		}()
+		next := func() map[string]json.RawMessage {
+			t.Helper()
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					t.Fatal("watch ended before expected line")
+				}
+				var data map[string]json.RawMessage
+				if err := json.Unmarshal(line, &data); err != nil {
+					t.Fatalf("invalid watch line %q: %v", line, err)
+				}
+				return data
+			case <-ctx.Done():
+				t.Fatal("watch timed out")
+			}
+			return nil
+		}
+		if got := next(); string(got["receipt"]) != `"snapshot"` {
+			t.Fatalf("first line is not snapshot: %s", got)
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("snapshot ended one-shot watch: %v", err)
+		default:
+		}
+		if err := c.Kill(watched[0]); err != nil {
+			t.Fatal(err)
+		}
+		first := next()
+		if string(first["receipt"]) != `"event"` || !strings.Contains(string(first["worker_data"]), watched[0]) {
+			t.Fatalf("first one-shot event: %s", first)
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("one-shot exit: %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("one-shot watch did not exit after event")
+		}
+		if err := c.Kill(watched[1]); err != nil {
+			t.Fatal(err)
+		}
+		cursor := strings.TrimSpace(string(first["cursor"]))
+		replayed, err := run("pilot", "--context", info.Context, "watch", watched[1], "--once", "--after", cursor, "--timeout", "5s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := watchLines(t, replayed)
+		if len(got) != 2 || got[0].Receipt != "snapshot" || fmt.Sprint(got[0].Cursor) != cursor || got[1].Receipt != "event" || got[1].Cursor <= got[0].Cursor || !strings.Contains(string(got[1].WorkerData), watched[1]) {
+			t.Fatalf("replayed one-shot event: %s", replayed)
+		}
+	})
 	if _, err := run("pilot", "--context", start.Context, "exit"); err != nil {
 		t.Fatal(err)
 	}
