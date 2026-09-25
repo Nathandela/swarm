@@ -212,7 +212,7 @@ loaded threads and subscribes to that exact thread. It does not require a new
 `thread/started` announcement for an existing conversation.
 
 **Codex permission handling is specific to the local backend attachment.** The
-characterized Codex 0.154.0 and 0.156.1 path is
+Codex 0.154.0-and-newer stable-release path is
 `codex resume <thread-id> --remote unix://...`:
 Swarm's local app-server socket is handled by Codex's remote-workspace startup path.
 Its permission-override rejection does not establish that the conversation is a
@@ -228,8 +228,13 @@ When no source sandbox was recorded (including external conversation imports),
 Codex uses its current server configuration; Swarm does not infer a historical
 policy. See [0.156.1 verification](../verification/auth-recovery/2026-09-23.md).
 Fresh launches and standalone fallback retain their complete permission arguments.
-Compatibility with other Codex versions requires characterization, rather than
-classifying a conversation from this error string.
+The live backend version selects this behavior at the 0.154.0 boundary; an exact
+release allowlist would restore rejected permission flags on every upgrade. Older,
+unparseable, prerelease, and build-suffixed versions retain the previous behavior
+because the existing banner parser accepts numeric release tokens only. Upgrade
+verification must exercise native resume and confirm the restored policy, rather
+than classify a conversation from this error string. See the
+[0.157.0 regression verification](../verification/auth-recovery/2026-09-25.md).
 
 **Remaining boundaries.** Same-account logout/login still requires the explicit
 `swarm relogin --force` assertion because stable account identity does not change.

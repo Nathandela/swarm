@@ -32,6 +32,7 @@ import (
 	"github.com/Nathandela/swarm/internal/appserver"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/status"
+	"golang.org/x/mod/semver"
 )
 
 // backendReadyPoll bounds how long the assembly waits for the shim's backend to become
@@ -746,16 +747,15 @@ func rebuildFrame(method string, id, params json.RawMessage) []byte {
 	return out
 }
 
-// Only characterized Codex versions accept remote resume without TUI permission
-// overrides. Earlier versions sent the TUI defaults instead. The version comes
-// from the live backend handshake, not a PATH probe or persisted session metadata.
+// Codex 0.154.0 and newer reject TUI permission overrides on remote resume.
+// The version comes from the live backend handshake, not a PATH probe or persisted metadata.
 func backendResumeCommandArgs(ch daemon.BackendChannel, userAgent string) []string {
 	ad, ok := registry.New("codex")
 	if !ok {
 		return nil
 	}
 	version, ok := ad.ParseVersion(userAgent)
-	if !ok || version != "0.154.0" && version != "0.156.1" {
+	if !ok || strings.Count(version, ".") != 2 || !semver.IsValid("v"+version) || semver.Compare("v"+version, "v0.154.0") < 0 {
 		return nil
 	}
 	return ch.AgentCommandArgs

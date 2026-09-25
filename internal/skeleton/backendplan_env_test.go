@@ -105,16 +105,16 @@ func TestBackendPlanWithNoLaunchEnvFallsBackToDaemonPolicy(t *testing.T) {
 	}
 }
 
-func TestBackendResumeCommandArgsRequiresCharacterizedRunningVersion(t *testing.T) {
+func TestBackendResumeCommandArgsRequiresCompatibleRunningVersion(t *testing.T) {
 	ch := daemon.BackendChannel{AgentCommandArgs: []string{"resume", "thread"}}
-	for _, userAgent := range []string{"", "swarm/0.147.0 (linux)", "swarm/0.153.0", "swarm/0.155.0", "swarm/0.154.0-alpha", "swarm/0.154.0+build", "unknown"} {
+	for _, userAgent := range []string{"", "swarm/0.147.0 (linux)", "swarm/0.153.999", "swarm/0.154", "swarm/0.154.0.1", "swarm/0.0154.0", "swarm/0.154.0junk", "swarm/0.154.0-alpha", "swarm/0.154.0+build", "unknown"} {
 		if got := backendResumeCommandArgs(ch, userAgent); got != nil {
-			t.Fatalf("%q selected uncharacterized resume args: %v", userAgent, got)
+			t.Fatalf("%q selected incompatible resume args: %v", userAgent, got)
 		}
 	}
-	for _, userAgent := range []string{"swarm/0.154.0 (Linux)", "swarm/0.156.1 (Linux)"} {
+	for _, userAgent := range []string{"swarm/0.154.0 (Linux)", "swarm/0.154.1", "swarm/0.155.0", "swarm/0.156.0", "swarm/0.156.1 (Linux)", "swarm/0.157.0 (Linux)", "swarm/0.200.0", "swarm/1.0.0"} {
 		if got := backendResumeCommandArgs(ch, userAgent); !reflect.DeepEqual(got, ch.AgentCommandArgs) {
-			t.Fatalf("%q characterized running version args = %v", userAgent, got)
+			t.Fatalf("%q compatible running version args = %v", userAgent, got)
 		}
 	}
 }
