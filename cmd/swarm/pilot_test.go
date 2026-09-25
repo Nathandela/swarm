@@ -53,6 +53,35 @@ func pilotCall(c agentClient, args ...string) (int, string, string) {
 	return code, out.String(), errs.String()
 }
 
+func TestPilotGuidanceIsGenericWhileWorkerNamesArePreserved(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	c := newFakeSteerClient()
+	c.sessions = []protocol.SessionView{view("local/nathan", "codex", "Nathan", status.GroupWorking)}
+	var out, errs bytes.Buffer
+	if code := runPilotEntry(c, &out, &errs); code != 0 {
+		t.Fatalf("pilot entry exit=%d err=%q", code, errs.String())
+	}
+	var entry pilotEnvelope
+	if err := json.Unmarshal(out.Bytes(), &entry); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(entry.Context) })
+	if strings.Contains(entry.TrustedGuidance, "Nathan") || !strings.Contains(string(entry.WorkerData), "Nathan") {
+		t.Fatalf("entry mixed caller guidance and worker name: %+v", entry)
+	}
+	code, body, callErr := pilotCall(c, "--context", entry.Context, "roster")
+	if code != 0 {
+		t.Fatalf("pilot roster exit=%d err=%q", code, callErr)
+	}
+	var followup pilotEnvelope
+	if err := json.Unmarshal([]byte(body), &followup); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(followup.TrustedGuidance, "Nathan") || !strings.Contains(string(followup.WorkerData), "Nathan") {
+		t.Fatalf("followup mixed caller guidance and worker name: %+v", followup)
+	}
+}
+
 func TestPilotContextBoundToCallerAndExit(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	c := newFakeSteerClient()

@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -31,10 +32,12 @@ type Client struct {
 	reqMu  sync.Mutex   // one outstanding request/reply at a time
 	respCh chan Control // read loop delivers responses here
 
-	mu       sync.Mutex
-	eventsCh chan Event
-	att      *Attachment
-	peekCh   chan TerminalSnapshot // terminal_snapshot PUSHES, never the request respCh
+	mu           sync.Mutex
+	eventsCh     chan Event
+	att          *Attachment
+	peekCh       chan TerminalSnapshot // terminal_snapshot PUSHES, never the request respCh
+	journalPages chan Control
+	journalCh    chan JournalRecord
 
 	pairMu  sync.Mutex      // one pairing in flight per client (mirrors the daemon host)
 	pairing *PairingSession // the in-flight pairing, routing pair_pending/pair_result pushes
@@ -391,6 +394,97 @@ func (c *Client) Subscribe() (<-chan Event, error) {
 	return ch, nil
 }
 
+// JournalSubscribeFrom returns the complete atomic snapshot before live records.
+// Use a dedicated client: cancellation or a full live queue closes its connection,
+// so the caller can reconnect from the last cursor it actually applied.
+func (c *Client) JournalSubscribeFrom(ctx context.Context, from uint64) (JournalResume, <-chan JournalRecord, error) {
+	if ctx.Err() != nil {
+		return JournalResume{}, nil, ctx.Err()
+	}
+	hasJournal, hasResume := false, false
+	for _, cap := range c.caps {
+		if cap == CapJournal {
+			hasJournal = true
+		}
+		if cap == CapJournalSubscribeFrom {
+			hasResume = true
+		}
+	}
+	if !hasJournal || !hasResume {
+		return JournalResume{}, nil, errors.New("protocol: atomic journal subscription capability not negotiated")
+	}
+	c.reqMu.Lock()
+	defer c.reqMu.Unlock()
+	c.mu.Lock()
+	if c.journalCh != nil {
+		c.mu.Unlock()
+		return JournalResume{}, nil, errors.New("protocol: journal subscription already active")
+	}
+	pages := make(chan Control)
+	live := make(chan JournalRecord, eventQueueCap)
+	c.journalPages, c.journalCh = pages, live
+	c.mu.Unlock()
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = c.Close()
+		case <-c.done:
+		}
+	}()
+	_ = c.conn.SetWriteDeadline(time.Now().Add(clientTimeout))
+	if err := c.writeControl(Control{Op: OpJournalSubscribeFrom, EndpointID: c.endpointID, Cursor: from, JournalMaxBytes: wire.MaxFrame - 1}); err != nil {
+		_ = c.Close()
+		if ctx.Err() != nil {
+			return JournalResume{}, nil, ctx.Err()
+		}
+		return JournalResume{}, nil, err
+	}
+	_ = c.conn.SetWriteDeadline(time.Time{})
+	var res JournalResume
+	for first, total := true, 0; ; first = false {
+		var page Control
+		select {
+		case page = <-pages:
+		case <-ctx.Done():
+			_ = c.Close()
+			return JournalResume{}, nil, ctx.Err()
+		case <-c.done:
+			if err := ctx.Err(); err != nil {
+				return JournalResume{}, nil, err
+			}
+			return JournalResume{}, nil, errors.New("protocol: connection closed during journal snapshot")
+		case <-time.After(clientTimeout):
+			_ = c.Close()
+			return JournalResume{}, nil, errors.New("protocol: journal snapshot timed out")
+		}
+		if page.Op == OpError {
+			_ = c.Close()
+			return JournalResume{}, nil, errors.New(page.Error)
+		}
+		if page.Op != OpJournalSubscribeFrom || (!first && (page.Cursor != res.Cursor || page.FullResync != res.FullResync)) {
+			_ = c.Close()
+			return JournalResume{}, nil, errors.New("protocol: invalid journal snapshot page")
+		}
+		// Bound the complete snapshot even if a peer keeps sending valid-size pages.
+		body, err := EncodeControl(page)
+		if err != nil || len(body) > wire.MaxFrame-1 || total+len(body) > 32<<20 {
+			_ = c.Close()
+			return JournalResume{}, nil, errors.New("protocol: journal snapshot exceeds client limit")
+		}
+		total += len(body)
+		res.Cursor, res.FullResync = page.Cursor, page.FullResync
+		res.Events = append(res.Events, page.Journal...)
+		res.Roster = append(res.Roster, page.Roster...)
+		if !page.JournalMore {
+			break
+		}
+	}
+	c.mu.Lock()
+	c.journalPages = nil
+	c.mu.Unlock()
+	return res, live, nil
+}
+
 // Attach takes the controller lease on a session and returns its Attachment: the
 // one snapshot followed by the live output stream.
 func (c *Client) Attach(id string) (*Attachment, error) {
@@ -663,6 +757,40 @@ func (c *Client) readLoop() {
 
 func (c *Client) dispatchControl(ctrl Control) {
 	switch ctrl.Op {
+	case OpJournalSubscribeFrom, OpJournalEvent:
+		c.mu.Lock()
+		pages, live := c.journalPages, c.journalCh
+		c.mu.Unlock()
+		if ctrl.Op == OpJournalSubscribeFrom && pages != nil {
+			select {
+			case pages <- ctrl:
+			case <-c.done:
+			}
+		} else if ctrl.Op == OpJournalEvent && live != nil {
+			for _, rec := range ctrl.Journal {
+				select {
+				case live <- rec:
+				default:
+					_ = c.Close()
+					return
+				}
+			}
+		}
+	case OpError:
+		c.mu.Lock()
+		pages := c.journalPages
+		c.mu.Unlock()
+		if pages != nil {
+			select {
+			case pages <- ctrl:
+			case <-c.done:
+			}
+		} else {
+			select {
+			case c.respCh <- ctrl:
+			default:
+			}
+		}
 	case OpEvent:
 		c.mu.Lock()
 		ch := c.eventsCh
@@ -770,12 +898,17 @@ func (c *Client) closeReadLoop() {
 	c.att = nil
 	ch := c.eventsCh
 	c.eventsCh = nil
+	journal := c.journalCh
+	c.journalCh, c.journalPages = nil, nil
 	c.mu.Unlock()
 	if att != nil {
 		att.closeFrames()
 	}
 	if ch != nil {
 		close(ch)
+	}
+	if journal != nil {
+		close(journal)
 	}
 	// Fail-closed pairing teardown: a dropped connection ENDS an in-flight pairing with
 	// a non-paired result, so a caller blocked on Result() unblocks and nothing enrolls
