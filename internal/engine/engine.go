@@ -248,6 +248,21 @@ func (e *Engine) EndSession(id string) {
 	delete(e.sessions, id)
 }
 
+// AuthenticateCallback checks the live session token without applying status or
+// advancing sequence numbers. Durable observers call this before admission.
+func (e *Engine) AuthenticateCallback(cb Callback) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s, ok := e.sessions[cb.SessionID]
+	if !ok || !s.alive {
+		return fmt.Errorf("engine: callback for unregistered or ended session %q", cb.SessionID)
+	}
+	if cb.Token == "" || cb.Token != s.token {
+		return errors.New("engine: callback token does not match the session's live token")
+	}
+	return nil
+}
+
 // HandleCallback authenticates and applies a typed status signal (S6/G5). It
 // rejects — with an error and NO emit — any callback that is tokenless, carries a
 // foreign token, targets an unregistered or ended session, names a status value

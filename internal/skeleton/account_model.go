@@ -11,8 +11,9 @@ import (
 )
 
 type accountModelRecord struct {
-	Binding accounts.Binding `json:"binding"`
-	Model   string           `json:"model"`
+	Binding      accounts.Binding `json:"binding"`
+	Model        string           `json:"model"`
+	HookSequence uint64           `json:"hook_sequence,omitempty"`
 }
 
 func exactAccountModel(model string) bool {
@@ -33,6 +34,9 @@ func exactAccountModel(model string) bool {
 }
 
 func (m *accountRotationManager) effectiveModel(meta persist.Meta) string {
+	if m.modelInboxHeld(meta.ID) {
+		return ""
+	}
 	if meta.AccountBinding == nil {
 		return ""
 	}
@@ -96,7 +100,7 @@ func (m *accountRotationManager) effectiveModel(meta persist.Meta) string {
 	return fallback
 }
 
-func (m *accountRotationManager) noteModel(meta persist.Meta, model string) error {
+func (m *accountRotationManager) noteModel(meta persist.Meta, model string, sequences ...uint64) error {
 	if meta.AccountBinding == nil {
 		return accounts.ErrIneligible
 	}
@@ -104,9 +108,16 @@ func (m *accountRotationManager) noteModel(meta persist.Meta, model string) erro
 		m.w.state.AccountModels = make(map[string]accountModelRecord)
 	}
 	previous, existed := m.w.state.AccountModels[meta.ID]
+	var sequence uint64
+	if len(sequences) > 0 {
+		sequence = sequences[0]
+	}
+	if existed && previous.Binding == *meta.AccountBinding && sequence != 0 && sequence <= previous.HookSequence {
+		return nil
+	}
 	schema := m.w.state.AccountSchemaVersion
-	m.w.state.AccountModels[meta.ID] = accountModelRecord{Binding: *meta.AccountBinding, Model: model}
-	m.w.state.AccountSchemaVersion = 1
+	m.w.state.AccountModels[meta.ID] = accountModelRecord{Binding: *meta.AccountBinding, Model: model, HookSequence: sequence}
+	m.w.state.AccountSchemaVersion = accounts.RecoverySchemaVersion
 	visible, err := m.w.persistState()
 	if err != nil && !visible {
 		m.w.state.AccountSchemaVersion = schema

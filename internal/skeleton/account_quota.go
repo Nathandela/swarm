@@ -105,108 +105,95 @@ func normalizeNativeQuota(raw []byte) ([]accounts.ScopeObservation, error) {
 	return updates, nil
 }
 
-// A feed callback never waits for the recovery owner while holding the backend
-// replacement fence. The owner rechecks exactly the captured feed before apply.
-func (m *accountRotationManager) NoteNativeFrame(local, instance string, feed *backendFeed, method string, raw []byte, at time.Time) {
-	if m == nil || len(raw) > 1<<20 || (method != "account/rateLimits/updated" && method != "error" && method != "turn/completed" && method != "turn/started") {
-		return
+// Admission persists normalized evidence without waiting for the recovery owner.
+// The caller proves this exact feed under the backend replacement fence.
+func (m *accountRotationManager) NoteNativeFrame(local, instance string, feed *backendFeed, method string, raw []byte, at time.Time) error {
+	if m == nil || feed == nil || feed.retired.Load() || len(raw) > 1<<20 || (method != "account/rateLimits/updated" && method != "error" && method != "turn/completed" && method != "turn/started") {
+		return nil
 	}
-	copyRaw := append([]byte(nil), raw...)
-	op := accountOwnerOperation{apply: func(w *authWatcher) error {
-		if w.stateErr != nil || feed.retired.Load() {
+	meta, ok := m.w.get(local)
+	if !ok || meta.AccountBinding == nil || meta.AgentType != accounts.ProviderCodex || rejectDuplicateJSONKeys(raw) != nil {
+		return nil
+	}
+	if m.d == nil {
+		return nil
+	}
+	if current, ok := m.d.sessionInstance(local); !ok || current != instance {
+		return nil
+	}
+	if backend, live := m.d.sessionBackendFor(local); live && backend.feed != feed {
+		return nil
+	}
+	rec, ok := m.inboxRecord(local, "native", meta.ConversationID, 0)
+	if !ok {
+		return nil
+	}
+	rec.Instance, rec.Feed, rec.ReceivedAt = instance, feed.epoch, at.UTC()
+	var envelope struct {
+		Params json.RawMessage `json:"params"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return nil
+	}
+	if method == "account/rateLimits/updated" {
+		updates, err := normalizeNativeQuota(envelope.Params)
+		if err != nil {
 			return nil
 		}
-		if current, ok := m.d.sessionInstance(local); !ok || current != instance {
-			return nil
-		}
-		backend, ok := m.d.sessionBackendFor(local)
-		if !ok || backend.feed != feed {
-			return nil
-		}
-		meta, ok := w.get(local)
-		if !ok || meta.AccountBinding == nil || meta.AgentType != accounts.ProviderCodex {
-			return nil
-		}
-		if rejectDuplicateJSONKeys(copyRaw) != nil {
-			return nil
-		}
-		if m.nativeFeeds == nil {
-			m.nativeFeeds = make(map[string]string)
-		}
-		if m.nativeFeeds[local] != feed.epoch {
-			r, err := m.store.Snapshot()
-			if err != nil {
-				return err
-			}
-			if _, err = m.store.RequireQuotaRefresh(r.Revision, *meta.AccountBinding); err != nil && !errors.Is(err, accounts.ErrIneligible) {
-				return err
-			}
-			m.nativeFeeds[local] = feed.epoch
-		}
-		var envelope struct {
-			Params json.RawMessage `json:"params"`
-		}
-		if json.Unmarshal(copyRaw, &envelope) != nil {
-			return nil
-		}
-		if method == "account/rateLimits/updated" {
-			updates, err := normalizeNativeQuota(envelope.Params)
-			if err != nil {
-				return nil
-			}
-			return m.observe(*meta.AccountBinding, updates, nil, false, "", at)
-		}
-		var params struct {
-			ThreadID  string `json:"threadId"`
-			TurnID    string `json:"turnId"`
-			WillRetry bool   `json:"willRetry"`
-			Error     *struct {
+		rec.Scopes = updates
+		return m.acceptInbox(rec)
+	}
+	var params struct {
+		ThreadID  string `json:"threadId"`
+		TurnID    string `json:"turnId"`
+		WillRetry bool   `json:"willRetry"`
+		Error     *struct {
+			Info json.RawMessage `json:"codexErrorInfo"`
+		} `json:"error"`
+		Turn struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Error  *struct {
 				Info json.RawMessage `json:"codexErrorInfo"`
 			} `json:"error"`
-			Turn struct {
-				ID     string `json:"id"`
-				Status string `json:"status"`
-				Error  *struct {
-					Info json.RawMessage `json:"codexErrorInfo"`
-				} `json:"error"`
-			} `json:"turn"`
-		}
-		if json.Unmarshal(envelope.Params, &params) != nil || params.ThreadID != meta.ConversationID {
-			return nil
-		}
-		info := json.RawMessage(nil)
-		if params.Error != nil {
-			info = params.Error.Info
-		}
-		if method == "turn/completed" && params.Turn.Error != nil {
+		} `json:"turn"`
+	}
+	if json.Unmarshal(envelope.Params, &params) != nil || params.ThreadID != meta.ConversationID {
+		return nil
+	}
+	var info json.RawMessage
+	if params.Error != nil {
+		info = params.Error.Info
+	}
+	if method == "turn/completed" {
+		params.TurnID = params.Turn.ID
+		if params.Turn.Error != nil {
 			info = params.Turn.Error.Info
-			params.TurnID = params.Turn.ID
 		}
-		var code string
-		_ = json.Unmarshal(info, &code)
-		class := ""
+	}
+	var code string
+	_ = json.Unmarshal(info, &code)
+	if !params.WillRetry {
 		switch code {
 		case "usageLimitExceeded":
-			class = "quota"
+			rec.Class = "quota"
 		case "unauthorized":
-			class = "auth-invalid"
+			rec.Class = "auth-invalid"
 		}
-		if class != "" && !params.WillRetry {
-			return m.reportFailure(w, local, class, meta.LaunchOptions["model"], params.ThreadID+":"+params.TurnID+":"+code)
-		}
-		if method == "turn/started" {
-			m.beginTrial(local, params.Turn.ID)
-		}
-		if method == "turn/completed" && params.Turn.Status == "completed" && params.Turn.Error == nil {
-			m.completeTrial(local, params.Turn.ID)
-		}
-		return nil
-	}}
-	select {
-	case m.w.managedOps <- op:
-	case <-m.w.stop:
-	default: /* A missing observation cannot clear a denial. */
 	}
+	rec.TurnID = params.TurnID
+	if method == "turn/started" {
+		rec.TurnID = params.Turn.ID
+		rec.Started = true
+	}
+	rec.Completed = method == "turn/completed" && params.Turn.Status == "completed" && params.Turn.Error == nil
+	if rec.Class == "" && !rec.Started && !rec.Completed {
+		return nil
+	}
+	if len(rec.TurnID) > 256 {
+		return nil
+	}
+	return m.acceptInbox(rec)
 }
 
 func (m *accountRotationManager) observe(binding accounts.Binding, updates []accounts.ScopeObservation, probe *accounts.ProbeStamp, full bool, event string, at time.Time) error {
@@ -226,7 +213,7 @@ func (m *accountRotationManager) observe(binding accounts.Binding, updates []acc
 	return err
 }
 
-func (m *accountRotationManager) completeTrial(local, turnID string) {
+func (m *accountRotationManager) completeTrial(local, turnID string) error {
 	for _, rec := range m.w.state.AccountRotations {
 		if rec.CandidateID != local || !rec.InputReleased || rec.TrialTurnID == "" || rec.TrialTurnID != turnID || (rec.State != accountCommitted && rec.State != accountUnknown) {
 			continue
@@ -234,13 +221,16 @@ func (m *accountRotationManager) completeTrial(local, turnID string) {
 		rec.Trial = nil
 		rec.State = accountComplete
 		rec.LastError = ""
-		_ = m.persist(rec)
+		if err := m.persist(rec); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (m *accountRotationManager) NoteConversation(local, conversation string, raw []byte, sequences ...uint64) {
+func (m *accountRotationManager) NoteConversation(local, conversation string, raw []byte, sequences ...uint64) error {
 	if len(raw) > 1<<20 || !adapter.IsCanonicalConversationID(conversation) {
-		return
+		return nil
 	}
 	var body struct {
 		SessionID string `json:"session_id"`
@@ -248,46 +238,30 @@ func (m *accountRotationManager) NoteConversation(local, conversation string, ra
 		Model     string `json:"model"`
 	}
 	if rejectDuplicateJSONKeys(raw) != nil || json.Unmarshal(raw, &body) != nil || body.AgentID != "" || body.SessionID != conversation {
-		return
-	}
-	op := accountOwnerOperation{apply: func(w *authWatcher) error {
-		meta, ok := w.get(local)
-		if !ok || meta.AccountBinding == nil || meta.AgentType != accounts.ProviderClaude || meta.ConversationID != conversation {
-			return nil
-		}
-		model := body.Model
-		if !exactAccountModel(model) {
-			model = ""
-		}
-		if err := m.noteModel(meta, model); err != nil {
-			return err
-		}
-		for _, rec := range w.state.AccountRotations {
-			if rec.CandidateID == local && rec.State == accountLaunched && rec.Destination != nil && *meta.AccountBinding == *rec.Destination && rec.ConversationID == conversation && body.Model == rec.Incident.Model {
-				rec.ConversationProven = true
-				if len(sequences) > 0 {
-					rec.NativeHookSequence = sequences[0]
-				}
-				return m.persist(rec)
-			}
-		}
 		return nil
-	}}
-	select {
-	case m.w.managedOps <- op:
-	case <-m.w.stop:
-	default:
 	}
+	var sequence uint64
+	if len(sequences) > 0 {
+		sequence = sequences[0]
+	}
+	rec, ok := m.inboxRecord(local, "model", conversation, sequence)
+	if !ok || rec.Binding.Provider != accounts.ProviderClaude {
+		return nil
+	}
+	if exactAccountModel(body.Model) {
+		rec.Model = body.Model
+	}
+	return m.acceptInbox(rec)
 }
 
-func (m *accountRotationManager) NoteClaudeFailure(cb engine.Callback) {
+func (m *accountRotationManager) NoteClaudeFailure(cb engine.Callback) error {
 	var body struct {
 		SessionID string `json:"session_id"`
 		AgentID   string `json:"agent_id"`
 		Error     string `json:"error"`
 	}
 	if len(cb.Raw) > 1<<20 || rejectDuplicateJSONKeys(cb.Raw) != nil || json.Unmarshal(cb.Raw, &body) != nil || body.AgentID != "" {
-		return
+		return nil
 	}
 	class := ""
 	switch body.Error {
@@ -296,20 +270,14 @@ func (m *accountRotationManager) NoteClaudeFailure(cb engine.Callback) {
 	case "authentication_failed":
 		class = "auth-invalid"
 	default:
-		return
+		return nil
 	}
-	op := accountOwnerOperation{apply: func(w *authWatcher) error {
-		meta, ok := w.get(cb.SessionID)
-		if !ok || meta.AccountBinding == nil || meta.AgentType != accounts.ProviderClaude || meta.ConversationID != body.SessionID {
-			return nil
-		}
-		return m.reportFailure(w, cb.SessionID, class, meta.LaunchOptions["model"], body.SessionID+":"+fmtUint(cb.Sequence)+":"+body.Error)
-	}}
-	select {
-	case m.w.managedOps <- op:
-	case <-m.w.stop:
-	default:
+	rec, ok := m.inboxRecord(cb.SessionID, "failure", body.SessionID, cb.Sequence)
+	if !ok || rec.Binding.Provider != accounts.ProviderClaude {
+		return nil
 	}
+	rec.Class = class
+	return m.acceptInbox(rec)
 }
 
 // Refresh uses a live, bound app-server and performs no model request. It does
@@ -398,23 +366,26 @@ func (m *accountRotationManager) Refresh(accountID string) error {
 
 var errAccountAvailabilityUnsafe = errors.New("account availability check cannot safely represent this native installation; use native recovery")
 
-func (m *accountRotationManager) beginTrial(local, turnID string) {
+func (m *accountRotationManager) beginTrial(local, turnID string) error {
 	if turnID == "" || len(turnID) > 256 {
-		return
+		return nil
 	}
 	for _, rec := range m.w.state.AccountRotations {
 		if rec.CandidateID == local && rec.InputReleased && (rec.State == accountCommitted || rec.State == accountUnknown) {
 			rec.TrialTurnID = turnID
-			_ = m.persist(rec)
+			if err := m.persist(rec); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // Claude root hooks delimit a new owner-submitted turn. Replay, subagent Stop,
 // failed StopFailure and stop-hook recursion cannot close a recovery incident.
-func (m *accountRotationManager) NoteClaudeTurn(cb engine.Callback) {
+func (m *accountRotationManager) NoteClaudeTurn(cb engine.Callback) error {
 	if cb.Event != "UserPromptSubmit" && cb.Event != "Stop" {
-		return
+		return nil
 	}
 	var body struct {
 		SessionID      string `json:"session_id"`
@@ -423,58 +394,29 @@ func (m *accountRotationManager) NoteClaudeTurn(cb engine.Callback) {
 		StopHookActive bool   `json:"stop_hook_active"`
 	}
 	if len(cb.Raw) > 1<<20 || rejectDuplicateJSONKeys(cb.Raw) != nil || json.Unmarshal(cb.Raw, &body) != nil || body.AgentID != "" || body.StopHookActive {
-		return
+		return nil
 	}
 	ad, found := registry.New(accounts.ProviderClaude)
 	if !found {
-		return
+		return nil
 	}
 	shaper, ok := adapter.AsInteractionSource(ad)
 	if !ok {
-		return
+		return nil
 	}
-	ownerPrompt, completed := false, false
+	rec, ok := m.inboxRecord(cb.SessionID, "claude-turn", body.SessionID, cb.Sequence)
+	if !ok || rec.Binding.Provider != accounts.ProviderClaude {
+		return nil
+	}
+	rec.Started = cb.Event == "UserPromptSubmit"
+	rec.ClearModel = rec.Started && strings.HasPrefix(strings.TrimSpace(body.Prompt), "/model")
 	for _, item := range shaper.Interactions(adapter.HookPayload{Event: cb.Event, Raw: cb.Raw}) {
 		if item.Kind == adapter.KindUserMessage && item.Source == adapter.SourceOwner && !strings.HasPrefix(strings.TrimSpace(item.Text), "/") {
-			ownerPrompt = true
+			rec.OwnerPrompt = true
 		}
 		if item.Kind == adapter.KindAgentMessage && item.Status == adapter.StatusCompleted && strings.TrimSpace(item.Text) != "" {
-			completed = true
+			rec.Completed = true
 		}
 	}
-	op := accountOwnerOperation{apply: func(w *authWatcher) error {
-		meta, ok := w.get(cb.SessionID)
-		if !ok || meta.AccountBinding == nil || meta.AgentType != accounts.ProviderClaude || meta.ConversationID != body.SessionID {
-			return nil
-		}
-		if cb.Event == "UserPromptSubmit" && strings.HasPrefix(strings.TrimSpace(body.Prompt), "/model") {
-			if err := m.noteModel(meta, ""); err != nil {
-				return err
-			}
-		}
-		for _, rec := range w.state.AccountRotations {
-			if rec.CandidateID != cb.SessionID || !rec.InputReleased || (rec.State != accountCommitted && rec.State != accountUnknown) || cb.Sequence <= rec.NativeHookSequence {
-				continue
-			}
-			if cb.Event == "UserPromptSubmit" {
-				if !ownerPrompt {
-					rec.TrialTurnID = ""
-					rec.TrialHookSequence = 0
-					return m.persist(rec)
-				}
-				rec.TrialHookSequence = cb.Sequence
-				rec.TrialTurnID = "claude:" + fmtUint(cb.Sequence)
-				return m.persist(rec)
-			}
-			if completed && cb.Sequence > rec.TrialHookSequence && rec.TrialHookSequence > rec.NativeHookSequence && meta.Status.Turn == "idle" && meta.Status.Interaction == "none" && !w.sessionUnsafe(meta.ID) {
-				m.completeTrial(meta.ID, rec.TrialTurnID)
-			}
-		}
-		return nil
-	}}
-	select {
-	case m.w.managedOps <- op:
-	case <-m.w.stop:
-	default:
-	}
+	return m.acceptInbox(rec)
 }

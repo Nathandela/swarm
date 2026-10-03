@@ -750,8 +750,16 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 	}
 	if d.contextGuards != nil {
 		d.contextGuards.replaceMu.Lock()
-		defer d.contextGuards.replaceMu.Unlock()
 	}
+	var accountErr error
+	defer func() {
+		if d.contextGuards != nil {
+			d.contextGuards.replaceMu.Unlock()
+		}
+		if accountErr != nil && d.accountRotation != nil {
+			d.accountRotation.nativeInboxFailed(local, expectedInstance)
+		}
+	}()
 	if feed.retired.Load() {
 		return
 	}
@@ -766,7 +774,7 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 	}
 	d.captureContextGuardFrame(local, expectedInstance, feed, method, frame, at)
 	if d.accountRotation != nil {
-		d.accountRotation.NoteNativeFrame(local, expectedInstance, feed, method, frame, at)
+		accountErr = d.accountRotation.NoteNativeFrame(local, expectedInstance, feed, method, frame, at)
 	}
 	d.ingestBackendFrame(local, frame, at.UnixMilli())
 }

@@ -72,34 +72,40 @@ type accountOwnerOperation struct {
 // This component has no state-writing goroutine. Every transition runs on the
 // existing auth-watch writer, under its existing owner/composer lifecycle fences.
 type accountRotationManager struct {
-	d             *Daemon
-	w             *authWatcher
-	store         *accounts.Store
-	viewMu        sync.RWMutex
-	aliases       map[string]string
-	refreshMu     sync.Mutex
-	refreshing    map[string]chan struct{}
-	refreshAt     map[string]time.Time
-	stopProof     func(persist.Meta) error
-	preflight     func(persist.Meta, accounts.Binding, accountHistoryOwnership, string) (accountHistoryManifest, error)
-	prepare       func(accountHistoryManifest) (accountHistoryManifest, error)
-	ready         func(persist.Meta, accountRotationRecord) bool
-	release       func(string, string) error
-	endTarget     func(string, string) error
-	prepareLaunch func(daemon.LaunchSpec) (daemon.LaunchSpec, error)
-	accessCheck   func(context.Context, persist.Meta, accounts.HalfOpenPermit) (bool, error)
-	accessMu      sync.Mutex
-	accessCancel  map[string]context.CancelFunc
-	accessWG      sync.WaitGroup
-	accessClosed  bool
-	nativeFeeds   map[string]string
+	d               *Daemon
+	w               *authWatcher
+	store           *accounts.Store
+	viewMu          sync.RWMutex
+	aliases         map[string]string
+	refreshMu       sync.Mutex
+	refreshing      map[string]chan struct{}
+	refreshAt       map[string]time.Time
+	stopProof       func(persist.Meta) error
+	preflight       func(persist.Meta, accounts.Binding, accountHistoryOwnership, string) (accountHistoryManifest, error)
+	prepare         func(accountHistoryManifest) (accountHistoryManifest, error)
+	ready           func(persist.Meta, accountRotationRecord) bool
+	release         func(string, string) error
+	endTarget       func(string, string) error
+	prepareLaunch   func(daemon.LaunchSpec) (daemon.LaunchSpec, error)
+	accessCheck     func(context.Context, persist.Meta, accounts.HalfOpenPermit) (bool, error)
+	accessMu        sync.Mutex
+	accessCancel    map[string]context.CancelFunc
+	accessWG        sync.WaitGroup
+	accessClosed    bool
+	inboxMu         sync.Mutex
+	inboxModels     map[string]string
+	inboxErrors     map[string]bool
+	inboxApplying   string
+	inboxQuotaFeeds map[string]accountInboxQuotaStamp
+	inboxHolds      map[string]bool
+	inboxFatal      bool
 }
 
 func newAccountRotationManager(d *Daemon, w *authWatcher, store *accounts.Store) *accountRotationManager {
 	m := &accountRotationManager{d: d, w: w, store: store, aliases: make(map[string]string), refreshing: make(map[string]chan struct{}), refreshAt: make(map[string]time.Time)}
 	m.accessCancel = make(map[string]context.CancelFunc)
 	m.accessCheck = m.nativeAccessCheck
-	m.nativeFeeds = make(map[string]string)
+	m.restoreInboxHolds()
 	w.accountRotation = m
 	if w.state.AccountRotations == nil {
 		w.state.AccountRotations = make(map[string]accountRotationRecord)
@@ -162,7 +168,7 @@ func validateAccountRecoveryState(st authWatchState) error {
 	if len(st.AccountRotations) > 4096 || len(st.AccountHalfOpen) > 256 || len(st.AccountHistoryOwnership) > 4096 || len(st.AccountModels) > 4096 {
 		return errors.New("authwatch: account recovery inventory exceeds bound")
 	}
-	if st.AccountSchemaVersion != 0 && st.AccountSchemaVersion != 1 {
+	if st.AccountSchemaVersion < 0 || st.AccountSchemaVersion > accounts.RecoverySchemaVersion {
 		return errors.New("authwatch: unsupported account recovery schema")
 	}
 	if st.AccountSchemaVersion == 0 && (len(st.AccountRotations) > 0 || len(st.AccountHalfOpen) > 0 || len(st.AccountHistoryOwnership) > 0 || len(st.AccountModels) > 0) {
@@ -285,7 +291,7 @@ func (m *accountRotationManager) persistOwnership(rec accountRotationRecord, own
 	rec = cloneAccountRotation(rec)
 	rec.UpdatedAt = w.clock()
 	w.state.AccountRotations = maps.Clone(old.AccountRotations)
-	w.state.AccountSchemaVersion = 1
+	w.state.AccountSchemaVersion = accounts.RecoverySchemaVersion
 	w.state.AccountRotations[rec.OriginalSource] = rec
 	if ownershipKey != "" {
 		w.state.AccountHistoryOwnership = maps.Clone(old.AccountHistoryOwnership)
@@ -420,6 +426,18 @@ func (m *accountRotationManager) step() {
 	if m.store == nil || m.w.stateErr != nil {
 		return
 	}
+	if err := m.drainObservationHolds(); err != nil {
+		return
+	}
+	if err := m.drainInbox(); err != nil {
+		// Each affected source stays held by its pending normalized evidence.
+		if m.w.stateErr != nil {
+			return
+		}
+	}
+	if m.store == nil || m.w.stateErr != nil {
+		return
+	}
 	keys := make([]string, 0, len(m.w.state.AccountRotations))
 	for key := range m.w.state.AccountRotations {
 		keys = append(keys, key)
@@ -445,6 +463,9 @@ func (m *accountRotationManager) block(rec accountRotationRecord, code string) {
 }
 
 func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
+	if m.modelInboxHeld(rec.SourceID) || (rec.CandidateID != "" && m.modelInboxHeld(rec.CandidateID)) {
+		return
+	}
 	rec = cloneAccountRotation(rec)
 	w := m.w
 	now := w.clock()

@@ -1077,10 +1077,14 @@ func (w *authWatcher) saveState() error {
 }
 
 func (w *authWatcher) persistState() (committed bool, err error) {
-	if err := validateAccountRecoveryState(w.state); err != nil {
+	next := w.state
+	if next.AccountSchemaVersion != 0 {
+		next.AccountSchemaVersion = accounts.RecoverySchemaVersion
+	}
+	if err := validateAccountRecoveryState(next); err != nil {
 		return false, err
 	}
-	raw, err := json.MarshalIndent(w.state, "", "  ")
+	raw, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return false, err
 	}
@@ -1092,7 +1096,11 @@ func (w *authWatcher) persistState() (committed bool, err error) {
 	if write == nil {
 		write = writeAuthWatchState
 	}
-	return write(path, raw)
+	visible, err := write(path, raw)
+	if visible || err == nil {
+		w.state.AccountSchemaVersion = next.AccountSchemaVersion
+	}
+	return visible, err
 }
 
 type authWatchStateWriteOps struct {

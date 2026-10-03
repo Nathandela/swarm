@@ -225,7 +225,9 @@ func TestAccountClaudeTrialRequiresOwnerPromptAndCompletedAssistant(t *testing.T
 	initial := accountRotationRecord{Incident: accounts.NewIncident("claude-trial", accounts.ProviderClaude, "claude-sonnet-4-6", 2), OriginalSource: source.ID, SourceID: source.ID, SourceBinding: binding, Destination: &binding, CandidateID: source.ID, ConversationID: source.ConversationID, State: accountCommitted, InputReleased: true, NativeHookSequence: 10}
 	apply := func(event, prompt, assistant string, sequence uint64) {
 		body, _ := json.Marshal(map[string]any{"session_id": source.ConversationID, "prompt": prompt, "last_assistant_message": assistant})
-		m.NoteClaudeTurn(engine.Callback{SessionID: source.ID, Event: event, Sequence: sequence, Raw: body})
+		if err := m.NoteClaudeTurn(engine.Callback{SessionID: source.ID, Event: event, Sequence: sequence, Raw: body}); err != nil {
+			t.Fatal(err)
+		}
 		select {
 		case op := <-m.w.managedOps:
 			if err := op.apply(m.w); err != nil {
@@ -328,7 +330,9 @@ func TestAccountCommittedReleaseRedrivesAfterRestartAndNeedsCorrelatedTurn(t *te
 		t.Fatal(err)
 	}
 	m.w.state = loaded
-	m.completeTrial(rec.CandidateID, "replayed-old-turn")
+	if err := m.completeTrial(rec.CandidateID, "replayed-old-turn"); err != nil {
+		t.Fatal(err)
+	}
 	if m.w.state.AccountRotations[source.ID].State != accountCommitted {
 		t.Fatal("replayed provider turn completed embargoed incident")
 	}
@@ -337,12 +341,18 @@ func TestAccountCommittedReleaseRedrivesAfterRestartAndNeedsCorrelatedTurn(t *te
 	if !rec.InputReleased || releases != 2 || m.w.state.Killed[source.ID] || rec.State != accountUnknown || rec.Trial != nil {
 		t.Fatalf("restart did not release durable successor: %+v", rec)
 	}
-	m.beginTrial(rec.CandidateID, "new-owner-turn")
-	m.completeTrial(rec.CandidateID, "old-turn")
+	if err := m.beginTrial(rec.CandidateID, "new-owner-turn"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.completeTrial(rec.CandidateID, "old-turn"); err != nil {
+		t.Fatal(err)
+	}
 	if m.w.state.AccountRotations[source.ID].State != accountUnknown {
 		t.Fatal("uncorrelated turn ended incident")
 	}
-	m.completeTrial(rec.CandidateID, "new-owner-turn")
+	if err := m.completeTrial(rec.CandidateID, "new-owner-turn"); err != nil {
+		t.Fatal(err)
+	}
 	if m.w.state.AccountRotations[source.ID].State != accountComplete {
 		t.Fatal("correlated successful turn did not complete incident")
 	}
