@@ -192,6 +192,9 @@ type LaunchSpec struct {
 	// the credentials on disk — exactly as it resolves Argv — and the daemon only
 	// stamps it into meta.AuthIdentity.
 	AuthIdentity string
+	CLIIdentity  *persist.CLIIdentity
+	// ExpectedCLIIdentity gates an automatic refresh against installer races.
+	ExpectedCLIIdentity *persist.CLIIdentity
 }
 
 // session is the daemon's live handle on one session: its last-known meta plus a
@@ -887,4 +890,27 @@ func writePIDFile(stateDir string) {
 
 func removePIDFile(stateDir string) {
 	_ = os.Remove(filepath.Join(stateDir, pidFileName))
+}
+
+// ClearCLIIdentity invalidates a launch observation when an installer raced it.
+func (d *Daemon) ClearCLIIdentity(id string) error {
+	d.writeMu.Lock()
+	d.mu.Lock()
+	sess, ok := d.sessions[id]
+	var m persist.Meta
+	if ok {
+		m = sess.meta
+	}
+	d.mu.Unlock()
+	if !ok {
+		d.writeMu.Unlock()
+		return fmt.Errorf("daemon: unknown session %q", id)
+	}
+	m.CLIIdentity = nil
+	written, err := d.saveMetaLocked(&m)
+	d.writeMu.Unlock()
+	if err == nil && written && d.cfg.onMetaSave != nil {
+		d.cfg.onMetaSave(m)
+	}
+	return err
 }

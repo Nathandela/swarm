@@ -69,9 +69,11 @@ package skeleton
 // toward inaction.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -223,22 +225,26 @@ func AuthProbedAgents() []string {
 // the sessions whose kill was OURS -- for which a resume is owed across
 // timeouts, restarts and crashes (audit H1).
 type authWatchState struct {
-	Identities map[string]string   `json:"identities"`
-	Pending    map[string][]string `json:"pending,omitempty"`
-	Killed     map[string]bool     `json:"killed,omitempty"`
-	Candidates map[string]string   `json:"candidates,omitempty"`
+	Identities    map[string]string              `json:"identities"`
+	Pending       map[string][]string            `json:"pending,omitempty"`
+	Killed        map[string]bool                `json:"killed,omitempty"`
+	Candidates    map[string]string              `json:"candidates,omitempty"`
+	Retries       map[string]recycleRetry        `json:"retries,omitempty"`
+	CLI           map[string]cliRefreshRecord    `json:"cli_refresh,omitempty"`
+	CLICandidates map[string]cliRefreshCandidate `json:"cli_candidates,omitempty"`
 }
 
 // authRecycleCoordination is the assembly-owned serialization around the pure
 // watcher's actions. Fresh and claimed fences are distinct because only a
 // durable pre-crash claim may consume a restored embargo.
 type authRecycleCoordination struct {
-	ready   func(persist.Meta) bool
-	restore func(local string)
-	clear   func(local string)
-	fresh   func(local string, attempt func() error) error
-	claimed func(local string, attempt func() error) error
-	resume  func(local string, attempt func() bool) (attempted, retry bool)
+	ready     func(persist.Meta) bool
+	cliUnsafe func(local string) bool
+	restore   func(local string)
+	clear     func(local string)
+	fresh     func(local string, attempt func() error) error
+	claimed   func(local string, attempt func() error) error
+	resume    func(local string, attempt func() bool) (attempted, retry bool)
 }
 
 // authWatcher is the component. Every action goes through an injected seam
@@ -258,6 +264,10 @@ type authWatcher struct {
 	remove          func(local string) error
 	ready           func(persist.Meta) bool
 	resolve         func(name string, env []string) (string, error)
+	cliProbe        func(agentType, executable string, env []string, cwd string) (*persist.CLIIdentity, error)
+	cliObserve      func(local string) *persist.CLIIdentity
+	cliUnsafe       func(local string) bool
+	now             func() time.Time
 	// unsafe covers every live authority/effect fact absent from persisted Status:
 	// owner/remote controls, ContextGuard effects, unresolved composer/direct
 	// input, and an already-committed recycle. withRecycleFence queues the final
@@ -274,6 +284,12 @@ type authWatcher struct {
 	exitPoll                time.Duration
 
 	state authWatchState
+	// stateErr freezes every destructive action when the shared durable document
+	// is unreadable. Treating corrupt state as a first run could lose a pre-crash
+	// kill claim and later kill a second session with no recovery authority.
+	stateErr      error
+	cliCursor     string
+	cliWorkCursor string
 	// settled flips after the first full tick: reconciled sessions are seeded
 	// from persisted status, so the first pass never STARTS a kill (owed
 	// resumes still complete).
@@ -310,13 +326,19 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 		list: list, get: get, kill: kill, launch: launch, remove: remove,
 		unsafe:         unsafe,
 		ready:          coord.ready,
+		cliUnsafe:      coord.cliUnsafe,
 		restoreRecycle: coord.restore, clearRecycle: coord.clear,
 		withRecycleFence: coord.fresh, withClaimedRecycleFence: coord.claimed,
 		withResumeFence: coord.resume,
 		resolve:         lookPathIn,
+		cliProbe:        probeCLIIdentity,
+		now:             time.Now,
 		exitWait:        authRecycleExitWait, exitPoll: authRecycleExitPoll,
 		warned: map[string]bool{}, unconfirmedClaims: map[string]bool{},
 		stop: make(chan struct{}),
+	}
+	w.cliObserve = func(local string) *persist.CLIIdentity {
+		return readCLIObservation(stateDir, local)
 	}
 	// pause is a stop-aware sleep, so a shutdown never waits behind an exit
 	// poll (audit M5); tests replace it with a no-op.
@@ -326,7 +348,10 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 		case <-time.After(d):
 		}
 	}
-	w.state = loadAuthWatchState(stateDir)
+	w.state, w.stateErr = loadAuthWatchStateChecked(stateDir)
+	if w.stateErr != nil {
+		log.Printf("authwatch: state unreadable; auth and CLI refresh are frozen: %v", w.stateErr)
+	}
 	// A durable claim is authority over the next terminal edge. Reconstruct its
 	// fail-closed input embargo synchronously, before the constructor returns and
 	// before any client can race the asynchronous first tick.
@@ -345,7 +370,13 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 var errAuthRecycleUnsafe = errors.New("authwatch: session became unsafe to recycle")
 
 func (w *authWatcher) sessionUnsafe(local string) bool {
-	return w.unsafe != nil && w.unsafe(local)
+	if w.unsafe != nil && w.unsafe(local) {
+		return true
+	}
+	if rec, ok := w.state.CLI[local]; ok && rec.State != cliRefreshComplete && rec.State != cliRefreshBlocked {
+		return w.cliUnsafe != nil && w.cliUnsafe(local)
+	}
+	return false
 }
 
 func (w *authWatcher) fencedRecycleAttempt(local string, claimed bool, attempt func() error) error {
@@ -362,14 +393,33 @@ func (w *authWatcher) fencedRecycleAttempt(local string, claimed bool, attempt f
 // loadAuthWatchState reads the state a prior incarnation persisted; a missing
 // or unparseable file is first run (empty maps, everything baselines afresh).
 func loadAuthWatchState(stateDir string) authWatchState {
-	st := authWatchState{Identities: map[string]string{}, Pending: map[string][]string{}, Killed: map[string]bool{}}
+	st, _ := loadAuthWatchStateChecked(stateDir)
+	return st
+}
+
+func loadAuthWatchStateChecked(stateDir string) (authWatchState, error) {
+	st := emptyAuthWatchState()
 	raw, err := os.ReadFile(filepath.Join(stateDir, authWatchStateFile))
 	if err != nil {
-		return st
+		if os.IsNotExist(err) {
+			return st, nil
+		}
+		return st, err
 	}
 	var loaded authWatchState
-	if json.Unmarshal(raw, &loaded) != nil {
-		return st
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return st, errors.New("authwatch: state is null")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&loaded); err != nil {
+		return st, err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			err = errors.New("authwatch: state contains multiple JSON values")
+		}
+		return st, err
 	}
 	if loaded.Identities == nil {
 		loaded.Identities = map[string]string{}
@@ -380,7 +430,22 @@ func loadAuthWatchState(stateDir string) authWatchState {
 	if loaded.Killed == nil {
 		loaded.Killed = map[string]bool{}
 	}
-	return loaded
+	if loaded.Candidates == nil {
+		loaded.Candidates = map[string]string{}
+	}
+	if loaded.Retries == nil {
+		loaded.Retries = map[string]recycleRetry{}
+	}
+	if loaded.CLI == nil {
+		loaded.CLI = map[string]cliRefreshRecord{}
+	}
+	if loaded.CLICandidates == nil {
+		loaded.CLICandidates = map[string]cliRefreshCandidate{}
+	}
+	if err := validateAuthWatchState(loaded); err != nil {
+		return st, err
+	}
+	return loaded, nil
 }
 
 // close stops the watcher and waits out an in-flight tick. The loops inside a
@@ -421,15 +486,18 @@ func (w *authWatcher) run() {
 // tick is one full pass: settings gate, then per-agent identity check + sweep.
 // It runs on the one watcher goroutine; nothing else mutates w.state.
 func (w *authWatcher) tick() {
-	if w.disabled() {
+	if w.stateErr != nil {
 		return
 	}
+	w.ensureStateMaps()
+	authDisabled := w.disabled()
 	for _, agent := range w.agents {
 		if w.stopping() {
 			return
 		}
-		w.tickAgent(agent)
+		w.tickAgent(agent, !authDisabled)
 	}
+	w.tickCLIRefresh(!CLIRefreshDisabled(w.stateDir))
 	w.settled = true
 }
 
@@ -452,14 +520,26 @@ func AuthWatchDisabled(stateDir string) bool {
 		}
 		return false
 	}
-	var s struct {
-		Disabled bool `json:"disabled"`
-	}
-	if err := json.Unmarshal(raw, &s); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
 		log.Printf("authwatch: settings unparseable, holding: %v", err)
 		return true
 	}
-	return s.Disabled
+	if len(fields) != 1 {
+		log.Printf("authwatch: settings must contain exactly disabled, holding")
+		return true
+	}
+	value, ok := fields["disabled"]
+	if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		log.Printf("authwatch: settings missing a boolean disabled value, holding")
+		return true
+	}
+	var disabled bool
+	if err := json.Unmarshal(value, &disabled); err != nil {
+		log.Printf("authwatch: settings disabled value is invalid, holding: %v", err)
+		return true
+	}
+	return disabled
 }
 
 // SetAuthWatchDisabled records the opt-out (`swarm relogin --auto off`) or
@@ -476,13 +556,16 @@ func SetAuthWatchDisabled(stateDir string, disabled bool) error {
 	return os.WriteFile(path, []byte("{\"disabled\": true}\n"), 0o600)
 }
 
-func (w *authWatcher) tickAgent(agent string) {
+func (w *authWatcher) tickAgent(agent string, discover bool) {
 	id := w.identity(agent)
 	if id == "" {
-		return // unknown (logged-out window, unreadable file): hold everything
+		// Unknown prevents discovering a new account change, but a durable kill
+		// claim remains an obligation even while credentials are temporarily absent.
+		w.workPending(agent, "\x00", false)
+		return
 	}
 	prev := w.state.Identities[agent]
-	if prev == "" {
+	if prev == "" && discover {
 		w.state.Identities[agent] = id
 		if err := w.saveState(); err != nil {
 			log.Printf("authwatch: persist baseline: %v", err)
@@ -490,7 +573,7 @@ func (w *authWatcher) tickAgent(agent string) {
 		return // baseline established; nothing predating it is judged
 	}
 	dirty := false
-	if prev != id {
+	if discover && prev != "" && prev != id {
 		// The account changed. Freeze the stale set NOW -- every running session
 		// of this agent not launched under the new identity, EMPTY STAMPS
 		// INCLUDED (a pre-ADR-024 launch predates the change by construction).
@@ -505,9 +588,11 @@ func (w *authWatcher) tickAgent(agent string) {
 	// Stamped mismatches are ground truth independent of observing the change
 	// (a re-login while the daemon was down, or before this build first ran,
 	// left stamps disagreeing with the current identity): sweep them in too.
-	for _, m := range w.list() {
-		if !m.RosterHidden && m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != "" && m.AuthIdentity != id {
-			dirty = w.addPending(agent, m.ID) || dirty
+	if discover {
+		for _, m := range w.list() {
+			if !m.RosterHidden && m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != "" && m.AuthIdentity != id {
+				dirty = w.addPending(agent, m.ID) || dirty
+			}
 		}
 	}
 	if dirty {
@@ -518,7 +603,7 @@ func (w *authWatcher) tickAgent(agent string) {
 			log.Printf("authwatch: persist pending set: %v", err)
 		}
 	}
-	w.workPending(agent, id)
+	w.workPending(agent, id, discover)
 }
 
 // addPending records local in agent's pending set (dedup'd); reports whether it
@@ -535,8 +620,14 @@ func (w *authWatcher) addPending(agent, local string) bool {
 
 // forget clears every per-session record when an entry leaves the pending set.
 func (w *authWatcher) forget(local string) {
+	if rec, ok := w.state.CLI[local]; ok && rec.State != cliRefreshComplete && rec.State != cliRefreshBlocked {
+		// Auth no longer needing this source does not cancel an independent CLI
+		// refresh, nor withdraw its shared kill claim.
+		return
+	}
 	delete(w.state.Killed, local)
 	delete(w.state.Candidates, local)
+	delete(w.state.Retries, local)
 	delete(w.unconfirmedClaims, local)
 	if w.clearRecycle != nil {
 		w.clearRecycle(local)
@@ -560,7 +651,11 @@ func (w *authWatcher) once(key, format string, args ...any) {
 // workPending walks agent's pending set: complete owed resumes, recycle what is
 // quiet, defer what is mid-turn or mid-interaction, hold what cannot be
 // recycled safely, drop what is gone or current.
-func (w *authWatcher) workPending(agent, id string) {
+func (w *authWatcher) workPending(agent, id string, allowKill ...bool) {
+	canKill := true
+	if len(allowKill) > 0 {
+		canKill = allowKill[0]
+	}
 	pending := w.state.Pending[agent]
 	if len(pending) == 0 {
 		return
@@ -626,6 +721,10 @@ func (w *authWatcher) workPending(agent, id string) {
 			// (codex finding 6). No NEW kill until the engine has had a full
 			// interval to reclassify; the entry stays owed.
 			keep = append(keep, local)
+		case !canKill:
+			// Opt-out stops new destructive edges. A Killed claim is handled by the
+			// earlier arm because it is already an owed recovery operation.
+			keep = append(keep, local)
 		default:
 			if w.recycle(agent, m) {
 				keep = append(keep, local)
@@ -648,6 +747,7 @@ func (w *authWatcher) workPending(agent, id string) {
 // to be recorded, resume-as-new-session, verify the replacement -- and reports
 // whether the session should stay pending (true = retry next tick).
 func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
+	w.ensureStateMaps()
 	local := m.ID
 	hadClaim := w.state.Killed[local]
 	// FEASIBILITY BEFORE DESTRUCTION (audit H3): the resume must be provably
@@ -673,6 +773,17 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 			cur.Status.Turn != status.TurnIdle || cur.Status.Interaction != status.InteractionNone ||
 			w.sessionUnsafe(local) ||
 			w.sessionIdentity != nil && w.sessionIdentity(agent, cur.Env) != w.identity(agent) {
+			return errAuthRecycleUnsafe
+		}
+		if err := w.validateCLIRefreshTarget(cur); err != nil {
+			return err
+		}
+		// The bounded provider probe above can outlive an engine poll. Re-read every
+		// safety fact after it and before publishing authority to kill.
+		cur, ok = w.get(local)
+		if !ok || cur.Status.Process != status.ProcessRunning ||
+			cur.Status.Turn != status.TurnIdle || cur.Status.Interaction != status.InteractionNone ||
+			w.sessionUnsafe(local) {
 			return errAuthRecycleUnsafe
 		}
 		// THE CLAIM: record the kill as ours -- durably -- immediately before
@@ -751,10 +862,16 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 }
 
 func (w *authWatcher) resumeClaimed(agent string, m persist.Meta) (retry bool) {
-	if w.withResumeFence == nil {
+	attempt := func() bool {
+		if _, cli := w.state.CLI[m.ID]; cli {
+			return w.resumeCLIEnded(agent, m)
+		}
 		return w.resumeEnded(agent, m)
 	}
-	attempted, retry := w.withResumeFence(m.ID, func() bool { return w.resumeEnded(agent, m) })
+	if w.withResumeFence == nil {
+		return attempt()
+	}
+	attempted, retry := w.withResumeFence(m.ID, attempt)
 	if !attempted {
 		// An owner terminal action already owned this edge. The owner's persisted
 		// row transition/delete is the cancellation authority; workPending forgets
@@ -770,6 +887,9 @@ func (w *authWatcher) resumeEnded(agent string, m persist.Meta) (retry bool) {
 	local := m.ID
 	if current, ok := w.get(local); !ok || current.RosterHidden {
 		return false // Owner deletion/archive wins even after the pending snapshot.
+	}
+	if !w.retryReady(local) {
+		return true
 	}
 	if w.state.Candidates == nil {
 		w.state.Candidates = map[string]string{}
@@ -815,6 +935,7 @@ func (w *authWatcher) resumeEnded(agent string, m persist.Meta) (retry bool) {
 	fresh, err := w.launch(daemon.LaunchSpec{
 		AgentType: agent,
 		Name:      m.Name, // the resumed row keeps its label (the TUI resume precedent)
+		Tag:       m.Tag,
 		Cwd:       m.Cwd,
 		Cols:      authRecycleCols,
 		Rows:      authRecycleRows,
@@ -830,13 +951,24 @@ func (w *authWatcher) resumeEnded(agent string, m persist.Meta) (retry bool) {
 		Supervision: m.Supervision,
 		Options:     map[string]string{protocol.OptionResumeFrom: w.endpointID + "/" + local},
 	})
-	if err != nil {
-		log.Printf("authwatch: resume %s session %s (%s): %v -- the ended row remains for a manual resume", agent, local, m.Name, err)
-		return false
+	if fresh.ID != "" {
+		w.state.Candidates[local] = fresh.ID
+		if saveErr := w.saveState(); saveErr != nil {
+			log.Printf("authwatch: checkpoint replacement %s for %s: %v", fresh.ID, local, saveErr)
+			w.deferRetry(local)
+			return true
+		}
 	}
-	w.state.Candidates[local] = fresh.ID
-	if err := w.saveState(); err != nil {
-		log.Printf("authwatch: persist replacement %s for %s: %v", fresh.ID, local, err)
+	if err != nil {
+		w.deferRetry(local)
+		_ = w.saveState()
+		log.Printf("authwatch: resume %s session %s (%s): %v -- obligation retained for retry", agent, local, m.Name, err)
+		return true
+	}
+	if fresh.ID == "" {
+		w.deferRetry(local)
+		_ = w.saveState()
+		return true
 	}
 	log.Printf("authwatch: started replacement %s for %s; awaiting conversation transport readiness", fresh.ID, local)
 	return true

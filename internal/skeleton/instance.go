@@ -400,7 +400,7 @@ func (d *Daemon) sessionCapabilityInputs(sessionID, agentType string, shimPID in
 		log.Printf("skeleton: session %s has no instance, so it keeps the status card: %v", sessionID, err)
 		return "", nil, "", false
 	}
-	return inst, ad, d.providerVersion(agentType), true
+	return inst, ad, d.sessionProviderVersion(sessionID, agentType), true
 }
 
 // backendPlaneDecided answers whether this session's STRUCTURED PLANE FACT is knowable
@@ -471,6 +471,21 @@ func detectProviderVersion(agentType string) string {
 // carried verbatim onto the record so a phone can tell "this machine's adapters are older
 // than the record format I know" apart from "this provider is old".
 const adapterRevision = "r8"
+
+// sessionProviderVersion reports the installation observed for this launch. A
+// host PATH probe cannot establish the version of a legacy running process, or
+// of a session launched with a different environment. Keep that fact unknown.
+func (d *Daemon) sessionProviderVersion(sessionID, agentType string) string {
+	if d.core != nil {
+		m, ok := d.core.Get(sessionID)
+		if !ok || m.CLIIdentity == nil {
+			return ""
+		}
+		return m.CLIIdentity.Version
+	}
+	// Core-less capability fixtures retain their explicit detection seam.
+	return d.providerVersion(agentType)
+}
 
 // providerVersion is the DETECTED version of an installed CLI, behind a daemon seam so
 // the record carries a fact about the host rather than a guess. It is cached per agent

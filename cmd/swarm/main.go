@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|doctor|relogin|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|doctor|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -87,6 +87,8 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reatta
   swarm relogin    recycle sessions stranded by a provider re-login
                    ([--dry-run] [--force] [--auto on|off]; the daemon's
                     watcher does this automatically -- this is the manual face)
+  swarm refresh    report automatic CLI refresh progress [--json]
+                   ([--auto on|off]; waits for safe idle sessions, retains history)
   swarm upgrade    check, --stage, --activate, --rollback, or --unattended
                    (signature + checksum verified; activation defers around
                     live sessions and hands off to the new binary's converge;
@@ -145,6 +147,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		// NOT dispatchAgentVerb: that seam ensures a daemon (D-1), and doctor's
 		// whole contract is that it never starts one (see doctor.go's header).
 		return runDoctor(args[1:], stdout, stderr)
+	case "refresh":
+		return dispatchCLIRefresh(args[1:], stdout, stderr)
 	case "relogin":
 		// The manual face of the ADR-024 auth watcher: needs Delete (which
 		// agentClient lacks) plus the state dir for its local reads, so it
@@ -611,15 +615,16 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
-	SessionID  string   `json:"session_id"`
-	Argv       []string `json:"argv"`
-	Cwd        string   `json:"cwd"`
-	Env        []string `json:"env"`
-	SocketPath string   `json:"socket_path"`
-	SessionDir string   `json:"session_dir"`
-	Cols       int      `json:"cols"`
-	Rows       int      `json:"rows"`
-	GraceMS    int      `json:"grace_ms"`
+	CLIIdentity *persist.CLIIdentity `json:"cli_identity,omitempty"`
+	SessionID   string               `json:"session_id"`
+	Argv        []string             `json:"argv"`
+	Cwd         string               `json:"cwd"`
+	Env         []string             `json:"env"`
+	SocketPath  string               `json:"socket_path"`
+	SessionDir  string               `json:"session_dir"`
+	Cols        int                  `json:"cols"`
+	Rows        int                  `json:"rows"`
+	GraceMS     int                  `json:"grace_ms"`
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1); "" (an
 	// old, pre-R6 launch config with no such key) disables it entirely (requirement
 	// 7's compat), leaving shim.Run's behavior exactly what it is today.
@@ -660,6 +665,7 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
+		CLIIdentity:    lc.CLIIdentity,
 		SessionID:      lc.SessionID,
 		Argv:           lc.Argv,
 		Cwd:            lc.Cwd,

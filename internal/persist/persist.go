@@ -96,13 +96,17 @@ type Meta struct {
 	// AgentCwd above; "" means the provider has no probe, or the credentials were
 	// unreadable at launch -- both gate conservatively (never auto-recycled).
 	AuthIdentity string `json:"auth_identity,omitempty"`
-	ExitCode     *int   `json:"exit_code"`
+	// CLIIdentity is the selected installation observed at launch; nil is unknown.
+	// It does not attest a running process or a wrapper's dependencies.
+	CLIIdentity *CLIIdentity `json:"cli_identity,omitempty"`
+	ExitCode    *int         `json:"exit_code"`
 	// RosterHidden archives an ended historical attempt without deleting its files.
 	RosterHidden bool   `json:"roster_hidden,omitempty"`
 	ResumedFrom  string `json:"resumed_from"`
 	SpawnedFrom  string `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
 	SpawnIntent  string `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
 	Supervision  string `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
+
 }
 
 // EffectiveGroupEnteredAt returns the durable ordering instant for a session.

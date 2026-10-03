@@ -150,7 +150,7 @@ func (d *Daemon) proveCurrentShimMessageSink(id string) bool {
 	if _, ok := adapter.AsKeystrokeComposer(ad); !ok {
 		return false
 	}
-	if !deriveSessionCapabilities(m.AgentType, ad, d.providerVersion(m.AgentType), adapterRevision, false).StructuredChat {
+	if !deriveSessionCapabilities(m.AgentType, ad, d.sessionProviderVersion(m.ID, m.AgentType), adapterRevision, false).StructuredChat {
 		return false
 	}
 	conn, caps, err := d.core.DialSession(id)
@@ -172,7 +172,7 @@ func (d *Daemon) proveCurrentShimMessageSink(id string) bool {
 	}
 	if !d.hasRawSessionCapabilities(id) {
 		if _, err := d.authorSessionCapabilities(id, expectedInstance, m.AgentType, ad,
-			d.providerVersion(m.AgentType), adapterRevision, false); err != nil {
+			d.sessionProviderVersion(m.ID, m.AgentType), adapterRevision, false); err != nil {
 			return false
 		}
 	}

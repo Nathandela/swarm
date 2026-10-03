@@ -10,6 +10,8 @@
 - [Remote-control operator runbook](operations/operator-runbook.md) — provision, pair, revoke and diagnose the one Cloudflare relay-v2 Worker
 - [Metadata disclosure](operations/metadata-disclosure.md) — the register of who observes what: the relay operator, the push provider, the gateway, a network observer, and (§5) a second model vendor, the one entry that receives session content rather than metadata (PB-OPS-3)
 - [Physical-handset gate](operations/physical-handset-gate.md) — **every step UNRUN**: the playbook 11.2 matrix as 95 executable PH-* rows (rewritten 2026-08-15 for gateway push, multi-machine, presets)
+- [Agent CLI refresh](ops/cli-session-refresh.md) — idle-session refresh after installed Claude/Codex upgrades, recovery, and operator controls
+- [CLI refresh implementation plan](specifications/cli-session-refresh-plan.md) — reviewed lifecycle, observation limits, and acceptance criteria
 - [Auto-upgrade runbook](ops/auto-upgrade.md) — the nightly `launchd` timer that upgrades the owner's machine and converges the daemon/gateway onto it, or touches nothing (ADR-020)
 
 ## The plan

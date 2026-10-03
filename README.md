@@ -27,6 +27,7 @@ Inspired by Claude Code's Agent View, but agent-agnostic and open source.
 - **Attention comes first.** _Needs input_, _Working_, _Ready for review_, and _Completed_ keep the next human action obvious.
 - **Background by default.** Each session owns a real PTY through its own shim process and continues after the TUI exits.
 - **Safe daemon upgrades.** Restart or upgrade swarm while agents are running; the replacement daemon finds and reconnects to them.
+- **Agent CLI refresh.** Resume eligible idle Claude and Codex sessions after installed CLI updates, retaining the old session for recovery. Inspect progress with `swarm refresh`; see the [runbook](docs/ops/cli-session-refresh.md).
 - **Keyboard-native control.** Launch, attach, rename, hand off work, and stop sessions without leaving the terminal.
 - **Remote companion.** The Android app in this repository can securely watch and control agents running on your computer.
 

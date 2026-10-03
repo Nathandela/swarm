@@ -40,6 +40,7 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
+	CLIIdentity   *persist.CLIIdentity
 	SessionID     string
 	Argv          []string // argv[0] = program; exec'd directly, never via a shell
 	Cwd           string   // agent working directory
@@ -211,6 +212,10 @@ func Run(cfg Config) (agentExit int, err error) {
 		}()
 	}
 
+	// A replayed session directory must not retain an earlier spawn observation.
+	_ = os.Remove(filepath.Join(cfg.SessionDir, CLIObservationFile))
+	// Observe before either process starts; the post-spawn check covers both.
+	cliStable := cliInstallationMatches(cfg)
 	if cfg.Backend == nil {
 		cmd = &exec.Cmd{
 			Path: cfg.Argv[0],
@@ -303,6 +308,7 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 		attach, ok := srv.waitBackendGoAhead(goAheadTimeout)
 		if !ok {
+			cliStable = false
 			log.Printf("shim: no backend_attach arrived within %s; launching the agent DEGRADED "+
 				"(no backend arguments appended)", goAheadTimeout)
 		}
@@ -342,6 +348,10 @@ func Run(cfg Config) (agentExit int, err error) {
 			return 0, fmt.Errorf("shim: start agent: %w", startErr)
 		}
 		srv.setAgentPgid(cmd.Process.Pid)
+	}
+
+	if cliStable && (cfg.Backend == nil || backendWatch != nil) {
+		recordCLIObservation(cfg)
 	}
 
 	// The hook socket (playbook §6.1): a second, independent listener over its own

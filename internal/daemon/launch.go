@@ -112,15 +112,16 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
-	SessionID  string   `json:"session_id"`
-	Argv       []string `json:"argv"`
-	Cwd        string   `json:"cwd"`
-	Env        []string `json:"env"`
-	SocketPath string   `json:"socket_path"`
-	SessionDir string   `json:"session_dir"`
-	Cols       int      `json:"cols"`
-	Rows       int      `json:"rows"`
-	GraceMS    int      `json:"grace_ms"`
+	CLIIdentity *persist.CLIIdentity `json:"cli_identity,omitempty"`
+	SessionID   string               `json:"session_id"`
+	Argv        []string             `json:"argv"`
+	Cwd         string               `json:"cwd"`
+	Env         []string             `json:"env"`
+	SocketPath  string               `json:"socket_path"`
+	SessionDir  string               `json:"session_dir"`
+	Cols        int                  `json:"cols"`
+	Rows        int                  `json:"rows"`
+	GraceMS     int                  `json:"grace_ms"`
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1). "" is the
 	// pre-R6 compat default the shim reads as "bind no hook listener at all".
 	HookSocketPath string `json:"hook_socket_path"`
@@ -319,7 +320,8 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		CreatedAt:      now,
 		GroupEnteredAt: now,
 		LastActivity:   now,
-		ResumedFrom:    spec.ResumedFrom,  // link a resume-as-new-session launch (R-2)
+		ResumedFrom:    spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
+		CLIIdentity:    spec.CLIIdentity,
 		AuthIdentity:   spec.AuthIdentity, // the account the agent starts under (ADR-024)
 		SpawnedFrom:    spec.SpawnedFrom,  // link an agent-initiated spawn to its source (ADR-010 D4)
 		SpawnIntent:    spec.SpawnIntent,
@@ -565,6 +567,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		return nil, "", err
 	}
 	lc := shimSpawnConfig{
+		CLIIdentity:    spec.CLIIdentity,
 		SessionID:      id,
 		Argv:           spec.Argv,
 		Cwd:            spec.Cwd,

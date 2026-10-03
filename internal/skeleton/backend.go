@@ -325,7 +325,7 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 		return false
 	}
 	ad, _ := d.resolveAdapter(m.AgentType)
-	if !deriveSessionCapabilities(m.AgentType, ad, d.providerVersion(m.AgentType), adapterRevision, true).StructuredChat {
+	if !deriveSessionCapabilities(m.AgentType, ad, d.sessionProviderVersion(m.ID, m.AgentType), adapterRevision, true).StructuredChat {
 		rollback()
 		return false // a sink-shaped object cannot launder a baseline fallback provider
 	}
@@ -411,7 +411,7 @@ func (d *Daemon) authorCapabilitiesOnBackendJoin(local, expectedInstance string)
 	}
 	ad, _ := d.resolveAdapter(m.AgentType)
 	if _, err := d.authorSessionCapabilities(local, expectedInstance, m.AgentType, ad,
-		d.providerVersion(m.AgentType), adapterRevision, true); err != nil {
+		d.sessionProviderVersion(m.ID, m.AgentType), adapterRevision, true); err != nil {
 		log.Printf("skeleton: author capability record for backend session %s: %v", local, err)
 	}
 }
@@ -444,7 +444,7 @@ func (d *Daemon) degradeCapabilitiesOnBackendLossForInstance(local, expectedInst
 	}
 	ad, _ := d.resolveAdapter(m.AgentType)
 	if _, err := d.authorSessionCapabilities(local, expectedInstance, m.AgentType, ad,
-		d.providerVersion(m.AgentType), adapterRevision, false); err != nil {
+		d.sessionProviderVersion(m.ID, m.AgentType), adapterRevision, false); err != nil {
 		log.Printf("skeleton: author capability record for unavailable backend session %s: %v", local, err)
 	}
 }

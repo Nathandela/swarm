@@ -1099,9 +1099,26 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	if err != nil {
 		return persist.Meta{}, err
 	}
+	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex") {
+		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], resolved.ClientEnv, resolved.Cwd)
+		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || observed == nil || *expected != *observed) {
+			return persist.Meta{}, fmt.Errorf("launch: CLI installation changed before refresh")
+		}
+		resolved.CLIIdentity = observed
+	}
 	m, err := a.core.Launch(resolved)
 	if err != nil {
 		return m, err
+	}
+	if identity := resolved.CLIIdentity; identity != nil {
+		fingerprint, checkErr := persist.CLIFingerprint(identity.Path)
+		if checkErr != nil || fingerprint != identity.Fingerprint {
+			m.CLIIdentity = nil
+			clearErr := a.core.ClearCLIIdentity(m.ID)
+			if resolved.ExpectedCLIIdentity != nil || clearErr != nil {
+				return m, fmt.Errorf("launch: CLI installation changed during refresh (identity clear: %v)", clearErr)
+			}
+		}
 	}
 	// ADR-017 T2-a / D-NIL, PATHS 1 AND 2: the owner-tier TUI launch and the R5 remote
 	// session_launch both arrive here -- the remote-tier Server drives the same DaemonAPI

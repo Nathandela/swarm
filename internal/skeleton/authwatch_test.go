@@ -85,9 +85,19 @@ func (f *authFake) launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	}
 	f.launched = append(f.launched, spec)
 	f.launchN++
+	var resumedFrom, conversationID string
+	if ref := spec.Options[protocol.OptionResumeFrom]; ref != "" {
+		if slash := len(ref) - len(filepath.Base(ref)); slash > 0 {
+			resumedFrom = ref[slash:]
+		}
+		if source, ok := f.sessions[resumedFrom]; ok {
+			conversationID = source.ConversationID
+		}
+	}
 	m := persist.Meta{
 		ID: "fresh" + string(rune('0'+f.launchN)), AgentType: spec.AgentType,
-		Name: spec.Name, Cwd: spec.Cwd, AuthIdentity: f.identity,
+		Name: spec.Name, Tag: spec.Tag, Cwd: spec.Cwd, AuthIdentity: f.identity,
+		ResumedFrom: resumedFrom, ConversationID: conversationID,
 		Status: status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionNone},
 	}
 	source := strings.TrimPrefix(spec.Options[protocol.OptionResumeFrom], "ep-test01/")
@@ -623,7 +633,7 @@ func TestDisabledSettingsHoldTheSweep(t *testing.T) {
 	}
 }
 
-func TestAFailedResumeLeavesTheEndedRowAndStopsRetrying(t *testing.T) {
+func TestAFailedResumeLeavesTheEndedRowAndRetainsRetry(t *testing.T) {
 	f := newAuthFake(identityB)
 	f.add(runningCodex("s1", identityA, status.TurnIdle, "01a05600-0000-7000-8000-000000000013"))
 	f.launchErr = errors.New("agent binary codex not found")
@@ -636,11 +646,19 @@ func TestAFailedResumeLeavesTheEndedRowAndStopsRetrying(t *testing.T) {
 	if len(f.deleted) != 0 {
 		t.Fatalf("deleted %v after a FAILED resume; the ended row must remain for a manual resume", f.deleted)
 	}
-	if got := w.state.Pending["codex"]; len(got) != 0 {
-		t.Fatalf("pending = %v; a failed resume must not kill-loop", got)
+	if got := w.state.Pending["codex"]; len(got) != 1 || got[0] != "s1" {
+		t.Fatalf("pending = %v; a failed resume must retain the recovery obligation", got)
 	}
-	if len(w.state.Killed) != 0 {
-		t.Fatalf("killed marks %v after the drop; want none", w.state.Killed)
+	if !w.state.Killed["s1"] || w.state.Retries["s1"].Attempts != 1 {
+		t.Fatalf("failed resume lost its claim/backoff: killed=%v retries=%v", w.state.Killed, w.state.Retries)
+	}
+	f.launchErr = nil
+	r := w.state.Retries["s1"]
+	r.NextAttempt = time.Time{}
+	w.state.Retries["s1"] = r
+	w.tick()
+	if len(f.launched) != 1 || len(f.deleted) != 1 {
+		t.Fatalf("retry did not complete: launched=%d deleted=%v", len(f.launched), f.deleted)
 	}
 }
 
