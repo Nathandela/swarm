@@ -441,6 +441,21 @@ func (m *accountRotationManager) drainInbox() error {
 			}
 			continue
 		}
+		// A previous apply may have published a file before its parent fsync
+		// failed. Idempotent replay can then do no new write; confirm that
+		// serialized journal rename before retiring the durable evidence.
+		parent, confirmErr := openAccountRecoveryRoot(m.w.stateDir)
+		if confirmErr == nil {
+			confirmErr = historySync(parent)
+			_ = parent.Close()
+		}
+		if confirmErr != nil {
+			blocked[rec.Local] = true
+			if firstErr == nil {
+				firstErr = confirmErr
+			}
+			continue
+		}
 		m.inboxMu.Lock()
 		err := root.Remove(rec.ID + ".json")
 		if err == nil {

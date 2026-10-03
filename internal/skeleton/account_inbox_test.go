@@ -115,6 +115,49 @@ func TestAccountInboxUnreadableEvidenceHoldsAllManagedModelAuthority(t *testing.
 	}
 }
 
+func TestAccountInboxConfirmsPublishedModelBeforeRetiringEvidence(t *testing.T) {
+	m, _, source := inboxClaudeFixture(t)
+	rec, ok := m.inboxRecord(source.ID, "model", source.ConversationID, 37)
+	if !ok {
+		t.Fatal("fixture record")
+	}
+	rec.Model = "current-native-model"
+	rec.ID = accountInboxID(rec)
+	if err := m.acceptInbox(rec); err != nil {
+		t.Fatal(err)
+	}
+	writes := 0
+	m.w.writeState = func(path string, raw []byte) (bool, error) {
+		writes++
+		return writeAuthWatchStateWithOps(path, raw, authWatchStateWriteOps{syncDir: func(string) error { return errors.New("synthetic post-rename parent sync failure") }})
+	}
+	event := filepath.Join(m.w.stateDir, accountInboxDirectory, rec.ID+".json")
+	if err := m.drainInbox(); err == nil {
+		t.Fatal("post-visible uncertainty was acknowledged")
+	}
+	if _, err := os.Stat(event); err != nil {
+		t.Fatal("uncertain published model lost its durable event", err)
+	}
+	if m.w.state.AccountModels[source.ID].HookSequence != rec.Sequence {
+		t.Fatal("fixture did not publish the model before parent sync failed")
+	}
+	// The directory is syncable now. Duplicate replay confirms the prior rename
+	// without republishing the entire journal or resetting the native sequence.
+	if err := m.drainInbox(); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 {
+		t.Fatal("duplicate model replay unnecessarily rewrote the journal")
+	}
+	if _, err := os.Stat(event); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("confirmed event was not retired", err)
+	}
+	loaded, err := loadAuthWatchStateChecked(m.w.stateDir)
+	if err != nil || loaded.AccountModels[source.ID].Model != rec.Model || loaded.AccountModels[source.ID].HookSequence != rec.Sequence {
+		t.Fatal("fresh state lost the durably confirmed model", err)
+	}
+}
+
 func TestAccountNativeAdmissionHoldSurvivesRestartAndOwnerEnd(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 1)
 	source := accountTestSource(root, bindings[0])
