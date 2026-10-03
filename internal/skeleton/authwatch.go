@@ -379,6 +379,35 @@ func (w *authWatcher) sessionUnsafe(local string) bool {
 	return false
 }
 
+func (w *authWatcher) authPending(agent, local string) bool {
+	for _, pending := range w.state.Pending[agent] {
+		if pending == local {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *authWatcher) sessionIdentityChanged(agent string, m persist.Meta) bool {
+	if w.sessionIdentity == nil {
+		return false
+	}
+	current := w.sessionIdentity(agent, m.Env)
+	if rec, ok := w.state.CLI[m.ID]; ok && rec.State != cliRefreshComplete && rec.State != cliRefreshBlocked {
+		if current == m.AuthIdentity {
+			return false
+		}
+		// A real account change may coincide with the CLI update. In that case
+		// the auth reason authorizes the new daemon identity; otherwise a change
+		// in this session's separate credential scope blocks the CLI-only kill.
+		return !w.authPending(agent, m.ID) || current != w.identity(agent)
+	}
+	if w.authPending(agent, m.ID) {
+		return current != w.identity(agent)
+	}
+	return false
+}
+
 func (w *authWatcher) fencedRecycleAttempt(local string, claimed bool, attempt func() error) error {
 	fence := w.withRecycleFence
 	if claimed && w.withClaimedRecycleFence != nil {
@@ -772,7 +801,7 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 		if !ok || cur.Status.Process != status.ProcessRunning ||
 			cur.Status.Turn != status.TurnIdle || cur.Status.Interaction != status.InteractionNone ||
 			w.sessionUnsafe(local) ||
-			w.sessionIdentity != nil && w.sessionIdentity(agent, cur.Env) != w.identity(agent) {
+			w.sessionIdentityChanged(agent, cur) {
 			return errAuthRecycleUnsafe
 		}
 		if err := w.validateCLIRefreshTarget(cur); err != nil {
@@ -783,7 +812,7 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 		cur, ok = w.get(local)
 		if !ok || cur.Status.Process != status.ProcessRunning ||
 			cur.Status.Turn != status.TurnIdle || cur.Status.Interaction != status.InteractionNone ||
-			w.sessionUnsafe(local) {
+			w.sessionUnsafe(local) || w.sessionIdentityChanged(agent, cur) {
 			return errAuthRecycleUnsafe
 		}
 		// THE CLAIM: record the kill as ours -- durably -- immediately before

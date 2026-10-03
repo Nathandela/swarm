@@ -85,19 +85,9 @@ func (f *authFake) launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	}
 	f.launched = append(f.launched, spec)
 	f.launchN++
-	var resumedFrom, conversationID string
-	if ref := spec.Options[protocol.OptionResumeFrom]; ref != "" {
-		if slash := len(ref) - len(filepath.Base(ref)); slash > 0 {
-			resumedFrom = ref[slash:]
-		}
-		if source, ok := f.sessions[resumedFrom]; ok {
-			conversationID = source.ConversationID
-		}
-	}
 	m := persist.Meta{
 		ID: "fresh" + string(rune('0'+f.launchN)), AgentType: spec.AgentType,
 		Name: spec.Name, Tag: spec.Tag, Cwd: spec.Cwd, AuthIdentity: f.identity,
-		ResumedFrom: resumedFrom, ConversationID: conversationID,
 		Status: status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionNone},
 	}
 	source := strings.TrimPrefix(spec.Options[protocol.OptionResumeFrom], "ep-test01/")
@@ -657,8 +647,12 @@ func TestAFailedResumeLeavesTheEndedRowAndRetainsRetry(t *testing.T) {
 	r.NextAttempt = time.Time{}
 	w.state.Retries["s1"] = r
 	w.tick()
-	if len(f.launched) != 1 || len(f.deleted) != 1 {
-		t.Fatalf("retry did not complete: launched=%d deleted=%v", len(f.launched), f.deleted)
+	w.tick() // upstream auth recovery confirms transport on a later observation
+	if len(f.launched) != 1 || len(f.deleted) != 0 || w.state.Killed["s1"] || len(w.state.Pending["codex"]) != 0 {
+		t.Fatalf("retry did not complete with retained history: launched=%d deleted=%v claim=%v pending=%v", len(f.launched), f.deleted, w.state.Killed, w.state.Pending)
+	}
+	if _, ok := f.get("s1"); !ok {
+		t.Fatal("recovery deleted the source history")
 	}
 }
 

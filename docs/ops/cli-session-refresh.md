@@ -96,3 +96,13 @@ go test -race ./internal/shim -run '^TestCLIRefresh' -count=1
 Run tests with inherited `SWARM_*` session-routing variables removed, except any
 explicit test-binary override. This prevents live-session routing from contaminating
 the fake daemon/hook fixtures.
+
+## Rolling back swarm
+
+Before installing an older swarm build, disable new CLI refreshes with
+`swarm refresh --auto off`. Inspect `swarm refresh --json` and allow owned
+replacements to finish, or explicitly recover blocked conversations. Back up the
+shared `auth-watch-state.json` before downgrading. An older build does not understand
+the CLI refresh records and may discard that recovery information when it saves
+its own auth state. Mid-refresh downgrade is therefore not a supported automatic
+recovery path; retained source history remains available for manual recovery.

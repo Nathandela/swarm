@@ -52,6 +52,22 @@ func TestPilotRealCLIControlsTwoWorkersWithoutChangingOrdinaryCLI(t *testing.T) 
 		}
 		return string(out), nil
 	}
+	// Launch confirms the shim, not the fixture's prompt. Sending before ask
+	// prints ">" can render ">got:" on one line and falsely fail the exact
+	// payload check below. Wait for both workers to be ready for input.
+	for _, id := range ids {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			out, err := run("peek", id)
+			if err == nil && strings.TrimSpace(out) == ">" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("worker prompt not ready; screen=%q err=%v", out, err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 	entry, err := run("--pilot")
 	if err != nil {
 		t.Fatal(err)

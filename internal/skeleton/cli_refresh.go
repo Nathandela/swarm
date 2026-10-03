@@ -424,7 +424,6 @@ func (w *authWatcher) workCLIRefresh(allowNewKills bool) {
 	destructiveAttempted := false
 	for step := 0; step < len(keys); step++ {
 		source := keys[(start+step)%len(keys)]
-		w.cliWorkCursor = source
 		rec := w.state.CLI[source]
 		if rec.State == cliRefreshComplete || rec.State == cliRefreshBlocked {
 			continue
@@ -450,6 +449,7 @@ func (w *authWatcher) workCLIRefresh(allowNewKills bool) {
 				w.blockCLIRefresh(source, "source session ended before automatic refresh claimed it")
 			} else if w.retryReady(source) && probeAttempts < maxCLIRefreshProbesPerTick && !destructiveAttempted {
 				probeAttempts++
+				w.cliWorkCursor = source
 				destructiveAttempted = true
 				_ = w.resumeClaimed(rec.AgentType, m)
 			}
@@ -459,9 +459,10 @@ func (w *authWatcher) workCLIRefresh(allowNewKills bool) {
 			continue
 		}
 		if probeAttempts >= maxCLIRefreshProbesPerTick {
-			continue
+			break
 		}
 		probeAttempts++
+		w.cliWorkCursor = source
 		if !w.prepareCLIRefreshTarget(m) {
 			continue
 		}
@@ -554,6 +555,12 @@ func (w *authWatcher) validateCLIRefreshTarget(m persist.Meta) error {
 }
 
 func (w *authWatcher) resumeCLIEnded(agent string, source persist.Meta) bool {
+	current, exists := w.get(source.ID)
+	if !exists || current.RosterHidden {
+		w.blockCLIRefresh(source.ID, "source session was deleted or archived before its owed replacement launched")
+		return false
+	}
+	source = current
 	rec, ok := w.state.CLI[source.ID]
 	if !ok {
 		return w.resumeEnded(agent, source)
@@ -648,7 +655,9 @@ func (w *authWatcher) findReplacement(source, agent string) (persist.Meta, bool,
 		w.state.CLI[source] = rec
 	}
 	if err := w.saveState(); err != nil {
-		return persist.Meta{}, false, fmt.Sprintf("could not checkpoint existing replacement %s: %v", children[0].ID, err)
+		// The child itself is durable evidence. Keep observing it; a restart can
+		// rediscover the same lineage without ever creating another child.
+		log.Printf("cli-refresh: checkpoint existing replacement %s for %s: %v", children[0].ID, source, err)
 	}
 	return children[0], true, ""
 }
@@ -736,16 +745,31 @@ func (w *authWatcher) blockCLIRefresh(source, reason string) {
 	if !ok {
 		return
 	}
+	prior := rec
+	retry, hadRetry := w.state.Retries[source]
+	wasKilled := w.state.Killed[source]
 	rec.State = cliRefreshBlocked
 	rec.LastError = reason
 	rec.UpdatedAt = w.clock()
 	w.state.CLI[source] = rec
 	delete(w.state.Retries, source)
 	delete(w.state.Killed, source)
+	committed, err := w.persistState()
+	if err != nil && !committed {
+		w.state.CLI[source] = prior
+		if hadRetry {
+			w.state.Retries[source] = retry
+		}
+		if wasKilled {
+			w.state.Killed[source] = true
+		}
+		log.Printf("cli-refresh: persist blocked state for %s: %v", source, err)
+		return
+	}
 	if w.clearRecycle != nil {
 		w.clearRecycle(source)
 	}
-	if err := w.saveState(); err != nil {
-		log.Printf("cli-refresh: persist blocked state for %s: %v", source, err)
+	if err != nil {
+		log.Printf("cli-refresh: blocked state for %s committed but directory sync was unconfirmed: %v", source, err)
 	}
 }

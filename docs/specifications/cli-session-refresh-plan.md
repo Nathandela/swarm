@@ -20,6 +20,14 @@ following release requirements. The configured Sonnet and Opus committee members
 could not authenticate; the configured Gemini 3.5 member was unavailable. Their
 approval is not claimed.
 
+The initial local checkout was behind the installed release. Before publication,
+the implementation was rebased onto v0.14.3/current main (`4c660259`), preserving
+its newer Codex remote-resume handling, discussion projection, auth readiness and
+archived-source cancellation. That upstream already supplies retained history and
+the durable `Candidates` map; the final implementation reuses them rather than
+introducing a competing replacement map. CLI refresh separately protects unsent
+drafts, which account-change recovery may deliberately discard.
+
 * A successful Launch means the shim is available, not that provider resume
   succeeded. The source row must remain available for recovery.
 * A durable replacement ID and a search of both running and ended children close
