@@ -26,6 +26,9 @@ import (
 
 const fixtureSecret = "fixture-private-device-code"
 const fixtureTerminal = "fixture-private-native-terminal"
+const secureStorageChild = "SWARM_TEST_CLAUDE_SECURE_STORAGE_CHILD"
+const secureStorageAmbientDir = "SWARM_TEST_CLAUDE_AMBIENT_DIR"
+const secureStorageExpectedDir = "SWARM_TEST_CLAUDE_EXPECTED_DIR"
 
 // A real detached same-binary supervisor/runner uses a fake native CLI and a
 // real WebSocket-over-UDS server. No provider authentication/network occurs.
@@ -437,10 +440,69 @@ func TestClaudePrivatePTYAttachAndReady(t *testing.T) {
 
 func TestCredentialEnvironmentScrubPreservesHome(t *testing.T) {
 	cfg := Config{StateRoot: "/private", CandidateProfileGeneration: "fixture", Provider: "claude"}
-	env := NativeEnvironment(cfg, []string{"HOME=/ordinary", "PATH=/usr/bin", "CLAUDE_CODE_OAUTH_TOKEN=private", "ANTHROPIC_API_KEY=private", "OPENAI_API_KEY=private", "CODEX_HOME=/ambient", "CLAUDE_CONFIG_DIR=/ambient", runnerEnv + "=bad", "HTTP_PROXY=private"})
+	env := NativeEnvironment(cfg, []string{"HOME=/ordinary", "PATH=/usr/bin", "CLAUDE_CODE_OAUTH_TOKEN=private", "ANTHROPIC_API_KEY=private", "OPENAI_API_KEY=private", "CODEX_HOME=/ambient", "CLAUDE_CONFIG_DIR=/ambient", "CLAUDE_SECURESTORAGE_CONFIG_DIR=/ambient-secure", runnerEnv + "=bad", "HTTP_PROXY=private"})
 	joined := strings.Join(env, "\n")
-	if strings.Contains(joined, "private\n") || strings.Contains(joined, "TOKEN=") || strings.Contains(joined, "API_KEY=") || strings.Contains(joined, "=/ambient") || !strings.Contains(joined, "HOME=/ordinary") || !strings.Contains(joined, "CLAUDE_CONFIG_DIR=/private/accounts/profiles/fixture") {
+	if strings.Contains(joined, "private\n") || strings.Contains(joined, "TOKEN=") || strings.Contains(joined, "API_KEY=") || strings.Contains(joined, "=/ambient") || !strings.Contains(joined, "HOME=/ordinary") || !strings.Contains(joined, "CLAUDE_CONFIG_DIR=/private/accounts/profiles/fixture") || !strings.Contains(joined, "CLAUDE_SECURESTORAGE_CONFIG_DIR=/private/accounts/profiles/fixture") {
 		t.Fatal("credential environment not isolated")
+	}
+}
+
+func TestClaudeSecureStorageSelectorChildSentinel(t *testing.T) {
+	if os.Getenv(secureStorageChild) == "1" {
+		ambient := os.Getenv(secureStorageAmbientDir)
+		selected := os.Getenv("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+		expected := os.Getenv(secureStorageExpectedDir)
+		if selected == "" || selected != expected || selected == ambient || os.Getenv("CLAUDE_CONFIG_DIR") != expected {
+			t.Fatalf("Claude profile selectors are not both isolated: config=%q secure-storage=%q", os.Getenv("CLAUDE_CONFIG_DIR"), selected)
+		}
+		if os.Getenv("HOME") != "/ordinary" {
+			t.Fatalf("ordinary HOME was not preserved: %q", os.Getenv("HOME"))
+		}
+		if _, err := os.Stat(filepath.Join(selected, "ambient-sentinel")); !os.IsNotExist(err) {
+			t.Fatalf("ambient sentinel appeared through the selected profile: %v", err)
+		}
+		if err := os.MkdirAll(selected, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(selected, "child-write-sentinel"), []byte("private-profile"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	root := t.TempDir()
+	ambient := filepath.Join(root, "ambient-secure-storage")
+	if err := os.MkdirAll(ambient, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ambient, "ambient-sentinel"), []byte("ambient-only"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{StateRoot: filepath.Join(root, "private"), CandidateProfileGeneration: "candidate-1", Provider: "claude"}
+	profile := filepath.Join(cfg.StateRoot, "accounts", "profiles", cfg.CandidateProfileGeneration)
+	env := NativeEnvironment(cfg, []string{"HOME=/ordinary", "PATH=/usr/bin", "CLAUDE_CONFIG_DIR=/ambient", "CLAUDE_SECURESTORAGE_CONFIG_DIR=" + ambient})
+	env = append(env,
+		secureStorageChild+"=1",
+		secureStorageAmbientDir+"="+ambient,
+		secureStorageExpectedDir+"="+profile,
+	)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.run=^TestClaudeSecureStorageSelectorChildSentinel$")
+	cmd.Env = env
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("secure-storage child failed: %v\n%s", err, output)
+	}
+	if raw, err := os.ReadFile(filepath.Join(ambient, "ambient-sentinel")); err != nil || string(raw) != "ambient-only" {
+		t.Fatalf("ambient sentinel changed: %q, %v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(ambient, "child-write-sentinel")); !os.IsNotExist(err) {
+		t.Fatalf("child wrote through the ambient secure-storage selector: %v", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(profile, "child-write-sentinel")); err != nil || string(raw) != "private-profile" {
+		t.Fatalf("private profile did not receive the child write: %q, %v", raw, err)
 	}
 }
 

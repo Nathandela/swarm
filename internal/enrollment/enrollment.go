@@ -190,6 +190,7 @@ func NativeEnvironment(cfg Config, inherited []string) []string {
 		env = append(env, "CODEX_HOME="+profile)
 	} else {
 		env = append(env, "CLAUDE_CONFIG_DIR="+profile)
+		env = append(env, "CLAUDE_SECURESTORAGE_CONFIG_DIR="+profile)
 	}
 	return env
 }
