@@ -93,6 +93,7 @@ func allOps() []string {
 		OpAttach, OpDetach, OpResize, OpSubscribe,
 		OpEvent, OpLease, OpOK, OpError,
 		OpContextGuardGet, OpContextGuardSet,
+		OpAccountsManage,
 	}
 }
 

@@ -6,6 +6,7 @@
 package persist
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,12 +15,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
 // SchemaVersion is the meta.json schema this build writes. Older versions are
 // migrated forward on read (see Load); newer versions are rejected loudly.
 const SchemaVersion = 1
+
+// ManagedSchemaVersion is execution critical; ordinary records remain v1.
+const ManagedSchemaVersion = 2
 
 // metaFile is the committed per-session state file name within a session dir.
 const metaFile = "meta.json"
@@ -96,6 +101,12 @@ type Meta struct {
 	// AgentCwd above; "" means the provider has no probe, or the credentials were
 	// unreadable at launch -- both gate conservatively (never auto-recycled).
 	AuthIdentity string `json:"auth_identity,omitempty"`
+	// AccountBinding freezes the private credential generation for managed sessions.
+	// It contains no credential values. Managed records use schema v2 so an older
+	// binary cannot silently drop the selector and fall back to ambient credentials.
+	AccountBinding       *accounts.Binding `json:"account_binding,omitempty"`
+	AccountProjectionRef string            `json:"account_projection_ref,omitempty"`
+	InputEmbargo         string            `json:"input_embargo,omitempty"`
 	// CLIIdentity is the selected installation observed at launch; nil is unknown.
 	// It does not attest a running process or a wrapper's dependencies.
 	CLIIdentity *CLIIdentity `json:"cli_identity,omitempty"`
@@ -229,6 +240,14 @@ func (s *Store) Save(m Meta) error {
 	}
 	m.Env = FilterEnv(m.Env)
 	m.SchemaVersion = SchemaVersion
+	if m.AccountBinding != nil {
+		if !validManagedMeta(m) {
+			return fmt.Errorf("persist: invalid managed account binding")
+		}
+		m.SchemaVersion = ManagedSchemaVersion
+	} else if m.AccountProjectionRef != "" || m.InputEmbargo != "" {
+		return fmt.Errorf("persist: managed state has no account binding")
+	}
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
@@ -329,13 +348,41 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	if m.ID != wantID {
 		return Meta{}, fmt.Errorf("meta id %q does not match session directory %q", m.ID, wantID)
 	}
-	if m.SchemaVersion > SchemaVersion {
-		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, SchemaVersion)
+	if m.SchemaVersion > ManagedSchemaVersion {
+		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, ManagedSchemaVersion)
+	}
+	if m.SchemaVersion == ManagedSchemaVersion && m.AccountBinding == nil {
+		return Meta{}, fmt.Errorf("managed session record has no account binding")
+	}
+	if m.AccountBinding != nil && (m.SchemaVersion != ManagedSchemaVersion || !validManagedMeta(m)) {
+		return Meta{}, fmt.Errorf("managed session record has an invalid account binding")
+	}
+	if m.AccountBinding == nil && (m.AccountProjectionRef != "" || m.InputEmbargo != "") {
+		return Meta{}, fmt.Errorf("managed session state has no account binding")
 	}
 	if err := applyMigrations(&m, SchemaVersion, migrations); err != nil {
 		return Meta{}, err
 	}
 	return m, nil
+}
+
+func validManagedMeta(m Meta) bool {
+	b := m.AccountBinding
+	if b == nil || b.SchemaVersion != accounts.SchemaVersion || b.Provider != m.AgentType || (b.Provider != accounts.ProviderCodex && b.Provider != accounts.ProviderClaude) || b.CredentialGeneration == 0 || b.ConfigurationGeneration == 0 {
+		return false
+	}
+	for _, value := range []struct {
+		text string
+		size int
+	}{{b.AccountID, 32}, {b.Identity, 64}, {m.AccountProjectionRef, 64}} {
+		if len(value.text) != value.size || strings.ToLower(value.text) != value.text {
+			return false
+		}
+		if _, err := hex.DecodeString(value.text); err != nil {
+			return false
+		}
+	}
+	return len(m.InputEmbargo) <= 128 && !strings.ContainsAny(m.InputEmbargo, "/\\\x00\r\n")
 }
 
 // migrateV0toV1 upgrades a Meta from schema v0 to v1. v0 and v1 share the same

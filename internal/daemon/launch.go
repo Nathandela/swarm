@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -112,16 +113,21 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
-	CLIIdentity *persist.CLIIdentity `json:"cli_identity,omitempty"`
-	SessionID   string               `json:"session_id"`
-	Argv        []string             `json:"argv"`
-	Cwd         string               `json:"cwd"`
-	Env         []string             `json:"env"`
-	SocketPath  string               `json:"socket_path"`
-	SessionDir  string               `json:"session_dir"`
-	Cols        int                  `json:"cols"`
-	Rows        int                  `json:"rows"`
-	GraceMS     int                  `json:"grace_ms"`
+	AccountBinding       *accounts.Binding    `json:"account_binding,omitempty"`
+	AccountProjectionRef string               `json:"account_projection_ref,omitempty"`
+	AccountStateRoot     string               `json:"account_state_root,omitempty"`
+	InputEmbargo         string               `json:"input_embargo,omitempty"`
+	InputEmbargoToken    string               `json:"input_embargo_token,omitempty"`
+	CLIIdentity          *persist.CLIIdentity `json:"cli_identity,omitempty"`
+	SessionID            string               `json:"session_id"`
+	Argv                 []string             `json:"argv"`
+	Cwd                  string               `json:"cwd"`
+	Env                  []string             `json:"env"`
+	SocketPath           string               `json:"socket_path"`
+	SessionDir           string               `json:"session_dir"`
+	Cols                 int                  `json:"cols"`
+	Rows                 int                  `json:"rows"`
+	GraceMS              int                  `json:"grace_ms"`
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1). "" is the
 	// pre-R6 compat default the shim reads as "bind no hook listener at all".
 	HookSocketPath string `json:"hook_socket_path"`
@@ -139,6 +145,7 @@ type shimSpawnConfig struct {
 	// and a restarted daemon recovers the whole session from this 0600 file; BackendProgram
 	// in particular is the RESOLVED absolute path, so a restart never re-resolves a bare
 	// name through a PATH that may now point at a different CLI version.
+	BackendCwd              string   `json:"backend_cwd,omitempty"`
 	BackendProgram          string   `json:"backend_program,omitempty"`
 	BackendArgs             []string `json:"backend_args,omitempty"`
 	BackendAgentArgs        []string `json:"backend_agent_args,omitempty"`
@@ -308,25 +315,28 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	id := d.freshIDLocked()
 	now := time.Now()
 	m := persist.Meta{
-		ID:             id,
-		AgentType:      spec.AgentType,
-		ConversationID: spec.ConversationID,
-		Name:           spec.Name, // user-provided label (P2); "" falls back to the agent name at display
-		NameSetAt:      now,       // the newest-wins clock starts at launch (ADR-022)
-		Tag:            spec.Tag,  // manual grouping label given on the new-session form; "" is untagged
-		Cwd:            spec.Cwd,
-		LaunchOptions:  spec.Options,
-		Env:            PolicyEnv(spec.ClientEnv), // already resolved above; idempotent
-		CreatedAt:      now,
-		GroupEnteredAt: now,
-		LastActivity:   now,
-		ResumedFrom:    spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
-		CLIIdentity:    spec.CLIIdentity,
-		AuthIdentity:   spec.AuthIdentity, // the account the agent starts under (ADR-024)
-		SpawnedFrom:    spec.SpawnedFrom,  // link an agent-initiated spawn to its source (ADR-010 D4)
-		SpawnIntent:    spec.SpawnIntent,
-		Supervision:    spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
-		Status:         status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
+		AccountBinding:       spec.AccountBinding,
+		AccountProjectionRef: spec.AccountProjectionRef,
+		InputEmbargo:         spec.InputEmbargo,
+		ID:                   id,
+		AgentType:            spec.AgentType,
+		ConversationID:       spec.ConversationID,
+		Name:                 spec.Name, // user-provided label (P2); "" falls back to the agent name at display
+		NameSetAt:            now,       // the newest-wins clock starts at launch (ADR-022)
+		Tag:                  spec.Tag,  // manual grouping label given on the new-session form; "" is untagged
+		Cwd:                  spec.Cwd,
+		LaunchOptions:        spec.Options,
+		Env:                  PolicyEnv(spec.ClientEnv), // already resolved above; idempotent
+		CreatedAt:            now,
+		GroupEnteredAt:       now,
+		LastActivity:         now,
+		ResumedFrom:          spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
+		CLIIdentity:          spec.CLIIdentity,
+		AuthIdentity:         spec.AuthIdentity, // the account the agent starts under (ADR-024)
+		SpawnedFrom:          spec.SpawnedFrom,  // link an agent-initiated spawn to its source (ADR-010 D4)
+		SpawnIntent:          spec.SpawnIntent,
+		Supervision:          spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
+		Status:               status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 	}
 	s := &session{meta: m, stop: make(chan struct{})}
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
@@ -425,6 +435,17 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		}
 	}
 
+	if d.cfg.FinalizeLaunch != nil {
+		var finalErr error
+		spec, finalErr = d.cfg.FinalizeLaunch(id, spec)
+		if finalErr != nil {
+			d.rollbackReserved(id, m, preLaunchOK)
+			return persist.Meta{}, finalErr
+		}
+		m.AccountBinding = spec.AccountBinding
+		m.AccountProjectionRef = spec.AccountProjectionRef
+		m.Env = PolicyEnv(spec.ClientEnv)
+	}
 	dir := d.sessionDir(id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
@@ -567,18 +588,31 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		return nil, "", err
 	}
 	lc := shimSpawnConfig{
-		CLIIdentity:    spec.CLIIdentity,
-		SessionID:      id,
-		Argv:           spec.Argv,
-		Cwd:            spec.Cwd,
-		Env:            injectHookEnv(PolicyEnv(spec.ClientEnv), id, token, d.cfg.SocketPath, hookSeqFilePath(dir), hookSock, spec.CaptureEvents),
-		SocketPath:     sock,
-		SessionDir:     dir,
-		Cols:           spec.Cols,
-		Rows:           spec.Rows,
-		GraceMS:        int(shimGrace / time.Millisecond),
-		HookSocketPath: hookSock,
-		HookDrainToken: drainToken,
+		AccountBinding:       spec.AccountBinding,
+		AccountProjectionRef: spec.AccountProjectionRef,
+		AccountStateRoot:     spec.AccountStateRoot,
+		InputEmbargo:         spec.InputEmbargo,
+		CLIIdentity:          spec.CLIIdentity,
+		SessionID:            id,
+		Argv:                 spec.Argv,
+		Cwd:                  spec.Cwd,
+		Env:                  injectHookEnv(PolicyEnv(spec.ClientEnv), id, token, d.cfg.SocketPath, hookSeqFilePath(dir), hookSock, spec.CaptureEvents),
+		SocketPath:           sock,
+		SessionDir:           dir,
+		Cols:                 spec.Cols,
+		Rows:                 spec.Rows,
+		GraceMS:              int(shimGrace / time.Millisecond),
+		HookSocketPath:       hookSock,
+		HookDrainToken:       drainToken,
+	}
+	if spec.InputEmbargo != "" {
+		if spec.AccountBinding == nil {
+			return nil, "", errors.New("daemon: unmanaged input embargo")
+		}
+		lc.InputEmbargoToken, err = newHookDrainToken()
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	// The plan is either CARRIED on the spec (a caller that already resolved it) or asked
 	// for HERE, at the first moment the session id -- and therefore the session dir and the
@@ -602,6 +636,10 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	if spec.Backend != nil {
 		lc.BackendProgram = spec.Backend.Program
 		lc.BackendArgs = append([]string(nil), spec.Backend.Args...)
+		lc.BackendArgs = append(lc.BackendArgs, spec.AccountBackendArgs...)
+		if spec.AccountBinding != nil {
+			lc.BackendCwd = spec.Cwd
+		}
 		lc.BackendAgentArgs = append([]string(nil), spec.Backend.AgentArgs...)
 		lc.BackendAgentCommandArgs = append([]string(nil), spec.Backend.AgentCommandArgs...)
 		lc.BackendSocketPath = backendSock

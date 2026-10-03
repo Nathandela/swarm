@@ -765,6 +765,9 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 		return
 	}
 	d.captureContextGuardFrame(local, expectedInstance, feed, method, frame, at)
+	if d.accountRotation != nil {
+		d.accountRotation.NoteNativeFrame(local, expectedInstance, feed, method, frame, at)
+	}
 	d.ingestBackendFrame(local, frame, at.UnixMilli())
 }
 

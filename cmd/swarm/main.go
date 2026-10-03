@@ -23,6 +23,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
 
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/detect"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
@@ -129,6 +130,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runDaemon(args[1:], stdout, stderr)
 	case "shim":
 		return runShim(args[1:], stdout, stderr)
+	case "internal":
+		return runAccountEnrollment(args[1:])
 	case "hook":
 		return runHook(args[1:], os.Stdin, stderr)
 	case "remote":
@@ -221,6 +224,12 @@ func runTUI(stdout, stderr io.Writer) int {
 		Restore: func() error { return prog.RestoreTerminal() },
 	})
 	opts := []tui.Option{tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc))}
+	opts = append(opts, tui.WithDaemonReconnector(func() (tui.Client, error) {
+		return dialClient(tuiCaps())
+	}), tui.WithAccountLoginRunner(accountLoginRunner(tui.TerminalHandoff{
+		Release: func() error { return prog.ReleaseTerminal() },
+		Restore: func() error { return prog.RestoreTerminal() },
+	})))
 	// The board layout is restored from, and written back to, the owner's config
 	// document (ADR-026). A machine with no resolvable config dir simply runs
 	// without durable custody rather than refusing to open the TUI.
@@ -295,7 +304,7 @@ func clientConfig() (daemon.ClientConfig, error) {
 // attachDialer's per-attach dial deliberately does NOT use this set: it offers
 // {"attach"} and never submits a launch.
 func tuiCaps() []string {
-	return []string{"attach", "subscribe", protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings}
+	return []string{"attach", "subscribe", protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapAccountsManage}
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
@@ -615,16 +624,21 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
-	CLIIdentity *persist.CLIIdentity `json:"cli_identity,omitempty"`
-	SessionID   string               `json:"session_id"`
-	Argv        []string             `json:"argv"`
-	Cwd         string               `json:"cwd"`
-	Env         []string             `json:"env"`
-	SocketPath  string               `json:"socket_path"`
-	SessionDir  string               `json:"session_dir"`
-	Cols        int                  `json:"cols"`
-	Rows        int                  `json:"rows"`
-	GraceMS     int                  `json:"grace_ms"`
+	AccountBinding       *accounts.Binding    `json:"account_binding,omitempty"`
+	AccountProjectionRef string               `json:"account_projection_ref,omitempty"`
+	AccountStateRoot     string               `json:"account_state_root,omitempty"`
+	InputEmbargo         string               `json:"input_embargo,omitempty"`
+	InputEmbargoToken    string               `json:"input_embargo_token,omitempty"`
+	CLIIdentity          *persist.CLIIdentity `json:"cli_identity,omitempty"`
+	SessionID            string               `json:"session_id"`
+	Argv                 []string             `json:"argv"`
+	Cwd                  string               `json:"cwd"`
+	Env                  []string             `json:"env"`
+	SocketPath           string               `json:"socket_path"`
+	SessionDir           string               `json:"session_dir"`
+	Cols                 int                  `json:"cols"`
+	Rows                 int                  `json:"rows"`
+	GraceMS              int                  `json:"grace_ms"`
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1); "" (an
 	// old, pre-R6 launch config with no such key) disables it entirely (requirement
 	// 7's compat), leaving shim.Run's behavior exactly what it is today.
@@ -646,6 +660,7 @@ type shimLaunchConfig struct {
 	// the pre-R7 session and shim.Run's spawn path is then byte-for-byte what it is today.
 	// BackendProgram is the RESOLVED absolute path the daemon obtained through the adapter
 	// contract's LookPath discipline, so the shim never searches PATH itself.
+	BackendCwd        string   `json:"backend_cwd,omitempty"`
 	BackendProgram    string   `json:"backend_program"`
 	BackendArgs       []string `json:"backend_args"`
 	BackendAgentArgs  []string `json:"backend_agent_args"`
@@ -665,20 +680,25 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
-		CLIIdentity:    lc.CLIIdentity,
-		SessionID:      lc.SessionID,
-		Argv:           lc.Argv,
-		Cwd:            lc.Cwd,
-		Env:            lc.Env,
-		SocketPath:     lc.SocketPath,
-		SessionDir:     lc.SessionDir,
-		Cols:           lc.Cols,
-		Rows:           lc.Rows,
-		TranscriptCfg:  transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
-		GraceTimeout:   time.Duration(lc.GraceMS) * time.Millisecond,
-		HookSocketPath: lc.HookSocketPath,
-		HookToken:      lc.HookDrainToken,
-		Backend:        backendConfigFromLaunch(lc),
+		AccountBinding:       lc.AccountBinding,
+		AccountProjectionRef: lc.AccountProjectionRef,
+		AccountStateRoot:     lc.AccountStateRoot,
+		InputEmbargo:         lc.InputEmbargo,
+		InputEmbargoToken:    lc.InputEmbargoToken,
+		CLIIdentity:          lc.CLIIdentity,
+		SessionID:            lc.SessionID,
+		Argv:                 lc.Argv,
+		Cwd:                  lc.Cwd,
+		Env:                  lc.Env,
+		SocketPath:           lc.SocketPath,
+		SessionDir:           lc.SessionDir,
+		Cols:                 lc.Cols,
+		Rows:                 lc.Rows,
+		TranscriptCfg:        transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
+		GraceTimeout:         time.Duration(lc.GraceMS) * time.Millisecond,
+		HookSocketPath:       lc.HookSocketPath,
+		HookToken:            lc.HookDrainToken,
+		Backend:              backendConfigFromLaunch(lc),
 	}
 }
 
@@ -702,6 +722,7 @@ func backendConfigFromLaunch(lc shimLaunchConfig) *shim.BackendConfig {
 	}
 	return &shim.BackendConfig{
 		Program:    lc.BackendProgram,
+		Cwd:        lc.BackendCwd,
 		Args:       lc.BackendArgs,
 		Env:        env,
 		SocketPath: lc.BackendSocketPath,

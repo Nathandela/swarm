@@ -20,7 +20,13 @@ func TestCLIIdentityProbe(t *testing.T) {
 				if provider == "codex" {
 					prefix, suffix = "codex-cli ", ""
 				}
-				if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '"+prefix+version+suffix+"'\n"), 0700); err != nil {
+				// Native installers replace the executable atomically. Distinct inodes
+				// also avoid relying on sub-millisecond filesystem mtimes.
+				next := filepath.Join(dir, "next-cli")
+				if err := os.WriteFile(next, []byte("#!/bin/sh\nprintf '%s\\n' '"+prefix+version+suffix+"'\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(next, path); err != nil {
 					t.Fatal(err)
 				}
 			}

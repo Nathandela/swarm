@@ -231,7 +231,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, AccountInputEmbargo: true})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -241,6 +241,12 @@ func (s *server) serveConn(conn net.Conn) {
 				continue // ignore attach/resize/signal until the client has said hello
 			}
 			switch ctrl.Type {
+			case shimwire.TypeAccountEmbargoRelease:
+				result := shimwire.Control{Type: shimwire.TypeAccountEmbargoResult}
+				if s.ptyIn.embargo == nil || s.ptyIn.embargo.release(ctrl.IncidentID, ctrl.Token) != nil {
+					result.Refused = shimwire.RefusedAccountSwitching
+				}
+				cw.writeControl(result)
 			case shimwire.TypeAttach:
 				if sub != nil {
 					s.hub.detach(sub)
@@ -272,7 +278,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// Daemon-authored keys (an interrupt, a dialog answer): the provenance
 				// write. The bytes reach the PTY verbatim but do not mutate the owner-input
 				// tracker; the frame they arrived on is the whole of that judgement.
-				_, _ = s.ptyIn.Write([]byte(ctrl.Keys))
+				_, _ = s.ptyIn.WriteControl([]byte(ctrl.Keys))
 			case shimwire.TypeBackendAttach:
 				// The daemon's GO-AHEAD (ADR-013 §R7.2e): it is a connected client of the
 				// backend, and the agent may now be spawned with AgentArgs appended.
@@ -831,6 +837,7 @@ type ptyWriter struct {
 	f      *os.File
 	closed bool
 
+	embargo   *accountEmbargo
 	inputLine inputLineTracker
 }
 
@@ -846,6 +853,9 @@ func (p *ptyWriter) Write(b []byte) (int, error) {
 func (p *ptyWriter) WriteInput(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.embargo != nil && p.embargo.held.Load() {
+		return 0, errAccountSwitching
+	}
 	n, err := p.writeLocked(b)
 	p.inputLine.apply(b[:n])
 	return n, err
@@ -875,6 +885,9 @@ var errInputBusy = errors.New("the session's input line was not empty")
 func (p *ptyWriter) submitMessage(text []byte, gap time.Duration) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.embargo != nil && p.embargo.held.Load() {
+		return errAccountSwitching
+	}
 	if p.inputLine.dirty() {
 		return errInputBusy
 	}

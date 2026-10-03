@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"log"
 	"net/http"
 	"os"
@@ -143,6 +144,7 @@ type coreAPI struct {
 	// bare coreAPI tests, where the optional protocol seam honestly answers unavailable.
 	contextGuardSettings *contextGuardSettingsStore
 	contextGuards        *contextGuardManager
+	accounts             *accountManager
 	// ksMu guards the read-time diff-write of the durable kill-switch state:
 	// RemoteControlEnabled runs on every remote op and concurrently. ksPersisted is the
 	// last enabled value written to remote-state.json this process (nil => never written),
@@ -1099,12 +1101,21 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	if err != nil {
 		return persist.Meta{}, err
 	}
+	if err := a.bindAccountLaunch(&resolved); err != nil {
+		return persist.Meta{}, err
+	}
 	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex") {
 		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], resolved.ClientEnv, resolved.Cwd)
 		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || observed == nil || *expected != *observed) {
 			return persist.Meta{}, fmt.Errorf("launch: CLI installation changed before refresh")
 		}
 		resolved.CLIIdentity = observed
+		if resolved.AccountBinding != nil {
+			if probeErr != nil || observed == nil || !accountconfig.SupportedNativeVersion(resolved.AgentType, observed.Version) {
+				return persist.Meta{}, errAccountLaunch
+			}
+			resolved.ExpectedCLIIdentity = observed
+		}
 	}
 	m, err := a.core.Launch(resolved)
 	if err != nil {

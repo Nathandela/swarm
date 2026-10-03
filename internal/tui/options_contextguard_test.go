@@ -206,8 +206,8 @@ func TestOptionsContextGuard_GuardsEnterAndDirectionalNavigation(t *testing.T) {
 		t.Fatalf("initial focus=%d, want group", rm.options.focus)
 	}
 	m = send(m, keyUp)
-	if got := m.(rootModel).options.focus; got != optionsFocusThreshold {
-		t.Fatalf("Up focus=%d, want threshold", got)
+	if got := m.(rootModel).options.focus; got != optionsFocusAccounts {
+		t.Fatalf("Up focus=%d, want Accounts", got)
 	}
 	m = send(m, keyDown)
 	if got := m.(rootModel).options.focus; got != optionsFocusGroup {

@@ -6,6 +6,7 @@
 - [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
 ## Operations
+- [Personal account pools](operations/account-pools.md) — add and manage provider accounts, opt in to assignment, and understand guarded recovery
 - [Pilot a Swarm conversation](operations/pilot.md) — caller-scoped `swarm --pilot` guidance and commands
 - [Remote-control operator runbook](operations/operator-runbook.md) — provision, pair, revoke and diagnose the one Cloudflare relay-v2 Worker
 - [Metadata disclosure](operations/metadata-disclosure.md) — the register of who observes what: the relay operator, the push provider, the gateway, a network observer, and (§5) a second model vendor, the one entry that receives session content rather than metadata (PB-OPS-3)
@@ -57,6 +58,7 @@
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
 
 ## Process traces
+- [Personal account pool evidence](verification/account-pools-v0150.md) — implementation verification boundaries and outstanding authenticated release acceptance
 - [Audit committee report 001](verification/audit-001-system-spec.md) — the adversarial review that shaped spec Draft 2
 - [Audit committee report 002](verification/audit-002-implementation-goals.md) — the review that shaped implementation-goals.md Draft 2
 - [Landscape research](research/agent_view_landscape.md) — Agent View internals, cross-CLI managers, mobile remotes

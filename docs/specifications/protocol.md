@@ -96,6 +96,8 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `remote_control`   | `*bool`           | `remote_set_control`: the DESIRED remote-control master state (true=on, false=manual off), owner-tier only (A4) |
 | `context_guard_settings` | `*ContextGuardSettings` | daemon-global context-guard settings reply, carried on `context_guard_get` / `context_guard_set` (ADR-023) |
 | `context_guard_set` | `*ContextGuardSettingsSetReq` | owner CAS request body for `context_guard_set`, carrying expected revision and auto-compact policy (ADR-023) |
+| `accounts_request` | `*AccountsReq` | owner-local account operation request, carried on `account_manage`; may contain secret token input which is never persisted or logged |
+| `accounts_result` | `*AccountsReply` | account registry, enrollment jobs, provider methods and enablement state, carried on the `account_manage` reply |
 | `terminal`         | `*TerminalSnapshot` | server-rendered terminal snapshot, carried on `terminal_snapshot` (A7 slice B) |
 | `send_input`       | `*SendInputReq`     | `send_input`: one owner-tier steering message for `session_id`, owner-tier only (ADR-010 A2) |
 | `body_version`     | int                 | R1 refusal-ops (`session_launch`/`composer_send`/`operation_status`/`turn_interrupt`/`terminal_control_begin`/`terminal_control_end`): the profile version the phone bound this op to (`RemoteProfileV1.accepted_body_versions`); there is no version `0` (Wave R1 skeleton, playbook §6.3) |
@@ -432,7 +434,9 @@ Handshake. The client sends `hello` with `protocol_version`, its own
 `build_version`, and its offered `capabilities`. The daemon replies with `hello`
 carrying the assigned unique `endpoint_id`, its `protocol_version`, its own
 `build_version`, and the negotiated `capabilities` (the intersection of the
-client's offer and the daemon's support). On a `protocol_version` mismatch the
+client's offer and the daemon's support). The owner-local `accounts.manage.v1` capability is
+offered only when the daemon has an account backend and is never negotiated for
+the remote tier. On a `protocol_version` mismatch the
 daemon replies with `error` naming `swarm daemon restart` (D-8). `build_version`
 is ADDITIVE and never fatal to the handshake: a client whose `build_version`
 differs from the daemon's (e.g. the daemon is still running an older build
@@ -1158,5 +1162,11 @@ negotiated `context-guard-settings` capability. Their additive bodies are
 The only accepted schema version is 1 and the threshold is an inclusive integer 40..95.
 Remote-tier callers are refused before body or backend access. A stale CAS is
 `stale_revision`; a missing or untrustworthy backend/document is `unavailable`.
+
+### Account management (ADR-028)
+
+The owner-tier `account_manage` operation requires the negotiated `accounts.manage.v1` capability. The request body is `accounts_request` (`AccountsReq`); the reply is `accounts_result` (`AccountsReply`). The closed action vocabulary is `list`, `start`, `status`, `cancel`, `admit`, `import`, `update`, `enable`, `refresh`, `retry`, `remove`, and `move`. Mutating operations carry `expected_revision` where applicable; a stale registry compare-and-swap is `stale_revision`. Unsupported operations or invalid bounded fields are `invalid_field`; a daemon without the optional backend/capability reports `unavailable` or `capability_refused`. The server refuses the remote tier as `not_authorized` before inspecting the request body or invoking the backend.
+
+`AccountsReq` carries the action and optional provider, account/job ids, label, authentication method, owner-selected import path, one-year token input (secret), pool enablement/pause state, retirement intent, a selected discussion id for guarded movement, and expected registry revision. A source without a verified account binding is refused as `account_move_unmanaged`; the client maps this to a fixed explanation. Enrollment status includes its canonical `target_account_id` so reauthentication can be resumed after navigation or reconnection. Provider authentication methods are advertised by the daemon in `AccountsReply.methods`; clients must use only methods marked available. The reply carries the nonsecret account view, observed quota windows, enrollment jobs and provider enablement. Authorization URL/user code and a private login socket are live owner-local enrollment status only. Token input, authorization codes and URLs are never written to registry/job state, launch metadata or diagnostics. The protocol version remains 1: these are additive optional `Control` fields behind the negotiated capability, and an older client ignores unknown reply fields.
 
 Resume roster projection groups explicit resume lineage (including shared missing ancestors), keeps the newest ended attempt or all running attempts, and leaves independent launches and handoffs separate. `list` returns all raw rows with projection annotations, retaining exact-ID lookup compatibility; `event` also retains actual session identity. The TUI and `swarm ls` apply the shared visibility filter. Clients must apply these annotations to avoid duplicate live rows. This projection does not alter the durable journal or phone journal reducer, which continue to expose raw session history.

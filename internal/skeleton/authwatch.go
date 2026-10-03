@@ -81,6 +81,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
@@ -225,32 +226,40 @@ func AuthProbedAgents() []string {
 // the sessions whose kill was OURS -- for which a resume is owed across
 // timeouts, restarts and crashes (audit H1).
 type authWatchState struct {
-	Identities    map[string]string              `json:"identities"`
-	Pending       map[string][]string            `json:"pending,omitempty"`
-	Killed        map[string]bool                `json:"killed,omitempty"`
-	Candidates    map[string]string              `json:"candidates,omitempty"`
-	Retries       map[string]recycleRetry        `json:"retries,omitempty"`
-	CLI           map[string]cliRefreshRecord    `json:"cli_refresh,omitempty"`
-	CLICandidates map[string]cliRefreshCandidate `json:"cli_candidates,omitempty"`
+	AccountModels           map[string]accountModelRecord      `json:"account_models,omitempty"`
+	AccountSchemaVersion    int                                `json:"account_schema_version,omitempty"`
+	AccountRotations        map[string]accountRotationRecord   `json:"account_rotations,omitempty"`
+	AccountHalfOpen         map[string]accounts.HalfOpenPermit `json:"account_half_open,omitempty"`
+	AccountHistoryOwnership map[string]accountHistoryOwnership `json:"account_history_ownership,omitempty"`
+	Identities              map[string]string                  `json:"identities"`
+	Pending                 map[string][]string                `json:"pending,omitempty"`
+	Killed                  map[string]bool                    `json:"killed,omitempty"`
+	Candidates              map[string]string                  `json:"candidates,omitempty"`
+	Retries                 map[string]recycleRetry            `json:"retries,omitempty"`
+	CLI                     map[string]cliRefreshRecord        `json:"cli_refresh,omitempty"`
+	CLICandidates           map[string]cliRefreshCandidate     `json:"cli_candidates,omitempty"`
 }
 
 // authRecycleCoordination is the assembly-owned serialization around the pure
 // watcher's actions. Fresh and claimed fences are distinct because only a
 // durable pre-crash claim may consume a restored embargo.
 type authRecycleCoordination struct {
-	ready     func(persist.Meta) bool
-	cliUnsafe func(local string) bool
-	restore   func(local string)
-	clear     func(local string)
-	fresh     func(local string, attempt func() error) error
-	claimed   func(local string, attempt func() error) error
-	resume    func(local string, attempt func() bool) (attempted, retry bool)
+	managedInit func(*authWatcher)
+	ready       func(persist.Meta) bool
+	cliUnsafe   func(local string) bool
+	restore     func(local string)
+	clear       func(local string)
+	fresh       func(local string, attempt func() error) error
+	claimed     func(local string, attempt func() error) error
+	resume      func(local string, attempt func() bool) (attempted, retry bool)
 }
 
 // authWatcher is the component. Every action goes through an injected seam
 // (production: the coreAPI's Kill/Launch/Delete and the core's roster; fakes in
 // tests), so the sweep logic is unit-testable with no daemon and no socket.
 type authWatcher struct {
+	accountRotation *accountRotationManager
+	managedOps      chan accountOwnerOperation
 	stateDir        string
 	endpointID      string
 	interval        time.Duration
@@ -335,7 +344,8 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 		now:             time.Now,
 		exitWait:        authRecycleExitWait, exitPoll: authRecycleExitPoll,
 		warned: map[string]bool{}, unconfirmedClaims: map[string]bool{},
-		stop: make(chan struct{}),
+		stop:       make(chan struct{}),
+		managedOps: make(chan accountOwnerOperation, 128),
 	}
 	w.cliObserve = func(local string) *persist.CLIIdentity {
 		return readCLIObservation(stateDir, local)
@@ -351,6 +361,9 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 	w.state, w.stateErr = loadAuthWatchStateChecked(stateDir)
 	if w.stateErr != nil {
 		log.Printf("authwatch: state unreadable; auth and CLI refresh are frozen: %v", w.stateErr)
+	}
+	if coord.managedInit != nil {
+		coord.managedInit(w)
 	}
 	// A durable claim is authority over the next terminal edge. Reconstruct its
 	// fail-closed input embargo synchronously, before the constructor returns and
@@ -389,6 +402,15 @@ func (w *authWatcher) authPending(agent, local string) bool {
 }
 
 func (w *authWatcher) sessionIdentityChanged(agent string, m persist.Meta) bool {
+	if m.AccountBinding != nil {
+		store, err := accounts.OpenReadOnly(w.stateDir)
+		if err != nil {
+			return true
+		}
+		defer func() { _ = store.Close() }()
+		identity, err := store.NativeIdentity(*m.AccountBinding)
+		return err != nil || identity != m.AccountBinding.Identity
+	}
 	if w.sessionIdentity == nil {
 		return false
 	}
@@ -428,11 +450,14 @@ func loadAuthWatchState(stateDir string) authWatchState {
 
 func loadAuthWatchStateChecked(stateDir string) (authWatchState, error) {
 	st := emptyAuthWatchState()
-	raw, err := os.ReadFile(filepath.Join(stateDir, authWatchStateFile))
+	raw, err := readAccountRecoveryFile(stateDir, authWatchStateFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return st, nil
 		}
+		return st, err
+	}
+	if err := rejectDuplicateJSONKeys(raw); err != nil {
 		return st, err
 	}
 	var loaded authWatchState
@@ -499,8 +524,15 @@ func (w *authWatcher) stopping() bool {
 
 func (w *authWatcher) run() {
 	defer w.wg.Done()
+	defer func() {
+		if w.accountRotation != nil {
+			w.accountRotation.closeAccessChecks()
+		}
+	}()
 	t := time.NewTicker(w.interval)
 	defer t.Stop()
+	managedTick := time.NewTicker(time.Second)
+	defer managedTick.Stop()
 	w.tick() // baseline + complete owed resumes promptly at daemon start
 	for {
 		select {
@@ -508,6 +540,15 @@ func (w *authWatcher) run() {
 			return
 		case <-t.C:
 			w.tick()
+		case op := <-w.managedOps:
+			err := op.apply(w)
+			if op.done != nil {
+				op.done <- err
+			}
+		case <-managedTick.C:
+			if w.stateErr == nil && w.accountRotation != nil {
+				w.accountRotation.step()
+			}
 		}
 	}
 }
@@ -519,6 +560,10 @@ func (w *authWatcher) tick() {
 		return
 	}
 	w.ensureStateMaps()
+	if w.accountRotation != nil {
+		w.accountRotation.checkIdentities()
+		w.accountRotation.step()
+	}
 	authDisabled := w.disabled()
 	for _, agent := range w.agents {
 		if w.stopping() {
@@ -607,7 +652,7 @@ func (w *authWatcher) tickAgent(agent string, discover bool) {
 		// of this agent not launched under the new identity, EMPTY STAMPS
 		// INCLUDED (a pre-ADR-024 launch predates the change by construction).
 		for _, m := range w.list() {
-			if !m.RosterHidden && m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != id {
+			if m.AccountBinding == nil && !m.RosterHidden && m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != id {
 				w.addPending(agent, m.ID)
 			}
 		}
@@ -619,7 +664,7 @@ func (w *authWatcher) tickAgent(agent string, discover bool) {
 	// left stamps disagreeing with the current identity): sweep them in too.
 	if discover {
 		for _, m := range w.list() {
-			if !m.RosterHidden && m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != "" && m.AuthIdentity != id {
+			if m.AccountBinding == nil && !m.RosterHidden && m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != "" && m.AuthIdentity != id {
 				dirty = w.addPending(agent, m.ID) || dirty
 			}
 		}
@@ -697,6 +742,9 @@ func (w *authWatcher) workPending(agent, id string, allowKill ...bool) {
 		}
 		m, ok := w.get(local)
 		switch {
+		case m.AccountBinding != nil:
+			// Old unmanaged pending sets cannot claim a managed private profile.
+			w.forget(local)
 		case !ok:
 			// Deleted entirely -- nothing left to resume.
 			w.forget(local)
@@ -1104,4 +1152,62 @@ func syncAuthWatchStateDir(dir string) error {
 	}
 	defer func() { _ = handle.Close() }()
 	return handle.Sync()
+}
+
+func readAccountRecoveryFile(stateDir, name string) ([]byte, error) {
+	root, err := openAccountRecoveryRoot(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	f, err := historyOpenFile(root, name)
+	if err != nil {
+		if _, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) {
+			return nil, os.ErrNotExist
+		}
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || info.Mode().Perm()&0o077 != 0 {
+		return nil, accounts.ErrUnsafePath
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, 8<<20+1))
+	if err != nil || len(raw) > 8<<20 {
+		return nil, accounts.ErrUnsafePath
+	}
+	return raw, nil
+}
+
+// An absent first-run directory is distinct from an unsafe existing path. Walk
+// from an anchored filesystem root so ENOENT behind a symlink is never accepted
+// as an empty recovery journal, and never create directories for a report.
+func openAccountRecoveryRoot(stateDir string) (*os.Root, error) {
+	abs, err := filepath.Abs(stateDir)
+	if err != nil {
+		return nil, accounts.ErrUnsafePath
+	}
+	root, err := os.OpenRoot(string(filepath.Separator))
+	if err != nil {
+		return nil, accounts.ErrUnsafePath
+	}
+	for _, component := range strings.Split(strings.TrimPrefix(abs, string(filepath.Separator)), string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		if _, err := root.Lstat(component); err != nil {
+			_ = root.Close()
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, os.ErrNotExist
+			}
+			return nil, accounts.ErrUnsafePath
+		}
+		child, err := historyOpenDir(root, component, false)
+		_ = root.Close()
+		if err != nil {
+			return nil, accounts.ErrUnsafePath
+		}
+		root = child
+	}
+	return root, nil
 }

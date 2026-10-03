@@ -58,6 +58,7 @@ const backendPollInterval = 25 * time.Millisecond
 // PRE-R7 SESSION, byte-for-byte: no file written, no timeout waited, no handshake expected.
 // It is HookSocketPath's exact unset-means-disabled convention.
 type BackendConfig struct {
+	Cwd string // optional managed provider cwd; empty retains the legacy session dir
 	// Program is the backend executable, ALREADY RESOLVED to an absolute path by the core
 	// (the adapter NAMES a program, adapter.ResolveBackend LookPaths it). It is exec'd
 	// DIRECTLY, never through a shell -- obligation 9b, and the rule this package already
@@ -137,6 +138,9 @@ func startBackend(cfg *BackendConfig, sessionDir string) (*backendProc, error) {
 		// recorded that one `codex app-server` is TWO pids (a node launcher plus the vendored
 		// rust binary), so the group is what reaps both.
 		SysProcAttr: &syscall.SysProcAttr{Setpgid: true},
+	}
+	if cfg.Cwd != "" {
+		cmd.Dir = cfg.Cwd
 	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("shim: start backend: %w", err)

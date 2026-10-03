@@ -110,6 +110,9 @@ func (w *authWatcher) ensureStateMaps() {
 }
 
 func validateAuthWatchState(st authWatchState) error {
+	if err := validateAccountRecoveryState(st); err != nil {
+		return err
+	}
 	for agent, sources := range st.Pending {
 		if agent == "" {
 			return fmt.Errorf("authwatch: pending set has an empty provider")

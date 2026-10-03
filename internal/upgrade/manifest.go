@@ -22,20 +22,27 @@ import (
 // checksum that covers the archive covers it too -- signed compatibility
 // metadata, not a hidden verb (committee: codex finding 1).
 type CompatManifest struct {
-	Version  string `json:"version"`  // the release tag
-	Shimwire int    `json:"shimwire"` // internal/shimwire.Version
-	Protocol int    `json:"protocol"` // internal/protocol.Version
-	Schema   int    `json:"schema"`   // internal/persist.SchemaVersion
+	AccountSchema   int    `json:"account_schema"`
+	AccountJobs     int    `json:"account_jobs"`
+	AccountRecovery int    `json:"account_recovery"`
+	AccountWorker   int    `json:"account_worker"`
+	AccountShim     int    `json:"account_shim"`
+	AccountConfig   int    `json:"account_config"`
+	Version         string `json:"version"`  // the release tag
+	Shimwire        int    `json:"shimwire"` // internal/shimwire.Version
+	Protocol        int    `json:"protocol"` // internal/protocol.Version
+	Schema          int    `json:"schema"`   // internal/persist.SchemaVersion
 }
 
 // CurrentManifest is THIS build's card -- what the emitter writes at release,
 // and what activation compares a staged card against for the axes that gate.
 func CurrentManifest(tag string) CompatManifest {
 	return CompatManifest{
-		Version:  tag,
-		Shimwire: shimwire.Version,
-		Protocol: protocol.Version,
-		Schema:   persist.SchemaVersion,
+		Version:       tag,
+		Shimwire:      shimwire.Version,
+		Protocol:      protocol.Version,
+		Schema:        persist.ManagedSchemaVersion,
+		AccountSchema: 1, AccountJobs: 1, AccountRecovery: 1, AccountWorker: 1, AccountShim: 1, AccountConfig: 1,
 	}
 }
 

@@ -39,6 +39,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/shim"
 )
@@ -83,11 +84,36 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 		log.Printf("skeleton: hook callback sequence %d for session %s was already ingested; dropped as a redelivery", cb.Sequence, cb.SessionID)
 		return fmt.Errorf("skeleton: hook callback sequence %d already ingested for session %s", cb.Sequence, cb.SessionID)
 	}
-	if err := d.eng.HandleCallback(cb); err != nil {
+	statusCallback := cb
+	if d.accountRotation != nil && cb.Event == "StopFailure" {
+		if meta, ok := d.core.Get(cb.SessionID); ok && meta.AccountBinding != nil && meta.AgentType == "claude" {
+			var body struct {
+				AgentID   string `json:"agent_id"`
+				SessionID string `json:"session_id"`
+				Error     string `json:"error"`
+			}
+			if rejectDuplicateJSONKeys(cb.Raw) == nil && json.Unmarshal(cb.Raw, &body) == nil && body.SessionID == meta.ConversationID && body.AgentID == "" && (body.Error == "rate_limit" || body.Error == "authentication_failed") {
+				statusCallback.Event = "Stop"
+				statusCallback.Payload = map[string]string{engine.PayloadKeyTurn: "idle"}
+			}
+		}
+	}
+	if err := d.eng.HandleCallback(statusCallback); err != nil {
 		log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
 		return err
 	}
 	d.serveHookInteractions(cb)
+	if d.accountRotation != nil {
+		if cb.Event == "SessionStart" {
+			d.accountRotation.NoteConversation(cb.SessionID, cb.Payload["session_id"], cb.Raw, cb.Sequence)
+		}
+		if cb.Event == "StopFailure" {
+			d.accountRotation.NoteClaudeFailure(cb)
+		}
+		if cb.Event == "UserPromptSubmit" || cb.Event == "Stop" {
+			d.accountRotation.NoteClaudeTurn(cb)
+		}
+	}
 	d.markHookSeqIngested(cb.SessionID, cb.Sequence)
 	return nil
 }

@@ -1,0 +1,78 @@
+{
+  "recorded_at": "2026-10-03",
+  "commands_use_private_synthetic_homes": true,
+  "auth_or_model_requests": false,
+  "codex": {
+    "version": "0.160.0",
+    "terminal_options": [
+      "--config",
+      "--profile"
+    ],
+    "backend_options": [
+      "--config",
+      "--strict-config"
+    ],
+    "resume_config_after_prompt_help_parser_gate": "passed",
+    "supported_settings": [
+      "model",
+      "model_reasoning_effort",
+      "model_reasoning_summary",
+      "approval_policy",
+      "sandbox_mode",
+      "personality",
+      "model_context_window",
+      "model_auto_compact_token_limit",
+      "check_for_update_on_startup",
+      "sandbox_workspace_write.network_access",
+      "sandbox_workspace_write.exclude_tmpdir_env_var",
+      "sandbox_workspace_write.exclude_slash_tmp",
+      "cli_auth_credentials_store=file"
+    ],
+    "resume_invocation_only_override": "check_for_update_on_startup=false preserves the original projection ref"
+  },
+  "claude": {
+    "version": "2.1.288",
+    "options": [
+      "--settings",
+      "--setting-sources",
+      "--strict-mcp-config"
+    ],
+    "supported_settings": [
+      "model",
+      "effortLevel",
+      "language",
+      "permissions.allow",
+      "permissions.deny",
+      "permissions.ask",
+      "Swarm-generated launch hooks including SessionStart and StopFailure observers"
+    ]
+  },
+  "unsupported_sources": [
+    "managed policy",
+    "project native settings",
+    "named/federated profile selectors",
+    "Claude ambient HOME/XDG Anthropic OAuth profile stores",
+    "cloud/gateway selectors",
+    "arbitrary executable hooks",
+    "unrecognized settings"
+  ],
+  "cohort_preservation": [
+    "native skills",
+    "native rules/hooks/customization files",
+    "Claude selected-project trust and MCP configuration"
+  ],
+  "source_profile_aliases": "Original ambient profiles may use owned symlink aliases to a canonical owner-controlled directory; alias targets and identities are revalidated. Bound account profiles and source files reject symlinks.",
+  "claude_availability_check_gate": "Linux-only, personal native OAuth identity/version required by caller, private selected profile and empty scratch directory, no custom or managed policy/cache sources, exact model without fallback, safe mode plus empty settings/tools/MCP and disabled skills. This gate reads configuration only; a live model request is separate.",
+  "claude_availability_runtime_history": "Private native projects directories with inert transcript JSONL and sessions-index.json data are allowed without opening content: at most 4096 entries, eight nested path separators, 64 MiB per file and 512 MiB total. Unknown, executable, writable-by-others, special or symlink artifacts refuse. This is not a broad native cache allowlist.",
+  "claude_availability_metadata_backups": "Pinned 2.1.288 static global-config readers Kc/Qc only print manual cp restoration suggestions for backups; they never parse them as fallback. Writer ll retains five .claude.json.backup.<epoch-ms> files. Permit only that inventory with owner-private non-executable regular files, no hardlinks/symlinks, at most 1 MiB each. Native 0775 backup directories remain confined by an owner-private 0700 profile; the gate never reads backup content or rewrites permissions. Characterization used public installed executable bytes and parent-reported auth-status artifact metadata; no model request.",
+  "claude_remote_policy_gate": "Pinned native remote eligibility excludes known personal native OAuth pro/max plans unless profile-store or API-key authentication activates another route. Caller verifies the current personal plan; environment and profile inventory reject alternate sources. The public native remote-path override function is a no-op and is not used.",
+  "remaining_release_gate": "Live native effective model, permissions, hooks, MCP, skills and trust precedence and native config rewrite acceptance; help parsing does not prove those behaviors.",
+  "references": [
+    "https://developers.openai.com/codex/config-basic",
+    "https://developers.openai.com/codex/config-reference",
+    "https://code.claude.com/docs/en/settings",
+    "https://code.claude.com/docs/en/cli-reference",
+    "https://code.claude.com/docs/en/env-vars",
+    "https://code.claude.com/docs/en/server-managed-settings"
+  ]
+}

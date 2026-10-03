@@ -246,6 +246,7 @@ var serverCaps = []string{
 	CapRemoteGateway, CapJournal, CapJournalSubscribeFrom, CapActivity, CapPolicy, CapPairing,
 	CapExternalResume, CapHandsOffHandoff,
 	CapContextGuardSettings,
+	CapAccountsManage,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1316,6 +1317,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleContextGuardGet()
 	case OpContextGuardSet:
 		cc.handleContextGuardSet(c)
+	case OpAccountsManage:
+		cc.handleAccounts(c)
 	case OpTakeControl:
 		cc.handleTakeControl(c)
 	case OpTakeControlEnd:
@@ -1391,6 +1394,10 @@ func (cc *clientConn) handleHello(c Control) {
 	// or body checks, but its hello must not suggest the operation exists for it.
 	if cc.srv.remoteTier {
 		cc.caps = withoutCap(cc.caps, CapContextGuardSettings)
+		cc.caps = withoutCap(cc.caps, CapAccountsManage)
+	}
+	if _, ok := cc.srv.d.(AccountsBackend); !ok {
+		cc.caps = withoutCap(cc.caps, CapAccountsManage)
 	}
 	cc.helloed = true
 	_ = cc.writeControl(Control{
