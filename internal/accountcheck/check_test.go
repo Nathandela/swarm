@@ -90,7 +90,7 @@ func checkFixture(t *testing.T, mode, checkMode string) (string, Config, string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	candidate, err := store.CreateCandidate(accounts.ProviderClaude, accounts.KindNative)
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func fixtureWritersStopped(t *testing.T, stateRoot string, binding accounts.Bind
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	return writersStopped(root, binding)
 }
 
@@ -265,7 +265,7 @@ func TestOwnedCheckRejectsAliasedOrNonemptyAdmissionLock(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer root.Close()
+			defer func() { _ = root.Close() }()
 			key := sha256.Sum256([]byte(cfg.Binding.Provider + ":" + cfg.Binding.AccountID + ":" + fmt.Sprint(cfg.Binding.CredentialGeneration)))
 			path := filepath.Join(cfg.StateRoot, "accounts", "checks", ".lock-"+hex.EncodeToString(key[:]))
 			target := filepath.Join(fixture, "lock-target")

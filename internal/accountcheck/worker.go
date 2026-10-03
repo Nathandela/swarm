@@ -43,12 +43,12 @@ func RunWorker(ctx context.Context, path string, input io.Reader, output io.Writ
 	if err != nil {
 		return err
 	}
-	defer checks.Close()
+	defer func() { _ = checks.Close() }()
 	files, err := openGeneration(checks, filepath.Base(path))
 	if err != nil {
 		return err
 	}
-	defer files.Close()
+	defer func() { _ = files.Close() }()
 	var ref Ref
 	// The parent writes this durable ref before sending any admission bytes.
 	// A rejected admission closes stdin; the same cleanup then proves no exec.
@@ -123,19 +123,20 @@ func RunWorker(ctx context.Context, path string, input io.Reader, output io.Writ
 	env = isolatedEnvironment(env)
 	args := []string{"auth", "status", "--json"}
 	nativeCwd := cfg.Cwd
-	if cfg.Mode == ModeAvailability {
+	switch cfg.Mode {
+	case ModeAvailability:
 		args, err = AvailabilityArguments(cfg.Model)
 		if err != nil {
 			return err
 		}
-	} else if cfg.Mode == ModeAuthStatus {
+	case ModeAuthStatus:
 		// Auth-status runs in a private empty context too. The discussion's project
 		// cannot contribute hooks, settings, MCP or runtime loader policy to it.
 		if err := files.Mkdir("native-cwd", 0o700); err != nil {
 			return ErrUnavailable
 		}
 		nativeCwd = filepath.Join(path, "native-cwd")
-	} else {
+	default:
 		return ErrUnavailable
 	}
 	store, err = accounts.Open(cfg.StateRoot)

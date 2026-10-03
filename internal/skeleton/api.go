@@ -1086,6 +1086,22 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		if existing, ok := runningConversation(a.core.List(), source); ok {
 			return existing, nil
 		}
+		if source.AccountBinding != nil {
+			if a.accounts == nil || a.accounts.store == nil || a.accounts.unavailable != nil || a.accounts.stateRoot == "" {
+				return persist.Meta{}, errAccountLaunch
+			}
+			// Retained attempts can still own profile writers after a later
+			// attempt stopped cleanly. Check the whole bound conversation while
+			// the same fence prevents another owner resume from racing spawn.
+			for _, attempt := range a.core.List() {
+				if attempt.AccountBinding == nil || attempt.AgentType != source.AgentType || (attempt.ID != source.ID && (source.ConversationID == "" || attempt.ConversationID != source.ConversationID)) {
+					continue
+				}
+				if err := verifyAccountWritersStopped(a.accounts.stateRoot, attempt); err != nil {
+					return persist.Meta{}, fmt.Errorf("resume: managed native writer death is unconfirmed for %q: %w", attempt.ID, err)
+				}
+			}
+		}
 	}
 	// ADR-024: stamp the account identity of the credentials this agent will load,
 	// resolved at the same moment as the argv and the env above -- this is the one
