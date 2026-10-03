@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/processcontain"
 	"github.com/Nathandela/swarm/internal/procstart"
 )
 
@@ -57,18 +58,7 @@ type Config struct {
 	Deadline                   time.Time `json:"deadline"`
 }
 
-type ProcessIdentity struct {
-	PID       int   `json:"pid"`
-	StartTime int64 `json:"start_time"`
-}
-
-func (p ProcessIdentity) Alive() bool {
-	if p.PID <= 0 || p.StartTime <= 0 {
-		return false
-	}
-	start, err := procstart.StartTime(p.PID)
-	return err == nil && start == p.StartTime && processRunning(p.PID)
-}
+type ProcessIdentity = processcontain.Identity
 
 type Ref struct {
 	StateRoot  string

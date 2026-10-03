@@ -107,8 +107,9 @@ func ReadBackendInfo(sessionDir string) (BackendInfo, bool) {
 
 // backendProc is one running backend, from the shim's side.
 type backendProc struct {
-	cmd  *exec.Cmd
-	pgid int
+	cmd       *exec.Cmd
+	pgid      int
+	startTime int64
 	// dead is CLOSED by the dedicated Wait goroutine once the backend is reaped, and
 	// exitCode is written before the close. A closed channel rather than a value channel so
 	// every observer -- the readiness poll, Run's own die-first edge, and the final join --
@@ -145,7 +146,8 @@ func startBackend(cfg *BackendConfig, sessionDir string) (*backendProc, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("shim: start backend: %w", err)
 	}
-	b := &backendProc{cmd: cmd, pgid: cmd.Process.Pid, dead: make(chan struct{})}
+	start, _ := procstart.StartTime(cmd.Process.Pid)
+	b := &backendProc{cmd: cmd, pgid: cmd.Process.Pid, startTime: start, dead: make(chan struct{})}
 	go func() {
 		err := cmd.Wait()
 		b.exitCode, _ = interpretExit(err)
@@ -180,14 +182,22 @@ func startBackend(cfg *BackendConfig, sessionDir string) (*backendProc, error) {
 // (leaving a record that names the pid this function just killed), and a prior incarnation
 // can leave a stale one; either would send the next daemon reconcile chasing a pid that is
 // not this session's backend.
-func containBackendFailure(b *backendProc, sessionDir string, grace time.Duration) {
+func containBackendFailure(b *backendProc, sessionDir string, grace time.Duration, managed bool) {
 	if b != nil {
-		_ = syscall.Kill(-b.pgid, syscall.SIGTERM)
+		if managed {
+			signalManagedDescendants(syscall.SIGTERM)
+		} else {
+			_ = syscall.Kill(-b.pgid, syscall.SIGTERM)
+		}
 		select {
 		case <-b.dead:
 		case <-time.After(grace):
 		}
-		_ = syscall.Kill(-b.pgid, syscall.SIGKILL)
+		if managed {
+			signalManagedDescendants(syscall.SIGKILL)
+		} else {
+			_ = syscall.Kill(-b.pgid, syscall.SIGKILL)
+		}
 		<-b.dead
 	}
 	_ = os.Remove(filepath.Join(sessionDir, BackendFile))

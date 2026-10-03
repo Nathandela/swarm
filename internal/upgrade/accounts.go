@@ -1,6 +1,7 @@
 package upgrade
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,12 +11,18 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Nathandela/swarm/internal/accountcheck"
 	"github.com/Nathandela/swarm/internal/accounts"
+	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shim"
 )
 
 // accountStateGuard covers non-session state too: an enrollment-only machine
 // can have credential writers even when maxPersistedSchema finds zero metas.
 func accountStateGuard(stateRoot string, card CompatManifest) error {
+	if err := accountObservationHoldGuard(stateRoot, card); err != nil {
+		return err
+	}
 	if err := accountRecoveryGuard(stateRoot, card); err != nil {
 		return err
 	}
@@ -56,7 +63,7 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 		return errors.New("account registry cannot be verified")
 	}
 	if len(reg.Accounts) > 0 {
-		if card.AccountSchema < reg.SchemaVersion || card.AccountShim < 1 || card.AccountConfig < 1 {
+		if card.AccountSchema < reg.SchemaVersion || card.AccountShim < shim.ManagedWriterSchemaVersion || card.AccountConfig < 1 {
 			return errors.New("the target build cannot preserve private account bindings and configuration")
 		}
 	}
@@ -73,6 +80,12 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 		}
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return errors.New("account enrollment state cannot be verified")
+	}
+	if err := accountInboxGuard(root, card); err != nil {
+		return err
+	}
+	if err := accountCheckGuard(root, card); err != nil {
+		return err
 	}
 	// Candidate workers have separate files, which cannot be hidden by an empty registry.
 	jobsPath := filepath.Join(accountPath, "jobs")
@@ -111,6 +124,144 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 	return nil
 }
 
+// A failed native event admission can leave only a per-session hold. It is
+// independent of both the account registry and the recovery journal.
+func accountObservationHoldGuard(stateRoot string, card CompatManifest) error {
+	root, err := os.OpenRoot(stateRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return errors.New("account observation holds cannot be verified")
+	}
+	defer func() { _ = root.Close() }()
+	f, err := root.Open(".")
+	if err != nil {
+		return errors.New("account observation holds cannot be verified")
+	}
+	entries, err := f.ReadDir(-1)
+	_ = f.Close()
+	if err != nil {
+		return errors.New("account observation holds cannot be verified")
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !persist.ValidID(entry.Name()) {
+			continue
+		}
+		name := filepath.Join(entry.Name(), "account-observation-hold.json")
+		if _, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return errors.New("account observation holds cannot be verified")
+		}
+		info, err := root.Lstat(entry.Name())
+		if err != nil || !privateAccountInfo(info, true) {
+			return errors.New("account observation holds cannot be verified")
+		}
+		data, err := readAccountDocument(root, name)
+		var hold struct {
+			SchemaVersion int    `json:"schema_version"`
+			Kind          string `json:"kind"`
+			Local         string `json:"local"`
+		}
+		if err != nil || json.Unmarshal(data, &hold) != nil || hold.SchemaVersion != 1 || hold.Kind != "hold" || hold.Local != entry.Name() {
+			return errors.New("account observation holds cannot be verified")
+		}
+		if card.AccountRecovery < accounts.RecoverySchemaVersion {
+			return errors.New("the target build cannot preserve account observation holds")
+		}
+	}
+	return nil
+}
+
+// Pending input and detached checks can precede the first recovery journal.
+// Inventory them independently, so an empty registry or legacy journal cannot
+// conceal a required recovery or containment capability during rollback.
+func accountInboxGuard(root *os.Root, card CompatManifest) error {
+	dir, entries, err := openAccountInventory(root, "recovery-inbox")
+	if err != nil || dir == nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	for _, entry := range entries {
+		data, err := readAccountDocument(dir, entry.Name())
+		var event struct {
+			SchemaVersion int `json:"schema_version"`
+		}
+		if err != nil || json.Unmarshal(data, &event) != nil || event.SchemaVersion != 1 {
+			return errors.New("account recovery inbox cannot be verified")
+		}
+		if card.AccountRecovery < accounts.RecoverySchemaVersion {
+			return errors.New("the target build cannot preserve pending account recovery events")
+		}
+	}
+	return nil
+}
+
+func accountCheckGuard(root *os.Root, card CompatManifest) error {
+	dir, entries, err := openAccountInventory(root, "checks")
+	if err != nil || dir == nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	for _, entry := range entries {
+		info, err := dir.Lstat(entry.Name())
+		if strings.HasPrefix(entry.Name(), ".lock-") {
+			digest := strings.TrimPrefix(entry.Name(), ".lock-")
+			raw, decodeErr := hex.DecodeString(digest)
+			if err != nil || decodeErr != nil || len(raw) != 32 || digest != strings.ToLower(digest) || !privateAccountInfo(info, false) || info.Size() != 0 {
+				return errors.New("account check lock inventory cannot be verified")
+			}
+			continue
+		}
+		if err != nil || !privateAccountInfo(info, true) {
+			return errors.New("account check inventory cannot be verified")
+		}
+		if card.AccountWorker < accountcheck.SchemaVersion {
+			return errors.New("the target build cannot contain persisted account checks")
+		}
+		check, err := dir.OpenRoot(entry.Name())
+		if err != nil {
+			return errors.New("account check inventory cannot be verified")
+		}
+		data, readErr := readAccountDocument(check, "worker.json")
+		_ = check.Close()
+		var worker struct {
+			SchemaVersion int `json:"schema_version"`
+		}
+		if readErr != nil || json.Unmarshal(data, &worker) != nil || worker.SchemaVersion != accountcheck.SchemaVersion {
+			return errors.New("account check custody cannot be verified")
+		}
+	}
+	return nil
+}
+
+func openAccountInventory(root *os.Root, name string) (*os.Root, []os.DirEntry, error) {
+	info, err := root.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil || !privateAccountInfo(info, true) {
+		return nil, nil, errors.New("account inventory cannot be verified")
+	}
+	dir, err := root.OpenRoot(name)
+	if err != nil {
+		return nil, nil, errors.New("account inventory cannot be verified")
+	}
+	f, err := dir.Open(".")
+	if err != nil {
+		_ = dir.Close()
+		return nil, nil, errors.New("account inventory cannot be verified")
+	}
+	entries, err := f.ReadDir(4097)
+	_ = f.Close()
+	if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > 4096 {
+		_ = dir.Close()
+		return nil, nil, errors.New("account inventory cannot be verified")
+	}
+	return dir, entries, nil
+}
+
 func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 	data, err := readPlainAccountDocument(filepath.Join(stateRoot, "auth-watch-state.json"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -133,7 +284,7 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 			hasManaged = true
 		}
 	}
-	if schema > 1 || (hasManaged && (schema != 1 || card.AccountRecovery < schema || card.AccountShim < 1)) {
+	if schema < 0 || schema > accounts.RecoverySchemaVersion || card.AccountRecovery < schema || (hasManaged && (schema < 1 || card.AccountRecovery < accounts.RecoverySchemaVersion || card.AccountShim < shim.ManagedWriterSchemaVersion)) {
 		return errors.New("the target build cannot reconcile managed account recovery")
 	}
 	return nil
