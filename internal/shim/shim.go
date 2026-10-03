@@ -132,6 +132,14 @@ func Run(cfg Config) (agentExit int, err error) {
 		return 0, err
 	}
 
+	managed, err := beginManagedNativeScope(cfg)
+	if err != nil {
+		return 0, err
+	}
+	// Every direct child's Wait is joined on each return path before this runs.
+	// The durable proof is emitted after all remaining adopted children are reaped.
+	defer func() { err = errors.Join(err, managed.finish()) }()
+
 	embargo, err := openAccountEmbargo(cfg)
 	if err != nil {
 		return 0, err
@@ -250,6 +258,7 @@ func Run(cfg Config) (agentExit int, err error) {
 			return 0, fmt.Errorf("shim: start agent: %w", startErr)
 		}
 		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, cmd.Process.Pid, cfg.GraceTimeout, cfg.Metrics)
+		srv.managedSignals = managed != nil
 		srv.ptyIn.embargo = embargo
 		replies = wireReplies(emu, srv)
 		startPlanes()
@@ -271,6 +280,7 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 		_ = setWinsize(ptmx, ws)
 		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, 0, cfg.GraceTimeout, cfg.Metrics)
+		srv.managedSignals = managed != nil
 		srv.ptyIn.embargo = embargo
 		replies = wireReplies(emu, srv)
 		startPlanes()
@@ -295,7 +305,7 @@ func Run(cfg Config) (agentExit int, err error) {
 				// find (containBackendFailure says why). setBackendPgid(0) afterwards:
 				// the group is fully reaped, and re-KILLing that pgid at finalization
 				// -- possibly hours later -- could hit a recycled group.
-				containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout)
+				containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout, managed != nil)
 				srv.setBackendPgid(0)
 			}
 		} else if werr := writeBackendInfo(cfg.SessionDir, backend, cfg.Backend.SocketPath); werr != nil {
@@ -310,7 +320,7 @@ func Run(cfg Config) (agentExit int, err error) {
 			log.Printf("shim: record the session backend: %v; killing the unrecorded backend "+
 				"and launching the agent without it (a backend the daemon cannot identify "+
 				"must not survive this shim)", werr)
-			containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout)
+			containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout, managed != nil)
 			srv.setBackendPgid(0)
 		} else {
 			// SERVING AND RECORDED, so the session HAS a structured plane and its death
@@ -370,7 +380,7 @@ func Run(cfg Config) (agentExit int, err error) {
 		srv.setAgentPgid(cmd.Process.Pid)
 	}
 
-	nativeRecordErr := recordManagedNativeProcess(cfg, cmd.Process.Pid)
+	nativeRecordErr := managed.record(cmd.Process.Pid, backend)
 	if nativeRecordErr != nil {
 		srv.onSignal(shimwire.SigKill)
 	}

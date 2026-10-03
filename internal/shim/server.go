@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/Nathandela/swarm/internal/processcontain"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/submitframe"
 	"github.com/Nathandela/swarm/internal/transcript"
@@ -55,10 +56,11 @@ var testHookAfterPTYResize func()
 // the hub still couples the pipeline to at most one live subscriber (S10), so a
 // later attach supersedes an earlier one.
 type server struct {
-	hub          *hub
-	ptmx         *os.File
-	ptyIn        *ptyWriter // serialized writer to the PTY master (TDataIn + emulator replies)
-	graceTimeout time.Duration
+	hub            *hub
+	ptmx           *os.File
+	ptyIn          *ptyWriter // serialized writer to the PTY master (TDataIn + emulator replies)
+	graceTimeout   time.Duration
+	managedSignals bool // dedicated managed shim: PID-bound descendant signals
 
 	// pgidMu guards the two process groups this shim contains. The AGENT's group is known
 	// at construction on the ordinary path and only after the go-ahead on a backend
@@ -408,11 +410,27 @@ func (s *server) killGroups(sig syscall.Signal) {
 		s.pendingSig = sig // remembered for replay on a group created later; KILL is sticky
 	}
 	s.pgidMu.Unlock()
+	if s.managedSignals {
+		signalManagedDescendants(sig)
+		return
+	}
 	if agent > 0 {
 		_ = syscall.Kill(-agent, sig)
 	}
 	if backend > 0 && backend != agent {
 		_ = syscall.Kill(-backend, sig)
+	}
+}
+
+// Managed signals never address a recycled process group. Every signal binds
+// the current descendant identity with pidfd before checking creation time.
+func signalManagedDescendants(sig syscall.Signal) {
+	children, err := processcontain.Descendants(os.Getpid())
+	if err != nil {
+		return
+	} // final cleanup refuses its proof if custody is unknown
+	for _, child := range children {
+		_ = processcontain.SignalIdentity(child, sig)
 	}
 }
 
@@ -427,7 +445,11 @@ func (s *server) setAgentPgid(pgid int) {
 	replay := s.pendingSig
 	s.pgidMu.Unlock()
 	if replay != 0 && pgid > 0 {
-		_ = syscall.Kill(-pgid, replay)
+		if s.managedSignals {
+			signalManagedDescendants(replay)
+		} else {
+			_ = syscall.Kill(-pgid, replay)
+		}
 	}
 }
 
@@ -440,7 +462,11 @@ func (s *server) setBackendPgid(pgid int) {
 	replay := s.pendingSig
 	s.pgidMu.Unlock()
 	if replay != 0 && pgid > 0 {
-		_ = syscall.Kill(-pgid, replay)
+		if s.managedSignals {
+			signalManagedDescendants(replay)
+		} else {
+			_ = syscall.Kill(-pgid, replay)
+		}
 	}
 }
 

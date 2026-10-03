@@ -1,42 +1,26 @@
 package skeleton
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accountcheck"
 	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/processcontain"
 	"github.com/Nathandela/swarm/internal/procstart"
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
-type accountBoundedOutput struct {
-	bytes.Buffer
-	maximum int
-}
-
-func (b *accountBoundedOutput) Write(p []byte) (int, error) {
-	if len(p) > b.maximum-b.Len() {
-		return 0, errAccountAvailabilityUnsafe
-	}
-	return b.Buffer.Write(p)
-}
-
 func isolatedAccountArguments(model string) ([]string, error) {
-	if model == "" || len(model) > 128 || strings.ContainsAny(model, "\x00\r\n\t ") {
-		return nil, accounts.ErrIneligible
-	}
-	return []string{"--safe-mode", "--setting-sources", "", "--settings", "{}", "--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--disable-slash-commands", "--no-session-persistence", "--output-format", "json", "--max-turns", "1", "--model", model, "--system-prompt", "Reply OK. Use no tools.", "-p", "Reply OK."}, nil
+	return accountcheck.AvailabilityArguments(model)
 }
 
 func isolatedAccountEnvironment(env []string) []string {
@@ -149,7 +133,7 @@ func (m *accountRotationManager) RetryAvailability(accountID string) error {
 			if start, err := procstart.StartTime(previous.WorkerPID); err == nil && start == previous.WorkerStartTime {
 				return accounts.ErrInUse
 			}
-			if syscall.Kill(-previous.WorkerPGID, 0) != syscall.ESRCH {
+			if !accountcheck.CustodyStopped(w.stateDir, processcontain.Identity{PID: previous.WorkerPID, StartTime: previous.WorkerStartTime}, previous.Stamp.Binding) {
 				return errAccountAvailabilityUnsafe
 			}
 		}
@@ -199,6 +183,11 @@ func (m *accountRotationManager) RetryAvailability(accountID string) error {
 		defer cancel()
 		defer func() { m.accessMu.Lock(); delete(m.accessCancel, permit.OperationID); m.accessMu.Unlock() }()
 		success, checkErr := m.accessCheck(ctx, source, permit)
+		// No crash/timeout without custody proof may clear the spent admission.
+		// The next owner retry must still reconcile the exact worker incarnation.
+		if errors.Is(checkErr, accountcheck.ErrCustodyUnknown) {
+			return
+		}
 		_ = m.submit(func(w *authWatcher) error {
 			current, ok := w.state.AccountHalfOpen[accountID]
 			if !ok || current.OperationID != permit.OperationID {
@@ -247,119 +236,28 @@ func (m *accountRotationManager) nativeAccessCheck(ctx context.Context, source p
 	if err = accountconfig.ValidateAvailabilityCheck(m.w.stateDir, profile, source.Cwd, isolatedAccountEnvironment(env)); err != nil {
 		return false, errAccountAvailabilityUnsafe
 	}
-	if !m.claudeAuthStatus(ctx, source, env) {
+	admit := func(ref accountcheck.Ref) error { return m.admitAccountCheck(source, permit, profile, env, ref) }
+	authenticated, err := m.claudeAuthStatusCheck(ctx, source, env, admit)
+	if err != nil {
+		return false, err
+	}
+	if !authenticated {
 		return false, accounts.ErrInvalidCredentials
 	}
-	if err = accountconfig.ValidateAvailabilityCheck(m.w.stateDir, profile, source.Cwd, isolatedAccountEnvironment(env)); err != nil {
+	if accountconfig.ValidateAvailabilityCheck(m.w.stateDir, profile, source.Cwd, isolatedAccountEnvironment(env)) != nil {
 		return false, errAccountAvailabilityUnsafe
 	}
-	args, err := isolatedAccountArguments(permit.Model)
-	if err != nil {
+	if _, err := isolatedAccountArguments(permit.Model); err != nil {
 		return false, err
 	}
-	scratch := source.Cwd
-	gateReader, gateWriter, err := os.Pipe()
-	if err != nil {
+	if m.checkExecutable() == "" {
+		return false, errAccountAvailabilityUnsafe
+	}
+	raw, err := accountcheck.Run(ctx, m.checkExecutable(), accountcheck.Config{StateRoot: m.w.stateDir, Binding: permit.Stamp.Binding, CLI: *source.CLIIdentity, Mode: accountcheck.ModeAvailability, Model: permit.Model, Cwd: source.Cwd, Env: env, Deadline: permit.Deadline}, admit)
+	if errors.Is(err, accountcheck.ErrCustodyUnknown) {
 		return false, err
 	}
-	defer func() { _ = gateReader.Close(); _ = gateWriter.Close() }()
-	// The small fixed launcher blocks before native exec. Its PID/start/group are
-	// durably recorded while the admission pipe is closed to model execution.
-	launcher := `IFS= read -r swarm_access_gate <&3 || exit 125; [ "$swarm_access_gate" = start ] || exit 125; exec "$@"`
-	launcherArgs := append([]string{"-c", launcher, "swarm-account-access", source.CLIIdentity.Path}, args...)
-	cmd := exec.CommandContext(ctx, "/bin/sh", launcherArgs...)
-	cmd.ExtraFiles = []*os.File{gateReader}
-	cmd.Dir = scratch
-	cmd.Env = isolatedAccountEnvironment(env)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = time.Second
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
-		return err
-	}
-	out := &accountBoundedOutput{maximum: 64 << 10}
-	cmd.Stdout = out
-	cmd.Stderr = &accountBoundedOutput{maximum: 32 << 10}
-	// Revalidate captured authority immediately before the one allowed exec.
-	registry, err := m.store.Snapshot()
-	if err != nil {
-		return false, err
-	}
-	quota := registry.Accounts[permit.Stamp.Binding.AccountID].Quota
-	for scope, revision := range permit.Stamp.DenialRevisions {
-		if quota.Scopes[scope].DenialRevision != revision {
-			return false, accounts.ErrIneligible
-		}
-	}
-	if m.store.ValidateBinding(permit.Stamp.Binding) != nil {
-		return false, accounts.ErrIneligible
-	}
-	if err = cmd.Start(); err != nil {
-		return false, errAccountAvailabilityUnsafe
-	}
-	start, startErr := procstart.StartTime(cmd.Process.Pid)
-	if startErr != nil {
-		_ = cmd.Cancel()
-		_ = cmd.Wait()
-		return false, errAccountAvailabilityUnsafe
-	}
-	err = m.submit(func(w *authWatcher) error {
-		current, ok := w.state.AccountHalfOpen[permit.Stamp.Binding.AccountID]
-		if !ok || current.OperationID != permit.OperationID {
-			return accounts.ErrIneligible
-		}
-		current.WorkerPID = cmd.Process.Pid
-		current.WorkerPGID = cmd.Process.Pid
-		current.WorkerStartTime = start
-		w.state.AccountHalfOpen[permit.Stamp.Binding.AccountID] = current
-		_, err := w.persistState()
-		return err
-	})
-	if err != nil {
-		_ = cmd.Cancel()
-		_ = cmd.Wait()
-		return false, errAccountAvailabilityUnsafe
-	}
-	registry, err = m.store.Snapshot()
-	if err != nil {
-		_ = cmd.Cancel()
-		_ = cmd.Wait()
-		return false, err
-	}
-	quota = registry.Accounts[permit.Stamp.Binding.AccountID].Quota
-	for scope, revision := range permit.Stamp.DenialRevisions {
-		if quota.Scopes[scope].DenialRevision != revision {
-			_ = cmd.Cancel()
-			_ = cmd.Wait()
-			return false, accounts.ErrIneligible
-		}
-	}
-	if m.store.ValidateBinding(permit.Stamp.Binding) != nil {
-		_ = cmd.Cancel()
-		_ = cmd.Wait()
-		return false, accounts.ErrIneligible
-	}
-	if err = accountconfig.ValidateAvailabilityCheck(m.w.stateDir, profile, source.Cwd, isolatedAccountEnvironment(env)); err != nil {
-		_ = cmd.Cancel()
-		_ = cmd.Wait()
-		return false, errAccountAvailabilityUnsafe
-	}
-	if _, err = gateWriter.Write([]byte("start\n")); err != nil {
-		_ = cmd.Cancel()
-		_ = cmd.Wait()
-		return false, errAccountAvailabilityUnsafe
-	}
-	_ = gateWriter.Close()
-	_ = gateReader.Close()
-	err = cmd.Wait()
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	if err != nil || rejectDuplicateJSONKeys(out.Bytes()) != nil {
+	if err != nil || rejectDuplicateJSONKeys(raw) != nil {
 		return false, accounts.ErrNoCapacity
 	}
 	var result struct {
@@ -368,7 +266,7 @@ func (m *accountRotationManager) nativeAccessCheck(ctx context.Context, source p
 		IsError    bool                       `json:"is_error"`
 		ModelUsage map[string]json.RawMessage `json:"modelUsage"`
 	}
-	if json.Unmarshal(out.Bytes(), &result) != nil || result.Type != "result" || result.Subtype != "success" || result.IsError || len(result.ModelUsage) != 1 {
+	if json.Unmarshal(raw, &result) != nil || result.Type != "result" || result.Subtype != "success" || result.IsError || len(result.ModelUsage) != 1 {
 		return false, accounts.ErrNoCapacity
 	}
 	if _, ok := result.ModelUsage[permit.Model]; !ok {
@@ -380,37 +278,68 @@ func (m *accountRotationManager) nativeAccessCheck(ctx context.Context, source p
 	return true, nil
 }
 
+func (m *accountRotationManager) checkExecutable() string {
+	if m.d == nil || m.d.accounts == nil {
+		return ""
+	}
+	return m.d.accounts.executable
+}
+
+func (m *accountRotationManager) admitAccountCheck(source persist.Meta, permit accounts.HalfOpenPermit, profile string, env []string, ref accountcheck.Ref) error {
+	registry, err := m.store.Snapshot()
+	if err != nil {
+		return err
+	}
+	quota := registry.Accounts[permit.Stamp.Binding.AccountID].Quota
+	for scope, revision := range permit.Stamp.DenialRevisions {
+		if quota.Scopes[scope].DenialRevision != revision {
+			return accounts.ErrIneligible
+		}
+	}
+	if m.store.ValidateBinding(permit.Stamp.Binding) != nil {
+		return accounts.ErrIneligible
+	}
+	if accountconfig.ValidateAvailabilityCheck(m.w.stateDir, profile, source.Cwd, isolatedAccountEnvironment(env)) != nil {
+		return errAccountAvailabilityUnsafe
+	}
+	return m.submit(func(w *authWatcher) error {
+		current, ok := w.state.AccountHalfOpen[permit.Stamp.Binding.AccountID]
+		if !ok || current.OperationID != permit.OperationID {
+			return accounts.ErrIneligible
+		}
+		current.WorkerPID, current.WorkerPGID, current.WorkerStartTime = ref.Worker.PID, ref.Worker.PID, ref.Worker.StartTime
+		w.state.AccountHalfOpen[permit.Stamp.Binding.AccountID] = current
+		_, err := w.persistState()
+		return err
+	})
+}
+
 func (m *accountRotationManager) claudeAuthStatus(ctx context.Context, source persist.Meta, env []string) bool {
-	if source.CLIIdentity == nil {
-		return false
+	ok, err := m.claudeAuthStatusCheck(ctx, source, env, nil)
+	return ok && err == nil
+}
+
+func (m *accountRotationManager) claudeAuthStatusCheck(ctx context.Context, source persist.Meta, env []string, admit func(accountcheck.Ref) error) (bool, error) {
+	if source.CLIIdentity == nil || source.AccountBinding == nil || m.w == nil || m.checkExecutable() == "" {
+		return false, errAccountAvailabilityUnsafe
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, source.CLIIdentity.Path, "auth", "status", "--json")
-	cmd.Env = isolatedAccountEnvironment(env)
-	cmd.Dir = source.Cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = time.Second
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
-		return err
+	deadline, _ := ctx.Deadline()
+	raw, err := accountcheck.Run(ctx, m.checkExecutable(), accountcheck.Config{StateRoot: m.w.stateDir, Binding: *source.AccountBinding, CLI: *source.CLIIdentity, Mode: accountcheck.ModeAuthStatus, Cwd: source.Cwd, Env: env, Deadline: deadline}, admit)
+	if err != nil {
+		return false, err
 	}
-	out := &accountBoundedOutput{maximum: 64 << 10}
-	cmd.Stdout = out
-	cmd.Stderr = &accountBoundedOutput{maximum: 16 << 10}
-	if cmd.Run() != nil {
-		return false
+	if rejectDuplicateJSONKeys(raw) != nil {
+		return false, errAccountAvailabilityUnsafe
 	}
 	var result struct {
 		LoggedIn     bool   `json:"loggedIn"`
 		AuthMethod   string `json:"authMethod"`
 		Subscription string `json:"subscriptionType"`
 	}
-	return json.Unmarshal(out.Bytes(), &result) == nil && result.LoggedIn && result.AuthMethod == "claude.ai" && (result.Subscription == "pro" || result.Subscription == "max")
+	if json.Unmarshal(raw, &result) != nil {
+		return false, errAccountAvailabilityUnsafe
+	}
+	return result.LoggedIn && result.AuthMethod == "claude.ai" && (result.Subscription == "pro" || result.Subscription == "max"), nil
 }

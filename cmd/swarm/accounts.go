@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/Nathandela/swarm/internal/accountcheck"
 	"github.com/Nathandela/swarm/internal/attach"
 	"github.com/Nathandela/swarm/internal/enrollment"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -11,6 +12,12 @@ import (
 )
 
 func runAccountEnrollment(args []string) int {
+	if len(args) == 2 && args[0] == "account-check" {
+		if accountcheck.RunWorker(context.Background(), args[1], os.Stdin, os.Stdout) != nil {
+			return 1
+		}
+		return 0
+	}
 	if len(args) != 2 || args[0] != "account-enroll" {
 		return 2
 	}
