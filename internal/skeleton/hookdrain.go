@@ -91,6 +91,7 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 	// status gate, so a full queue or crash cannot erase the account side effect.
 	if d.accountRotation != nil {
 		if err := d.eng.AuthenticateCallback(cb); err != nil {
+			log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
 			return err
 		}
 		var err error
