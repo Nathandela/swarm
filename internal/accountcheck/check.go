@@ -253,17 +253,8 @@ func CustodyStopped(stateRoot string, worker processcontain.Identity, binding ac
 	return false
 }
 
-// WritersStoppedForBinding covers every owned check sharing the retained
-// credential generation. It also refuses unreadable or malformed custody.
-func WritersStoppedForBinding(stateRoot string, binding accounts.Binding) bool {
-	root, err := openChecks(stateRoot)
-	if err != nil {
-		return false
-	}
-	defer root.Close()
-	return writersStopped(root, binding)
-}
-
+// writersStopped covers every owned check sharing the retained credential
+// generation and refuses unreadable or malformed custody.
 func writersStopped(root *os.Root, binding accounts.Binding) bool {
 	directory, err := root.Open(".")
 	if err != nil {

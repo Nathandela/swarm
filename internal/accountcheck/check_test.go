@@ -141,6 +141,16 @@ func checkFixture(t *testing.T, mode, checkMode string) (string, Config, string)
 	return exe, cfg, fixture
 }
 
+func fixtureWritersStopped(t *testing.T, stateRoot string, binding accounts.Binding) bool {
+	t.Helper()
+	root, err := openChecks(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	return writersStopped(root, binding)
+}
+
 func fixtureWriter(t *testing.T, fixture string) processcontain.Identity {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -173,7 +183,7 @@ func TestOwnedCheckContainsDetachedWriterBeforeSuccess(t *testing.T) {
 			if _, err := procstart.StartTime(child.PID); !os.IsNotExist(err) {
 				t.Fatal("proof/result published before detached writer was reaped")
 			}
-			if !CustodyStopped(cfg.StateRoot, ref.Worker, cfg.Binding) || !WritersStoppedForBinding(cfg.StateRoot, cfg.Binding) {
+			if !CustodyStopped(cfg.StateRoot, ref.Worker, cfg.Binding) || !fixtureWritersStopped(t, cfg.StateRoot, cfg.Binding) {
 				t.Fatal("exact clean custody proof unavailable")
 			}
 			wrong := ref.Worker
@@ -211,7 +221,7 @@ func TestOwnedAuthCheckCrashKeepsCustodyUnknownAndBlocksNextExec(t *testing.T) {
 	exe, cfg, _ := checkFixture(t, "crash", ModeAuthStatus)
 	var ref Ref
 	_, err := Run(context.Background(), exe, cfg, func(got Ref) error { ref = got; return nil })
-	if !errors.Is(err, ErrCustodyUnknown) || CustodyStopped(cfg.StateRoot, ref.Worker, cfg.Binding) || WritersStoppedForBinding(cfg.StateRoot, cfg.Binding) {
+	if !errors.Is(err, ErrCustodyUnknown) || CustodyStopped(cfg.StateRoot, ref.Worker, cfg.Binding) || fixtureWritersStopped(t, cfg.StateRoot, cfg.Binding) {
 		t.Fatal("crashed auth check inferred writer death")
 	}
 	called := false
@@ -276,7 +286,7 @@ func TestOwnedCheckRejectsAliasedOrNonemptyAdmissionLock(t *testing.T) {
 			if _, err := Run(context.Background(), exe, cfg, nil); !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("unsafe lock accepted: %v", err)
 			}
-			if WritersStoppedForBinding(cfg.StateRoot, cfg.Binding) {
+			if fixtureWritersStopped(t, cfg.StateRoot, cfg.Binding) {
 				t.Fatal("unsafe lock ignored by writer inventory")
 			}
 			if _, err := os.Stat(filepath.Join(fixture, "writer.json")); !os.IsNotExist(err) {
