@@ -55,13 +55,13 @@ func init() {
 			if err != nil {
 				os.Exit(93)
 			}
-			defer ln.Close()
+			defer func() { _ = ln.Close() }()
 			for {
 				c, err := ln.Accept()
 				if err != nil {
 					os.Exit(94)
 				}
-				c.Close()
+				_ = c.Close()
 			}
 		}
 		for {
@@ -107,7 +107,7 @@ func managedFixture(t *testing.T, withBackend bool) (Config, *exec.Cmd, <-chan e
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	candidate, err := store.CreateCandidate(accounts.ProviderCodex, accounts.KindNative)
 	if err != nil {
 		t.Fatal(err)
