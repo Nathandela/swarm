@@ -15,8 +15,6 @@ func nativeAttrs() *syscall.SysProcAttr                    { return &syscall.Sys
 func nativePTYAttrs() *syscall.SysProcAttr                 { return &syscall.SysProcAttr{Setsid: true, Setctty: true} }
 func enableSubreaper() error                               { return ErrUnsupported }
 func ownerPeer(*net.UnixConn) bool                         { return false }
-func processRunning(int) bool                              { return false }
-func descendants(int) ([]ProcessIdentity, error)           { return nil, ErrUnsupported }
 func containDescendants(int) error                         { return ErrUnsupported }
 func reapOrphans()                                         {}
 func signalIdentity(ProcessIdentity, syscall.Signal) error { return ErrUnsupported }

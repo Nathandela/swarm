@@ -47,8 +47,6 @@ func enableSubreaper() error {
 	}
 	return err
 }
-func processRunning(pid int) bool                    { return processcontain.Running(pid) }
-func descendants(pid int) ([]ProcessIdentity, error) { return processcontain.Descendants(pid) }
 func containDescendants(pid int) error {
 	err := processcontain.ContainDescendants(pid)
 	if errors.Is(err, processcontain.ErrUnavailable) {
