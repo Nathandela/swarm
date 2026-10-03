@@ -16,6 +16,8 @@ Account changes take effect when saved and are separate from pending Options cha
 
 Enable **automatic rotation for new sessions** separately for Claude and Codex. This changes assignments for future discussions only. Account details offer **Move discussion here** for discussions with a verified private binding. Busy discussions can be deferred until the existing recovery safeguards allow a move. Discussions launched before account pools do not have the required writer and configuration proofs and receive a clear refusal; their migration remains an acceptance requirement before production release. Swarm does not change an account underneath a running process.
 
+New discussions can use the provider's default model. Until the native CLI reports its effective model, capacity remains unknown and a known denial is not bypassed. Automatic recovery waits for verified model evidence.
+
 When a bound account cannot serve a discussion's requested model, Swarm may restore that discussion on another eligible account from the same provider. A healthy discussion stays on its account even if another account has more quota. The requested model, permissions, worktree, and saved conversation are preserved. Swarm does not change providers or models to find capacity.
 
 After a request fails during a switch, Swarm restores the conversation and asks you to retry. It does not resubmit the failed prompt, replay a tool call, or repeat an unresolved action. An account with unknown or stale quota is not assumed healthy; if no destination can be established safely, the discussion remains held for operator action.
@@ -33,3 +35,7 @@ For Claude, enrollment uses a fresh native personal OAuth sign-in in an isolated
 Authenticated release acceptance has not established two accounts per provider, continuation and native credential refresh, effective configuration, history transfer, or a Claude safe-turn after account recovery. Existing unmanaged discussions still refuse migration when original writer and configuration proofs are missing. Retiring credentials remain retained until a complete native cache inventory is available. These gaps must be closed and recorded before the planned v0.15.0 release; implementation and local tests alone do not satisfy them.
 
 The existing release and recovery procedures remain authoritative for binary upgrades and rollback: see [automatic upgrades](../ops/auto-upgrade.md) and [release signing](release-signing.md). Account storage adds local credentials and bindings; before using an older binary, follow the compatibility result produced by Swarm and do not manually remove account state to bypass a refusal.
+
+If a native supervisor crashes before proving that all its writers have stopped, Swarm holds the discussion instead of transferring history. A stopped parent or missing process group does not prove that detached children have exited. Review the held recovery state before retrying.
+
+Account details and retirement confirmation explicitly show that this build retains credentials. Completed native-check proof is also retained in a bounded inventory. If that inventory is exhausted or its custody cannot be verified, Swarm holds further checks; reference-aware collection remains a release requirement. Do not delete that state to bypass a hold.
