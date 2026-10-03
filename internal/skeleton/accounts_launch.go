@@ -63,7 +63,7 @@ func (a *coreAPI) bindAccountLaunch(spec *daemon.LaunchSpec) error {
 				counts[m.AccountBinding.AccountID]++
 			}
 		}
-		selection, err := accounts.Select(registry, accounts.SelectionRequest{Provider: spec.AgentType, Model: spec.Options["model"], ConfigurationGeneration: 1, ActiveCounts: counts}, time.Now())
+		selection, err := accounts.SelectInitial(registry, accounts.SelectionRequest{Provider: spec.AgentType, Model: spec.Options["model"], ConfigurationGeneration: 1, ActiveCounts: counts}, time.Now())
 		if err != nil {
 			return errAccountLaunch
 		}

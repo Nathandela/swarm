@@ -365,7 +365,21 @@ func fresh(observed, now time.Time) bool {
 // Select is pure. The recovery authority must durably reserve the selection,
 // then revalidate its registry revision/binding before any claim or spawn.
 func Select(r Registry, request SelectionRequest, now time.Time) (Selection, error) {
-	if !validProvider(request.Provider) || request.Model == "" || request.ConfigurationGeneration == 0 {
+	return selectAccount(r, request, now, false)
+}
+
+// SelectInitial assigns a fresh discussion before the native CLI resolves its
+// default model. Unresolved capacity stays unknown; a known denial cannot be
+// bypassed by omitting --model. Recovery must keep using the strict Select.
+func SelectInitial(r Registry, request SelectionRequest, now time.Time) (Selection, error) {
+	if request.Current != nil || request.Failed || len(request.TriedAccounts) != 0 {
+		return Selection{}, ErrIneligible
+	}
+	return selectAccount(r, request, now, true)
+}
+
+func selectAccount(r Registry, request SelectionRequest, now time.Time, initial bool) (Selection, error) {
+	if !validProvider(request.Provider) || (request.Model == "" && !initial) || request.ConfigurationGeneration == 0 {
 		return Selection{}, ErrIneligible
 	}
 	if request.Current != nil && !request.Failed {
@@ -392,13 +406,21 @@ func Select(r Registry, request SelectionRequest, now time.Time) (Selection, err
 			continue
 		}
 		usable, unknown, utilization := quotaEligibility(a.Quota, request.Model, now)
+		if request.Model == "" {
+			unknown = true
+			for _, scope := range a.Quota.Scopes {
+				if scope.Denied {
+					usable = false
+				}
+			}
+		}
 		if !usable {
 			continue
 		}
 		count := request.ActiveCounts[a.ID]
 		occupied := false
 		for _, lease := range request.Trials {
-			if lease.Binding.AccountID == a.ID && lease.Model == request.Model && lease.Deadline.After(now) {
+			if lease.Binding.AccountID == a.ID && (request.Model == "" || lease.Model == request.Model) && lease.Deadline.After(now) {
 				count++
 				occupied = true
 			}
