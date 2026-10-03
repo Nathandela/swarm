@@ -741,7 +741,7 @@ func accountText(s string) string {
 
 func accountState(account protocol.AccountView) string {
 	if account.Retiring {
-		return "Retiring"
+		return "Retiring · credentials retained"
 	}
 	s := strings.ReplaceAll(strings.ReplaceAll(account.State, "_", " "), "-", " ")
 	if s == "" {
@@ -840,7 +840,7 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 		return accountScrolled(accountWrap(b.String(), width), height, -1)
 	}
 	if a.retireConfirm {
-		b.WriteString("\nRetire this account? New assignments stop immediately.\nAssigned discussions continue; local credentials are deleted only after all users release them.\nProvider logout/revocation is not performed.\n\ny confirm · n/Esc cancel\n")
+		b.WriteString("\nRetire this account? New assignments stop immediately.\nAssigned discussions continue. This build retains the local credentials.\nProvider logout/revocation is not performed.\n\ny confirm · n/Esc cancel\n")
 		return accountScrolled(accountWrap(b.String(), width), height, a.scroll)
 	}
 	row := a.selected()
