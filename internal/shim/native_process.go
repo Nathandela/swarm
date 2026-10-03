@@ -112,7 +112,13 @@ func (s *managedNativeScope) finish() error {
 		return errors.New("shim: managed descendants could not be contained and reaped")
 	}
 	if !s.recorded {
-		return nil
+		// Startup can fail before the main CLI identity is captured, even after
+		// a backend has spawned descendants. ECHILD above proves the whole
+		// dedicated shim scope is drained; publish its exact zero/native record
+		// so a clean failure can be retried without inferring safety from absence.
+		if err := writeAccountRecord(s.root, NativeProcessFile, s.info); err != nil {
+			return errors.New("shim: native writer record could not be made durable")
+		}
 	}
 	proof := NativeStoppedInfo{SchemaVersion: ManagedWriterSchemaVersion, Native: s.info, WritersStopped: true}
 	if err := writeAccountRecord(s.root, NativeStoppedFile, proof); err != nil {

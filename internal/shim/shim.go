@@ -126,12 +126,6 @@ func Run(cfg Config) (agentExit int, err error) {
 	if len(cfg.Argv) == 0 {
 		return 0, errors.New("shim: empty Argv (no program to exec)")
 	}
-	// Resolve once, before either native process can start. A managed selector
-	// failure never reaches the degraded backend or ambient credential paths.
-	if err := resolveAccountEnvironment(&cfg); err != nil {
-		return 0, err
-	}
-
 	managed, err := beginManagedNativeScope(cfg)
 	if err != nil {
 		return 0, err
@@ -139,6 +133,11 @@ func Run(cfg Config) (agentExit int, err error) {
 	// Every direct child's Wait is joined on each return path before this runs.
 	// The durable proof is emitted after all remaining adopted children are reaped.
 	defer func() { err = errors.Join(err, managed.finish()) }()
+	// Resolve once, before either native process can start. Scope custody is
+	// already installed so a clean selector failure also has positive stop proof.
+	if err := resolveAccountEnvironment(&cfg); err != nil {
+		return 0, err
+	}
 
 	embargo, err := openAccountEmbargo(cfg)
 	if err != nil {
