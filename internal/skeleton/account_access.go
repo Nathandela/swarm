@@ -149,7 +149,7 @@ func (m *accountRotationManager) RetryAvailability(accountID string) error {
 			return err
 		}
 		oldSchema := w.state.AccountSchemaVersion
-		w.state.AccountSchemaVersion = 1
+		w.state.AccountSchemaVersion = accounts.RecoverySchemaVersion
 		w.state.AccountHalfOpen[accountID] = permit
 		visible, err := w.persistState()
 		if err != nil && !visible {

@@ -5,13 +5,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accountcheck"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -905,27 +909,84 @@ func (m *accountRotationManager) reserveStoppedFallback(rec accountRotationRecor
 }
 
 func (m *accountRotationManager) verifyStopped(meta persist.Meta) error {
-	if meta.Status.Process == status.ProcessRunning {
+	return verifyAccountWritersStopped(m.w.stateDir, meta)
+}
+
+// Shared by guarded recovery and owner resume under their existing lifecycle
+// fences. PID disappearance cannot replace the shim's containment proof.
+func verifyAccountWritersStopped(stateDir string, meta persist.Meta) error {
+	if meta.Status.Process == status.ProcessRunning || meta.AccountBinding == nil || !validManagedBinding(*meta.AccountBinding) {
 		return accounts.ErrInUse
 	}
-	raw, err := readCredentials(filepath.Join(m.w.stateDir, meta.ID, shim.NativeProcessFile))
+	root, err := openAccountRecoveryRoot(stateDir)
 	if err != nil {
 		return accounts.ErrInUse
 	}
+	defer func() { _ = root.Close() }()
 	var native shim.NativeProcessInfo
-	if json.Unmarshal(raw, &native) != nil || native.SchemaVersion != 1 || native.PID <= 0 || native.PGID != native.PID || native.ShimPID != meta.ShimPID || native.ShimStartTime != meta.ShimStartTime || meta.AccountBinding == nil || native.Binding != *meta.AccountBinding {
+	if readAccountWriterProof(root, meta.ID, shim.NativeProcessFile, &native) != nil {
 		return accounts.ErrInUse
 	}
-	if start, err := procstart.StartTime(native.PID); err == nil && start == native.StartTime {
+	nativeAbsent := native.PID == 0 && native.PGID == 0 && native.StartTime == 0
+	nativeValid := native.PID > 0 && native.PGID == native.PID && native.StartTime > 0
+	if native.SchemaVersion != shim.ManagedWriterSchemaVersion || !accountHex(native.Generation, 32) || (!nativeAbsent && !nativeValid) || native.ShimPID <= 0 || native.ShimStartTime <= 0 || native.ShimPID != meta.ShimPID || native.ShimStartTime != meta.ShimStartTime || native.Binding != *meta.AccountBinding || native.IncidentID != meta.InputEmbargo || native.BackendPID < 0 || (native.BackendPID == 0) != (native.BackendStartTime == 0) || native.BackendStartTime < 0 {
 		return accounts.ErrInUse
 	}
-	if syscall.Kill(-native.PGID, 0) != syscall.ESRCH {
+	var proof shim.NativeStoppedInfo
+	if readAccountWriterProof(root, meta.ID, shim.NativeStoppedFile, &proof) != nil || proof.SchemaVersion != shim.ManagedWriterSchemaVersion || !proof.WritersStopped || proof.Native != native {
 		return accounts.ErrInUse
 	}
-	if info, ok := shim.ReadBackendInfo(filepath.Join(m.w.stateDir, meta.ID)); ok && info.PGID > 0 {
+	if start, err := procstart.StartTime(native.ShimPID); err == nil && start == native.ShimStartTime {
+		return accounts.ErrInUse
+	}
+	if !nativeAbsent {
+		if start, err := procstart.StartTime(native.PID); err == nil && start == native.StartTime {
+			return accounts.ErrInUse
+		}
+		if syscall.Kill(-native.PGID, 0) != syscall.ESRCH {
+			return accounts.ErrInUse
+		}
+	}
+	if native.BackendPID > 0 {
+		if start, err := procstart.StartTime(native.BackendPID); err == nil && start == native.BackendStartTime {
+			return accounts.ErrInUse
+		}
+		if syscall.Kill(-native.BackendPID, 0) != syscall.ESRCH {
+			return accounts.ErrInUse
+		}
+	}
+	if info, ok := shim.ReadBackendInfo(filepath.Join(stateDir, meta.ID)); ok && info.PGID > 0 {
 		if syscall.Kill(-info.PGID, 0) != syscall.ESRCH {
 			return accounts.ErrInUse
 		}
+	}
+	if !accountcheck.WritersStoppedForBinding(stateDir, *meta.AccountBinding) {
+		return accounts.ErrInUse
+	}
+	return nil
+}
+
+func readAccountWriterProof(root *os.Root, local, name string, value any) error {
+	if !persist.ValidID(local) {
+		return accounts.ErrUnsafePath
+	}
+	f, err := historyOpenFile(root, local+"/"+name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || info.Mode().Perm()&0o077 != 0 || info.Size() > 16<<10 {
+		return accounts.ErrUnsafePath
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, (16<<10)+1))
+	if err != nil || len(raw) > 16<<10 || rejectDuplicateJSONKeys(raw) != nil {
+		return accounts.ErrUnsafePath
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if dec.Decode(value) != nil || dec.Decode(&struct{}{}) != io.EOF {
+		return accounts.ErrUnsafePath
 	}
 	return nil
 }

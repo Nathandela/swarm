@@ -86,7 +86,7 @@ func Run(ctx context.Context, executable string, cfg Config, admit func(Ref) err
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	// Serialize admission for a credential generation across daemon replacements.
 	key := sha256.Sum256([]byte(cfg.Binding.Provider + ":" + cfg.Binding.AccountID + ":" + fmt.Sprint(cfg.Binding.CredentialGeneration)))
 	lockName := ".lock-" + hex.EncodeToString(key[:])
@@ -102,7 +102,7 @@ func Run(ctx context.Context, executable string, cfg Config, admit func(Ref) err
 	if err != nil {
 		return nil, ErrUnavailable
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	after, err := lock.Stat()
 	if err != nil || !validLockInfo(after) {
 		return nil, ErrUnavailable
@@ -114,7 +114,7 @@ func Run(ctx context.Context, executable string, cfg Config, admit func(Ref) err
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return nil, ErrUnavailable
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 	if !writersStopped(root, cfg.Binding) {
 		return nil, ErrCustodyUnknown
 	}
@@ -134,14 +134,14 @@ func Run(ctx context.Context, executable string, cfg Config, admit func(Ref) err
 	if err != nil {
 		return nil, err
 	}
-	defer files.Close()
+	defer func() { _ = files.Close() }()
 	path := filepath.Join(cfg.StateRoot, "accounts", "checks", generation)
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	cmd := exec.Command(executable, "internal", "account-check", path)
 	cmd.Stdin = reader
 	// The child receives selected auth only through the anonymous pipe; its own
@@ -224,12 +224,12 @@ func CustodyStopped(stateRoot string, worker processcontain.Identity, binding ac
 	if err != nil {
 		return false
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	directory, err := root.Open(".")
 	if err != nil {
 		return false
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	entries, err := directory.ReadDir(4097)
 	if err != nil && !errors.Is(err, io.EOF) || len(entries) > 4096 {
 		return false
@@ -253,6 +253,21 @@ func CustodyStopped(stateRoot string, worker processcontain.Identity, binding ac
 	return false
 }
 
+// WritersStoppedForBinding refuses transfer while any retained check for this
+// credential generation lacks an exact stopped-writer proof. A genuinely absent
+// check inventory is safe; malformed or unsafe custody fails closed.
+func WritersStoppedForBinding(stateRoot string, binding accounts.Binding) bool {
+	root, err := openCheckRoot(stateRoot, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	return writersStopped(root, binding)
+}
+
 // writersStopped covers every owned check sharing the retained credential
 // generation and refuses unreadable or malformed custody.
 func writersStopped(root *os.Root, binding accounts.Binding) bool {
@@ -260,7 +275,7 @@ func writersStopped(root *os.Root, binding accounts.Binding) bool {
 	if err != nil {
 		return false
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	entries, err := directory.ReadDir(4097)
 	if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > 4096 {
 		return false
@@ -341,6 +356,10 @@ func validGeneration(value string) bool {
 	return err == nil && len(raw) == 16 && value == strings.ToLower(value)
 }
 func openChecks(stateRoot string) (*os.Root, error) {
+	return openCheckRoot(stateRoot, true)
+}
+
+func openCheckRoot(stateRoot string, create bool) (*os.Root, error) {
 	if !filepath.IsAbs(stateRoot) {
 		return nil, ErrUnavailable
 	}
@@ -354,8 +373,12 @@ func openChecks(stateRoot string) (*os.Root, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer state.Close()
-	if err := state.Mkdir("accounts/checks", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+	defer func() { _ = state.Close() }()
+	if create {
+		if err := state.Mkdir("accounts/checks", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+	} else if _, err := state.Lstat("accounts/checks"); err != nil {
 		return nil, err
 	}
 	// Sync even an existing link: an earlier process may have crashed between
@@ -377,7 +400,16 @@ func openChecks(stateRoot string) (*os.Root, error) {
 	if !ok || owner.Uid != uint32(os.Getuid()) {
 		return nil, ErrUnavailable
 	}
-	return state.OpenRoot("accounts/checks")
+	root, err := state.OpenRoot("accounts/checks")
+	if err != nil {
+		return nil, err
+	}
+	after, err := root.Lstat(".")
+	if err != nil || !os.SameFile(info, after) {
+		_ = root.Close()
+		return nil, ErrUnavailable
+	}
+	return root, nil
 }
 
 func readJSON(root *os.Root, name string, value any) error {
@@ -389,11 +421,11 @@ func readJSON(root *os.Root, name string, value any) error {
 	if !ok || owner.Uid != uint32(os.Getuid()) || owner.Nlink != 1 || before.Size() > 16<<10 {
 		return ErrUnavailable
 	}
-	file, err := root.Open(name)
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	after, err := file.Stat()
 	if err != nil || !os.SameFile(before, after) {
 		return ErrUnavailable
@@ -436,6 +468,6 @@ func syncRoot(root *os.Root) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	return dir.Sync()
 }
