@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Nathandela/swarm/internal/accountcheck"
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
 )
 
@@ -42,7 +45,7 @@ func CurrentManifest(tag string) CompatManifest {
 		Shimwire:      shimwire.Version,
 		Protocol:      protocol.Version,
 		Schema:        persist.ManagedSchemaVersion,
-		AccountSchema: 1, AccountJobs: 1, AccountRecovery: 1, AccountWorker: 1, AccountShim: 1, AccountConfig: 1,
+		AccountSchema: accounts.SchemaVersion, AccountJobs: 1, AccountRecovery: accounts.RecoverySchemaVersion, AccountWorker: accountcheck.SchemaVersion, AccountShim: shim.ManagedWriterSchemaVersion, AccountConfig: 1,
 	}
 }
 
