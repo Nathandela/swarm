@@ -102,6 +102,11 @@ func rotationTestManager(t *testing.T, store *accounts.Store, root string, sourc
 	w.state.AccountHistoryOwnership = make(map[string]accountHistoryOwnership)
 	w.state.AccountModels = make(map[string]accountModelRecord)
 	w.managedOps = make(chan accountOwnerOperation, 128)
+	w.resolve = func(string, []string) (string, error) { return source.CLIIdentity.Path, nil }
+	w.cliProbe = func(string, string, []string, string) (*persist.CLIIdentity, error) {
+		value := *source.CLIIdentity
+		return &value, nil
+	}
 	w.withResumeFence = func(_ string, attempt func() bool) (bool, bool) { return true, attempt() }
 	w.launch = func(spec daemon.LaunchSpec) (persist.Meta, error) {
 		meta, err := f.launch(spec)
@@ -117,6 +122,8 @@ func rotationTestManager(t *testing.T, store *accounts.Store, root string, sourc
 		return meta, nil
 	}
 	m := &accountRotationManager{w: w, store: store, aliases: make(map[string]string), stopProof: func(persist.Meta) error { return nil }, ready: func(persist.Meta, accountRotationRecord) bool { return true }, release: func(string, string) error { return nil }}
+	m.prepareLaunch = func(spec daemon.LaunchSpec) (daemon.LaunchSpec, error) { return spec, nil }
+	w.accountRotation = m
 	resolver := newAccountResumeHistoryResolver(root, newFilesystemResumeHistoryResolver(root, defaultResumeHistoryLimits))
 	m.preflight = func(meta persist.Meta, destination accounts.Binding, ownership accountHistoryOwnership, incident string) (accountHistoryManifest, error) {
 		return preflightAccountHistory(store, resolver, meta, destination, ownership, incident)

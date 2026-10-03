@@ -140,6 +140,7 @@ type Config struct {
 type LaunchSpec struct {
 	AccountBinding       *accounts.Binding
 	AccountProjectionRef string
+	AccountNativeModel   string `json:"-"`
 	AccountStateRoot     string
 	AccountBackendArgs   []string
 	InputEmbargo         string

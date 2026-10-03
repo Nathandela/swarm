@@ -78,6 +78,31 @@ type manifest struct {
 // selectors are scrubbed/injected. It writes only validated nonsecret settings.
 // A prior ref preserves its settings while composing the current resume argv.
 func Prepare(stateRoot, provider, profilePath, cwd string, env, argv []string, priorProjectionRef string) (Projection, error) {
+	return PrepareWithModel(stateRoot, provider, profilePath, cwd, env, argv, priorProjectionRef, "")
+}
+
+// PrepareWithModel permits only the invocation model authenticated by the
+// managed recovery authority. It leaves the frozen manifest and non-model
+// policy unchanged; ordinary caller argv must use the strict Prepare entrypoint.
+func PrepareWithModel(stateRoot, provider, profilePath, cwd string, env, argv []string, priorProjectionRef, nativeModel string) (Projection, error) {
+	if nativeModel != "" {
+		if priorProjectionRef == "" || len(nativeModel) > 128 || strings.ContainsAny(nativeModel, "\x00\r\n\t ") {
+			return Projection{}, Conflict("invalid-native-model-proof")
+		}
+		switch strings.ToLower(strings.SplitN(strings.SplitN(nativeModel, "[", 2)[0], ":", 2)[0]) {
+		case "opus", "opusplan", "sonnet", "haiku", "default", "auto":
+			return Projection{}, Conflict("invalid-native-model-proof")
+		}
+		for _, c := range nativeModel {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && !strings.ContainsRune("-_.:/[]", c) {
+				return Projection{}, Conflict("invalid-native-model-proof")
+			}
+		}
+		models := append(flagValues(argv, "--model"), flagValues(argv, "-m")...)
+		if len(models) != 1 || models[0] != nativeModel {
+			return Projection{}, Conflict("native-model-proof-mismatch")
+		}
+	}
 	if provider != "codex" && provider != "claude" {
 		return Projection{}, Conflict("unsupported-provider")
 	}
@@ -98,6 +123,7 @@ func Prepare(stateRoot, provider, profilePath, cwd string, env, argv []string, p
 		return Projection{}, err
 	}
 	var profileSources manifest
+	var invocationCodex map[string]string
 	if provider == "claude" {
 		if err := collectClaudeProfileSources(&profileSources, env); err != nil {
 			return Projection{}, err
@@ -194,7 +220,16 @@ func Prepare(stateRoot, provider, profilePath, cwd string, env, argv []string, p
 		}
 	} else {
 		// Launch-specific model/sandbox policy is shared by both native processes.
-		if err := projectCodexFlags(m.Codex, argv, priorProjectionRef == ""); err != nil {
+		checked := m.Codex
+		if nativeModel != "" {
+			invocationCodex = make(map[string]string, len(m.Codex)+1)
+			for key, value := range m.Codex {
+				invocationCodex[key] = value
+			}
+			invocationCodex["model"] = strconv.Quote(nativeModel)
+			checked = invocationCodex
+		}
+		if err := projectCodexFlags(checked, argv, priorProjectionRef == ""); err != nil {
 			return Projection{}, err
 		}
 		m.Codex["cli_auth_credentials_store"] = `"file"`
@@ -236,13 +271,17 @@ func Prepare(stateRoot, provider, profilePath, cwd string, env, argv []string, p
 		result.Generation = 1
 	}
 	if provider == "codex" {
-		keys := make([]string, 0, len(m.Codex))
-		for key := range m.Codex {
+		settings := m.Codex
+		if invocationCodex != nil {
+			settings = invocationCodex
+		}
+		keys := make([]string, 0, len(settings))
+		for key := range settings {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			result.BackendArgs = append(result.BackendArgs, "-c", key+"="+m.Codex[key])
+			result.BackendArgs = append(result.BackendArgs, "-c", key+"="+settings[key])
 		}
 		// The adapter disables update checks for this resume invocation. It is
 		// independent of the frozen session defaults and must win in both processes.

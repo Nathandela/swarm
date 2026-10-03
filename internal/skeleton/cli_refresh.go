@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -374,6 +375,14 @@ func (w *authWatcher) discoverCLIRefreshes() {
 			}
 			continue
 		}
+		if m.AccountBinding != nil && !accountconfig.SupportedNativeVersion(m.AgentType, result.id.Version) {
+			if _, exists := w.state.CLICandidates[m.ID]; exists {
+				delete(w.state.CLICandidates, m.ID)
+				dirty = true
+			}
+			w.once("cli-managed-version:"+m.ID, "cli-refresh: managed %s session %s has an unsupported target; leaving it untouched", m.AgentType, m.ID)
+			continue
+		}
 		candidate := w.state.CLICandidates[m.ID]
 		if candidate.Identity != *result.id {
 			w.state.CLICandidates[m.ID] = cliRefreshCandidate{Identity: *result.id, Observations: 1}
@@ -501,6 +510,15 @@ func (w *authWatcher) prepareCLIRefreshTarget(source persist.Meta) bool {
 		w.state.CLI[source.ID] = rec
 		return false
 	}
+	if err := w.validateManagedRefresh(source, observed); err != nil {
+		rec.LastError = errAccountSuccessorUnavailable.Error()
+		rec.UpdatedAt = w.clock()
+		w.state.CLI[source.ID] = rec
+		if err := w.saveState(); err != nil {
+			w.stateErr = err
+		}
+		return false
+	}
 	if *observed == rec.Target {
 		delete(w.state.CLICandidates, source.ID)
 		return true
@@ -554,7 +572,7 @@ func (w *authWatcher) validateCLIRefreshTarget(m persist.Meta) error {
 		}
 		return fmt.Errorf("cli-refresh: target is no longer stable: %w", err)
 	}
-	return nil
+	return w.validateManagedRefresh(m, observed)
 }
 
 func (w *authWatcher) resumeCLIEnded(agent string, source persist.Meta) bool {
@@ -582,14 +600,26 @@ func (w *authWatcher) resumeCLIEnded(agent string, source persist.Meta) bool {
 	}
 	rec = w.state.CLI[source.ID]
 
-	fresh, err := w.launch(daemon.LaunchSpec{
+	launch := daemon.LaunchSpec{
 		AgentType: agent, Name: source.Name, Tag: source.Tag, Cwd: source.Cwd,
 		Cols: authRecycleCols, Rows: authRecycleRows, ClientEnv: source.Env,
 		SpawnedFrom: source.SpawnedFrom, SpawnIntent: source.SpawnIntent,
 		Supervision:         source.Supervision,
 		Options:             map[string]string{protocol.OptionResumeFrom: w.endpointID + "/" + source.ID},
 		ExpectedCLIIdentity: &rec.Target,
-	})
+	}
+	if source.AccountBinding != nil {
+		var err error
+		launch, err = w.accountRotation.preflightSuccessor(source, *source.AccountBinding, w.accountRotation.effectiveModel(source), "", &rec.Target)
+		if err != nil {
+			rec.LastError = errAccountSuccessorUnavailable.Error()
+			w.state.CLI[source.ID] = rec
+			w.deferRetry(source.ID)
+			_ = w.saveState()
+			return true
+		}
+	}
+	fresh, err := w.launch(launch)
 	if fresh.ID != "" {
 		rec.ReplacementID = fresh.ID
 		rec.State = cliRefreshWaiting

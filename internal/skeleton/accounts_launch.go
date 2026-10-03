@@ -116,7 +116,7 @@ func (d *Daemon) prepareAccountLaunch(_ string, spec daemon.LaunchSpec) (daemon.
 			}
 		}
 	}
-	projection, err := accountconfig.Prepare(d.accounts.stateRoot, spec.AgentType, profile, spec.Cwd, spec.ClientEnv, spec.Argv, spec.AccountProjectionRef)
+	projection, err := accountconfig.PrepareWithModel(d.accounts.stateRoot, spec.AgentType, profile, spec.Cwd, spec.ClientEnv, spec.Argv, spec.AccountProjectionRef, spec.AccountNativeModel)
 	if err != nil {
 		return spec, err
 	}

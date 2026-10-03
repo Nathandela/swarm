@@ -36,30 +36,31 @@ const (
 )
 
 type accountRotationRecord struct {
-	Incident           accounts.Incident       `json:"incident"`
-	OriginalSource     string                  `json:"original_source"`
-	SourceID           string                  `json:"source_id"`
-	SourceBinding      accounts.Binding        `json:"source_binding"`
-	Destination        *accounts.Binding       `json:"destination,omitempty"`
-	RegistryRevision   uint64                  `json:"registry_revision"`
-	State              string                  `json:"state"`
-	CandidateID        string                  `json:"candidate_id,omitempty"`
-	ConversationID     string                  `json:"conversation_id"`
-	Manifest           *accountHistoryManifest `json:"manifest,omitempty"`
-	Trial              *accounts.TrialLease    `json:"trial,omitempty"`
-	FailureClass       string                  `json:"failure_class"`
-	TargetAccountID    string                  `json:"target_account_id,omitempty"`
-	ConversationProven bool                    `json:"conversation_proven,omitempty"`
-	LastError          string                  `json:"last_error,omitempty"`
-	LastActiveAt       time.Time               `json:"last_active_at,omitempty"`
-	PhaseDeadline      time.Time               `json:"phase_deadline,omitempty"`
-	UpdatedAt          time.Time               `json:"updated_at"`
-	InputReleased      bool                    `json:"input_released,omitempty"`
-	TrialTurnID        string                  `json:"trial_turn_id,omitempty"`
-	NativeHookSequence uint64                  `json:"native_hook_sequence,omitempty"`
-	TrialHookSequence  uint64                  `json:"trial_hook_sequence,omitempty"`
-	IdentityHeld       bool                    `json:"identity_held,omitempty"`
-	OwnerTarget        string                  `json:"owner_target,omitempty"`
+	Incident            accounts.Incident       `json:"incident"`
+	OriginalSource      string                  `json:"original_source"`
+	SourceID            string                  `json:"source_id"`
+	SourceBinding       accounts.Binding        `json:"source_binding"`
+	Destination         *accounts.Binding       `json:"destination,omitempty"`
+	RegistryRevision    uint64                  `json:"registry_revision"`
+	State               string                  `json:"state"`
+	CandidateID         string                  `json:"candidate_id,omitempty"`
+	ConversationID      string                  `json:"conversation_id"`
+	Manifest            *accountHistoryManifest `json:"manifest,omitempty"`
+	Trial               *accounts.TrialLease    `json:"trial,omitempty"`
+	FailureClass        string                  `json:"failure_class"`
+	TargetAccountID     string                  `json:"target_account_id,omitempty"`
+	ConversationProven  bool                    `json:"conversation_proven,omitempty"`
+	LastError           string                  `json:"last_error,omitempty"`
+	LastActiveAt        time.Time               `json:"last_active_at,omitempty"`
+	PhaseDeadline       time.Time               `json:"phase_deadline,omitempty"`
+	UpdatedAt           time.Time               `json:"updated_at"`
+	InputReleased       bool                    `json:"input_released,omitempty"`
+	TrialTurnID         string                  `json:"trial_turn_id,omitempty"`
+	NativeHookSequence  uint64                  `json:"native_hook_sequence,omitempty"`
+	TrialHookSequence   uint64                  `json:"trial_hook_sequence,omitempty"`
+	IdentityHeld        bool                    `json:"identity_held,omitempty"`
+	OwnerTarget         string                  `json:"owner_target,omitempty"`
+	ExpectedCLIIdentity *persist.CLIIdentity    `json:"expected_cli_identity,omitempty"`
 }
 
 type accountOwnerOperation struct {
@@ -70,26 +71,27 @@ type accountOwnerOperation struct {
 // This component has no state-writing goroutine. Every transition runs on the
 // existing auth-watch writer, under its existing owner/composer lifecycle fences.
 type accountRotationManager struct {
-	d            *Daemon
-	w            *authWatcher
-	store        *accounts.Store
-	viewMu       sync.RWMutex
-	aliases      map[string]string
-	refreshMu    sync.Mutex
-	refreshing   map[string]chan struct{}
-	refreshAt    map[string]time.Time
-	stopProof    func(persist.Meta) error
-	preflight    func(persist.Meta, accounts.Binding, accountHistoryOwnership, string) (accountHistoryManifest, error)
-	prepare      func(accountHistoryManifest) (accountHistoryManifest, error)
-	ready        func(persist.Meta, accountRotationRecord) bool
-	release      func(string, string) error
-	endTarget    func(string, string) error
-	accessCheck  func(context.Context, persist.Meta, accounts.HalfOpenPermit) (bool, error)
-	accessMu     sync.Mutex
-	accessCancel map[string]context.CancelFunc
-	accessWG     sync.WaitGroup
-	accessClosed bool
-	nativeFeeds  map[string]string
+	d             *Daemon
+	w             *authWatcher
+	store         *accounts.Store
+	viewMu        sync.RWMutex
+	aliases       map[string]string
+	refreshMu     sync.Mutex
+	refreshing    map[string]chan struct{}
+	refreshAt     map[string]time.Time
+	stopProof     func(persist.Meta) error
+	preflight     func(persist.Meta, accounts.Binding, accountHistoryOwnership, string) (accountHistoryManifest, error)
+	prepare       func(accountHistoryManifest) (accountHistoryManifest, error)
+	ready         func(persist.Meta, accountRotationRecord) bool
+	release       func(string, string) error
+	endTarget     func(string, string) error
+	prepareLaunch func(daemon.LaunchSpec) (daemon.LaunchSpec, error)
+	accessCheck   func(context.Context, persist.Meta, accounts.HalfOpenPermit) (bool, error)
+	accessMu      sync.Mutex
+	accessCancel  map[string]context.CancelFunc
+	accessWG      sync.WaitGroup
+	accessClosed  bool
+	nativeFeeds   map[string]string
 }
 
 func newAccountRotationManager(d *Daemon, w *authWatcher, store *accounts.Store) *accountRotationManager {
@@ -116,6 +118,7 @@ func newAccountRotationManager(d *Daemon, w *authWatcher, store *accounts.Store)
 	}
 	m.ready = m.nativeReady
 	m.release = d.core.ReleaseAccountEmbargo
+	m.prepareLaunch = func(spec daemon.LaunchSpec) (daemon.LaunchSpec, error) { return d.prepareAccountLaunch("", spec) }
 	m.endTarget = func(target, action string) error {
 		return d.withOwnerSessionEnd(target, func() error {
 			if action == "kill" {
@@ -181,6 +184,9 @@ func validateAccountRecoveryState(st authWatchState) error {
 		}
 		if rec.Destination != nil && !validManagedBinding(*rec.Destination) {
 			return errors.New("authwatch: invalid destination binding")
+		}
+		if rec.ExpectedCLIIdentity != nil && !validCLIIdentity(rec.ExpectedCLIIdentity) {
+			return errors.New("authwatch: invalid account successor executable")
 		}
 		if rec.OwnerTarget != "" && (rec.State != accountOwnerCanceled || !persist.ValidID(rec.OwnerTarget) || (rec.OwnerTarget != rec.SourceID && rec.OwnerTarget != rec.CandidateID)) {
 			return errors.New("authwatch: invalid account owner-end target")
@@ -386,6 +392,7 @@ func (m *accountRotationManager) reportFailure(w *authWatcher, local, class, _, 
 	rec.NativeHookSequence = 0
 	rec.TrialHookSequence = 0
 	rec.PhaseDeadline = time.Time{}
+	rec.ExpectedCLIIdentity = nil
 	rec.LastActiveAt = time.Time{}
 	err = m.persist(rec)
 	if err == nil && rec.IdentityHeld && w.restoreRecycle != nil {
@@ -533,6 +540,11 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		if err := m.store.ValidateBinding(selection.Binding); err != nil {
 			return
 		}
+		launch, err := m.preflightSuccessor(source, selection.Binding, rec.Incident.Model, rec.Incident.ID, nil)
+		if err != nil {
+			m.block(rec, "successor-preflight-refused")
+			return
+		}
 		ownership := w.state.AccountHistoryOwnership[source.AgentType+":"+source.ConversationID]
 		manifest, err := m.preflight(source, selection.Binding, ownership, rec.Incident.ID)
 		if err != nil {
@@ -549,6 +561,7 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		rec.Destination = &selection.Binding
 		rec.RegistryRevision = registry.Revision
 		rec.Manifest = &manifest
+		rec.ExpectedCLIIdentity = launch.ExpectedCLIIdentity
 		rec.State = accountReserved
 		rec.LastError = ""
 		if selection.Unknown {
@@ -580,6 +593,17 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 			if !m.reservationEligible(registry, rec) {
 				return errAuthRecycleUnsafe
 			}
+			launch, err := m.preflightSuccessor(current, *rec.Destination, rec.Incident.Model, rec.Incident.ID, rec.ExpectedCLIIdentity)
+			if err != nil {
+				rec.LastError = "successor-preflight-refused"
+				_ = m.persist(rec)
+				return errAuthRecycleUnsafe
+			}
+			current, ok = w.get(source.ID)
+			if !ok || current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || w.sessionUnsafe(source.ID) || current.AccountBinding == nil || *current.AccountBinding != rec.SourceBinding {
+				return errAuthRecycleUnsafe
+			}
+			rec.ExpectedCLIIdentity = launch.ExpectedCLIIdentity
 			rec.RegistryRevision = registry.Revision
 			rec.State = accountClaimed
 			rec.LastActiveAt = now
@@ -611,6 +635,20 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 				if !ok || current.AccountBinding == nil || *current.AccountBinding != rec.SourceBinding || current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || w.sessionUnsafe(source.ID) {
 					return errAuthRecycleUnsafe
 				}
+				launch, err := m.preflightSuccessor(current, *rec.Destination, rec.Incident.Model, rec.Incident.ID, rec.ExpectedCLIIdentity)
+				if err != nil {
+					rec.LastError = "successor-preflight-refused"
+					_ = m.persist(rec)
+					return errAuthRecycleObligationRetained
+				}
+				rec.ExpectedCLIIdentity = launch.ExpectedCLIIdentity
+				if err := m.persist(rec); err != nil {
+					return errAuthRecycleObligationRetained
+				}
+				current, ok = w.get(source.ID)
+				if !ok || current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || w.sessionUnsafe(source.ID) || current.AccountBinding == nil || *current.AccountBinding != rec.SourceBinding {
+					return errAuthRecycleObligationRetained
+				}
 				if err := w.kill(source.ID); err != nil {
 					return errAuthRecycleObligationRetained
 				}
@@ -620,6 +658,11 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		}
 		if m.stopProof(source) != nil {
 			m.block(rec, "native-writer-death-unconfirmed")
+			return
+		}
+		if _, err := m.preflightSuccessor(source, *rec.Destination, rec.Incident.Model, rec.Incident.ID, rec.ExpectedCLIIdentity); err != nil {
+			rec.LastError = "successor-preflight-refused"
+			_ = m.persist(rec)
 			return
 		}
 		ownership := w.state.AccountHistoryOwnership[source.AgentType+":"+source.ConversationID]
@@ -668,7 +711,7 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		}
 		if rec.CandidateID == "" {
 			for _, child := range w.list() {
-				if child.InputEmbargo == rec.Incident.ID && child.ResumedFrom == source.ID && child.AccountBinding != nil && *child.AccountBinding == *rec.Destination {
+				if child.InputEmbargo == rec.Incident.ID && child.ResumedFrom == source.ID && child.AccountBinding != nil && *child.AccountBinding == *rec.Destination && validCLIIdentity(child.CLIIdentity) && rec.ExpectedCLIIdentity != nil && *child.CLIIdentity == *rec.ExpectedCLIIdentity {
 					rec.CandidateID = child.ID
 					break
 				}
@@ -676,6 +719,12 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		}
 		if rec.CandidateID != "" {
 			rec.State = accountLaunched
+			_ = m.persist(rec)
+			return
+		}
+		launch, err := m.preflightSuccessor(source, *rec.Destination, rec.Incident.Model, rec.Incident.ID, rec.ExpectedCLIIdentity)
+		if err != nil {
+			rec.LastError = "successor-preflight-refused"
 			_ = m.persist(rec)
 			return
 		}
@@ -687,10 +736,7 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 			return
 		}
 		_, _ = w.withResumeFence(source.ID, func() bool {
-			options := cloneLaunchOptions(source.LaunchOptions)
-			options["model"] = rec.Incident.Model
-			options[protocol.OptionResumeFrom] = w.endpointID + "/" + source.ID
-			fresh, err := w.launch(daemon.LaunchSpec{AgentType: source.AgentType, Name: source.Name, Tag: source.Tag, Cwd: source.Cwd, Cols: authRecycleCols, Rows: authRecycleRows, ClientEnv: source.Env, SpawnedFrom: source.SpawnedFrom, SpawnIntent: source.SpawnIntent, Supervision: source.Supervision, Options: options, AccountBinding: rec.Destination, AccountStateRoot: w.stateDir, InputEmbargo: rec.Incident.ID, AccountProjectionRef: source.AccountProjectionRef})
+			fresh, err := w.launch(launch)
 			if fresh.ID != "" {
 				rec.CandidateID = fresh.ID
 				rec.State = accountLaunched
@@ -793,6 +839,11 @@ func (m *accountRotationManager) reserveStoppedFallback(rec accountRotationRecor
 		m.block(rec, "fallback-capacity-exhausted")
 		return
 	}
+	launch, err := m.preflightSuccessor(source, selection.Binding, rec.Incident.Model, rec.Incident.ID, rec.ExpectedCLIIdentity)
+	if err != nil {
+		m.block(rec, "successor-preflight-refused")
+		return
+	}
 	ownership := m.w.state.AccountHistoryOwnership[source.AgentType+":"+source.ConversationID]
 	manifest, err := m.preflight(source, selection.Binding, ownership, rec.Incident.ID)
 	if err != nil {
@@ -809,6 +860,7 @@ func (m *accountRotationManager) reserveStoppedFallback(rec accountRotationRecor
 	rec.Destination = &selection.Binding
 	rec.RegistryRevision = registry.Revision
 	rec.Manifest = &manifest
+	rec.ExpectedCLIIdentity = launch.ExpectedCLIIdentity
 	rec.State = accountStopped
 	rec.LastActiveAt = m.w.clock()
 	if selection.Unknown {

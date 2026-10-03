@@ -134,6 +134,71 @@ func TestCodexProjection_ActualAdapterResumePreservesRefAcrossAccounts(t *testin
 	}
 }
 
+func TestCodexProjection_AuthenticatedInvocationModelPreservesFrozenPolicy(t *testing.T) {
+	f := fixture(t, "codex")
+	put(t, filepath.Join(f.source, "config.toml"), "model = \"gpt-first-model\"\nmodel_reasoning_effort = \"high\"\n")
+	cli := codex.New()
+	fresh, err := cli.Command(adapter.LaunchSpec{Options: map[string]string{"model": "gpt-first-model", "sandbox": "workspace-write"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, fresh, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(f.root, "accounts", "configurations", frozen.Ref, "projection.json")
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := cli.Resume(adapter.ResumeSpec{ConversationID: "019a0000-0000-7000-8000-000000000000", Options: map[string]string{"model": "gpt-current-model", "sandbox": "workspace-write"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, resumed, frozen.Ref); err == nil {
+		t.Fatal("ordinary argv changed the frozen model without native authority")
+	}
+	next, err := PrepareWithModel(f.root, "codex", f.candidate, f.cwd, f.env, resumed, frozen.Ref, "gpt-current-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Ref != frozen.Ref || next.Generation != frozen.Generation {
+		t.Fatal("invocation model changed the frozen configuration identity")
+	}
+	for _, argv := range [][]string{next.CLIArgs, next.BackendArgs} {
+		for _, want := range []string{`model="gpt-current-model"`, `model_reasoning_effort="high"`, `sandbox_mode="workspace-write"`, `cli_auth_credentials_store="file"`} {
+			if !contains(argv, want) {
+				t.Fatalf("prepared invocation missing %q: %v", want, argv)
+			}
+		}
+		if contains(argv, `model="gpt-first-model"`) {
+			t.Fatal("frozen model would override the native invocation model")
+		}
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatal("authorized invocation rewrote the frozen manifest")
+	}
+	for _, tc := range []struct {
+		name, proof string
+		argv        []string
+		ref         string
+	}{
+		{"mismatched-proof", "gpt-other-model", resumed, frozen.Ref},
+		{"missing-model-argument", "gpt-current-model", []string{"codex", "resume", "thread-id"}, frozen.Ref},
+		{"alias-proof", "sonnet[1m]", []string{"codex", "resume", "thread-id", "--model", "sonnet[1m]"}, frozen.Ref},
+		{"fresh-unfrozen-proof", "gpt-current-model", resumed, ""},
+		{"conflicting-model-setting", "gpt-current-model", append(append([]string(nil), resumed...), "-c", `model="gpt-other-model"`), frozen.Ref},
+		{"non-model-policy-drift", "gpt-current-model", append(append([]string(nil), resumed...), "-c", `model_reasoning_effort="low"`), frozen.Ref},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := PrepareWithModel(f.root, "codex", f.candidate, f.cwd, f.env, tc.argv, tc.ref, tc.proof); err == nil {
+				t.Fatal("invalid invocation authority or policy drift was accepted")
+			}
+		})
+	}
+}
+
 func TestProjection_SourceProfileAliasIsFrozenAndBoundProfilesStayStrict(t *testing.T) {
 	for _, provider := range []string{"codex", "claude"} {
 		t.Run(provider, func(t *testing.T) {
