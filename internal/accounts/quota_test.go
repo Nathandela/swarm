@@ -10,6 +10,48 @@ func observation(sequence uint64, now time.Time, updates ...ScopeObservation) Ob
 	return Observation{FeedGeneration: 1, Sequence: sequence, ReceivedAt: now, Full: true, Scopes: updates}
 }
 
+func TestInitialDefaultModelSelectionDoesNotWeakenRecovery(t *testing.T) {
+	s, _ := testStore(t)
+	_, account := admitNative(t, s, "native-default")
+	r, _ := s.Snapshot()
+	r.Enabled[ProviderCodex] = true
+	now := time.Now()
+	request := SelectionRequest{Provider: ProviderCodex, ConfigurationGeneration: 1}
+	selected, err := SelectInitial(r, request, now)
+	if err != nil || selected.Binding.AccountID != account.ID || !selected.Unknown {
+		t.Fatalf("unresolved native default was not assigned as unknown: %+v %v", selected, err)
+	}
+	if _, err := Select(r, request, now); !errors.Is(err, ErrIneligible) {
+		t.Fatal("recovery accepted an unresolved model")
+	}
+	for _, mutate := range []func(*SelectionRequest){
+		func(r *SelectionRequest) { r.Failed = true },
+		func(r *SelectionRequest) { r.Current = &selected.Binding },
+		func(r *SelectionRequest) { r.TriedAccounts = map[string]bool{account.ID: true} },
+	} {
+		invalid := request
+		mutate(&invalid)
+		if _, err := SelectInitial(r, invalid, now); !errors.Is(err, ErrIneligible) {
+			t.Fatal("initial assignment accepted recovery state")
+		}
+	}
+	for _, scope := range []ScopeState{
+		{Denied: true, DenialRevision: 1},
+		{Model: "limited-native-model", Denied: true, DenialRevision: 1},
+	} {
+		record := r.Accounts[account.ID]
+		key := ScopeGlobal
+		if scope.Model != "" {
+			key = "model:" + scope.Model
+		}
+		record.Quota = QuotaState{Scopes: map[string]ScopeState{key: scope}}
+		r.Accounts[account.ID] = record
+		if _, err := SelectInitial(r, request, now); !errors.Is(err, ErrNoCapacity) {
+			t.Fatal("unresolved default bypassed a known capacity denial")
+		}
+	}
+}
+
 func TestSparseObservationDoesNotRefreshAllowedAuthorityOrUsage(t *testing.T) {
 	old := time.Now().Add(-QuotaFreshness - time.Minute)
 	now := old.Add(QuotaFreshness + time.Minute)

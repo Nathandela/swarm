@@ -73,6 +73,13 @@ func TestAccountLaunchPoolOnlyAssignsNewDiscussionsAndPreservesFrozenResume(t *t
 	if fresh.Options["model"] != "gpt-fixed" || fresh.AccountStateRoot != m.stateRoot {
 		t.Fatal("account assignment changed requested model or private state anchor")
 	}
+	defaultModel := daemon.LaunchSpec{AgentType: "codex"}
+	if err := api.bindAccountLaunch(&defaultModel); err != nil || defaultModel.AccountBinding == nil || defaultModel.AccountBinding.AccountID != account.ID {
+		t.Fatalf("ordinary launch without --model was not assigned: %v", err)
+	}
+	if defaultModel.Options["model"] != "" || defaultModel.AccountNativeModel != "" {
+		t.Fatal("initial assignment invented a resolved native model")
+	}
 	if _, err := m.store.SetEnabled(accountTestRegistry(t, m).Revision, "codex", false); err != nil {
 		t.Fatal(err)
 	}
