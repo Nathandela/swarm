@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -275,20 +276,24 @@ func (m *accountRotationManager) submit(apply func(*authWatcher) error) error {
 }
 
 func (m *accountRotationManager) persist(rec accountRotationRecord) error {
+	return m.persistOwnership(rec, "", accountHistoryOwnership{})
+}
+
+func (m *accountRotationManager) persistOwnership(rec accountRotationRecord, ownershipKey string, ownership accountHistoryOwnership) error {
 	w := m.w
-	old, existed := w.state.AccountRotations[rec.OriginalSource]
-	oldSchema := w.state.AccountSchemaVersion
+	old := w.state
+	rec = cloneAccountRotation(rec)
 	rec.UpdatedAt = w.clock()
+	w.state.AccountRotations = maps.Clone(old.AccountRotations)
 	w.state.AccountSchemaVersion = 1
 	w.state.AccountRotations[rec.OriginalSource] = rec
+	if ownershipKey != "" {
+		w.state.AccountHistoryOwnership = maps.Clone(old.AccountHistoryOwnership)
+		w.state.AccountHistoryOwnership[ownershipKey] = cloneAccountHistoryOwnership(ownership)
+	}
 	visible, err := w.persistState()
 	if err != nil && !visible {
-		if existed {
-			w.state.AccountRotations[rec.OriginalSource] = old
-		} else {
-			delete(w.state.AccountRotations, rec.OriginalSource)
-		}
-		w.state.AccountSchemaVersion = oldSchema
+		w.state = old
 	}
 	if visible && err != nil {
 		w.markClaimUnconfirmed(rec.OriginalSource)
@@ -440,6 +445,7 @@ func (m *accountRotationManager) block(rec accountRotationRecord, code string) {
 }
 
 func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
+	rec = cloneAccountRotation(rec)
 	w := m.w
 	now := w.clock()
 	if w.claimUnconfirmed(rec.OriginalSource) {
@@ -711,7 +717,7 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		}
 		if rec.CandidateID == "" {
 			for _, child := range w.list() {
-				if child.InputEmbargo == rec.Incident.ID && child.ResumedFrom == source.ID && child.AccountBinding != nil && *child.AccountBinding == *rec.Destination && validCLIIdentity(child.CLIIdentity) && rec.ExpectedCLIIdentity != nil && *child.CLIIdentity == *rec.ExpectedCLIIdentity {
+				if ownedAccountCandidate(rec, child) {
 					rec.CandidateID = child.ID
 					break
 				}
@@ -737,6 +743,11 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		}
 		_, _ = w.withResumeFence(source.ID, func() bool {
 			fresh, err := w.launch(launch)
+			if fresh.ID != "" && !ownedAccountCandidate(rec, fresh) {
+				rec.CandidateID = ""
+				m.block(rec, "successor-launch-not-owned")
+				return true
+			}
 			if fresh.ID != "" {
 				rec.CandidateID = fresh.ID
 				rec.State = accountLaunched
@@ -757,10 +768,9 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 			_ = m.persist(rec)
 			return
 		}
-		if candidate.AccountBinding == nil || *candidate.AccountBinding != *rec.Destination || candidate.InputEmbargo != rec.Incident.ID || candidate.ConversationID != rec.ConversationID {
-			rec.State = accountCandidateFailed
-			rec.LastError = "successor-proof-mismatch"
-			_ = m.persist(rec)
+		if !ownedAccountCandidate(rec, candidate) {
+			rec.CandidateID = ""
+			m.block(rec, "successor-ownership-lost")
 			return
 		}
 		if !m.ready(candidate, rec) {
@@ -773,7 +783,7 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 				rec.Trial.Deadline = now.Add(accounts.TrialLeaseDuration)
 			}
 			key := source.AgentType + ":" + source.ConversationID
-			ownership := w.state.AccountHistoryOwnership[key]
+			ownership := cloneAccountHistoryOwnership(w.state.AccountHistoryOwnership[key])
 			if ownership.ProfileFiles == nil {
 				ownership.ProfileFiles = make(map[string][]accountHistoryFile)
 			}
@@ -782,8 +792,7 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 			ownership.CommittedManifest = rec.Manifest.SHA256
 			ownership.ProfileFiles[historyProfileKey(rec.SourceBinding)] = append([]accountHistoryFile(nil), rec.Manifest.Files...)
 			ownership.ProfileFiles[historyProfileKey(*rec.Destination)] = append([]accountHistoryFile(nil), rec.Manifest.Files...)
-			w.state.AccountHistoryOwnership[key] = ownership
-			if err := m.persist(rec); err != nil {
+			if err := m.persistOwnership(rec, key, ownership); err != nil {
 				return true
 			}
 			if !m.reconcileCommitted(rec) {
@@ -795,6 +804,11 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		if rec.CandidateID != "" {
 			candidate, ok := w.get(rec.CandidateID)
 			if ok {
+				if !ownedAccountCandidate(rec, candidate) {
+					rec.CandidateID = ""
+					m.block(rec, "successor-ownership-lost")
+					return
+				}
 				if candidate.Status.Process == status.ProcessRunning {
 					_ = w.kill(candidate.ID)
 					return
@@ -954,7 +968,9 @@ func (m *accountRotationManager) ownerEnd(w *authWatcher, local, action string) 
 		target = rec.SourceID
 	}
 	if rec.OwnerTarget == "" && (rec.State == accountCommitted || rec.State == accountUnknown || rec.State == accountComplete) && rec.CandidateID != "" {
-		target = rec.CandidateID
+		if candidate, ok := w.get(rec.CandidateID); ok && ownedAccountCandidate(rec, candidate) {
+			target = rec.CandidateID
+		}
 	}
 	if rec.State != accountOwnerCanceled || rec.OwnerTarget == "" {
 		rec.State = accountOwnerCanceled
@@ -965,7 +981,7 @@ func (m *accountRotationManager) ownerEnd(w *authWatcher, local, action string) 
 		}
 	}
 	if rec.CandidateID != "" && rec.CandidateID != target {
-		if candidate, ok := w.get(rec.CandidateID); ok && candidate.Status.Process == status.ProcessRunning {
+		if candidate, ok := w.get(rec.CandidateID); ok && ownedAccountCandidate(rec, candidate) && candidate.Status.Process == status.ProcessRunning {
 			if err := w.kill(candidate.ID); err != nil {
 				return err
 			}
@@ -984,7 +1000,7 @@ func (m *accountRotationManager) reconcileCommitted(rec accountRotationRecord) b
 		return false
 	}
 	candidate, ok := m.w.get(rec.CandidateID)
-	if !ok || candidate.AccountBinding == nil || *candidate.AccountBinding != *rec.Destination || candidate.InputEmbargo != rec.Incident.ID {
+	if !ok || !ownedAccountCandidate(rec, candidate) {
 		return false
 	}
 	if candidate.Status.Process != status.ProcessRunning {

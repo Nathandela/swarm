@@ -1077,9 +1077,15 @@ func (w *authWatcher) saveState() error {
 }
 
 func (w *authWatcher) persistState() (committed bool, err error) {
+	if err := validateAccountRecoveryState(w.state); err != nil {
+		return false, err
+	}
 	raw, err := json.MarshalIndent(w.state, "", "  ")
 	if err != nil {
 		return false, err
+	}
+	if len(raw) > 8<<20 {
+		return false, errors.New("authwatch: state exceeds the readable size limit")
 	}
 	path := filepath.Join(w.stateDir, authWatchStateFile)
 	write := w.writeState
