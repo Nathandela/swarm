@@ -30,6 +30,8 @@ For Codex, fresh device-code sign-in is performed by the native Codex app-server
 
 For Claude, enrollment uses a fresh native personal OAuth sign-in in an isolated Swarm-managed profile. Cached profile import is unavailable pending native authenticated proof that the credential belongs to the identified account. The installed environment's one-year token is also unavailable because offline identity cannot be verified and its effective remote policy is unknown; no manual launch route is supported for it.
 
+Managed launches freeze the selected native profile and the supported project configuration boundary. Claude's unselected global settings are excluded when the worktree is below the user's home; project MCP files remain checked. Codex uses its nearest supported Git root, or the current directory when there is no root, and also checks the main checkout configuration for an ordinary linked worktree. Changed home paths or Git markers, unfamiliar Git layouts and unsupported project settings hold the launch rather than silently changing its configuration.
+
 ## Release acceptance still required
 
 Authenticated release acceptance has not established two accounts per provider, continuation and native credential refresh, effective configuration, history transfer, or a Claude safe-turn after account recovery. Existing unmanaged discussions still refuse migration when original writer and configuration proofs are missing. Token-only Claude execution and cached imports remain unavailable. These gaps must be closed or their scope explicitly changed and recorded before the planned v0.15.0 release; implementation and local tests alone do not satisfy them.
