@@ -987,7 +987,7 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 		account := a.reply.Accounts[row.index]
 		b.WriteString("\n" + styleTitle.Render(accountText(account.Label)) + " · " + accountProviderName(account.Provider) + "\n")
 		b.WriteString("Status: " + accountState(account) + "\n")
-		b.WriteString(fmt.Sprintf("%d assigned discussions\n", account.Assigned))
+		fmt.Fprintf(&b, "%d assigned discussions\n", account.Assigned)
 		if account.Email != "" {
 			b.WriteString("Email: " + accountText(account.Email) + "\n")
 		}
@@ -1182,11 +1182,12 @@ func (w accountWizard) view(width int, lost, busy, loginSupported bool, methods 
 		switch {
 		case w.job.State == "failed" || w.job.State == "cancelled":
 			b.WriteString(accountJobState(w.job) + ".\nAdded accounts are unchanged.\n\n")
-			if w.method == "token-manual" {
+			switch w.method {
+			case "token-manual":
 				b.WriteString("Press r or Enter to enter a new token.\n")
-			} else if w.method == "import-native" {
+			case "import-native":
 				b.WriteString("Press r or Enter to choose a profile again.\n")
-			} else {
+			default:
 				b.WriteString("Press r or Enter to start a new sign-in.\n")
 			}
 		case w.job.State == "verifying" || w.job.State == "admitting" || w.job.State == "cancelling":
