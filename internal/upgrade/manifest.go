@@ -25,16 +25,17 @@ import (
 // checksum that covers the archive covers it too -- signed compatibility
 // metadata, not a hidden verb (committee: codex finding 1).
 type CompatManifest struct {
-	AccountSchema   int    `json:"account_schema"`
-	AccountJobs     int    `json:"account_jobs"`
-	AccountRecovery int    `json:"account_recovery"`
-	AccountWorker   int    `json:"account_worker"`
-	AccountShim     int    `json:"account_shim"`
-	AccountConfig   int    `json:"account_config"`
-	Version         string `json:"version"`  // the release tag
-	Shimwire        int    `json:"shimwire"` // internal/shimwire.Version
-	Protocol        int    `json:"protocol"` // internal/protocol.Version
-	Schema          int    `json:"schema"`   // internal/persist.SchemaVersion
+	AccountSchema    int    `json:"account_schema"`
+	AccountJobs      int    `json:"account_jobs"`
+	AccountRecovery  int    `json:"account_recovery"`
+	AccountWorker    int    `json:"account_worker"`
+	AccountShim      int    `json:"account_shim"`
+	AccountConfig    int    `json:"account_config"`
+	AccountInventory int    `json:"account_inventory"`
+	Version          string `json:"version"`  // the release tag
+	Shimwire         int    `json:"shimwire"` // internal/shimwire.Version
+	Protocol         int    `json:"protocol"` // internal/protocol.Version
+	Schema           int    `json:"schema"`   // internal/persist.SchemaVersion
 }
 
 // CurrentManifest is THIS build's card -- what the emitter writes at release,
@@ -46,6 +47,7 @@ func CurrentManifest(tag string) CompatManifest {
 		Protocol:      protocol.Version,
 		Schema:        persist.ManagedSchemaVersion,
 		AccountSchema: accounts.SchemaVersion, AccountJobs: 1, AccountRecovery: accounts.RecoverySchemaVersion, AccountWorker: accountcheck.SchemaVersion, AccountShim: shim.ManagedWriterSchemaVersion, AccountConfig: 1,
+		AccountInventory: accounts.NativeInventorySchemaVersion,
 	}
 }
 

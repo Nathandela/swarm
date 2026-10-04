@@ -62,6 +62,28 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 	if snapshotErr != nil {
 		return errors.New("account registry cannot be verified")
 	}
+	for _, raw := range reg.Accounts {
+		var account struct {
+			Generations map[string]struct {
+				ErasureInventory json.RawMessage `json:"erasure_inventory"`
+			} `json:"generations"`
+		}
+		if json.Unmarshal(raw, &account) != nil {
+			return errors.New("account erasure inventory cannot be verified")
+		}
+		for _, generation := range account.Generations {
+			if generation.ErasureInventory == nil {
+				continue
+			}
+			var contract string
+			if json.Unmarshal(generation.ErasureInventory, &contract) != nil || contract == "" {
+				return errors.New("account erasure inventory cannot be verified")
+			}
+			if card.AccountInventory < accounts.NativeInventorySchemaVersion {
+				return errors.New("the target build cannot preserve native account erasure inventory")
+			}
+		}
+	}
 	if len(reg.Accounts) > 0 {
 		if card.AccountSchema < reg.SchemaVersion || card.AccountShim < shim.ManagedWriterSchemaVersion || card.AccountConfig < 1 {
 			return errors.New("the target build cannot preserve private account bindings and configuration")
@@ -77,6 +99,25 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 		}
 		if len(jobs.Jobs) > 0 && (card.AccountJobs < jobs.SchemaVersion || card.AccountWorker < 1) {
 			return errors.New("the target build cannot manage persisted account enrollment workers")
+		}
+		for _, raw := range jobs.Jobs {
+			var job struct {
+				State           string          `json:"state"`
+				CustodyConsumed json.RawMessage `json:"custody_consumed"`
+			}
+			if json.Unmarshal(raw, &job) != nil {
+				return errors.New("account enrollment custody cannot be verified")
+			}
+			if job.CustodyConsumed == nil {
+				continue
+			}
+			var consumed bool
+			if string(job.CustodyConsumed) == "null" || json.Unmarshal(job.CustodyConsumed, &consumed) != nil || (consumed && job.State != "admitted" && job.State != "cancelled") {
+				return errors.New("account enrollment custody cannot be verified")
+			}
+			if card.AccountInventory < accounts.NativeInventorySchemaVersion {
+				return errors.New("the target build cannot preserve consumed account enrollment custody")
+			}
 		}
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return errors.New("account enrollment state cannot be verified")
