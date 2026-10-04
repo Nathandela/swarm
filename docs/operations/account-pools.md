@@ -2,7 +2,7 @@
 
 Account pools let Swarm keep separate personal Claude and Codex logins and assign each new discussion to one account. Automatic rotation is opt-in per provider. Adding an account does not enroll existing discussions or change their current credentials.
 
-> **Release status (2026-10-04):** [v0.15.2 was published](https://github.com/Nathandela/swarm/releases/tag/v0.15.2) at 12:56 UTC and deployed. It adds automatic read-only usage updates for verified native Claude and Codex accounts. After activation, the installed reader observed fresh usage for both enrolled Claude profiles; Codex reads remain covered by synthetic fixtures because no live Codex profile was available. Native continuation and quota-triggered switching acceptance remain open. Token-only execution, cached imports and legacy-discussion migration remain unavailable follow-up scope. See the [v0.15.2 verification record](../verification/account-pools-v0152.md).
+> **Release status (2026-10-04):** [v0.15.3 was published](https://github.com/Nathandela/swarm/releases/tag/v0.15.3) at 13:51 UTC and deployed. It shortens known quota-window labels in the Accounts list and details. The installed Accounts UI was verified at 80 columns with two Claude accounts: both rows retained the 5h and weekly usage percentages, and both details showed usage, remaining percentages, reset times when supplied, and reading age. Codex display was not checked against a live account; native continuation and quota-triggered switching remain open. See the [v0.15.3 verification record](../verification/account-pools-v0153.md) and the [v0.15.2 quota-reader record](../verification/account-pools-v0152.md) for the quota fetching behavior and safeguards.
 
 ## Manage accounts
 
