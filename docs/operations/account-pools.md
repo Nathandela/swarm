@@ -2,7 +2,7 @@
 
 Account pools let Swarm keep separate personal Claude and Codex logins and assign each new discussion to one account. Automatic rotation is opt-in per provider. Adding an account does not enroll existing discussions or change their current credentials.
 
-> **Release status:** v0.15.0 is planned and unreleased. Fresh native sign-in for Claude and Codex is implemented, but authenticated release acceptance is incomplete. This guide describes implemented behavior and open release requirements; it is not evidence of release availability or provider acceptance.
+> **Release status (2026-10-04):** v0.15.0 release is authorized; publishing and deployment are pending. The authorized scope is native-login account pools for new managed discussions. Real two-account and full-flow acceptance will be tested after deployment. Token-only Claude execution, cached credential imports, and migration of older discussions remain unavailable follow-up work.
 
 ## Manage accounts
 
@@ -14,7 +14,7 @@ Account changes take effect when saved and are separate from pending Options cha
 
 ## Enable or move discussions
 
-Enable **automatic rotation for new sessions** separately for Claude and Codex. This changes assignments for future discussions only. Account details offer **Move discussion here** for discussions with a verified private binding. Busy discussions can be deferred until the existing recovery safeguards allow a move. Discussions launched before account pools do not have the required writer and configuration proofs and receive a clear refusal; their migration remains an acceptance requirement before production release. Swarm does not change an account underneath a running process.
+Enable **automatic rotation for new sessions** separately for Claude and Codex. This changes assignments for future discussions only. Account details offer **Move discussion here** for discussions with a verified private binding. Busy discussions can be deferred until the existing recovery safeguards allow a move. Discussions launched before account pools do not have the required writer and configuration proofs and receive a clear refusal; safe migration remains follow-up work. Swarm does not change an account underneath a running process.
 
 New discussions can use the provider's default model. Until the native CLI reports its effective model, capacity remains unknown and a known denial is not bypassed. Automatic recovery waits for verified model evidence.
 
@@ -32,9 +32,9 @@ For Claude, enrollment uses a fresh native personal OAuth sign-in in an isolated
 
 Managed launches freeze the selected native profile and the supported project configuration boundary. Claude's unselected global settings are excluded when the worktree is below the user's home; project MCP files remain checked. Codex uses its nearest supported Git root, or the current directory when there is no root, and also checks the main checkout configuration for an ordinary linked worktree. Changed home paths or Git markers, unfamiliar Git layouts and unsupported project settings hold the launch rather than silently changing its configuration.
 
-## Release acceptance still required
+## Post-deployment acceptance and follow-up
 
-Authenticated release acceptance has not established two accounts per provider, continuation and native credential refresh, effective configuration, history transfer, or a Claude safe-turn after account recovery. Existing unmanaged discussions still refuse migration when original writer and configuration proofs are missing. Token-only Claude execution and cached imports remain unavailable. These gaps must be closed or their scope explicitly changed and recorded before the planned v0.15.0 release; implementation and local tests alone do not satisfy them.
+The v0.15.0 release scope is native-login account pools for new managed discussions. Real two-account operation and the full flow—including continuation, native credential refresh, effective configuration, history transfer, and a Claude safe-turn after account recovery—remain post-deployment acceptance work. Existing unmanaged discussions still refuse migration when original writer and configuration proofs are missing. Token-only Claude execution, cached imports, and legacy-discussion migration remain unavailable follow-up work.
 
 The existing release and recovery procedures remain authoritative for binary upgrades and rollback: see [automatic upgrades](../ops/auto-upgrade.md) and [release signing](release-signing.md). Account storage adds local credentials and bindings; before using an older binary, follow the compatibility result produced by Swarm and do not manually remove account state to bypass a refusal.
 
