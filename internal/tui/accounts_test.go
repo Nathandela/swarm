@@ -448,6 +448,63 @@ func TestAccounts_QuotaAgeAndDistinctAvailabilityActions(t *testing.T) {
 	}
 }
 
+func TestAccounts_RetirementStatusAndConfirmation(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		retiring          bool
+		credentialsErased bool
+		want              string
+	}{
+		{name: "active", want: "available"},
+		{name: "retiring", retiring: true, want: "Retiring · credentials retained"},
+		{name: "retired", retiring: true, credentialsErased: true, want: "Retired · account credentials removed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newAccountUIClient()
+			c.reply.Accounts = []protocol.AccountView{{ID: "account-1", Provider: "claude", Label: "Personal", State: "available", Retiring: tc.retiring, CredentialsErased: tc.credentialsErased}}
+			m := accountUIOpen(t, c)
+			m = send(m, keyDown)
+			m = send(m, keyEnter)
+			if !strings.Contains(view(m), tc.want) {
+				t.Fatalf("account detail missing status %q", tc.want)
+			}
+		})
+	}
+
+	c := newAccountUIClient()
+	c.reply.Accounts = []protocol.AccountView{{ID: "account-1", Provider: "claude", Label: "Personal", State: "available"}}
+	m := accountUIOpen(t, c)
+	m = send(m, keyDown)
+	m = send(m, keyEnter)
+	rm := m.(rootModel)
+	rm.accounts.detailFocus = 5
+	m = rm
+	before := len(c.requests)
+	m = send(m, keyEnter)
+	confirmation := view(m)
+	for _, want := range []string{
+		"New discussions stop using it.",
+		"Existing discussions continue.",
+		"Local account credentials remain until Swarm verifies they can be removed.",
+		"Discussion history is kept.",
+	} {
+		if !strings.Contains(confirmation, want) {
+			t.Fatalf("retirement confirmation missing %q", want)
+		}
+	}
+	if len(c.requests) != before {
+		t.Fatal("opening retirement confirmation sent a request")
+	}
+	requesting, cmd := m.Update(keyRune('y'))
+	if cmd == nil {
+		t.Fatal("confirmed retirement did not dispatch")
+	}
+	_, _ = requesting.Update(cmd())
+	if req := c.requests[len(c.requests)-1]; req.Action != "update" || req.AccountID != "account-1" || !req.Retire {
+		t.Fatalf("confirmed retirement sent wrong request: %+v", req)
+	}
+}
+
 func TestAccounts_StalePageAndClientRepliesCannotMutate(t *testing.T) {
 	c := newAccountUIClient()
 	m := accountUIOpen(t, c).(rootModel)

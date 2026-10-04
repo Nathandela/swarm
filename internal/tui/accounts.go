@@ -741,6 +741,9 @@ func accountText(s string) string {
 
 func accountState(account protocol.AccountView) string {
 	if account.Retiring {
+		if account.CredentialsErased {
+			return "Retired · account credentials removed"
+		}
 		return "Retiring · credentials retained"
 	}
 	s := strings.ReplaceAll(strings.ReplaceAll(account.State, "_", " "), "-", " ")
@@ -840,7 +843,7 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 		return accountScrolled(accountWrap(b.String(), width), height, -1)
 	}
 	if a.retireConfirm {
-		b.WriteString("\nRetire this account? New assignments stop immediately.\nAssigned discussions continue. This build retains the local credentials.\nProvider logout/revocation is not performed.\n\ny confirm · n/Esc cancel\n")
+		b.WriteString("\nRetire this account? New discussions stop using it.\nExisting discussions continue. Local account credentials remain until Swarm verifies they can be removed.\nDiscussion history is kept.\n\ny confirm · n/Esc cancel\n")
 		return accountScrolled(accountWrap(b.String(), width), height, a.scroll)
 	}
 	row := a.selected()
