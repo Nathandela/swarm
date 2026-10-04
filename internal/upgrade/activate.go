@@ -161,6 +161,11 @@ func Activate(opts ActivateOptions) (State, error) {
 		return s, recordState(opts.StateDir, &s)
 	}
 
+	if err := accountStateGuard(opts.StateDir, card); err != nil {
+		s.Outcome, s.Detail = "refused-account-state", err.Error()
+		return s, recordState(opts.StateDir, &s)
+	}
+
 	// Gate 1b: the schema guard, BOTH directions of travel (Fable M1): rollback
 	// already refuses restoring a build that cannot load the persisted metas,
 	// and an --allow-downgrade activation is the same brick through the front

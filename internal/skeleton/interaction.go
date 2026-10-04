@@ -39,6 +39,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/claude"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/remotegw"
@@ -165,12 +166,17 @@ func (d *Daemon) serveHookInteractions(cb engine.Callback) {
 	// resolves to nothing -- the SAME "no capture" outcome an early return here
 	// would give, with no behavior change for any session the core DOES know.
 	var agentType string
+	managedClaude := false
 	if m, ok := d.core.Get(cb.SessionID); ok {
 		agentType = m.AgentType
+		managedClaude = m.AccountBinding != nil && m.AgentType == "claude"
 	}
 	ad, ok := d.resolveAdapter(agentType)
 	if !ok {
 		return
+	}
+	if managedClaude {
+		ad = claude.ManagedObservations()
 	}
 	payload := adapter.HookPayload{
 		Event: cb.Event,

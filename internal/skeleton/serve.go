@@ -228,6 +228,8 @@ type Daemon struct {
 	// policy state; it never dispatches while the provider action is observe-only.
 	contextGuardSettings *contextGuardSettingsStore
 	contextGuards        *contextGuardManager
+	accounts             *accountManager
+	accountRotation      *accountRotationManager
 
 	// sup is the passive handoff supervisor (ADR-010 Amendment 3 C2; supervision.go):
 	// armed from registerSession, signalled from emitStatus and endSession, closed by
@@ -321,6 +323,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		MaxSessions:    cfg.MaxSessions,
 		ConnHandler:    d.handleConn,
 		PreLaunch:      preLaunchWorktree,
+		FinalizeLaunch: d.prepareAccountLaunch,
 		PreDelete:      preDeleteWorktree,
 		OnSessionStart: d.registerSession,
 		OnSessionEnd:   d.endSession,
@@ -339,6 +342,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.restoreDirectInputState(locals)
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	d.accounts = openAccountManager(cfg.StateDir, cfg.ShimBinary, core.List)
+	d.api.accounts = d.accounts
 	d.api.contextGuardSettings = d.contextGuardSettings
 	d.api.contextGuards = d.contextGuards
 	d.api.syncName = func(local, name string) {
@@ -349,7 +354,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		historyHome, _ = os.UserHomeDir()
 	}
 	d.home = historyHome
-	d.api.historyResolver = newFilesystemResumeHistoryResolver(historyHome, defaultResumeHistoryLimits)
+	d.api.historyResolver = newAccountResumeHistoryResolver(cfg.StateDir, newFilesystemResumeHistoryResolver(historyHome, defaultResumeHistoryLimits))
 	// ADR-017 T2-a's three assembly hooks: author at launch (api.go), author on the
 	// re-attach of a session dir that has no record (sessiontap.go), and the PURE READ
 	// the remote-tier capability gate consults. Wired here and nowhere else, so there is
@@ -616,6 +621,12 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.authw = newAuthWatcher(cfg.StateDir, epID, AuthProbedAgents(), CurrentAuthIdentity,
 		d.api.List, d.core.Get, d.core.Kill, d.api.Launch, d.core.Delete,
 		authRecycleUnsafeSource, authRecycleCoordination{
+			managedInit: func(w *authWatcher) {
+				d.accountRotation = newAccountRotationManager(d, w, d.accounts.store)
+				d.accounts.refresh = d.accountRotation.Refresh
+				d.accounts.retry = d.accountRotation.RetryAvailability
+				d.accounts.move = d.accountRotation.RequestMove
+			},
 			ready:     d.authRecoveryReady,
 			cliUnsafe: d.directInputUnresolved,
 			restore:   d.restoreAuthRecycle,
@@ -675,6 +686,9 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	var sources []adapter.SignalSource
 	if ad, ok := registry.New(m.AgentType); ok {
 		sources = ad.SignalSources()
+	}
+	if m.AccountBinding != nil && m.AgentType == "claude" {
+		sources = append(sources, managedClaudeObserverSources()...)
 	}
 	// Register WITH the session's persisted status in ONE atomic op (C2/S7): at fresh
 	// launch m.Status is the humble launch baseline; on reconcile after a restart it
@@ -1213,6 +1227,9 @@ func (d *Daemon) Close() error {
 		if d.contextGuards != nil {
 			d.contextGuards.close() // workers stop before provider backends/core teardown
 		}
+		if d.accounts != nil {
+			d.accounts.close()
+		} // drain account mutations before releasing singleton ownership
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
 		if d.remoteSrv != nil {

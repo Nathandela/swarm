@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/transcript"
@@ -40,17 +41,22 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
-	CLIIdentity   *persist.CLIIdentity
-	SessionID     string
-	Argv          []string // argv[0] = program; exec'd directly, never via a shell
-	Cwd           string   // agent working directory
-	Env           []string // pre-filtered by caller; used verbatim (+ TERM if absent)
-	SocketPath    string   // per-session UDS
-	SessionDir    string   // side-files: final-snapshot.bin, exit.json, transcript.log
-	Cols, Rows    int      // initial PTY + emulator dimensions
-	TranscriptCfg transcript.Config
-	GraceTimeout  time.Duration // TERM->KILL grace on the signal op
-	Metrics       *Metrics      // optional, test-observable counters
+	AccountBinding       *accounts.Binding
+	AccountProjectionRef string
+	AccountStateRoot     string
+	InputEmbargo         string
+	InputEmbargoToken    string
+	CLIIdentity          *persist.CLIIdentity
+	SessionID            string
+	Argv                 []string // argv[0] = program; exec'd directly, never via a shell
+	Cwd                  string   // agent working directory
+	Env                  []string // pre-filtered by caller; used verbatim (+ TERM if absent)
+	SocketPath           string   // per-session UDS
+	SessionDir           string   // side-files: final-snapshot.bin, exit.json, transcript.log
+	Cols, Rows           int      // initial PTY + emulator dimensions
+	TranscriptCfg        transcript.Config
+	GraceTimeout         time.Duration // TERM->KILL grace on the signal op
+	Metrics              *Metrics      // optional, test-observable counters
 
 	// HookSocketPath is the per-session hook UDS (playbook §6.1): a second listener,
 	// independent of SocketPath's PTY/control plane. Empty disables it entirely --
@@ -120,6 +126,25 @@ func Run(cfg Config) (agentExit int, err error) {
 	if len(cfg.Argv) == 0 {
 		return 0, errors.New("shim: empty Argv (no program to exec)")
 	}
+	managed, err := beginManagedNativeScope(cfg)
+	if err != nil {
+		return 0, err
+	}
+	// Every direct child's Wait is joined on each return path before this runs.
+	// The durable proof is emitted after all remaining adopted children are reaped.
+	defer func() { err = errors.Join(err, managed.finish()) }()
+	// Resolve once, before either native process can start. Scope custody is
+	// already installed so a clean selector failure also has positive stop proof.
+	if err := resolveAccountEnvironment(&cfg); err != nil {
+		return 0, err
+	}
+
+	embargo, err := openAccountEmbargo(cfg)
+	if err != nil {
+		return 0, err
+	}
+
+	defer embargo.close()
 
 	emu := vt.NewEmulator(cfg.Cols, cfg.Rows)
 	defer func() { _ = emu.Close() }()
@@ -232,6 +257,8 @@ func Run(cfg Config) (agentExit int, err error) {
 			return 0, fmt.Errorf("shim: start agent: %w", startErr)
 		}
 		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, cmd.Process.Pid, cfg.GraceTimeout, cfg.Metrics)
+		srv.managedSignals = managed != nil
+		srv.ptyIn.embargo = embargo
 		replies = wireReplies(emu, srv)
 		startPlanes()
 	} else {
@@ -252,6 +279,8 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 		_ = setWinsize(ptmx, ws)
 		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, 0, cfg.GraceTimeout, cfg.Metrics)
+		srv.managedSignals = managed != nil
+		srv.ptyIn.embargo = embargo
 		replies = wireReplies(emu, srv)
 		startPlanes()
 
@@ -275,7 +304,7 @@ func Run(cfg Config) (agentExit int, err error) {
 				// find (containBackendFailure says why). setBackendPgid(0) afterwards:
 				// the group is fully reaped, and re-KILLing that pgid at finalization
 				// -- possibly hours later -- could hit a recycled group.
-				containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout)
+				containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout, managed != nil)
 				srv.setBackendPgid(0)
 			}
 		} else if werr := writeBackendInfo(cfg.SessionDir, backend, cfg.Backend.SocketPath); werr != nil {
@@ -290,7 +319,7 @@ func Run(cfg Config) (agentExit int, err error) {
 			log.Printf("shim: record the session backend: %v; killing the unrecorded backend "+
 				"and launching the agent without it (a backend the daemon cannot identify "+
 				"must not survive this shim)", werr)
-			containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout)
+			containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout, managed != nil)
 			srv.setBackendPgid(0)
 		} else {
 			// SERVING AND RECORDED, so the session HAS a structured plane and its death
@@ -348,6 +377,11 @@ func Run(cfg Config) (agentExit int, err error) {
 			return 0, fmt.Errorf("shim: start agent: %w", startErr)
 		}
 		srv.setAgentPgid(cmd.Process.Pid)
+	}
+
+	nativeRecordErr := managed.record(cmd.Process.Pid, backend)
+	if nativeRecordErr != nil {
+		srv.onSignal(shimwire.SigKill)
 	}
 
 	if cliStable && (cfg.Backend == nil || backendWatch != nil) {
@@ -471,7 +505,7 @@ func Run(cfg Config) (agentExit int, err error) {
 		<-hookAcceptDone
 	}
 
-	return exitCode, persistErr
+	return exitCode, errors.Join(persistErr, nativeRecordErr)
 }
 
 // wireReplies routes emulator query replies (DSR/DA/...) back into the PTY master so the

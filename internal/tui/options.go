@@ -30,6 +30,7 @@ const (
 	optionsFocusOrder
 	optionsFocusAutoCompact
 	optionsFocusThreshold
+	optionsFocusAccounts
 )
 
 // optionsModel is the open form: the focused row and the pending choices.
@@ -59,6 +60,20 @@ type contextGuardSettingsSavedMsg struct {
 	generation uint64
 	settings   protocol.ContextGuardSettings
 	err        error
+}
+
+func (m *rootModel) invalidateOptionsConnection() {
+	if m.screen != screenOptions && m.screen != screenAccounts {
+		return
+	}
+	o := &m.options.contextGuard
+	if !o.available {
+		return
+	}
+	m.optionsGeneration++
+	o.generation = m.optionsGeneration
+	o.loading, o.saving = false, false
+	o.err = "daemon connection changed; reopen options to reload settings"
 }
 
 func newOptionsModel(grouping groupingMode, ordering orderingMode, c Client, generation uint64) (optionsModel, tea.Cmd) {
@@ -100,6 +115,9 @@ func saveContextGuardSettingsCmd(c contextGuardSettingsClient, generation, revis
 const optionsHint = "←→ change · tab/↑↓ next · enter apply · esc cancel"
 
 func (o optionsModel) hint() string {
+	if o.focus == optionsFocusAccounts {
+		return "enter accounts · tab/↑↓ next · esc cancel options"
+	}
 	if !o.contextGuard.available || !o.contextGuard.loaded {
 		return optionsHint
 	}
@@ -113,11 +131,16 @@ func (m rootModel) updateOptions(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEsc:
 		return m, m.enterGeneral()
 	case tea.KeyUp:
-		o.focus = wrapIndex(o.focus-1, o.focusCount())
+		o.moveFocus(-1)
 		return m, nil
 	case tea.KeyDown, tea.KeyTab:
-		o.focus = wrapIndex(o.focus+1, o.focusCount())
+		o.moveFocus(1)
 		return m, nil
+	}
+	// Accounts remains reachable while settings load, save or fail. Opening it
+	// keeps this exact Options form, including its pending choices and snapshot.
+	if k.Code == tea.KeyEnter && o.focus == optionsFocusAccounts {
+		return m.enterAccounts()
 	}
 	// A load/save owns the settings snapshot. The owner may still navigate and cancel,
 	// but no key may mutate it or begin a second same-revision CAS while it is in flight.
@@ -162,11 +185,23 @@ func optionStep(k tea.KeyPressMsg) int {
 	return 1
 }
 
-func (o optionsModel) focusCount() int {
+func (o optionsModel) focusRows() []int {
+	rows := []int{optionsFocusGroup, optionsFocusOrder}
 	if o.contextGuard.available && o.contextGuard.loaded {
-		return 4
+		rows = append(rows, optionsFocusAutoCompact, optionsFocusThreshold)
 	}
-	return 2
+	return append(rows, optionsFocusAccounts)
+}
+
+func (o *optionsModel) moveFocus(step int) {
+	rows := o.focusRows()
+	for i, row := range rows {
+		if row == o.focus {
+			o.focus = rows[wrapIndex(i+step, len(rows))]
+			return
+		}
+	}
+	o.focus = rows[0]
 }
 
 // cycle steps the focused picker, wrapping at both ends.
@@ -211,7 +246,7 @@ func (m rootModel) beginContextGuardSave() (tea.Model, tea.Cmd) {
 }
 
 func (m rootModel) applyContextGuardSettingsLoaded(msg contextGuardSettingsLoadedMsg) (tea.Model, tea.Cmd) {
-	if m.screen != screenOptions || !m.options.contextGuard.available || msg.generation != m.options.contextGuard.generation {
+	if (m.screen != screenOptions && m.screen != screenAccounts) || !m.options.contextGuard.available || msg.generation != m.options.contextGuard.generation {
 		return m, nil
 	}
 	o := &m.options.contextGuard
@@ -230,7 +265,7 @@ func (m rootModel) applyContextGuardSettingsLoaded(msg contextGuardSettingsLoade
 }
 
 func (m rootModel) applyContextGuardSettingsSaved(msg contextGuardSettingsSavedMsg) (tea.Model, tea.Cmd) {
-	if m.screen != screenOptions || !m.options.contextGuard.available || msg.generation != m.options.contextGuard.generation {
+	if (m.screen != screenOptions && m.screen != screenAccounts) || !m.options.contextGuard.available || msg.generation != m.options.contextGuard.generation {
 		return m, nil
 	}
 	o := &m.options.contextGuard
@@ -248,6 +283,11 @@ func (m rootModel) applyContextGuardSettingsSaved(msg contextGuardSettingsSavedM
 	o.savedCompact = msg.settings.AutoCompact
 	o.threshold.set(strconv.Itoa(msg.settings.AutoCompact.ThresholdPercent))
 	o.err = ""
+	if m.screen == screenAccounts {
+		// A save acknowledged while visiting Accounts commits the layout, but
+		// leaves the active page and the Options form intact for the return trip.
+		return m, m.applyLayout(m.options.grouping, m.options.ordering)
+	}
 	return m, tea.Batch(m.applyLayout(m.options.grouping, m.options.ordering), m.enterGeneral())
 }
 
@@ -260,17 +300,19 @@ func (o optionsModel) view(width int) string {
 	b.WriteString(styleTitle.Render("swarm") + styleDim.Render(" · options") + "\n\n")
 	b.WriteString(fieldLine("group", picker(groupingLabels[:], int(o.grouping), width-agentRowIndent), o.focus == optionsFocusGroup))
 	b.WriteString(fieldLine("order", picker(orderingLabels[:], int(o.ordering), width-agentRowIndent), o.focus == optionsFocusOrder))
+	// Every early return (unsupported/loading/error) retains the action.
+	accounts := fieldLine("accounts", "Accounts →", o.focus == optionsFocusAccounts)
 	if !o.contextGuard.available {
-		return b.String()
+		return b.String() + "\n" + accounts
 	}
 	b.WriteString("\n" + styleDim.Render("Context guard: Codex only · compacts when quiet and unattended, then continues the task") + "\n")
 	if o.contextGuard.loading {
 		b.WriteString(styleDim.Render("  loading context guard settings…") + "\n")
-		return b.String()
+		return b.String() + "\n" + accounts
 	}
 	if !o.contextGuard.loaded {
 		b.WriteString(styleDim.Render("  "+o.contextGuard.err) + "\n")
-		return b.String()
+		return b.String() + "\n" + accounts
 	}
 	compact := "[ ] disabled"
 	if o.contextGuard.autoCompact.Enabled {
@@ -288,7 +330,7 @@ func (o optionsModel) view(width int) string {
 	if o.contextGuard.err != "" {
 		b.WriteString(styleError.Render("  "+o.contextGuard.err) + "\n")
 	}
-	return b.String()
+	return b.String() + "\n" + accounts
 }
 
 // picker renders a choice row the way the agent picker does: the selection as an

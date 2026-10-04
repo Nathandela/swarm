@@ -81,6 +81,7 @@ const (
 	// do not start a context-guard worker; this is settings/protocol foundation only.
 	OpContextGuardGet = "context_guard_get"
 	OpContextGuardSet = "context_guard_set"
+	OpAccountsManage  = "account_manage"
 
 	// OpTakeControl is the signed remote MUTATING op (slice A5-a) that acquires a
 	// controller lease on a session — the anti-abuse gate that must precede any remote
@@ -205,6 +206,7 @@ const (
 	// CapContextGuardSettings keeps a new owner settings operation from silently
 	// degrading against an older daemon that would otherwise only know version 1.
 	CapContextGuardSettings = "context-guard-settings"
+	CapAccountsManage       = "accounts.manage.v1"
 )
 
 // The closed spawn-intent vocabulary (ADR-010 D4), re-exported from the schema
@@ -246,6 +248,12 @@ type (
 	ContextGuardAutoCompact    = schema.ContextGuardAutoCompact
 	ContextGuardSettings       = schema.ContextGuardSettings
 	ContextGuardSettingsSetReq = schema.ContextGuardSettingsSetReq
+	AccountsReq                = schema.AccountsReq
+	AccountsReply              = schema.AccountsReply
+	AccountView                = schema.AccountView
+	AccountQuotaView           = schema.AccountQuotaView
+	AccountMethodView          = schema.AccountMethodView
+	AccountEnrollmentView      = schema.AccountEnrollmentView
 	ContextGuardView           = schema.ContextGuardView
 )
 

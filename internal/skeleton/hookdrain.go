@@ -39,6 +39,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accounts"
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/shim"
 )
@@ -83,13 +86,91 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 		log.Printf("skeleton: hook callback sequence %d for session %s was already ingested; dropped as a redelivery", cb.Sequence, cb.SessionID)
 		return fmt.Errorf("skeleton: hook callback sequence %d already ingested for session %s", cb.Sequence, cb.SessionID)
 	}
-	if err := d.eng.HandleCallback(cb); err != nil {
+	// Durable account evidence is admitted after live-token authentication and
+	// before engine sequence application. Its replay is independent of that
+	// status gate, so a full queue or crash cannot erase the account side effect.
+	if d.accountRotation != nil {
+		if err := d.eng.AuthenticateCallback(cb); err != nil {
+			log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
+			return err
+		}
+		var err error
+		switch cb.Event {
+		case "SessionStart":
+			err = d.admitManagedClaudeIdentity(cb)
+			if err == nil {
+				err = d.accountRotation.NoteConversation(cb.SessionID, cb.Payload["session_id"], cb.Raw, cb.Sequence)
+			}
+		case "StopFailure":
+			err = d.accountRotation.NoteClaudeFailure(cb)
+		case "UserPromptSubmit", "Stop":
+			err = d.accountRotation.NoteClaudeTurn(cb)
+		}
+		if err != nil {
+			return fmt.Errorf("%w: %v", errAccountInboxRetry, err)
+		}
+	}
+	statusCallback := cb
+	if d.accountRotation != nil && cb.Event == "StopFailure" {
+		if meta, ok := d.core.Get(cb.SessionID); ok && meta.AccountBinding != nil && meta.AgentType == "claude" {
+			var body struct {
+				AgentID   string `json:"agent_id"`
+				SessionID string `json:"session_id"`
+				Error     string `json:"error"`
+			}
+			if rejectDuplicateJSONKeys(cb.Raw) == nil && json.Unmarshal(cb.Raw, &body) == nil && body.SessionID == meta.ConversationID && body.AgentID == "" && (body.Error == "rate_limit" || body.Error == "authentication_failed") {
+				statusCallback.Event = "Stop"
+				statusCallback.Payload = map[string]string{engine.PayloadKeyTurn: "idle"}
+			}
+		}
+	}
+	if err := d.eng.HandleCallback(statusCallback); err != nil {
 		log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
 		return err
 	}
 	d.serveHookInteractions(cb)
 	d.markHookSeqIngested(cb.SessionID, cb.Sequence)
 	return nil
+}
+
+// The first authenticated native SessionStart establishes the write-once
+// conversation before critical model evidence is captured. Other interaction
+// identity capture retains its existing best-effort behavior.
+func (d *Daemon) admitManagedClaudeIdentity(cb engine.Callback) error {
+	meta, ok := d.core.Get(cb.SessionID)
+	if !ok || meta.AccountBinding == nil || meta.AgentType != "claude" {
+		return nil
+	}
+	var body struct {
+		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
+	}
+	if len(cb.Raw) > 1<<20 || rejectDuplicateJSONKeys(cb.Raw) != nil || json.Unmarshal(cb.Raw, &body) != nil || body.AgentID != "" || body.SessionID != cb.Payload["session_id"] || !adapter.IsCanonicalConversationID(body.SessionID) {
+		return nil
+	}
+	if meta.ConversationID != "" && meta.ConversationID != body.SessionID {
+		return nil // the existing write-once identity cannot be replaced
+	}
+	if err := d.core.SetConversationID(cb.SessionID, body.SessionID); err != nil {
+		return err
+	}
+	current, ok := d.core.Get(cb.SessionID)
+	if !ok || current.AccountBinding == nil || *current.AccountBinding != *meta.AccountBinding || current.ConversationID != body.SessionID {
+		return accounts.ErrIneligible
+	}
+	root, err := openAccountRecoveryRoot(d.stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	session, err := historyOpenDir(root, cb.SessionID, false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = session.Close() }()
+	// Meta's writer fsyncs the file before rename; account evidence also requires
+	// its containing directory durable before the hook may be acknowledged.
+	return historySync(session)
 }
 
 // hookSeenAboveMax bounds how many NON-CONTIGUOUS above-floor sequences one session's
@@ -581,6 +662,9 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor ui
 			break
 		}
 		if ierr := hd.d.ingestHookBytes(rec.Body); ierr != nil {
+			if errors.Is(ierr, errAccountInboxRetry) {
+				return applied, skipped, ierr
+			}
 			skipped++
 		} else {
 			applied++

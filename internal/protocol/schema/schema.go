@@ -90,6 +90,8 @@ type Control struct {
 	// byte shape of every pre-ADR-023 Control frame.
 	ContextGuardSettings *ContextGuardSettings       `json:"context_guard_settings,omitempty"`
 	ContextGuardSet      *ContextGuardSettingsSetReq `json:"context_guard_set,omitempty"`
+	AccountsRequest      *AccountsReq                `json:"accounts_request,omitempty"`
+	AccountsResult       *AccountsReply              `json:"accounts_result,omitempty"`
 
 	Terminal *TerminalSnapshot `json:"terminal,omitempty"` // server-rendered terminal snapshot, carried on terminal_snapshot (A7 slice B)
 

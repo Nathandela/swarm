@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"log"
 	"net/http"
 	"os"
@@ -143,6 +144,7 @@ type coreAPI struct {
 	// bare coreAPI tests, where the optional protocol seam honestly answers unavailable.
 	contextGuardSettings *contextGuardSettingsStore
 	contextGuards        *contextGuardManager
+	accounts             *accountManager
 	// ksMu guards the read-time diff-write of the durable kill-switch state:
 	// RemoteControlEnabled runs on every remote op and concurrently. ksPersisted is the
 	// last enabled value written to remote-state.json this process (nil => never written),
@@ -1084,6 +1086,22 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		if existing, ok := runningConversation(a.core.List(), source); ok {
 			return existing, nil
 		}
+		if source.AccountBinding != nil {
+			if a.accounts == nil || a.accounts.store == nil || a.accounts.unavailable != nil || a.accounts.stateRoot == "" {
+				return persist.Meta{}, errAccountLaunch
+			}
+			// Retained attempts can still own profile writers after a later
+			// attempt stopped cleanly. Check the whole bound conversation while
+			// the same fence prevents another owner resume from racing spawn.
+			for _, attempt := range a.core.List() {
+				if attempt.AccountBinding == nil || attempt.AgentType != source.AgentType || (attempt.ID != source.ID && (source.ConversationID == "" || attempt.ConversationID != source.ConversationID)) {
+					continue
+				}
+				if err := verifyAccountWritersStopped(a.accounts.stateRoot, attempt); err != nil {
+					return persist.Meta{}, fmt.Errorf("resume: managed native writer death is unconfirmed for %q: %w", attempt.ID, err)
+				}
+			}
+		}
 	}
 	// ADR-024: stamp the account identity of the credentials this agent will load,
 	// resolved at the same moment as the argv and the env above -- this is the one
@@ -1099,12 +1117,21 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	if err != nil {
 		return persist.Meta{}, err
 	}
+	if err := a.bindAccountLaunch(&resolved); err != nil {
+		return persist.Meta{}, err
+	}
 	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex") {
 		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], resolved.ClientEnv, resolved.Cwd)
 		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || observed == nil || *expected != *observed) {
 			return persist.Meta{}, fmt.Errorf("launch: CLI installation changed before refresh")
 		}
 		resolved.CLIIdentity = observed
+		if resolved.AccountBinding != nil {
+			if probeErr != nil || observed == nil || !accountconfig.SupportedNativeVersion(resolved.AgentType, observed.Version) {
+				return persist.Meta{}, errAccountLaunch
+			}
+			resolved.ExpectedCLIIdentity = observed
+		}
 	}
 	m, err := a.core.Launch(resolved)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/Nathandela/swarm/internal/processcontain"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/submitframe"
 	"github.com/Nathandela/swarm/internal/transcript"
@@ -55,10 +56,11 @@ var testHookAfterPTYResize func()
 // the hub still couples the pipeline to at most one live subscriber (S10), so a
 // later attach supersedes an earlier one.
 type server struct {
-	hub          *hub
-	ptmx         *os.File
-	ptyIn        *ptyWriter // serialized writer to the PTY master (TDataIn + emulator replies)
-	graceTimeout time.Duration
+	hub            *hub
+	ptmx           *os.File
+	ptyIn          *ptyWriter // serialized writer to the PTY master (TDataIn + emulator replies)
+	graceTimeout   time.Duration
+	managedSignals bool // dedicated managed shim: PID-bound descendant signals
 
 	// pgidMu guards the two process groups this shim contains. The AGENT's group is known
 	// at construction on the ordinary path and only after the go-ahead on a backend
@@ -231,7 +233,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, AccountInputEmbargo: true})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -241,6 +243,12 @@ func (s *server) serveConn(conn net.Conn) {
 				continue // ignore attach/resize/signal until the client has said hello
 			}
 			switch ctrl.Type {
+			case shimwire.TypeAccountEmbargoRelease:
+				result := shimwire.Control{Type: shimwire.TypeAccountEmbargoResult}
+				if s.ptyIn.embargo == nil || s.ptyIn.embargo.release(ctrl.IncidentID, ctrl.Token) != nil {
+					result.Refused = shimwire.RefusedAccountSwitching
+				}
+				cw.writeControl(result)
 			case shimwire.TypeAttach:
 				if sub != nil {
 					s.hub.detach(sub)
@@ -272,7 +280,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// Daemon-authored keys (an interrupt, a dialog answer): the provenance
 				// write. The bytes reach the PTY verbatim but do not mutate the owner-input
 				// tracker; the frame they arrived on is the whole of that judgement.
-				_, _ = s.ptyIn.Write([]byte(ctrl.Keys))
+				_, _ = s.ptyIn.WriteControl([]byte(ctrl.Keys))
 			case shimwire.TypeBackendAttach:
 				// The daemon's GO-AHEAD (ADR-013 §R7.2e): it is a connected client of the
 				// backend, and the agent may now be spawned with AgentArgs appended.
@@ -402,11 +410,27 @@ func (s *server) killGroups(sig syscall.Signal) {
 		s.pendingSig = sig // remembered for replay on a group created later; KILL is sticky
 	}
 	s.pgidMu.Unlock()
+	if s.managedSignals {
+		signalManagedDescendants(sig)
+		return
+	}
 	if agent > 0 {
 		_ = syscall.Kill(-agent, sig)
 	}
 	if backend > 0 && backend != agent {
 		_ = syscall.Kill(-backend, sig)
+	}
+}
+
+// Managed signals never address a recycled process group. Every signal binds
+// the current descendant identity with pidfd before checking creation time.
+func signalManagedDescendants(sig syscall.Signal) {
+	children, err := processcontain.Descendants(os.Getpid())
+	if err != nil {
+		return
+	} // final cleanup refuses its proof if custody is unknown
+	for _, child := range children {
+		_ = processcontain.SignalIdentity(child, sig)
 	}
 }
 
@@ -421,7 +445,11 @@ func (s *server) setAgentPgid(pgid int) {
 	replay := s.pendingSig
 	s.pgidMu.Unlock()
 	if replay != 0 && pgid > 0 {
-		_ = syscall.Kill(-pgid, replay)
+		if s.managedSignals {
+			signalManagedDescendants(replay)
+		} else {
+			_ = syscall.Kill(-pgid, replay)
+		}
 	}
 }
 
@@ -434,7 +462,11 @@ func (s *server) setBackendPgid(pgid int) {
 	replay := s.pendingSig
 	s.pgidMu.Unlock()
 	if replay != 0 && pgid > 0 {
-		_ = syscall.Kill(-pgid, replay)
+		if s.managedSignals {
+			signalManagedDescendants(replay)
+		} else {
+			_ = syscall.Kill(-pgid, replay)
+		}
 	}
 }
 
@@ -831,6 +863,7 @@ type ptyWriter struct {
 	f      *os.File
 	closed bool
 
+	embargo   *accountEmbargo
 	inputLine inputLineTracker
 }
 
@@ -846,6 +879,9 @@ func (p *ptyWriter) Write(b []byte) (int, error) {
 func (p *ptyWriter) WriteInput(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.embargo != nil && p.embargo.held.Load() {
+		return 0, errAccountSwitching
+	}
 	n, err := p.writeLocked(b)
 	p.inputLine.apply(b[:n])
 	return n, err
@@ -875,6 +911,9 @@ var errInputBusy = errors.New("the session's input line was not empty")
 func (p *ptyWriter) submitMessage(text []byte, gap time.Duration) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.embargo != nil && p.embargo.held.Load() {
+		return errAccountSwitching
+	}
 	if p.inputLine.dirty() {
 		return errInputBusy
 	}

@@ -67,6 +67,7 @@ const providerAliasMaxDepth = 64
 
 type filesystemResumeHistoryResolver struct {
 	home                  string
+	privateProvider       string // managed native root already replaces ~/.provider
 	limits                resumeHistoryLimits
 	beforeAliasReadlink   func(string) // private deterministic alias race seams; nil in production
 	beforeAliasTargetOpen func(string)
@@ -439,6 +440,12 @@ func (r *filesystemResumeHistoryResolver) openHome() (*os.Root, resumeHistoryOut
 // and target text are revalidated after traversal. Every link below this first
 // component remains forbidden by openDirPath.
 func (r *filesystemResumeHistoryResolver) openProviderRoot(home *os.Root, provider string) (*os.Root, string, func(), resumeHistoryOutcome, bool) {
+	if r.privateProvider != "" {
+		if provider != "."+r.privateProvider {
+			return nil, "", func() {}, resumeHistoryUnsafe, false
+		}
+		return home, filepath.Clean(r.home), func() {}, resumeHistoryFound, true
+	}
 	homeAbs := filepath.Clean(r.home)
 	aliasAbs := filepath.Join(homeAbs, provider)
 	before, err := home.Lstat(provider)

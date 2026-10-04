@@ -35,6 +35,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [025](ADR-025-launch-gate-answered-by-the-daemon.md) | The daemon answers a CLI's own launch gate (Claude Code's folder-trust dialog) from the grid tap, once, on the screen it is proven on | Accepted | 2026-09-02 |
 | [026](ADR-026-board-layout-outlives-the-client.md) | The board's grouping and ordering outlive the client that chose them (amends the options window's process-scoped rule) | Accepted | 2026-09-04 |
 | [027](ADR-027-clean-remote-control-v2.md) | Clean remote-control v2 replacement, with native relay and shared push authority | Accepted, implementation gates open | 2026-09-05 |
+| [028](ADR-028-personal-account-pools.md) | Personal subscription account pools with immutable discussion bindings and guarded recovery | Accepted for implementation; authenticated release gates open | 2026-10-03 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the

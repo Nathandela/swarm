@@ -74,6 +74,11 @@ func Rollback(opts ActivateOptions) (State, error) {
 		return s, recordState(opts.StateDir, &s)
 	}
 
+	if err := accountStateGuard(opts.StateDir, prevCard); err != nil {
+		s.Outcome, s.Detail = "refused-account-state", err.Error()
+		return s, recordState(opts.StateDir, &s)
+	}
+
 	// The schema guard, fail-closed: an unreadable meta is a refusal, not a
 	// skip -- unknown state must not permit a potentially bricking rollback.
 	need, id, serr := maxPersistedSchema(opts.StateDir)

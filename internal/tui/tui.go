@@ -77,10 +77,14 @@ const (
 	screenHandoff
 	screenOptions
 	screenAttach
+	screenAccounts
 )
 
 // eventMsg carries one Subscribe status-change into the update loop.
-type eventMsg struct{ ev protocol.Event }
+type eventMsg struct {
+	ev   protocol.Event
+	from <-chan protocol.Event
+}
 
 // connectionLostMsg signals the Subscribe stream's channel closed: the daemon
 // connection is gone for good (pump eviction, daemon crash/restart all look the
@@ -178,11 +182,18 @@ type rootModel struct {
 	width  int
 	height int
 
-	screen  screen
-	general generalModel
-	launch  launchModel
-	handoff handoffModel
-	options optionsModel
+	screen                                       screen
+	general                                      generalModel
+	launch                                       launchModel
+	handoff                                      handoffModel
+	options                                      optionsModel
+	accounts                                     accountsModel
+	accountsGeneration, accountsClientGeneration uint64
+	accountLoginRunner                           AccountLoginRunner
+	reconnector                                  DaemonReconnector
+	reconnectGeneration                          uint64
+	reconnectAttempts                            int
+	reconnecting                                 bool
 	// optionsGeneration monotonically stamps every context-guard settings RPC. It
 	// survives closing/reopening the form, so an older response cannot land in a new
 	// options incarnation that happens to reuse the same local focus state.
@@ -323,7 +334,7 @@ func waitForEvent(ch <-chan protocol.Event) tea.Cmd {
 		if !ok {
 			return connectionLostMsg{from: ch}
 		}
-		return eventMsg{ev}
+		return eventMsg{ev: ev, from: ch}
 	}
 }
 
@@ -338,6 +349,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case eventMsg:
+		if msg.from != nil && msg.from != m.events {
+			return m, nil
+		}
 		// A status change updates the affected row in place and, on a transition
 		// into needs_input/ready_for_review, prints a notification banner (V-5).
 		// Re-arm the stream so the next event is delivered too.
@@ -362,6 +376,19 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tick (see repaintMsg case) — there is nothing left to wait on or refresh
 		// (agents-tracker-1uq).
 		m.connectionLost = true
+		m.invalidateOptionsConnection()
+		m.accountsGeneration++
+		m.accounts.generation = m.accountsGeneration
+		m.accounts.busy = false
+		if m.accounts.wizardOpen {
+			m.accounts.wizard.input = lineEditor{}
+		}
+		if m.reconnector != nil {
+			m.reconnectGeneration++
+			m.reconnectAttempts = 0
+			m.reconnecting = true
+			return m, tea.Batch(m.general.setBanner("connection to daemon lost - reconnecting"), reconnectDelay(m.reconnectGeneration, 0))
+		}
 		return m, m.general.setBanner("connection to daemon lost - restart swarm to reconnect")
 
 	case launchResultMsg:
@@ -409,6 +436,11 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// dead OLD channel. The stale-source guard (connectionLostMsg case) drops it, and
 		// clearing connectionLost here covers the reverse ordering where it landed first.
 		m.client = msg.client
+		m.invalidateOptionsConnection()
+		m.accountsClientGeneration++
+		m.accountsGeneration++
+		m.accounts.generation = m.accountsGeneration
+		m.accounts.busy = false
 		if bv, ok := msg.client.(interface{ BuildVersion() string }); ok {
 			m.daemonVersion = bv.BuildVersion()
 		}
@@ -433,7 +465,40 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.armWorkingAnimation(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		if m.screen == screenAccounts {
+			updated, cmd := m.beginAccountsRequest(protocol.AccountsReq{Action: "list"})
+			m = updated.(rootModel)
+			cmds = append(cmds, cmd)
+		}
 		return m, tea.Batch(cmds...)
+
+	case daemonReconnectTickMsg:
+		return m.reconnectDaemon(msg)
+
+	case daemonReconnectedMsg:
+		return m.applyDaemonReconnected(msg)
+
+	case accountsReplyMsg:
+		return m.applyAccountsReply(msg)
+
+	case accountsPollMsg:
+		if m.screen != screenAccounts || msg.generation != m.accounts.generation || msg.clientGeneration != m.accountsClientGeneration || m.accounts.busy || m.connectionLost {
+			return m, nil
+		}
+		if m.accounts.wizardOpen && m.accounts.wizard.job.ID != "" {
+			return m.beginAccountsRequest(protocol.AccountsReq{Action: "status", JobID: m.accounts.wizard.job.ID})
+		}
+		return m.beginAccountsRequest(protocol.AccountsReq{Action: "list"})
+
+	case accountLoginDoneMsg:
+		if m.screen != screenAccounts || msg.generation != m.accounts.generation || msg.clientGeneration != m.accountsClientGeneration {
+			return m, nil
+		}
+		m.accounts.busy = false
+		if msg.err != nil {
+			m.accounts.wizard.err = "Native sign-in attachment failed. Press Enter to reconnect, or Ctrl+X to cancel."
+		}
+		return m.beginAccountsRequest(protocol.AccountsReq{Action: "status", JobID: m.accounts.wizard.job.ID})
 
 	case detectMsg:
 		// Drop a stale probe: one dispatched before the latest generation that only
@@ -469,6 +534,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch {
+		case m.screen == screenAccounts:
+			m.pasteAccounts(msg.Content)
 		case m.screen == screenLaunch:
 			// Creation requires consecutive Enter presses. Pasting into any launch
 			// field is an edit action and therefore invalidates an armed path.
@@ -616,6 +683,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateHandoff(msg)
 		case screenOptions:
 			return m.updateOptions(msg)
+		case screenAccounts:
+			return m.updateAccounts(msg)
 		case screenAttach:
 			return m.updateAttach(msg)
 		}
@@ -636,6 +705,8 @@ func (m rootModel) View() tea.View {
 		content = m.composeBoard(m.handoff.view(), m.handoff.hint())
 	case m.screen == screenOptions:
 		content = m.composeBoard(m.options.view(m.width), m.options.hint())
+	case m.screen == screenAccounts:
+		content = m.composeBoard(m.accounts.view(m.width, m.height, m.connectionLost, m.accountLoginRunner != nil), m.accounts.hint(m.connectionLost))
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
@@ -669,6 +740,9 @@ func (m rootModel) View() tea.View {
 // frozen, which outranks a mid-confirm prompt or the normal keymap.
 func (m rootModel) generalStatus() string {
 	if m.connectionLost {
+		if m.reconnecting {
+			return "daemon connection lost · reconnecting"
+		}
 		return "daemon connection lost - restart swarm"
 	}
 	if m.general.editing {
