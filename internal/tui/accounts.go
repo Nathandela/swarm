@@ -162,9 +162,8 @@ func (m rootModel) applyAccountsReply(msg accountsReplyMsg) (tea.Model, tea.Cmd)
 		a.reply.Revision = msg.reply.Revision
 	}
 	if a.wizardOpen && msg.reply.Job != nil {
-		a.wizard.job = *msg.reply.Job
 		a.wizard.err = ""
-		m.advanceAccountJob()
+		m.updateAccountJob(*msg.reply.Job)
 	}
 	if a.cancelAfterStart && msg.reply.Job != nil {
 		a.cancelAfterStart = false
@@ -173,8 +172,7 @@ func (m rootModel) applyAccountsReply(msg accountsReplyMsg) (tea.Model, tea.Cmd)
 	if a.wizardOpen && msg.action == "list" && a.wizard.job.ID != "" {
 		for _, job := range msg.reply.Jobs {
 			if job.ID == a.wizard.job.ID {
-				a.wizard.job = job
-				m.advanceAccountJob()
+				m.updateAccountJob(job)
 				break
 			}
 		}
@@ -203,6 +201,15 @@ func (m rootModel) applyAccountsReply(msg accountsReplyMsg) (tea.Model, tea.Cmd)
 	return m, accountPoll(a.generation, m.accountsClientGeneration)
 }
 
+func (m *rootModel) updateAccountJob(job protocol.AccountEnrollmentView) {
+	w := &m.accounts.wizard
+	if w.job.State != job.State {
+		w.scroll = 0
+	}
+	w.job = job
+	m.advanceAccountJob()
+}
+
 func (m *rootModel) advanceAccountJob() {
 	w := &m.accounts.wizard
 	if w.job.TargetAccountID != "" {
@@ -212,6 +219,7 @@ func (m *rootModel) advanceAccountJob() {
 	case "ready":
 		if w.step < accountStepVerify {
 			w.step = accountStepVerify
+			w.scroll = 0
 			w.input = lineEditor{}
 		}
 	case "admitted":
@@ -219,12 +227,24 @@ func (m *rootModel) advanceAccountJob() {
 		m.accounts.wizard = accountWizard{}
 		m.accounts.notice = "Account was added."
 	case "failed":
+		if w.step != accountStepAuthenticate {
+			w.step, w.scroll = accountStepAuthenticate, 0
+		}
+		w.input = lineEditor{}
 		w.err = accountText(w.job.Message)
 		if w.err == "" {
 			w.err = "Sign-in failed. Press r to retry this method."
 		}
 	case "cancelled":
+		if w.step != accountStepAuthenticate {
+			w.step, w.scroll = accountStepAuthenticate, 0
+		}
+		w.input = lineEditor{}
 		w.err = "Sign-in was cancelled. Press r to start a new attempt."
+	default:
+		if w.step >= accountStepVerify {
+			w.step, w.scroll = accountStepAuthenticate, 0
+		}
 	}
 }
 
@@ -311,7 +331,11 @@ func (m rootModel) updateAccounts(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if k.Code == tea.KeyPgUp {
 			step = -step
 		}
-		a.scroll = max(0, a.scroll+step)
+		if a.detail || a.retireConfirm || !a.available {
+			a.scroll = max(0, a.scroll+step)
+		} else {
+			a.focus = min(max(0, a.focus+step), max(0, len(a.rows())-1))
+		}
 		return m, nil
 	}
 	if m.connectionLost {
@@ -474,6 +498,9 @@ func (m rootModel) updateAccountMove(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m rootModel) updateAccountWizard(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	a, w := &m.accounts, &m.accounts.wizard
+	if w.step >= accountStepVerify && w.job.State != "ready" {
+		w.step, w.scroll = accountStepAuthenticate, 0
+	}
 	if k.Code == tea.KeyEsc {
 		w.input = lineEditor{}
 		a.wizardOpen = false
@@ -522,6 +549,7 @@ func (m rootModel) updateAccountWizard(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if w.step > accountStepProvider {
 			w.step--
+			w.scroll = 0
 			w.err = ""
 		}
 		return m, nil
@@ -531,26 +559,35 @@ func (m rootModel) updateAccountWizard(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch w.step {
 	case accountStepProvider:
+		previous := w.providerFocus
 		if k.Code == tea.KeyUp || k.Code == tea.KeyLeft || k.Text == "k" {
 			w.providerFocus = wrapIndex(w.providerFocus-1, 2)
 		}
 		if k.Code == tea.KeyDown || k.Code == tea.KeyRight || k.Code == tea.KeyTab || k.Text == "j" {
 			w.providerFocus = wrapIndex(w.providerFocus+1, 2)
 		}
+		if w.providerFocus != previous {
+			w.scroll = -1
+		}
 		if k.Code == tea.KeyEnter {
 			w.provider = []string{"claude", "codex"}[w.providerFocus]
 			w.step = accountStepMethod
+			w.scroll = 0
 		}
 	case accountStepMethod:
 		methods := a.reply.Methods[w.provider]
 		if len(methods) == 0 {
 			return m, nil
 		}
+		previous := w.methodFocus
 		if k.Code == tea.KeyUp || k.Text == "k" {
 			w.methodFocus = wrapIndex(w.methodFocus-1, len(methods))
 		}
 		if k.Code == tea.KeyDown || k.Code == tea.KeyTab || k.Text == "j" {
 			w.methodFocus = wrapIndex(w.methodFocus+1, len(methods))
+		}
+		if w.methodFocus != previous {
+			w.scroll = -1
 		}
 		if k.Code == tea.KeyEnter {
 			method := methods[w.methodFocus]
@@ -566,6 +603,7 @@ func (m rootModel) updateAccountWizard(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			w.method = method.ID
 			w.step = accountStepAuthenticate
+			w.scroll = 0
 			w.err = ""
 			if w.method != "token-manual" && w.method != "import-native" {
 				return m.startAccountEnrollment()
@@ -591,13 +629,14 @@ func (m rootModel) updateAccountWizard(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			if w.job.State == "failed" || w.job.State == "cancelled" {
 				w.job = protocol.AccountEnrollmentView{}
+				w.scroll = 0
 				w.err = ""
 				if w.method != "token-manual" && w.method != "import-native" {
 					return m.startAccountEnrollment()
 				}
 				return m, nil
 			}
-			if k.Code == tea.KeyEnter && w.job.LoginSocket != "" && m.accountLoginRunner != nil {
+			if k.Code == tea.KeyEnter && accountCanAttach(w.job) && m.accountLoginRunner != nil {
 				generation, clientGeneration, job, runner := a.generation, m.accountsClientGeneration, w.job, m.accountLoginRunner
 				a.busy = true
 				return m, func() tea.Msg {
@@ -609,6 +648,7 @@ func (m rootModel) updateAccountWizard(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case accountStepVerify:
 		if k.Code == tea.KeyEnter {
 			w.step = accountStepLabel
+			w.scroll = 0
 			if w.label.text == "" {
 				w.label.set(accountProviderName(w.provider) + " account")
 			}
@@ -622,6 +662,7 @@ func (m rootModel) updateAccountWizard(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			w.label.set(label)
 			w.step = accountStepReview
+			w.scroll = 0
 			w.err = ""
 		} else {
 			w.label.update(k)
@@ -636,6 +677,7 @@ func (m rootModel) updateAccountWizard(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m rootModel) startAccountEnrollment() (tea.Model, tea.Cmd) {
 	w := &m.accounts.wizard
+	w.scroll = 0
 	req := protocol.AccountsReq{Action: "start", Provider: w.provider, Method: w.method, AccountID: w.targetID}
 	switch w.method {
 	case "token-manual":
@@ -746,11 +788,47 @@ func accountState(account protocol.AccountView) string {
 		}
 		return "Retiring · credentials retained"
 	}
+	if accountReady(account) {
+		return "Ready"
+	}
 	s := strings.ReplaceAll(strings.ReplaceAll(account.State, "_", " "), "-", " ")
 	if s == "" {
 		return "unknown"
 	}
 	return accountText(s)
+}
+
+func accountReady(account protocol.AccountView) bool {
+	return !account.Retiring && (account.State == "enabled" || account.State == "available")
+}
+
+func accountJobState(job protocol.AccountEnrollmentView) string {
+	switch job.State {
+	case "pending":
+		return "Starting sign-in"
+	case "authenticating":
+		return "Waiting for sign-in"
+	case "verifying":
+		return "Checking sign-in"
+	case "ready":
+		return "Review needed"
+	case "admitting":
+		return "Adding account"
+	case "admitted":
+		return "Account added"
+	case "failed":
+		return "Sign-in failed"
+	case "cancelling":
+		return "Stopping sign-in"
+	case "cancelled":
+		return "Sign-in cancelled"
+	default:
+		return "Waiting for sign-in status"
+	}
+}
+
+func accountCanAttach(job protocol.AccountEnrollmentView) bool {
+	return job.LoginSocket != "" && (job.State == "pending" || job.State == "authenticating")
 }
 
 func accountAge(at time.Time) string {
@@ -775,7 +853,7 @@ func accountAge(at time.Time) string {
 
 func accountQuotaLines(account protocol.AccountView) []string {
 	if len(account.Quota) == 0 {
-		return []string{"Quota: unknown · last observed: unknown"}
+		return []string{"Quota: unknown · not yet observed"}
 	}
 	var lines []string
 	for _, quota := range account.Quota {
@@ -793,16 +871,74 @@ func accountQuotaLines(account protocol.AccountView) []string {
 	return lines
 }
 
+func (a accountsModel) accountCounts(provider string) (total, ready int) {
+	for _, account := range a.reply.Accounts {
+		if account.Provider == provider {
+			total++
+			if accountReady(account) {
+				ready++
+			}
+		}
+	}
+	return total, ready
+}
+
+func (a accountsModel) nextStep(row accountRow) string {
+	if row.kind == "job" {
+		job := a.reply.Jobs[row.index]
+		switch job.State {
+		case "failed":
+			return "Previous sign-in attempt failed.\nAdded accounts are unchanged.\nNext: Enter to review and retry."
+		case "ready":
+			return "Next: Enter to review and add this account."
+		case "verifying", "admitting", "cancelling":
+			return accountJobState(job) + "; no action needed.\nEnter reopens this attempt."
+		default:
+			return "Next: Enter to continue this sign-in."
+		}
+	}
+	provider := accountProviderName(row.provider)
+	_, ready := a.accountCounts(row.provider)
+	if !a.reply.Enabled[row.provider] {
+		return "Next: enable " + provider + " rotation (e).\nThis applies to new discussions."
+	}
+	if ready == 0 {
+		return "Next: add a verified " + provider + " account (a).\nNo account is ready for new discussions."
+	}
+	lines := []string{"Next: start a new " + provider + " discussion."}
+	if ready == 1 {
+		lines = append(lines, "1 ready account; no same-provider backup.")
+	} else {
+		lines = append(lines, fmt.Sprintf("%d ready accounts configured for switching.", ready))
+	}
+	observed := false
+	for _, account := range a.reply.Accounts {
+		if account.Provider == row.provider && (row.kind != "account" || account.ID == row.id) {
+			for _, quota := range account.Quota {
+				observed = observed || quota.UsedPercent != nil
+			}
+		}
+	}
+	if !observed {
+		lines = append(lines, "Quota: unknown · not yet observed")
+	} else if row.kind == "account" {
+		lines = append(lines, accountQuotaLines(a.reply.Accounts[row.index])[0])
+	}
+	if ready > 1 {
+		lines = append(lines, "Backup capacity is unconfirmed.")
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (a accountsModel) view(width, height int, lost bool, loginSupported bool) string {
 	if width > 0 && width < 38 || height > 0 && height < 9 {
-		return accountWrap("Accounts\nResize to manage accounts.\nEsc back · Ctrl+X cancel", width)
+		return accountScrolled(accountWrap("Accounts\nResize to manage accounts.", width), height, 0)
 	}
 	if a.wizardOpen {
 		return accountScrolled(a.wizard.view(width, lost, a.busy, loginSupported, a.reply.Methods), height, a.wizard.scroll)
 	}
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("swarm") + styleDim.Render(" · accounts") + "\n\n")
-	b.WriteString("Changes here save immediately; Options Apply/Cancel affects board settings.\n")
 	if lost {
 		b.WriteString(styleError.Render("Daemon unavailable. Last known state; sign-in workers may continue.") + "\n")
 	}
@@ -810,14 +946,14 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 		b.WriteString("\nAccount management is unavailable on this daemon. Upgrade the daemon to use Accounts.\n")
 		return accountScrolled(accountWrap(b.String(), width), height, a.scroll)
 	}
-	if a.busy {
+	if a.busy && !a.loaded {
 		b.WriteString(styleDim.Render("Loading account information…") + "\n")
 	}
 	if a.err != "" {
-		b.WriteString(styleError.Render(a.err) + "\n")
+		b.WriteString(styleError.Render(accountRowLine(a.err, width)) + "\n")
 	}
 	if a.notice != "" {
-		b.WriteString(styleDim.Render(a.notice) + "\n")
+		b.WriteString(styleDim.Render(accountRowLine(a.notice, width)) + "\n")
 	}
 	if a.moveOpen {
 		b.WriteString("\nMove discussion here · " + accountText(a.moveLabel) + "\n")
@@ -850,13 +986,15 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 	if a.detail && row.kind == "account" {
 		account := a.reply.Accounts[row.index]
 		b.WriteString("\n" + styleTitle.Render(accountText(account.Label)) + " · " + accountProviderName(account.Provider) + "\n")
-		b.WriteString(accountText(account.CredentialKind) + " · " + accountState(account) + fmt.Sprintf(" · %d assigned discussions\n", account.Assigned))
+		b.WriteString("Status: " + accountState(account) + "\n")
+		b.WriteString(fmt.Sprintf("%d assigned discussions\n", account.Assigned))
 		if account.Email != "" {
 			b.WriteString("Email: " + accountText(account.Email) + "\n")
 		}
 		if account.Plan != "" {
 			b.WriteString("Plan: " + accountText(account.Plan) + "\n")
 		}
+		b.WriteString("\n")
 		for _, line := range accountQuotaLines(account) {
 			b.WriteString(line + "\n")
 		}
@@ -883,16 +1021,18 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 		return accountScrolled(accountWrap(b.String(), width), height, a.scroll)
 	}
 	if a.loaded && len(a.reply.Accounts) == 0 {
-		b.WriteString("\nNo accounts yet. Press a to add your first personal subscription.\n")
+		b.WriteString(styleDim.Render("No accounts added yet.") + "\n")
 	}
 	rows := a.rows()
-	// Budget rows around focus so long lists remain navigable on small terminals.
-	budget := height - len(strings.Split(accountWrap(b.String(), width), "\n")) - 6
-	if budget < 2 {
-		budget = 2
-	}
+	guidance := strings.Split(accountWrap(a.nextStep(row), width), "\n")
+	header := strings.Split(strings.TrimSuffix(accountWrap(b.String(), width), "\n"), "\n")
+	// Keep the current action and focused row together. Paging changes the
+	// selection; list viewport position is derived from that single authority.
+	budget := max(1, height-len(header)-len(guidance)-1)
 	if height <= 0 {
 		budget = len(rows)
+	} else if len(rows) > budget {
+		budget = max(1, budget-1) // one indicator for the hidden rows
 	}
 	start := 0
 	if a.focus >= budget {
@@ -902,9 +1042,7 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 	if end > len(rows) {
 		end = len(rows)
 	}
-	if start > 0 {
-		b.WriteString("  ↑ more accounts\n")
-	}
+	list := make([]string, 0, end-start+1)
 	for i := start; i < end; i++ {
 		r := rows[i]
 		switch r.kind {
@@ -913,32 +1051,37 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 			if a.reply.Enabled[r.provider] {
 				enabled = "on"
 			}
-			b.WriteString(accountRowLine(accountChoice(accountProviderName(r.provider)+" · rotation for new sessions: "+enabled, i == a.focus), width) + "\n")
+			count, _ := a.accountCounts(r.provider)
+			label := fmt.Sprintf("%s · rotation %s · %d account", accountProviderName(r.provider), enabled, count)
+			if count != 1 {
+				label += "s"
+			}
+			list = append(list, accountRowLine(accountChoice(label, i == a.focus), width))
 		case "account":
 			account := a.reply.Accounts[r.index]
 			label := accountText(account.Label)
 			if label == "" {
 				label = accountProviderName(r.provider) + " account"
 			}
-			b.WriteString(accountRowLine(accountChoice(label+" · "+accountText(account.CredentialKind)+" · "+accountState(account)+fmt.Sprintf(" · %d assigned", account.Assigned), i == a.focus), width) + "\n")
+			list = append(list, accountRowLine(accountChoice(label+" · "+accountState(account)+fmt.Sprintf(" · %d assigned", account.Assigned), i == a.focus), width))
 		case "job":
 			job := a.reply.Jobs[r.index]
-			b.WriteString(accountRowLine(accountChoice("Sign-in · "+accountText(job.State)+" · Enter to reopen", i == a.focus), width) + "\n")
+			label := accountJobState(job)
+			if job.State == "failed" {
+				label = "Previous sign-in · failed"
+			}
+			list = append(list, accountRowLine(accountChoice(label, i == a.focus), width))
 		}
 	}
-	if end < len(rows) {
-		b.WriteString("  ↓ more accounts\n")
+	if start > 0 || end < len(rows) {
+		list = append(list, styleDim.Render("↑↓ more · PgUp/PgDn page"))
 	}
-	if row.kind == "account" {
-		quota := accountQuotaLines(a.reply.Accounts[row.index])
-		for _, line := range quota[:min(2, len(quota))] {
-			b.WriteString(accountRowLine("    "+line, width) + "\n")
-		}
-		if len(quota) > 2 {
-			b.WriteString("    Enter for all quota windows\n")
-		}
+	if height > 0 && len(header)+len(list)+len(guidance)+1 > height {
+		// Long notices or very narrow wrapping must never evict the focus.
+		header = header[:max(0, min(len(header), height-len(list)-2))]
+		guidance = guidance[:max(0, min(len(guidance), height-len(header)-len(list)-1))]
 	}
-	return accountWrap(b.String(), width)
+	return strings.Join(append(append(append(header, list...), ""), guidance...), "\n")
 }
 
 func accountRowLine(text string, width int) string {
@@ -955,10 +1098,13 @@ func accountScrolled(text string, height, scroll int) string {
 		return text
 	}
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-	budget := max(1, height-3)
-	if len(lines) <= budget+1 {
+	if len(lines) <= height {
 		return text
 	}
+	if height == 1 {
+		return lines[0]
+	}
+	budget := max(0, height-2) // pinned title and paging reminder
 	if scroll < 0 {
 		scroll = 0
 		for i, line := range lines {
@@ -970,7 +1116,8 @@ func accountScrolled(text string, height, scroll int) string {
 	}
 	scroll = min(max(0, scroll), max(0, len(lines)-1-budget))
 	end := min(len(lines), 1+scroll+budget)
-	return lines[0] + "\n" + strings.Join(lines[1+scroll:end], "\n")
+	visible := append([]string{lines[0]}, lines[1+scroll:end]...)
+	return strings.Join(append(visible, styleDim.Render("PgUp/PgDn scroll")), "\n")
 }
 
 func accountChoice(label string, focused bool) string {
@@ -988,8 +1135,9 @@ func accountWrap(text string, width int) string {
 }
 
 func (w accountWizard) view(width int, lost, busy, loginSupported bool, methods map[string][]protocol.AccountMethodView) string {
+	w.step = w.displayStep()
 	var b strings.Builder
-	titles := []string{"Provider", "Authentication method", "Authenticate", "Verify and identify", "Label", "Review and add"}
+	titles := []string{"Provider", "Sign-in method", "Sign in", "Review identity", "Account label", "Confirm"}
 	b.WriteString(styleTitle.Render("Add account") + fmt.Sprintf(" · %d/6 · %s\n\n", w.step+1, titles[w.step]))
 	if w.targetID != "" {
 		b.WriteString("Replacing credentials for the selected account.\n")
@@ -997,7 +1145,7 @@ func (w accountWizard) view(width int, lost, busy, loginSupported bool, methods 
 	if lost {
 		b.WriteString(styleError.Render("Daemon unavailable; sign-in may continue. Press r to reconnect.") + "\n")
 	}
-	if busy {
+	if busy && w.job.ID == "" {
 		b.WriteString(styleDim.Render("Waiting for daemon…") + "\n")
 	}
 	if w.err != "" {
@@ -1032,6 +1180,17 @@ func (w accountWizard) view(width int, lost, busy, loginSupported bool, methods 
 		}
 	case accountStepAuthenticate:
 		switch {
+		case w.job.State == "failed" || w.job.State == "cancelled":
+			b.WriteString(accountJobState(w.job) + ".\nAdded accounts are unchanged.\n\n")
+			if w.method == "token-manual" {
+				b.WriteString("Press r or Enter to enter a new token.\n")
+			} else if w.method == "import-native" {
+				b.WriteString("Press r or Enter to choose a profile again.\n")
+			} else {
+				b.WriteString("Press r or Enter to start a new sign-in.\n")
+			}
+		case w.job.State == "verifying" || w.job.State == "admitting" || w.job.State == "cancelling":
+			b.WriteString(accountJobState(w.job) + "…\nPlease wait; no next step is available yet.\n")
 		case w.job.ID == "" && w.method == "token-manual":
 			b.WriteString("Run claude setup-token, then paste only its subscription token here.\nSurrounding space/tab/newlines are trimmed. Maximum 32 KiB.\n\n")
 			masked := strings.Repeat("•", min(24, utf8.RuneCountInString(w.input.text))) + "█"
@@ -1041,27 +1200,31 @@ func (w accountWizard) view(width int, lost, busy, loginSupported bool, methods 
 			b.WriteString("Enter an owner-local native profile directory or subscription login file.\nThe daemon copies and verifies it in a private profile.\nMoving a refreshable login is safer than using both copies.\n\n")
 			b.WriteString("Profile or login file: " + w.input.cursorView() + "\n")
 		default:
-			b.WriteString("Sign-in state: " + accountText(w.job.State) + "\n")
+			b.WriteString(accountJobState(w.job) + "\n")
 			if w.job.VerificationURL != "" {
 				b.WriteString("\nOpen this address in your browser:\n" + accountText(w.job.VerificationURL) + "\n")
 			}
 			if w.job.UserCode != "" {
 				b.WriteString("\nEnter this code: " + accountText(w.job.UserCode) + "\n")
 			}
-			if w.job.LoginSocket != "" {
+			if accountCanAttach(w.job) {
 				if loginSupported {
-					b.WriteString("\nPress Enter to attach to the private native sign-in terminal.\n")
+					b.WriteString("\nNext: Enter opens " + accountProviderName(w.provider) + " sign-in.\nFinish signing in there, then return here.\n")
 				} else {
 					b.WriteString("\nNative terminal attachment is unavailable in this client.\n")
 				}
 			}
 			if w.job.Deadline != nil {
-				b.WriteString("\nSwarm sign-in deadline: " + w.job.Deadline.Local().Format("15:04") + " (not provider code expiry)\n")
+				b.WriteString("\nAttempt deadline: " + w.job.Deadline.Local().Format("15:04") + ".\n")
 			}
-			b.WriteString("\nSelect the intended subscription in the browser. Verification follows sign-in.\n")
+			if w.job.VerificationURL != "" {
+				b.WriteString("\nFinish browser sign-in; Swarm checks the result.\n")
+			} else if w.job.LoginSocket == "" {
+				b.WriteString("\nWaiting for sign-in details from the daemon.\n")
+			}
 		}
 	case accountStepVerify:
-		b.WriteString("Candidate ready. Verify this is the intended subscription before adding it.\n\n")
+		b.WriteString("Sign-in checked. Review the account before adding it.\n\n")
 		b.WriteString("Provider: " + accountProviderName(w.provider) + "\n")
 		if w.job.Email != "" {
 			b.WriteString("Email: " + accountText(w.job.Email) + "\n")
@@ -1089,7 +1252,20 @@ func (w accountWizard) view(width int, lost, busy, loginSupported bool, methods 
 	return accountWrap(b.String(), width)
 }
 
-func (a accountsModel) hint(lost bool) string {
+func (w accountWizard) displayStep() int {
+	if w.step >= accountStepVerify && w.job.State != "ready" {
+		return accountStepAuthenticate
+	}
+	return w.step
+}
+
+func (a accountsModel) hint(lost, loginSupported bool, width int) string {
+	if width > 0 && width < 42 {
+		if a.wizardOpen {
+			return "esc · ctrl+x cancel"
+		}
+		return "esc back"
+	}
 	if a.moveOpen {
 		if lost {
 			return "esc back · r reconnect"
@@ -1098,9 +1274,33 @@ func (a accountsModel) hint(lost bool) string {
 	}
 	if a.wizardOpen {
 		if lost {
-			return "esc leave · ctrl+x cancel sign-in · r reconnect"
+			return "r reconnect · esc leave · ctrl+x cancel"
 		}
-		return "esc leave · ctrl+x cancel · enter next · shift+tab back · pgup/down scroll"
+		w := a.wizard
+		if a.busy {
+			return "esc leave · ctrl+x cancel"
+		}
+		switch w.displayStep() {
+		case accountStepProvider, accountStepMethod:
+			return "↑↓ choose · enter · esc · ctrl+x cancel"
+		case accountStepAuthenticate:
+			if w.job.State == "failed" || w.job.State == "cancelled" {
+				return "r retry · esc leave · ctrl+x cancel"
+			}
+			if w.job.ID == "" && (w.method == "token-manual" || w.method == "import-native") {
+				return "enter submit · esc leave · ctrl+x cancel"
+			}
+			if accountCanAttach(w.job) && loginSupported {
+				return "enter sign in · esc leave · ctrl+x cancel"
+			}
+			return "r status · esc leave · ctrl+x cancel"
+		case accountStepVerify:
+			return "enter label · esc leave · ctrl+x cancel"
+		case accountStepLabel:
+			return "enter review · esc leave · ctrl+x cancel"
+		case accountStepReview:
+			return "enter add · esc leave · ctrl+x cancel"
+		}
 	}
 	if lost {
 		return "esc back · r reconnect"
@@ -1111,8 +1311,18 @@ func (a accountsModel) hint(lost bool) string {
 	if !a.available {
 		return "esc back"
 	}
-	if a.detail {
-		return "esc back · ↑↓ action · enter choose · p pause · r refresh · l sign in"
+	if !a.loaded || a.err != "" {
+		return "r reload · a add · esc back"
 	}
-	return "esc back · ↑↓/j/k move · enter details · a add · p pause · r refresh · l sign in · e rotation"
+	if a.detail {
+		return "↑↓ action · enter choose · esc back"
+	}
+	switch a.selected().kind {
+	case "provider":
+		return "enter toggle · a add · esc back"
+	case "job":
+		return "enter reopen · a add · esc back"
+	default:
+		return "enter details · a add · e rotate · esc"
+	}
 }
