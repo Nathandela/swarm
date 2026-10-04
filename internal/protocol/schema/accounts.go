@@ -50,6 +50,7 @@ type AccountView struct {
 	NextRetryAt          *time.Time         `json:"next_retry_at,omitempty"`
 	RefreshSupported     bool               `json:"refresh_supported"`
 	RetrySupported       bool               `json:"retry_supported"`
+	CredentialsErased    bool               `json:"credentials_erased,omitempty"`
 	Retiring             bool               `json:"retiring,omitempty"`
 }
 

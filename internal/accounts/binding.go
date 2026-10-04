@@ -1,10 +1,10 @@
 package accounts
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 func (s *Store) CurrentBinding(id string, configurationGeneration uint64) (Binding, error) {
@@ -106,11 +106,11 @@ func (s *Store) HistoryProfilePath(b Binding) (string, error) {
 		return "", err
 	}
 	a, ok := r.Accounts[b.AccountID]
-	if !ok || b.SchemaVersion != SchemaVersion || a.Provider != b.Provider || b.CredentialGeneration == 0 {
+	if !ok || b.SchemaVersion != SchemaVersion || a.Provider != b.Provider || b.CredentialGeneration == 0 || b.ConfigurationGeneration == 0 {
 		return "", ErrIneligible
 	}
 	g, ok := a.Generations[b.CredentialGeneration]
-	if !ok || g.Identity != b.Identity {
+	if !ok || g.Identity != b.Identity || !validVerification(b.Provider, g.Kind, g.Identity, g.Verification) || (g.Kind == KindNative && g.Source != SourceNativeLogin) {
 		return "", ErrIneligible
 	}
 	if _, err := checkRelative(s.root, filepath.Join("profiles", g.ProfileGeneration), true); err != nil {
@@ -211,50 +211,24 @@ func ResolveBoundEnvironment(stateRoot string, binding Binding, inherited []stri
 	return s.ResolveEnvironment(binding, inherited)
 }
 
-// EraseCredentials persists an embargo before deleting only the characterized
-// credential inventory. Native history and all generation references survive.
-// A crash leaves CredentialErasing set; retrying with the visible revision
-// completes the same idempotent erasure after the authority renews its proof.
-func (s *Store) EraseCredentials(expected uint64, id string, number uint64, proof ErasureProof) (Registry, error) {
-	if !proof.WritersStopped || proof.LiveReferences != 0 {
-		return Registry{}, ErrInUse
-	}
-	if !proof.CompleteInventory {
-		return Registry{}, ErrIneligible
-	}
-	for _, file := range proof.CredentialFiles {
-		if !filepath.IsLocal(file) || filepath.Clean(file) != file || file == "." || file == candidateFile || strings.Contains(file, string(filepath.Separator)) {
-			return Registry{}, ErrUnsafePath
-		}
-	}
-	r, err := s.mutate(expected, func(r *Registry) error {
+// BeginCredentialErasure fences exactly one drained generation before the
+// authority's definitive reference scan. Retiring is irreversible; retained
+// history remains resolvable, but credential resolution now refuses this binding.
+func (s *Store) BeginCredentialErasure(expected uint64, id string, number uint64, nativeVersion string) (Registry, error) {
+	return s.mutate(expected, func(r *Registry) error {
 		a, ok := r.Accounts[id]
-		if !ok {
+		g, found := a.Generations[number]
+		if !ok || !found || a.Lifecycle != LifecycleRetiring || g.CredentialErased {
 			return ErrIneligible
 		}
-		g, ok := a.Generations[number]
-		if !ok || g.CredentialErased {
+		contract, err := nativeErasureContract(a.Provider, g, nativeVersion)
+		if err != nil {
+			return err
+		}
+		if g.CredentialErasing && g.ErasureInventory != contract {
 			return ErrIneligible
 		}
-		if g.Kind == KindNative {
-			required := "auth.json"
-			if a.Provider == ProviderClaude {
-				required = ".credentials.json"
-			}
-			found := false
-			for _, name := range proof.CredentialFiles {
-				if name != required {
-					return ErrIneligible
-				}
-				found = found || name == required
-			}
-			if !found {
-				return ErrIneligible
-			}
-		} else if len(proof.CredentialFiles) != 0 {
-			return ErrIneligible
-		}
-		g.CredentialErasing = true
+		g.CredentialErasing, g.ErasureInventory = true, contract
 		a.Generations[number] = g
 		if number == a.CurrentGeneration {
 			a.Auth = AuthNeedsLogin
@@ -262,57 +236,86 @@ func (s *Store) EraseCredentials(expected uint64, id string, number uint64, proo
 		r.Accounts[id] = a
 		return nil
 	})
-	if err != nil {
-		return r, err
+}
+
+// EraseCredentials requires the already durable embargo and a renewed custody
+// proof. It independently checks the pinned cache inventory under the store
+// lock. Partial deletion or a failed sync leaves the embargo for a safe retry.
+func (s *Store) EraseCredentials(expected uint64, id string, number uint64, proof ErasureProof) (Registry, error) {
+	if !proof.WritersStopped || proof.LiveReferences != 0 {
+		return Registry{}, ErrInUse
 	}
 	s.mu.Lock()
-	err = s.withFileLock(func() error {
-		latest, err := s.load()
+	var visible Registry
+	err := s.withFileLock(func() error {
+		r, err := s.load()
 		if err != nil {
 			return err
 		}
-		a, ok := latest.Accounts[id]
-		if !ok {
+		visible = r
+		if s.uncertain {
+			return ErrDurabilityUncertain
+		}
+		if r.Revision != expected {
+			return ErrRevisionConflict
+		}
+		a, ok := r.Accounts[id]
+		g, found := a.Generations[number]
+		if !ok || !found || a.Lifecycle != LifecycleRetiring || !g.CredentialErasing || g.CredentialErased {
 			return ErrIneligible
 		}
-		g, ok := a.Generations[number]
-		if !ok || !g.CredentialErasing {
-			return ErrIneligible
+		// Confirm this exact visible fence before the first credential write,
+		// including an existing handle which did not author the registry rename.
+		if err := s.confirmCredentialFence(); err != nil {
+			return err
 		}
-		base := filepath.Join("profiles", g.ProfileGeneration)
-		for _, name := range proof.CredentialFiles {
-			path := filepath.Join(base, name)
-			if _, err := checkRelative(s.root, path, false); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return ErrUnsafePath
-			}
-			if err := s.root.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
+		if err := s.eraseNativeInventory(a.Provider, g); err != nil {
+			return err
 		}
-		if g.Kind == KindClaudeToken {
-			if err := s.root.Remove(filepath.Join("vault", g.ProfileGeneration)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			if err := syncRootDir(s.root, "vault"); err != nil {
-				return ErrDurabilityUncertain
-			}
-		}
-		return syncRootDir(s.root, base)
+		return nil
 	})
 	s.mu.Unlock()
 	if err != nil {
-		return r, err
+		return visible, err
 	}
-	return s.mutate(r.Revision, func(r *Registry) error {
+	return s.mutate(expected, func(r *Registry) error {
 		a := r.Accounts[id]
 		g := a.Generations[number]
-		if !g.CredentialErasing {
+		if a.Lifecycle != LifecycleRetiring || !g.CredentialErasing || g.CredentialErased {
 			return ErrIneligible
 		}
-		g.CredentialErasing = false
-		g.CredentialErased = true
+		g.CredentialErasing, g.CredentialErased = false, true
 		a.Generations[number] = g
 		r.Accounts[id] = a
 		return nil
 	})
+}
+
+// The visible embargo may come from a predecessor's uncertain rename. Confirm
+// its file and parent under the same registry lock before credential effects.
+func (s *Store) confirmCredentialFence() error {
+	before, err := checkRelative(s.root, "registry.json", false)
+	if err != nil {
+		return ErrUnsafePath
+	}
+	f, err := s.root.OpenFile("registry.json", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return ErrUnsafePath
+	}
+	defer func() { _ = f.Close() }()
+	opened, err := f.Stat()
+	if err != nil || !privateInfo(opened, false) || !os.SameFile(before, opened) {
+		return ErrUnsafePath
+	}
+	if err := f.Sync(); err != nil {
+		return ErrDurabilityUncertain
+	}
+	if s.writeOps.syncDir != nil {
+		if err := s.writeOps.syncDir(s.path); err != nil {
+			return ErrDurabilityUncertain
+		}
+	} else if err := syncRootDir(s.root, "."); err != nil {
+		return ErrDurabilityUncertain
+	}
+	return nil
 }

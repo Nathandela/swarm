@@ -74,6 +74,7 @@ type Generation struct {
 	TokenFingerprint  string    `json:"token_fingerprint,omitempty"`
 	CredentialErased  bool      `json:"credential_erased,omitempty"`
 	CredentialErasing bool      `json:"credential_erasing,omitempty"`
+	ErasureInventory  string    `json:"erasure_inventory,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 
@@ -95,13 +96,10 @@ type Registry struct {
 	Accounts      map[string]Account `json:"accounts"`
 }
 
-// ErasureProof is supplied by the lifecycle authority after it has fenced all
-// live writers and references. Ended discussion history is not a live reference.
-// CompleteInventory requires native-version characterization of every local
-// credential cache; absence of that proof refuses erasure.
+// ErasureProof is renewed by the lifecycle authority after the durable generation
+// embargo and a complete reference rescan. The store computes the native cache
+// inventory itself; a caller cannot authorize arbitrary credential paths.
 type ErasureProof struct {
-	WritersStopped    bool
-	LiveReferences    int
-	CompleteInventory bool
-	CredentialFiles   []string // relative to this generation's native directory
+	WritersStopped bool
+	LiveReferences int
 }

@@ -459,6 +459,7 @@ func (m *accountRotationManager) step() {
 		m.stepRecord(rec)
 	}
 	m.collectChecks()
+	m.stepRetirements()
 }
 
 func (m *accountRotationManager) block(rec accountRotationRecord, code string) {
@@ -533,7 +534,7 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 	}
 	switch rec.State {
 	case accountObserved, accountBlocked:
-		if source.Status.Process != status.ProcessRunning || source.Status.Turn != status.TurnIdle || source.Status.Interaction != status.InteractionNone || w.sessionUnsafe(source.ID) || !w.settled || source.ConversationID == "" {
+		if !m.claimableAccountSource(source, rec) || !w.settled || source.ConversationID == "" {
 			return
 		}
 		registry, err := m.store.Snapshot()
@@ -616,7 +617,7 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		}
 		err = w.fencedRecycleAttempt(source.ID, rec.IdentityHeld, func() error {
 			current, ok := w.get(source.ID)
-			if !ok || current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || w.sessionUnsafe(source.ID) || current.AccountBinding == nil || *current.AccountBinding != rec.SourceBinding {
+			if !ok || !m.claimableAccountSource(current, rec) || current.AccountBinding == nil || *current.AccountBinding != rec.SourceBinding {
 				return errAuthRecycleUnsafe
 			}
 			registry, err := m.store.Snapshot()
@@ -633,7 +634,7 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 				return errAuthRecycleUnsafe
 			}
 			current, ok = w.get(source.ID)
-			if !ok || current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || w.sessionUnsafe(source.ID) || current.AccountBinding == nil || *current.AccountBinding != rec.SourceBinding {
+			if !ok || !m.claimableAccountSource(current, rec) || current.AccountBinding == nil || *current.AccountBinding != rec.SourceBinding {
 				return errAuthRecycleUnsafe
 			}
 			rec.ExpectedCLIIdentity = launch.ExpectedCLIIdentity
@@ -649,8 +650,10 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 				}
 				return errAuthRecycleObligationRetained
 			}
-			if err := w.kill(source.ID); err != nil {
-				return errAuthRecycleObligationRetained
+			if current.Status.Process == status.ProcessRunning {
+				if err := w.kill(source.ID); err != nil {
+					return errAuthRecycleObligationRetained
+				}
 			}
 			return nil
 		})
@@ -1152,6 +1155,31 @@ func (m *accountRotationManager) RequestMove(local string, destination accounts.
 		rec.Incident.TriedAccounts[source.AccountBinding.AccountID] = true
 		return m.persist(rec)
 	})
+}
+
+// Owner movement can consume a retained, ended source after credential erasure.
+// Automatic failure recovery still claims only an idle running source. Every
+// retained managed attempt for that conversation must have exact stopped proof
+// before a stopped owner's source can reserve a new history writer.
+func (m *accountRotationManager) claimableAccountSource(source persist.Meta, rec accountRotationRecord) bool {
+	if m.w.sessionUnsafe(source.ID) {
+		return false
+	}
+	if source.Status.Process == status.ProcessRunning {
+		return source.Status.Turn == status.TurnIdle && source.Status.Interaction == status.InteractionNone
+	}
+	if rec.FailureClass != "owner-move" || m.stopProof(source) != nil || source.AccountBinding == nil {
+		return false
+	}
+	if _, err := m.store.HistoryProfilePath(*source.AccountBinding); err != nil {
+		return false
+	}
+	for _, retained := range m.w.list() {
+		if retained.AccountBinding != nil && retained.AgentType == source.AgentType && retained.ConversationID == source.ConversationID && m.stopProof(retained) != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *accountRotationManager) reservationEligible(registry accounts.Registry, rec accountRotationRecord) bool {

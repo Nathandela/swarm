@@ -42,6 +42,7 @@ type accountJob struct {
 	ErrorCode         string                     `json:"error_code,omitempty"`
 	Email             string                     `json:"email,omitempty"`
 	Plan              string                     `json:"plan,omitempty"`
+	CustodyConsumed   bool                       `json:"custody_consumed,omitempty"`
 }
 
 type accountJobs struct {
@@ -96,7 +97,7 @@ func openAccountManager(stateRoot, executable string, list func() []persist.Meta
 			return m
 		}
 		for id, job := range m.jobs.Jobs {
-			if id != job.ID || job.ID != job.Candidate.ID || job.Generation == 0 || (job.Provider != "codex" && job.Provider != "claude") {
+			if id != job.ID || job.ID != job.Candidate.ID || job.Generation == 0 || (job.Provider != "codex" && job.Provider != "claude") || (job.CustodyConsumed && job.State != "admitted" && job.State != "cancelled") {
 				m.unavailable = protocol.ErrAccountsUnavailable
 				return m
 			}
@@ -232,7 +233,7 @@ func (m *accountManager) pruneTerminalJobs() error {
 	}
 	var terminal []accountJob
 	for _, job := range m.jobs.Jobs {
-		if job.State == "admitted" || job.State == "cancelled" {
+		if (job.State == "admitted" || job.State == "cancelled") && m.terminalEnrollmentAbsent(job) {
 			terminal = append(terminal, job)
 		}
 	}
@@ -486,6 +487,11 @@ func (m *accountManager) snapshot() (protocol.AccountsReply, error) {
 			state = "unverified"
 		}
 		view := protocol.AccountView{ID: id, Provider: account.Provider, Label: account.Label, CredentialKind: generation.Kind, State: state, CredentialGeneration: account.CurrentGeneration, Assigned: counts[id], Retiring: account.Lifecycle == accounts.LifecycleRetiring, RefreshSupported: account.Provider == "codex" && m.refresh != nil}
+		view.CredentialsErased = len(account.Generations) > 0
+		for _, retained := range account.Generations {
+			view.CredentialsErased = view.CredentialsErased && retained.CredentialErased
+		}
+
 		binding := accounts.Binding{SchemaVersion: accounts.SchemaVersion, Provider: account.Provider, AccountID: account.ID, CredentialGeneration: account.CurrentGeneration, Identity: generation.Identity, ConfigurationGeneration: 1}
 		view.Email, view.Plan, _ = m.store.DisplayIdentity(binding)
 		scopes := make([]string, 0, len(account.Quota.Scopes))

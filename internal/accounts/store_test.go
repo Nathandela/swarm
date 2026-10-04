@@ -224,18 +224,24 @@ func TestCredentialErasureRetainsHistoryAndGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, _ := s.Snapshot()
-	proof := ErasureProof{WritersStopped: true, CompleteInventory: true, CredentialFiles: []string{"auth.json"}}
+	proof := ErasureProof{WritersStopped: true}
 	proof.LiveReferences = 1
 	if _, err := s.EraseCredentials(r.Revision, a.ID, 1, proof); !errors.Is(err, ErrInUse) {
 		t.Fatalf("erased in-use account: %v", err)
 	}
 	proof.LiveReferences = 0
-	proof.CompleteInventory = false
 	if _, err := s.EraseCredentials(r.Revision, a.ID, 1, proof); !errors.Is(err, ErrIneligible) {
 		t.Fatalf("unknown inventory claimed erased: %v", err)
 	}
-	proof.CompleteInventory = true
-	r, err := s.EraseCredentials(r.Revision, a.ID, 1, proof)
+	r, err := s.SetLifecycle(r.Revision, a.ID, LifecycleRetiring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.BeginCredentialErasure(r.Revision, a.ID, 1, "0.160.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.EraseCredentials(r.Revision, a.ID, 1, proof)
 	if err != nil {
 		t.Fatal(err)
 	}
