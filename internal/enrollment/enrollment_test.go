@@ -119,9 +119,25 @@ func fakeCodex() {
 		}
 		physical = filepath.Join(dir, fmt.Sprintf("%x", sha256.Sum256([]byte(socket))))
 	}
+	if fixtureMode() == "socket-bind-barrier" {
+		// Reproduce the VM's permissive inherited mask inside this fake process.
+		syscall.Umask(0o002)
+	}
+	// A direct fixture socket must be private as soon as bind publishes it.
+	previousMask := syscall.Umask(0o177)
 	ln, err := net.Listen("unix", physical)
+	syscall.Umask(previousMask)
 	if err != nil {
 		os.Exit(2)
+	}
+	if fixtureMode() == "socket-bind-barrier" {
+		_ = os.WriteFile("fixture-socket-bound", nil, 0o600)
+		for {
+			if _, err := os.Stat("fixture-socket-release"); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 	if os.Chmod(physical, 0o600) != nil {
 		os.Exit(2)
@@ -333,6 +349,42 @@ func TestDetachedCodexNativeSocketAlias(t *testing.T) {
 		t.Fatalf("native socket alias did not complete enrollment: phase=%s code=%s", p.Phase, p.ErrorCode)
 	}
 	assertNoJobSecrets(t, cfg)
+}
+
+func TestCodexFixtureSocketPrivateAtBind(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "fixture-mode"), []byte("socket-bind-barrier"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "native.sock")
+	executable, _ := os.Executable()
+	cmd := exec.Command(executable, "app-server", "--listen", "unix://"+socket)
+	cmd.Dir = dir
+	cmd.Env = append(cleanEnvironment(os.Environ()), "CODEX_HOME="+dir)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "fixture-socket-bound")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fake native socket did not reach bind barrier")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	info, err := os.Lstat(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("socket visible before chmod with unsafe mode %o", info.Mode().Perm())
+	}
+	if _, err := codexSocketPath(socket); err != nil {
+		t.Fatalf("newly bound fixture socket rejected: %v", err)
+	}
 }
 
 func TestCodexSocketPathRejectsUnsafeAliases(t *testing.T) {

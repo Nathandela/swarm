@@ -52,7 +52,11 @@ func accountFixtureCodex() {
 			socket = strings.TrimPrefix(arg, "unix://")
 		}
 	}
+	// Publish owner-only permissions at bind time, as the native server does
+	// before publishing its alias. A post-bind chmod alone has a visible race.
+	mask := syscall.Umask(0o177)
 	listener, err := net.Listen("unix", socket)
+	syscall.Umask(mask)
 	if err != nil {
 		os.Exit(2)
 	}
