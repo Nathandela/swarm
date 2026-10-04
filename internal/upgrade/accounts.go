@@ -1,6 +1,7 @@
 package upgrade
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/Nathandela/swarm/internal/accountcheck"
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
@@ -39,7 +41,17 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 		return errors.New("account state cannot be verified")
 	}
 	defer func() { _ = root.Close() }()
+	configurations, err := accountConfigurationGuard(root, card)
+	if err != nil {
+		return err
+	}
 	registry, err := readAccountDocument(root, "registry.json")
+	// Prepare can publish immutable projection metadata before accounts.Open
+	// creates a registry. Permit only that exact metadata-only directory; any
+	// profile, worker, or unknown neighboring state still requires a registry.
+	if configurations && errors.Is(err, os.ErrNotExist) && configurationOnlyAccounts(root) {
+		return nil
+	}
 	if err != nil {
 		return errors.New("account registry cannot be verified")
 	}
@@ -345,6 +357,71 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 		return errors.New("the target build cannot reconcile managed account recovery")
 	}
 	return nil
+}
+
+// Configuration contracts survive all credential generations and erasure. Scan
+// the independent immutable inventory, including projections published before a
+// session/meta reservation and old sources absent from the current roster. Only
+// projected metadata is opened; user settings and source files are not read.
+func accountConfigurationGuard(root *os.Root, card CompatManifest) (bool, error) {
+	directory, entries, err := openAccountInventory(root, "configurations")
+	if err != nil {
+		return false, errors.New("account configuration inventory cannot be verified")
+	}
+	if directory == nil {
+		return false, nil
+	}
+	defer func() { _ = directory.Close() }()
+	for _, entry := range entries {
+		ref := entry.Name()
+		if len(ref) != 64 || ref != strings.ToLower(ref) {
+			return true, errors.New("account configuration inventory contains an unknown entry")
+		}
+		if _, err := hex.DecodeString(ref); err != nil {
+			return true, errors.New("account configuration inventory contains an unknown entry")
+		}
+		before, err := directory.Lstat(ref)
+		if err != nil || !privateAccountInfo(before, true) {
+			return true, errors.New("account configuration inventory contains an unsafe entry")
+		}
+		projection, err := directory.OpenRoot(ref)
+		if err != nil {
+			return true, errors.New("account configuration metadata cannot be verified")
+		}
+		actual, statErr := projection.Lstat(".")
+		current, currentErr := directory.Lstat(ref)
+		if statErr != nil || currentErr != nil || !privateAccountInfo(actual, true) || !os.SameFile(before, actual) || !os.SameFile(current, actual) {
+			_ = projection.Close()
+			return true, errors.New("account configuration metadata cannot be verified")
+		}
+		raw, readErr := readAccountDocument(projection, "projection.json")
+		_ = projection.Close()
+		if readErr != nil {
+			return true, errors.New("account configuration metadata cannot be verified")
+		}
+		digest := sha256.Sum256(raw)
+		if hex.EncodeToString(digest[:]) != ref {
+			return true, errors.New("account configuration metadata cannot be verified")
+		}
+		need, err := accountconfig.ProjectionCompatibility(raw)
+		if err != nil {
+			return true, errors.New("account configuration contract cannot be verified")
+		}
+		if card.AccountConfig < need {
+			return true, errors.New("the target build cannot preserve managed project configuration boundaries")
+		}
+	}
+	return true, nil
+}
+
+func configurationOnlyAccounts(root *os.Root) bool {
+	directory, err := root.Open(".")
+	if err != nil {
+		return false
+	}
+	defer func() { _ = directory.Close() }()
+	entries, err := directory.ReadDir(2)
+	return (err == nil || errors.Is(err, io.EOF)) && len(entries) == 1 && entries[0].Name() == "configurations" && entries[0].IsDir()
 }
 
 func privateAccountInfo(info os.FileInfo, directory bool) bool {
