@@ -527,6 +527,9 @@ func (w *authWatcher) run() {
 	defer func() {
 		if w.accountRotation != nil {
 			w.accountRotation.closeAccessChecks()
+			if w.accountRotation.checkCollector != nil {
+				w.accountRotation.checkCollector.Close()
+			}
 		}
 	}()
 	t := time.NewTicker(w.interval)

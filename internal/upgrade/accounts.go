@@ -87,6 +87,9 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 	if err := accountCheckGuard(root, card); err != nil {
 		return err
 	}
+	if err := accountCheckCollectionGuard(root, card); err != nil {
+		return err
+	}
 	// Candidate workers have separate files, which cannot be hidden by an empty registry.
 	jobsPath := filepath.Join(accountPath, "jobs")
 	jobsInfo, err := root.Lstat("jobs")
@@ -232,6 +235,19 @@ func accountCheckGuard(root *os.Root, card CompatManifest) error {
 		if readErr != nil || json.Unmarshal(data, &worker) != nil || worker.SchemaVersion != accountcheck.SchemaVersion {
 			return errors.New("account check custody cannot be verified")
 		}
+	}
+	return nil
+}
+
+// Collection intents retain only proved-dead, durably unreferenced Worker2
+// custody. They never authorize execution or replace a stopped-writer proof.
+func accountCheckCollectionGuard(root *os.Root, card CompatManifest) error {
+	present, err := accountcheck.ValidateCollectionInventory(root)
+	if err != nil {
+		return errors.New("account check collection cannot be verified")
+	}
+	if present && card.AccountWorker < accountcheck.SchemaVersion {
+		return errors.New("the target build cannot preserve retained account check custody")
 	}
 	return nil
 }

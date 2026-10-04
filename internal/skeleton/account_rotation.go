@@ -103,6 +103,7 @@ type accountRotationManager struct {
 	inboxQuotaFeeds map[string]accountInboxQuotaStamp
 	inboxHolds      map[string]bool
 	inboxFatal      bool
+	checkCollector  *accountcheck.Collector
 }
 
 func newAccountRotationManager(d *Daemon, w *authWatcher, store *accounts.Store) *accountRotationManager {
@@ -457,6 +458,7 @@ func (m *accountRotationManager) step() {
 		}
 		m.stepRecord(rec)
 	}
+	m.collectChecks()
 }
 
 func (m *accountRotationManager) block(rec accountRotationRecord, code string) {

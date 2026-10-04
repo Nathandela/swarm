@@ -88,8 +88,7 @@ func Run(ctx context.Context, executable string, cfg Config, admit func(Ref) err
 	}
 	defer func() { _ = root.Close() }()
 	// Serialize admission for a credential generation across daemon replacements.
-	key := sha256.Sum256([]byte(cfg.Binding.Provider + ":" + cfg.Binding.AccountID + ":" + fmt.Sprint(cfg.Binding.CredentialGeneration)))
-	lockName := ".lock-" + hex.EncodeToString(key[:])
+	lockName := generationLockName(cfg.Binding)
 
 	before, err := root.Lstat(lockName)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -115,7 +114,7 @@ func Run(ctx context.Context, executable string, cfg Config, admit func(Ref) err
 		return nil, ErrUnavailable
 	}
 	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
-	if !writersStopped(root, cfg.Binding) {
+	if !collectionStateSafe(cfg.StateRoot) || !writersStopped(root, cfg.Binding) {
 		return nil, ErrCustodyUnknown
 	}
 	var nonce [16]byte
@@ -220,6 +219,9 @@ func Run(ctx context.Context, executable string, cfg Config, admit func(Ref) err
 // CustodyStopped checks the exact owner incarnation from a persisted permit.
 // A missing or foreign proof never becomes true through PID/PGID disappearance.
 func CustodyStopped(stateRoot string, worker processcontain.Identity, binding accounts.Binding) bool {
+	if !collectionStateSafe(stateRoot) {
+		return false
+	}
 	root, err := openChecks(stateRoot)
 	if err != nil {
 		return false
@@ -257,6 +259,9 @@ func CustodyStopped(stateRoot string, worker processcontain.Identity, binding ac
 // credential generation lacks an exact stopped-writer proof. A genuinely absent
 // check inventory is safe; malformed or unsafe custody fails closed.
 func WritersStoppedForBinding(stateRoot string, binding accounts.Binding) bool {
+	if !collectionStateSafe(stateRoot) {
+		return false
+	}
 	root, err := openCheckRoot(stateRoot, false)
 	if errors.Is(err, os.ErrNotExist) {
 		return true
@@ -354,6 +359,11 @@ func validLockInfo(info os.FileInfo) bool {
 func validGeneration(value string) bool {
 	raw, err := hex.DecodeString(value)
 	return err == nil && len(raw) == 16 && value == strings.ToLower(value)
+}
+
+func generationLockName(binding accounts.Binding) string {
+	key := sha256.Sum256([]byte(binding.Provider + ":" + binding.AccountID + ":" + fmt.Sprint(binding.CredentialGeneration)))
+	return ".lock-" + hex.EncodeToString(key[:])
 }
 func openChecks(stateRoot string) (*os.Root, error) {
 	return openCheckRoot(stateRoot, true)
