@@ -140,3 +140,75 @@ func TestAccountsQuotaSummaryAndViewport(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountsQuotaProductionLabelsFitAccountRows(t *testing.T) {
+	for _, labels := range [][2]string{{"Claude 5-hour usage", "Claude 7-day usage"}, {"5-hour usage", "Weekly usage"}} {
+		t.Run(labels[0], func(t *testing.T) {
+			c := newAccountUIClient()
+			c.reply.Enabled["claude"] = true
+			reset, observed := time.Now().Add(3*time.Hour), time.Now()
+			for i, usage := range [][2]int{{0, 46}, {13, 72}} {
+				c.reply.Accounts = append(c.reply.Accounts, protocol.AccountView{
+					ID: string(rune('a' + i)), Provider: "claude", Label: "Personal Claude Subscription " + string(rune('A'+i)), State: "enabled", RefreshSupported: true, QuotaFetchState: "ready",
+					Quota: []protocol.AccountQuotaView{{Label: labels[0], UsedPercent: &usage[0], ResetAt: &reset, ObservedAt: observed}, {Label: labels[1], UsedPercent: &usage[1], ResetAt: &reset, ObservedAt: observed}},
+				})
+			}
+			m := accountUIOpen(t, c).(rootModel)
+			m.width, m.height = 80, 24
+			for i, want := range [][2]string{{"5h 0% used", "weekly 46% used"}, {"5h 13% used", "weekly 72% used"}} {
+				m.accounts.focus = i + 1
+				body := stripANSI(view(m))
+				checkAccountsFlowViewport(t, body, 80, 24)
+				found := false
+				for _, line := range strings.Split(body, "\n") {
+					if strings.Contains(line, c.reply.Accounts[i].Label) {
+						found = true
+						if !strings.Contains(line, "▌") || !strings.Contains(line, want[0]) || !strings.Contains(line, want[1]) {
+							t.Fatalf("selected account row loses quota: %q", line)
+						}
+					}
+				}
+				if !found {
+					t.Fatal("selected account row is missing", body)
+				}
+				m.accounts.detail = true
+				body = stripANSI(view(m))
+				checkAccountsFlowViewport(t, body, 80, 24)
+				if strings.Count(body, "last observed:") != 2 {
+					t.Fatalf("details split the observation label: %s", body)
+				}
+				for _, token := range []string{strings.Replace(want[0], " ", ": ", 1), strings.Replace(want[1], " ", ": ", 1), "resets " + reset.Local().Format("02 Jan 15:04"), "just now"} {
+					if !strings.Contains(body, token) {
+						t.Fatalf("details lose %q: %s", token, body)
+					}
+				}
+				m.accounts.detail = false
+			}
+		})
+	}
+}
+
+func TestAccountsQuotaKnownLabelsAndUnknownSanitization(t *testing.T) {
+	for _, group := range []struct {
+		want   string
+		labels []string
+	}{
+		{"5h", []string{"five_hour", "Claude 5-hour usage", "5-hour usage"}},
+		{"weekly", []string{"seven_day", "Claude 7-day usage", "Weekly usage"}},
+		{"Sonnet weekly", []string{"seven_day_sonnet", "Claude Sonnet 7-day usage", "Weekly Sonnet usage"}},
+		{"Opus weekly", []string{"seven_day_opus", "Claude Opus 7-day usage", "Weekly Opus usage"}},
+		{"Primary", []string{"primary", "Codex primary window", "Primary usage"}},
+		{"Secondary", []string{"secondary", "Codex secondary window", "Secondary usage"}},
+	} {
+		for _, label := range group.labels {
+			if got := accountQuotaLabel(label); got != group.want {
+				t.Fatalf("%q: got %q, want %q", label, got, group.want)
+			}
+		}
+	}
+	for _, label := range []string{"Custom feature primary window", "Claude experimental usage", "Unknown\x1b\n\r\t bucket"} {
+		if got := accountQuotaLabel(label); got != accountText(label) || strings.ContainsAny(got, "\x1b\n\r\t") {
+			t.Fatalf("unknown label changed or contains controls: %q", got)
+		}
+	}
+}
