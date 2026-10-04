@@ -52,8 +52,16 @@ func accountFixtureCodex() {
 			socket = strings.TrimPrefix(arg, "unix://")
 		}
 	}
+	// Publish owner-only permissions at bind time, as the native server does
+	// before publishing its alias. A post-bind chmod alone has a visible race.
+	mask := syscall.Umask(0o177)
 	listener, err := net.Listen("unix", socket)
+	syscall.Umask(mask)
 	if err != nil {
+		os.Exit(2)
+	}
+	// The pinned native server restricts its bound socket to the owner.
+	if err := os.Chmod(socket, 0o600); err != nil {
 		os.Exit(2)
 	}
 	mode, _ := os.ReadFile(filepath.Join(filepath.Dir(os.Args[0]), "native-fixture-mode"))
@@ -702,6 +710,51 @@ func TestAccountManagerMissingNativeInstallationCreatesNoCandidate(t *testing.T)
 	after, readErr := os.ReadDir(filepath.Join(m.stateRoot, "accounts", "profiles"))
 	if !errors.Is(err, protocol.ErrAccountsUnavailable) || readErr != nil || len(before) != len(after) || len(m.jobs.Jobs) != 0 {
 		t.Fatal("missing native installation left pending credentials or intent")
+	}
+}
+
+func TestAccountManagerUnlaunchableNativeMethodCreatesNoCandidate(t *testing.T) {
+	for _, mode := range []os.FileMode{0o775, 0o777, 0o644} {
+		t.Run(fmt.Sprintf("%o", mode), func(t *testing.T) {
+			m := accountTestManager(t, accountTestState(t))
+			native := filepath.Join(m.stateRoot, "native-codex")
+			accountTestPut(t, native, []byte("#!/bin/sh\nexit 1\n"))
+			if err := os.Chmod(native, mode); err != nil {
+				t.Fatal(err)
+			}
+			// Normal npm installation aliases must resolve to the same file
+			// whose executable permissions the worker validates.
+			alias := filepath.Join(m.stateRoot, "codex")
+			if err := os.Symlink(native, alias); err != nil {
+				t.Fatal(err)
+			}
+			m.native["codex"] = &persist.CLIIdentity{Path: alias, Version: "0.160.0"}
+			method := m.methods()["codex"][0]
+			if method.Available || method.Reason == "" {
+				t.Error("unlaunchable Codex sign-in was advertised as available")
+			}
+			_, err := m.Accounts(protocol.AccountsReq{Action: "start", Provider: "codex", Method: "device-code"})
+			profiles, readErr := os.ReadDir(filepath.Join(m.stateRoot, "accounts", "profiles"))
+			jobs, jobsErr := os.ReadDir(filepath.Join(m.stateRoot, "accounts", "jobs"))
+			if !errors.Is(err, protocol.ErrAccountsUnavailable) || readErr != nil || jobsErr != nil || len(profiles) != 0 || len(jobs) != 0 || len(m.jobs.Jobs) != 0 {
+				t.Error("unlaunchable Codex created a failed enrollment or candidate")
+			}
+		})
+	}
+}
+
+func TestAccountManagerNativeMethodTracksPermissionRepair(t *testing.T) {
+	m := accountTestManager(t, accountTestState(t))
+	native := filepath.Join(m.stateRoot, "native-codex")
+	accountTestPut(t, native, []byte("#!/bin/sh\nexit 1\n"))
+	m.native["codex"] = &persist.CLIIdentity{Path: native, Version: "0.160.0"}
+	for _, mode := range []os.FileMode{0o775, 0o755, 0o775} {
+		if err := os.Chmod(native, mode); err != nil {
+			t.Fatal(err)
+		}
+		if got := m.methods()["codex"][0].Available; got != (mode == 0o755) {
+			t.Errorf("mode %o: available=%v", mode, got)
+		}
 	}
 }
 
