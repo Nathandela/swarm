@@ -706,7 +706,29 @@ func (m rootModel) View() tea.View {
 	case m.screen == screenOptions:
 		content = m.composeBoard(m.options.view(m.width), m.options.hint())
 	case m.screen == screenAccounts:
-		content = m.composeBoard(m.accounts.view(m.width, m.height, m.connectionLost, m.accountLoginRunner != nil), m.accounts.hint(m.connectionLost))
+		width, height := m.width, m.height
+		if width > 4 {
+			width -= 4
+		}
+		if height > 0 {
+			height-- // The persistent status bar owns the last row.
+			if skewNotice(m.daemonVersion, m.clientVersion) != "" && m.height >= 3 {
+				height--
+			}
+		}
+		top := ""
+		if m.height >= 12 {
+			top = "\n"
+			height--
+		}
+		if m.height > 0 {
+			height = max(1, height)
+		}
+		body := m.accounts.view(width, height, m.connectionLost, m.accountLoginRunner != nil)
+		if m.width > 4 {
+			body = "  " + strings.ReplaceAll(body, "\n", "\n  ")
+		}
+		content = m.composeBoard(top+body, m.accounts.hint(m.connectionLost, m.accountLoginRunner != nil, m.width))
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).

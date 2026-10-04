@@ -8,7 +8,21 @@ Account pools let Swarm keep separate personal Claude and Codex logins and assig
 
 Open **Options → Accounts**. From Accounts, use the account list to inspect authentication state, observed quota and reset times, last observation, and the number of discussions bound to each account. Unknown quota is shown as unknown. Quota observations come from provider or discussion evidence; Swarm does not make background model requests to poll quota.
 
-Use **Add Account** and follow the provider, method, authentication, verification, and label/admission steps. The daemon advertises methods and availability. Codex supports fresh native device-code sign-in; its browser method is shown unavailable on this VM. Claude supports fresh native personal OAuth in an isolated profile. Cached profile imports for both providers and the installed Claude environment's one-year token are unavailable pending characterized authenticated identity. Cached account identifiers and credentials are separate evidence; discovery or pairing does not establish that a credential authenticates the identified account or prove distinct pool capacity. Import, reauthentication, or reverification cannot promote a cached profile without durable provenance and native authenticated proof. The environment token cannot authenticate identity offline, and its effective remote policy is uncharacterized; it has no manual launch route. Review the returned account identity before admission. An account is available for automatic assignment only after Swarm has verified its provider identity. A credential without verified identity cannot be treated as a second subscription.
+To add an account:
+
+1. Choose **Add Account**, select Claude or Codex, then choose an available sign-in method.
+2. Complete the provider sign-in. You can leave Accounts while sign-in runs; return to review its status.
+3. Check the displayed identity to confirm it is the subscription you intend to add, choose a local label, and add it. Swarm makes the account available for assignment only after it verifies the provider identity.
+
+**Unavailable methods:** Codex supports fresh native device-code sign-in; its browser method is unavailable on this VM. Claude supports fresh native personal OAuth in an isolated profile. Cached profile imports for both providers and the installed Claude environment's one-year token are unavailable. A cached account identifier does not prove its credential authenticates that account or represents another subscription. Importing, signing in again, or reverifying cannot promote a cached profile without durable provenance and native authenticated proof. The environment token cannot verify identity offline, its effective remote policy is uncharacterized, and it has no manual launch route. Subscription API keys are not pool accounts.
+
+## After adding an account
+
+**Ready** means sign-in succeeded and the verified account was saved. It does not mean a discussion is already assigned to it or that Swarm has observed its usage. Quota can remain unknown until provider or discussion evidence is available; Swarm does not make background model requests to poll it.
+
+Enable provider rotation to use configured accounts for **new managed discussions**. With one ready account, Swarm can assign new discussions to it, but has no other account from that provider to switch to. A second verified account gives Swarm a possible destination; whether it can serve a discussion still depends on the requested model and available quota evidence. A healthy discussion stays bound to its current account, even when another account is available.
+
+If recovery interrupts a request while switching accounts, Swarm restores the conversation and asks you to retry. It does not resubmit the request, replay a tool call, or repeat an unresolved action.
 
 Account changes take effect when saved and are separate from pending Options changes. Pausing an account prevents future assignment; existing discussions keep their binding. Retiring an account also prevents new assignment. Swarm retains its credentials while discussions, native workers, enrollment or recovery still reference them. After those references drain, it fences execution, verifies exact stopped-writer proof, and removes the characterized credential files for the supported Linux native versions. Unknown cache routes, unsafe files or uncertain durability keep the credentials retained. Accounts shows **Retired · account credentials removed** only after every retained credential generation has been erased. Discussion history is kept, and retirement does not revoke the login at the provider.
 
@@ -18,9 +32,9 @@ Enable **automatic rotation for new sessions** separately for Claude and Codex. 
 
 New discussions can use the provider's default model. Until the native CLI reports its effective model, capacity remains unknown and a known denial is not bypassed. Automatic recovery waits for verified model evidence.
 
-When a bound account cannot serve a discussion's requested model, Swarm may restore that discussion on another eligible account from the same provider. A healthy discussion stays on its account even if another account has more quota. The requested model, permissions, worktree, and saved conversation are preserved. Swarm does not change providers or models to find capacity.
+When a bound account cannot serve a discussion's requested model, Swarm may restore that discussion on another eligible account from the same provider. The requested model, permissions, worktree, and saved conversation are preserved. Swarm does not change providers or models to find capacity.
 
-After a request fails during a switch, Swarm restores the conversation and asks you to retry. It does not resubmit the failed prompt, replay a tool call, or repeat an unresolved action. An account with unknown or stale quota is not assumed healthy; if no destination can be established safely, the discussion remains held for operator action.
+An account with unknown or stale quota is not assumed healthy; if no destination can be established safely, the discussion remains held for operator action.
 
 ## Sign-in and recovery
 

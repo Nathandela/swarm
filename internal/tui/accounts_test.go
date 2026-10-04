@@ -455,7 +455,7 @@ func TestAccounts_RetirementStatusAndConfirmation(t *testing.T) {
 		credentialsErased bool
 		want              string
 	}{
-		{name: "active", want: "available"},
+		{name: "active", want: "Ready"},
 		{name: "retiring", retiring: true, want: "Retiring · credentials retained"},
 		{name: "retired", retiring: true, credentialsErased: true, want: "Retired · account credentials removed"},
 	} {
