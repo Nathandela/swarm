@@ -2,7 +2,7 @@
 
 Account pools let Swarm keep separate personal Claude and Codex logins and assign each new discussion to one account. Automatic rotation is opt-in per provider. Adding an account does not enroll existing discussions or change their current credentials.
 
-> **Release status (2026-10-04):** [v0.15.0 is published](https://github.com/Nathandela/swarm/releases/tag/v0.15.0) and deployed on the VM. The CLI and daemon run 0.15.0; all doctor checks pass, and 155 saved discussions and eight live shims survived activation. The installed Accounts wizard offers native Claude sign-in and Codex device-code sign-in. Real two-account and full-flow acceptance still needs owner authentication. Token-only Claude execution, cached credential imports, and migration of older discussions remain unavailable follow-up work.
+> **Release status (2026-10-04):** [v0.15.1 is published](https://github.com/Nathandela/swarm/releases/tag/v0.15.1) and deployed on the VM, with clearer Accounts and sign-in screens. The CLI and daemon run 0.15.1; all doctor checks pass, and account generations, 155 saved discussions and eight live shims survived activation. Two personal Claude accounts have completed native admission, with automatic assignment enabled. Actual post-switch continuation remains acceptance work; token-only execution, cached imports and legacy-discussion migration remain unavailable follow-up scope. See the [hotfix evidence](../verification/account-pools-v0151.md).
 
 ## Manage accounts
 
@@ -10,7 +10,7 @@ Open **Options → Accounts**. From Accounts, use the account list to inspect au
 
 To add an account:
 
-1. Choose **Add Account**, select Claude or Codex, then choose an available sign-in method.
+1. Press **a** (**Add account**), select Claude or Codex, then choose an available sign-in method.
 2. Complete the provider sign-in. You can leave Accounts while sign-in runs; return to review its status.
 3. Check the displayed identity to confirm it is the subscription you intend to add, choose a local label, and add it. Swarm makes the account available for assignment only after it verifies the provider identity.
 
