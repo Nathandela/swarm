@@ -2,7 +2,7 @@
 
 Account pools let Swarm keep separate personal Claude and Codex logins and assign each new discussion to one account. Automatic rotation is opt-in per provider. Adding an account does not enroll existing discussions or change their current credentials.
 
-> **Release status (2026-10-04):** v0.15.0 release is authorized; publishing and deployment are pending. The authorized scope is native-login account pools for new managed discussions. Real two-account and full-flow acceptance will be tested after deployment. Token-only Claude execution, cached credential imports, and migration of older discussions remain unavailable follow-up work.
+> **Release status (2026-10-04):** [v0.15.0 is published](https://github.com/Nathandela/swarm/releases/tag/v0.15.0) and deployed on the VM. The CLI and daemon run 0.15.0; all doctor checks pass, and 155 saved discussions and eight live shims survived activation. The installed Accounts wizard offers native Claude sign-in and Codex device-code sign-in. Real two-account and full-flow acceptance still needs owner authentication. Token-only Claude execution, cached credential imports, and migration of older discussions remain unavailable follow-up work.
 
 ## Manage accounts
 
