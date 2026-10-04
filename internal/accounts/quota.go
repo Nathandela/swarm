@@ -198,15 +198,20 @@ func ReduceQuota(q QuotaState, o Observation, now time.Time) (QuotaState, error)
 		if strings.HasPrefix(update.Scope, "model:") {
 			scope.Model = strings.TrimPrefix(update.Scope, "model:")
 		}
-		if update.UsedPercent != nil {
+		// A native event may have reserved its sequence before a passive usage
+		// read completed. Retain newer usage, while still applying its negative
+		// authority below regardless of the telemetry's age.
+		if update.UsedPercent != nil && !o.ReceivedAt.Before(scope.UsageObservedAt) {
 			value := *update.UsedPercent
 			scope.UsedPercent = &value
 			scope.UsageObservedAt = o.ReceivedAt
 		}
-		if update.ResetPresent {
+		if update.ResetPresent && !o.ReceivedAt.Before(scope.UsageObservedAt) && !o.ReceivedAt.Before(scope.ObservedAt) {
 			scope.ResetAt = update.ResetAt
 		}
-		scope.ObservedAt = o.ReceivedAt
+		if !o.ReceivedAt.Before(scope.ObservedAt) {
+			scope.ObservedAt = o.ReceivedAt
+		}
 		switch update.Authority {
 		case AuthorityDenied:
 			duplicate := false

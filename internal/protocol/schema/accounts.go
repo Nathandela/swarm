@@ -47,6 +47,10 @@ type AccountView struct {
 	CredentialGeneration uint64             `json:"credential_generation"`
 	Assigned             int                `json:"assigned"`
 	Quota                []AccountQuotaView `json:"quota,omitempty"`
+	QuotaFetchState      string             `json:"quota_fetch_state,omitempty"`
+	QuotaFetchError      string             `json:"quota_fetch_error,omitempty"`
+	QuotaNextRefreshAt   *time.Time         `json:"quota_next_refresh_at,omitempty"`
+	QuotaLastAttemptAt   *time.Time         `json:"quota_last_attempt_at,omitempty"`
 	NextRetryAt          *time.Time         `json:"next_retry_at,omitempty"`
 	RefreshSupported     bool               `json:"refresh_supported"`
 	RetrySupported       bool               `json:"retry_supported"`

@@ -188,7 +188,7 @@ func (m rootModel) applyAccountsReply(msg accountsReplyMsg) (tea.Model, tea.Cmd)
 	if msg.action == "admit" {
 		a.wizard = accountWizard{}
 		a.wizardOpen = false
-		a.notice = "Account added. Automatic rotation is enabled separately for each provider."
+		a.notice = "Account added. Open details for quota; enable rotation separately."
 	}
 	if msg.action == "move" {
 		a.moveOpen, a.moveConfirm = false, false
@@ -353,10 +353,7 @@ func (m rootModel) updateAccounts(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		a.cancelAfterStart = false
 		return m, nil
 	}
-	if a.busy {
-		return m, nil
-	}
-	if !a.loaded || a.err != "" {
+	if !a.loaded {
 		if k.Text == "r" {
 			return m.beginAccountsRequest(protocol.AccountsReq{Action: "list"})
 		}
@@ -375,6 +372,25 @@ func (m rootModel) updateAccounts(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			a.scroll = -1
 		} else {
 			a.focus = wrapIndex(a.focus+step, len(a.rows()))
+		}
+		return m, nil
+	}
+	if k.Code == tea.KeyEnter && !a.detail && a.selected().kind == "account" {
+		a.detail = true
+		a.detailFocus = 0
+		a.scroll = 0
+		return m, nil
+	}
+	if k.Code == tea.KeyEnter && a.detail && a.detailFocus == 6 {
+		a.detail = false
+		return m, nil
+	}
+	if a.busy {
+		return m, nil
+	}
+	if a.err != "" {
+		if k.Text == "r" {
+			return m.beginAccountsRequest(protocol.AccountsReq{Action: "list"})
 		}
 		return m, nil
 	}
@@ -405,11 +421,6 @@ func (m rootModel) updateAccounts(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		action = "refresh"
 	case k.Text == "l":
 		action = "login"
-	case k.Code == tea.KeyEnter && !a.detail:
-		a.detail = true
-		a.detailFocus = 0
-		a.scroll = 0
-		return m, nil
 	case k.Code == tea.KeyEnter && a.detail:
 		action = []string{"pause", "refresh", "retry", "login", "move", "retire", "back"}[a.detailFocus]
 	}
@@ -852,23 +863,115 @@ func accountAge(at time.Time) string {
 }
 
 func accountQuotaLines(account protocol.AccountView) []string {
-	if len(account.Quota) == 0 {
-		return []string{"Quota: unknown · not yet observed"}
-	}
 	var lines []string
+	if len(account.Quota) == 0 {
+		message := "Quota: unknown · not yet observed"
+		switch account.QuotaFetchState {
+		case "loading":
+			message = "Quota: unknown · fetching…"
+		case "ready":
+			message = "Quota: unknown · provider reported no usage windows"
+		case "idle":
+			message = "Quota: unknown · waiting for first refresh"
+		case "unsupported":
+			message = "Quota: unknown · unavailable for this credential"
+		}
+		lines = append(lines, message)
+	}
+	for _, quota := range account.Quota {
+		used := "unknown"
+		if quota.UsedPercent != nil {
+			used = fmt.Sprintf("%d%% used", *quota.UsedPercent)
+			if *quota.UsedPercent >= 0 && *quota.UsedPercent <= 100 {
+				used += fmt.Sprintf(" · %d%% remaining", 100-*quota.UsedPercent)
+			}
+		}
+		line := accountQuotaLabel(quota.Label) + ": " + used
+		if quota.ResetAt != nil {
+			if !quota.ResetAt.After(time.Now()) {
+				line += " · reset passed " + quota.ResetAt.Local().Format("02 Jan 15:04")
+			} else {
+				line += " · resets " + quota.ResetAt.Local().Format("02 Jan 15:04")
+			}
+		}
+		line += " · last observed: " + accountAge(quota.ObservedAt)
+		if accountQuotaStale(quota) {
+			line += " · stale"
+		}
+		lines = append(lines, line)
+	}
+	if len(account.Quota) > 0 && account.QuotaFetchState == "loading" {
+		lines = append(lines, "Quota: refreshing… · keeping last observation")
+	}
+	if len(account.Quota) > 0 && account.QuotaFetchState == "unsupported" {
+		lines = append(lines, "Quota refresh unavailable for this credential")
+	}
+	if account.QuotaFetchState == "error" {
+		message := "Quota refresh failed"
+		if safe := []rune(accountText(account.QuotaFetchError)); len(safe) > 0 {
+			message += ": " + string(safe[:min(len(safe), 160)])
+		}
+		if account.RefreshSupported {
+			message += " · r to retry"
+		}
+		lines = append(lines, message)
+	}
+	if account.QuotaNextRefreshAt != nil {
+		lines = append(lines, "Next quota refresh: "+account.QuotaNextRefreshAt.Local().Format("02 Jan 15:04"))
+	}
+	if account.QuotaLastAttemptAt != nil && account.QuotaFetchState == "error" {
+		lines = append(lines, "Last refresh attempt: "+accountAge(*account.QuotaLastAttemptAt))
+	}
+	return lines
+}
+
+func accountQuotaLabel(label string) string {
+	switch label {
+	case "five_hour":
+		return "5h"
+	case "seven_day":
+		return "weekly"
+	case "seven_day_sonnet":
+		return "Sonnet weekly"
+	case "seven_day_opus":
+		return "Opus weekly"
+	default:
+		if label == "" {
+			return "Usage"
+		}
+		return accountText(label)
+	}
+}
+
+func accountQuotaStale(quota protocol.AccountQuotaView) bool {
+	return quota.ObservedAt.IsZero() || time.Since(quota.ObservedAt) > 5*time.Minute || quota.ResetAt != nil && !quota.ResetAt.After(time.Now())
+}
+
+func accountQuotaSummary(account protocol.AccountView) string {
+	var parts []string
+	stale := false
 	for _, quota := range account.Quota {
 		used := "unknown"
 		if quota.UsedPercent != nil {
 			used = fmt.Sprintf("%d%% used", *quota.UsedPercent)
 		}
-		line := accountText(quota.Label) + ": " + used
-		if quota.ResetAt != nil {
-			line += " · resets " + quota.ResetAt.Local().Format("02 Jan 15:04")
-		}
-		line += " · last observed: " + accountAge(quota.ObservedAt)
-		lines = append(lines, line)
+		parts = append(parts, accountQuotaLabel(quota.Label)+" "+used)
+		stale = stale || accountQuotaStale(quota)
 	}
-	return lines
+	if len(parts) == 0 {
+		parts = append(parts, "unknown")
+	}
+	if account.QuotaFetchState == "loading" {
+		parts = append(parts, "fetching…")
+	} else if account.QuotaFetchState == "error" {
+		parts = append(parts, "refresh failed")
+	} else if account.QuotaFetchState == "unsupported" {
+		parts = append(parts, "unavailable")
+	}
+	if stale {
+		parts = append(parts, "stale")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (a accountsModel) accountCounts(provider string) (total, ready int) {
@@ -919,7 +1022,9 @@ func (a accountsModel) nextStep(row accountRow) string {
 			}
 		}
 	}
-	if !observed {
+	if row.kind == "account" && a.reply.Accounts[row.index].QuotaFetchState != "" {
+		lines = append(lines, "Quota: "+accountQuotaSummary(a.reply.Accounts[row.index]))
+	} else if !observed {
 		lines = append(lines, "Quota: unknown · not yet observed")
 	} else if row.kind == "account" {
 		lines = append(lines, accountQuotaLines(a.reply.Accounts[row.index])[0])
@@ -998,6 +1103,9 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 		for _, line := range accountQuotaLines(account) {
 			b.WriteString(line + "\n")
 		}
+		if account.RefreshSupported && account.QuotaFetchState != "loading" {
+			b.WriteString("r refreshes quota for this account.\n")
+		}
 		if account.NextRetryAt != nil {
 			b.WriteString("Next retry: " + account.NextRetryAt.Local().Format("02 Jan 15:04") + "\n")
 		}
@@ -1063,7 +1171,11 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 			if label == "" {
 				label = accountProviderName(r.provider) + " account"
 			}
-			list = append(list, accountRowLine(accountChoice(label+" · "+accountState(account)+fmt.Sprintf(" · %d assigned", account.Assigned), i == a.focus), width))
+			label += " · " + accountState(account)
+			if len(account.Quota) > 0 || account.QuotaFetchState != "" {
+				label += " · " + accountQuotaSummary(account)
+			}
+			list = append(list, accountRowLine(accountChoice(label+fmt.Sprintf(" · %d assigned", account.Assigned), i == a.focus), width))
 		case "job":
 			job := a.reply.Jobs[r.index]
 			label := accountJobState(job)
@@ -1226,6 +1338,7 @@ func (w accountWizard) view(width int, lost, busy, loginSupported bool, methods 
 		}
 	case accountStepVerify:
 		b.WriteString("Sign-in checked. Review the account before adding it.\n\n")
+		b.WriteString("After adding, check quota in account details.\n\n")
 		b.WriteString("Provider: " + accountProviderName(w.provider) + "\n")
 		if w.job.Email != "" {
 			b.WriteString("Email: " + accountText(w.job.Email) + "\n")

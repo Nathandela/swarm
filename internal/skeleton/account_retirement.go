@@ -178,6 +178,16 @@ func (m *accountRotationManager) retirementMetas() ([]persist.Meta, error) {
 }
 
 func (m *accountRotationManager) retirementReferences(manager *accountManager, binding accounts.Binding, generation accounts.Generation) (string, error) {
+	// Cancellation requests a stop; only worker return releases copied bearer
+	// custody. The manager mutex already protects this exact-generation scan.
+	if manager.quota != nil {
+		for request, cancel := range manager.quota.active {
+			if request.id == binding.AccountID && request.generation == binding.CredentialGeneration {
+				cancel()
+				return "", accounts.ErrInUse
+			}
+		}
+	}
 	// Retrying uses retained generation metadata, never ProfilePath or a cached
 	// environment which would bypass the CredentialErasing execution embargo.
 	if _, err := m.store.HistoryProfilePath(binding); err != nil {
