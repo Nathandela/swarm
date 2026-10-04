@@ -961,11 +961,12 @@ func accountQuotaSummary(account protocol.AccountView) string {
 	if len(parts) == 0 {
 		parts = append(parts, "unknown")
 	}
-	if account.QuotaFetchState == "loading" {
+	switch account.QuotaFetchState {
+	case "loading":
 		parts = append(parts, "fetching…")
-	} else if account.QuotaFetchState == "error" {
+	case "error":
 		parts = append(parts, "refresh failed")
-	} else if account.QuotaFetchState == "unsupported" {
+	case "unsupported":
 		parts = append(parts, "unavailable")
 	}
 	if stale {
