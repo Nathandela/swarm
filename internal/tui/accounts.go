@@ -927,14 +927,18 @@ func accountQuotaLines(account protocol.AccountView) []string {
 
 func accountQuotaLabel(label string) string {
 	switch label {
-	case "five_hour":
+	case "five_hour", "Claude 5-hour usage", "5-hour usage":
 		return "5h"
-	case "seven_day":
+	case "seven_day", "Claude 7-day usage", "Weekly usage":
 		return "weekly"
-	case "seven_day_sonnet":
+	case "seven_day_sonnet", "Claude Sonnet 7-day usage", "Weekly Sonnet usage":
 		return "Sonnet weekly"
-	case "seven_day_opus":
+	case "seven_day_opus", "Claude Opus 7-day usage", "Weekly Opus usage":
 		return "Opus weekly"
+	case "primary", "Codex primary window", "Primary usage":
+		return "Primary"
+	case "secondary", "Codex secondary window", "Secondary usage":
+		return "Secondary"
 	default:
 		if label == "" {
 			return "Usage"
