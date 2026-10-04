@@ -65,13 +65,14 @@ type sourceProfileLink struct {
 	Device, Inode uint64
 }
 type manifest struct {
-	SchemaVersion int
-	Provider, Cwd string
-	Sources       []source
-	SourceAliases []sourceProfileAlias `json:",omitempty"`
-	Codex         map[string]string    `json:",omitempty"`
-	Claude        map[string]any       `json:",omitempty"`
-	Cohort        map[string]string
+	SchemaVersion   int
+	Provider, Cwd   string
+	Sources         []source
+	SourceAliases   []sourceProfileAlias `json:",omitempty"`
+	Codex           map[string]string    `json:",omitempty"`
+	Claude          map[string]any       `json:",omitempty"`
+	Cohort          map[string]string
+	ProjectBoundary *projectBoundary `json:",omitempty"`
 }
 
 // Prepare must receive the original launch environment before account auth
@@ -138,6 +139,9 @@ func PrepareWithModel(stateRoot, provider, profilePath, cwd string, env, argv []
 		if m.Provider != provider || m.Cwd != filepath.Clean(cwd) {
 			return Projection{}, Conflict("projection-context-changed")
 		}
+		if err := validateProjectBoundary(m, env); err != nil {
+			return Projection{}, err
+		}
 		if err := validateSourceAliases(m.SourceAliases); err != nil {
 			return Projection{}, err
 		}
@@ -146,6 +150,10 @@ func PrepareWithModel(stateRoot, provider, profilePath, cwd string, env, argv []
 		}
 	} else {
 		m = manifest{SchemaVersion: 1, Provider: provider, Cwd: filepath.Clean(cwd), Cohort: map[string]string{}}
+		m.ProjectBoundary, err = discoverProjectBoundary(provider, cwd, env)
+		if err != nil {
+			return Projection{}, err
+		}
 		originalProfilePath := originalProfile(provider, env)
 		if originalProfilePath == "" {
 			return Projection{}, Conflict("missing-original-home")
@@ -162,7 +170,7 @@ func PrepareWithModel(stateRoot, provider, profilePath, cwd string, env, argv []
 				return Projection{}, err
 			}
 		}
-		if err := collectPoliciesAndProject(&m, provider, cwd); err != nil {
+		if err := collectPoliciesAndProject(&m, provider, cwd, profilePath); err != nil {
 			return Projection{}, err
 		}
 		if provider == "codex" {
@@ -309,8 +317,11 @@ func Revalidate(stateRoot, ref, provider, profilePath, cwd string) error {
 	if m.Provider != provider || m.Cwd != filepath.Clean(cwd) {
 		return Conflict("projection-context-changed")
 	}
-	var currentPolicies manifest
-	if err := collectPoliciesAndProject(&currentPolicies, provider, cwd); err != nil {
+	if err := validateProjectBoundary(m, nil); err != nil {
+		return err
+	}
+	currentPolicies := manifest{ProjectBoundary: m.ProjectBoundary}
+	if err := collectPoliciesAndProject(&currentPolicies, provider, cwd, profilePath); err != nil {
 		return err
 	}
 	if provider == "claude" {
@@ -470,7 +481,7 @@ func collectClaudeProfileSources(m *manifest, env []string) error {
 	return nil
 }
 
-func collectPoliciesAndProject(m *manifest, provider, cwd string) error {
+func collectPoliciesAndProject(m *manifest, provider, cwd, profile string) error {
 	// Policies remain native and higher priority. Their raw contents are not
 	// projected. Until effective managed precedence is characterized, a present
 	// policy is a refusal, including unreadable/malformed documents.
@@ -485,7 +496,7 @@ func collectPoliciesAndProject(m *manifest, provider, cwd string) error {
 			}
 		}
 	}
-	return collectProjectSources(m, provider, cwd)
+	return collectProjectSources(m, provider, cwd, profile)
 }
 
 func collectClaudePolicies(m *manifest, directory, reason string) error {
@@ -509,15 +520,37 @@ func collectClaudeProfilePolicies(m *manifest, profile, reason string) error {
 	return nil
 }
 
-func collectProjectSources(m *manifest, provider, cwd string) error {
+func collectProjectSources(m *manifest, provider, cwd, profile string) error {
 	for dir := cwd; ; dir = filepath.Dir(dir) {
 		names := []string{filepath.Join(".codex", "config.toml")}
 		if provider == "claude" {
 			names = []string{filepath.Join(".claude", "settings.json"), filepath.Join(".claude", "settings.local.json"), ".mcp.json"}
 		}
 		for _, name := range names {
+			if m.ProjectBoundary != nil {
+				if provider == "claude" && dir == m.ProjectBoundary.Home && name != ".mcp.json" {
+					continue
+				}
+				if provider == "codex" && filepath.Join(dir, ".codex") == profile {
+					continue
+				}
+			}
 			if err := absentSource(m, filepath.Join(dir, name), "project-settings-not-characterized"); err != nil {
 				return err
+			}
+		}
+		if provider == "codex" && m.ProjectBoundary != nil {
+			if main := m.ProjectBoundary.MainRoot; main != "" {
+				rel, err := filepath.Rel(m.ProjectBoundary.Root, dir)
+				if err != nil || !withinDirectory(m.ProjectBoundary.Root, dir) {
+					return Conflict("project-boundary-changed")
+				}
+				if err := absentSource(m, filepath.Join(main, rel, ".codex", "config.toml"), "project-settings-not-characterized"); err != nil {
+					return err
+				}
+			}
+			if dir == m.ProjectBoundary.Root {
+				break
 			}
 		}
 		if filepath.Dir(dir) == dir {
@@ -1016,6 +1049,10 @@ func safePath(path string, directory bool) error {
 }
 
 func readRegular(path string, limit int64) ([]byte, error) {
+	return readBoundedRegular(path, limit, 0o022)
+}
+
+func readBoundedRegular(path string, limit int64, forbiddenWrite os.FileMode) ([]byte, error) {
 	if err := safePath(path, false); err != nil {
 		return nil, err
 	}
@@ -1023,7 +1060,7 @@ func readRegular(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !before.Mode().IsRegular() || before.Size() > limit || before.Mode().Perm()&0o022 != 0 {
+	if !before.Mode().IsRegular() || before.Size() > limit || before.Mode().Perm()&forbiddenWrite != 0 {
 		return nil, Conflict("unsafe-configuration-file")
 	}
 	anchor, err := os.OpenRoot(filepath.Dir(path))
@@ -1068,7 +1105,8 @@ func readManifest(stateRoot, ref string) (manifest, error) {
 		return m, err
 	}
 	digest := sha256.Sum256(raw)
-	if hex.EncodeToString(digest[:]) != ref || json.Unmarshal(raw, &m) != nil || m.SchemaVersion != 1 {
+	_, metadataErr := ProjectionCompatibility(raw)
+	if hex.EncodeToString(digest[:]) != ref || metadataErr != nil || json.Unmarshal(raw, &m) != nil {
 		return m, Conflict("projection-corrupt")
 	}
 	if m.Claude != nil {

@@ -83,13 +83,17 @@ func validateAvailabilityCheck(stateRoot, profile, cwd string, env []string, pol
 		return Conflict("availability-missing-selected-profile")
 	}
 	var inventory manifest
+	inventory.ProjectBoundary, err = discoverProjectBoundary("claude", cwd, env)
+	if err != nil {
+		return err
+	}
 	if err := collectClaudeProfileSources(&inventory, env); err != nil {
 		return err
 	}
 	if err := collectClaudePolicies(&inventory, policyDirectory, "availability-managed-policy-not-characterized"); err != nil {
 		return err
 	}
-	if err := collectProjectSources(&inventory, "claude", cwd); err != nil {
+	if err := collectProjectSources(&inventory, "claude", cwd, profile); err != nil {
 		return err
 	}
 	if _, err := readClaudeSettings(&inventory, filepath.Join(profile, "settings.json"), false); err != nil {
