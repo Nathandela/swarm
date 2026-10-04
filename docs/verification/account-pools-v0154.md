@@ -1,6 +1,6 @@
 # Codex enrollment preflight: v0.15.4
 
-Status on 2026-10-04: **source and release verification pending; v0.15.4 is not published or deployed**. The isolated native device-code prompt and cancellation proof passed, but OAuth was not completed. This record does not claim successful Codex account admission, model rotation, or live Codex quota acceptance.
+Status on 2026-10-04: **v0.15.4 published and deployed on the owner VM**. The official installed binary reached a real Codex device-code prompt and passed cancellation proof and Accounts navigation checks. OAuth was not completed. This record does not claim successful Codex account admission, live Codex quota acceptance, quota-triggered rotation, or discussion resume.
 
 ## Diagnosis and changes
 
@@ -10,7 +10,7 @@ The owner removed the launcher's group-write bit in place: mode 0775 became 0755
 
 A second issue caused native Codex readiness to remain at `starting`: Codex 0.160 publishes `native.sock` as a symlink to a physical socket under a protected owner-only directory. A socket-only `Lstat` predicate sees the advertised symlink as a symlink, not a socket, and therefore reports a false negative. The fix validates only the expected deterministic alias, checks the protected directory and physical socket, then dials that socket. It does not increase the startup timeout.
 
-The behavior matches the pinned [Codex Unix socket transport](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/app-server-transport/src/transport/unix_socket.rs) and [daemon directory implementation](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/uds/src/daemon_directory.rs): the app-server binds and protects the socket before publishing a symlink whose basename is derived from the canonical socket path. A separate no-auth probe validated the alias and observed the owner-protected socket in 365 ms; the target directory was mode 0700 and the socket mode 0600.
+The behavior matches the pinned [Codex Unix socket transport](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/app-server-transport/src/transport/unix_socket.rs) and [daemon directory implementation](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/uds/src/daemon_directory.rs): the app-server binds and protects the socket before publishing a symlink whose basename is derived from the canonical socket path. A separate no-auth probe observed the expected alias and socket metadata in 365 ms; the target directory was mode 0700 and the socket mode 0600. This read-only metadata check did not dial or validate the peer; the later real device-code flow provides the live connection evidence.
 
 The pinned 0.160.0 app-server schema was generated under a new empty `CODEX_HOME`, without sign-in or provider requests. `LoginAccountResponse` requires `type`, `loginId`, `userCode`, and `verificationUrl`; the existing adapter spelling is correct. No device-code wire or schema change was needed.
 
@@ -28,4 +28,38 @@ The first full normal suite failed after 490.42 seconds in the cancellation fixt
 
 ## Gates and release identity
 
-Android release identity is prepared as version name **0.15.4** and version code **51**. Frozen source commit/tree/inventory, complete build/vet/lint/normal/race gates, independent Astra review, PR and merge identity, release tag/workflow, publication time/assets, and deployment evidence are **pending**. Do not infer them from focused tests or the device prompt. The v0.15.2 quota-reader and v0.15.3 compact-label records remain the evidence for those releases; this draft does not supersede them.
+The frozen reviewed source is `41dc207c58fbc317d6e0acd1c938cd611684ce6e`, tree `da2bb9363029380b8a69a2aaa86f54465a2afd85`. All 1,651 tracked Go files were hashed and independently checked by Astra; canonical inventory SHA-256 is `bd5b3b645726b15e4392a0a514ff246b22143697d8581ef49772f65d3a41ff71`. The squash merge in [PR #45](https://github.com/Nathandela/swarm/pull/45) produced `cd0ae8986b74d2ce98d4e2e1c8124ef19146a342` with the same reviewed tree and every Go hash unchanged.
+
+| Local gate | Result | Elapsed |
+|---|---|---|
+| build | pass | 3.42 s |
+| vet | pass | 4.54 s |
+| lint | pass | 10.16 s |
+| docs | pass | 0.04 s |
+| test | pass | 447.17 s |
+| race | pass | 565.96 s |
+
+Normal and race suites each passed 76 tested packages; eight packages had no tests. The final changed-file secret scan checked 12 files with zero findings. Independent Astra reviewed executable preflight, expected socket aliases and hostile alternatives, cancellation custody, collapsed/expanded history, focus and viewport behavior, and the corrected bind-publication fixtures.
+
+All 30 branch/PR checks passed. Initial branch CI run 37219650812 failed before its unchanged shim survivor fixture sent SIGTERM because `CHILD_PID` was not observed within five seconds. The independent duplicate full CI run passed on the same source; ten focused uncached race repetitions also passed with unchanged assertions. Astra demonstrated a legal snapshot/live-output marker split that the fixture's separate searches miss, but did not establish the original CI interleaving. Original failure evidence was preserved. Exactly one unchanged failed-job rerun passed on attempt 2. Follow-up `swarm-8ip` tracks deterministic observation; no gate or assertion was bypassed.
+
+The exact release tag **v0.15.4** resolves to `cd0ae8986b74d2ce98d4e2e1c8124ef19146a342`. [Release workflow](https://github.com/Nathandela/swarm/actions/runs/37221590952) attempt 1 passed all 17 jobs. [The release](https://github.com/Nathandela/swarm/releases/tag/v0.15.4) was published at **2026-10-04T18:00:29Z** with 10 assets. Signed staging verified clean-source build metadata and embedded commit/version for both binaries against that source, plus the archive's compatibility card. Android identity is version name **0.15.4**, version code **51**; this is not a Play Store publication claim.
+
+The account compatibility axes remain `account_schema=1`, `account_jobs=1`, `account_recovery=2`, `account_worker=2`, `account_shim=2`, `account_config=2`, `account_inventory=1`. Shim wire and protocol remain 1, discussion schema remains 2.
+
+## Installed acceptance and continuity
+
+Both `/usr/local/bin/swarm` and `/usr/local/bin/swarm-remote` match the verified official stage; the responding daemon loads the installed Swarm hash and reports 0.15.4. All doctor checks pass and the pending-converge marker is absent. Activation installed both verified binaries and returned deferred (exit 2) while a discussion was working. The restart with the saved environment passed (exit 0), followed by successful convergence to current (exit 0). Fresh doctor and executable-hash observations prove the running version.
+
+| Installed artifact | SHA-256 |
+|---|---|
+| swarm | `88ef96d90ba4b3839e8abe6639a80b91d95bcfe0dd97badc60eb566dc70ce8eb` |
+| swarm-remote | `d35ec3aeea6ab42a416d36439ff1c1ec30ba325ce6b362f38ce6571c618b8aea` |
+
+The official installed binary's isolated native Codex prompt and shutdown probe passed in 1.88 seconds. It used a fresh temporary profile, omitted the device URL/code from published output, and verified the worker, runner and every recorded native child had stopped before erasing temporary state. OAuth was not completed and no model turn was requested.
+
+The owner-local daemon also advertised Codex device-code sign-in as available. The installed 80-column terminal flow passed: Options → Accounts, default collapsed failures, both connected Claude quota rows, **h** expand/hide history, select a failed attempt, **Enter** reopen, and **Esc** leave and return through Options to the discussion board. This navigation check did not start authentication, cancel production jobs or change account/rotation settings.
+
+Across activation, all 155 existing discussions and the exact PID/start-tick identities of all 8 live shims were retained. Saved daemon environment, selected account identity/lifecycle/generation metadata, provider rotation settings and discussion bindings were preserved. This compares selected metadata, not credential or quota byte identity, and does not prove a discussion resumed or performed account rotation. The launcher permission repair changed the mode-sensitive CLI fingerprint despite preserving its bytes and inode.
+
+Completed native OAuth/admission, live enrolled Codex quota, two-account quota exhaustion/rotation and continuation remain tracked in `swarm-2xm.2`. The existing 256-job cap and safe retirement of failed history remain `swarm-2xm.27`. The historical v0.15.2 quota-reader and v0.15.3 compact-label verification records retain their original evidence.
