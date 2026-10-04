@@ -636,6 +636,7 @@ func Serve(cfg Config) (*Daemon, error) {
 			resume:    d.withAuthResumeFence,
 		})
 
+	d.accounts.startQuotaFetching()
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
 	go d.eng.Run(ctx) // the ONLY periodic driver (E10.8); idle when PollInterval<=0

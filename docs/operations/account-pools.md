@@ -20,6 +20,12 @@ To add an account:
 
 **Ready** means sign-in succeeded and the verified account was saved. It does not mean a discussion is already assigned to it or that Swarm has observed its usage. Quota can remain unknown until provider or discussion evidence is available; Swarm does not make background model requests to poll it.
 
+For verified native Claude and Codex logins, Swarm reads usage after account admission and at daemon startup when a reading is due. It refreshes readings about every five minutes. These read-only checks use the current verified account profile. They do not start a provider CLI, request a model response, refresh OAuth credentials, or write credentials. Checks run whether provider rotation is on or off and continue for paused accounts; retiring an account stops its checks.
+
+Usage checks update reported usage only. **Unknown** means no usable usage observation is available; it never means 0%. While a check runs or after one fails, the last successful reading remains visible with its age. Readings older than five minutes, or with a reset time that has passed, are marked stale. A usage refresh does not clear a recorded denial or prove that a requested model is available.
+
+To request a refresh, open account details and press **r**. Requests coalesce while a refresh is running, and manual refreshes are limited to one every 30 seconds. After an error, Swarm retries with a delay; provider rate limits can delay the next attempt. If the provider refuses usage access, retry once with **r**. If it still requires sign-in, choose **Sign in again** in Accounts and complete native sign-in. Usage checks do not renew the login token.
+
 Enable provider rotation to use configured accounts for **new managed discussions**. With one ready account, Swarm can assign new discussions to it, but has no other account from that provider to switch to. A second verified account gives Swarm a possible destination; whether it can serve a discussion still depends on the requested model and available quota evidence. A healthy discussion stays bound to its current account, even when another account is available.
 
 If recovery interrupts a request while switching accounts, Swarm restores the conversation and asks you to retry. It does not resubmit the request, replay a tool call, or repeat an unresolved action.
@@ -48,7 +54,7 @@ Managed launches freeze the selected native profile and the supported project co
 
 ## Post-deployment acceptance and follow-up
 
-The v0.15.0 release scope is native-login account pools for new managed discussions. Real two-account operation and the full flow—including continuation, native credential refresh, effective configuration, history transfer, and a Claude safe-turn after account recovery—remain post-deployment acceptance work. Existing unmanaged discussions still refuse migration when original writer and configuration proofs are missing. Token-only Claude execution, cached imports, and legacy-discussion migration remain unavailable follow-up work.
+The initial account-pools release scope is native-login accounts for new managed discussions. Real two-account operation and the full flow—including continuation, native credential refresh, effective configuration, history transfer, and a Claude safe-turn after account recovery—remain post-deployment acceptance work. Existing unmanaged discussions still refuse migration when original writer and configuration proofs are missing. Token-only Claude execution, cached imports, and legacy-discussion migration remain unavailable follow-up work.
 
 The existing release and recovery procedures remain authoritative for binary upgrades and rollback: see [automatic upgrades](../ops/auto-upgrade.md) and [release signing](release-signing.md). Account storage adds local credentials and bindings; before using an older binary, follow the compatibility result produced by Swarm and do not manually remove account state to bypass a refusal.
 

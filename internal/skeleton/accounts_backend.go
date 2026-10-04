@@ -62,6 +62,7 @@ type accountManager struct {
 	native                map[string]*persist.CLIIdentity
 	list                  func() []persist.Meta
 	refresh               func(string) error
+	quota                 *accountQuotaFetcher
 	retry                 func(string) error
 	move                  func(string, accounts.Binding) error
 }
@@ -118,8 +119,17 @@ func openAccountManager(stateRoot, executable string, list func() []persist.Meta
 
 func (m *accountManager) close() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.unavailable = protocol.ErrAccountsUnavailable
+	q := m.quota
+	if q != nil {
+		q.cancel()
+	}
+	m.mu.Unlock()
+	if q != nil {
+		q.wg.Wait()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.store != nil {
 		_ = m.store.Close()
 	}
@@ -463,6 +473,9 @@ func (m *accountManager) snapshot() (protocol.AccountsReply, error) {
 	if err != nil {
 		return protocol.AccountsReply{}, protocol.ErrAccountsUnavailable
 	}
+	if m.quota != nil {
+		m.quota.scheduleLocked(r, time.Now())
+	}
 	out := protocol.AccountsReply{Revision: r.Revision, Enabled: r.Enabled, Methods: m.methods(), Accounts: []protocol.AccountView{}, Jobs: []protocol.AccountEnrollmentView{}}
 	counts := map[string]int{}
 	if m.list != nil {
@@ -501,7 +514,9 @@ func (m *accountManager) snapshot() (protocol.AccountsReply, error) {
 		sort.Strings(scopes)
 		for _, name := range scopes {
 			scope := account.Quota.Scopes[name]
-			view.Quota = append(view.Quota, protocol.AccountQuotaView{Label: name, UsedPercent: scope.UsedPercent, ResetAt: scope.ResetAt, ObservedAt: scope.ObservedAt})
+			if scope.UsedPercent != nil || scope.ResetAt != nil {
+				view.Quota = append(view.Quota, protocol.AccountQuotaView{Label: name, UsedPercent: scope.UsedPercent, ResetAt: scope.ResetAt, ObservedAt: quotaUsageObservedAt(scope)})
+			}
 			if scope.Denied && account.Auth == accounts.AuthValid && account.Lifecycle == accounts.LifecycleEnabled {
 				view.State = "cooling-down"
 				if scope.NextTrialAt != nil && (view.NextRetryAt == nil || scope.NextTrialAt.After(*view.NextRetryAt)) {
@@ -513,6 +528,9 @@ func (m *accountManager) snapshot() (protocol.AccountsReply, error) {
 			}
 		}
 		view.RetrySupported = account.Provider == "claude" && view.State == "cooling-down" && m.retry != nil && (view.NextRetryAt == nil || !view.NextRetryAt.After(time.Now()))
+		if m.quota != nil {
+			m.quota.projectLocked(account, &view)
+		}
 		out.Accounts = append(out.Accounts, view)
 	}
 	jobIDs := make([]string, 0, len(m.jobs.Jobs))
@@ -555,7 +573,7 @@ func (m *accountManager) Accounts(req protocol.AccountsReq) (protocol.AccountsRe
 	if err != nil {
 		return protocol.AccountsReply{}, accountAPIError(err)
 	}
-	if req.Action != "status" && req.Action != "cancel" && req.ExpectedRevision != r.Revision {
+	if req.Action != "status" && req.Action != "cancel" && req.Action != "refresh" && req.ExpectedRevision != r.Revision {
 		return protocol.AccountsReply{}, protocol.ErrAccountsStaleRevision
 	}
 	switch req.Action {
@@ -676,7 +694,14 @@ func (m *accountManager) Accounts(req protocol.AccountsReq) (protocol.AccountsRe
 		}
 		err = m.move(source.ID, binding)
 	case "refresh":
-		if m.refresh == nil {
+		if m.quota != nil {
+			account, exists := r.Accounts[req.AccountID]
+			if !exists {
+				err = accounts.ErrIneligible
+			} else {
+				err = m.quota.requestLocked(account, time.Now(), true)
+			}
+		} else if m.refresh == nil {
 			err = protocol.ErrAccountsUnavailable
 		} else {
 			err = m.refresh(req.AccountID)
