@@ -4,6 +4,7 @@ package enrollment
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,8 +111,22 @@ func fakeCodex() {
 			socket = strings.TrimPrefix(arg, "unix://")
 		}
 	}
-	ln, err := net.Listen("unix", socket)
+	physical := socket
+	if strings.HasPrefix(fixtureMode(), "alias-") {
+		dir := filepath.Join("/tmp", fmt.Sprintf("codex-daemon-%d", os.Getuid()))
+		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			os.Exit(2)
+		}
+		physical = filepath.Join(dir, fmt.Sprintf("%x", sha256.Sum256([]byte(socket))))
+	}
+	ln, err := net.Listen("unix", physical)
 	if err != nil {
+		os.Exit(2)
+	}
+	if os.Chmod(physical, 0o600) != nil {
+		os.Exit(2)
+	}
+	if physical != socket && os.Symlink(physical, socket) != nil {
 		os.Exit(2)
 	}
 	handler := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
@@ -155,7 +170,7 @@ func fakeCodex() {
 				if mode == "pending" || mode == "late-cancel" {
 					fixtureDescendant()
 				}
-				if mode == "early-null" || mode == "mismatch" {
+				if mode == "early-null" || mode == "alias-null" || mode == "mismatch" {
 					fakeCodexCredentials()
 					authenticated = true
 					var id any
@@ -300,6 +315,51 @@ func TestDetachedCodexEarlyNullCompletion(t *testing.T) {
 	r, err := store.Snapshot()
 	if err != nil || len(r.Accounts) != 0 {
 		t.Fatal("worker modified registry admission")
+	}
+}
+
+func TestDetachedCodexNativeSocketAlias(t *testing.T) {
+	cfg := testConfig(t, "codex", "alias-null")
+	ref := startFixture(t, cfg)
+	socket := filepath.Join(cfg.StateRoot, "accounts", "jobs", cfg.JobID, "native.sock")
+	target := filepath.Join("/tmp", fmt.Sprintf("codex-daemon-%d", os.Getuid()), fmt.Sprintf("%x", sha256.Sum256([]byte(socket))))
+	t.Cleanup(func() {
+		if p, err := ReadProgress(cfg.StateRoot, cfg.JobID); err == nil && p.WritersStopped && p.NativeWritersStopped {
+			_ = os.Remove(target)
+		}
+	})
+	p := waitProgress(t, ref, func(p Progress) bool { return p.WritersStopped })
+	if p.Phase != PhaseReady || p.Worker != ref.Worker || p.Runner.Alive() {
+		t.Fatalf("native socket alias did not complete enrollment: phase=%s code=%s", p.Phase, p.ErrorCode)
+	}
+	assertNoJobSecrets(t, cfg)
+}
+
+func TestCodexSocketPathRejectsUnsafeAliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "native.sock")
+	dir := filepath.Join("/tmp", fmt.Sprintf("codex-daemon-%d", os.Getuid()))
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(dir, fmt.Sprintf("%x", sha256.Sum256([]byte(path))))
+	for _, target := range []string{filepath.Join(t.TempDir(), "other.sock"), filepath.Join(dir, strings.Repeat("0", 64)), expected} {
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := codexSocketPath(path); !errors.Is(err, ErrUnsafe) {
+			t.Fatalf("unsafe or dangling socket alias accepted: %v", err)
+		}
+		_ = os.Remove(path)
+	}
+	if err := os.WriteFile(expected, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(expected) })
+	if err := os.Symlink(expected, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codexSocketPath(path); !errors.Is(err, ErrUnsafe) {
+		t.Fatal("non-socket alias target accepted")
 	}
 }
 
@@ -515,6 +575,56 @@ func TestUnsafeConfigStartsNoWorker(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cfg.StateRoot, "accounts", "jobs", cfg.JobID, ConfigFile)); !os.IsNotExist(err) {
 		t.Fatal("unsafe config persisted")
+	}
+}
+
+func TestValidateNativePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "native")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		mode os.FileMode
+		want error
+	}{{0o700, nil}, {0o755, nil}, {0o775, ErrUnsafe}, {0o757, ErrUnsafe}, {0o644, ErrUnsafe}} {
+		t.Run(fmt.Sprintf("mode_%o", tc.mode), func(t *testing.T) {
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateNativePath(path); !errors.Is(err, tc.want) {
+				t.Fatalf("native mode %o: got %v, want %v", tc.mode, err, tc.want)
+			}
+		})
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := path + "-alias"
+	if err := os.Symlink(path, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, unsafe := range []string{alias, filepath.Dir(path), path + "-missing", "relative-native"} {
+		if err := ValidateNativePath(unsafe); !errors.Is(err, ErrUnsafe) {
+			t.Fatalf("unsafe native path accepted: %s", unsafe)
+		}
+	}
+}
+
+func TestGroupWritableNativeStartsNoWorker(t *testing.T) {
+	cfg := testConfig(t, "codex", "pending")
+	cfg.NativePath = filepath.Join(t.TempDir(), "codex.js")
+	if err := os.WriteFile(cfg.NativePath, []byte("#!/bin/sh\nexit 0\n"), 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cfg.NativePath, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	executable, _ := os.Executable()
+	if _, err := Start(context.Background(), executable, cfg); !errors.Is(err, ErrUnsafe) {
+		t.Fatalf("group-writable native launch: got %v, want unsafe", err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.StateRoot, "accounts", "jobs", cfg.JobID, ConfigFile)); !os.IsNotExist(err) {
+		t.Fatal("unsafe native launch persisted worker configuration")
 	}
 }
 

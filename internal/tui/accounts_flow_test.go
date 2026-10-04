@@ -39,7 +39,7 @@ func TestAccountsFlow_ReadyAccountsHaveTruthfulNextStepAndUnknownQuota(t *testin
 		{0, true, []string{"add a verified Claude account", "No account is ready"}},
 		{1, false, []string{"enable Claude rotation", "new discussions"}},
 		{1, true, []string{"Ready", "Quota: unknown", "not yet observed", "no same-provider backup", "Next: start a new Claude discussion"}},
-		{2, true, []string{"Ready", "Quota: unknown", "2 ready accounts configured", "Backup capacity is unconfirmed", "Previous sign-in · failed"}},
+		{2, true, []string{"Ready", "Quota: unknown", "2 ready accounts configured", "Backup capacity is unconfirmed"}},
 	} {
 		t.Run(fmt.Sprintf("count%d-enabled%t", tc.count, tc.enabled), func(t *testing.T) {
 			a := accountsFlowFixture(tc.count, tc.enabled)
@@ -55,6 +55,9 @@ func TestAccountsFlow_ReadyAccountsHaveTruthfulNextStepAndUnknownQuota(t *testin
 			}
 			if strings.Contains(text, "0%") || strings.Contains(text, "Checking") || strings.Contains(text, "Account added") {
 				t.Fatal("quota absence or completed enrollment implies active checking/capacity", text)
+			}
+			if strings.Contains(text, "Previous sign-in") {
+				t.Fatal("completed failures crowd added accounts", text)
 			}
 		})
 	}

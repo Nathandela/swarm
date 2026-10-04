@@ -2,7 +2,7 @@
 
 Account pools let Swarm keep separate personal Claude and Codex logins and assign each new discussion to one account. Automatic rotation is opt-in per provider. Adding an account does not enroll existing discussions or change their current credentials.
 
-> **Release status (2026-10-04):** [v0.15.3 was published](https://github.com/Nathandela/swarm/releases/tag/v0.15.3) at 13:51 UTC and deployed. It shortens known quota-window labels in the Accounts list and details. The installed Accounts UI was verified at 80 columns with two Claude accounts: both rows retained the 5h and weekly usage percentages, and both details showed usage, remaining percentages, reset times when supplied, and reading age. Codex display was not checked against a live account; native continuation and quota-triggered switching remain open. See the [v0.15.3 verification record](../verification/account-pools-v0153.md) and the [v0.15.2 quota-reader record](../verification/account-pools-v0152.md) for the quota fetching behavior and safeguards.
+> **Release status (2026-10-04):** v0.15.4 Codex enrollment fixes are prepared; publication and deployment are pending. The owner repaired the resolved Codex launcher permissions in place. Source preflight now reuses the executable safety check before creating a candidate, and native readiness validates Codex's expected protected socket alias before dialing it. The installed Codex 0.160 device-code prompt and explicit cancellation passed in an isolated profile; OAuth was not completed, so no Codex account admission, model rotation, or live quota acceptance is claimed. During sign-in, press **h** to show prior-attempt history (collapsed by default), **Ctrl+X** to cancel, or **Esc** to leave the attempt running. See the [v0.15.4 verification record](../verification/account-pools-v0154.md), [v0.15.3 label verification](../verification/account-pools-v0153.md), and [v0.15.2 quota-reader record](../verification/account-pools-v0152.md).
 
 ## Manage accounts
 
@@ -44,7 +44,7 @@ An account with unknown or stale quota is not assumed healthy; if no destination
 
 ## Sign-in and recovery
 
-Enrollment is separate from the discussion board and transcript and can continue while you leave Accounts. Return to Accounts to inspect or review its result. Cancel is explicit; leaving the page does not cancel sign-in. If the daemon does not advertise `accounts.manage.v1`, account mutations are unavailable until Swarm is upgraded. If the daemon is unavailable, account state is read-only until it reconnects.
+Enrollment is separate from the discussion board and transcript and can continue while you leave Accounts. Return to Accounts to inspect or review its result. Prior sign-in attempts are hidden initially; press **h** to show history. Press **Ctrl+X** to cancel the current attempt; **Esc** leaves Accounts while sign-in continues. If the daemon does not advertise `accounts.manage.v1`, account mutations are unavailable until Swarm is upgraded. If the daemon is unavailable, account state is read-only until it reconnects.
 
 For Codex, fresh device-code sign-in is performed by the native Codex app-server. Cached profile import is unavailable pending native authenticated proof that the credential belongs to the identified account. Subscription API keys are not pool accounts.
 

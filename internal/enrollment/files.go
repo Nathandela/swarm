@@ -56,6 +56,20 @@ func privateInfo(info os.FileInfo, directory bool) bool {
 	return info.Mode().IsRegular() && stat.Nlink == 1
 }
 
+// ValidateNativePath checks the resolved executable using the same permissions
+// required at launch. Callers must resolve installation aliases first.
+func ValidateNativePath(path string) error {
+	info, err := safeAbsolute(path, false, false)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return ErrUnsafe
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || (stat.Uid != 0 && stat.Uid != uint32(os.Getuid())) || info.Mode().Perm()&0o022 != 0 {
+		return ErrUnsafe
+	}
+	return nil
+}
+
 func validateConfig(c Config) error {
 	if c.SchemaVersion != SchemaVersion || !validID(c.JobID) || !validID(c.CandidateID) || !validID(c.CandidateProfileGeneration) || c.CandidateID != c.CandidateProfileGeneration || c.Generation == 0 {
 		return ErrInvalid
@@ -88,13 +102,8 @@ func validateConfig(c Config) error {
 			return err
 		}
 	}
-	info, err := safeAbsolute(c.NativePath, false, false)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return ErrUnsafe
-	}
-	nativeStat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || (nativeStat.Uid != 0 && nativeStat.Uid != uint32(os.Getuid())) || info.Mode().Perm()&0o022 != 0 {
-		return ErrUnsafe
+	if err := ValidateNativePath(c.NativePath); err != nil {
+		return err
 	}
 	profile, err := os.OpenRoot(filepath.Join(c.StateRoot, "accounts", "profiles", c.CandidateProfileGeneration))
 	if err != nil {

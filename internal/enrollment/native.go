@@ -2,7 +2,9 @@ package enrollment
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -247,6 +250,44 @@ func validateCompletion(start deviceStart, completed completion) error {
 	return nil
 }
 
+func codexSocketPath(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != uint32(os.Getuid()) {
+			return "", ErrUnsafe
+		}
+		// Codex 0.160 publishes an alias to this deterministic, owner-private
+		// socket after binding it (app-server-transport/src/transport/unix_socket.rs).
+		tmp, err := filepath.EvalSymlinks("/tmp")
+		if err != nil {
+			return "", ErrUnsafe
+		}
+		dir := filepath.Join(tmp, fmt.Sprintf("codex-daemon-%d", os.Getuid()))
+		expected := filepath.Join(dir, fmt.Sprintf("%x", sha256.Sum256([]byte(path))))
+		target, err := os.Readlink(path)
+		if err != nil || target != expected {
+			return "", ErrUnsafe
+		}
+		if _, err := safeAbsolute(dir, true, true); err != nil {
+			return "", err
+		}
+		path = target
+		info, err = os.Lstat(path)
+		if err != nil {
+			return "", ErrUnsafe
+		}
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Getuid()) || info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o600 {
+		return "", ErrUnsafe
+	}
+	return path, nil
+}
+
 func (w *loginWorker) codex(ctx context.Context) error {
 	socketPath := filepath.Join(w.files.path, "native.sock")
 	cmd := w.command("-c", "cli_auth_credentials_store=\"file\"", "app-server", "--listen", "unix://"+socketPath)
@@ -263,8 +304,13 @@ func (w *loginWorker) codex(ctx context.Context) error {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if info, err := os.Lstat(socketPath); err == nil && info.Mode()&os.ModeSocket != 0 {
+		physical, err := codexSocketPath(socketPath)
+		if err == nil {
+			socketPath = physical
 			break
+		}
+		if !os.IsNotExist(err) {
+			return err
 		}
 		select {
 		case <-ctx.Done():

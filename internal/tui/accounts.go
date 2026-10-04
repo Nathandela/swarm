@@ -28,6 +28,7 @@ type accountsModel struct {
 	focus, detailFocus       int
 	scroll                   int
 	detail, retireConfirm    bool
+	showFailedAttempts       bool
 	moveOpen, moveConfirm    bool
 	moveFocus                int
 	moveAccountID, moveLabel string
@@ -181,6 +182,9 @@ func (m rootModel) applyAccountsReply(msg accountsReplyMsg) (tea.Model, tea.Cmd)
 		a.wizard = accountWizard{}
 		a.wizardOpen = false
 		a.notice = "Sign-in cancelled."
+		if msg.reply.Job != nil && msg.reply.Job.State == "cancelling" {
+			a.notice = "Stopping sign-in. Waiting for sign-in workers to stop."
+		}
 		if msg.reply.Job != nil && msg.reply.Job.State == "admitted" {
 			a.notice = "This account was already added. Open its details to retire it."
 		}
@@ -263,12 +267,21 @@ func (a accountsModel) rows() []accountRow {
 			}
 		}
 		for i, job := range a.reply.Jobs {
-			if job.Provider == provider && job.State != "admitted" && job.State != "cancelled" {
+			if job.Provider == provider && job.State != "admitted" && job.State != "cancelled" && (job.State != "failed" || a.showFailedAttempts) {
 				rows = append(rows, accountRow{kind: "job", provider: provider, id: job.ID, index: i})
 			}
 		}
 	}
 	return rows
+}
+
+func (a accountsModel) hasFailedAttempts() bool {
+	for _, job := range a.reply.Jobs {
+		if job.State == "failed" {
+			return true
+		}
+	}
+	return false
 }
 
 func (a accountsModel) selected() accountRow {
@@ -357,6 +370,12 @@ func (m rootModel) updateAccounts(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if k.Text == "r" {
 			return m.beginAccountsRequest(protocol.AccountsReq{Action: "list"})
 		}
+		return m, nil
+	}
+	if k.Text == "h" && !a.detail && a.hasFailedAttempts() {
+		selected := a.selectedKey()
+		a.showFailedAttempts = !a.showFailedAttempts
+		a.restoreSelection(selected)
 		return m, nil
 	}
 	step := 0
@@ -1379,9 +1398,16 @@ func (w accountWizard) displayStep() int {
 }
 
 func (a accountsModel) hint(lost, loginSupported bool, width int) string {
+	history := "h history"
+	if a.showFailedAttempts {
+		history = "h hide history"
+	}
 	if width > 0 && width < 42 {
 		if a.wizardOpen {
 			return "esc · ctrl+x cancel"
+		}
+		if a.loaded && !a.detail && !a.moveOpen && !a.retireConfirm && !lost && a.hasFailedAttempts() {
+			return "esc · " + history
 		}
 		return "esc back"
 	}
@@ -1436,12 +1462,17 @@ func (a accountsModel) hint(lost, loginSupported bool, width int) string {
 	if a.detail {
 		return "↑↓ action · enter choose · esc back"
 	}
+	hint := "enter details · a add · e rotate · esc"
 	switch a.selected().kind {
 	case "provider":
-		return "enter toggle · a add · esc back"
+		hint = "enter toggle · a add · esc back"
 	case "job":
-		return "enter reopen · a add · esc back"
-	default:
-		return "enter details · a add · e rotate · esc"
+		hint = "enter reopen · a add · esc back"
 	}
+	if a.hasFailedAttempts() {
+		hint = strings.Replace(hint, " · e rotate", "", 1)
+		hint = strings.Replace(hint, "esc back", "esc", 1)
+		hint += " · " + history
+	}
+	return hint
 }

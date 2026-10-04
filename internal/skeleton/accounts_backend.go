@@ -458,6 +458,12 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 		reason := ""
 		if !supported {
 			reason = "Installed CLI version has not been verified for isolated enrollment."
+		} else {
+			path, err := filepath.EvalSymlinks(native.Path)
+			if err != nil || enrollment.ValidateNativePath(path) != nil {
+				supported = false
+				reason = "Installed CLI cannot start safely. Check its ownership and executable permissions."
+			}
 		}
 		if provider == "codex" {
 			out[provider] = []protocol.AccountMethodView{{ID: "device-code", Label: "Sign in with device code", Available: supported, Reason: reason}, {ID: "browser", Label: "Browser sign-in", Available: false, Reason: "Use device-code sign-in on this VM."}, {ID: "import-native", Label: "Import native profile", Available: false, Reason: "Cached Codex identity is not tied to the imported credential. Use a fresh device-code sign-in."}}
@@ -750,7 +756,7 @@ func (m *accountManager) start(req protocol.AccountsReq, r accounts.Registry) (p
 		native := m.native[req.Provider]
 		var pathErr error
 		nativePath, pathErr = filepath.EvalSymlinks(native.Path)
-		if pathErr != nil {
+		if pathErr != nil || enrollment.ValidateNativePath(nativePath) != nil {
 			return protocol.AccountsReply{}, protocol.ErrAccountsUnavailable
 		}
 	}
