@@ -27,6 +27,15 @@ type AccountsReply struct {
 	Enabled  map[string]bool                `json:"enabled"`
 	Methods  map[string][]AccountMethodView `json:"methods"`
 	Job      *AccountEnrollmentView         `json:"job,omitempty"`
+	Coverage map[string]AccountCoverageView `json:"coverage,omitempty"`
+}
+
+// Coverage counts visible discussions, not historical resume attempts. An
+// enabled pool does not imply an older, unbound discussion has been enrolled.
+type AccountCoverageView struct {
+	Managed          int `json:"managed"`
+	Unmanaged        int `json:"unmanaged"`
+	RunningUnmanaged int `json:"running_unmanaged"`
 }
 
 type AccountMethodView struct {

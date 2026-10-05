@@ -353,7 +353,7 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 			hasManaged = true
 		}
 	}
-	if schema < 0 || schema > accounts.RecoverySchemaVersion || card.AccountRecovery < schema || (hasManaged && (schema < 1 || card.AccountRecovery < accounts.RecoverySchemaVersion || card.AccountShim < shim.ManagedWriterSchemaVersion)) {
+	if schema < 0 || schema > accounts.RecoverySchemaVersion || card.AccountRecovery < schema || (hasManaged && (schema < 1 || card.AccountRecovery < 2 || card.AccountShim < shim.ManagedWriterSchemaVersion)) {
 		return errors.New("the target build cannot reconcile managed account recovery")
 	}
 	return nil

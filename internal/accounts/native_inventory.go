@@ -23,7 +23,7 @@ func nativeErasureContract(provider string, g Generation, version string) (strin
 	if runtime.GOOS != "linux" || g.Kind != KindNative || g.Source != SourceNativeLogin || !validVerification(provider, g.Kind, g.Identity, g.Verification) {
 		return "", ErrIneligible
 	}
-	if (provider == ProviderCodex && version == "0.160.0") || (provider == ProviderClaude && version == "2.1.288") {
+	if (provider == ProviderCodex && version == "0.160.0") || (provider == ProviderClaude && (version == "2.1.288" || version == "2.1.289")) {
 		return provider + ":" + version + ":linux-file-v" + strconv.Itoa(NativeInventorySchemaVersion), nil
 	}
 	return "", ErrIneligible
@@ -45,6 +45,9 @@ func (s *Store) eraseNativeInventory(provider string, g Generation) error {
 	version := "0.160.0"
 	if provider == ProviderClaude {
 		version = "2.1.288"
+		if strings.Contains(g.ErasureInventory, ":2.1.289:") {
+			version = "2.1.289"
+		}
 	}
 	contract, err := nativeErasureContract(provider, g, version)
 	if err != nil || contract != g.ErasureInventory {
@@ -104,6 +107,9 @@ func nativeEntries(root *os.Root, limit int) ([]os.DirEntry, error) {
 
 func inspectNativeInventory(profile *os.Root, provider string) (nativeInventory, error) {
 	var result nativeInventory
+	if nativeContextUpdatePending(profile, provider) {
+		return result, ErrIneligible
+	}
 	entries, err := nativeEntries(profile, 256)
 	if err != nil {
 		return result, err
@@ -111,7 +117,16 @@ func inspectNativeInventory(profile *os.Root, provider string) (nativeInventory,
 	for _, entry := range entries {
 		name := entry.Name()
 		info, err := profile.Lstat(name)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		if err != nil {
+			return result, ErrUnsafePath
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if provider == ProviderCodex && name == "sessions" && validCodexHistoryInventory(profile) {
+				continue
+			}
+			if validNativeContextAssetAlias(profile, provider, name) {
+				continue
+			}
 			return result, ErrUnsafePath
 		}
 		if provider == ProviderCodex {
@@ -121,11 +136,15 @@ func inspectNativeInventory(profile *os.Root, provider string) (nativeInventory,
 					return result, ErrUnsafePath
 				}
 				result.remove = append(result.remove, name)
+			case ".tmp":
+				if !validCodexMarketplaceInventory(profile) {
+					return result, ErrUnsafePath
+				}
 			case ".credentials.json", "secrets", "keyring", "auth.json.bak":
 				return result, ErrIneligible
 			case "config.toml":
 				raw, err := readPrivate(profile, name, maxCredentialBytes)
-				if err != nil || !codexInventoryPolicy(raw) {
+				if err != nil || (!codexInventoryPolicy(raw) && !validCodexContextConfiguration(profile, raw)) {
 					return result, ErrIneligible
 				}
 			default:
@@ -141,6 +160,12 @@ func inspectNativeInventory(profile *os.Root, provider string) (nativeInventory,
 				return result, ErrUnsafePath
 			}
 			result.remove = append(result.remove, name)
+		case name == "projects":
+			if !info.IsDir() || !validClaudeHistoryAliases(profile) {
+				return result, ErrUnsafePath
+			}
+		case name == ".config.json":
+			return result, ErrIneligible
 		case name == ".claude.json":
 			raw, err := readPrivate(profile, name, maxCredentialBytes)
 			if err != nil {
@@ -176,7 +201,7 @@ func inspectNativeInventory(profile *os.Root, provider string) (nativeInventory,
 			_ = backups.Close()
 		default:
 			lower := strings.ToLower(name)
-			if strings.Contains(lower, "credential") || strings.Contains(lower, "keyring") || strings.Contains(lower, "oauth") || strings.HasPrefix(name, ".claude.json.") || strings.HasPrefix(name, ".account-tmp-") {
+			if strings.Contains(lower, "credential") || strings.Contains(lower, "keyring") || strings.Contains(lower, "oauth") || strings.Contains(lower, "auth") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.HasPrefix(name, ".claude.json.") || strings.HasPrefix(name, ".account-tmp-") {
 				return result, ErrIneligible
 			}
 		}

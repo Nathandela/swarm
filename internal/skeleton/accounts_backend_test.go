@@ -168,7 +168,7 @@ func accountTestManager(t *testing.T, root string) *accountManager {
 	if m.unavailable != nil {
 		t.Fatalf("private manager unavailable: %v", m.unavailable)
 	}
-	m.native = map[string]*persist.CLIIdentity{"codex": {Path: "/fixture/codex", Version: "0.160.0"}, "claude": {Path: "/fixture/claude", Version: "2.1.288"}}
+	m.native = map[string]*persist.CLIIdentity{"codex": {Path: "/fixture/codex", Version: "0.160.0"}, "claude": {Path: "/fixture/claude", Version: "2.1.289"}}
 	t.Cleanup(m.close)
 	return m
 }

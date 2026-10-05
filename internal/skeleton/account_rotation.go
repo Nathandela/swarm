@@ -17,6 +17,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/accountcheck"
 	"github.com/Nathandela/swarm/internal/accounts"
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/procstart"
@@ -41,31 +42,34 @@ const (
 )
 
 type accountRotationRecord struct {
-	Incident            accounts.Incident       `json:"incident"`
-	OriginalSource      string                  `json:"original_source"`
-	SourceID            string                  `json:"source_id"`
-	SourceBinding       accounts.Binding        `json:"source_binding"`
-	Destination         *accounts.Binding       `json:"destination,omitempty"`
-	RegistryRevision    uint64                  `json:"registry_revision"`
-	State               string                  `json:"state"`
-	CandidateID         string                  `json:"candidate_id,omitempty"`
-	ConversationID      string                  `json:"conversation_id"`
-	Manifest            *accountHistoryManifest `json:"manifest,omitempty"`
-	Trial               *accounts.TrialLease    `json:"trial,omitempty"`
-	FailureClass        string                  `json:"failure_class"`
-	TargetAccountID     string                  `json:"target_account_id,omitempty"`
-	ConversationProven  bool                    `json:"conversation_proven,omitempty"`
-	LastError           string                  `json:"last_error,omitempty"`
-	LastActiveAt        time.Time               `json:"last_active_at,omitempty"`
-	PhaseDeadline       time.Time               `json:"phase_deadline,omitempty"`
-	UpdatedAt           time.Time               `json:"updated_at"`
-	InputReleased       bool                    `json:"input_released,omitempty"`
-	TrialTurnID         string                  `json:"trial_turn_id,omitempty"`
-	NativeHookSequence  uint64                  `json:"native_hook_sequence,omitempty"`
-	TrialHookSequence   uint64                  `json:"trial_hook_sequence,omitempty"`
-	IdentityHeld        bool                    `json:"identity_held,omitempty"`
-	OwnerTarget         string                  `json:"owner_target,omitempty"`
-	ExpectedCLIIdentity *persist.CLIIdentity    `json:"expected_cli_identity,omitempty"`
+	Incident             accounts.Incident       `json:"incident"`
+	OriginalSource       string                  `json:"original_source"`
+	SourceID             string                  `json:"source_id"`
+	SourceBinding        accounts.Binding        `json:"source_binding"`
+	Destination          *accounts.Binding       `json:"destination,omitempty"`
+	RegistryRevision     uint64                  `json:"registry_revision"`
+	State                string                  `json:"state"`
+	CandidateID          string                  `json:"candidate_id,omitempty"`
+	ConversationID       string                  `json:"conversation_id"`
+	Manifest             *accountHistoryManifest `json:"manifest,omitempty"`
+	Trial                *accounts.TrialLease    `json:"trial,omitempty"`
+	FailureClass         string                  `json:"failure_class"`
+	TargetAccountID      string                  `json:"target_account_id,omitempty"`
+	ConversationProven   bool                    `json:"conversation_proven,omitempty"`
+	LastError            string                  `json:"last_error,omitempty"`
+	LastActiveAt         time.Time               `json:"last_active_at,omitempty"`
+	PhaseDeadline        time.Time               `json:"phase_deadline,omitempty"`
+	UpdatedAt            time.Time               `json:"updated_at"`
+	InputReleased        bool                    `json:"input_released,omitempty"`
+	TrialTurnID          string                  `json:"trial_turn_id,omitempty"`
+	NativeHookSequence   uint64                  `json:"native_hook_sequence,omitempty"`
+	TrialHookSequence    uint64                  `json:"trial_hook_sequence,omitempty"`
+	IdentityHeld         bool                    `json:"identity_held,omitempty"`
+	OwnerTarget          string                  `json:"owner_target,omitempty"`
+	ExpectedCLIIdentity  *persist.CLIIdentity    `json:"expected_cli_identity,omitempty"`
+	NativeClaudeFailure  bool                    `json:"native_claude_failure,omitempty"`
+	FailedPromptID       string                  `json:"failed_prompt_id,omitempty"`
+	FailedPromptSequence uint64                  `json:"failed_prompt_sequence,omitempty"`
 }
 
 type accountOwnerOperation struct {
@@ -98,6 +102,7 @@ type accountRotationManager struct {
 	accessClosed    bool
 	inboxMu         sync.Mutex
 	inboxModels     map[string]string
+	inboxPrompts    map[string]accountInboxRecord
 	inboxErrors     map[string]bool
 	inboxApplying   string
 	inboxQuotaFeeds map[string]accountInboxQuotaStamp
@@ -180,6 +185,9 @@ func validateAccountRecoveryState(st authWatchState) error {
 		return errors.New("authwatch: account recovery schema missing")
 	}
 	for key, rec := range st.AccountRotations {
+		if rec.NativeClaudeFailure && (st.AccountSchemaVersion < 3 || rec.SourceBinding.Provider != accounts.ProviderClaude || rec.FailedPromptSequence == 0 || rec.FailedPromptID != "" && !adapter.IsCanonicalConversationID(rec.FailedPromptID) || accountActive(rec.State) && !adapter.IsCanonicalConversationID(rec.FailedPromptID)) {
+			return errors.New("authwatch: invalid native failed-prompt authority")
+		}
 		if key != rec.OriginalSource || !persist.ValidID(key) || !persist.ValidID(rec.SourceID) || !validManagedBinding(rec.SourceBinding) || !persist.ValidID(rec.Incident.ID) || rec.SourceBinding.Provider != rec.Incident.Provider || (rec.Incident.Model == "" && rec.State != accountBlocked && rec.State != accountOwnerCanceled) || len(rec.Incident.Model) > 128 || len(rec.Incident.TriedAccounts) > 256 || rec.Incident.SpawnCount < 0 || rec.Incident.SpawnLimit < 0 || rec.Incident.SpawnLimit > 3 || rec.Incident.SpawnCount > rec.Incident.SpawnLimit || rec.Incident.RemainingActiveNanos < 0 || rec.Incident.RemainingActiveNanos > int64(accounts.IncidentActiveBudget) {
 			return errors.New("authwatch: invalid account rotation")
 		}
@@ -211,7 +219,7 @@ func validateAccountRecoveryState(st authWatchState) error {
 		if rec.Trial != nil && (rec.Destination == nil || rec.Trial.Binding != *rec.Destination || rec.Trial.ID != rec.Incident.ID || rec.Trial.Model != rec.Incident.Model) {
 			return errors.New("authwatch: invalid account trial lease")
 		}
-		if rec.Manifest != nil && (rec.Manifest.SchemaVersion != 1 || rec.Manifest.SHA256 != accountManifestHash(*rec.Manifest)) {
+		if rec.Manifest != nil && ((rec.Manifest.SchemaVersion != 1 && rec.Manifest.SchemaVersion != 2) || rec.Manifest.SHA256 != accountManifestHash(*rec.Manifest)) {
 			return errors.New("authwatch: invalid history manifest")
 		}
 		if rec.Manifest != nil && validateAccountManifest(*rec.Manifest) != nil {
@@ -234,6 +242,9 @@ func validateAccountRecoveryState(st authWatchState) error {
 		}
 	}
 	for local, observed := range st.AccountModels {
+		if len(observed.PromptID) > 256 || observed.PromptID != "" && !adapter.IsCanonicalConversationID(observed.PromptID) || (observed.PromptSequence != 0 || observed.PromptID != "") && (st.AccountSchemaVersion < 3 || observed.Binding.Provider != accounts.ProviderClaude) {
+			return errors.New("authwatch: invalid native prompt evidence")
+		}
 		if !persist.ValidID(local) || !validManagedBinding(observed.Binding) || (observed.Model != "" && !exactAccountModel(observed.Model)) {
 			return errors.New("authwatch: invalid native model evidence")
 		}
@@ -325,7 +336,7 @@ func (m *accountRotationManager) ReportFailure(local, class, model, eventID stri
 	return m.submit(func(w *authWatcher) error { return m.reportFailure(w, local, class, model, eventID) })
 }
 
-func (m *accountRotationManager) reportFailure(w *authWatcher, local, class, _, eventID string) error {
+func (m *accountRotationManager) reportFailure(w *authWatcher, local, class, _, eventID string, nativeFailure ...accountInboxRecord) error {
 	if w.stateErr != nil || m.store == nil {
 		return protocol.ErrAccountsUnavailable
 	}
@@ -391,6 +402,11 @@ func (m *accountRotationManager) reportFailure(w *authWatcher, local, class, _, 
 	rec.SourceBinding = *source.AccountBinding
 	rec.ConversationID = source.ConversationID
 	rec.FailureClass = class
+	rec.NativeClaudeFailure = len(nativeFailure) == 1
+	rec.FailedPromptID, rec.FailedPromptSequence = "", 0
+	if rec.NativeClaudeFailure {
+		rec.FailedPromptID, rec.FailedPromptSequence = nativeFailure[0].TurnID, nativeFailure[0].Sequence
+	}
 	rec.IdentityHeld = class == "identity-drift"
 	rec.State = accountObserved
 	rec.LastError = ""
@@ -524,6 +540,9 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 		return
 	}
 	if rec.Incident.Model == "" {
+		if rec.NativeClaudeFailure {
+			return // Missing failed-request evidence cannot be supplied by a later turn.
+		}
 		model := m.effectiveModel(source)
 		if model == "" {
 			return
@@ -637,25 +656,27 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 			if !ok || !m.claimableAccountSource(current, rec) || current.AccountBinding == nil || *current.AccountBinding != rec.SourceBinding {
 				return errAuthRecycleUnsafe
 			}
-			rec.ExpectedCLIIdentity = launch.ExpectedCLIIdentity
-			rec.RegistryRevision = registry.Revision
-			rec.State = accountClaimed
-			rec.LastActiveAt = now
-			rec.PhaseDeadline = now.Add(time.Duration(rec.Incident.RemainingActiveNanos))
-			w.state.Killed[source.ID] = true
-			if err := m.persist(rec); err != nil {
-				if !w.claimUnconfirmed(rec.OriginalSource) {
-					delete(w.state.Killed, source.ID)
-					return err
-				}
-				return errAuthRecycleObligationRetained
-			}
-			if current.Status.Process == status.ProcessRunning {
-				if err := w.kill(source.ID); err != nil {
+			return m.withClaudeFailureFence(rec, func() error {
+				rec.ExpectedCLIIdentity = launch.ExpectedCLIIdentity
+				rec.RegistryRevision = registry.Revision
+				rec.State = accountClaimed
+				rec.LastActiveAt = now
+				rec.PhaseDeadline = now.Add(time.Duration(rec.Incident.RemainingActiveNanos))
+				w.state.Killed[source.ID] = true
+				if err := m.persist(rec); err != nil {
+					if !w.claimUnconfirmed(rec.OriginalSource) {
+						delete(w.state.Killed, source.ID)
+						return err
+					}
 					return errAuthRecycleObligationRetained
 				}
-			}
-			return nil
+				if current.Status.Process == status.ProcessRunning {
+					if err := w.kill(source.ID); err != nil {
+						return errAuthRecycleObligationRetained
+					}
+				}
+				return nil
+			})
 		})
 		if errors.Is(err, errAuthOwnerEnding) {
 			rec.State = accountOwnerCanceled
@@ -685,10 +706,12 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 				if !ok || current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || w.sessionUnsafe(source.ID) || current.AccountBinding == nil || *current.AccountBinding != rec.SourceBinding {
 					return errAuthRecycleObligationRetained
 				}
-				if err := w.kill(source.ID); err != nil {
-					return errAuthRecycleObligationRetained
-				}
-				return nil
+				return m.withClaudeFailureFence(rec, func() error {
+					if err := w.kill(source.ID); err != nil {
+						return errAuthRecycleObligationRetained
+					}
+					return nil
+				})
 			})
 			return
 		}
@@ -1162,6 +1185,9 @@ func (m *accountRotationManager) RequestMove(local string, destination accounts.
 // retained managed attempt for that conversation must have exact stopped proof
 // before a stopped owner's source can reserve a new history writer.
 func (m *accountRotationManager) claimableAccountSource(source persist.Meta, rec accountRotationRecord) bool {
+	if rec.NativeClaudeFailure && !m.currentClaudeFailure(rec) {
+		return false
+	}
 	if m.w.sessionUnsafe(source.ID) {
 		return false
 	}
@@ -1192,6 +1218,13 @@ func (m *accountRotationManager) reservationEligible(registry accounts.Registry,
 	}
 	single := registry
 	single.Accounts = map[string]accounts.Account{a.ID: a}
+	// Turning a pool off prevents new reservations. A durable claim already
+	// owes restoration to this one frozen destination, even if its source is
+	// still finishing shutdown. Account retirement/auth/quota guards still run.
+	if !registry.Enabled[rec.Incident.Provider] && m.w.state.Killed[rec.SourceID] &&
+		(rec.State == accountClaimed || rec.State == accountStopped || rec.State == accountPrepared || rec.State == accountLaunched) {
+		single.Enabled = map[string]bool{rec.Incident.Provider: true}
+	}
 	trials := m.activeTrials()
 	filtered := trials[:0]
 	for _, trial := range trials {

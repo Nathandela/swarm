@@ -15,7 +15,7 @@ import (
 
 func TestAccountReservationFailurePreservesDurableTriedAccounts(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 2)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	accountTestRollout(t, store, bindings[0], root, "opaque history\n")
 	m, _ := rotationTestManager(t, store, root, source)
 	if err := m.reportFailure(m.w, source.ID, "quota", "", "reserve-failure"); err != nil {
@@ -43,7 +43,7 @@ func TestAccountCommitVisibilityStagesHistoryAndLeaseTogether(t *testing.T) {
 	for _, visible := range []bool{false, true} {
 		t.Run(fmt.Sprint(visible), func(t *testing.T) {
 			store, root, bindings := accountTestStore(t, 2)
-			source := accountTestSource(root, bindings[0])
+			source := accountTestSource(t, root, bindings[0])
 			accountTestRollout(t, store, bindings[0], root, "opaque history\n")
 			m, _ := rotationTestManager(t, store, root, source)
 			if err := m.reportFailure(m.w, source.ID, "quota", "", "commit-failure"); err != nil {
@@ -90,7 +90,7 @@ func TestAccountCommitVisibilityStagesHistoryAndLeaseTogether(t *testing.T) {
 
 func TestAccountRecoveryNeverAdoptsCanonicalOwnerResume(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 2)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	accountTestRollout(t, store, bindings[0], root, "opaque history\n")
 	m, fake := rotationTestManager(t, store, root, source)
 	if err := m.reportFailure(m.w, source.ID, "quota", "", "owner-resume"); err != nil {
@@ -131,7 +131,7 @@ func TestAccountRecoveryNeverAdoptsCanonicalOwnerResume(t *testing.T) {
 
 func TestAccountModelCapacityFailurePreservesReadableJournal(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 1)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	m, _ := rotationTestManager(t, store, root, source)
 	m.w.state.AccountSchemaVersion = 1
 	for i := 0; i < 4096; i++ {

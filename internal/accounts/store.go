@@ -25,6 +25,9 @@ type Store struct {
 	writeOps  writeOps // fault injection only; production uses anchored native ops
 }
 
+// StateRoot identifies the owner's anchored Swarm state, never a credential.
+func (s *Store) StateRoot() string { return filepath.Dir(s.path) }
+
 // Open uses the existing owner-local state directory. Concurrent handles may
 // read it; a native file lock serializes every registry CAS across handles.
 func Open(stateRoot string) (*Store, error) {

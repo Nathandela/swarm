@@ -259,7 +259,7 @@ func ValidateCollectionIntent(intent CollectionIntent) error {
 	pathBytes := 0
 	for _, file := range intent.Files {
 		pathBytes += len(file.Path)
-		if seen[file.Path] || file.Inode == 0 || (file.Path != "." && (!filepath.IsLocal(file.Path) || filepath.Clean(file.Path) != file.Path)) || (file.Path != "." && file.Path != WorkerFile && file.Path != StoppedFile && file.Path != "native-cwd" && !strings.HasPrefix(file.Path, "native-cwd/")) || ((file.Path == "." || file.Path == "native-cwd") && !file.Directory) || ((file.Path == WorkerFile || file.Path == StoppedFile) && file.Directory) {
+		if seen[file.Path] || file.Inode == 0 || (file.Path != "." && (!filepath.IsLocal(file.Path) || filepath.Clean(file.Path) != file.Path)) || (file.Path != "." && file.Path != WorkerFile && file.Path != StoppedFile && file.Path != "native-cwd" && !strings.HasPrefix(file.Path, "native-cwd/") && file.Path != "native-config" && !strings.HasPrefix(file.Path, "native-config/")) || ((file.Path == "." || file.Path == "native-cwd" || file.Path == "native-config") && !file.Directory) || ((file.Path == WorkerFile || file.Path == StoppedFile) && file.Directory) {
 			return ErrCustodyUnknown
 		}
 		seen[file.Path] = true
@@ -286,7 +286,8 @@ func collectionInventory(root *os.Root) ([]collectionFile, error) {
 			return err
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || stat.Uid != uint32(os.Getuid()) || info.Mode()&os.ModeSymlink != 0 || (info.IsDir() && info.Mode().Perm() != 0o700) || (!info.IsDir() && (!info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || stat.Nlink != 1)) {
+		directoryAllowed := info.Mode().Perm() == 0o700 || name == "native-config/backups" && info.Mode().Perm()&0o002 == 0 && info.Mode().Perm()&0o700 == 0o700
+		if !ok || stat.Uid != uint32(os.Getuid()) || info.Mode()&os.ModeSymlink != 0 || (info.IsDir() && !directoryAllowed) || (!info.IsDir() && (!info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || stat.Nlink != 1)) {
 			return ErrCustodyUnknown
 		}
 		files = append(files, collectionFile{Path: name, Device: uint64(stat.Dev), Inode: stat.Ino, Directory: info.IsDir()})
@@ -304,7 +305,7 @@ func collectionInventory(root *os.Root) ([]collectionFile, error) {
 		}
 		for _, entry := range entries {
 			path := filepath.Join(name, entry.Name())
-			if name == "." && path != WorkerFile && path != StoppedFile && path != "native-cwd" {
+			if name == "." && path != WorkerFile && path != StoppedFile && path != "native-cwd" && path != "native-config" {
 				return ErrCustodyUnknown
 			}
 			if err := walk(path, depth+1); err != nil {

@@ -250,6 +250,7 @@ type (
 	ContextGuardSettingsSetReq = schema.ContextGuardSettingsSetReq
 	AccountsReq                = schema.AccountsReq
 	AccountsReply              = schema.AccountsReply
+	AccountCoverageView        = schema.AccountCoverageView
 	AccountView                = schema.AccountView
 	AccountQuotaView           = schema.AccountQuotaView
 	AccountMethodView          = schema.AccountMethodView

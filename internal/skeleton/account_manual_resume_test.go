@@ -42,7 +42,7 @@ type accountManualResumeFixture struct {
 func manualResumeFixture(t *testing.T) *accountManualResumeFixture {
 	t.Helper()
 	store, root, bindings := accountTestStore(t, 1)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	source.Status.Process = status.ProcessLost
 	source.ShimPID, source.ShimStartTime = 1<<30, 1
 	source.LaunchOptions = map[string]string{"model": "gpt-native-fixture"}
@@ -73,7 +73,7 @@ func manualResumeFixture(t *testing.T) *accountManualResumeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, err := accountconfig.Prepare(root, accounts.ProviderCodex, profile, source.Cwd, source.Env, argv, "")
+	projection, err := accountconfig.PrepareWithModel(root, accounts.ProviderCodex, profile, source.Cwd, source.Env, argv, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +128,22 @@ func TestAccountManualResumeCustody(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			f := manualResumeFixture(t)
 			if kind == "unmanaged" {
+				// Legacy history resides in the original native profile. Retain the
+				// exact fixture artifacts while moving them out of the old private profile.
+				ambient := filepath.Join(filepath.Dir(filepath.Dir(f.source.CLIIdentity.Path)), "isolated-home", ".codex", "sessions")
+				if err := os.Rename(filepath.Join(f.profile, "sessions"), ambient); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(ambient, legacyCreatedAt.Format("2006/01/02"), "rollout-"+legacyCreatedAt.Format("2006-01-02T15-04-05")+"-"+legacyCodexRootID+".jsonl")
+				file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = file.WriteString(`{"type":"turn_context","payload":{"model":"gpt-native-fixture"}}` + "\n")
+				_ = file.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
 				f.source.AccountBinding = nil
 				f.source.AccountProjectionRef = ""
 			}

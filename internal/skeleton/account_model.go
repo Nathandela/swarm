@@ -3,17 +3,21 @@ package skeleton
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
 type accountModelRecord struct {
-	Binding      accounts.Binding `json:"binding"`
-	Model        string           `json:"model"`
-	HookSequence uint64           `json:"hook_sequence,omitempty"`
+	Binding        accounts.Binding `json:"binding"`
+	Model          string           `json:"model"`
+	HookSequence   uint64           `json:"hook_sequence,omitempty"`
+	PromptID       string           `json:"prompt_id,omitempty"`
+	PromptSequence uint64           `json:"prompt_sequence,omitempty"`
 }
 
 func exactAccountModel(model string) bool {
@@ -61,37 +65,17 @@ func (m *accountRotationManager) effectiveModel(meta persist.Meta) string {
 	if err != nil {
 		return ""
 	}
-	root, err := historyOpenRoot(profile)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = root.Close() }()
-	relative := strings.TrimPrefix(path, profile+"/")
-	f, err := historyOpenFile(root, relative)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	scanner := bufio.NewScanner(io.LimitReader(f, accountHistoryMaxBytes+1))
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
-	model := ""
-	seen := false
-	for scanner.Scan() {
-		var entry struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Model string `json:"model"`
-			} `json:"payload"`
+	if meta.AccountProjectionRef != "" {
+		nativePath, err := accountconfig.NativeHistoryAuthority(m.w.stateDir, meta.AccountProjectionRef, meta.AgentType, meta.ProviderCwd(), meta.AccountBinding.ConfigurationGeneration)
+		if err != nil {
+			return ""
 		}
-		if json.Unmarshal(scanner.Bytes(), &entry) == nil && entry.Type == "turn_context" {
-			seen = true
-			model = ""
-			if rejectDuplicateJSONKeys(scanner.Bytes()) == nil && exactAccountModel(entry.Payload.Model) {
-				model = entry.Payload.Model
-			}
+		if nativePath != "" {
+			profile = nativePath
 		}
 	}
-	if scanner.Err() != nil {
+	model, seen, err := readCodexTranscriptModel(profile, path)
+	if err != nil {
 		return ""
 	}
 	if seen {
@@ -116,7 +100,11 @@ func (m *accountRotationManager) noteModel(meta persist.Meta, model string, sequ
 		return nil
 	}
 	schema := m.w.state.AccountSchemaVersion
-	m.w.state.AccountModels[meta.ID] = accountModelRecord{Binding: *meta.AccountBinding, Model: model, HookSequence: sequence}
+	next := accountModelRecord{Binding: *meta.AccountBinding, Model: model, HookSequence: sequence}
+	if existed && previous.Binding == next.Binding {
+		next.PromptID, next.PromptSequence = previous.PromptID, previous.PromptSequence
+	}
+	m.w.state.AccountModels[meta.ID] = next
 	m.w.state.AccountSchemaVersion = accounts.RecoverySchemaVersion
 	visible, err := m.w.persistState()
 	if err != nil && !visible {
@@ -179,4 +167,47 @@ func (m *accountRotationManager) checkIdentities() {
 		}
 		_ = m.reportFailure(m.w, meta.ID, "identity-drift", m.effectiveModel(meta), "identity-drift:"+fmtUint(meta.AccountBinding.CredentialGeneration))
 	}
+}
+
+func readCodexTranscriptModel(profile, path string) (string, bool, error) {
+	root, err := historyOpenRoot(profile)
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = root.Close() }()
+	if !strings.HasPrefix(path, profile+"/") {
+		return "", false, errors.New("account native model: invalid transcript origin")
+	}
+	f, err := historyOpenFile(root, strings.TrimPrefix(path, profile+"/"))
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || info.Size() > accountHistoryMaxBytes {
+		return "", false, errors.New("account native model: transcript limit")
+	}
+	scanner := bufio.NewScanner(io.LimitReader(f, accountHistoryMaxBytes+1))
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	model := ""
+	seen := false
+	for scanner.Scan() {
+		var entry struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Model string `json:"model"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &entry) == nil && entry.Type == "turn_context" {
+			seen = true
+			model = ""
+			if rejectDuplicateJSONKeys(scanner.Bytes()) == nil && exactAccountModel(entry.Payload.Model) {
+				model = entry.Payload.Model
+			}
+		}
+	}
+	if scanner.Err() != nil {
+		return "", false, errors.New("account native model: unreadable transcript")
+	}
+	return model, seen, nil
 }

@@ -44,7 +44,7 @@ func accountTestBinding(t *testing.T, m *accountManager, account accounts.Accoun
 	return binding
 }
 
-func TestAccountLaunchPoolOnlyAssignsNewDiscussionsAndPreservesFrozenResume(t *testing.T) {
+func TestAccountLaunchPoolEnrollsOwnerLaunchesAndPreservesFrozenResume(t *testing.T) {
 	m := accountTestManager(t, accountTestState(t))
 	candidate := accountTestCandidate(t, m, "codex", "bound-resume")
 	account := accountTestAdmit(t, m, candidate)
@@ -96,8 +96,8 @@ func TestAccountLaunchPoolOnlyAssignsNewDiscussionsAndPreservesFrozenResume(t *t
 		t.Fatal(err)
 	}
 	external := daemon.LaunchSpec{AgentType: "codex", Options: map[string]string{protocol.OptionResumeConversationID: migratedConversationID}}
-	if err := api.bindAccountLaunch(&external); err != nil || external.AccountBinding != nil {
-		t.Fatal("enabled pool silently adopted unmanaged native history")
+	if err := api.bindAccountLaunch(&external); err != nil || external.AccountBinding == nil {
+		t.Fatal("enabled pool did not enroll owner imported discussion")
 	}
 	wrongProvider := daemon.LaunchSpec{AgentType: "claude", AccountBinding: &binding}
 	if err := api.bindAccountLaunch(&wrongProvider); !errors.Is(err, errAccountLaunch) {
@@ -113,6 +113,7 @@ func accountTestLaunchEnvironment(t *testing.T, root string) (home, cwd string, 
 			t.Fatal(err)
 		}
 	}
+	accountTestPut(t, filepath.Join(home, ".codex", "auth.json"), []byte("synthetic-ambient-file"))
 	accountTestPut(t, filepath.Join(home, ".codex", "config.toml"), []byte("model = \"gpt-default\"\nmodel_reasoning_effort = \"high\"\n[sandbox_workspace_write]\nnetwork_access = true\n"))
 	return home, cwd, []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "OPENAI_API_KEY=synthetic-ambient-key"}
 }
@@ -136,10 +137,13 @@ func TestAccountLaunchFinalizesBothConfigurationsAfterActualCwd(t *testing.T) {
 	if prepared.AccountBinding == nil || prepared.AccountBinding.ConfigurationGeneration == 0 || prepared.AccountProjectionRef == "" || binding.ConfigurationGeneration != 1 {
 		t.Fatal("resolved configuration was not frozen independently")
 	}
-	for _, expected := range []string{`model="gpt-fixed"`, `model_reasoning_effort="high"`, `sandbox_mode="workspace-write"`, `sandbox_workspace_write.network_access=true`, `cli_auth_credentials_store="file"`} {
+	for _, expected := range []string{`cli_auth_credentials_store="file"`} {
 		if !argvContains(prepared.Argv, expected) || !argvContains(prepared.AccountBackendArgs, expected) {
 			t.Fatalf("native CLI/backend configuration diverged for %s", expected)
 		}
+	}
+	if !argvContains(prepared.Argv, "gpt-fixed") || !argvContains(prepared.Argv, "workspace-write") || argvContains(prepared.AccountBackendArgs, `model_reasoning_effort="high"`) {
+		t.Fatal("native settings tier or explicit launch permission changed")
 	}
 	if !argvContains(prepared.ClientEnv, "HOME="+home) {
 		t.Fatal("configuration projection lost ordinary HOME")
@@ -156,7 +160,7 @@ func TestAccountLaunchFinalizesBothConfigurationsAfterActualCwd(t *testing.T) {
 }
 
 func TestAccountLaunchInvalidBindingOrConfigurationStartsZeroChildren(t *testing.T) {
-	for _, failure := range []string{"changed-identity", "unknown-settings", "missing-authority", "missing-cli-identity", "unsupported-cli-version"} {
+	for _, failure := range []string{"changed-identity", "unsupported-auth-route", "missing-authority", "missing-cli-identity", "unsupported-cli-version"} {
 		t.Run(failure, func(t *testing.T) {
 			m := accountTestManager(t, accountTestState(t))
 			candidate := accountTestCandidate(t, m, "codex", "invalid-launch")
@@ -178,8 +182,8 @@ func TestAccountLaunchInvalidBindingOrConfigurationStartsZeroChildren(t *testing
 			switch failure {
 			case "changed-identity":
 				accountTestPut(t, filepath.Join(candidate.ProfilePath, "auth.json"), accountTestCodexRaw("changed-account", "fixture@example.test"))
-			case "unknown-settings":
-				accountTestPut(t, filepath.Join(home, ".codex", "config.toml"), []byte("credential_helper = \"uncharacterized\"\n"))
+			case "unsupported-auth-route":
+				accountTestPut(t, filepath.Join(home, ".codex", "config.toml"), []byte("model_provider = \"custom\"\n"))
 			case "missing-authority":
 				assembly.accounts = nil
 			case "missing-cli-identity":
@@ -278,11 +282,10 @@ func TestAccountLaunchActualCLIAndBackendShareBoundProfileAndWorktree(t *testing
 		if record.Profile != candidate.ProfilePath || record.Home != home || record.Cwd != actual || record.AmbientKeyPresent {
 			t.Fatal("native CLI/backend inherited divergent profile, HOME, cwd or ambient credentials")
 		}
-		for _, setting := range []string{`model="gpt-fixed"`, `model_reasoning_effort="high"`, `sandbox_mode="workspace-write"`, `sandbox_workspace_write.network_access=true`} {
-			if !argvContains(record.Args, setting) {
-				t.Fatalf("native fixture did not receive %s", setting)
-			}
+		if !argvContains(record.Args, `cli_auth_credentials_store="file"`) || argvContains(record.Args, `sandbox_workspace_write.network_access=true`) || argvContains(record.Args, `model_reasoning_effort="high"`) {
+			t.Fatal("native user settings were promoted to CLI or network policy was broadened")
 		}
+
 	}
 	current, ok := core.Get(meta.ID)
 	if !ok || current.AccountBinding == nil || current.AccountBinding.ConfigurationGeneration == 1 || current.AccountProjectionRef == "" || current.AgentCwd != actual {

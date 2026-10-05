@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/enrollment"
@@ -454,7 +455,7 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 	out := map[string][]protocol.AccountMethodView{}
 	for _, provider := range []string{"codex", "claude"} {
 		native := m.native[provider]
-		supported := runtime.GOOS == "linux" && native != nil && ((provider == "codex" && native.Version == "0.160.0") || (provider == "claude" && native.Version == "2.1.288"))
+		supported := runtime.GOOS == "linux" && native != nil && ((provider == "codex" && native.Version == "0.160.0") || (provider == "claude" && native.Version == accountconfig.CharacterizedClaudeVersion))
 		reason := ""
 		if !supported {
 			reason = "Installed CLI version has not been verified for isolated enrollment."
@@ -485,7 +486,9 @@ func (m *accountManager) snapshot() (protocol.AccountsReply, error) {
 	out := protocol.AccountsReply{Revision: r.Revision, Enabled: r.Enabled, Methods: m.methods(), Accounts: []protocol.AccountView{}, Jobs: []protocol.AccountEnrollmentView{}}
 	counts := map[string]int{}
 	if m.list != nil {
-		for _, session := range m.list() {
+		sessions := m.list()
+		out.Coverage = accountCoverage(sessions)
+		for _, session := range sessions {
 			if session.Status.Process == status.ProcessRunning && session.AccountBinding != nil {
 				counts[session.AccountBinding.AccountID]++
 			}
@@ -554,6 +557,27 @@ func (m *accountManager) snapshot() (protocol.AccountsReply, error) {
 		}
 	}
 	return out, nil
+}
+
+func accountCoverage(sessions []persist.Meta) map[string]protocol.AccountCoverageView {
+	coverage := map[string]protocol.AccountCoverageView{"codex": {}, "claude": {}}
+	visible, _ := persist.ProjectDiscussions(sessions)
+	for _, session := range visible {
+		if session.RosterHidden || (session.AgentType != "codex" && session.AgentType != "claude") {
+			continue
+		}
+		view := coverage[session.AgentType]
+		if session.AccountBinding != nil {
+			view.Managed++
+		} else {
+			view.Unmanaged++
+			if session.Status.Process == status.ProcessRunning {
+				view.RunningUnmanaged++
+			}
+		}
+		coverage[session.AgentType] = view
+	}
+	return coverage
 }
 
 func accountAPIError(err error) error {

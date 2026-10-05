@@ -9,9 +9,9 @@ package daemon
 // PolicyEnv from the DAEMON's environment (policyenv.go). So the daemon records
 // what it started with, and an unattended restart spawns from that file instead.
 //
-// What is recorded is persist.FilterEnv of the daemon's own environment: the same
-// S-2 allowlist already written into every session's meta.json, so this file is not
-// a new exposure class.
+// The saved environment contains the ordinary launch allowlist plus the narrow
+// nonsecret native configuration origins and policy selectors needed for managed
+// admission after restart. Those selectors are filtered from the child environment.
 
 import (
 	"bufio"
@@ -30,7 +30,7 @@ func SavedEnvPath(stateDir string) string {
 	return filepath.Join(stateDir, savedEnvFileName)
 }
 
-// writeSavedEnv records the daemon's current environment, allowlist-filtered, as
+// writeSavedEnv records the daemon's launch environment and native source policy as
 // one KEY=VALUE per line at SavedEnvPath, mode 0600 inside the 0700 state dir.
 //
 // The write is atomic (temp file + rename within the same directory), so a reader
@@ -44,7 +44,8 @@ func SavedEnvPath(stateDir string) string {
 // a newline in practice, and the alternative encodings buy nothing this daemon
 // needs.
 func writeSavedEnv(stateDir string) error {
-	env := PolicyEnv(nil) // FilterEnv over daemonEnviron(): the S-2 allowlist, one source
+	original := daemonEnviron()
+	env := append(PolicyEnv(original), NativeConfigurationEnvironment(original)...)
 
 	var buf strings.Builder
 	for _, kv := range env {

@@ -1027,12 +1027,15 @@ func (a accountsModel) nextStep(row accountRow) string {
 	provider := accountProviderName(row.provider)
 	_, ready := a.accountCounts(row.provider)
 	if !a.reply.Enabled[row.provider] {
-		return "Next: enable " + provider + " rotation (e).\nThis applies to new discussions."
+		return "Next: enable " + provider + " rotation (e).\n" + a.coverageGuidance(row.provider)
 	}
 	if ready == 0 {
 		return "Next: add a verified " + provider + " account (a).\nNo account is ready for new discussions."
 	}
 	lines := []string{"Next: start a new " + provider + " discussion."}
+	if _, ok := a.reply.Coverage[row.provider]; ok {
+		lines = append(lines, a.coverageGuidance(row.provider))
+	}
 	if ready == 1 {
 		lines = append(lines, "1 ready account; no same-provider backup.")
 	} else {
@@ -1057,6 +1060,17 @@ func (a accountsModel) nextStep(row accountRow) string {
 		lines = append(lines, "Backup capacity is unconfirmed.")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (a accountsModel) coverageGuidance(provider string) string {
+	c, ok := a.reply.Coverage[provider]
+	if !ok {
+		return "Discussion coverage is unavailable on this daemon."
+	}
+	if c.Unmanaged == 0 {
+		return fmt.Sprintf("Discussions: %d managed.", c.Managed)
+	}
+	return fmt.Sprintf("Discussions: %d managed; %d awaiting enrollment (%d running).\nResume an ended discussion to enroll its new process.", c.Managed, c.Unmanaged, c.RunningUnmanaged)
 }
 
 func (a accountsModel) view(width, height int, lost bool, loginSupported bool) string {

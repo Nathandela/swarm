@@ -138,18 +138,21 @@ type Config struct {
 
 // LaunchSpec is a request to launch a new session.
 type LaunchSpec struct {
-	AccountBinding       *accounts.Binding
-	AccountProjectionRef string
-	AccountNativeModel   string `json:"-"`
-	AccountStateRoot     string
-	AccountBackendArgs   []string
-	InputEmbargo         string
-	AgentType            string
-	Argv                 []string
-	Cwd                  string
-	ClientEnv            []string
-	Cols, Rows           int
-	Options              map[string]string
+	AccountBinding                  *accounts.Binding
+	AccountProjectionRef            string
+	AccountNativeModel              string                        `json:"-"`
+	AccountNativeContext            bool                          `json:"-"`
+	AccountClaudeFallback           *persist.ClaudeFallbackPolicy `json:"-"`
+	AccountOriginalConfigurationEnv []string                      `json:"-"`
+	AccountStateRoot                string
+	AccountBackendArgs              []string
+	InputEmbargo                    string
+	AgentType                       string
+	Argv                            []string
+	Cwd                             string
+	ClientEnv                       []string
+	Cols, Rows                      int
+	Options                         map[string]string
 	// Name is the optional user-provided session label. The daemon only stamps it
 	// into the session meta; an empty name falls back to the agent name at display
 	// time (P2 / bd agents-tracker-4e2).

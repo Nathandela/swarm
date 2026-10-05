@@ -1,8 +1,8 @@
 # Account pools
 
-Account pools let Swarm keep separate personal Claude and Codex logins and assign each new discussion to one account. Automatic rotation is opt-in per provider. Adding an account does not enroll existing discussions or change their current credentials.
+Account pools let Swarm keep separate personal Claude and Codex logins and assign each new discussion to one account. Automatic rotation is opt-in per provider. Enabling a provider covers compatible new discussions and explicit resumes of ended discussions on this VM. Running discussions keep their current credentials until they end or their existing managed recovery runs.
 
-> **Release status (2026-10-04):** v0.15.4 is published and deployed on the owner VM. Codex startup preflight and its protected native socket alias are verified; the official binary reaches a device-code prompt. Past failed attempts are collapsed in Accounts: press **h** in the list to show history, then **Enter** to reopen an attempt. Inside the wizard, **Ctrl+X** cancels and **Esc** returns to Accounts while a live attempt continues. OAuth was not completed in release checks, so Codex admission, live quota and rotation remain acceptance work. See the [v0.15.4 verification record](../verification/account-pools-v0154.md), [v0.15.3 label verification](../verification/account-pools-v0153.md), and [v0.15.2 quota-reader record](../verification/account-pools-v0152.md).
+> **Release candidate (2026-10-05):** v0.16.0 adds native configuration preservation, shared native conversation history, existing-discussion enrollment on explicit owner resume, and actual coverage counts. Supported native contracts are Codex 0.160.0 and Claude 2.1.289; historical managed 2.1.288 discussions retain their previous compatibility contract. See the [v0.16.0 verification record](../verification/account-pools-v0160.md) for release, deployment and acceptance status.
 
 ## Manage accounts
 
@@ -26,7 +26,7 @@ Usage checks update reported usage only. **Unknown** means no usable usage obser
 
 To request a refresh, open account details and press **r**. Requests coalesce while a refresh is running, and manual refreshes are limited to one every 30 seconds. After an error, Swarm retries with a delay; provider rate limits can delay the next attempt. If the provider refuses usage access, retry once with **r**. If it still requires sign-in, choose **Sign in again** in Accounts and complete native sign-in. Usage checks do not renew the login token.
 
-Enable provider rotation to use configured accounts for **new managed discussions**. With one ready account, Swarm can assign new discussions to it, but has no other account from that provider to switch to. A second verified account gives Swarm a possible destination; whether it can serve a discussion still depends on the requested model and available quota evidence. A healthy discussion stays bound to its current account, even when another account is available.
+Enable provider rotation to use configured accounts for **compatible new discussions and resumed ended discussions** on this VM. With one ready account, Swarm can assign new discussions to it, but has no other account from that provider to switch to. A second verified account gives Swarm a possible destination; whether it can serve a discussion still depends on the requested model and available quota evidence. A healthy discussion stays bound to its current account, even when another account is available.
 
 If recovery interrupts a request while switching accounts, Swarm restores the conversation and asks you to retry. It does not resubmit the request, replay a tool call, or repeat an unresolved action.
 
@@ -34,7 +34,9 @@ Account changes take effect when saved and are separate from pending Options cha
 
 ## Enable or move discussions
 
-Enable **automatic rotation for new sessions** separately for Claude and Codex. This changes assignments for future discussions only. Account details offer **Move discussion here** for discussions with a verified private binding. Busy discussions can be deferred until the existing recovery safeguards allow a move. Discussions launched before account pools do not have the required writer and configuration proofs and receive a clear refusal; safe migration remains follow-up work. Swarm does not change an account underneath a running process.
+Enable **automatic rotation** separately for Claude and Codex. Accounts shows how many visible discussions are managed, how many remain unmanaged, and how many unmanaged discussions are still running. An enabled switch does not mean those running processes have changed credentials.
+
+To enroll an existing discussion, end its current process normally and use **Resume**. Swarm prepares a new managed child, retains the old discussion record and original conversation history, and selects a verified account. Codex resumes its latest proved native model; Claude lets native session restore select the model until an authenticated failed-request proof establishes recovery authority. Missing history or uncertain stopped writers hold the resume with a clear refusal. Account details also offer **Move discussion here** for discussions already carrying a verified private binding. Busy discussions wait for the existing recovery safeguards.
 
 New discussions can use the provider's default model. Until the native CLI reports its effective model, capacity remains unknown and a known denial is not bypassed. Automatic recovery waits for verified model evidence.
 
@@ -50,11 +52,17 @@ For Codex, fresh device-code sign-in is performed by the native Codex app-server
 
 For Claude, enrollment uses a fresh native personal OAuth sign-in in an isolated Swarm-managed profile. Cached profile import is unavailable pending native authenticated proof that the credential belongs to the identified account. The installed environment's one-year token is also unavailable because offline identity cannot be verified and its effective remote policy is unknown; no manual launch route is supported for it.
 
-Managed launches freeze the selected native profile and the supported project configuration boundary. Claude's unselected global settings are excluded when the worktree is below the user's home; project MCP files remain checked. Codex uses its nearest supported Git root, or the current directory when there is no root, and also checks the main checkout configuration for an ordinary linked worktree. Changed home paths or Git markers, unfamiliar Git layouts and unsupported project settings hold the launch rather than silently changing its configuration.
+Managed launches retain ordinary native user settings at their user tier and leave project, local and invocation settings at their native tiers. Codex TOML paths and hook trust keys retain their original meaning. Claude ordinary preferences, project settings and hooks retain their native precedence. Only the selected private account supplies provider credentials. Source credential files, source account identity, and ambient MCP OAuth credentials are not copied into managed profiles.
+
+Conversation history stays in the original native store through recorded history aliases; switching accounts does not copy or replace the primary conversation. Native companion files outside the characterized conversation store, such as every possible rewind or up-arrow cache, are not claimed portable. Original hook, skill and plugin directories remain live native assets, with their root custody checked.
+
+Automatic recovery uses frozen settings and holds if policy or project settings change. After all affected writers stop, an explicit owner resume can capture changed owner settings with a crash-resumable update. A private native edit that differs from the recorded owner configuration stays held and is not overwritten. In particular, Codex's first visit to a new project may write private trust settings; that trust decision is not automatically copied to another account. Set the intended ordinary trust/configuration in the original native settings before preparing a fresh managed cohort; do not delete managed proof files to bypass a divergence hold.
+
+The supported native contracts are pinned. An uncharacterized CLI update holds managed launch/recovery until Swarm supports that version. Standard trailing directory separators from autocomplete are normalized; interior traversal, unsafe symlinks, foreign ownership and uncharacterized alternate account routing still refuse. Codex network access follows native project/user policy. When that policy disables network access, its sandbox can also block tool-side Swarm socket commands; owner TUI controls remain available.
 
 ## Post-deployment acceptance and follow-up
 
-The initial account-pools release scope is native-login accounts for new managed discussions. Real two-account operation and the full flow—including continuation, native credential refresh, effective configuration, history transfer, and a Claude safe-turn after account recovery—remain post-deployment acceptance work. Existing unmanaged discussions still refuse migration when original writer and configuration proofs are missing. Token-only Claude execution, cached imports, and legacy-discussion migration remain unavailable follow-up work.
+Native-login accounts are supported for compatible new discussions and explicit resumes of ended discussions. Authenticated continuation and real native quota exhaustion are distinct acceptance checks; the verification record lists exactly which ran. Token-only Claude execution, cached imports, automatic transfer of private trust edits, and ambient MCP OAuth transfer remain unavailable. Existing live unmanaged discussions are not rebound in place.
 
 The existing release and recovery procedures remain authoritative for binary upgrades and rollback: see [automatic upgrades](../ops/auto-upgrade.md) and [release signing](release-signing.md). Account storage adds local credentials and bindings; before using an older binary, follow the compatibility result produced by Swarm and do not manually remove account state to bypass a refusal.
 

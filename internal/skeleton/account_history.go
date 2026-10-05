@@ -2,9 +2,11 @@ package skeleton
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
@@ -31,20 +33,21 @@ type accountHistoryFile struct {
 }
 
 type accountHistoryManifest struct {
-	SchemaVersion  int                  `json:"schema_version"`
-	Provider       string               `json:"provider"`
-	NativeVersion  string               `json:"native_version"`
-	ConversationID string               `json:"conversation_id"`
-	Cwd            string               `json:"cwd"`
-	Source         accounts.Binding     `json:"source"`
-	Destination    accounts.Binding     `json:"destination"`
-	Epoch          uint64               `json:"epoch"`
-	PreviousHash   string               `json:"previous_hash,omitempty"`
-	Transaction    string               `json:"transaction"`
-	Files          []accountHistoryFile `json:"files"`
-	PreviousFiles  []accountHistoryFile `json:"previous_files,omitempty"`
-	SHA256         string               `json:"sha256"`
-	Published      bool                 `json:"published"`
+	NativeContextRef string               `json:"native_context_ref,omitempty"`
+	SchemaVersion    int                  `json:"schema_version"`
+	Provider         string               `json:"provider"`
+	NativeVersion    string               `json:"native_version"`
+	ConversationID   string               `json:"conversation_id"`
+	Cwd              string               `json:"cwd"`
+	Source           accounts.Binding     `json:"source"`
+	Destination      accounts.Binding     `json:"destination"`
+	Epoch            uint64               `json:"epoch"`
+	PreviousHash     string               `json:"previous_hash,omitempty"`
+	Transaction      string               `json:"transaction"`
+	Files            []accountHistoryFile `json:"files"`
+	PreviousFiles    []accountHistoryFile `json:"previous_files,omitempty"`
+	SHA256           string               `json:"sha256"`
+	Published        bool                 `json:"published"`
 }
 
 // Ownership epochs and previously published artifact hashes establish ancestry.
@@ -76,7 +79,10 @@ func validateAccountHistoryFiles(files []accountHistoryFile) error {
 }
 
 func validateAccountManifest(manifest accountHistoryManifest) error {
-	if manifest.SchemaVersion != 1 || !validManagedBinding(manifest.Source) || !validManagedBinding(manifest.Destination) || manifest.Source == manifest.Destination || manifest.Provider != manifest.Source.Provider || manifest.Provider != manifest.Destination.Provider || !adapter.IsCanonicalConversationID(manifest.ConversationID) || !filepath.IsAbs(manifest.Cwd) || manifest.Epoch == 0 || !accountHex(manifest.Transaction, 64) || !accountHex(manifest.SHA256, 64) || len(manifest.Files) == 0 || validateAccountHistoryFiles(manifest.Files) != nil || validateAccountHistoryFiles(manifest.PreviousFiles) != nil {
+	if (manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2) || !validManagedBinding(manifest.Source) || !validManagedBinding(manifest.Destination) || manifest.Source == manifest.Destination || manifest.Provider != manifest.Source.Provider || manifest.Provider != manifest.Destination.Provider || !adapter.IsCanonicalConversationID(manifest.ConversationID) || !filepath.IsAbs(manifest.Cwd) || manifest.Epoch == 0 || !accountHex(manifest.Transaction, 64) || !accountHex(manifest.SHA256, 64) || len(manifest.Files) == 0 || validateAccountHistoryFiles(manifest.Files) != nil || validateAccountHistoryFiles(manifest.PreviousFiles) != nil {
+		return errAccountHistoryUnsupported
+	}
+	if (manifest.SchemaVersion == 2) != (manifest.NativeContextRef != "") || (manifest.NativeContextRef != "" && (!accountHex(manifest.NativeContextRef, 64) || manifest.Source.ConfigurationGeneration != projectionGeneration(manifest.NativeContextRef) || manifest.Destination.ConfigurationGeneration != projectionGeneration(manifest.NativeContextRef))) {
 		return errAccountHistoryUnsupported
 	}
 	if manifest.Provider == accounts.ProviderCodex {
@@ -89,7 +95,7 @@ func validateAccountManifest(manifest accountHistoryManifest) error {
 			}
 		}
 	} else {
-		if manifest.NativeVersion != "2.1.288" {
+		if !accountconfig.SupportedNativeVersion("claude", manifest.NativeVersion) {
 			return errAccountHistoryUnsupported
 		}
 		ad, found := registry.New(accounts.ProviderClaude)
@@ -110,6 +116,18 @@ func validateAccountManifest(manifest accountHistoryManifest) error {
 	return nil
 }
 
+func projectionGeneration(ref string) uint64 {
+	raw, err := hex.DecodeString(ref)
+	if err != nil || len(raw) != 32 {
+		return 0
+	}
+	gen := binary.BigEndian.Uint64(raw[:8])
+	if gen == 0 {
+		gen = 1
+	}
+	return gen
+}
+
 func historyProfileKey(binding accounts.Binding) string {
 	return binding.AccountID + ":" + fmtUint(binding.CredentialGeneration)
 }
@@ -119,7 +137,7 @@ func historyNativeVersion(source persist.Meta) (string, bool) {
 		return "", false
 	}
 	version := strings.TrimPrefix(source.CLIIdentity.Version, "v")
-	return version, (source.AgentType == accounts.ProviderCodex && version == "0.160.0") || (source.AgentType == accounts.ProviderClaude && version == "2.1.288")
+	return version, (source.AgentType == accounts.ProviderCodex && version == "0.160.0") || (source.AgentType == accounts.ProviderClaude && accountconfig.SupportedNativeVersion("claude", version))
 }
 
 func historyOpenRoot(path string) (*os.Root, error) {
@@ -320,9 +338,22 @@ func preflightAccountHistory(store *accounts.Store, resolver resumeHistoryResolv
 	if err != nil {
 		return accountHistoryManifest{}, err
 	}
+	contextRef := ""
+	if source.AccountProjectionRef != "" {
+		nativePath, err := accountconfig.NativeHistoryAuthority(store.StateRoot(), source.AccountProjectionRef, source.AgentType, source.ProviderCwd(), source.AccountBinding.ConfigurationGeneration)
+		if err != nil {
+			return accountHistoryManifest{}, err
+		}
+		if nativePath != "" {
+			sourcePath, contextRef = nativePath, source.AccountProjectionRef
+		}
+	}
 	destinationPath, err := store.ProfilePath(destination)
 	if err != nil {
 		return accountHistoryManifest{}, err
+	}
+	if contextRef != "" {
+		destinationPath = sourcePath
 	}
 	primary, outcome := resolver.LocateTranscript(source, source.ConversationID)
 	if outcome != resumeHistoryFound {
@@ -347,6 +378,9 @@ func preflightAccountHistory(store *accounts.Store, resolver resumeHistoryResolv
 	}
 	defer func() { _ = destRoot.Close() }()
 	prior := ownership.ProfileFiles[historyProfileKey(destination)]
+	if contextRef != "" {
+		prior = append([]accountHistoryFile(nil), files...)
+	}
 	priorByPath := make(map[string]accountHistoryFile, len(prior))
 	for _, file := range prior {
 		priorByPath[file.Path] = file
@@ -364,6 +398,9 @@ func preflightAccountHistory(store *accounts.Store, resolver resumeHistoryResolv
 	}
 	transaction := sha256.Sum256([]byte(incidentID + "\x00" + historyProfileKey(destination)))
 	manifest := accountHistoryManifest{SchemaVersion: 1, Provider: source.AgentType, NativeVersion: version, ConversationID: source.ConversationID, Cwd: source.ProviderCwd(), Source: *source.AccountBinding, Destination: destination, Epoch: ownership.Epoch + 1, PreviousHash: ownership.CommittedManifest, Transaction: hex.EncodeToString(transaction[:]), Files: files, PreviousFiles: append([]accountHistoryFile(nil), prior...)}
+	if contextRef != "" {
+		manifest.SchemaVersion, manifest.NativeContextRef = 2, contextRef
+	}
 	manifest.SHA256 = accountManifestHash(manifest)
 	return manifest, nil
 }
@@ -439,6 +476,9 @@ func prepareAccountHistory(stateRoot string, store *accounts.Store, manifest acc
 func prepareAccountHistoryWithHook(stateRoot string, store *accounts.Store, manifest accountHistoryManifest, afterPublish func(string) error) (accountHistoryManifest, error) {
 	if validateAccountManifest(manifest) != nil || manifest.SHA256 != accountManifestHash(manifest) {
 		return manifest, errAccountHistoryUnsupported
+	}
+	if manifest.NativeContextRef != "" {
+		return prepareSharedAccountHistory(stateRoot, store, manifest)
 	}
 	sourcePath, err := store.HistoryProfilePath(manifest.Source)
 	if err != nil {
@@ -603,6 +643,12 @@ func verifyAccountHistory(store *accounts.Store, manifest accountHistoryManifest
 	if err != nil {
 		return err
 	}
+	if manifest.NativeContextRef != "" {
+		path, err = accountconfig.NativeHistoryAuthority(store.StateRoot(), manifest.NativeContextRef, manifest.Provider, manifest.Cwd, manifest.Destination.ConfigurationGeneration)
+		if err != nil || path == "" {
+			return errAccountHistoryUnsupported
+		}
+	}
 	root, err := historyOpenRoot(path)
 	if err != nil {
 		return err
@@ -631,6 +677,44 @@ func verifyAccountHistory(store *accounts.Store, manifest accountHistoryManifest
 
 func fmtUint(value uint64) string { return strconv.FormatUint(value, 10) }
 
+// Shared native history needs no copy. Publish the same bounded manifest after
+// writer-stop proof, and keep every existing recovery ownership/epoch barrier.
+func prepareSharedAccountHistory(stateRoot string, store *accounts.Store, manifest accountHistoryManifest) (accountHistoryManifest, error) {
+	if manifest.SchemaVersion != 2 || manifest.NativeContextRef == "" {
+		return manifest, errAccountHistoryUnsupported
+	}
+	manifest.Published = true
+	if err := verifyAccountHistory(store, manifest); err != nil {
+		return manifest, err
+	}
+	anchor, err := historyOpenRoot(filepath.Join(stateRoot, "accounts", "history-transfer"))
+	if err != nil {
+		return manifest, err
+	}
+	defer func() { _ = anchor.Close() }()
+	staging, err := historyOpenDir(anchor, manifest.Transaction, true)
+	if err != nil {
+		return manifest, err
+	}
+	defer func() { _ = staging.Close() }()
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return manifest, err
+	}
+	sum := sha256.Sum256(raw)
+	metadata := accountHistoryFile{Path: "manifest.json", SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(raw))}
+	if err := historyWrite(staging, "manifest.json", strings.NewReader(string(raw)), metadata); err != nil {
+		return manifest, err
+	}
+	if err := historySync(anchor); err != nil {
+		return manifest, accounts.ErrDurabilityUncertain
+	}
+	if err := verifyAccountHistory(store, manifest); err != nil {
+		return manifest, err
+	}
+	return manifest, nil
+}
+
 // Managed history is rooted at the frozen native generation, including after
 // credentials are erased. An invalid binding never falls back to global HOME.
 type accountResumeHistoryResolver struct {
@@ -657,6 +741,15 @@ func (r *accountResumeHistoryResolver) selected(m persist.Meta) (resumeHistoryRe
 	profile, err := store.HistoryProfilePath(*m.AccountBinding)
 	if err != nil {
 		return nil, false
+	}
+	if m.AccountProjectionRef != "" {
+		nativePath, err := accountconfig.NativeHistoryAuthority(r.stateRoot, m.AccountProjectionRef, m.AgentType, m.ProviderCwd(), m.AccountBinding.ConfigurationGeneration)
+		if err != nil {
+			return nil, false
+		}
+		if nativePath != "" {
+			profile = nativePath
+		}
 	}
 	selected := newFilesystemResumeHistoryResolver(profile, defaultResumeHistoryLimits)
 	selected.privateProvider = m.AgentType

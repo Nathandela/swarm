@@ -10,11 +10,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+
+	"github.com/Nathandela/swarm/internal/adapter/claude"
 )
 
 // CompatibilityVersion is required only for projections carrying a frozen
 // native project boundary. Legacy projections retain their original guards.
-const CompatibilityVersion = 2
+const CompatibilityVersion = 3
 
 type projectBoundary struct {
 	Home, Root, MainRoot string          `json:",omitempty"`
@@ -32,8 +34,29 @@ type projectMarker struct {
 func ProjectionCompatibility(raw []byte) (int, error) {
 	var fields map[string]json.RawMessage
 	var m manifest
-	if len(raw) > maxSourceBytes || json.Unmarshal(raw, &fields) != nil || json.Unmarshal(raw, &m) != nil || m.SchemaVersion != 1 ||
+	if len(raw) > maxSourceBytes || json.Unmarshal(raw, &fields) != nil || json.Unmarshal(raw, &m) != nil || (m.SchemaVersion != 1 && m.SchemaVersion != 3) ||
 		(m.Provider != "codex" && m.Provider != "claude") || !cleanAbsolute(m.Cwd) {
+		return 0, Conflict("projection-corrupt")
+	}
+	if m.SchemaVersion == 3 {
+		if m.Codex != nil || m.Claude != nil || len(m.Cohort) != 0 || len(m.Sources) != 0 || len(m.SourceAliases) != 0 ||
+			(m.Provider == "codex") != (m.CodexContext != nil) || (m.Provider == "claude") != (m.ClaudeContext != nil) {
+			return 0, Conflict("projection-corrupt")
+		}
+		if m.ClaudeContext != nil && !validClaudeContext(*m.ClaudeContext) {
+			return 0, Conflict("projection-corrupt")
+		}
+		if m.Provider == "claude" && (m.CodexHistoryAlias != nil || len(m.CodexProjectSources) != 0 || m.ClaudeHistoryAlias == nil || m.ClaudeHistoryAlias.ProjectKey != claude.New().ProjectDirName(m.Cwd) || !ValidClaudeHistoryAlias(*m.ClaudeContext, *m.ClaudeHistoryAlias)) {
+			return 0, Conflict("projection-corrupt")
+		}
+		if m.Provider == "codex" && (m.ClaudeHistoryAlias != nil || len(m.ClaudeProjectSources) != 0 || len(m.ClaudeInvocationSources) != 0 || m.CodexHistoryAlias == nil || !ValidCodexHistoryAlias(*m.CodexContext, *m.CodexHistoryAlias)) {
+			return 0, Conflict("projection-corrupt")
+		}
+		if m.CodexContext != nil && !validCodexContext(*m.CodexContext) {
+			return 0, Conflict("projection-corrupt")
+		}
+
+	} else if m.CodexContext != nil || m.ClaudeContext != nil || m.CodexHistoryAlias != nil || m.ClaudeHistoryAlias != nil || len(m.ClaudeProjectSources) != 0 || len(m.CodexProjectSources) != 0 || len(m.ClaudeInvocationSources) != 0 {
 		return 0, Conflict("projection-corrupt")
 	}
 	for key := range fields {
@@ -43,6 +66,15 @@ func ProjectionCompatibility(raw []byte) (int, error) {
 	}
 	boundaryRaw, exists := fields["ProjectBoundary"]
 	if !exists {
+		if m.SchemaVersion == 3 {
+			if m.Provider == "codex" {
+				return 0, Conflict("projection-corrupt")
+			}
+			if err := validNativeProjectProvenance(m); err != nil {
+				return 0, err
+			}
+			return 3, nil
+		}
 		return 1, nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(boundaryRaw))
@@ -84,7 +116,13 @@ func ProjectionCompatibility(raw []byte) (int, error) {
 			}
 		}
 	}
-	return CompatibilityVersion, nil
+	if m.SchemaVersion == 3 {
+		if err := validNativeProjectProvenance(m); err != nil {
+			return 0, err
+		}
+		return 3, nil
+	}
+	return 2, nil
 }
 
 func cleanAbsolute(path string) bool { return filepath.IsAbs(path) && filepath.Clean(path) == path }

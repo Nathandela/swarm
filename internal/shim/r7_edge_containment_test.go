@@ -331,12 +331,23 @@ func TestR7Edge_AReadinessTimeoutKillsTheBackendGroupAndCleansTheRecord(t *testi
 	default:
 	}
 
+	// External process death can precede the shim's Wait join and record scrub.
+	// The idle agent starts only after containment completes; use the existing
+	// end-session handshake as that completion barrier before inspecting disk.
+	c := dialShim(t, cfg.SocketPath)
+	c.startReader()
+	c.hello(shimwire.Version)
+	c.attach()
+	c.waitObserved("IDLING", 10*time.Second)
+
 	if _, ok := ReadBackendInfo(cfg.SessionDir); ok {
 		t.Error("an early/stale backend.json survived the readiness timeout; the next daemon " +
 			"reconcile would chase a pid that is not this session's backend")
 	}
 
-	r7EdgeEndSession(t, cfg, done)
+	c.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
+	waitRun(t, done, 20*time.Second)
+	_ = c.conn.Close()
 }
 
 // r7EdgeWriteStaleRecord plants a well-formed backend.json naming a pid that cannot be a live

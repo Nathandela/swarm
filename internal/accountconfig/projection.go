@@ -24,7 +24,7 @@ import (
 const maxSourceBytes = 2 << 20
 
 const CharacterizedCodexVersion = "0.160.0"
-const CharacterizedClaudeVersion = "2.1.288"
+const CharacterizedClaudeVersion = "2.1.289"
 
 // SupportedNativeVersion is an exact gate, not a future-version promise. The
 // help fixture establishes flags; live effective-configuration acceptance is
@@ -34,7 +34,7 @@ func SupportedNativeVersion(provider, version string) bool {
 		return version == CharacterizedCodexVersion
 	}
 	if provider == "claude" {
-		return version == CharacterizedClaudeVersion
+		return version == CharacterizedClaudeVersion || version == "2.1.288"
 	}
 	return false
 }
@@ -46,12 +46,13 @@ type Conflict string
 func (c Conflict) Error() string { return "account configuration conflict: " + string(c) }
 
 type Projection struct {
-	Ref         string
-	Generation  uint64
-	HarmlessEnv []string
-	CLIArgs     []string // ephemeral full current argv; never persisted in the manifest
-	BackendArgs []string // additional config overrides, without a user prompt
-	ProviderCwd string
+	Ref           string
+	Generation    uint64
+	HarmlessEnv   []string
+	CLIArgs       []string // ephemeral full current argv; never persisted in the manifest
+	BackendArgs   []string // additional config overrides, without a user prompt
+	ProviderCwd   string
+	NativeContext bool
 }
 
 type source struct{ Path, SHA256 string }
@@ -65,44 +66,51 @@ type sourceProfileLink struct {
 	Device, Inode uint64
 }
 type manifest struct {
-	SchemaVersion   int
-	Provider, Cwd   string
-	Sources         []source
-	SourceAliases   []sourceProfileAlias `json:",omitempty"`
-	Codex           map[string]string    `json:",omitempty"`
-	Claude          map[string]any       `json:",omitempty"`
-	Cohort          map[string]string
-	ProjectBoundary *projectBoundary `json:",omitempty"`
-}
-
-// Prepare must receive the original launch environment before account auth
-// selectors are scrubbed/injected. It writes only validated nonsecret settings.
-// A prior ref preserves its settings while composing the current resume argv.
-func Prepare(stateRoot, provider, profilePath, cwd string, env, argv []string, priorProjectionRef string) (Projection, error) {
-	return PrepareWithModel(stateRoot, provider, profilePath, cwd, env, argv, priorProjectionRef, "")
+	SchemaVersion           int
+	Provider, Cwd           string
+	Sources                 []source
+	SourceAliases           []sourceProfileAlias `json:",omitempty"`
+	Codex                   map[string]string    `json:",omitempty"`
+	Claude                  map[string]any       `json:",omitempty"`
+	Cohort                  map[string]string
+	ProjectBoundary         *projectBoundary    `json:",omitempty"`
+	CodexContext            *CodexContext       `json:",omitempty"`
+	ClaudeContext           *ClaudeContext      `json:",omitempty"`
+	ClaudeProjectSources    []source            `json:",omitempty"`
+	CodexProjectSources     []source            `json:",omitempty"`
+	ClaudeHistoryAlias      *ClaudeHistoryAlias `json:",omitempty"`
+	CodexHistoryAlias       *CodexHistoryAlias  `json:",omitempty"`
+	ClaudeInvocationSources []source            `json:",omitempty"`
 }
 
 // PrepareWithModel permits only the invocation model authenticated by the
 // managed recovery authority. It leaves the frozen manifest and non-model
-// policy unchanged; ordinary caller argv must use the strict Prepare entrypoint.
-func PrepareWithModel(stateRoot, provider, profilePath, cwd string, env, argv []string, priorProjectionRef, nativeModel string) (Projection, error) {
+// policy unchanged; ordinary caller argv must pass an empty nativeModel.
+func validateNativeModel(argv []string, prior, nativeModel string) error {
 	if nativeModel != "" {
-		if priorProjectionRef == "" || len(nativeModel) > 128 || strings.ContainsAny(nativeModel, "\x00\r\n\t ") {
-			return Projection{}, Conflict("invalid-native-model-proof")
+		if prior == "" || len(nativeModel) > 128 || strings.ContainsAny(nativeModel, "\x00\r\n\t ") {
+			return Conflict("invalid-native-model-proof")
 		}
 		switch strings.ToLower(strings.SplitN(strings.SplitN(nativeModel, "[", 2)[0], ":", 2)[0]) {
 		case "opus", "opusplan", "sonnet", "haiku", "default", "auto":
-			return Projection{}, Conflict("invalid-native-model-proof")
+			return Conflict("invalid-native-model-proof")
 		}
 		for _, c := range nativeModel {
 			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && !strings.ContainsRune("-_.:/[]", c) {
-				return Projection{}, Conflict("invalid-native-model-proof")
+				return Conflict("invalid-native-model-proof")
 			}
 		}
 		models := append(flagValues(argv, "--model"), flagValues(argv, "-m")...)
 		if len(models) != 1 || models[0] != nativeModel {
-			return Projection{}, Conflict("native-model-proof-mismatch")
+			return Conflict("native-model-proof-mismatch")
 		}
+	}
+	return nil
+}
+
+func PrepareWithModel(stateRoot, provider, profilePath, cwd string, env, argv []string, priorProjectionRef, nativeModel string) (Projection, error) {
+	if err := validateNativeModel(argv, priorProjectionRef, nativeModel); err != nil {
+		return Projection{}, err
 	}
 	if provider != "codex" && provider != "claude" {
 		return Projection{}, Conflict("unsupported-provider")
@@ -317,6 +325,9 @@ func Revalidate(stateRoot, ref, provider, profilePath, cwd string) error {
 	if m.Provider != provider || m.Cwd != filepath.Clean(cwd) {
 		return Conflict("projection-context-changed")
 	}
+	if m.SchemaVersion == 3 {
+		return revalidateNativeManifest(m, profilePath)
+	}
 	if err := validateProjectBoundary(m, nil); err != nil {
 		return err
 	}
@@ -431,10 +442,19 @@ func validateSourceAliases(aliases []sourceProfileAlias) error {
 func rejectSelectors(env, argv []string) error {
 	for _, entry := range env {
 		key, value, _ := strings.Cut(entry, "=")
+		// These values name paths, so "false" and "0" are real selectors too.
+		if value != "" {
+			switch key {
+			case "CLAUDE_CODE_MANAGED_SETTINGS_PATH", "CLAUDE_CODE_REMOTE_SETTINGS_PATH":
+				return Conflict("provider-or-profile-selector")
+			}
+		}
 		if value == "" || value == "0" || value == "false" {
 			continue
 		}
 		switch key {
+		case "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_MANTLE":
+			return Conflict("provider-or-profile-selector")
 		case "CODEX_PROFILE", "ANTHROPIC_PROFILE", "ANTHROPIC_CONFIG_DIR", "CLAUDE_CODE_PROFILE", "CLAUDE_CODE_DEFAULT_PROFILE", "CLAUDE_CODE_FEDERATION_PROFILE", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_GATEWAY", "CLAUDE_CODE_GATEWAY_URL", "CLAUDE_CODE_HOST_GATEWAY_LINEAGE":
 			return Conflict("provider-or-profile-selector")
 		}

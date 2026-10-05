@@ -20,7 +20,7 @@ import (
 func accountWriterProofFixture(t *testing.T) (*accountRotationManager, persist.Meta, shim.NativeProcessInfo) {
 	t.Helper()
 	store, root, bindings := accountTestStore(t, 2)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	source.Status.Process = status.ProcessExited
 	source.ShimPID, source.ShimStartTime = 1<<30+1, 1
 	m, _ := rotationTestManager(t, store, root, source)

@@ -31,7 +31,7 @@ func TestProjectBoundaryClaudeFreezesHomeAndSelectedAlias(t *testing.T) {
 	f.env = append(f.env, "CLAUDE_CONFIG_DIR="+alias)
 	put(t, filepath.Join(f.source, "settings.json"), `{"hooks":{"Stop":[]}}`)
 	put(t, filepath.Join(f.source, "settings.local.json"), `{"hooks":{"SessionStart":[]}}`)
-	p, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
+	p, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,13 +39,13 @@ func TestProjectBoundaryClaudeFreezesHomeAndSelectedAlias(t *testing.T) {
 	if err := Revalidate(f.root, p.Ref, "claude", f.candidate, f.cwd); err != nil {
 		t.Fatalf("unselected HOME settings gained authority: %v", err)
 	}
-	resume, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude", "--resume", "synthetic"}, p.Ref)
+	resume, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude", "--resume", "synthetic"}, p.Ref)
 	if err != nil || resume.Ref != p.Ref || resume.Generation != p.Generation {
 		t.Fatalf("unchanged owned alias lost frozen projection: %v", err)
 	}
 	changed := append([]string(nil), f.env...)
 	changed[0] = "HOME=" + filepath.Dir(f.home)
-	if _, err := Prepare(f.root, "claude", f.candidate, f.cwd, changed, []string{"claude"}, p.Ref); err == nil {
+	if _, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, changed, []string{"claude"}, p.Ref); err == nil {
 		t.Fatal("resume accepted changed HOME boundary")
 	}
 	if err := os.Remove(alias); err != nil {
@@ -75,7 +75,7 @@ func TestProjectBoundaryClaudeRetainsGenuineSources(t *testing.T) {
 				path = filepath.Join(f.home, ".claude", "settings.json")
 			}
 			put(t, path, `{}`)
-			if _, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, ""); err == nil {
+			if _, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, ""); err == nil {
 				t.Fatal("genuine project source accepted")
 			}
 		})
@@ -83,7 +83,7 @@ func TestProjectBoundaryClaudeRetainsGenuineSources(t *testing.T) {
 	f := fixture(t, "claude")
 	homeProject(t, &f)
 	put(t, filepath.Join(f.source, "settings.json"), `{"model":"claude-sonnet-4-6"}`)
-	p, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
+	p, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestProjectBoundaryCodexRangeAndDefaultMarkers(t *testing.T) {
 			put(t, filepath.Join(f.source, "config.toml"), `model="gpt-current"`)
 			// Not a native project layer in any of these layouts.
 			put(t, filepath.Join(filepath.Dir(f.cwd), ".codex", "config.toml"), "[hooks]\n")
-			p, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
+			p, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -149,7 +149,7 @@ func TestProjectBoundaryCodexRangeAndDefaultMarkers(t *testing.T) {
 	homeProject(t, &f)
 	put(t, filepath.Join(f.home, ".git", "HEAD"), "ref: refs/heads/main\n")
 	put(t, filepath.Join(f.source, "config.toml"), `model="gpt-current"`)
-	if _, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, ""); err == nil {
+	if _, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, ""); err == nil {
 		t.Fatal("real HOME project root was blindly exempted")
 	}
 }
@@ -163,7 +163,7 @@ func TestProjectBoundaryCodexMarkerChangesHoldButOrdinaryHEADDoesNot(t *testing.
 			if change != "no-root-new-marker" {
 				put(t, filepath.Join(root, ".git", "HEAD"), "ref: refs/heads/main\n")
 			}
-			p, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
+			p, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -181,7 +181,7 @@ func TestProjectBoundaryCodexMarkerChangesHoldButOrdinaryHEADDoesNot(t *testing.
 			if (change == "changed-head") != (err == nil) {
 				t.Fatalf("marker replay %s: %v", change, err)
 			}
-			_, resumeErr := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex", "resume", "synthetic"}, p.Ref)
+			_, resumeErr := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex", "resume", "synthetic"}, p.Ref)
 			if (change == "changed-head") != (resumeErr == nil) {
 				t.Fatalf("prior-reference marker replay %s: %v", change, resumeErr)
 			}
@@ -194,7 +194,7 @@ func TestProjectBoundaryCodexSelectedNativeProfileIsExcluded(t *testing.T) {
 	homeProject(t, &f)
 	f.candidate = filepath.Join(f.cwd, ".codex")
 	put(t, filepath.Join(f.candidate, "config.toml"), `model="gpt-destination-default"`)
-	p, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex", "--model", "gpt-requested"}, "")
+	p, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex", "--model", "gpt-requested"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestProjectBoundaryCodexRefusesUnprovenMarkerLayouts(t *testing.T) {
 			case "unproven-pointer":
 				put(t, path, "gitdir: unsupported\n")
 			}
-			if _, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, ""); err == nil {
+			if _, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, ""); err == nil {
 				t.Fatal("unsafe or uncertain marker granted a project boundary")
 			}
 		})
@@ -272,7 +272,7 @@ func TestProjectBoundaryCodexWorktreeKeepsMainHooksAndPointerProof(t *testing.T)
 		t.Run(change, func(t *testing.T) {
 			f := fixture(t, "codex")
 			repo := gitWorktreeFixture(t, &f)
-			p, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
+			p, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -301,7 +301,7 @@ func TestProjectBoundaryCodexWorktreeKeepsMainHooksAndPointerProof(t *testing.T)
 func TestProjectBoundaryMetadataCompatibilityIsIntrinsic(t *testing.T) {
 	f := fixture(t, "claude")
 	homeProject(t, &f)
-	p, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
+	p, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestProjectBoundaryMetadataCompatibilityIsIntrinsic(t *testing.T) {
 	if err := os.RemoveAll(f.home); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := ProjectionCompatibility(raw); err != nil || got != CompatibilityVersion {
+	if got, err := ProjectionCompatibility(raw); err != nil || got != 2 {
 		t.Fatalf("new capability: %d %v", got, err)
 	}
 	var fields map[string]json.RawMessage

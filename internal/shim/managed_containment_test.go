@@ -136,7 +136,7 @@ func managedFixture(t *testing.T, withBackend bool) (Config, *exec.Cmd, <-chan e
 	}
 	exe := selfExe(t)
 	argv := []string{exe, "fixture-managed-provider", native}
-	projection, err := accountconfig.Prepare(state, accounts.ProviderCodex, candidate.ProfilePath, cwd, []string{"HOME=" + home}, argv, "")
+	projection, err := accountconfig.PrepareWithModel(state, accounts.ProviderCodex, candidate.ProfilePath, cwd, []string{"HOME=" + home}, argv, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

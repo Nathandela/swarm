@@ -87,33 +87,12 @@ func Run(ctx context.Context, executable string, cfg Config, admit func(Ref) err
 		return nil, err
 	}
 	defer func() { _ = root.Close() }()
-	// Serialize admission for a credential generation across daemon replacements.
-	lockName := generationLockName(cfg.Binding)
-
-	before, err := root.Lstat(lockName)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, ErrUnavailable
-	}
-	if err == nil && !validLockInfo(before) {
-		return nil, ErrUnavailable
-	}
-	lock, err := root.OpenFile(lockName, os.O_CREATE|os.O_RDWR, 0o600)
+	// Shared with ordinary native configuration initialization.
+	lock, err := acquireGenerationLock(root, cfg.Binding)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, err
 	}
 	defer func() { _ = lock.Close() }()
-	after, err := lock.Stat()
-	if err != nil || !validLockInfo(after) {
-		return nil, ErrUnavailable
-	}
-	current, err := root.Lstat(lockName)
-	if err != nil || !validLockInfo(current) || !os.SameFile(current, after) || (before != nil && !os.SameFile(before, after)) {
-		return nil, ErrUnavailable
-	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return nil, ErrUnavailable
-	}
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 	if !collectionStateSafe(cfg.StateRoot) || !writersStopped(root, cfg.Binding) {
 		return nil, ErrCustodyUnknown
 	}

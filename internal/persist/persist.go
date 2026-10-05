@@ -104,9 +104,10 @@ type Meta struct {
 	// AccountBinding freezes the private credential generation for managed sessions.
 	// It contains no credential values. Managed records use schema v2 so an older
 	// binary cannot silently drop the selector and fall back to ambient credentials.
-	AccountBinding       *accounts.Binding `json:"account_binding,omitempty"`
-	AccountProjectionRef string            `json:"account_projection_ref,omitempty"`
-	InputEmbargo         string            `json:"input_embargo,omitempty"`
+	AccountBinding        *accounts.Binding     `json:"account_binding,omitempty"`
+	AccountProjectionRef  string                `json:"account_projection_ref,omitempty"`
+	AccountClaudeFallback *ClaudeFallbackPolicy `json:"account_claude_fallback,omitempty"`
+	InputEmbargo          string                `json:"input_embargo,omitempty"`
 	// CLIIdentity is the selected installation observed at launch; nil is unknown.
 	// It does not attest a running process or a wrapper's dependencies.
 	CLIIdentity *CLIIdentity `json:"cli_identity,omitempty"`
@@ -245,7 +246,7 @@ func (s *Store) Save(m Meta) error {
 			return fmt.Errorf("persist: invalid managed account binding")
 		}
 		m.SchemaVersion = ManagedSchemaVersion
-	} else if m.AccountProjectionRef != "" || m.InputEmbargo != "" {
+	} else if m.AccountProjectionRef != "" || m.InputEmbargo != "" || m.AccountClaudeFallback != nil {
 		return fmt.Errorf("persist: managed state has no account binding")
 	}
 	data, err := json.Marshal(m)
@@ -357,7 +358,7 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	if m.AccountBinding != nil && (m.SchemaVersion != ManagedSchemaVersion || !validManagedMeta(m)) {
 		return Meta{}, fmt.Errorf("managed session record has an invalid account binding")
 	}
-	if m.AccountBinding == nil && (m.AccountProjectionRef != "" || m.InputEmbargo != "") {
+	if m.AccountBinding == nil && (m.AccountProjectionRef != "" || m.InputEmbargo != "" || m.AccountClaudeFallback != nil) {
 		return Meta{}, fmt.Errorf("managed session state has no account binding")
 	}
 	if err := applyMigrations(&m, SchemaVersion, migrations); err != nil {
@@ -367,6 +368,9 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 }
 
 func validManagedMeta(m Meta) bool {
+	if m.AccountClaudeFallback != nil && (m.AgentType != accounts.ProviderClaude || m.AccountClaudeFallback.OwnerValue != nil && strings.ContainsAny(*m.AccountClaudeFallback.OwnerValue, "\x00\r\n")) {
+		return false
+	}
 	b := m.AccountBinding
 	if b == nil || b.SchemaVersion != accounts.SchemaVersion || b.Provider != m.AgentType || (b.Provider != accounts.ProviderCodex && b.Provider != accounts.ProviderClaude) || b.CredentialGeneration == 0 || b.ConfigurationGeneration == 0 {
 		return false

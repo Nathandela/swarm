@@ -22,6 +22,8 @@ func (m *accountRotationManager) preflightSuccessor(source persist.Meta, destina
 	}
 	spec := daemon.LaunchSpec{AgentType: source.AgentType, Name: source.Name, Tag: source.Tag, Cwd: source.Cwd, Cols: authRecycleCols, Rows: authRecycleRows, ClientEnv: source.Env, SpawnedFrom: source.SpawnedFrom, SpawnIntent: source.SpawnIntent, Supervision: source.Supervision, Options: map[string]string{"model": model, protocol.OptionResumeFrom: m.w.endpointID + "/" + source.ID}, AccountBinding: &destination, AccountStateRoot: m.w.stateDir, InputEmbargo: incident, AccountProjectionRef: source.AccountProjectionRef}
 	spec.AccountNativeModel = model
+	spec.ClientEnv = restoreClaudeOwnerFallback(source, spec.ClientEnv)
+	spec.AccountOriginalConfigurationEnv = daemon.NativeConfigurationEnvironment(spec.ClientEnv)
 	previewSource := source
 	previewSource.Status.Process = status.ProcessExited
 	compiled, err := composeLaunchSpec(spec, m.w.endpointID, "", func(local string) (persist.Meta, bool) {

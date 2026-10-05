@@ -38,7 +38,7 @@ func newDirectoryLaunchFixture(t *testing.T, provider string) directoryLaunchFix
 	bin, record := filepath.Join(m.stateRoot, provider), filepath.Join(m.stateRoot, "native-cwd")
 	version := "codex-cli 0.160.0"
 	if provider == "claude" {
-		version = "2.1.288 (Claude Code)"
+		version = "2.1.289 (Claude Code)"
 	}
 	// The executable only reports a pinned version and records its launch cwd.
 	// It never authenticates or contacts a provider.

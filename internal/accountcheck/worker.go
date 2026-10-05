@@ -122,7 +122,10 @@ func RunWorker(ctx context.Context, path string, input io.Reader, output io.Writ
 	}
 	env = isolatedEnvironment(env)
 	args := []string{"auth", "status", "--json"}
-	nativeCwd := cfg.Cwd
+	if err := files.Mkdir("native-cwd", 0o700); err != nil {
+		return ErrUnavailable
+	}
+	nativeCwd := filepath.Join(path, "native-cwd")
 	switch cfg.Mode {
 	case ModeAvailability:
 		args, err = AvailabilityArguments(cfg.Model)
@@ -132,10 +135,7 @@ func RunWorker(ctx context.Context, path string, input io.Reader, output io.Writ
 	case ModeAuthStatus:
 		// Auth-status runs in a private empty context too. The discussion's project
 		// cannot contribute hooks, settings, MCP or runtime loader policy to it.
-		if err := files.Mkdir("native-cwd", 0o700); err != nil {
-			return ErrUnavailable
-		}
-		nativeCwd = filepath.Join(path, "native-cwd")
+
 	default:
 		return ErrUnavailable
 	}
@@ -148,7 +148,19 @@ func RunWorker(ctx context.Context, path string, input io.Reader, output io.Writ
 	if err != nil {
 		return err
 	}
-	if err := accountconfig.ValidateAvailabilityCheck(cfg.StateRoot, profile, nativeCwd, env); err != nil {
+	if err := files.Mkdir("native-config", 0o700); err != nil {
+		return ErrUnavailable
+	}
+	configProfile := filepath.Join(path, "native-config")
+	if err := accountconfig.PrepareRestrictedClaudeConfig(profile, configProfile); err != nil {
+		return ErrUnavailable
+	}
+	for i, entry := range env {
+		if strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
+			env[i] = "CLAUDE_CONFIG_DIR=" + configProfile
+		}
+	}
+	if err := accountconfig.ValidateRestrictedClaudeCheck(cfg.StateRoot, profile, configProfile, nativeCwd, env); err != nil {
 		return ErrUnavailable
 	}
 	if cfg.Deadline.IsZero() || !cfg.Deadline.After(time.Now()) || cfg.Deadline.After(time.Now().Add(2*time.Minute)) {
@@ -196,7 +208,7 @@ func isolatedEnvironment(env []string) []string {
 	for _, item := range env {
 		key, _, _ := strings.Cut(item, "=")
 		switch key {
-		case "CLAUDE_CODE_MAX_RETRIES", "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES":
+		case "CLAUDE_CODE_MAX_RETRIES", "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES", "CLAUDE_CODE_DIAGNOSTICS_FILE", "CLAUDE_CODE_NO_MODEL_FALLBACK":
 			continue
 		}
 		out = append(out, item)

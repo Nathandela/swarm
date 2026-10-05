@@ -16,6 +16,7 @@ require (
 	github.com/flynn/noise v1.1.0
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/muesli/cancelreader v0.2.2
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/rivo/uniseg v0.4.7
 	go.etcd.io/bbolt v1.3.11
 	golang.org/x/crypto v0.55.0

@@ -1008,6 +1008,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		}
 		if len(source.Env) > 0 {
 			spec.ClientEnv = append([]string(nil), source.Env...)
+			spec.ClientEnv = restoreClaudeOwnerFallback(source, spec.ClientEnv)
 		}
 	}
 	// The launch ENVIRONMENT is resolved before argv, because argv depends on it: the
@@ -1021,6 +1022,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// the core then hands the shim, so the binary this resolves is the binary the
 	// agent runs. THIS is the one point every launch entry passes through; resolving
 	// here is what makes the daemon-side seam real (R1 audit H1).
+	spec.AccountOriginalConfigurationEnv = a.core.NativeConfigurationEnvironment(spec.ClientEnv)
 	spec.ClientEnv = a.core.LaunchPolicyEnv(spec.ClientEnv)
 	// PRESENCE, not emptiness -- and this layer is the one that must get it right,
 	// because it is the ONLY point every launch entry passes through. handleLaunch has
@@ -1111,6 +1113,11 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 				}
 			}
 		}
+	}
+	var admissionErr error
+	spec, admissionErr = a.prepareLegacyAccountResume(spec)
+	if admissionErr != nil {
+		return persist.Meta{}, admissionErr
 	}
 	// ADR-024: stamp the account identity of the credentials this agent will load,
 	// resolved at the same moment as the argv and the env above -- this is the one
@@ -1312,6 +1319,12 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		}
 		if cwd := srcMeta.ProviderCwd(); cwd != "" && (spec.AgentType == "codex" || srcMeta.AgentCwd != "") {
 			spec.Cwd = cwd
+			if len(spec.Cwd) > 1 {
+				spec.Cwd = strings.TrimRight(spec.Cwd, string(filepath.Separator))
+				if spec.Cwd == "" {
+					spec.Cwd = string(filepath.Separator)
+				}
+			}
 		}
 		if srcMeta.AgentCwd != "" {
 			if fi, err := os.Stat(srcMeta.AgentCwd); err != nil || !fi.IsDir() {

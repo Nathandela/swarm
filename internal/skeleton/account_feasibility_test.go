@@ -45,7 +45,7 @@ func feasibleAccountTest(t *testing.T, count int) *feasibleAccountFixture {
 	if err := os.WriteFile(filepath.Join(fixture.original, "config.toml"), []byte("model = \"gpt-first-model\"\nsandbox_mode = \"workspace-write\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	source := accountTestSource(filepath.Join(root, "requested"), bindings[0])
+	source := accountTestSource(t, filepath.Join(root, "requested"), bindings[0])
 	source.AgentCwd = filepath.Join(root, "checkout")
 	source.Env = []string{"HOME=" + filepath.Dir(fixture.original), "PATH=" + filepath.Dir(fixture.native)}
 	source.LaunchOptions = map[string]string{"model": "gpt-first-model", "sandbox": "workspace-write", protocol.OptionWorktree: "true"}
@@ -64,7 +64,7 @@ func feasibleAccountTest(t *testing.T, count int) *feasibleAccountFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, err := accountconfig.Prepare(root, source.AgentType, profile, source.AgentCwd, source.Env, argv, "")
+	projection, err := accountconfig.PrepareWithModel(root, source.AgentType, profile, source.AgentCwd, source.Env, argv, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -50,7 +50,7 @@ func boundaryProjectionFixture(t *testing.T, provider string, withRegistry bool)
 		}
 	}
 	argv := []string{"synthetic-" + provider, "--model", "synthetic-model"}
-	projection, err := accountconfig.Prepare(state, provider, profile, cwd, []string{"HOME=" + home}, argv, "")
+	projection, err := accountconfig.PrepareWithModel(state, provider, profile, cwd, []string{"HOME=" + home}, argv, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func legacyBoundaryProjection(t *testing.T, state, ref string, raw []byte) strin
 }
 
 func TestAccountProjectBoundaryCardUsesCompiledContract(t *testing.T) {
-	if CurrentManifest("v9.9.9").AccountConfig != accountconfig.CompatibilityVersion || accountconfig.CompatibilityVersion != 2 {
+	if CurrentManifest("v9.9.9").AccountConfig != accountconfig.CompatibilityVersion || accountconfig.CompatibilityVersion != 3 {
 		t.Fatal("release card lacks current project boundary interpretation")
 	}
 }

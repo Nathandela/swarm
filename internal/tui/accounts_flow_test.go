@@ -37,7 +37,7 @@ func TestAccountsFlow_ReadyAccountsHaveTruthfulNextStepAndUnknownQuota(t *testin
 		want    []string
 	}{
 		{0, true, []string{"add a verified Claude account", "No account is ready"}},
-		{1, false, []string{"enable Claude rotation", "new discussions"}},
+		{1, false, []string{"enable Claude rotation", "Discussion coverage is unavailable"}},
 		{1, true, []string{"Ready", "Quota: unknown", "not yet observed", "no same-provider backup", "Next: start a new Claude discussion"}},
 		{2, true, []string{"Ready", "Quota: unknown", "2 ready accounts configured", "Backup capacity is unconfirmed"}},
 	} {

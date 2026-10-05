@@ -1,6 +1,7 @@
 package upgrade
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,7 @@ func TestAccountGuardChecksRecoveryWithoutRegistryOrSessions(t *testing.T) {
 	if err := accountStateGuard(state, CurrentManifest("v0.15.0")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(`{"account_schema_version":3,"account_rotations":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"account_schema_version":%d,"account_rotations":{}}`, accounts.RecoverySchemaVersion+1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := accountStateGuard(state, CurrentManifest("v0.15.0")); err == nil {

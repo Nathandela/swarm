@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -332,6 +333,7 @@ func (m *accountRotationManager) acceptInbox(rec accountInboxRecord) error {
 	if inboxHoldsModel(rec) {
 		m.inboxModels[rec.ID] = rec.Local
 	}
+	m.admitClaudePromptLocked(rec)
 	m.wakeInboxLocked()
 	return nil
 }
@@ -404,6 +406,7 @@ func (m *accountRotationManager) drainInbox() error {
 				break
 			}
 			records = append(records, rec)
+			m.admitClaudePromptLocked(rec)
 			if inboxHoldsModel(rec) {
 				models[rec.ID] = rec.Local
 			}
@@ -670,8 +673,59 @@ func (m *accountRotationManager) applyInbox(input accountInboxRecord) error {
 		if meta.Status.Process != status.ProcessRunning || meta.RosterHidden {
 			return nil
 		}
+		native, contextErr := accountconfig.HasNativeContext(w.stateDir, meta.AccountProjectionRef)
+		if contextErr != nil {
+			return contextErr
+		}
+		if native {
+			if input.TurnID == "" {
+				if err := m.noteModel(meta, "", input.Sequence); err != nil {
+					return err
+				}
+				return m.reportFailure(w, input.Local, input.Class, "", input.ID, input)
+			}
+			if m.claudeFailureSuperseded(input) {
+				return nil
+			}
+		}
+		if native || input.TurnID != "" {
+			model, stale, err := m.claudeFailedRequestModel(meta, input)
+			if native && !m.claudeFailureAdmitted(input) {
+				err = errClaudeFailureModelPending
+			}
+			if stale {
+				return nil
+			}
+			if err != nil && time.Since(input.ReceivedAt) < 30*time.Second {
+				return errClaudeFailureModelPending
+			}
+			if err != nil {
+				model = ""
+			}
+			if err := m.noteModel(meta, model, input.Sequence); err != nil {
+				return err
+			}
+		}
+		if native {
+			return m.reportFailure(w, input.Local, input.Class, "", input.ID, input)
+		}
 		return m.reportFailure(w, input.Local, input.Class, "", input.ID)
 	case "model":
+		if input.Model == "" && input.Started && meta.CLIIdentity != nil && meta.CLIIdentity.Version == accountconfig.CharacterizedClaudeVersion {
+			for _, rec := range w.state.AccountRotations {
+				if rec.CandidateID == input.Local && rec.State == accountLaunched && rec.Destination != nil && *meta.AccountBinding == *rec.Destination && rec.ConversationID == input.Conversation && meta.InputEmbargo == rec.Incident.ID && meta.LaunchOptions["model"] == rec.Incident.Model && exactAccountModel(rec.Incident.Model) {
+					pinned := meta.AccountClaudeFallback != nil && meta.AccountClaudeFallback.RecoveryPinned
+					if !pinned {
+						break
+					}
+					if err := m.noteModel(meta, rec.Incident.Model, input.Sequence); err != nil {
+						return err
+					}
+					rec.ConversationProven, rec.NativeHookSequence = true, input.Sequence
+					return m.persist(rec)
+				}
+			}
+		}
 		if err := m.noteModel(meta, input.Model, input.Sequence); err != nil {
 			return err
 		}
@@ -683,6 +737,11 @@ func (m *accountRotationManager) applyInbox(input accountInboxRecord) error {
 			}
 		}
 	case "claude-turn":
+		if input.Started {
+			if err := m.persistClaudePrompt(meta, input); err != nil {
+				return err
+			}
+		}
 		if input.ClearModel {
 			if err := m.noteModel(meta, "", input.Sequence); err != nil {
 				return err

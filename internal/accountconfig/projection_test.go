@@ -50,7 +50,7 @@ func TestCodexProjection_PreservesModelPolicyForBothProcessesAndRotation(t *test
 	f := fixture(t, "codex")
 	put(t, filepath.Join(f.source, "config.toml"), "model = \"gpt-original\"\nmodel_reasoning_effort = \"high\"\n[sandbox_workspace_write]\nnetwork_access = true\n")
 	argv := []string{"codex", "--model", "gpt-requested", "--sandbox", "workspace-write", "prompt must remain current"}
-	p, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, argv, "")
+	p, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, argv, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestCodexProjection_PreservesModelPolicyForBothProcessesAndRotation(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	resume, err := Prepare(f.root, "codex", second, f.cwd, f.env, []string{"codex", "resume", "thread-id", "current retry"}, p.Ref)
+	resume, err := prepareTestProjection(f.root, "codex", second, f.cwd, f.env, []string{"codex", "resume", "thread-id", "current retry"}, p.Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestCodexProjection_ActualAdapterResumePreservesRefAcrossAccounts(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, fresh, "")
+	p, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, fresh, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestCodexProjection_ActualAdapterResumePreservesRefAcrossAccounts(t *testin
 	if err := os.Mkdir(second, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	next, err := Prepare(f.root, "codex", second, f.cwd, f.env, resumed, p.Ref)
+	next, err := prepareTestProjection(f.root, "codex", second, f.cwd, f.env, resumed, p.Ref)
 	if err != nil {
 		t.Fatalf("actual adapter A to B resume refused: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestCodexProjection_AuthenticatedInvocationModelPreservesFrozenPolicy(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	frozen, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, fresh, "")
+	frozen, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, fresh, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestCodexProjection_AuthenticatedInvocationModelPreservesFrozenPolicy(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, resumed, frozen.Ref); err == nil {
+	if _, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, resumed, frozen.Ref); err == nil {
 		t.Fatal("ordinary argv changed the frozen model without native authority")
 	}
 	next, err := PrepareWithModel(f.root, "codex", f.candidate, f.cwd, f.env, resumed, frozen.Ref, "gpt-current-model")
@@ -218,7 +218,7 @@ func TestProjection_SourceProfileAliasIsFrozenAndBoundProfilesStayStrict(t *test
 			if err := os.Symlink(canonical, f.source); err != nil {
 				t.Fatal(err)
 			}
-			p, err := Prepare(f.root, provider, f.candidate, f.cwd, f.env, []string{provider}, "")
+			p, err := prepareTestProjection(f.root, provider, f.candidate, f.cwd, f.env, []string{provider}, "")
 			if err != nil {
 				t.Fatalf("explicit ambient profile alias refused: %v", err)
 			}
@@ -242,7 +242,7 @@ func TestProjection_SourceProfileAliasIsFrozenAndBoundProfilesStayStrict(t *test
 			if err := os.Symlink(f.candidate, boundAlias); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Prepare(f.root, provider, boundAlias, f.cwd, f.env, []string{provider}, ""); err == nil {
+			if _, err := prepareTestProjection(f.root, provider, boundAlias, f.cwd, f.env, []string{provider}, ""); err == nil {
 				t.Fatal("source alias support weakened private bound profile validation")
 			}
 		})
@@ -259,7 +259,7 @@ func TestClaudeProjection_AlternateOAuthStoreCannotOverridePrivateAccount(t *tes
 				f.env = append(f.env, "XDG_CONFIG_HOME="+base)
 				store = filepath.Join(base, "anthropic")
 			}
-			projection, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
+			projection, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -267,7 +267,7 @@ func TestClaudeProjection_AlternateOAuthStoreCannotOverridePrivateAccount(t *tes
 			if err := Revalidate(f.root, projection.Ref, "claude", f.candidate, f.cwd); err == nil {
 				t.Fatal("ambient OAuth store appearing after freeze was accepted")
 			}
-			if _, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, ""); err == nil || !strings.Contains(err.Error(), "alternate-native-profile-store") || strings.Contains(err.Error(), "synthetic bearer") {
+			if _, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, ""); err == nil || !strings.Contains(err.Error(), "alternate-native-profile-store") || strings.Contains(err.Error(), "synthetic bearer") {
 				t.Fatal("ambient OAuth store could override selected private account or exposed credentials")
 			}
 		})
@@ -283,7 +283,7 @@ func TestClaudeProjection_RejectsRemotePolicyAtEitherProfileAndAfterFreeze(t *te
 				if source {
 					profile = f.source
 				}
-				p, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
+				p, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -292,7 +292,7 @@ func TestClaudeProjection_RejectsRemotePolicyAtEitherProfileAndAfterFreeze(t *te
 					t.Fatal("policy arriving after projection freeze was accepted")
 				}
 				for _, prior := range []string{"", p.Ref} {
-					if _, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, prior); err == nil || strings.Contains(err.Error(), "synthetic-must-not-run") {
+					if _, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, prior); err == nil || strings.Contains(err.Error(), "synthetic-must-not-run") {
 						t.Fatal("native policy omitted from source/destination or resume proof")
 					}
 				}
@@ -303,7 +303,7 @@ func TestClaudeProjection_RejectsRemotePolicyAtEitherProfileAndAfterFreeze(t *te
 
 func TestClaudeProjection_ManagedDropinDirectoryIsInventoried(t *testing.T) {
 	f := fixture(t, "claude")
-	p, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
+	p, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestClaudeProjection_ComposesPermissionsAndSwarmHooksInPrivateFile(t *testi
 	put(t, filepath.Join(f.source, "settings.json"), `{"model":"sonnet","permissions":{"allow":["Read(*)"],"deny":["Bash(rm:*)"]}}`)
 	hooks := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"swarm hook Stop"}]}]},"permissions":{"allow":["Read(*)","Bash(git:*)"]}}`
 	argv := []string{"claude", "--settings", hooks, "--model", "opus", "current task"}
-	p, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, argv, "")
+	p, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, argv, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestClaudeProjection_PreservesCaptureAndManagedObserverHooksOnRotation(t *t
 			argv[i] = string(raw)
 		}
 	}
-	first, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, argv, "")
+	first, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, argv, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +407,7 @@ func TestClaudeProjection_PreservesCaptureAndManagedObserverHooksOnRotation(t *t
 	if err := os.Mkdir(secondProfile, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	second, err := Prepare(f.root, "claude", secondProfile, f.cwd, f.env, argv, first.Ref)
+	second, err := prepareTestProjection(f.root, "claude", secondProfile, f.cwd, f.env, argv, first.Ref)
 	if err != nil || first.Ref != second.Ref {
 		t.Fatalf("rotation changed frozen observer/capture settings: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestProjection_RefusesChangedOrUnrepresentableConfiguration(t *testing.T) {
 		t.Run(tc.provider+"-"+tc.reason, func(t *testing.T) {
 			f := fixture(t, tc.provider)
 			put(t, filepath.Join(f.source, tc.name), tc.content)
-			_, err := Prepare(f.root, tc.provider, f.candidate, f.cwd, f.env, []string{tc.provider}, "")
+			_, err := prepareTestProjection(f.root, tc.provider, f.candidate, f.cwd, f.env, []string{tc.provider}, "")
 			var conflict Conflict
 			if !errors.As(err, &conflict) || !strings.Contains(err.Error(), tc.reason) || strings.Contains(err.Error(), tc.content) || strings.Contains(err.Error(), f.home) {
 				t.Fatal("unsafe configuration lacked a specific redacted refusal")
@@ -447,7 +447,7 @@ func TestProjection_RefusesChangedOrUnrepresentableConfiguration(t *testing.T) {
 	}
 	f := fixture(t, "codex")
 	put(t, filepath.Join(f.source, "config.toml"), `model = "gpt-a"`)
-	p, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
+	p, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,11 +460,11 @@ func TestProjection_RefusesChangedOrUnrepresentableConfiguration(t *testing.T) {
 func TestProjection_NativeCustomizationsRequireCompatibleCohort(t *testing.T) {
 	f := fixture(t, "codex")
 	put(t, filepath.Join(f.source, "skills", "example", "SKILL.md"), "Synthetic skill: keep the requested model.")
-	if _, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, ""); err == nil {
+	if _, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, ""); err == nil {
 		t.Fatal("missing destination skill silently dropped")
 	}
 	put(t, filepath.Join(f.candidate, "skills", "example", "SKILL.md"), "Synthetic skill: keep the requested model.")
-	p, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
+	p, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,13 +479,13 @@ func TestClaudeProjection_TrustAndMCPCohortIgnoreAccountIdentity(t *testing.T) {
 	trust := map[string]any{"projects": map[string]any{f.cwd: map[string]any{"hasTrustDialogAccepted": true, "allowedTools": []string{"Read"}}}, "mcpServers": map[string]any{"example": map[string]any{"command": "synthetic-mcp"}}, "oauthAccount": map[string]string{"emailAddress": "first@example.test"}}
 	raw, _ := json.Marshal(trust)
 	put(t, filepath.Join(f.home, ".claude.json"), string(raw))
-	if _, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, ""); err == nil {
+	if _, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, ""); err == nil {
 		t.Fatal("missing destination trust/MCP silently changed configuration")
 	}
 	trust["oauthAccount"] = map[string]string{"emailAddress": "second@example.test"}
 	raw, _ = json.Marshal(trust)
 	put(t, filepath.Join(f.candidate, ".claude.json"), string(raw))
-	p, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
+	p, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestClaudeProjection_TrustAndMCPCohortIgnoreAccountIdentity(t *testing.T) {
 
 func TestProjection_NewProjectSourceAndCandidateDefaultsRefuseBeforeSpawn(t *testing.T) {
 	f := fixture(t, "codex")
-	p, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
+	p, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +513,7 @@ func TestProjection_NewProjectSourceAndCandidateDefaultsRefuseBeforeSpawn(t *tes
 	}
 	f = fixture(t, "codex")
 	put(t, filepath.Join(f.candidate, "config.toml"), "model_context_window = 32000")
-	if _, err := Prepare(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, ""); err == nil {
+	if _, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, f.env, []string{"codex"}, ""); err == nil {
 		t.Fatal("unprojected candidate default changed effective settings")
 	}
 }
@@ -525,12 +525,12 @@ func TestProjection_SymlinksAndSelectorsFailClosed(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(f.source, "settings.json")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Prepare(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, ""); err == nil {
+	if _, err := prepareTestProjection(f.root, "claude", f.candidate, f.cwd, f.env, []string{"claude"}, ""); err == nil {
 		t.Fatal("symlinked settings source accepted")
 	}
 	for _, selector := range []string{"CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CODE_FEDERATION_PROFILE=work", "CODEX_PROFILE=named"} {
 		f := fixture(t, "codex")
-		if _, err := Prepare(f.root, "codex", f.candidate, f.cwd, append(f.env, selector), []string{"codex"}, ""); err == nil {
+		if _, err := prepareTestProjection(f.root, "codex", f.candidate, f.cwd, append(f.env, selector), []string{"codex"}, ""); err == nil {
 			t.Fatal("uncharacterized selector accepted")
 		}
 	}
@@ -590,4 +590,9 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// Ordinary legacy projections have no authenticated recovery model override.
+func prepareTestProjection(stateRoot, provider, profilePath, cwd string, env, argv []string, prior string) (Projection, error) {
+	return PrepareWithModel(stateRoot, provider, profilePath, cwd, env, argv, prior, "")
 }

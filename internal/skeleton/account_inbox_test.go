@@ -22,7 +22,7 @@ func inboxClaudeFixture(t *testing.T) (*accountRotationManager, *authFake, persi
 	manager := accountTestManager(t, accountTestState(t))
 	candidate := accountTestCandidate(t, manager, accounts.ProviderClaude, "synthetic-inbox-account")
 	account := accountTestAdmit(t, manager, candidate)
-	source := accountTestSource(manager.stateRoot, accountTestBinding(t, manager, account))
+	source := accountTestSource(t, manager.stateRoot, accountTestBinding(t, manager, account))
 	source.AgentType = accounts.ProviderClaude
 	source.CLIIdentity.Version = "2.1.288"
 	m, fake := rotationTestManager(t, manager.store, manager.stateRoot, source)
@@ -101,7 +101,7 @@ func TestAccountInboxModelCapacityKeepsLatestProofPending(t *testing.T) {
 
 func TestAccountInboxUnreadableEvidenceHoldsAllManagedModelAuthority(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 1)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	m, _ := rotationTestManager(t, store, root, source)
 	dir := filepath.Join(root, accountInboxDirectory)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -160,7 +160,7 @@ func TestAccountInboxConfirmsPublishedModelBeforeRetiringEvidence(t *testing.T) 
 
 func TestAccountNativeAdmissionHoldSurvivesRestartAndOwnerEnd(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 1)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	m, _ := rotationTestManager(t, store, root, source)
 	dir := filepath.Join(root, accountInboxDirectory)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

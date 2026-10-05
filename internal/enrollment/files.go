@@ -80,7 +80,7 @@ func validateConfig(c Config) error {
 			return ErrUnsupported
 		}
 	case "claude":
-		if c.Method != MethodNativeLogin || c.NativeVersion != "2.1.288" {
+		if c.Method != MethodNativeLogin || (c.NativeVersion != "2.1.288" && c.NativeVersion != "2.1.289") {
 			return ErrUnsupported
 		}
 	default:

@@ -50,7 +50,7 @@ func retainedCheckFixture(t *testing.T, state string, binding accounts.Binding) 
 
 func TestAccountCheckCollectionUsesDurableAndMemoryPermitUnion(t *testing.T) {
 	store, state, bindings := accountTestStore(t, 1)
-	m, _ := rotationTestManager(t, store, state, accountTestSource(state, bindings[0]))
+	m, _ := rotationTestManager(t, store, state, accountTestSource(t, state, bindings[0]))
 	ref := retainedCheckFixture(t, state, bindings[0])
 	permit := accounts.HalfOpenPermit{OperationID: "check-operation", OwnerRequested: true, Model: "exact-model", Deadline: time.Now().Add(time.Minute), Spent: true, Stamp: accounts.ProbeStamp{Binding: bindings[0]}, WorkerPID: ref.Worker.PID, WorkerPGID: ref.Worker.PID, WorkerStartTime: ref.Worker.StartTime}
 	m.w.state.AccountSchemaVersion = accounts.RecoverySchemaVersion
@@ -70,7 +70,7 @@ func TestAccountCheckCollectionUsesDurableAndMemoryPermitUnion(t *testing.T) {
 	}
 	// Fresh owner must still retain the persisted permit, even when the prior
 	// actor optimistically removed it in memory before its write failed.
-	fresh, _ := rotationTestManager(t, store, state, accountTestSource(state, bindings[0]))
+	fresh, _ := rotationTestManager(t, store, state, accountTestSource(t, state, bindings[0]))
 	fresh.collectChecks()
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("restart lost durable-only permit", err)
@@ -102,7 +102,7 @@ func TestAccountCheckCollectionUsesDurableAndMemoryPermitUnion(t *testing.T) {
 
 func TestAccountCheckCollectionRefusesUnreadableJournal(t *testing.T) {
 	store, state, bindings := accountTestStore(t, 1)
-	m, _ := rotationTestManager(t, store, state, accountTestSource(state, bindings[0]))
+	m, _ := rotationTestManager(t, store, state, accountTestSource(t, state, bindings[0]))
 	ref := retainedCheckFixture(t, state, bindings[0])
 	if err := os.WriteFile(filepath.Join(state, authWatchStateFile), []byte(`{"account_schema_version":999}`), 0o600); err != nil {
 		t.Fatal(err)

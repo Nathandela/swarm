@@ -13,6 +13,7 @@ package daemon
 
 import (
 	"os"
+	"strings"
 
 	"github.com/Nathandela/swarm/internal/persist"
 )
@@ -70,4 +71,35 @@ func (d *Daemon) LaunchPolicyEnv(clientEnv []string) []string {
 		return persist.FilterEnv(d.savedEnv)
 	}
 	return PolicyEnv(clientEnv)
+}
+
+// NativeConfigurationEnvironment carries only ordinary configuration origins
+// and policy selectors to managed admission. It is never the child environment.
+// Retain unsupported selectors so admission can hold them before filtering.
+func NativeConfigurationEnvironment(env []string) []string {
+	out := make([]string, 0)
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "CLAUDE_CODE_NO_MODEL_FALLBACK",
+			"CODEX_PROFILE", "ANTHROPIC_PROFILE", "ANTHROPIC_CONFIG_DIR", "CLAUDE_CODE_PROFILE", "CLAUDE_CODE_DEFAULT_PROFILE", "CLAUDE_CODE_FEDERATION_PROFILE",
+			"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_GATEWAY", "CLAUDE_CODE_GATEWAY_URL", "CLAUDE_CODE_HOST_GATEWAY_LINEAGE",
+			"CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_REMOTE_SETTINGS_PATH", "CLAUDE_CODE_MANAGED_SETTINGS_PATH":
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// Resolve the same supplied/saved/live origin as LaunchPolicyEnv, before its
+// allowlist removes configuration source and policy variables.
+func (d *Daemon) NativeConfigurationEnvironment(clientEnv []string) []string {
+	if clientEnv == nil {
+		if len(d.savedEnv) > 0 {
+			clientEnv = d.savedEnv
+		} else {
+			clientEnv = daemonEnviron()
+		}
+	}
+	return NativeConfigurationEnvironment(clientEnv)
 }

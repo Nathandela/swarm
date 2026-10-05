@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
@@ -236,8 +237,9 @@ func (m *accountRotationManager) NoteConversation(local, conversation string, ra
 		SessionID string `json:"session_id"`
 		AgentID   string `json:"agent_id"`
 		Model     string `json:"model"`
+		Source    string `json:"source"`
 	}
-	if rejectDuplicateJSONKeys(raw) != nil || json.Unmarshal(raw, &body) != nil || body.AgentID != "" || body.SessionID != conversation {
+	if !accountconfig.ValidClaudeNativeProofJSON(raw) || json.Unmarshal(raw, &body) != nil || body.AgentID != "" || body.SessionID != conversation {
 		return nil
 	}
 	var sequence uint64
@@ -247,6 +249,10 @@ func (m *accountRotationManager) NoteConversation(local, conversation string, ra
 	rec, ok := m.inboxRecord(local, "model", conversation, sequence)
 	if !ok || rec.Binding.Provider != accounts.ProviderClaude {
 		return nil
+	}
+	rec.Started = body.Source == "resume"
+	if body.Model != "" && !exactAccountModel(body.Model) {
+		rec.Started = false // A present invalid model is not native omission.
 	}
 	if exactAccountModel(body.Model) {
 		rec.Model = body.Model
@@ -259,8 +265,9 @@ func (m *accountRotationManager) NoteClaudeFailure(cb engine.Callback) error {
 		SessionID string `json:"session_id"`
 		AgentID   string `json:"agent_id"`
 		Error     string `json:"error"`
+		PromptID  string `json:"prompt_id"`
 	}
-	if len(cb.Raw) > 1<<20 || rejectDuplicateJSONKeys(cb.Raw) != nil || json.Unmarshal(cb.Raw, &body) != nil || body.AgentID != "" {
+	if len(cb.Raw) > 1<<20 || !accountconfig.ValidClaudeNativeProofJSON(cb.Raw) || json.Unmarshal(cb.Raw, &body) != nil || body.AgentID != "" {
 		return nil
 	}
 	class := ""
@@ -277,6 +284,9 @@ func (m *accountRotationManager) NoteClaudeFailure(cb engine.Callback) error {
 		return nil
 	}
 	rec.Class = class
+	if adapter.IsCanonicalConversationID(body.PromptID) {
+		rec.TurnID = body.PromptID
+	}
 	return m.acceptInbox(rec)
 }
 
@@ -392,8 +402,9 @@ func (m *accountRotationManager) NoteClaudeTurn(cb engine.Callback) error {
 		AgentID        string `json:"agent_id"`
 		Prompt         string `json:"prompt"`
 		StopHookActive bool   `json:"stop_hook_active"`
+		PromptID       string `json:"prompt_id"`
 	}
-	if len(cb.Raw) > 1<<20 || rejectDuplicateJSONKeys(cb.Raw) != nil || json.Unmarshal(cb.Raw, &body) != nil || body.AgentID != "" || body.StopHookActive {
+	if len(cb.Raw) > 1<<20 || !accountconfig.ValidClaudeNativeProofJSON(cb.Raw) || json.Unmarshal(cb.Raw, &body) != nil || body.AgentID != "" || body.StopHookActive {
 		return nil
 	}
 	ad, found := registry.New(accounts.ProviderClaude)
@@ -409,7 +420,10 @@ func (m *accountRotationManager) NoteClaudeTurn(cb engine.Callback) error {
 		return nil
 	}
 	rec.Started = cb.Event == "UserPromptSubmit"
-	rec.ClearModel = rec.Started && strings.HasPrefix(strings.TrimSpace(body.Prompt), "/model")
+	if rec.Started && adapter.IsCanonicalConversationID(body.PromptID) {
+		rec.TurnID = body.PromptID
+	}
+	rec.ClearModel = rec.Started
 	for _, item := range shaper.Interactions(adapter.HookPayload{Event: cb.Event, Raw: cb.Raw}) {
 		if item.Kind == adapter.KindUserMessage && item.Source == adapter.SourceOwner && !strings.HasPrefix(strings.TrimSpace(item.Text), "/") {
 			rec.OwnerPrompt = true

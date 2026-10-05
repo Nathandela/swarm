@@ -1,6 +1,8 @@
 package skeleton
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -80,12 +82,23 @@ func accountTestRollout(t *testing.T, store *accounts.Store, binding accounts.Bi
 	return relative
 }
 
-func accountTestSource(root string, binding accounts.Binding) persist.Meta {
+func accountTestSource(t *testing.T, root string, binding accounts.Binding) persist.Meta {
 	meta := runningCodex("managed-source", binding.Identity, status.TurnIdle, legacyCodexRootID)
 	meta.Cwd = root
 	meta.Env = []string{"HOME=" + root, "PATH=/usr/bin"}
 	meta.AccountBinding = &binding
-	meta.AccountProjectionRef = strings.Repeat("a", 64)
+	// Publish real, legacy projection metadata: history authority must never
+	// infer a native context from a missing synthetic reference.
+	raw, _ := json.Marshal(map[string]any{"SchemaVersion": 1, "Provider": "codex", "Cwd": root})
+	digest := sha256.Sum256(raw)
+	meta.AccountProjectionRef = hex.EncodeToString(digest[:])
+	dir := filepath.Join(root, "accounts", "configurations", meta.AccountProjectionRef)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "projection.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
 	meta.LaunchOptions = map[string]string{"model": "exact-model"}
 	meta.CLIIdentity = &persist.CLIIdentity{Path: "/abs/synthetic-codex", Version: "0.160.0", Fingerprint: "synthetic"}
 	return meta
@@ -136,7 +149,7 @@ func rotationTestManager(t *testing.T, store *accounts.Store, root string, sourc
 
 func TestAccountNativeModelChangeOutranksLaunchDefaultAndAliases(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 1)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	source.LaunchOptions["model"] = "gpt-launch-model"
 	m, _ := rotationTestManager(t, store, root, source)
 	m.w.state.AccountModels[source.ID] = accountModelRecord{Binding: bindings[0], Model: "gpt-stale-observer-model"}
@@ -185,7 +198,7 @@ func TestAccountRecoveryMissingStateIsReadOnlyAndUnsafePathsRefuse(t *testing.T)
 
 func TestAccountHealthyManagedIdentityDriftIsQuarantinedAndHeld(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 1)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	m, f := rotationTestManager(t, store, root, source)
 	held := 0
 	m.w.restoreRecycle = func(string) { held++ }
@@ -219,7 +232,7 @@ func TestAccountClaudeTrialRequiresOwnerPromptAndCompletedAssistant(t *testing.T
 	store, root, bindings := accountTestStore(t, 1)
 	binding := bindings[0]
 	binding.Provider = accounts.ProviderClaude
-	source := accountTestSource(root, binding)
+	source := accountTestSource(t, root, binding)
 	source.AgentType = accounts.ProviderClaude
 	m, _ := rotationTestManager(t, store, root, source)
 	initial := accountRotationRecord{Incident: accounts.NewIncident("claude-trial", accounts.ProviderClaude, "claude-sonnet-4-6", 2), OriginalSource: source.ID, SourceID: source.ID, SourceBinding: binding, Destination: &binding, CandidateID: source.ID, ConversationID: source.ConversationID, State: accountCommitted, InputReleased: true, NativeHookSequence: 10}
@@ -259,7 +272,7 @@ func TestAccountClaudeTrialRequiresOwnerPromptAndCompletedAssistant(t *testing.T
 
 func TestAccountRotationDefersApprovalPersistsBeforeKillAndPreservesProjection(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 3)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	accountTestRollout(t, store, bindings[0], source.Cwd, "opaque native body\n")
 	m, f := rotationTestManager(t, store, root, source)
 	if err := m.reportFailure(m.w, source.ID, "quota", "exact-model", "failure-1"); err != nil {
@@ -295,7 +308,7 @@ func TestAccountRotationDefersApprovalPersistsBeforeKillAndPreservesProjection(t
 
 func TestAccountCommittedReleaseRedrivesAfterRestartAndNeedsCorrelatedTurn(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 2)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	accountTestRollout(t, store, bindings[0], source.Cwd, "latest\n")
 	m, f := rotationTestManager(t, store, root, source)
 	releases := 0
@@ -363,7 +376,7 @@ func TestAccountCommittedReleaseRedrivesAfterRestartAndNeedsCorrelatedTurn(t *te
 
 func TestAccountOwnerEndRetryKeepsDurableSuccessorTarget(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 2)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	accountTestRollout(t, store, bindings[0], source.Cwd, "latest\n")
 	m, _ := rotationTestManager(t, store, root, source)
 	if err := m.reportFailure(m.w, source.ID, "quota", "exact-model", "owner-end-failure"); err != nil {
@@ -412,7 +425,7 @@ func TestAccountUnknownModelHoldAndCancellationRemainReadable(t *testing.T) {
 	for _, reason := range []string{"owner-end", "source-disappeared", "source-binding-changed"} {
 		t.Run(reason, func(t *testing.T) {
 			store, root, bindings := accountTestStore(t, 2)
-			source := accountTestSource(root, bindings[0])
+			source := accountTestSource(t, root, bindings[0])
 			source.LaunchOptions = nil
 			m, f := rotationTestManager(t, store, root, source)
 			if err := m.reportFailure(m.w, source.ID, "quota", "ignored-unverified-model", "unknown-model-failure"); err != nil {
@@ -472,7 +485,7 @@ func TestAccountRepeatedTrialFailureUsesCurrentNativeModelAndRetainsBudgets(t *t
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, root, bindings := accountTestStore(t, 3)
-			source := accountTestSource(root, bindings[0])
+			source := accountTestSource(t, root, bindings[0])
 			source.LaunchOptions["model"] = "gpt-first-model"
 			accountTestRollout(t, store, bindings[0], root, `{"type":"turn_context","payload":{"model":"gpt-first-model"}}`+"\n")
 			m, f := rotationTestManager(t, store, root, source)
@@ -557,7 +570,7 @@ func TestAccountRepeatedTrialFailureUsesCurrentNativeModelAndRetainsBudgets(t *t
 
 func TestAccountRotationFallbackIsFiniteAndRetainsLatestSource(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 3)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	accountTestRollout(t, store, bindings[0], source.Cwd, "latest retained native bytes\n")
 	m, f := rotationTestManager(t, store, root, source)
 	m.ready = func(persist.Meta, accountRotationRecord) bool { return false }
@@ -588,7 +601,7 @@ func TestAccountRotationFallbackIsFiniteAndRetainsLatestSource(t *testing.T) {
 
 func TestAccountHistoryLatestRoundTripAndInterruptedPublication(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 2)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	relative := accountTestRollout(t, store, bindings[0], root, "original A history\n")
 	resolver := newAccountResumeHistoryResolver(root, nil)
 	manifest, err := preflightAccountHistory(store, resolver, source, bindings[1], accountHistoryOwnership{}, "incident-one")
@@ -636,7 +649,7 @@ func TestAccountHistoryLatestRoundTripAndInterruptedPublication(t *testing.T) {
 
 func TestAccountHistoryUnsafeArtifactsAndVersionRefuseBeforeStop(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 2)
-	source := accountTestSource(root, bindings[0])
+	source := accountTestSource(t, root, bindings[0])
 	relative := accountTestRollout(t, store, bindings[0], root, "opaque\n")
 	resolver := newAccountResumeHistoryResolver(root, nil)
 	source.CLIIdentity.Version = "9.9.9"
