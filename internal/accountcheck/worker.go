@@ -112,8 +112,7 @@ func RunWorker(ctx context.Context, path string, input io.Reader, output io.Writ
 	if cfg.CLI.Path == "" || cfg.Binding.Provider != accounts.ProviderClaude || !accountconfig.SupportedNativeVersion(cfg.Binding.Provider, cfg.CLI.Version) || !filepath.IsAbs(cfg.Cwd) {
 		return ErrUnavailable
 	}
-	fingerprint, err := persist.CLIFingerprint(cfg.CLI.Path)
-	if err != nil || fingerprint != cfg.CLI.Fingerprint {
+	if !persist.MatchCLIFingerprint(cfg.CLI.Path, cfg.CLI.Fingerprint) {
 		return ErrUnavailable
 	}
 	env, err := accounts.ResolveBoundEnvironment(cfg.StateRoot, cfg.Binding, cfg.Env)

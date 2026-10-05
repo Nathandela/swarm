@@ -18,6 +18,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/appserver"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/procstart"
 	"github.com/Nathandela/swarm/internal/vt"
 	"github.com/creack/pty"
@@ -80,6 +81,9 @@ func startChild(cmd *exec.Cmd) (*nativeChild, error) {
 func (child *nativeChild) stop() error { return stopNative(child.cmd, child.identity, child.done) }
 
 func (w *loginWorker) capture(ctx context.Context, limit int, args ...string) ([]byte, error) {
+	if w.cfg.NativeFingerprint != "" && !persist.MatchCLIFingerprint(w.cfg.NativePath, w.cfg.NativeFingerprint) {
+		return nil, ErrUnsafe
+	}
 	cmd := w.command(args...)
 	output := &boundedBuffer{limit: limit}
 	cmd.Stdout, cmd.Stderr = output, io.Discard
@@ -424,6 +428,9 @@ func (w *loginWorker) codex(ctx context.Context) error {
 }
 
 func (w *loginWorker) claude(ctx context.Context) error {
+	if w.cfg.NativeFingerprint != "" && !persist.MatchCLIFingerprint(w.cfg.NativePath, w.cfg.NativeFingerprint) {
+		return ErrUnsafe
+	}
 	cmd := w.command("auth", "login", "--claudeai")
 	cmd.SysProcAttr = nativePTYAttrs()
 	ptmx, err := pty.StartWithAttrs(cmd, &pty.Winsize{Cols: 80, Rows: 24}, cmd.SysProcAttr)

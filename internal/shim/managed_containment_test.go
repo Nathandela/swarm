@@ -5,6 +5,7 @@ package shim
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -37,12 +38,33 @@ func init() {
 		if err != nil || json.Unmarshal(raw, &cfg) != nil {
 			os.Exit(90)
 		}
+		for _, item := range cfg.Env {
+			if item == "SWARM_TEST_RETAINED_TAMPER=1" {
+				testHookAfterSignalArm = func() {
+					_ = os.Chmod(cfg.Argv[0], 0o700)
+					file, err := os.OpenFile(cfg.Argv[0], os.O_WRONLY|os.O_APPEND, 0)
+					if err != nil {
+						os.Exit(97)
+					}
+					_, _ = file.WriteString("synthetic changed content")
+					_ = file.Close()
+					_ = os.Chmod(cfg.Argv[0], 0o500)
+				}
+			}
+		}
 		_, err = Run(cfg)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(91)
 		}
 		os.Exit(0)
+	case "fixture-managed-marker-only":
+		if os.WriteFile(filepath.Join(path, "child-started"), []byte("started"), 0o600) != nil {
+			os.Exit(98)
+		}
+		for {
+			time.Sleep(time.Second)
+		}
 	case "fixture-managed-provider", "fixture-managed-backend":
 		child := exec.Command(os.Args[0], "fixture-managed-fork", path)
 		child.Env = nil
@@ -93,6 +115,10 @@ func init() {
 }
 
 func managedFixture(t *testing.T, withBackend bool) (Config, *exec.Cmd, <-chan error, []processcontain.Identity) {
+	return managedFixtureModify(t, withBackend, nil)
+}
+
+func managedFixtureModify(t *testing.T, withBackend bool, modify func(*Config)) (Config, *exec.Cmd, <-chan error, []processcontain.Identity) {
 	t.Helper()
 	base, err := os.MkdirTemp("", "sw-managed-")
 	if err != nil {
@@ -159,6 +185,9 @@ func managedFixture(t *testing.T, withBackend bool) (Config, *exec.Cmd, <-chan e
 		cfg.Backend = &BackendConfig{Program: exe, Args: []string{"fixture-managed-backend", backend, socket}, Env: projection.HarmlessEnv, SocketPath: socket, GoAheadTimeout: 20 * time.Millisecond, ReadyTimeout: 5 * time.Second}
 		paths = append(paths, backend)
 	}
+	if modify != nil {
+		modify(&cfg)
+	}
 	raw, _ = json.Marshal(cfg)
 	config := filepath.Join(base, "config.json")
 	if err := os.WriteFile(config, raw, 0o600); err != nil {
@@ -191,6 +220,9 @@ func managedFixture(t *testing.T, withBackend bool) (Config, *exec.Cmd, <-chan e
 			_ = processcontain.SignalIdentity(processcontain.Identity{PID: info.BackendPID, StartTime: info.BackendStartTime}, syscall.SIGKILL)
 		}
 	})
+	if modify != nil {
+		return cfg, cmd, done, children
+	}
 	for _, path := range paths {
 		deadline := time.Now().Add(10 * time.Second)
 		for {
@@ -217,6 +249,65 @@ func managedFixture(t *testing.T, withBackend bool) (Config, *exec.Cmd, <-chan e
 		time.Sleep(10 * time.Millisecond)
 	}
 	return cfg, cmd, done, children
+}
+
+func TestManagedRetainedShimRejectsFinalTamperBeforeSpawn(t *testing.T) {
+	cfg, cmd, done, _ := managedFixtureModify(t, false, func(cfg *Config) {
+		path := filepath.Join(cfg.SessionDir, "retained-cli")
+		source, err := os.Open(cfg.Argv[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = source.Close() }()
+		target, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o500)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, copyErr := io.Copy(target, source)
+		closeErr := target.Close()
+		if copyErr != nil || closeErr != nil {
+			t.Fatalf("copy retained fixture: %v %v", copyErr, closeErr)
+		}
+		stamp, err := persist.CLIContentFingerprint(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Argv[0], cfg.Argv[1] = path, "fixture-managed-marker-only"
+		cfg.CLIIdentity.Path, cfg.CLIIdentity.Fingerprint = path, stamp
+		cfg.Env = append(cfg.Env, "SWARM_TEST_RETAINED_TAMPER=1")
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("tampered retained launch reported success")
+			}
+			var proof NativeStoppedInfo
+			raw, readErr := os.ReadFile(filepath.Join(cfg.SessionDir, NativeStoppedFile))
+			if readErr != nil || json.Unmarshal(raw, &proof) != nil || !proof.WritersStopped || proof.Native.PID != 0 || proof.Native.BackendPID != 0 {
+				t.Fatalf("failed launch lost clean zero-native custody: %+v %v", proof, readErr)
+			}
+			if ReadCLIObservation(cfg.SessionDir) != nil {
+				t.Fatal("failed launch authored CLI observation")
+			}
+			return
+		default:
+		}
+		if _, err := os.Stat(filepath.Join(cfg.Argv[2], "child-started")); err == nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("synthetic changed child did not stop")
+			}
+			t.Fatal("known changed retained executable spawned a native child")
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retained tamper refusal did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestManagedShimContainsDetachedWritersBeforeDurableProof(t *testing.T) {

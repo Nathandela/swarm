@@ -34,6 +34,38 @@ const accountFixtureDeviceCode = "synthetic-private-device-code"
 // The real swarm executable supplies the detached supervisor and runner. A copy
 // of this test executable supplies only the local native WebSocket fixture.
 func TestMain(m *testing.M) {
+	if name := filepath.Base(os.Args[0]); name == "claude" || name == "2.1.289" || name == "2.1.290" {
+		if len(os.Args) == 2 && os.Args[1] == "--version" {
+			version := "2.1.289"
+			executable, _ := os.Executable()
+			if filepath.Base(executable) == "2.1.290" {
+				version = "2.1.290"
+			}
+			fmt.Println(version + " (Claude Code)")
+			os.Exit(0)
+		}
+		// Only an explicit private fixture marker admits a synthetic child. It
+		// records process selection and idles; it never invokes a provider/model.
+		record, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".retention-fixture-record"))
+		if err != nil {
+			os.Exit(91)
+		}
+		executable, _ := os.Executable()
+		cwd, _ := os.Getwd()
+		start, _ := procstart.StartTime(os.Getpid())
+		raw, _ := json.Marshal(struct {
+			Executable, Argv0, Cwd string
+			PID                    int
+			StartTime              int64
+		}{executable, os.Args[0], cwd, os.Getpid(), start})
+		if os.WriteFile(string(record), raw, 0o600) != nil {
+			os.Exit(92)
+		}
+		fmt.Println("synthetic retained child ready")
+		for {
+			time.Sleep(time.Second)
+		}
+	}
 	if filepath.Base(os.Args[0]) == "account-fixture-codex" {
 		if len(os.Args) == 2 && os.Args[1] == "--version" {
 			fmt.Println("codex-cli 0.160.0")

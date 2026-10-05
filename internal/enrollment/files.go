@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/persist"
 )
 
 type jobFiles struct {
@@ -71,7 +73,10 @@ func ValidateNativePath(path string) error {
 }
 
 func validateConfig(c Config) error {
-	if c.SchemaVersion != SchemaVersion || !validID(c.JobID) || !validID(c.CandidateID) || !validID(c.CandidateProfileGeneration) || c.CandidateID != c.CandidateProfileGeneration || c.Generation == 0 {
+	if (c.SchemaVersion != SchemaVersion && c.SchemaVersion != RetainedNativeConfigSchemaVersion) || (c.SchemaVersion == SchemaVersion && c.NativeFingerprint != "") || (c.SchemaVersion == RetainedNativeConfigSchemaVersion && (c.Provider != "claude" || !persist.IsCLIContentFingerprint(c.NativeFingerprint))) || !validID(c.JobID) || !validID(c.CandidateID) || !validID(c.CandidateProfileGeneration) || c.CandidateID != c.CandidateProfileGeneration || c.Generation == 0 {
+		return ErrInvalid
+	}
+	if c.SchemaVersion == RetainedNativeConfigSchemaVersion && (c.NativeVersion != "2.1.289" || c.NativePath != filepath.Join(c.StateRoot, "accounts", "native", "claude-"+c.NativeVersion, "claude")) {
 		return ErrInvalid
 	}
 	switch c.Provider {
@@ -104,6 +109,9 @@ func validateConfig(c Config) error {
 	}
 	if err := ValidateNativePath(c.NativePath); err != nil {
 		return err
+	}
+	if c.NativeFingerprint != "" && !persist.MatchCLIFingerprint(c.NativePath, c.NativeFingerprint) {
+		return ErrUnsafe
 	}
 	profile, err := os.OpenRoot(filepath.Join(c.StateRoot, "accounts", "profiles", c.CandidateProfileGeneration))
 	if err != nil {

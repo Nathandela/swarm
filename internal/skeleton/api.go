@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
@@ -1132,15 +1133,30 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	if spec.AuthIdentity == "" {
 		spec.AuthIdentity = launchAuthIdentity(spec.AgentType, spec.ClientEnv)
 	}
-	resolved, err := composeLaunchSpec(spec, a.endpointID, a.fakeAgentBin, a.core.Get, lookPathIn)
+	resolved, err := composeLaunchSpec(spec, a.endpointID, a.fakeAgentBin, a.core.Get, a.accountLaunchResolver(spec))
 	if err != nil {
 		return persist.Meta{}, err
 	}
 	if err := a.bindAccountLaunch(&resolved); err != nil {
 		return persist.Meta{}, err
 	}
+	var managedIdentity *persist.CLIIdentity
+	if resolved.AccountBinding != nil && resolved.AgentType == accounts.ProviderClaude {
+		managedIdentity, err = a.accounts.managedNative(resolved.AgentType, resolved.ClientEnv, resolved.Cwd)
+		if err != nil || len(resolved.Argv) == 0 {
+			return persist.Meta{}, errAccountLaunch
+		}
+		resolved.Argv = append([]string(nil), resolved.Argv...)
+		resolved.Argv[0] = managedIdentity.Path
+	}
 	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex") {
 		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], resolved.ClientEnv, resolved.Cwd)
+		if managedIdentity != nil {
+			if probeErr != nil || observed == nil || observed.Version != managedIdentity.Version || !persist.MatchCLIFingerprint(managedIdentity.Path, managedIdentity.Fingerprint) {
+				return persist.Meta{}, errAccountLaunch
+			}
+			observed = managedIdentity
+		}
 		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || observed == nil || *expected != *observed) {
 			return persist.Meta{}, fmt.Errorf("launch: CLI installation changed before refresh")
 		}
@@ -1157,8 +1173,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		return m, err
 	}
 	if identity := resolved.CLIIdentity; identity != nil {
-		fingerprint, checkErr := persist.CLIFingerprint(identity.Path)
-		if checkErr != nil || fingerprint != identity.Fingerprint {
+		if !persist.MatchCLIFingerprint(identity.Path, identity.Fingerprint) {
 			m.CLIIdentity = nil
 			clearErr := a.core.ClearCLIIdentity(m.ID)
 			if resolved.ExpectedCLIIdentity != nil || clearErr != nil {

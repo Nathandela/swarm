@@ -836,7 +836,13 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 	// with -- because the daemon's env may lack the agent's PATH entirely (the
 	// original daemon-PATH incident).
 	if ad, ok := registry.New(agent); ok {
-		if _, err := w.resolve(ad.Binary(), m.Env); err != nil {
+		var err error
+		if m.AccountBinding != nil && agent == accounts.ProviderClaude && w.accountRotation != nil && w.accountRotation.d != nil && w.accountRotation.d.accounts != nil {
+			_, err = w.accountRotation.d.accounts.managedNative(agent, m.Env, m.ProviderCwd())
+		} else {
+			_, err = w.resolve(ad.Binary(), m.Env)
+		}
+		if err != nil {
 			w.once("binary:"+local, "authwatch: %s session %s (%s): agent binary does not resolve on the session's environment (%v); holding the recycle", agent, local, m.Name, err)
 			return true
 		}

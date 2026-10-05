@@ -9,19 +9,28 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/Nathandela/swarm/internal/accountcheck"
 	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
+	"github.com/Nathandela/swarm/internal/enrollment"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 )
 
+// Capability 3 adds retained executable digests; existing account-check and
+// stopped-writer proof schemas remain 2 and retain their original meaning.
+const RetainedNativeWorkerCapability = 3
+
 // accountStateGuard covers non-session state too: an enrollment-only machine
 // can have credential writers even when maxPersistedSchema finds zero metas.
 func accountStateGuard(stateRoot string, card CompatManifest) error {
+	if err := accountRetainedSessionGuard(stateRoot, card); err != nil {
+		return err
+	}
 	if err := accountObservationHoldGuard(stateRoot, card); err != nil {
 		return err
 	}
@@ -41,6 +50,9 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 		return errors.New("account state cannot be verified")
 	}
 	defer func() { _ = root.Close() }()
+	if err := accountNativeRuntimeGuard(root, stateRoot, card); err != nil {
+		return err
+	}
 	if err := accountStockCustodyGuard(root, card); err != nil {
 		return err
 	}
@@ -174,10 +186,189 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 			return errors.New("account worker state cannot be verified")
 		}
 		var cfg struct {
-			SchemaVersion int `json:"schema_version"`
+			SchemaVersion     int    `json:"schema_version"`
+			Provider          string `json:"provider"`
+			NativePath        string `json:"native_path"`
+			NativeVersion     string `json:"native_version"`
+			NativeFingerprint string `json:"native_fingerprint"`
 		}
-		if json.Unmarshal(data, &cfg) != nil || cfg.SchemaVersion != 1 || card.AccountWorker < cfg.SchemaVersion {
+		if json.Unmarshal(data, &cfg) != nil || (cfg.SchemaVersion != enrollment.SchemaVersion && cfg.SchemaVersion != enrollment.RetainedNativeConfigSchemaVersion) || (cfg.SchemaVersion == enrollment.SchemaVersion && (cfg.NativeFingerprint != "" || card.AccountWorker < 1)) {
 			return errors.New("the target build cannot contain persisted account workers")
+		}
+		if cfg.SchemaVersion == enrollment.RetainedNativeConfigSchemaVersion && (card.AccountWorker < RetainedNativeWorkerCapability || cfg.Provider != accounts.ProviderClaude || cfg.NativeVersion != accountconfig.CharacterizedClaudeVersion || cfg.NativePath != filepath.Join(stateRoot, "accounts", "native", "claude-"+cfg.NativeVersion, "claude") || !persist.IsCLIContentFingerprint(cfg.NativeFingerprint)) {
+			return errors.New("the target build cannot verify retained account enrollment executables")
+		}
+	}
+	return nil
+}
+
+func accountNativeRuntimeGuard(root *os.Root, stateRoot string, card CompatManifest) error {
+	dir, entries, err := openAccountInventory(root, "native")
+	if err != nil || dir == nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	if len(entries) == 0 {
+		return nil
+	}
+	if card.AccountWorker < RetainedNativeWorkerCapability {
+		return errors.New("the target build cannot verify retained managed native executables")
+	}
+	for _, entry := range entries {
+		info, err := dir.Lstat(entry.Name())
+		if entry.Name() == ".lock" {
+			if err != nil || !privateAccountInfo(info, false) || info.Size() != 0 {
+				return errors.New("retained native runtime lock cannot be verified")
+			}
+			continue
+		}
+		if err != nil || !privateAccountInfo(info, true) {
+			return errors.New("retained native runtime inventory cannot be verified")
+		}
+		if strings.HasPrefix(entry.Name(), ".stage-") {
+			if err := accountNativeStageGuard(dir, entry.Name()); err != nil {
+				return err
+			}
+			continue
+		}
+		if entry.Name() != "claude-"+accountconfig.CharacterizedClaudeVersion {
+			return errors.New("retained native runtime version cannot be verified")
+		}
+		version, err := dir.OpenRoot(entry.Name())
+		if err != nil {
+			return errors.New("retained native runtime metadata cannot be verified")
+		}
+		raw, err := readAccountDocument(version, "manifest.json")
+		_ = version.Close()
+		var manifest struct {
+			Version       string              `json:"version"`
+			Path          string              `json:"path"`
+			ContentSHA256 string              `json:"content_sha256"`
+			Source        persist.CLIIdentity `json:"source"`
+		}
+		fields, shapeErr := retainedManifestKeys(raw, []string{"version", "path", "content_sha256", "source"})
+		_, sourceErr := retainedManifestKeys(fields["source"], []string{"path", "version", "fingerprint"})
+		if err != nil || len(raw) > 8<<10 || shapeErr != nil || sourceErr != nil || json.Unmarshal(raw, &manifest) != nil || manifest.Version != accountconfig.CharacterizedClaudeVersion || manifest.Source.Version != manifest.Version || manifest.Source.Path == "" || manifest.Source.Fingerprint == "" || manifest.Path != filepath.Join(stateRoot, "accounts", "native", "claude-"+manifest.Version, "claude") || !persist.IsCLIContentFingerprint("sha256:"+manifest.ContentSHA256+":"+strings.Repeat("0", 64)) {
+			return errors.New("retained native runtime metadata cannot be verified")
+		}
+	}
+	return nil
+}
+
+// The retained manifest has two known objects. Reject future or duplicate keys
+// before an older build can admit security-bearing metadata it would ignore.
+func retainedManifestKeys(raw []byte, allowed []string) (map[string]json.RawMessage, error) {
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if token, err := dec.Token(); err != nil || token != json.Delim('{') {
+		return nil, errors.New("invalid retained native manifest object")
+	}
+	fields := make(map[string]json.RawMessage)
+	for dec.More() {
+		token, err := dec.Token()
+		key, ok := token.(string)
+		if err != nil || !ok || !slices.Contains(allowed, key) || fields[key] != nil {
+			return nil, errors.New("unknown or duplicate retained native manifest key")
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		fields[key] = value
+	}
+	if token, err := dec.Token(); err != nil || token != json.Delim('}') {
+		return nil, errors.New("invalid retained native manifest object")
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("multiple retained native manifest documents")
+	}
+	if len(fields) != len(allowed) {
+		return nil, errors.New("missing retained native manifest key")
+	}
+	return fields, nil
+}
+
+func accountNativeStageGuard(root *os.Root, name string) error {
+	nonce := strings.TrimPrefix(name, ".stage-")
+	if len(nonce) != 26 || !strings.ContainsRune("01234567", rune(nonce[0])) {
+		return errors.New("retained native stage name cannot be verified")
+	}
+	for _, value := range nonce {
+		if !strings.ContainsRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", value) {
+			return errors.New("retained native stage name cannot be verified")
+		}
+	}
+	stage, err := root.OpenRoot(name)
+	if err != nil {
+		return errors.New("retained native stage cannot be verified")
+	}
+	defer func() { _ = stage.Close() }()
+	dir, err := stage.Open(".")
+	if err != nil {
+		return errors.New("retained native stage cannot be verified")
+	}
+	entries, err := dir.ReadDir(3)
+	_ = dir.Close()
+	if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > 2 {
+		return errors.New("retained native stage cannot be verified")
+	}
+	for _, entry := range entries {
+		limit := int64(8 << 10)
+		if entry.Name() == "claude" {
+			limit = 1 << 30
+		} else if entry.Name() != "manifest.json" {
+			return errors.New("retained native stage contains unknown state")
+		}
+		info, err := stage.Lstat(entry.Name())
+		if err != nil || !privateAccountInfo(info, false) || info.Size() > limit {
+			return errors.New("retained native stage custody cannot be verified")
+		}
+	}
+	return nil
+}
+
+// The cached executable may have been removed. Retained session observations
+// still require a reader that cannot replace their content stamp with metadata.
+func accountRetainedSessionGuard(stateRoot string, card CompatManifest) error {
+	root, err := os.OpenRoot(stateRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return errors.New("retained session observations cannot be verified")
+	}
+	defer func() { _ = root.Close() }()
+	dir, err := root.Open(".")
+	if err != nil {
+		return errors.New("retained session observations cannot be verified")
+	}
+	entries, err := dir.ReadDir(-1)
+	_ = dir.Close()
+	if err != nil {
+		return errors.New("retained session observations cannot be verified")
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !persist.ValidID(entry.Name()) {
+			continue
+		}
+		name := filepath.Join(entry.Name(), "meta.json")
+		if _, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return errors.New("retained session observations cannot be verified")
+		}
+		info, err := root.Lstat(entry.Name())
+		if err != nil || !privateAccountInfo(info, true) {
+			return errors.New("retained session observations cannot be verified")
+		}
+		raw, err := readAccountDocument(root, name)
+		var meta struct {
+			CLI *persist.CLIIdentity `json:"cli_identity"`
+		}
+		if err != nil || json.Unmarshal(raw, &meta) != nil {
+			return errors.New("retained session observations cannot be verified")
+		}
+		if meta.CLI != nil && strings.HasPrefix(meta.CLI.Fingerprint, "sha256:") && (card.AccountWorker < RetainedNativeWorkerCapability || !persist.IsCLIContentFingerprint(meta.CLI.Fingerprint)) {
+			return errors.New("the target build cannot verify retained session executables")
 		}
 	}
 	return nil
@@ -358,6 +549,37 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 	}
 	if schema < 0 || schema > accounts.RecoverySchemaVersion || card.AccountRecovery < schema || (hasManaged && (schema < 1 || card.AccountRecovery < 2 || card.AccountShim < shim.ManagedWriterSchemaVersion)) {
 		return errors.New("the target build cannot reconcile managed account recovery")
+	}
+	if raw := state["account_rotations"]; raw != nil {
+		var rotations map[string]struct {
+			Expected *persist.CLIIdentity `json:"expected_cli_identity"`
+		}
+		if json.Unmarshal(raw, &rotations) != nil {
+			return errors.New("retained recovery observations cannot be verified")
+		}
+		for _, rec := range rotations {
+			if rec.Expected != nil && strings.HasPrefix(rec.Expected.Fingerprint, "sha256:") && (card.AccountWorker < RetainedNativeWorkerCapability || !persist.IsCLIContentFingerprint(rec.Expected.Fingerprint)) {
+				return errors.New("the target build cannot verify retained recovery executables")
+			}
+		}
+	}
+	for _, key := range []string{"cli_refresh", "cli_candidates"} {
+		if raw := state[key]; raw != nil {
+			var records map[string]struct {
+				Target   *persist.CLIIdentity `json:"target"`
+				Identity *persist.CLIIdentity `json:"identity"`
+			}
+			if json.Unmarshal(raw, &records) != nil {
+				return errors.New("retained CLI refresh observations cannot be verified")
+			}
+			for _, rec := range records {
+				for _, identity := range []*persist.CLIIdentity{rec.Target, rec.Identity} {
+					if identity != nil && strings.HasPrefix(identity.Fingerprint, "sha256:") && (card.AccountWorker < RetainedNativeWorkerCapability || !persist.IsCLIContentFingerprint(identity.Fingerprint)) {
+						return errors.New("the target build cannot verify retained CLI refresh executables")
+					}
+				}
+			}
+		}
 	}
 	return nil
 }

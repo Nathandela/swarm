@@ -93,6 +93,11 @@ func (m *accountRotationManager) RetryAvailability(accountID string) error {
 		if source.ID == "" || source.CLIIdentity == nil || !accountconfig.SupportedNativeVersion(source.AgentType, strings.TrimPrefix(source.CLIIdentity.Version, "v")) {
 			return errAccountAvailabilityUnsafe
 		}
+		if identity, err := m.managedCheckIdentity(source); err != nil {
+			return errAccountAvailabilityUnsafe
+		} else {
+			source.CLIIdentity = identity
+		}
 		binding, err := m.store.CurrentBinding(accountID, source.AccountBinding.ConfigurationGeneration)
 		if err != nil {
 			return err
@@ -221,8 +226,7 @@ func (m *accountRotationManager) nativeAccessCheck(ctx context.Context, source p
 	if source.CLIIdentity == nil || source.AccountBinding == nil || *source.AccountBinding != permit.Stamp.Binding || source.AgentType != accounts.ProviderClaude {
 		return false, errAccountAvailabilityUnsafe
 	}
-	fingerprint, err := persist.CLIFingerprint(source.CLIIdentity.Path)
-	if err != nil || fingerprint != source.CLIIdentity.Fingerprint {
+	if !persist.MatchCLIFingerprint(source.CLIIdentity.Path, source.CLIIdentity.Fingerprint) {
 		return false, errAccountAvailabilityUnsafe
 	}
 	profile, err := m.store.ProfilePath(*source.AccountBinding)
@@ -323,6 +327,11 @@ func (m *accountRotationManager) claudeAuthStatusCheck(ctx context.Context, sour
 	if source.CLIIdentity == nil || source.AccountBinding == nil || m.w == nil || m.checkExecutable() == "" {
 		return false, errAccountAvailabilityUnsafe
 	}
+	identity, err := m.managedCheckIdentity(source)
+	if err != nil {
+		return false, errAccountAvailabilityUnsafe
+	}
+	source.CLIIdentity = identity
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	deadline, _ := ctx.Deadline()

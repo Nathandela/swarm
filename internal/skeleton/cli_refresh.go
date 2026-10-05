@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/accountconfig"
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -375,6 +376,12 @@ func (w *authWatcher) discoverCLIRefreshes() {
 			}
 			continue
 		}
+		if m.AccountBinding != nil && m.AgentType == accounts.ProviderClaude && w.accountRotation != nil && w.accountRotation.d != nil && w.accountRotation.d.accounts != nil {
+			manager := w.accountRotation.d.accounts
+			manager.nativeMu.Lock()
+			manager.nativeAmbient = result.id
+			manager.nativeMu.Unlock()
+		}
 		if m.AccountBinding != nil && !accountconfig.SupportedNativeVersion(m.AgentType, result.id.Version) {
 			if _, exists := w.state.CLICandidates[m.ID]; exists {
 				delete(w.state.CLICandidates, m.ID)
@@ -382,6 +389,13 @@ func (w *authWatcher) discoverCLIRefreshes() {
 			}
 			w.once("cli-managed-version:"+m.ID, "cli-refresh: managed %s session %s has an unsupported target; leaving it untouched", m.AgentType, m.ID)
 			continue
+		}
+		if m.AccountBinding != nil && m.AgentType == accounts.ProviderClaude {
+			identity, err := w.managedRefreshIdentity(m, result.id)
+			if err != nil {
+				continue
+			}
+			result.id = identity
 		}
 		candidate := w.state.CLICandidates[m.ID]
 		if candidate.Identity != *result.id {
@@ -499,7 +513,7 @@ func (w *authWatcher) prepareCLIRefreshTarget(source persist.Meta) bool {
 	if !ok {
 		return true
 	}
-	observed, err := w.cliProbe(rec.AgentType, "", source.Env, source.Cwd)
+	observed, err := w.refreshTargetIdentity(source, rec.Target)
 	if err != nil || !validCLIIdentity(observed) {
 		if err != nil {
 			rec.LastError = err.Error()
@@ -565,7 +579,7 @@ func (w *authWatcher) validateCLIRefreshTarget(m persist.Meta) error {
 	if !ok {
 		return nil
 	}
-	observed, err := w.cliProbe(rec.AgentType, "", m.Env, m.Cwd)
+	observed, err := w.refreshTargetIdentity(m, rec.Target)
 	if err != nil || !validCLIIdentity(observed) || *observed != rec.Target {
 		if err == nil {
 			err = fmt.Errorf("candidate identity changed")

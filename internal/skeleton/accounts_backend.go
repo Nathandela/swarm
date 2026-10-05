@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -61,6 +62,12 @@ type accountManager struct {
 	jobs                  accountJobs
 	unavailable           error
 	native                map[string]*persist.CLIIdentity
+	nativeMu              sync.Mutex
+	nativeAmbient         *persist.CLIIdentity
+	nativeSelected        *persist.CLIIdentity
+	nativeFailed          bool
+	nativePublish         func(*os.Root, string, string) error // publication fault injection only
+	nativeSync            func(*os.Root) error                 // post-publication fault injection only
 	list                  func() []persist.Meta
 	refresh               func(string) error
 	quota                 *accountQuotaFetcher
@@ -113,8 +120,12 @@ func openAccountManager(stateRoot, executable string, list func() []persist.Meta
 		identity, err := probeCLIIdentity(provider, "", daemon.PolicyEnv(nil), stateRoot)
 		if err == nil {
 			m.native[provider] = identity
+			if provider == accounts.ProviderClaude {
+				m.nativeAmbient = identity
+			}
 		}
 	}
+	m.startupManagedClaude()
 	return m
 }
 
@@ -455,15 +466,42 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 	out := map[string][]protocol.AccountMethodView{}
 	for _, provider := range []string{"codex", "claude"} {
 		native := m.native[provider]
+		if provider == accounts.ProviderClaude {
+			m.nativeMu.Lock()
+			selected, failed := m.nativeSelected, m.nativeFailed
+			m.nativeMu.Unlock()
+			if failed {
+				native = nil
+			} else if selected != nil {
+				native = selected
+			}
+		}
 		supported := runtime.GOOS == "linux" && native != nil && ((provider == "codex" && native.Version == "0.160.0") || (provider == "claude" && native.Version == accountconfig.CharacterizedClaudeVersion))
 		reason := ""
 		if !supported {
 			reason = "Installed CLI version has not been verified for isolated enrollment."
 		} else {
 			path, err := filepath.EvalSymlinks(native.Path)
-			if err != nil || enrollment.ValidateNativePath(path) != nil {
+			metadataMatches := true
+			if persist.IsCLIContentFingerprint(native.Fingerprint) {
+				parts := strings.Split(native.Fingerprint, ":")
+				info, err := os.Lstat(native.Path)
+				metadataMatches = err == nil && nativePrivateInfo(info, false) && persist.MatchCLIFingerprint(native.Path, parts[2])
+			} else if provider == accounts.ProviderClaude {
+				metadataMatches = persist.MatchCLIFingerprint(native.Path, native.Fingerprint)
+			}
+			if err != nil || enrollment.ValidateNativePath(path) != nil || !metadataMatches {
 				supported = false
 				reason = "Installed CLI cannot start safely. Check its ownership and executable permissions."
+			}
+		}
+		if supported && provider == accounts.ProviderClaude {
+			reason = "Managed Claude uses qualified version " + native.Version + "."
+			m.nativeMu.Lock()
+			ambient := m.nativeAmbient
+			m.nativeMu.Unlock()
+			if cliIdentityNewer(ambient, native) {
+				reason += " Last observed installed version " + ambient.Version + " is held until qualified."
 			}
 		}
 		if provider == "codex" {
@@ -776,8 +814,17 @@ func (m *accountManager) start(req protocol.AccountsReq, r accounts.Registry) (p
 	// Resolve a native installation before creating durable candidate intent.
 	// A removed startup installation must not leave an unstartable pending job.
 	var nativePath string
+	var selectedNative *persist.CLIIdentity
 	if req.Method != "import-native" && req.Method != "token-manual" {
 		native := m.native[req.Provider]
+		if req.Provider == accounts.ProviderClaude {
+			var err error
+			native, err = m.managedNative(req.Provider, daemon.PolicyEnv(nil), m.stateRoot)
+			if err != nil {
+				return protocol.AccountsReply{}, protocol.ErrAccountsUnavailable
+			}
+		}
+		selectedNative = native
 		var pathErr error
 		nativePath, pathErr = filepath.EvalSymlinks(native.Path)
 		if pathErr != nil || enrollment.ValidateNativePath(nativePath) != nil {
@@ -840,8 +887,12 @@ func (m *accountManager) start(req protocol.AccountsReq, r accounts.Registry) (p
 		return protocol.AccountsReply{}, err
 	}
 	if job.State == "pending" {
-		native := m.native[req.Provider]
+		native := selectedNative
 		cfg := enrollment.Config{SchemaVersion: enrollment.SchemaVersion, StateRoot: m.stateRoot, JobID: job.ID, CandidateID: candidate.ID, CandidateProfileGeneration: candidate.ProfileGeneration, Generation: job.Generation, Provider: job.Provider, Method: job.Method, NativePath: nativePath, NativeVersion: native.Version, Deadline: job.Deadline}
+		if strings.HasPrefix(native.Fingerprint, "sha256:") {
+			cfg.SchemaVersion = enrollment.RetainedNativeConfigSchemaVersion
+			cfg.NativeFingerprint = native.Fingerprint
+		}
 		ref, startErr := enrollment.Start(context.Background(), m.executable, cfg)
 		if startErr != nil {
 			job.State = "failed"

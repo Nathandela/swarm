@@ -77,9 +77,11 @@ func (a *coreAPI) bindAccountLaunch(spec *daemon.LaunchSpec) error {
 	if spec.AccountBinding.Provider != spec.AgentType || store.ValidateBinding(*spec.AccountBinding) != nil {
 		return errAccountLaunch
 	}
-	native := a.accounts.native[spec.AgentType]
-	if native == nil || !accountconfig.SupportedNativeVersion(spec.AgentType, native.Version) {
-		return errAccountLaunch
+	if spec.AgentType != accounts.ProviderClaude {
+		native := a.accounts.native[spec.AgentType]
+		if native == nil || !accountconfig.SupportedNativeVersion(spec.AgentType, native.Version) {
+			return errAccountLaunch
+		}
 	}
 	spec.AccountStateRoot = a.accounts.stateRoot
 	spec.AuthIdentity = spec.AccountBinding.Identity
@@ -99,6 +101,9 @@ func (d *Daemon) prepareAccountLaunch(id string, spec daemon.LaunchSpec) (daemon
 		return spec, errAccountLaunch
 	}
 	if d.accounts == nil || d.accounts.store == nil {
+		return spec, errAccountLaunch
+	}
+	if strings.HasPrefix(spec.CLIIdentity.Fingerprint, "sha256:") && !persist.MatchCLIFingerprint(spec.CLIIdentity.Path, spec.CLIIdentity.Fingerprint) {
 		return spec, errAccountLaunch
 	}
 	if spec.AgentType == accounts.ProviderClaude && spec.CLIIdentity.Version != accountconfig.CharacterizedClaudeVersion {

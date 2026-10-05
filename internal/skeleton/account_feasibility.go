@@ -26,9 +26,19 @@ func (m *accountRotationManager) preflightSuccessor(source persist.Meta, destina
 	spec.AccountOriginalConfigurationEnv = daemon.NativeConfigurationEnvironment(spec.ClientEnv)
 	previewSource := source
 	previewSource.Status.Process = status.ProcessExited
+	resolve := m.w.resolve
+	var retained *persist.CLIIdentity
+	if source.AgentType == accounts.ProviderClaude && m.d != nil && m.d.accounts != nil {
+		var err error
+		retained, err = m.d.accounts.managedNative(source.AgentType, source.Env, source.ProviderCwd())
+		if err != nil {
+			return daemon.LaunchSpec{}, errAccountSuccessorUnavailable
+		}
+		resolve = func(string, []string) (string, error) { return retained.Path, nil }
+	}
 	compiled, err := composeLaunchSpec(spec, m.w.endpointID, "", func(local string) (persist.Meta, bool) {
 		return previewSource, local == source.ID
-	}, m.w.resolve)
+	}, resolve)
 	if err != nil || len(compiled.Argv) == 0 {
 		return daemon.LaunchSpec{}, errAccountSuccessorUnavailable
 	}
@@ -37,6 +47,12 @@ func (m *accountRotationManager) preflightSuccessor(source persist.Meta, destina
 		probe = probeCLIIdentity
 	}
 	identity, err := probe(compiled.AgentType, compiled.Argv[0], compiled.ClientEnv, compiled.Cwd)
+	if retained != nil {
+		if err != nil || identity == nil || identity.Version != retained.Version || !persist.MatchCLIFingerprint(retained.Path, retained.Fingerprint) {
+			return daemon.LaunchSpec{}, errAccountSuccessorUnavailable
+		}
+		identity = retained
+	}
 	if err != nil || !validCLIIdentity(identity) || identity.Path != compiled.Argv[0] || !accountconfig.SupportedNativeVersion(compiled.AgentType, identity.Version) || (expected != nil && *identity != *expected) {
 		return daemon.LaunchSpec{}, errAccountSuccessorUnavailable
 	}

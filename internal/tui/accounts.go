@@ -1137,6 +1137,12 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 		if account.Plan != "" {
 			b.WriteString("Plan: " + accountText(account.Plan) + "\n")
 		}
+		for _, method := range a.reply.Methods[account.Provider] {
+			if method.Available && method.Reason != "" {
+				b.WriteString(accountText(method.Reason) + "\n")
+				break
+			}
+		}
 		b.WriteString("\n")
 		for _, line := range accountQuotaLines(account) {
 			b.WriteString(line + "\n")

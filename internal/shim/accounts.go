@@ -26,7 +26,7 @@ func resolveAccountEnvironment(cfg *Config) error {
 	if cfg.CLIIdentity == nil || !accountconfig.SupportedNativeVersion(cfg.AccountBinding.Provider, cfg.CLIIdentity.Version) || len(cfg.Argv) == 0 || cfg.CLIIdentity.Path != cfg.Argv[0] {
 		return errAccountResolution
 	}
-	if fingerprint, err := persist.CLIFingerprint(cfg.CLIIdentity.Path); err != nil || fingerprint != cfg.CLIIdentity.Fingerprint {
+	if !persist.MatchCLIFingerprint(cfg.CLIIdentity.Path, cfg.CLIIdentity.Fingerprint) {
 		return errAccountResolution
 	}
 	resolved, err := accounts.ResolveBoundEnvironment(cfg.AccountStateRoot, *cfg.AccountBinding, cfg.Env)

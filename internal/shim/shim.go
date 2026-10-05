@@ -241,6 +241,12 @@ func Run(cfg Config) (agentExit int, err error) {
 	_ = os.Remove(filepath.Join(cfg.SessionDir, CLIObservationFile))
 	// Observe before either process starts; the post-spawn check covers both.
 	cliStable := cliInstallationMatches(cfg)
+	if cfg.AccountBinding != nil && cfg.CLIIdentity != nil && persist.IsCLIContentFingerprint(cfg.CLIIdentity.Fingerprint) && !cliStable {
+		sigStop()
+		_ = listener.Close()
+		closeTranscript(tr)
+		return 0, errAccountResolution
+	}
 	if cfg.Backend == nil {
 		cmd = &exec.Cmd{
 			Path: cfg.Argv[0],

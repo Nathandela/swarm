@@ -16,21 +16,24 @@ import (
 )
 
 const (
-	SchemaVersion       = 1
-	MethodDeviceCode    = "device-code"
-	MethodNativeLogin   = "native-login"
-	PhaseStarting       = "starting"
-	PhaseAuthenticating = "authenticating"
-	PhaseVerifying      = "verifying"
-	PhaseReady          = "ready"
-	PhaseCanceled       = "canceled"
-	PhaseFailed         = "failed"
-	ConfigFile          = "worker-config.json"
-	ProgressFile        = "worker-progress.json"
-	SocketFile          = "worker.sock"
-	CancelFile          = "cancel-fence.json"
-	maxDeadline         = 15 * time.Minute
-	runnerEnv           = "SWARM_ACCOUNT_ENROLL_RUNNER"
+	SchemaVersion = 1
+	// Only retained executable configurations require this version. Progress
+	// and stopped-writer custody retain their existing schema.
+	RetainedNativeConfigSchemaVersion = 2
+	MethodDeviceCode                  = "device-code"
+	MethodNativeLogin                 = "native-login"
+	PhaseStarting                     = "starting"
+	PhaseAuthenticating               = "authenticating"
+	PhaseVerifying                    = "verifying"
+	PhaseReady                        = "ready"
+	PhaseCanceled                     = "canceled"
+	PhaseFailed                       = "failed"
+	ConfigFile                        = "worker-config.json"
+	ProgressFile                      = "worker-progress.json"
+	SocketFile                        = "worker.sock"
+	CancelFile                        = "cancel-fence.json"
+	maxDeadline                       = 15 * time.Minute
+	runnerEnv                         = "SWARM_ACCOUNT_ENROLL_RUNNER"
 )
 
 var (
@@ -55,6 +58,7 @@ type Config struct {
 	Method                     string    `json:"method"`
 	NativePath                 string    `json:"native_path"`
 	NativeVersion              string    `json:"native_version"`
+	NativeFingerprint          string    `json:"native_fingerprint,omitempty"`
 	Deadline                   time.Time `json:"deadline"`
 }
 

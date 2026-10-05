@@ -18,13 +18,11 @@ func cliInstallationMatches(cfg Config) bool {
 	if identity == nil || len(cfg.Argv) == 0 || identity.Path != cfg.Argv[0] {
 		return false
 	}
-	fingerprint, err := persist.CLIFingerprint(identity.Path)
-	if err != nil || fingerprint != identity.Fingerprint {
+	if !persist.MatchCLIFingerprint(identity.Path, identity.Fingerprint) {
 		return false
 	}
 	if cfg.Backend != nil {
-		backendFingerprint, err := persist.CLIFingerprint(cfg.Backend.Program)
-		if err != nil || backendFingerprint != fingerprint {
+		if !persist.MatchCLIFingerprint(cfg.Backend.Program, identity.Fingerprint) {
 			return false
 		}
 	}
