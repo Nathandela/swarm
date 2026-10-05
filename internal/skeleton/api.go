@@ -990,6 +990,15 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
 func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
+	// Directory completion appends a separator. Strip only trailing separators
+	// before history, worktree, projection and persistence use the cwd; keep
+	// interior traversal components and symlinks visible to the strict validators.
+	if len(spec.Cwd) > 1 {
+		spec.Cwd = strings.TrimRight(spec.Cwd, string(filepath.Separator))
+		if spec.Cwd == "" {
+			spec.Cwd = string(filepath.Separator)
+		}
+	}
 	// A resume continues the source's credential store and executable environment,
 	// even when requested from a different terminal or the phone.
 	if src := spec.Options[protocol.OptionResumeFrom]; src != "" {
