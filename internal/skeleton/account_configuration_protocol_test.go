@@ -247,7 +247,8 @@ func TestAccountConfigurationOwnerProtocolRefusesSelectorsBeforeDestinationWrite
 	}
 }
 
-func TestAccountConfigurationOwnerProtocolNilUsesSavedOriginEmptyDoesNot(t *testing.T) {
+func configurationSavedOriginFixture(t *testing.T) (directoryLaunchFixture, string, string) {
+	t.Helper()
 	root := accountTestState(t)
 	home, bin := filepath.Join(root, "saved-home"), filepath.Join(root, "saved-bin")
 	if err := os.MkdirAll(home, 0700); err != nil {
@@ -257,7 +258,8 @@ func TestAccountConfigurationOwnerProtocolNilUsesSavedOriginEmptyDoesNot(t *test
 		t.Fatal(err)
 	}
 	origin, selector := configurationCustomOrigin(t, "codex", root)
-	accountTestPut(t, filepath.Join(bin, "codex"), []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'codex-cli 0.160.0\\n'; exit; fi\nexec /bin/sleep 60\n"))
+	started := filepath.Join(root, "native-started")
+	accountTestPut(t, filepath.Join(bin, "codex"), []byte(fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'codex-cli 0.160.0\\n'; exit; fi\nprintf 'started\\n' > %q\nexec /bin/sleep 60\n", started)))
 	if err := os.Chmod(filepath.Join(bin, "codex"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -265,6 +267,19 @@ func TestAccountConfigurationOwnerProtocolNilUsesSavedOriginEmptyDoesNot(t *test
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	t.Setenv("CODEX_HOME", strings.TrimPrefix(selector, "CODEX_HOME="))
 	f := newDirectoryLaunchFixture(t, "codex")
+	t.Cleanup(func() {
+		for _, meta := range f.api.core.List() {
+			_ = f.api.core.Kill(meta.ID)
+			_ = f.api.core.Delete(meta.ID)
+		}
+	})
+	return f, origin, started
+}
+
+func TestAccountConfigurationOwnerProtocolNilUsesSavedOriginEmptyDoesNot(t *testing.T) {
+	// This fixture exercises the saved Codex origin, not an ambient XDG origin.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	f, origin, _ := configurationSavedOriginFixture(t)
 	// Change live environment after Open: only the daemon's saved origin is valid.
 	t.Setenv("CODEX_HOME", "/live-unavailable")
 	owner := configurationOwnerClient(t, f.api, f.manager.stateRoot)
@@ -280,5 +295,32 @@ func TestAccountConfigurationOwnerProtocolNilUsesSavedOriginEmptyDoesNot(t *test
 	_, _, err = owner.Launch(protocol.LaunchReq{Agent: "codex", Cwd: cwd, Env: []string{}, Cols: 80, Rows: 24})
 	if err == nil || len(f.api.core.List()) != 1 || !reflect.DeepEqual(before, configurationFenceSnapshot(t, filepath.Join(f.manager.stateRoot, "accounts"))) {
 		t.Fatalf("explicit empty environment inherited daemon source: %v", err)
+	}
+}
+
+func TestAccountConfigurationOwnerProtocolNilRetainsSavedUnsupportedXDG(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/synthetic-saved-xdg")
+	f, _, started := configurationSavedOriginFixture(t)
+	// Clearing the live selector must not erase the daemon's saved source policy.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	owner := configurationOwnerClient(t, f.api, f.manager.stateRoot)
+	profiles := filepath.Join(f.manager.stateRoot, "accounts", "profiles")
+	projections := filepath.Join(f.manager.stateRoot, "accounts", "configurations")
+	before, beforeProjections := configurationFenceSnapshot(t, profiles), configurationFenceSnapshot(t, projections)
+	_, _, err := owner.Launch(protocol.LaunchReq{Agent: "codex", Cwd: filepath.Join(f.manager.stateRoot, "project"), Env: nil, Cols: 80, Rows: 24})
+	if err == nil || !strings.Contains(err.Error(), "configuration-origin-not-characterized") {
+		t.Fatalf("nil owner environment lost saved unsupported XDG origin: %v", err)
+	}
+	if len(f.api.core.List()) != 0 || !reflect.DeepEqual(before, configurationFenceSnapshot(t, profiles)) || !reflect.DeepEqual(beforeProjections, configurationFenceSnapshot(t, projections)) {
+		t.Fatal("saved unsupported XDG origin wrote profile, projection or session state")
+	}
+	for _, filename := range []string{"meta.json", "shim-launch.json", "shim.sock", "native-process.json"} {
+		paths, err := filepath.Glob(filepath.Join(f.manager.stateRoot, "*", filename))
+		if err != nil || len(paths) != 0 {
+			t.Fatalf("saved unsupported XDG origin created session/shim artifact %s: %v", filename, err)
+		}
+	}
+	if _, err := os.Stat(started); !os.IsNotExist(err) {
+		t.Fatal("saved unsupported XDG origin started the fake provider")
 	}
 }

@@ -1,6 +1,6 @@
 # Account pools v0.16.1 hotfix verification
 
-Status on 2026-10-05: final local gates and independent Astra source review pass. Android version metadata is **0.16.1**, version code **54**. Official publication and deployment are pending. The deployed v0.16.0 release is signed and its official workflow passed all 17 jobs; that release preserved 160 discussion records, seven accounts and all eight live shim process identities.
+Status on 2026-10-05: local gates passed, but official publication was stopped after main CI exposed a non-hermetic regression fixture. The immutable v0.16.1 tag remains at `98d6626b1f09a2d50796f263353e99906080ba0d`; this version was neither published nor deployed. The correction is tracked in [v0.16.2 verification](account-pools-v0162.md). The deployed v0.16.0 release is signed and its official workflow passed all 17 jobs; that release preserved 160 discussion records, seven accounts and all eight live shim process identities.
 
 ## Installed defects and corrections
 
@@ -22,7 +22,17 @@ Independent product acceptance passes all three required layouts: owner-present 
 
 The installed native backend starts, initializes and resumes retained synthetic history through its remote TUI. Conversation ID, model and network policy remain intact, and copied Gaston configuration retains its four enabled/trusted hooks. These probes justify no backend compatibility patch. They do not explain two historical degraded sessions whose early native stderr was discarded, nor establish an authenticated assistant turn.
 
-Private raw receipts are under the session's `machine-account-rotation-impact/native-release-v0161` directory. Signed official publication, installation and fresh managed Gaston turn/continuation acceptance remain pending. Real quota exhaustion is not manufactured or claimed.
+Private raw receipts are under the session's `machine-account-rotation-impact/native-release-v0161` directory. Signed installation and fresh managed Gaston turn/continuation acceptance remain pending under v0.16.2. Real quota exhaustion is not manufactured or claimed.
+
+## Official execution and successor
+
+Official release run `37364545756` first completed with eight successful jobs, seven cancelled jobs and two skipped publication jobs. GitHub's annotations confirm that every cancellation had no assigned runner or executed step and failed hosted-runner acquisition. Astra independently verified all seven annotations. One failed-jobs rerun retained the successful gates and passed two more, including Android.
+
+The simultaneous main CI race job `111946490389` executed and failed only `TestAccountConfigurationOwnerProtocolNilUsesSavedOriginEmptyDoesNot`. The positive fixture left `XDG_CONFIG_HOME` inherited when the daemon saved its environment. A nonempty value correctly triggers the native characterized-origin guard. Astra reproduced the exact error with a synthetic nonempty XDG value and confirmed the same unchanged test passes with an empty value. This is a fixture defect, distinct from the runner cancellations. The remaining release attempt was explicitly cancelled before publication. The successor isolates the positive fixture and tests rejection of a saved unsupported selector after the live selector is cleared; production behavior is preserved.
+
+Three Astra reviewers also corrected the temporary installed canary's persisted status/provider readiness checks and Python 3.10 parsing of Go nanosecond timestamps. The final v0.16.1 helper digest is `3ff39cace3026d55fbe9b22aeb2621f75d87695d195422fcd357b7abda2267a3`; 62 pure checks pass, and all 160 existing discussion timestamps parse. Read-only owner RPC confirms distinct fresh Codex targets. All four Claude accounts have stale usage observations, which can hold movement after a successful first response. No installed canary was run for v0.16.1.
+
+Host inspection found 42 abandoned synthetic test processes. Astra proved their exact PID/start/executable identities, synthetic state paths and disjointness from all live user discussions. A pidfd-fenced cleanup stopped those processes with TERM only and reclaimed six generated binary folders. Independent verification preserved all 160 discussions, eight original live shim identities, seven accounts and both original disabled rotation settings. This task cleanup neither removed histories nor cleared shared caches.
 
 ## Frozen source and local gates
 
