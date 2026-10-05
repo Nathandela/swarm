@@ -110,6 +110,9 @@ func inspectNativeInventory(profile *os.Root, provider string) (nativeInventory,
 	if nativeContextUpdatePending(profile, provider) {
 		return result, ErrIneligible
 	}
+	if provider == ProviderCodex && !validCodexStockInventory(profile) {
+		return result, ErrIneligible
+	}
 	entries, err := nativeEntries(profile, 256)
 	if err != nil {
 		return result, err

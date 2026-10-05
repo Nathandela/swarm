@@ -14,9 +14,9 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter/claude"
 )
 
-// CompatibilityVersion is required only for projections carrying a frozen
-// native project boundary. Legacy projections retain their original guards.
-const CompatibilityVersion = 3
+// CompatibilityVersion is the current reader capability. Existing projections
+// retain their original requirements; native Codex stock custody requires 4.
+const CompatibilityVersion = 4
 
 type projectBoundary struct {
 	Home, Root, MainRoot string          `json:",omitempty"`

@@ -3,6 +3,7 @@ package accountconfig
 import (
 	"encoding/json"
 	"errors"
+	"github.com/Nathandela/swarm/internal/codexstock"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,6 +26,11 @@ func readCodexContextUpdate(profile string) (*codexContextUpdate, error) {
 	path := filepath.Join(profile, CodexContextUpdateMarker)
 	raw, err := readRegular(path, maxSourceBytes)
 	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if guard, guardErr := readCodexStockOuterGuard(profile); guardErr != nil {
+		return nil, guardErr
+	} else if guard != nil {
 		return nil, nil
 	}
 	var u codexContextUpdate
@@ -64,11 +70,14 @@ func removeCodexContextUpdate(profile string) error {
 	return syncCodexContextDirectory(profile)
 }
 
-func validateCodexPartialUpdate(u codexContextUpdate, profile string) error {
+func validateCodexPartialUpdate(u codexContextUpdate, profile string, stockPlan *codexstock.Receipt) error {
 	if validateCodexInstalledConfig(u.Previous, profile) != nil && validateCodexInstalledConfig(u.Next, profile) != nil {
 		return Conflict("candidate-configuration-changed")
 	}
 	for i, asset := range u.Next.Assets {
+		if asset.Name == "skills" && (stockPlan != nil || codexAbsentSourceStock(u.Next, profile)) {
+			continue
+		}
 		path := filepath.Join(profile, asset.Name)
 		_, err := os.Lstat(path)
 		if errors.Is(err, os.ErrNotExist) && (asset.SHA256 == "absent" || u.Previous.Assets[i].SHA256 == "absent") {

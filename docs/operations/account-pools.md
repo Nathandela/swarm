@@ -2,7 +2,7 @@
 
 Account pools let Swarm keep separate personal Claude and Codex logins and assign each new discussion to one account. Automatic rotation is opt-in per provider. Enabling a provider covers compatible new discussions and explicit resumes of ended discussions on this VM. Running discussions keep their current credentials until they end or their existing managed recovery runs.
 
-> **Release candidate (2026-10-05):** v0.16.0 adds native configuration preservation, shared native conversation history, existing-discussion enrollment on explicit owner resume, and actual coverage counts. Supported native contracts are Codex 0.160.0 and Claude 2.1.289; historical managed 2.1.288 discussions retain their previous compatibility contract. See the [v0.16.0 verification record](../verification/account-pools-v0160.md) for release, deployment and acceptance status.
+> **Verification records (2026-10-05):** v0.16.0 adds native configuration preservation, shared native conversation history, existing-discussion enrollment on explicit owner resume, and actual coverage counts. Supported native contracts are Codex 0.160.0 and Claude 2.1.289; historical managed 2.1.288 discussions retain their previous compatibility contract. See the [v0.16.0 verification record](../verification/account-pools-v0160.md) for its signed deployment and the [v0.16.1 hotfix record](../verification/account-pools-v0161.md) for owner configuration ingress, native runtime directory and bundled-skills corrections with their current acceptance status.
 
 ## Manage accounts
 

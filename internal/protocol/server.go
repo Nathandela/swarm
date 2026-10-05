@@ -70,21 +70,25 @@ var remoteForbiddenOptions = map[string]string{
 // entirely (R-POL.5): it is an unauthenticated channel (LaunchContentHash excludes Env),
 // so filtering is not enough — it must not survive at all.
 func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
-	clientEnv := persist.FilterEnv(req.Env)
-	if remote {
-		clientEnv = nil // R-POL.5: remote launch carries no phone-supplied env
+	var clientEnv, configurationEnv []string
+	if !remote && req.Env != nil {
+		// Capture owner configuration origins before the launch allowlist removes
+		// them. Nil still requests daemon policy; an explicit empty env stays empty.
+		configurationEnv = daemon.NativeConfigurationEnvironment(req.Env)
+		clientEnv = persist.FilterEnv(req.Env)
 	}
 	return daemon.LaunchSpec{
 		AgentType: req.Agent,
 		Name:      SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
 		// The launch-time tag takes the SAME sanitization as set_tag's (handleSetTag):
 		// a client is never trusted to have sanitized it, and a blank tag is no tag.
-		Tag:       strings.TrimSpace(SanitizeName(req.Tag)),
-		Cwd:       req.Cwd,
-		ClientEnv: clientEnv,
-		Cols:      req.Cols,
-		Rows:      req.Rows,
-		Options:   launchOptions(req),
+		Tag:                             strings.TrimSpace(SanitizeName(req.Tag)),
+		Cwd:                             req.Cwd,
+		ClientEnv:                       clientEnv,
+		AccountOriginalConfigurationEnv: configurationEnv,
+		Cols:                            req.Cols,
+		Rows:                            req.Rows,
+		Options:                         launchOptions(req),
 		// OperationID carries the signed launch operation_id to the daemon so its launch
 		// idempotency engages — a replayed signed remote launch reuses the reserved session
 		// instead of double-spawning (C3). Owner-tier launches carry no operation_id (""), so

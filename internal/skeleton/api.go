@@ -1009,6 +1009,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		if len(source.Env) > 0 {
 			spec.ClientEnv = append([]string(nil), source.Env...)
 			spec.ClientEnv = restoreClaudeOwnerFallback(source, spec.ClientEnv)
+			spec.AccountOriginalConfigurationEnv = daemon.NativeConfigurationEnvironment(spec.ClientEnv)
 		}
 	}
 	// The launch ENVIRONMENT is resolved before argv, because argv depends on it: the
@@ -1022,7 +1023,9 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// the core then hands the shim, so the binary this resolves is the binary the
 	// agent runs. THIS is the one point every launch entry passes through; resolving
 	// here is what makes the daemon-side seam real (R1 audit H1).
-	spec.AccountOriginalConfigurationEnv = a.core.NativeConfigurationEnvironment(spec.ClientEnv)
+	if spec.AccountOriginalConfigurationEnv == nil {
+		spec.AccountOriginalConfigurationEnv = a.core.NativeConfigurationEnvironment(spec.ClientEnv)
+	}
 	spec.ClientEnv = a.core.LaunchPolicyEnv(spec.ClientEnv)
 	// PRESENCE, not emptiness -- and this layer is the one that must get it right,
 	// because it is the ONLY point every launch entry passes through. handleLaunch has

@@ -41,6 +41,9 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 		return errors.New("account state cannot be verified")
 	}
 	defer func() { _ = root.Close() }()
+	if err := accountStockCustodyGuard(root, card); err != nil {
+		return err
+	}
 	configurations, err := accountConfigurationGuard(root, card)
 	if err != nil {
 		return err

@@ -385,6 +385,9 @@ func PendingNativeContextUpdate(profile, provider string) bool {
 	name := ".swarm-claude-context-update.json"
 	if provider == "codex" {
 		name = ".swarm-codex-context-update.json"
+		if _, err := os.Lstat(filepath.Join(profile, ".swarm-codex-stock-skills-update.json")); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
 	}
 	_, err := os.Lstat(filepath.Join(profile, name))
 	return !errors.Is(err, os.ErrNotExist)

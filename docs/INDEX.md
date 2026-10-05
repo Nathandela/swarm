@@ -59,6 +59,7 @@
 
 ## Process traces
 - [Personal account pool evidence](verification/account-pools-v0150.md) — implementation verification boundaries and outstanding authenticated release acceptance
+- [Account-pool v0.16.1 hotfix evidence](verification/account-pools-v0161.md) — owner-provided native configuration ingress regression and pending release verification
 - [Account onboarding hotfix evidence](verification/account-pools-v0151.md) — readable Accounts and sign-in flow, independent review and patch release verification
 - [Audit committee report 001](verification/audit-001-system-spec.md) — the adversarial review that shaped spec Draft 2
 - [Audit committee report 002](verification/audit-002-implementation-goals.md) — the review that shaped implementation-goals.md Draft 2

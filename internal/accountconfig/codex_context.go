@@ -165,6 +165,10 @@ func PrepareCodexContext(profile, cwd string, env []string, lease func(string, f
 		if err := validateCodexProfileAnchors(profile); err != nil {
 			return err
 		}
+		stockPlan, stockPending, err := planCodexStockSkills(c, profile)
+		if err != nil {
+			return err
+		}
 		markerPath := filepath.Join(profile, CodexContextMarker)
 		marker, markerErr := readRegular(markerPath, maxSourceBytes)
 		update, err := readCodexContextUpdate(profile)
@@ -185,38 +189,44 @@ func PrepareCodexContext(profile, cwd string, env []string, lease func(string, f
 				if installed.GlobalGeneration != update.Previous.GlobalGeneration && installed.GlobalGeneration != update.Next.GlobalGeneration {
 					return Conflict("invalid-native-configuration-update")
 				}
-				if err := validateCodexPartialUpdate(*update, profile); err != nil {
+				if err := validateCodexPartialUpdate(*update, profile, stockPlan); err != nil {
 					return err
 				}
 			} else {
 				if installed.GlobalGeneration == c.GlobalGeneration {
-					return RevalidateCodexContext(c, profile)
-				}
-				if !refresh {
+					if !stockPending {
+						if stockPlan != nil {
+							return Conflict("candidate-customization-not-context-alias")
+						}
+						return RevalidateCodexContext(c, profile)
+					}
+					if err := validateCodexInstalledConfig(installed, profile); err != nil {
+						return err
+					}
+				} else if !refresh {
 					return Conflict("account-global-configuration-generation-differs")
+				} else {
+					if !sameCodexContextCustody(installed, c) {
+						return Conflict("configuration-source-custody-changed")
+					}
+					if err := validateCodexInstalledSettings(installed, profile); err != nil {
+						return err
+					}
+					update = &codexContextUpdate{SchemaVersion: 1, Previous: installed, Next: c}
 				}
-				if !sameCodexContextCustody(installed, c) {
-					return Conflict("configuration-source-custody-changed")
-				}
-				if err := validateCodexInstalledSettings(installed, profile); err != nil {
+			}
+			if update != nil {
+				history, err = refreshCodexHistoryProof(update.Previous, c, profile)
+				if err != nil {
 					return err
 				}
-				update = &codexContextUpdate{SchemaVersion: 1, Previous: installed, Next: c}
-			}
-			history, err = refreshCodexHistoryProof(update.Previous, c, profile)
-			if err != nil {
-				return err
 			}
 		} else if !errors.Is(markerErr, os.ErrNotExist) || update != nil {
 			return Conflict("unsafe-account-configuration")
 		}
 		// Nested asset aliases must not traverse an account-owned alias.
-		if _, err := os.Lstat(filepath.Join(profile, ".tmp")); err == nil {
-			if err := privateDir(filepath.Join(profile, ".tmp")); err != nil {
-				return err
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return Conflict("unsafe-account-configuration")
+		if err := validateCodexRuntimeTmp(profile); err != nil {
+			return err
 		}
 		// Validate all destinations before any write. Login-created ordinary config
 		// may exist, but an unsupported account/provider route is never replaced.
@@ -234,6 +244,9 @@ func PrepareCodexContext(profile, cwd string, env []string, lease func(string, f
 		}
 		if update == nil {
 			for _, asset := range c.Assets {
+				if asset.Name == "skills" && (stockPlan != nil || codexAbsentSourceStock(c, profile)) {
+					continue
+				}
 				path := filepath.Join(profile, asset.Name)
 				if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 					continue
@@ -249,10 +262,18 @@ func PrepareCodexContext(profile, cwd string, env []string, lease func(string, f
 			}
 			for _, asset := range c.Assets {
 				if asset.SHA256 == "absent" {
+					if asset.Name == "skills" && codexAbsentSourceStock(c, profile) {
+						continue
+					}
 					if err := os.Remove(filepath.Join(profile, asset.Name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 						return Conflict("configuration-install")
 					}
 				}
+			}
+		}
+		if stockPlan != nil {
+			if err := applyCodexStockSkills(*stockPlan, profile); err != nil {
+				return err
 			}
 		}
 		if err := writeClaudeContextFile(profile, "config.toml", raw); err != nil {
@@ -300,6 +321,25 @@ func PrepareCodexContext(profile, cwd string, env []string, lease func(string, f
 		defer func() { _ = dir.Close() }()
 		if err := dir.Sync(); err != nil {
 			return Conflict("configuration-durability-uncertain")
+		}
+		if stockPlan != nil {
+			if err := validateCodexContextSource(c); err != nil {
+				return err
+			}
+			if err := validateCodexCandidatePolicies(profile); err != nil {
+				return err
+			}
+			if err := validateCodexInstalledSettings(c, profile); err != nil {
+				return err
+			}
+			if history != nil {
+				if err := RevalidateCodexHistoryAlias(c, profile, *history); err != nil {
+					return err
+				}
+			}
+			if err := completeCodexStockSkills(*stockPlan, profile); err != nil {
+				return err
+			}
 		}
 		if err := RevalidateCodexContext(c, profile); err != nil {
 			return err
@@ -380,6 +420,9 @@ func RevalidateCodexContext(c CodexContext, profile string) error {
 	if err := validateCodexProfileAnchors(profile); err != nil {
 		return err
 	}
+	if err := revalidateCodexStockSkills(c, profile); err != nil {
+		return err
+	}
 	if err := validateCodexCandidatePolicies(profile); err != nil {
 		return err
 	}
@@ -402,14 +445,35 @@ func validateCodexProfileAnchors(profile string) error {
 	if err := privateDir(profile); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(filepath.Join(profile, ".tmp")); err == nil {
-		if err := safePath(filepath.Join(profile, ".tmp"), true); err != nil {
-			return Conflict("unsafe-account-configuration")
-		}
-		if err := privateDir(filepath.Join(profile, ".tmp")); err != nil {
-			return err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	return validateCodexRuntimeTmp(profile)
+}
+
+// Native plugin synchronization creates .tmp with ordinary directory modes.
+// Only this owner-controlled runtime directory may use those modes, behind a
+// private credential-profile anchor; credentials and projection files stay private.
+func validateCodexRuntimeTmp(profile string) error {
+	if err := safePath(profile, true); err != nil || privateDir(profile) != nil {
+		return Conflict("unsafe-account-configuration")
+	}
+	anchor, err := os.OpenRoot(profile)
+	if err != nil {
+		return Conflict("unsafe-account-configuration")
+	}
+	defer func() { _ = anchor.Close() }()
+	before, err := anchor.Lstat(".tmp")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !claudeOwnedInfo(before, true) {
+		return Conflict("unsafe-account-configuration")
+	}
+	runtime, err := anchor.OpenRoot(".tmp")
+	if err != nil {
+		return Conflict("unsafe-account-configuration")
+	}
+	defer func() { _ = runtime.Close() }()
+	after, err := runtime.Stat(".")
+	if err != nil || !os.SameFile(before, after) || !claudeOwnedInfo(after, true) {
 		return Conflict("unsafe-account-configuration")
 	}
 	return nil
@@ -438,6 +502,9 @@ func validateCodexInstalledSettings(c CodexContext, profile string) error {
 	for _, a := range c.Assets {
 		path := filepath.Join(profile, a.Name)
 		if a.SHA256 == "absent" {
+			if a.Name == "skills" && codexAbsentSourceStock(c, profile) {
+				continue
+			}
 			if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 				continue
 			}

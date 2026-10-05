@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/Nathandela/swarm/internal/codexstock"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -15,6 +16,11 @@ func nativeContextUpdatePending(profile *os.Root, provider string) bool {
 	name := ".swarm-codex-context-update.json"
 	if provider == ProviderClaude {
 		name = ".swarm-claude-context-update.json"
+	}
+	if provider == ProviderCodex {
+		if _, err := profile.Lstat(codexstock.PendingFile); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
 	}
 	_, err := profile.Lstat(name)
 	return !errors.Is(err, os.ErrNotExist)

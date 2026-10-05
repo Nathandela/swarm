@@ -36,6 +36,6 @@ An argument-level test does not prove the assembled child receives it; the final
 
 ## Verdict
 
-The initial verdict was **revise**. Validated objections produced the fixes and experiments above. Final Astra code review identifies no remaining code blocker; all 1,698 reviewed Go files match the final source, and full local build/vet/lint/normal/race gates pass. Production acceptance remains conditional on exact official CI release and separate VM checks. This record does not claim unanimous committee approval or authenticated quota exhaustion.
+The initial verdict was **revise**. Validated objections produced the fixes and experiments above. At the v0.16.0 source freeze, Astra identified no remaining code blocker; all 1,698 reviewed Go files matched the final source, and full local build/vet/lint/normal/race gates passed. Official release gates and signed deployment subsequently passed. Installed managed-launch acceptance exposed further protocol-ingress and native enrolled-profile layout defects. These are recorded separately in the [v0.16.1 hotfix verification](account-pools-v0161.md); the earlier review did not establish that acceptance. This record does not claim unanimous committee approval or authenticated quota exhaustion.
 
 Raw independent brief and outputs: `/tmp/swarm-native-context-committee-ki32d4q7xjjaggcr`. Extended Astra and Sol correction receipts remain in the session's `machine-account-rotation-impact` evidence directory.

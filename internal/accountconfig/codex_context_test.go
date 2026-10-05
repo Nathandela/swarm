@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
@@ -30,6 +31,133 @@ func readNativeCodexFixtureSettings(t *testing.T, path string) map[string]any {
 		t.Fatal("invalid installed TOML")
 	}
 	return out
+}
+
+func TestCodexContextAcceptsConfinedNativeRuntimeTmp(t *testing.T) {
+	f := codexContextFixture(t)
+	put(t, filepath.Join(f.source, ".tmp", "marketplaces", "fixture"), "ordinary marketplace")
+	tmp := filepath.Join(f.candidate, ".tmp")
+	for _, name := range []string{"plugins.sha", "plugins.sync.lock", "plugins/native-cache"} {
+		put(t, filepath.Join(tmp, name), "native "+name)
+	}
+	if err := os.Chmod(tmp, 0775); err != nil {
+		t.Fatal(err)
+	}
+	c, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RevalidateCodexContext(c, f.candidate); err != nil {
+		t.Fatal(err)
+	}
+	next := filepath.Join(filepath.Dir(f.cwd), "second-project")
+	if err := os.Mkdir(next, 0700); err != nil {
+		t.Fatal(err)
+	}
+	d, err := PrepareCodexContext(f.candidate, next, f.env, codexContextLease)
+	if err != nil || c.GlobalGeneration != d.GlobalGeneration {
+		t.Fatalf("native runtime directory blocked shared cohort reuse: %v", err)
+	}
+	if err := RevalidateCodexContext(d, f.candidate); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"plugins.sha", "plugins.sync.lock", "plugins/native-cache"} {
+		raw, err := os.ReadFile(filepath.Join(tmp, name))
+		if err != nil || string(raw) != "native "+name {
+			t.Fatal("ordinary native runtime artifact changed")
+		}
+	}
+	info, err := os.Stat(tmp)
+	if err != nil || info.Mode().Perm() != 0775 {
+		t.Fatal("native runtime directory permissions changed")
+	}
+	target, err := os.Readlink(filepath.Join(tmp, "marketplaces"))
+	if err != nil || target != filepath.Join(f.source, ".tmp", "marketplaces") {
+		t.Fatal("marketplace custody changed")
+	}
+	if err := os.Chmod(tmp, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := RevalidateCodexContext(c, f.candidate); err == nil {
+		t.Fatal("runtime directory became world-writable without a hold")
+	}
+	if _, err := PrepareCodexContext(f.candidate, next, f.env, codexContextLease); err == nil {
+		t.Fatal("shared cohort reuse admitted world-writable runtime directory")
+	}
+	if err := os.Chmod(tmp, 0775); err != nil {
+		t.Fatal(err)
+	}
+	marketplace := filepath.Join(f.source, ".tmp", "marketplaces")
+	if err := os.Rename(marketplace, marketplace+"-previous"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(marketplace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := RevalidateCodexContext(c, f.candidate); err == nil {
+		t.Fatal("source marketplace inode replacement admitted")
+	}
+}
+
+func TestCodexContextRejectsUnconfinedRuntimeTmp(t *testing.T) {
+	for _, kind := range []string{"world-writable", "symlink", "regular-file", "profile-0755", "profile-0775"} {
+		t.Run(kind, func(t *testing.T) {
+			f := codexContextFixture(t)
+			tmp := filepath.Join(f.candidate, ".tmp")
+			switch kind {
+			case "regular-file":
+				put(t, tmp, "not a directory")
+			case "symlink":
+				if err := os.Symlink(f.cwd, tmp); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				if err := os.Mkdir(tmp, 0775); err != nil {
+					t.Fatal(err)
+				}
+				mode := os.FileMode(0775)
+				if kind == "world-writable" {
+					mode = 0777
+				}
+				if err := os.Chmod(tmp, mode); err != nil {
+					t.Fatal(err)
+				}
+				if strings.HasPrefix(kind, "profile-") {
+					rootMode := os.FileMode(0755)
+					if kind == "profile-0775" {
+						rootMode = 0775
+					}
+					if err := os.Chmod(f.candidate, rootMode); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if _, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease); err == nil {
+				t.Fatal("unsafe runtime directory admitted")
+			}
+			if _, err := os.Lstat(filepath.Join(f.candidate, "config.toml")); !os.IsNotExist(err) {
+				t.Fatal("unsafe runtime directory refusal wrote configuration")
+			}
+		})
+	}
+}
+
+type codexForeignRuntimeInfo struct{ os.FileInfo }
+
+func (info codexForeignRuntimeInfo) Sys() any {
+	stat := *info.FileInfo.Sys().(*syscall.Stat_t)
+	stat.Uid = uint32(os.Getuid()) + 1
+	return &stat
+}
+
+func TestCodexRuntimeTmpOwnershipAdmissionRejectsForeignUID(t *testing.T) {
+	info, err := os.Stat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claudeOwnedInfo(info, true) || claudeOwnedInfo(codexForeignRuntimeInfo{info}, true) {
+		t.Fatal("runtime directory owner custody was not enforced")
+	}
 }
 
 func TestCodexContextRetainsUserTierAcrossAccountsAndConcurrentProjects(t *testing.T) {

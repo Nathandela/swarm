@@ -100,7 +100,7 @@ func legacyBoundaryProjection(t *testing.T, state, ref string, raw []byte) strin
 }
 
 func TestAccountProjectBoundaryCardUsesCompiledContract(t *testing.T) {
-	if CurrentManifest("v9.9.9").AccountConfig != accountconfig.CompatibilityVersion || accountconfig.CompatibilityVersion != 3 {
+	if CurrentManifest("v9.9.9").AccountConfig != accountconfig.CompatibilityVersion || accountconfig.CompatibilityVersion != 4 {
 		t.Fatal("release card lacks current project boundary interpretation")
 	}
 }
