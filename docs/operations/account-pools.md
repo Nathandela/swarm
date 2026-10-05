@@ -2,7 +2,7 @@
 
 Account pools let Swarm keep separate personal Claude and Codex logins and assign each new discussion to one account. Automatic rotation is opt-in per provider. Enabling a provider covers compatible new discussions and explicit resumes of ended discussions on this VM. Running discussions keep their current credentials until they end or their existing managed recovery runs.
 
-> **Verification records (2026-10-05):** v0.16.0 adds native configuration preservation, shared native conversation history, existing-discussion enrollment on explicit owner resume, and actual coverage counts. Supported native contracts are Codex 0.160.0 and Claude 2.1.289; historical managed 2.1.288 discussions retain their previous compatibility contract. See the [v0.16.0 verification record](../verification/account-pools-v0160.md) for its signed deployment and the [v0.16.1 hotfix record](../verification/account-pools-v0161.md) for owner configuration ingress, native runtime directory and bundled-skills corrections with their current acceptance status.
+> **Verification records (2026-10-05):** signed v0.16.2 is installed. It includes owner configuration ingress, native runtime directory and bundled-skills corrections, and retains qualified Claude 2.1.289 for managed operations across ordinary CLI updates. Supported native contracts are Codex 0.160.0 and Claude 2.1.289; historical managed 2.1.288 discussions retain their previous compatibility contract. The [v0.16.2 verification record](../verification/account-pools-v0162.md) lists the exact source, gates, deployment and actual provider acceptance. The [v0.16.0 record](../verification/account-pools-v0160.md) retains the initial native configuration and existing-discussion enrollment evidence; the unpublished [v0.16.1 record](../verification/account-pools-v0161.md) retains its correction evidence.
 
 ## Manage accounts
 
@@ -19,6 +19,10 @@ To add an account:
 ## After adding an account
 
 **Ready** means sign-in succeeded and the verified account was saved. It does not mean a discussion is already assigned to it or that Swarm has observed its usage. Quota can remain unknown until provider or discussion evidence is available; Swarm does not make background model requests to poll it.
+
+A new Claude account can still need native first-use setup. Open its first discussion and follow the native prompts before expecting a model response. The installed check reaches the theme selector, then **Select login method**; the characterized native flow also includes **Security notes** confirmation. This setup belongs to that account's private profile, so another account can need it independently. A verified login alone does not prove that first-use setup is complete, and Swarm does not mark it complete or skip native confirmations on the owner's behalf.
+
+Use a fresh managed Claude discussion for this setup: enable Claude in Accounts, create a new discussion and complete its native prompts in the attached terminal. Inspect the discussion's assigned account. **Move discussion here** is not a setup route for another account: a recovery destination can remain input-held until native readiness is established. A dedicated per-account setup flow is still pending.
 
 For verified native Claude and Codex logins, Swarm reads usage after account admission and at daemon startup when a reading is due. It refreshes readings about every five minutes. These read-only checks use the current verified account profile. They do not start a provider CLI, request a model response, refresh OAuth credentials, or write credentials. Checks run whether provider rotation is on or off and continue for paused accounts; retiring an account stops its checks.
 
@@ -58,7 +62,9 @@ Conversation history stays in the original native store through recorded history
 
 Automatic recovery uses frozen settings and holds if policy or project settings change. After all affected writers stop, an explicit owner resume can capture changed owner settings with a crash-resumable update. A private native edit that differs from the recorded owner configuration stays held and is not overwritten. In particular, Codex's first visit to a new project may write private trust settings; that trust decision is not automatically copied to another account. Set the intended ordinary trust/configuration in the original native settings before preparing a fresh managed cohort; do not delete managed proof files to bypass a divergence hold.
 
-The supported native contracts are pinned. An uncharacterized CLI update holds managed launch/recovery until Swarm supports that version. Standard trailing directory separators from autocomplete are normalized; interior traversal, unsafe symlinks, foreign ownership and uncharacterized alternate account routing still refuse. Codex network access follows native project/user policy. When that policy disables network access, its sandbox can also block tool-side Swarm socket commands; owner TUI controls remain available.
+The supported native contracts are pinned. On the characterized Linux portable installation, Swarm retains and verifies Claude 2.1.289 for managed operations while ordinary launches continue using the owner's installed CLI. Accounts shows the qualified managed version and the last observed installed version. A missing or changed retained executable holds managed operations. Its original vendor directory must be owned by the user without group or other write access; the installed VM's directory was repaired from 0775 to 0755 while preserving owner updater access. Custom launchers and alternate layouts do not gain this retention guarantee. Other uncharacterized CLI updates hold managed launch/recovery until Swarm supports that version.
+
+Standard trailing directory separators from autocomplete are normalized; interior traversal, unsafe symlinks, foreign ownership and uncharacterized alternate account routing still refuse. Codex network access follows native project/user policy. When that policy disables network access, its sandbox can also block tool-side Swarm socket commands; owner TUI controls remain available.
 
 ## Post-deployment acceptance and follow-up
 
