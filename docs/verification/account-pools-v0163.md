@@ -1,5 +1,7 @@
 # Account pools v0.16.3 verification
 
+Status on 2026-10-06: signed v0.16.3 is published and installed from source `a7226533fb35e3ff4b2730ffd48a11521eea4d1b`. The affected managed Claude profile successfully launches in Gaston with its original settings and marker bytes unchanged.
+
 This patch corrects a false `candidate-configuration-changed` refusal when a managed Claude profile contains the expected settings with different JSON formatting. On the affected VM, the private file was 9,400 bytes while canonical encoding was 7,920 bytes; the canonical digest exactly matched the stored settings fingerprint. Owner source and stable preference fingerprints were unchanged. The writer responsible for reformatting was not established.
 
 Candidate settings validation and interrupted-update recovery compare canonical JSON with the existing fingerprint. Owner-source byte provenance, context generations and compatibility axes remain unchanged. Validation does not rewrite native files or discard unexpected candidate fields. Malformed or ambiguous JSON and actual setting differences remain refused. Numeric tokens retain their precision and spelling; alternative number spellings may conservatively require reconciliation.
@@ -7,3 +9,13 @@ Candidate settings validation and interrupted-update recovery compare canonical 
 Release identity is v0.16.3; Android identity is 0.16.3, version code 56. Regression checks, final-source gates, Astra review and signed deployment results are recorded in the local issue swarm-2xm.50 and release evidence directory. Publication and installed acceptance must be reported separately from source test results.
 
 Before implementation, the new formatting regressions failed in normal revalidation/reuse and interrupted updates with old, new and committed markers. With the fix, the complete accountconfig package passes (9.099 seconds) and focused Claude context/native-proof race tests pass (3.520 seconds). A read-only call to the fixed RevalidateClaudeContext against the affected live profile succeeds with the settings bytes unchanged. This checks the specific configuration refusal; it does not establish authenticated Claude conversation continuation.
+
+## Final release and installed acceptance
+
+Final-source build, vet, lint and the full local suite pass (77 tested packages). Initial local runs inherited live Swarm hook routing and a temporary directory beneath the real home; those failures are retained in the evidence record. The final run removes inherited `SWARM_*` variables from the test process and uses `/tmp`. Astra independently reviews the malformed-Unicode correction and passes focused race checks.
+
+[CI 37422730631](https://github.com/Nathandela/swarm/actions/runs/37422730631) passes all fourteen jobs. Its original frame-reader fuzz job ends at its 30-second limit with a deadline error and no failing input; one unchanged retry passes. The actual full race run tests 77 packages with zero cached results. [Official Release 37424373609](https://github.com/Nathandela/swarm/actions/runs/37424373609) passes all seventeen jobs on its first attempt, including fuzz checks.
+
+The signed archive, binary pair, exact clean source metadata and unchanged compatibility card are independently verified before activation. Activation defers convergence around a working discussion. The replacement supervisor initially exceeds its readiness timeout, then becomes reachable; normal convergence succeeds. All 165 existing discussion records, nine live process identities, seven accounts and their generations, saved environment, and enabled provider settings are preserved. All nine doctor checks pass and the convergence marker clears.
+
+A uniquely named, no-prompt managed Claude discussion launches in `/home/ubuntu/data/gaston/` with Worktree off, selects the previously affected profile, and runs the qualified retained Claude 2.1.289 executable. Its live native process and terminal access are verified. The exact test discussion is stopped, with matching native-writer stop proof and process absence. Settings and marker bytes remain unchanged. The final roster contains the 165 original records plus the stopped test record; all nine original session processes remain live. This verifies the launch refusal fix, not authenticated conversation continuation or natural quota exhaustion.
