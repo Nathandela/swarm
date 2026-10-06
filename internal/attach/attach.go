@@ -113,6 +113,23 @@ const snapshotUnavailableNotice = "[swarm: snapshot unavailable - live output fo
 // finish() and the panic recover — emit it whenever the snapshot paint entered alt.
 const altExitSeq = "\x1b[?1049l\x1b[?25h\x1b[0m"
 
+// inputModeResetSeq turns off the input-reporting modes an agent may have enabled
+// through the live passthrough: mouse tracking (1000/1002/1003) and its encodings
+// (1005/1006/1015/1016), focus reports (1004), alternate scroll (1007), color-scheme
+// reports (2031), bracketed paste (2004), application cursor keys (DECCKM) and keypad
+// (DECKPNM), xterm modifyOtherKeys, and the Kitty keyboard stack (CSI < 99 u pops every
+// entry; popping past the bottom just empties it). The client never parses the live
+// stream, so it cannot know which of these the agent left on; all of them are safe to
+// reset unconditionally, and the hosting Bubble Tea program re-enables the ones it uses
+// on RestoreTerminal. Without this, a terminal that keeps honouring a stranded mode
+// (e.g. Termius on iOS after Claude Code's all-motion mouse + Kitty keys) hands the
+// board input it cannot decode and the arrow keys go dead after Ctrl+Q.
+//
+// The Kitty keyboard stack is per screen buffer, so teardown emits this both before
+// and after exiting alt.
+const inputModeResetSeq = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l" +
+	"\x1b[?1004l\x1b[?1007l\x1b[?2031l\x1b[?2004l\x1b[?1l\x1b>\x1b[>4m\x1b[<99u"
+
 // Run blocks driving the passthrough and ALWAYS restores the terminal before it
 // returns. It paints the snapshot exactly once (raw-then-paint), then streams live
 // frames to Out while forwarding keystrokes (except the detach key) and resizes to
@@ -170,17 +187,17 @@ func Run(cfg Config) (reason Reason, err error) {
 			// then exit alt (global state). Without the alt-exit a recovered panic after
 			// an alt snapshot paint would strand the terminal in the alternate screen
 			// (deployment-committee via agents-tracker-rs8).
-			if chromeEngaged || wasAlt {
-				func() {
-					defer func() { _ = recover() }()
-					if chromeEngaged {
-						writeAll(out, chromeCleanup(curRows))
-					}
-					if wasAlt {
-						writeAll(out, []byte(altExitSeq))
-					}
-				}()
-			}
+			func() {
+				defer func() { _ = recover() }()
+				if chromeEngaged {
+					writeAll(out, chromeCleanup(curRows))
+				}
+				writeAll(out, []byte(inputModeResetSeq))
+				if wasAlt {
+					writeAll(out, []byte(altExitSeq))
+					writeAll(out, []byte(inputModeResetSeq))
+				}
+			}()
 			reason, err = ReasonError, fmt.Errorf("attach: recovered panic: %v", r)
 		}
 	}()
@@ -358,7 +375,11 @@ func Run(cfg Config) (reason Reason, err error) {
 		if chromeEngaged {
 			writeAll(out, chromeCleanup(curRows))
 		}
-		teardownAlt()
+		writeAll(out, []byte(inputModeResetSeq))
+		if wasAlt {
+			teardownAlt()
+			writeAll(out, []byte(inputModeResetSeq))
+		}
 		restore()
 		return r, nil
 	}
