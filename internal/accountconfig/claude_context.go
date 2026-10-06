@@ -1,6 +1,7 @@
 package accountconfig
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ClaudeContext identifies the ordinary global configuration independently of
@@ -322,8 +325,8 @@ func validateClaudeInstalledContext(c ClaudeContext, profile string) error {
 	if err != nil {
 		return Conflict("configuration-source-changed")
 	}
-	expected := c.SettingsSHA256
-	if claudeHashBytes(raw) != expected {
+	hash, err := claudeSettingsDigest(raw)
+	if err != nil || hash != c.SettingsSHA256 {
 		return Conflict("candidate-configuration-changed")
 	}
 	preferences, err := readClaudePreferences(filepath.Join(profile, ".claude.json"))
@@ -344,6 +347,58 @@ func validateClaudeInstalledContext(c ClaudeContext, profile string) error {
 		}
 	}
 	return nil
+}
+
+// The installed marker hashes json.Marshal(map), so whitespace, object order
+// and string escapes are presentation only. Preserve numeric spelling instead
+// of rounding through float64: noncanonical numbers conservatively hold.
+func claudeSettingsDigest(raw []byte) (string, error) {
+	if !validClaudeSettingsEncoding(raw) || !validClaudeJSON(raw, false) {
+		return "", Conflict("candidate-configuration-changed")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var settings map[string]any
+	if decoder.Decode(&settings) != nil || settings == nil {
+		return "", Conflict("candidate-configuration-changed")
+	}
+	return claudeHash(settings), nil
+}
+
+// encoding/json replaces invalid UTF-8 and unpaired surrogate escapes. Refuse
+// those inputs rather than equating changed settings with a literal U+FFFD.
+func validClaudeSettingsEncoding(raw []byte) bool {
+	if !utf8.Valid(raw) {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '\\' {
+			continue
+		}
+		i++
+		if i >= len(raw) || raw[i] != 'u' {
+			continue
+		}
+		if i+4 >= len(raw) {
+			return false
+		}
+		value, err := strconv.ParseUint(string(raw[i+1:i+5]), 16, 16)
+		if err != nil || value >= 0xdc00 && value <= 0xdfff {
+			return false
+		}
+		i += 4
+		if value >= 0xd800 && value <= 0xdbff {
+			if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+				return false
+			}
+			low, err := strconv.ParseUint(string(raw[i+3:i+7]), 16, 16)
+			if err != nil || low < 0xdc00 || low > 0xdfff {
+				return false
+			}
+			i += 6
+		}
+	}
+	return true
 }
 
 func readClaudeContextState(path string) (map[string]any, error) {

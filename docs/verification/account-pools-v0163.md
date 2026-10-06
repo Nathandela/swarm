@@ -1,0 +1,9 @@
+# Account pools v0.16.3 verification
+
+This patch corrects a false `candidate-configuration-changed` refusal when a managed Claude profile contains the expected settings with different JSON formatting. On the affected VM, the private file was 9,400 bytes while canonical encoding was 7,920 bytes; the canonical digest exactly matched the stored settings fingerprint. Owner source and stable preference fingerprints were unchanged. The writer responsible for reformatting was not established.
+
+Candidate settings validation and interrupted-update recovery compare canonical JSON with the existing fingerprint. Owner-source byte provenance, context generations and compatibility axes remain unchanged. Validation does not rewrite native files or discard unexpected candidate fields. Malformed or ambiguous JSON and actual setting differences remain refused. Numeric tokens retain their precision and spelling; alternative number spellings may conservatively require reconciliation.
+
+Release identity is v0.16.3; Android identity is 0.16.3, version code 56. Regression checks, final-source gates, Astra review and signed deployment results are recorded in the local issue swarm-2xm.50 and release evidence directory. Publication and installed acceptance must be reported separately from source test results.
+
+Before implementation, the new formatting regressions failed in normal revalidation/reuse and interrupted updates with old, new and committed markers. With the fix, the complete accountconfig package passes (9.099 seconds) and focused Claude context/native-proof race tests pass (3.520 seconds). A read-only call to the fixed RevalidateClaudeContext against the affected live profile succeeds with the settings bytes unchanged. This checks the specific configuration refusal; it does not establish authenticated Claude conversation continuation.

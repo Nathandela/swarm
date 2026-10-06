@@ -104,6 +104,10 @@ func claudeDiagnosticModel(value string) bool {
 // ValidClaudeNativeProofJSON bounds nesting and rejects both exact and folded
 // duplicate keys before Go's case-insensitive struct field matching can apply.
 func ValidClaudeNativeProofJSON(raw []byte) bool {
+	return validClaudeJSON(raw, true)
+}
+
+func validClaudeJSON(raw []byte, foldKeys bool) bool {
 	if len(raw) > maxSourceBytes {
 		return false
 	}
@@ -128,7 +132,9 @@ func ValidClaudeNativeProofJSON(raw []byte) bool {
 			for decoder.More() {
 				key, err := decoder.Token()
 				name, ok := key.(string)
-				name = strings.ToLower(name)
+				if foldKeys {
+					name = strings.ToLower(name)
+				}
 				if err != nil || !ok || seen[name] || !value(depth+1) {
 					return false
 				}

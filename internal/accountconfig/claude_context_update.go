@@ -35,8 +35,8 @@ func validateClaudePartialUpdate(update claudeContextUpdate, profile string) err
 	if err != nil {
 		return Conflict("candidate-configuration-changed")
 	}
-	hash := claudeHashBytes(raw)
-	if hash != update.Previous.SettingsSHA256 && hash != update.Next.SettingsSHA256 {
+	hash, err := claudeSettingsDigest(raw)
+	if err != nil || hash != update.Previous.SettingsSHA256 && hash != update.Next.SettingsSHA256 {
 		return Conflict("candidate-configuration-changed")
 	}
 	prefs, err := readClaudePreferences(filepath.Join(profile, ".claude.json"))

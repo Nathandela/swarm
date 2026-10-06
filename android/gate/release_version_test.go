@@ -6,14 +6,14 @@ import (
 	"testing"
 )
 
-// TestPlayReleaseIdentityIsV0162Code55 pins the two values Google Play uses to
+// TestPlayReleaseIdentityIsV0163Code56 pins the two values Google Play uses to
 // distinguish this upload. Every source release advances both together so a new
 // release never reuses the preceding Android identity (v0.16.1/code 54).
-func TestPlayReleaseIdentityIsV0162Code55(t *testing.T) {
+func TestPlayReleaseIdentityIsV0163Code56(t *testing.T) {
 	build := readFileOrFail(t, filepath.Join(appModule(t), "build.gradle.kts"), "Play release identity")
 
-	assertSingleGradleAssignment(t, build, "versionCode", `55`)
-	assertSingleGradleAssignment(t, build, "versionName", `"0.16.2"`)
+	assertSingleGradleAssignment(t, build, "versionCode", `56`)
+	assertSingleGradleAssignment(t, build, "versionName", `"0.16.3"`)
 }
 
 func assertSingleGradleAssignment(t *testing.T, build, name, want string) {
