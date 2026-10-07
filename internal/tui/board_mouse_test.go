@@ -249,7 +249,7 @@ func TestMouse_ThirdClickStartsOver(t *testing.T) {
 		t.Fatalf("precondition: the double-click attaches once, got %d calls", n)
 	}
 	*clock = clock.Add(100 * time.Millisecond)
-	m = click(t, m, y) // fails if this click attached again
+	_ = click(t, m, y) // fails if this click attached again
 	if n := len(r.recorded()); n != 1 {
 		t.Fatalf("the click after a double-click must start a new pair, not attach again (%d calls)", n)
 	}
@@ -262,7 +262,7 @@ func TestMouse_DoubleClickReleasedOnAnotherRowCancels(t *testing.T) {
 	m = click(t, m, y)
 	*clock = clock.Add(100 * time.Millisecond)
 	m = quiet(t, m, press(y))
-	m = quiet(t, m, release(other))
+	_ = quiet(t, m, release(other))
 
 	if n := len(r.recorded()); n != 0 {
 		t.Fatalf("a double-click dragged off its row must cancel; runner called %d times", n)

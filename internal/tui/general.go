@@ -104,6 +104,13 @@ type generalModel struct {
 	edit    lineEditor
 	editTag bool // the shared inline editor targets Tag instead of Name
 
+	// Double-click state (ADR-029 D3), by session identity so a regroup between the
+	// clicks cannot move it onto a neighbour. clickID/clickAt are the last left press
+	// on a row; openID is the row a second press armed, opened on its release.
+	clickID string
+	clickAt time.Time
+	openID  string
+
 	// spinnerFrame advances on the dedicated 90 ms Working animation tick. The
 	// router runs that tick only while this board is visible and has a Working row.
 	spinnerFrame uint64
@@ -494,23 +501,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case k.Code == tea.KeyUp || (k.Text == "k"):
 		m.general.move(-1)
 	case k.Code == tea.KeyEnter:
-		// Route the attach at the selection captured now (this keypress).
-		if s, ok := m.general.selected(); ok {
-			// An ended/lost row cannot be attached: the daemon refuses any attach to a
-			// non-running session (internal/daemon attach.go). Rather than dial a doomed
-			// attach and swallow the error (the field-test silent no-op), surface an
-			// actionable banner and never attempt it.
-			if s.Status.Process != status.ProcessRunning {
-				return m, m.general.setBanner("session has ended - r resume, ctrl+x delete")
-			}
-			if m.attachRunner != nil {
-				m.screen = screenAttach
-				// Only running rows reach here, so the passthrough is always read-write.
-				return m, runAttach(m.attachRunner, s, false)
-			}
-			m.attach = attachModel{session: s, hasSession: true, width: m.width}
-			m.screen = screenAttach
-		}
+		return m.openSelected()
 	case k.Text == "n":
 		// Open INSTANTLY against cached detection (never call the prober on the Update
 		// hot path — the P0 freeze), and kick an async refresh so availability updates
@@ -576,6 +567,103 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case k.Code == tea.KeyEsc:
 		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// openSelected is ⏎ on the board, and a double-click (ADR-029 D3): attach the
+// selection captured now.
+func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
+	s, ok := m.general.selected()
+	if !ok {
+		return m, nil
+	}
+	// An ended/lost row cannot be attached: the daemon refuses any attach to a
+	// non-running session (internal/daemon attach.go). Rather than dial a doomed
+	// attach and swallow the error (the field-test silent no-op), surface an
+	// actionable banner and never attempt it.
+	if s.Status.Process != status.ProcessRunning {
+		return m, m.general.setBanner("session has ended - r resume, ctrl+x delete")
+	}
+	if m.attachRunner != nil {
+		m.screen = screenAttach
+		// Only running rows reach here, so the passthrough is always read-write.
+		return m, runAttach(m.attachRunner, s, false)
+	}
+	m.attach = attachModel{session: s, hasSession: true, width: m.width}
+	m.screen = screenAttach
+	return m, nil
+}
+
+// ---------------------------------------------------------------------------
+// Router glue: mouse handling for the general screen (ADR-029).
+// ---------------------------------------------------------------------------
+
+// doubleClickWindow is how close two left presses on one row must be to open it.
+// 500 ms is the common desktop default.
+const doubleClickWindow = 500 * time.Millisecond
+
+// boardTakesMouse reports whether the board is in its plain navigation state, the
+// only state that asks the terminal for mouse reports (ADR-029 D1). Forms, the
+// pairing modal, the attach screen, inline edits and confirms keep the terminal's
+// own selection and paste, and drop any report already in flight.
+func (m rootModel) boardTakesMouse() bool {
+	return m.screen == screenGeneral && m.pairing == nil && !m.general.editing && !m.general.confirm
+}
+
+// boardRowAt maps screen row y to the session drawn there. Rows composeBoard clipped
+// off the bottom (where the status bar and skew notice sit) are not on screen.
+func (m rootModel) boardRowAt(y int) (protocol.SessionView, int, bool) {
+	if m.height > 0 && y >= m.boardBodyRows() {
+		return protocol.SessionView{}, 0, false
+	}
+	return m.general.rowAt(y)
+}
+
+func (m rootModel) updateBoardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if !m.boardTakesMouse() {
+		return m, nil
+	}
+	mouse := msg.Mouse()
+	switch msg.(type) {
+	case tea.MouseWheelMsg:
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			m.general.scroll(-1)
+		case tea.MouseWheelDown:
+			m.general.scroll(1)
+		}
+	case tea.MouseClickMsg:
+		if mouse.Button != tea.MouseLeft {
+			return m, nil
+		}
+		s, idx, ok := m.boardRowAt(mouse.Y)
+		if !ok {
+			m.general.clickID, m.general.openID = "", ""
+			return m, nil
+		}
+		m.general.sel = idx
+		now := m.now()
+		if m.general.clickID == s.ID && now.Sub(m.general.clickAt) <= doubleClickWindow {
+			// The second press arms the open; the release performs it (D3). The pair
+			// is spent, so a third click starts a new one.
+			m.general.openID, m.general.clickID = s.ID, ""
+			return m, nil
+		}
+		m.general.clickID, m.general.clickAt, m.general.openID = s.ID, now, ""
+	case tea.MouseReleaseMsg:
+		// Acting here rather than on the press keeps the release report out of the
+		// agent: by the time the attach releases the terminal there is none left to
+		// arrive. A release off the armed row cancels, as in any desktop UI.
+		id := m.general.openID
+		m.general.openID = ""
+		if id == "" {
+			return m, nil
+		}
+		if s, _, ok := m.boardRowAt(mouse.Y); !ok || s.ID != id || m.general.selectedID() != id {
+			return m, nil
+		}
+		return m.openSelected()
 	}
 	return m, nil
 }
@@ -816,39 +904,107 @@ func deleteCmd(c Client, id string) tea.Cmd {
 // Rendering.
 // ---------------------------------------------------------------------------
 
-func (m generalModel) view() string {
-	var b strings.Builder
-	b.WriteString(m.header())
-	b.WriteString("\n\n")
+// boardLineKind names what occupies one line of the board.
+type boardLineKind int
 
-	if bn := m.bannerLine(); bn != "" {
-		b.WriteString(bn + "\n\n")
+const (
+	lineHeader  boardLineKind = iota // the "swarm" title row
+	lineSpacer                       // an empty row
+	lineBanner                       // the transient V-5 notification
+	lineSection                      // a section header (status group, repo, or tag)
+	lineSession                      // one session row
+)
+
+// boardLine is one line of the board. section is set on a section header; session
+// and idx (its flat display index, the selection's coordinate) on a session row.
+type boardLine struct {
+	kind    boardLineKind
+	section string
+	session protocol.SessionView
+	idx     int
+}
+
+// layout visits the board's lines top to bottom, one per screen row. It is the one
+// description of the board's shape: view renders from it and rowAt hit-tests
+// against it (ADR-029), so a click can never land on a different row than the one
+// drawn there. banner says whether the notification line is showing; the caller
+// decides it once, because bannerLine reads the clock.
+func (m generalModel) layout(banner bool, visit func(boardLine)) {
+	visit(boardLine{kind: lineHeader})
+	visit(boardLine{kind: lineSpacer})
+	if banner {
+		visit(boardLine{kind: lineBanner})
+		visit(boardLine{kind: lineSpacer})
 	}
-
 	// idx walks the flat display order so it lines up with the selection index.
 	idx := 0
 	for _, section := range m.sectionOrder() {
-		var hdr string
-		if m.grouping == groupByStatus {
-			g := status.Group(section)
-			hdr = groupHeaderStyle(g).Render(groupHeader(g))
-		} else {
-			hdr = styleTitle.Render(strings.ToUpper(section))
-		}
-		b.WriteString("  " + hdr + "\n")
+		visit(boardLine{kind: lineSection, section: section})
 		for _, s := range m.sessions {
 			if m.groupKey(s) != section {
 				continue
 			}
-			b.WriteString(m.renderRow(s, s.Group, idx == m.sel) + "\n")
+			visit(boardLine{kind: lineSession, session: s, idx: idx})
 			idx++
 		}
-		b.WriteString("\n")
+		visit(boardLine{kind: lineSpacer})
 	}
+}
 
+func (m generalModel) view() string {
+	var b strings.Builder
+	banner := m.bannerLine()
+	m.layout(banner != "", func(l boardLine) {
+		switch l.kind {
+		case lineHeader:
+			b.WriteString(m.header())
+		case lineBanner:
+			b.WriteString(banner)
+		case lineSection:
+			b.WriteString("  " + m.sectionHeader(l.section))
+		case lineSession:
+			b.WriteString(m.renderRow(l.session, l.session.Group, l.idx == m.sel))
+		}
+		b.WriteByte('\n')
+	})
 	// The context-key footer is promoted to the router's persistent bottom bar
 	// (generalStatus / composeBoard), so it is no longer rendered inline here.
 	return b.String()
+}
+
+// sectionHeader renders one section's title: the status group's own header, or the
+// repo/tag key in capitals.
+func (m generalModel) sectionHeader(section string) string {
+	if m.grouping == groupByStatus {
+		g := status.Group(section)
+		return groupHeaderStyle(g).Render(groupHeader(g))
+	}
+	return styleTitle.Render(strings.ToUpper(section))
+}
+
+// rowAt returns the session drawn on board line y and its flat display index, or
+// ok=false when that line is chrome (header, banner, section header, spacer) or
+// past the last section. y counts from the board's first line, which composeBoard
+// puts on the screen's first row.
+func (m generalModel) rowAt(y int) (s protocol.SessionView, idx int, ok bool) {
+	if y < 0 {
+		return protocol.SessionView{}, 0, false
+	}
+	line := 0
+	m.layout(m.bannerLine() != "", func(l boardLine) {
+		if line == y && l.kind == lineSession {
+			s, idx, ok = l.session, l.idx, true
+		}
+		line++
+	})
+	return s, idx, ok
+}
+
+// scroll moves the selection by delta WITHOUT wrapping: the mouse wheel's motion
+// (ADR-029 D4). The arrow keys keep move's wrap (V-3).
+func (m *generalModel) scroll(delta int) {
+	m.sel += delta
+	m.clampSel()
 }
 
 func (m generalModel) header() string {

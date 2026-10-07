@@ -673,6 +673,11 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pairing = &pairingModal{sas: msg.SAS, deviceName: msg.DeviceName}
 		return m, nil
 
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg:
+		// ADR-029: only the board in plain navigation takes the mouse. A report that
+		// reaches any other state (already in flight when it opened) is dropped there.
+		return m.updateBoardMouse(msg.(tea.MouseMsg))
+
 	case tea.KeyPressMsg:
 		// The SAS gate is modal: while it is open it owns every keypress so a
 		// y/n/enter/esc can never leak through to the board beneath it.
@@ -757,6 +762,13 @@ func (m rootModel) View() tea.View {
 	// cached View when the terminal is restored after an attach (agents-tracker-gcf6).
 	// During an attach the child agent's own title passes through and owns the tab.
 	v.WindowTitle = "swarm"
+	// Mouse reports are asked for per frame, and only while the board is in plain
+	// navigation (ADR-029 D1). The renderer turns tracking off when the attach runner
+	// releases the terminal and re-applies it on restore, so an attached agent never
+	// receives a report swarm requested.
+	if m.boardTakesMouse() {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
 }
 
@@ -969,15 +981,10 @@ func (m rootModel) composeBoard(body, status string) string {
 	// status bar is the last-resort row (kept whenever height >= 1); the body fills what
 	// remains above it.
 	tail := []string{bar}
-	// The notice needs height >= 3 so it never evicts the entire body: below that the
-	// notice is dropped FIRST (policy: notice, then body; the bar is the last resort).
-	if noticeRow != "" && m.height >= 3 {
+	if m.boardShowsNotice() {
 		tail = []string{noticeRow, bar}
 	}
-	target := m.height - len(tail)
-	if target < 0 {
-		target = 0
-	}
+	target := m.boardBodyRows()
 	lines := strings.Split(body, "\n")
 	if len(lines) > target {
 		lines = lines[:target]
@@ -985,6 +992,26 @@ func (m rootModel) composeBoard(body, status string) string {
 		lines = append(lines, make([]string, target-len(lines))...)
 	}
 	return strings.Join(append(lines, tail...), "\n")
+}
+
+// boardShowsNotice reports whether composeBoard gives the version-skew notice its
+// own row above the bar. It needs height >= 3 so it never evicts the entire body:
+// below that the notice is dropped FIRST (policy: notice, then body; the bar is the
+// last resort).
+func (m rootModel) boardShowsNotice() bool {
+	return skewNotice(m.daemonVersion, m.clientVersion) != "" && m.height >= 3
+}
+
+// boardBodyRows is how many screen rows composeBoard gives the body: everything
+// above the status bar and, when it shows, the notice. The body's lines past it are
+// clipped off the screen, so the mouse hit-test bounds clicks by it too (ADR-029).
+// Meaningful only once the height is known.
+func (m rootModel) boardBodyRows() int {
+	tail := 1
+	if m.boardShowsNotice() {
+		tail = 2
+	}
+	return max(0, m.height-tail)
 }
 
 // enterGeneral switches to the general view and restarts any elapsed/animation

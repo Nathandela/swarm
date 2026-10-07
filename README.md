@@ -92,6 +92,8 @@ The daemon starts automatically and opens the session board.
 | <kbd>ctrl</kbd>+<kbd>x</kbd> | Kill a live session or delete a finished one; confirm with <kbd>y</kbd> |
 | <kbd>esc</kbd> | Close the TUI while agents keep running |
 
+The board also takes the mouse: click a session to select it, double-click to attach (the same as <kbd>⏎</kbd>), and scroll to move the selection. Only the board does. Forms, inline edits and confirms keep your terminal's normal mouse behaviour, and swarm stops asking for mouse input before it hands the terminal to an attached agent. On the board, select text with your terminal's bypass modifier (usually <kbd>shift</kbd>, or <kbd>option</kbd> in iTerm2 and Terminal.app).
+
 Attach mode is raw passthrough: the agent's native full-screen interface remains untouched. swarm adds only a thin session header, which can be hidden. Ended sessions offer <kbd>r</kbd> to resume as a fresh linked session where the adapter supports it.
 
 ## Status is the interface
