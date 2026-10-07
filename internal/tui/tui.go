@@ -236,6 +236,10 @@ type rootModel struct {
 	layoutStore LayoutStore
 
 	pairing *pairingModal // open SAS-gate overlay (nil -> no pairing modal), see pairing_modal.go
+
+	// now is the Update path's clock (the double-click window, ADR-029). Tests
+	// replace it; production reads the wall clock.
+	now func() time.Time
 }
 
 // listDialTimeout bounds New's eager List so a wedged daemon cannot stall the first
@@ -259,6 +263,7 @@ func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 		events:        events,
 		ticking:       true, // Init arms the first repaint tick
 		clientVersion: version.Version,
+		now:           time.Now,
 	}
 	m.animatingWorking = m.general.hasWorking()
 	// The daemon's build version rides the hello handshake. The narrow tui.Client
