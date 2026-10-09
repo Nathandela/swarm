@@ -36,6 +36,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [026](ADR-026-board-layout-outlives-the-client.md) | The board's grouping and ordering outlive the client that chose them (amends the options window's process-scoped rule) | Accepted | 2026-09-04 |
 | [027](ADR-027-clean-remote-control-v2.md) | Clean remote-control v2 replacement, with native relay and shared push authority | Accepted, implementation gates open | 2026-09-05 |
 | [028](ADR-028-personal-account-pools.md) | Personal subscription account pools with immutable discussion bindings and guarded recovery | Accepted for implementation; authenticated release gates open | 2026-10-03 |
+| [029](ADR-029-board-mouse-selection.md) | The session board takes mouse clicks, and only the board (click selects, a click on the selected row opens it like Enter, wheel moves; never during an attach, a form or text entry) | Accepted | 2026-10-07 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the
@@ -49,7 +50,7 @@ ADR-009-structured-chat-interaction.md and drawn in the language of ADR-009-obsi
 
 ## Adding a new ADR
 
-1. Next sequential number: ADR-028 (027 records the clean remote-control v2 replacement).
+1. Next sequential number: ADR-030 (029 records mouse selection on the session board).
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.
