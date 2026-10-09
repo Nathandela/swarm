@@ -140,7 +140,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
+          go-version: '1.26.9'
       - name: Set up goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:

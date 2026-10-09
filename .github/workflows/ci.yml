@@ -294,11 +294,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
-        # Pinned exactly (not the floating '1.24' the other jobs use): this is
-        # the release pipeline, so its toolchain should be reproducible.
+        # Match the publish job's patched, reproducible release toolchain.
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
+          go-version: '1.26.9'
       - name: Set up goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:
