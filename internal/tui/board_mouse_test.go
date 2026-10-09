@@ -1,8 +1,8 @@
 package tui
 
 // ADR-029: the session board takes mouse clicks. A left click selects the row under
-// the pointer, a double-click opens it exactly as Enter does (acted on the release),
-// the wheel moves the selection one row without wrapping, and the board asks the
+// the pointer, a click on the row that is ALREADY selected opens it exactly as Enter
+// does (acted on the release; no timing, so a phone tap works too), the wheel moves the selection one row without wrapping, and the board asks the
 // terminal for mouse reports only while it is in its plain navigation state -- never
 // in a form, the pairing modal, an inline edit, a kill/delete confirm, or an attach.
 //
@@ -20,8 +20,8 @@ import (
 )
 
 // mouseBoard is a four-group board (one session per status section unless
-// sessions are given) with an injected attach runner and a controllable clock.
-func mouseBoard(t *testing.T, sessions ...protocol.SessionView) (tea.Model, *recordingRunner, *time.Time) {
+// sessions are given) with an injected attach runner.
+func mouseBoard(t *testing.T, sessions ...protocol.SessionView) (tea.Model, *recordingRunner) {
 	t.Helper()
 	if len(sessions) == 0 {
 		sessions = []protocol.SessionView{
@@ -35,11 +35,7 @@ func mouseBoard(t *testing.T, sessions ...protocol.SessionView) (tea.Model, *rec
 	r := &recordingRunner{}
 	m := New(f, detectMixed(), WithAttachRunner(r.run))
 	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
-	clock := new(time.Time)
-	*clock = time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
-	rm := m.(rootModel)
-	rm.now = func() time.Time { return *clock }
-	return rm, r, clock
+	return m, r
 }
 
 // rowY returns the screen row the rendered board shows needle on.
@@ -91,19 +87,18 @@ func settle(m tea.Model, cmd tea.Cmd) tea.Model {
 	return m
 }
 
-// doubleClick is press, release, press, release on row y, 100ms apart, running
-// whatever the final release returns.
-func doubleClick(t *testing.T, m tea.Model, clock *time.Time, y int) tea.Model {
+// openClick is a press+release on row y, which must already be the selected row,
+// running whatever the release returns. The press itself must stay quiet: see
+// TestMouse_ClickOnTheSelectedRowAttachesOnRelease.
+func openClick(t *testing.T, m tea.Model, y int) tea.Model {
 	t.Helper()
-	m = click(t, m, y)
-	*clock = clock.Add(100 * time.Millisecond)
-	m = quiet(t, m, press(y)) // never on the press: see TestMouse_DoubleClickAttachesOnTheSecondRelease
+	m = quiet(t, m, press(y))
 	m, cmd := m.Update(release(y))
 	return settle(m, cmd)
 }
 
 func TestMouse_BoardAsksForCellMotionReports(t *testing.T) {
-	m, _, _ := mouseBoard(t)
+	m, _ := mouseBoard(t)
 	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
 		t.Fatalf("board MouseMode = %v, want MouseModeCellMotion (clicks, releases, wheel; no idle motion)", got)
 	}
@@ -126,7 +121,7 @@ func TestMouse_OffWhereverTheBoardIsNotInPlainNavigation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m, _, _ := mouseBoard(t)
+			m, _ := mouseBoard(t)
 			m = tc.open(m)
 			if got := m.View().MouseMode; got != tea.MouseModeNone {
 				t.Fatalf("%s: MouseMode = %v, want MouseModeNone (native selection and paste stay the terminal's)", tc.name, got)
@@ -150,7 +145,7 @@ func TestMouse_OffOnTheAttachScreen(t *testing.T) {
 }
 
 func TestMouse_LeftClickSelectsTheRowUnderThePointer(t *testing.T) {
-	m, r, _ := mouseBoard(t)
+	m, r := mouseBoard(t)
 	if selectedOf(m) != "endpoint/n1" {
 		t.Fatalf("precondition: first row selected, got %q", selectedOf(m))
 	}
@@ -165,7 +160,7 @@ func TestMouse_LeftClickSelectsTheRowUnderThePointer(t *testing.T) {
 }
 
 func TestMouse_ClicksOnChromeChangeNothing(t *testing.T) {
-	m, r, clock := mouseBoard(t)
+	m, r := mouseBoard(t)
 	reviewY := rowY(t, m, "review-row-summary")
 	rows := len(strings.Split(view(m), "\n"))
 	chrome := []int{
@@ -180,8 +175,7 @@ func TestMouse_ClicksOnChromeChangeNothing(t *testing.T) {
 	for _, y := range chrome {
 		before := selectedOf(m)
 		m = click(t, m, y)
-		*clock = clock.Add(100 * time.Millisecond)
-		m = click(t, m, y) // a "double-click" on chrome opens nothing either
+		m = click(t, m, y) // a second click on chrome opens nothing either
 		if got := selectedOf(m); got != before {
 			t.Fatalf("click on chrome row %d moved the selection %q -> %q", y, before, got)
 		}
@@ -191,30 +185,64 @@ func TestMouse_ClicksOnChromeChangeNothing(t *testing.T) {
 	}
 }
 
-func TestMouse_DoubleClickAttachesOnTheSecondRelease(t *testing.T) {
-	m, r, clock := mouseBoard(t)
-	// doubleClick asserts the second PRESS returns no command. Acting on the press would
-	// hand the terminal to the agent with the second release still in flight, and that
-	// report would reach the agent as input (the ADR-019 class of leak).
-	m = doubleClick(t, m, clock, rowY(t, m, "working-row-summary"))
+func TestMouse_ClickOnTheSelectedRowAttachesOnRelease(t *testing.T) {
+	m, r := mouseBoard(t)
+	if selectedOf(m) != "endpoint/n1" {
+		t.Fatalf("precondition: first row selected, got %q", selectedOf(m))
+	}
+	// openClick asserts the PRESS returns no command. Acting on the press would hand the
+	// terminal to the agent with the release report still in flight, and that report
+	// would reach the agent as input (the ADR-019 class of leak).
+	m = openClick(t, m, rowY(t, m, "needs-row-summary"))
 
 	calls := r.recorded()
 	if len(calls) != 1 {
-		t.Fatalf("double-click on a running row: runner called %d times, want 1", len(calls))
+		t.Fatalf("click on the selected running row: runner called %d times, want 1", len(calls))
 	}
-	if calls[0].session.ID != "endpoint/w1" || calls[0].readOnly {
-		t.Fatalf("runner got %q readOnly=%v, want endpoint/w1 read-write (the Enter path)", calls[0].session.ID, calls[0].readOnly)
+	if calls[0].session.ID != "endpoint/n1" || calls[0].readOnly {
+		t.Fatalf("runner got %q readOnly=%v, want endpoint/n1 read-write (the Enter path)", calls[0].session.ID, calls[0].readOnly)
 	}
 	if m.(rootModel).screen != screenGeneral {
 		t.Fatal("after the passthrough returns the board must be shown again")
 	}
 }
 
-func TestMouse_DoubleClickOnAnEndedRowBannersLikeEnter(t *testing.T) {
-	m, r, clock := mouseBoard(t)
-	y := rowY(t, m, "ended-row-summary")
+// Click to select, click again to open: the desktop and phone (Termius taps) gesture.
+func TestMouse_SecondClickOnARowOpensIt(t *testing.T) {
+	m, r := mouseBoard(t)
+	y := rowY(t, m, "working-row-summary")
 	m = click(t, m, y)
-	*clock = clock.Add(100 * time.Millisecond)
+	if n := len(r.recorded()); n != 0 {
+		t.Fatalf("the click that selects must not attach; runner called %d times", n)
+	}
+	_ = openClick(t, m, y)
+	if calls := r.recorded(); len(calls) != 1 || calls[0].session.ID != "endpoint/w1" {
+		t.Fatalf("second click on the working row: runner got %+v, want one attach of endpoint/w1", calls)
+	}
+}
+
+// "Already selected" is about the selection, not about how it got there.
+func TestMouse_ClickOnARowSelectedByKeyboardOpensIt(t *testing.T) {
+	m, r := mouseBoard(t)
+	m = send(m, keyDown)
+	if selectedOf(m) != "endpoint/w1" {
+		t.Fatalf("precondition: down selects endpoint/w1, got %q", selectedOf(m))
+	}
+	_ = openClick(t, m, rowY(t, m, "working-row-summary"))
+	if calls := r.recorded(); len(calls) != 1 || calls[0].session.ID != "endpoint/w1" {
+		t.Fatalf("click on the keyboard-selected row: runner got %+v, want one attach of endpoint/w1", calls)
+	}
+}
+
+func TestMouse_ClickOnTheSelectedEndedRowBannersLikeEnter(t *testing.T) {
+	m, r := mouseBoard(t)
+	for i := 0; i < 3; i++ {
+		m = send(m, keyDown)
+	}
+	if selectedOf(m) != "endpoint/c1" {
+		t.Fatalf("precondition: the ended row selected, got %q", selectedOf(m))
+	}
+	y := rowY(t, m, "ended-row-summary")
 	m = quiet(t, m, press(y))
 	m = send(m, release(y)) // returns the banner's expiry tick
 
@@ -222,75 +250,46 @@ func TestMouse_DoubleClickOnAnEndedRowBannersLikeEnter(t *testing.T) {
 		t.Fatalf("an ended row must never be attached; runner called %d times", n)
 	}
 	if !strings.Contains(view(m), "session has ended") {
-		t.Fatalf("double-click on an ended row must show Enter's banner:\n%s", view(m))
+		t.Fatalf("click on the selected ended row must show Enter's banner:\n%s", view(m))
 	}
 }
 
-func TestMouse_SlowSecondClickOnlySelects(t *testing.T) {
-	m, r, clock := mouseBoard(t)
-	y := rowY(t, m, "working-row-summary")
-	m = click(t, m, y)
-	*clock = clock.Add(800 * time.Millisecond)
-	m = click(t, m, y)
-
-	if n := len(r.recorded()); n != 0 {
-		t.Fatalf("two clicks 800ms apart are not a double-click; runner called %d times", n)
-	}
-	if got := selectedOf(m); got != "endpoint/w1" {
-		t.Fatalf("selection = %q, want endpoint/w1", got)
-	}
-}
-
-func TestMouse_ThirdClickStartsOver(t *testing.T) {
-	m, r, clock := mouseBoard(t)
-	y := rowY(t, m, "working-row-summary")
-	m = doubleClick(t, m, clock, y)
-	if n := len(r.recorded()); n != 1 {
-		t.Fatalf("precondition: the double-click attaches once, got %d calls", n)
-	}
-	*clock = clock.Add(100 * time.Millisecond)
-	_ = click(t, m, y) // fails if this click attached again
-	if n := len(r.recorded()); n != 1 {
-		t.Fatalf("the click after a double-click must start a new pair, not attach again (%d calls)", n)
-	}
-}
-
-func TestMouse_DoubleClickReleasedOnAnotherRowCancels(t *testing.T) {
-	m, r, clock := mouseBoard(t)
-	y := rowY(t, m, "working-row-summary")
+func TestMouse_ReleasedOnAnotherRowCancels(t *testing.T) {
+	m, r := mouseBoard(t)
+	y := rowY(t, m, "needs-row-summary") // the selected row
 	other := rowY(t, m, "review-row-summary")
-	m = click(t, m, y)
-	*clock = clock.Add(100 * time.Millisecond)
 	m = quiet(t, m, press(y))
-	_ = quiet(t, m, release(other))
+	m = quiet(t, m, release(other))
 
 	if n := len(r.recorded()); n != 0 {
-		t.Fatalf("a double-click dragged off its row must cancel; runner called %d times", n)
+		t.Fatalf("a click dragged off the selected row must cancel; runner called %d times", n)
+	}
+	if got := selectedOf(m); got != "endpoint/n1" {
+		t.Fatalf("a cancelled open moved the selection to %q", got)
 	}
 }
 
-func TestMouse_QuickClicksOnTwoRowsAreTwoSelections(t *testing.T) {
-	m, r, clock := mouseBoard(t)
-	m = click(t, m, rowY(t, m, "working-row-summary"))
-	*clock = clock.Add(100 * time.Millisecond)
-	m = click(t, m, rowY(t, m, "review-row-summary"))
+// A release with no press on the selected row before it opens nothing (a press that
+// selected another row, or a release whose press was lost).
+func TestMouse_StrayReleaseOpensNothing(t *testing.T) {
+	m, r := mouseBoard(t)
+	y := rowY(t, m, "needs-row-summary") // the selected row
+	m = quiet(t, m, release(y))
+	m = quiet(t, m, press(rowY(t, m, "working-row-summary")))
+	_ = quiet(t, m, release(rowY(t, m, "working-row-summary")))
 
 	if n := len(r.recorded()); n != 0 {
-		t.Fatalf("quick clicks on two different rows must not attach; runner called %d times", n)
-	}
-	if got := selectedOf(m); got != "endpoint/r1" {
-		t.Fatalf("selection = %q, want the second row clicked (endpoint/r1)", got)
+		t.Fatalf("a release without its press on the selected row attached; runner called %d times", n)
 	}
 }
 
 func TestMouse_OtherButtonsAreIgnored(t *testing.T) {
-	m, _, clock := mouseBoard(t)
+	m, _ := mouseBoard(t)
 	y := rowY(t, m, "review-row-summary")
 	for _, b := range []tea.MouseButton{tea.MouseRight, tea.MouseMiddle} {
 		for i := 0; i < 2; i++ {
 			m = quiet(t, m, tea.MouseClickMsg{X: 6, Y: y, Button: b})
 			m = quiet(t, m, tea.MouseReleaseMsg{X: 6, Y: y, Button: b})
-			*clock = clock.Add(100 * time.Millisecond)
 		}
 	}
 	if got := selectedOf(m); got != "endpoint/n1" {
@@ -299,7 +298,7 @@ func TestMouse_OtherButtonsAreIgnored(t *testing.T) {
 }
 
 func TestMouse_WheelMovesTheSelectionWithoutWrapping(t *testing.T) {
-	m, _, _ := mouseBoard(t)
+	m, _ := mouseBoard(t)
 	wheel := func(b tea.MouseButton) { m = quiet(t, m, tea.MouseWheelMsg{X: 6, Y: 10, Button: b}) }
 
 	wheel(tea.MouseWheelUp)
@@ -324,7 +323,7 @@ func TestMouse_WheelMovesTheSelectionWithoutWrapping(t *testing.T) {
 
 // The banner pushes every row down two lines; the hit-test must follow the frame.
 func TestMouse_HitTestFollowsTheBanner(t *testing.T) {
-	m, _, _ := mouseBoard(t)
+	m, _ := mouseBoard(t)
 	m = click(t, m, rowY(t, m, "ended-row-summary"))
 	m = send(m, keyEnter) // Enter on the ended row raises the "session has ended" banner
 	if !strings.Contains(view(m), "session has ended") {
@@ -342,7 +341,7 @@ func TestMouse_HitTestFollowsTagSections(t *testing.T) {
 	a.Tag = "zeta"
 	b := sReview("endpoint/b", "claude", "~/Code/b", "beta-row", 2*time.Minute)
 	b.Tag = "alpha"
-	m, _, _ := mouseBoard(t, a, b)
+	m, _ := mouseBoard(t, a, b)
 	rm := m.(rootModel)
 	rm.general.setLayout(groupByTag, orderByArrival)
 	m = rm
@@ -370,7 +369,7 @@ func TestMouse_ClippedRowsAreNotClickable(t *testing.T) {
 		id := "endpoint/w" + itoa(i)
 		sessions = append(sessions, sWorking(id, "codex", "~/Code/x", "row-"+itoa(i), time.Duration(i+1)*time.Minute))
 	}
-	m, _, _ := mouseBoard(t, sessions...)
+	m, _ := mouseBoard(t, sessions...)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: 8})
 	lines := strings.Split(view(m), "\n")
 	if len(lines) != 8 {
@@ -386,11 +385,10 @@ func TestMouse_ClippedRowsAreNotClickable(t *testing.T) {
 // Mouse events that arrive while the board is not in plain navigation (a report
 // already in flight when a confirm opened) are dropped, never acted on.
 func TestMouse_EventsDuringAConfirmAreDropped(t *testing.T) {
-	m, r, clock := mouseBoard(t)
+	m, r := mouseBoard(t)
 	y := rowY(t, m, "working-row-summary")
 	m = send(m, keyCtrlX) // kill/delete confirm owns input: y/n only
 	m = click(t, m, y)
-	*clock = clock.Add(100 * time.Millisecond)
 	m = click(t, m, y)
 	m = quiet(t, m, tea.MouseWheelMsg{X: 6, Y: y, Button: tea.MouseWheelDown})
 
@@ -408,12 +406,11 @@ func TestMouse_EventsDuringAConfirmAreDropped(t *testing.T) {
 // Same for a form opened over the board: its own state is untouched and nothing
 // on the board beneath it moves.
 func TestMouse_EventsOnAFormAreDropped(t *testing.T) {
-	m, r, clock := mouseBoard(t)
+	m, r := mouseBoard(t)
 	y := rowY(t, m, "working-row-summary")
 	m = send(m, keyRune('n')) // the launch form
 	before := view(m)
 	m = click(t, m, y)
-	*clock = clock.Add(100 * time.Millisecond)
 	m = click(t, m, y)
 	m = quiet(t, m, tea.MouseWheelMsg{X: 6, Y: y, Button: tea.MouseWheelDown})
 

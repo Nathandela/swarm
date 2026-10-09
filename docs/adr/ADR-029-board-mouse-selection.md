@@ -1,7 +1,7 @@
 # ADR-029: The session board takes mouse clicks, and only the board
 
 - Status: Accepted
-- Date: 2026-10-07
+- Date: 2026-10-07, D3 revised 2026-10-09 before merge (see D3)
 - Amends: nothing. V-6 (`system-spec.md`) says "no mouse required"; that stays true. Every action keeps its key, and the mouse is an additional way to reach some of them.
 - Affects: `internal/tui` (`tui.go`, `general.go`)
 
@@ -42,13 +42,21 @@ same line layout `view()` renders from, so it follows the banner, every sectioni
 status bar drawn where it would have been, headers, spacers and the banner select
 nothing.
 
-**D3. A double-click opens the row exactly as `⏎` does.** Two left presses on the same
-row within 500 ms arm it, and the matching release opens it: an attach for a running
-row, the "session has ended" banner for an ended one. It acts on the **release**, not
-the press. Acting on the press would release the terminal to the agent with the
-second release report still to come, and that report would be forwarded to the agent
-as input, the ADR-019 leak. A release on a different row cancels. A third click starts
-a new pair.
+**D3. A click on the row that is already selected opens it exactly as `⏎` does:** an
+attach for a running row, the "session has ended" banner for an ended one. A left
+press on the selected row arms it, and the matching release opens it. It does not
+matter how the row became selected (an earlier click, the keyboard, the initial
+selection) or how long ago, so "click to select, click again to open" is the gesture,
+and no timing is involved. It acts on the **release**, not the press. Acting on the
+press would release the terminal to the agent with the release report still to come,
+and that report would be forwarded to the agent as input, the ADR-019 leak. A release
+on a different row cancels, and a release with no armed press opens nothing.
+
+The first draft of this decision was a timed double-click (two presses on one row
+within 500 ms). Field testing from Termius on iOS showed it cannot work there: a tap
+arrives as a press and release at the same instant, and a double-tap arrives as a Tab
+key with no position, in every tracking mode (1000, 1002, 1003, SGR or legacy). The
+owner chose the clock-free rule, which works for a tap and a desktop click alike.
 
 **D4. The wheel moves the selection one row and does not wrap.** The `↑↓` keys wrap
 (V-3), but a wheel that wraps sends a long scroll cycling through the board.
@@ -59,13 +67,18 @@ a new pair.
 
 ### Positive
 
-- The board can be driven by pointer: select, open, scroll.
+- The board can be driven by pointer: select, open, scroll, including by tap from a
+  phone terminal.
 - An attached agent never receives a report swarm asked for. Tracking is off before
   the passthrough starts and back on after it returns.
 - Forms, inline edits and confirms behave exactly as before, including native text
   selection and paste.
 
 ### Negative
+
+- A single click opens whenever it lands on the selected row, including the row
+  selected at start-up and the row just detached from. Opening is what the click on
+  a highlighted row is for, and `ctrl+q` returns from it.
 
 - On the board itself the terminal's native text selection needs the terminal's
   bypass modifier (Shift in most terminals, Option in iTerm2 and Terminal.app) for as
@@ -80,9 +93,12 @@ a new pair.
 
 ## Alternatives Considered
 
-- **A click on the already-selected row attaches.** Deterministic and clock-free, but
-  two unhurried clicks minutes apart would attach, and a single click would do
-  different things depending on where the selection happened to be.
+- **A timed double-click (the first draft of D3).** The desktop convention, but Termius
+  on iOS never delivers one: a double-tap becomes a Tab key. A board opened from a
+  phone could select but never open.
+- **Tab opens the selection.** It would make the Termius double-tap open, but Tab has
+  no position, so a double-tap anywhere would open whatever row was selected, and the
+  key would mean something on the board alone.
 - **Mouse tracking on every screen.** It would take native selection and middle-click
   paste away from the launch form's text fields and the inline editors, for no action
   those screens need a pointer for.
