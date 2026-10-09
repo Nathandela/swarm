@@ -1,7 +1,11 @@
 # ADR-029 — mouse selection on the session board: evidence
 
 Decision: [ADR-029](../adr/ADR-029-board-mouse-selection.md). Tests:
-`internal/tui/board_mouse_test.go` (18 tests, `TestMouse_*`).
+`internal/tui/board_mouse_test.go` (`TestMouse_*`).
+
+D3 was revised before merge, from a timed double-click to "a click on the selected row
+opens it". The first round below is the original RED/GREEN; the D3 revision has its own
+section after it.
 
 ## RED (failing-first, GG-5)
 
@@ -49,6 +53,31 @@ pass unseen.
     `SWARM_*` variable unset, both are ok.
   - `mobile` (`TestPBBIND2_*`): `gobind` is not installed on this machine; CI installs the
     pinned version (`ci.yml`, "Install the pinned gomobile and gobind").
+
+## D3 revision: a click on the selected row opens it
+
+Why: from Termius on iOS, a probe that requested each tracking mode in turn (1000, 1002,
+1003 with SGR, and 1000 legacy) recorded a tap as a press and a release with 0 ms between
+them, and every double-tap as a `tab` key with no position. A timed double-click can never
+fire there. The owner chose the clock-free rule.
+
+RED, commit `64c6bed8` (tests and the ADR revision, against the double-click code):
+
+| Test | RED result |
+|---|---|
+| `ClickOnTheSelectedRowAttachesOnRelease` | FAIL: `click on the selected running row: runner called 0 times, want 1` |
+| `ClickOnARowSelectedByKeyboardOpensIt` | FAIL: `runner got [], want one attach of endpoint/w1` |
+| `ClickOnTheSelectedEndedRowBannersLikeEnter` | FAIL: no "session has ended" banner |
+| `SecondClickOnARowOpensIt` | green on arrival: the old code also opens two quick clicks on one row (inside its 500 ms window) |
+| `ReleasedOnAnotherRowCancels`, `StrayReleaseOpensNothing` | green on arrival (guards) |
+| every other `TestMouse_*` | unchanged, green |
+
+GREEN: the press on the selected row arms the open and its release performs it; the
+double-click window and the `rootModel.now` clock seam are gone.
+`go test -race -count=1 ./internal/tui/` ok, `go build ./...` and `golangci-lint run ./...`
+clean. The live smoke below was re-run with a single Termius-shaped tap (press and release
+in one write) on the selected row: all checks PASS, tracking off at byte 471 of the
+response and the agent's screen at byte 1004.
 
 ## Live smoke (real pty, real terminal bytes)
 

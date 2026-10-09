@@ -104,12 +104,10 @@ type generalModel struct {
 	edit    lineEditor
 	editTag bool // the shared inline editor targets Tag instead of Name
 
-	// Double-click state (ADR-029 D3), by session identity so a regroup between the
-	// clicks cannot move it onto a neighbour. clickID/clickAt are the last left press
-	// on a row; openID is the row a second press armed, opened on its release.
-	clickID string
-	clickAt time.Time
-	openID  string
+	// openID is the selected row a left press armed (ADR-029 D3), opened on its
+	// release. Held by session identity so a regroup between the press and the
+	// release cannot move it onto a neighbour.
+	openID string
 
 	// spinnerFrame advances on the dedicated 90 ms Working animation tick. The
 	// router runs that tick only while this board is visible and has a Working row.
@@ -599,10 +597,6 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 // Router glue: mouse handling for the general screen (ADR-029).
 // ---------------------------------------------------------------------------
 
-// doubleClickWindow is how close two left presses on one row must be to open it.
-// 500 ms is the common desktop default.
-const doubleClickWindow = 500 * time.Millisecond
-
 // boardTakesMouse reports whether the board is in its plain navigation state, the
 // only state that asks the terminal for mouse reports (ADR-029 D1). Forms, the
 // pairing modal, the attach screen, inline edits and confirms keep the terminal's
@@ -637,20 +631,18 @@ func (m rootModel) updateBoardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if mouse.Button != tea.MouseLeft {
 			return m, nil
 		}
+		m.general.openID = ""
 		s, idx, ok := m.boardRowAt(mouse.Y)
 		if !ok {
-			m.general.clickID, m.general.openID = "", ""
+			return m, nil
+		}
+		if m.general.selectedID() == s.ID {
+			// A press on the row already selected arms the open; the release
+			// performs it (D3). No timing: a phone tap and a desktop click alike.
+			m.general.openID = s.ID
 			return m, nil
 		}
 		m.general.sel = idx
-		now := m.now()
-		if m.general.clickID == s.ID && now.Sub(m.general.clickAt) <= doubleClickWindow {
-			// The second press arms the open; the release performs it (D3). The pair
-			// is spent, so a third click starts a new one.
-			m.general.openID, m.general.clickID = s.ID, ""
-			return m, nil
-		}
-		m.general.clickID, m.general.clickAt, m.general.openID = s.ID, now, ""
 	case tea.MouseReleaseMsg:
 		// Acting here rather than on the press keeps the release report out of the
 		// agent: by the time the attach releases the terminal there is none left to
