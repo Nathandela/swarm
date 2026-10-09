@@ -453,7 +453,7 @@ func TestMouse_InterruptedClickDoesNotOpenAfterReturningToBoard(t *testing.T) {
 			m = quiet(t, m, press(y))
 			m = send(m, key)
 			m = send(m, keyEsc)
-			m = quiet(t, m, release(y))
+			_ = quiet(t, m, release(y))
 			if len(r.recorded()) != 0 {
 				t.Fatal("interrupted click opened a session")
 			}
