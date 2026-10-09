@@ -15,6 +15,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 )
@@ -422,5 +423,82 @@ func TestMouse_EventsOnAFormAreDropped(t *testing.T) {
 	}
 	if got := selectedOf(m); got != "endpoint/n1" {
 		t.Fatalf("mouse input on a form moved the board selection to %q", got)
+	}
+}
+
+func TestMouse_ArmedClickRequiresLeftOrLegacyRelease(t *testing.T) {
+	for _, button := range []tea.MouseButton{tea.MouseRight, tea.MouseMiddle, tea.MouseNone} {
+		t.Run(tea.Mouse{Button: button}.String(), func(t *testing.T) {
+			m, r := mouseBoard(t)
+			y := rowY(t, m, "needs-row-summary")
+			m = quiet(t, m, press(y))
+			m, cmd := m.Update(tea.MouseReleaseMsg{X: 6, Y: y, Button: button})
+			_ = settle(m, cmd)
+			want := 0
+			if button == tea.MouseNone { // Legacy reports do not identify the released button.
+				want = 1
+			}
+			if got := len(r.recorded()); got != want {
+				t.Fatalf("release button %v attached %d times, want %d", button, got, want)
+			}
+		})
+	}
+}
+
+func TestMouse_InterruptedClickDoesNotOpenAfterReturningToBoard(t *testing.T) {
+	for _, key := range []tea.KeyPressMsg{keyRune('n'), keyCtrlX} {
+		t.Run(key.String(), func(t *testing.T) {
+			m, r := mouseBoard(t)
+			y := rowY(t, m, "needs-row-summary")
+			m = quiet(t, m, press(y))
+			m = send(m, key)
+			m = send(m, keyEsc)
+			m = quiet(t, m, release(y))
+			if len(r.recorded()) != 0 {
+				t.Fatal("interrupted click opened a session")
+			}
+		})
+	}
+}
+
+func TestMouse_SectionHeadersFitTheTerminal(t *testing.T) {
+	for _, grouping := range []groupingMode{groupByStatus, groupByRepo, groupByTag} {
+		m, _ := mouseBoard(t)
+		rm := m.(rootModel)
+		rm.width, rm.general.width = 24, 24
+		for i := range rm.general.sessions {
+			rm.general.sessions[i].Cwd = "/very/long/repository/path/that/would/wrap"
+			rm.general.sessions[i].Tag = strings.Repeat("界", 30)
+		}
+		rm.general.setLayout(grouping, orderByArrival)
+		for _, section := range rm.general.sectionOrder() {
+			if got := lipgloss.Width("  " + rm.general.sectionHeader(section)); got > rm.width {
+				t.Fatalf("section header is %d cells wide, terminal is %d", got, rm.width)
+			}
+		}
+	}
+}
+
+func TestMouse_BannerLayoutChangesOnlyWhenExpiryIsHandled(t *testing.T) {
+	m, _ := mouseBoard(t)
+	rm := m.(rootModel)
+	_ = rm.general.setBanner("notification")
+	m = rm
+	y := rowY(t, m, "review-row-summary")
+	// The displayed banner must keep its rows until Update processes its expiry.
+	rm.general.bannerExpiry = time.Now().Add(-time.Second)
+	m = click(t, rm, y)
+	if got := selectedOf(m); got != "endpoint/r1" {
+		t.Fatalf("click on the displayed review row selected %q", got)
+	}
+	m = send(m, bannerExpireMsg{})
+	if strings.Contains(view(m), "notification") {
+		t.Fatal("handled expiry left the banner visible")
+	}
+	rm = m.(rootModel)
+	_ = rm.general.setBanner("new notification")
+	m = send(rm, bannerExpireMsg{}) // A prior banner's tick cannot clear a new one.
+	if !strings.Contains(view(m), "new notification") {
+		t.Fatal("stale expiry cleared a newer banner")
 	}
 }

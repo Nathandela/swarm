@@ -94,3 +94,22 @@ SGR mouse reports were written to the pty, and the TUI's raw output was checked:
 | Tracking back on after `ctrl+q` | PASS |
 | Off on the launch form, back on at the board | PASS |
 | Off when the TUI exits | PASS |
+
+## Pre-merge regression review, 2026-10-09
+
+Four added tests reproduced failures against `9cab97e9`: an armed left click opened
+on a right/middle release, a click survived opening and cancelling a form/confirm,
+long section headings wrapped, and wall-clock banner expiry shifted click targets
+before its expiry message was handled. Legacy releases without a button identity
+were separately verified to remain supported.
+
+After the fixes, all 22 `TestMouse_*` tests pass with Go 1.25.0. Section headings now
+use the existing display-cell clamp, interrupted gestures are cancelled, and banner
+expiry changes the layout in `Update`, with stale expiry messages preserving newer
+banners. No dependencies were added.
+
+The required container scan also found Go standard-library vulnerabilities published
+on October 8: [GO-2026-6609](https://pkg.go.dev/vuln/GO-2026-6609) and
+[GO-2026-6607](https://pkg.go.dev/vuln/GO-2026-6607). The push-gateway builder and both
+the snapshot and publish release toolchains now pin the patched Go 1.26.9. The module
+floor and its Go 1.25.0 lint compatibility check remain supported.

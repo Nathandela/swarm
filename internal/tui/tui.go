@@ -618,8 +618,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case bannerExpireMsg:
-		// The transient banner reached its expiry; re-emit the general frame so the
-		// (now wall-clock-expired) banner disappears. Mirrors repaintMsg's full
+		// Change the layout in Update so mouse hit-tests retain the displayed rows
+		// until expiry is handled. An older banner's tick cannot clear a newer one.
+		if !time.Now().Before(m.general.bannerExpiry) {
+			m.general.bannerText = ""
+		}
+		// Re-emit the general frame. Mirrors repaintMsg's full
 		// re-emit (SGR nonce + ClearScreen); a no-op off the general view.
 		if m.screen != screenGeneral {
 			return m, nil
@@ -666,6 +670,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The daemon pushed a pair_pending (SAS gate): open the pairing-confirm
 		// modal over whatever screen is showing. It stays up until answered (A4).
 		m.pairing = &pairingModal{sas: msg.SAS, deviceName: msg.DeviceName}
+		m.general.openID = ""
 		return m, nil
 
 	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg:
@@ -674,6 +679,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateBoardMouse(msg.(tea.MouseMsg))
 
 	case tea.KeyPressMsg:
+		m.general.openID = ""
 		// The SAS gate is modal: while it is open it owns every keypress so a
 		// y/n/enter/esc can never leak through to the board beneath it.
 		if m.pairing != nil {

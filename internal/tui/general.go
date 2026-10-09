@@ -456,7 +456,7 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 }
 
 // bannerExpireMsg fires when the transient banner reaches its expiry, prompting a
-// frame re-emit so the (wall-clock-expired) banner is cleared from the render.
+// frame re-emit after Update clears the expired banner.
 type bannerExpireMsg struct{}
 
 // bannerTick schedules the banner's auto-expiry re-emit.
@@ -464,9 +464,9 @@ func bannerTick() tea.Cmd {
 	return tea.Tick(bannerDuration, func(time.Time) tea.Msg { return bannerExpireMsg{} })
 }
 
-// bannerLine renders the transient banner, or "" once it has expired or is unset.
+// bannerLine renders the banner until Update handles its expiry.
 func (m generalModel) bannerLine() string {
-	if m.bannerText == "" || !time.Now().Before(m.bannerExpiry) {
+	if m.bannerText == "" {
 		return ""
 	}
 	text := "● " + m.bannerText
@@ -569,7 +569,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// openSelected is ⏎ on the board, and a double-click (ADR-029 D3): attach the
+// openSelected is ⏎ on the board, and a click on the selected row (ADR-029 D3): attach the
 // selection captured now.
 func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 	s, ok := m.general.selected()
@@ -616,11 +616,13 @@ func (m rootModel) boardRowAt(y int) (protocol.SessionView, int, bool) {
 
 func (m rootModel) updateBoardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if !m.boardTakesMouse() {
+		m.general.openID = ""
 		return m, nil
 	}
 	mouse := msg.Mouse()
 	switch msg.(type) {
 	case tea.MouseWheelMsg:
+		m.general.openID = ""
 		switch mouse.Button {
 		case tea.MouseWheelUp:
 			m.general.scroll(-1)
@@ -644,6 +646,10 @@ func (m rootModel) updateBoardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		m.general.sel = idx
 	case tea.MouseReleaseMsg:
+		// Legacy reports omit the released button; SGR reports must match the left press.
+		if mouse.Button != tea.MouseLeft && mouse.Button != tea.MouseNone {
+			return m, nil
+		}
 		// Acting here rather than on the press keeps the release report out of the
 		// agent: by the time the attach releases the terminal there is none left to
 		// arrive. A release off the armed row cancels, as in any desktop UI.
@@ -919,8 +925,7 @@ type boardLine struct {
 // layout visits the board's lines top to bottom, one per screen row. It is the one
 // description of the board's shape: view renders from it and rowAt hit-tests
 // against it (ADR-029), so a click can never land on a different row than the one
-// drawn there. banner says whether the notification line is showing; the caller
-// decides it once, because bannerLine reads the clock.
+// drawn there. banner says whether the notification line is showing.
 func (m generalModel) layout(banner bool, visit func(boardLine)) {
 	visit(boardLine{kind: lineHeader})
 	visit(boardLine{kind: lineSpacer})
@@ -967,11 +972,15 @@ func (m generalModel) view() string {
 // sectionHeader renders one section's title: the status group's own header, or the
 // repo/tag key in capitals.
 func (m generalModel) sectionHeader(section string) string {
+	header, style := strings.ToUpper(section), styleTitle
 	if m.grouping == groupByStatus {
 		g := status.Group(section)
-		return groupHeaderStyle(g).Render(groupHeader(g))
+		header, style = groupHeader(g), groupHeaderStyle(g)
 	}
-	return styleTitle.Render(strings.ToUpper(section))
+	if m.width > 0 {
+		header = clampCells(header, m.width-2)
+	}
+	return style.Render(header)
 }
 
 // rowAt returns the session drawn on board line y and its flat display index, or

@@ -51,6 +51,8 @@ and no timing is involved. It acts on the **release**, not the press. Acting on 
 press would release the terminal to the agent with the release report still to come,
 and that report would be forwarded to the agent as input, the ADR-019 leak. A release
 on a different row cancels, and a release with no armed press opens nothing.
+Keyboard input, wheel input and entering a modal cancel the armed click. SGR releases
+must identify the left button; legacy releases may omit the button identity.
 
 The first draft of this decision was a timed double-click (two presses on one row
 within 500 ms). Field testing from Termius on iOS showed it cannot work there: a tap
@@ -83,13 +85,9 @@ owner chose the clock-free rule, which works for a tap and a desktop click alike
 - On the board itself the terminal's native text selection needs the terminal's
   bypass modifier (Shift in most terminals, Option in iTerm2 and Terminal.app) for as
   long as the board is in plain navigation.
-- The hit-test assumes one board line per terminal row. Every row, the header and
-  the banner are clamped to the width. A section header naming a repo or tag wider
-  than the terminal is not, so it wraps, and clicks below it land one row off until
-  the window is wider. That wrap already breaks the board's fixed-height layout today.
-- The banner's presence is decided by the wall clock at render time. A click in the
-  instant between the banner's expiry and the repaint that removes it can land two
-  rows off.
+- Section titles are clamped to the terminal width, so long repo or tag names are
+  shortened. Banner expiry changes the layout only when the update loop handles its
+  expiry message, keeping the rendered and clickable rows aligned.
 
 ## Alternatives Considered
 
