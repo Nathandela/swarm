@@ -81,8 +81,8 @@ func TestGeneral_RowShowsAllFields(t *testing.T) {
 	if !strings.Contains(row, "~/Code/quanthome-api") { // (2) home-shortened cwd
 		t.Errorf("row missing home-shortened cwd (~/Code/quanthome-api):\n%s", row)
 	}
-	if !strings.Contains(row, "needs input") { // (3) per-row status (lowercased group label)
-		t.Errorf("row missing status token 'needs input':\n%s", row)
+	if !strings.Contains(row, "approval") { // (3) per-row status (lowercased group label)
+		t.Errorf("row missing status token 'approval':\n%s", row)
 	}
 	if !elapsedRe.MatchString(row) { // (4) elapsed/last-activity token
 		t.Errorf("row missing elapsed-time token (e.g. 12m):\n%s", row)

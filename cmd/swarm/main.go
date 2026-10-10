@@ -237,6 +237,7 @@ func runTUI(stdout, stderr io.Writer) int {
 		opts = append(opts, tui.WithLayoutStore(tui.NewFileLayoutStore(path)))
 	}
 	model := tui.New(client, detectAgents(os.Getenv(envFakeAgentBin)), opts...)
+	defer func() { _ = model.(interface{ Close() error }).Close() }()
 
 	prog = tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out))
 	if _, err := prog.Run(); err != nil && !errors.Is(err, tea.ErrInterrupted) {

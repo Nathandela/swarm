@@ -35,6 +35,7 @@ const (
 	InteractionPrompt     Interaction = "prompt"
 	InteractionPermission Interaction = "permission"
 	InteractionUnknown    Interaction = "unknown"
+	InteractionError      Interaction = "error"
 )
 
 // Group is the derived, display-facing status shown to users.
@@ -62,7 +63,7 @@ type Status struct {
 //  2. Otherwise, an active or unknown turn is Working: the spec's Working
 //     rule ORs in both with no interaction qualifier, so it wins outright.
 //  3. Otherwise (running and idle), interaction decides: prompt or
-//     permission is Needs input; none or unknown is Ready for review.
+//     permission or error is Needs input; none or unknown is Ready for review.
 func Derive(s Status) Group {
 	if s.Process != ProcessRunning {
 		return GroupCompleted
@@ -70,7 +71,7 @@ func Derive(s Status) Group {
 	if s.Turn == TurnActive || s.Turn == TurnUnknown {
 		return GroupWorking
 	}
-	if s.Interaction == InteractionPrompt || s.Interaction == InteractionPermission {
+	if s.Interaction == InteractionPrompt || s.Interaction == InteractionPermission || s.Interaction == InteractionError {
 		return GroupNeedsInput
 	}
 	return GroupReadyForReview

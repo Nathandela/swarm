@@ -112,10 +112,11 @@ type workingAnimationMsg struct{}
 // and a SUCCESS carries the daemon-returned session id + agent so the router can
 // auto-attach straight into the new session (bd agents-tracker-stc).
 type launchResultMsg struct {
-	id    string // namespaced id of the new session on success ("" if the producer omits it)
-	agent string // the new session's agent, for the attach chrome label
-	name  string // the new session's label (P2); carried into the auto-attach chrome hint
-	err   error
+	generation uint64
+	id         string // namespaced id of the new session on success ("" if the producer omits it)
+	agent      string // the new session's agent, for the attach chrome label
+	name       string // the new session's label (P2); carried into the auto-attach chrome hint
+	err        error
 }
 
 // beginUpgradeMsg kicks the daemon auto-restart from Init through Update (which owns
@@ -128,6 +129,7 @@ type beginUpgradeMsg struct{}
 type daemonRestartedMsg struct {
 	client Client
 	err    error
+	result *daemonReconnectedMsg
 }
 
 // detectMsg carries the result of an async agent-detection probe. Detection runs
@@ -176,8 +178,9 @@ func workingAnimationTick() tea.Cmd {
 // rootModel is the screen router: the only tea.Model, holding the screen
 // sub-models and the shared client/size state.
 type rootModel struct {
-	client Client
-	detect DetectFunc
+	client      Client
+	connections *clientLifetime
+	detect      DetectFunc
 
 	width  int
 	height int
@@ -194,6 +197,10 @@ type rootModel struct {
 	reconnectGeneration                          uint64
 	reconnectAttempts                            int
 	reconnecting                                 bool
+	reconnectDialing                             bool
+	rosterInvalidations                          bool
+	rosterRefreshing, rosterDirty                bool
+	rosterRevision                               uint64
 	// optionsGeneration monotonically stamps every context-guard settings RPC. It
 	// survives closing/reopening the form, so an older response cannot land in a new
 	// options incarnation that happens to reuse the same local focus state.
@@ -214,8 +221,8 @@ type rootModel struct {
 	animatingWorking bool
 
 	// connectionLost is PERSISTENT (unlike the transient V-5 banner): once the
-	// daemon connection is gone for good, the roster is frozen forever for the
-	// life of this process, so the indicator must survive past bannerDuration
+	// daemon connection is lost, cached rows remain stale until a complete replacement
+	// subscription and roster have been obtained, so the indicator must survive past bannerDuration
 	// instead of fading while the freeze remains (agents-tracker-1uq).
 	connectionLost bool
 
@@ -253,6 +260,7 @@ func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 	events, _ := c.Subscribe()
 	m := rootModel{
 		client:        c,
+		connections:   newClientLifetime(c),
 		detect:        detect,
 		screen:        screenGeneral,
 		general:       newGeneralModel(boundedList(c)),
@@ -339,6 +347,20 @@ func waitForEvent(ch <-chan protocol.Event) tea.Cmd {
 }
 
 func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.connections == nil {
+		m.connections = newClientLifetime(m.client)
+	}
+	if generation, ok := clientResultGeneration(msg); ok {
+		if generation != m.reconnectGeneration {
+			return m, nil
+		}
+		m.rosterRevision++
+	}
+	next, cmd := m.update(msg)
+	return next, stampClientResults(cmd, next.(rootModel).reconnectGeneration)
+}
+
+func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -351,6 +373,10 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventMsg:
 		if msg.from != nil && msg.from != m.events {
 			return m, nil
+		}
+		if m.rosterInvalidations {
+			next, refresh := m.refreshRoster()
+			return next, tea.Batch(refresh, waitForEvent(m.events))
 		}
 		// A status change updates the affected row in place and, on a transition
 		// into needs_input/ready_for_review, prints a notification banner (V-5).
@@ -368,6 +394,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.from != m.events {
 			return m, nil
 		}
+		if m.connectionLost {
+			return m, nil
+		}
 		// The daemon connection is gone for good: set the PERSISTENT indicator (see
 		// generalStatus) so it survives past the transient banner's bannerDuration —
 		// a 4s banner would fade while the roster stays frozen, looking like false
@@ -376,6 +405,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tick (see repaintMsg case) — there is nothing left to wait on or refresh
 		// (agents-tracker-1uq).
 		m.connectionLost = true
+		m.rosterRefreshing, m.rosterDirty = false, false
 		m.invalidateOptionsConnection()
 		m.accountsGeneration++
 		m.accounts.generation = m.accountsGeneration
@@ -420,63 +450,37 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.restartAttempted = true
+		m.reconnectGeneration++
+		m.connectionLost, m.reconnecting, m.reconnectDialing = true, false, false
 		banner := m.general.setBanner("upgrading daemon " + m.daemonVersion + " -> " + m.clientVersion + "...")
-		return m, tea.Batch(banner, restartDaemonCmd(m.restarter))
+		return m, tea.Batch(banner, restartDaemonCmd(m.restarter, m.connections, m.reconnectGeneration))
 
 	case daemonRestartedMsg:
-		// The restart+reconnect resolved. A failure banners the reason (never silent).
-		if msg.err != nil {
-			return m, m.general.setBanner("daemon upgrade failed: " + msg.err.Error())
+		result := msg.result
+		if result != nil && result.generation != m.reconnectGeneration {
+			m.connections.discard(result.owned)
+			return m, nil
 		}
-		// Swap to the fresh client and re-read its (now matching) build version, which
-		// clears the skew. Sessions survive the restart (shims own the PTYs), so the
-		// board stays accurate; we only re-subscribe for future events. The old client's
-		// pending waitForEvent does NOT stay blocked — the old daemon's death closes its
-		// eventsCh, so that stale waitForEvent fires a connectionLostMsg stamped with the
-		// dead OLD channel. The stale-source guard (connectionLostMsg case) drops it, and
-		// clearing connectionLost here covers the reverse ordering where it landed first.
-		m.client = msg.client
-		m.invalidateOptionsConnection()
-		m.accountsClientGeneration++
-		m.accountsGeneration++
-		m.accounts.generation = m.accountsGeneration
-		m.accounts.busy = false
-		if bv, ok := msg.client.(interface{ BuildVersion() string }); ok {
-			m.daemonVersion = bv.BuildVersion()
+		if result == nil {
+			m.reconnectGeneration++
+			prepared := prepareDaemonConnection(m.connections, m.reconnectGeneration, msg.client, msg.err)
+			result = &prepared
 		}
-		events, serr := msg.client.Subscribe()
-		if serr != nil {
-			// The reconnect succeeded but re-subscribing did not: surface it instead of
-			// silently leaving m.events nil (a live-looking board that never updates —
-			// codex+Fable item 3). Events stay nil, but the user is told, not left dark.
-			return m, m.general.setBanner("daemon upgraded but event stream failed: " + serr.Error())
+		m.connectionLost, m.reconnecting, m.reconnectDialing = true, true, false
+		next, cmd := m.applyDaemonReconnected(*result)
+		m = next.(rootModel)
+		if result.err != nil {
+			return m, tea.Batch(cmd, m.general.setBanner("daemon upgrade failed: "+result.err.Error()))
 		}
-		m.events = events
-		// Clear any connection-lost state a stale pre-upgrade loss may have set, and
-		// resume the elapsed-column repaint tick if it was halted while on the general
-		// view (mirrors enterGeneral's single-tick guard). Without this the board would
-		// stay frozen when the stale loss arrived before the restart completed.
-		m.connectionLost = false
-		cmds := []tea.Cmd{m.general.setBanner("daemon upgraded"), waitForEvent(m.events)}
-		if m.screen == screenGeneral && !m.ticking {
-			m.ticking = true
-			cmds = append(cmds, repaintTick())
-		}
-		if cmd := m.armWorkingAnimation(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		if m.screen == screenAccounts {
-			updated, cmd := m.beginAccountsRequest(protocol.AccountsReq{Action: "list"})
-			m = updated.(rootModel)
-			cmds = append(cmds, cmd)
-		}
-		return m, tea.Batch(cmds...)
+		return m, tea.Batch(cmd, m.general.setBanner("daemon upgraded"))
 
 	case daemonReconnectTickMsg:
 		return m.reconnectDaemon(msg)
 
 	case daemonReconnectedMsg:
 		return m.applyDaemonReconnected(msg)
+	case rosterLoadedMsg:
+		return m.applyRoster(msg)
 
 	case accountsReplyMsg:
 		return m.applyAccountsReply(msg)
@@ -633,8 +637,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case repaintMsg:
 		if m.connectionLost {
-			// The roster is frozen forever once the connection is lost — halt the
-			// timer for good so the elapsed-time column stops advancing over data
+			// The roster is stale until recovery — halt the
+			// timer meanwhile so the elapsed-time column stops advancing over data
 			// that will never update again (false liveness, agents-tracker-1uq).
 			m.ticking = false
 			return m, nil
@@ -683,7 +687,15 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The SAS gate is modal: while it is open it owns every keypress so a
 		// y/n/enter/esc can never leak through to the board beneath it.
 		if m.pairing != nil {
+			if m.connectionLost {
+				return m, nil
+			}
 			return m.updatePairing(msg)
+		}
+		if m.connectionLost && m.screen != screenGeneral && m.screen != screenAccounts && msg.Code != tea.KeyEsc {
+			if m.screen == screenOptions || msg.Code == tea.KeyEnter || m.screen == screenHandoff && m.handoff.confirmPending() {
+				return m, nil
+			}
 		}
 		switch m.screen {
 		case screenGeneral:
@@ -776,8 +788,7 @@ func (m rootModel) View() tea.View {
 // generalStatus is the context-key line for the general board — or, during a pending
 // kill/delete confirm, that sub-state's keys. Promoted from the old inline footer
 // (general.view) to the persistent bottom bar (A-5, ADR-006). A lost connection
-// (agents-tracker-1uq) takes priority over both: the roster is frozen and staying
-// frozen, which outranks a mid-confirm prompt or the normal keymap.
+// (agents-tracker-1uq) takes priority until subscription and roster recovery complete.
 func (m rootModel) generalStatus() string {
 	if m.connectionLost {
 		if m.reconnecting {
@@ -812,10 +823,11 @@ func WithDaemonRestarter(r DaemonRestarter) Option {
 
 // restartDaemonCmd runs the injected restart+reconnect off the update loop and reports
 // its outcome as a daemonRestartedMsg.
-func restartDaemonCmd(r DaemonRestarter) tea.Cmd {
+func restartDaemonCmd(r DaemonRestarter, lifetime *clientLifetime, generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		c, err := r()
-		return daemonRestartedMsg{client: c, err: err}
+		prepared := prepareDaemonConnection(lifetime, generation, c, err)
+		return daemonRestartedMsg{client: prepared.client, err: prepared.err, result: &prepared}
 	}
 }
 
@@ -939,6 +951,9 @@ func semverParts(core string) []int {
 // present, takes the row directly above the bar (persistent, distinct from a session
 // row). Before the first WindowSizeMsg (height unknown) the tail simply follows the body.
 func (m rootModel) composeBoard(body, status string) string {
+	if m.connectionLost {
+		status = m.generalStatus()
+	}
 	// Clamp the status text to the terminal width (less its 2-cell indent) so the bar
 	// can never wrap onto a second row and break the fixed-height board contract. The
 	// PLAIN text is clamped before styling, so an ANSI escape is never cut mid-sequence.
@@ -1149,6 +1164,20 @@ func groupIcon(g status.Group, frame uint64) string {
 
 // statusToken is the per-row status word: the group name, lowercased with the
 // underscore rendered as a space ("needs_input" -> "needs input").
+func attentionToken(s protocol.SessionView) string {
+	if s.Group == status.GroupNeedsInput {
+		switch s.Status.Interaction {
+		case status.InteractionPermission:
+			return "approval"
+		case status.InteractionPrompt:
+			return "question"
+		case status.InteractionError:
+			return "error"
+		}
+	}
+	return statusToken(s.Group)
+}
+
 func statusToken(g status.Group) string {
 	return strings.ReplaceAll(string(g), "_", " ")
 }
