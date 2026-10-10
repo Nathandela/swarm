@@ -1,4 +1,4 @@
-# ADR-030 Unit A3: red run
+# ADR-031 Unit A3: red run
 
 Tests: `internal/skeleton/account_quota_login_expired_test.go` (written before any implementation).
 

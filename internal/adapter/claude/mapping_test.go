@@ -45,7 +45,7 @@ func TestHookMapping_DrivesStatusViaSignalSources(t *testing.T) {
 		// B5: a bare Notification (no confirmed subtype — the fixture's is such) must
 		// NOT be assumed a permission prompt; it degrades to none. A permission signal
 		// comes from the dedicated PermissionRequest event, or an explicit subtype.
-		{"Notification with no subtype degrades to none (B5)", "Notification", fixturePayload["Notification"], status.TurnIdle, status.InteractionNone},
+		{"Notification with no subtype preserves the turn", "Notification", fixturePayload["Notification"], status.TurnUnknown, status.InteractionNone},
 		{"Notification idle subtype -> none", "Notification", map[string]string{"notification_type": "idle"}, status.TurnIdle, status.InteractionNone},
 		{"Notification explicit permission subtype -> permission", "Notification", map[string]string{"notification_type": "permission"}, status.TurnIdle, status.InteractionPermission},
 		// The values real Claude Code posts (docs/verification/spike-SB.md, 3/3 runs).

@@ -428,10 +428,12 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	}
 
 	var oldGroup status.Group
+	var oldAttention string
 	found := false
 	for i := range m.sessions {
 		if m.sessions[i].ID == s.ID {
 			oldGroup = m.sessions[i].Group
+			oldAttention = attentionToken(m.sessions[i])
 			m.sessions[i] = s
 			found = true
 			break
@@ -442,13 +444,16 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	}
 	m.refreshLayout(selID)
 
-	if bannerGroup(s.Group) && (!found || oldGroup != s.Group) {
+	if bannerGroup(s.Group) && (!found || oldGroup != s.Group || oldAttention != attentionToken(s)) {
 		// A transition INTO needs_input/ready_for_review raises a transient banner
 		// (V-5) rendered IN View().Content, so it is visible under the alt-screen —
 		// where the former tea.Printf (which writes to scrollback above the program)
 		// was a no-op. It auto-expires after bannerDuration; the tick re-emits the
 		// frame at expiry so the banner disappears on time.
 		m.bannerText = displayName(s) + " " + statusToken(s.Group)
+		if label := attentionToken(s); label != statusToken(s.Group) {
+			m.bannerText += " (" + label + ")"
+		}
 		m.bannerExpiry = time.Now().Add(bannerDuration)
 		return bannerTick()
 	}
@@ -486,6 +491,24 @@ func bannerGroup(g status.Group) bool {
 // ---------------------------------------------------------------------------
 
 func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.connectionLost && k.Code != tea.KeyEsc {
+		if m.general.editing {
+			if k.Code == tea.KeyEnter {
+				return m, nil
+			}
+			return m.updateRename(k)
+		}
+		if k.Code == tea.KeyDown || k.Text == "j" {
+			m.general.move(1)
+		}
+		if k.Code == tea.KeyUp || k.Text == "k" {
+			m.general.move(-1)
+		}
+		if k.Text == "r" && !m.general.confirm {
+			return m.retryDaemonConnection()
+		}
+		return m, nil
+	}
 	if m.general.editing {
 		return m.updateRename(k)
 	}
@@ -602,7 +625,7 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 // pairing modal, the attach screen, inline edits and confirms keep the terminal's
 // own selection and paste, and drop any report already in flight.
 func (m rootModel) boardTakesMouse() bool {
-	return m.screen == screenGeneral && m.pairing == nil && !m.general.editing && !m.general.confirm
+	return !m.connectionLost && m.screen == screenGeneral && m.pairing == nil && !m.general.editing && !m.general.confirm
 }
 
 // boardRowAt maps screen row y to the session drawn there. Rows composeBoard clipped
@@ -744,16 +767,18 @@ func isCtrlX(k tea.KeyPressMsg) bool {
 // row (and acknowledge it) and a failure can be surfaced, instead of relying on the
 // eventual daemon event (the field-test "nothing happens - looks stale").
 type deleteDoneMsg struct {
-	id  string
-	err error
+	generation uint64
+	id         string
+	err        error
 }
 
 // killDoneMsg carries a kill's outcome so a failure is surfaced rather than silently
 // discarded. A success is a no-op on the board: the daemon event transitions the row
 // to completed (it is not removed).
 type killDoneMsg struct {
-	id  string
-	err error
+	generation uint64
+	id         string
+	err        error
 }
 
 func killCmd(c Client, id string) tea.Cmd {
@@ -764,9 +789,10 @@ func killCmd(c Client, id string) tea.Cmd {
 // skew refusal) is surfaced on the banner, and a success updates the row's label
 // optimistically — the daemon's roster event then re-applies the same name (F-safe).
 type renameDoneMsg struct {
-	id   string
-	name string
-	err  error
+	generation uint64
+	id         string
+	name       string
+	err        error
 }
 
 func renameCmd(c Client, id, name string) tea.Cmd {
@@ -774,9 +800,10 @@ func renameCmd(c Client, id, name string) tea.Cmd {
 }
 
 type tagDoneMsg struct {
-	id  string
-	tag string
-	err error
+	generation uint64
+	id         string
+	tag        string
+	err        error
 }
 
 func setTagCmd(c Client, id, tag string) tea.Cmd {
@@ -1193,7 +1220,7 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 		styleAgent.Render(padRight(m.nameCell(s, cols.name), cols.name)) +
 		styleDim.Render(padRight(clampCells(s.Agent, colAgent-1), colAgent)) +
 		styleDim.Render(padRight(clampCells(shortenCwd(s.Cwd), cols.cwd-1), cols.cwd)) +
-		gs.Render(padRight(statusToken(g), colStatus)) +
+		gs.Render(padRight(attentionToken(s), colStatus)) +
 		tail
 	return prefix + fields
 }

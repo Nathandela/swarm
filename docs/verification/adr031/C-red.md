@@ -1,4 +1,4 @@
-# ADR-030 Unit C: red run
+# ADR-031 Unit C: red run
 
 Tests: `internal/tui/accounts_needs_login_test.go` (written before any implementation).
 

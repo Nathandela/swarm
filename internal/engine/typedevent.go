@@ -26,8 +26,6 @@ package engine
 
 import (
 	"fmt"
-
-	"github.com/Nathandela/swarm/internal/status"
 )
 
 // ApplyTypedEvent applies one typed status event for sessionID, exactly as HandleCallback
@@ -58,39 +56,29 @@ func (e *Engine) ApplyTypedEvent(sessionID, event string, payload map[string]str
 		e.mu.Unlock()
 		return fmt.Errorf("engine: typed event for unregistered or ended session %q", sessionID)
 	}
-	countChild(s, event)
 	dims := deriveDims(s.sources, event, payload)
 	if len(dims) == 0 {
 		e.mu.Unlock()
 		return nil // unmapped: benign, exactly as on the hook path
 	}
 	now := e.now()
-	idleStop := event == stopEvent && dims[PayloadKeyTurn] == string(status.TurnIdle)
-	dims = withChildrenHoldingTheTurn(s, event, dims)
-	if dims = withoutPostStopReactivation(s, event, dims, now); len(dims) == 0 {
-		e.mu.Unlock()
-		return nil
-	}
 	// The sequence is drawn HERE, from a per-session in-memory monotonic counter, and it is
 	// allocated under e.mu -- so two frames can never draw the same number and have the
 	// second silently rejected as a replay by applyTyped's high-water.
 	s.typedSeq++
-	next, advanced, err := applyTyped(s, s.typedSeq, dims)
+	next, advanced, typed, err := applySignal(s, event, payload, s.typedSeq, now)
 	if err != nil {
 		e.mu.Unlock()
 		return err
 	}
 	if !advanced {
-		// Unreachable with a strictly increasing counter, and reported rather than hidden:
-		// silence here is the exact drop shape §R7.3 refuses.
 		e.mu.Unlock()
-		return fmt.Errorf("engine: typed event %q for %q advanced no dimension at sequence %d", event, sessionID, s.typedSeq)
+		return nil
 	}
-	s.lastTypedAt = now
+	if typed {
+		s.lastTypedAt = now
+	}
 	s.lastSignalAt = now
-	if idleStop {
-		s.lastStopAt = now
-	}
 	changed := commit(s, next)
 	e.mu.Unlock()
 

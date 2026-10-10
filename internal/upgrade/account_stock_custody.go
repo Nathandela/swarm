@@ -33,7 +33,7 @@ func accountStockCustodyGuard(root *os.Root, card CompatManifest) error {
 	for _, entry := range entries {
 		name := entry.Name()
 		if stem, ok := strings.CutSuffix(name, ".lock"); ok && accountProfileName(stem) {
-			// Claude Code's legacy proper-lockfile directory, possibly left by a crash (ADR-030).
+			// Claude Code's legacy proper-lockfile directory, possibly left by a crash (ADR-031).
 			info, err := profiles.Lstat(name)
 			if err != nil || !info.IsDir() {
 				return errors.New("account stock profile inventory contains an unsafe entry")

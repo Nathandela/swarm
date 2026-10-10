@@ -66,7 +66,7 @@ var eventSources = []struct {
 	// r1-codex-gate.md:129-131), so without the row a session the OWNER approved at the
 	// terminal keeps showing an awaiting-input badge on the phone until the turn ends.
 	{event: "item/fileChange/requestApproval", turn: "idle", interaction: "permission", capture: true},
-	{event: "serverRequest/resolved", interaction: "none"},
+	{event: "serverRequest/resolved", turn: "active", interaction: "none"},
 	// The CONTENT rows. They map no status dimension at all -- the engine's deriveDims
 	// drops an empty turn and an empty interaction, so they are benign no-ops on the status
 	// path -- and exist because their bodies are what M4.2 shapes into the transcript:

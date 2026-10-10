@@ -603,7 +603,7 @@ func TestAccounts_ReconnectReloadsCapabilitiesAndRejectsOldClientReplies(t *test
 	}
 	reconnected, _ := dialing.Update(dial())
 	rm = reconnected.(rootModel)
-	if rm.connectionLost || rm.client != fresh || rm.events != fresh.events || !rm.accounts.busy {
+	if rm.connectionLost || rm.client != fresh || (rm.events == c.events || rm.events == nil) || !rm.accounts.busy {
 		t.Fatal("reconnect did not resubscribe and reload Accounts")
 	}
 	old := accountsReplyMsg{generation: oldGeneration, clientGeneration: 0, action: "list", reply: protocol.AccountsReply{Revision: 99}}

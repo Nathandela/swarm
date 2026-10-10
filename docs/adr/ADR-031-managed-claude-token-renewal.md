@@ -1,4 +1,4 @@
-# ADR-030: Managed Claude profiles renew their own expired access token
+# ADR-031: Managed Claude profiles renew their own expired access token
 
 - Status: Proposed
 - Date: 2026-10-10

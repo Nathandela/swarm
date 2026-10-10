@@ -1,4 +1,4 @@
-# ADR-030 Unit B red run
+# ADR-031 Unit B red run
 
 Tests: `internal/upgrade/account_stock_custody_lock_test.go`
 

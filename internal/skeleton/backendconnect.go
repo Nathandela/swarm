@@ -659,15 +659,17 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 			// application, the thread adoption and the item path (backend.go). A notification
 			// and a server-request differ only in whether an id rides along, and the pump
 			// reads that off the frame itself, so both arrive here as the same verbatim bytes.
-			OnNotify: func(method string, params json.RawMessage) {
-				at := time.Now()
-				frame := rebuildFrame(method, nil, params)
-				d.ingestBackendFrameForFeed(id, expectedInstance, feed, method, frame, at)
-			},
-			OnRequest: func(rid json.RawMessage, method string, params json.RawMessage) {
-				at := time.Now()
-				frame := rebuildFrame(method, rid, params)
-				d.ingestBackendFrameForFeed(id, expectedInstance, feed, method, frame, at)
+			OnFrame: func(method string, frame json.RawMessage) {
+				var envelope struct {
+					Params json.RawMessage `json:"params"`
+					ID     json.RawMessage `json:"id"`
+				}
+				if json.Unmarshal(frame, &envelope) != nil {
+					return
+				}
+				// ContextGuard keeps its characterized projection; attention validates untouched bytes.
+				guardFrame := rebuildFrame(method, envelope.ID, envelope.Params)
+				d.ingestBackendFrameForFeed(id, expectedInstance, feed, method, frame, time.Now(), guardFrame)
 			},
 		})
 		if err == nil {

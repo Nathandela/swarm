@@ -61,13 +61,14 @@ const (
 // optional subtype keys let one event map by a payload field (e.g. a Claude
 // Notification whose subtype distinguishes a permission prompt from an idle nudge):
 // descKeySubtypeField names the payload field carrying the subtype, and
-// descKeySubtypeMap is a "subtype=interaction;..." table selecting the interaction.
+// descKeySubtypeMap / descKeySubtypeTurn select interaction and turn from tables.
 const (
 	descKeyEvent        = "event"
 	descKeyTurn         = "turn"
 	descKeyInteraction  = "interaction"
 	descKeySubtypeField = "subtype_field"
 	descKeySubtypeMap   = "subtype_interaction"
+	descKeySubtypeTurn  = "subtype_turn"
 )
 
 // Callback is one authenticated status post from a session's `swarm hook`
@@ -175,7 +176,17 @@ type session struct {
 	// subagentStartEvent). It is IN-MEMORY ONLY and never persisted: a daemon
 	// restart forgets it, and the grid path (the workflow row marker in
 	// heuristic.go) re-establishes the truth from the screen, in both directions.
-	children int
+	children          int
+	anonymousChildren int
+	childSeq          uint64
+	childStates       map[string]childState
+	mainTurn          status.Turn
+	inputActor        string
+}
+
+type childState struct {
+	sequence uint64
+	active   bool
 }
 
 // New builds an Engine from cfg, defaulting the injectable effects so a partial
@@ -231,12 +242,13 @@ func (e *Engine) RegisterSession(id, token string, pid int, sources []adapter.Si
 		st = initialStatus[0]
 	}
 	e.sessions[id] = &session{
-		token:   token,
-		pid:     pid,
-		sources: sources,
-		rules:   parseGridRules(sources),
-		alive:   true,
-		status:  st,
+		token:    token,
+		pid:      pid,
+		sources:  sources,
+		rules:    parseGridRules(sources),
+		alive:    true,
+		status:   st,
+		mainTurn: st.Turn,
 	}
 }
 
@@ -294,49 +306,25 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		e.mu.Unlock()
 		return errors.New("engine: callback token does not match the session's live token")
 	}
-	// Outstanding-children accounting, in ARRIVAL order and only for a callback
-	// that authenticated: a rejected post must not move the count.
-	countChild(s, cb.Event)
 	// Normalize the callback's event + payload into status dimensions via the
 	// session's registered SignalSources (the mapping bridge, seam c): a real hook
 	// posts {event, payload fields} and the engine derives turn/interaction from the
 	// adapter's declared event->status descriptor. A pre-normalized caller carrying
 	// explicit turn/interaction dims is honored as-is.
-	dims := deriveDims(s.sources, cb.Event, cb.Payload)
-	if len(dims) == 0 {
-		// The event maps to no status dimension and none was supplied explicitly (an
-		// unmapped event): accept as a benign no-op — the grid heuristic still governs
-		// — rather than reject it as an auth/replay failure.
-		e.mu.Unlock()
-		return nil
-	}
 	now := e.now()
-	// A Stop is the turn boundary whether or not children mask its idle below, so
-	// read the boundary off the Stop's OWN derived turn before masking.
-	idleStop := cb.Event == stopEvent && dims[PayloadKeyTurn] == string(status.TurnIdle)
-	dims = withChildrenHoldingTheTurn(s, cb.Event, dims)
-	if dims = withoutPostStopReactivation(s, cb.Event, dims, now); len(dims) == 0 {
-		// A post-Stop straggler naming nothing but the turn it may not reopen:
-		// accept as a benign no-op, like an unmapped event.
-		e.mu.Unlock()
-		return nil
-	}
-	next, advanced, err := applyTyped(s, cb.Sequence, dims)
+	next, advanced, typed, err := applySignal(s, cb.Event, cb.Payload, cb.Sequence, now)
 	if err != nil {
 		e.mu.Unlock()
-		return err // out-of-vocabulary payload: reject like an auth failure, advance nothing
+		return err
 	}
 	if !advanced {
-		// The sequence is not newer than the high-water of ANY dimension it names:
-		// an exact replay or a stale reorder. Reject without advancing or emitting.
 		e.mu.Unlock()
-		return fmt.Errorf("engine: callback sequence %d is stale or replayed for every named dimension", cb.Sequence)
+		return nil
 	}
-	s.lastTypedAt = now
+	if typed {
+		s.lastTypedAt = now
+	}
 	s.lastSignalAt = now
-	if idleStop {
-		s.lastStopAt = now // arm the turn boundary (postStopGrace)
-	}
 	changed := commit(s, next)
 	e.mu.Unlock()
 
@@ -394,9 +382,20 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	} else {
 		turn, interaction, conclusive = evaluateGridSig(snap, gridSignature(s.sources))
 	}
+	if s.status.Interaction == status.InteractionError {
+		e.mu.Unlock()
+		return
+	}
 	if !conclusive {
 		e.mu.Unlock()
 		return // inconclusive grid tap: preserve the committed status (ADR-007)
+	}
+	// A composer can be idle while the discussion's background work continues.
+	if turn == status.TurnIdle || !hasWorkflowMarker(snap) || hasBusyMarker(snap) || hasClaudeSpinner(snap) {
+		s.mainTurn = turn
+	}
+	if s.children > 0 && turn == status.TurnIdle && interaction == status.InteractionNone {
+		turn = status.TurnActive
 	}
 	next := s.status
 	next.Turn = turn
@@ -490,6 +489,9 @@ func (e *Engine) Tick() {
 				e.now().Sub(j.s.lastSignalAt) >= e.staleness {
 				next = j.s.status
 				next.Turn = status.TurnUnknown
+				if j.s.mainTurn == status.TurnActive {
+					j.s.mainTurn = status.TurnUnknown
+				}
 				changed = commit(j.s, next)
 			}
 			e.mu.Unlock()
@@ -562,14 +564,11 @@ func commit(s *session, next status.Status) bool {
 // advances, so a malformed payload advances nothing and stores no bogus dimension
 // a downstream Derive would have to interpret (F2). Caller holds e.mu.
 func applyTyped(s *session, seq uint64, payload map[string]string) (next status.Status, advanced bool, err error) {
+	if err := validateDims(payload); err != nil {
+		return status.Status{}, false, err
+	}
 	tv, hasTurn := payload[PayloadKeyTurn]
-	if hasTurn && !validTurn(tv) {
-		return status.Status{}, false, fmt.Errorf("engine: callback turn %q is not in the status vocabulary", tv)
-	}
 	iv, hasInter := payload[PayloadKeyInteraction]
-	if hasInter && !validInteraction(iv) {
-		return status.Status{}, false, fmt.Errorf("engine: callback interaction %q is not in the status vocabulary", iv)
-	}
 	next = s.status
 	if hasTurn && seq > s.turnSeq {
 		s.turnSeq = seq
@@ -582,6 +581,16 @@ func applyTyped(s *session, seq uint64, payload map[string]string) (next status.
 		advanced = true
 	}
 	return next, advanced, nil
+}
+
+func validateDims(payload map[string]string) error {
+	if tv, ok := payload[PayloadKeyTurn]; ok && !validTurn(tv) {
+		return fmt.Errorf("engine: callback turn %q is not in the status vocabulary", tv)
+	}
+	if iv, ok := payload[PayloadKeyInteraction]; ok && !validInteraction(iv) {
+		return fmt.Errorf("engine: callback interaction %q is not in the status vocabulary", iv)
+	}
+	return nil
 }
 
 // Stop is a TURN BOUNDARY, not merely another sequence-numbered write. Typed
@@ -634,44 +643,125 @@ var trailingEdgeEvents = map[string]bool{
 	"PostToolUse": true,
 }
 
-// countChild moves the session's outstanding-children count for the bracketing
-// hooks and leaves every other event alone. The DECREMENT FLOORS AT ZERO, which
-// is not defensive rounding: the live capture carries three SubagentStops for two
-// SubagentStarts (an agent RESUME re-fires SubagentStart, and a child can stop
-// without this session ever having seen its start), so an unfloored count drifts
-// negative and the next real child then fails to hold the turn. Nothing resets
-// the count — in particular NOT UserPromptSubmit, which the auto-continuation
-// fires mid-workflow (spike-SE F3). Caller holds e.mu.
-func countChild(s *session, event string) {
-	switch event {
-	case subagentStartEvent:
-		s.children++
-	case subagentStopEvent:
-		if s.children > 0 {
+// Child lifecycles have their own high-water: another actor's newer callback
+// cannot discard this child's start/end, and an unknown stop cannot end a sibling.
+func countChild(s *session, event, actor string, seq uint64) (fresh, changed bool) {
+	if actor == "" {
+		if seq == 0 || seq <= s.childSeq {
+			return false, false
+		}
+		s.childSeq = seq
+		// shortcut: idless legacy hooks use a balanced counter; remove when legacy fixtures retire.
+		if event == subagentStartEvent {
+			s.anonymousChildren++
+			s.children++
+			return true, true
+		}
+		if s.anonymousChildren > 0 {
+			s.anonymousChildren--
+			s.children--
+			return true, true
+		}
+		return true, false
+	}
+	old := s.childStates[actor]
+	if seq == 0 || seq <= old.sequence {
+		return false, false
+	}
+	active := event != subagentStopEvent
+	if event != subagentStartEvent && old.sequence != 0 && !old.active {
+		active = false
+	}
+	if old.active != active {
+		if active {
+			s.children++
+		} else {
 			s.children--
 		}
+		changed = true
 	}
+	if s.childStates == nil {
+		s.childStates = make(map[string]childState)
+	}
+	s.childStates[actor] = childState{sequence: seq, active: active}
+	return true, changed
 }
 
-// withChildrenHoldingTheTurn masks a Stop's idle turn to active while background
-// children are still outstanding: the MAIN loop ended, the workflow did not, and
-// reporting "done" there is the false completion agents-tracker-c7i4 removes
-// (76-91 per session per day, spike-SE). Only Stop is masked — PermissionRequest
-// is also turn=idle, but a session waiting on the human is waiting on the human
-// whether or not children run, and needs_input must never be hidden behind
-// working. Every other callback is returned unchanged, and dims is never mutated
-// in place (deriveDims may return the caller's own payload map). Caller holds
-// e.mu.
-func withChildrenHoldingTheTurn(s *session, event string, dims map[string]string) map[string]string {
-	if event != stopEvent || s.children == 0 || dims[PayloadKeyTurn] != string(status.TurnIdle) {
-		return dims
+// Both typed producers use this reducer; actor attribution precedes aggregation.
+func applySignal(s *session, event string, payload map[string]string, seq uint64, now time.Time) (status.Status, bool, bool, error) {
+	dims := deriveDims(s.sources, event, payload)
+	if len(dims) == 0 {
+		return s.status, false, false, nil
 	}
-	held := make(map[string]string, len(dims))
-	for k, v := range dims {
-		held[k] = v
+	if err := validateDims(dims); err != nil {
+		return status.Status{}, false, false, err
 	}
-	held[PayloadKeyTurn] = string(status.TurnActive)
-	return held
+	actor := payload["agent_id"]
+	waiting := s.status.Interaction == status.InteractionPermission || s.status.Interaction == status.InteractionPrompt || s.status.Interaction == status.InteractionError
+	if event == "Notification" && s.status.Interaction == status.InteractionPermission && dims[PayloadKeyInteraction] == string(status.InteractionPermission) {
+		actor = s.inputActor // a global permission nudge does not replace the requester
+	}
+	lifecycle := event == subagentStartEvent || event == subagentStopEvent
+	childWork := actor != "" && (event == "PreToolUse" || event == "PostToolUse")
+	childFresh, childChanged := false, false
+	if lifecycle || childWork {
+		childFresh, childChanged = countChild(s, event, actor, seq)
+	}
+	if lifecycle {
+		dims = nil
+		if event == subagentStopEvent && childChanged && actor != "" && s.inputActor == actor && waiting {
+			dims = map[string]string{PayloadKeyInteraction: string(status.InteractionNone)}
+		}
+	} else {
+		kept := make(map[string]string, 2)
+		for key, value := range dims {
+			if key == PayloadKeyTurn && actor != "" {
+				continue
+			}
+			if key == PayloadKeyInteraction && value == string(status.InteractionNone) &&
+				((childWork && !waiting) || (waiting && s.inputActor != actor)) {
+				continue
+			}
+			kept[key] = value
+		}
+		dims = withoutPostStopReactivation(s, event, kept, now)
+	}
+	beforeTurn, beforeInter := s.turnSeq, s.interSeq
+	next, typed, err := applyTyped(s, seq, dims)
+	if err != nil {
+		return status.Status{}, false, false, err
+	}
+	if !typed && !childFresh {
+		if len(dims) == 0 && !lifecycle && !childWork {
+			return s.status, false, false, nil
+		}
+		return s.status, false, false, fmt.Errorf("engine: callback sequence %d is stale or replayed for every named dimension", seq)
+	}
+	if s.turnSeq > beforeTurn {
+		s.mainTurn = next.Turn
+		if event == stopEvent && next.Turn == status.TurnIdle {
+			s.lastStopAt = now
+		}
+	}
+	if s.interSeq > beforeInter {
+		if next.Interaction == status.InteractionPermission || next.Interaction == status.InteractionPrompt || next.Interaction == status.InteractionError {
+			s.inputActor = actor
+		} else {
+			s.inputActor = ""
+		}
+	}
+	if typed || childChanged || (childFresh && event == subagentStartEvent) {
+		if next.Interaction == status.InteractionPermission || next.Interaction == status.InteractionPrompt || next.Interaction == status.InteractionError {
+			if s.inputActor != "" {
+				next.Turn = status.TurnIdle
+			}
+		} else if s.children > 0 {
+			next.Turn = status.TurnActive
+		} else {
+			next.Turn = s.mainTurn
+		}
+	}
+	return next, true, typed, nil
 }
 
 // withoutPostStopReactivation drops the turn dimension of a trailing-edge hook
@@ -718,7 +808,11 @@ func deriveDims(sources []adapter.SignalSource, event string, payload map[string
 		return nil // no descriptor for this event: nothing typed to apply
 	}
 	dims := make(map[string]string, 2)
-	if t := desc[descKeyTurn]; t != "" {
+	t := desc[descKeyTurn]
+	if table := desc[descKeySubtypeTurn]; table != "" {
+		t, _ = lookupSubtype(table, payload[desc[descKeySubtypeField]])
+	}
+	if t != "" {
 		dims[PayloadKeyTurn] = t
 	}
 	interaction := desc[descKeyInteraction]
@@ -782,7 +876,7 @@ func validTurn(v string) bool {
 
 func validInteraction(v string) bool {
 	switch status.Interaction(v) {
-	case status.InteractionNone, status.InteractionPrompt, status.InteractionPermission, status.InteractionUnknown:
+	case status.InteractionNone, status.InteractionPrompt, status.InteractionPermission, status.InteractionUnknown, status.InteractionError:
 		return true
 	}
 	return false

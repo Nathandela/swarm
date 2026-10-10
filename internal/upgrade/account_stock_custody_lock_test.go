@@ -10,7 +10,7 @@ import (
 )
 
 // Claude Code's legacy proper-lockfile lock is the sibling directory
-// profiles/<profile>.lock; a crash can leave it behind (ADR-030).
+// profiles/<profile>.lock; a crash can leave it behind (ADR-031).
 func TestAccountStockCustodyGuardAcceptsLeftoverLegacyLockDirectory(t *testing.T) {
 	for name, mode := range map[string]os.FileMode{"private": 0700, "umask-default": 0755} {
 		t.Run(name, func(t *testing.T) {

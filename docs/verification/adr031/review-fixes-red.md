@@ -1,4 +1,4 @@
-# ADR-030 review fixes: red run
+# ADR-031 review fixes: red run
 
 Command: `go test -count=1 ./internal/{accounts,accountusage,tui} -run 'ReadOnlyStoreNever|HeaderUnsafe|LegacySiblingLock|EndpointFailureKeeps|WithoutReadingTime'`
 

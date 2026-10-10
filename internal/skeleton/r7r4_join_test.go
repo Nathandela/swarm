@@ -336,7 +336,7 @@ func (r *r7r4Rig) noGap(t *testing.T, why string) {
 // send below refuses structured_unsupported. Restore the `late -> emitBackendGap` arm and noGap
 // fails. Either mutation fails this test.
 func TestR7R4_AFreshLaunchNEVERGapsAndTheComposerDrivesTheThreadBeforeAnyTurnExists(t *testing.T) {
-	r := newR7R4Rig(t, fakeCodexThreadID)
+	r := newR7R4Rig(t, r7NativeThreadID)
 	go r.join()
 
 	r.awaitSink(t, 20*time.Second)

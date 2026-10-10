@@ -618,7 +618,10 @@ func handoffSourceEligibility(source protocol.SessionView) (bool, string) {
 	}
 }
 
-type handoffDoneMsg struct{ err error }
+type handoffDoneMsg struct {
+	generation uint64
+	err        error
+}
 
 func handoffCmd(c Client, id, prompt string) tea.Cmd {
 	return func() tea.Msg {

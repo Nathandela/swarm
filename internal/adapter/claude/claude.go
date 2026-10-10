@@ -86,7 +86,7 @@ var hookEvents = []struct {
 	{"UserPromptSubmit", "active", "none", "", "", true},
 	{"PreToolUse", "active", "none", "", "", true},
 	{"PostToolUse", "active", "none", "", "", true},
-	{"Notification", "idle", "permission", "notification_type", "permission_prompt=permission;idle_prompt=none;idle=none;permission=permission;prompt=prompt", false},
+	{"Notification", "", "permission", "notification_type", "permission_prompt=permission;idle_prompt=none;idle=none;permission=permission;prompt=prompt", false},
 	{"Stop", "idle", "none", "", "", true},
 	{"SubagentStart", "active", "none", "", "", false},
 	{"SubagentStop", "", "none", "", "", false},
@@ -163,12 +163,12 @@ func (claudeAdapter) SignalSources() []adapter.SignalSource {
 			"turn":        h.turn,
 			"interaction": h.interaction,
 		}
-		// The optional subtype refinement (Notification): the engine reads these keys
-		// (its descKeySubtypeField / descKeySubtypeMap) to map the interaction by a
-		// payload subtype. Spelled literally to keep the T-5 boundary (no engine import).
+		// Only recognized Notification subtypes describe the session's turn.
+		// Auth and teammate notifications must not finish the main turn.
 		if h.subtypeField != "" {
 			desc["subtype_field"] = h.subtypeField
 			desc["subtype_interaction"] = h.subtypeMap
+			desc["subtype_turn"] = "permission_prompt=idle;idle_prompt=idle;idle=idle;permission=idle;prompt=idle"
 		}
 		if h.capture {
 			desc[adapter.DescriptorCapture] = adapter.CaptureRaw

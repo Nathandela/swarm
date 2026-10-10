@@ -75,6 +75,9 @@ func TestR7CodexSignalSources_ServerRequestResolvedClearsThePermissionInteractio
 	if row["interaction"] != "none" {
 		t.Errorf("serverRequest/resolved maps interaction %q, want \"none\"", row["interaction"])
 	}
+	if row["turn"] != "active" {
+		t.Errorf("serverRequest/resolved maps turn %q; unblocked work must be active", row["turn"])
+	}
 }
 
 // TestR7CodexSignalSources_TheTurnRowsAreUnchanged pins the two rows that were already right,

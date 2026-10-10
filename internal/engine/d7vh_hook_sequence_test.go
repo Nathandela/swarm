@@ -99,6 +99,7 @@ func hookFields(t *testing.T, raw json.RawMessage) map[string]string {
 	var f struct {
 		ToolName         string `json:"tool_name"`
 		NotificationType string `json:"notification_type"`
+		AgentID          string `json:"agent_id"`
 	}
 	if err := json.Unmarshal(raw, &f); err != nil {
 		t.Fatalf("decode hook payload: %v", err)
@@ -109,6 +110,9 @@ func hookFields(t *testing.T, raw json.RawMessage) map[string]string {
 	}
 	if f.NotificationType != "" {
 		p["notification_type"] = f.NotificationType
+	}
+	if f.AgentID != "" {
+		p["agent_id"] = f.AgentID
 	}
 	return p
 }

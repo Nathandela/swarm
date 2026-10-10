@@ -22,6 +22,7 @@ package engine
 
 import (
 	"strings"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -576,13 +577,37 @@ func evaluateClaudeGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 			return status.TurnIdle, status.InteractionPermission, true
 		}
 	}
-	if hasBusyMarker(snap) || hasWorkflowMarker(snap) {
+	if hasBusyMarker(snap) || hasClaudeSpinner(snap) || hasWorkflowMarker(snap) {
 		return status.TurnActive, status.InteractionNone, true
 	}
 	if composerInRegion(snap) {
 		return status.TurnIdle, status.InteractionNone, true
 	}
 	return status.TurnUnknown, status.InteractionUnknown, false
+}
+
+// Claude keeps its composer visible while its star spinner is running. Unlike
+// the completion footer, this row has an ellipsis and a timed metrics group.
+func hasClaudeSpinner(snap *vt.Snap) bool {
+	for _, row := range bottomContentLines(snap, gridRegionRows) {
+		row = strings.TrimSpace(row)
+		glyph, _, ok := strings.Cut(row, " ")
+		if !ok || len([]rune(glyph)) != 1 || !strings.ContainsAny(glyph, "·✢✳✶✻✽") {
+			continue
+		}
+		_, metrics, ok := strings.Cut(row, "… (")
+		if !ok || !strings.HasSuffix(metrics, ")") {
+			continue
+		}
+		elapsed, _, ok := strings.Cut(metrics, " · ")
+		if !ok {
+			continue
+		}
+		if d, err := time.ParseDuration(strings.ReplaceAll(elapsed, " ", "")); err == nil && d >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // hasBusyMarker reports whether the bottom region carries a "turn is running"

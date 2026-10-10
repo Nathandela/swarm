@@ -342,6 +342,7 @@ func TestR7ComposerSink_TheBackendBranchCorrelatesTheEchoEXACTLYAndNeverByText(t
 	}
 	params := r7CallParams(t, r.backend, "turn/start")
 	clientID, _ := params["clientUserMessageId"].(string)
+	threadID, _ := params["threadId"].(string)
 	if clientID == "" {
 		t.Fatal("turn/start carried no clientUserMessageId; without it the backend branch falls back " +
 			"to matching on TEXT, and short strings are exactly the ones two parties type identically " +
@@ -352,13 +353,13 @@ func TestR7ComposerSink_TheBackendBranchCorrelatesTheEchoEXACTLYAndNeverByText(t
 	// must keep the adapter's honest owner attribution.
 	r.sk.ingestBackendFrame(r.local, []byte(
 		`{"method":"item/started","params":{"item":{"type":"userMessage","id":"um-owner","clientId":null,`+
-			`"content":[{"type":"text","text":"yes","text_elements":[]}]},"threadId":"t","turnId":"turn-o","startedAtMs":1}}`),
+			`"content":[{"type":"text","text":"yes","text_elements":[]}]},"threadId":`+jsonString(threadID)+`,"turnId":"turn-o","startedAtMs":1}}`),
 		time.Now().UnixMilli())
 	// Then the PHONE's own send echoes, carrying the id the daemon minted.
 	r.sk.ingestBackendFrame(r.local, []byte(
 		`{"method":"item/started","params":{"item":{"type":"userMessage","id":"um-phone","clientId":`+
 			jsonString(clientID)+`,"content":[{"type":"text","text":"yes","text_elements":[]}]},`+
-			`"threadId":"t","turnId":"turn-p","startedAtMs":2}}`),
+			`"threadId":`+jsonString(threadID)+`,"turnId":"turn-p","startedAtMs":2}}`),
 		time.Now().UnixMilli())
 	r.sk.flushBackendFrames(r.local)
 

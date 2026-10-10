@@ -1,4 +1,4 @@
-# ADR-030 Unit A1 red run
+# ADR-031 Unit A1 red run
 
 Tests written first: `internal/accounts/claude_renew_test.go` (new) and two additions to
 `internal/accounts/native_inventory_test.go`. No implementation exists yet.

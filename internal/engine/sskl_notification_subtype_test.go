@@ -91,10 +91,9 @@ func TestSSKL_NotificationSubtypeDims(t *testing.T) {
 			map[string]string{PayloadKeyTurn: "idle", PayloadKeyInteraction: "permission"}},
 		{"idle_prompt is an idle nudge", map[string]string{"notification_type": "idle_prompt"},
 			map[string]string{PayloadKeyTurn: "idle", PayloadKeyInteraction: "none"}},
-		{"an unrecognized subtype emits no interaction dimension", map[string]string{"notification_type": "auth_success"},
-			map[string]string{PayloadKeyTurn: "idle"}},
+		{"an unrecognized subtype emits no dimensions", map[string]string{"notification_type": "auth_success"}, nil},
 		{"no subtype field keeps the B5 safe default", nil,
-			map[string]string{PayloadKeyTurn: "idle", PayloadKeyInteraction: "none"}},
+			map[string]string{PayloadKeyInteraction: "none"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

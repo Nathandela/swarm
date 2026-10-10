@@ -35,6 +35,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,6 +160,10 @@ type backendState struct {
 	// byID is the reverse lookup requests needs when the SERVER tells us a request was
 	// resolved: it names only the request id.
 	byID map[string]map[string]string
+	// waits tracks only validated blocking requests; answerability has a separate lifetime.
+	waits map[string]map[string]string
+	// snapshotWait retains a thread wait whose request was not observed on this feed.
+	snapshotWait map[string]map[string]bool
 	// adopted maps a local session id to the CLI'S OWN thread id, learned from the
 	// `thread/started` the app-server broadcasts when the AGENT creates its thread.
 	//
@@ -268,6 +273,8 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 	// compare-install boundary into the newly authoritative app-server connection.
 	delete(d.backend.requests, local)
 	delete(d.backend.byID, local)
+	delete(d.backend.waits, local)
+	delete(d.backend.snapshotWait, local)
 	delete(d.backend.adopted, local)
 	d.backend.mu.Unlock()
 	if displaced != nil {
@@ -287,6 +294,8 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 			delete(d.backend.live, local)
 			delete(d.backend.requests, local)
 			delete(d.backend.byID, local)
+			delete(d.backend.waits, local)
+			delete(d.backend.snapshotWait, local)
 			delete(d.backend.adopted, local)
 		}
 		d.backend.mu.Unlock()
@@ -469,9 +478,7 @@ func (d *Daemon) authorCapabilitiesForBackend(local string, live bool) {
 
 // adoptBackendThread records the thread id the agent created, once.
 //
-// FIRST WINS, and the rule matters: §R7.10 pins ONE app-server per session, so a session has
-// exactly one agent and exactly one thread. Overwriting on a later `thread/started` would
-// point a live session's composer at a thread nobody is reading.
+// The CLI announces its main thread first; later child threads must not repoint it.
 func (d *Daemon) adoptBackendThread(local, threadID string) {
 	if !adapter.IsCanonicalConversationID(threadID) {
 		return
@@ -550,6 +557,8 @@ func (d *Daemon) removeBackendForFeed(local, expectedEpoch string) (*sessionBack
 	delete(d.backend.live, local)
 	delete(d.backend.requests, local)
 	delete(d.backend.byID, local)
+	delete(d.backend.waits, local)
+	delete(d.backend.snapshotWait, local)
 	delete(d.backend.adopted, local)
 	d.backend.mu.Unlock()
 	d.unregisterContextGuardBackend(local, b)
@@ -607,9 +616,14 @@ func (d *Daemon) sessionBackendFor(local string) (*sessionBackend, bool) {
 // noteServerRequest records the JSON-RPC id an incoming server-request carried, keyed by the
 // item ref it named (params.itemId). It is the tie between an approval card and the exact
 // frame that must be answered.
-func (d *Daemon) noteServerRequest(local, itemRef string, id json.RawMessage) {
-	if itemRef == "" || len(id) == 0 {
-		return
+func (d *Daemon) noteServerRequest(local, itemRef string, id json.RawMessage) bool {
+	return d.noteBackendRequest(local, itemRef, id, true)
+}
+
+func (d *Daemon) noteBackendRequest(local, itemRef string, id json.RawMessage, answerable bool) bool {
+	id, valid := backendRequestID(id)
+	if itemRef == "" || !valid {
+		return false
 	}
 	d.backend.mu.Lock()
 	defer d.backend.mu.Unlock()
@@ -621,8 +635,23 @@ func (d *Daemon) noteServerRequest(local, itemRef string, id json.RawMessage) {
 		d.backend.requests[local] = map[string]json.RawMessage{}
 		d.backend.byID[local] = map[string]string{}
 	}
-	d.backend.requests[local][itemRef] = append(json.RawMessage(nil), id...)
+	if ref, exists := d.backend.byID[local][string(id)]; exists && ref != itemRef {
+		return false
+	}
+	// A reused item ref replaces the old request, even after the phone answered it.
+	for previous, ref := range d.backend.byID[local] {
+		if ref == itemRef {
+			delete(d.backend.byID[local], previous)
+			delete(d.backend.waits[local], previous)
+		}
+	}
+	if answerable {
+		d.backend.requests[local][itemRef] = append(json.RawMessage(nil), id...)
+	} else {
+		delete(d.backend.requests[local], itemRef) // questions remain answerable only in the native CLI
+	}
 	d.backend.byID[local][string(id)] = itemRef
+	return true
 }
 
 // takeServerRequest consumes the ANSWERABILITY of one item ref: the id is returned once and
@@ -664,6 +693,10 @@ func (d *Daemon) takeServerRequest(local, itemRef string) (json.RawMessage, bool
 
 // serverRequestRef resolves a request id back to the item ref it named, consuming it.
 func (d *Daemon) serverRequestRef(local string, id json.RawMessage) (string, bool) {
+	id, valid := backendRequestID(id)
+	if !valid {
+		return "", false
+	}
 	d.backend.mu.Lock()
 	defer d.backend.mu.Unlock()
 	ref, ok := d.backend.byID[local][string(id)]
@@ -671,8 +704,54 @@ func (d *Daemon) serverRequestRef(local string, id json.RawMessage) (string, boo
 		return "", false
 	}
 	delete(d.backend.byID[local], string(id))
-	delete(d.backend.requests[local], ref)
+	if string(d.backend.requests[local][ref]) == string(id) {
+		delete(d.backend.requests[local], ref)
+	}
 	return ref, true
+}
+
+func backendRequestID(raw json.RawMessage) (json.RawMessage, bool) {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 {
+		return nil, false
+	}
+	if raw[0] == '"' {
+		id, ok := strictJSONString(raw)
+		if !ok || strings.TrimSpace(id) == "" {
+			return nil, false
+		}
+		canonical, _ := json.Marshal(id)
+		return canonical, true
+	}
+	var id int64
+	if raw[0] != '-' && (raw[0] < '0' || raw[0] > '9') || json.Unmarshal(raw, &id) != nil {
+		return nil, false
+	}
+	return json.RawMessage(strconv.FormatInt(id, 10)), true
+}
+
+// backendWaitDimensions is called with backend.mu held, after one wait changes.
+func (d *Daemon) backendWaitDimensions(local string) map[string]string {
+	interaction := "none"
+	for _, pending := range d.backend.waits[local] {
+		if pending == "permission" {
+			interaction = pending
+			break
+		}
+		if interaction != "permission" {
+			interaction = pending
+		}
+	}
+	if d.backend.snapshotWait[local]["permission"] {
+		interaction = "permission"
+	} else if d.backend.snapshotWait[local]["prompt"] && interaction == "none" {
+		interaction = "prompt"
+	}
+	turn := "active"
+	if interaction != "none" {
+		turn = "idle"
+	}
+	return map[string]string{"turn": turn, "interaction": interaction}
 }
 
 // ---- the producer-edge pump ------------------------------------------------
@@ -714,6 +793,11 @@ func (d *Daemon) ingestBackendFrame(local string, frame []byte, receivedAtMs int
 		// shape degrades to the grid heuristic rather than killing the pump.
 		return
 	}
+	// App-server also broadcasts child threads. Only the session's own thread may
+	// change its status, approvals, name or transcript.
+	if !d.backendFrameBelongsToSession(local, frame, fr.Method) {
+		return
+	}
 	// The provider-owned thread id is committed before pump.emitMu is acquired.
 	// A metadata fsync must never hold the producer ordering lock and delay every
 	// other frame. Strict path decoding rejects duplicate identity keys that the
@@ -740,11 +824,64 @@ func (d *Daemon) ingestBackendFrame(local string, frame []byte, receivedAtMs int
 	d.emitBackendFrame(local, fr, frame, receivedAtMs)
 }
 
+func (d *Daemon) backendThreadID(local string) string {
+	d.backend.mu.Lock()
+	owned := d.backend.adopted[local]
+	if b := d.backend.live[local]; b != nil {
+		owned = b.threadID
+	}
+	d.backend.mu.Unlock()
+	if owned == "" && d.core != nil {
+		if m, ok := d.core.Get(local); ok {
+			owned = m.ConversationID
+		}
+	}
+	return owned
+}
+
+func (d *Daemon) backendFrameBelongsToSession(local string, frame []byte, method string) bool {
+	owned := d.backendThreadID(local)
+	envelope, ok := decodeStrictObject(frame)
+	if !ok {
+		return false
+	}
+	actualMethod, ok := strictJSONString(envelope["method"])
+	if !ok || actualMethod != method {
+		return false
+	}
+	for key := range envelope {
+		if key != "method" && strings.EqualFold(key, "method") || key != "params" && strings.EqualFold(key, "params") {
+			return false
+		}
+	}
+	if owned == "" {
+		return true // fresh launch: thread/started establishes the identity
+	}
+	params, ok := decodeStrictObject(envelope["params"])
+	if !ok {
+		return false
+	}
+	for key := range params {
+		if key != "threadId" && strings.EqualFold(key, "threadId") {
+			return false // encoding/json accepts aliases; ownership requires one exact key
+		}
+	}
+	if method == backendStartedMethod {
+		id, ok := backendStartedThreadID(frame)
+		return ok && id == owned
+	}
+	if raw, present := params["threadId"]; present {
+		id, ok := strictJSONString(raw)
+		return ok && id == owned
+	}
+	return !strings.HasPrefix(method, "turn/") && !strings.HasPrefix(method, "item/") && !strings.HasPrefix(method, "thread/") && method != backendResolvedMethod
+}
+
 // ingestBackendFrameForFeed is the app-server callback boundary. Before registration it accepts
 // a frame only for the still-current session instance (needed for fresh thread/started); after
 // registration it additionally requires this exact feed. Holding the replacement fence through
 // capture and pump ingestion makes the decision linearizable with compare-install and loss.
-func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed *backendFeed, method string, frame []byte, at time.Time) {
+func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed *backendFeed, method string, frame []byte, at time.Time, guardProjection ...[]byte) {
 	if local == "" || expectedInstance == "" || feed == nil || at.IsZero() || feed.retired.Load() {
 		return
 	}
@@ -772,7 +909,11 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 	if feed.retired.Load() {
 		return
 	}
-	d.captureContextGuardFrame(local, expectedInstance, feed, method, frame, at)
+	guardFrame := frame
+	if len(guardProjection) == 1 {
+		guardFrame = guardProjection[0]
+	}
+	d.captureContextGuardFrame(local, expectedInstance, feed, method, guardFrame, at)
 	if d.accountRotation != nil {
 		accountErr = d.accountRotation.NoteNativeFrame(local, expectedInstance, feed, method, frame, at)
 	}
@@ -932,40 +1073,125 @@ func (d *Daemon) emitBackendFrame(local string, fr backendFrame, raw []byte, rec
 	if fr.Method == "" {
 		return
 	}
-	if d.eng != nil {
-		if err := d.eng.ApplyTypedEvent(local, fr.Method, nil); err != nil {
-			// A session the engine does not run is the ordinary case for a test rig and for
-			// a frame arriving after the agent exited; it is not worth a log line per frame.
-			_ = err
+	agentType := ""
+	if d.core != nil {
+		if m, ok := d.core.Get(local); ok {
+			agentType = m.AgentType
+		}
+	}
+	ad, _ := d.resolveAdapter(agentType)
+	payload := adapter.HookPayload{Event: fr.Method, Raw: raw, ReceivedAtMs: receivedAtMs}
+	normalizer, normalized := ad.(adapter.TypedStatusSource)
+	var dims map[string]string
+	var eventStatus adapter.TypedStatus
+	claimed := false
+	if normalized {
+		eventStatus, claimed = normalizer.EventStatus(payload, d.backendThreadID(local))
+		dims = eventStatus.Dimensions
+		if claimed && len(dims) == 0 {
+			return // malformed/unsupported/nonblocking: never revive a static mapping
 		}
 	}
 	if fr.Method == backendResolvedMethod {
-		// LIFECYCLE, NOT CONTENT. It names a JSON-RPC request id -- transport state only the
-		// daemon holds, which the adapter has never seen -- so it is handled here and is NOT
-		// offered to the item path. Shaping it would be the daemon asking the adapter about
-		// a fact the adapter cannot know.
-		d.retireResolvedRequest(local, fr.Params.RequestID)
+		if normalized && !adapter.IsCanonicalConversationID(d.backendThreadID(local)) {
+			return
+		}
+		requestID, ok := backendResolvedRequestID(raw)
+		if !ok {
+			return
+		}
+		if normalized {
+			d.backend.mu.Lock()
+			if _, known := d.backend.waits[local][string(requestID)]; known {
+				delete(d.backend.waits[local], string(requestID))
+				dims = d.backendWaitDimensions(local)
+			}
+			d.backend.mu.Unlock()
+		}
+		if d.eng != nil && (!normalized || len(dims) != 0) {
+			_ = d.eng.ApplyTypedEvent(local, fr.Method, dims)
+		}
+		d.retireResolvedRequest(local, requestID)
 		return
 	}
 	// A server-initiated request carries BOTH a method and an id, and the id is what an
 	// approval is later answered with. Recorded BEFORE the item is shaped, so the card can
 	// never reach the phone ahead of the means to answer it.
-	if len(fr.ID) > 0 && fr.Params.ItemID != "" {
-		d.noteServerRequest(local, fr.Params.ItemID, fr.ID)
+	if len(fr.ID) > 0 && fr.Params.ItemID != "" && (!normalized || claimed && (dims["interaction"] == "permission" || dims["interaction"] == "prompt")) {
+		if !d.noteBackendRequest(local, fr.Params.ItemID, fr.ID, !normalized || dims["interaction"] == "permission") {
+			return
+		}
+		if normalized {
+			id, _ := backendRequestID(fr.ID) // the normalizer validated the request envelope
+			d.backend.mu.Lock()
+			if d.backend.waits == nil {
+				d.backend.waits = make(map[string]map[string]string)
+			}
+			if d.backend.waits[local] == nil {
+				d.backend.waits[local] = make(map[string]string)
+			}
+			d.backend.waits[local][string(id)] = dims["interaction"]
+			delete(d.backend.snapshotWait[local], dims["interaction"])
+			dims = d.backendWaitDimensions(local)
+			d.backend.mu.Unlock()
+		}
+	} else if normalized && len(eventStatus.Waiting) != 0 {
+		d.backend.mu.Lock()
+		if d.backend.snapshotWait == nil {
+			d.backend.snapshotWait = make(map[string]map[string]bool)
+		}
+		waiting := make(map[string]bool, len(eventStatus.Waiting))
+		unobserved := make(map[string]bool, len(eventStatus.Waiting))
+		for _, interaction := range eventStatus.Waiting {
+			waiting[interaction], unobserved[interaction] = true, true
+		}
+		for id, interaction := range d.backend.waits[local] {
+			if waiting[interaction] {
+				delete(unobserved, interaction)
+			} else {
+				delete(d.backend.waits[local], id) // the snapshot proves this category ended
+			}
+		}
+		d.backend.snapshotWait[local] = unobserved
+		d.backend.mu.Unlock()
+	} else if normalized && (claimed || fr.Method == "turn/started") {
+		// Healthy/error thread snapshots and turn boundaries end older waits.
+		d.backend.mu.Lock()
+		delete(d.backend.waits, local)
+		delete(d.backend.snapshotWait, local)
+		d.backend.mu.Unlock()
 	}
-	agentType := ""
-	if m, ok := d.core.Get(local); ok {
-		agentType = m.AgentType
+	if d.eng != nil {
+		_ = d.eng.ApplyTypedEvent(local, fr.Method, dims)
 	}
-	ad, ok := d.resolveAdapter(agentType)
-	if !ok {
+	if ad == nil {
 		return
 	}
-	d.captureInteractions(local, ad, adapter.HookPayload{
-		Event:        fr.Method,
-		Raw:          raw,
-		ReceivedAtMs: receivedAtMs,
-	})
+	d.captureInteractions(local, ad, payload)
+}
+
+func backendResolvedRequestID(raw []byte) (json.RawMessage, bool) {
+	if len(raw) > 64<<10 {
+		return nil, false
+	}
+	root, ok := decodeStrictObject(raw)
+	if !ok {
+		return nil, false
+	}
+	method, ok := strictJSONString(root["method"])
+	if !ok || method != backendResolvedMethod {
+		return nil, false
+	}
+	params, ok := decodeStrictObject(root["params"])
+	if !ok {
+		return nil, false
+	}
+	for key := range params {
+		if key != "requestId" && strings.EqualFold(key, "requestId") {
+			return nil, false
+		}
+	}
+	return backendRequestID(params["requestId"])
 }
 
 // retireResolvedRequest applies the server's own FIRST-ANSWER-WINS broadcast.
