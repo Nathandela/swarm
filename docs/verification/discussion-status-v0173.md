@@ -1,4 +1,4 @@
-# Discussion activity indicators — v0.17.1
+# Discussion activity indicators — v0.17.3
 
 Bead: `agents-tracker-8mi0`. Investigated on 2026-10-10 against main
 `d46c56e5` and installed Swarm v0.17.0.
@@ -64,7 +64,7 @@ Verification:
   check of the thread-identity validation.
 
 No dependencies, status vocabulary, wire/schema versions, or additional polling
-were introduced. Android's required release identity is v0.17.1 / code 59.
+were introduced. Android's required release identity is v0.17.3 / code 61.
 Live Claude inference was not run; existing captured screens and hook timelines
 were replayed. The pre-existing macOS skeleton test-helper build-tag problem is
 tracked separately as `agents-tracker-tyyo`.
@@ -73,3 +73,5 @@ child PID readiness marker; follow-up is tracked as `agents-tracker-fail`.
 
 Protocol references: [Codex app-server](https://learn.chatgpt.com/docs/app-server)
 and [Claude Code hooks](https://code.claude.com/docs/en/hooks).
+
+During final verification, PR #50 landed on main and advanced the source release identity to v0.17.2. The actor reducer was rebased onto that update, error attention was included in requester ownership, and a race regression proves child activity cannot erase that attention. Publication therefore uses the next patch, v0.17.3, and preserves the concurrent work.

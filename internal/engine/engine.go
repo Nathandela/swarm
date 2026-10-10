@@ -697,6 +697,7 @@ func applySignal(s *session, event string, payload map[string]string, seq uint64
 		return status.Status{}, false, false, err
 	}
 	actor := payload["agent_id"]
+	waiting := s.status.Interaction == status.InteractionPermission || s.status.Interaction == status.InteractionPrompt || s.status.Interaction == status.InteractionError
 	if event == "Notification" && s.status.Interaction == status.InteractionPermission && dims[PayloadKeyInteraction] == string(status.InteractionPermission) {
 		actor = s.inputActor // a global permission nudge does not replace the requester
 	}
@@ -708,7 +709,7 @@ func applySignal(s *session, event string, payload map[string]string, seq uint64
 	}
 	if lifecycle {
 		dims = nil
-		if event == subagentStopEvent && childChanged && s.inputActor == actor && (s.status.Interaction == status.InteractionPermission || s.status.Interaction == status.InteractionPrompt) {
+		if event == subagentStopEvent && childChanged && actor != "" && s.inputActor == actor && waiting {
 			dims = map[string]string{PayloadKeyInteraction: string(status.InteractionNone)}
 		}
 	} else {
@@ -718,8 +719,7 @@ func applySignal(s *session, event string, payload map[string]string, seq uint64
 				continue
 			}
 			if key == PayloadKeyInteraction && value == string(status.InteractionNone) &&
-				((childWork && s.status.Interaction != status.InteractionPermission && s.status.Interaction != status.InteractionPrompt) ||
-					((s.status.Interaction == status.InteractionPermission || s.status.Interaction == status.InteractionPrompt) && s.inputActor != actor)) {
+				((childWork && !waiting) || (waiting && s.inputActor != actor)) {
 				continue
 			}
 			kept[key] = value
@@ -744,14 +744,14 @@ func applySignal(s *session, event string, payload map[string]string, seq uint64
 		}
 	}
 	if s.interSeq > beforeInter {
-		if next.Interaction == status.InteractionPermission || next.Interaction == status.InteractionPrompt {
+		if next.Interaction == status.InteractionPermission || next.Interaction == status.InteractionPrompt || next.Interaction == status.InteractionError {
 			s.inputActor = actor
 		} else {
 			s.inputActor = ""
 		}
 	}
 	if typed || childChanged || (childFresh && event == subagentStartEvent) {
-		if next.Interaction == status.InteractionPermission || next.Interaction == status.InteractionPrompt {
+		if next.Interaction == status.InteractionPermission || next.Interaction == status.InteractionPrompt || next.Interaction == status.InteractionError {
 			if s.inputActor != "" {
 				next.Turn = status.TurnIdle
 			}

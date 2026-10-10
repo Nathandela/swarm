@@ -195,3 +195,27 @@ func TestClaudeSiblingActivityDoesNotClearAnotherActorsPermission(t *testing.T) 
 		t.Fatalf("requester resume did not clear its wait: %+v", got.s)
 	}
 }
+
+func TestChildActivityPreservesMergedErrorAttention(t *testing.T) {
+	clk, rec := newClock(), &emitRecorder{}
+	e := newEngine(clk, constCPU(0), rec, 30*time.Second, time.Second)
+	e.RegisterSession("s1", "tok1", 1, claudeSignalSources(t))
+	for i, event := range []string{"UserPromptSubmit", "SubagentStart", "failure", "PostToolUse", "SubagentStop"} {
+		payload := map[string]string{}
+		if event == "SubagentStart" || event == "PostToolUse" || event == "SubagentStop" {
+			payload["agent_id"] = "child"
+		}
+		if event == "failure" {
+			payload[PayloadKeyTurn] = "idle"
+			payload[PayloadKeyInteraction] = "error"
+		}
+		if err := e.HandleCallback(Callback{SessionID: "s1", Token: "tok1", Sequence: uint64(i + 1), Event: event, Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+		if i >= 2 {
+			if got, _ := rec.last(); got.s.Interaction != status.InteractionError || status.Derive(got.s) != status.GroupNeedsInput {
+				t.Fatalf("%s erased error attention: %+v", event, got.s)
+			}
+		}
+	}
+}
