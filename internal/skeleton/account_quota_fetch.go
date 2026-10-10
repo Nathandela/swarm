@@ -234,6 +234,24 @@ func (q *accountQuotaFetcher) fetch(req accountQuotaRequest) {
 		}
 		fetchErr = err
 	}
+	var safe *accountusage.Error
+	if errors.As(fetchErr, &safe) && safe.Class == "login-expired" {
+		// Fenced on generation so a re-login during the fetch is never overwritten.
+		for attempt := 0; attempt < 3; attempt++ {
+			r, err = m.store.Snapshot()
+			if err != nil || r.Accounts[req.id].CurrentGeneration != req.generation {
+				break
+			}
+			_, err = m.store.SetAuth(r.Revision, req.id, accounts.AuthNeedsLogin)
+			if err == nil {
+				delete(q.items, req.id)
+				return
+			}
+			if !errors.Is(err, accounts.ErrRevisionConflict) {
+				break
+			}
+		}
+	}
 	if errors.Is(fetchErr, accounts.ErrUsageSuperseded) {
 		s.state = "ready"
 		s.message = ""
@@ -261,7 +279,6 @@ func (q *accountQuotaFetcher) fetch(req accountQuotaRequest) {
 		s.backoff = 30 * time.Minute
 	}
 	delay := s.backoff
-	var safe *accountusage.Error
 	if errors.As(fetchErr, &safe) {
 		s.message = safe.Error()
 		if safe.RetryAfter > delay {
