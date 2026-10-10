@@ -17,6 +17,10 @@
 
 ## The plan
 
+- [Reconnection and attention plan](specifications/reconnect-attention-plan.md) — Astra-reviewed terminal recovery and structured attention contracts
+- [Reconnection and attention decision](adr/ADR-030-reconnection-and-attention.md) — additive error status and authoritative recovery semantics
+- [Reconnection and attention verification](verification/reconnect-attention.md) — regression, race, compatibility, review and release evidence
+
 - [Clean v2 remote-control plan](specifications/remote-scale-to-zero-plan.md) — owner-directed zero-user replacement: no backward compatibility, direct on-demand push, legacy cleanup, safety gates and conditional cost budget; not deployed
 - [Scale-to-zero verification](verification/remote-scale-to-zero/README.md) — reproducible local runtime/emulator/interop tests and explicit unrun production gates
 - [Private mobile repository decision](research/mobile-private-repository.md) — source-access/IP benefits, APK/history limits, split/CI costs and release-continuity gates

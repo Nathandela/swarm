@@ -42,7 +42,13 @@ type optionsModel struct {
 	contextGuard contextGuardOptions
 }
 
+type contextGuardDraft struct {
+	compact   protocol.ContextGuardAutoCompact
+	threshold lineEditor
+}
+
 type contextGuardOptions struct {
+	reconnectDraft                     *contextGuardDraft
 	available, loaded, loading, saving bool
 	generation, revision               uint64
 	autoCompact, savedCompact          protocol.ContextGuardAutoCompact
@@ -260,6 +266,10 @@ func (m rootModel) applyContextGuardSettingsLoaded(msg contextGuardSettingsLoade
 	o.autoCompact = msg.settings.AutoCompact
 	o.savedCompact = msg.settings.AutoCompact
 	o.threshold.set(strconv.Itoa(msg.settings.AutoCompact.ThresholdPercent))
+	if o.reconnectDraft != nil {
+		o.autoCompact, o.threshold = o.reconnectDraft.compact, o.reconnectDraft.threshold
+		o.reconnectDraft = nil
+	}
 	o.err = ""
 	return m, nil
 }

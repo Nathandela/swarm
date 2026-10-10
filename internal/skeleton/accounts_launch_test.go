@@ -14,35 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 )
-
-func accountTestCore(t *testing.T, m *accountManager, adjust func(*daemon.Config)) *daemon.Daemon {
-	t.Helper()
-	cfg := daemon.Config{StateDir: m.stateRoot, SocketPath: filepath.Join(m.stateRoot, "d.sock"), LockPath: filepath.Join(m.stateRoot, "d.lock"), LogPath: filepath.Join(m.stateRoot, "d.log"), ShimBinary: "/bin/true", MaxSessions: 8}
-	if adjust != nil {
-		adjust(&cfg)
-	}
-	core, err := daemon.Open(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = core.Close() })
-	return core
-}
-
-func accountTestBinding(t *testing.T, m *accountManager, account accounts.Account) accounts.Binding {
-	t.Helper()
-	binding, err := m.store.CurrentBinding(account.ID, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return binding
-}
 
 func TestAccountLaunchPoolEnrollsOwnerLaunchesAndPreservesFrozenResume(t *testing.T) {
 	m := accountTestManager(t, accountTestState(t))
@@ -103,19 +79,6 @@ func TestAccountLaunchPoolEnrollsOwnerLaunchesAndPreservesFrozenResume(t *testin
 	if err := api.bindAccountLaunch(&wrongProvider); !errors.Is(err, errAccountLaunch) {
 		t.Fatal("cross-provider binding was accepted")
 	}
-}
-
-func accountTestLaunchEnvironment(t *testing.T, root string) (home, cwd string, env []string) {
-	t.Helper()
-	home, cwd = filepath.Join(root, "ordinary-home"), filepath.Join(root, "project")
-	for _, directory := range []string{home, filepath.Join(home, ".codex"), cwd} {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	accountTestPut(t, filepath.Join(home, ".codex", "auth.json"), []byte("synthetic-ambient-file"))
-	accountTestPut(t, filepath.Join(home, ".codex", "config.toml"), []byte("model = \"gpt-default\"\nmodel_reasoning_effort = \"high\"\n[sandbox_workspace_write]\nnetwork_access = true\n"))
-	return home, cwd, []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "OPENAI_API_KEY=synthetic-ambient-key"}
 }
 
 func TestAccountLaunchFinalizesBothConfigurationsAfterActualCwd(t *testing.T) {

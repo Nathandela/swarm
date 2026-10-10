@@ -29,12 +29,15 @@
 package appserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,6 +81,8 @@ type Options struct {
 	// OnNotify receives every server->client NOTIFICATION (a frame with a method and no id).
 	// It runs on the read loop's goroutine, so it must not block for long.
 	OnNotify func(method string, params json.RawMessage)
+	// OnFrame receives untouched notification/request envelopes instead of the split callbacks.
+	OnFrame func(method string, frame json.RawMessage)
 	// OnRequest receives every server->client REQUEST (a frame with BOTH a method and an id).
 	// The client must answer it with Respond, carrying the SAME id, on THIS connection.
 	OnRequest func(id json.RawMessage, method string, params json.RawMessage)
@@ -203,10 +208,14 @@ func (c *Client) readLoop() {
 			continue // the protocol is TEXT frames; anything else is not ours
 		}
 		var fr wireFrame
-		if json.Unmarshal(data, &fr) != nil {
+		if !validEnvelope(data) || json.Unmarshal(data, &fr) != nil {
 			continue // a frame this revision cannot parse is dropped, never fatal
 		}
-		c.dispatch(fr)
+		if fr.Method != "" && c.opt.OnFrame != nil {
+			c.opt.OnFrame(fr.Method, append(json.RawMessage(nil), data...))
+		} else {
+			c.dispatch(fr)
+		}
 	}
 	c.finish(reason)
 }
@@ -423,3 +432,40 @@ func (c *Client) Close() error {
 
 // Done is closed once the connection has ended.
 func (c *Client) Done() <-chan struct{} { return c.done }
+
+// Validate routing keys before encoding/json can collapse duplicate or case-aliased members.
+func validEnvelope(data []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	token, err := dec.Token()
+	if err != nil || token != json.Delim('{') {
+		return false
+	}
+	seen := make(map[string]bool)
+	for dec.More() {
+		token, err = dec.Token()
+		if err != nil {
+			return false
+		}
+		key, ok := token.(string)
+		if !ok || seen[key] {
+			return false
+		}
+		seen[key] = true
+		lower := strings.ToLower(key)
+		switch lower {
+		case "method", "params", "id", "result", "error", "jsonrpc":
+			if key != lower {
+				return false
+			}
+		}
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
+			return false
+		}
+	}
+	if token, err = dec.Token(); err != nil || token != json.Delim('}') {
+		return false
+	}
+	_, err = dec.Token()
+	return err == io.EOF
+}

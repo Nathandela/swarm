@@ -409,6 +409,10 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	} else {
 		turn, interaction, conclusive = evaluateGridSig(snap, gridSignature(s.sources))
 	}
+	if s.status.Interaction == status.InteractionError {
+		e.mu.Unlock()
+		return
+	}
 	if !conclusive {
 		e.mu.Unlock()
 		return // inconclusive grid tap: preserve the committed status (ADR-007)
@@ -812,7 +816,7 @@ func validTurn(v string) bool {
 
 func validInteraction(v string) bool {
 	switch status.Interaction(v) {
-	case status.InteractionNone, status.InteractionPrompt, status.InteractionPermission, status.InteractionUnknown:
+	case status.InteractionNone, status.InteractionPrompt, status.InteractionPermission, status.InteractionUnknown, status.InteractionError:
 		return true
 	}
 	return false
