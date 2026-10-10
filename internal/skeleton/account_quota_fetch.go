@@ -12,6 +12,11 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
+// The scheduler ticks once a minute and stores a reading just after the tick
+// that fetched it, so a refresh due at age N runs at age N+1m. Due at
+// QuotaFreshness-2m, it runs at QuotaFreshness-1m: a reading never goes stale.
+const quotaRefreshInterval = accounts.QuotaFreshness - 2*time.Minute
+
 type quotaUsageSource func(context.Context, *accounts.Store, accounts.Binding) (accountusage.Result, error)
 
 type accountQuotaFetchState struct {
@@ -114,7 +119,7 @@ func (q *accountQuotaFetcher) stateLocked(a accounts.Account, now time.Time) *ac
 	if !oldest.IsZero() {
 		s.state = "ready"
 		if !missingAge && !generationChanged {
-			s.next = oldest.Add(accounts.QuotaFreshness)
+			s.next = oldest.Add(quotaRefreshInterval)
 		}
 	}
 	q.items[a.ID] = s
@@ -241,7 +246,7 @@ func (q *accountQuotaFetcher) fetch(req accountQuotaRequest) {
 		s.message = ""
 		s.labels = result.Labels
 		s.backoff = 0
-		s.next = now.Add(accounts.QuotaFreshness)
+		s.next = now.Add(quotaRefreshInterval)
 		s.blockedUntil = now.Add(30 * time.Second)
 		return
 	}
