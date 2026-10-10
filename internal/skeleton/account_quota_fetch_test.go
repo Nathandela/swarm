@@ -215,3 +215,31 @@ func TestQuotaReauthenticationFetchesImmediatelyDespiteFreshOldUsage(t *testing.
 		t.Fatal("reauthentication did not fetch exactly once")
 	}
 }
+
+// The scheduler ticks once a minute, so a reading must be due one tick before
+// it ages past QuotaFreshness; otherwise every cycle shows stale usage.
+func TestQuotaRefreshIsDueBeforeReadingAgesPastFreshness(t *testing.T) {
+	m := accountTestManager(t, accountTestState(t))
+	fetched := quotaTestAccount(t, m, accounts.ProviderCodex)
+	restarted := quotaTestAccount(t, m, accounts.ProviderClaude)
+	r := accountTestRegistry(t, m)
+	b, err := m.store.CurrentBinding(restarted.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	used, observed := 20, time.Now().Add(-time.Minute)
+	if _, err := m.store.RecordUsage(r.Revision, b, restarted.Quota, []accounts.ScopeObservation{{Scope: "bucket:claude:five_hour", UsedPercent: &used}}, observed); err != nil {
+		t.Fatal(err)
+	}
+	m.startQuotaFetchingWith(func(_ context.Context, _ *accounts.Store, b accounts.Binding) (accountusage.Result, error) {
+		return accountusage.Result{Observations: []accounts.ScopeObservation{{Scope: "bucket:" + b.Provider + ":primary", UsedPercent: &used}}}, nil
+	})
+	view := quotaWait(t, m, fetched.ID, "ready")
+	if view.QuotaNextRefreshAt == nil || !view.QuotaNextRefreshAt.Before(view.Quota[0].ObservedAt.Add(accounts.QuotaFreshness-time.Minute)) {
+		t.Fatal("fetched reading is not refreshed before it goes stale", view.QuotaNextRefreshAt)
+	}
+	view = quotaWait(t, m, restarted.ID, "ready")
+	if view.QuotaNextRefreshAt == nil || !view.QuotaNextRefreshAt.Before(observed.Add(accounts.QuotaFreshness-time.Minute)) {
+		t.Fatal("durable reading is not refreshed before it goes stale", view.QuotaNextRefreshAt)
+	}
+}

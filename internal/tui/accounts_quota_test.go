@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -209,6 +210,33 @@ func TestAccountsQuotaKnownLabelsAndUnknownSanitization(t *testing.T) {
 	for _, label := range []string{"Custom feature primary window", "Claude experimental usage", "Unknown\x1b\n\r\t bucket"} {
 		if got := accountQuotaLabel(label); got != accountText(label) || strings.ContainsAny(got, "\x1b\n\r\t") {
 			t.Fatalf("unknown label changed or contains controls: %q", got)
+		}
+	}
+}
+
+func TestAccountsQuotaPollSurvivesFailedList(t *testing.T) {
+	m := accountUIOpen(t, newAccountUIClient()).(rootModel)
+	m.accounts.busy = true
+	_, poll := m.applyAccountsReply(accountsReplyMsg{generation: m.accounts.generation, clientGeneration: m.accountsClientGeneration, action: "list", err: errors.New("transient")})
+	if poll == nil {
+		t.Fatal("a failed list stopped the quota poll")
+	}
+}
+
+func TestAccountsQuotaBarsShowUsage(t *testing.T) {
+	half, full := 50, 100
+	a := accountsFlowFixture(1, true)
+	a.focus = 1
+	a.reply.Accounts[0].QuotaFetchState = "ready"
+	a.reply.Accounts[0].Quota = []protocol.AccountQuotaView{{Label: "five_hour", UsedPercent: &half, ObservedAt: time.Now()}, {Label: "seven_day", UsedPercent: &full, ObservedAt: time.Now()}, {Label: "seven_day_opus", ObservedAt: time.Now()}}
+	for _, detail := range []bool{false, true} {
+		a.detail = detail
+		text := stripANSI(a.view(100, 40, false, true))
+		if !strings.Contains(text, strings.Repeat("█", 10)+strings.Repeat("░", 10)) || !strings.Contains(text, strings.Repeat("█", 20)) {
+			t.Fatalf("detail=%v missing usage bars:\n%s", detail, text)
+		}
+		if strings.Count(text, "░") != 10 {
+			t.Fatalf("detail=%v unknown usage drew a bar:\n%s", detail, text)
 		}
 	}
 }
