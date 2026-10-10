@@ -150,7 +150,8 @@ func (m rootModel) applyAccountsReply(msg accountsReplyMsg) (tea.Model, tea.Cmd)
 				a.wizard.err = "This step failed. Enter the token or profile path again, or Esc to leave."
 			}
 		}
-		return m, nil
+		// One transient failure must not freeze the screen until a manual reload.
+		return m, accountPoll(a.generation, m.accountsClientGeneration)
 	}
 	selected := a.selectedKey()
 	// Mutation/status replies may contain only a Job. Do not discard a useful
@@ -944,6 +945,29 @@ func accountQuotaLines(account protocol.AccountView) []string {
 	return lines
 }
 
+// accountQuotaBars draws one usage bar per window with a known percentage, so
+// where each limit stands reads at a glance. Stale readings are drawn dim.
+func accountQuotaBars(account protocol.AccountView) []string {
+	const cells = 20
+	var lines []string
+	for _, quota := range account.Quota {
+		if quota.UsedPercent == nil {
+			continue
+		}
+		used := min(max(*quota.UsedPercent, 0), 100)
+		filled := used * cells / 100
+		style := styleGroupReview
+		if accountQuotaStale(quota) {
+			style = styleDim
+		} else if used >= 90 {
+			style = styleError
+		}
+		label := []rune(accountQuotaLabel(quota.Label))
+		lines = append(lines, fmt.Sprintf("%-13s", string(label[:min(len(label), 12)]))+style.Render(strings.Repeat("█", filled))+styleDim.Render(strings.Repeat("░", cells-filled))+fmt.Sprintf(" %3d%%", used))
+	}
+	return lines
+}
+
 func accountQuotaLabel(label string) string {
 	switch label {
 	case "five_hour", "Claude 5-hour usage", "5-hour usage":
@@ -1051,6 +1075,7 @@ func (a accountsModel) nextStep(row accountRow) string {
 	}
 	if row.kind == "account" && a.reply.Accounts[row.index].QuotaFetchState != "" {
 		lines = append(lines, "Quota: "+accountQuotaSummary(a.reply.Accounts[row.index]))
+		lines = append(lines, accountQuotaBars(a.reply.Accounts[row.index])...)
 	} else if !observed {
 		lines = append(lines, "Quota: unknown · not yet observed")
 	} else if row.kind == "account" {
@@ -1144,6 +1169,9 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 			}
 		}
 		b.WriteString("\n")
+		for _, line := range accountQuotaBars(account) {
+			b.WriteString(line + "\n")
+		}
 		for _, line := range accountQuotaLines(account) {
 			b.WriteString(line + "\n")
 		}
