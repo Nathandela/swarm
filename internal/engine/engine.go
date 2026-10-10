@@ -61,13 +61,14 @@ const (
 // optional subtype keys let one event map by a payload field (e.g. a Claude
 // Notification whose subtype distinguishes a permission prompt from an idle nudge):
 // descKeySubtypeField names the payload field carrying the subtype, and
-// descKeySubtypeMap is a "subtype=interaction;..." table selecting the interaction.
+// descKeySubtypeMap / descKeySubtypeTurn select interaction and turn from tables.
 const (
 	descKeyEvent        = "event"
 	descKeyTurn         = "turn"
 	descKeyInteraction  = "interaction"
 	descKeySubtypeField = "subtype_field"
 	descKeySubtypeMap   = "subtype_interaction"
+	descKeySubtypeTurn  = "subtype_turn"
 )
 
 // Callback is one authenticated status post from a session's `swarm hook`
@@ -175,7 +176,8 @@ type session struct {
 	// subagentStartEvent). It is IN-MEMORY ONLY and never persisted: a daemon
 	// restart forgets it, and the grid path (the workflow row marker in
 	// heuristic.go) re-establishes the truth from the screen, in both directions.
-	children int
+	children    int
+	mainStopped bool // the main turn ended while children can still be running
 }
 
 // New builds an Engine from cfg, defaulting the injectable effects so a partial
@@ -294,9 +296,6 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		e.mu.Unlock()
 		return errors.New("engine: callback token does not match the session's live token")
 	}
-	// Outstanding-children accounting, in ARRIVAL order and only for a callback
-	// that authenticated: a rejected post must not move the count.
-	countChild(s, cb.Event)
 	// Normalize the callback's event + payload into status dimensions via the
 	// session's registered SignalSources (the mapping bridge, seam c): a real hook
 	// posts {event, payload fields} and the engine derives turn/interaction from the
@@ -314,6 +313,22 @@ func (e *Engine) HandleCallback(cb Callback) error {
 	// A Stop is the turn boundary whether or not children mask its idle below, so
 	// read the boundary off the Stop's OWN derived turn before masking.
 	idleStop := cb.Event == stopEvent && dims[PayloadKeyTurn] == string(status.TurnIdle)
+	// Rejected/replayed hooks must not change child accounting.
+	if err := validateDims(dims); err != nil {
+		e.mu.Unlock()
+		return err
+	}
+	if cb.Sequence > max(s.turnSeq, s.interSeq) {
+		countChild(s, cb.Event)
+	}
+	if cb.Sequence > s.turnSeq {
+		if idleStop {
+			s.mainStopped = true
+		}
+		if (cb.Event == "UserPromptSubmit" || cb.Event == "PreToolUse") && dims[PayloadKeyTurn] == string(status.TurnActive) && cb.Payload["agent_id"] == "" {
+			s.mainStopped = false
+		}
+	}
 	dims = withChildrenHoldingTheTurn(s, cb.Event, dims)
 	if dims = withoutPostStopReactivation(s, cb.Event, dims, now); len(dims) == 0 {
 		// A post-Stop straggler naming nothing but the turn it may not reopen:
@@ -397,6 +412,10 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	if !conclusive {
 		e.mu.Unlock()
 		return // inconclusive grid tap: preserve the committed status (ADR-007)
+	}
+	// A composer can be idle while the discussion's background work continues.
+	if s.children > 0 && turn == status.TurnIdle && interaction == status.InteractionNone {
+		turn = status.TurnActive
 	}
 	next := s.status
 	next.Turn = turn
@@ -562,14 +581,11 @@ func commit(s *session, next status.Status) bool {
 // advances, so a malformed payload advances nothing and stores no bogus dimension
 // a downstream Derive would have to interpret (F2). Caller holds e.mu.
 func applyTyped(s *session, seq uint64, payload map[string]string) (next status.Status, advanced bool, err error) {
+	if err := validateDims(payload); err != nil {
+		return status.Status{}, false, err
+	}
 	tv, hasTurn := payload[PayloadKeyTurn]
-	if hasTurn && !validTurn(tv) {
-		return status.Status{}, false, fmt.Errorf("engine: callback turn %q is not in the status vocabulary", tv)
-	}
 	iv, hasInter := payload[PayloadKeyInteraction]
-	if hasInter && !validInteraction(iv) {
-		return status.Status{}, false, fmt.Errorf("engine: callback interaction %q is not in the status vocabulary", iv)
-	}
 	next = s.status
 	if hasTurn && seq > s.turnSeq {
 		s.turnSeq = seq
@@ -582,6 +598,16 @@ func applyTyped(s *session, seq uint64, payload map[string]string) (next status.
 		advanced = true
 	}
 	return next, advanced, nil
+}
+
+func validateDims(payload map[string]string) error {
+	if tv, ok := payload[PayloadKeyTurn]; ok && !validTurn(tv) {
+		return fmt.Errorf("engine: callback turn %q is not in the status vocabulary", tv)
+	}
+	if iv, ok := payload[PayloadKeyInteraction]; ok && !validInteraction(iv) {
+		return fmt.Errorf("engine: callback interaction %q is not in the status vocabulary", iv)
+	}
+	return nil
 }
 
 // Stop is a TURN BOUNDARY, not merely another sequence-numbered write. Typed
@@ -653,24 +679,24 @@ func countChild(s *session, event string) {
 	}
 }
 
-// withChildrenHoldingTheTurn masks a Stop's idle turn to active while background
-// children are still outstanding: the MAIN loop ended, the workflow did not, and
-// reporting "done" there is the false completion agents-tracker-c7i4 removes
-// (76-91 per session per day, spike-SE). Only Stop is masked — PermissionRequest
-// is also turn=idle, but a session waiting on the human is waiting on the human
-// whether or not children run, and needs_input must never be hidden behind
-// working. Every other callback is returned unchanged, and dims is never mutated
-// in place (deriveDims may return the caller's own payload map). Caller holds
-// e.mu.
+// withChildrenHoldingTheTurn keeps an idle main loop active while children run,
+// then settles it when the last child ends. A new main turn clears mainStopped;
+// child tools do not. Permission/prompt waits remain visible. Caller holds e.mu.
 func withChildrenHoldingTheTurn(s *session, event string, dims map[string]string) map[string]string {
-	if event != stopEvent || s.children == 0 || dims[PayloadKeyTurn] != string(status.TurnIdle) {
+	settle := event == subagentStopEvent && s.children == 0 && s.mainStopped && s.status.Interaction == status.InteractionNone
+	hold := s.children > 0 && dims[PayloadKeyTurn] == string(status.TurnIdle) && dims[PayloadKeyInteraction] == string(status.InteractionNone)
+	if !settle && !hold {
 		return dims
 	}
 	held := make(map[string]string, len(dims))
 	for k, v := range dims {
 		held[k] = v
 	}
-	held[PayloadKeyTurn] = string(status.TurnActive)
+	if settle {
+		held[PayloadKeyTurn] = string(status.TurnIdle)
+	} else {
+		held[PayloadKeyTurn] = string(status.TurnActive)
+	}
 	return held
 }
 
@@ -718,7 +744,11 @@ func deriveDims(sources []adapter.SignalSource, event string, payload map[string
 		return nil // no descriptor for this event: nothing typed to apply
 	}
 	dims := make(map[string]string, 2)
-	if t := desc[descKeyTurn]; t != "" {
+	t := desc[descKeyTurn]
+	if table := desc[descKeySubtypeTurn]; table != "" {
+		t, _ = lookupSubtype(table, payload[desc[descKeySubtypeField]])
+	}
+	if t != "" {
 		dims[PayloadKeyTurn] = t
 	}
 	interaction := desc[descKeyInteraction]

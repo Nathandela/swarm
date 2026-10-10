@@ -228,7 +228,7 @@ func TestSignalSources_DeclaresSixHooksWithStatusMapping(t *testing.T) {
 	assertTurn("UserPromptSubmit", string(status.TurnActive))
 	assertTurn("PreToolUse", string(status.TurnActive))
 	assertTurn("Stop", string(status.TurnIdle))
-	assertTurn("Notification", string(status.TurnIdle))
+	assertTurn("Notification", "") // only recognized notification subtypes name a turn
 
 	// Notification is the permission/idle-prompt signal: it must map interaction to
 	// a real waiting-on-user value.

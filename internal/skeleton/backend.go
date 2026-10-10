@@ -469,9 +469,7 @@ func (d *Daemon) authorCapabilitiesForBackend(local string, live bool) {
 
 // adoptBackendThread records the thread id the agent created, once.
 //
-// FIRST WINS, and the rule matters: §R7.10 pins ONE app-server per session, so a session has
-// exactly one agent and exactly one thread. Overwriting on a later `thread/started` would
-// point a live session's composer at a thread nobody is reading.
+// The CLI announces its main thread first; later child threads must not repoint it.
 func (d *Daemon) adoptBackendThread(local, threadID string) {
 	if !adapter.IsCanonicalConversationID(threadID) {
 		return
@@ -714,6 +712,11 @@ func (d *Daemon) ingestBackendFrame(local string, frame []byte, receivedAtMs int
 		// shape degrades to the grid heuristic rather than killing the pump.
 		return
 	}
+	// App-server also broadcasts child threads. Only the session's own thread may
+	// change its status, approvals, name or transcript.
+	if !d.backendFrameBelongsToSession(local, frame, fr.Method) {
+		return
+	}
 	// The provider-owned thread id is committed before pump.emitMu is acquired.
 	// A metadata fsync must never hold the producer ordering lock and delay every
 	// other frame. Strict path decoding rejects duplicate identity keys that the
@@ -738,6 +741,45 @@ func (d *Daemon) ingestBackendFrame(local string, frame []byte, receivedAtMs int
 		d.releaseFoldLocked(local)
 	}
 	d.emitBackendFrame(local, fr, frame, receivedAtMs)
+}
+
+func (d *Daemon) backendFrameBelongsToSession(local string, frame []byte, method string) bool {
+	d.backend.mu.Lock()
+	owned := d.backend.adopted[local]
+	if b := d.backend.live[local]; b != nil {
+		owned = b.threadID
+	}
+	d.backend.mu.Unlock()
+	if owned == "" && d.core != nil {
+		if m, ok := d.core.Get(local); ok {
+			owned = m.ConversationID
+		}
+	}
+	if owned == "" {
+		return true // fresh launch: thread/started establishes the identity
+	}
+	envelope, ok := decodeStrictObject(frame)
+	if !ok {
+		return false
+	}
+	params, ok := decodeStrictObject(envelope["params"])
+	if !ok {
+		return false
+	}
+	for key := range params {
+		if key != "threadId" && strings.EqualFold(key, "threadId") {
+			return false // encoding/json accepts aliases; ownership requires one exact key
+		}
+	}
+	if method == backendStartedMethod {
+		id, ok := backendStartedThreadID(frame)
+		return ok && id == owned
+	}
+	if raw, present := params["threadId"]; present {
+		id, ok := strictJSONString(raw)
+		return ok && id == owned
+	}
+	return !strings.HasPrefix(method, "turn/") && !strings.HasPrefix(method, "item/") && !strings.HasPrefix(method, "thread/") && method != backendResolvedMethod
 }
 
 // ingestBackendFrameForFeed is the app-server callback boundary. Before registration it accepts

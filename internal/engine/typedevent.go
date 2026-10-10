@@ -58,7 +58,6 @@ func (e *Engine) ApplyTypedEvent(sessionID, event string, payload map[string]str
 		e.mu.Unlock()
 		return fmt.Errorf("engine: typed event for unregistered or ended session %q", sessionID)
 	}
-	countChild(s, event)
 	dims := deriveDims(s.sources, event, payload)
 	if len(dims) == 0 {
 		e.mu.Unlock()
@@ -66,6 +65,17 @@ func (e *Engine) ApplyTypedEvent(sessionID, event string, payload map[string]str
 	}
 	now := e.now()
 	idleStop := event == stopEvent && dims[PayloadKeyTurn] == string(status.TurnIdle)
+	if err := validateDims(dims); err != nil {
+		e.mu.Unlock()
+		return err
+	}
+	countChild(s, event)
+	if idleStop {
+		s.mainStopped = true
+	}
+	if (event == "UserPromptSubmit" || event == "PreToolUse") && dims[PayloadKeyTurn] == string(status.TurnActive) && payload["agent_id"] == "" {
+		s.mainStopped = false
+	}
 	dims = withChildrenHoldingTheTurn(s, event, dims)
 	if dims = withoutPostStopReactivation(s, event, dims, now); len(dims) == 0 {
 		e.mu.Unlock()
