@@ -55,15 +55,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # EXACT pin, not '1.25': staticcheck's stdlib facts must come from the
+          # EXACT pin, not '1.26': staticcheck's stdlib facts must come from the
           # same toolchain the module pins (go.mod:3). When the runners rolled
           # forward to go1.25.14 on 2026-09-01, v2.12.2 under the floating spec
           # began emitting SA5011 false positives on t.Fatal-guarded nil checks
           # (t.Fatal's noreturn fact was lost) and failed every branch; the same
           # linter against go1.25.0 is clean. Bump this together with go.mod.
-          go-version: '1.25.0'
+          go-version: '1.26.0'
       - name: Run golangci-lint
-        # v2.12.2: the golangci-lint release pinned to `go 1.25.0` (go.mod:3, ADR-008).
+        # v2.12.2: the golangci-lint release built with go1.26.2, so it lints the `go 1.26.0` module (go.mod:3, ADR-008).
         # v1.64's binary was built with go1.24.1, which refuses to run at all against a
         # go 1.25.0 module ("the Go language version used to build golangci-lint is
         # lower than the targeted Go version") -- exit 3 before any linter runs.
@@ -79,7 +79,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
       # mobile/bind_test.go (PB-BIND-2) shells out to the real gobind binary and
       # t.Fatalf's if it is not on PATH or in $GOPATH/bin -- there is no skip path.
       # Installed exactly as the "android" job does: same pin (android/toolchain.env),
@@ -129,7 +129,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
+          go-version: '1.26.0'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -178,7 +178,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
       - name: Engine + hookclient unit tests (incl. darwin CPU parser)
         run: go test -race ./internal/engine/... ./internal/hookclient/...
       - name: CPU sampler integration (E10.6, darwin proc_pidinfo)
@@ -201,7 +201,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
       - name: Fuzz FuzzRoundTrip (internal/wire)
         run: go test -run '^$' -fuzz '^FuzzRoundTrip$' -fuzztime=30s ./internal/wire
       - name: Fuzz FuzzReadFrame (internal/wire)
@@ -225,7 +225,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
       - name: Build swarm binary (CGO_ENABLED=0)
         env:
           CGO_ENABLED: '0'
@@ -257,7 +257,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
       - name: Build darwin binary (CGO_ENABLED=0)
         env:
           CGO_ENABLED: '0'
@@ -374,7 +374,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
       - name: Set up the Android SDK
         uses: android-actions/setup-android@v3
         with:

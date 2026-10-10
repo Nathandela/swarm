@@ -18,9 +18,9 @@ This file is a map, not a manual — read the linked source of truth before acti
 
 ## Build, test, run
 
-Go toolchain >= 1.25 (raised from 1.22 by the VT emulator dependency — see ADR-005; raised again
-to 1.25 by Phase B's mandatory `golang.org/x/mobile` tool directive — see ADR-008, which
-supersedes ADR-005's floor without superseding ADR-005).
+Go toolchain >= 1.26 (raised from 1.22 by the VT emulator dependency — see ADR-005; to 1.25 by
+Phase B's mandatory `golang.org/x/mobile` tool directive — see ADR-008, which supersedes ADR-005's
+floor without superseding ADR-005; to 1.26 by the `golang.org/x/net` CVE fix — ADR-008 Amendment 1).
 
 ```bash
 go build ./...

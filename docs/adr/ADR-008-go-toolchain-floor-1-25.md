@@ -73,3 +73,12 @@ The floor moved as a *side effect* of a tool directive rather than as a delibera
 is exactly how toolchain floors usually drift. It is recorded here so the next person finds a
 decision rather than an accident, and so the CI pins are corrected in the same breath instead of
 being discovered later as a lie.
+
+## Amendment 1 (2026-10-10): floor raised to 1.26
+
+CVE-2026-78669 (HIGH, `golang.org/x/net` net/http2) fails the container vulnerability gate that
+`release.yml` reuses, so no release can publish on `x/net` v0.58.0. Every fixed `x/net` release
+(v0.59.0 and later) declares `go 1.26.0`, so the module floor moves to 1.26 with it. Release
+binaries were already built with go1.26.9 and golangci-lint v2.12.2 is built with go1.26.2, so
+nothing shipped changes toolchain. Every CI pin, `android/toolchain.env`, CLAUDE.md and
+AGENTS.md move in the same change; the PB-TOOL gates enforce that.
