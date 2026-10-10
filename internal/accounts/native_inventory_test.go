@@ -290,3 +290,63 @@ func TestCredentialErasureReopenedHandleConfirmsFenceBeforeDeletion(t *testing.T
 		t.Fatal(err)
 	}
 }
+
+func TestClaudeErasureRemovesEmptyLeftoverRefreshLock(t *testing.T) {
+	s, c, a, _, r := retiringNative(t, ProviderClaude)
+	// Native proper-lockfile creates the directory with the default 0777&umask mode.
+	lock := filepath.Join(c.ProfilePath, ".oauth_refresh.lock")
+	if err := os.Mkdir(lock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.BeginCredentialErasure(r.Revision, a.ID, 1, "2.1.288")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EraseCredentials(r.Revision, a.ID, 1, ErasureProof{WritersStopped: true}); err != nil {
+		t.Fatalf("leftover refresh lock refused erasure: %v", err)
+	}
+	for _, name := range []string{".oauth_refresh.lock", ".credentials.json"} {
+		if _, err := os.Lstat(filepath.Join(c.ProfilePath, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("not removed: %s", name)
+		}
+	}
+}
+
+func TestClaudeErasureRefusesNonEmptyRefreshLock(t *testing.T) {
+	s, c, a, _, r := retiringNative(t, ProviderClaude)
+	lock := filepath.Join(c.ProfilePath, ".oauth_refresh.lock")
+	if err := os.Mkdir(lock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lock, "unknown"), []byte("synthetic"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.BeginCredentialErasure(r.Revision, a.ID, 1, "2.1.288")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EraseCredentials(r.Revision, a.ID, 1, ErasureProof{WritersStopped: true}); err == nil {
+		t.Fatal("non-empty refresh lock erased")
+	}
+	if _, err := os.Stat(filepath.Join(c.ProfilePath, ".credentials.json")); err != nil {
+		t.Fatal("deleted before complete inventory validation")
+	}
+}
+
+func TestClaudeErasureRemovesEmptyLegacySiblingLock(t *testing.T) {
+	s, c, a, _, r := retiringNative(t, ProviderClaude)
+	legacy := c.ProfilePath + ".lock"
+	if err := os.Mkdir(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.BeginCredentialErasure(r.Revision, a.ID, 1, "2.1.288")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EraseCredentials(r.Revision, a.ID, 1, ErasureProof{WritersStopped: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(legacy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("legacy sibling refresh lock outlived erasure")
+	}
+}

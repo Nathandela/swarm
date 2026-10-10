@@ -32,8 +32,18 @@ func accountStockCustodyGuard(root *os.Root, card CompatManifest) error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		id, err := hex.DecodeString(name)
-		if err != nil || len(id) != 16 || name != strings.ToLower(name) {
+		if stem, ok := strings.CutSuffix(name, ".lock"); ok && accountProfileName(stem) {
+			// Claude Code's legacy proper-lockfile directory, possibly left by a crash (ADR-031).
+			info, err := profiles.Lstat(name)
+			if err != nil || !info.IsDir() {
+				return errors.New("account stock profile inventory contains an unsafe entry")
+			}
+			if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Uid != uint32(os.Getuid()) {
+				return errors.New("account stock profile inventory contains an unsafe entry")
+			}
+			continue
+		}
+		if !accountProfileName(name) {
 			return errors.New("account stock profile inventory contains an unknown entry")
 		}
 		before, err := profiles.Lstat(name)
@@ -59,6 +69,11 @@ func accountStockCustodyGuard(root *os.Root, card CompatManifest) error {
 		return errors.New("account stock profile inventory cannot be verified")
 	}
 	return nil
+}
+
+func accountProfileName(name string) bool {
+	id, err := hex.DecodeString(name)
+	return err == nil && len(id) == 16 && name == strings.ToLower(name)
 }
 
 func checkAccountStockCustody(profile *os.Root, before os.FileInfo, card CompatManifest) error {

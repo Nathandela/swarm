@@ -75,6 +75,8 @@ func (s *Store) eraseNativeInventory(provider string, g Generation) error {
 			return err
 		}
 	}
+	// Best effort: rmdir removes only an empty leftover legacy native lock.
+	_ = s.root.Remove(base + ".lock")
 	if _, err := profile.Lstat("backups"); err == nil {
 		backups, err := openNativeBackups(profile)
 		if err != nil {
@@ -163,6 +165,12 @@ func inspectNativeInventory(profile *os.Root, provider string) (nativeInventory,
 				return result, ErrUnsafePath
 			}
 			result.remove = append(result.remove, name)
+		case name == ".oauth_refresh.lock":
+			// A leftover native proper-lockfile directory holds nothing and is removed.
+			if !emptyOwnedDirectory(profile, name, info) {
+				return result, ErrIneligible
+			}
+			result.remove = append(result.remove, name)
 		case name == "projects":
 			if !info.IsDir() || !validClaudeHistoryAliases(profile) {
 				return result, ErrUnsafePath
@@ -210,6 +218,20 @@ func inspectNativeInventory(profile *os.Root, provider string) (nativeInventory,
 		}
 	}
 	return result, nil
+}
+
+func emptyOwnedDirectory(profile *os.Root, name string, info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || stat.Uid != uint32(os.Getuid()) {
+		return false
+	}
+	directory, err := profile.Open(name)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = directory.Close() }()
+	names, err := directory.Readdirnames(1)
+	return len(names) == 0 && errors.Is(err, io.EOF)
 }
 
 func nativeStaging(name, base string) bool {

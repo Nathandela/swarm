@@ -37,8 +37,8 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [027](ADR-027-clean-remote-control-v2.md) | Clean remote-control v2 replacement, with native relay and shared push authority | Accepted, implementation gates open | 2026-09-05 |
 | [028](ADR-028-personal-account-pools.md) | Personal subscription account pools with immutable discussion bindings and guarded recovery | Accepted for implementation; authenticated release gates open | 2026-10-03 |
 | [029](ADR-029-board-mouse-selection.md) | The session board takes mouse clicks, and only the board (click selects, a click on the selected row opens it like Enter, wheel moves; never during an attach, a form or text entry) | Accepted | 2026-10-07 |
-
 | [030](ADR-030-reconnection-and-attention.md) | Automatic terminal recovery and structured approval/question/error attention | Accepted | 2026-10-10 |
+| [031](ADR-031-managed-claude-token-renewal.md) | Managed Claude profiles renew their own expired access token (reactive on a usage 401, native lock and CAS, identity must match; a dead refresh token sets needs-login; amends ADR-028) | Proposed | 2026-10-10 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the
@@ -52,7 +52,7 @@ ADR-009-structured-chat-interaction.md and drawn in the language of ADR-009-obsi
 
 ## Adding a new ADR
 
-1. Next sequential number: ADR-031 (030 records reconnection and attention).
+1. Next sequential number: ADR-032 (031 records managed Claude token renewal).
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.

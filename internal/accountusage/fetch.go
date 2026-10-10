@@ -42,6 +42,8 @@ func (e *Error) Error() string {
 		return "The provider returned an unsupported usage response."
 	case "cancelled":
 		return "Usage refresh was cancelled."
+	case "login-expired":
+		return "Sign-in expired for this account; sign in again."
 	default:
 		return "Usage refresh is unavailable for this account right now."
 	}
@@ -96,6 +98,25 @@ func fetch(ctx context.Context, store *accounts.Store, binding accounts.Binding,
 				if next != credential {
 					credential = next
 					continue
+				}
+				if binding.Provider == accounts.ProviderClaude {
+					outcome, renewErr := store.RenewClaudeCredential(ctx, binding, credential, exchangeClaude(client))
+					switch {
+					case renewErr == nil && (outcome == accounts.RenewRefreshed || outcome == accounts.RenewAdopted):
+						if credential, readErr = store.ReadUsageCredential(binding); readErr != nil {
+							return Result{}, credentialFailure(readErr)
+						}
+						continue
+					case renewErr == nil && outcome == accounts.RenewDead:
+						return Result{}, &Error{Class: "login-expired"}
+					case renewErr == nil && outcome == accounts.RenewBusy:
+						return Result{}, &Error{Class: "unavailable"}
+					}
+					// Keep the token endpoint's own class and Retry-After.
+					var safe *Error
+					if errors.As(renewErr, &safe) {
+						return Result{}, safe
+					}
 				}
 			}
 			class := "unavailable"
