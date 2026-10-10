@@ -209,3 +209,16 @@ FAIL
 FAIL	github.com/Nathandela/swarm/internal/tui	0.302s
 FAIL
 ```
+
+## reconnect-initial-subscription-red.log
+
+```text
+--- FAIL: TestReconnect_InitialSubscriptionFailureStartsRecovery (0.10s)
+    --- FAIL: TestReconnect_InitialSubscriptionFailureStartsRecovery/error (0.10s)
+        reconnect_test.go:365: initial subscription failure silently kept a live-looking view
+    --- FAIL: TestReconnect_InitialSubscriptionFailureStartsRecovery/nil_channel (0.00s)
+        reconnect_test.go:353: initial subscription failure left no recovery signal
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/tui	0.450s
+FAIL
+```

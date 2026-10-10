@@ -257,7 +257,12 @@ const listDialTimeout = time.Second
 // client are non-fatal — the model still renders. Options (WithAttachRunner) are
 // applied last; the 2-arg form used across the suite is unaffected.
 func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
-	events, _ := c.Subscribe()
+	events, err := c.Subscribe()
+	if err != nil || events == nil {
+		failed := make(chan protocol.Event)
+		close(failed)
+		events = failed
+	}
 	m := rootModel{
 		client:        c,
 		connections:   newClientLifetime(c),
@@ -397,7 +402,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.connectionLost {
 			return m, nil
 		}
-		// The daemon connection is gone for good: set the PERSISTENT indicator (see
+		// Set the persistent stale indicator until recovery completes (see
 		// generalStatus) so it survives past the transient banner's bannerDuration —
 		// a 4s banner would fade while the roster stays frozen, looking like false
 		// liveness. The transient banner still fires too, for immediacy. waitForEvent

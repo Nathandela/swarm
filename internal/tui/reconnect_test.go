@@ -335,3 +335,35 @@ func TestReconnect_DuplicateCompletionCannotCloseTheAdoptedClient(t *testing.T) 
 		t.Fatal("adopted client was not closed exactly once on shutdown")
 	}
 }
+
+func TestReconnect_InitialSubscriptionFailureStartsRecovery(t *testing.T) {
+	for _, kind := range []string{"error", "nil channel"} {
+		t.Run(kind, func(t *testing.T) {
+			old := &reconnectTestClient{fakeClient: newFakeClient()}
+			if kind == "error" {
+				old.subErr = errors.New("daemon disappeared after hello")
+			} else {
+				old.nilEvents = true
+			}
+			fresh := newFakeClient()
+			m := New(old, nil, WithDaemonReconnector(func() (Client, error) { return fresh, nil })).(rootModel)
+			defer func() { _ = m.Close() }()
+			wait := waitForEvent(m.events)
+			if wait == nil {
+				t.Fatal("initial subscription failure left no recovery signal")
+			}
+			done := make(chan tea.Msg, 1)
+			go func() { done <- wait() }()
+			select {
+			case loss := <-done:
+				next, retry := m.Update(loss)
+				if !next.(rootModel).connectionLost || !next.(rootModel).reconnecting || retry == nil {
+					t.Fatal("initial subscription failure did not start automatic recovery")
+				}
+			case <-time.After(100 * time.Millisecond):
+				close(old.events)
+				t.Fatal("initial subscription failure silently kept a live-looking view")
+			}
+		})
+	}
+}
