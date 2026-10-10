@@ -994,7 +994,22 @@ func accountQuotaStale(quota protocol.AccountQuotaView) bool {
 	return quota.ObservedAt.IsZero() || time.Since(quota.ObservedAt) > 5*time.Minute || quota.ResetAt != nil && !quota.ResetAt.After(time.Now())
 }
 
+// accountLastReading returns when the newest quota reading was observed, and
+// whether a needs-login account has one to report.
+func accountLastReading(account protocol.AccountView) (time.Time, bool) {
+	var newest time.Time
+	for _, quota := range account.Quota {
+		if quota.ObservedAt.After(newest) {
+			newest = quota.ObservedAt
+		}
+	}
+	return newest, account.State == "needs-login" && !newest.IsZero()
+}
+
 func accountQuotaSummary(account protocol.AccountView) string {
+	if newest, ok := accountLastReading(account); ok {
+		return "sign in again · last reading " + newest.Local().Format("02 Jan")
+	}
 	var parts []string
 	stale := false
 	for _, quota := range account.Quota {
@@ -1169,6 +1184,9 @@ func (a accountsModel) view(width, height int, lost bool, loginSupported bool) s
 			}
 		}
 		b.WriteString("\n")
+		if newest, ok := accountLastReading(account); ok {
+			b.WriteString("Sign-in expired. Last reading " + newest.Local().Format("02 Jan 15:04") + "; use \"Sign in again\".\n")
+		}
 		for _, line := range accountQuotaBars(account) {
 			b.WriteString(line + "\n")
 		}
