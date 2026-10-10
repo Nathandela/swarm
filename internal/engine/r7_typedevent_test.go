@@ -22,7 +22,7 @@ package engine
 //	func (e *Engine) ApplyTypedEvent(sessionID, event string, payload map[string]string) error
 //
 // It performs exactly what HandleCallback does AFTER the token check -- deriveDims ->
-// withChildrenHoldingTheTurn -> withoutPostStopReactivation -> applyTyped -> commit -> emit --
+// applySignal -> applyTyped -> commit -> emit --
 // with the sequence drawn from a per-session IN-MEMORY monotonic counter the engine allocates
 // under e.mu. applyTyped's per-dimension high-water is RETAINED (it is what rejects a stale
 // reorder and is real value); the fsync, the token and the durable seen-set are not. Frames
@@ -82,6 +82,9 @@ func TestR7ApplyTypedEvent_AnApprovalRequestRaisesPermissionAndResolvedClearsIt(
 	}
 	if got := r.interaction(t); got != status.InteractionNone {
 		t.Errorf("after serverRequest/resolved the interaction is %q, want %q", got, status.InteractionNone)
+	}
+	if got := r.turn(t); got != status.TurnActive {
+		t.Errorf("resolved approval left turn %q; the agent is computing again, want active", got)
 	}
 }
 

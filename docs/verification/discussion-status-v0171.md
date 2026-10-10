@@ -9,6 +9,7 @@ failures occur before rendering, in signal attribution and the terminal fallback
 | Reproduction | Previous result | Correct result |
 | --- | --- | --- |
 | Codex main turn active, child `turn/completed` on the same backend | Main discussion idle | Main stays active until its own completion |
+| Codex approval resolved while its turn resumes | Permission cleared, turn still idle for up to 30s | Turn immediately active and permission cleared |
 | Claude main Stop with a child running, idle composer after the 30s typed-signal window | Discussion idle | Discussion stays active; the last child's end settles a stopped main turn |
 | Claude's captured `✶ Blanching… (4s · ↓ 74 tokens)` screen after that window | Active CLI classified idle | Timed star-spinner row classified active |
 | Claude Notification such as `auth_success` or `agent_completed` during work | Turn idle | Turn preserved; only recognized turn-related subtypes supply a turn |
@@ -24,14 +25,23 @@ identity before status, transcript, approval and name handling. Duplicate,
 case-aliased, missing and foreign thread identities cannot pass that boundary.
 The initial thread announcement still establishes a fresh launch's identity.
 Existing strict JSON decoding and connection/session replacement fences are used.
+The adapter's approval-resolution row now restores active as well as clearing the
+permission interaction; clearing only interaction left a computing turn idle.
 
-Claude's child accounting now ignores rejected/replayed hooks. A stopped main
-turn is kept distinct from a new main turn and from child tool activity, so a
-child's completion cannot finish a newly started main turn. The grid fallback
-honors outstanding children and still exposes permission dialogs. The spinner
+Claude's main turn and each child's lifecycle are tracked separately. Child IDs
+have independent sequence high-waters: duplicate starts cannot inflate activity,
+unknown/internal stops cannot consume a sibling, and reordered child callbacks
+cannot overwrite or be discarded by a newer main-turn callback. Child tool hooks
+cannot overwrite the main turn or clear another actor's permission wait. Both
+typed producers use one authenticated/validated reducer before deriving the
+discussion's status. The grid fallback honors outstanding children and still
+exposes permission dialogs. The spinner
 reader requires Claude's leading glyph, ellipsis, valid elapsed duration and
 metrics group; completion footers and ordinary quoted prose are negative controls.
 Notification turns use the adapter's declarative subtype table.
+The captured-hook replay helper now retains the recorded `agent_id`. The
+background-work capture ends with a stop for a different/internal agent; its test
+now explicitly ends the actual resumed child before asserting drainage.
 
 Verification:
 
@@ -47,6 +57,9 @@ Verification:
   and announce the recorded completion's thread, and their race checks pass.
 - Linux `go build ./...` passed. GoReleaser's exact-commit release gates independently
   run the full suite, Android checks, container scans and signed publication.
+- The final actor-state implementation passed all Go packages with `-race`.
+  The concurrent 50-session UI fixture hit a request timeout; its complete package
+  passed when rerun without competing packages, followed by the Linux build.
 - Go 1.25.0 / golangci-lint 2.12.2 reported zero issues, including a final scoped
   check of the thread-identity validation.
 
@@ -55,6 +68,8 @@ were introduced. Android's required release identity is v0.17.1 / code 59.
 Live Claude inference was not run; existing captured screens and hook timelines
 were replayed. The pre-existing macOS skeleton test-helper build-tag problem is
 tracked separately as `agents-tracker-tyyo`.
+The first unpublished release gate failed on the unchanged shim fixture's missing
+child PID readiness marker; follow-up is tracked as `agents-tracker-fail`.
 
 Protocol references: [Codex app-server](https://learn.chatgpt.com/docs/app-server)
 and [Claude Code hooks](https://code.claude.com/docs/en/hooks).

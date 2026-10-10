@@ -129,12 +129,17 @@ func TestC7I4_CapturedWorkflowHoldsWorkingAcrossStop(t *testing.T) {
 		t.Errorf("PermissionRequest (hook %d) derived %v; want needs_input", perm[0], g)
 	}
 
-	// Drainage: every child the capture started has stopped, so a Stop posted after
-	// the capture ends real work and must read done — the mask is not a one-way
-	// latch.
+	// The last captured stop belongs to an untracked internal agent, not the
+	// resumed child. End the actual child before asserting that the workflow drained.
 	clk.advance(time.Second)
+	if got := status.Derive(standing[stops[2]]); got != status.GroupWorking {
+		t.Fatalf("an unrelated child stop ended the captured workflow: %s", got)
+	}
+	if err := e.HandleCallback(Callback{SessionID: "s1", Token: "tok1", Sequence: uint64(len(hooks) + 1), Event: "SubagentStop", Payload: hookFields(t, hooks[starts[1]].Raw)}); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.HandleCallback(Callback{
-		SessionID: "s1", Token: "tok1", Sequence: uint64(len(hooks) + 1), Event: "Stop",
+		SessionID: "s1", Token: "tok1", Sequence: uint64(len(hooks) + 2), Event: "Stop",
 	}); err != nil {
 		t.Fatalf("trailing Stop: %v", err)
 	}

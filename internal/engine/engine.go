@@ -176,8 +176,17 @@ type session struct {
 	// subagentStartEvent). It is IN-MEMORY ONLY and never persisted: a daemon
 	// restart forgets it, and the grid path (the workflow row marker in
 	// heuristic.go) re-establishes the truth from the screen, in both directions.
-	children    int
-	mainStopped bool // the main turn ended while children can still be running
+	children          int
+	anonymousChildren int
+	childSeq          uint64
+	childStates       map[string]childState
+	mainTurn          status.Turn
+	inputActor        string
+}
+
+type childState struct {
+	sequence uint64
+	active   bool
 }
 
 // New builds an Engine from cfg, defaulting the injectable effects so a partial
@@ -233,12 +242,13 @@ func (e *Engine) RegisterSession(id, token string, pid int, sources []adapter.Si
 		st = initialStatus[0]
 	}
 	e.sessions[id] = &session{
-		token:   token,
-		pid:     pid,
-		sources: sources,
-		rules:   parseGridRules(sources),
-		alive:   true,
-		status:  st,
+		token:    token,
+		pid:      pid,
+		sources:  sources,
+		rules:    parseGridRules(sources),
+		alive:    true,
+		status:   st,
+		mainTurn: st.Turn,
 	}
 }
 
@@ -301,57 +311,20 @@ func (e *Engine) HandleCallback(cb Callback) error {
 	// posts {event, payload fields} and the engine derives turn/interaction from the
 	// adapter's declared event->status descriptor. A pre-normalized caller carrying
 	// explicit turn/interaction dims is honored as-is.
-	dims := deriveDims(s.sources, cb.Event, cb.Payload)
-	if len(dims) == 0 {
-		// The event maps to no status dimension and none was supplied explicitly (an
-		// unmapped event): accept as a benign no-op — the grid heuristic still governs
-		// — rather than reject it as an auth/replay failure.
-		e.mu.Unlock()
-		return nil
-	}
 	now := e.now()
-	// A Stop is the turn boundary whether or not children mask its idle below, so
-	// read the boundary off the Stop's OWN derived turn before masking.
-	idleStop := cb.Event == stopEvent && dims[PayloadKeyTurn] == string(status.TurnIdle)
-	// Rejected/replayed hooks must not change child accounting.
-	if err := validateDims(dims); err != nil {
+	next, advanced, typed, err := applySignal(s, cb.Event, cb.Payload, cb.Sequence, now)
+	if err != nil {
 		e.mu.Unlock()
 		return err
 	}
-	if cb.Sequence > max(s.turnSeq, s.interSeq) {
-		countChild(s, cb.Event)
-	}
-	if cb.Sequence > s.turnSeq {
-		if idleStop {
-			s.mainStopped = true
-		}
-		if (cb.Event == "UserPromptSubmit" || cb.Event == "PreToolUse") && dims[PayloadKeyTurn] == string(status.TurnActive) && cb.Payload["agent_id"] == "" {
-			s.mainStopped = false
-		}
-	}
-	dims = withChildrenHoldingTheTurn(s, cb.Event, dims)
-	if dims = withoutPostStopReactivation(s, cb.Event, dims, now); len(dims) == 0 {
-		// A post-Stop straggler naming nothing but the turn it may not reopen:
-		// accept as a benign no-op, like an unmapped event.
+	if !advanced {
 		e.mu.Unlock()
 		return nil
 	}
-	next, advanced, err := applyTyped(s, cb.Sequence, dims)
-	if err != nil {
-		e.mu.Unlock()
-		return err // out-of-vocabulary payload: reject like an auth failure, advance nothing
+	if typed {
+		s.lastTypedAt = now
 	}
-	if !advanced {
-		// The sequence is not newer than the high-water of ANY dimension it names:
-		// an exact replay or a stale reorder. Reject without advancing or emitting.
-		e.mu.Unlock()
-		return fmt.Errorf("engine: callback sequence %d is stale or replayed for every named dimension", cb.Sequence)
-	}
-	s.lastTypedAt = now
 	s.lastSignalAt = now
-	if idleStop {
-		s.lastStopAt = now // arm the turn boundary (postStopGrace)
-	}
 	changed := commit(s, next)
 	e.mu.Unlock()
 
@@ -418,6 +391,9 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 		return // inconclusive grid tap: preserve the committed status (ADR-007)
 	}
 	// A composer can be idle while the discussion's background work continues.
+	if turn == status.TurnIdle || !hasWorkflowMarker(snap) || hasBusyMarker(snap) || hasClaudeSpinner(snap) {
+		s.mainTurn = turn
+	}
 	if s.children > 0 && turn == status.TurnIdle && interaction == status.InteractionNone {
 		turn = status.TurnActive
 	}
@@ -513,6 +489,9 @@ func (e *Engine) Tick() {
 				e.now().Sub(j.s.lastSignalAt) >= e.staleness {
 				next = j.s.status
 				next.Turn = status.TurnUnknown
+				if j.s.mainTurn == status.TurnActive {
+					j.s.mainTurn = status.TurnUnknown
+				}
 				changed = commit(j.s, next)
 			}
 			e.mu.Unlock()
@@ -664,44 +643,125 @@ var trailingEdgeEvents = map[string]bool{
 	"PostToolUse": true,
 }
 
-// countChild moves the session's outstanding-children count for the bracketing
-// hooks and leaves every other event alone. The DECREMENT FLOORS AT ZERO, which
-// is not defensive rounding: the live capture carries three SubagentStops for two
-// SubagentStarts (an agent RESUME re-fires SubagentStart, and a child can stop
-// without this session ever having seen its start), so an unfloored count drifts
-// negative and the next real child then fails to hold the turn. Nothing resets
-// the count — in particular NOT UserPromptSubmit, which the auto-continuation
-// fires mid-workflow (spike-SE F3). Caller holds e.mu.
-func countChild(s *session, event string) {
-	switch event {
-	case subagentStartEvent:
-		s.children++
-	case subagentStopEvent:
-		if s.children > 0 {
+// Child lifecycles have their own high-water: another actor's newer callback
+// cannot discard this child's start/end, and an unknown stop cannot end a sibling.
+func countChild(s *session, event, actor string, seq uint64) (fresh, changed bool) {
+	if actor == "" {
+		if seq == 0 || seq <= s.childSeq {
+			return false, false
+		}
+		s.childSeq = seq
+		// shortcut: idless legacy hooks use a balanced counter; remove when legacy fixtures retire.
+		if event == subagentStartEvent {
+			s.anonymousChildren++
+			s.children++
+			return true, true
+		}
+		if s.anonymousChildren > 0 {
+			s.anonymousChildren--
+			s.children--
+			return true, true
+		}
+		return true, false
+	}
+	old := s.childStates[actor]
+	if seq == 0 || seq <= old.sequence {
+		return false, false
+	}
+	active := event != subagentStopEvent
+	if event != subagentStartEvent && old.sequence != 0 && !old.active {
+		active = false
+	}
+	if old.active != active {
+		if active {
+			s.children++
+		} else {
 			s.children--
 		}
+		changed = true
 	}
+	if s.childStates == nil {
+		s.childStates = make(map[string]childState)
+	}
+	s.childStates[actor] = childState{sequence: seq, active: active}
+	return true, changed
 }
 
-// withChildrenHoldingTheTurn keeps an idle main loop active while children run,
-// then settles it when the last child ends. A new main turn clears mainStopped;
-// child tools do not. Permission/prompt waits remain visible. Caller holds e.mu.
-func withChildrenHoldingTheTurn(s *session, event string, dims map[string]string) map[string]string {
-	settle := event == subagentStopEvent && s.children == 0 && s.mainStopped && s.status.Interaction == status.InteractionNone
-	hold := s.children > 0 && dims[PayloadKeyTurn] == string(status.TurnIdle) && dims[PayloadKeyInteraction] == string(status.InteractionNone)
-	if !settle && !hold {
-		return dims
+// Both typed producers use this reducer; actor attribution precedes aggregation.
+func applySignal(s *session, event string, payload map[string]string, seq uint64, now time.Time) (status.Status, bool, bool, error) {
+	dims := deriveDims(s.sources, event, payload)
+	if len(dims) == 0 {
+		return s.status, false, false, nil
 	}
-	held := make(map[string]string, len(dims))
-	for k, v := range dims {
-		held[k] = v
+	if err := validateDims(dims); err != nil {
+		return status.Status{}, false, false, err
 	}
-	if settle {
-		held[PayloadKeyTurn] = string(status.TurnIdle)
+	actor := payload["agent_id"]
+	if event == "Notification" && s.status.Interaction == status.InteractionPermission && dims[PayloadKeyInteraction] == string(status.InteractionPermission) {
+		actor = s.inputActor // a global permission nudge does not replace the requester
+	}
+	lifecycle := event == subagentStartEvent || event == subagentStopEvent
+	childWork := actor != "" && (event == "PreToolUse" || event == "PostToolUse")
+	childFresh, childChanged := false, false
+	if lifecycle || childWork {
+		childFresh, childChanged = countChild(s, event, actor, seq)
+	}
+	if lifecycle {
+		dims = nil
+		if event == subagentStopEvent && childChanged && s.inputActor == actor && (s.status.Interaction == status.InteractionPermission || s.status.Interaction == status.InteractionPrompt) {
+			dims = map[string]string{PayloadKeyInteraction: string(status.InteractionNone)}
+		}
 	} else {
-		held[PayloadKeyTurn] = string(status.TurnActive)
+		kept := make(map[string]string, 2)
+		for key, value := range dims {
+			if key == PayloadKeyTurn && actor != "" {
+				continue
+			}
+			if key == PayloadKeyInteraction && value == string(status.InteractionNone) &&
+				((childWork && s.status.Interaction != status.InteractionPermission && s.status.Interaction != status.InteractionPrompt) ||
+					((s.status.Interaction == status.InteractionPermission || s.status.Interaction == status.InteractionPrompt) && s.inputActor != actor)) {
+				continue
+			}
+			kept[key] = value
+		}
+		dims = withoutPostStopReactivation(s, event, kept, now)
 	}
-	return held
+	beforeTurn, beforeInter := s.turnSeq, s.interSeq
+	next, typed, err := applyTyped(s, seq, dims)
+	if err != nil {
+		return status.Status{}, false, false, err
+	}
+	if !typed && !childFresh {
+		if len(dims) == 0 && !lifecycle && !childWork {
+			return s.status, false, false, nil
+		}
+		return s.status, false, false, fmt.Errorf("engine: callback sequence %d is stale or replayed for every named dimension", seq)
+	}
+	if s.turnSeq > beforeTurn {
+		s.mainTurn = next.Turn
+		if event == stopEvent && next.Turn == status.TurnIdle {
+			s.lastStopAt = now
+		}
+	}
+	if s.interSeq > beforeInter {
+		if next.Interaction == status.InteractionPermission || next.Interaction == status.InteractionPrompt {
+			s.inputActor = actor
+		} else {
+			s.inputActor = ""
+		}
+	}
+	if typed || childChanged || (childFresh && event == subagentStartEvent) {
+		if next.Interaction == status.InteractionPermission || next.Interaction == status.InteractionPrompt {
+			if s.inputActor != "" {
+				next.Turn = status.TurnIdle
+			}
+		} else if s.children > 0 {
+			next.Turn = status.TurnActive
+		} else {
+			next.Turn = s.mainTurn
+		}
+	}
+	return next, true, typed, nil
 }
 
 // withoutPostStopReactivation drops the turn dimension of a trailing-edge hook
