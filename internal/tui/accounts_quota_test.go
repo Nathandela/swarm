@@ -240,3 +240,15 @@ func TestAccountsQuotaBarsShowUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountsQuotaBarsShowWhileRotationIsOff(t *testing.T) {
+	half := 50
+	a := accountsFlowFixture(1, false)
+	a.focus = 1
+	a.reply.Accounts[0].QuotaFetchState = "ready"
+	a.reply.Accounts[0].Quota = []protocol.AccountQuotaView{{Label: "primary", UsedPercent: &half, ObservedAt: time.Now()}}
+	text := stripANSI(a.view(100, 40, false, true))
+	if !strings.Contains(text, "enable Claude rotation") || !strings.Contains(text, strings.Repeat("█", 10)+strings.Repeat("░", 10)) {
+		t.Fatalf("selected account lost its usage bar while rotation is off:\n%s", text)
+	}
+}

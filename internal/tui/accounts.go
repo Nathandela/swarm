@@ -1066,7 +1066,12 @@ func (a accountsModel) nextStep(row accountRow) string {
 	provider := accountProviderName(row.provider)
 	_, ready := a.accountCounts(row.provider)
 	if !a.reply.Enabled[row.provider] {
-		return "Next: enable " + provider + " rotation (e).\n" + a.coverageGuidance(row.provider)
+		lines := []string{"Next: enable " + provider + " rotation (e).", a.coverageGuidance(row.provider)}
+		if row.kind == "account" && a.reply.Accounts[row.index].QuotaFetchState != "" {
+			lines = append(lines, "Quota: "+accountQuotaSummary(a.reply.Accounts[row.index]))
+			lines = append(lines, accountQuotaBars(a.reply.Accounts[row.index])...)
+		}
+		return strings.Join(lines, "\n")
 	}
 	if ready == 0 {
 		return "Next: add a verified " + provider + " account (a).\nNo account is ready for new discussions."
