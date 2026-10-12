@@ -538,7 +538,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// validates the source and composes the adapter's resume argv from the source's
 		// captured conversation id.
 		if s, ok := m.general.selected(); ok && s.Status.Process != status.ProcessRunning {
-			return m, resumeCmd(m.client, s, m.width, m.height)
+			return m.beginResume(s)
 		}
 	case k.Text == "e":
 		// Open an inline rename of the selected row (v0.5). Capture the target by
@@ -886,7 +886,7 @@ const (
 // agent + cwd carry over. It passes Env (so the daemon can resolve the real agent
 // binary on PATH — B1) and surfaces a launch failure via launchResultMsg instead of
 // discarding it, so a rejected resume (e.g. no captured conversation id) is visible.
-func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
+func resumeCmd(c Client, s protocol.SessionView, cols, rows int, relocate bool) tea.Cmd {
 	if cols <= 0 {
 		cols = defaultResumeCols
 	}
@@ -902,6 +902,9 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 		Cols:    cols,
 		Rows:    rows,
 	}
+	if relocate {
+		req.Options[protocol.OptionResumeRelocate] = "true"
+	}
 	return func() tea.Msg {
 		id, name, err := c.Launch(req)
 		if name == "" {
@@ -909,7 +912,7 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int) tea.Cmd {
 		}
 		// Carry the new session id + agent + name so a successful resume auto-attaches into
 		// it (bd agents-tracker-stc) — the user pressed 'r' precisely to interact with it.
-		return launchResultMsg{id: id, agent: s.Agent, name: name, err: err}
+		return resumeResultMsg{source: s, result: launchResultMsg{id: id, agent: s.Agent, name: name, err: err}}
 	}
 }
 

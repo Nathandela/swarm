@@ -14,7 +14,8 @@ import (
 )
 
 func TestResume_KeyIssuesResumeLaunchOnEndedRow(t *testing.T) {
-	f := newFakeClient(sCompleted("endpoint/done1", "claude", "~/Code/x", "exit 0", time.Hour))
+	cwd := t.TempDir()
+	f := newFakeClient(sCompleted("endpoint/done1", "claude", cwd, "exit 0", time.Hour))
 	m := newModel(t, f, detectMixed())
 
 	_, cmd := m.Update(keyRune('r'))
@@ -31,7 +32,7 @@ func TestResume_KeyIssuesResumeLaunchOnEndedRow(t *testing.T) {
 	if req.Agent != "claude" {
 		t.Errorf("resume launch agent = %q; want the source agent %q", req.Agent, "claude")
 	}
-	if req.Cwd != "~/Code/x" {
+	if req.Cwd != cwd {
 		t.Errorf("resume launch cwd = %q; want the source cwd", req.Cwd)
 	}
 	if req.Cols <= 0 || req.Rows <= 0 {
@@ -45,7 +46,7 @@ func TestResume_KeyIssuesResumeLaunchOnEndedRow(t *testing.T) {
 // TestResume_LaunchFailureSurfacesToBanner proves a rejected resume (e.g. no
 // captured conversation id) is shown to the user, not silently discarded (B1).
 func TestResume_LaunchFailureSurfacesToBanner(t *testing.T) {
-	f := newFakeClient(sCompleted("endpoint/done1", "claude", "~/Code/x", "exit 0", time.Hour))
+	f := newFakeClient(sCompleted("endpoint/done1", "claude", t.TempDir(), "exit 0", time.Hour))
 	f.launchErr = errors.New("resume: cannot resume \"done1\": no captured conversation id")
 	m := newModel(t, f, detectMixed())
 

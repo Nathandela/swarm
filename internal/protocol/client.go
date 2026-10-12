@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -145,6 +146,9 @@ func (c *Client) InteractionHistory(id string, limit int) ([]JournalRecord, erro
 // chrome uses the canonical name so the label matches what the daemon persisted (an
 // older daemon whose reply predates naming returns an empty name).
 func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
+	if _, relocate := req.Options[OptionResumeRelocate]; relocate && !slices.Contains(c.caps, CapResumeRelocate) {
+		return "", "", errors.New("resume relocation requires an updated daemon; run swarm daemon restart")
+	}
 	r := req
 	resp, err := c.request(Control{Op: OpLaunch, EndpointID: c.endpointID, Launch: &r})
 	if err != nil {

@@ -257,6 +257,8 @@ type ResumeSpec struct {
 	ConversationID string
 	Name           string
 	Options        map[string]string
+	// Relocate explicitly overrides the conversation's saved working root with Cwd.
+	Relocate bool
 }
 
 // TranscriptLayout is the OPTIONAL extension a CLI implements when swarm has

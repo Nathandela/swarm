@@ -37,6 +37,10 @@ const OptionWorktree = "worktree"
 // adapter's resume argv from the source conversation id.
 const OptionResumeFrom = "resume_from"
 
+// OptionResumeRelocate explicitly authorizes using LaunchReq.Cwd instead of the
+// source's saved checkout on an owner-tier linked resume. It is never inherited.
+const OptionResumeRelocate = "resume_relocate"
+
 // OptionResumeConversationID is the owner-tier-only launch-option key used to
 // adopt a provider-native conversation that is not already represented by a
 // swarm session. It is capability-gated so an older daemon cannot mistake the
@@ -248,7 +252,7 @@ const maxCommandValidity = 1 * time.Hour
 var serverCaps = []string{
 	CapAttach, CapSubscribe,
 	CapRemoteGateway, CapJournal, CapJournalSubscribeFrom, CapActivity, CapPolicy, CapPairing,
-	CapExternalResume, CapHandsOffHandoff,
+	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapAccountsManage,
 }
@@ -1503,6 +1507,20 @@ func (cc *clientConn) handleLaunch(c Control) {
 		}
 		if req.Options[OptionResumeConversationID] != "" {
 			cc.replyErrorCode("launch: "+OptionHandoffFrom+" cannot be combined with "+OptionResumeConversationID, CodeInvalidField)
+			return
+		}
+	}
+	if relocate, present := req.Options[OptionResumeRelocate]; present {
+		if cc.srv.remoteTier {
+			cc.replyErrorCode("launch: resume relocation is owner-tier only", CodePolicy)
+			return
+		}
+		if relocate != "true" || req.Options[OptionResumeFrom] == "" {
+			cc.replyErrorCode("launch: resume_relocate requires true and resume_from", CodeInvalidField)
+			return
+		}
+		if !cc.hasCap(CapResumeRelocate) {
+			cc.replyErrorCode("launch: resume relocation capability was not negotiated", CodeCapabilityRefused)
 			return
 		}
 	}

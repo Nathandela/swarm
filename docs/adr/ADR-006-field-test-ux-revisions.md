@@ -3,6 +3,16 @@
 **Status**: Accepted
 **Date**: 2026-07-18
 
+## Amendment: terminal type matches the shim PTY (2026-10-12)
+
+Swarm runs agents inside shim-owned PTYs consumed by its xterm-compatible VT
+emulator. Some launchers set `TERM=dumb`, which makes an interactive agent believe
+it has no terminal capabilities and can leave it waiting on a warning before the
+conversation starts. At the final shim exec boundary, Swarm now maps `TERM=dumb`
+to `TERM=xterm-256color`, the same value it already supplies when TERM is absent.
+Other TERM values and the captured session environment remain unchanged; this
+normalizes only the terminal capability reported to the child process.
+
 ## Amendment: enhanced keyboard input (2026-08-26)
 
 A later field test attached to Codex while its TUI had enabled the Kitty keyboard

@@ -174,7 +174,7 @@ func TestLaunchResult_NoIDStaysOnBoard(t *testing.T) {
 // into the returned new session (resume is a launch-as-new-session; the user resumed
 // precisely to interact with it).
 func TestResume_SuccessAutoAttachesIntoNewSession(t *testing.T) {
-	f := newFakeClient(sCompleted("endpoint/done1", "claude", "~/Code/x", "exit 0", time.Hour))
+	f := newFakeClient(sCompleted("endpoint/done1", "claude", t.TempDir(), "exit 0", time.Hour))
 	f.launchID = "endpoint/resumed-1"
 	r := &recordingRunner{}
 	m := New(f, detectMixed(), WithAttachRunner(r.run))

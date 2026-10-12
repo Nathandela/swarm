@@ -129,8 +129,28 @@ func TestSpawn_EnvIsCapturedNotInherited(t *testing.T) {
 	t.Errorf("no TERM in agent env; the shim must inject TERM=xterm-256color when absent")
 }
 
-// E4.1b (companion) — when cfg.Env DOES carry a TERM, the shim preserves it and
-// does not override with its default.
+// A terminal marked "dumb" describes a host without terminal capabilities, but
+// the child is inside swarm's xterm-compatible PTY. Give it the PTY's actual
+// terminal type so interactive agents do not pause on a terminal warning.
+func TestBuildEnvDumbTermUsesPTYTerminalType(t *testing.T) {
+	env := buildEnv([]string{"TERM=dumb", "LANG=C"})
+	term, lang := "", false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TERM=") {
+			term = kv
+		}
+		lang = lang || kv == "LANG=C"
+	}
+	if term != "TERM=xterm-256color" {
+		t.Errorf("TERM = %q, want xterm-256color for the swarm PTY", term)
+	}
+	if !lang {
+		t.Errorf("non-TERM environment entry was not preserved: %v", env)
+	}
+}
+
+// E4.1b (companion) — when cfg.Env carries a usable TERM, the shim preserves it
+// and does not override it with the default.
 func TestSpawn_EnvTermPreservedWhenProvided(t *testing.T) {
 	cfg := helperConfig(t, modeInfo, nil, []string{"TERM=screen-256color"})
 	_, _, env := runInfo(t, cfg)

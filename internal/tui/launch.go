@@ -222,7 +222,7 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Field navigation stays on Up/Down, so a completion attempt can never
 		// unexpectedly move the user into another form control.
 		if lm.isDir() {
-			lm.cycleDirCompletion(true)
+			lm.updateDirectory(k)
 		}
 	case k.Code == tea.KeyDown:
 		lm.moveFocus(1)
@@ -231,7 +231,7 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case (k.Code == tea.KeyLeft || k.Code == tea.KeyRight) && k.Mod == 0 && lm.isDir():
 		// Directory keeps its established shell-like plain-arrow completion. Only
 		// exact unmodified arrows are reserved; Command/Meta arrows reach the editor.
-		lm.cycleDirCompletion(k.Code == tea.KeyRight)
+		lm.updateDirectory(k)
 	case (k.Code == tea.KeyLeft || k.Code == tea.KeyRight) && k.Mod == 0 && lm.plainArrowsCycleField():
 		// Pickers and curated string suggestions retain their established arrows.
 		lm.cycleField(k.Code == tea.KeyRight)
@@ -290,6 +290,20 @@ func (m *launchModel) updateFocusedText(k tea.KeyPressMsg) lineEditResult {
 		m.refreshDirCompletion()
 	}
 	return result
+}
+
+// updateDirectory applies the same path editing and completion keys used by the
+// new-session form. Recovery screens reuse this field without the other launch
+// controls.
+func (m *launchModel) updateDirectory(k tea.KeyPressMsg) {
+	switch {
+	case k.Code == tea.KeyTab:
+		m.cycleDirCompletion(true)
+	case (k.Code == tea.KeyLeft || k.Code == tea.KeyRight) && k.Mod == 0:
+		m.cycleDirCompletion(k.Code == tea.KeyRight)
+	default:
+		m.updateFocusedText(k)
+	}
 }
 
 // toggleBoolOption flips the focused bool option ("true"/"false") and reports
@@ -727,14 +741,7 @@ func (m launchModel) view() string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("swarm") + styleDim.Render(" · new session") + "\n\n")
 
-	b.WriteString(m.launchFieldLine("directory", m.dirValue(), m.isDir()))
-	if m.isDir() && (len(m.dirCands) > 1 || m.dirFuzzy && len(m.dirCands) > 0) {
-		row := strings.Join(m.dirCands, "  ")
-		if m.width > 2+launchLabelW {
-			row = clampCells(row, m.width-(2+launchLabelW))
-		}
-		b.WriteString(strings.Repeat(" ", 2+launchLabelW) + styleDim.Render(row) + "\n")
-	}
+	b.WriteString(m.directoryView())
 	b.WriteString(m.launchFieldLine("name", m.nameValue(), m.isName()))
 	b.WriteString(m.launchFieldLine("tag", m.tagValue(), m.isTag()))
 	b.WriteString(m.launchFieldLine("agent", m.agentValue(), m.isAgent()))
@@ -758,6 +765,28 @@ func (m launchModel) view() string {
 	return b.String()
 }
 
+// directoryView renders the shared path selector used by both new-session
+// creation and missing-directory recovery.
+func (m launchModel) directoryView() string {
+	var b strings.Builder
+	b.WriteString(m.launchFieldLine("directory", m.dirValue(), m.isDir()))
+	if m.isDir() && (len(m.dirCands) > 1 || m.dirFuzzy && len(m.dirCands) > 0) {
+		row := strings.Join(m.dirCands, "  ")
+		if m.width > 2+launchLabelW {
+			row = clampCells(row, m.width-(2+launchLabelW))
+		}
+		b.WriteString(strings.Repeat(" ", 2+launchLabelW) + styleDim.Render(row) + "\n")
+	}
+	return b.String()
+}
+
+func (m launchModel) directoryEditHint() string {
+	if m.dirGhost != "" || len(m.dirCands) > 1 {
+		return "tab/←→ complete · " + lineEditFastHint
+	}
+	return "type or paste · " + lineEditFastHint
+}
+
 // hint is the contextual footer for the focused field: text fields prompt to type
 // or paste, the agent and choice pickers to use the arrows, and bool options to
 // toggle with Space. The tab/enter/esc tail is constant across fields.
@@ -773,7 +802,7 @@ func (m launchModel) hint() string {
 		return lineEditFastHint + " · enter create directory · esc cancel"
 	}
 	if m.isDir() && (m.dirGhost != "" || len(m.dirCands) > 1) {
-		return "tab/←→ complete · " + lineEditFastHint + tail
+		return m.directoryEditHint() + tail
 	}
 	if m.isAgent() || m.isChoiceFocused() {
 		return "arrows change" + tail
@@ -785,7 +814,7 @@ func (m launchModel) hint() string {
 		return "space toggle" + tail
 	}
 	if m.isDir() {
-		return "type or paste · " + lineEditFastHint + tail
+		return m.directoryEditHint() + tail
 	}
 	if si, ok := m.focusedOptionOfType("string"); ok && len(m.optSpecs[si].Suggest) > 0 {
 		return "type or paste · ←→ suggest · " + lineEditFastHint + tail
