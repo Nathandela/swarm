@@ -36,9 +36,12 @@ func accountTestManager(t *testing.T, root string) *accountManager {
 	// Manager startup probes only version; an empty PATH keeps these tests
 	// independent of real installed providers and all native authentication.
 	path := os.Getenv("PATH")
+	home := os.Getenv("HOME")
 	t.Setenv("PATH", "/no-account-test-providers")
+	t.Setenv("HOME", root)
 	m := openAccountManager(root, "", nil)
 	t.Setenv("PATH", path)
+	t.Setenv("HOME", home)
 	if m.unavailable != nil {
 		t.Fatalf("private manager unavailable: %v", m.unavailable)
 	}
