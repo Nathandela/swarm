@@ -28,7 +28,7 @@ func (m *accountRotationManager) preflightSuccessor(source persist.Meta, destina
 	previewSource.Status.Process = status.ProcessExited
 	resolve := m.w.resolve
 	var retained *persist.CLIIdentity
-	if source.AgentType == accounts.ProviderClaude && m.d != nil && m.d.accounts != nil {
+	if (source.AgentType == accounts.ProviderClaude || source.AgentType == accounts.ProviderCodex) && m.d != nil && m.d.accounts != nil {
 		var err error
 		retained, err = m.d.accounts.managedNative(source.AgentType, source.Env, source.ProviderCwd())
 		if err != nil {
@@ -69,6 +69,23 @@ func (m *accountRotationManager) preflightSuccessor(source persist.Meta, destina
 
 func (w *authWatcher) validateManagedRefresh(source persist.Meta, identity *persist.CLIIdentity) error {
 	if source.AccountBinding == nil {
+		if !w.accountEnrollmentEnabled(source.AgentType) {
+			if w.state.CLI[source.ID].Enrollment != nil && !w.state.Killed[source.ID] {
+				return errAccountSuccessorUnavailable
+			}
+			return nil
+		}
+		rec := w.state.CLI[source.ID]
+		prepared, err := w.preflightAccountEnrollment(source, identity, rec.Enrollment)
+		if err != nil {
+			return err
+		}
+		rec.Enrollment = &accountEnrollmentPlan{Binding: *prepared.AccountBinding, Projection: prepared.AccountProjectionRef}
+		w.state.CLI[source.ID] = rec
+		if err := w.saveState(); err != nil {
+			w.stateErr = err
+			return err
+		}
 		return nil
 	}
 	if !validCLIIdentity(identity) || !accountconfig.SupportedNativeVersion(source.AgentType, identity.Version) || w.accountRotation == nil {

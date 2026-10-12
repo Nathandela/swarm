@@ -31,14 +31,22 @@ const accountFixtureDeviceCode = "synthetic-private-device-code"
 // The real swarm executable supplies the detached supervisor and runner. A copy
 // of this test executable supplies only the local native WebSocket fixture.
 func TestMain(m *testing.M) {
-	if name := filepath.Base(os.Args[0]); name == "claude" || name == "2.1.289" || name == "2.1.290" {
+	if name := filepath.Base(os.Args[0]); name == "claude" || name == "2.1.289" || name == "2.1.290" || name == "codex" || name == "0.160.0" || name == "0.162.1" {
 		if len(os.Args) == 2 && os.Args[1] == "--version" {
 			version := "2.1.289"
 			executable, _ := os.Executable()
 			if filepath.Base(executable) == "2.1.290" {
 				version = "2.1.290"
 			}
-			fmt.Println(version + " (Claude Code)")
+			if name == "codex" || name == "0.160.0" || name == "0.162.1" {
+				version = "0.160.0"
+				if filepath.Base(executable) == "0.162.1" {
+					version = "0.162.1"
+				}
+				fmt.Println("codex-cli " + version)
+			} else {
+				fmt.Println(version + " (Claude Code)")
+			}
 			os.Exit(0)
 		}
 		// Only an explicit private fixture marker admits a synthetic child. It
@@ -173,6 +181,14 @@ func accountTestNative(t *testing.T, m *accountManager, mode string) string {
 	}
 	accountTestPut(t, filepath.Join(m.stateRoot, "native-fixture-mode"), []byte(mode))
 	m.native["codex"] = &persist.CLIIdentity{Path: native, Version: "0.160.0"}
+	bin := filepath.Join(m.stateRoot, "bin")
+	if err := os.MkdirAll(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(native, filepath.Join(bin, "codex")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	return native
 }
 

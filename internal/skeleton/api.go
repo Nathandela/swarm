@@ -1144,7 +1144,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		return persist.Meta{}, err
 	}
 	var managedIdentity *persist.CLIIdentity
-	if resolved.AccountBinding != nil && resolved.AgentType == accounts.ProviderClaude {
+	if resolved.AccountBinding != nil && (resolved.AgentType == accounts.ProviderClaude || resolved.AgentType == accounts.ProviderCodex) {
 		managedIdentity, err = a.accounts.managedNative(resolved.AgentType, resolved.ClientEnv, resolved.Cwd)
 		if err != nil || len(resolved.Argv) == 0 {
 			return persist.Meta{}, errAccountLaunch
