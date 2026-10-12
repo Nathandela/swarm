@@ -83,6 +83,15 @@ func TestManagedCodexBootstrapsQualifiedSiblingAndRejectsTamper(t *testing.T) {
 	qualified := filepath.Join(versions, accountconfig.CharacterizedCodexVersion)
 	copyRetentionELF(t, qualified)
 	env := []string{"HOME=" + home, "PATH=/no-installed-codex"}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "/no-installed-codex")
+	m.startupManagedNative("codex")
+	if m.native["codex"] == nil || m.native["codex"].Path != qualified {
+		t.Fatal("unenrolled startup did not advertise the qualified source")
+	}
+	if _, err := os.Stat(filepath.Join(m.stateRoot, "accounts", "native", "codex-0.160.0")); !os.IsNotExist(err) {
+		t.Fatal("unenrolled startup retained a large executable", err)
+	}
 	selected, err := m.managedNative("codex", env, m.stateRoot)
 	if err != nil {
 		t.Fatal(err)

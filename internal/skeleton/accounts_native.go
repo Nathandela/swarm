@@ -468,37 +468,48 @@ func (a *coreAPI) accountLaunchResolver(spec daemon.LaunchSpec) func(string, []s
 	}
 }
 
-func (m *accountManager) startupManagedClaude() {
+func (m *accountManager) startupManagedNative(provider string) {
 	env := daemon.PolicyEnv(nil)
-	if identity, err := m.retainedClaude(); err == nil {
-		m.recordNativeSelection(identity, nil)
-		m.native[accounts.ProviderClaude] = identity
+	if identity, err := m.retainedNative(provider); err == nil {
+		if provider == accounts.ProviderClaude {
+			m.recordNativeSelection(identity, nil)
+		}
+		m.native[provider] = identity
 		return
 	} else if !errors.Is(err, os.ErrNotExist) {
-		m.recordNativeSelection(nil, err)
+		if provider == accounts.ProviderClaude {
+			m.recordNativeSelection(nil, err)
+		}
 		return
 	}
 	registry, err := m.store.Snapshot()
 	if err != nil {
 		return
 	}
-	intent := registry.Enabled[accounts.ProviderClaude]
+	intent := registry.Enabled[provider]
 	for _, account := range registry.Accounts {
-		intent = intent || account.Provider == accounts.ProviderClaude
+		intent = intent || account.Provider == provider
 	}
 	for _, job := range m.jobs.Jobs {
-		intent = intent || job.Provider == accounts.ProviderClaude
+		intent = intent || job.Provider == provider
 	}
 	if !intent {
 		// Advertise first enrollment from qualified source metadata without
 		// retaining a large executable on an otherwise unmanaged machine.
-		if identity, err := qualifiedClaudeSource(env, m.stateRoot); err == nil {
-			m.native[accounts.ProviderClaude] = identity
+		var identity *persist.CLIIdentity
+		var err error
+		if provider == accounts.ProviderClaude {
+			identity, err = qualifiedClaudeSource(env, m.stateRoot)
+		} else {
+			identity, err = qualifiedCodexSource(env, m.stateRoot)
+		}
+		if err == nil {
+			m.native[provider] = identity
 		}
 		return
 	}
-	if identity, err := m.managedNative(accounts.ProviderClaude, env, m.stateRoot); err == nil {
-		m.native[accounts.ProviderClaude] = identity
+	if identity, err := m.managedNative(provider, env, m.stateRoot); err == nil {
+		m.native[provider] = identity
 	}
 }
 

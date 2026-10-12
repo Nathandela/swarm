@@ -125,10 +125,8 @@ func openAccountManager(stateRoot, executable string, list func() []persist.Meta
 			}
 		}
 	}
-	m.startupManagedClaude()
-	if identity, err := m.managedNative(accounts.ProviderCodex, daemon.PolicyEnv(nil), stateRoot); err == nil {
-		m.native[accounts.ProviderCodex] = identity
-	}
+	m.startupManagedNative(accounts.ProviderClaude)
+	m.startupManagedNative(accounts.ProviderCodex)
 	return m
 }
 
