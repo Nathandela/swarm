@@ -991,6 +991,9 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
 func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
+	if err := validateResumeRelocation(spec); err != nil {
+		return persist.Meta{}, err
+	}
 	// Directory completion appends a separator. Strip only trailing separators
 	// before history, worktree, projection and persistence use the cwd; keep
 	// interior traversal components and symlinks visible to the strict validators.
@@ -1265,6 +1268,9 @@ var _ protocol.SessionCapabilityLookup = (*coreAPI)(nil)
 // lookPath (a stub in tests, the real PATH search in production). A missing binary
 // is a clear launch error.
 func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, getSource func(local string) (persist.Meta, bool), lookPath func(name string, env []string) (string, error)) (daemon.LaunchSpec, error) {
+	if err := validateResumeRelocation(spec); err != nil {
+		return daemon.LaunchSpec{}, err
+	}
 	// GG-6 scope: refuse a registered-but-non-production adapter at the launch
 	// boundary so a crafted launch RPC cannot spawn it in a real install. The only
 	// such adapter is the fixture-only "reference" (kept registered for the E9.5
@@ -1332,22 +1338,9 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if spec.AgentType == "codex" && spec.Options["sandbox"] != "" {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: Codex restores the saved conversation permission policy; change sandbox in the resumed conversation instead")
 		}
-		if srcMeta.LaunchOptions[protocol.OptionWorktree] == "true" && srcMeta.AgentCwd == "" {
-			return daemon.LaunchSpec{}, fmt.Errorf("resume: source worktree path was not captured; refusing to resume in another checkout")
-		}
-		if cwd := srcMeta.ProviderCwd(); cwd != "" && (spec.AgentType == "codex" || srcMeta.AgentCwd != "") {
-			spec.Cwd = cwd
-			if len(spec.Cwd) > 1 {
-				spec.Cwd = strings.TrimRight(spec.Cwd, string(filepath.Separator))
-				if spec.Cwd == "" {
-					spec.Cwd = string(filepath.Separator)
-				}
-			}
-		}
-		if srcMeta.AgentCwd != "" {
-			if fi, err := os.Stat(srcMeta.AgentCwd); err != nil || !fi.IsDir() {
-				return daemon.LaunchSpec{}, fmt.Errorf("resume: source checkout %q is no longer available", srcMeta.AgentCwd)
-			}
+		spec.Cwd, err = resumeDirectory(spec, srcMeta)
+		if err != nil {
+			return daemon.LaunchSpec{}, err
 		}
 		if spec.Name == "" {
 			spec.Name = srcMeta.Name
@@ -1372,6 +1365,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		}
 		argv, rerr := ad.Resume(adapter.ResumeSpec{
 			Cwd:            spec.Cwd,
+			Relocate:       spec.Options[protocol.OptionResumeRelocate] == "true",
 			ConversationID: srcMeta.ConversationID,
 			Name:           spec.Name,
 			Options:        spec.Options,
@@ -1735,7 +1729,7 @@ func mergeResumeOptions(req, src map[string]string) map[string]string {
 	merged := make(map[string]string, len(src)+len(req))
 	for k, v := range src {
 		switch k {
-		case protocol.OptionResumeFrom, protocol.OptionHandoffFrom, protocol.OptionResumeConversationID,
+		case protocol.OptionResumeFrom, protocol.OptionResumeRelocate, protocol.OptionHandoffFrom, protocol.OptionResumeConversationID,
 			protocol.OptionWorktree, "script":
 			continue
 		}

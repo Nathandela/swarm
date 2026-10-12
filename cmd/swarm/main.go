@@ -305,7 +305,7 @@ func clientConfig() (daemon.ClientConfig, error) {
 // attachDialer's per-attach dial deliberately does NOT use this set: it offers
 // {"attach"} and never submits a launch.
 func tuiCaps() []string {
-	return []string{"attach", "subscribe", protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapAccountsManage}
+	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapAccountsManage}
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected

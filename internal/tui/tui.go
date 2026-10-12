@@ -78,6 +78,7 @@ const (
 	screenOptions
 	screenAttach
 	screenAccounts
+	screenResume
 )
 
 // eventMsg carries one Subscribe status-change into the update loop.
@@ -188,6 +189,7 @@ type rootModel struct {
 	screen                                       screen
 	general                                      generalModel
 	launch                                       launchModel
+	resume                                       resumeModel
 	handoff                                      handoffModel
 	options                                      optionsModel
 	accounts                                     accountsModel
@@ -371,6 +373,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.general.width = msg.Width
 		m.launch.width = msg.Width
+		m.resume.directory.width = msg.Width
 		m.handoff.width = msg.Width
 		m.attach.width = msg.Width
 		return m, nil
@@ -425,6 +428,12 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.general.setBanner("connection to daemon lost - reconnecting"), reconnectDelay(m.reconnectGeneration, 0))
 		}
 		return m, m.general.setBanner("connection to daemon lost - restart swarm to reconnect")
+
+	case resumeResultMsg:
+		if msg.result.err != nil {
+			return m.openResume(msg.source, "launch failed: "+msg.result.err.Error()), nil
+		}
+		return m.Update(msg.result)
 
 	case launchResultMsg:
 		// A launch/resume failed: surface the reason on the general board's banner
@@ -550,6 +559,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// field is an edit action and therefore invalidates an armed path.
 			m.launch.createCwd = ""
 			m.launch.paste(msg.Content)
+		case m.screen == screenResume && !m.resume.busy:
+			m.resume.pasteDirectory(msg.Content)
 		case m.screen == screenHandoff:
 			m.handoff.paste(msg.Content)
 		case m.screen == screenGeneral && m.general.editing:
@@ -707,6 +718,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateGeneral(msg)
 		case screenLaunch:
 			return m.updateLaunch(msg)
+		case screenResume:
+			return m.updateResume(msg)
 		case screenHandoff:
 			return m.updateHandoff(msg)
 		case screenOptions:
@@ -729,6 +742,8 @@ func (m rootModel) View() tea.View {
 		content = m.composeBoard(m.pairing.view(), "y allow   n deny")
 	case m.screen == screenLaunch:
 		content = m.composeBoard(m.launch.view(), m.launch.hint())
+	case m.screen == screenResume:
+		content = m.composeBoard(m.resume.view(), m.resume.hint())
 	case m.screen == screenHandoff:
 		content = m.composeBoard(m.handoff.view(), m.handoff.hint())
 	case m.screen == screenOptions:

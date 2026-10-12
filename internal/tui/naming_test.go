@@ -214,7 +214,7 @@ func TestLaunchResult_AutoAttachCarriesName(t *testing.T) {
 // Resuming a named session carries the source's name into the resume launch, so the
 // resumed session keeps its label.
 func TestResume_CarriesSourceName(t *testing.T) {
-	src := sCompleted("endpoint/done1", "claude", "~/Code/x", "exit 0", time.Hour)
+	src := sCompleted("endpoint/done1", "claude", t.TempDir(), "exit 0", time.Hour)
 	src.Name = "backend-refactor"
 	f := newFakeClient(src)
 	m := newModel(t, f, detectMixed())

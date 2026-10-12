@@ -163,6 +163,9 @@ func (codexAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 		return nil, nil
 	}
 	argv := []string{binary, "resume", spec.ConversationID, "-c", "check_for_update_on_startup=false"}
+	if spec.Relocate {
+		argv = append(argv, "--cd", spec.Cwd)
+	}
 	return append(argv, optionFlags(spec.Options)...), nil
 }
 

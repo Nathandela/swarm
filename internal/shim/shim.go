@@ -36,7 +36,8 @@ const (
 	TranscriptFile = "transcript.log"
 )
 
-// defaultTerm is injected into the agent env when the caller supplies no TERM.
+// defaultTerm describes the xterm-compatible PTY Swarm provides when the caller
+// supplies no TERM or explicitly marks it as "dumb".
 const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
@@ -50,7 +51,7 @@ type Config struct {
 	SessionID            string
 	Argv                 []string // argv[0] = program; exec'd directly, never via a shell
 	Cwd                  string   // agent working directory
-	Env                  []string // pre-filtered by caller; used verbatim (+ TERM if absent)
+	Env                  []string // pre-filtered by caller; TERM=dumb is normalized to the PTY type
 	SocketPath           string   // per-session UDS
 	SessionDir           string   // side-files: final-snapshot.bin, exit.json, transcript.log
 	Cols, Rows           int      // initial PTY + emulator dimensions
@@ -605,14 +606,19 @@ func fsyncDir(dir string) error {
 // buildEnv returns the agent environment: the caller's env minus the
 // launch-environment denylist (persist.ScrubRemoteControl — a supervised session
 // must never inherit ambient Remote Control, agents-tracker-n047), plus a TERM
-// injected when the caller supplied none (agents assume a terminfo-known TERM).
+// injected when missing or set to "dumb". The shim owns an xterm-compatible PTY;
+// passing through TERM=dumb would tell interactive agents that it has no terminal
+// capabilities and can make them stop for a warning before starting.
 // This is the last gate before exec, so the denylist holds whatever composed
 // cfg.Env — a widened daemon allowlist, a post-filter injection, or a
 // hand-written shim-launch.json.
 func buildEnv(env []string) []string {
 	env = persist.ScrubRemoteControl(env)
-	for _, kv := range env {
+	for i, kv := range env {
 		if strings.HasPrefix(kv, "TERM=") {
+			if kv == "TERM=dumb" {
+				env[i] = defaultTerm
+			}
 			return env
 		}
 	}

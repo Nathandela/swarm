@@ -95,7 +95,7 @@ The daemon starts automatically and opens the session board.
 
 The board also takes the mouse: click a session to select it, click the selected session to attach (the same as <kbd>⏎</kbd>; this works as a tap in phone terminals too), and scroll to move the selection. Only the board does. Forms, inline edits and confirms keep your terminal's normal mouse behaviour, and swarm stops asking for mouse input before it hands the terminal to an attached agent. On the board, select text with your terminal's bypass modifier (usually <kbd>shift</kbd>, or <kbd>option</kbd> in iTerm2 and Terminal.app).
 
-Attach mode is raw passthrough: the agent's native full-screen interface remains untouched. swarm adds only a thin session header, which can be hidden. Ended sessions offer <kbd>r</kbd> to resume as a fresh linked session where the adapter supports it.
+Attach mode is raw passthrough: the agent's native full-screen interface remains untouched. swarm adds only a thin session header, which can be hidden. Ended sessions offer <kbd>r</kbd> to resume as a fresh linked session where the adapter supports it. If the saved directory is unavailable, choose an existing directory to relocate and resume the same conversation, or press <kbd>esc</kbd> to cancel.
 
 ## Status is the interface
 
