@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/Nathandela/swarm/internal/accountconfig"
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -101,6 +102,14 @@ func (w *authWatcher) preflightAccountEnrollment(source persist.Meta, identity *
 		if !w.state.Killed[source.ID] {
 			current, err := d.accounts.store.CurrentBinding(plan.Binding.AccountID, plan.Binding.ConfigurationGeneration)
 			if err != nil || current != plan.Binding {
+				return daemon.LaunchSpec{}, errAccountSuccessorUnavailable
+			}
+			registry, err := d.accounts.store.Snapshot()
+			if err != nil {
+				return daemon.LaunchSpec{}, errAccountSuccessorUnavailable
+			}
+			registry.Accounts = map[string]accounts.Account{current.AccountID: registry.Accounts[current.AccountID]}
+			if _, err := accounts.SelectInitial(registry, accounts.SelectionRequest{Provider: source.AgentType, Model: compiled.Options["model"], ConfigurationGeneration: current.ConfigurationGeneration}, w.clock()); err != nil {
 				return daemon.LaunchSpec{}, errAccountSuccessorUnavailable
 			}
 		}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
@@ -99,7 +100,7 @@ func TestAccountEnrollmentUsesExistingRecyclerForBothProviders(t *testing.T) {
 }
 
 func TestAccountEnrollmentDefersUnsafeSourcesAndRechecksConfigurationBeforeKill(t *testing.T) {
-	for _, reason := range []string{"active", "interaction", "controller", "unsupported", "unobserved", "disabled", "missing-history", "configuration-changed"} {
+	for _, reason := range []string{"active", "interaction", "controller", "unsupported", "unobserved", "disabled", "missing-history", "configuration-changed", "destination-denied"} {
 		t.Run(reason, func(t *testing.T) {
 			w, f, m, source := enrollmentRig(t, "codex")
 			switch reason {
@@ -127,6 +128,18 @@ func TestAccountEnrollmentDefersUnsafeSourcesAndRechecksConfigurationBeforeKill(
 				}
 			}
 			w.discoverAccountEnrollments()
+			if reason == "destination-denied" {
+				plan := w.state.CLI[source.ID].Enrollment
+				if plan == nil {
+					t.Fatal("fixture did not queue")
+				}
+				registry := accountTestRegistry(t, m)
+				quota := registry.Accounts[plan.Binding.AccountID].Quota
+				observation := accounts.Observation{FeedGeneration: quota.FeedGeneration + 1, Sequence: 1, EventID: "destination-denied", ReceivedAt: w.clock(), Terminal: true, Scopes: []accounts.ScopeObservation{{Scope: accounts.ScopeGlobal, Authority: accounts.AuthorityDenied}}}
+				if _, err := m.store.Observe(registry.Revision, plan.Binding, observation); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if reason == "configuration-changed" {
 				if w.state.CLI[source.ID].Enrollment == nil {
 					t.Fatal("fixture did not queue")
