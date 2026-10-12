@@ -73,10 +73,10 @@ func ValidateNativePath(path string) error {
 }
 
 func validateConfig(c Config) error {
-	if (c.SchemaVersion != SchemaVersion && c.SchemaVersion != RetainedNativeConfigSchemaVersion) || (c.SchemaVersion == SchemaVersion && c.NativeFingerprint != "") || (c.SchemaVersion == RetainedNativeConfigSchemaVersion && (c.Provider != "claude" || !persist.IsCLIContentFingerprint(c.NativeFingerprint))) || !validID(c.JobID) || !validID(c.CandidateID) || !validID(c.CandidateProfileGeneration) || c.CandidateID != c.CandidateProfileGeneration || c.Generation == 0 {
+	if (c.SchemaVersion != SchemaVersion && c.SchemaVersion != RetainedNativeConfigSchemaVersion) || (c.SchemaVersion == SchemaVersion && c.NativeFingerprint != "") || (c.SchemaVersion == RetainedNativeConfigSchemaVersion && ((c.Provider != "claude" && c.Provider != "codex") || !persist.IsCLIContentFingerprint(c.NativeFingerprint))) || !validID(c.JobID) || !validID(c.CandidateID) || !validID(c.CandidateProfileGeneration) || c.CandidateID != c.CandidateProfileGeneration || c.Generation == 0 {
 		return ErrInvalid
 	}
-	if c.SchemaVersion == RetainedNativeConfigSchemaVersion && (c.NativeVersion != "2.1.289" || c.NativePath != filepath.Join(c.StateRoot, "accounts", "native", "claude-"+c.NativeVersion, "claude")) {
+	if c.SchemaVersion == RetainedNativeConfigSchemaVersion && ((c.Provider == "claude" && c.NativeVersion != "2.1.289") || (c.Provider == "codex" && c.NativeVersion != "0.160.0") || c.NativePath != filepath.Join(c.StateRoot, "accounts", "native", c.Provider+"-"+c.NativeVersion, c.Provider)) {
 		return ErrInvalid
 	}
 	switch c.Provider {

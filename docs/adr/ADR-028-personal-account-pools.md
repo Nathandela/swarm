@@ -27,6 +27,12 @@ The installed Claude environment's one-year token is unavailable: it cannot auth
 
 Implementation does not close the release gates. Authenticated acceptance remains outstanding for two accounts per provider; continuation, native credential refresh, effective configuration, and history transfer; and a Claude safe-turn after account recovery. Existing unmanaged discussions still refuse migration when original writer and configuration proofs are missing. A planned v0.15.0 release requires these behaviors to be accepted and recorded; a plan review or transport-only test does not satisfy the gates.
 
+## Amendment: guarded onboarding and retained Codex (2026-10-12)
+
+Enabling a pool also queues compatible running discussions when safely idle. Reuse the existing auth/CLI lifecycle coordinator, durable kill claim, owner/composer/controller fences and linked-resume deduplication. Prepare the native executable, original history/model and destination configuration before stopping a source. Persist the selected binding and projection in the existing refresh record, revalidate them before claiming the source, and retain the destination credentials while enrollment is pending. Active, unobserved, unsupported or conflicting sources remain untouched. No prompts or tool calls are replayed.
+
+Codex uses the same private native-executable retention as Claude. The exact characterized Codex executable can be provisioned in the owner's versioned native directory after npm removed it. Managed launches, enrollment and recovery use that verified executable; unmanaged PATH resolution remains owner-controlled. Worker capability 4 is required for retained Codex or running-discussion enrollment metadata. Upgrade/rollback refuse a target that cannot preserve those records; protocol and shim wire versions remain unchanged.
+
 ## Compatibility and rollback
 
 The `accounts.manage.v1` capability is optional, owner-local, and negotiated only when the daemon has an account backend. A client without it has no account mutation surface. Preserve the existing unmanaged launch path and ambient login behavior when a provider pool is disabled. Account bindings are durable launch metadata, and account state is not disposable: activation and rollback refuse a binary transition that cannot safely interpret live bindings, account records, enrollment workers, or running account-bound shims. Do not bypass a refusal by deleting the registry.

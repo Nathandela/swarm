@@ -24,6 +24,7 @@ import (
 // Capability 3 adds retained executable digests; existing account-check and
 // stopped-writer proof schemas remain 2 and retain their original meaning.
 const RetainedNativeWorkerCapability = 3
+const RetainedCodexWorkerCapability = 4
 
 // accountStateGuard covers non-session state too: an enrollment-only machine
 // can have credential writers even when maxPersistedSchema finds zero metas.
@@ -195,11 +196,15 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 		if json.Unmarshal(data, &cfg) != nil || (cfg.SchemaVersion != enrollment.SchemaVersion && cfg.SchemaVersion != enrollment.RetainedNativeConfigSchemaVersion) || (cfg.SchemaVersion == enrollment.SchemaVersion && (cfg.NativeFingerprint != "" || card.AccountWorker < 1)) {
 			return errors.New("the target build cannot contain persisted account workers")
 		}
-		if cfg.SchemaVersion == enrollment.RetainedNativeConfigSchemaVersion && (card.AccountWorker < RetainedNativeWorkerCapability || cfg.Provider != accounts.ProviderClaude || cfg.NativeVersion != accountconfig.CharacterizedClaudeVersion || cfg.NativePath != filepath.Join(stateRoot, "accounts", "native", "claude-"+cfg.NativeVersion, "claude") || !persist.IsCLIContentFingerprint(cfg.NativeFingerprint)) {
+		if cfg.SchemaVersion == enrollment.RetainedNativeConfigSchemaVersion && (card.AccountWorker < RetainedNativeWorkerCapability || !supportedRetainedNative(cfg.Provider, cfg.NativeVersion) || (cfg.Provider == accounts.ProviderCodex && card.AccountWorker < RetainedCodexWorkerCapability) || cfg.NativePath != filepath.Join(stateRoot, "accounts", "native", cfg.Provider+"-"+cfg.NativeVersion, cfg.Provider) || !persist.IsCLIContentFingerprint(cfg.NativeFingerprint)) {
 			return errors.New("the target build cannot verify retained account enrollment executables")
 		}
 	}
 	return nil
+}
+
+func supportedRetainedNative(provider, version string) bool {
+	return provider == accounts.ProviderClaude && version == accountconfig.CharacterizedClaudeVersion || provider == accounts.ProviderCodex && version == accountconfig.CharacterizedCodexVersion
 }
 
 func accountNativeRuntimeGuard(root *os.Root, stateRoot string, card CompatManifest) error {
@@ -231,7 +236,11 @@ func accountNativeRuntimeGuard(root *os.Root, stateRoot string, card CompatManif
 			}
 			continue
 		}
-		if entry.Name() != "claude-"+accountconfig.CharacterizedClaudeVersion {
+		provider, versionNumber := accounts.ProviderClaude, accountconfig.CharacterizedClaudeVersion
+		if entry.Name() == "codex-"+accountconfig.CharacterizedCodexVersion && card.AccountWorker >= RetainedCodexWorkerCapability {
+			provider, versionNumber = accounts.ProviderCodex, accountconfig.CharacterizedCodexVersion
+		}
+		if entry.Name() != provider+"-"+versionNumber {
 			return errors.New("retained native runtime version cannot be verified")
 		}
 		version, err := dir.OpenRoot(entry.Name())
@@ -248,7 +257,7 @@ func accountNativeRuntimeGuard(root *os.Root, stateRoot string, card CompatManif
 		}
 		fields, shapeErr := retainedManifestKeys(raw, []string{"version", "path", "content_sha256", "source"})
 		_, sourceErr := retainedManifestKeys(fields["source"], []string{"path", "version", "fingerprint"})
-		if err != nil || len(raw) > 8<<10 || shapeErr != nil || sourceErr != nil || json.Unmarshal(raw, &manifest) != nil || manifest.Version != accountconfig.CharacterizedClaudeVersion || manifest.Source.Version != manifest.Version || manifest.Source.Path == "" || manifest.Source.Fingerprint == "" || manifest.Path != filepath.Join(stateRoot, "accounts", "native", "claude-"+manifest.Version, "claude") || !persist.IsCLIContentFingerprint("sha256:"+manifest.ContentSHA256+":"+strings.Repeat("0", 64)) {
+		if err != nil || len(raw) > 8<<10 || shapeErr != nil || sourceErr != nil || json.Unmarshal(raw, &manifest) != nil || manifest.Version != versionNumber || manifest.Source.Version != manifest.Version || manifest.Source.Path == "" || manifest.Source.Fingerprint == "" || manifest.Path != filepath.Join(stateRoot, "accounts", "native", provider+"-"+manifest.Version, provider) || !persist.IsCLIContentFingerprint("sha256:"+manifest.ContentSHA256+":"+strings.Repeat("0", 64)) {
 			return errors.New("retained native runtime metadata cannot be verified")
 		}
 	}
@@ -313,7 +322,7 @@ func accountNativeStageGuard(root *os.Root, name string) error {
 	}
 	for _, entry := range entries {
 		limit := int64(8 << 10)
-		if entry.Name() == "claude" {
+		if entry.Name() == "claude" || entry.Name() == "codex" {
 			limit = 1 << 30
 		} else if entry.Name() != "manifest.json" {
 			return errors.New("retained native stage contains unknown state")
@@ -566,13 +575,17 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 	for _, key := range []string{"cli_refresh", "cli_candidates"} {
 		if raw := state[key]; raw != nil {
 			var records map[string]struct {
-				Target   *persist.CLIIdentity `json:"target"`
-				Identity *persist.CLIIdentity `json:"identity"`
+				Enrollment json.RawMessage      `json:"account_enrollment"`
+				Target     *persist.CLIIdentity `json:"target"`
+				Identity   *persist.CLIIdentity `json:"identity"`
 			}
 			if json.Unmarshal(raw, &records) != nil {
 				return errors.New("retained CLI refresh observations cannot be verified")
 			}
 			for _, rec := range records {
+				if len(rec.Enrollment) > 0 && string(rec.Enrollment) != "null" && card.AccountWorker < RetainedCodexWorkerCapability {
+					return errors.New("the target build cannot preserve running discussion enrollment")
+				}
 				for _, identity := range []*persist.CLIIdentity{rec.Target, rec.Identity} {
 					if identity != nil && strings.HasPrefix(identity.Fingerprint, "sha256:") && (card.AccountWorker < RetainedNativeWorkerCapability || !persist.IsCLIContentFingerprint(identity.Fingerprint)) {
 						return errors.New("the target build cannot verify retained CLI refresh executables")

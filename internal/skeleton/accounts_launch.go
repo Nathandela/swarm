@@ -77,12 +77,6 @@ func (a *coreAPI) bindAccountLaunch(spec *daemon.LaunchSpec) error {
 	if spec.AccountBinding.Provider != spec.AgentType || store.ValidateBinding(*spec.AccountBinding) != nil {
 		return errAccountLaunch
 	}
-	if spec.AgentType != accounts.ProviderClaude {
-		native := a.accounts.native[spec.AgentType]
-		if native == nil || !accountconfig.SupportedNativeVersion(spec.AgentType, native.Version) {
-			return errAccountLaunch
-		}
-	}
 	spec.AccountStateRoot = a.accounts.stateRoot
 	spec.AuthIdentity = spec.AccountBinding.Identity
 	return nil
@@ -274,6 +268,11 @@ func (a *coreAPI) prepareLegacyAccountResume(spec daemon.LaunchSpec) (daemon.Lau
 	if err != nil {
 		return spec, err
 	}
+	return a.prepareLegacyAccountResumeSource(spec, source)
+}
+
+func (a *coreAPI) prepareLegacyAccountResumeSource(spec daemon.LaunchSpec, source persist.Meta) (daemon.LaunchSpec, error) {
+	var err error
 	managedNative := false
 	if source.AccountBinding != nil {
 		if source.AccountProjectionRef == "" {

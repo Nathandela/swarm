@@ -80,7 +80,9 @@ func manualResumeFixture(t *testing.T) *accountManualResumeFixture {
 	source.AccountProjectionRef = projection.Ref
 	source.AccountBinding.ConfigurationGeneration = projection.Generation
 	accountTestRollout(t, store, *source.AccountBinding, source.Cwd, "synthetic retained history\n")
-	f := &accountManualResumeFixture{manager: &accountManager{store: store, stateRoot: root, native: map[string]*persist.CLIIdentity{accounts.ProviderCodex: source.CLIIdentity}}, source: source, profile: profile, probe: probe, stop: errors.New("synthetic stop before child spawn")}
+	manager := accountTestManager(t, root)
+	manager.native[accounts.ProviderCodex] = source.CLIIdentity
+	f := &accountManualResumeFixture{manager: manager, source: source, profile: profile, probe: probe, stop: errors.New("synthetic stop before child spawn")}
 	f.native = shim.NativeProcessInfo{SchemaVersion: shim.ManagedWriterSchemaVersion, Generation: strings.Repeat("a", 32), PID: 1<<30 + 1, PGID: 1<<30 + 1, StartTime: 1, ShimPID: source.ShimPID, ShimStartTime: source.ShimStartTime, Binding: *source.AccountBinding}
 	return f
 }

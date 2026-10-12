@@ -171,3 +171,49 @@ func TestRetainedNativeIncompleteStageCustody(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexRetentionAndEnrollmentRequireWorker4(t *testing.T) {
+	for _, shape := range []string{"cache", "enrollment", "running-enrollment"} {
+		t.Run(shape, func(t *testing.T) {
+			state := t.TempDir()
+			_ = os.Chmod(state, 0700)
+			store, err := accounts.Open(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = store.Close()
+			version := accountconfig.CharacterizedCodexVersion
+			path := filepath.Join(state, "accounts", "native", "codex-"+version, "codex")
+			stamp := "sha256:" + strings.Repeat("a", 64) + ":" + strings.Repeat("b", 64)
+			var file string
+			var value any
+			switch shape {
+			case "cache":
+				file = filepath.Join(filepath.Dir(path), "manifest.json")
+				value = map[string]any{"version": version, "path": path, "content_sha256": strings.Repeat("a", 64), "source": persist.CLIIdentity{Path: "/owner/codex/0.160.0", Version: version, Fingerprint: "observed"}}
+			case "enrollment":
+				file = filepath.Join(state, "accounts", "jobs", "codex-job", enrollment.ConfigFile)
+				value = enrollment.Config{SchemaVersion: enrollment.RetainedNativeConfigSchemaVersion, Provider: accounts.ProviderCodex, NativeVersion: version, NativePath: path, NativeFingerprint: stamp}
+			case "running-enrollment":
+				file = filepath.Join(state, "auth-watch-state.json")
+				value = map[string]any{"cli_refresh": map[string]any{"source": map[string]any{"account_enrollment": map[string]any{"binding": "retained-plan"}}}}
+			}
+			if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(value)
+			if err := os.WriteFile(file, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			card := CurrentManifest("v0.17.6")
+			older := card
+			older.AccountWorker = 3
+			if err := accountStateGuard(state, older); err == nil {
+				t.Fatal("older build accepted Codex/enrollment authority")
+			}
+			if err := accountStateGuard(state, card); err != nil {
+				t.Fatal("current build rejected metadata", err)
+			}
+		})
+	}
+}

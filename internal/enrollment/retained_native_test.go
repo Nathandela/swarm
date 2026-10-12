@@ -68,3 +68,37 @@ func TestRetainedEnrollmentConfigSchemaAndTamperBeforeWrites(t *testing.T) {
 		t.Fatal("tamper persisted worker intent")
 	}
 }
+
+func TestRetainedCodexEnrollmentRequiresExactPathAndContent(t *testing.T) {
+	cfg := testConfig(t, "codex", "success")
+	cfg.SchemaVersion = RetainedNativeConfigSchemaVersion
+	cfg.NativePath = filepath.Join(cfg.StateRoot, "accounts", "native", "codex-"+cfg.NativeVersion, "codex")
+	if err := os.MkdirAll(filepath.Dir(cfg.NativePath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.NativePath, []byte("synthetic qualified Codex"), 0500); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	cfg.NativeFingerprint, err = persist.CLIContentFingerprint(cfg.NativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateConfig(cfg); err != nil {
+		t.Fatal("qualified Codex refused", err)
+	}
+	wrong := cfg
+	wrong.NativePath = filepath.Join(cfg.StateRoot, "different-native")
+	if err := validateConfig(wrong); !errors.Is(err, ErrInvalid) {
+		t.Fatal("accepted another path", err)
+	}
+	if err := os.Chmod(cfg.NativePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.NativePath, []byte("changed Codex"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateConfig(cfg); !errors.Is(err, ErrUnsafe) {
+		t.Fatal("accepted changed executable", err)
+	}
+}

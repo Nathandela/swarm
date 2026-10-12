@@ -228,6 +228,11 @@ func (m *accountRotationManager) retirementReferences(manager *accountManager, b
 		return "", err
 	}
 	for _, state := range []authWatchState{m.w.state, durable} {
+		for _, rec := range state.CLI {
+			if rec.Enrollment != nil && rec.State != cliRefreshComplete && rec.State != cliRefreshBlocked && sameCredentialGeneration(rec.Enrollment.Binding, binding) {
+				return "", accounts.ErrInUse
+			}
+		}
 		for _, record := range state.AccountRotations {
 			if record.State == accountComplete || record.State == accountOwnerCanceled {
 				continue

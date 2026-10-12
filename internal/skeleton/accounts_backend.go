@@ -125,7 +125,8 @@ func openAccountManager(stateRoot, executable string, list func() []persist.Meta
 			}
 		}
 	}
-	m.startupManagedClaude()
+	m.startupManagedNative(accounts.ProviderClaude)
+	m.startupManagedNative(accounts.ProviderCodex)
 	return m
 }
 
@@ -495,12 +496,16 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 				reason = "Installed CLI cannot start safely. Check its ownership and executable permissions."
 			}
 		}
-		if supported && provider == accounts.ProviderClaude {
-			reason = "Managed Claude uses qualified version " + native.Version + "."
+		if supported {
+			name := "Codex"
+			if provider == accounts.ProviderClaude {
+				name = "Claude"
+			}
+			reason = "Managed " + name + " uses qualified version " + native.Version + "."
 			m.nativeMu.Lock()
 			ambient := m.nativeAmbient
 			m.nativeMu.Unlock()
-			if cliIdentityNewer(ambient, native) {
+			if provider == accounts.ProviderClaude && cliIdentityNewer(ambient, native) {
 				reason += " Last observed installed version " + ambient.Version + " is held until qualified."
 			}
 		}
@@ -817,7 +822,7 @@ func (m *accountManager) start(req protocol.AccountsReq, r accounts.Registry) (p
 	var selectedNative *persist.CLIIdentity
 	if req.Method != "import-native" && req.Method != "token-manual" {
 		native := m.native[req.Provider]
-		if req.Provider == accounts.ProviderClaude {
+		if req.Provider == accounts.ProviderClaude || req.Provider == accounts.ProviderCodex {
 			var err error
 			native, err = m.managedNative(req.Provider, daemon.PolicyEnv(nil), m.stateRoot)
 			if err != nil {

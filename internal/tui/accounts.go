@@ -1115,7 +1115,7 @@ func (a accountsModel) coverageGuidance(provider string) string {
 	if c.Unmanaged == 0 {
 		return fmt.Sprintf("Discussions: %d managed.", c.Managed)
 	}
-	return fmt.Sprintf("Discussions: %d managed; %d awaiting enrollment (%d running).\nResume an ended discussion to enroll its new process.", c.Managed, c.Unmanaged, c.RunningUnmanaged)
+	return fmt.Sprintf("Discussions: %d managed; %d awaiting enrollment (%d running).\nCompatible running discussions enroll when idle. Resume ended discussions to enroll.", c.Managed, c.Unmanaged, c.RunningUnmanaged)
 }
 
 func (a accountsModel) view(width, height int, lost bool, loginSupported bool) string {

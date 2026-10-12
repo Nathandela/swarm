@@ -78,7 +78,7 @@ func retirementGeneration(t *testing.T, m *accountRotationManager, source persis
 }
 
 func TestAccountRetirementPrescanRetainsHealthyPendingUnknownWriters(t *testing.T) {
-	for _, kind := range []string{"healthy", "pending", "missing-proof", "unknown-check", "orphan-custody", "malformed-meta", "half-open"} {
+	for _, kind := range []string{"healthy", "pending", "missing-proof", "unknown-check", "orphan-custody", "malformed-meta", "half-open", "enrollment"} {
 		t.Run(kind, func(t *testing.T) {
 			m, f, source, _ := retirementFixture(t)
 			profile, err := m.store.HistoryProfilePath(*source.AccountBinding)
@@ -111,6 +111,8 @@ func TestAccountRetirementPrescanRetainsHealthyPendingUnknownWriters(t *testing.
 				if err := os.WriteFile(filepath.Join(m.w.stateDir, source.ID, "meta.json"), []byte(`{"unreadable":true}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
+			case "enrollment":
+				m.w.state.CLI = map[string]cliRefreshRecord{"legacy-enrollment": {Enrollment: &accountEnrollmentPlan{Binding: *source.AccountBinding}, State: cliRefreshPending}}
 			case "half-open":
 				m.w.state.AccountHalfOpen[source.AccountBinding.AccountID] = accounts.HalfOpenPermit{Stamp: accounts.ProbeStamp{Binding: *source.AccountBinding}}
 			}

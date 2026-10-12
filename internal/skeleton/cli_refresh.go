@@ -6,6 +6,7 @@ package skeleton
 // composer/owner fences or they can both replace the same session.
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -48,14 +49,20 @@ type cliRefreshCandidate struct {
 	Observations int                 `json:"observations"`
 }
 
+type accountEnrollmentPlan struct {
+	Binding    accounts.Binding `json:"binding"`
+	Projection string           `json:"projection"`
+}
+
 type cliRefreshRecord struct {
-	AgentType      string              `json:"agent_type"`
-	Target         persist.CLIIdentity `json:"target"`
-	ReplacementID  string              `json:"replacement_id,omitempty"`
-	State          string              `json:"state"`
-	LastError      string              `json:"last_error,omitempty"`
-	HealthDeadline time.Time           `json:"health_deadline,omitempty"`
-	UpdatedAt      time.Time           `json:"updated_at"`
+	Enrollment     *accountEnrollmentPlan `json:"account_enrollment,omitempty"`
+	AgentType      string                 `json:"agent_type"`
+	Target         persist.CLIIdentity    `json:"target"`
+	ReplacementID  string                 `json:"replacement_id,omitempty"`
+	State          string                 `json:"state"`
+	LastError      string                 `json:"last_error,omitempty"`
+	HealthDeadline time.Time              `json:"health_deadline,omitempty"`
+	UpdatedAt      time.Time              `json:"updated_at"`
 }
 
 // CLIRefreshRecord is the stable, non-secret status view exposed to the CLI.
@@ -148,6 +155,12 @@ func validateAuthWatchState(st authWatchState) error {
 	for source, rec := range st.CLI {
 		if !persist.ValidID(source) || !refreshProvider(rec.AgentType) || !validCLIIdentity(&rec.Target) {
 			return fmt.Errorf("authwatch: invalid CLI refresh record for %q", source)
+		}
+		if plan := rec.Enrollment; plan != nil {
+			decoded, err := hex.DecodeString(plan.Projection)
+			if !validManagedBinding(plan.Binding) || plan.Binding.Provider != rec.AgentType || err != nil || len(decoded) != 32 {
+				return fmt.Errorf("authwatch: invalid account enrollment for %q", source)
+			}
 		}
 		switch rec.State {
 		case cliRefreshPending, cliRefreshWaiting, cliRefreshBlocked, cliRefreshComplete:
@@ -481,7 +494,7 @@ func (w *authWatcher) workCLIRefresh(allowNewKills bool) {
 			}
 			continue
 		}
-		if !allowNewKills || !w.settled || !w.retryReady(source) {
+		if (!allowNewKills && rec.Enrollment == nil) || !w.settled || !w.retryReady(source) {
 			continue
 		}
 		if probeAttempts >= maxCLIRefreshProbesPerTick {
@@ -533,6 +546,19 @@ func (w *authWatcher) prepareCLIRefreshTarget(source persist.Meta) bool {
 		}
 		return false
 	}
+	rec = w.state.CLI[source.ID]
+	if rec.Enrollment != nil {
+		if rec.Target != *observed {
+			rec.Target = *observed
+			w.state.CLI[source.ID] = rec
+			if err := w.saveState(); err != nil {
+				w.stateErr = err
+				return false
+			}
+		}
+		delete(w.state.CLICandidates, source.ID)
+		return true
+	}
 	if *observed == rec.Target {
 		delete(w.state.CLICandidates, source.ID)
 		return true
@@ -577,6 +603,9 @@ func (w *authWatcher) prepareCLIRefreshTarget(source persist.Meta) bool {
 func (w *authWatcher) validateCLIRefreshTarget(m persist.Meta) error {
 	rec, ok := w.state.CLI[m.ID]
 	if !ok {
+		if m.AccountBinding == nil && w.accountEnrollmentEnabled(m.AgentType) {
+			return errAccountSuccessorUnavailable
+		}
 		return nil
 	}
 	observed, err := w.refreshTargetIdentity(m, rec.Target)
@@ -622,7 +651,17 @@ func (w *authWatcher) resumeCLIEnded(agent string, source persist.Meta) bool {
 		Options:             map[string]string{protocol.OptionResumeFrom: w.endpointID + "/" + source.ID},
 		ExpectedCLIIdentity: &rec.Target,
 	}
-	if source.AccountBinding != nil {
+	if rec.Enrollment != nil {
+		var err error
+		launch, err = w.preflightAccountEnrollment(source, &rec.Target, rec.Enrollment)
+		if err != nil {
+			rec.LastError = errAccountSuccessorUnavailable.Error()
+			w.state.CLI[source.ID] = rec
+			w.deferRetry(source.ID)
+			_ = w.saveState()
+			return true
+		}
+	} else if source.AccountBinding != nil {
 		var err error
 		launch, err = w.accountRotation.preflightSuccessor(source, *source.AccountBinding, w.accountRotation.effectiveModel(source), "", &rec.Target)
 		if err != nil {
@@ -719,6 +758,10 @@ func (w *authWatcher) checkCLIReplacement(sourceID string, source, replacement p
 	}
 	if replacement.BackendPlanError != "" {
 		w.blockCLIRefresh(sourceID, fmt.Sprintf("replacement %s launched without its required backend: %s", replacement.ID, replacement.BackendPlanError))
+		return true
+	}
+	if rec.Enrollment != nil && (replacement.AccountBinding == nil || *replacement.AccountBinding != rec.Enrollment.Binding || replacement.AccountProjectionRef != rec.Enrollment.Projection) {
+		w.blockCLIRefresh(sourceID, "replacement did not preserve the enrolled account configuration")
 		return true
 	}
 	if !validCLIIdentity(replacement.CLIIdentity) || *replacement.CLIIdentity != rec.Target {

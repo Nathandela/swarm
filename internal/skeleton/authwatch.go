@@ -574,6 +574,7 @@ func (w *authWatcher) tick() {
 		}
 		w.tickAgent(agent, !authDisabled)
 	}
+	w.discoverAccountEnrollments()
 	w.tickCLIRefresh(!CLIRefreshDisabled(w.stateDir))
 	w.settled = true
 }
