@@ -67,12 +67,12 @@ func (m rootModel) updateResume(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.resume.busy {
 		return m, nil
 	}
-	switch {
-	case k.Code == tea.KeyEsc:
+	switch k.Code {
+	case tea.KeyEsc:
 		m.resume = resumeModel{}
 		cmd := m.enterGeneral()
 		return m, cmd
-	case k.Code == tea.KeyEnter:
+	case tea.KeyEnter:
 		return m.submitResume()
 	default:
 		m.resume.directory.updateDirectory(k)
