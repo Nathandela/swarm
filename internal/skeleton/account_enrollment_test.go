@@ -100,7 +100,7 @@ func TestAccountEnrollmentUsesExistingRecyclerForBothProviders(t *testing.T) {
 }
 
 func TestAccountEnrollmentDefersUnsafeSourcesAndRechecksConfigurationBeforeKill(t *testing.T) {
-	for _, reason := range []string{"active", "interaction", "controller", "unsupported", "unobserved", "disabled", "missing-history", "configuration-changed", "destination-denied"} {
+	for _, reason := range []string{"active", "interaction", "controller", "unsupported", "downgrade", "unobserved", "disabled", "missing-history", "configuration-changed", "destination-denied"} {
 		t.Run(reason, func(t *testing.T) {
 			w, f, m, source := enrollmentRig(t, "codex")
 			switch reason {
@@ -114,6 +114,11 @@ func TestAccountEnrollmentDefersUnsafeSourcesAndRechecksConfigurationBeforeKill(
 				id := *source.CLIIdentity
 				id.Version = "0.159.9"
 				f.sessions[source.ID].CLIIdentity = &id
+			case "downgrade":
+				id := *source.CLIIdentity
+				id.Version = "0.162.1"
+				f.sessions[source.ID].CLIIdentity = &id
+				w.cliObserve = func(string) *persist.CLIIdentity { return &id }
 			case "unobserved":
 				w.cliObserve = func(string) *persist.CLIIdentity { return nil }
 			case "disabled":

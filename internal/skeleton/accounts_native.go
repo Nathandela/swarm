@@ -500,7 +500,11 @@ func (m *accountRotationManager) managedCheckIdentity(source persist.Meta) (*per
 		return nil, errAccountAvailabilityUnsafe
 	}
 	if m.d != nil && m.d.accounts != nil {
-		return m.d.accounts.managedNative(source.AgentType, source.Env, source.Cwd)
+		identity, err := m.d.accounts.managedNative(source.AgentType, source.Env, source.Cwd)
+		if err == nil && source.AgentType == accounts.ProviderCodex && identity.Version != source.CLIIdentity.Version && !cliIdentityNewer(identity, source.CLIIdentity) {
+			return nil, errAccountAvailabilityUnsafe
+		}
+		return identity, err
 	}
 	if !persist.MatchCLIFingerprint(source.CLIIdentity.Path, source.CLIIdentity.Fingerprint) {
 		return nil, errAccountAvailabilityUnsafe
