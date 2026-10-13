@@ -23,6 +23,7 @@ func nativeErasureContract(provider string, g Generation, version string) (strin
 	if runtime.GOOS != "linux" || g.Kind != KindNative || g.Source != SourceNativeLogin || !validVerification(provider, g.Kind, g.Identity, g.Verification) {
 		return "", ErrIneligible
 	}
+	// shortcut: later Codex inventories stay retained, qualify their files before extending erasure.
 	if (provider == ProviderCodex && version == "0.160.0") || (provider == ProviderClaude && (version == "2.1.288" || version == "2.1.289")) {
 		return provider + ":" + version + ":linux-file-v" + strconv.Itoa(NativeInventorySchemaVersion), nil
 	}

@@ -67,6 +67,9 @@ func (w *authWatcher) preflightAccountEnrollment(source persist.Meta, identity *
 	if source.AccountBinding != nil || !validCLIIdentity(identity) || !validCLIIdentity(source.CLIIdentity) || !accountconfig.SupportedNativeVersion(source.AgentType, source.CLIIdentity.Version) || !accountconfig.SupportedNativeVersion(source.AgentType, identity.Version) || !adapter.IsCanonicalConversationID(source.ConversationID) || w.accountRotation == nil || w.accountRotation.d == nil || w.accountRotation.d.api == nil {
 		return daemon.LaunchSpec{}, errAccountSuccessorUnavailable
 	}
+	if source.AgentType == accounts.ProviderCodex && identity.Version != source.CLIIdentity.Version && !cliIdentityNewer(identity, source.CLIIdentity) {
+		return daemon.LaunchSpec{}, errAccountSuccessorUnavailable
+	}
 	d := w.accountRotation.d
 	for _, other := range w.list() {
 		if other.ID != source.ID && other.AgentType == source.AgentType && other.ConversationID == source.ConversationID && other.Status.Process == status.ProcessRunning {

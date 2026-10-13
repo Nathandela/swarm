@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
@@ -81,7 +82,7 @@ func validateConfig(c Config) error {
 	}
 	switch c.Provider {
 	case "codex":
-		if c.Method != MethodDeviceCode || c.NativeVersion != "0.160.0" {
+		if c.Method != MethodDeviceCode || !accountconfig.SupportedNativeVersion(c.Provider, c.NativeVersion) {
 			return ErrUnsupported
 		}
 	case "claude":

@@ -10,10 +10,9 @@ import (
 	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/daemon"
-	"github.com/Nathandela/swarm/internal/persist"
 )
 
-func TestManagedCodexRetainsQualifiedRuntimeAcrossNPMUpgrade(t *testing.T) {
+func TestManagedCodexFollowsInstalledRuntimeAcrossNPMUpgrade(t *testing.T) {
 	m := accountTestManager(t, accountTestState(t))
 	home := filepath.Join(m.stateRoot, "home")
 	versions := providerVersionsDir("codex", []string{"HOME=" + home})
@@ -31,8 +30,12 @@ func TestManagedCodexRetainsQualifiedRuntimeAcrossNPMUpgrade(t *testing.T) {
 	}
 	env := []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
 	selected, err := m.managedNative("codex", env, m.stateRoot)
-	if err != nil || selected.Version != accountconfig.CharacterizedCodexVersion || !persist.IsCLIContentFingerprint(selected.Fingerprint) {
-		t.Fatalf("not retained: %+v %v", selected, err)
+	if err != nil || selected.Version != accountconfig.MinimumCodexVersion || selected.Path != alias {
+		t.Fatalf("not selected: %+v %v", selected, err)
+	}
+	// Existing retained copies must not override the installed CLI.
+	if _, err := m.retainNative("codex", selected, env, m.stateRoot); err != nil {
+		t.Fatal(err)
 	}
 	newer := filepath.Join(versions, "0.162.1")
 	copyRetentionELF(t, newer)
@@ -46,8 +49,8 @@ func TestManagedCodexRetainsQualifiedRuntimeAcrossNPMUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	again, err := m.managedNative("codex", env, m.stateRoot)
-	if err != nil || *again != *selected {
-		t.Fatalf("npm update stranded runtime: %+v %v", again, err)
+	if err != nil || again.Version != "0.162.1" || again.Path != alias {
+		t.Fatalf("npm update was pinned to an old runtime: %+v %v", again, err)
 	}
 	ambient, err := probeCLIIdentity("codex", "", env, m.stateRoot)
 	if err != nil || ambient.Version != "0.162.1" {
@@ -56,53 +59,47 @@ func TestManagedCodexRetainsQualifiedRuntimeAcrossNPMUpgrade(t *testing.T) {
 	// The launch resolver uses qualified Codex only for managed discussions.
 	api := &coreAPI{accounts: m}
 	path, err := api.accountLaunchResolver(daemon.LaunchSpec{AgentType: "codex", AccountBinding: &accounts.Binding{Provider: "codex"}})("codex", env)
-	if err != nil || path != selected.Path {
+	if err != nil || path != again.Path {
 		t.Fatalf("managed resolver: %q %v", path, err)
 	}
 	path, err = api.accountLaunchResolver(daemon.LaunchSpec{AgentType: "codex"})("codex", env)
 	if err != nil || path != alias {
 		t.Fatalf("unmanaged resolver: %q %v", path, err)
 	}
-	// A fresh daemon recovers the same content-bound identity after vendor GC.
+	// A fresh daemon advertises the installed version after vendor GC.
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
 	restarted := openAccountManager(m.stateRoot, "", nil)
 	t.Cleanup(restarted.close)
-	if restarted.native["codex"] == nil || *restarted.native["codex"] != *selected || !restarted.methods()["codex"][0].Available {
-		t.Fatal("restart lost qualified Codex")
+	if restarted.native["codex"] == nil || *restarted.native["codex"] != *again || !restarted.methods()["codex"][0].Available {
+		t.Fatal("restart lost current Codex")
 	}
 }
 
-func TestManagedCodexBootstrapsQualifiedSiblingAndRejectsTamper(t *testing.T) {
+func TestManagedCodexDoesNotFallBackToOldRetainedRuntime(t *testing.T) {
 	m := accountTestManager(t, accountTestState(t))
 	home := filepath.Join(m.stateRoot, "home")
 	versions := providerVersionsDir("codex", []string{"HOME=" + home})
 	if err := os.MkdirAll(versions, 0700); err != nil {
 		t.Fatal(err)
 	}
-	qualified := filepath.Join(versions, accountconfig.CharacterizedCodexVersion)
-	copyRetentionELF(t, qualified)
+	source := filepath.Join(versions, accountconfig.CharacterizedCodexVersion)
+	copyRetentionELF(t, source)
 	env := []string{"HOME=" + home, "PATH=/no-installed-codex"}
-	t.Setenv("HOME", home)
-	t.Setenv("PATH", "/no-installed-codex")
-	m.startupManagedNative("codex")
-	if m.native["codex"] == nil || m.native["codex"].Path != qualified {
-		t.Fatal("unenrolled startup did not advertise the qualified source")
-	}
-	if _, err := os.Stat(filepath.Join(m.stateRoot, "accounts", "native", "codex-0.160.0")); !os.IsNotExist(err) {
-		t.Fatal("unenrolled startup retained a large executable", err)
-	}
-	selected, err := m.managedNative("codex", env, m.stateRoot)
+	identity, err := probeCLIIdentity("codex", source, env, m.stateRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(selected.Path, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(selected.Path, []byte("changed executable"), 0500); err != nil {
+	if _, err := m.retainNative("codex", identity, env, m.stateRoot); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.managedNative("codex", env, m.stateRoot); err == nil {
-		t.Fatal("tampered cache silently fell back")
+		t.Fatal("missing installation silently downgraded to retained Codex")
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "/no-installed-codex")
+	m.startupManagedNative("codex")
+	if m.native["codex"] != nil || m.methods()["codex"][0].Available {
+		t.Fatal("missing installed CLI advertised an old retained executable")
 	}
 }

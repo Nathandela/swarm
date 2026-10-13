@@ -602,6 +602,7 @@ func TestAccountRotationFallbackIsFiniteAndRetainsLatestSource(t *testing.T) {
 func TestAccountHistoryLatestRoundTripAndInterruptedPublication(t *testing.T) {
 	store, root, bindings := accountTestStore(t, 2)
 	source := accountTestSource(t, root, bindings[0])
+	source.CLIIdentity.Version = "0.162.1"
 	relative := accountTestRollout(t, store, bindings[0], root, "original A history\n")
 	resolver := newAccountResumeHistoryResolver(root, nil)
 	manifest, err := preflightAccountHistory(store, resolver, source, bindings[1], accountHistoryOwnership{}, "incident-one")
@@ -652,7 +653,7 @@ func TestAccountHistoryUnsafeArtifactsAndVersionRefuseBeforeStop(t *testing.T) {
 	source := accountTestSource(t, root, bindings[0])
 	relative := accountTestRollout(t, store, bindings[0], root, "opaque\n")
 	resolver := newAccountResumeHistoryResolver(root, nil)
-	source.CLIIdentity.Version = "9.9.9"
+	source.CLIIdentity.Version = "0.159.9"
 	if _, err := preflightAccountHistory(store, resolver, source, bindings[1], accountHistoryOwnership{}, "unsupported"); !errors.Is(err, errAccountHistoryUnsupported) {
 		t.Fatal("unknown native layout accepted")
 	}

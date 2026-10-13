@@ -52,7 +52,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("CODEX_HOME") != "" || os.Getenv("CLAUDE_CONFIG_DIR") != "" {
 		if len(os.Args) > 1 && os.Args[1] == "--version" {
 			if os.Getenv("CODEX_HOME") != "" {
-				fmt.Println("codex-cli 0.160.0")
+				fmt.Println("codex-cli " + fixtureCodexVersion())
 			} else {
 				fmt.Println("2.1.288 (Claude Code)")
 			}
@@ -82,6 +82,14 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(m.Run())
+}
+
+func fixtureCodexVersion() string {
+	raw, _ := os.ReadFile("fixture-codex-version")
+	if len(raw) == 0 {
+		return "0.160.0"
+	}
+	return string(raw)
 }
 
 func fixtureMode() string { raw, _ := os.ReadFile("fixture-mode"); return string(raw) }
@@ -174,7 +182,7 @@ func fakeCodex() {
 			case "initialized":
 				continue
 			case "initialize":
-				result = map[string]any{"userAgent": "codex-cli 0.160.0"}
+				result = map[string]any{"userAgent": "codex-cli " + fixtureCodexVersion()}
 			case "account/read":
 				if authenticated {
 					result = map[string]any{"account": map[string]any{"type": "chatgpt", "email": "fixture@example.test", "planType": "plus"}}
@@ -332,6 +340,26 @@ func TestDetachedCodexEarlyNullCompletion(t *testing.T) {
 	if err != nil || len(r.Accounts) != 0 {
 		t.Fatal("worker modified registry admission")
 	}
+}
+
+func TestDetachedCodexNewerVersion(t *testing.T) {
+	cfg := testConfig(t, "codex", "early-null")
+	cfg.NativeVersion = "0.162.1"
+	files, err := openJob(cfg.StateRoot, cfg.JobID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = files.root.WriteFile("fixture-codex-version", []byte(cfg.NativeVersion), 0600)
+	files.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := startFixture(t, cfg)
+	p := waitProgress(t, ref, func(p Progress) bool { return p.WritersStopped })
+	if p.Phase != PhaseReady || !p.NativeWritersStopped || p.Runner.Alive() {
+		t.Fatalf("newer Codex admission worker failed: phase=%s code=%s", p.Phase, p.ErrorCode)
+	}
+	assertNoJobSecrets(t, cfg)
 }
 
 func TestDetachedCodexNativeSocketAlias(t *testing.T) {

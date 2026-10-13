@@ -154,14 +154,14 @@ func TestAccountImpossibleSuccessorNeverClaimsRunningSource(t *testing.T) {
 				t.Fatal(err)
 			}
 			if kind == "unsupported-before-reservation" {
-				x.install(t, "0.161.0")
+				x.install(t, "0.159.9")
 			} else {
 				x.m.step()
 			}
 			rec := x.m.w.state.AccountRotations[x.source.ID]
 			switch kind {
 			case "unsupported-after-reservation":
-				x.install(t, "0.161.0")
+				x.install(t, "0.159.9")
 			case "source-config":
 				if err := os.WriteFile(filepath.Join(x.original, "config.toml"), []byte("model = \"changed-local-source\"\n"), 0o600); err != nil {
 					t.Fatal(err)
@@ -204,7 +204,7 @@ func TestAccountClaimedRedriveRetainsAuthorityWhenSuccessorBecomesImpossible(t *
 	x.m.step()
 	x.m.step()
 	x.f.killErr = nil
-	x.install(t, "0.161.0")
+	x.install(t, "0.159.9")
 	x.m.step()
 	loaded, err := loadAuthWatchStateChecked(x.root)
 	if err != nil {
@@ -229,7 +229,7 @@ func TestManagedCLIRefreshUnsupportedDiscoveryAndFinalClaimHold(t *testing.T) {
 		x.source.CLIIdentity.Version = "0.159.0"
 		x.f.add(x.source)
 		x.m.w.cliObserve = func(string) *persist.CLIIdentity { return x.source.CLIIdentity }
-		x.install(t, "0.161.0")
+		x.install(t, "0.159.9")
 		for i := 0; i < 4; i++ {
 			x.m.w.tickCLIRefresh(true)
 		}
@@ -247,7 +247,7 @@ func TestManagedCLIRefreshUnsupportedDiscoveryAndFinalClaimHold(t *testing.T) {
 		if !x.m.w.prepareCLIRefreshTarget(x.source) {
 			t.Fatal("supported target could not prepare")
 		}
-		x.m.w.withRecycleFence = func(_ string, attempt func() error) error { x.install(t, "0.161.0"); return attempt() }
+		x.m.w.withRecycleFence = func(_ string, attempt func() error) error { x.install(t, "0.159.9"); return attempt() }
 		x.m.w.recycle(x.source.AgentType, x.source)
 		loaded, err := loadAuthWatchStateChecked(x.root)
 		if err != nil {

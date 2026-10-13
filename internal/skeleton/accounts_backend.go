@@ -477,7 +477,7 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 				native = selected
 			}
 		}
-		supported := runtime.GOOS == "linux" && native != nil && ((provider == "codex" && native.Version == "0.160.0") || (provider == "claude" && native.Version == accountconfig.CharacterizedClaudeVersion))
+		supported := runtime.GOOS == "linux" && native != nil && ((provider == "codex" && accountconfig.SupportedNativeVersion(provider, native.Version)) || (provider == "claude" && native.Version == accountconfig.CharacterizedClaudeVersion))
 		reason := ""
 		if !supported {
 			reason = "Installed CLI version has not been verified for isolated enrollment."
@@ -502,6 +502,9 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 				name = "Claude"
 			}
 			reason = "Managed " + name + " uses qualified version " + native.Version + "."
+			if provider == accounts.ProviderCodex {
+				reason = "Managed Codex uses installed version " + native.Version + " (minimum " + accountconfig.MinimumCodexVersion + ")."
+			}
 			m.nativeMu.Lock()
 			ambient := m.nativeAmbient
 			m.nativeMu.Unlock()
