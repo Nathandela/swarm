@@ -86,7 +86,7 @@ func validateAccountManifest(manifest accountHistoryManifest) error {
 		return errAccountHistoryUnsupported
 	}
 	if manifest.Provider == accounts.ProviderCodex {
-		if manifest.NativeVersion != "0.160.0" || len(manifest.Files) != 1 {
+		if !accountconfig.SupportedNativeVersion(accounts.ProviderCodex, manifest.NativeVersion) || len(manifest.Files) != 1 {
 			return errAccountHistoryUnsupported
 		}
 		for _, file := range append(append([]accountHistoryFile(nil), manifest.Files...), manifest.PreviousFiles...) {
@@ -137,7 +137,7 @@ func historyNativeVersion(source persist.Meta) (string, bool) {
 		return "", false
 	}
 	version := strings.TrimPrefix(source.CLIIdentity.Version, "v")
-	return version, (source.AgentType == accounts.ProviderCodex && version == "0.160.0") || (source.AgentType == accounts.ProviderClaude && accountconfig.SupportedNativeVersion("claude", version))
+	return version, accountconfig.SupportedNativeVersion(source.AgentType, version)
 }
 
 func historyOpenRoot(path string) (*os.Root, error) {

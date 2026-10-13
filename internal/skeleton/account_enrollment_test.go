@@ -112,7 +112,7 @@ func TestAccountEnrollmentDefersUnsafeSourcesAndRechecksConfigurationBeforeKill(
 				w.unsafe = func(string) bool { return true }
 			case "unsupported":
 				id := *source.CLIIdentity
-				id.Version = "0.162.1"
+				id.Version = "0.159.9"
 				f.sessions[source.ID].CLIIdentity = &id
 			case "unobserved":
 				w.cliObserve = func(string) *persist.CLIIdentity { return nil }
@@ -182,5 +182,33 @@ func TestAccountEnrollmentUpgradesPendingCLIRefreshAndHonorsDisableBeforeKill(t 
 				t.Fatalf("enrollment did not reuse pending refresh: %v %d", f.killed, len(f.launched))
 			}
 		})
+	}
+}
+
+func TestAccountEnrollmentAcceptsNewerCodexSourceAndTarget(t *testing.T) {
+	w, f, _, source := enrollmentRig(t, "codex")
+	path := source.CLIIdentity.Path
+	accountTestPut(t, path, []byte("#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n"))
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := probeCLIIdentity("codex", path, source.Env, source.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.sessions[source.ID].CLIIdentity = identity
+	w.cliObserve = func(string) *persist.CLIIdentity { return identity }
+	w.discoverAccountEnrollments()
+	rec := w.state.CLI[source.ID]
+	if rec.Enrollment == nil || rec.Target.Version != "0.162.1" || len(f.killed) != 0 {
+		t.Fatalf("newer Codex was not safely queued: %+v", rec)
+	}
+	for i := 0; i < 4; i++ {
+		w.workCLIRefresh(true)
+	}
+	rec = w.state.CLI[source.ID]
+	child := f.sessions[rec.ReplacementID]
+	if len(f.killed) != 1 || len(f.launched) != 1 || rec.State != cliRefreshComplete || child.ConversationID != source.ConversationID || child.AccountBinding == nil || child.CLIIdentity.Version != "0.162.1" {
+		t.Fatalf("newer Codex enrollment lost continuity: %+v", rec)
 	}
 }

@@ -152,7 +152,7 @@ func TestAccountLaunchInvalidBindingOrConfigurationStartsZeroChildren(t *testing
 			case "missing-cli-identity":
 				identity = nil
 			case "unsupported-cli-version":
-				identity.Version = "0.161.0"
+				identity.Version = "0.159.9"
 			}
 			planned, rolledBack := 0, false
 			core := accountTestCore(t, m, func(cfg *daemon.Config) {

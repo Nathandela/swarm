@@ -385,40 +385,21 @@ func characterizedNativeVersion(provider string) string {
 	return accountconfig.CharacterizedClaudeVersion
 }
 
-// Codex's npm updater removes the previous native package. An owner-provisioned
-// versioned executable lets managed sessions retain their qualified contract.
-func qualifiedCodexSource(env []string, cwd string) (*persist.CLIIdentity, error) {
+func installedCodexSource(env []string, cwd string) (*persist.CLIIdentity, error) {
 	ambient, err := probeCLIIdentity(accounts.ProviderCodex, "", env, cwd)
-	if err == nil && ambient.Version == accountconfig.CharacterizedCodexVersion {
-		return ambient, nil
-	}
-	versions := providerVersionsDir(accounts.ProviderCodex, env)
-	if versions == "" {
+	if err != nil || !accountconfig.SupportedNativeVersion(accounts.ProviderCodex, ambient.Version) {
 		return nil, errAccountLaunch
 	}
-	path := filepath.Join(versions, accountconfig.CharacterizedCodexVersion)
-	if enrollment.ValidateNativePath(path) != nil {
+	path, err := filepath.EvalSymlinks(ambient.Path)
+	if err != nil || enrollment.ValidateNativePath(path) != nil {
 		return nil, errAccountLaunch
 	}
-	qualified, err := probeCLIIdentity(accounts.ProviderCodex, path, env, cwd)
-	if err != nil || qualified.Version != accountconfig.CharacterizedCodexVersion {
-		return nil, errAccountLaunch
-	}
-	return qualified, nil
+	return ambient, nil
 }
 
 func (m *accountManager) managedNative(provider string, env []string, cwd string) (identity *persist.CLIIdentity, resultErr error) {
 	if provider == accounts.ProviderCodex {
-		if cached, err := m.retainedNative(provider); err == nil {
-			return cached, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		source, err := qualifiedCodexSource(env, cwd)
-		if err != nil {
-			return nil, err
-		}
-		return m.retainNative(provider, source, env, cwd)
+		return installedCodexSource(env, cwd)
 	}
 	if provider != accounts.ProviderClaude {
 		return nil, errAccountLaunch
@@ -470,6 +451,13 @@ func (a *coreAPI) accountLaunchResolver(spec daemon.LaunchSpec) func(string, []s
 
 func (m *accountManager) startupManagedNative(provider string) {
 	env := daemon.PolicyEnv(nil)
+	if provider == accounts.ProviderCodex {
+		delete(m.native, provider)
+		if identity, err := installedCodexSource(env, m.stateRoot); err == nil {
+			m.native[provider] = identity
+		}
+		return
+	}
 	if identity, err := m.retainedNative(provider); err == nil {
 		if provider == accounts.ProviderClaude {
 			m.recordNativeSelection(identity, nil)
@@ -496,13 +484,7 @@ func (m *accountManager) startupManagedNative(provider string) {
 	if !intent {
 		// Advertise first enrollment from qualified source metadata without
 		// retaining a large executable on an otherwise unmanaged machine.
-		var identity *persist.CLIIdentity
-		var err error
-		if provider == accounts.ProviderClaude {
-			identity, err = qualifiedClaudeSource(env, m.stateRoot)
-		} else {
-			identity, err = qualifiedCodexSource(env, m.stateRoot)
-		}
+		identity, err := qualifiedClaudeSource(env, m.stateRoot)
 		if err == nil {
 			m.native[provider] = identity
 		}
@@ -530,8 +512,11 @@ func (w *authWatcher) managedRefreshIdentity(source persist.Meta, candidate *per
 	if source.AccountBinding == nil || (source.AgentType != accounts.ProviderClaude && source.AgentType != accounts.ProviderCodex) || w.accountRotation == nil || w.accountRotation.d == nil || w.accountRotation.d.accounts == nil {
 		return candidate, nil
 	}
-	if candidate == nil || candidate.Version != characterizedNativeVersion(source.AgentType) {
+	if candidate == nil || !accountconfig.SupportedNativeVersion(source.AgentType, candidate.Version) {
 		return nil, errAccountSuccessorUnavailable
+	}
+	if source.AgentType == accounts.ProviderCodex {
+		return w.accountRotation.d.accounts.managedNative(source.AgentType, source.Env, source.Cwd)
 	}
 	m := w.accountRotation.d.accounts
 	identity, err := m.retainNative(source.AgentType, candidate, source.Env, source.Cwd)

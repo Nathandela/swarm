@@ -19,19 +19,21 @@ import (
 	"syscall"
 
 	"github.com/Nathandela/swarm/internal/accounts"
+	"golang.org/x/mod/semver"
 )
 
 const maxSourceBytes = 2 << 20
 
 const CharacterizedCodexVersion = "0.160.0"
+const MinimumCodexVersion = CharacterizedCodexVersion
 const CharacterizedClaudeVersion = "2.1.289"
 
-// SupportedNativeVersion is an exact gate, not a future-version promise. The
-// help fixture establishes flags; live effective-configuration acceptance is
-// a separate release gate for any newly supported configuration source.
+// Codex uses a minimum stable version; configuration and writer custody are
+// validated separately. Claude keeps its characterized native contracts.
 func SupportedNativeVersion(provider, version string) bool {
 	if provider == "codex" {
-		return version == CharacterizedCodexVersion
+		v := "v" + version
+		return semver.IsValid(v) && semver.Canonical(v) == v && semver.Prerelease(v) == "" && semver.Compare(v, "v"+MinimumCodexVersion) >= 0
 	}
 	if provider == "claude" {
 		return version == CharacterizedClaudeVersion || version == "2.1.288"
