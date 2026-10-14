@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/idempotency"
@@ -669,9 +668,6 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	if spec.Backend != nil {
 		lc.BackendProgram = spec.Backend.Program
 		lc.BackendArgs = append([]string(nil), spec.Backend.Args...)
-		if spec.AccountNativeContext {
-			lc.BackendArgs = accountconfig.WithoutSynthesizedNetworkOverride(lc.BackendArgs)
-		}
 		lc.BackendArgs = append(lc.BackendArgs, spec.AccountBackendArgs...)
 		if spec.AccountBinding != nil {
 			lc.BackendCwd = spec.Cwd

@@ -211,7 +211,6 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 		result.Generation = 1
 	}
 	if provider == "codex" {
-		result.CLIArgs = WithoutSynthesizedNetworkOverride(result.CLIArgs)
 		result.BackendArgs = []string{"-c", `cli_auth_credentials_store="file"`}
 		if codexResumeNoUpdate(argv) {
 			result.BackendArgs = append(result.BackendArgs, "-c", "check_for_update_on_startup=false")
