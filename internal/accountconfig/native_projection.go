@@ -220,20 +220,6 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 	return result, nil
 }
 
-// WithoutSynthesizedNetworkOverride removes precisely the historical override
-// injected by Swarm's adapter. All other explicit permission flags survive.
-func WithoutSynthesizedNetworkOverride(argv []string) []string {
-	out := make([]string, 0, len(argv))
-	for i := 0; i < len(argv); i++ {
-		if (argv[i] == "-c" || argv[i] == "--config") && i+1 < len(argv) && argv[i+1] == "sandbox_workspace_write.network_access=true" {
-			i++
-			continue
-		}
-		out = append(out, argv[i])
-	}
-	return out
-}
-
 func revalidateNativeManifest(m manifest, profile string) error {
 	if PendingNativeContextUpdate(profile, m.Provider) {
 		return Conflict("native-configuration-update-pending")
