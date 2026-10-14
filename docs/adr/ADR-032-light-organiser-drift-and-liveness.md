@@ -13,7 +13,7 @@ Separately, an owner refresh required every other discussion on the account to b
 
 ## Decision
 
-**D1. Drift is accepted and logged, never refused.** When the profile's `settings.json`, `.claude.json` or `config.toml` differs from the installed cohort, the launch proceeds with the profile as it is and logs `accounts: accepted native configuration drift profile=<path> file=<file>`.
+**D1. Drift is accepted and logged, never refused.** When the profile's `settings.json`, `.claude.json` or `config.toml` differs from the installed cohort, the launch proceeds with the profile as it is and logs `accounts: accepted native configuration drift profile=<path> file=<file>`. Codex rewrites the profile's `config.toml` with mode 0644, so the installed-config check (`validateCodexInstalledConfig`) no longer applies the private-file check (0600, owner uid, single link) to it, together with the hash. No boundary moves: `readRegular` still refuses to read a symlinked or group/other-writable `config.toml` (the check then logs it as drift rather than parsing it), and the profile directory stays 0700, so only the owner can place files in it.
 
 **D2. The owner wins on refresh.** When the owner configuration changed, every managed launch, resume, recovery and onboarding refreshes the profile from it, overwriting private edits. Schema-3 resumes, including model-pinned recoveries, re-project; only the frozen environment origin and the model proof carry over. An interrupted refresh followed by another owner change supersedes its stale intent instead of holding.
 
