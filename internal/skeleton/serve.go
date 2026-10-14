@@ -354,7 +354,9 @@ func Serve(cfg Config) (*Daemon, error) {
 		historyHome, _ = os.UserHomeDir()
 	}
 	d.home = historyHome
-	d.api.historyResolver = newAccountResumeHistoryResolver(cfg.StateDir, newFilesystemResumeHistoryResolver(historyHome, defaultResumeHistoryLimits))
+	unmanagedHistory := newFilesystemResumeHistoryResolver(historyHome, defaultResumeHistoryLimits)
+	unmanagedHistory.stateDir = cfg.StateDir
+	d.api.historyResolver = newAccountResumeHistoryResolver(cfg.StateDir, unmanagedHistory)
 	// ADR-017 T2-a's three assembly hooks: author at launch (api.go), author on the
 	// re-attach of a session dir that has no record (sessiontap.go), and the PURE READ
 	// the remote-tier capability gate consults. Wired here and nowhere else, so there is
