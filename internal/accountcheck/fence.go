@@ -11,9 +11,9 @@ import (
 	"github.com/Nathandela/swarm/internal/accounts"
 )
 
-// WithCredentialFence shares the native worker's generation lock. The caller
-// supplies native-writer proof before installing ordinary configuration; the
-// lock excludes auth/status, refresh and availability workers through install.
+// WithCredentialFence shares the native worker's generation lock. The lock
+// excludes live auth/status, refresh and availability workers through install;
+// a retained check directory without a stopped proof never blocks a launch.
 func WithCredentialFence(stateRoot string, binding accounts.Binding, install func() error) error {
 	root, err := openChecks(stateRoot)
 	if err != nil {
@@ -25,9 +25,6 @@ func WithCredentialFence(stateRoot string, binding accounts.Binding, install fun
 		return err
 	}
 	defer func() { _ = lock.Close() }()
-	if !collectionStateSafe(stateRoot) || !writersStopped(root, binding) {
-		return ErrCustodyUnknown
-	}
 	return install()
 }
 

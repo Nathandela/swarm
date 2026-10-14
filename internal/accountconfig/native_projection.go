@@ -18,8 +18,10 @@ import (
 
 // PrepareNative keeps settings in native user/project tiers. Its only Codex
 // override is the characterized credential file store; no user defaults are
-// promoted over project policy. Old frozen projections retain their contract.
-func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string, prior, nativeModel string, lease func(string, func() error) error, createHistory bool, ownerResume ...bool) (Projection, error) {
+// promoted over project policy. Configuration drift is followed, not refused:
+// the account profile is refreshed from the owner and resumes re-project.
+// Only a model-pinned recovery keeps its frozen schema-3 projection.
+func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string, prior, nativeModel string, lease func(string, func() error) error, createHistory bool) (Projection, error) {
 	var m manifest
 	var err error
 	var frozenOrigin manifest
@@ -35,7 +37,7 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 			return Projection{}, Conflict("projection-context-changed")
 		}
 		frozenOrigin = m
-		if len(ownerResume) == 1 && ownerResume[0] && nativeModel == "" {
+		if nativeModel == "" {
 			prior = ""
 			m = manifest{SchemaVersion: 3, Provider: provider, Cwd: filepath.Clean(cwd)}
 		}
@@ -127,7 +129,7 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 		if err != nil {
 			return Projection{}, err
 		}
-		ctx, err := PrepareCodexContext(profile, cwd, contextEnv, lease, prior == "" && createHistory)
+		ctx, err := PrepareCodexContext(profile, cwd, contextEnv, lease, true)
 		if err != nil {
 			return Projection{}, err
 		}
@@ -140,7 +142,7 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 		} else if m.CodexContext == nil || m.CodexContext.GlobalGeneration != ctx.GlobalGeneration || !reflect.DeepEqual(m.CodexProjectSources, projectSources) {
 			return Projection{}, Conflict("native-configuration-source-changed")
 		}
-		history, err := PrepareCodexHistoryAlias(ctx, profile, createHistory, lease, prior == "" && createHistory)
+		history, err := PrepareCodexHistoryAlias(ctx, profile, createHistory, lease, true)
 		if err != nil {
 			return Projection{}, err
 		}
@@ -167,7 +169,7 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 		} else if !reflect.DeepEqual(m.ClaudeProjectSources, projectSources) || !reflect.DeepEqual(m.ClaudeInvocationSources, invocationSources) {
 			return Projection{}, Conflict("native-configuration-source-changed")
 		}
-		ctx, err := PrepareClaudeContext(profile, cwd, contextEnv, lease, prior == "" && createHistory)
+		ctx, err := PrepareClaudeContext(profile, cwd, contextEnv, lease, true)
 		if err != nil {
 			return Projection{}, err
 		}

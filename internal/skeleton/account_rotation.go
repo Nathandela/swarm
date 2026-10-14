@@ -941,8 +941,53 @@ func (m *accountRotationManager) verifyStopped(meta persist.Meta) error {
 }
 
 // Shared by guarded recovery and owner resume under their existing lifecycle
-// fences. PID disappearance cannot replace the shim's containment proof.
+// fences. Writers are stopped when no recorded process is alive: the shim, the
+// native CLI (or any member of its process group) and the backend. A killed
+// shim that never wrote its stopped proof does not hold the account.
 func verifyAccountWritersStopped(stateDir string, meta persist.Meta) error {
+	if meta.Status.Process == status.ProcessRunning || meta.AccountBinding == nil || !validManagedBinding(*meta.AccountBinding) {
+		return accounts.ErrInUse
+	}
+	native := shim.NativeProcessInfo{ShimPID: meta.ShimPID, ShimStartTime: meta.ShimStartTime}
+	if _, err := os.Lstat(filepath.Join(stateDir, meta.ID, shim.NativeProcessFile)); !errors.Is(err, os.ErrNotExist) {
+		root, err := openAccountRecoveryRoot(stateDir)
+		if err != nil {
+			return accounts.ErrInUse
+		}
+		err = readAccountWriterProof(root, meta.ID, shim.NativeProcessFile, &native)
+		_ = root.Close()
+		if err != nil {
+			return accounts.ErrInUse
+		}
+	}
+	if accountProcessAlive(native.ShimPID, native.ShimStartTime) || accountProcessAlive(native.PID, native.StartTime) || accountProcessAlive(native.BackendPID, native.BackendStartTime) {
+		return accounts.ErrInUse
+	}
+	groups := []int{native.PGID, native.BackendPID}
+	if info, ok := shim.ReadBackendInfo(filepath.Join(stateDir, meta.ID)); ok {
+		groups = append(groups, info.PGID)
+	}
+	for _, pgid := range groups {
+		if pgid > 0 && syscall.Kill(-pgid, 0) != syscall.ESRCH {
+			return accounts.ErrInUse
+		}
+	}
+	return nil
+}
+
+// A recorded process is alive when its PID exists with the recorded start time
+// (any start time when none was recorded).
+func accountProcessAlive(pid int, startTime int64) bool {
+	if pid <= 0 {
+		return false
+	}
+	start, err := procstart.StartTime(pid)
+	return err == nil && (startTime <= 0 || start == startTime)
+}
+
+// Credential erasure keeps the shim's positive containment proof: PID
+// disappearance alone cannot authorize removing an account's credentials.
+func verifyAccountWritersProvenStopped(stateDir string, meta persist.Meta) error {
 	if meta.Status.Process == status.ProcessRunning || meta.AccountBinding == nil || !validManagedBinding(*meta.AccountBinding) {
 		return accounts.ErrInUse
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -318,20 +319,25 @@ func RevalidateClaudeContext(c ClaudeContext, profile string) error {
 	return validateClaudeInstalledContext(c, profile)
 }
 
-// Private native edits are never overwritten by owner-source refresh. This
-// comparison intentionally excludes the owner source, which may have changed.
+// Native CLIs persist ordinary preferences (/fast, /model, /config, mcp add)
+// into the account profile. Such drift is logged and accepted, never refused;
+// an owner refresh still overwrites the profile copy (owner wins).
+func acceptNativeDrift(profile, file string) {
+	log.Printf("accounts: accepted native configuration drift profile=%s file=%s change=differs-from-installed-cohort", profile, file)
+}
+
+// This comparison intentionally excludes the owner source, which may have changed.
 func validateClaudeInstalledContext(c ClaudeContext, profile string) error {
 	raw, err := readRegular(filepath.Join(profile, "settings.json"), maxSourceBytes)
 	if err != nil {
 		return Conflict("configuration-source-changed")
 	}
-	hash, err := claudeSettingsDigest(raw)
-	if err != nil || hash != c.SettingsSHA256 {
-		return Conflict("candidate-configuration-changed")
+	if hash, err := claudeSettingsDigest(raw); err != nil || hash != c.SettingsSHA256 {
+		acceptNativeDrift(profile, "settings.json")
 	}
 	preferences, err := readClaudePreferences(filepath.Join(profile, ".claude.json"))
 	if err != nil || claudeHash(claudeStablePreferences(preferences)) != c.PreferencesStableSHA256 {
-		return Conflict("candidate-configuration-changed")
+		acceptNativeDrift(profile, ".claude.json")
 	}
 	for _, asset := range c.Assets {
 		path := filepath.Join(profile, asset.Name)
@@ -475,8 +481,14 @@ func filterClaudeGlobalSettings(settings map[string]any) error {
 		if filepath.IsAbs(key) {
 			delete(settings, key)
 		}
+		// Ordinary owner settings follow the owner natively. Only keys that
+		// route credentials or providers around the account profile are refused.
+		switch key {
+		case "apiKeyHelper", "env", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod", "forceLoginOrgUUID":
+			return Conflict("credential-or-provider-settings")
+		}
 	}
-	return validateClaudeContextSettings(settings)
+	return nil
 }
 
 func validateClaudeContextSettings(settings map[string]any) error {

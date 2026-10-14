@@ -3,7 +3,6 @@ package skeleton
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -132,33 +131,15 @@ func (d *Daemon) prepareAccountLaunch(id string, spec daemon.LaunchSpec) (daemon
 		if accountconfig.MatchingInstalledContext(profile, spec.AgentType, globalGeneration) {
 			return install()
 		}
-		return accountcheck.WithCredentialFence(d.accounts.stateRoot, *spec.AccountBinding, func() error {
-			// An installed immutable cohort can serve concurrent discussions.
-			// Initial installation requires every prior writer to be stopped.
-			marker := accountconfig.ClaudeContextMarker
-			if spec.AgentType == "codex" {
-				marker = accountconfig.CodexContextMarker
-			}
-			var cohort struct{ GlobalGeneration string }
-			raw, markerErr := os.ReadFile(filepath.Join(profile, marker))
-			needsWriterFence := accountconfig.PendingNativeContextUpdate(profile, spec.AgentType) || errors.Is(markerErr, os.ErrNotExist) || (markerErr == nil && json.Unmarshal(raw, &cohort) == nil && cohort.GlobalGeneration != globalGeneration)
-			if needsWriterFence && d.core != nil {
-				for _, meta := range d.core.List() {
-					if meta.ID != id && meta.AccountBinding != nil && meta.AccountBinding.Provider == spec.AccountBinding.Provider && meta.AccountBinding.AccountID == spec.AccountBinding.AccountID && meta.AccountBinding.CredentialGeneration == spec.AccountBinding.CredentialGeneration {
-						if meta.Status.Process == status.ProcessRunning || verifyAccountWritersStopped(d.accounts.stateRoot, meta) != nil {
-							return accountconfig.Conflict("configuration-writer-active")
-						}
-					}
-				}
-			}
-			return install()
-		})
+		// A refresh rewrites ordinary configuration the way the owner's own CLIs
+		// do; other discussions on the account, live or not, never block it.
+		return accountcheck.WithCredentialFence(d.accounts.stateRoot, *spec.AccountBinding, install)
 	}
 	var projection accountconfig.Projection
 	originalEnv := append(append([]string(nil), spec.ClientEnv...), spec.AccountOriginalConfigurationEnv...)
 	err = accountcheck.WithConfigurationFence(d.accounts.stateRoot, *spec.AccountBinding, func() error {
 		var prepareErr error
-		projection, prepareErr = accountconfig.PrepareNative(d.accounts.stateRoot, spec.AgentType, profile, spec.Cwd, originalEnv, spec.Argv, spec.AccountProjectionRef, spec.AccountNativeModel, lease, id != "", spec.ResumedFrom != "" && spec.InputEmbargo == "" && spec.AccountNativeModel == "")
+		projection, prepareErr = accountconfig.PrepareNative(d.accounts.stateRoot, spec.AgentType, profile, spec.Cwd, originalEnv, spec.Argv, spec.AccountProjectionRef, spec.AccountNativeModel, lease, id != "")
 		return prepareErr
 	})
 	if err != nil {

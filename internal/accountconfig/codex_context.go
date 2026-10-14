@@ -479,19 +479,18 @@ func validateCodexRuntimeTmp(profile string) error {
 	return nil
 }
 
+// Codex persists /model, trust and TUI choices into CODEX_HOME/config.toml.
+// That drift is logged and accepted; an owner refresh rewrites the file.
 func validateCodexInstalledConfig(c CodexContext, profile string) error {
 	path := filepath.Join(profile, "config.toml")
 	raw, err := readRegular(path, maxSourceBytes)
-	if err != nil || privateProjectionFile(path) != nil {
-		return Conflict("candidate-configuration-changed")
-	}
 	var settings map[string]any
-	if toml.Unmarshal(raw, &settings) != nil || remapCodexHookState(settings, c.NativeProfile, profile, true) != nil {
-		return Conflict("candidate-configuration-changed")
+	if err != nil || toml.Unmarshal(raw, &settings) != nil || remapCodexHookState(settings, c.NativeProfile, profile, true) != nil {
+		acceptNativeDrift(profile, "config.toml")
+		return nil
 	}
-	normalized, err := toml.Marshal(settings)
-	if err != nil || claudeHashBytes(normalized) != c.SettingsSHA256 {
-		return Conflict("candidate-configuration-changed")
+	if normalized, err := toml.Marshal(settings); err != nil || claudeHashBytes(normalized) != c.SettingsSHA256 {
+		acceptNativeDrift(profile, "config.toml")
 	}
 	return nil
 }
