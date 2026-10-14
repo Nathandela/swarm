@@ -66,6 +66,7 @@
 - [Account-pool v0.16.1 hotfix evidence](verification/account-pools-v0161.md) — owner-provided native configuration ingress regression and pending release verification
 - [Account-pool v0.17.6 evidence](verification/account-pools-v0176.md) — qualified Codex runtime, guarded running-discussion enrollment and release acceptance
 - [Codex minimum version and migration readiness](verification/codex-minimum-version.md) — forward version admission, installed native sign-in checks and current bulk-migration limits
+- [Phase A rotation unblock](verification/phase-a.md) — native configuration drift accepted, liveness writer holds, per-account retry, resume and handoff fixes, journal retention (v0.17.8)
 - [Account onboarding hotfix evidence](verification/account-pools-v0151.md) — readable Accounts and sign-in flow, independent review and patch release verification
 - [Audit committee report 001](verification/audit-001-system-spec.md) — the adversarial review that shaped spec Draft 2
 - [Audit committee report 002](verification/audit-002-implementation-goals.md) — the review that shaped implementation-goals.md Draft 2
