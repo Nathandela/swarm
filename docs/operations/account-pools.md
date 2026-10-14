@@ -32,7 +32,7 @@ To request a refresh, open account details and press **r**. Requests coalesce wh
 
 Enable provider rotation to use configured accounts for **compatible new discussions and resumed ended discussions** on this VM. With one ready account, Swarm can assign new discussions to it, but has no other account from that provider to switch to. A second verified account gives Swarm a possible destination; whether it can serve a discussion still depends on the requested model and available quota evidence. A healthy discussion stays bound to its current account, even when another account is available.
 
-Other discussions on the same account never block a launch. When the owner configuration changed, the launch refreshes the account's native profile even while other discussions run on it (ADR-032). If the selected account refuses a launch for an account-specific reason, such as a busy configuration check, Swarm tries the next eligible account itself; when none can serve the discussion, the refusal names each account with its reason and a remedy.
+Other discussions on the same account never block a launch. When the owner configuration changed, the launch refreshes the account's native profile even while other discussions run on it (ADR-032). If the selected account refuses a launch for an account-specific reason, such as a busy configuration check, an unsafe or mid-update profile, or unreadable credentials, Swarm tries the next eligible account itself; when none can serve the discussion, the refusal names each account with its reason and a remedy.
 
 If recovery interrupts a request while switching accounts, Swarm restores the conversation and asks you to retry. It does not resubmit the request, replay a tool call, or repeat an unresolved action.
 

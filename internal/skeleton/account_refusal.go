@@ -11,7 +11,6 @@ import (
 	"github.com/Nathandela/swarm/internal/accountcheck"
 	"github.com/Nathandela/swarm/internal/accountconfig"
 	"github.com/Nathandela/swarm/internal/accounts"
-	"github.com/Nathandela/swarm/internal/status"
 )
 
 // accountRefusal is one account a managed launch could not use: its nonsecret
@@ -48,9 +47,14 @@ func (e *noAccountError) Unwrap() error { return errAccountLaunch }
 // account alone, or "" for every other failure, which another account would share
 // (cwd, project, argv, environment, CLI) and so is never retried.
 func accountRefusalCode(err error) string {
+	for _, code := range profileScopedConflicts {
+		if errors.Is(err, accountconfig.Conflict(code)) {
+			return code
+		}
+	}
 	switch {
-	case errors.Is(err, accountconfig.Conflict("configuration-writer-active")):
-		return "configuration-writer-active"
+	case errors.Is(err, accounts.ErrInvalidCredentials):
+		return "invalid-credentials"
 	case errors.Is(err, accountcheck.ErrUnavailable):
 		return "configuration-busy"
 	case errors.Is(err, accountcheck.ErrCustodyUnknown):
@@ -58,6 +62,10 @@ func accountRefusalCode(err error) string {
 	}
 	return ""
 }
+
+// profileScopedConflicts are raised by the bound account's own profile, which no
+// other account's profile shares.
+var profileScopedConflicts = []string{"candidate-configuration-marker-changed", "unsafe-account-profile", "unsafe-account-configuration", "native-configuration-update-pending"}
 
 func refusedAccount(tried []accountRefusal, id string) bool {
 	for _, r := range tried {
@@ -68,22 +76,16 @@ func refusedAccount(tried []accountRefusal, id string) bool {
 	return false
 }
 
-// accountRefusal describes err for the bound account, naming the discussions that
-// hold it when ending one of them is the remedy.
+// accountRefusal describes err for the bound account, with a remedy when the owner
+// can act on it.
 func (a *coreAPI) accountRefusal(b accounts.Binding, err error) accountRefusal {
 	r := accountRefusal{id: b.AccountID, label: b.AccountID, code: accountRefusalCode(err)}
 	if registry, snapErr := a.accounts.store.Snapshot(); snapErr == nil && registry.Accounts[b.AccountID].Label != "" {
 		r.label = registry.Accounts[b.AccountID].Label
 	}
 	switch r.code {
-	case "configuration-writer-active":
-		var names []string
-		for _, m := range a.core.List() {
-			if m.AccountBinding != nil && m.AccountBinding.AccountID == b.AccountID && m.Status.Process == status.ProcessRunning {
-				names = append(names, fmt.Sprintf("%q", cmp.Or(m.Name, m.ID)))
-			}
-		}
-		r.remedy = "end discussion " + cmp.Or(strings.Join(names, ", "), "using this account")
+	case "invalid-credentials":
+		r.remedy = "sign in again"
 	case "configuration-busy":
 		r.remedy = "retry in a moment"
 	}
