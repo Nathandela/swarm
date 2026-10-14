@@ -1,6 +1,6 @@
 # ADR-032: Swarm is a light organiser: provider configuration drift is accepted, writer holds follow process liveness
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-14
 - Supersedes: the configuration-freeze and stopped-writer-proof parts of [ADR-028](ADR-028-personal-account-pools.md) and [ADR-031](ADR-031-managed-claude-token-renewal.md) for launch, resume, recovery, automatic onboarding and owner refresh. Credential erasure (retirement) is unchanged.
 - Affects: `internal/accountconfig` (`claude_context.go`, `claude_context_update.go`, `codex_context.go`, `native_projection.go`), `internal/accountcheck` (`fence.go`), `internal/skeleton` (`accounts_launch.go`, `account_rotation.go`, `account_retirement.go`, `account_enrollment.go`)

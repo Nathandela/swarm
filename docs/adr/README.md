@@ -39,7 +39,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [029](ADR-029-board-mouse-selection.md) | The session board takes mouse clicks, and only the board (click selects, a click on the selected row opens it like Enter, wheel moves; never during an attach, a form or text entry) | Accepted | 2026-10-07 |
 | [030](ADR-030-reconnection-and-attention.md) | Automatic terminal recovery and structured approval/question/error attention | Accepted | 2026-10-10 |
 | [031](ADR-031-managed-claude-token-renewal.md) | Managed Claude profiles renew their own expired access token (reactive on a usage 401, native lock and CAS, identity must match; a dead refresh token sets needs-login; amends ADR-028) | Proposed | 2026-10-10 |
-| [032](ADR-032-light-organiser-drift-and-liveness.md) | Swarm is a light organiser: provider configuration drift is accepted and logged, writer holds follow process liveness, owner wins on refresh (supersedes the freeze/proof parts of ADR-028/031) | Proposed | 2026-10-14 |
+| [032](ADR-032-light-organiser-drift-and-liveness.md) | Swarm is a light organiser: provider configuration drift is accepted and logged, writer holds follow process liveness, owner wins on refresh (supersedes the freeze/proof parts of ADR-028/031) | Accepted | 2026-10-14 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the
