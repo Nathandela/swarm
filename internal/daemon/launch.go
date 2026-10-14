@@ -669,9 +669,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		lc.BackendProgram = spec.Backend.Program
 		lc.BackendArgs = append([]string(nil), spec.Backend.Args...)
 		lc.BackendArgs = append(lc.BackendArgs, spec.AccountBackendArgs...)
-		if spec.AccountBinding != nil {
-			lc.BackendCwd = spec.Cwd
-		}
+		// Codex records the app-server's cwd as the thread's and roots its sandbox there, so
+		// every backend runs in the session's cwd, never in the state dir.
+		lc.BackendCwd = spec.Cwd
 		lc.BackendAgentArgs = append([]string(nil), spec.Backend.AgentArgs...)
 		lc.BackendAgentCommandArgs = append([]string(nil), spec.Backend.AgentCommandArgs...)
 		lc.BackendSocketPath = backendSock
