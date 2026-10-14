@@ -7,15 +7,34 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+// logSink is a mutex-guarded log sink: server goroutines write while the test reads.
+type logSink struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *logSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *logSink) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
 
 // TestLaunchRefusal_IsWrittenToTheDaemonLog pins observability of launch and handoff
 // refusals (A4). replyError only wrote the refusal to the client, so a TUI-surfaced
 // refusal left no trace in daemon.log and no handoff failure text could be recovered.
 func TestLaunchRefusal_IsWrittenToTheDaemonLog(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
+	buf := &logSink{}
+	log.SetOutput(buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	stub := newStubDaemon()

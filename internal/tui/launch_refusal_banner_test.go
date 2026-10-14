@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -23,5 +24,21 @@ func TestBanner_LaunchRefusalNamesTheAccountAndRemedy(t *testing.T) {
 		if !strings.Contains(shown, want) {
 			t.Errorf("banner lacks %q at %d columns; view:\n%s", want, testCols, view(m))
 		}
+	}
+}
+
+// A wrapped refusal stays on screen longer, one bannerDuration per row, so a
+// three-row refusal naming several accounts can be read before it expires.
+func TestBanner_AWrappedRefusalStaysOnePeriodPerRow(t *testing.T) {
+	m := New(newFakeClient(), detectMixed())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
+	m = send(m, launchResultMsg{err: errors.New(strings.Repeat("account refused - sign in again; ", 8))})
+	rm := m.(rootModel)
+	rows := len(rm.general.bannerLines())
+	if rows != bannerMaxLines {
+		t.Fatalf("banner rows = %d, want %d for a long refusal", rows, bannerMaxLines)
+	}
+	if left := time.Until(rm.general.bannerExpiry); left < time.Duration(rows-1)*bannerDuration {
+		t.Fatalf("a %d-row banner expires in %v, want about %v", rows, left, time.Duration(rows)*bannerDuration)
 	}
 }

@@ -119,7 +119,7 @@ func TestBindAccountLaunch_RetriesTheNextAccountAfterAnAccountConfigurationConfl
 }
 
 func TestBindAccountLaunch_DoesNotRetryALaunchContextFailure(t *testing.T) {
-	for _, failure := range []error{accountconfig.Conflict("unsafe-project-directory"), errors.New("daemon: spawn shim: no such file or directory")} {
+	for _, failure := range []error{accountconfig.Conflict("unsafe-project-directory"), accountconfig.Conflict("unsupported-git-layout"), errors.New("daemon: spawn shim: no such file or directory")} {
 		t.Run(failure.Error(), func(t *testing.T) {
 			f := newAccountRetryFixture(t, "Work", "Personal")
 			f.refuse = func(accounts.Binding) error { return failure }
@@ -175,5 +175,24 @@ func TestBindAccountLaunch_NamesEveryAccountTriedWhenNoneCanServe(t *testing.T) 
 		if !strings.Contains(sink.String(), id) {
 			t.Errorf("daemon log does not name refused account %s:\n%s", id, sink.String())
 		}
+	}
+}
+
+// A launch whose binding is frozen (a bound resume, enrollment, recovery) cannot move
+// to another account, so its own refusal is returned, not a pool-wide summary.
+func TestBindAccountLaunch_AFrozenBindingReturnsItsOwnRefusal(t *testing.T) {
+	f := newAccountRetryFixture(t, "Work", "Personal")
+	var frozen accounts.Binding
+	for id := range f.labels {
+		frozen = accountTestBinding(t, f.manager, accounts.Account{ID: id})
+		break
+	}
+	f.refuse = func(accounts.Binding) error { return accountconfig.Conflict("configuration-writer-active") }
+	_, err := f.api.Launch(daemon.LaunchSpec{AgentType: "codex", Name: "bound", Cwd: f.cwd, ClientEnv: f.env, Options: map[string]string{}, AccountBinding: &frozen, Cols: 80, Rows: 24})
+	if !errors.Is(err, accountconfig.Conflict("configuration-writer-active")) || strings.Contains(err.Error(), "rotation off") {
+		t.Fatalf("frozen launch error = %v, want the account's own configuration-writer-active refusal", err)
+	}
+	if len(f.attempts) != 1 || f.attempts[0] != frozen.AccountID {
+		t.Fatalf("attempted accounts %v, want only the frozen account %s", f.attempts, frozen.AccountID)
 	}
 }
