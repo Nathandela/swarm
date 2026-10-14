@@ -9,9 +9,10 @@ import (
 
 // TestDaemon_TheJournalIsOpenedWithBoundedRetention pins R-JRN.6 ("retention rotates segments to
 // bound disk") at the daemon: journal.Open's zero Options disable both rotation and retention,
-// so the live journal grew to 90 segments / 603 MB, all loaded into memory at every start
-// (daemon RSS 1.46 GB). Every daemon start adds a segment, so of 100 pre-existing ones only the
-// owner's chosen 64 may remain after the first append.
+// so the live journal grew without bound (90 segments / 603 MB, all mirrored in memory). The
+// segment count bounds growth, not a single start's load (the total-size cap does that). Every
+// daemon start adds a segment, so of 100 pre-existing ones only the owner's chosen 64 may remain
+// after the first append.
 func TestDaemon_TheJournalIsOpenedWithBoundedRetention(t *testing.T) {
 	cfg := daemonConfig(t)
 	dir := filepath.Join(cfg.StateDir, "journal")

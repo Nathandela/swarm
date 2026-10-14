@@ -147,6 +147,9 @@ type Resume struct {
 type Options struct {
 	MaxBytes int64            // rotate the active segment past this size (0 = unbounded)
 	MaxFiles int              // keep at most this many segments (0 = unbounded)
+	// MaxTotalBytes drops the oldest whole segments at Open, before loading, until the rest
+	// total at most this (0 = unbounded). Retained records are mirrored in memory.
+	MaxTotalBytes int64
 	Clock    func() time.Time // record timestamp source (defaults to time.Now)
 }
 
@@ -237,6 +240,32 @@ func Open(dir string, opts Options) (*Journal, error) {
 		}
 	}
 	sort.Slice(segs, func(a, b int) bool { return segs[a].seq < segs[b].seq })
+
+	if opts.MaxTotalBytes > 0 {
+		total, sizes := int64(0), make([]int64, len(segs))
+		for i, f := range segs {
+			if fi, err := os.Stat(f.path); err == nil {
+				sizes[i] = fi.Size()
+			}
+			total += sizes[i]
+		}
+		drop := 0
+		for drop < len(segs)-1 && total > opts.MaxTotalBytes { // the newest is always kept
+			total -= sizes[drop]
+			drop++
+		}
+		// The retained segments may all be empty (starts that appended nothing): the dropped
+		// ones' high-water cursor is kept so cursors stay monotonic.
+		for i := drop - 1; i >= 0 && j.cursor == 0; i-- {
+			for _, r := range loadSegment(segs[i].path) {
+				j.cursor = max(j.cursor, r.Cursor)
+			}
+		}
+		for _, f := range segs[:drop] {
+			_ = os.Remove(f.path)
+		}
+		segs = segs[drop:]
+	}
 
 	var maxSeq uint64
 	for _, f := range segs {
@@ -464,13 +493,17 @@ func (j *Journal) enforceRetentionLocked() {
 	if j.opts.MaxFiles <= 0 {
 		return
 	}
+	dropped := 0
 	for len(j.segments) > j.opts.MaxFiles {
 		old := j.segments[0]
 		_ = os.Remove(old.path)
-		if old.count > 0 && old.count <= len(j.records) {
-			j.records = j.records[old.count:]
+		if old.count > 0 && dropped+old.count <= len(j.records) {
+			dropped += old.count
 		}
 		j.segments = j.segments[1:]
+	}
+	if dropped > 0 { // copy the tail: a re-slice would keep the dropped records in memory
+		j.records = append(make([]Record, 0, len(j.records)-dropped), j.records[dropped:]...)
 	}
 }
 
