@@ -16,7 +16,7 @@ func TestDaemon_TheJournalIsOpenedWithBoundedRetention(t *testing.T) {
 	cfg := daemonConfig(t)
 	dir := filepath.Join(cfg.StateDir, "journal")
 	for i := 0; i < 100; i++ {
-		j, err := journal.Open(dir) // each open starts a fresh segment, as each daemon start does
+		j, err := journal.Open(dir, journal.Options{}) // each open starts a fresh segment, as each daemon start does
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -26,7 +26,7 @@ func TestTypeRoster_ExistsAndIsSnapshotOnly_DHI2(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	j, err := Open(dir)
+	j, err := Open(dir, Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

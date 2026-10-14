@@ -206,14 +206,11 @@ type Journal struct {
 // reconnect replays the durable tail from the last acknowledged cursor (R-JRN.6).
 const subscriberBuffer = 256
 
-// Open opens (or creates) the journal at dir with default (unbounded) retention.
-func Open(dir string) (*Journal, error) { return OpenWithOptions(dir, Options{}) }
-
-// OpenWithOptions opens the journal, loading every retained record (tolerating a
-// torn final line from a crash mid-append) and resuming the high-water cursor. A
-// fresh active segment is always started so new appends never extend a possibly
-// torn segment.
-func OpenWithOptions(dir string, opts Options) (*Journal, error) {
+// Open opens (or creates) the journal at dir, loading every retained record (tolerating
+// a torn final line from a crash mid-append) and resuming the high-water cursor. Zero
+// Options mean unbounded retention. A fresh active segment is always started so new
+// appends never extend a possibly torn segment.
+func Open(dir string, opts Options) (*Journal, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}

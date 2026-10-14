@@ -307,7 +307,7 @@ func Open(cfg Config) (*Daemon, error) {
 	// The daemon-wide durable journal (R-JRN) and the two-phase idempotency store
 	// (R-IDP) both live under the state dir and must be open BEFORE reconcile, whose
 	// restart transitions journal through the saveMeta choke point.
-	jrnl, err := journal.OpenWithOptions(filepath.Join(cfg.StateDir, "journal"),
+	jrnl, err := journal.Open(filepath.Join(cfg.StateDir, "journal"),
 		journal.Options{MaxBytes: journalMaxBytes, MaxFiles: journalMaxFiles})
 	if err != nil {
 		_ = listener.Close()
