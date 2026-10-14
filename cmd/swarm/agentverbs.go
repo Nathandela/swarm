@@ -280,7 +280,7 @@ func dispatchAgentVerb(run func([]string, agentClient, io.Writer, io.Writer) int
 // missing daemon.
 func dialHint(err error) string {
 	if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
-		return "the daemon socket refused this process; a Codex sandbox without network access blocks it -- enable sandbox_workspace_write.network_access"
+		return "the daemon socket refused this process; a Codex sandbox without network access blocks it (enable sandbox_workspace_write.network_access), or check the socket's permissions"
 	}
 	return "no daemon running? start swarm first"
 }
