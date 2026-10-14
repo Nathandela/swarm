@@ -109,11 +109,18 @@ func TestNativeProjectionRejectsIncompleteOrCrossProviderProvenance(t *testing.T
 	}
 }
 
-func TestNetworkOverrideRemovalPreservesExplicitPolicy(t *testing.T) {
-	args := []string{"codex", "-c", "sandbox_workspace_write.network_access=true", "--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=false", "--model", "exact-model"}
-	want := []string{"codex", "--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=false", "--model", "exact-model"}
-	if got := WithoutSynthesizedNetworkOverride(args); !reflect.DeepEqual(got, want) {
-		t.Fatal("unrelated explicit policy was removed")
+// TestNativeProjectionKeepsTheOwnerSandboxNetworkOverride pins ADR-028 Amendment 1: the managed Codex
+// CLI keeps the sandbox network override from the launch argv, unchanged, ahead of the backend args.
+func TestNativeProjectionKeepsTheOwnerSandboxNetworkOverride(t *testing.T) {
+	f := fixture(t, "codex")
+	argv := []string{"codex", "-c", "sandbox_workspace_write.network_access=true", "--sandbox", "workspace-write", "--model", "exact-model"}
+	p, err := PrepareNative(f.root, "codex", f.candidate, f.cwd, f.env, argv, "", "", codexContextLease, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(append([]string(nil), argv...), p.BackendArgs...)
+	if !reflect.DeepEqual(p.CLIArgs, want) {
+		t.Fatalf("CLIArgs = %v, want the launch argv with the network override kept: %v", p.CLIArgs, want)
 	}
 }
 
