@@ -78,7 +78,7 @@ func dispatchRelogin(args []string, stdout, stderr io.Writer) int {
 	dial := func() (reloginClient, error) {
 		client, err := protocol.Dial(cc.SocketPath, nil)
 		if err != nil {
-			return nil, fmt.Errorf("%v (no daemon running? start swarm first)", err)
+			return nil, fmt.Errorf("%v (%s)", err, dialHint(err))
 		}
 		if got, want := client.EndpointID(), skeleton.EndpointIDForStateDir(cc.StateDir); got != want {
 			_ = client.Close()
