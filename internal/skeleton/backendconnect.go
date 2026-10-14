@@ -195,7 +195,7 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		// §R7.7 case 1: this session will NEVER have a structured plane. The gap is emitted
 		// AT LAUNCH because the phone reads gaps off the transcript to decide whether to show
 		// a composer at all -- without it the owner types and the refusal arrives after the tap.
-		d.noteBackendUnavailableForInstance(id, expectedInstance)
+		d.noteBackendNeverServedForInstance(id, expectedInstance)
 		if aerr := d.core.SendBackendAttach(id, nil); aerr != nil {
 			log.Printf("skeleton: release session %s without a backend: %v", id, aerr)
 		}

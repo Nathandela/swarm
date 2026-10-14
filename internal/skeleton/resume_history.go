@@ -849,8 +849,10 @@ func withinCodexResumeWindow(created, candidate time.Time, degraded bool) bool {
 			withinResumeWindow(created.Add(shim.DegradedAgentDelay), candidate))
 }
 
-// degradedStart reports durable evidence that session id's backend never became available:
-// the structured-degraded marker of a backend_unavailable gap (markSessionDegradedFor).
+// degradedStart reports durable evidence that session id's backend never became available at
+// launch: a structured-degraded marker naming backend_never_served (markSessionDegradedFor).
+// backend_unavailable markers, also written by rejoin and no-thread failures whose agent
+// started on time, are not evidence.
 func (r *filesystemResumeHistoryResolver) degradedStart(id string) bool {
 	if r.stateDir == "" || id == "" || filepath.Base(id) != id {
 		return false
@@ -858,7 +860,7 @@ func (r *filesystemResumeHistoryResolver) degradedStart(id string) bool {
 	raw, err := os.ReadFile(filepath.Join(r.stateDir, id, sessionDegradedFile))
 	var marker historyTornMarker
 	return err == nil && json.Unmarshal(raw, &marker) == nil &&
-		strings.HasSuffix(marker.Generation, "/"+gapBackendUnavailable)
+		strings.HasSuffix(marker.Generation, "/"+gapBackendNeverServed)
 }
 
 func withinResumeWindow(created, candidate time.Time) bool {

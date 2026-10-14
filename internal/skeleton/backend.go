@@ -1244,6 +1244,9 @@ func (d *Daemon) forgetBackendPump(local string) {
 const (
 	gapBackendUnavailable = "backend_unavailable"
 	gapBackendLost        = "backend_lost"
+	// gapBackendNeverServed is a degraded-marker reason only (never a journal gap reason): the
+	// launch could not dial the backend, so the agent started after the shim's degraded delay.
+	gapBackendNeverServed = "backend_never_served"
 	// gapBackendPriorHistory says the daemon joined a thread that had ALREADY RUN TURNS it
 	// never read. It is the ONLY join-time gap, and it REPLACES round 3's
 	// `backend_joined_late` (review round 4, RULING 1), whose inference ran backwards.
@@ -1289,6 +1292,18 @@ func (d *Daemon) noteBackendUnavailable(local string) {
 // backend was probed. recordSessionInstance takes the same replacement fence before changing
 // the instance, so an old dial/resume cannot publish a gap or withdraw chat from its replacement.
 func (d *Daemon) noteBackendUnavailableForInstance(local, expectedInstance string) {
+	d.noteBackendGapForInstance(local, expectedInstance, gapBackendUnavailable)
+}
+
+// noteBackendNeverServedForInstance is the launch-dial failure: the shim then starts the
+// agent only after its degraded delay. The journal gap is the ordinary backend_unavailable;
+// only the durable marker names backend_never_served, the one degraded-start evidence the
+// widened Codex resume windows accept (rejoin and no-thread failures start the agent on time).
+func (d *Daemon) noteBackendNeverServedForInstance(local, expectedInstance string) {
+	d.noteBackendGapForInstance(local, expectedInstance, gapBackendNeverServed)
+}
+
+func (d *Daemon) noteBackendGapForInstance(local, expectedInstance, markerReason string) {
 	if expectedInstance == "" {
 		return
 	}
@@ -1299,7 +1314,7 @@ func (d *Daemon) noteBackendUnavailableForInstance(local, expectedInstance strin
 	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
 		return
 	}
-	d.markSessionDegradedFor(local, backendGapGeneration(gapBackendUnavailable))
+	d.markSessionDegradedFor(local, backendGapGeneration(markerReason))
 	d.emitBackendGap(local, gapBackendUnavailable)
 	d.degradeCapabilitiesOnBackendLossForInstance(local, expectedInstance)
 }
