@@ -43,6 +43,7 @@ func writeAccountProofFixture(t *testing.T, path string, value any) {
 	}
 }
 
+// Credential erasure (retirement) still requires the shim's contained proof.
 func TestAccountStoppedWriterRequiresExactContainedProof(t *testing.T) {
 	for _, kind := range []string{"missing", "legacy", "unconfirmed", "generation", "binding", "incident", "shim-live", "native-live", "backend-live", "unsafe", "partial-zero", "zero-valid", "valid"} {
 		t.Run(kind, func(t *testing.T) {
@@ -96,7 +97,7 @@ func TestAccountStoppedWriterRequiresExactContainedProof(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			err = m.verifyStopped(source)
+			err = verifyAccountWritersProvenStopped(m.w.stateDir, source)
 			if kind == "valid" || kind == "zero-valid" {
 				if err != nil {
 					t.Fatal("exact contained dead writers refused", err)
@@ -121,16 +122,16 @@ func TestAccountStoppedWriterIncludesRetainedCheckCustody(t *testing.T) {
 	binding.ConfigurationGeneration++
 	ref := accountcheck.Ref{SchemaVersion: accountcheck.SchemaVersion, Generation: generation, Binding: binding, Mode: accountcheck.ModeAuthStatus, Worker: processcontain.Identity{PID: 1<<30 + 2, StartTime: 1}}
 	writeAccountProofFixture(t, filepath.Join(dir, accountcheck.WorkerFile), ref)
-	if err := m.verifyStopped(source); !errors.Is(err, accounts.ErrInUse) {
+	if err := verifyAccountWritersProvenStopped(m.w.stateDir, source); !errors.Is(err, accounts.ErrInUse) {
 		t.Fatal("dead probe without contained proof permitted transfer", err)
 	}
 	writeAccountProofFixture(t, filepath.Join(dir, accountcheck.StoppedFile), accountcheck.Stopped{SchemaVersion: accountcheck.SchemaVersion, Ref: ref, WritersStopped: true})
-	if err := m.verifyStopped(source); err != nil {
+	if err := verifyAccountWritersProvenStopped(m.w.stateDir, source); err != nil {
 		t.Fatal("exact stopped check custody refused", err)
 	}
 }
 
-func TestAccountClaimedRecoveryReloadRequiresStoppedWriterProofBeforeHistory(t *testing.T) {
+func TestAccountClaimedRecoveryReloadRequiresDeadWritersBeforeHistory(t *testing.T) {
 	m, source, native := accountWriterProofFixture(t)
 	m.stopProof = m.verifyStopped
 	binding := *source.AccountBinding
@@ -162,6 +163,13 @@ func TestAccountClaimedRecoveryReloadRequiresStoppedWriterProofBeforeHistory(t *
 		called++
 		return manifest, nil
 	}
+	start, err := procstart.StartTime(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := native
+	live.PID, live.PGID, live.StartTime = os.Getpid(), os.Getpid(), start
+	writeAccountProofFixture(t, filepath.Join(m.w.stateDir, source.ID, shim.NativeProcessFile), live)
 	loaded, err := loadAuthWatchStateChecked(m.w.stateDir)
 	if err != nil {
 		t.Fatal(err)
@@ -169,15 +177,15 @@ func TestAccountClaimedRecoveryReloadRequiresStoppedWriterProofBeforeHistory(t *
 	m.w.state = loaded
 	m.stepRecord(loaded.AccountRotations[source.ID])
 	if called != 0 || !m.w.state.Killed[source.ID] || m.w.state.AccountRotations[source.ID].LastError != "native-writer-death-unconfirmed" {
-		t.Fatal("restart invented death from missing PID or lost issued stop authority")
+		t.Fatal("restart invented death of a live writer or lost issued stop authority")
 	}
-	writeAccountProofFixture(t, filepath.Join(m.w.stateDir, source.ID, shim.NativeStoppedFile), shim.NativeStoppedInfo{SchemaVersion: shim.ManagedWriterSchemaVersion, Native: native, WritersStopped: true})
-	// Existing claimed authority can reconcile once the exact shim proof arrives.
+	// Once every recorded writer is dead, no stopped proof is needed.
+	writeAccountProofFixture(t, filepath.Join(m.w.stateDir, source.ID, shim.NativeProcessFile), native)
 	if err := m.persist(rec); err != nil {
 		t.Fatal(err)
 	}
 	m.stepRecord(rec)
 	if called != 1 || m.w.state.AccountRotations[source.ID].State != accountStopped {
-		t.Fatal("contained positive control did not reach history preflight")
+		t.Fatal("dead writers without a stopped proof did not reach history preflight")
 	}
 }

@@ -67,8 +67,39 @@ func TestCodexContextRefreshInterruptedCommitRetriesWithoutLosingHistory(t *test
 	}
 }
 
-func TestCodexContextPendingRefreshHoldsUnrelatedWritesAndOwnerDrift(t *testing.T) {
-	for _, drift := range []string{"private-config", "owner-config", "foreign-alias"} {
+// A native private config write during a pending refresh is accepted drift and
+// the refresh completes (owner wins); owner drift and foreign aliases still hold.
+func TestCodexContextPendingRefreshHoldsOwnerDriftAndForeignAliases(t *testing.T) {
+	t.Run("private-config", func(t *testing.T) {
+		f := codexContextFixture(t)
+		old, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease)
+		if err != nil {
+			t.Fatal(err)
+		}
+		put(t, filepath.Join(f.source, "config.toml"), "model_reasoning_effort=\"medium\"\n")
+		nextProfile := filepath.Join(filepath.Dir(f.candidate), "next-cohort")
+		if err := os.Mkdir(nextProfile, 0700); err != nil {
+			t.Fatal(err)
+		}
+		next, err := PrepareCodexContext(nextProfile, f.cwd, f.env, codexContextLease)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writeCodexContextUpdate(f.candidate, codexContextUpdate{1, old, next}); err != nil {
+			t.Fatal(err)
+		}
+		put(t, filepath.Join(f.candidate, "config.toml"), "model_reasoning_effort=\"low\"\n")
+		if refreshed, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease, true); err != nil || refreshed.GlobalGeneration != next.GlobalGeneration {
+			t.Fatal("pending refresh refused a native private write:", err)
+		}
+		if settings := readNativeCodexFixtureSettings(t, filepath.Join(f.candidate, "config.toml")); settings["model_reasoning_effort"] != "medium" {
+			t.Fatal("pending refresh did not let the owner win")
+		}
+		if _, err := os.Lstat(filepath.Join(f.candidate, CodexContextUpdateMarker)); !os.IsNotExist(err) {
+			t.Fatal("completed intent remains")
+		}
+	})
+	for _, drift := range []string{"owner-config", "foreign-alias"} {
 		t.Run(drift, func(t *testing.T) {
 			f := codexContextFixture(t)
 			old, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease)
@@ -88,8 +119,6 @@ func TestCodexContextPendingRefreshHoldsUnrelatedWritesAndOwnerDrift(t *testing.
 				t.Fatal(err)
 			}
 			switch drift {
-			case "private-config":
-				put(t, filepath.Join(f.candidate, "config.toml"), "model_reasoning_effort=\"low\"\n")
 			case "owner-config":
 				put(t, filepath.Join(f.source, "config.toml"), "model_reasoning_effort=\"low\"\n")
 			case "foreign-alias":

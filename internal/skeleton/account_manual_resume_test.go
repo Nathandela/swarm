@@ -218,7 +218,8 @@ func TestAccountManualResumeCustody(t *testing.T) {
 				api.accounts = &accountManager{store: f.manager.store, stateRoot: f.manager.stateRoot, unavailable: protocol.ErrAccountsUnavailable}
 			}
 			_, err := api.Launch(f.request())
-			allowed := kind == "clean" || kind == "clean-zero" || kind == "unmanaged"
+			// Dead writers without a stopped proof (a killed shim) resume too.
+			allowed := kind == "clean" || kind == "clean-zero" || kind == "unmanaged" || kind == "dead-missing"
 			if allowed {
 				if !f.finalized || !errors.Is(err, f.stop) {
 					t.Fatalf("clean/unmanaged resume did not reach real launch preparation: %v", err)
@@ -230,7 +231,7 @@ func TestAccountManualResumeCustody(t *testing.T) {
 				if err == nil || f.finalized {
 					t.Fatal("unknown writer custody reached new child preparation")
 				}
-				if kind == "lost-live" || kind == "older-live" || kind == "dead-missing" {
+				if kind == "lost-live" || kind == "older-live" {
 					if !errors.Is(err, accounts.ErrInUse) {
 						t.Fatalf("writer custody refusal was not preserved: %v", err)
 					}
