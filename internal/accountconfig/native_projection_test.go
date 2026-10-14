@@ -109,7 +109,7 @@ func TestNativeProjectionRejectsIncompleteOrCrossProviderProvenance(t *testing.T
 	}
 }
 
-// TestNativeProjectionKeepsTheOwnerSandboxNetworkOverride pins ADR-028 Amendment 1: the managed Codex
+// TestNativeProjectionKeepsTheOwnerSandboxNetworkOverride pins ADR-028 amendment of 2026-10-14: the managed Codex
 // CLI keeps the sandbox network override from the launch argv, unchanged, ahead of the backend args.
 func TestNativeProjectionKeepsTheOwnerSandboxNetworkOverride(t *testing.T) {
 	f := fixture(t, "codex")

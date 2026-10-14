@@ -182,7 +182,7 @@ type accountExecRecord struct {
 }
 
 func TestAccountLaunchActualCLIAndBackendShareBoundProfileAndWorktree(t *testing.T) {
-	// The owner's native sandbox network policy is carried to managed Codex CLI and backend (ADR-028 Amendment 1).
+	// The owner's native sandbox network policy is carried to managed Codex CLI and backend (ADR-028 amendment of 2026-10-14).
 	const networkOverride = "sandbox_workspace_write.network_access=true"
 	buildBinaries(t)
 	python, err := exec.LookPath("python3")
