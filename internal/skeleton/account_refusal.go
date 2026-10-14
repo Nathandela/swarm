@@ -44,29 +44,13 @@ func (e *noAccountError) Error() string {
 
 func (e *noAccountError) Unwrap() error { return errAccountLaunch }
 
-// launchContextConflicts are refusals of the launch itself (cwd, argv, environment,
-// CLI version): every account would refuse them the same way, so none is retried.
-var launchContextConflicts = map[accountconfig.Conflict]bool{
-	"unsafe-project-directory":               true,
-	"invalid-launch-context":                 true,
-	"provider-or-profile-selector":           true,
-	"configuration-origin-not-characterized": true,
-	"invalid-environment":                    true,
-	"unsupported-launch-selector":            true,
-	"invalid-codex-launch-setting":           true,
-	"native-version-not-characterized":       true,
-}
-
-// accountRefusalCode is the reason code of a failure another account may not share,
-// or "" when the failure is not specific to the bound account.
+// accountRefusalCode is the reason code of a failure that belongs to the bound
+// account alone, or "" for every other failure, which another account would share
+// (cwd, project, argv, environment, CLI) and so is never retried.
 func accountRefusalCode(err error) string {
-	var conflict accountconfig.Conflict
 	switch {
-	case errors.As(err, &conflict):
-		if launchContextConflicts[conflict] {
-			return ""
-		}
-		return string(conflict)
+	case errors.Is(err, accountconfig.Conflict("configuration-writer-active")):
+		return "configuration-writer-active"
 	case errors.Is(err, accountcheck.ErrUnavailable):
 		return "configuration-busy"
 	case errors.Is(err, accountcheck.ErrCustodyUnknown):

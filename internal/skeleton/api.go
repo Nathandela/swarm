@@ -1143,18 +1143,20 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// A3: an account-specific refusal is logged and the next eligible account is
 	// tried; a launch failure every account would share is returned as is.
 	var tried []accountRefusal
+	var lastErr error
 	for {
 		resolved := composed
 		if err := a.bindAccountLaunch(&resolved, tried...); err != nil {
 			return persist.Meta{}, err
 		}
 		if resolved.AccountBinding != nil && refusedAccount(tried, resolved.AccountBinding.AccountID) {
-			return persist.Meta{}, &noAccountError{provider: resolved.AgentType, refusals: tried}
+			return persist.Meta{}, lastErr // a frozen binding cannot move to another account
 		}
 		m, err := a.launchResolved(resolved)
 		if err == nil || resolved.AccountBinding == nil {
 			return m, err
 		}
+		lastErr = err
 		refusal := a.accountRefusal(*resolved.AccountBinding, err)
 		log.Printf("accounts: %s launch %q refused on account %s (%q): %v", resolved.AgentType, resolved.Name, refusal.id, refusal.label, err)
 		if refusal.code == "" {

@@ -456,7 +456,7 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 			m.bannerText += " (" + label + ")"
 		}
 		m.bannerExpiry = time.Now().Add(bannerDuration)
-		return bannerTick()
+		return bannerTick(bannerDuration)
 	}
 	return nil
 }
@@ -466,8 +466,8 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 type bannerExpireMsg struct{}
 
 // bannerTick schedules the banner's auto-expiry re-emit.
-func bannerTick() tea.Cmd {
-	return tea.Tick(bannerDuration, func(time.Time) tea.Msg { return bannerExpireMsg{} })
+func bannerTick(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return bannerExpireMsg{} })
 }
 
 // bannerMaxLines bounds the banner's rows: a launch refusal naming several accounts
@@ -929,8 +929,10 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int, relocate bool) 
 // to surface a launch/resume failure to the user rather than discarding it.
 func (m *generalModel) setBanner(text string) tea.Cmd {
 	m.bannerText = text
-	m.bannerExpiry = time.Now().Add(bannerDuration)
-	return bannerTick()
+	// One period per wrapped row, so a multi-row refusal stays readable.
+	d := bannerDuration * time.Duration(max(1, len(m.bannerLines())))
+	m.bannerExpiry = time.Now().Add(d)
+	return bannerTick(d)
 }
 
 func deleteCmd(c Client, id string) tea.Cmd {
