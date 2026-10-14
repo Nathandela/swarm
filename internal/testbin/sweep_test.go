@@ -40,3 +40,38 @@ func TestKillProcessesOf_KillsADetachedSurvivorOfATestBinary(t *testing.T) {
 		t.Fatal("a process running a test-built binary survived the sweep")
 	}
 }
+
+// TestKillProcessesOf_MatchesABinaryBuiltUnderASymlinkedDir pins the sweep when TMPDIR is a
+// symlink: /proc/<pid>/exe names the resolved path, so an unresolved build path matched nothing
+// and the sweep was a silent no-op.
+func TestKillProcessesOf_MatchesABinaryBuiltUnderASymlinkedDir(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "tmp")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("/bin/sleep")
+	if err != nil {
+		t.Skip("no /bin/sleep")
+	}
+	exe := filepath.Join(link, "swarm")
+	if err := os.WriteFile(exe, raw, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "600")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	KillProcessesOf(exe)
+
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a binary built under a symlinked dir survived the sweep")
+	}
+}
