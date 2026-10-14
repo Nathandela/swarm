@@ -64,7 +64,13 @@ func driftCodexModelWrite(t *testing.T, profile string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	put(t, path, "model = \"gpt-picked-in-tui\"\nmodel_reasoning_effort = \"xhigh\"\n"+string(raw))
+	var lines []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "model") {
+			lines = append(lines, line)
+		}
+	}
+	put(t, path, "model = \"gpt-picked-in-tui\"\nmodel_reasoning_effort = \"xhigh\"\n"+strings.Join(lines, "\n"))
 }
 
 func TestPrepareNative_ClaudeProfileSettingsDriftStillLaunches(t *testing.T) {
