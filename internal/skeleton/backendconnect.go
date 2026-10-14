@@ -481,7 +481,9 @@ func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, e
 		}
 		// A source rollout that is really gone never appears: its retry is bounded by the join
 		// deadline, while the recorded `no rollout found` race keeps the session's life.
-		if !isMissingRollout(err) || (isMissingSourceRollout(err) && time.Since(start) > d.backendDeadline()) {
+		sourceGone := isMissingSourceRollout(err) && time.Since(start) > d.backendDeadline()
+		retry := isMissingRollout(err) && !sourceGone
+		if !retry {
 			log.Printf("skeleton: session %s can never subscribe to thread %s: %v", id, threadID, err)
 			reason := "the thread subscription could not be established: " + err.Error()
 			if expectedFeed == "" {

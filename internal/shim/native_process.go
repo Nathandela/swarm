@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"time"
 
@@ -61,13 +62,17 @@ func (s *managedNativeScope) reapWhileRunning(keep ...int) {
 	s.stopReap = make(chan struct{})
 	go func(stop <-chan struct{}) {
 		tick := time.NewTicker(managedReapInterval)
+		warned := false
 		defer tick.Stop()
 		for {
 			select {
 			case <-stop:
 				return
 			case <-tick.C:
-				processcontain.ReapAdoptedZombies(keep...)
+				if !processcontain.ReapAdoptedZombies(keep...) && !warned {
+					warned = true
+					log.Printf("shim: /proc/self/task/*/children is unavailable; adopted orphans are reaped only when the session ends")
+				}
 			}
 		}
 	}(s.stopReap)

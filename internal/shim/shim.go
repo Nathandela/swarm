@@ -396,8 +396,8 @@ func Run(cfg Config) (agentExit int, err error) {
 	}
 
 	nativeRecordErr := managed.record(cmd.Process.Pid, backend)
-	if backend != nil {
-		managed.reapWhileRunning(cmd.Process.Pid, backend.cmd.Process.Pid)
+	if backendWatch != nil { // a contained backend is already reaped; its pid may be reused
+		managed.reapWhileRunning(cmd.Process.Pid, backendWatch.cmd.Process.Pid)
 	} else {
 		managed.reapWhileRunning(cmd.Process.Pid)
 	}
