@@ -79,7 +79,9 @@ func TestMain(m *testing.M) {
 		accountFixtureCodex()
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	testBins.Sweep() // shims outlive their daemon by design: end every session a test left running
+	os.Exit(code)
 }
 
 func accountFixtureCodex() {

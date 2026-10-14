@@ -325,7 +325,7 @@ number of interaction records a reseed can carry before it exceeds that same adm
 **halved** — roughly 96 maximal items to roughly 48. IS-CAP-4 already requires the events half to
 be bounded at "a record count that fits" and **nothing implements that bound**:
 `remotegw.Gateway.Resync` seals every record above the phone's cursor into one frame, over a
-journal that production opens with unbounded retention (`journal.Open`, `Options{}`). The gap is
+journal that production then opened with unbounded retention (bounded since ADR-014 A12). The gap is
 therefore pre-existing and orthogonal to this ruling, which makes it twice as easy to reach rather
 than creating it. Carried as an open point against IS-CAP-4, not against this amendment.
 

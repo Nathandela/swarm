@@ -7,7 +7,7 @@ import (
 )
 
 func TestJournal_SubscribeFromReturnsAtomicBacklogThenLiveBoundary(t *testing.T) {
-	j, err := Open(t.TempDir())
+	j, err := Open(t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestJournal_SubscribeFromReturnsAtomicBacklogThenLiveBoundary(t *testing.T)
 }
 
 func TestJournal_OverflowDisconnectsAndReplayRecoversDroppedTail(t *testing.T) {
-	j, err := Open(t.TempDir())
+	j, err := Open(t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

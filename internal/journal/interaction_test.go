@@ -34,7 +34,7 @@ const interactionItemLine = `{"v":1,"item_id":"01JBQ4Z0X9M6T7NPKV2RQF8SJD","ts":
 
 func TestInteractionRecordCarriesTheItemInItsPayload(t *testing.T) {
 	dir := t.TempDir()
-	j, err := Open(dir)
+	j, err := Open(dir, Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestInteractionRecordCarriesTheItemInItsPayload(t *testing.T) {
 
 	// Reopen: the assertion must be about what a restarted daemon reads off disk, not
 	// about the in-memory mirror it was just handed.
-	j2, err := Open(dir)
+	j2, err := Open(dir, Options{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

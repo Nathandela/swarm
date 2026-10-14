@@ -9,6 +9,7 @@ func Running(int) bool                              { return false }
 func Descendants(int) ([]Identity, error)           { return nil, ErrUnsupported }
 func ContainDescendants(int) error                  { return ErrUnsupported }
 func ReapOrphans()                                  {}
+func ReapAdoptedZombies(...int) bool                { return false }
 func ContainAndReap() error                         { return ErrUnsupported }
 func SignalIdentity(Identity, syscall.Signal) error { return ErrUnsupported }
 
