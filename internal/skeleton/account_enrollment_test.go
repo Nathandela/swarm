@@ -21,6 +21,7 @@ func enrollmentRig(t *testing.T, provider string) (*authWatcher, *authFake, *acc
 	if _, err := manager.store.SetEnabled(accountTestRegistry(t, manager).Revision, provider, true); err != nil {
 		t.Fatal(err)
 	}
+	accountTestPut(t, filepath.Join(manager.stateRoot, "account-onboarding.json"), []byte(fmt.Sprintf(`{%q:true}`, provider)))
 	home, cwd, env := accountTestLaunchEnvironment(t, manager.stateRoot)
 	native := filepath.Join(manager.stateRoot, "bin", provider)
 	version := "codex-cli 0.160.0"
@@ -94,6 +95,28 @@ func TestAccountEnrollmentUsesExistingRecyclerForBothProviders(t *testing.T) {
 			child := f.sessions[rec.ReplacementID]
 			if child.ConversationID != source.ConversationID || child.AccountBinding == nil || *child.AccountBinding != rec.Enrollment.Binding || f.sessions[source.ID].AccountBinding != nil {
 				t.Fatal("enrollment lost conversation or changed old binding")
+			}
+		})
+	}
+}
+
+// Rotation alone never onboards running unmanaged discussions: the separate
+// daemon-side onboarding switch must be on for that provider (absent = off).
+func TestAccountEnrollmentRequiresTheOnboardingSwitch(t *testing.T) {
+	for name, raw := range map[string]string{"absent": "", "other-provider": `{"claude":true}`, "off": `{"codex":false}`, "malformed": `{"codex":`, "on": `{"codex":true}`} {
+		t.Run(name, func(t *testing.T) {
+			w, f, m, source := enrollmentRig(t, "codex")
+			path := filepath.Join(m.stateRoot, "account-onboarding.json")
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if raw != "" {
+				accountTestPut(t, path, []byte(raw))
+			}
+			w.discoverAccountEnrollments()
+			queued := w.state.CLI[source.ID].Enrollment != nil
+			if queued != (name == "on") || len(f.killed) != 0 {
+				t.Fatalf("onboarding %s: queued=%v, rotation is on", name, queued)
 			}
 		})
 	}
