@@ -1131,6 +1131,14 @@ never sleep, because its PTY writer lock is shared with the VT emulator's DSR/CP
 pump. A message sleeps at most once, so that hold is bounded by the gap plus two writes
 however long or newline-heavy the text is.
 
+**The text is framed as a paste when the agent asked for one** (ADR-010 Amendment 9). The
+daemon hands the text frame to the shim's `paste_input` op; the shim writes it inside
+bracketed-paste markers (`CSI 200 ~` ... `CSI 201 ~`) when the agent has enabled DECSET
+2004, and verbatim otherwise. A CLI that guesses pastes from timing (codex) would otherwise
+read a CR arriving during a long burst as a newline and leave the message unsent. Markers
+inside the text are removed first. The CR stays outside the markers, after the gap. A key
+message is never pasted. A shim that predates the op gets the text as ordinary input.
+
 That serialization is held across both frames, so the message is atomic against
 **owner-tier** lease input — a concurrent owner-tier controller's keystrokes land wholly
 before the message or wholly after it, never between the text and its CR (invariant S2).

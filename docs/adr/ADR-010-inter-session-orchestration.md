@@ -1,6 +1,6 @@
 # ADR-010: Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs
 
-**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6), 2026-09-02 (Amendment 7), 2026-09-02 (Amendment 8), 2026-10-14 (Amendment 5 F1 addendum))
+**Status**: Accepted (amended 2026-10-14 (Amendment 9); 2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6), 2026-09-02 (Amendment 7), 2026-09-02 (Amendment 8), 2026-10-14 (Amendment 5 F1 addendum))
 **Date**: 2026-07-24
 
 ## Context
@@ -845,3 +845,54 @@ sink may restore authority for future sends through the existing sink-proof tran
 - Large existing conversations establish the live stream without weakening the 8 MiB allocation
   boundary or treating provider history as newly captured Swarm history.
 - Evidence: `docs/verification/adr010/amendment8-red.md`.
+
+## Amendment 9 (2026-10-14): a message's text is framed as a bracketed paste when the agent asked for one
+
+Amendment 1 A2 delivers a text message as one text frame, one `submitframe.Gap`, then a lone CR.
+That rule was characterized against Claude Code, which reads a write's co-arrival as a paste and
+is satisfied once the CR travels alone. It does not hold for codex.
+
+### J1. The defect: codex guesses pastes from timing and swallows the submit
+
+codex (measured on 0.162.1) reads its input key by key and treats a fast burst of characters as
+a paste it is still assembling; a CR that arrives while it is still assembling is inserted as a
+newline, and the message sits unsent in the composer. Driving a real, isolated codex with the
+exact A2 sequence, 15 characters submitted and 300 did not; 900 characters did not submit at a
+500 ms gap and did at 1 s. Production sessions showed the same: steering messages between two
+codex sessions stayed in the recipient's composer until a separate `swarm send --key enter`.
+Raising the gap would only move the threshold, since the time codex needs grows with the text.
+
+### J2. The shim frames the text, because only the shim knows the mode
+
+The same 900 and 3000 characters submitted at the unchanged 150 ms gap once they arrived inside
+bracketed-paste markers (`CSI 200 ~` ... `CSI 201 ~`): the markers tell the CLI where the paste
+ends, so nothing is left to guess when the CR arrives. Markers are only meaningful to a program
+that enabled DECSET 2004; any other program would print them. The shim's emulator parses every
+byte the agent writes, so it records the mode (via the emulator's mode callbacks, which a full
+reset also drives), and the shim decides:
+
+- A new shim op, `paste_input`, carries one message's text. The shim writes it inside the markers
+  when the agent enabled bracketed paste and verbatim otherwise, and tracks it as typed input
+  (a draft). `send_input` sends a text message's first frame through it; the CR remains its own
+  frame after the gap, sent as before. Keys are never pasted.
+- The shim's submit transaction (the composer lane) frames its text the same way; its CR still
+  follows the gap outside the markers.
+- A marker inside the text is removed before framing, as terminals do, so the text cannot end
+  the paste early and have its tail read as keys.
+- The mode is a lock-free flag. The shim's PTY writer holds its lock across the submit gap, and
+  the emulator's reply pump waits on that writer while `Feed` holds the emulator's lock, so the
+  writer must never wait on the emulator.
+
+The capability is negotiated at hello (`paste_input`, without bumping the wire version), on the
+`control_input` precedent: a new daemon facing an old shim degrades to today's raw write, which
+a shim restart resolves.
+
+### Consequences
+
+- codex sessions receive `swarm send --text` messages of any length up to the 4096-byte bound as
+  one submitted message; Claude Code, which also enables bracketed paste, still submits them
+  (short, long, and multi-line messages were checked against both CLIs).
+- Multi-line text is one paste: its newlines are content in every CLI that enables the mode,
+  which is what A2's paste semantics already intended.
+- Evidence: `docs/verification/adr010/amendment9-red.md`.
+

@@ -97,6 +97,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Storage cleanup inventory](verification/storage-cleanup-inventory.md) — measured Mac/VM state, live-writer limits, missing recovery destination, and explicit cleanup boundaries
 - [Discussion deletion](verification/discussion-deletion.md) — remove retained attempts and owned worktrees, retry failed cleanup, and preserve lifecycle ordering
 - [Provider login qualification](verification/provider-logins.md) — native feasibility evidence and open integrated release gates
+- [Bracketed-paste message framing](verification/adr010/amendment9-red.md) — why `swarm send` text did not submit in codex, the real-CLI measurements, and the TDD record for ADR-010 Amendment 9
 - [Codex minimum version and migration readiness](verification/codex-minimum-version.md) — forward version admission, installed native sign-in checks and current bulk-migration limits
 - [Phase A verification](verification/phase-a.md) — Codex model scan, backend/shim resilience, resume history and journal retention (v0.17.8)
 - [v0.17.9 verification](verification/v0179.md) — CLI refresh retry bounds, board elapsed, SubagentStop ordering and status persist retry

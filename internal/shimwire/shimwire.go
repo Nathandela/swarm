@@ -92,6 +92,16 @@ const (
 	// tracker used by the next TypeSubmit. The distinction is provenance, not key value: an
 	// owner's identical Escape still travels through TDataIn and is tracked there.
 	TypeControlInput = "control_input"
+	// TypePasteInput is a daemon->shim frame carrying one message's TEXT as a paste: the
+	// shim writes it inside bracketed-paste markers when the agent enabled DECSET 2004 and
+	// verbatim otherwise, and tracks it as typed input (ADR-010 Amendment 9).
+	//
+	// WHY THE SHIM FRAMES IT. A CLI that reads input key by key (codex) cannot tell a pasted
+	// message from typing except by timing; a carriage return that arrives while it is still
+	// assembling a long burst is inserted as a newline instead of submitting. The markers end
+	// that guess. Only the shim's emulator knows whether the agent asked for them, and
+	// markers sent to an agent that did not would be printed as text.
+	TypePasteInput = "paste_input"
 )
 
 // RefusedInputBusy is the one STABLE reason token a TypeSubmitResult carries: the shim
@@ -155,13 +165,18 @@ type Control struct {
 	// it, so a new daemon sends its control keys as ordinary input (G-D) -- today's behaviour,
 	// disclosed.
 	ControlInput bool `json:"control_input,omitempty"` // hello (shim reply)
+	// PasteInput is an OPTIONAL hello capability advertised by the SHIM: it honours
+	// TypePasteInput. An old shim never sets it, so a new daemon sends the text as ordinary
+	// input (G-D) -- today's behaviour, disclosed.
+	PasteInput bool `json:"paste_input,omitempty"` // hello (shim reply)
 	// Keys rides a TypeControlInput: the daemon-authored bytes, written verbatim. They are
 	// the adapters' recorded control sequences (ESC, a digit), which JSON carries exactly.
 	Keys string `json:"keys,omitempty"` // control_input
-	// Text rides a TypeSubmit: the whole of one message, without its carriage return.
+	// Text rides a TypeSubmit or a TypePasteInput: the whole of one message, without its
+	// carriage return.
 	// The shim adds the return itself, because the point of the verb is that nothing
 	// may land between the two.
-	Text string `json:"text,omitempty"` // submit
+	Text string `json:"text,omitempty"` // submit, paste_input
 	// Refused rides a TypeSubmitResult and is EMPTY ON SUCCESS. A non-empty reason
 	// means nothing was written.
 	Refused string `json:"refused,omitempty"` // submit_result
@@ -181,6 +196,7 @@ type Caps struct {
 	SnapshotOnly         bool
 	SubmitTransaction    bool
 	ControlInput         bool
+	PasteInput          bool
 }
 
 // Caps extracts the capability fields from a hello Control.
@@ -193,6 +209,7 @@ func (c Control) Caps() Caps {
 		SnapshotOnly:         c.SnapshotOnly,
 		SubmitTransaction:    c.SubmitTransaction,
 		ControlInput:         c.ControlInput,
+		PasteInput:          c.PasteInput,
 	}
 }
 
