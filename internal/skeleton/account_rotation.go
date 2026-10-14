@@ -960,7 +960,7 @@ func verifyAccountWritersStopped(stateDir string, meta persist.Meta) error {
 			return accounts.ErrInUse
 		}
 	}
-	if accountProcessAlive(native.ShimPID, native.ShimStartTime) || accountProcessAlive(native.PID, native.StartTime) || accountProcessAlive(native.BackendPID, native.BackendStartTime) {
+	if accountProcessAlive(meta.ShimPID, meta.ShimStartTime) || accountProcessAlive(native.ShimPID, native.ShimStartTime) || accountProcessAlive(native.PID, native.StartTime) || accountProcessAlive(native.BackendPID, native.BackendStartTime) {
 		return accounts.ErrInUse
 	}
 	groups := []int{native.PGID, native.BackendPID}
