@@ -23,7 +23,8 @@ var errAccountLaunch = errors.New("accounts: private account or configuration is
 
 // This seam covers every assembled launch. Existing discussions retain their
 // frozen account; enrollment and pool toggles never rebind a running process.
-func (a *coreAPI) bindAccountLaunch(spec *daemon.LaunchSpec) error {
+// tried names accounts that already refused this launch; selection skips them.
+func (a *coreAPI) bindAccountLaunch(spec *daemon.LaunchSpec, tried ...accountRefusal) error {
 	if spec.AgentType != "codex" && spec.AgentType != "claude" {
 		if spec.AccountBinding != nil {
 			return errAccountLaunch
@@ -67,9 +68,13 @@ func (a *coreAPI) bindAccountLaunch(spec *daemon.LaunchSpec) error {
 				counts[m.AccountBinding.AccountID]++
 			}
 		}
-		selection, err := accounts.SelectInitial(registry, accounts.SelectionRequest{Provider: spec.AgentType, Model: spec.Options["model"], ConfigurationGeneration: 1, ActiveCounts: counts}, time.Now())
+		for _, refusal := range tried {
+			delete(registry.Accounts, refusal.id)
+		}
+		now := time.Now()
+		selection, err := accounts.SelectInitial(registry, accounts.SelectionRequest{Provider: spec.AgentType, Model: spec.Options["model"], ConfigurationGeneration: 1, ActiveCounts: counts}, now)
 		if err != nil {
-			return errAccountLaunch
+			return noAccountLeft(spec.AgentType, registry, tried, now)
 		}
 		binding := selection.Binding
 		spec.AccountBinding = &binding

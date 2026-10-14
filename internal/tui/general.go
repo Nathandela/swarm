@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
@@ -455,7 +456,7 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 			m.bannerText += " (" + label + ")"
 		}
 		m.bannerExpiry = time.Now().Add(bannerDuration)
-		return bannerTick()
+		return bannerTick(bannerDuration)
 	}
 	return nil
 }
@@ -465,20 +466,28 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 type bannerExpireMsg struct{}
 
 // bannerTick schedules the banner's auto-expiry re-emit.
-func bannerTick() tea.Cmd {
-	return tea.Tick(bannerDuration, func(time.Time) tea.Msg { return bannerExpireMsg{} })
+func bannerTick(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return bannerExpireMsg{} })
 }
 
-// bannerLine renders the banner until Update handles its expiry.
-func (m generalModel) bannerLine() string {
+// bannerMaxLines bounds the banner's rows: a launch refusal naming several accounts
+// and their remedies wraps instead of being clipped to one row (A4).
+const bannerMaxLines = 3
+
+// bannerLines renders the banner until Update handles its expiry.
+func (m generalModel) bannerLines() []string {
 	if m.bannerText == "" {
-		return ""
+		return nil
 	}
-	text := "● " + m.bannerText
+	lines := []string{"● " + m.bannerText}
 	if m.width > 2 {
-		text = clampCells(text, m.width-2)
+		lines = strings.Split(ansi.Wrap(lines[0], m.width-2, ""), "\n")
+		lines = lines[:min(len(lines), bannerMaxLines)]
 	}
-	return "  " + styleTitle.Render(text)
+	for i := range lines {
+		lines[i] = "  " + styleTitle.Render(lines[i])
+	}
+	return lines
 }
 
 // bannerGroup reports whether a transition into g raises a notification banner.
@@ -920,8 +929,10 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int, relocate bool) 
 // to surface a launch/resume failure to the user rather than discarding it.
 func (m *generalModel) setBanner(text string) tea.Cmd {
 	m.bannerText = text
-	m.bannerExpiry = time.Now().Add(bannerDuration)
-	return bannerTick()
+	// One period per wrapped row, so a multi-row refusal stays readable.
+	d := bannerDuration * time.Duration(max(1, len(m.bannerLines())))
+	m.bannerExpiry = time.Now().Add(d)
+	return bannerTick(d)
 }
 
 func deleteCmd(c Client, id string) tea.Cmd {
@@ -944,7 +955,8 @@ const (
 )
 
 // boardLine is one line of the board. section is set on a section header; session
-// and idx (its flat display index, the selection's coordinate) on a session row.
+// and idx (its flat display index, the selection's coordinate) on a session row; idx
+// on a banner line is its row within the wrapped banner.
 type boardLine struct {
 	kind    boardLineKind
 	section string
@@ -955,12 +967,14 @@ type boardLine struct {
 // layout visits the board's lines top to bottom, one per screen row. It is the one
 // description of the board's shape: view renders from it and rowAt hit-tests
 // against it (ADR-029), so a click can never land on a different row than the one
-// drawn there. banner says whether the notification line is showing.
-func (m generalModel) layout(banner bool, visit func(boardLine)) {
+// drawn there. banner is how many notification lines are showing.
+func (m generalModel) layout(banner int, visit func(boardLine)) {
 	visit(boardLine{kind: lineHeader})
 	visit(boardLine{kind: lineSpacer})
-	if banner {
-		visit(boardLine{kind: lineBanner})
+	if banner > 0 {
+		for i := 0; i < banner; i++ {
+			visit(boardLine{kind: lineBanner, idx: i})
+		}
 		visit(boardLine{kind: lineSpacer})
 	}
 	// idx walks the flat display order so it lines up with the selection index.
@@ -980,13 +994,13 @@ func (m generalModel) layout(banner bool, visit func(boardLine)) {
 
 func (m generalModel) view() string {
 	var b strings.Builder
-	banner := m.bannerLine()
-	m.layout(banner != "", func(l boardLine) {
+	banner := m.bannerLines()
+	m.layout(len(banner), func(l boardLine) {
 		switch l.kind {
 		case lineHeader:
 			b.WriteString(m.header())
 		case lineBanner:
-			b.WriteString(banner)
+			b.WriteString(banner[l.idx])
 		case lineSection:
 			b.WriteString("  " + m.sectionHeader(l.section))
 		case lineSession:
@@ -1022,7 +1036,7 @@ func (m generalModel) rowAt(y int) (s protocol.SessionView, idx int, ok bool) {
 		return protocol.SessionView{}, 0, false
 	}
 	line := 0
-	m.layout(m.bannerLine() != "", func(l boardLine) {
+	m.layout(len(m.bannerLines()), func(l boardLine) {
 		if line == y && l.kind == lineSession {
 			s, idx, ok = l.session, l.idx, true
 		}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -1169,6 +1170,9 @@ type clientConn struct {
 	// same discipline as helloed/caps). Background writers (eventWriter, journalWriter,
 	// the peek and pairing goroutines) use writeControl directly and never these helpers.
 	opID string
+	// launch is the request of the launch control being handled, nil for any other op;
+	// logRefusal names it. Owned by the serve goroutine like opID.
+	launch *LaunchReq
 
 	writeMu sync.Mutex
 
@@ -1267,6 +1271,10 @@ func (cc *clientConn) handleControl(c Control) {
 	// Every reply to THIS control -- success or refusal, from any handler -- echoes the
 	// request's operation_id (see clientConn.opID).
 	cc.opID = c.OperationID
+	cc.launch = nil
+	if c.Op == OpLaunch {
+		cc.launch = c.Launch
+	}
 	if c.Op == OpHello {
 		cc.handleHello(c)
 		return
@@ -3520,12 +3528,22 @@ func (cc *clientConn) writeFrameDeadline(typ wire.Type, payload []byte) error {
 // as much as the success one: a phone with two ops in flight that receives an untagged
 // refusal can neither retry the right op nor mark the right one failed.
 func (cc *clientConn) replyError(msg string) {
+	cc.logRefusal(msg)
 	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, OperationID: cc.opID, Error: msg})
 }
 
 // replyErrorCode is replyError carrying a machine-readable refusal code (R-PROT.7).
 func (cc *clientConn) replyErrorCode(msg string, code ErrorCode) {
+	cc.logRefusal(msg)
 	_ = cc.writeControl(Control{Op: OpError, EndpointID: cc.endpointID, OperationID: cc.opID, Error: msg, ErrorCode: code})
+}
+
+// logRefusal writes a refused launch (handoffs and resumes included) to the daemon log:
+// the client is often a TUI banner, which leaves no other trace (A4).
+func (cc *clientConn) logRefusal(msg string) {
+	if req := cc.launch; req != nil {
+		log.Printf("protocol: launch refused agent=%s name=%q handoff_from=%q resume_from=%q: %s", req.Agent, req.Name, req.Options[OptionHandoffFrom], req.Options[OptionResumeFrom], msg)
+	}
 }
 
 func (cc *clientConn) replyOK(sessionID string) {
