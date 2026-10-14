@@ -15,6 +15,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shim"
 )
 
 type resumeHistoryOutcome uint8
@@ -825,10 +826,23 @@ func parseCodexSessionMeta(line []byte, fileID string, fileTime time.Time, clean
 			}
 		}
 	}
-	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cleanCWD || !withinResumeWindow(created, when) {
+	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cleanCWD || !withinCodexResumeWindow(created, when) {
 		return codexHistoryCandidate{}, false, resumeHistoryFound
 	}
 	return codexHistoryCandidate{id: id, parent: parent}, true, resumeHistoryFound
+}
+
+// earlierDegradedAgentDelay is shim.DegradedAgentDelay under the earlier 20 s + 20 s backend
+// budgets; sessions created then (zmvdy4aj7fs57uru) keep that start offset.
+const earlierDegradedAgentDelay = 40 * time.Second
+
+// withinCodexResumeWindow also accepts the measured window around a DEGRADED start: when the
+// backend never serves, the shim starts the agent only after its degraded delay. No agent start
+// time is recorded, so the window is anchored at each delay the shim has used.
+func withinCodexResumeWindow(created, candidate time.Time) bool {
+	return withinResumeWindow(created, candidate) ||
+		withinResumeWindow(created.Add(earlierDegradedAgentDelay), candidate) ||
+		withinResumeWindow(created.Add(shim.DegradedAgentDelay), candidate)
 }
 
 func withinResumeWindow(created, candidate time.Time) bool {
