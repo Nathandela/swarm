@@ -193,6 +193,11 @@ var ErrInputBusy = errors.New("protocol: the session's input line was not empty"
 // where the shim will count them against the next submit.
 var ErrControlInputUnsupported = errors.New("protocol: this shim advertises no control input")
 
+// ErrPasteInputUnsupported is the honest degrade for a message's text: this shim predates the
+// paste_input frame, so the text travels as ordinary input, unbracketed -- the path a CLI
+// that guesses pastes from timing (codex) may not submit.
+var ErrPasteInputUnsupported = errors.New("protocol: this shim advertises no paste input")
+
 // Submit delivers one whole message through the shim's submit transaction: text and the
 // carriage return that runs it, under one hold of the PTY's only serialized writer.
 func (st *shimStream) Submit(text string) error {
@@ -414,6 +419,21 @@ func (st *shimStream) ControlInput(keys []byte) error {
 		return ErrControlInputUnsupported
 	}
 	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeControlInput, Keys: string(keys)})
+	if err != nil {
+		return err
+	}
+	st.writeMu.Lock()
+	defer st.writeMu.Unlock()
+	return wire.WriteFrame(st.conn, wire.TControl, body)
+}
+
+// PasteInput delivers one message's text on the frame that lets the shim bracket it as a
+// paste (ADR-010 Amendment 9).
+func (st *shimStream) PasteInput(text []byte) error {
+	if !st.caps.PasteInput {
+		return ErrPasteInputUnsupported
+	}
+	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypePasteInput, Text: string(text)})
 	if err != nil {
 		return err
 	}

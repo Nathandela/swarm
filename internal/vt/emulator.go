@@ -23,6 +23,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 
@@ -105,6 +106,12 @@ type Emulator struct {
 	title   string // latest raw window title (OSC 0/2), sanitized on snapshot
 	visible bool   // cursor visibility (DECTCEM), tracked via callback
 
+	// paste is bracketed-paste mode (DECSET 2004), tracked via callback. It is atomic
+	// because the shim's PTY writer reads it WITHOUT taking mu: Feed holds mu while the
+	// reply pump waits on that writer, and the writer holds its own lock across the
+	// submit gap, so a locked read could deadlock the two (ADR-010 Amendment 9).
+	paste atomic.Bool
+
 	reply     replySink     // query-reply destination; discards until SetReplyWriter
 	closing   chan struct{} // closed by Close; isClosed does a lock-free receive on it
 	drainDone chan struct{} // closed when the reply-drain goroutine exits
@@ -170,6 +177,18 @@ func NewEmulator(cols, rows int) *Emulator {
 	e.term.SetCallbacks(xvt.Callbacks{
 		Title:            func(s string) { e.title = s },
 		CursorVisibility: func(v bool) { e.visible = v },
+		// A full reset (RIS) re-applies every mode's default through setMode, so
+		// DisableMode fires for 2004 there too.
+		EnableMode: func(m ansi.Mode) {
+			if m == ansi.ModeBracketedPaste {
+				e.paste.Store(true)
+			}
+		},
+		DisableMode: func(m ansi.Mode) {
+			if m == ansi.ModeBracketedPaste {
+				e.paste.Store(false)
+			}
+		},
 	})
 	// Charm answers device queries (DA, DSR, mode/color reports, ...) by writing
 	// synchronously into an unbuffered reply pipe during Write; an undrained
@@ -481,6 +500,10 @@ func (e *Emulator) Resize(cols, rows int) {
 	e.cols = cols
 	e.rows = rows
 }
+
+// BracketedPaste reports whether the agent has enabled bracketed paste (DECSET 2004), so
+// text written on its behalf can be framed as one paste. It takes no lock; see paste.
+func (e *Emulator) BracketedPaste() bool { return e.paste.Load() }
 
 // Snapshot serializes the current visible screen to versioned JSON. It is
 // deterministic: repeated calls with no intervening Feed return identical bytes.

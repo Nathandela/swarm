@@ -469,6 +469,21 @@ func (s *tapSub) ControlKeys(p []byte) error {
 	return s.t.up.Input(p)
 }
 
+// PasteInput forwards one message's text on the frame that lets the shim bracket it as a paste
+// (ADR-010 Amendment 9). An upstream that proves no such frame gets it as Input: today's
+// behaviour, a disclosed degrade that a daemon restart resolves.
+func (s *tapSub) PasteInput(p []byte) error {
+	if s.mode != readWrite {
+		return nil
+	}
+	if pw, ok := s.t.up.(protocol.PasteInputWriter); ok {
+		if err := pw.PasteInput(p); !errors.Is(err, protocol.ErrPasteInputUnsupported) {
+			return err
+		}
+	}
+	return s.t.up.Input(p)
+}
+
 // Resize forwards to the shared upstream for a readWrite subscriber and updates
 // the daemon mirror in the same tap critical section. The lock serializes resize
 // with pump's frame feed and late-subscriber snapshots, preserving one coherent

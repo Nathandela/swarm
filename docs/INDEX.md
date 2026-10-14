@@ -65,6 +65,7 @@
 - [Personal account pool evidence](verification/account-pools-v0150.md) — implementation verification boundaries and outstanding authenticated release acceptance
 - [Account-pool v0.16.1 hotfix evidence](verification/account-pools-v0161.md) — owner-provided native configuration ingress regression and pending release verification
 - [Account-pool v0.17.6 evidence](verification/account-pools-v0176.md) — qualified Codex runtime, guarded running-discussion enrollment and release acceptance
+- [Bracketed-paste message framing](verification/adr010/amendment9-red.md) — why `swarm send` text did not submit in codex, the real-CLI measurements, and the TDD record for ADR-010 Amendment 9
 - [Codex minimum version and migration readiness](verification/codex-minimum-version.md) — forward version admission, installed native sign-in checks and current bulk-migration limits
 - [Account onboarding hotfix evidence](verification/account-pools-v0151.md) — readable Accounts and sign-in flow, independent review and patch release verification
 - [Audit committee report 001](verification/audit-001-system-spec.md) — the adversarial review that shaped spec Draft 2

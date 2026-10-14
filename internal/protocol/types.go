@@ -359,6 +359,16 @@ type ControlInputWriter interface {
 	ControlInput(keys []byte) error
 }
 
+// PasteInputWriter is the OPTIONAL half of a SessionStream that can deliver one message's
+// TEXT as a paste: the shim frames it in bracketed-paste markers when the agent enabled
+// DECSET 2004, so a CLI that reads keys one by one (codex) knows where the message ends
+// before its submit arrives (ADR-010 Amendment 9). Optional on the same reasoning as
+// ControlInputWriter: an old shim answers ErrPasteInputUnsupported and the caller degrades
+// to Input -- today's behaviour, disclosed.
+type PasteInputWriter interface {
+	PasteInput(text []byte) error
+}
+
 // OperationClaimer is the optional interface a DaemonAPI ALSO implements to claim a
 // remote op's operation_id as single-use through the daemon's durable idempotency store
 // (slice A5-c). handleTakeControl claims the op AFTER authorization: a duplicate
