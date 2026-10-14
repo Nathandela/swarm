@@ -101,9 +101,10 @@ func TestClaudeContextRefusesAuthSettingsAndLeaseDenialBeforeWrites(t *testing.T
 	}
 }
 
-func TestClaudeContextExplicitOwnerRefreshPreservesHistoryAndHoldsPrivateEdits(t *testing.T) {
+// A private native edit no longer holds an explicit owner refresh: owner wins.
+func TestClaudeContextExplicitOwnerRefreshPreservesHistoryAndOwnerWinsOverPrivateEdits(t *testing.T) {
 	for _, privateEdit := range []bool{false, true} {
-		t.Run(map[bool]string{false: "owner-refresh", true: "private-edit-held"}[privateEdit], func(t *testing.T) {
+		t.Run(map[bool]string{false: "owner-refresh", true: "private-edit-owner-wins"}[privateEdit], func(t *testing.T) {
 			f := fixture(t, "claude")
 			put(t, filepath.Join(f.source, "settings.json"), `{"effortLevel":"high"}`)
 			lease := func(_ string, install func() error) error { return install() }
@@ -123,11 +124,8 @@ func TestClaudeContextExplicitOwnerRefreshPreservesHistoryAndHoldsPrivateEdits(t
 				put(t, filepath.Join(f.candidate, "settings.json"), `{"language":"Spanish"}`)
 			}
 			next, err := PrepareClaudeContext(f.candidate, f.cwd, f.env, lease, true)
-			if privateEdit {
-				if err == nil {
-					t.Fatal("native private configuration overwritten")
-				}
-				return
+			if raw, _ := os.ReadFile(filepath.Join(f.candidate, "settings.json")); privateEdit && string(raw) != `{"effortLevel":"low"}` {
+				t.Fatalf("owner refresh did not win over the private edit: %s", raw)
 			}
 			if err != nil {
 				t.Fatal(err)

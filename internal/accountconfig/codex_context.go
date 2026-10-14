@@ -3,6 +3,7 @@ package accountconfig
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -176,14 +177,30 @@ func PrepareCodexContext(profile, cwd string, env []string, lease func(string, f
 			return err
 		}
 		refresh := len(ownerRefresh) == 1 && ownerRefresh[0]
-		if update != nil && (!refresh || update.Next.GlobalGeneration != c.GlobalGeneration) {
+		if update != nil && !refresh {
 			return Conflict("native-configuration-update-source-changed")
+		}
+		superseded := update != nil && update.Next.GlobalGeneration != c.GlobalGeneration
+		if superseded {
+			// The owner changed again after an interrupted refresh: finish it
+			// toward the current owner configuration instead of holding forever.
+			log.Printf("accounts: superseded interrupted configuration refresh profile=%s", profile)
+			update.Next = c
 		}
 		var history *CodexHistoryAlias
 		if markerErr == nil {
 			var installed CodexContext
 			if privateProjectionFile(markerPath) != nil || json.Unmarshal(marker, &installed) != nil || !validCodexContext(installed) {
 				return Conflict("candidate-configuration-marker-changed")
+			}
+			if superseded && installed.GlobalGeneration == c.GlobalGeneration {
+				if err := removeCodexContextUpdate(profile); err != nil {
+					return err
+				}
+				update = nil
+			} else if superseded {
+				// The marker records the last committed cohort (Previous or the stale Next).
+				update.Previous = installed
 			}
 			if update != nil {
 				if installed.GlobalGeneration != update.Previous.GlobalGeneration && installed.GlobalGeneration != update.Next.GlobalGeneration {
@@ -479,19 +496,18 @@ func validateCodexRuntimeTmp(profile string) error {
 	return nil
 }
 
+// Codex persists /model, trust and TUI choices into CODEX_HOME/config.toml.
+// That drift is logged and accepted; an owner refresh rewrites the file.
 func validateCodexInstalledConfig(c CodexContext, profile string) error {
 	path := filepath.Join(profile, "config.toml")
 	raw, err := readRegular(path, maxSourceBytes)
-	if err != nil || privateProjectionFile(path) != nil {
-		return Conflict("candidate-configuration-changed")
-	}
 	var settings map[string]any
-	if toml.Unmarshal(raw, &settings) != nil || remapCodexHookState(settings, c.NativeProfile, profile, true) != nil {
-		return Conflict("candidate-configuration-changed")
+	if err != nil || toml.Unmarshal(raw, &settings) != nil || remapCodexHookState(settings, c.NativeProfile, profile, true) != nil {
+		acceptNativeDrift(profile, "config.toml")
+		return nil
 	}
-	normalized, err := toml.Marshal(settings)
-	if err != nil || claudeHashBytes(normalized) != c.SettingsSHA256 {
-		return Conflict("candidate-configuration-changed")
+	if normalized, err := toml.Marshal(settings); err != nil || claudeHashBytes(normalized) != c.SettingsSHA256 {
+		acceptNativeDrift(profile, "config.toml")
 	}
 	return nil
 }

@@ -211,7 +211,7 @@ func (m *accountRotationManager) retirementReferences(manager *accountManager, b
 		if meta.AccountBinding == nil || !sameCredentialGeneration(*meta.AccountBinding, binding) {
 			continue
 		}
-		if meta.Status.Process == status.ProcessRunning || verifyAccountWritersStopped(m.w.stateDir, meta) != nil {
+		if meta.Status.Process == status.ProcessRunning || verifyAccountWritersProvenStopped(m.w.stateDir, meta) != nil {
 			return "", accounts.ErrInUse
 		}
 		nativeVersion, ok := historyNativeVersion(meta)

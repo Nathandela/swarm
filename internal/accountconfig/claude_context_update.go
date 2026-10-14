@@ -37,7 +37,7 @@ func validateClaudePartialUpdate(update claudeContextUpdate, profile string) err
 	}
 	hash, err := claudeSettingsDigest(raw)
 	if err != nil || hash != update.Previous.SettingsSHA256 && hash != update.Next.SettingsSHA256 {
-		return Conflict("candidate-configuration-changed")
+		acceptNativeDrift(profile, "settings.json")
 	}
 	prefs, err := readClaudePreferences(filepath.Join(profile, ".claude.json"))
 	if err != nil {
@@ -45,7 +45,7 @@ func validateClaudePartialUpdate(update claudeContextUpdate, profile string) err
 	}
 	hash = claudeHash(claudeStablePreferences(prefs))
 	if hash != update.Previous.PreferencesStableSHA256 && hash != update.Next.PreferencesStableSHA256 {
-		return Conflict("candidate-configuration-changed")
+		acceptNativeDrift(profile, ".claude.json")
 	}
 	for i, asset := range update.Next.Assets {
 		path := filepath.Join(profile, asset.Name)

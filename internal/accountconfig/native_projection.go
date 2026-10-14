@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"syscall"
 
@@ -18,30 +17,26 @@ import (
 
 // PrepareNative keeps settings in native user/project tiers. Its only Codex
 // override is the characterized credential file store; no user defaults are
-// promoted over project policy. Old frozen projections retain their contract.
-func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string, prior, nativeModel string, lease func(string, func() error) error, createHistory bool, ownerResume ...bool) (Projection, error) {
-	var m manifest
+// promoted over project policy. Configuration drift is followed, not refused:
+// the account profile is refreshed from the owner and every schema-3 resume,
+// including a model-pinned recovery, re-projects. Only the frozen env origin
+// and the model proof carry over from the prior projection.
+func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string, prior, nativeModel string, lease func(string, func() error) error, createHistory bool) (Projection, error) {
 	var err error
 	var frozenOrigin manifest
 	if prior != "" {
-		m, err = readManifest(stateRoot, prior)
+		frozenOrigin, err = readManifest(stateRoot, prior)
 		if err != nil {
 			return Projection{}, err
 		}
-		if m.SchemaVersion != 3 {
+		if frozenOrigin.SchemaVersion != 3 {
 			return PrepareWithModel(stateRoot, provider, profile, cwd, env, argv, prior, nativeModel)
 		}
-		if m.Provider != provider || m.Cwd != filepath.Clean(cwd) {
+		if frozenOrigin.Provider != provider || frozenOrigin.Cwd != filepath.Clean(cwd) {
 			return Projection{}, Conflict("projection-context-changed")
 		}
-		frozenOrigin = m
-		if len(ownerResume) == 1 && ownerResume[0] && nativeModel == "" {
-			prior = ""
-			m = manifest{SchemaVersion: 3, Provider: provider, Cwd: filepath.Clean(cwd)}
-		}
-	} else {
-		m = manifest{SchemaVersion: 3, Provider: provider, Cwd: filepath.Clean(cwd)}
 	}
+	m := manifest{SchemaVersion: 3, Provider: provider, Cwd: filepath.Clean(cwd)}
 	if !cleanAbsolute(cwd) || safePath(cwd, true) != nil {
 		return Projection{}, Conflict("unsafe-project-directory")
 	}
@@ -79,7 +74,7 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 	if err != nil {
 		return Projection{}, Conflict("invalid-environment")
 	}
-	if prior == "" && createHistory {
+	if createHistory {
 		origin := originalProfile(provider, contextEnv)
 		if !cleanAbsolute(origin) {
 			return Projection{}, Conflict("unsafe-source-profile")
@@ -127,28 +122,20 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 		if err != nil {
 			return Projection{}, err
 		}
-		ctx, err := PrepareCodexContext(profile, cwd, contextEnv, lease, prior == "" && createHistory)
+		ctx, err := PrepareCodexContext(profile, cwd, contextEnv, lease, true)
 		if err != nil {
 			return Projection{}, err
 		}
-		if prior == "" {
-			m.CodexContext, m.CodexProjectSources = &ctx, projectSources
-			m.ProjectBoundary, err = discoverProjectBoundary(provider, cwd, env)
-			if err != nil {
-				return Projection{}, err
-			}
-		} else if m.CodexContext == nil || m.CodexContext.GlobalGeneration != ctx.GlobalGeneration || !reflect.DeepEqual(m.CodexProjectSources, projectSources) {
-			return Projection{}, Conflict("native-configuration-source-changed")
-		}
-		history, err := PrepareCodexHistoryAlias(ctx, profile, createHistory, lease, prior == "" && createHistory)
+		m.CodexContext, m.CodexProjectSources = &ctx, projectSources
+		m.ProjectBoundary, err = discoverProjectBoundary(provider, cwd, env)
 		if err != nil {
 			return Projection{}, err
 		}
-		if prior == "" {
-			m.CodexHistoryAlias = &history
-		} else if m.CodexHistoryAlias == nil || *m.CodexHistoryAlias != history {
-			return Projection{}, Conflict("native-history-root-changed")
+		history, err := PrepareCodexHistoryAlias(ctx, profile, createHistory, lease, true)
+		if err != nil {
+			return Projection{}, err
 		}
+		m.CodexHistoryAlias = &history
 		if err := revalidateNativeManifest(m, profile); err != nil {
 			return Projection{}, err
 		}
@@ -162,24 +149,15 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 		if err != nil {
 			return Projection{}, err
 		}
-		if prior == "" {
-			m.ClaudeProjectSources, m.ClaudeInvocationSources = projectSources, invocationSources
-		} else if !reflect.DeepEqual(m.ClaudeProjectSources, projectSources) || !reflect.DeepEqual(m.ClaudeInvocationSources, invocationSources) {
-			return Projection{}, Conflict("native-configuration-source-changed")
-		}
-		ctx, err := PrepareClaudeContext(profile, cwd, contextEnv, lease, prior == "" && createHistory)
+		m.ClaudeProjectSources, m.ClaudeInvocationSources = projectSources, invocationSources
+		ctx, err := PrepareClaudeContext(profile, cwd, contextEnv, lease, true)
 		if err != nil {
 			return Projection{}, err
 		}
-		if prior != "" && (m.ClaudeContext == nil || m.ClaudeContext.GlobalGeneration != ctx.GlobalGeneration) {
-			return Projection{}, Conflict("native-configuration-source-changed")
-		}
-		if prior == "" {
-			m.ClaudeContext = &ctx
-			m.ProjectBoundary, err = discoverProjectBoundary(provider, cwd, env)
-			if err != nil {
-				return Projection{}, err
-			}
+		m.ClaudeContext = &ctx
+		m.ProjectBoundary, err = discoverProjectBoundary(provider, cwd, env)
+		if err != nil {
+			return Projection{}, err
 		}
 		if err := validateProjectBoundary(m, env); err != nil {
 			return Projection{}, err
@@ -188,11 +166,7 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 		if err != nil {
 			return Projection{}, err
 		}
-		if prior == "" {
-			m.ClaudeHistoryAlias = &history
-		} else if m.ClaudeHistoryAlias == nil || *m.ClaudeHistoryAlias != history {
-			return Projection{}, Conflict("native-history-root-changed")
-		}
+		m.ClaudeHistoryAlias = &history
 	}
 	raw, err := json.Marshal(m)
 	if err != nil {
@@ -200,9 +174,6 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 	}
 	digest := sha256.Sum256(raw)
 	ref := hex.EncodeToString(digest[:])
-	if prior != "" && prior != ref {
-		return Projection{}, Conflict("immutable-projection-changed")
-	}
 	if _, err := writeProjection(stateRoot, ref, raw, nil); err != nil {
 		return Projection{}, err
 	}

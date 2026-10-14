@@ -55,12 +55,10 @@ func TestClaudeContextRefreshRecoversOnlyRecordedPartialWrites(t *testing.T) {
 			if stage == "private-edit" {
 				put(t, filepath.Join(f.candidate, "settings.json"), `{"language":"Spanish"}`)
 			}
+			// An unrelated native private edit is accepted drift; the owner wins.
 			refreshed, err := PrepareClaudeContext(f.candidate, f.cwd, f.env, lease, true)
-			if stage == "private-edit" {
-				if err == nil {
-					t.Fatal("unrelated native private edit overwritten")
-				}
-				return
+			if raw, _ := os.ReadFile(filepath.Join(f.candidate, "settings.json")); stage == "private-edit" && string(raw) != `{"effortLevel":"low"}` {
+				t.Fatalf("owner settings did not win over the private edit: %s", raw)
 			}
 			if err != nil || refreshed.GlobalGeneration != next.GlobalGeneration {
 				t.Fatal("recorded partial update did not recover", err)

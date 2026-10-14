@@ -3,6 +3,7 @@ package accountconfig
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +39,9 @@ func TestClaudeContextSettingsRepresentationsReuseWithoutWrites(t *testing.T) {
 	}
 }
 
-func TestClaudeContextSettingsRejectChangedOrAmbiguousJSONWithoutWrites(t *testing.T) {
+// Native edits of the profile settings.json are accepted drift: the launch
+// proceeds with the profile as it is and nothing is rewritten.
+func TestClaudeContextSettingsAcceptChangedOrAmbiguousJSONWithoutWrites(t *testing.T) {
 	const original = `{"model":"sonnet","cleanupPeriodDays":9007199254740992,"permissions":{"allow":["Read","Edit"]},"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"exit 0"}]}]}}`
 	for name, candidate := range map[string]string{
 		"model":            `{"model":"opus","cleanupPeriodDays":9007199254740992,"permissions":{"allow":["Read","Edit"]},"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"exit 0"}]}]}}`,
@@ -60,11 +63,11 @@ func TestClaudeContextSettingsRejectChangedOrAmbiguousJSONWithoutWrites(t *testi
 			}
 			put(t, filepath.Join(f.candidate, "settings.json"), candidate)
 			before := snapshotClaudeProfileFiles(t, f.candidate)
-			if err := RevalidateClaudeContext(c, f.candidate); err == nil {
-				t.Error("changed or ambiguous settings admitted")
+			if err := RevalidateClaudeContext(c, f.candidate); err != nil {
+				t.Error("changed or ambiguous settings refused:", err)
 			}
-			if _, err := PrepareClaudeContext(f.candidate, f.cwd, f.env, lease); err == nil {
-				t.Error("reuse admitted changed or ambiguous settings")
+			if _, err := PrepareClaudeContext(f.candidate, f.cwd, f.env, lease); err != nil {
+				t.Error("reuse refused changed or ambiguous settings:", err)
 			}
 			assertClaudeProfileFilesUnchanged(t, f.candidate, before)
 		})
@@ -109,14 +112,9 @@ func TestClaudeContextPartialUpdateSettingsRepresentations(t *testing.T) {
 				put(t, filepath.Join(f.candidate, ClaudeContextMarker), string(raw))
 			}
 			before := snapshotClaudeProfileFiles(t, f.candidate)
+			// An unrelated native value change ("changed") is accepted drift: the
+			// recorded update completes and the owner's settings win.
 			refreshed, err := PrepareClaudeContext(f.candidate, f.cwd, f.env, lease, true)
-			if stage == "changed" {
-				if err == nil {
-					t.Fatal("unrelated partial-update value change admitted")
-				}
-				assertClaudeProfileFilesUnchanged(t, f.candidate, before)
-				return
-			}
 			if err != nil || refreshed.GlobalGeneration != next.GlobalGeneration {
 				t.Fatal("equivalent old/new partial representation failed recovery:", err)
 			}
@@ -125,6 +123,9 @@ func TestClaudeContextPartialUpdateSettingsRepresentations(t *testing.T) {
 			}
 			if stage == "committed" {
 				assertClaudeProfileFilesUnchanged(t, f.candidate, before)
+			}
+			if raw, _ := os.ReadFile(filepath.Join(f.candidate, "settings.json")); stage == "changed" && !strings.Contains(string(raw), `"opus"`) {
+				t.Fatal("owner settings did not win over the unrelated native change")
 			}
 		})
 	}

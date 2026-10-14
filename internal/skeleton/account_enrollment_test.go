@@ -100,7 +100,7 @@ func TestAccountEnrollmentUsesExistingRecyclerForBothProviders(t *testing.T) {
 }
 
 func TestAccountEnrollmentDefersUnsafeSourcesAndRechecksConfigurationBeforeKill(t *testing.T) {
-	for _, reason := range []string{"active", "interaction", "controller", "unsupported", "downgrade", "unobserved", "disabled", "missing-history", "configuration-changed", "destination-denied"} {
+	for _, reason := range []string{"active", "interaction", "controller", "unsupported", "downgrade", "unobserved", "disabled", "missing-history", "destination-denied"} {
 		t.Run(reason, func(t *testing.T) {
 			w, f, m, source := enrollmentRig(t, "codex")
 			switch reason {
@@ -145,21 +145,30 @@ func TestAccountEnrollmentDefersUnsafeSourcesAndRechecksConfigurationBeforeKill(
 					t.Fatal(err)
 				}
 			}
-			if reason == "configuration-changed" {
-				if w.state.CLI[source.ID].Enrollment == nil {
-					t.Fatal("fixture did not queue")
-				}
-				for _, item := range source.Env {
-					if len(item) > 5 && item[:5] == "HOME=" {
-						accountTestPut(t, filepath.Join(item[5:], ".codex", "config.toml"), []byte("model=\"changed\"\n"))
-					}
-				}
-			}
 			w.workCLIRefresh(true)
 			if len(f.killed) != 0 || len(f.launched) != 0 {
 				t.Fatal("unsafe source was interrupted", reason)
 			}
 		})
+	}
+}
+
+// Owner configuration drift after the preflight no longer defers onboarding:
+// the recheck follows the owner configuration and the source is enrolled.
+func TestAccountEnrollmentFollowsOwnerConfigurationChangeBeforeKill(t *testing.T) {
+	w, f, _, source := enrollmentRig(t, "codex")
+	w.discoverAccountEnrollments()
+	if w.state.CLI[source.ID].Enrollment == nil {
+		t.Fatal("fixture did not queue")
+	}
+	for _, item := range source.Env {
+		if len(item) > 5 && item[:5] == "HOME=" {
+			accountTestPut(t, filepath.Join(item[5:], ".codex", "config.toml"), []byte("model=\"changed\"\n"))
+		}
+	}
+	w.workCLIRefresh(true)
+	if len(f.killed) != 1 {
+		t.Fatal("owner configuration drift deferred onboarding")
 	}
 }
 
