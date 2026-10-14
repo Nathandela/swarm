@@ -37,14 +37,15 @@ import (
 
 // backendReadyPoll bounds how long the assembly waits for the shim's backend to become
 // dialable, and how often it retries. The shim has its own ReadyTimeout on the same event; this
-// one covers the shim's spawn plus that wait, so it is deliberately the longer of the two.
+// one covers the shim's spawn plus that wait and the go-ahead after it (shim.DegradedAgentDelay),
+// so it is deliberately the longer of the two.
 const (
-	backendReadyDeadline = 45 * time.Second
+	backendReadyDeadline = 90 * time.Second
 	backendReadyInterval = 100 * time.Millisecond
 )
 
 // backendDeadline is the ready/join bound this daemon actually uses. It exists ONLY so a test
-// can drive the degrade paths without waiting out a 45 s dial retry; production never sets it
+// can drive the degrade paths without waiting out a 90 s dial retry; production never sets it
 // (Config carries no knob) and the default is the constant above.
 func (d *Daemon) backendDeadline() time.Duration {
 	if d.backendReady > 0 {

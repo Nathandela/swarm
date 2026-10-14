@@ -44,9 +44,15 @@ const BackendFile = "backend.json"
 // Default bounds for the two waits a backend introduces. Both are overridable per session and
 // both exist so a backend failure is a failure for the BACKEND only.
 const (
-	defaultBackendReadyTimeout   = 20 * time.Second
+	// 60 s, not 20: live start-to-servable reached 2-8 s on a healthy host and passed 20 s
+	// under host memory/IO stalls, and a miss degrades the session for its whole life.
+	defaultBackendReadyTimeout   = 60 * time.Second
 	defaultBackendGoAheadTimeout = 20 * time.Second
 )
+
+// DegradedAgentDelay is how late the shim starts the agent when the backend never serves: the
+// whole readiness budget, then the whole go-ahead budget. Resume-history matching needs it.
+const DegradedAgentDelay = defaultBackendReadyTimeout + defaultBackendGoAheadTimeout
 
 // backendDialTimeout bounds ONE readiness probe of the backend socket.
 const backendDialTimeout = 500 * time.Millisecond

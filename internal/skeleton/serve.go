@@ -253,7 +253,7 @@ type Daemon struct {
 	backend backendState
 	pump    backendPump
 	// backendReady overrides backendReadyDeadline. Test-only, and unset in production: the
-	// degrade paths are only reachable after a dial gives up, and waiting 45 s per case is a
+	// degrade paths are only reachable after a dial gives up, and waiting 90 s per case is a
 	// test suite nobody runs.
 	backendReady time.Duration
 
