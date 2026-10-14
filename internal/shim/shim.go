@@ -387,6 +387,11 @@ func Run(cfg Config) (agentExit int, err error) {
 	}
 
 	nativeRecordErr := managed.record(cmd.Process.Pid, backend)
+	if backend != nil {
+		managed.reapWhileRunning(cmd.Process.Pid, backend.cmd.Process.Pid)
+	} else {
+		managed.reapWhileRunning(cmd.Process.Pid)
+	}
 	if nativeRecordErr != nil {
 		srv.onSignal(shimwire.SigKill)
 	}

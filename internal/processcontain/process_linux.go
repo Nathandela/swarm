@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -130,6 +132,26 @@ func ReapOrphans() {
 		pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
 		if pid <= 0 || err != nil {
 			return
+		}
+	}
+}
+
+// ReapAdoptedZombies reaps this subreaper's exited children except keep, the children an
+// exec.Cmd still waits for. Children are listed per thread (/proc/self/task/*/children), so
+// the cost does not grow with the host's process count.
+func ReapAdoptedZombies(keep ...int) {
+	lists, _ := filepath.Glob("/proc/self/task/*/children")
+	for _, list := range lists {
+		raw, _ := os.ReadFile(list)
+		for _, field := range strings.Fields(string(raw)) {
+			pid, err := strconv.Atoi(field)
+			if err != nil || slices.Contains(keep, pid) {
+				continue
+			}
+			if p, err := readProc(pid); err == nil && p.state == "Z" {
+				var status syscall.WaitStatus
+				_, _ = syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+			}
 		}
 	}
 }
