@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-10-14
 - Supersedes: the configuration-freeze and stopped-writer-proof parts of [ADR-028](ADR-028-personal-account-pools.md) and [ADR-031](ADR-031-managed-claude-token-renewal.md) for launch, resume, recovery, automatic onboarding and owner refresh. Credential erasure (retirement) is unchanged.
-- Affects: `internal/accountconfig` (`claude_context.go`, `claude_context_update.go`, `codex_context.go`, `native_projection.go`), `internal/accountcheck` (`fence.go`), `internal/skeleton` (`accounts_launch.go`, `account_rotation.go`, `account_retirement.go`)
+- Affects: `internal/accountconfig` (`claude_context.go`, `claude_context_update.go`, `codex_context.go`, `native_projection.go`), `internal/accountcheck` (`fence.go`), `internal/skeleton` (`accounts_launch.go`, `account_rotation.go`, `account_retirement.go`, `account_enrollment.go`)
 
 ## Context
 
@@ -22,6 +22,8 @@ Separately, an owner refresh required every other discussion on the account to b
 **D4. Writer holds follow liveness.** A discussion's writers are stopped when its recorded shim (from meta and `native-process.json`), native CLI, backend and their process groups are no longer alive (PID present with the recorded start time, or `kill(-pgid, 0)` not ESRCH). A missing stopped proof never blocks. Retirement keeps the positive proof: PID disappearance alone does not authorize removing credentials.
 
 **D5. Credential routing still refuses.** Owner settings `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `forceLoginMethod`, `forceLoginOrgUUID`, and `env` entries that the launch environment scrub or selector check would strip or refuse (for example `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `AWS_*`) still refuse with `credential-or-provider-settings`. Ordinary `env` entries launch.
+
+**D6. Onboarding running discussions is a separate switch, off by default.** Because D2 lets an onboarding preflight rewrite the chosen profile and then stop and resume each idle source on another account, enabling rotation no longer onboards running unmanaged discussions by itself. Onboarding also needs the per-provider switch in `account-onboarding.json` in the daemon state directory (for example `{"codex":true}`; absent or unreadable means off). It stays off until the cross-account resume acceptance (PLAN section 4) passes; the TUI control arrives in Phase C. The file is outside the account registry, so a downgrade sees no schema change.
 
 ## Consequences
 
