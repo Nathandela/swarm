@@ -37,8 +37,8 @@ import (
 
 // backendReadyPoll bounds how long the assembly waits for the shim's backend to become
 // dialable, and how often it retries. The shim has its own ReadyTimeout on the same event; this
-// one covers the shim's spawn plus that wait and the go-ahead after it (shim.DegradedAgentDelay),
-// so it is deliberately the longer of the two.
+// one covers the shim's spawn plus that wait (shim.DegradedAgentDelay, after which a backend
+// that never served is abandoned), so it is deliberately the longer of the two.
 const (
 	backendReadyDeadline = 90 * time.Second
 	backendReadyInterval = 100 * time.Millisecond

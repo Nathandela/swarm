@@ -51,8 +51,9 @@ const (
 )
 
 // DegradedAgentDelay is how late the shim starts the agent when the backend never serves: the
-// whole readiness budget, then the whole go-ahead budget. Resume-history matching needs it.
-const DegradedAgentDelay = defaultBackendReadyTimeout + defaultBackendGoAheadTimeout
+// whole readiness budget (no go-ahead is awaited from a failed backend). Resume-history
+// matching needs it.
+const DegradedAgentDelay = defaultBackendReadyTimeout
 
 // backendDialTimeout bounds ONE readiness probe of the backend socket.
 const backendDialTimeout = 500 * time.Millisecond

@@ -338,15 +338,24 @@ func Run(cfg Config) (agentExit int, err error) {
 			backendWatch = backend
 		}
 
-		goAheadTimeout := cfg.Backend.GoAheadTimeout
-		if goAheadTimeout <= 0 {
-			goAheadTimeout = defaultBackendGoAheadTimeout
-		}
-		attach, ok := srv.waitBackendGoAhead(goAheadTimeout)
-		if !ok {
+		var attach shimwire.Control
+		if backendWatch == nil {
+			// The backend failed and is contained: the daemon sends backend_attach only after
+			// dialling it, so no go-ahead can arrive. Waiting for one only delays the agent.
 			cliStable = false
-			log.Printf("shim: no backend_attach arrived within %s; launching the agent DEGRADED "+
-				"(no backend arguments appended)", goAheadTimeout)
+			log.Printf("shim: launching the agent DEGRADED (no backend arguments appended)")
+		} else {
+			goAheadTimeout := cfg.Backend.GoAheadTimeout
+			if goAheadTimeout <= 0 {
+				goAheadTimeout = defaultBackendGoAheadTimeout
+			}
+			var ok bool
+			attach, ok = srv.waitBackendGoAhead(goAheadTimeout)
+			if !ok {
+				cliStable = false
+				log.Printf("shim: no backend_attach arrived within %s; launching the agent DEGRADED "+
+					"(no backend arguments appended)", goAheadTimeout)
+			}
 		}
 		argv := backendAgentArgv(cfg.Argv, attach.AgentCommandArgs, attach.AgentArgs)
 		cmd = &exec.Cmd{
