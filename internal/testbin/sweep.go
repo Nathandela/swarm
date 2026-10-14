@@ -14,6 +14,12 @@ import (
 // forgot to kill. Exe paths are unique per run, so no other run's processes match. Linux only:
 // without /proc it does nothing.
 func KillProcessesOf(exes ...string) {
+	exes = slices.Clone(exes)
+	for i, exe := range exes { // /proc/<pid>/exe names the resolved path
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exes[i] = resolved
+		}
+	}
 	entries, _ := os.ReadDir("/proc")
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
