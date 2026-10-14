@@ -196,6 +196,8 @@ func readCodexTranscriptModel(profile, path string) (string, bool, error) {
 		if oversized {
 			// Tool output lines reach 20 MB; the model lives in small turn_context records.
 			// An oversized turn_context could name the newest model, so it still refuses.
+			// The head check assumes Codex's compact serde output, which writes "type" as the
+			// second key with no spaces. A spaced or reordered turn_context would be skipped.
 			if bytes.Contains(line, []byte(`"type":"turn_context"`)) {
 				return "", false, errors.New("account native model: unreadable transcript")
 			}
@@ -223,15 +225,15 @@ func readCodexTranscriptModel(profile, path string) (string, bool, error) {
 	}
 }
 
-// readCappedLine reads one line. A line longer than max is consumed whole but only its first
+// readCappedLine reads one line. A line longer than limit is consumed whole but only its first
 // 64 KiB is returned, with oversized set, so the caller can classify it without holding it.
-func readCappedLine(r *bufio.Reader, max int) ([]byte, bool, error) {
+func readCappedLine(r *bufio.Reader, limit int) ([]byte, bool, error) {
 	var line []byte
 	oversized := false
 	for {
 		chunk, err := r.ReadSlice('\n')
 		if !oversized {
-			if len(line)+len(chunk) > max {
+			if len(line)+len(chunk) > limit {
 				oversized = true
 				line = line[:min(len(line), 64<<10)]
 			} else {
