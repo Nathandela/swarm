@@ -343,7 +343,9 @@ Rationale and consequences:
 - The bound is on memory as much as disk, because the in-memory mirror holds every retained
   record. `MaxTotalBytes` bounds what a start loads, including legacy segments larger than 16 MiB;
   `MaxFiles` x `MaxBytes` bounds growth while running.
-- Every daemon start opens a segment, so 64 starts age history out regardless of size.
+- Every daemon start opens a segment. `Open` unlinks retained zero-record segments except the
+  newest, so starts that appended nothing do not count toward `MaxFiles`; 64 starts that each
+  appended something still age history out regardless of size.
 - On the live data, 512 MiB keeps about six weeks; the first start after upgrade deletes the
   oldest segments. This is history loss by design: below the floor, `ReadFrom`/`SubscribeFrom`
   answer `full_resync` and this ADR's pages report `history_floor`, as section 2 already requires.

@@ -268,8 +268,15 @@ func Open(dir string, opts Options) (*Journal, error) {
 	}
 
 	var maxSeq uint64
-	for _, f := range segs {
+	for i, f := range segs {
+		maxSeq = max(maxSeq, f.seq)
 		recs := loadSegment(f.path)
+		// A start that appended nothing leaves an empty segment; only the newest is kept
+		// so restarts do not consume MaxFiles. Cursors are carried by the records alone.
+		if len(recs) == 0 && i < len(segs)-1 {
+			_ = os.Remove(f.path)
+			continue
+		}
 		seg := &segment{seq: f.seq, path: f.path, count: len(recs)}
 		if fi, err := os.Stat(f.path); err == nil {
 			seg.bytes = fi.Size()
@@ -281,9 +288,6 @@ func Open(dir string, opts Options) (*Journal, error) {
 			}
 		}
 		j.segments = append(j.segments, seg)
-		if f.seq > maxSeq {
-			maxSeq = f.seq
-		}
 	}
 	j.nextSeq = maxSeq + 1
 	if err := j.openNewSegmentLocked(); err != nil {
