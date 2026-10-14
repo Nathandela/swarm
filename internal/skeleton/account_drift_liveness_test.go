@@ -124,7 +124,7 @@ func TestWriterHold_LiveProcessesStillHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"running", "shim-live", "shim-live-without-native-file", "native-live", "native-group-live", "backend-live"} {
+	for _, kind := range []string{"running", "shim-live", "shim-live-without-native-file", "native-live", "native-group-live", "backend-live", "meta-shim-live", "unreadable-native-file"} {
 		t.Run(kind, func(t *testing.T) {
 			m, source, native := accountWriterProofFixture(t)
 			switch kind {
@@ -140,9 +140,17 @@ func TestWriterHold_LiveProcessesStillHold(t *testing.T) {
 				native.PGID = syscall.Getpgrp()
 			case "backend-live":
 				native.BackendPID, native.BackendStartTime = os.Getpid(), start
+			case "meta-shim-live":
+				// The file names another (dead) shim; the live meta shim still holds.
+				source.ShimPID, source.ShimStartTime = os.Getpid(), start
 			}
 			path := filepath.Join(m.w.stateDir, source.ID, shim.NativeProcessFile)
 			writeAccountProofFixture(t, path, native)
+			if kind == "unreadable-native-file" {
+				if err := os.Chmod(path, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if kind == "shim-live-without-native-file" {
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)

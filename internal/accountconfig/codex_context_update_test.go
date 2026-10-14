@@ -67,39 +67,46 @@ func TestCodexContextRefreshInterruptedCommitRetriesWithoutLosingHistory(t *test
 	}
 }
 
-// A native private config write during a pending refresh is accepted drift and
-// the refresh completes (owner wins); owner drift and foreign aliases still hold.
-func TestCodexContextPendingRefreshHoldsOwnerDriftAndForeignAliases(t *testing.T) {
-	t.Run("private-config", func(t *testing.T) {
-		f := codexContextFixture(t)
-		old, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease)
-		if err != nil {
-			t.Fatal(err)
-		}
-		put(t, filepath.Join(f.source, "config.toml"), "model_reasoning_effort=\"medium\"\n")
-		nextProfile := filepath.Join(filepath.Dir(f.candidate), "next-cohort")
-		if err := os.Mkdir(nextProfile, 0700); err != nil {
-			t.Fatal(err)
-		}
-		next, err := PrepareCodexContext(nextProfile, f.cwd, f.env, codexContextLease)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := writeCodexContextUpdate(f.candidate, codexContextUpdate{1, old, next}); err != nil {
-			t.Fatal(err)
-		}
-		put(t, filepath.Join(f.candidate, "config.toml"), "model_reasoning_effort=\"low\"\n")
-		if refreshed, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease, true); err != nil || refreshed.GlobalGeneration != next.GlobalGeneration {
-			t.Fatal("pending refresh refused a native private write:", err)
-		}
-		if settings := readNativeCodexFixtureSettings(t, filepath.Join(f.candidate, "config.toml")); settings["model_reasoning_effort"] != "medium" {
-			t.Fatal("pending refresh did not let the owner win")
-		}
-		if _, err := os.Lstat(filepath.Join(f.candidate, CodexContextUpdateMarker)); !os.IsNotExist(err) {
-			t.Fatal("completed intent remains")
-		}
-	})
-	for _, drift := range []string{"owner-config", "foreign-alias"} {
+// A native private config write or a later owner change during a pending
+// refresh is accepted drift: the refresh completes with the current owner
+// configuration (owner wins). Foreign aliases still hold.
+func TestCodexContextPendingRefreshAcceptsDriftAndHoldsForeignAliases(t *testing.T) {
+	for drift, want := range map[string]string{"private-config": "medium", "owner-config": "low"} {
+		t.Run(drift, func(t *testing.T) {
+			f := codexContextFixture(t)
+			old, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			put(t, filepath.Join(f.source, "config.toml"), "model_reasoning_effort=\"medium\"\n")
+			nextProfile := filepath.Join(filepath.Dir(f.candidate), "next-cohort")
+			if err := os.Mkdir(nextProfile, 0700); err != nil {
+				t.Fatal(err)
+			}
+			next, err := PrepareCodexContext(nextProfile, f.cwd, f.env, codexContextLease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeCodexContextUpdate(f.candidate, codexContextUpdate{1, old, next}); err != nil {
+				t.Fatal(err)
+			}
+			if drift == "private-config" {
+				put(t, filepath.Join(f.candidate, "config.toml"), "model_reasoning_effort=\"low\"\n")
+			} else {
+				put(t, filepath.Join(f.source, "config.toml"), "model_reasoning_effort=\"low\"\n")
+			}
+			if _, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease, true); err != nil {
+				t.Fatal("pending refresh refused drift:", err)
+			}
+			if settings := readNativeCodexFixtureSettings(t, filepath.Join(f.candidate, "config.toml")); settings["model_reasoning_effort"] != want {
+				t.Fatal("pending refresh did not install the current owner configuration")
+			}
+			if _, err := os.Lstat(filepath.Join(f.candidate, CodexContextUpdateMarker)); !os.IsNotExist(err) {
+				t.Fatal("completed intent remains")
+			}
+		})
+	}
+	for _, drift := range []string{"foreign-alias"} {
 		t.Run(drift, func(t *testing.T) {
 			f := codexContextFixture(t)
 			old, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease)
@@ -119,8 +126,6 @@ func TestCodexContextPendingRefreshHoldsOwnerDriftAndForeignAliases(t *testing.T
 				t.Fatal(err)
 			}
 			switch drift {
-			case "owner-config":
-				put(t, filepath.Join(f.source, "config.toml"), "model_reasoning_effort=\"low\"\n")
 			case "foreign-alias":
 				if err := os.Symlink(f.cwd, filepath.Join(f.candidate, "skills")); err != nil {
 					t.Fatal(err)
