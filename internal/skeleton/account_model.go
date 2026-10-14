@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -187,27 +188,58 @@ func readCodexTranscriptModel(profile, path string) (string, bool, error) {
 	if err != nil || info.Size() > accountHistoryMaxBytes {
 		return "", false, errors.New("account native model: transcript limit")
 	}
-	scanner := bufio.NewScanner(io.LimitReader(f, accountHistoryMaxBytes+1))
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	r := bufio.NewReaderSize(io.LimitReader(f, accountHistoryMaxBytes+1), 64<<10)
 	model := ""
 	seen := false
-	for scanner.Scan() {
-		var entry struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Model string `json:"model"`
-			} `json:"payload"`
-		}
-		if json.Unmarshal(scanner.Bytes(), &entry) == nil && entry.Type == "turn_context" {
-			seen = true
-			model = ""
-			if rejectDuplicateJSONKeys(scanner.Bytes()) == nil && exactAccountModel(entry.Payload.Model) {
-				model = entry.Payload.Model
+	for {
+		line, oversized, err := readCappedLine(r, 8<<20)
+		if oversized {
+			// Tool output lines reach 20 MB; the model lives in small turn_context records.
+			// An oversized turn_context could name the newest model, so it still refuses.
+			if bytes.Contains(line, []byte(`"type":"turn_context"`)) {
+				return "", false, errors.New("account native model: unreadable transcript")
+			}
+		} else {
+			var entry struct {
+				Type    string `json:"type"`
+				Payload struct {
+					Model string `json:"model"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal(line, &entry) == nil && entry.Type == "turn_context" {
+				seen = true
+				model = ""
+				if rejectDuplicateJSONKeys(line) == nil && exactAccountModel(entry.Payload.Model) {
+					model = entry.Payload.Model
+				}
 			}
 		}
+		if err == io.EOF {
+			return model, seen, nil
+		}
+		if err != nil {
+			return "", false, errors.New("account native model: unreadable transcript")
+		}
 	}
-	if scanner.Err() != nil {
-		return "", false, errors.New("account native model: unreadable transcript")
+}
+
+// readCappedLine reads one line. A line longer than max is consumed whole but only its first
+// 64 KiB is returned, with oversized set, so the caller can classify it without holding it.
+func readCappedLine(r *bufio.Reader, max int) ([]byte, bool, error) {
+	var line []byte
+	oversized := false
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if !oversized {
+			if len(line)+len(chunk) > max {
+				oversized = true
+				line = line[:min(len(line), 64<<10)]
+			} else {
+				line = append(line, chunk...)
+			}
+		}
+		if err != bufio.ErrBufferFull {
+			return line, oversized, err
+		}
 	}
-	return model, seen, nil
 }
