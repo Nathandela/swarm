@@ -2,6 +2,7 @@
 
 Date: 2026-10-14. Baseline: v0.17.7, `e538d1e9`.
 Tracked by `agents-tracker-6co2`.
+The final patch is rebased onto v0.17.8, `08ac3f50`.
 
 ## Observed failure and cause
 
@@ -70,14 +71,22 @@ shim resize timing assertion. Representative account failures were reproduced
 on the untouched v0.17.7 worktree. `/tmp` is a symlink on this Mac and is rejected
 by private account-path checks; `/private/tmp` fixes those path-only failures but
 not the existing platform cases. None of those guards or frozen tests was relaxed.
-The full Linux CI run is required before publishing a release. Follow-up
-`agents-tracker-4p4q` records the unrelated macOS gate failures.
+The rebased production/test patch passed the complete
+[CI matrix](https://github.com/Nathandela/swarm/actions/runs/38619701497) at
+`38b490ae`: Linux full race suite, lint, fuzzing, Android, relay/Firestore
+integration, release dry-run, cross-platform builds, and the scoped Mac engine,
+hookclient and real idle-CPU checks. Follow-up `agents-tracker-4p4q` records the
+unrelated full macOS gate failures. Two new upstream test files using existing
+Linux-only fixtures were given matching Linux build tags, restoring local Mac
+vet/lint compilation without changing their Linux assertions.
 
 ## Owner installation
 
-Installed `0.17.7+rosterfix` with Go 1.26.9, retaining the original Homebrew binary
+Installed `0.17.8+rosterfix` with Go 1.26.9, retaining the original Homebrew binary
 as `swarm.before-rosterfix` next to the installed executable. The normal daemon
-restart succeeded. All 19 roster entries, 11 observed live shim process/start
+restart succeeded. All 18 roster entries, 11 observed live shim process/start
 identities, stored conversation/account identities, and the saved daemon
 environment survived unchanged. `swarm doctor` reports a matching patched daemon.
 Existing OpenCode environment and Homebrew unattended-upgrade warnings remain.
+The prior working patch and its original release binary were also retained under
+the owner's private `swarm/patch-backups` directory before the Homebrew upgrade.
