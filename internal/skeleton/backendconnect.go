@@ -459,6 +459,7 @@ const backendSubscribeMaxBackoff = 5 * time.Second
 // never moved, which is the silent bridge ADR-017 forbids.
 func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, expectedFeed, expectedInstance string, priorHistory bool) {
 	wait := backendReadyInterval
+	start := time.Now()
 	for {
 		timer := time.NewTimer(wait)
 		<-timer.C
@@ -478,7 +479,9 @@ func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, e
 		if !d.backendFeedCurrent(id, expectedFeed) {
 			return // a replacement landed while this RPC was in flight
 		}
-		if !isMissingRollout(err) {
+		// A source rollout that is really gone never appears: its retry is bounded by the join
+		// deadline, while the recorded `no rollout found` race keeps the session's life.
+		if !isMissingRollout(err) || (isMissingSourceRollout(err) && time.Since(start) > d.backendDeadline()) {
 			log.Printf("skeleton: session %s can never subscribe to thread %s: %v", id, threadID, err)
 			reason := "the thread subscription could not be established: " + err.Error()
 			if expectedFeed == "" {
@@ -497,14 +500,21 @@ func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, e
 	}
 }
 
-// isMissingRollout reports the RECORDED pre-first-turn resume failure
-// (errors-observed.json: {"code":-32600,"message":"no rollout found for thread id <uuid>"}).
+// isMissingRollout reports the RECORDED pre-first-turn resume failure in both wordings:
+// {"code":-32600,"message":"no rollout found for thread id <uuid>"} (errors-observed.json), and
+// codex >= 0.156's paginated-history "invalid paginated history lineage for <uuid>: missing
+// source rollout" (isMissingSourceRollout).
 func isMissingRollout(err error) bool {
+	return rpcMessageContains(err, "no rollout found") || isMissingSourceRollout(err)
+}
+
+func isMissingSourceRollout(err error) bool {
+	return rpcMessageContains(err, "missing source rollout")
+}
+
+func rpcMessageContains(err error, text string) bool {
 	var rpcErr *appserver.RPCError
-	if !errors.As(err, &rpcErr) {
-		return false
-	}
-	return strings.Contains(rpcErr.Message, "no rollout found")
+	return errors.As(err, &rpcErr) && strings.Contains(rpcErr.Message, text)
 }
 
 // discoverLoadedThread finds the one thread this session's app-server is holding.
