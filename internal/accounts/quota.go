@@ -37,6 +37,12 @@ type ScopeState struct {
 	NegativeEventIDs    []string   `json:"negative_event_ids,omitempty"`
 }
 
+// Exhausted reports a scope whose usage is spent until a reset still ahead, which
+// makes the account unusable even before the provider records a denial.
+func (s ScopeState) Exhausted(now time.Time) bool {
+	return s.UsedPercent != nil && *s.UsedPercent >= 100 && s.ResetAt != nil && s.ResetAt.After(now)
+}
+
 type ModelException struct {
 	GlobalDenialRevision uint64            `json:"global_denial_revision"`
 	ObservedAt           time.Time         `json:"observed_at"`
@@ -330,6 +336,9 @@ func quotaEligibility(q QuotaState, model string, now time.Time) (allowed, unkno
 	unknown = len(keys) == 0 || q.FullRefreshNeeded
 	for _, key := range keys {
 		scope := q.Scopes[key]
+		if scope.Exhausted(now) {
+			return false, false, nil
+		}
 		if scope.Denied {
 			exception, ok := q.ModelExceptions[model]
 			captured, covered := exception.ScopeDenialRevisions[key]
@@ -414,7 +423,7 @@ func selectAccount(r Registry, request SelectionRequest, now time.Time, initial 
 		if request.Model == "" {
 			unknown = true
 			for _, scope := range a.Quota.Scopes {
-				if scope.Denied {
+				if scope.Denied || scope.Exhausted(now) {
 					usable = false
 				}
 			}

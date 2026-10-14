@@ -15,6 +15,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shim"
 )
 
 type resumeHistoryOutcome uint8
@@ -69,6 +70,7 @@ type filesystemResumeHistoryResolver struct {
 	home                  string
 	privateProvider       string // managed native root already replaces ~/.provider
 	limits                resumeHistoryLimits
+	stateDir              string       // where a session's structured-degraded marker lives; "" reads none
 	beforeAliasReadlink   func(string) // private deterministic alias race seams; nil in production
 	beforeAliasTargetOpen func(string)
 	beforeOpen            func(string) // private deterministic TOCTOU test seam; nil in production
@@ -679,6 +681,7 @@ func (r *filesystemResumeHistoryResolver) resolveCodex(home *os.Root, budget *hi
 	}
 	defer closeSessions()
 	cleanCWD := filepath.Clean(m.ProviderCwd())
+	degraded := r.degradedStart(m.ID)
 	var candidates []codexHistoryCandidate
 	for delta := -1; delta <= 1; delta++ {
 		day := m.CreatedAt.UTC().AddDate(0, 0, delta)
@@ -719,7 +722,7 @@ func (r *filesystemResumeHistoryResolver) resolveCodex(home *os.Root, budget *hi
 				closeDay()
 				return resumeHistoryResult{Outcome: readOutcome}
 			}
-			candidateValue, matched, parseOutcome := parseCodexSessionMeta(line, fileID, fileTime, cleanCWD, m.CreatedAt)
+			candidateValue, matched, parseOutcome := parseCodexSessionMeta(line, fileID, fileTime, cleanCWD, m.CreatedAt, degraded)
 			if parseOutcome == resumeHistoryNoMatch {
 				continue // a torn first record: not a record (ADR-010 Amendment 7 H2)
 			}
@@ -789,7 +792,7 @@ func tornRecord(line []byte) bool {
 	return errors.As(err, &syntaxErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
 }
 
-func parseCodexSessionMeta(line []byte, fileID string, fileTime time.Time, cleanCWD string, created time.Time) (codexHistoryCandidate, bool, resumeHistoryOutcome) {
+func parseCodexSessionMeta(line []byte, fileID string, fileTime time.Time, cleanCWD string, created time.Time, degraded bool) (codexHistoryCandidate, bool, resumeHistoryOutcome) {
 	trimmed := []byte(strings.TrimSpace(string(line)))
 	if tornRecord(trimmed) {
 		return codexHistoryCandidate{}, false, resumeHistoryNoMatch
@@ -825,10 +828,39 @@ func parseCodexSessionMeta(line []byte, fileID string, fileTime time.Time, clean
 			}
 		}
 	}
-	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cleanCWD || !withinResumeWindow(created, when) {
+	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cleanCWD || !withinCodexResumeWindow(created, when, degraded) {
 		return codexHistoryCandidate{}, false, resumeHistoryFound
 	}
 	return codexHistoryCandidate{id: id, parent: parent}, true, resumeHistoryFound
+}
+
+// earlierDegradedAgentDelay is shim.DegradedAgentDelay under the earlier 20 s + 20 s backend
+// budgets; sessions created then (zmvdy4aj7fs57uru) keep that start offset.
+const earlierDegradedAgentDelay = 40 * time.Second
+
+// withinCodexResumeWindow also accepts, for a DEGRADED start, the measured window around the
+// agent's late start: when the backend never serves, the shim starts the agent only after its
+// degraded delay. No agent start time is recorded, so the window is anchored at each delay the
+// shim has used. Only rows with that evidence get the extra windows, so sessions started apart
+// in one cwd do not see each other's rollouts.
+func withinCodexResumeWindow(created, candidate time.Time, degraded bool) bool {
+	return withinResumeWindow(created, candidate) || degraded &&
+		(withinResumeWindow(created.Add(earlierDegradedAgentDelay), candidate) ||
+			withinResumeWindow(created.Add(shim.DegradedAgentDelay), candidate))
+}
+
+// degradedStart reports durable evidence that session id's backend never became available at
+// launch: a structured-degraded marker naming backend_never_served (markSessionDegradedFor).
+// backend_unavailable markers, also written by rejoin and no-thread failures whose agent
+// started on time, are not evidence.
+func (r *filesystemResumeHistoryResolver) degradedStart(id string) bool {
+	if r.stateDir == "" || id == "" || filepath.Base(id) != id {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(r.stateDir, id, sessionDegradedFile))
+	var marker historyTornMarker
+	return err == nil && json.Unmarshal(raw, &marker) == nil &&
+		strings.HasSuffix(marker.Generation, "/"+gapBackendNeverServed)
 }
 
 func withinResumeWindow(created, candidate time.Time) bool {

@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/processcontain"
@@ -44,6 +46,36 @@ type managedNativeScope struct {
 	root     *os.Root
 	info     NativeProcessInfo
 	recorded bool
+	stopReap chan struct{}
+}
+
+// managedReapInterval paces reaping of adopted orphans while a managed session runs.
+const managedReapInterval = 2 * time.Second
+
+// reapWhileRunning reaps adopted orphans until finish, never keep (the pids an exec.Cmd waits
+// for). As a subreaper this shim inherits every double-forked or setsid descendant, and nothing
+// else waits for them before the final ContainAndReap.
+func (s *managedNativeScope) reapWhileRunning(keep ...int) {
+	if s == nil {
+		return
+	}
+	s.stopReap = make(chan struct{})
+	go func(stop <-chan struct{}) {
+		tick := time.NewTicker(managedReapInterval)
+		warned := false
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				if !processcontain.ReapAdoptedZombies(keep...) && !warned {
+					warned = true
+					log.Printf("shim: /proc/self/task/*/children is unavailable; adopted orphans are reaped only when the session ends")
+				}
+			}
+		}
+	}(s.stopReap)
 }
 
 func beginManagedNativeScope(cfg Config) (*managedNativeScope, error) {
@@ -108,6 +140,9 @@ func (s *managedNativeScope) finish() error {
 		return nil
 	}
 	defer func() { _ = s.root.Close() }()
+	if s.stopReap != nil {
+		s.stopReap <- struct{}{} // unbuffered: returns only once the reaper is between passes
+	}
 	if err := processcontain.ContainAndReap(); err != nil {
 		return errors.New("shim: managed descendants could not be contained and reaped")
 	}

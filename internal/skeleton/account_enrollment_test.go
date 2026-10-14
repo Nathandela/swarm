@@ -21,6 +21,7 @@ func enrollmentRig(t *testing.T, provider string) (*authWatcher, *authFake, *acc
 	if _, err := manager.store.SetEnabled(accountTestRegistry(t, manager).Revision, provider, true); err != nil {
 		t.Fatal(err)
 	}
+	accountTestPut(t, filepath.Join(manager.stateRoot, "account-onboarding.json"), []byte(fmt.Sprintf(`{%q:true}`, provider)))
 	home, cwd, env := accountTestLaunchEnvironment(t, manager.stateRoot)
 	native := filepath.Join(manager.stateRoot, "bin", provider)
 	version := "codex-cli 0.160.0"
@@ -99,8 +100,30 @@ func TestAccountEnrollmentUsesExistingRecyclerForBothProviders(t *testing.T) {
 	}
 }
 
+// Rotation alone never onboards running unmanaged discussions: the separate
+// daemon-side onboarding switch must be on for that provider (absent = off).
+func TestAccountEnrollmentRequiresTheOnboardingSwitch(t *testing.T) {
+	for name, raw := range map[string]string{"absent": "", "other-provider": `{"claude":true}`, "off": `{"codex":false}`, "malformed": `{"codex":`, "on": `{"codex":true}`} {
+		t.Run(name, func(t *testing.T) {
+			w, f, m, source := enrollmentRig(t, "codex")
+			path := filepath.Join(m.stateRoot, "account-onboarding.json")
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if raw != "" {
+				accountTestPut(t, path, []byte(raw))
+			}
+			w.discoverAccountEnrollments()
+			queued := w.state.CLI[source.ID].Enrollment != nil
+			if queued != (name == "on") || len(f.killed) != 0 {
+				t.Fatalf("onboarding %s: queued=%v, rotation is on", name, queued)
+			}
+		})
+	}
+}
+
 func TestAccountEnrollmentDefersUnsafeSourcesAndRechecksConfigurationBeforeKill(t *testing.T) {
-	for _, reason := range []string{"active", "interaction", "controller", "unsupported", "downgrade", "unobserved", "disabled", "missing-history", "configuration-changed", "destination-denied"} {
+	for _, reason := range []string{"active", "interaction", "controller", "unsupported", "downgrade", "unobserved", "disabled", "missing-history", "destination-denied"} {
 		t.Run(reason, func(t *testing.T) {
 			w, f, m, source := enrollmentRig(t, "codex")
 			switch reason {
@@ -145,21 +168,30 @@ func TestAccountEnrollmentDefersUnsafeSourcesAndRechecksConfigurationBeforeKill(
 					t.Fatal(err)
 				}
 			}
-			if reason == "configuration-changed" {
-				if w.state.CLI[source.ID].Enrollment == nil {
-					t.Fatal("fixture did not queue")
-				}
-				for _, item := range source.Env {
-					if len(item) > 5 && item[:5] == "HOME=" {
-						accountTestPut(t, filepath.Join(item[5:], ".codex", "config.toml"), []byte("model=\"changed\"\n"))
-					}
-				}
-			}
 			w.workCLIRefresh(true)
 			if len(f.killed) != 0 || len(f.launched) != 0 {
 				t.Fatal("unsafe source was interrupted", reason)
 			}
 		})
+	}
+}
+
+// Owner configuration drift after the preflight no longer defers onboarding:
+// the recheck follows the owner configuration and the source is enrolled.
+func TestAccountEnrollmentFollowsOwnerConfigurationChangeBeforeKill(t *testing.T) {
+	w, f, _, source := enrollmentRig(t, "codex")
+	w.discoverAccountEnrollments()
+	if w.state.CLI[source.ID].Enrollment == nil {
+		t.Fatal("fixture did not queue")
+	}
+	for _, item := range source.Env {
+		if len(item) > 5 && item[:5] == "HOME=" {
+			accountTestPut(t, filepath.Join(item[5:], ".codex", "config.toml"), []byte("model=\"changed\"\n"))
+		}
+	}
+	w.workCLIRefresh(true)
+	if len(f.killed) != 1 {
+		t.Fatal("owner configuration drift deferred onboarding")
 	}
 }
 

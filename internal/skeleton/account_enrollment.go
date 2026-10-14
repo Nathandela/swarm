@@ -1,6 +1,9 @@
 package skeleton
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/Nathandela/swarm/internal/accountconfig"
@@ -12,12 +15,25 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
+// accountOnboardingFile holds the owner's per-provider switch for onboarding
+// running unmanaged discussions, e.g. {"codex":true}. It is separate from the
+// rotation switch and off when absent or unreadable, until the cross-account
+// acceptance passes (ADR-032). It lives outside the registry so a downgrade
+// sees no schema change.
+const accountOnboardingFile = "account-onboarding.json"
+
+func accountOnboardingEnabled(stateRoot, provider string) bool {
+	raw, err := os.ReadFile(filepath.Join(stateRoot, accountOnboardingFile))
+	var on map[string]bool
+	return err == nil && json.Unmarshal(raw, &on) == nil && on[provider]
+}
+
 func (w *authWatcher) accountEnrollmentEnabled(provider string) bool {
 	if w.accountRotation == nil || w.accountRotation.d == nil || w.accountRotation.d.accounts == nil || w.accountRotation.d.accounts.store == nil {
 		return false
 	}
 	r, err := w.accountRotation.d.accounts.store.Snapshot()
-	return err == nil && r.Enabled[provider]
+	return err == nil && r.Enabled[provider] && accountOnboardingEnabled(w.accountRotation.d.accounts.stateRoot, provider)
 }
 
 // Enabling a pool queues compatible running discussions on the existing durable

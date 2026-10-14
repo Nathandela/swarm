@@ -753,6 +753,7 @@ func (r *accountResumeHistoryResolver) selected(m persist.Meta) (resumeHistoryRe
 	}
 	selected := newFilesystemResumeHistoryResolver(profile, defaultResumeHistoryLimits)
 	selected.privateProvider = m.AgentType
+	selected.stateDir = r.stateRoot
 	return selected, true
 }
 

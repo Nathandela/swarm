@@ -182,6 +182,8 @@ type accountExecRecord struct {
 }
 
 func TestAccountLaunchActualCLIAndBackendShareBoundProfileAndWorktree(t *testing.T) {
+	// The owner's native sandbox network policy is carried to managed Codex CLI and backend (ADR-028 amendment of 2026-10-14).
+	const networkOverride = "sandbox_workspace_write.network_access=true"
 	buildBinaries(t)
 	python, err := exec.LookPath("python3")
 	if err != nil {
@@ -216,10 +218,10 @@ func TestAccountLaunchActualCLIAndBackendShareBoundProfileAndWorktree(t *testing
 		cfg.PreLaunch = func(_ string, _ daemon.LaunchSpec) (string, error) { return actual, nil }
 		cfg.FinalizeLaunch = assembly.prepareAccountLaunch
 		cfg.BackendPlanner = func(_, _, socket string, env, _ []string) (*daemon.BackendSpec, error) {
-			return &daemon.BackendSpec{Program: native, Args: []string{"fixture-backend", socket}, Env: env}, nil
+			return &daemon.BackendSpec{Program: native, Args: []string{"fixture-backend", socket, "-c", networkOverride}, Env: env}, nil
 		}
 	})
-	meta, err := core.Launch(daemon.LaunchSpec{AgentType: "codex", Argv: []string{native, "--model", "gpt-fixed", "--sandbox", "workspace-write"}, Cwd: requested, ClientEnv: env, AccountBinding: &binding, AccountStateRoot: m.stateRoot, CLIIdentity: identity, Cols: 80, Rows: 24})
+	meta, err := core.Launch(daemon.LaunchSpec{AgentType: "codex", Argv: []string{native, "--model", "gpt-fixed", "--sandbox", "workspace-write", "-c", networkOverride}, Cwd: requested, ClientEnv: env, AccountBinding: &binding, AccountStateRoot: m.stateRoot, CLIIdentity: identity, Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,8 +247,8 @@ func TestAccountLaunchActualCLIAndBackendShareBoundProfileAndWorktree(t *testing
 		if record.Profile != candidate.ProfilePath || record.Home != home || record.Cwd != actual || record.AmbientKeyPresent {
 			t.Fatal("native CLI/backend inherited divergent profile, HOME, cwd or ambient credentials")
 		}
-		if !argvContains(record.Args, `cli_auth_credentials_store="file"`) || argvContains(record.Args, `sandbox_workspace_write.network_access=true`) || argvContains(record.Args, `model_reasoning_effort="high"`) {
-			t.Fatal("native user settings were promoted to CLI or network policy was broadened")
+		if !argvContains(record.Args, `cli_auth_credentials_store="file"`) || !argvContains(record.Args, networkOverride) || argvContains(record.Args, `model_reasoning_effort="high"`) {
+			t.Fatal("native user settings were promoted to CLI or the sandbox network override was dropped")
 		}
 
 	}

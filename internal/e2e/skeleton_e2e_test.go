@@ -155,6 +155,7 @@ func launchFakeSession(t *testing.T, c *protocol.Client, script string) string {
 	if err != nil {
 		t.Fatalf("client Launch(fake): %v", err)
 	}
+	t.Cleanup(func() { _ = c.Kill(id) }) // shims outlive their daemon; end the session first
 	return id
 }
 

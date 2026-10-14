@@ -327,6 +327,31 @@ stream may interleave A(head), B, A(delta); starting at B still carries A's head
 old edge therefore closes the suffix over every repeated identity, exceeding the record-count
 request only when that closure is indivisible. The independent 512 KiB ceiling stays hard.
 
+### A12 — production opens the journal with bounded retention (2026-10-14)
+
+The floor this ADR pages against was, until now, never reached in production: the daemon opened
+the journal with zero `Options`, so nothing rotated or aged out. The live journal reached 90
+segments / 609 MB, every record mirrored in memory (daemon RSS 1.44 GB), and every start loaded
+all of it. The daemon now opens it with `MaxBytes` 16 MiB (a segment rotates past this size),
+`MaxFiles` 64 (segments kept) and `MaxTotalBytes` 512 MiB (applied at `Open`, before loading:
+the oldest whole segments are deleted until the rest fit; the newest is always kept, and the
+dropped high-water cursor is kept so cursors stay monotonic). Dropping a segment copies the
+retained tail, so the dropped records are freed rather than pinned until the next restart.
+
+Rationale and consequences:
+
+- The bound is on memory as much as disk, because the in-memory mirror holds every retained
+  record. `MaxTotalBytes` bounds what a start loads, including legacy segments larger than 16 MiB;
+  `MaxFiles` x `MaxBytes` bounds growth while running.
+- Every daemon start opens a segment. `Open` unlinks retained zero-record segments except the
+  newest, so starts that appended nothing do not count toward `MaxFiles`; 64 starts that each
+  appended something still age history out regardless of size.
+- On the live data, 512 MiB keeps about six weeks; the first start after upgrade deletes the
+  oldest segments. This is history loss by design: below the floor, `ReadFrom`/`SubscribeFrom`
+  answer `full_resync` and this ADR's pages report `history_floor`, as section 2 already requires.
+  The roster is rebuilt from persisted metas, not from the journal.
+- `EmitStructuredGapOnce` may re-emit a gap whose earlier record aged out; that is benign.
+
 ## What this amends
 
 PB-SYNC-3's reseed remains the transport repair channel, unchanged; this ADR adds the bounded,

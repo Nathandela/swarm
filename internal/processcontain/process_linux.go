@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -132,6 +134,31 @@ func ReapOrphans() {
 			return
 		}
 	}
+}
+
+// ReapAdoptedZombies reaps this subreaper's exited children except keep, the children an
+// exec.Cmd still waits for. Children are listed per thread (/proc/self/task/*/children), so
+// the cost does not grow with the host's process count. It reports false when the kernel
+// exposes no children lists (no CONFIG_PROC_CHILDREN), in which case it reaps nothing.
+func ReapAdoptedZombies(keep ...int) bool {
+	lists, _ := filepath.Glob("/proc/self/task/*/children")
+	if len(lists) == 0 {
+		return false
+	}
+	for _, list := range lists {
+		raw, _ := os.ReadFile(list)
+		for _, field := range strings.Fields(string(raw)) {
+			pid, err := strconv.Atoi(field)
+			if err != nil || slices.Contains(keep, pid) {
+				continue
+			}
+			if p, err := readProc(pid); err == nil && p.state == "Z" {
+				var status syscall.WaitStatus
+				_, _ = syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+			}
+		}
+	}
+	return true
 }
 
 func SignalIdentity(p Identity, signal syscall.Signal) error {

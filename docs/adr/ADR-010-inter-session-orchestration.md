@@ -1,6 +1,6 @@
 # ADR-010: Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs
 
-**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6), 2026-09-02 (Amendment 7), 2026-09-02 (Amendment 8))
+**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6), 2026-09-02 (Amendment 7), 2026-09-02 (Amendment 8), 2026-10-14 (Amendment 5 F1 addendum))
 **Date**: 2026-07-24
 
 ## Context
@@ -614,6 +614,14 @@ E7's gate becomes "either layout": a source is supported when its adapter has ch
 its transcripts live, by cwd or by day. agy and opencode still implement neither and are refused
 by name. A MISSING codex id is first offered to the existing `resolveCodex` window before the locator runs;
 the limits above say what that recovers today.
+
+**Addendum (2026-10-14): the app-server runs in the session's real cwd.** The paragraph above that
+places the app-server in the state dir is superseded for new sessions. Every launch now runs the
+app-server in the session's provider cwd (the checkout, for a worktree session), not only managed
+launches, because Codex roots the thread's cwd and its workspace-write sandbox at the process cwd.
+New rollouts therefore name the real cwd, and the `resolveCodex` cwd window can match them.
+Rollouts written before this change keep the state-dir cwd, so the no-cwd-clause rule for a known id
+still holds, and an ambiguous cwd match still fails closed.
 
 ### F2. Every codex argv lifts the sandbox's network filter for the swarm CLI
 

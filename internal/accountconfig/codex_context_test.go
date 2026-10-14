@@ -346,12 +346,15 @@ func TestCodexContextHoldsChangesWithoutOverwritingNativeWrites(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := RevalidateCodexContext(c, f.candidate); err == nil {
-				t.Fatal("changed context accepted")
+			// A native write of the profile config.toml is accepted drift and
+			// launches with the profile as it is; every other change still holds.
+			accepted := kind == "candidate-config"
+			if err := RevalidateCodexContext(c, f.candidate); (err == nil) != accepted {
+				t.Fatal("changed context accepted or native write refused:", err)
 			}
 			before, _ := os.ReadFile(filepath.Join(f.candidate, "config.toml"))
-			if _, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease); err == nil {
-				t.Fatal("changed cohort admitted")
+			if _, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease); (err == nil) != accepted {
+				t.Fatal("changed cohort admitted or native write refused:", err)
 			}
 			after, _ := os.ReadFile(filepath.Join(f.candidate, "config.toml"))
 			if string(before) != string(after) {
@@ -448,7 +451,7 @@ func TestCodexNativeArgumentsKeepOrdinaryOverridesAndHoldAuthSelectors(t *testin
 	}
 }
 
-func TestCodexContextHookStatePortableAcrossAccountsAndPrivateWritesHeld(t *testing.T) {
+func TestCodexContextHookStatePortableAcrossAccountsAndPrivateWritesAccepted(t *testing.T) {
 	f := codexContextFixture(t)
 	sourceCfg := filepath.Join(f.source, "config.toml")
 	sourceHooks := filepath.Join(f.source, "hooks.json")
@@ -480,11 +483,16 @@ func TestCodexContextHookStatePortableAcrossAccountsAndPrivateWritesHeld(t *test
 		t.Fatal(err)
 	}
 	put(t, filepath.Join(f.candidate, "config.toml"), string(raw))
-	if err := RevalidateCodexContext(c, f.candidate); err == nil {
-		t.Fatal("private native hook write erased or admitted")
+	if err := RevalidateCodexContext(c, f.candidate); err != nil {
+		t.Fatal("private native hook write refused:", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(f.candidate, "config.toml")); string(after) != string(raw) {
+		t.Fatal("private native hook write erased")
 	}
 }
-func TestCodexContextHookStateCollisionAndWrongNativeSourceHeld(t *testing.T) {
+// An owner hook-state collision still holds; a profile write that names the
+// owner path is accepted native drift.
+func TestCodexContextHookStateCollisionHeldAndWrongNativeSourceAccepted(t *testing.T) {
 	for _, collision := range []bool{false, true} {
 		f := codexContextFixture(t)
 		cfg := filepath.Join(f.source, "config.toml")
@@ -504,12 +512,13 @@ func TestCodexContextHookStateCollisionAndWrongNativeSourceHeld(t *testing.T) {
 		raw, _ := os.ReadFile(filepath.Join(f.candidate, "config.toml"))
 		raw = []byte(strings.ReplaceAll(string(raw), filepath.Join(f.candidate, "config.toml"), cfg))
 		put(t, filepath.Join(f.candidate, "config.toml"), string(raw))
-		if err := RevalidateCodexContext(c, f.candidate); err == nil {
-			t.Fatal("semantically inactive owner key admitted as private trust")
+		if err := RevalidateCodexContext(c, f.candidate); err != nil {
+			t.Fatal("native profile hook write refused:", err)
 		}
 	}
 }
-func TestCodexContextExplicitOwnerRefreshPreservesHistoryAndHoldsNativeDivergence(t *testing.T) {
+// A native private write no longer holds an explicit owner refresh: owner wins.
+func TestCodexContextExplicitOwnerRefreshPreservesHistoryAndOwnerWinsOverNativeDivergence(t *testing.T) {
 	for _, privateWrite := range []bool{false, true} {
 		f := codexContextFixture(t)
 		old, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease)
@@ -524,20 +533,12 @@ func TestCodexContextExplicitOwnerRefreshPreservesHistoryAndHoldsNativeDivergenc
 		if privateWrite {
 			put(t, filepath.Join(f.candidate, "config.toml"), "model_reasoning_effort=\"low\"\n")
 		}
-		before, _ := os.ReadFile(filepath.Join(f.candidate, "config.toml"))
 		if _, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease); err == nil {
 			t.Fatal("automatic source refresh admitted")
 		}
 		next, err := PrepareCodexContext(f.candidate, f.cwd, f.env, codexContextLease, true)
-		if privateWrite {
-			if err == nil {
-				t.Fatal("explicit source refresh overwrote native private write")
-			}
-			after, _ := os.ReadFile(filepath.Join(f.candidate, "config.toml"))
-			if string(after) != string(before) {
-				t.Fatal("native private write lost")
-			}
-			continue
+		if settings := readNativeCodexFixtureSettings(t, filepath.Join(f.candidate, "config.toml")); privateWrite && settings["model_reasoning_effort"] != "medium" {
+			t.Fatal("explicit owner refresh did not win over the native private write")
 		}
 		if err != nil || next.GlobalGeneration == old.GlobalGeneration {
 			t.Fatalf("explicit quiescent owner refresh held: %v", err)

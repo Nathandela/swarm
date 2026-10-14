@@ -2,6 +2,7 @@ package accountconfig
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -39,7 +40,9 @@ func TestClaudeNativeTrustDoesNotHoldAccountOrOverwritePrivateAcknowledgement(t 
 	}
 }
 
-func TestClaudeNativePermissionOrMCPAmendmentStillHolds(t *testing.T) {
+// A native permission grant or `claude mcp add` in the profile is accepted
+// drift: revalidation and an unchanged-owner refresh keep it in place.
+func TestClaudeNativePermissionOrMCPAmendmentIsAccepted(t *testing.T) {
 	for _, amendment := range []map[string]any{{"allowedTools": []string{"Bash(*)"}}, {"mcpServers": map[string]any{"synthetic": map[string]string{"command": "changed"}}}} {
 		f := fixture(t, "claude")
 		lease := func(_ string, install func() error) error { return install() }
@@ -50,11 +53,14 @@ func TestClaudeNativePermissionOrMCPAmendmentStillHolds(t *testing.T) {
 		amendment["hasTrustDialogAccepted"] = true
 		raw, _ := json.Marshal(map[string]any{"projects": map[string]any{f.cwd: amendment}})
 		put(t, filepath.Join(f.candidate, ".claude.json"), string(raw))
-		if err := RevalidateClaudeContext(c, f.candidate); err == nil {
-			t.Fatal("permission/MCP amendment silently ignored")
+		if err := RevalidateClaudeContext(c, f.candidate); err != nil {
+			t.Fatal("permission/MCP amendment refused:", err)
 		}
-		if _, err := PrepareClaudeContext(f.candidate, f.cwd, f.env, lease, true); err == nil {
-			t.Fatal("permission/MCP amendment overwritten by refresh")
+		if _, err := PrepareClaudeContext(f.candidate, f.cwd, f.env, lease, true); err != nil {
+			t.Fatal("permission/MCP amendment refused by refresh:", err)
+		}
+		if after, _ := os.ReadFile(filepath.Join(f.candidate, ".claude.json")); string(after) != string(raw) {
+			t.Fatal("permission/MCP amendment overwritten without an owner change")
 		}
 	}
 }

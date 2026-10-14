@@ -30,8 +30,7 @@
 //	func DecodeRecord(line []byte) (Record, error) // future schema -> error; older -> migrated; malformed -> error
 //	type Options struct { MaxBytes int64; MaxFiles int; Clock func() time.Time }
 //	type Journal struct{ ... }
-//	func Open(dir string) (*Journal, error)
-//	func OpenWithOptions(dir string, opts Options) (*Journal, error)
+//	func Open(dir string, opts Options) (*Journal, error) // zero Options = unbounded retention
 //	func (j *Journal) Append(r Record) (Record, error)   // assigns cursor+schema+ts; fsync BEFORE return (R-JRN.5)
 //	func (j *Journal) Cursor() uint64
 //	func (j *Journal) ReadFrom(from uint64) (Resume, error) // atomic snapshot+range (R-JRN.4); FullResync below floor (R-JRN.6)
@@ -68,7 +67,7 @@ func jdir(t *testing.T) string {
 // openJournal opens a journal with cleanup, fatal on error.
 func openJournal(t *testing.T, dir string) *Journal {
 	t.Helper()
-	j, err := Open(dir)
+	j, err := Open(dir, Options{})
 	if err != nil {
 		t.Fatalf("Open(%s): %v", dir, err)
 	}
@@ -270,7 +269,7 @@ func TestJournal_CursorMonotonicAcrossRestart(t *testing.T) {
 // the same dir reads it back.
 func TestJournal_CrashAfterAckSurvives(t *testing.T) {
 	dir := jdir(t)
-	j, err := Open(dir)
+	j, err := Open(dir, Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -308,9 +307,9 @@ func TestJournal_CrashAfterAckSurvives(t *testing.T) {
 func TestJournal_CompactionBoundsDisk(t *testing.T) {
 	dir := jdir(t)
 	const maxBytes, maxFiles = 4 << 10, 3
-	j, err := OpenWithOptions(dir, Options{MaxBytes: maxBytes, MaxFiles: maxFiles})
+	j, err := Open(dir, Options{MaxBytes: maxBytes, MaxFiles: maxFiles})
 	if err != nil {
-		t.Fatalf("OpenWithOptions: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = j.Close() })
 
@@ -328,9 +327,9 @@ func TestJournal_CompactionBoundsDisk(t *testing.T) {
 // returns a full-resync signal (never a silent omission of dropped records).
 func TestJournal_StaleCursorReturnsFullResync(t *testing.T) {
 	dir := jdir(t)
-	j, err := OpenWithOptions(dir, Options{MaxBytes: 2 << 10, MaxFiles: 2})
+	j, err := Open(dir, Options{MaxBytes: 2 << 10, MaxFiles: 2})
 	if err != nil {
-		t.Fatalf("OpenWithOptions: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = j.Close() })
 	for i := 0; i < 1000; i++ {

@@ -7,12 +7,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Nathandela/swarm/internal/accounts"
 )
 
 // ClaudeContext identifies the ordinary global configuration independently of
@@ -131,8 +135,15 @@ func PrepareClaudeContext(profile, cwd string, env []string, withLease func(stri
 		if err != nil {
 			return err
 		}
+		superseded := false
 		if update != nil && update.Next.GlobalGeneration != c.GlobalGeneration {
-			return Conflict("native-configuration-update-source-changed")
+			if len(ownerRefresh) != 1 || !ownerRefresh[0] {
+				return Conflict("native-configuration-update-source-changed")
+			}
+			// The owner changed again after an interrupted refresh: finish it
+			// toward the current owner configuration instead of holding forever.
+			log.Printf("accounts: superseded interrupted configuration refresh profile=%s", profile)
+			update.Next, superseded = c, true
 		}
 		var refreshedHistory *claudeHistoryInventory
 		var previous *ClaudeContext
@@ -157,11 +168,19 @@ func PrepareClaudeContext(profile, cwd string, env []string, withLease func(stri
 				return Conflict("account-global-configuration-generation-differs")
 			}
 			if update != nil {
-				if update.Previous.GlobalGeneration != installed.GlobalGeneration {
+				if superseded {
+					// The marker records the last committed cohort (Previous or the stale Next).
+					update.Previous = installed
+				} else if update.Previous.GlobalGeneration != installed.GlobalGeneration {
 					return Conflict("invalid-native-configuration-update")
 				}
 				if err := validateClaudePartialUpdate(*update, profile); err != nil {
 					return err
+				}
+				if superseded {
+					if err := writeClaudeContextUpdate(profile, *update); err != nil {
+						return err
+					}
 				}
 			} else {
 				if err := validateClaudeInstalledContext(installed, profile); err != nil {
@@ -318,20 +337,25 @@ func RevalidateClaudeContext(c ClaudeContext, profile string) error {
 	return validateClaudeInstalledContext(c, profile)
 }
 
-// Private native edits are never overwritten by owner-source refresh. This
-// comparison intentionally excludes the owner source, which may have changed.
+// Native CLIs persist ordinary preferences (/fast, /model, /config, mcp add)
+// into the account profile. Such drift is logged and accepted, never refused;
+// an owner refresh still overwrites the profile copy (owner wins).
+func acceptNativeDrift(profile, file string) {
+	log.Printf("accounts: accepted native configuration drift profile=%s file=%s change=differs-from-installed-cohort", profile, file)
+}
+
+// This comparison intentionally excludes the owner source, which may have changed.
 func validateClaudeInstalledContext(c ClaudeContext, profile string) error {
 	raw, err := readRegular(filepath.Join(profile, "settings.json"), maxSourceBytes)
 	if err != nil {
 		return Conflict("configuration-source-changed")
 	}
-	hash, err := claudeSettingsDigest(raw)
-	if err != nil || hash != c.SettingsSHA256 {
-		return Conflict("candidate-configuration-changed")
+	if hash, err := claudeSettingsDigest(raw); err != nil || hash != c.SettingsSHA256 {
+		acceptNativeDrift(profile, "settings.json")
 	}
 	preferences, err := readClaudePreferences(filepath.Join(profile, ".claude.json"))
 	if err != nil || claudeHash(claudeStablePreferences(preferences)) != c.PreferencesStableSHA256 {
-		return Conflict("candidate-configuration-changed")
+		acceptNativeDrift(profile, ".claude.json")
 	}
 	for _, asset := range c.Assets {
 		path := filepath.Join(profile, asset.Name)
@@ -475,8 +499,36 @@ func filterClaudeGlobalSettings(settings map[string]any) error {
 		if filepath.IsAbs(key) {
 			delete(settings, key)
 		}
+		// Ordinary owner settings follow the owner natively. Only keys that
+		// route credentials or providers around the account profile are refused.
+		switch key {
+		case "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod", "forceLoginOrgUUID":
+			return Conflict("credential-or-provider-settings")
+		case "env":
+			if claudeEnvRoutesCredentials(settings[key]) {
+				return Conflict("credential-or-provider-settings")
+			}
+		}
 	}
-	return validateClaudeContextSettings(settings)
+	return nil
+}
+
+// An owner env entry routes credentials or providers when the launch scrub or
+// selector check would remove or refuse it as process environment.
+func claudeEnvRoutesCredentials(value any) bool {
+	env, ok := value.(map[string]any)
+	if !ok {
+		return true
+	}
+	entries := make([]string, 0, len(env))
+	for key, v := range env {
+		if strings.HasPrefix(key, "AWS_") {
+			return true
+		}
+		entries = append(entries, fmt.Sprintf("%s=%v", key, v))
+	}
+	scrubbed, err := accounts.ScrubEnvironment(entries)
+	return err != nil || len(scrubbed) != len(entries) || rejectSelectors(entries, nil) != nil
 }
 
 func validateClaudeContextSettings(settings map[string]any) error {

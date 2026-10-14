@@ -37,14 +37,15 @@ import (
 
 // backendReadyPoll bounds how long the assembly waits for the shim's backend to become
 // dialable, and how often it retries. The shim has its own ReadyTimeout on the same event; this
-// one covers the shim's spawn plus that wait, so it is deliberately the longer of the two.
+// one covers the shim's spawn plus that wait (shim.DegradedAgentDelay, after which a backend
+// that never served is abandoned), so it is deliberately the longer of the two.
 const (
-	backendReadyDeadline = 45 * time.Second
+	backendReadyDeadline = 90 * time.Second
 	backendReadyInterval = 100 * time.Millisecond
 )
 
 // backendDeadline is the ready/join bound this daemon actually uses. It exists ONLY so a test
-// can drive the degrade paths without waiting out a 45 s dial retry; production never sets it
+// can drive the degrade paths without waiting out a 90 s dial retry; production never sets it
 // (Config carries no knob) and the default is the constant above.
 func (d *Daemon) backendDeadline() time.Duration {
 	if d.backendReady > 0 {
@@ -194,7 +195,7 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		// §R7.7 case 1: this session will NEVER have a structured plane. The gap is emitted
 		// AT LAUNCH because the phone reads gaps off the transcript to decide whether to show
 		// a composer at all -- without it the owner types and the refusal arrives after the tap.
-		d.noteBackendUnavailableForInstance(id, expectedInstance)
+		d.noteBackendNeverServedForInstance(id, expectedInstance)
 		if aerr := d.core.SendBackendAttach(id, nil); aerr != nil {
 			log.Printf("skeleton: release session %s without a backend: %v", id, aerr)
 		}
@@ -458,6 +459,7 @@ const backendSubscribeMaxBackoff = 5 * time.Second
 // never moved, which is the silent bridge ADR-017 forbids.
 func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, expectedFeed, expectedInstance string, priorHistory bool) {
 	wait := backendReadyInterval
+	start := time.Now()
 	for {
 		timer := time.NewTimer(wait)
 		<-timer.C
@@ -477,7 +479,11 @@ func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, e
 		if !d.backendFeedCurrent(id, expectedFeed) {
 			return // a replacement landed while this RPC was in flight
 		}
-		if !isMissingRollout(err) {
+		// A source rollout that is really gone never appears: its retry is bounded by the join
+		// deadline, while the recorded `no rollout found` race keeps the session's life.
+		sourceGone := isMissingSourceRollout(err) && time.Since(start) > d.backendDeadline()
+		retry := isMissingRollout(err) && !sourceGone
+		if !retry {
 			log.Printf("skeleton: session %s can never subscribe to thread %s: %v", id, threadID, err)
 			reason := "the thread subscription could not be established: " + err.Error()
 			if expectedFeed == "" {
@@ -496,14 +502,21 @@ func (d *Daemon) subscribeSessionThread(id string, conn backendConn, threadID, e
 	}
 }
 
-// isMissingRollout reports the RECORDED pre-first-turn resume failure
-// (errors-observed.json: {"code":-32600,"message":"no rollout found for thread id <uuid>"}).
+// isMissingRollout reports the RECORDED pre-first-turn resume failure in both wordings:
+// {"code":-32600,"message":"no rollout found for thread id <uuid>"} (errors-observed.json), and
+// codex >= 0.156's paginated-history "invalid paginated history lineage for <uuid>: missing
+// source rollout" (isMissingSourceRollout).
 func isMissingRollout(err error) bool {
+	return rpcMessageContains(err, "no rollout found") || isMissingSourceRollout(err)
+}
+
+func isMissingSourceRollout(err error) bool {
+	return rpcMessageContains(err, "missing source rollout")
+}
+
+func rpcMessageContains(err error, text string) bool {
 	var rpcErr *appserver.RPCError
-	if !errors.As(err, &rpcErr) {
-		return false
-	}
-	return strings.Contains(rpcErr.Message, "no rollout found")
+	return errors.As(err, &rpcErr) && strings.Contains(rpcErr.Message, text)
 }
 
 // discoverLoadedThread finds the one thread this session's app-server is holding.

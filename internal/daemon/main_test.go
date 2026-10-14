@@ -80,6 +80,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/testbin"
 	"github.com/Nathandela/swarm/internal/vt"
 )
 
@@ -240,6 +241,10 @@ func TestMain(m *testing.M) {
 		}
 	}
 	code := m.Run()
+	// Shims outlive their daemon by design (ADR-001): end every session a test left running.
+	// Agents re-exec this test binary, so it is swept too.
+	self, _ := os.Executable()
+	testbin.KillProcessesOf(swarmBin, fakeAgentBin, self)
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
@@ -301,8 +306,19 @@ func openDaemon(t *testing.T, cfg Config) *Daemon {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { _ = d.Close() })
+	t.Cleanup(func() { killSessions(d); _ = d.Close() })
 	return d
+}
+
+// killSessions ends every session d lists whose recorded shim is still alive. Shims outlive
+// their daemon by design (ADR-001), so a test that returns without killing its sessions leaks
+// the shim and its agent; the agent exits when the shim's PTY closes.
+func killSessions(d *Daemon) {
+	for _, m := range d.List() {
+		if d.shimIdentityMatches(m) {
+			killTree(m.ShimPID)
+		}
+	}
 }
 
 // announceSpec builds a LaunchSpec for a long-lived announce agent that writes
