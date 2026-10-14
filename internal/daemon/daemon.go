@@ -62,6 +62,14 @@ const (
 	idempotencyCompactInterval = time.Hour
 )
 
+// Journal retention (R-JRN.6). Every daemon start opens a segment, so the bound is in files of
+// at most journalMaxBytes: at most 1 GiB on disk. A client whose cursor falls below the floor
+// gets full_resync; history below it answers the sealed unavailable/history_floor.
+const (
+	journalMaxBytes = 16 << 20
+	journalMaxFiles = 64
+)
+
 // Registry is the read view of the session roster (frozen API).
 type Registry interface {
 	List() []persist.Meta
@@ -299,7 +307,8 @@ func Open(cfg Config) (*Daemon, error) {
 	// The daemon-wide durable journal (R-JRN) and the two-phase idempotency store
 	// (R-IDP) both live under the state dir and must be open BEFORE reconcile, whose
 	// restart transitions journal through the saveMeta choke point.
-	jrnl, err := journal.Open(filepath.Join(cfg.StateDir, "journal"))
+	jrnl, err := journal.OpenWithOptions(filepath.Join(cfg.StateDir, "journal"),
+		journal.Options{MaxBytes: journalMaxBytes, MaxFiles: journalMaxFiles})
 	if err != nil {
 		_ = listener.Close()
 		_ = releaseLock(lockFile)
