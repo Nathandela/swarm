@@ -95,7 +95,7 @@ func TestBindAccountLaunch_RetriesTheNextAccountAfterAnAccountConfigurationConfl
 	f := newAccountRetryFixture(t, "Work", "Personal")
 	f.refuse = func(accounts.Binding) error {
 		if len(f.attempts) == 1 {
-			return accountconfig.Conflict("configuration-writer-active")
+			return accountconfig.Conflict("unsafe-account-profile")
 		}
 		return nil
 	}
@@ -111,10 +111,38 @@ func TestBindAccountLaunch_RetriesTheNextAccountAfterAnAccountConfigurationConfl
 	}
 	refused := f.attempts[0]
 	got := sink.String()
-	for _, want := range []string{refused, fmt.Sprintf("%q", f.labels[refused]), "configuration-writer-active"} {
+	for _, want := range []string{refused, fmt.Sprintf("%q", f.labels[refused]), "unsafe-account-profile"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("daemon log lacks %q for the refused account:\n%s", want, got)
 		}
+	}
+}
+
+// Refusals scoped to the bound account's own profile or credentials are retried on
+// the next account, which another account's profile would not share.
+func TestBindAccountLaunch_RetriesEveryProfileScopedRefusal(t *testing.T) {
+	for code, failure := range map[string]error{
+		"candidate-configuration-marker-changed": accountconfig.Conflict("candidate-configuration-marker-changed"),
+		"unsafe-account-profile":                 accountconfig.Conflict("unsafe-account-profile"),
+		"unsafe-account-configuration":           accountconfig.Conflict("unsafe-account-configuration"),
+		"native-configuration-update-pending":    accountconfig.Conflict("native-configuration-update-pending"),
+		"invalid-credentials":                    accounts.ErrInvalidCredentials,
+	} {
+		t.Run(code, func(t *testing.T) {
+			f := newAccountRetryFixture(t, "Work", "Personal")
+			f.refuse = func(accounts.Binding) error {
+				if len(f.attempts) == 1 {
+					return failure
+				}
+				return nil
+			}
+			if _, err := f.launch(t, "fix-login"); err != nil {
+				t.Fatalf("launch refused although a second account was eligible: %v", err)
+			}
+			if len(f.attempts) != 2 || f.attempts[0] == f.attempts[1] {
+				t.Fatalf("attempted accounts %v, want the refused account then a different one", f.attempts)
+			}
+		})
 	}
 }
 
@@ -145,12 +173,11 @@ func TestBindAccountLaunch_NamesEveryAccountTriedWhenNoneCanServe(t *testing.T) 
 	if _, err := f.manager.store.SetAuth(accountTestRegistry(t, f.manager).Revision, spare, accounts.AuthNeedsLogin); err != nil {
 		t.Fatal(err)
 	}
-	running, err := f.launch(t, "fix-login")
+	_, err := f.launch(t, "fix-login")
 	if err != nil {
 		t.Fatal(err)
 	}
-	holder := f.labels[running.AccountBinding.AccountID]
-	f.refuse = func(accounts.Binding) error { return accountconfig.Conflict("configuration-writer-active") }
+	f.refuse = func(accounts.Binding) error { return accounts.ErrInvalidCredentials }
 	_, err = f.launch(t, "second")
 	if err == nil {
 		t.Fatal("launch succeeded although every account refused")
@@ -160,8 +187,7 @@ func TestBindAccountLaunch_NamesEveryAccountTriedWhenNoneCanServe(t *testing.T) 
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		`"Work" configuration-writer-active`, `"Personal" configuration-writer-active`,
-		fmt.Sprintf("%q configuration-writer-active - end discussion \"fix-login\"", holder),
+		`"Work" invalid-credentials - sign in again`, `"Personal" invalid-credentials - sign in again`,
 		`"Spare" signed-out - sign in again`, "codex rotation off",
 	} {
 		if !strings.Contains(msg, want) {
@@ -187,10 +213,10 @@ func TestBindAccountLaunch_AFrozenBindingReturnsItsOwnRefusal(t *testing.T) {
 		frozen = accountTestBinding(t, f.manager, accounts.Account{ID: id})
 		break
 	}
-	f.refuse = func(accounts.Binding) error { return accountconfig.Conflict("configuration-writer-active") }
+	f.refuse = func(accounts.Binding) error { return accountconfig.Conflict("unsafe-account-profile") }
 	_, err := f.api.Launch(daemon.LaunchSpec{AgentType: "codex", Name: "bound", Cwd: f.cwd, ClientEnv: f.env, Options: map[string]string{}, AccountBinding: &frozen, Cols: 80, Rows: 24})
-	if !errors.Is(err, accountconfig.Conflict("configuration-writer-active")) || strings.Contains(err.Error(), "rotation off") {
-		t.Fatalf("frozen launch error = %v, want the account's own configuration-writer-active refusal", err)
+	if !errors.Is(err, accountconfig.Conflict("unsafe-account-profile")) || strings.Contains(err.Error(), "rotation off") {
+		t.Fatalf("frozen launch error = %v, want the account's own unsafe-account-profile refusal", err)
 	}
 	if len(f.attempts) != 1 || f.attempts[0] != frozen.AccountID {
 		t.Fatalf("attempted accounts %v, want only the frozen account %s", f.attempts, frozen.AccountID)
