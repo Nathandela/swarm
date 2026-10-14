@@ -8,10 +8,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -266,9 +268,19 @@ func dispatchAgentVerb(run func([]string, agentClient, io.Writer, io.Writer) int
 	}
 	client, err := protocol.Dial(cc.SocketPath, caps)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "swarm: %v (no daemon running? start swarm first)\n", err)
+		_, _ = fmt.Fprintf(stderr, "swarm: %v (%s)\n", err, dialHint(err))
 		return 1
 	}
 	defer func() { _ = client.Close() }()
 	return run(args, client, stdout, stderr)
+}
+
+// dialHint names the likely cause of a failed daemon dial. A permission refusal comes from a
+// sandbox (Codex workspace-write without network access) or socket permissions, never from a
+// missing daemon.
+func dialHint(err error) string {
+	if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+		return "the daemon socket refused this process; a Codex sandbox without network access blocks it (enable sandbox_workspace_write.network_access), or check the socket's permissions"
+	}
+	return "no daemon running? start swarm first"
 }

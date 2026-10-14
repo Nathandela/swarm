@@ -33,6 +33,12 @@ Enabling a pool also queues compatible running discussions when safely idle. Reu
 
 Codex uses the same private native-executable retention as Claude. The exact characterized Codex executable can be provisioned in the owner's versioned native directory after npm removed it. Managed launches, enrollment and recovery use that verified executable; unmanaged PATH resolution remains owner-controlled. Worker capability 4 is required for retained Codex or running-discussion enrollment metadata. Upgrade/rollback refuse a target that cannot preserve those records; protocol and shim wire versions remain unchanged.
 
+## Amendment (2026-10-14): managed Codex keeps the owner's sandbox network policy
+
+Managed Codex launches no longer remove the `sandbox_workspace_write.network_access=true` override that the Codex adapter adds to every Swarm launch. The CLI and its app-server carry the owner's native sandbox policy, as unmanaged launches already do ([ADR-010](ADR-010-inter-session-orchestration.md) Amendment 5 F2). This reverses the v0.16.0 rule that managed network access follows native project/user policy. Under a workspace-write sandbox without network access, `connect()` to the daemon socket is blocked, so `swarm handoff`, `swarm spawn` and passive supervision failed inside every managed discussion.
+
+Trade-off: a managed workspace-write agent may open network connections without an approval prompt, as an unmanaged swarm Codex session already may. The command-line override takes precedence over the owner's `config.toml`, so that file cannot narrow it for a managed session. The owner approved this reversal. A refused daemon socket now names the sandbox setting in its hint (`cmd/swarm`, `dialHint`).
+
 ## Compatibility and rollback
 
 ### Codex minimum version (2026-10-13)

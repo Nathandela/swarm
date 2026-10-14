@@ -80,7 +80,7 @@ Enabling a provider's rotation switch is the bulk onboarding route for its eligi
 
 For a running WIP discussion, let its current turn finish, then either allow automatic onboarding or end the process normally and use **Resume**. Do not delete an ended history entry. A missing conversation ID or CLI observation can prevent automatic onboarding even when native history exists; do not stop such an exception until its identity and recovery route are established. A `configuration-writer-active` hold also needs resolution before migration can proceed.
 
-Standard trailing directory separators from autocomplete are normalized; interior traversal, unsafe symlinks, foreign ownership and uncharacterized alternate account routing still refuse. Codex network access follows native project/user policy. When that policy disables network access, its sandbox can also block tool-side Swarm socket commands; owner TUI controls remain available.
+Standard trailing directory separators from autocomplete are normalized; interior traversal, unsafe symlinks, foreign ownership and uncharacterized alternate account routing still refuse. Managed Codex keeps the owner's sandbox network setting: Swarm's `sandbox_workspace_write.network_access=true` override is carried to the CLI and its backend (ADR-028 amendment of 2026-10-14). A managed workspace-write agent can therefore reach the Swarm daemon socket, and it may open network connections without an approval prompt. Owner TUI controls remain available.
 
 ## Post-deployment acceptance and follow-up
 

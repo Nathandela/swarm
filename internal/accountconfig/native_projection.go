@@ -211,7 +211,6 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 		result.Generation = 1
 	}
 	if provider == "codex" {
-		result.CLIArgs = WithoutSynthesizedNetworkOverride(result.CLIArgs)
 		result.BackendArgs = []string{"-c", `cli_auth_credentials_store="file"`}
 		if codexResumeNoUpdate(argv) {
 			result.BackendArgs = append(result.BackendArgs, "-c", "check_for_update_on_startup=false")
@@ -219,20 +218,6 @@ func PrepareNative(stateRoot, provider, profile, cwd string, env, argv []string,
 		result.CLIArgs = append(result.CLIArgs, result.BackendArgs...)
 	}
 	return result, nil
-}
-
-// WithoutSynthesizedNetworkOverride removes precisely the historical override
-// injected by Swarm's adapter. All other explicit permission flags survive.
-func WithoutSynthesizedNetworkOverride(argv []string) []string {
-	out := make([]string, 0, len(argv))
-	for i := 0; i < len(argv); i++ {
-		if (argv[i] == "-c" || argv[i] == "--config") && i+1 < len(argv) && argv[i+1] == "sandbox_workspace_write.network_access=true" {
-			i++
-			continue
-		}
-		out = append(out, argv[i])
-	}
-	return out
 }
 
 func revalidateNativeManifest(m manifest, profile string) error {
