@@ -42,17 +42,20 @@ func TestResumeHistory_CodexMatchesADegradedLaunchStartedAfterTheBackendBudget(t
 		delta  time.Duration
 		want   resumeHistoryOutcome
 	}{
-		{"zmvdy4aj7fs57uru: +51 s under the earlier 40 s delay", gapBackendUnavailable, 51 * time.Second, resumeHistoryFound},
-		{"earlier degraded start lower bound inclusive", gapBackendUnavailable, earlierDelay - 2*time.Second, resumeHistoryFound},
-		{"earlier degraded start upper bound inclusive", gapBackendUnavailable, earlierDelay + 30*time.Second, resumeHistoryFound},
-		{"between the normal and the earlier degraded window", gapBackendUnavailable, 35 * time.Second, resumeHistoryNoMatch},
-		{"current degraded start lower bound inclusive", gapBackendUnavailable, shim.DegradedAgentDelay - 2*time.Second, resumeHistoryFound},
-		{"current degraded start upper bound inclusive", gapBackendUnavailable, shim.DegradedAgentDelay + 30*time.Second, resumeHistoryFound},
-		{"after the current degraded window", gapBackendUnavailable, shim.DegradedAgentDelay + 30*time.Second + time.Nanosecond, resumeHistoryNoMatch},
+		{"zmvdy4aj7fs57uru: +51 s under the earlier 40 s delay", "backend_never_served", 51 * time.Second, resumeHistoryFound},
+		{"earlier degraded start lower bound inclusive", "backend_never_served", earlierDelay - 2*time.Second, resumeHistoryFound},
+		{"earlier degraded start upper bound inclusive", "backend_never_served", earlierDelay + 30*time.Second, resumeHistoryFound},
+		{"between the normal and the earlier degraded window", "backend_never_served", 35 * time.Second, resumeHistoryNoMatch},
+		{"current degraded start lower bound inclusive", "backend_never_served", shim.DegradedAgentDelay - 2*time.Second, resumeHistoryFound},
+		{"current degraded start upper bound inclusive", "backend_never_served", shim.DegradedAgentDelay + 30*time.Second, resumeHistoryFound},
+		{"after the current degraded window", "backend_never_served", shim.DegradedAgentDelay + 30*time.Second + time.Nanosecond, resumeHistoryNoMatch},
 		{"a row with no degraded evidence 50 s apart", "", 50 * time.Second, resumeHistoryNoMatch},
 		{"a row with no degraded evidence at +51 s", "", 51 * time.Second, resumeHistoryNoMatch},
 		{"a row that lost a served backend is not a degraded start", gapBackendLost, 51 * time.Second, resumeHistoryNoMatch},
-		{"a degraded row keeps the original window", gapBackendUnavailable, time.Second, resumeHistoryFound},
+		// Rejoin and no-thread failures also write backend_unavailable although the agent
+		// started on time, so that reason (including every pre-existing marker) is not evidence.
+		{"a backend_unavailable marker is not a degraded start", gapBackendUnavailable, 51 * time.Second, resumeHistoryNoMatch},
+		{"a degraded row keeps the original window", "backend_never_served", time.Second, resumeHistoryFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
