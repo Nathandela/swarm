@@ -228,10 +228,17 @@ func (m *accountRotationManager) accountLabel(id string) string {
 	return id
 }
 
-// noteIdentityHold names the identity check and its remedy in input refusals.
+// noteHold names the job holding local's input lock in refusals.
+func (m *accountRotationManager) noteHold(local, reason string) {
+	if m.d != nil {
+		m.d.noteAuthRecycleReason(local, reason)
+	}
+}
+
 func (m *accountRotationManager) noteIdentityHold(local, accountID string) {
 	if m.d != nil {
-		m.d.noteAuthRecycleReason(local, fmt.Sprintf("is held by the account identity check on %q -- its login no longer matches; log that account in again from Accounts, or end the session", m.accountLabel(accountID)))
+		label := m.accountLabel(accountID)
+		m.noteHold(local, fmt.Sprintf("is held by the account identity check on %q -- its profile now holds another login; end the session and resume it (sign %q in again from Accounts first if it shows needs-login)", label, label))
 	}
 }
 

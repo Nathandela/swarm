@@ -155,15 +155,21 @@ func newAccountRotationManager(d *Daemon, w *authWatcher, store *accounts.Store)
 	}
 	for _, rec := range w.state.AccountRotations {
 		m.publishAliases(rec)
-		if (rec.IdentityHeld && (rec.State == accountObserved || rec.State == accountBlocked)) || accountActive(rec.State) || ((rec.State == accountCommitted || rec.State == accountUnknown) && !rec.InputReleased) {
+		held := rec.IdentityHeld && (rec.State == accountObserved || rec.State == accountBlocked)
+		if held || accountActive(rec.State) || ((rec.State == accountCommitted || rec.State == accountUnknown) && !rec.InputReleased) {
+			if held {
+				m.noteIdentityHold(rec.SourceID, rec.SourceBinding.AccountID)
+			} else if accountActive(rec.State) {
+				m.noteHold(rec.SourceID, recycleReasonMove)
+				if rec.CandidateID != "" {
+					m.noteHold(rec.CandidateID, recycleReasonMove)
+				}
+			}
 			if w.restoreRecycle != nil {
 				w.restoreRecycle(rec.SourceID)
 				if rec.CandidateID != "" {
 					w.restoreRecycle(rec.CandidateID)
 				}
-			}
-			if rec.IdentityHeld && (rec.State == accountObserved || rec.State == accountBlocked) {
-				m.noteIdentityHold(rec.SourceID, rec.SourceBinding.AccountID)
 			}
 		}
 	}
@@ -416,7 +422,8 @@ func (m *accountRotationManager) reportFailure(w *authWatcher, local, class, _, 
 	if rec.NativeClaudeFailure {
 		rec.FailedPromptID, rec.FailedPromptSequence = nativeFailure[0].TurnID, nativeFailure[0].Sequence
 	}
-	rec.IdentityHeld = class == "identity-drift"
+	// A later failure on a still-held drift keeps the hold, and so its release.
+	rec.IdentityHeld = class == "identity-drift" || rec.IdentityHeld && (rec.State == accountObserved || rec.State == accountBlocked)
 	rec.State = accountObserved
 	rec.LastError = ""
 	if model == "" {
@@ -437,8 +444,8 @@ func (m *accountRotationManager) reportFailure(w *authWatcher, local, class, _, 
 	rec.LastActiveAt = time.Time{}
 	err = m.persist(rec)
 	if err == nil && rec.IdentityHeld && w.restoreRecycle != nil {
-		w.restoreRecycle(rec.SourceID)
 		m.noteIdentityHold(rec.SourceID, account.ID)
+		w.restoreRecycle(rec.SourceID)
 	}
 	return err
 }
@@ -688,6 +695,9 @@ func (m *accountRotationManager) stepRecord(rec accountRotationRecord) {
 				return nil
 			})
 		})
+		if err == nil {
+			m.noteHold(source.ID, recycleReasonMove)
+		}
 		if errors.Is(err, errAuthOwnerEnding) {
 			rec.State = accountOwnerCanceled
 			_ = m.persist(rec)
@@ -1126,7 +1136,8 @@ func (m *accountRotationManager) ownerEnd(w *authWatcher, local, action string) 
 	m.viewMu.RUnlock()
 	rec, ok := w.state.AccountRotations[key]
 	if !ok {
-		return accounts.ErrIneligible
+		// An identity release dropped the record after handles(local) routed here.
+		return m.endTarget(local, action)
 	}
 	target := rec.OwnerTarget
 	if target == "" {
