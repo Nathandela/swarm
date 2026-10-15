@@ -118,7 +118,9 @@ type Meta struct {
 	SpawnedFrom  string `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
 	SpawnIntent  string `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
 	Supervision  string `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
-
+	// LaunchNotice is what the launch that returned this meta wants the owner to read
+	// (an owner-login fallback, ADR-032 Amendment 4). Never persisted.
+	LaunchNotice string `json:"-"`
 }
 
 // EffectiveGroupEnteredAt returns the durable ordering instant for a session.

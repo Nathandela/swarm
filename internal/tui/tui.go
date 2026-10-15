@@ -118,6 +118,7 @@ type launchResultMsg struct {
 	id         string // namespaced id of the new session on success ("" if the producer omits it)
 	agent      string // the new session's agent, for the attach chrome label
 	name       string // the new session's label (P2); carried into the auto-attach chrome hint
+	notice     string // the daemon's note on a successful launch (owner-login fallback, ADR-032 Amendment 4)
 	err        error
 }
 
@@ -456,6 +457,11 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (B1 — never a silent failure) and stay on the board.
 		if msg.err != nil {
 			return m, m.general.setBanner("launch failed: " + msg.err.Error())
+		}
+		// An owner-login fallback (ADR-032 Amendment 4) stays on the board so its
+		// banner is read; the owner attaches to the new row with Enter.
+		if msg.notice != "" {
+			return m, m.general.setBanner(msg.notice)
 		}
 		// Success: auto-attach straight into the new session (bd agents-tracker-stc),
 		// reusing the exact attach path Enter uses on a running row (the session is
