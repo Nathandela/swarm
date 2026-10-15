@@ -28,23 +28,20 @@ func TestLaunchCmd_CarriesTheOwnerFallbackNotice(t *testing.T) {
 	}
 }
 
-// An owner-fallback launch is surfaced on the launch banner, where refusals are
-// shown, and the board stays up so the owner reads it before attaching.
+// An owner-fallback launch auto-attaches like any launch; its notice is shown on
+// the board's banner when the owner returns from the session.
 func TestBanner_OwnerFallbackLaunchIsShown(t *testing.T) {
 	m := New(newFakeClient(), detectMixed())
 	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
 	m = send(m, launchResultMsg{id: "endpoint/new-1", agent: "codex", name: "fix-login", notice: fallbackNotice})
-	shown := strings.Join(strings.Fields(view(m)), " ")
-	if !strings.Contains(shown, `launched on the owner login: account "Work" refused`) {
-		t.Errorf("banner lacks the owner-fallback notice; view:\n%s", view(m))
+	if m.(rootModel).screen != screenAttach {
+		t.Fatalf("screen = %v, want the new session attached as on any launch", m.(rootModel).screen)
 	}
-	if m.(rootModel).screen != screenGeneral {
-		t.Errorf("screen = %v, want the board so the notice is read", m.(rootModel).screen)
-	}
+	assertNoticeOnReturn(t, m)
 }
 
-// A relocated resume that succeeded on the owner login closes the resume dialog
-// instead of leaving it busy and deaf to keys.
+// A relocated resume that fell back to the owner login attaches like any resume,
+// and the notice is shown when the owner returns to the board.
 func TestBanner_OwnerFallbackResumeLeavesTheResumeDialog(t *testing.T) {
 	m := New(newFakeClient(), detectMixed())
 	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
@@ -52,11 +49,20 @@ func TestBanner_OwnerFallbackResumeLeavesTheResumeDialog(t *testing.T) {
 	rm := m.(rootModel).openResume(source, "")
 	rm.resume.busy = true
 	m = send(rm, resumeResultMsg{source: source, result: launchResultMsg{id: "endpoint/new-1", agent: "codex", name: "fix-login", notice: fallbackNotice}})
-	got := m.(rootModel)
-	if got.screen != screenGeneral || got.resume.busy {
-		t.Fatalf("screen = %v busy = %v, want the board with the dialog closed", got.screen, got.resume.busy)
+	if m.(rootModel).screen != screenAttach {
+		t.Fatalf("screen = %v, want the resumed session attached as on any resume", m.(rootModel).screen)
+	}
+	assertNoticeOnReturn(t, m)
+}
+
+// assertNoticeOnReturn detaches back to the board and expects the notice banner.
+func assertNoticeOnReturn(t *testing.T, m tea.Model) {
+	t.Helper()
+	m = send(m, attachDoneMsg{})
+	if m.(rootModel).screen != screenGeneral {
+		t.Fatalf("screen = %v after detaching, want the board", m.(rootModel).screen)
 	}
 	if shown := strings.Join(strings.Fields(view(m)), " "); !strings.Contains(shown, `launched on the owner login: account "Work" refused`) {
-		t.Errorf("banner lacks the owner-fallback notice; view:\n%s", view(m))
+		t.Errorf("banner lacks the owner-fallback notice on return; view:\n%s", view(m))
 	}
 }
