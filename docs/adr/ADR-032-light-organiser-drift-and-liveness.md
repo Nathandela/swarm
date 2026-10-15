@@ -46,7 +46,7 @@ The structural fix (credentials-only profiles linking the owner's files) is Phas
 
 D6 also covers the relaunch that automatic CLI refresh owes after it stops an idle unmanaged discussion. `bindAccountLaunch` selects no account for an unbound launch that carries `ExpectedCLIIdentity`, so enabling rotation alone cannot move that discussion onto an account or swap in the retained managed binary. A planned enrollment (`account_enrollment` in the refresh record) still prebinds its own account and is unaffected.
 
-A relaunch that fails 3 consecutive times blocks the refresh record with `automatic restart failed: <reason>`, releases the input lock and kill claim, and logs once. The ended discussion stays in the roster for a manual resume, and `swarm cli-refresh status` shows the reason. Before this amendment the watcher retried every 10 minutes indefinitely while the discussion stayed down.
+A relaunch that fails 3 consecutive times blocks the refresh record with `automatic restart failed: <reason>`, releases the input lock and kill claim, and logs once. The ended discussion stays in the roster for a manual resume, and `swarm refresh` (`--json`) shows the reason. Before this amendment the watcher retried every 10 minutes indefinitely while the discussion stayed down.
 
 ## Amendment 2 (2026-10-15, swarm-oj5): identity-drift holds follow the identity read
 
