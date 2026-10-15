@@ -64,7 +64,13 @@ func TestEmitStatus_FailedPersistIsLoggedAndRetried(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	if n := strings.Count(sink.String(), m.ID); n != 1 {
+	n := 0
+	for _, line := range strings.Split(sink.String(), "\n") {
+		if strings.Contains(line, m.ID) {
+			n++
+		}
+	}
+	if n != 1 {
 		t.Fatalf("want exactly one log line naming %s for the failure episode, got %d:\n%s", m.ID, n, sink.String())
 	}
 }
