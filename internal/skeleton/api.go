@@ -1176,6 +1176,11 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	}
 }
 
+// errCLIOlderThanSource refuses a bound resume that would downgrade the CLI
+// that last wrote the discussion. Every account would share it, so it is never
+// retried on another account.
+var errCLIOlderThanSource = errors.New("launch: cli-older-than-source: the installed CLI is older than the one that last wrote this discussion; update the CLI and resume again")
+
 // launchResolved resolves the managed CLI identity and launches one bound attempt.
 func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, error) {
 	var err error
@@ -1203,6 +1208,11 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 		if resolved.AccountBinding != nil {
 			if probeErr != nil || observed == nil || !accountconfig.SupportedNativeVersion(resolved.AgentType, observed.Version) {
 				return persist.Meta{}, errAccountLaunch
+			}
+			if src := resolved.Options[protocol.OptionResumeFrom]; src != "" {
+				if _, source, err := validateResumeSource(src, resolved.AgentType, a.endpointID, a.core.Get); err == nil && cliIdentityNewer(source.CLIIdentity, observed) {
+					return persist.Meta{}, errCLIOlderThanSource
+				}
 			}
 			resolved.ExpectedCLIIdentity = observed
 		}

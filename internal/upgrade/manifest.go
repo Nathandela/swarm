@@ -47,7 +47,7 @@ func CurrentManifest(tag string) CompatManifest {
 		Shimwire:      shimwire.Version,
 		Protocol:      protocol.Version,
 		Schema:        persist.ManagedSchemaVersion,
-		AccountSchema: accounts.SchemaVersion, AccountJobs: 1, AccountRecovery: accounts.RecoverySchemaVersion, AccountWorker: MinimumCodexWorkerCapability, AccountShim: shim.ManagedWriterSchemaVersion, AccountConfig: accountconfig.CompatibilityVersion,
+		AccountSchema: accounts.SchemaVersion, AccountJobs: 1, AccountRecovery: accounts.RecoverySchemaVersion, AccountWorker: MinimumClaudeWorkerCapability, AccountShim: shim.ManagedWriterSchemaVersion, AccountConfig: accountconfig.CompatibilityVersion,
 		AccountInventory: accounts.NativeInventorySchemaVersion, AccountAuth: 1,
 	}
 }

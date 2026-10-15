@@ -96,7 +96,7 @@ func readClaudeTerminalFailure(reader io.Reader, conversation, prompt, class str
 }
 
 func (m *accountRotationManager) claudeFailedRequestModel(meta persist.Meta, input accountInboxRecord) (string, bool, error) {
-	if meta.AccountBinding == nil || meta.CLIIdentity == nil || meta.CLIIdentity.Version != "2.1.289" || !adapter.IsCanonicalConversationID(input.TurnID) {
+	if meta.AccountBinding == nil || meta.CLIIdentity == nil || !accountconfig.ClaudeNativeContextVersion(meta.CLIIdentity.Version) || !adapter.IsCanonicalConversationID(input.TurnID) {
 		return "", false, errClaudeFailureModelPending
 	}
 	profile, err := accountconfig.NativeHistoryAuthority(m.w.stateDir, meta.AccountProjectionRef, meta.AgentType, meta.ProviderCwd(), meta.AccountBinding.ConfigurationGeneration)
