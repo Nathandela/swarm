@@ -3,6 +3,7 @@ package skeleton
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ type accountQuotaFetchState struct {
 	backoff                         time.Duration
 	cancel                          context.CancelFunc
 	labels                          map[string]string
+	errClass                        string // last logged fetch error class; empty when healthy
 }
 
 type accountQuotaRequest struct {
@@ -168,6 +170,13 @@ func (q *accountQuotaFetcher) scheduleLocked(r accounts.Registry, now time.Time)
 	}
 }
 
+// logAuthChange records an account auth transition; the cause is a fixed class, never credential data.
+func logAuthChange(a accounts.Account, to, cause string) {
+	if a.Auth != to {
+		log.Printf("accounts: auth %s: %s -> %s (%s)", a.Label, a.Auth, to, cause)
+	}
+}
+
 func (q *accountQuotaFetcher) worker() {
 	defer q.wg.Done()
 	for {
@@ -242,8 +251,10 @@ func (q *accountQuotaFetcher) fetch(req accountQuotaRequest) {
 			if err != nil || r.Accounts[req.id].CurrentGeneration != req.generation {
 				break
 			}
+			prev := r.Accounts[req.id]
 			_, err = m.store.SetAuth(r.Revision, req.id, accounts.AuthNeedsLogin)
 			if err == nil {
+				logAuthChange(prev, accounts.AuthNeedsLogin, safe.Class)
 				delete(q.items, req.id)
 				return
 			}
@@ -258,6 +269,22 @@ func (q *accountQuotaFetcher) fetch(req accountQuotaRequest) {
 		s.next = now.Add(time.Minute)
 		s.blockedUntil = s.next
 		return
+	}
+	class := ""
+	if fetchErr != nil {
+		class = "error"
+		if safe != nil {
+			class = safe.Class
+		}
+	}
+	if class != s.errClass {
+		// One line per error-state change, never per retry.
+		if class == "" {
+			log.Printf("accounts: usage fetch %s: recovered", a.Label)
+		} else {
+			log.Printf("accounts: usage fetch %s: %s", a.Label, class)
+		}
+		s.errClass = class
 	}
 	if fetchErr == nil {
 		s.state = "ready"

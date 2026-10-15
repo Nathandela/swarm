@@ -118,6 +118,7 @@ type launchResultMsg struct {
 	id         string // namespaced id of the new session on success ("" if the producer omits it)
 	agent      string // the new session's agent, for the attach chrome label
 	name       string // the new session's label (P2); carried into the auto-attach chrome hint
+	notice     string // the daemon's note on a successful launch (owner-login fallback, ADR-032 Amendment 4)
 	err        error
 }
 
@@ -180,9 +181,12 @@ func workingAnimationTick() tea.Cmd {
 // rootModel is the screen router: the only tea.Model, holding the screen
 // sub-models and the shared client/size state.
 type rootModel struct {
-	client      Client
-	connections *clientLifetime
-	detect      DetectFunc
+	// pendingNotice is a launch notice (owner-login fallback, ADR-032 Amendment 4)
+	// bannered the next time the board is entered.
+	pendingNotice string
+	client        Client
+	connections   *clientLifetime
+	detect        DetectFunc
 
 	width  int
 	height int
@@ -457,6 +461,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.general.setBanner("launch failed: " + msg.err.Error())
 		}
+		// An owner-login fallback (ADR-032 Amendment 4) navigates like any launch;
+		// its notice is bannered when the owner next returns to the board.
+		m.pendingNotice = msg.notice
 		// Success: auto-attach straight into the new session (bd agents-tracker-stc),
 		// reusing the exact attach path Enter uses on a running row (the session is
 		// freshly launched, so read-write). A result with no id (a producer that does
@@ -1078,6 +1085,10 @@ func (m *rootModel) enterGeneral() tea.Cmd {
 	}
 	if cmd := m.armWorkingAnimation(); cmd != nil {
 		cmds = append(cmds, cmd)
+	}
+	if m.pendingNotice != "" {
+		cmds = append(cmds, m.general.setBanner(m.pendingNotice))
+		m.pendingNotice = ""
 	}
 	return tea.Batch(cmds...)
 }

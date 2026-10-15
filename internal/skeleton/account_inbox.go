@@ -712,7 +712,7 @@ func (m *accountRotationManager) applyInbox(input accountInboxRecord) error {
 		}
 		return m.reportFailure(w, input.Local, input.Class, "", input.ID)
 	case "model":
-		if input.Model == "" && input.Started && meta.CLIIdentity != nil && meta.CLIIdentity.Version == accountconfig.CharacterizedClaudeVersion {
+		if input.Model == "" && input.Started && meta.CLIIdentity != nil && accountconfig.ClaudeNativeContextVersion(meta.CLIIdentity.Version) {
 			for _, rec := range w.state.AccountRotations {
 				if rec.CandidateID == input.Local && rec.State == accountLaunched && rec.Destination != nil && *meta.AccountBinding == *rec.Destination && rec.ConversationID == input.Conversation && meta.InputEmbargo == rec.Incident.ID && meta.LaunchOptions["model"] == rec.Incident.Model && exactAccountModel(rec.Incident.Model) {
 					pinned := meta.AccountClaudeFallback != nil && meta.AccountClaudeFallback.RecoveryPinned

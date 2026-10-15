@@ -26,6 +26,39 @@ import (
 const RetainedNativeWorkerCapability = 3
 const RetainedCodexWorkerCapability = 4
 const MinimumCodexWorkerCapability = 5
+const MinimumClaudeWorkerCapability = 6
+
+// boundSession reports whether a refresh record's session is account-bound;
+// unreadable metadata counts as bound so the guard fails closed.
+func boundSession(stateRoot, id string) bool {
+	if !persist.ValidID(id) {
+		return true
+	}
+	raw, err := readPlainAccountDocument(filepath.Join(stateRoot, id, "meta.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	var meta struct {
+		Binding *accounts.Binding `json:"account_binding"`
+	}
+	return err != nil || json.Unmarshal(raw, &meta) != nil || meta.Binding != nil
+}
+
+// newerNativeUnmanaged reports managed state written by a Codex later than
+// 0.160.0 or a Claude later than 2.1.289 that the target build's worker
+// capability cannot manage under the minimum-version policy.
+func newerNativeUnmanaged(provider, version string, card CompatManifest) bool {
+	minimum := MinimumCodexWorkerCapability
+	switch {
+	case provider == accounts.ProviderCodex && version == accountconfig.CharacterizedCodexVersion, provider == accounts.ProviderClaude && (version == accountconfig.MinimumClaudeVersion || version == accountconfig.CharacterizedClaudeVersion):
+		return false
+	case provider == accounts.ProviderClaude:
+		minimum = MinimumClaudeWorkerCapability
+	case provider != accounts.ProviderCodex:
+		return false
+	}
+	return card.AccountWorker < minimum
+}
 
 // accountStateGuard covers non-session state too: an enrollment-only machine
 // can have credential writers even when maxPersistedSchema finds zero metas.
@@ -201,8 +234,8 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 		if json.Unmarshal(data, &cfg) != nil || (cfg.SchemaVersion != enrollment.SchemaVersion && cfg.SchemaVersion != enrollment.RetainedNativeConfigSchemaVersion) || (cfg.SchemaVersion == enrollment.SchemaVersion && (cfg.NativeFingerprint != "" || card.AccountWorker < 1)) {
 			return errors.New("the target build cannot contain persisted account workers")
 		}
-		if cfg.Provider == accounts.ProviderCodex && cfg.NativeVersion != accountconfig.CharacterizedCodexVersion && (!accountconfig.SupportedNativeVersion(cfg.Provider, cfg.NativeVersion) || card.AccountWorker < MinimumCodexWorkerCapability) {
-			return errors.New("the target build cannot manage newer Codex enrollment workers")
+		if newerNativeUnmanaged(cfg.Provider, cfg.NativeVersion, card) || (cfg.Provider == accounts.ProviderCodex || cfg.Provider == accounts.ProviderClaude) && !accountconfig.SupportedNativeVersion(cfg.Provider, cfg.NativeVersion) {
+			return errors.New("the target build cannot manage newer " + cfg.Provider + " enrollment workers")
 		}
 		if cfg.SchemaVersion == enrollment.RetainedNativeConfigSchemaVersion && (card.AccountWorker < RetainedNativeWorkerCapability || !supportedRetainedNative(cfg.Provider, cfg.NativeVersion) || (cfg.Provider == accounts.ProviderCodex && card.AccountWorker < RetainedCodexWorkerCapability) || cfg.NativePath != filepath.Join(stateRoot, "accounts", "native", cfg.Provider+"-"+cfg.NativeVersion, cfg.Provider) || !persist.IsCLIContentFingerprint(cfg.NativeFingerprint)) {
 			return errors.New("the target build cannot verify retained account enrollment executables")
@@ -385,8 +418,8 @@ func accountRetainedSessionGuard(stateRoot string, card CompatManifest) error {
 		if err != nil || json.Unmarshal(raw, &meta) != nil {
 			return errors.New("retained session observations cannot be verified")
 		}
-		if meta.Binding != nil && meta.Binding.Provider == accounts.ProviderCodex && meta.CLI != nil && meta.CLI.Version != accountconfig.CharacterizedCodexVersion && card.AccountWorker < MinimumCodexWorkerCapability {
-			return errors.New("the target build cannot manage newer Codex discussions")
+		if meta.Binding != nil && meta.CLI != nil && newerNativeUnmanaged(meta.Binding.Provider, meta.CLI.Version, card) {
+			return errors.New("the target build cannot manage newer " + meta.Binding.Provider + " discussions")
 		}
 		if meta.CLI != nil && strings.HasPrefix(meta.CLI.Fingerprint, "sha256:") && (card.AccountWorker < RetainedNativeWorkerCapability || !persist.IsCLIContentFingerprint(meta.CLI.Fingerprint)) {
 			return errors.New("the target build cannot verify retained session executables")
@@ -580,8 +613,8 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 			return errors.New("retained recovery observations cannot be verified")
 		}
 		for _, rec := range rotations {
-			if rec.Source.Provider == accounts.ProviderCodex && rec.Expected != nil && rec.Expected.Version != accountconfig.CharacterizedCodexVersion && card.AccountWorker < MinimumCodexWorkerCapability {
-				return errors.New("the target build cannot recover newer Codex discussions")
+			if rec.Expected != nil && newerNativeUnmanaged(rec.Source.Provider, rec.Expected.Version, card) {
+				return errors.New("the target build cannot recover newer " + rec.Source.Provider + " discussions")
 			}
 			if rec.Expected != nil && strings.HasPrefix(rec.Expected.Fingerprint, "sha256:") && (card.AccountWorker < RetainedNativeWorkerCapability || !persist.IsCLIContentFingerprint(rec.Expected.Fingerprint)) {
 				return errors.New("the target build cannot verify retained recovery executables")
@@ -592,6 +625,7 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 		if raw := state[key]; raw != nil {
 			var records map[string]struct {
 				AgentType  string               `json:"agent_type"`
+				State      string               `json:"state"`
 				Enrollment json.RawMessage      `json:"account_enrollment"`
 				Target     *persist.CLIIdentity `json:"target"`
 				Identity   *persist.CLIIdentity `json:"identity"`
@@ -599,12 +633,15 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 			if json.Unmarshal(raw, &records) != nil {
 				return errors.New("retained CLI refresh observations cannot be verified")
 			}
-			for _, rec := range records {
+			for id, rec := range records {
+				if key == "cli_refresh" && rec.State != "complete" && rec.Target != nil && newerNativeUnmanaged(rec.AgentType, rec.Target.Version, card) && boundSession(stateRoot, id) {
+					return errors.New("the target build cannot refresh newer " + rec.AgentType + " discussions")
+				}
 				if len(rec.Enrollment) > 0 && string(rec.Enrollment) != "null" && card.AccountWorker < RetainedCodexWorkerCapability {
 					return errors.New("the target build cannot preserve running discussion enrollment")
 				}
-				if rec.AgentType == accounts.ProviderCodex && len(rec.Enrollment) > 0 && string(rec.Enrollment) != "null" && rec.Target != nil && rec.Target.Version != accountconfig.CharacterizedCodexVersion && card.AccountWorker < MinimumCodexWorkerCapability {
-					return errors.New("the target build cannot enroll newer Codex discussions")
+				if len(rec.Enrollment) > 0 && string(rec.Enrollment) != "null" && rec.Target != nil && newerNativeUnmanaged(rec.AgentType, rec.Target.Version, card) {
+					return errors.New("the target build cannot enroll newer " + rec.AgentType + " discussions")
 				}
 				for _, identity := range []*persist.CLIIdentity{rec.Target, rec.Identity} {
 					if identity != nil && strings.HasPrefix(identity.Fingerprint, "sha256:") && (card.AccountWorker < RetainedNativeWorkerCapability || !persist.IsCLIContentFingerprint(identity.Fingerprint)) {

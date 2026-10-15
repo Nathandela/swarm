@@ -89,6 +89,20 @@ func (a *coreAPI) bindAccountLaunch(spec *daemon.LaunchSpec, tried ...accountRef
 	return nil
 }
 
+// selectorChoseBinding reports whether bindAccountLaunch selects spec's account, as
+// opposed to a frozen binding (explicit, or inherited from a bound resume source).
+func (a *coreAPI) selectorChoseBinding(spec daemon.LaunchSpec) bool {
+	if spec.AccountBinding != nil {
+		return false
+	}
+	src := spec.Options[protocol.OptionResumeFrom]
+	if src == "" {
+		return true
+	}
+	_, source, err := validateResumeSource(src, spec.AgentType, a.endpointID, a.core.Get)
+	return err == nil && source.AccountBinding == nil
+}
+
 // prepareAccountLaunch runs after worktree resolution and before the first
 // persisted reservation or child spawn, so both processes share the real cwd.
 func (d *Daemon) prepareAccountLaunch(id string, spec daemon.LaunchSpec) (daemon.LaunchSpec, error) {
@@ -107,7 +121,7 @@ func (d *Daemon) prepareAccountLaunch(id string, spec daemon.LaunchSpec) (daemon
 	if strings.HasPrefix(spec.CLIIdentity.Fingerprint, "sha256:") && !persist.MatchCLIFingerprint(spec.CLIIdentity.Path, spec.CLIIdentity.Fingerprint) {
 		return spec, errAccountLaunch
 	}
-	if spec.AgentType == accounts.ProviderClaude && spec.CLIIdentity.Version != accountconfig.CharacterizedClaudeVersion {
+	if spec.AgentType == accounts.ProviderClaude && !accountconfig.ClaudeNativeContextVersion(spec.CLIIdentity.Version) {
 		if spec.AccountProjectionRef == "" {
 			return spec, accountconfig.Conflict("native-version-not-characterized")
 		}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -63,7 +64,6 @@ type accountManager struct {
 	unavailable           error
 	native                map[string]*persist.CLIIdentity
 	nativeMu              sync.Mutex
-	nativeAmbient         *persist.CLIIdentity
 	nativeSelected        *persist.CLIIdentity
 	nativeFailed          bool
 	nativePublish         func(*os.Root, string, string) error // publication fault injection only
@@ -120,9 +120,6 @@ func openAccountManager(stateRoot, executable string, list func() []persist.Meta
 		identity, err := probeCLIIdentity(provider, "", daemon.PolicyEnv(nil), stateRoot)
 		if err == nil {
 			m.native[provider] = identity
-			if provider == accounts.ProviderClaude {
-				m.nativeAmbient = identity
-			}
 		}
 	}
 	m.startupManagedNative(accounts.ProviderClaude)
@@ -477,7 +474,7 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 				native = selected
 			}
 		}
-		supported := runtime.GOOS == "linux" && native != nil && ((provider == "codex" && accountconfig.SupportedNativeVersion(provider, native.Version)) || (provider == "claude" && native.Version == accountconfig.CharacterizedClaudeVersion))
+		supported := runtime.GOOS == "linux" && native != nil && accountconfig.SupportedNativeVersion(provider, native.Version)
 		reason := ""
 		if !supported {
 			reason = "Installed CLI version has not been verified for isolated enrollment."
@@ -488,8 +485,6 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 				parts := strings.Split(native.Fingerprint, ":")
 				info, err := os.Lstat(native.Path)
 				metadataMatches = err == nil && nativePrivateInfo(info, false) && persist.MatchCLIFingerprint(native.Path, parts[2])
-			} else if provider == accounts.ProviderClaude {
-				metadataMatches = persist.MatchCLIFingerprint(native.Path, native.Fingerprint)
 			}
 			if err != nil || enrollment.ValidateNativePath(path) != nil || !metadataMatches {
 				supported = false
@@ -497,19 +492,9 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 			}
 		}
 		if supported {
-			name := "Codex"
+			reason = "Managed Codex uses installed version " + native.Version + " (minimum " + accountconfig.MinimumCodexVersion + ")."
 			if provider == accounts.ProviderClaude {
-				name = "Claude"
-			}
-			reason = "Managed " + name + " uses qualified version " + native.Version + "."
-			if provider == accounts.ProviderCodex {
-				reason = "Managed Codex uses installed version " + native.Version + " (minimum " + accountconfig.MinimumCodexVersion + ")."
-			}
-			m.nativeMu.Lock()
-			ambient := m.nativeAmbient
-			m.nativeMu.Unlock()
-			if provider == accounts.ProviderClaude && cliIdentityNewer(ambient, native) {
-				reason += " Last observed installed version " + ambient.Version + " is held until qualified."
+				reason = "Managed Claude uses installed version " + native.Version + " (minimum " + accountconfig.MinimumClaudeVersion + ")."
 			}
 		}
 		if provider == "codex" {
@@ -703,6 +688,9 @@ func (m *accountManager) Accounts(req protocol.AccountsReq) (protocol.AccountsRe
 				} else {
 					_, account, err = m.store.Admit(req.ExpectedRevision, job.Candidate, req.Label)
 				}
+				if err == nil && job.TargetAccountID != "" {
+					logAuthChange(r.Accounts[job.TargetAccountID], account.Auth, "re-login")
+				}
 				if err != nil {
 					if !errors.Is(err, accounts.ErrDurabilityUncertain) {
 						job.State = "ready"
@@ -728,7 +716,9 @@ func (m *accountManager) Accounts(req protocol.AccountsReq) (protocol.AccountsRe
 		out.Job = &view
 		return out, err
 	case "enable":
-		_, err = m.store.SetEnabled(req.ExpectedRevision, req.Provider, req.Enabled)
+		if _, err = m.store.SetEnabled(req.ExpectedRevision, req.Provider, req.Enabled); err == nil {
+			log.Printf("accounts: rotation %s: %t -> %t", req.Provider, r.Enabled[req.Provider], req.Enabled)
+		}
 	case "update":
 		if req.Label != "" {
 			_, err = m.store.SetLabel(req.ExpectedRevision, req.AccountID, req.Label)

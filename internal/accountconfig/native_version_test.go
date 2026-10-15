@@ -13,7 +13,7 @@ func TestCodexNativeVersionUsesMinimumStableRelease(t *testing.T) {
 			t.Errorf("invalid or unsupported Codex accepted: %q", version)
 		}
 	}
-	if SupportedNativeVersion("claude", "2.1.296") {
-		t.Fatal("Codex policy changed Claude compatibility")
+	if !SupportedNativeVersion("claude", "2.1.296") {
+		t.Fatal("Claude minimum-version policy rejected a later stable release")
 	}
 }

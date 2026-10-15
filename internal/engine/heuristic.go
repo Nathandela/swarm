@@ -21,6 +21,7 @@ package engine
 // engine preserves the prior status rather than committing unknown (ADR-007).
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -155,6 +156,18 @@ const escToInterrupt = "esc to interrupt"
 // the frame reads inconclusive and ADR-007 preserves "working" for the whole
 // wait. When the hint is visible, Codex is waiting on the user's decision.
 const codexApprovalHint = "Press enter to confirm or esc to cancel"
+
+// codexRateLimitTitles are the title rows of Codex's rate-limit modal. The first
+// is captured from a live session; the second is unverified and kept only because
+// it is matched by the same whole-row and choice-row rule. Each is matched as a
+// whole trimmed row, never as a substring, so prose quoting it does not match.
+var codexRateLimitTitles = []string{"You're out of Codex messages", "Approaching rate limits"}
+
+// codexRateLimitFooters are the standing choice hints of that modal. The modal
+// is a numbered choice list with no typed signal, so it is recognised only when
+// a title row, a footer row and the numbered "› 1." choice row are all in the
+// bottom region. The bare composer "› Ask Codex ..." has no digit and cannot match.
+var codexRateLimitFooters = []string{"press a number to choose", "press enter to select", "enter select"}
 
 // claudeDialogHints are the standing rows of Claude's modal dialogs, each from a
 // live capture. Every one of these dialogs spells its selected option with the
@@ -549,6 +562,9 @@ func evaluateCodexGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 	if regionContains(snap, codexApprovalHint) {
 		return status.TurnIdle, status.InteractionPermission, true
 	}
+	if codexRateLimitModalInRegion(snap) {
+		return status.TurnIdle, status.InteractionPrompt, true
+	}
 	if hasBusyMarker(snap) {
 		return status.TurnActive, status.InteractionNone, true
 	}
@@ -556,6 +572,36 @@ func evaluateCodexGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 		return status.TurnIdle, status.InteractionNone, true
 	}
 	return status.TurnUnknown, status.InteractionUnknown, false
+}
+
+// codexRateLimitModalInRegion reports whether the bottom region carries the
+// rate-limit modal: a title row, a choice-footer row and the numbered first choice.
+func codexRateLimitModalInRegion(snap *vt.Snap) bool {
+	last, _, ok := lastContentLine(snap)
+	if !ok {
+		return false
+	}
+	// The modal's wrapped description and the model footer under the composer put
+	// the title past gridRegionRows, so this reader scans a wider window. The
+	// three-row conjunction below keeps the wider window free of false positives.
+	const modalRows = 2 * gridRegionRows
+	title, footer, choice := false, false, false
+	for y := last; y >= 0 && y > last-modalRows; y-- {
+		row := strings.TrimSpace(lineText(snap.Lines[y]))
+		if slices.Contains(codexRateLimitTitles, row) {
+			title = true
+		}
+		if strings.HasPrefix(row, "› 1. ") {
+			choice = true
+		}
+		lower := strings.ToLower(row)
+		for _, f := range codexRateLimitFooters {
+			if strings.HasPrefix(lower, f) {
+				footer = true
+			}
+		}
+	}
+	return title && footer && choice
 }
 
 // evaluateClaudeGrid reads Claude's real screen (dqh). The modal dialogs are

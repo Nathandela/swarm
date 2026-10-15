@@ -376,6 +376,7 @@ func (m *accountRotationManager) reportFailure(w *authWatcher, local, class, _, 
 		if _, err = m.store.SetAuthReason(registry.Revision, account.ID, accounts.AuthNeedsLogin, reason); err != nil {
 			return err
 		}
+		logAuthChange(account, accounts.AuthNeedsLogin, class)
 	} else if class == "quota" {
 		feed := account.Quota.FeedGeneration
 		if feed == 0 {

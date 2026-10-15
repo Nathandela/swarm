@@ -1170,11 +1170,27 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		refusal := a.accountRefusal(*resolved.AccountBinding, err)
 		log.Printf("accounts: %s launch %q refused on account %s (%q): %v", resolved.AgentType, resolved.Name, refusal.id, refusal.label, err)
 		if refusal.code == "" {
+			if !errors.Is(err, errAccountLaunch) || !a.selectorChoseBinding(composed) {
+				return m, err
+			}
+			// ADR-032 Amendment 4: a rotation-machinery failure on a binding the
+			// selector chose falls back to the owner login rather than blocking it.
+			log.Printf("accounts: %s launch %q fell back to the owner login after account %q refused: %v", resolved.AgentType, resolved.Name, refusal.label, err)
+			m, err = a.launchResolved(composed)
+			if err == nil {
+				reason := strings.TrimSuffix(lastErr.Error(), "; review Accounts before resuming") // the remedy stays in the log
+				m.LaunchNotice = fmt.Sprintf("launched on the owner login: account %q refused: %s", refusal.label, reason)
+			}
 			return m, err
 		}
 		tried = append(tried, refusal)
 	}
 }
+
+// errCLIOlderThanSource refuses a bound resume that would downgrade the CLI
+// that last wrote the discussion. Every account would share it, so it is never
+// retried on another account.
+var errCLIOlderThanSource = errors.New("launch: cli-older-than-source: the installed CLI is older than the one that last wrote this discussion; update the CLI and resume again")
 
 // launchResolved resolves the managed CLI identity and launches one bound attempt.
 func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, error) {
@@ -1203,6 +1219,11 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 		if resolved.AccountBinding != nil {
 			if probeErr != nil || observed == nil || !accountconfig.SupportedNativeVersion(resolved.AgentType, observed.Version) {
 				return persist.Meta{}, errAccountLaunch
+			}
+			if src := resolved.Options[protocol.OptionResumeFrom]; src != "" {
+				if _, source, err := validateResumeSource(src, resolved.AgentType, a.endpointID, a.core.Get); err == nil && cliIdentityNewer(source.CLIIdentity, observed) {
+					return persist.Meta{}, errCLIOlderThanSource
+				}
 			}
 			resolved.ExpectedCLIIdentity = observed
 		}

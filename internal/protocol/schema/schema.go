@@ -169,6 +169,9 @@ type Control struct {
 	// the launch screen's tier-denied state had no data source. Empty when the backend
 	// exposes no capability seam: absent fact, never an invented tier.
 	DeviceCapability string `json:"device_capability,omitempty"`
+	// Notice is a launch reply's note for the owner, such as an owner-login fallback
+	// after an account refused (ADR-032 Amendment 4). Empty on an ordinary launch.
+	Notice string `json:"notice,omitempty"`
 }
 
 // SendInputReq is one owner-tier steering message (ADR-010 Amendment 1 A2), carried in

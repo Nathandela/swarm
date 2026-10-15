@@ -391,12 +391,6 @@ func (w *authWatcher) discoverCLIRefreshes() {
 			}
 			continue
 		}
-		if m.AccountBinding != nil && m.AgentType == accounts.ProviderClaude && w.accountRotation != nil && w.accountRotation.d != nil && w.accountRotation.d.accounts != nil {
-			manager := w.accountRotation.d.accounts
-			manager.nativeMu.Lock()
-			manager.nativeAmbient = result.id
-			manager.nativeMu.Unlock()
-		}
 		if m.AccountBinding != nil && !accountconfig.SupportedNativeVersion(m.AgentType, result.id.Version) {
 			if _, exists := w.state.CLICandidates[m.ID]; exists {
 				delete(w.state.CLICandidates, m.ID)

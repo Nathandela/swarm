@@ -70,10 +70,6 @@ func (m *accountManager) nativeRoot(create bool) (*os.Root, error) {
 	return root, nil
 }
 
-func (m *accountManager) retainedClaude() (*persist.CLIIdentity, error) {
-	return m.retainedNative(accounts.ProviderClaude)
-}
-
 func (m *accountManager) retainedNative(provider string) (*persist.CLIIdentity, error) {
 	versionNumber := characterizedNativeVersion(provider)
 	retainedName := provider + "-" + versionNumber
@@ -137,10 +133,6 @@ func (m *accountManager) retainedNative(provider string) (*persist.CLIIdentity, 
 	return &persist.CLIIdentity{Path: path, Version: manifest.Version, Fingerprint: fingerprint}, nil
 }
 
-func nativeVersionsDir(env []string) string {
-	return providerVersionsDir(accounts.ProviderClaude, env)
-}
-
 func providerVersionsDir(provider string, env []string) string {
 	var home string
 	for _, item := range env {
@@ -156,10 +148,6 @@ func providerVersionsDir(provider string, env []string) string {
 
 // Relocation is limited to the characterized vendor-native installation. A
 // custom executable, including an ELF wrapper, keeps its original path.
-func (m *accountManager) retainClaude(source *persist.CLIIdentity, env []string, cwd string) (*persist.CLIIdentity, error) {
-	return m.retainNative(accounts.ProviderClaude, source, env, cwd)
-}
-
 func (m *accountManager) retainNative(provider string, source *persist.CLIIdentity, env []string, cwd string) (*persist.CLIIdentity, error) {
 	retainedName := provider + "-" + characterizedNativeVersion(provider)
 	m.nativeMu.Lock()
@@ -344,40 +332,6 @@ func syncNativeRoot(root *os.Root) error {
 	return dir.Sync()
 }
 
-// Only a qualified sibling of an observed standard native installation may
-// bootstrap a new cache after the ambient updater has moved ahead.
-func qualifiedClaudeSource(env []string, cwd string) (*persist.CLIIdentity, error) {
-	ambient, err := probeCLIIdentity(accounts.ProviderClaude, "", env, cwd)
-	if err != nil {
-		return nil, err
-	}
-	if ambient.Version == accountconfig.CharacterizedClaudeVersion {
-		return ambient, nil
-	}
-	canonical, err := filepath.EvalSymlinks(ambient.Path)
-	versions := nativeVersionsDir(env)
-	if err != nil || versions == "" || filepath.Dir(canonical) != versions {
-		return nil, errAccountLaunch
-	}
-	info, err := os.Lstat(versions)
-	if err != nil {
-		return nil, errAccountLaunch
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != uint32(os.Getuid()) || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
-		return nil, errAccountLaunch
-	}
-	path := filepath.Join(versions, accountconfig.CharacterizedClaudeVersion)
-	if enrollment.ValidateNativePath(path) != nil {
-		return nil, errAccountLaunch
-	}
-	qualified, err := probeCLIIdentity(accounts.ProviderClaude, path, env, cwd)
-	if err != nil || qualified.Version != accountconfig.CharacterizedClaudeVersion {
-		return nil, errAccountLaunch
-	}
-	return qualified, nil
-}
-
 func characterizedNativeVersion(provider string) string {
 	if provider == accounts.ProviderCodex {
 		return accountconfig.CharacterizedCodexVersion
@@ -385,9 +339,11 @@ func characterizedNativeVersion(provider string) string {
 	return accountconfig.CharacterizedClaudeVersion
 }
 
-func installedCodexSource(env []string, cwd string) (*persist.CLIIdentity, error) {
-	ambient, err := probeCLIIdentity(accounts.ProviderCodex, "", env, cwd)
-	if err != nil || !accountconfig.SupportedNativeVersion(accounts.ProviderCodex, ambient.Version) {
+// Managed launches use the owner's installed CLI at or above the provider
+// minimum; retained private copies are no longer selected.
+func installedNativeSource(provider string, env []string, cwd string) (*persist.CLIIdentity, error) {
+	ambient, err := probeCLIIdentity(provider, "", env, cwd)
+	if err != nil || !accountconfig.SupportedNativeVersion(provider, ambient.Version) {
 		return nil, errAccountLaunch
 	}
 	path, err := filepath.EvalSymlinks(ambient.Path)
@@ -398,23 +354,12 @@ func installedCodexSource(env []string, cwd string) (*persist.CLIIdentity, error
 }
 
 func (m *accountManager) managedNative(provider string, env []string, cwd string) (identity *persist.CLIIdentity, resultErr error) {
-	if provider == accounts.ProviderCodex {
-		return installedCodexSource(env, cwd)
-	}
-	if provider != accounts.ProviderClaude {
+	if provider == accounts.ProviderClaude {
+		defer func() { m.recordNativeSelection(identity, resultErr) }()
+	} else if provider != accounts.ProviderCodex {
 		return nil, errAccountLaunch
 	}
-	defer func() { m.recordNativeSelection(identity, resultErr) }()
-	if cached, err := m.retainedClaude(); err == nil {
-		return cached, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	source, err := qualifiedClaudeSource(env, cwd)
-	if err != nil {
-		return nil, err
-	}
-	return m.retainClaude(source, env, cwd)
+	return installedNativeSource(provider, env, cwd)
 }
 
 func (m *accountManager) recordNativeSelection(identity *persist.CLIIdentity, err error) {
@@ -443,54 +388,17 @@ func (a *coreAPI) accountLaunchResolver(spec daemon.LaunchSpec) func(string, []s
 	return func(name string, env []string) (string, error) {
 		identity, err := a.accounts.managedNative(spec.AgentType, env, spec.Cwd)
 		if err != nil {
-			return "", err
+			// launchResolved re-checks every bound attempt, so a frozen binding is
+			// still refused and a selector-chosen one falls back (ADR-032 Amendment 4).
+			return lookPathIn(name, env)
 		}
 		return identity.Path, nil
 	}
 }
 
 func (m *accountManager) startupManagedNative(provider string) {
-	env := daemon.PolicyEnv(nil)
-	if provider == accounts.ProviderCodex {
-		delete(m.native, provider)
-		if identity, err := installedCodexSource(env, m.stateRoot); err == nil {
-			m.native[provider] = identity
-		}
-		return
-	}
-	if identity, err := m.retainedNative(provider); err == nil {
-		if provider == accounts.ProviderClaude {
-			m.recordNativeSelection(identity, nil)
-		}
-		m.native[provider] = identity
-		return
-	} else if !errors.Is(err, os.ErrNotExist) {
-		if provider == accounts.ProviderClaude {
-			m.recordNativeSelection(nil, err)
-		}
-		return
-	}
-	registry, err := m.store.Snapshot()
-	if err != nil {
-		return
-	}
-	intent := registry.Enabled[provider]
-	for _, account := range registry.Accounts {
-		intent = intent || account.Provider == provider
-	}
-	for _, job := range m.jobs.Jobs {
-		intent = intent || job.Provider == provider
-	}
-	if !intent {
-		// Advertise first enrollment from qualified source metadata without
-		// retaining a large executable on an otherwise unmanaged machine.
-		identity, err := qualifiedClaudeSource(env, m.stateRoot)
-		if err == nil {
-			m.native[provider] = identity
-		}
-		return
-	}
-	if identity, err := m.managedNative(provider, env, m.stateRoot); err == nil {
+	delete(m.native, provider)
+	if identity, err := m.managedNative(provider, daemon.PolicyEnv(nil), m.stateRoot); err == nil {
 		m.native[provider] = identity
 	}
 }
@@ -501,7 +409,7 @@ func (m *accountRotationManager) managedCheckIdentity(source persist.Meta) (*per
 	}
 	if m.d != nil && m.d.accounts != nil {
 		identity, err := m.d.accounts.managedNative(source.AgentType, source.Env, source.Cwd)
-		if err == nil && source.AgentType == accounts.ProviderCodex && identity.Version != source.CLIIdentity.Version && !cliIdentityNewer(identity, source.CLIIdentity) {
+		if err == nil && identity.Version != source.CLIIdentity.Version && !cliIdentityNewer(identity, source.CLIIdentity) {
 			return nil, errAccountAvailabilityUnsafe
 		}
 		return identity, err
@@ -519,26 +427,12 @@ func (w *authWatcher) managedRefreshIdentity(source persist.Meta, candidate *per
 	if candidate == nil || !accountconfig.SupportedNativeVersion(source.AgentType, candidate.Version) {
 		return nil, errAccountSuccessorUnavailable
 	}
-	if source.AgentType == accounts.ProviderCodex {
-		return w.accountRotation.d.accounts.managedNative(source.AgentType, source.Env, source.Cwd)
-	}
-	m := w.accountRotation.d.accounts
-	identity, err := m.retainNative(source.AgentType, candidate, source.Env, source.Cwd)
-	if source.AgentType == accounts.ProviderClaude {
-		m.recordNativeSelection(identity, err)
-	}
-	return identity, err
+	return w.accountRotation.d.accounts.managedNative(source.AgentType, source.Env, source.Cwd)
 }
 
 func (w *authWatcher) refreshTargetIdentity(source persist.Meta, target persist.CLIIdentity) (*persist.CLIIdentity, error) {
 	if (w.state.CLI[source.ID].Enrollment != nil || source.AccountBinding == nil && w.accountEnrollmentEnabled(source.AgentType)) && w.accountRotation != nil && w.accountRotation.d != nil && w.accountRotation.d.accounts != nil {
 		return w.accountRotation.d.accounts.managedNative(source.AgentType, source.Env, source.ProviderCwd())
-	}
-	if source.AccountBinding != nil && (source.AgentType == accounts.ProviderClaude || source.AgentType == accounts.ProviderCodex) && strings.HasPrefix(target.Fingerprint, "sha256:") {
-		if !persist.MatchCLIFingerprint(target.Path, target.Fingerprint) {
-			return nil, errAccountSuccessorUnavailable
-		}
-		return &target, nil
 	}
 	candidate, err := w.cliProbe(source.AgentType, "", source.Env, source.Cwd)
 	if err != nil {
