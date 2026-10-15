@@ -96,7 +96,8 @@ func TestQuotaFetch_RepeatedErrorLogsOnce(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		if class == "" {
-			return accountusage.Result{}, nil
+			used := 10
+			return accountusage.Result{Observations: []accounts.ScopeObservation{{Scope: "bucket:codex:primary", UsedPercent: &used}}}, nil
 		}
 		return accountusage.Result{}, &accountusage.Error{Class: class}
 	})
