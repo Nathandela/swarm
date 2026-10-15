@@ -581,8 +581,12 @@ func codexRateLimitModalInRegion(snap *vt.Snap) bool {
 	if !ok {
 		return false
 	}
+	// The modal's wrapped description and the model footer under the composer put
+	// the title past gridRegionRows, so this reader scans a wider window. The
+	// three-row conjunction below keeps the wider window free of false positives.
+	const modalRows = 2 * gridRegionRows
 	title, footer, choice := false, false, false
-	for y := last; y >= 0 && y > last-gridRegionRows; y-- {
+	for y := last; y >= 0 && y > last-modalRows; y-- {
 		row := strings.TrimSpace(lineText(snap.Lines[y]))
 		if slices.Contains(codexRateLimitTitles, row) {
 			title = true
