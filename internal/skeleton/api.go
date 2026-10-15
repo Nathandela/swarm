@@ -1178,7 +1178,8 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 			log.Printf("accounts: %s launch %q fell back to the owner login after account %q refused: %v", resolved.AgentType, resolved.Name, refusal.label, err)
 			m, err = a.launchResolved(composed)
 			if err == nil {
-				m.LaunchNotice = fmt.Sprintf("launched on the owner login: account %q refused: %v", refusal.label, lastErr)
+				reason := strings.TrimSuffix(lastErr.Error(), "; review Accounts before resuming") // the remedy stays in the log
+				m.LaunchNotice = fmt.Sprintf("launched on the owner login: account %q refused: %s", refusal.label, reason)
 			}
 			return m, err
 		}
