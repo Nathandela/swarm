@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -2577,7 +2578,7 @@ func (cc *clientConn) handleJournalRead(c Control) {
 		}
 		return
 	}
-	pages, err := journalReadPages(reply, c.JournalMaxBytes)
+	pages, err := journalReadPages(reply, c.JournalMaxBytes, cc.done)
 	if err != nil {
 		cc.replyError("journal_read: " + err.Error())
 		return
@@ -2592,7 +2593,7 @@ func (cc *clientConn) handleJournalRead(c Control) {
 	}
 }
 
-func journalReadPages(reply Control, requested int) ([]Control, error) {
+func journalReadPages(reply Control, requested int, done <-chan struct{}) ([]Control, error) {
 	max := requested
 	if max > wire.MaxFrame-1 {
 		max = wire.MaxFrame - 1
@@ -2601,6 +2602,11 @@ func journalReadPages(reply Control, requested int) ([]Control, error) {
 	reply.Journal, reply.Roster = nil, nil
 	var pages []Control
 	for ei, ri := 0, 0; ei < len(events) || ri < len(roster) || len(pages) == 0; {
+		select {
+		case <-done:
+			return nil, context.Canceled
+		default:
+		}
 		page := reply
 		// Size conservatively with the continuation field present. The final page only
 		// gets smaller when this is cleared below.
@@ -2631,33 +2637,30 @@ func journalReadPages(reply Control, requested int) ([]Control, error) {
 }
 
 func maxJournalPageRecords(page Control, records []JournalRecord, max int) int {
-	lo, hi := 0, len(records)
-	for lo < hi {
-		mid := (lo + hi + 1) / 2
-		page.Journal = records[:mid]
-		body, err := EncodeControl(page)
-		if err == nil && len(body) <= max {
-			lo = mid
-		} else {
-			hi = mid - 1
-		}
-	}
-	return lo
+	page.Journal = nil
+	return maxPageRecords(page, records, max, "journal")
 }
 
 func maxRosterPageRecords(page Control, records []JournalRecord, max int) int {
-	lo, hi := 0, len(records)
-	for lo < hi {
-		mid := (lo + hi + 1) / 2
-		page.Roster = records[:mid]
-		body, err := EncodeControl(page)
-		if err == nil && len(body) <= max {
-			lo = mid
-		} else {
-			hi = mid - 1
-		}
+	page.Roster = nil
+	return maxPageRecords(page, records, max, "roster")
+}
+
+// Record sizes are additive, including escaped JSON; never re-encode the backlog to size a page.
+func maxPageRecords(page Control, records []JournalRecord, max int, field string) int {
+	body, err := EncodeControl(page)
+	if err != nil {
+		return 0
 	}
-	return lo
+	remaining := max - len(body) - len(`,"`+field+`":[]`)
+	for i, record := range records {
+		body, err := json.Marshal(record)
+		if err != nil || len(body) > remaining {
+			return i
+		}
+		remaining -= len(body) + 1 // reserve the comma before the next record
+	}
+	return len(records)
 }
 
 // handleJournalSubscribe registers a journal subscriber (journal-capable backend +
@@ -2724,7 +2727,7 @@ func (cc *clientConn) handleJournalSubscribeFrom(c Control) {
 	if max <= 0 {
 		max = wire.MaxFrame - 1
 	}
-	pages, err := journalReadPages(reply, max)
+	pages, err := journalReadPages(reply, max, cc.done)
 	if err != nil {
 		cancel()
 		cc.replyError("journal_subscribe_from: " + err.Error())

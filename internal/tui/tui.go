@@ -11,6 +11,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"strings"
@@ -203,6 +204,7 @@ type rootModel struct {
 	rosterInvalidations                          bool
 	rosterRefreshing, rosterDirty                bool
 	rosterRevision                               uint64
+	initialRoster                                tea.Cmd
 	// optionsGeneration monotonically stamps every context-guard settings RPC. It
 	// survives closing/reopening the form, so an older response cannot land in a new
 	// options incarnation that happens to reuse the same local focus state.
@@ -247,10 +249,7 @@ type rootModel struct {
 	pairing *pairingModal // open SAS-gate overlay (nil -> no pairing modal), see pairing_modal.go
 }
 
-// listDialTimeout bounds New's eager List so a wedged daemon cannot stall the first
-// paint. A live local daemon answers in single-digit milliseconds; this only bites
-// when the daemon is hung, in which case New comes up with an empty (still usable)
-// board and the Subscribe stream fills it in once the daemon responds.
+// Only the eager first paint uses this budget; Init awaits the same read if it is slower.
 const listDialTimeout = time.Second
 
 // New builds the router. It eagerly lists sessions (N-1: the first paint must
@@ -265,15 +264,20 @@ func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 		close(failed)
 		events = failed
 	}
+	connections := newClientLifetime(c)
+	sessions, initialRoster := boundedList(connections.ctx, c, events)
 	m := rootModel{
-		client:        c,
-		connections:   newClientLifetime(c),
-		detect:        detect,
-		screen:        screenGeneral,
-		general:       newGeneralModel(boundedList(c)),
-		events:        events,
-		ticking:       true, // Init arms the first repaint tick
-		clientVersion: version.Version,
+		client:              c,
+		connections:         connections,
+		detect:              detect,
+		screen:              screenGeneral,
+		general:             newGeneralModel(sessions),
+		initialRoster:       initialRoster,
+		rosterRefreshing:    initialRoster != nil,
+		rosterInvalidations: initialRoster != nil,
+		events:              events,
+		ticking:             true, // Init arms the first repaint tick
+		clientVersion:       version.Version,
 	}
 	m.animatingWorking = m.general.hasWorking()
 	// The daemon's build version rides the hello handshake. The narrow tui.Client
@@ -291,21 +295,33 @@ func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 	return m
 }
 
-// boundedList performs the eager List under listDialTimeout so a hung daemon cannot
-// stall first paint. On timeout it returns an empty board; the blocked List
-// goroutine drains into the buffered channel and is collected when it finally
-// returns.
-func boundedList(c Client) []protocol.SessionView {
-	ch := make(chan []protocol.SessionView, 1)
+// The first paint is bounded; a late snapshot still reaches Update without a new event.
+func boundedList(ctx context.Context, c Client, events <-chan protocol.Event) ([]protocol.SessionView, tea.Cmd) {
+	ch := make(chan rosterLoadedMsg, 1)
 	go func() {
-		s, _ := c.List()
-		ch <- s
+		s, err := c.List()
+		if err != nil {
+			s = nil
+		} else if s == nil {
+			s = []protocol.SessionView{}
+		}
+		ch <- rosterLoadedMsg{from: events, sessions: s}
 	}()
 	select {
-	case s := <-ch:
-		return s
+	case loaded := <-ch:
+		if loaded.sessions != nil {
+			return loaded.sessions, nil
+		}
+		return nil, func() tea.Msg { return loaded }
 	case <-time.After(listDialTimeout):
-		return nil
+		return nil, func() tea.Msg {
+			select {
+			case loaded := <-ch:
+				return loaded
+			case <-ctx.Done():
+				return nil
+			}
+		}
 	}
 }
 
@@ -313,7 +329,7 @@ func boundedList(c Client) []protocol.SessionView {
 // probe runs asynchronously (detectCmd) so a slow prober never delays first paint
 // or the launch form; its result is cached via detectMsg (V-2/L1).
 func (m rootModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitForEvent(m.events), repaintTick(), detectCmd(m.detect, m.detectGen)}
+	cmds := []tea.Cmd{waitForEvent(m.events), repaintTick(), detectCmd(m.detect, m.detectGen), m.initialRoster}
 	if m.animatingWorking {
 		cmds = append(cmds, workingAnimationTick())
 	}

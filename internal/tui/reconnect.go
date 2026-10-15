@@ -131,7 +131,8 @@ func reconnectRoster(c Client) []protocol.SessionView {
 			return []protocol.SessionView{}
 		}
 		return loaded.sessions
-	case <-time.After(listDialTimeout):
+	// Hydration commands already run off the UI loop; allow the protocol's request budget.
+	case <-time.After(10 * time.Second):
 		return nil
 	}
 }
