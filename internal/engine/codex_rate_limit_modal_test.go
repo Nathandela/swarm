@@ -55,6 +55,49 @@ func codexOutOfMessagesProseScreen() *vt.Snap {
 	})
 }
 
+// codexOutOfMessagesWrappedScreen: the live modal at 80 columns. The description
+// wraps to two rows, and the model footer renders under the composer, so the title
+// sits more than gridRegionRows rows above the last content line.
+func codexOutOfMessagesWrappedScreen() *vt.Snap {
+	return snapFromLines(80, 0, 0, false, []string{
+		"  You're out of Codex messages",
+		"  Your rate limit resets on 06:20 on 22 Oct. Use one of your rate limit resets or add",
+		"  credits to continue now.",
+		"",
+		"› 1. Add Credits",
+		"  2. Reset usage",
+		"",
+		"  Press a number to choose",
+		"",
+		"",
+		"",
+		"› Ask Codex to do anything",
+		"  gpt-5.6-sol medium · ~/code",
+	})
+}
+
+// TestOnOutput_CodexOutOfMessagesWrappedModalMapsToNeedsInput: the wrapped live
+// modal, with its title outside the bounded grid region, must still read as a
+// needs-input prompt.
+func TestOnOutput_CodexOutOfMessagesWrappedModalMapsToNeedsInput(t *testing.T) {
+	clk := newClock()
+	rec := &emitRecorder{}
+	e := newEngine(clk, constCPU(0), rec, time.Minute, time.Second)
+	e.RegisterSession("s1", "tok1", 1, gridSig("codex"))
+
+	e.OnOutput("s1", codexOutOfMessagesWrappedScreen())
+	got, ok := rec.last()
+	if !ok {
+		t.Fatal("wrapped out-of-messages modal emitted no status change from the unknown seed")
+	}
+	if got.s.Turn != status.TurnIdle || got.s.Interaction != status.InteractionPrompt {
+		t.Fatalf("wrapped out-of-messages modal -> turn=%s interaction=%s, want idle+prompt", got.s.Turn, got.s.Interaction)
+	}
+	if g := status.Derive(got.s); g != status.GroupNeedsInput {
+		t.Fatalf("wrapped out-of-messages modal derives group %s, want needs_input", g)
+	}
+}
+
 // TestOnOutput_CodexOutOfMessagesModalMapsToNeedsInput: the captured modal must be
 // read as an interaction prompt that derives to needs_input, even though the
 // composer row is still rendered below it.
