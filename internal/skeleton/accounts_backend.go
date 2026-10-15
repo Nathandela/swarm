@@ -484,8 +484,6 @@ func (m *accountManager) methods() map[string][]protocol.AccountMethodView {
 				parts := strings.Split(native.Fingerprint, ":")
 				info, err := os.Lstat(native.Path)
 				metadataMatches = err == nil && nativePrivateInfo(info, false) && persist.MatchCLIFingerprint(native.Path, parts[2])
-			} else if provider == accounts.ProviderClaude {
-				metadataMatches = persist.MatchCLIFingerprint(native.Path, native.Fingerprint)
 			}
 			if err != nil || enrollment.ValidateNativePath(path) != nil || !metadataMatches {
 				supported = false

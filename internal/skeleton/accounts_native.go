@@ -70,10 +70,6 @@ func (m *accountManager) nativeRoot(create bool) (*os.Root, error) {
 	return root, nil
 }
 
-func (m *accountManager) retainedClaude() (*persist.CLIIdentity, error) {
-	return m.retainedNative(accounts.ProviderClaude)
-}
-
 func (m *accountManager) retainedNative(provider string) (*persist.CLIIdentity, error) {
 	versionNumber := characterizedNativeVersion(provider)
 	retainedName := provider + "-" + versionNumber
@@ -435,12 +431,6 @@ func (w *authWatcher) managedRefreshIdentity(source persist.Meta, candidate *per
 func (w *authWatcher) refreshTargetIdentity(source persist.Meta, target persist.CLIIdentity) (*persist.CLIIdentity, error) {
 	if (w.state.CLI[source.ID].Enrollment != nil || source.AccountBinding == nil && w.accountEnrollmentEnabled(source.AgentType)) && w.accountRotation != nil && w.accountRotation.d != nil && w.accountRotation.d.accounts != nil {
 		return w.accountRotation.d.accounts.managedNative(source.AgentType, source.Env, source.ProviderCwd())
-	}
-	if source.AccountBinding != nil && (source.AgentType == accounts.ProviderClaude || source.AgentType == accounts.ProviderCodex) && strings.HasPrefix(target.Fingerprint, "sha256:") {
-		if !persist.MatchCLIFingerprint(target.Path, target.Fingerprint) {
-			return nil, errAccountSuccessorUnavailable
-		}
-		return &target, nil
 	}
 	candidate, err := w.cliProbe(source.AgentType, "", source.Env, source.Cwd)
 	if err != nil {

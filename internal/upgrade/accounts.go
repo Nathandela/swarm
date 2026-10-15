@@ -28,6 +28,22 @@ const RetainedCodexWorkerCapability = 4
 const MinimumCodexWorkerCapability = 5
 const MinimumClaudeWorkerCapability = 6
 
+// boundSession reports whether a refresh record's session is account-bound;
+// unreadable metadata counts as bound so the guard fails closed.
+func boundSession(stateRoot, id string) bool {
+	if !persist.ValidID(id) {
+		return true
+	}
+	raw, err := readPlainAccountDocument(filepath.Join(stateRoot, id, "meta.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	var meta struct {
+		Binding *accounts.Binding `json:"account_binding"`
+	}
+	return err != nil || json.Unmarshal(raw, &meta) != nil || meta.Binding != nil
+}
+
 // newerNativeUnmanaged reports managed state written by a Codex later than
 // 0.160.0 or a Claude later than 2.1.289 that the target build's worker
 // capability cannot manage under the minimum-version policy.
@@ -609,6 +625,7 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 		if raw := state[key]; raw != nil {
 			var records map[string]struct {
 				AgentType  string               `json:"agent_type"`
+				State      string               `json:"state"`
 				Enrollment json.RawMessage      `json:"account_enrollment"`
 				Target     *persist.CLIIdentity `json:"target"`
 				Identity   *persist.CLIIdentity `json:"identity"`
@@ -616,7 +633,10 @@ func accountRecoveryGuard(stateRoot string, card CompatManifest) error {
 			if json.Unmarshal(raw, &records) != nil {
 				return errors.New("retained CLI refresh observations cannot be verified")
 			}
-			for _, rec := range records {
+			for id, rec := range records {
+				if key == "cli_refresh" && rec.State != "complete" && rec.Target != nil && newerNativeUnmanaged(rec.AgentType, rec.Target.Version, card) && boundSession(stateRoot, id) {
+					return errors.New("the target build cannot refresh newer " + rec.AgentType + " discussions")
+				}
 				if len(rec.Enrollment) > 0 && string(rec.Enrollment) != "null" && card.AccountWorker < RetainedCodexWorkerCapability {
 					return errors.New("the target build cannot preserve running discussion enrollment")
 				}
