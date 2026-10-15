@@ -94,7 +94,7 @@ func TestLaunch_OwnerFallbackIsLoggedAndShown(t *testing.T) {
 	if want := `accounts: codex launch "fix-login" fell back to the owner login after account "Work" refused: ` + errAccountLaunch.Error(); !strings.Contains(sink.String(), want) {
 		t.Errorf("daemon log lacks %q:\n%s", want, sink.String())
 	}
-	for _, want := range []string{"owner login", `"Work"`, errAccountLaunch.Error()} {
+	for _, want := range []string{"owner login", `"Work"`, "private account or configuration is unavailable"} {
 		if !strings.Contains(meta.LaunchNotice, want) {
 			t.Errorf("launch notice %q lacks %q", meta.LaunchNotice, want)
 		}
@@ -149,5 +149,58 @@ func TestLaunch_LaunchContextFailureStillAborts(t *testing.T) {
 				t.Fatalf("attempts %v; a launch-context failure must not fall back to the owner", f.attempts)
 			}
 		})
+	}
+}
+
+// belowFloorCodex makes the fixture's owner Codex fail the managed check: it reports
+// a version below the supported floor, so managedNative refuses it.
+func belowFloorCodex(t *testing.T, f *accountRetryFixture) {
+	t.Helper()
+	accountTestPut(t, filepath.Join(f.manager.stateRoot, "codex"), []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.159.0'; exit; fi\nexec /bin/sleep 60\n"))
+}
+
+// An owner CLI that fails the managed check fails at launch composition, before any
+// account is tried; a selector-chosen launch still falls back to the owner login.
+func TestLaunch_ManagedCheckFailureAtCompositionFallsBackToOwner(t *testing.T) {
+	f := newOwnerFallbackFixture(t, "Work")
+	belowFloorCodex(t, f)
+	meta, err := f.launch(t, "fix-login")
+	if err != nil {
+		t.Fatalf("launch refused although the owner login could take it: %v", err)
+	}
+	if meta.AccountBinding != nil || !strings.Contains(meta.LaunchNotice, "owner login") {
+		t.Fatalf("launch bound to %+v with notice %q, want an owner launch with a notice", meta.AccountBinding, meta.LaunchNotice)
+	}
+}
+
+// The same composition-time failure on a frozen binding is still refused.
+func TestLaunch_ManagedCheckFailureAtCompositionKeepsAFrozenBinding(t *testing.T) {
+	f := newOwnerFallbackFixture(t, "Work")
+	belowFloorCodex(t, f)
+	var frozen accounts.Binding
+	for id := range f.labels {
+		frozen = accountTestBinding(t, f.manager, accounts.Account{ID: id})
+	}
+	_, err := f.api.Launch(daemon.LaunchSpec{AgentType: "codex", Name: "bound", Cwd: f.cwd, ClientEnv: f.env, Options: map[string]string{}, AccountBinding: &frozen, Cols: 80, Rows: 24})
+	if !errors.Is(err, errAccountLaunch) {
+		t.Fatalf("frozen launch error = %v, want errAccountLaunch", err)
+	}
+	for _, attempt := range f.attempts {
+		if attempt == ownerAttempt {
+			t.Fatalf("attempts %v; a frozen binding must not reach the owner login", f.attempts)
+		}
+	}
+}
+
+// The notice names the account and the reason, without the log-only remedy tail.
+func TestLaunch_OwnerFallbackNoticeDropsTheRemedyTail(t *testing.T) {
+	f := newOwnerFallbackFixture(t, "Work")
+	f.refuse = func(accounts.Binding) error { return errAccountLaunch }
+	meta, err := f.launch(t, "fix-login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(meta.LaunchNotice, "review Accounts") || !strings.Contains(meta.LaunchNotice, `"Work"`) {
+		t.Fatalf("notice %q, want the account without the remedy tail", meta.LaunchNotice)
 	}
 }
