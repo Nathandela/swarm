@@ -42,7 +42,7 @@ func TestBanner_OwnerFallbackLaunchIsShown(t *testing.T) {
 
 // A relocated resume that fell back to the owner login attaches like any resume,
 // and the notice is shown when the owner returns to the board.
-func TestBanner_OwnerFallbackResumeLeavesTheResumeDialog(t *testing.T) {
+func TestBanner_OwnerFallbackResumeAutoAttachesAndBannersOnReturn(t *testing.T) {
 	m := New(newFakeClient(), detectMixed())
 	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
 	source := protocol.SessionView{ID: "endpoint/old", Agent: "codex", Name: "fix-login", Cwd: t.TempDir()}
