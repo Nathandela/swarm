@@ -186,6 +186,7 @@ type session struct {
 
 type childState struct {
 	sequence uint64
+	startSeq uint64 // the SubagentStart that opened the current incarnation
 	active   bool
 }
 
@@ -665,12 +666,26 @@ func countChild(s *session, event, actor string, seq uint64) (fresh, changed boo
 		return true, false
 	}
 	old := s.childStates[actor]
-	if seq == 0 || seq <= old.sequence {
+	if seq == 0 {
+		return false, false
+	}
+	// Sequences carry no causal order (see stopEvent), so a stop may trail its own
+	// child's tool hooks: it is terminal for the live incarnation regardless. Only
+	// a stop at or below that incarnation's start is a replay from an older one.
+	if event == subagentStopEvent && old.active && seq > old.startSeq {
+		s.children--
+		s.childStates[actor] = childState{sequence: max(seq, old.sequence), startSeq: old.startSeq}
+		return true, true
+	}
+	if seq <= old.sequence {
 		return false, false
 	}
 	active := event != subagentStopEvent
 	if event != subagentStartEvent && old.sequence != 0 && !old.active {
 		active = false
+	}
+	if event == subagentStartEvent {
+		old.startSeq = seq
 	}
 	if old.active != active {
 		if active {
@@ -683,7 +698,7 @@ func countChild(s *session, event, actor string, seq uint64) (fresh, changed boo
 	if s.childStates == nil {
 		s.childStates = make(map[string]childState)
 	}
-	s.childStates[actor] = childState{sequence: seq, active: active}
+	s.childStates[actor] = childState{sequence: seq, startSeq: old.startSeq, active: active}
 	return true, changed
 }
 
