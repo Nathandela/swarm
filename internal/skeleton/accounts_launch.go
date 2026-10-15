@@ -107,7 +107,7 @@ func (d *Daemon) prepareAccountLaunch(id string, spec daemon.LaunchSpec) (daemon
 	if strings.HasPrefix(spec.CLIIdentity.Fingerprint, "sha256:") && !persist.MatchCLIFingerprint(spec.CLIIdentity.Path, spec.CLIIdentity.Fingerprint) {
 		return spec, errAccountLaunch
 	}
-	if spec.AgentType == accounts.ProviderClaude && spec.CLIIdentity.Version != accountconfig.CharacterizedClaudeVersion {
+	if spec.AgentType == accounts.ProviderClaude && !accountconfig.ClaudeNativeContextVersion(spec.CLIIdentity.Version) {
 		if spec.AccountProjectionRef == "" {
 			return spec, accountconfig.Conflict("native-version-not-characterized")
 		}

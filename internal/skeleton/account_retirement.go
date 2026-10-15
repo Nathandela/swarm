@@ -82,10 +82,14 @@ func (m *accountRotationManager) stepRetirements() {
 				continue
 			}
 			if !generation.CredentialErasing {
-				registry, err = m.store.BeginCredentialErasure(registry.Revision, id, number, version)
+				next, err := m.store.BeginCredentialErasure(registry.Revision, id, number, version)
+				if errors.Is(err, accounts.ErrIneligible) {
+					continue
+				}
 				if err != nil {
 					return
 				}
+				registry = next
 				generation = registry.Accounts[id].Generations[number]
 			}
 			if _, err = m.retirementReferences(manager, binding, generation); err != nil {

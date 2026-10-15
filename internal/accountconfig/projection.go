@@ -27,18 +27,29 @@ const maxSourceBytes = 2 << 20
 const CharacterizedCodexVersion = "0.160.0"
 const MinimumCodexVersion = CharacterizedCodexVersion
 const CharacterizedClaudeVersion = "2.1.289"
+const MinimumClaudeVersion = "2.1.288"
 
-// Codex uses a minimum stable version; configuration and writer custody are
-// validated separately. Claude keeps its characterized native contracts.
+// Both providers use a minimum stable version; configuration and writer
+// custody are validated separately.
 func SupportedNativeVersion(provider, version string) bool {
-	if provider == "codex" {
-		v := "v" + version
-		return semver.IsValid(v) && semver.Canonical(v) == v && semver.Prerelease(v) == "" && semver.Compare(v, "v"+MinimumCodexVersion) >= 0
-	}
-	if provider == "claude" {
-		return version == CharacterizedClaudeVersion || version == "2.1.288"
+	switch provider {
+	case "codex":
+		return atLeast(version, MinimumCodexVersion)
+	case "claude":
+		return atLeast(version, MinimumClaudeVersion)
 	}
 	return false
+}
+
+// ClaudeNativeContextVersion reports whether a Claude release carries the
+// native context contract first characterized on CharacterizedClaudeVersion.
+func ClaudeNativeContextVersion(version string) bool {
+	return atLeast(version, CharacterizedClaudeVersion)
+}
+
+func atLeast(version, minimum string) bool {
+	v := "v" + version
+	return semver.IsValid(v) && semver.Canonical(v) == v && semver.Prerelease(v) == "" && semver.Compare(v, "v"+minimum) >= 0
 }
 
 // Conflict exposes a stable, nonsecret cause. It never includes a source path,
