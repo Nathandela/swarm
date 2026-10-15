@@ -476,7 +476,18 @@ func pilotCreate(args []string, c agentClient, stdout, stderr io.Writer, outboun
 		return 1
 	}
 	*outbound = map[string]string{"prompt": *prompt}
-	return pilotJSON(stdout, stderr, map[string]string{"discussion_id": id, "name": canonical})
+	return pilotJSON(stdout, stderr, withLaunchNotice(c, id, map[string]string{"discussion_id": id, "name": canonical}))
+}
+
+// withLaunchNotice adds the daemon's note on launch id (an owner-login fallback,
+// ADR-032 Amendment 4) to out when the client carries one.
+func withLaunchNotice(c any, id string, out map[string]string) map[string]string {
+	if n, ok := c.(interface{ TakeLaunchNotice(string) string }); ok {
+		if notice := n.TakeLaunchNotice(id); notice != "" {
+			out["notice"] = notice
+		}
+	}
+	return out
 }
 
 func pilotResume(args []string, c agentClient, stdout, stderr io.Writer) int {
@@ -497,7 +508,7 @@ func pilotResume(args []string, c agentClient, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "pilot: resume: %v\n", err)
 		return 1
 	}
-	return pilotJSON(stdout, stderr, map[string]string{"discussion_id": id, "name": name, "resumed_from": row.ID})
+	return pilotJSON(stdout, stderr, withLaunchNotice(c, id, map[string]string{"discussion_id": id, "name": name, "resumed_from": row.ID}))
 }
 
 func pilotAwait(path string, args []string, remaining time.Duration, c agentClient, stdout, stderr io.Writer) int {

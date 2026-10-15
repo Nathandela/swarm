@@ -42,3 +42,21 @@ func TestBanner_OwnerFallbackLaunchIsShown(t *testing.T) {
 		t.Errorf("screen = %v, want the board so the notice is read", m.(rootModel).screen)
 	}
 }
+
+// A relocated resume that succeeded on the owner login closes the resume dialog
+// instead of leaving it busy and deaf to keys.
+func TestBanner_OwnerFallbackResumeLeavesTheResumeDialog(t *testing.T) {
+	m := New(newFakeClient(), detectMixed())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
+	source := protocol.SessionView{ID: "endpoint/old", Agent: "codex", Name: "fix-login", Cwd: t.TempDir()}
+	rm := m.(rootModel).openResume(source, "")
+	rm.resume.busy = true
+	m = send(rm, resumeResultMsg{source: source, result: launchResultMsg{id: "endpoint/new-1", agent: "codex", name: "fix-login", notice: fallbackNotice}})
+	got := m.(rootModel)
+	if got.screen != screenGeneral || got.resume.busy {
+		t.Fatalf("screen = %v busy = %v, want the board with the dialog closed", got.screen, got.resume.busy)
+	}
+	if shown := strings.Join(strings.Fields(view(m)), " "); !strings.Contains(shown, `launched on the owner login: account "Work" refused`) {
+		t.Errorf("banner lacks the owner-fallback notice; view:\n%s", view(m))
+	}
+}

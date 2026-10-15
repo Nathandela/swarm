@@ -388,7 +388,9 @@ func (a *coreAPI) accountLaunchResolver(spec daemon.LaunchSpec) func(string, []s
 	return func(name string, env []string) (string, error) {
 		identity, err := a.accounts.managedNative(spec.AgentType, env, spec.Cwd)
 		if err != nil {
-			return "", err
+			// launchResolved re-checks every bound attempt, so a frozen binding is
+			// still refused and a selector-chosen one falls back (ADR-032 Amendment 4).
+			return lookPathIn(name, env)
 		}
 		return identity.Path, nil
 	}

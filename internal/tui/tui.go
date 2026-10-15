@@ -461,7 +461,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// An owner-login fallback (ADR-032 Amendment 4) stays on the board so its
 		// banner is read; the owner attaches to the new row with Enter.
 		if msg.notice != "" {
-			return m, m.general.setBanner(msg.notice)
+			m.resume = resumeModel{}
+			cmd := m.enterGeneral()
+			return m, tea.Batch(cmd, m.general.setBanner(msg.notice))
 		}
 		// Success: auto-attach straight into the new session (bd agents-tracker-stc),
 		// reusing the exact attach path Enter uses on a running row (the session is
