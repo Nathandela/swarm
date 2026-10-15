@@ -36,6 +36,8 @@ const (
 	eventPoll = 200 * time.Millisecond
 	// eventsBuffer sizes the roster event channel the Server fans out from.
 	eventsBuffer = 64
+	// persistRetryEvery paces the re-push of a status whose persist failed.
+	persistRetryEvery = time.Second
 )
 
 // coreAPI adapts the core *daemon.Daemon to the protocol.DaemonAPI the Server
@@ -199,11 +201,19 @@ type coreAPI struct {
 	// provider sync is best-effort and must never make the durable Swarm rename fail.
 	syncName func(local, name string)
 
-	events   chan persist.Meta
-	nudge    chan struct{} // wakes the poller to sample NOW (it is the sole snapshot producer)
-	stop     chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	events chan persist.Meta
+	nudge  chan struct{} // wakes the poller to sample NOW (it is the sole snapshot producer)
+	// unpersisted holds, per session, the latest engine status whose SetStatus failed
+	// (e.g. ENOSPC). The engine has already committed it and will not re-emit, so the
+	// roster poller re-pushes it until it persists. unpersistedMu also serializes every
+	// SetStatus from emitStatus, so a stale retry can never overwrite a newer emit.
+	unpersistedMu sync.Mutex
+	unpersisted   map[string]status.Status
+	// lastPersistFailure paces retryUnpersisted (persistRetryEvery).
+	lastPersistFailure time.Time
+	stop               chan struct{}
+	stopOnce           sync.Once
+	wg                 sync.WaitGroup
 }
 
 // AuthorizeCommand makes coreAPI a protocol.DeviceAuthenticator (R-POL.9): it verifies
@@ -1839,14 +1849,13 @@ var _ protocol.TerminalTapper = (*coreAPI)(nil)
 // stays its sole authority), so an unknown/ended session persists nothing and is
 // dropped here.
 func (a *coreAPI) emitStatus(id string, s status.Status) {
-	if err := a.core.SetStatus(id, s); err != nil {
-		return // unknown/ended session: nothing to persist or fan out
+	a.unpersistedMu.Lock()
+	ok := a.persistStatusLocked(id, s)
+	a.unpersistedMu.Unlock()
+	if !ok {
+		return // unknown/ended session, or a failed write the poller retries
 	}
-	if a.statusObserver != nil {
-		if current, ok := a.core.Get(id); ok {
-			a.statusObserver(id, current.Status)
-		}
-	}
+	a.observeStatus(id)
 	// FAN OUT happens via the poller, which is the SOLE snapshot producer: a
 	// direct Get-then-send here could capture meta, lose the CPU to a concurrent
 	// Rename, and queue its stale snapshot AFTER the poller queued the newer one
@@ -1855,6 +1864,58 @@ func (a *coreAPI) emitStatus(id string, s status.Status) {
 	// poller samples now, not at the next tick, and emits the CURRENT meta under
 	// its own seen discipline.
 	a.pokeWatch()
+}
+
+// persistStatusLocked writes s through SetStatus. A failure on a known session is
+// logged once per failure episode and remembered for retryUnpersisted; an unknown or
+// ended session is dropped. Callers hold unpersistedMu.
+func (a *coreAPI) persistStatusLocked(id string, s status.Status) bool {
+	err := a.core.SetStatus(id, s)
+	if err == nil {
+		delete(a.unpersisted, id)
+		return true
+	}
+	if _, known := a.core.Get(id); !known {
+		delete(a.unpersisted, id)
+		return false
+	}
+	if _, retrying := a.unpersisted[id]; !retrying {
+		log.Printf("skeleton: persist status for session %s failed, retrying: %v", id, err)
+		if a.unpersisted == nil {
+			a.unpersisted = map[string]status.Status{}
+		}
+	}
+	a.unpersisted[id] = s
+	a.lastPersistFailure = time.Now()
+	return false
+}
+
+// retryUnpersisted re-pushes every status whose persist failed, at most once per
+// persistRetryEvery: a failed meta save after a successful journal append journals the
+// transition again on each attempt. The roster poller calls it before each sample so a
+// recovered write fans out in the same pass.
+func (a *coreAPI) retryUnpersisted() {
+	var persisted []string
+	a.unpersistedMu.Lock()
+	if time.Since(a.lastPersistFailure) >= persistRetryEvery {
+		for id, s := range a.unpersisted {
+			if a.persistStatusLocked(id, s) {
+				persisted = append(persisted, id)
+			}
+		}
+	}
+	a.unpersistedMu.Unlock()
+	for _, id := range persisted {
+		a.observeStatus(id)
+	}
+}
+
+func (a *coreAPI) observeStatus(id string) {
+	if a.statusObserver != nil {
+		if current, ok := a.core.Get(id); ok {
+			a.statusObserver(id, current.Status)
+		}
+	}
 }
 
 // pokeWatch wakes the roster poller for an immediate sample. Non-blocking and
@@ -1992,6 +2053,7 @@ func (a *coreAPI) watch() {
 		case <-t.C:
 		case <-a.nudge: // an emitStatus/Rename wants immediate fan-out (L1)
 		}
+		a.retryUnpersisted()
 		if !sample() {
 			return
 		}

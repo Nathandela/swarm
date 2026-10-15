@@ -58,7 +58,10 @@ func (a *coreAPI) bindAccountLaunch(spec *daemon.LaunchSpec, tried ...accountRef
 		if err != nil {
 			return errAccountLaunch
 		}
-		if !registry.Enabled[spec.AgentType] {
+		// An automated refresh resume (ExpectedCLIIdentity) stays an owner launch:
+		// rotation alone never onboards a discussion (ADR-032 D6). Enrollment
+		// selects its destination without resume_from and is unaffected.
+		if !registry.Enabled[spec.AgentType] || spec.ExpectedCLIIdentity != nil && spec.Options[protocol.OptionResumeFrom] != "" {
 			return nil
 		}
 		counts := map[string]int{}

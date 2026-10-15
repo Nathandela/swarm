@@ -93,12 +93,16 @@ func accountStateGuard(stateRoot string, card CompatManifest) error {
 	}
 	for _, raw := range reg.Accounts {
 		var account struct {
+			AuthReason  string `json:"auth_reason"`
 			Generations map[string]struct {
 				ErasureInventory json.RawMessage `json:"erasure_inventory"`
 			} `json:"generations"`
 		}
 		if json.Unmarshal(raw, &account) != nil {
 			return errors.New("account erasure inventory cannot be verified")
+		}
+		if account.AuthReason != "" && card.AccountAuth < 1 {
+			return errors.New("the target build cannot read an account flagged by the identity check; sign that account in again, or wait for its identity check to match, then retry")
 		}
 		for _, generation := range account.Generations {
 			if generation.ErasureInventory == nil {

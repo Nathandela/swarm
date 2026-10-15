@@ -1409,7 +1409,11 @@ func localID(id string) string {
 	return id
 }
 
-// elapsedOf is the time since the session was last active.
+// elapsedOf is the time since the session's last state change. LastActivity moves only at
+// launch and exit, so it is the fallback when GroupEnteredAt is not set.
 func elapsedOf(s protocol.SessionView) time.Duration {
+	if !s.GroupEnteredAt.IsZero() {
+		return time.Since(s.GroupEnteredAt)
+	}
 	return time.Since(s.LastActivity)
 }

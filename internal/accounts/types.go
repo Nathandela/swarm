@@ -18,6 +18,7 @@ const (
 	LifecycleRetiring      = "retiring"
 	AuthValid              = "valid"
 	AuthNeedsLogin         = "needs-login"
+	AuthReasonDrift        = "identity-drift"
 	VerificationCodex      = "codex-account-id"
 	VerificationClaude     = "claude-cached-personal"
 	VerificationUnverified = "unverified"
@@ -84,6 +85,7 @@ type Account struct {
 	Label             string                `json:"label"`
 	Lifecycle         string                `json:"lifecycle"`
 	Auth              string                `json:"auth"`
+	AuthReason        string                `json:"auth_reason,omitempty"` // why needs-login was set; "" is a real login failure
 	CurrentGeneration uint64                `json:"current_generation"`
 	Generations       map[uint64]Generation `json:"generations"`
 	Quota             QuotaState            `json:"quota"`

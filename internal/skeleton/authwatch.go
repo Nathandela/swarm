@@ -372,6 +372,7 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 		for local := range w.state.Killed {
 			if _, ok := w.get(local); ok {
 				w.restoreRecycle(local)
+				w.noteCLIRefreshHold(local)
 			}
 		}
 	}
@@ -381,6 +382,13 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 }
 
 var errAuthRecycleUnsafe = errors.New("authwatch: session became unsafe to recycle")
+
+// noteCLIRefreshHold names a CLI refresh as the job holding local's input lock.
+func (w *authWatcher) noteCLIRefreshHold(local string) {
+	if rec, ok := w.state.CLI[local]; ok && rec.State != cliRefreshComplete && rec.State != cliRefreshBlocked && w.accountRotation != nil && w.accountRotation.d != nil {
+		w.accountRotation.d.noteAuthRecycleReason(local, recycleReasonCLI)
+	}
+}
 
 func (w *authWatcher) sessionUnsafe(local string) bool {
 	if w.unsafe != nil && w.unsafe(local) {
@@ -854,6 +862,7 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 	// The durable claim belongs here too: publishing it before the fence would let a crash while
 	// an earlier composer send still owns the lane resurrect a session the watcher never killed.
 	var claimErr error
+	w.noteCLIRefreshHold(local)
 	killErr := w.fencedRecycleAttempt(local, hadClaim, func() error {
 		cur, ok := w.get(local)
 		if !ok || cur.Status.Process != status.ProcessRunning ||

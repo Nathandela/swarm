@@ -37,6 +37,8 @@ const (
 	maxCLIRefreshProbesPerTick = 8
 	refreshRetryBase           = 30 * time.Second
 	refreshRetryMax            = 10 * time.Minute
+	// Consecutive failed relaunches after the kill before the record blocks.
+	maxCLIRefreshRelaunchFailures = 3
 )
 
 type recycleRetry struct {
@@ -689,11 +691,19 @@ func (w *authWatcher) resumeCLIEnded(agent string, source persist.Meta) bool {
 		}
 	}
 	if err != nil {
+		w.deferRetry(source.ID)
+		// A returned replacement is judged by checkCLIReplacement, not by the cap.
+		if fresh.ID == "" && w.state.Retries[source.ID].Attempts >= maxCLIRefreshRelaunchFailures {
+			w.blockCLIRefresh(source.ID, "automatic restart failed: "+err.Error())
+			if w.state.CLI[source.ID].State == cliRefreshBlocked {
+				log.Printf("cli-refresh: resume %s session %s (%s) failed %d times: %v; refresh blocked, source left for manual resume", agent, source.ID, source.Name, maxCLIRefreshRelaunchFailures, err)
+				return false
+			}
+		}
 		rec = w.state.CLI[source.ID]
 		rec.LastError = err.Error()
 		rec.UpdatedAt = w.clock()
 		w.state.CLI[source.ID] = rec
-		w.deferRetry(source.ID)
 		_ = w.saveState()
 		log.Printf("cli-refresh: resume %s session %s (%s): %v; obligation retained", agent, source.ID, source.Name, err)
 		return true

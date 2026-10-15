@@ -91,6 +91,26 @@ func TestGeneral_RowShowsAllFields(t *testing.T) {
 
 // E7.2 — the home directory is shortened to ~ in the cwd column.
 
+// The elapsed column is the time since the session's last STATE CHANGE (GroupEnteredAt),
+// not since launch (LastActivity moves only at launch and exit). A running session launched
+// three hours ago that changed state ten seconds ago must read as about 10s, not 3h.
+func TestBoard_ElapsedTracksStateChangeNotLaunch(t *testing.T) {
+	s := sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Minute)
+	s.LastActivity = time.Now().Add(-3 * time.Hour)
+	s.CreatedAt = s.LastActivity
+	s.GroupEnteredAt = time.Now().Add(-10 * time.Second)
+	m := newModel(t, newFakeClient(s), detectMixed())
+
+	row := lineContaining(view(m), "building")
+	if row == "" {
+		t.Fatalf("no row carried the summary:\n%s", view(m))
+	}
+	token := elapsedRe.FindString(row)
+	if token != "9s" && token != "10s" && token != "11s" {
+		t.Fatalf("elapsed must track the state change (about 10s), got %q:\n%s", token, row)
+	}
+}
+
 func TestGeneral_CwdShortenedToTilde(t *testing.T) {
 	cwd := homeDir(t) + "/Code/nathan-site"
 	f := newFakeClient(sWorking("endpoint/s1", "agy", cwd, "refactoring nav", 41*time.Second))
