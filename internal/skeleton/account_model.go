@@ -217,7 +217,9 @@ func (m *accountRotationManager) releaseIdentityHold(meta persist.Meta) {
 	}
 	account := registry.Accounts[meta.AccountBinding.AccountID]
 	if account.Auth == accounts.AuthNeedsLogin && account.AuthReason == accounts.AuthReasonDrift && account.CurrentGeneration == meta.AccountBinding.CredentialGeneration {
-		_, _ = m.store.SetAuth(registry.Revision, account.ID, accounts.AuthValid)
+		if _, err := m.store.SetAuth(registry.Revision, account.ID, accounts.AuthValid); err == nil {
+			logAuthChange(account, accounts.AuthValid, "identity-restored")
+		}
 	}
 }
 

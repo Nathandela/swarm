@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -687,6 +688,9 @@ func (m *accountManager) Accounts(req protocol.AccountsReq) (protocol.AccountsRe
 				} else {
 					_, account, err = m.store.Admit(req.ExpectedRevision, job.Candidate, req.Label)
 				}
+				if err == nil && job.TargetAccountID != "" {
+					logAuthChange(r.Accounts[job.TargetAccountID], account.Auth, "re-login")
+				}
 				if err != nil {
 					if !errors.Is(err, accounts.ErrDurabilityUncertain) {
 						job.State = "ready"
@@ -712,7 +716,9 @@ func (m *accountManager) Accounts(req protocol.AccountsReq) (protocol.AccountsRe
 		out.Job = &view
 		return out, err
 	case "enable":
-		_, err = m.store.SetEnabled(req.ExpectedRevision, req.Provider, req.Enabled)
+		if _, err = m.store.SetEnabled(req.ExpectedRevision, req.Provider, req.Enabled); err == nil {
+			log.Printf("accounts: rotation %s: %t -> %t", req.Provider, r.Enabled[req.Provider], req.Enabled)
+		}
 	case "update":
 		if req.Label != "" {
 			_, err = m.store.SetLabel(req.ExpectedRevision, req.AccountID, req.Label)
