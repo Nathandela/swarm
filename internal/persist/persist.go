@@ -121,7 +121,6 @@ type Meta struct {
 	// LaunchNotice is what the launch that returned this meta wants the owner to read
 	// (an owner-login fallback, ADR-032 Amendment 4). Never persisted.
 	LaunchNotice string `json:"-"`
-
 }
 
 // EffectiveGroupEnteredAt returns the durable ordering instant for a session.

@@ -15,10 +15,7 @@ type noticeClient struct {
 	notice string
 }
 
-func (c noticeClient) LaunchWithNotice(r protocol.LaunchReq) (string, string, string, error) {
-	id, name, err := c.Launch(r)
-	return id, name, c.notice, err
-}
+func (c noticeClient) TakeLaunchNotice(string) string { return c.notice }
 
 const fallbackNotice = `launched on the owner login: account "Work" refused: accounts: private account or configuration is unavailable`
 

@@ -915,13 +915,13 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int, relocate bool) 
 		req.Options[protocol.OptionResumeRelocate] = "true"
 	}
 	return func() tea.Msg {
-		id, name, err := c.Launch(req)
+		id, name, notice, err := launchWithNotice(c, req)
 		if name == "" {
 			name = s.Name // skew fallback: an older daemon's reply carries no canonical name
 		}
 		// Carry the new session id + agent + name so a successful resume auto-attaches into
 		// it (bd agents-tracker-stc) — the user pressed 'r' precisely to interact with it.
-		return resumeResultMsg{source: s, result: launchResultMsg{id: id, agent: s.Agent, name: name, err: err}}
+		return resumeResultMsg{source: s, result: launchResultMsg{id: id, agent: s.Agent, name: name, notice: notice, err: err}}
 	}
 }
 

@@ -28,11 +28,14 @@ func TestClient_LaunchWithNoticeCarriesTheDaemonNotice(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 	c := dialClient(t, sock, nil)
-	id, _, notice, err := c.LaunchWithNotice(validLaunch(t))
+	id, _, err := c.Launch(validLaunch(t))
 	if err != nil || id == "" {
 		t.Fatalf("launch: id=%q err=%v", id, err)
 	}
-	if notice != "launched on the owner login" {
+	if notice := c.TakeLaunchNotice(id); notice != "launched on the owner login" {
 		t.Fatalf("notice = %q, want the daemon's launch notice", notice)
+	}
+	if again := c.TakeLaunchNotice(id); again != "" {
+		t.Fatalf("notice taken twice: %q", again)
 	}
 }

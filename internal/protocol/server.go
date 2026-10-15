@@ -1648,7 +1648,7 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// phonecore.foldContent drops a command reply naming no op rather than mis-key it -- so
 	// the op stays in flight for the life of the phone process while the session runs.
 	_ = cc.writeControl(Control{Op: OpLaunch, EndpointID: cc.endpointID, OperationID: cc.opID,
-		Session: cc.stampView(m, status.Derive(m.Status))})
+		Session: cc.stampView(m, status.Derive(m.Status)), Notice: m.LaunchNotice})
 }
 
 func (cc *clientConn) handleKill(c Control) {

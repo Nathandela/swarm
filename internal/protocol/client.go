@@ -39,6 +39,8 @@ type Client struct {
 	peekCh       chan TerminalSnapshot // terminal_snapshot PUSHES, never the request respCh
 	journalPages chan Control
 	journalCh    chan JournalRecord
+	// launchNotices holds launch replies' notes by session id until TakeLaunchNotice.
+	launchNotices map[string]string
 
 	pairMu  sync.Mutex      // one pairing in flight per client (mirrors the daemon host)
 	pairing *PairingSession // the in-flight pairing, routing pair_pending/pair_result pushes
@@ -146,28 +148,40 @@ func (c *Client) InteractionHistory(id string, limit int) ([]JournalRecord, erro
 // chrome uses the canonical name so the label matches what the daemon persisted (an
 // older daemon whose reply predates naming returns an empty name).
 func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
-	id, name, _, err = c.LaunchWithNotice(req)
-	return id, name, err
-}
-
-// LaunchWithNotice is Launch that also returns the reply's note for the owner (an
-// owner-login fallback, ADR-032 Amendment 4); an older daemon sends none.
-func (c *Client) LaunchWithNotice(req LaunchReq) (id, name, notice string, err error) {
 	if _, relocate := req.Options[OptionResumeRelocate]; relocate && !slices.Contains(c.caps, CapResumeRelocate) {
-		return "", "", "", errors.New("resume relocation requires an updated daemon; run swarm daemon restart")
+		return "", "", errors.New("resume relocation requires an updated daemon; run swarm daemon restart")
 	}
 	r := req
 	resp, err := c.request(Control{Op: OpLaunch, EndpointID: c.endpointID, Launch: &r})
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	if resp.Op == OpError {
-		return "", "", "", errors.New(resp.Error)
+		return "", "", errors.New(resp.Error)
 	}
 	if resp.Session == nil {
-		return "", "", "", errors.New("protocol: launch reply carried no session")
+		return "", "", errors.New("protocol: launch reply carried no session")
 	}
-	return resp.Session.ID, resp.Session.Name, "", nil
+	if resp.Notice != "" {
+		c.mu.Lock()
+		if c.launchNotices == nil {
+			c.launchNotices = map[string]string{}
+		}
+		c.launchNotices[resp.Session.ID] = resp.Notice
+		c.mu.Unlock()
+	}
+	return resp.Session.ID, resp.Session.Name, nil
+}
+
+// TakeLaunchNotice returns and forgets the launch reply's note for the owner on
+// session id (an owner-login fallback, ADR-032 Amendment 4); "" when there was none.
+// Kept beside Launch so wrappers that override Launch still deliver it.
+func (c *Client) TakeLaunchNotice(id string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	notice := c.launchNotices[id]
+	delete(c.launchNotices, id)
+	return notice
 }
 
 // SendInput writes ONE steering message into a session (ADR-010 A2): either req.Text

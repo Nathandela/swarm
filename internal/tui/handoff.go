@@ -587,8 +587,8 @@ func handsOffLaunchCmd(c Client, sourceID, cwd, agent, model string, cols, rows 
 		Rows:    rows,
 	}
 	return func() tea.Msg {
-		id, name, err := c.Launch(req)
-		return launchResultMsg{id: id, agent: agent, name: name, err: err}
+		id, name, notice, err := launchWithNotice(c, req)
+		return launchResultMsg{id: id, agent: agent, name: name, notice: notice, err: err}
 	}
 }
 

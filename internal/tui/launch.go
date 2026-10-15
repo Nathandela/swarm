@@ -551,12 +551,22 @@ func launchDims(w, h int) (int, int) {
 
 func launchCmd(c Client, req protocol.LaunchReq) tea.Cmd {
 	return func() tea.Msg {
-		id, name, err := c.Launch(req)
+		id, name, notice, err := launchWithNotice(c, req)
 		if name == "" {
 			name = req.Name // skew fallback: an older daemon's reply carries no canonical name
 		}
-		return launchResultMsg{id: id, agent: req.Agent, name: name, err: err}
+		return launchResultMsg{id: id, agent: req.Agent, name: name, notice: notice, err: err}
 	}
+}
+
+// launchWithNotice launches req and returns the daemon's note for the owner (an
+// owner-login fallback, ADR-032 Amendment 4) when the client carries one.
+func launchWithNotice(c Client, req protocol.LaunchReq) (id, name, notice string, err error) {
+	id, name, err = c.Launch(req)
+	if n, ok := c.(interface{ TakeLaunchNotice(id string) string }); ok && err == nil {
+		notice = n.TakeLaunchNotice(id)
+	}
+	return id, name, notice, err
 }
 
 // expandTilde expands a leading "~" to the user's home directory.

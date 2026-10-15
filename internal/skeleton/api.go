@@ -1170,6 +1170,16 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		refusal := a.accountRefusal(*resolved.AccountBinding, err)
 		log.Printf("accounts: %s launch %q refused on account %s (%q): %v", resolved.AgentType, resolved.Name, refusal.id, refusal.label, err)
 		if refusal.code == "" {
+			if !errors.Is(err, errAccountLaunch) || !a.selectorChoseBinding(composed) {
+				return m, err
+			}
+			// ADR-032 Amendment 4: a rotation-machinery failure on a binding the
+			// selector chose falls back to the owner login rather than blocking it.
+			log.Printf("accounts: %s launch %q fell back to the owner login after account %q refused: %v", resolved.AgentType, resolved.Name, refusal.label, err)
+			m, err = a.launchResolved(composed)
+			if err == nil {
+				m.LaunchNotice = fmt.Sprintf("launched on the owner login: account %q refused: %v", refusal.label, lastErr)
+			}
 			return m, err
 		}
 		tried = append(tried, refusal)

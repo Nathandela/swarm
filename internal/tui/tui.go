@@ -458,6 +458,11 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.general.setBanner("launch failed: " + msg.err.Error())
 		}
+		// An owner-login fallback (ADR-032 Amendment 4) stays on the board so its
+		// banner is read; the owner attaches to the new row with Enter.
+		if msg.notice != "" {
+			return m, m.general.setBanner(msg.notice)
+		}
 		// Success: auto-attach straight into the new session (bd agents-tracker-stc),
 		// reusing the exact attach path Enter uses on a running row (the session is
 		// freshly launched, so read-write). A result with no id (a producer that does
