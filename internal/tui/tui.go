@@ -118,6 +118,7 @@ type launchResultMsg struct {
 	id         string // namespaced id of the new session on success ("" if the producer omits it)
 	agent      string // the new session's agent, for the attach chrome label
 	name       string // the new session's label (P2); carried into the auto-attach chrome hint
+	notice     string // the daemon's note on a successful launch (owner-login fallback, ADR-032 Amendment 4)
 	err        error
 }
 
