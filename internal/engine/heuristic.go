@@ -156,6 +156,16 @@ const escToInterrupt = "esc to interrupt"
 // wait. When the hint is visible, Codex is waiting on the user's decision.
 const codexApprovalHint = "Press enter to confirm or esc to cancel"
 
+// codexRateLimitTitle is the title row of Codex's rate-limit model-switch modal.
+// It is matched as a whole trimmed row, never as a substring, so prose that
+// merely mentions rate limits does not match.
+const codexRateLimitTitle = "Approaching rate limits"
+
+// codexRateLimitFooters are the standing choice hints of that modal. The modal
+// is a numbered choice list with no typed signal, so it is recognised only when
+// its title row and a choice-footer row are both in the bottom region.
+var codexRateLimitFooters = []string{"press enter to select", "enter select"}
+
 // claudeDialogHints are the standing rows of Claude's modal dialogs, each from a
 // live capture. Every one of these dialogs spells its selected option with the
 // composer glyph ("❯ 1. Yes", "❯ 1. Red") — the same U+276F the idle composer
@@ -549,6 +559,9 @@ func evaluateCodexGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 	if regionContains(snap, codexApprovalHint) {
 		return status.TurnIdle, status.InteractionPermission, true
 	}
+	if codexRateLimitModalInRegion(snap) {
+		return status.TurnIdle, status.InteractionPrompt, true
+	}
 	if hasBusyMarker(snap) {
 		return status.TurnActive, status.InteractionNone, true
 	}
@@ -556,6 +569,29 @@ func evaluateCodexGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 		return status.TurnIdle, status.InteractionNone, true
 	}
 	return status.TurnUnknown, status.InteractionUnknown, false
+}
+
+// codexRateLimitModalInRegion reports whether the bottom region carries the
+// rate-limit modal: its title row as a whole row, and a choice-footer row.
+func codexRateLimitModalInRegion(snap *vt.Snap) bool {
+	last, _, ok := lastContentLine(snap)
+	if !ok {
+		return false
+	}
+	title, footer := false, false
+	for y := last; y >= 0 && y > last-gridRegionRows; y-- {
+		row := strings.TrimSpace(lineText(snap.Lines[y]))
+		if row == codexRateLimitTitle {
+			title = true
+		}
+		lower := strings.ToLower(row)
+		for _, f := range codexRateLimitFooters {
+			if strings.HasPrefix(lower, f) {
+				footer = true
+			}
+		}
+	}
+	return title && footer
 }
 
 // evaluateClaudeGrid reads Claude's real screen (dqh). The modal dialogs are
