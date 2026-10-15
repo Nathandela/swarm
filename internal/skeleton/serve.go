@@ -590,8 +590,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	// input, and supervisor delivery refuse before bytes while compaction or auth
 	// recycling owns the session (the supervisor avoids even attempting).
 	inputGate := func(local string) error {
-		if d.composerRecycleInFlight(local) {
-			return fmt.Errorf("session %q is recycling stale credentials; nothing was typed -- wait for its replacement", local)
+		if reason := d.composerRecycleRefusal(local); reason != "" {
+			return fmt.Errorf("session %q %s; nothing was typed", local, reason)
 		}
 		if d.contextGuardCompactionInFlight(local) {
 			return fmt.Errorf("session %q is compacting its context; nothing was typed -- retry shortly", local)

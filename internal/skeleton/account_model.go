@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"strings"
 
 	"github.com/Nathandela/swarm/internal/accountconfig"
@@ -143,7 +145,18 @@ func (m *accountRotationManager) checkIdentities() {
 			}
 			observed[key] = value
 		}
-		if value.err == nil && value.identity == meta.AccountBinding.Identity {
+		// Only a successful read that names another identity is drift. An
+		// unreadable profile proves nothing; it is said once and retried.
+		readKey := "identity-read:" + meta.ID
+		if value.err != nil {
+			if !m.w.warned[readKey] {
+				m.w.once(readKey, "account identity: cannot read the profile identity of account %s (%v); not treating it as drift, retrying each tick", m.accountLabel(meta.AccountBinding.AccountID), value.err)
+			}
+			continue
+		}
+		delete(m.w.warned, readKey)
+		if value.identity == meta.AccountBinding.Identity {
+			m.releaseIdentityHold(meta)
 			continue
 		}
 		registry, err := m.store.Snapshot()
@@ -167,6 +180,65 @@ func (m *accountRotationManager) checkIdentities() {
 			}
 		}
 		_ = m.reportFailure(m.w, meta.ID, "identity-drift", m.effectiveModel(meta), "identity-drift:"+fmtUint(meta.AccountBinding.CredentialGeneration))
+	}
+}
+
+// releaseIdentityHold undoes what identity drift did once the bound identity
+// reads back: the held record, which never claimed the session, is dropped
+// with its aliases and input lock, and a needs-login that only drift set
+// returns to valid. A later drift starts a fresh incident.
+func (m *accountRotationManager) releaseIdentityHold(meta persist.Meta) {
+	w := m.w
+	for key, rec := range w.state.AccountRotations {
+		if rec.SourceID != meta.ID || !rec.IdentityHeld || (rec.State != accountObserved && rec.State != accountBlocked) || w.state.Killed[rec.SourceID] {
+			continue
+		}
+		old := w.state
+		w.state.AccountRotations = maps.Clone(old.AccountRotations)
+		delete(w.state.AccountRotations, key)
+		if visible, err := w.persistState(); err != nil && !visible {
+			w.state = old
+			return
+		}
+		m.viewMu.Lock()
+		for alias, original := range m.aliases {
+			if original == key {
+				delete(m.aliases, alias)
+			}
+		}
+		m.viewMu.Unlock()
+		if w.clearRecycle != nil {
+			w.clearRecycle(rec.SourceID)
+		}
+	}
+	registry, err := m.store.Snapshot()
+	if err != nil {
+		return
+	}
+	account := registry.Accounts[meta.AccountBinding.AccountID]
+	if account.Auth == accounts.AuthNeedsLogin && account.AuthReason == accounts.AuthReasonDrift && account.CurrentGeneration == meta.AccountBinding.CredentialGeneration {
+		_, _ = m.store.SetAuth(registry.Revision, account.ID, accounts.AuthValid)
+	}
+}
+
+func (m *accountRotationManager) accountLabel(id string) string {
+	if registry, err := m.store.Snapshot(); err == nil && registry.Accounts[id].Label != "" {
+		return registry.Accounts[id].Label
+	}
+	return id
+}
+
+// noteHold names the job holding local's input lock in refusals.
+func (m *accountRotationManager) noteHold(local, reason string) {
+	if m.d != nil {
+		m.d.noteAuthRecycleReason(local, reason)
+	}
+}
+
+func (m *accountRotationManager) noteIdentityHold(local, accountID string) {
+	if m.d != nil {
+		label := m.accountLabel(accountID)
+		m.noteHold(local, fmt.Sprintf("is held by the account identity check on %q -- its profile now holds another login; end the session and resume it (sign %q in again from Accounts first if it shows needs-login)", label, label))
 	}
 }
 

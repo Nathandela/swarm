@@ -236,7 +236,7 @@ func validateRegistry(r Registry) error {
 	}
 	profiles := make(map[string]bool)
 	for id, account := range r.Accounts {
-		if id != account.ID || !validID(id) || !validProvider(account.Provider) || !validLifecycle(account.Lifecycle) || (account.Auth != AuthValid && account.Auth != AuthNeedsLogin) || !validLabel(account.Label) || account.CurrentGeneration == 0 {
+		if id != account.ID || !validID(id) || !validProvider(account.Provider) || !validLifecycle(account.Lifecycle) || (account.Auth != AuthValid && account.Auth != AuthNeedsLogin) || (account.AuthReason != "" && (account.AuthReason != AuthReasonDrift || account.Auth != AuthNeedsLogin)) || !validLabel(account.Label) || account.CurrentGeneration == 0 {
 			return ErrUnsafePath
 		}
 		if _, ok := account.Generations[account.CurrentGeneration]; !ok {
@@ -371,12 +371,19 @@ func (s *Store) SetLifecycle(expected uint64, id, lifecycle string) (Registry, e
 }
 
 func (s *Store) SetAuth(expected uint64, id, auth string) (Registry, error) {
+	return s.SetAuthReason(expected, id, auth, "")
+}
+
+// SetAuthReason records why needs-login was set, so a cause that later clears
+// (identity drift) can be undone without undoing a real login failure.
+func (s *Store) SetAuthReason(expected uint64, id, auth, reason string) (Registry, error) {
 	return s.mutate(expected, func(r *Registry) error {
 		account, ok := r.Accounts[id]
-		if !ok || (auth != AuthValid && auth != AuthNeedsLogin) {
+		if !ok || (auth != AuthValid && auth != AuthNeedsLogin) || (reason != "" && (reason != AuthReasonDrift || auth != AuthNeedsLogin)) {
 			return ErrIneligible
 		}
 		account.Auth = auth
+		account.AuthReason = reason
 		r.Accounts[id] = account
 		return nil
 	})

@@ -476,7 +476,7 @@ func (m *accountRotationManager) drainInbox() error {
 }
 
 func (m *accountRotationManager) nativeInboxFailed(local, instance string) {
-	log.Printf("account recovery: native observation for %s could not be durably accepted; holding automatic recovery", local)
+	log.Printf("account recovery: native observation for %s could not be durably accepted; holding automatic recovery and input until the session ends", local)
 	meta, ok := m.w.get(local)
 	if ok && meta.AccountBinding != nil {
 		rec, valid := m.inboxRecord(local, "hold", meta.ConversationID, 0)
@@ -494,6 +494,7 @@ func (m *accountRotationManager) nativeInboxFailed(local, instance string) {
 			m.inboxMu.Unlock()
 		}
 	}
+	m.noteHold(local, recycleReasonObservation)
 	if m.w.restoreRecycle != nil {
 		m.w.restoreRecycle(local)
 	}
