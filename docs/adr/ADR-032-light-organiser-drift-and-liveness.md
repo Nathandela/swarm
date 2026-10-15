@@ -41,3 +41,9 @@ The structural fix (credentials-only profiles linking the owner's files) is Phas
 
 - Skip the refresh while another writer is alive. Rejected: the launch would then run against a marker for a different cohort, which needs new fallback machinery for little benefit.
 - Merge private edits into owner refreshes. Rejected as new merge machinery; Phase B removes the copies instead.
+
+## Amendment 1 (2026-10-15, swarm-8xz): automatic CLI-refresh relaunches stay owner launches
+
+D6 also covers the relaunch that automatic CLI refresh owes after it stops an idle unmanaged discussion. `bindAccountLaunch` selects no account for an unbound launch that carries `ExpectedCLIIdentity`, so enabling rotation alone cannot move that discussion onto an account or swap in the retained managed binary. A planned enrollment (`account_enrollment` in the refresh record) still prebinds its own account and is unaffected.
+
+A relaunch that fails 3 consecutive times blocks the refresh record with `automatic restart failed: <reason>`, releases the input lock and kill claim, and logs once. The ended discussion stays in the roster for a manual resume, and `swarm cli-refresh status` shows the reason. Before this amendment the watcher retried every 10 minutes indefinitely while the discussion stayed down.
