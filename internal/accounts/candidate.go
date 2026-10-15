@@ -464,7 +464,7 @@ func (s *Store) Reauthenticate(expected uint64, id string, c Candidate) (Registr
 		}
 		account.CurrentGeneration++
 		account.Generations[account.CurrentGeneration] = generationFromCandidate(verified, account.CurrentGeneration)
-		account.Auth = AuthValid
+		account.Auth, account.AuthReason = AuthValid, ""
 		r.Accounts[id] = account
 		promoted = account
 		return nil

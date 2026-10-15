@@ -233,7 +233,7 @@ func (s *Store) BeginCredentialErasure(expected uint64, id string, number uint64
 		g.CredentialErasing, g.ErasureInventory = true, contract
 		a.Generations[number] = g
 		if number == a.CurrentGeneration {
-			a.Auth = AuthNeedsLogin
+			a.Auth, a.AuthReason = AuthNeedsLogin, ""
 		}
 		r.Accounts[id] = a
 		return nil

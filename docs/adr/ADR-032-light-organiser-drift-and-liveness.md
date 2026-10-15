@@ -41,3 +41,7 @@ The structural fix (credentials-only profiles linking the owner's files) is Phas
 
 - Skip the refresh while another writer is alive. Rejected: the launch would then run against a marker for a different cohort, which needs new fallback machinery for little benefit.
 - Merge private edits into owner refreshes. Rejected as new merge machinery; Phase B removes the copies instead.
+
+## Amendment 1 (2026-10-15): identity-drift holds follow the identity read
+
+Same principle as D4, applied to the account identity check (`checkIdentities`, `internal/skeleton/account_model.go`). A failed read of the bound profile's identity is logged once and retried; only a successful read naming another identity is drift. When the identity reads as bound again, an identity-held rotation record still `observed` or `manual-recovery` (never claimed, so it owns no kill or launch obligation) is removed with its aliases and its input lock clears, so a later real drift opens a fresh incident and is held again. Drift records its cause on the account as the optional registry field `auth_reason` (`identity-drift`); a match restores `auth` to `valid` only for that cause, and every other `needs-login` write (login-expired quota fetch, `auth-invalid`, erasure) clears it. Input-lock refusals name the job holding the lock (identity check on the account, CLI refresh, or credential recycle) and its remedy. The field is written only while an account is drift-flagged; a binary older than v0.17.9 refuses such a registry (strict decoding), so a downgrade must happen with no account in that state.

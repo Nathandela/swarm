@@ -460,10 +460,10 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 	lane := d.composerLaneFor(local)
 	lane.enter()
 	defer lane.leave()
-	if lane.recyclingNow() {
+	if reason := lane.recycleRefusal(); reason != "" {
 		return protocol.CodeInputBusy, errIsLife4(
-			"session %q is recycling stale credentials, so approval %q was not applied; nothing was typed",
-			req.Session, req.InteractionID)
+			"session %q %s; approval %q was not applied, nothing was typed",
+			req.Session, reason, req.InteractionID)
 	}
 
 	d.itemMu.Lock()

@@ -182,6 +182,7 @@ type composerLane struct {
 	recycling        bool
 	recycleCommitted bool
 	recycleRestored  bool
+	recycleReason    string // the job holding the embargo, for refusals; "" is a credential recycle
 	// endMu is the per-session lifecycle authority fence. Owner Kill/Delete and
 	// auth recycling take it around their raw core action, so exactly one side
 	// can own a terminal edge. The global lifecycle order is endMu -> lane.mu;
@@ -246,6 +247,7 @@ func (d *Daemon) withAuthRecycleFenceState(local string, claimed bool, attempt f
 		lane.recycling = false
 		lane.recycleCommitted = false
 		lane.recycleRestored = false
+		lane.recycleReason = ""
 	}
 	lane.mu.Unlock()
 	if ownerEnding {
@@ -275,6 +277,7 @@ func (d *Daemon) withAuthRecycleFenceState(local string, claimed bool, attempt f
 		lane.recycling = false
 		lane.recycleCommitted = false
 		lane.recycleRestored = false
+		lane.recycleReason = ""
 	}
 	lane.mu.Unlock()
 	return err
@@ -338,7 +341,47 @@ func (d *Daemon) clearAuthRecycle(local string) {
 	lane.recycling = false
 	lane.recycleCommitted = false
 	lane.recycleRestored = false
+	lane.recycleReason = ""
 	lane.mu.Unlock()
+}
+
+const (
+	recycleReasonCredentials = "is recycling stale credentials -- retry after its replacement appears"
+	recycleReasonCLI         = "is restarting on a refreshed CLI -- retry after its replacement appears"
+)
+
+// noteAuthRecycleReason names the job holding local's recycle embargo, so a
+// refused input says who holds it and the remedy.
+func (d *Daemon) noteAuthRecycleReason(local, reason string) {
+	lane := d.composerLaneFor(local)
+	lane.mu.Lock()
+	lane.recycleReason = reason
+	lane.mu.Unlock()
+}
+
+// recycleRefusal is "" when no recycle embargo holds the lane, else its reason.
+func (l *composerLane) recycleRefusal() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.recycleRefusalLocked()
+}
+
+func (l *composerLane) recycleRefusalLocked() string {
+	if !l.recycling {
+		return ""
+	}
+	if l.recycleReason != "" {
+		return l.recycleReason
+	}
+	return recycleReasonCredentials
+}
+
+func (d *Daemon) composerRecycleRefusal(local string) string {
+	value, ok := d.composerLanes.Load(local)
+	if !ok {
+		return ""
+	}
+	return value.(*composerLane).recycleRefusal()
 }
 
 // enter assigns an explicit FIFO ticket and returns when that ticket is at the head. The
@@ -483,9 +526,8 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 	if lane.barrierChanged(admittedBarrier) {
 		return protocol.CodeStaleTurn, errIsLife5("composer send was queued before Stop completed; nothing was sent")
 	}
-	if lane.recyclingNow() {
-		return protocol.CodeInputBusy, errIsLife5(
-			"session %q is recycling stale credentials, so this message was not written; retry after the replacement appears", req.Session)
+	if reason := lane.recycleRefusal(); reason != "" {
+		return protocol.CodeInputBusy, errIsLife5("session %q %s; this message was not written", req.Session, reason)
 	}
 	// The composer lane orders WRITES; a ContextGuard compaction has an EFFECT
 	// window that outlives its write (ADR-023 amendment 1), and the 2026-09-01
@@ -1168,7 +1210,8 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 	// queued messages.
 	lane := d.composerLaneFor(local)
 	var current, native string
-	var stale, recycling bool
+	var stale bool
+	var recycling string
 	d.withComposerInteractionState(lane, func() {
 		d.initInteractionsLocked()
 		current = d.turnIDs[local]
@@ -1178,8 +1221,8 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 		// path rather than a FIFO ticket, so this in-transaction read is its
 		// serialization point: once the bit is visible it must not publish a
 		// barrier or write an interrupt into the process being recycled.
-		recycling = lane.recycling
-		if recycling {
+		recycling = lane.recycleRefusalLocked()
+		if recycling != "" {
 			return
 		}
 		if hook := testHookInterruptValidatedNotYetBarrier.Load(); hook != nil {
@@ -1192,9 +1235,9 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 			lane.stopsInFlight++
 		}
 	})
-	if recycling {
+	if recycling != "" {
 		return protocol.CodeInputBusy, fmt.Errorf(
-			"turn interrupt: session %q is recycling stale credentials; nothing was interrupted", session)
+			"turn interrupt: session %q %s; nothing was interrupted", session, recycling)
 	}
 	if stale {
 		return protocol.CodeStaleTurn, fmt.Errorf(

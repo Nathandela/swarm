@@ -162,6 +162,9 @@ func newAccountRotationManager(d *Daemon, w *authWatcher, store *accounts.Store)
 					w.restoreRecycle(rec.CandidateID)
 				}
 			}
+			if rec.IdentityHeld && (rec.State == accountObserved || rec.State == accountBlocked) {
+				m.noteIdentityHold(rec.SourceID, rec.SourceBinding.AccountID)
+			}
 		}
 	}
 	return m
@@ -358,7 +361,13 @@ func (m *accountRotationManager) reportFailure(w *authWatcher, local, class, _, 
 		return accounts.ErrIneligible
 	}
 	if (class == "auth-invalid" || class == "identity-drift") && source.AccountBinding.CredentialGeneration == account.CurrentGeneration {
-		if _, err = m.store.SetAuth(registry.Revision, account.ID, accounts.AuthNeedsLogin); err != nil {
+		// Drift is the cause only if it found the login valid; it never
+		// relabels a real login failure as one an identity match may undo.
+		reason := ""
+		if class == "identity-drift" && (account.Auth == accounts.AuthValid || account.AuthReason == accounts.AuthReasonDrift) {
+			reason = accounts.AuthReasonDrift
+		}
+		if _, err = m.store.SetAuthReason(registry.Revision, account.ID, accounts.AuthNeedsLogin, reason); err != nil {
 			return err
 		}
 	} else if class == "quota" {
@@ -429,6 +438,7 @@ func (m *accountRotationManager) reportFailure(w *authWatcher, local, class, _, 
 	err = m.persist(rec)
 	if err == nil && rec.IdentityHeld && w.restoreRecycle != nil {
 		w.restoreRecycle(rec.SourceID)
+		m.noteIdentityHold(rec.SourceID, account.ID)
 	}
 	return err
 }
