@@ -36,6 +36,8 @@ const (
 	eventPoll = 200 * time.Millisecond
 	// eventsBuffer sizes the roster event channel the Server fans out from.
 	eventsBuffer = 64
+	// persistRetryEvery paces the re-push of a status whose persist failed.
+	persistRetryEvery = time.Second
 )
 
 // coreAPI adapts the core *daemon.Daemon to the protocol.DaemonAPI the Server
@@ -207,9 +209,11 @@ type coreAPI struct {
 	// SetStatus from emitStatus, so a stale retry can never overwrite a newer emit.
 	unpersistedMu sync.Mutex
 	unpersisted   map[string]status.Status
-	stop          chan struct{}
-	stopOnce      sync.Once
-	wg            sync.WaitGroup
+	// lastPersistFailure paces retryUnpersisted (persistRetryEvery).
+	lastPersistFailure time.Time
+	stop               chan struct{}
+	stopOnce           sync.Once
+	wg                 sync.WaitGroup
 }
 
 // AuthorizeCommand makes coreAPI a protocol.DeviceAuthenticator (R-POL.9): it verifies
@@ -1882,17 +1886,22 @@ func (a *coreAPI) persistStatusLocked(id string, s status.Status) bool {
 		}
 	}
 	a.unpersisted[id] = s
+	a.lastPersistFailure = time.Now()
 	return false
 }
 
-// retryUnpersisted re-pushes every status whose persist failed; the roster poller
-// calls it before each sample so a recovered write fans out in the same pass.
+// retryUnpersisted re-pushes every status whose persist failed, at most once per
+// persistRetryEvery: a failed meta save after a successful journal append journals the
+// transition again on each attempt. The roster poller calls it before each sample so a
+// recovered write fans out in the same pass.
 func (a *coreAPI) retryUnpersisted() {
 	var persisted []string
 	a.unpersistedMu.Lock()
-	for id, s := range a.unpersisted {
-		if a.persistStatusLocked(id, s) {
-			persisted = append(persisted, id)
+	if time.Since(a.lastPersistFailure) >= persistRetryEvery {
+		for id, s := range a.unpersisted {
+			if a.persistStatusLocked(id, s) {
+				persisted = append(persisted, id)
+			}
 		}
 	}
 	a.unpersistedMu.Unlock()
