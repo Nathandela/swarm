@@ -99,14 +99,13 @@ func TestR6History_TheOldestPageReportsTheFloorHonestly(t *testing.T) {
 	}
 }
 
-// TestR6History_AnUnknownBeforeItemIsRefusedInvalidField: paging from an id the session
-// never held is a coded refusal, never an arbitrary page.
-func TestR6History_AnUnknownBeforeItemIsRefusedInvalidField(t *testing.T) {
+// A phone can retain an anchor after the host's live RAM window has gone.
+func TestR6History_AnEvictedBeforeItemReportsTheHistoryFloor(t *testing.T) {
 	sk, session, _ := r6HistoryRig(t, "s-history-unknown", 2)
 
-	_, _, code, err := sk.api.InteractionHistory(session, "01JNEVERANITEM", 5)
-	if err == nil || code != protocol.CodeInvalidField {
-		t.Fatalf("unknown before_item = code %q err %v, want invalid_field with an error", code, err)
+	recs, floor, code, err := sk.api.InteractionHistory(session, "01JNEVERANITEM", 5)
+	if code != "" || err != nil || !floor || len(recs) != 0 {
+		t.Fatalf("evicted anchor must return an empty live-history floor: records=%d floor=%v code=%q err=%v", len(recs), floor, code, err)
 	}
 }
 

@@ -1390,8 +1390,7 @@ func (d *Daemon) interactionHistory(session, beforeItem string, limit int) ([]pr
 			}
 		}
 		if !found {
-			return nil, false, protocol.CodeInvalidField, fmt.Errorf(
-				"interaction history: before_item %q is not an item of session %q", beforeItem, session)
+			return nil, true, "", nil // the phone's old anchor is outside the live window
 		}
 		for _, rec := range recs {
 			if rec.Cursor < boundary {

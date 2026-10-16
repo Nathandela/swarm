@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -11,8 +14,7 @@ import (
 // bound disk") at the daemon: journal.Open's zero Options disable both rotation and retention,
 // so the live journal grew without bound (90 segments / 603 MB, all mirrored in memory). The
 // segment count bounds growth, not a single start's load (the total-size cap does that). Every
-// daemon start adds a segment, so of 100 pre-existing ones only the owner's chosen 64 may remain
-// after the first append.
+// a legacy journal is compacted into the small control budget when live-only opens it.
 func TestDaemon_TheJournalIsOpenedWithBoundedRetention(t *testing.T) {
 	cfg := daemonConfig(t)
 	dir := filepath.Join(cfg.StateDir, "journal")
@@ -32,7 +34,45 @@ func TestDaemon_TheJournalIsOpenedWithBoundedRetention(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 	segs, _ := filepath.Glob(filepath.Join(dir, "seg-*.log"))
-	if len(segs) != 64 {
-		t.Errorf("journal holds %d segments after an append, want the bounded 64", len(segs))
+	if len(segs) > journalMaxFiles {
+		t.Errorf("journal holds %d segments after an append, max %d", len(segs), journalMaxFiles)
+	}
+}
+
+func TestDaemon_ConversationJournalIsLiveOnly(t *testing.T) {
+	cfg := daemonConfig(t)
+	d := openDaemon(t, cfg)
+	if err := d.RecordInteraction("session", InteractionItem{V: InteractionSchemaVersion, ItemID: "message", Kind: "agent_message", Status: "completed", Fields: json.RawMessage(`{"text":"host-live-only-body"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := d.JournalReadFrom(0)
+	if err != nil || len(res.Events) != 1 || res.Events[0].Type != journal.TypeInteraction {
+		t.Fatalf("live records = %+v, %v", res.Events, err)
+	}
+	paths, err := filepath.Glob(filepath.Join(cfg.StateDir, "journal", "seg-*.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(raw, []byte("host-live-only-body")) {
+			t.Fatal("production daemon persisted a conversation")
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = openDaemon(t, cfg)
+	res, err = d.JournalReadFrom(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range res.Events {
+		if record.Type == journal.TypeInteraction {
+			t.Fatal("production daemon replayed archived conversation payload")
+		}
 	}
 }

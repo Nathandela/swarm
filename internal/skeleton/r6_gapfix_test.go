@@ -149,8 +149,8 @@ func TestHookDrainer_RedeliveredUnmappedEventNeverDuplicatesTheJournalItem(t *te
 
 	// Give any (incorrect) second shape a moment to land, then assert it never did.
 	time.Sleep(200 * time.Millisecond)
-	if n := countJournalInteractions(t, sk2, sessionID); n != 1 {
-		t.Fatalf("journal holds %d interaction item(s) for %s after a redelivered record, want exactly 1 (no duplicate)", n, sessionID)
+	if n := countJournalInteractions(t, sk2, sessionID); n != 0 {
+		t.Fatalf("fresh live journal holds %d item(s) after suppressed redelivery, want 0; prior prose is not replayed", n)
 	}
 }
 

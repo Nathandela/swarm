@@ -78,7 +78,6 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
-	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
@@ -139,7 +138,6 @@ func startHookShim(t *testing.T, sessionDir, sessionID string) hookShim {
 		SessionDir:     sessionDir,
 		Cols:           80,
 		Rows:           24,
-		TranscriptCfg:  transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
 		GraceTimeout:   5 * time.Second,
 	}
 	done := make(chan struct{})
@@ -340,7 +338,7 @@ func TestHookDrainer_DrainsEverythingThatAccumulatedWhileNeverDrained(t *testing
 // (2): restart the daemon MID-drain -- no duplicate, no loss, idempotent fold cursor.
 // ---------------------------------------------------------------------------
 
-func TestHookDrainer_RestartMidDrain_ResumesExactlyOnceWithNoDuplicateOrLoss(t *testing.T) {
+func TestHookDrainer_RestartMidDrain_ResumesIngressWithoutArchivingPriorHistory(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "swskhd2")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
@@ -372,6 +370,7 @@ func TestHookDrainer_RestartMidDrain_ResumesExactlyOnceWithNoDuplicateOrLoss(t *
 	if applied1 != 3 {
 		t.Fatalf("first incarnation applied %d, want 3", applied1)
 	}
+	awaitJournalTexts(t, sk1, sessionID, 3)
 
 	// Second batch posted BEFORE the restart -- the backlog the restarted daemon must
 	// resume into, proving the drain was genuinely left mid-sequence, not merely re-run
@@ -394,9 +393,15 @@ func TestHookDrainer_RestartMidDrain_ResumesExactlyOnceWithNoDuplicateOrLoss(t *
 	if applied2 != 3 {
 		t.Fatalf("second incarnation applied %d, want exactly the 3 records left over from before the restart (no loss, no re-delivery of the first batch)", applied2)
 	}
-	// Wait for the append-floor window to durably flush BEFORE closing sk2, so the journal
-	// on disk really does hold all 6 by the time the third incarnation reads it.
-	awaitJournalTexts(t, sk2, sessionID, 6)
+	got := awaitJournalTexts(t, sk2, sessionID, 3)
+	want := []string{"second-4", "second-5", "second-6"}
+	if !equalStrings(got, want) {
+		t.Fatalf("post-restart live items = %q, want only previously unfolded ingress %q", got, want)
+	}
+	beforeRestart, err := sk2.api.JournalReadFrom(0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := sk2.Close(); err != nil {
 		t.Fatalf("close second daemon incarnation: %v", err)
 	}
@@ -414,15 +419,12 @@ func TestHookDrainer_RestartMidDrain_ResumesExactlyOnceWithNoDuplicateOrLoss(t *
 		t.Fatalf("third incarnation (nothing new posted) applied %d, want 0 — the fold cursor must survive two restarts without re-requesting what was already folded", applied3)
 	}
 
-	got := awaitJournalTexts(t, sk3, sessionID, 6)
-	if len(got) != 6 {
-		t.Fatalf("journal holds %d interaction item(s) across three daemon incarnations, want exactly 6 — no duplicate, no loss", len(got))
+	if got := countJournalInteractions(t, sk3, sessionID); got != 0 {
+		t.Fatalf("fresh daemon retained %d prior discussion items, want none", got)
 	}
-	want := []string{"first-1", "first-2", "first-3", "second-4", "second-5", "second-6"}
-	for i, w := range want {
-		if got[i] != w {
-			t.Errorf("item %d = %q, want %q", i, got[i], w)
-		}
+	repair, err := sk3.api.JournalReadFrom(beforeRestart.Cursor)
+	if err != nil || !repair.FullResync {
+		t.Fatalf("lost RAM history must require a truthful resync: %+v, %v", repair, err)
 	}
 }
 

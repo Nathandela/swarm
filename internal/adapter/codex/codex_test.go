@@ -23,6 +23,7 @@
 package codex
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -206,6 +207,9 @@ func TestResume_CarriesConversationID(t *testing.T) {
 	argv, err := a.Resume(adapter.ResumeSpec{Cwd: "/work", ConversationID: fixtureConversationID})
 	if err != nil {
 		t.Fatalf("Resume(id): %v", err)
+	}
+	if !strings.Contains(strings.Join(argv, " "), "--cd /work") {
+		t.Fatalf("resume must override a legacy native cwd with the saved project: %v", argv)
 	}
 	if len(argv) == 0 || argv[0] != "codex" {
 		t.Fatalf("Resume argv[0] = %q; want \"codex\" (argv = %v)", first(argv), argv)

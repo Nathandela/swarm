@@ -34,7 +34,7 @@ Inspired by Claude Code's Agent View (see `docs/research/agent_view_landscape.md
 client (TUI) ── UDS, control+data protocol ── daemon ── per-session UDS ── shim ── PTY ── agent CLI
 ```
 
-- The **shim** owns: PTY master, VT emulator (grid), transcript append, a per-session socket.
+- The **shim** owns: PTY master, VT emulator (grid), bounded identity-discovery output, a per-session socket.
 - The **daemon** owns: roster, launch/kill orchestration, adapters, status engine, client protocol, event fan-out. Clients never talk to shims directly.
 - Daemon crash or upgrade: shims and agents continue; a restarting daemon rediscovers shims from per-session metadata and reconnects. Nothing is lost.
 
@@ -67,7 +67,7 @@ Derived view groups:
 - **D-6** (Ubiquitous) The daemon socket SHALL live under a 0700 state directory with 0600 permissions; a restarting daemon SHALL take a flock-based singleton lock **before** binding and unlink stale sockets only under that lock.
 - **D-7** (Unwanted) IF a second daemon instance starts, THEN it SHALL fail to take the lock and exit; the client that spawned it SHALL retry connecting to the winner (bounded backoff).
 - **D-8** (Event) WHEN client and daemon protocol versions are incompatible at handshake, swarm SHALL surface a clear error and offer `swarm daemon restart` — which is safe (D-5) and SHALL say so.
-- **D-9** (Ubiquitous) The daemon SHALL keep a single durable append-only event journal (session lifecycle and status-group transitions), fsync'd before each cursor is acked and surviving a crash/upgrade (D-5); and every **remote** mutating operation SHALL be idempotent, keyed by an `operation_id` whose durable two-phase record makes a replay return the cached outcome and execute nothing. ADR-007 is the authority on the journal, idempotency, and remote-access model.
+- **D-9** (Ubiquitous) The daemon SHALL keep a small durable control journal (session lifecycle, status, capability and gap transitions), fsync'd before acknowledgement. Generic interaction content SHALL be a bounded RAM-only live window; its cursor range SHALL be durably reserved before publication and never reused after restart. Missing live history SHALL produce an explicit resync/history floor. Every **remote** mutating operation SHALL remain idempotent, keyed by an `operation_id` whose durable two-phase record makes a replay return the cached outcome and execute nothing. ADR-033 amends ADR-007's history-retention assumptions without weakening operation or delivery custody.
 
 ### Sessions (S)
 
@@ -77,7 +77,7 @@ Derived view groups:
 - **S-2** (Ubiquitous) Each session SHALL persist: id, agent type, working directory, launch options, captured environment, created-at, status dimensions, last-activity, shim PID + start time, agent-native conversation id when the adapter exposes one, exit code when ended, `schema_version`.
 - **S-3** (Optional, later epic) WHERE the worktree toggle was enabled at launch, the daemon SHALL create a git worktree under `.swarm/worktrees/<name-slug>` with branch `swarm/<name-slug>-<id>` when the session has a usable name, adding the validated `<id>` to the path only on a name collision and falling back to `<id>` for an unnamed session (error if not a git repo), and SHALL tear the exact persisted worktree path down (`git worktree remove` + prune) when the session is deleted.
 - **S-4** (Event) WHEN the user kills a session, the shim SHALL signal the agent's **process group** (SIGTERM, grace, SIGKILL) so descendant processes (MCP servers, shells) do not leak; outcome recorded.
-- **S-5** (Ubiquitous) The shim SHALL maintain the session's VT grid (emulated screen: cells, cursor, alternate-screen, modes) and an append-only transcript with a size cap and rotation; repeated redraw frames (spinners) SHALL be collapsed before hitting disk.
+- **S-5** (Ubiquitous) The shim SHALL maintain the session's live VT grid (emulated screen: cells, cursor, alternate-screen, modes). Output retained for native identity discovery SHALL be limited to the newest 64 KiB plus its fixed ring header, with a stable committed generation. Queue pressure SHALL preserve newest evidence without blocking PTY draining. New shims SHALL NOT create raw terminal archives, rotated transcript history, or persisted final screens. [ADR-033]
 - **S-6** (Ubiquitous) The launch RPC SHALL carry the client's environment (allowlist-filtered); the shim SHALL spawn the agent with that environment, never the daemon's inherited one. Because the shim supplies an xterm-compatible PTY, it SHALL use `TERM=xterm-256color` when the captured TERM is absent or `dumb`, and SHALL preserve other captured TERM values.
 
   > AMENDED BY ADR-007 B144 (2026-08-15): owner tier only. The remote tier's `session_launch` composes environment from daemon-authored launch-preset policy, never a phone-supplied env.
@@ -140,7 +140,7 @@ Derived view groups:
 
 ### Persistence (R) (ADR-003)
 
-- **R-1** (Ubiquitous) State SHALL live under `$XDG_STATE_HOME/swarm` (fallback `~/.local/state/swarm`), 0700: `sessions/<id>/meta.json` (source of truth, atomic temp+rename writes, `schema_version`) + transcript files (0600, capped, rotated); `roster.json` is a rebuildable index only.
+- **R-1** (Ubiquitous) State SHALL live under `$XDG_STATE_HOME/swarm` (fallback `~/.local/state/swarm`), 0700: `sessions/<id>/meta.json` (source of truth, atomic temp+rename writes, `schema_version`) and compact supervision/control side-files. The bounded identity tail SHALL be 0600 and retired after session end when its native identity is durable; `roster.json` is a rebuildable index only. Agent working directories, including native resumes and resolved worktrees, SHALL remain outside supervisor state. Provider CLIs own historical discussion content. [ADR-033]
 - **R-2** (Optional) WHERE an adapter supports resume and a native conversation id was captured (S-2), an ended/lost session SHALL offer relaunch-with-resume as a **new session** linked via `resumed_from`. IF its saved directory or worktree is unavailable, the owner TUI SHALL offer an explicit relocation to an existing directory or cancellation. Relocation SHALL preserve the conversation identity, source link, saved options, environment, name, and tag; it SHALL NOT create a directory, recreate a worktree, or rewrite the source's saved directory. The daemon SHALL validate the replacement directory, and relocation SHALL require a negotiated owner-tier capability. WHERE an ended/lost Codex or Claude session predates durable capture, an explicit resume SHALL first attempt one bounded, trusted-home, fail-closed recovery of a unique provider-history identity and persist the winner write-once before composing argv. Missing, malformed, unsafe, unreadable, or ambiguous history SHALL refuse the resume and SHALL NOT fall through to a fresh launch. Providers without a characterized history format SHALL retain the captured-id-only behavior.
 - **R-3** (Ubiquitous) Completed discussions SHALL remain listed until the user deletes them (Ctrl+X on a completed row deletes). Explicit deletion SHALL remove all attempts in the validated resume family, including hidden predecessors, and their owned worktrees per S-3; it SHALL NOT archive predecessors instead. Multi-attempt deletion SHALL require every attempt stopped and SHALL refuse shared workspace use outside the family before removal. Cleanup failures SHALL retain retryable ownership metadata and SHALL NOT report success. Provider-native history and external project directories remain outside this deletion. [ADR-024 amendment 2026-10-16]
 - **R-4** (Event) WHEN the owner explicitly imports provider-managed background sessions, swarm SHALL adopt only canonical native conversation identities through the adapter's resume command, preserve that identity in session metadata, and reuse an existing matching provider/identity row on retries. Potentially live sessions SHALL require an explicit takeover that stops the provider's background supervisor before the first swarm launch; settled sessions SHALL require an explicit include-settled option. Interactive provider sessions SHALL NOT be imported. External resume SHALL be owner-tier-only and capability-negotiated so an older daemon cannot silently treat the request as a fresh launch.
@@ -182,8 +182,8 @@ flowchart TB
     ADP["adapters: claude, codex · agy, opencode · hermes"]
   end
   subgraph shims["per-session shims (survive daemon)"]
-    SH1["shim: PTY + VT grid + transcript"]
-    SH2["shim: PTY + VT grid + transcript"]
+    SH1["shim: PTY + VT grid + identity tail"]
+    SH2["shim: PTY + VT grid + identity tail"]
   end
   A1["claude"] --- SH1
   A2["codex"] --- SH2
@@ -192,7 +192,7 @@ flowchart TB
   API --> REG & DET
   DET --> ADP
   API <--> SH1 & SH2
-  SH1 & SH2 --> DISK[("$XDG_STATE_HOME/swarm: meta.json per session, transcripts")]
+  SH1 & SH2 --> DISK[("$XDG_STATE_HOME/swarm: supervision records, bounded identity tails")]
 ```
 
 ### Session lifecycle (process × turn × interaction, illustrative)
@@ -261,7 +261,7 @@ sequenceDiagram
 | 9 | Attached | Terminal resized | Agent reflows (lease holds resize authority) | A-3, P-5 |
 | 10 | Sessions running | Daemon killed -9, restarted | Shims kept agents alive; daemon reconnects; nothing lost | D-4, D-5 |
 | 11 | Sessions running | `brew upgrade swarm` + daemon restart | Same as 10 — upgrade is safe and says so | D-5, D-8 |
-| 12 | Machine rebooted | swarm reopened | Sessions marked lost, transcripts intact, resume offered where supported | D-4, R-2 |
+| 12 | Machine rebooted | swarm reopened | Sessions marked lost, native identity retained, resume offered where supported; host live history unavailable | D-4, R-2 |
 | 13 | Launch form | Nonexistent dir | Close sibling suggestions appear; arrows choose one, or a second consecutive Enter confirms creation; daemon re-validates | L-3, P-6 |
 | 14 | agy not installed | Launch form opened | Greyed with install hint | L-2 |
 | 15 | Spinner runs overnight | — | Transcript capped/rotated; near-zero client-idle CPU | S-5, N-3 |

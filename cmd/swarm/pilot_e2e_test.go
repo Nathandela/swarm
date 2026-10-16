@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/transcript"
 )
 
 func TestPilotRealCLIControlsTwoWorkersWithoutChangingOrdinaryCLI(t *testing.T) {
@@ -127,7 +129,7 @@ func TestPilotRealCLIControlsTwoWorkersWithoutChangingOrdinaryCLI(t *testing.T) 
 		if !ok {
 			t.Fatalf("invalid worker id %q", id)
 		}
-		log, err := os.ReadFile(filepath.Join(cc.StateDir, local, "transcript.log"))
+		log, _, err := transcript.ReadTail(filepath.Join(cc.StateDir, local, shim.IdentityTailFile), 0)
 		if err != nil {
 			t.Fatal(err)
 		}

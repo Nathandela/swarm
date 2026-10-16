@@ -58,9 +58,9 @@ func largeStyledPayload(cols, rows, reps int) []byte {
 func TestHub_FeedPublishesBeforeParse(t *testing.T) {
 	emu := vt.NewEmulator(80, 24)
 	defer func() { _ = emu.Close() }()
-	tr, err := transcript.New(filepath.Join(t.TempDir(), "t.log"), transcript.Config{MaxBytes: 10 << 20, MaxFiles: 3})
+	tr, err := transcript.NewTail(filepath.Join(t.TempDir(), IdentityTailFile))
 	if err != nil {
-		t.Fatalf("transcript.New: %v", err)
+		t.Fatalf("transcript.NewTail: %v", err)
 	}
 	defer func() { _ = tr.Close() }()
 

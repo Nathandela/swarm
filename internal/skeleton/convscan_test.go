@@ -7,7 +7,8 @@ package skeleton
 // live process, so the AgentType is set on an otherwise-real fake-agent session —
 // same trick capture_c1_e2e_test.go's Agent:"reference" launch relies on, minus
 // the real reference-cli binary). Its transcript file is then mutated directly on
-// disk (the agent is parked in a long idle, so nothing else touches the file),
+// disk as an explicit legacy-shim fixture (the new shim's identity tail is
+// removed after its boot output, while the fake agent remains parked),
 // which gives byte-exact control over growth/shrink timing that waiting on a real
 // script's scheduled output cannot. readTail is swapped for a call-counting
 // wrapper around the real reader so "did a re-read happen" is observed directly.
@@ -16,6 +17,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -27,6 +29,7 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/vt"
 )
 
@@ -85,8 +88,25 @@ func convScanHarness(t *testing.T) (d *Daemon, id string, transcriptPath string,
 		}
 	})
 
-	tp := filepath.Join(dir, m.ID, "transcript.log")
-	waitForFile(t, tp)
+	tailPath := filepath.Join(dir, m.ID, shim.IdentityTailFile)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		tail, _, err := transcript.ReadTail(tailPath, 0)
+		if err == nil && strings.Contains(string(tail), "booting") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("new shim never flushed boot output: %q (%v)", tail, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := os.Remove(tailPath); err != nil {
+		t.Fatalf("switch test fixture to the legacy reader: %v", err)
+	}
+	tp := filepath.Join(dir, m.ID, shim.TranscriptFile)
+	if err := os.WriteFile(tp, []byte("booting old shim waiting for a native conversation identifier\n"), 0o600); err != nil {
+		t.Fatalf("write explicit legacy transcript: %v", err)
+	}
 
 	var n int32
 	orig := readTail
@@ -98,18 +118,6 @@ func convScanHarness(t *testing.T) (d *Daemon, id string, transcriptPath string,
 
 	d = &Daemon{core: core, stateDir: dir}
 	return d, m.ID, tp, func() int32 { return atomic.LoadInt32(&n) }
-}
-
-func waitForFile(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("transcript file %s never appeared with content", path)
 }
 
 // TestCaptureConversationID_UnchangedSizeSkipsReread: back-to-back calls against

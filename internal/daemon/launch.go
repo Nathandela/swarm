@@ -296,6 +296,9 @@ func (d *Daemon) CommitComposerOperation(op string, outcome []byte, success bool
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT
 // cleanup, modelling a crash whose orphan/phantom reconcile later resolves.
 func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error) {
+	if err := d.validateWorkspace(spec.Cwd); err != nil {
+		return persist.Meta{}, err
+	}
 	if spec.AccountOriginalConfigurationEnv == nil {
 		spec.AccountOriginalConfigurationEnv = d.NativeConfigurationEnvironment(spec.ClientEnv)
 	}
@@ -450,6 +453,10 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		m.AccountProjectionRef = spec.AccountProjectionRef
 		m.AccountClaudeFallback = spec.AccountClaudeFallback
 		m.Env = PolicyEnv(spec.ClientEnv)
+	}
+	if err := d.validateWorkspace(spec.Cwd); err != nil {
+		d.rollbackReserved(id, m, preLaunchOK)
+		return persist.Meta{}, err
 	}
 	dir := d.sessionDir(id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

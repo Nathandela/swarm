@@ -105,7 +105,7 @@ func TestSidefile_ShimNeverWritesMeta(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sessionDir, "meta.json")); err == nil {
 		t.Fatalf("shim wrote meta.json; only the daemon may write it (G6)")
 	}
-	for _, f := range []string{shim.ExitFile, shim.SnapshotFile, shim.TranscriptFile} {
+	for _, f := range []string{shim.ExitFile, shim.IdentityTailFile} {
 		if _, err := os.Stat(filepath.Join(sessionDir, f)); err != nil {
 			t.Fatalf("expected shim side-file %s missing: %v", f, err)
 		}

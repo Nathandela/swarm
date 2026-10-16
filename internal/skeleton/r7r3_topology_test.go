@@ -40,6 +40,7 @@ import (
 	"github.com/Nathandela/swarm/internal/appserver"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/transcript"
 )
 
 // ---------------------------------------------------------------------------
@@ -166,14 +167,19 @@ func TestR7R3_TheAgentIsLaunchedAsACLIENTOfTheAppServerTheShimSpawned(t *testing
 	//    report of its own argv, written on its PTY: nothing between the shim's exec and this
 	//    string can be faked by the daemon.
 	want := "--remote unix://" + sock
-	transcript := filepath.Join(dir, "transcript.log")
+	tailPath := filepath.Join(dir, shim.IdentityTailFile)
+	var generation uint64
 	awaitTrue(t, 30*time.Second, fmt.Sprintf(
 		"the agent's argv never carried %q. The daemon's go-ahead is the ONLY thing that puts it "+
 			"there, and without it the TUI and the daemon are on two unconnected planes: no "+
 			"thread/started ever reaches this daemon, the phone drives a conversation the owner "+
 			"cannot see, and the wave's exit criterion is structurally unreachable", want),
 		func() bool {
-			body, _ := os.ReadFile(transcript)
+			body, next, err := transcript.ReadTail(tailPath, generation)
+			if err != nil {
+				return false
+			}
+			generation = next
 			return strings.Contains(string(body), want)
 		})
 

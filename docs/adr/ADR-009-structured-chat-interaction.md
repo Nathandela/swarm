@@ -1,5 +1,11 @@
 # ADR-009: The phone surface is a structured chat transcript — the terminal grid is retired
 
+> **Host-storage amendment 2026-10-16:** [ADR-033](ADR-033-live-only-supervisor-storage.md)
+> replaces durable generic discussion history with a bounded live RAM window and
+> truthful history floors. Small lifecycle/control state and accepted-operation,
+> replay and delivery custody remain durable. Provider-native history and existing
+> phone caches retain their ownership. The historical decisions below otherwise stand.
+
 **Status**: Accepted (owner sign-off 2026-08-07)
 **Date**: 2026-08-07
 **Amends**: ADR-007-remote-access.md — the 2026-07-23 amendment's item 2 (`ADR-007:305-307`, "The v1 input UX is the already-designed **terminal peek + take-control** screen"), item 4's

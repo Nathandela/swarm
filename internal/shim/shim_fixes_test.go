@@ -7,7 +7,7 @@ package shim
 //	F1  group-empty escalation + bounded PTY-EOF wait (S5/S-4/E4.4)
 //	F2  reply writer must never block the PTY drain (S9)
 //	F3  transcript Flush wrapped in a finalization timeout (S9)
-//	F4  G3 persistence integrity (no exit.json without a snapshot; err surfaced)
+//	F4  exit persistence integrity (write errors surfaced)
 //	F6  empty/nil Argv -> clean setup error, not an index panic
 //	F7  socket file gone after Run returns
 
@@ -166,17 +166,16 @@ func buildF1Agent(t *testing.T) string {
 func f1Config(t *testing.T, grace time.Duration, env ...string) Config {
 	t.Helper()
 	return Config{
-		SessionID:     "f1",
-		Argv:          []string{buildF1Agent(t)},
-		Cwd:           t.TempDir(),
-		Env:           env,
-		SocketPath:    newSocketPath(t),
-		SessionDir:    t.TempDir(),
-		Cols:          80,
-		Rows:          24,
-		TranscriptCfg: transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
-		GraceTimeout:  grace,
-		Metrics:       &Metrics{},
+		SessionID:    "f1",
+		Argv:         []string{buildF1Agent(t)},
+		Cwd:          t.TempDir(),
+		Env:          env,
+		SocketPath:   newSocketPath(t),
+		SessionDir:   t.TempDir(),
+		Cols:         80,
+		Rows:         24,
+		GraceTimeout: grace,
+		Metrics:      &Metrics{},
 	}
 }
 
@@ -249,8 +248,8 @@ func TestF1_NaturalExitWithLingeringChildStillFinalizes(t *testing.T) {
 	if ei.ExitCode != 0 || ei.ExitSignal != "" {
 		t.Errorf("exit.json = {code:%d sig:%q}, want {0 \"\"}", ei.ExitCode, ei.ExitSignal)
 	}
-	if _, err := os.Stat(filepath.Join(cfg.SessionDir, SnapshotFile)); err != nil {
-		t.Errorf("final snapshot missing: %v", err)
+	if tail := readTranscript(t, cfg.SessionDir); !strings.Contains(tail, "CHILD_PID") {
+		t.Errorf("identity tail missing the child's output: %q", tail)
 	}
 }
 
@@ -332,10 +331,12 @@ func TestR1_SurvivorKilledSynchronouslyNotByLeakedTimer(t *testing.T) {
 // emulator's replies pile up on the PTY input with no reader.
 func dsrFloodScript(n int) string {
 	var b strings.Builder
+	b.WriteString("ask START-QUERIES\n")
 	for i := 0; i < n; i++ {
 		fmt.Fprintf(&b, "print \x1b[6nQ%05d\n", i)
 	}
 	b.WriteString("print QDONE\n")
+	b.WriteString("idle 60s\n")
 	b.WriteString("exit 0\n")
 	return b.String()
 }
@@ -343,12 +344,31 @@ func dsrFloodScript(n int) string {
 // F2 / S9 — an agent floods terminal queries without reading stdin. The
 // emulator's query replies must be routed through a bounded, dropping queue so
 // the reply write never blocks the vt drain (and thus the PTY drain): the grid
-// keeps advancing and the agent runs to completion. Pre-fix: the reply write
+// keeps advancing through QDONE. The agent then idles for a live grid check.
+// Pre-fix: the reply write
 // blocks on the full PTY, wedges Feed under hub.mu, stalls the drain, and Run
 // hangs.
 func TestF2_QueryFloodDoesNotWedgeDrain(t *testing.T) {
 	cfg := fakeAgentConfig(t, dsrFloodScript(2000))
-	r := waitRun(t, runShimAsync(cfg), 25*time.Second)
+	ch := runShimAsync(cfg)
+	c := dialShim(t, cfg.SocketPath)
+	c.startReader()
+	c.hello(shimwire.Version)
+	c.attach()
+	c.waitObserved("START-QUERIES", 5*time.Second)
+	c.writeDataIn([]byte("\n"))
+	c.waitOutput("QDONE", 25*time.Second)
+	_ = c.conn.Close()
+	fresh := dialShim(t, cfg.SocketPath)
+	fresh.startReader()
+	fresh.hello(shimwire.Version)
+	fresh.attach()
+	snap, err := vt.DecodeSnapshot(fresh.firstSnapshot(5 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
+	r := waitRun(t, ch, 10*time.Second)
 	if r.err != nil {
 		t.Fatalf("Run: %v", r.err)
 	}
@@ -371,9 +391,9 @@ func TestF2_QueryFloodDoesNotWedgeDrain(t *testing.T) {
 	// QDONE still shown OR the reply-echo flood the emulator only ever produces by
 	// processing the whole query stream, rather than QDONE's echo-dependent
 	// visibility.
-	grid := gridText(decodeFinalSnapshot(t, cfg.SessionDir))
+	grid := gridText(snap)
 	if !strings.Contains(grid, "QDONE") && !cprEchoRE.MatchString(grid) {
-		t.Errorf("final grid shows neither QDONE nor the flood's reply-echoes — the grid did not advance under the reply flood (S9):\n%s", grid)
+		t.Errorf("live grid shows neither QDONE nor the flood's reply-echoes — the grid did not advance under the reply flood (S9):\n%s", grid)
 	}
 }
 
@@ -386,79 +406,85 @@ var cprEchoRE = regexp.MustCompile(`\[\d+;\d+R`)
 // F3 — transcript Flush must be timeout-protected at finalization.
 // ---------------------------------------------------------------------------
 
-// F3 / S9 — a wedged transcript sink (a FIFO no one drains) must not hang
-// finalization: the exit-time Flush is bounded by the same timeout mechanism as
-// Close, so Run finalizes and writes its side-files. Pre-fix: the un-timed
-// Flush blocks forever and Run never returns.
+// A full FIFO exercises the finalization timeout directly; new shim identity
+// tails use positioned regular-file writes and cannot use an archive FIFO.
 func TestF3_WedgedTranscriptFlushTimesOut(t *testing.T) {
 	orig := finalizeStepTimeout
 	finalizeStepTimeout = 300 * time.Millisecond
 	defer func() { finalizeStepTimeout = orig }()
 
-	cfg := helperConfig(t, modeFloodIdle, nil, nil)
-	fifo := filepath.Join(cfg.SessionDir, TranscriptFile)
+	fifo := filepath.Join(t.TempDir(), "blocked-sink")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatalf("mkfifo transcript: %v", err)
 	}
-	// Hold the read end open so the shim's write-open unblocks, but never read,
-	// so the pipe fills and the transcript's sink.Write wedges. The reader's
-	// O_RDONLY open and the shim's O_WRONLY open rendezvous — starting the shim
-	// after launching this goroutine is enough; waiting on the open here would
-	// deadlock (it blocks until the shim opens the write end).
-	holderStop := make(chan struct{})
-	go func() {
-		rf, err := os.OpenFile(fifo, os.O_RDONLY, 0)
-		if err != nil {
-			return
-		}
-		<-holderStop
-		_ = rf.Close()
-	}()
-	defer close(holderStop)
-
-	ch := runShimAsync(cfg)
-	c := dialShim(t, cfg.SocketPath)
-	c.startReader()
-	c.hello(shimwire.Version)
-	c.attach()
-	c.waitOutput("F", 5*time.Second)   // flood underway
-	time.Sleep(500 * time.Millisecond) // let the FIFO fill and the transcript drain wedge
-	c.writeControl(shimwire.Control{Type: shimwire.TypeSignal, Sig: shimwire.SigKill})
-
-	r := waitRun(t, ch, 10*time.Second) // must finalize despite the wedged transcript
-	_ = r
-	if _, err := os.Stat(filepath.Join(cfg.SessionDir, ExitFile)); err != nil {
-		t.Errorf("exit.json missing after wedged-transcript finalization (Flush hung the shim): %v", err)
+	fd, err := syscall.Open(fifo, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
+	holder := os.NewFile(uintptr(fd), fifo)
+	t.Cleanup(func() { _ = holder.Close() })
+	for {
+		if _, err := syscall.Write(fd, make([]byte, 4096)); err != nil {
+			if err != syscall.EAGAIN {
+				t.Fatalf("fill FIFO: %v", err)
+			}
+			break
+		}
+	}
+	tr, err := transcript.New(fifo, transcript.Config{MaxBytes: 1 << 20, MaxFiles: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Close(); _ = tr.Close() })
+	_, _ = tr.Write([]byte("blocked"))
+	flushed := make(chan error, 1)
+	go func() { flushed <- tr.Flush() }()
+	select {
+	case err := <-flushed:
+		t.Fatalf("FIFO sink did not wedge Flush: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	done := make(chan struct{})
+	start := time.Now()
+	go func() { flushTranscript(tr); close(done) }()
+	select {
+	case <-done:
+		if elapsed := time.Since(start); elapsed < finalizeStepTimeout {
+			t.Fatalf("flush timeout returned after %s without waiting for the blocked sink", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("wedged sink blocked the timeout-protected finalization helpers")
+	}
+	closeTranscript(tr)
 }
 
 // ---------------------------------------------------------------------------
 // F4 — G3 persistence integrity.
 // ---------------------------------------------------------------------------
 
-// F4 / G3 — when the final-snapshot write fails, the shim must NOT write
-// exit.json (its presence must imply a complete snapshot) and must surface the
-// failure via Run's returned err, while still reporting the agent's exit code.
-// The snapshot write is obstructed by placing a directory where the file must
-// go, so the atomic rename fails.
-func TestF4_SnapshotWriteFailureLeavesNoExitJSON(t *testing.T) {
+// An obstructed exit path must surface the persistence error and preserve the
+// agent's exit code; successful tail flushing alone is not a persisted outcome.
+func TestF4_ExitWriteFailureIsReported(t *testing.T) {
 	cfg := fakeAgentConfig(t, "print hi\nexit 0\n")
-	if err := os.Mkdir(filepath.Join(cfg.SessionDir, SnapshotFile), 0o755); err != nil {
-		t.Fatalf("obstruct snapshot path: %v", err)
+	if err := os.Mkdir(filepath.Join(cfg.SessionDir, ExitFile), 0o755); err != nil {
+		t.Fatalf("obstruct exit path: %v", err)
 	}
 	r := waitRun(t, runShimAsync(cfg), 15*time.Second)
-	if r.err == nil {
-		t.Errorf("Run err = nil, want a persistence error when the snapshot write fails")
+	if r.err == nil || !strings.Contains(r.err.Error(), "write exit info") {
+		t.Errorf("Run err = %v, want the exit persistence error", r.err)
 	}
 	if r.exit != 0 {
 		t.Errorf("Run agentExit = %d, want 0 (the agent's exit code is still reported)", r.exit)
 	}
-	if _, err := os.Stat(filepath.Join(cfg.SessionDir, ExitFile)); !os.IsNotExist(err) {
-		t.Errorf("exit.json exists despite a failed snapshot write — G3 integrity violated (stat err=%v)", err)
+	if _, err := os.ReadFile(filepath.Join(cfg.SessionDir, ExitFile)); err == nil {
+		t.Error("failed exit persistence left a readable exit.json")
+	}
+	if tail := readTranscript(t, cfg.SessionDir); !strings.Contains(tail, "hi") {
+		t.Errorf("exit persistence failure lost the flushed identity tail: %q", tail)
 	}
 }
 
-// F4 (happy path) — a clean run persists both side-files and returns nil,
+// A clean run persists the bounded tail and exit marker and returns nil,
 // proving the added parent-dir fsync does not break the normal path.
 func TestF4_HappyPathPersistsAndReturnsNil(t *testing.T) {
 	cfg := fakeAgentConfig(t, "print ok\nexit 0\n")
@@ -466,12 +492,13 @@ func TestF4_HappyPathPersistsAndReturnsNil(t *testing.T) {
 	if r.err != nil {
 		t.Fatalf("Run err = %v, want nil on the happy path", r.err)
 	}
-	if _, err := os.Stat(filepath.Join(cfg.SessionDir, SnapshotFile)); err != nil {
-		t.Errorf("snapshot missing: %v", err)
+	if tail := readTranscript(t, cfg.SessionDir); lastNonEmptyLine(tail) != "ok" {
+		t.Errorf("identity tail missing final output: %q", tail)
 	}
 	if _, err := os.Stat(filepath.Join(cfg.SessionDir, ExitFile)); err != nil {
 		t.Errorf("exit.json missing: %v", err)
 	}
+	assertNoArchivedCapture(t, cfg.SessionDir)
 }
 
 // ---------------------------------------------------------------------------

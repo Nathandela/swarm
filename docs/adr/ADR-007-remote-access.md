@@ -1,5 +1,11 @@
 # ADR-007: Remote access — identity, pairing, two-scheme crypto, relay trust, journal, launch authority
 
+> **Host-storage amendment 2026-10-16:** [ADR-033](ADR-033-live-only-supervisor-storage.md)
+> replaces durable generic discussion history with a bounded live RAM window and
+> truthful history floors. Small lifecycle/control state and accepted-operation,
+> replay and delivery custody remain durable. Provider-native history and existing
+> phone caches retain their ownership. The historical decisions below otherwise stand.
+
 **Status**: Accepted with named open gates (owner sign-off 2026-08-15, per B144(c): the physical-handset gate / PB-E2E-5 remains unrun, and the Wave R1 records ADR-015..018 govern the amendments their waves implement. Originally Proposed as the design lock for the remote-control epic `agents-tracker-5h5`, "ratifies to Accepted at Phase-1 close"; the epic itself is superseded by `agents-tracker-hggx` and the plan of record is `docs/specifications/remote-control-product-playbook.md`. Historical: fed `.claude/tmp/remote-control-implementation-plan.md`, coverage-audited in `docs/verification/audit-003-remote-control-plan.md`.)
 **Date**: 2026-07-18
 

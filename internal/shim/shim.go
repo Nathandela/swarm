@@ -31,9 +31,10 @@ import (
 
 // Side-file names written into the session dir on agent exit (G3).
 const (
-	SnapshotFile   = "final-snapshot.bin"
-	ExitFile       = "exit.json"
-	TranscriptFile = "transcript.log"
+	SnapshotFile     = "final-snapshot.bin"
+	ExitFile         = "exit.json"
+	TranscriptFile   = "transcript.log"
+	IdentityTailFile = "identity-tail.bin"
 )
 
 // defaultTerm describes the xterm-compatible PTY Swarm provides when the caller
@@ -49,13 +50,12 @@ type Config struct {
 	InputEmbargoToken    string
 	CLIIdentity          *persist.CLIIdentity
 	SessionID            string
-	Argv                 []string // argv[0] = program; exec'd directly, never via a shell
-	Cwd                  string   // agent working directory
-	Env                  []string // pre-filtered by caller; TERM=dumb is normalized to the PTY type
-	SocketPath           string   // per-session UDS
-	SessionDir           string   // side-files: final-snapshot.bin, exit.json, transcript.log
-	Cols, Rows           int      // initial PTY + emulator dimensions
-	TranscriptCfg        transcript.Config
+	Argv                 []string      // argv[0] = program; exec'd directly, never via a shell
+	Cwd                  string        // agent working directory
+	Env                  []string      // pre-filtered by caller; TERM=dumb is normalized to the PTY type
+	SocketPath           string        // per-session UDS
+	SessionDir           string        // supervision side-files and bounded identity tail
+	Cols, Rows           int           // initial PTY + emulator dimensions
 	GraceTimeout         time.Duration // TERM->KILL grace on the signal op
 	Metrics              *Metrics      // optional, test-observable counters
 
@@ -115,7 +115,7 @@ var testHookBeforeBackendSpawn func(s *server)
 
 // Run execs the agent under a fresh PTY, serves the per-session socket, and
 // blocks until the agent exits. It always drains the PTY to completion, writes
-// the final snapshot + exit side-files, and reports the agent's exit code. err
+// a bounded identity tail and exit status, and reports the agent's exit code. err
 // is non-nil for a shim-level failure — either a setup failure (before the
 // agent runs) or a side-file persistence failure at exit; in the latter case
 // agentExit still carries the agent's real exit code. Any agent outcome (clean
@@ -150,9 +150,13 @@ func Run(cfg Config) (agentExit int, err error) {
 	emu := vt.NewEmulator(cfg.Cols, cfg.Rows)
 	defer func() { _ = emu.Close() }()
 
-	tr, err := transcript.New(filepath.Join(cfg.SessionDir, TranscriptFile), cfg.TranscriptCfg)
+	tr, err := transcript.NewTail(filepath.Join(cfg.SessionDir, IdentityTailFile))
 	if err != nil {
-		return 0, fmt.Errorf("shim: open transcript: %w", err)
+		return 0, fmt.Errorf("shim: open identity tail: %w", err)
+	}
+	if err := removeLegacyCaptures(cfg.SessionDir); err != nil {
+		closeTranscript(tr)
+		return 0, err
 	}
 
 	// Bind the socket first so a fast daemon client can dial (kernel backlog)
@@ -295,7 +299,7 @@ func Run(cfg Config) (agentExit int, err error) {
 			testHookBeforeBackendSpawn(srv)
 		}
 		var berr error
-		backend, berr = startBackend(cfg.Backend, cfg.SessionDir)
+		backend, berr = startBackend(cfg.Backend, cfg.Cwd)
 		if backend != nil {
 			// Recorded BEFORE anything can be signalled at it, so a TERM arriving in this
 			// window still reaps it.
@@ -512,10 +516,10 @@ func Run(cfg Config) (agentExit int, err error) {
 	flushTranscript(tr)
 	closeTranscript(tr)
 
-	// Persist the side-files (snapshot first, then exit.json, then fsync the
-	// dir). A persistence failure is surfaced as Run's err while the agent's
+	// Persist exit.json after flushing the identity tail, then fsync the dir.
+	// A persistence failure is surfaced as Run's err while the agent's
 	// exit code is still returned.
-	persistErr := persistSideFiles(cfg.SessionDir, emu, exitCode, exitSignal, backendExit)
+	persistErr := persistSideFiles(cfg.SessionDir, exitCode, exitSignal, backendExit)
 
 	// Flush buffered DataOut, emit exit_report to any connected client, then
 	// tear the socket down.
@@ -575,19 +579,8 @@ func waitClosed(ch <-chan struct{}, d time.Duration) bool {
 	}
 }
 
-// persistSideFiles writes the G3 side-files: the final grid snapshot (fsync'd),
-// then exit.json, then an fsync of the session dir so the temp+rename of both
-// files is durable. If the snapshot cannot be produced or written, exit.json is
-// NOT written, preserving the invariant that exit.json's presence implies a
-// complete snapshot. Any failure is returned so Run can surface it.
-func persistSideFiles(dir string, emu *vt.Emulator, exitCode int, exitSignal string, backendExit *int) error {
-	snap, err := emu.Snapshot()
-	if err != nil {
-		return fmt.Errorf("shim: snapshot: %w", err)
-	}
-	if err := writeFileAtomic(dir, SnapshotFile, snap); err != nil {
-		return fmt.Errorf("shim: write snapshot: %w", err)
-	}
+// The live grid stays in the shim; only the process outcome needs persistence.
+func persistSideFiles(dir string, exitCode int, exitSignal string, backendExit *int) error {
 	data, err := json.Marshal(ExitInfo{
 		ExitCode:    exitCode,
 		ExitSignal:  exitSignal,

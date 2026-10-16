@@ -2,8 +2,8 @@
 // PTY, execs the agent in its own process group from an argv array + captured
 // env, serves the per-session UDS (G2 message set), pipes PTY bytes into the VT
 // emulator + transcript, and — surviving the daemon indefinitely — always
-// drains the PTY, then on agent exit writes the final snapshot + exit side-file
-// (G3). This is the security-critical heart of ADR-001.
+// drains the PTY, then on agent exit flushes its bounded identity tail and writes
+// the exit side-file. This is the security-critical heart of ADR-001.
 //
 // These are FAILING-FIRST white-box tests (package shim). They exercise the
 // frozen production API a separate implementer will build:
@@ -14,9 +14,8 @@
 //	    Cwd           string
 //	    Env           []string      // pre-filtered by caller
 //	    SocketPath    string        // per-session UDS
-//	    SessionDir    string        // side-files: final-snapshot.bin, exit.json, transcript.log
+//	    SessionDir    string        // side-files: identity-tail.bin, exit.json
 //	    Cols, Rows    int
-//	    TranscriptCfg transcript.Config
 //	    GraceTimeout  time.Duration // TERM->KILL grace
 //	    Metrics       *Metrics      // optional, test-observable counters
 //	}
@@ -26,7 +25,7 @@
 //	    ExitSignal string    `json:"exit_signal"`
 //	    FinishedAt time.Time `json:"finished_at"`
 //	}
-//	const ( SnapshotFile="final-snapshot.bin"; ExitFile="exit.json"; TranscriptFile="transcript.log" )
+//	const ( IdentityTailFile="identity-tail.bin"; ExitFile="exit.json" )
 //	func Run(cfg Config) (agentExit int, err error)  // blocks until agent exit
 //
 // DRIVER STRATEGY (orchestrator brief):
@@ -45,6 +44,7 @@ package shim
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -283,7 +283,7 @@ func helperIdle() {
 }
 
 func helperBurstExit() {
-	for i := 0; i < 500; i++ {
+	for i := 0; i < 12000; i++ {
 		fmt.Printf("B%04d\n", i)
 	}
 	fmt.Printf("BURST_DONE\n")
@@ -399,17 +399,16 @@ func helperConfig(t *testing.T, mode string, argvExtra []string, envExtra []stri
 	sessionDir := t.TempDir()
 	argv := append([]string{selfExe(t)}, argvExtra...)
 	return Config{
-		SessionID:     "test-session",
-		Argv:          argv,
-		Cwd:           t.TempDir(),
-		Env:           helperEnv(mode, envExtra...),
-		SocketPath:    newSocketPath(t),
-		SessionDir:    sessionDir,
-		Cols:          80,
-		Rows:          24,
-		TranscriptCfg: transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
-		GraceTimeout:  5 * time.Second,
-		Metrics:       &Metrics{},
+		SessionID:    "test-session",
+		Argv:         argv,
+		Cwd:          t.TempDir(),
+		Env:          helperEnv(mode, envExtra...),
+		SocketPath:   newSocketPath(t),
+		SessionDir:   sessionDir,
+		Cols:         80,
+		Rows:         24,
+		GraceTimeout: 5 * time.Second,
+		Metrics:      &Metrics{},
 	}
 }
 
@@ -422,17 +421,16 @@ func fakeAgentConfig(t *testing.T, script string) Config {
 		t.Fatalf("write script: %v", err)
 	}
 	return Config{
-		SessionID:     "test-session",
-		Argv:          []string{fakeAgentBin, scriptPath},
-		Cwd:           t.TempDir(),
-		Env:           []string{"PATH=" + os.Getenv("PATH")},
-		SocketPath:    newSocketPath(t),
-		SessionDir:    sessionDir,
-		Cols:          80,
-		Rows:          24,
-		TranscriptCfg: transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
-		GraceTimeout:  5 * time.Second,
-		Metrics:       &Metrics{},
+		SessionID:    "test-session",
+		Argv:         []string{fakeAgentBin, scriptPath},
+		Cwd:          t.TempDir(),
+		Env:          []string{"PATH=" + os.Getenv("PATH")},
+		SocketPath:   newSocketPath(t),
+		SessionDir:   sessionDir,
+		Cols:         80,
+		Rows:         24,
+		GraceTimeout: 5 * time.Second,
+		Metrics:      &Metrics{},
 	}
 }
 
@@ -470,24 +468,18 @@ func waitRun(t *testing.T, ch <-chan runResult, timeout time.Duration) runResult
 
 func readTranscript(t *testing.T, sessionDir string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(sessionDir, TranscriptFile))
-	if err != nil {
-		t.Fatalf("read transcript: %v", err)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		b, _, err := transcript.ReadTail(filepath.Join(sessionDir, IdentityTailFile), 0)
+		if errors.Is(err, transcript.ErrTailBusy) && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		if err != nil {
+			t.Fatalf("read identity tail: %v", err)
+		}
+		return string(b)
 	}
-	return string(b)
-}
-
-func decodeFinalSnapshot(t *testing.T, sessionDir string) *vt.Snap {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(sessionDir, SnapshotFile))
-	if err != nil {
-		t.Fatalf("read final snapshot: %v", err)
-	}
-	s, err := vt.DecodeSnapshot(b)
-	if err != nil {
-		t.Fatalf("decode final snapshot: %v", err)
-	}
-	return s
 }
 
 func readExitInfo(t *testing.T, sessionDir string) ExitInfo {

@@ -7,6 +7,7 @@ package shim
 
 import (
 	"os"
+	"os/signal"
 	"runtime"
 	"syscall"
 	"testing"
@@ -78,6 +79,10 @@ func TestShimSelfContainsAgentGroupOnSIGTERM(t *testing.T) {
 // via the sigDone close + WaitGroup join rather than by consuming a signal. A leak
 // (handler never released/joined) leaves a goroutine blocked in the select forever.
 func TestShimSignalHandler_ReleasedAndJoinedOnCleanExit(t *testing.T) {
+	// os/signal starts one process-wide watcher on the first Notify, outside shim ownership.
+	warm := make(chan os.Signal, 1)
+	signal.Notify(warm, syscall.SIGWINCH)
+	signal.Stop(warm)
 	before := runtime.NumGoroutine()
 
 	cfg := helperConfig(t, modeBurstExit, nil, nil)

@@ -2,8 +2,9 @@
 // R-JRN): a single daemon-wide append-only log of versioned records
 // (schema_version, monotonic cursor, ts, session_id, type, payload) under
 // <stateDir>/journal/, written at the daemon's saveMetaLocked choke point (A7).
-// It survives a daemon crash/upgrade (D-5): every append is fsync'd before its
-// cursor is acked (R-JRN.5). Resume is "snapshot as of cursor N + events after N",
+// Control events survive a daemon crash/upgrade (D-5). Live-only mode keeps
+// interactions in RAM and durably reserves their cursors before publication.
+// Resume is "snapshot as of cursor N + events after N",
 // atomic under one lock (R-JRN.4); a read below the retained floor returns a
 // full-resync signal (R-JRN.6). Retention rotates segments to bound disk.
 package journal
@@ -13,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -145,12 +147,15 @@ type Resume struct {
 
 // Options tune retention (rotation bounds) and the injected clock.
 type Options struct {
-	MaxBytes int64            // rotate the active segment past this size (0 = unbounded)
-	MaxFiles int              // keep at most this many segments (0 = unbounded)
+	MaxBytes int64 // rotate the active segment past this size (0 = unbounded)
+	MaxFiles int   // keep at most this many segments (0 = unbounded)
 	// MaxTotalBytes drops the oldest whole segments at Open, before loading, until the rest
-	// total at most this (0 = unbounded). Retained records are mirrored in memory.
+	// total at most this (0 = unbounded). Live mode also enforces it while running.
 	MaxTotalBytes int64
-	Clock    func() time.Time // record timestamp source (defaults to time.Now)
+	// LiveBytes enables live-only interaction storage when positive. Other records
+	// remain durable; interaction payloads occupy this RAM budget, plus live approvals.
+	LiveBytes int64
+	Clock     func() time.Time // record timestamp source (defaults to time.Now)
 }
 
 // EncodeRecord serializes a record to one JSON line (no trailing newline).
@@ -178,10 +183,11 @@ func DecodeRecord(line []byte) (Record, error) {
 
 // segment is one on-disk log file; segments are ascending by seq (== cursor order).
 type segment struct {
-	seq   uint64
-	path  string
-	count int   // records written to this segment (for retention record-drop)
-	bytes int64 // on-disk size (for rotation)
+	seq        uint64
+	path       string
+	count      int   // records written to this segment (for retention record-drop)
+	bytes      int64 // on-disk size (for rotation)
+	lastCursor uint64
 }
 
 // Journal is the daemon-wide append-only log. Retained records are mirrored in
@@ -191,15 +197,22 @@ type Journal struct {
 	opts  Options
 	clock func() time.Time
 
-	mu       sync.Mutex
-	cursor   uint64     // high-water mark, monotonic for the journal's lifetime
-	records  []Record   // retained records, ascending cursor
-	segments []*segment // ascending seq; the last is the active segment
-	active   *segment
-	activeF  *os.File
-	nextSeq  uint64
-	closed   bool
-	subs     map[chan Record]struct{} // live subscribers (fan-out), guarded by mu
+	mu            sync.Mutex
+	cursor        uint64     // high-water mark, monotonic for the journal's lifetime
+	records       []Record   // retained records, ascending cursor
+	segments      []*segment // ascending seq; the last is the active segment
+	active        *segment
+	activeF       *os.File
+	nextSeq       uint64
+	closed        bool
+	subs          map[chan Record]struct{} // live subscribers (fan-out), guarded by mu
+	reserved      uint64
+	lostThrough   uint64
+	liveBytes     int64
+	pins          map[string]livePin
+	suppressed    map[string]struct{}
+	cacheDisabled map[string]bool
+	liveErr       error
 }
 
 // subscriberBuffer bounds each live subscriber's per-channel buffer. Append does a
@@ -220,6 +233,9 @@ func Open(dir string, opts Options) (*Journal, error) {
 	j := &Journal{dir: dir, opts: opts, clock: opts.Clock}
 	if j.clock == nil {
 		j.clock = time.Now
+	}
+	if opts.LiveBytes > 0 {
+		return j.openLive()
 	}
 
 	entries, err := os.ReadDir(dir)
@@ -296,36 +312,89 @@ func Open(dir string, opts Options) (*Journal, error) {
 	return j, nil
 }
 
-// Append assigns the next cursor, stamps schema+ts, writes the record as one JSON
-// line, and fsyncs BEFORE returning the stamped record (fsync-before-ack, R-JRN.5).
+// Append stamps the next cursor/schema/time. Controls are fsync'd before return;
+// live interactions reserve durable cursor custody but retain their payload in RAM.
 func (j *Journal) Append(r Record) (Record, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.closed {
 		return Record{}, errors.New("journal: closed")
 	}
+	if j.opts.LiveBytes > 0 {
+		if j.liveErr != nil {
+			return Record{}, j.liveErr
+		}
+		if r.Type == TypeInteraction {
+			if err := j.reserveCursorLocked(); err != nil {
+				return Record{}, j.failLiveLocked(err)
+			}
+		} else {
+			// Controls follow the ceiling on disk; old readers must also replay in order.
+			j.cursor = max(j.cursor, j.reserved)
+		}
+	}
 
-	j.cursor++
-	r.Cursor = j.cursor
+	if j.cursor == math.MaxUint64 {
+		return Record{}, j.failLiveLocked(errors.New("journal: cursor space exhausted"))
+	}
+	r.Cursor = j.cursor + 1
+	if j.opts.LiveBytes == 0 {
+		j.cursor = r.Cursor // preserve the legacy journal's failed-append allocation
+	}
 	r.SchemaVersion = SchemaVersion
 	r.TS = j.clock().UTC()
 
 	line := append(EncodeRecord(r), '\n')
-	if j.opts.MaxBytes > 0 && j.active.bytes > 0 && j.active.bytes+int64(len(line)) > j.opts.MaxBytes {
+	transient := j.opts.LiveBytes > 0 && r.Type == TypeInteraction
+	if j.opts.LiveBytes > 0 && !transient && int64(len(line)) > j.opts.MaxTotalBytes {
+		return Record{}, errors.New("journal: control record exceeds retention budget")
+	}
+	if !transient && j.opts.MaxBytes > 0 && j.active.bytes > 0 && j.active.bytes+int64(len(line)) > j.opts.MaxBytes {
 		if err := j.rotateLocked(); err != nil {
-			return Record{}, err
+			return Record{}, j.failLiveLocked(err)
 		}
 	}
-	if _, err := j.activeF.Write(line); err != nil {
-		return Record{}, err
+	if !transient {
+		if _, err := j.activeF.Write(line); err != nil {
+			return Record{}, j.failLiveLocked(err)
+		}
+		if err := j.activeF.Sync(); err != nil { // durable before the cursor is acked
+			return Record{}, j.failLiveLocked(err)
+		}
+		j.active.bytes += int64(len(line))
+		j.active.count++
+		j.active.lastCursor = r.Cursor
+		if j.opts.LiveBytes > 0 {
+			if r.Type == TypeExited || r.Type == TypeLost {
+				delete(j.pins, r.SessionID)
+			}
+			if r.Type == TypeDeleted {
+				j.forgetLiveSessionLocked(r.SessionID)
+				kept := j.records[:0]
+				for _, prior := range j.records {
+					if prior.Type == TypeInteraction && prior.SessionID == r.SessionID {
+						j.liveBytes -= int64(len(EncodeRecord(prior)) + 1)
+						j.lostThrough = max(j.lostThrough, prior.Cursor)
+					} else {
+						kept = append(kept, prior)
+					}
+				}
+				clear(j.records[len(kept):])
+				j.records = kept
+			}
+		}
 	}
-	if err := j.activeF.Sync(); err != nil { // durable before the cursor is acked
-		return Record{}, err
-	}
-	j.active.bytes += int64(len(line))
-	j.active.count++
+	j.cursor = r.Cursor
 	j.records = append(j.records, r)
+	if transient {
+		j.liveBytes += int64(len(line))
+		j.noteLiveItemLocked(r)
+		j.trimLiveLocked()
+	}
 	j.enforceRetentionLocked()
+	if j.opts.LiveBytes > 0 && j.liveErr != nil {
+		return Record{}, j.liveErr
+	}
 	// Live fan-out: deliver the newly-appended record to every subscriber. The send
 	// is NON-BLOCKING so a slow/wedged subscriber never blocks the write-critical
 	// path. Full means observable EOF, never a silent connected gap.
@@ -427,7 +496,13 @@ func (j *Journal) ReadFrom(from uint64) (Resume, error) {
 }
 
 func (j *Journal) readFromLocked(from uint64) Resume {
+	if j.opts.LiveBytes > 0 {
+		j.trimLiveLocked()
+	}
 	res := Resume{Cursor: j.cursor}
+	if j.opts.LiveBytes > 0 && from > 0 && from < j.lostThrough {
+		res.FullResync = true
+	}
 	if floor := j.floorLocked(); from > 0 && floor > 0 && from+1 < floor {
 		res.FullResync = true
 	}
@@ -488,12 +563,22 @@ func (j *Journal) openNewSegmentLocked() error {
 	j.active = seg
 	j.activeF = f
 	j.segments = append(j.segments, seg)
+	if j.opts.LiveBytes > 0 {
+		if err := syncLiveDir(j.dir); err != nil {
+			_ = f.Close()
+			return err
+		}
+	}
 	return nil
 }
 
 // enforceRetentionLocked deletes the oldest segments (and drops their records from
 // the in-memory mirror) until at most MaxFiles remain, bounding disk (R-JRN.6).
 func (j *Journal) enforceRetentionLocked() {
+	if j.opts.LiveBytes > 0 {
+		j.enforceLiveRetentionLocked()
+		return
+	}
 	if j.opts.MaxFiles <= 0 {
 		return
 	}

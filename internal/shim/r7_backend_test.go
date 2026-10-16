@@ -75,6 +75,12 @@ func init() {
 		return
 	}
 	sock := os.Getenv(r7BackendEnvVar + "_SOCK")
+	if report := os.Getenv(r7BackendEnvVar + "_CWD_REPORT"); report != "" {
+		cwd, err := os.Getwd()
+		if err != nil || os.WriteFile(report, []byte(cwd), 0o600) != nil {
+			os.Exit(89)
+		}
+	}
 	switch mode {
 	case r7BackendNeverBinds:
 		select {}
@@ -146,6 +152,45 @@ func r7WaitBackendInfo(t *testing.T, sessionDir string, within time.Duration) Ba
 }
 
 func r7Alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
+
+func TestR7ShimBackend_RunUsesProjectCwdForLegacyConfig(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		name := "legacy-empty-backend-cwd"
+		if explicit {
+			name = "explicit-backend-cwd"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := r7BackendCfg(t, r7BackendBind, nil)
+			cfg.Backend.GoAheadTimeout = 25 * time.Millisecond
+			want := cfg.Cwd
+			if explicit {
+				cfg.Backend.Cwd = t.TempDir()
+				want = cfg.Backend.Cwd
+			}
+			report := filepath.Join(t.TempDir(), "backend.cwd")
+			cfg.Backend.Env = append(cfg.Backend.Env, r7BackendEnvVar+"_CWD_REPORT="+report)
+
+			r := waitRun(t, runShimAsync(cfg), 15*time.Second)
+			if r.err != nil || r.exit != 0 {
+				t.Fatalf("Run = %+v, want a successful backend and agent lifecycle", r)
+			}
+			if _, ok := ReadBackendInfo(cfg.SessionDir); !ok {
+				t.Fatal("Run never made the backend servable")
+			}
+			raw, err := os.ReadFile(report)
+			if err != nil {
+				t.Fatalf("read backend's actual cwd: %v", err)
+			}
+			want, err = filepath.EvalSymlinks(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(raw); got != want {
+				t.Fatalf("backend cwd = %q, want %q; the session state directory %q is not a project workspace", got, want, cfg.SessionDir)
+			}
+		})
+	}
+}
 
 // ---------------------------------------------------------------------------
 // §R7.2e -- the spawn-ordering handshake

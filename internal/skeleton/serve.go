@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -47,6 +48,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remotegw"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/vt"
 	"github.com/Nathandela/swarm/internal/worktree"
 )
@@ -857,6 +859,11 @@ func (d *Daemon) endSession(id string) {
 	d.forgetBackendPump(id)
 	d.forgetBackend(id)
 	d.captureConversationIDFinal(id)
+	if m, ok := d.core.Get(id); ok && m.ConversationID != "" {
+		if err := os.Remove(filepath.Join(d.stateDir, id, shim.IdentityTailFile)); err != nil && !os.IsNotExist(err) {
+			log.Printf("skeleton: retire identity tail for %s: %v", id, err)
+		}
+	}
 	d.convScanMu.Lock()
 	delete(d.convScan, id) // bound convScan to running sessions (R2.1.3 hygiene)
 	d.convScanMu.Unlock()
@@ -1036,8 +1043,9 @@ const convTailBytes = 64 << 10
 // convScanState is one session's transcript-scan bookkeeping for the growth-gated
 // re-read in captureConversationID (R2.1.3).
 type convScanState struct {
-	size    int64 // transcript size as of the last scan
-	errOnce bool  // a disk error has already been logged for this session (log-once)
+	size       int64  // legacy transcript size as of the last scan
+	generation uint64 // fixed-size identity ring's committed generation
+	errOnce    bool   // a disk error has already been logged for this session (log-once)
 }
 
 // captureConversationID recovers a session's native conversation id from its output
@@ -1102,25 +1110,36 @@ func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
 	if !ok {
 		return
 	}
-	path := filepath.Join(d.stateDir, id, shim.TranscriptFile)
-	fi, err := os.Stat(path)
-	if err != nil {
-		d.noteConvScanError(id)
-		return
-	}
-	size := fi.Size()
-
 	d.convScanMu.Lock()
 	if d.convScan == nil {
 		d.convScan = make(map[string]convScanState)
 	}
-	if d.convScan[id].size == size {
-		d.convScanMu.Unlock()
-		return // unchanged since the last scan: nothing new to extract
-	}
+	previous := d.convScan[id]
 	d.convScanMu.Unlock()
-
-	tail := readTail(path, convTailBytes)
+	tail, generation, err := transcript.ReadTail(filepath.Join(d.stateDir, id, shim.IdentityTailFile), previous.generation)
+	var size int64
+	if os.IsNotExist(err) { // old running shims still use their original writer
+		path := filepath.Join(d.stateDir, id, shim.TranscriptFile)
+		var fi os.FileInfo
+		fi, err = os.Stat(path)
+		if err == nil {
+			size = fi.Size()
+			if size == previous.size {
+				return
+			}
+			tail, generation = readTail(path, convTailBytes), 0
+		}
+	}
+	if errors.Is(err, transcript.ErrTailBusy) {
+		return
+	}
+	if err != nil {
+		d.noteConvScanError(id)
+		return
+	}
+	if generation == previous.generation && size == previous.size {
+		return
+	}
 
 	d.convScanMu.Lock()
 	if gateRunning {
@@ -1133,7 +1152,7 @@ func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
 			return
 		}
 	}
-	d.convScan[id] = convScanState{size: size} // also clears errOnce: the error cleared
+	d.convScan[id] = convScanState{size: size, generation: generation}
 	d.convScanMu.Unlock()
 
 	if len(tail) == 0 {
@@ -1143,7 +1162,12 @@ func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
 	if !ok || convID == "" || !adapter.AcceptsConversationID(ad, convID) {
 		return
 	}
-	_ = d.core.SetConversationID(id, convID)
+	if err := d.core.SetConversationID(id, convID); err != nil {
+		d.convScanMu.Lock()
+		d.convScan[id] = convScanState{errOnce: previous.errOnce} // retry a quiet tail
+		d.convScanMu.Unlock()
+		d.noteConvScanError(id)
+	}
 }
 
 // noteConvScanError log-once's a transcript-scan disk error for a session

@@ -25,7 +25,7 @@ import (
 func BenchmarkHubFeed(b *testing.B) {
 	emu := vt.NewEmulator(80, 24)
 	defer func() { _ = emu.Close() }()
-	tr, err := transcript.New(filepath.Join(b.TempDir(), "transcript.log"), transcript.Config{MaxBytes: 10 << 20, MaxFiles: 3})
+	tr, err := transcript.NewTail(filepath.Join(b.TempDir(), IdentityTailFile))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func BenchmarkHubFeed(b *testing.B) {
 func BenchmarkHubFeed_PublishLatency(b *testing.B) {
 	emu := vt.NewEmulator(80, 24)
 	defer func() { _ = emu.Close() }()
-	tr, err := transcript.New(filepath.Join(b.TempDir(), "transcript.log"), transcript.Config{MaxBytes: 10 << 20, MaxFiles: 3})
+	tr, err := transcript.NewTail(filepath.Join(b.TempDir(), IdentityTailFile))
 	if err != nil {
 		b.Fatal(err)
 	}

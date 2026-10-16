@@ -21,7 +21,6 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/processcontain"
 	"github.com/Nathandela/swarm/internal/procstart"
-	"github.com/Nathandela/swarm/internal/transcript"
 )
 
 // All subreaper mutation and all synthetic native descendants live in a
@@ -174,7 +173,7 @@ func managedFixtureModify(t *testing.T, withBackend bool, modify func(*Config)) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{SessionID: "session", Argv: argv, Cwd: cwd, Env: projection.HarmlessEnv, SocketPath: filepath.Join(dir, "s"), SessionDir: dir, AccountBinding: &binding, AccountStateRoot: state, AccountProjectionRef: projection.Ref, CLIIdentity: &persist.CLIIdentity{Path: exe, Version: "0.160.0", Fingerprint: fingerprint}, Cols: 80, Rows: 24, GraceTimeout: 25 * time.Millisecond, TranscriptCfg: transcript.Config{MaxBytes: 1 << 20, MaxFiles: 1}}
+	cfg := Config{SessionID: "session", Argv: argv, Cwd: cwd, Env: projection.HarmlessEnv, SocketPath: filepath.Join(dir, "s"), SessionDir: dir, AccountBinding: &binding, AccountStateRoot: state, AccountProjectionRef: projection.Ref, CLIIdentity: &persist.CLIIdentity{Path: exe, Version: "0.160.0", Fingerprint: fingerprint}, Cols: 80, Rows: 24, GraceTimeout: 25 * time.Millisecond}
 	paths := []string{native}
 	if withBackend {
 		backend := filepath.Join(base, "backend")

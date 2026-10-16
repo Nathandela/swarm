@@ -12,6 +12,11 @@ Provider CLIs already offer much of the discussion history and resumability Swar
 
 ## 1. Introduction
 
+After this survey, the owner selected live-only supervision. The subsequent
+[fixing plan](../specifications/lightweight-storage-plan.md) and
+[ADR-033](../adr/ADR-033-live-only-supervisor-storage.md) record the implementation
+direction; the alternatives below remain a research comparison.
+
 ### Problem statement and evidence
 
 The desired property is sustained low overhead, rather than periodically recovering space after growth. Four resources matter independently: retained disk bytes, write volume, resident memory, and startup/read cost. Moving data between directories or putting it in RAM does not necessarily improve all four.

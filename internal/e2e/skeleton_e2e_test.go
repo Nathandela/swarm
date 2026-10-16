@@ -34,6 +34,7 @@ import (
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/testbin"
+	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/vt"
 )
 
@@ -261,11 +262,11 @@ func containsAll(s string, subs []string) bool {
 // transcript survives a daemon kill -9 intact (not lost or truncated).
 func transcriptContains(t *testing.T, stateDir, local, want string) {
 	t.Helper()
-	path := filepath.Join(stateDir, local, shim.TranscriptFile)
+	path := filepath.Join(stateDir, local, shim.IdentityTailFile)
 	deadline := time.Now().Add(10 * time.Second)
 	var lastLen int
 	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(path)
+		data, _, err := transcript.ReadTail(path, 0)
 		lastLen = len(data)
 		if err == nil && len(data) > 0 && strings.Contains(string(data), want) {
 			return

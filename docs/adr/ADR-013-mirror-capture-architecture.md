@@ -1,5 +1,11 @@
 # ADR-013: Mirror capture architecture — structure arrives beside the PTY, and a phone answer is typed into the CLI's own dialog
 
+> **Host-storage amendment 2026-10-16:** [ADR-033](ADR-033-live-only-supervisor-storage.md)
+> replaces durable generic discussion history with a bounded live RAM window and
+> truthful history floors. Small lifecycle/control state and accepted-operation,
+> replay and delivery custody remain durable. Provider-native history and existing
+> phone caches retain their ownership. The historical decisions below otherwise stand.
+
 **Status**: Accepted (owner-approved direction 2026-08-13, "that's exactly the direction"; the M1 items it records are built, tested and pushed)
 **Date**: 2026-08-13
 **Program**: [docs/specifications/mirror-program.md](../specifications/mirror-program.md) — the plan of record; this ADR records the decisions inside it, not the wave schedule.

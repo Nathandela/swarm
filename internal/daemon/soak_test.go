@@ -29,7 +29,9 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/transcript"
 )
 
 // soakSession is one session's captured identity + transcript baseline: the truth
@@ -69,15 +71,13 @@ func launchFakePrint(t *testing.T, d *Daemon, marker string) persist.Meta {
 	return m
 }
 
-// waitTranscript polls a session's transcript.log (the shim's raw, append-only PTY
-// capture) until it contains want, returning its full bytes as the stable baseline
-// the soak later asserts stays byte-identical across every restart.
+// The idle shim's bounded identity evidence survives supervisor restarts.
 func waitTranscript(t *testing.T, sessionDir, want string, timeout time.Duration) []byte {
 	t.Helper()
-	path := filepath.Join(sessionDir, "transcript.log")
+	path := filepath.Join(sessionDir, shim.IdentityTailFile)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		b, err := os.ReadFile(path)
+		b, _, err := transcript.ReadTail(path, 0)
 		if err == nil && strings.Contains(string(b), want) {
 			return b
 		}
@@ -148,7 +148,7 @@ func TestSoak_RestartUpgrade_50CyclesZeroLoss(t *testing.T) {
 			}
 			// Transcript intact: byte-identical to the pre-soak baseline, so the kill
 			// -9 + restart churn never lost or truncated the agent's captured output.
-			tr, err := os.ReadFile(filepath.Join(d.sessionDir(s.id), "transcript.log"))
+			tr, _, err := transcript.ReadTail(filepath.Join(d.sessionDir(s.id), shim.IdentityTailFile), 0)
 			if err != nil {
 				d.abandon()
 				t.Fatalf("cycle %d: session %s transcript unreadable: %v", cycle, s.id, err)

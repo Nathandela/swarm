@@ -12,7 +12,9 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/transcript"
 )
 
 // These are actual shim/PTY launches. The provider is a local shell fixture:
@@ -36,8 +38,9 @@ func TestCLIRefreshInstalledUpgradeRealResume(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = core.Close() })
 	api := &coreAPI{core: core, endpointID: testEndpoint}
+	project := t.TempDir()
 	env := []string{"PATH=" + dir + ":/usr/bin:/bin", "HOME=" + dir}
-	old, err := api.Launch(daemon.LaunchSpec{AgentType: "claude", Name: "upgrade-me", Tag: "refresh", Cwd: dir, ClientEnv: env, ConversationID: migratedConversationID, Cols: 80, Rows: 24, SpawnedFrom: "parent", SpawnIntent: "delegate", Supervision: "manual", Options: map[string]string{"model": "sonnet"}})
+	old, err := api.Launch(daemon.LaunchSpec{AgentType: "claude", Name: "upgrade-me", Tag: "refresh", Cwd: project, ClientEnv: env, ConversationID: migratedConversationID, Cols: 80, Rows: 24, SpawnedFrom: "parent", SpawnIntent: "delegate", Supervision: "manual", Options: map[string]string{"model": "sonnet"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +50,7 @@ func TestCLIRefreshInstalledUpgradeRealResume(t *testing.T) {
 		t.Fatalf("initial CLI identity = %+v", old.CLIIdentity)
 	}
 	installRefreshMock(t, bin, "2.0.2")
-	candidate, err := probeCLIIdentity("claude", "", env, dir)
+	candidate, err := probeCLIIdentity("claude", "", env, project)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,8 +60,8 @@ func TestCLIRefreshInstalledUpgradeRealResume(t *testing.T) {
 	if err := syscall.Kill(old.ShimPID, 0); err != nil {
 		t.Fatalf("installer interrupted existing shim: %v", err)
 	}
-	after, _ := os.ReadFile(filepath.Join(dir, old.ID, "transcript.log"))
-	if strings.Contains(string(after), "fixture-version=2.0.2") || !strings.Contains(before, "fixture-version=2.0.1") {
+	after := refreshAwaitTranscript(t, dir, old.ID, "fixture-ready")
+	if strings.Contains(after, "fixture-version=2.0.2") || !strings.Contains(before, "fixture-version=2.0.1") {
 		t.Fatal("installation replacement changed existing process")
 	}
 	if err := core.SetStatus(old.ID, status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionNone}); err != nil {
@@ -121,7 +124,7 @@ func TestCLIRefreshInstalledUpgradeRealResume(t *testing.T) {
 	refreshAwaitExited(t, core, fresh.ID)
 	installRefreshMock(t, bin, "2.0.3")
 	count := len(core.List())
-	_, err = api.Launch(daemon.LaunchSpec{AgentType: "claude", Cwd: dir, ClientEnv: env, ExpectedCLIIdentity: candidate, Options: map[string]string{protocol.OptionResumeFrom: testEndpoint + "/" + fresh.ID}})
+	_, err = api.Launch(daemon.LaunchSpec{AgentType: "claude", Cwd: project, ClientEnv: env, ExpectedCLIIdentity: candidate, Options: map[string]string{protocol.OptionResumeFrom: testEndpoint + "/" + fresh.ID}})
 	if err == nil {
 		t.Fatal("installer race accepted stale expected target")
 	}
@@ -145,9 +148,16 @@ func refreshAwaitTranscript(t *testing.T, dir, id, want string) string {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	var b []byte
+	var generation uint64
 	for time.Now().Before(deadline) {
-		b, _ = os.ReadFile(filepath.Join(dir, id, "transcript.log"))
-		if strings.Contains(string(b), want) {
+		tail, next, err := transcript.ReadTail(filepath.Join(dir, id, shim.IdentityTailFile), generation)
+		if err == nil {
+			generation = next
+			if tail != nil {
+				b = tail
+			}
+		}
+		if err == nil && strings.Contains(string(b), want) {
 			return string(b)
 		}
 		time.Sleep(10 * time.Millisecond)

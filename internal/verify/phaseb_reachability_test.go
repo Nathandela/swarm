@@ -100,6 +100,7 @@ var b94Allowed = map[string]string{
 
 	// ---- 2026-08-02 merge of main (v0.6 perf wave) into this line ------------------------
 	"github.com/Nathandela/swarm/internal/transcript.Writer.Write": "the io.Writer face of the transcript writer; the shim's hot path moved to WriteOwned (v0.6 perf: caller-owned buffer, no copy) and Write remains the copying general-purpose entry, exercised by the transcript package's own tests.",
+	"github.com/Nathandela/swarm/internal/transcript.New":          "legacy rotating-sink constructor retained for writer fault/rotation fixtures and the shim's blocked-flush test. ADR-033 production shims exclusively use NewTail; no product archive mode remains.",
 	"github.com/Nathandela/swarm/internal/testbin.Binaries.Build":  "test-support package from main: builds per-test binaries for e2e suites; production never builds test binaries, by definition.",
 	"github.com/Nathandela/swarm/internal/testbin.Binaries.Sweep":  "test-support: TestMains kill the sessions a run left behind; production never sweeps test binaries, by definition.",
 	"github.com/Nathandela/swarm/internal/testbin.KillProcessesOf": "test-support: the daemon TestMain kills processes of the binaries its run built; production never runs test binaries.",

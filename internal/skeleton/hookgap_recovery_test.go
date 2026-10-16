@@ -378,9 +378,10 @@ func TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents(t *testing.T) {
 	if applied, _, err := hd.DrainOnce(); err != nil || applied != 1 {
 		t.Fatalf("future DrainOnce = applied %d err %v, want applied 1", applied, err)
 	}
-	awaitJournalTexts(t, sk, sessionID, 4)
+	awaitJournalTexts(t, sk, sessionID, 3)
 
-	wantOrder := []string{"interaction:before-gap", "gap", "interaction:retained-4", "interaction:retained-5", "interaction:future-6"}
+	// The gap is durable control evidence; pre-restart prose is deliberately gone.
+	wantOrder := []string{"gap", "interaction:retained-4", "interaction:retained-5", "interaction:future-6"}
 	if got := hookJournalOrder(t, sk, sessionID); !equalStrings(got, wantOrder) {
 		t.Fatalf("journal chronology = %q, want %q", got, wantOrder)
 	}

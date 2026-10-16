@@ -65,7 +65,7 @@ const backendPollInterval = 25 * time.Millisecond
 // PRE-R7 SESSION, byte-for-byte: no file written, no timeout waited, no handshake expected.
 // It is HookSocketPath's exact unset-means-disabled convention.
 type BackendConfig struct {
-	Cwd string // provider cwd, always set by the daemon; empty only for shim-launch.json files written before it was (legacy session dir)
+	Cwd string // provider cwd; legacy configs fall back to the agent's project cwd
 	// Program is the backend executable, ALREADY RESOLVED to an absolute path by the core
 	// (the adapter NAMES a program, adapter.ResolveBackend LookPaths it). It is exec'd
 	// DIRECTLY, never through a shell -- obligation 9b, and the rule this package already
@@ -130,7 +130,7 @@ type backendProc struct {
 // backend only: the caller still launches the agent (degraded), because playbook §6.1's
 // posture -- "disk-full lets the agent continue locally" -- applies here too. The PTY plane is
 // never at this channel's mercy.
-func startBackend(cfg *BackendConfig, sessionDir string) (*backendProc, error) {
+func startBackend(cfg *BackendConfig, projectDir string) (*backendProc, error) {
 	if cfg.Program == "" {
 		return nil, errors.New("shim: backend declared with no program")
 	}
@@ -140,7 +140,7 @@ func startBackend(cfg *BackendConfig, sessionDir string) (*backendProc, error) {
 		Path: cfg.Program,
 		Args: append([]string{cfg.Program}, cfg.Args...),
 		Env:  cfg.Env,
-		Dir:  sessionDir,
+		Dir:  projectDir,
 		// ITS OWN GROUP. A backend in the SHIM's group is contained only by the daemon's
 		// containment of the shim -- the accident §R7.2a refuses to rely on -- and R1 leg 1
 		// recorded that one `codex app-server` is TWO pids (a node launcher plus the vendored

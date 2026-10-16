@@ -6,6 +6,8 @@ package shim
 // blocking the drain, and the grid stays authoritative.
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -14,11 +16,12 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/shimwire"
+	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/vt"
 )
 
 // E4.6 / S1 — with NO client ever connecting, the shim drains the PTY and the
-// agent runs to completion; all its output is captured in the grid + transcript.
+// agent runs to completion; the final marker survives in a bounded identity tail.
 func TestSurvival_DrainsWithNoConsumer(t *testing.T) {
 	cfg := helperConfig(t, modeBurstExit, nil, nil)
 	r := waitRun(t, runShimAsync(cfg), 20*time.Second)
@@ -29,11 +32,20 @@ func TestSurvival_DrainsWithNoConsumer(t *testing.T) {
 	if !strings.Contains(tr, "BURST_DONE") {
 		t.Errorf("transcript missing BURST_DONE — the shim did not drain to completion without a consumer")
 	}
-	// The last burst line reached the grid too.
-	snap := decodeFinalSnapshot(t, cfg.SessionDir)
-	if !strings.Contains(gridText(snap), "BURST_DONE") {
-		t.Errorf("final grid missing BURST_DONE:\n%s", gridText(snap))
+	if strings.Contains(tr, "B0000\r\n") {
+		t.Error("identity tail retained the start of a burst larger than its capacity")
 	}
+	info, err := os.Stat(filepath.Join(cfg.SessionDir, IdentityTailFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > transcript.TailBytes+32 {
+		t.Fatalf("identity tail grew to %d bytes after a burst, want <= %d", info.Size(), transcript.TailBytes+32)
+	}
+	if ei := readExitInfo(t, cfg.SessionDir); ei.ExitCode != 0 {
+		t.Errorf("burst exit code = %d, want 0", ei.ExitCode)
+	}
+	assertNoArchivedCapture(t, cfg.SessionDir)
 }
 
 var floodIdxRE = regexp.MustCompile(`F(\d+)`)

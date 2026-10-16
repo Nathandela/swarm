@@ -89,7 +89,7 @@ func TestDaemonHostSubprocess(t *testing.T) {
 		if _, err := d.Launch(LaunchSpec{
 			AgentType: "fake",
 			Argv:      []string{self, markerAnnounce, pidFile},
-			Cwd:       stateDir,
+			Cwd:       filepath.Dir(stateDir),
 			ClientEnv: []string{"PATH=" + os.Getenv("PATH")},
 			Cols:      80,
 			Rows:      24,

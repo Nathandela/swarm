@@ -30,7 +30,7 @@ func TestBackendLaunch_AnUnmanagedBackendRunsInTheSessionCwdNotTheStateDir(t *te
 
 	raw := r7ReadLaunchConfig(t, d, m.ID)
 	if got, _ := raw["backend_cwd"].(string); got != spec.Cwd {
-		t.Errorf("backend_cwd = %q, want the session cwd %q; an empty value runs the backend in the state dir %q",
+		t.Errorf("backend_cwd = %q, want the explicit session cwd %q rather than depending on legacy fallback from %q",
 			got, spec.Cwd, d.sessionDir(m.ID))
 	}
 }

@@ -34,7 +34,6 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/skeleton"
-	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/tui"
 	"github.com/Nathandela/swarm/internal/version"
 	"golang.org/x/sys/unix"
@@ -695,7 +694,6 @@ func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 		SessionDir:           lc.SessionDir,
 		Cols:                 lc.Cols,
 		Rows:                 lc.Rows,
-		TranscriptCfg:        transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
 		GraceTimeout:         time.Duration(lc.GraceMS) * time.Millisecond,
 		HookSocketPath:       lc.HookSocketPath,
 		HookToken:            lc.HookDrainToken,

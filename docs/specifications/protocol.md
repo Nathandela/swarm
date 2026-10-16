@@ -967,8 +967,10 @@ same plane.
 strictly older than a non-empty `before_item` (or the newest retained page when it is empty),
 ascending by cursor, normally at most `limit` and always within the conservative 512 KiB serialized-record
 budget — plus
-`history_floor` when nothing older is retained; an unknown `before_item` or a
-non-positive `limit` is refused `invalid_field`. The page also carries every
+`history_floor` when nothing older is retained. Under ADR-033 the host window is
+RAM-only: an anchor outside that window answers an empty page with
+`history_floor=true`, including after supervisor restart. A non-positive `limit`
+is refused `invalid_field`. The page also carries every
 `structured_gap` boundary inside its range, beside the `interaction` records: a page that
 omitted them would span a proven tear contiguously, which is ADR-017's silently-bridged gap.
 `limit` bounds RECORDS but the page is closed over every ITEM IDENTITY it contains — the window

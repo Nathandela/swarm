@@ -84,7 +84,7 @@ func writeLaunchConfig(t *testing.T, fakeAgent, script string) (cfgPath, session
 
 func assertSideFiles(t *testing.T, sessionDir string) {
 	t.Helper()
-	for _, name := range []string{shim.SnapshotFile, shim.ExitFile, shim.TranscriptFile} {
+	for _, name := range []string{shim.ExitFile, shim.IdentityTailFile} {
 		if _, err := os.Stat(filepath.Join(sessionDir, name)); err != nil {
 			t.Errorf("side-file %s missing after shim role run: %v", name, err)
 		}

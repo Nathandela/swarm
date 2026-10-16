@@ -1,15 +1,6 @@
-// Package transcript is the append-only transcript writer for a session's PTY
-// byte stream (Epic 3, build-plan.md). It carries invariant S9 for the write
-// path: Write must never block the caller, even when the underlying disk is
-// slow, wedged, or permanently failing, because the caller here is the PTY
-// drain loop and it must never stall on transcript I/O.
-//
-// The public surface (Config, New, Writer.Write, Writer.Close, plus
-// Writer.Dropped and Writer.Flush required by E3.4/E3.5) is intentionally
-// small. Internally, Write only ever appends to a bounded in-memory buffer and
-// signals a background goroutine; that goroutine is the sole caller of the
-// sink (see sink.go), so disk latency or failure never propagates back to the
-// Write call.
+// Package transcript provides nonblocking output writers (S9). Production shims
+// use a fixed identity tail (ADR-033); the old rotating sink remains a test fixture.
+// A bounded queue isolates PTY draining from slow or failed disk writes.
 package transcript
 
 import (
@@ -67,6 +58,7 @@ type Writer struct {
 	flushWaiters []chan error  // Flush callers waiting for pending to fully drain
 	drainDone    chan struct{} // closed once the drain goroutine has exited
 	closeErr     error         // result of the sink's Close, set once before drainDone closes
+	latest       bool          // identity tails retain newest queued bytes under pressure
 }
 
 // New opens (creating if needed) the transcript at path and starts its
@@ -81,10 +73,14 @@ func New(path string, cfg Config) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newWriter(s), nil
+}
+
+func newWriter(s sink) *Writer {
 	w := &Writer{sink: s, drainDone: make(chan struct{})}
 	w.cond = sync.NewCond(&w.mu)
 	go w.drainLoop()
-	return w, nil
+	return w
 }
 
 // isRepaintFrame reports whether p is a "repaint frame" per the E3.2
@@ -135,6 +131,10 @@ func (w *Writer) enqueue(cp []byte) (int, error) {
 	repaint := isRepaintFrame(cp)
 
 	w.mu.Lock()
+	if w.latest && int64(len(cp)) > bufCap {
+		w.dropped += int64(len(cp)) - bufCap
+		cp = cp[int64(len(cp))-bufCap:]
+	}
 	if repaint && w.held != nil {
 		w.held = cp // collapse: replace the still-unflushed previous frame
 	} else {
@@ -157,6 +157,19 @@ func (w *Writer) enqueue(cp []byte) (int, error) {
 // counting in dropped) whatever tail of data would push pending past bufCap.
 // Callers must hold mu.
 func (w *Writer) enqueueLocked(data []byte) {
+	if w.latest {
+		excess := w.pendingBytes + int64(len(data)) - bufCap
+		for excess > 0 && len(w.pending) > 0 {
+			drop := min(excess, int64(len(w.pending[0])))
+			w.pending[0] = w.pending[0][drop:]
+			w.pendingBytes -= drop
+			w.dropped += drop
+			excess -= drop
+			if len(w.pending[0]) == 0 {
+				w.pending = w.pending[1:]
+			}
+		}
+	}
 	avail := bufCap - w.pendingBytes
 	if avail <= 0 {
 		w.dropped += int64(len(data))

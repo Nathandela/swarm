@@ -14,7 +14,7 @@ package skeleton
 // session's grid actually changes to the moment a real subscriber receives the
 // resulting status event.
 //
-// The grid-change moment is observed by polling the session's ON-DISK transcript
+// The grid-change moment is observed by polling the session's bounded identity tail
 // file directly (no attach): attaching would mark the session controlled and the
 // tap SKIPS a controlled session (R1.3.7), which would defeat the point of timing
 // the tap itself. The transcript is written by the same PTY-drain iteration that
@@ -23,12 +23,13 @@ package skeleton
 // file captureConversationID itself reads.
 import (
 	"bytes"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/transcript"
 )
 
 // TestGridPoll_IsFiveHundredMillis pins gridPoll at 500ms (R2.1.1: a 2.5x cut
@@ -54,18 +55,22 @@ func TestTapLatency_GridChangeReachesSubscriberWithin1s(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	transcriptPath := filepath.Join(sk.stateDir, m.ID, "transcript.log")
+	tailPath := filepath.Join(sk.stateDir, m.ID, shim.IdentityTailFile)
 
 	deadline := time.Now().Add(5 * time.Second)
 	var changedAt time.Time
+	var generation uint64
 	for {
-		b, _ := os.ReadFile(transcriptPath)
-		if bytes.Contains(b, []byte(">")) {
+		b, next, err := transcript.ReadTail(tailPath, generation)
+		if err == nil {
+			generation = next
+		}
+		if err == nil && bytes.Contains(b, []byte(">")) {
 			changedAt = time.Now()
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("transcript never showed the scripted prompt within 5s")
+			t.Fatalf("identity tail never showed the scripted prompt within 5s")
 		}
 		time.Sleep(2 * time.Millisecond)
 	}

@@ -4,6 +4,15 @@
 **Purpose**: The orchestration contract for building the 15 epics in [build-plan.md](build-plan.md). Each epic closes only when every one of its exit criteria is demonstrably true (a passing automated test, a produced artifact, or a recorded verification). The finished system is audited against this document.
 **Sources**: [system-spec.md](system-spec.md) (EARS ids), [system-invariants.md](../invariants/system-invariants.md) (S1–S12, L1–L3), ADR-001..004, Gate 3 gap resolutions G1–G6.
 
+**Owner amendment 2026-10-16:** [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md)
+supersedes the raw terminal archive, final-screen persistence and durable generic
+interaction-history criteria below. Epic 3 now requires a fixed 64 KiB identity
+tail plus header, generation-consistent reads, newest-evidence queue pressure and
+nonblocking PTY drain. E4.5 persists exit status after tail flush; E8.4 has no
+persisted completed screen. GG-1 preserves live processes/grid and durable native
+identity, not a duplicate conversation archive. Existing historical evidence is
+unchanged; the new acceptance gates are in the lightweight storage fixing plan.
+
 ## Global goals (hold across all epics)
 
 - **GG-1 Walking skeleton**: by end of Epic 8, one scripted demo passes end-to-end: launch fake agent → grouped general view → attach (snapshot paint) → type → detach → `kill -9` daemon → restart → reconnect with zero loss. *Zero loss means*: every agent process alive, authoritative grid recovered (client grid == shim grid), meta.json intact, transcript intact per retention policy. Transient DATA_OUT frames dropped while no client was attached are not loss.

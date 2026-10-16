@@ -25,6 +25,7 @@
 - [Scale-to-zero verification](verification/remote-scale-to-zero/README.md) — reproducible local runtime/emulator/interop tests and explicit unrun production gates
 - [Private mobile repository decision](research/mobile-private-repository.md) — source-access/IP benefits, APK/history limits, split/CI costs and release-continuity gates
 - [Lightweight storage strategies](research/swarm-lightweight-storage-strategies.md) — native history ownership, bounded caches, workspace growth, quota boundaries, and recovery trade-offs; research, not an implementation decision
+- [Lightweight storage fixing plan](specifications/lightweight-storage-plan.md) — owner-selected live-only supervisor, workspace boundaries, deletion, legacy cleanup, and two-host acceptance
 
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
 - [Build plan](specifications/build-plan.md) — 15 ordered epics, contracts, gap resolutions, implementation guidelines (Gate 3-approved)
@@ -63,6 +64,8 @@
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
 
 ## Process traces
+- [Lightweight storage verification](verification/lightweight-storage.md) — live-only journal/tail, workspace prevention, crash/pressure tests, and explicit remaining rollout/cleanup work
+- [Storage cleanup inventory](verification/storage-cleanup-inventory.md) — measured Mac candidates, live native writers, missing recovery destination, and unreachable VM limits
 - [Discussion deletion](verification/discussion-deletion.md) — remove retained attempts and owned worktrees, retry failed cleanup, and preserve lifecycle ordering
 - [Personal account pool evidence](verification/account-pools-v0150.md) — implementation verification boundaries and outstanding authenticated release acceptance
 - [Account-pool v0.16.1 hotfix evidence](verification/account-pools-v0161.md) — owner-provided native configuration ingress regression and pending release verification

@@ -68,9 +68,9 @@ func newDrainedConn(t *testing.T) (net.Conn, *frameSink) {
 
 func newHubTranscript(t *testing.T) *transcript.Writer {
 	t.Helper()
-	tr, err := transcript.New(filepath.Join(t.TempDir(), "t.log"), transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3})
+	tr, err := transcript.NewTail(filepath.Join(t.TempDir(), IdentityTailFile))
 	if err != nil {
-		t.Fatalf("transcript.New: %v", err)
+		t.Fatalf("transcript.NewTail: %v", err)
 	}
 	t.Cleanup(func() { _ = tr.Close() })
 	return tr

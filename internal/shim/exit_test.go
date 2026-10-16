@@ -1,9 +1,7 @@
 package shim
 
-// E4.5 / G3 — on agent exit the shim writes a final grid snapshot and an exit
-// side-file into the session dir, then exits. Run returns the agent's exit code.
-// The transcript is flushed before close, so it ends with the agent's final
-// output (binding carry-forward from Epic 3).
+// On agent exit the shim flushes its bounded identity tail before persisting
+// exit.json. Screen snapshots remain available only from a running shim.
 
 import (
 	"os"
@@ -15,8 +13,7 @@ import (
 	"github.com/Nathandela/swarm/internal/shimwire"
 )
 
-// E4.5 — a clean exit 0: side-files present and decodable, code reported, grid
-// captured, transcript non-empty and ending with the last output.
+// A clean exit reports its outcome and flushes the final output into the tail.
 func TestExit_CleanZero(t *testing.T) {
 	cfg := fakeAgentConfig(t, "print first-line\nprint FINAL-LINE\nexit 0\n")
 	r := waitRun(t, runShimAsync(cfg), 15*time.Second)
@@ -33,12 +30,6 @@ func TestExit_CleanZero(t *testing.T) {
 	}
 	if ei.FinishedAt.IsZero() || time.Since(ei.FinishedAt) > time.Minute {
 		t.Errorf("exit.json finished_at = %v, want a recent RFC3339 time", ei.FinishedAt)
-	}
-
-	// Final snapshot decodes and shows the agent's output.
-	snap := decodeFinalSnapshot(t, cfg.SessionDir)
-	if !strings.Contains(gridText(snap), "FINAL-LINE") {
-		t.Errorf("final snapshot grid missing last output:\n%s", gridText(snap))
 	}
 
 	// Transcript flushed before close: non-empty, ending with the final line.
@@ -91,42 +82,39 @@ func TestExit_KilledBySignalRecorded(t *testing.T) {
 	if ei.ExitSignal != "SIGKILL" {
 		t.Errorf("exit.json exit_signal = %q, want SIGKILL", ei.ExitSignal)
 	}
-	// The final snapshot is still written on a signal death.
-	snap := decodeFinalSnapshot(t, cfg.SessionDir)
-	if !strings.Contains(gridText(snap), "IDLING") {
-		t.Errorf("final snapshot missing pre-kill output:\n%s", gridText(snap))
+	if tail := readTranscript(t, cfg.SessionDir); !strings.Contains(tail, "IDLING") {
+		t.Errorf("identity tail missing pre-kill output:\n%s", tail)
 	}
 }
 
-// E4.5 — ordering/completeness: after Run returns, BOTH side-files exist and are
-// fully readable. The shim writes the snapshot (and fsyncs) before exit.json, so
-// exit.json's presence implies a complete snapshot; the mtime ordering is
-// asserted as a supporting signal (equal timestamps allowed).
+// Tail completeness and file ordering still hold without persisting a screen archive.
 func TestExit_SideFilesCompleteAndOrdered(t *testing.T) {
 	cfg := fakeAgentConfig(t, "print done\nexit 0\n")
 	if r := waitRun(t, runShimAsync(cfg), 15*time.Second); r.err != nil {
 		t.Fatalf("Run: %v", r.err)
 	}
 
-	snapPath := filepath.Join(cfg.SessionDir, SnapshotFile)
+	tailPath := filepath.Join(cfg.SessionDir, IdentityTailFile)
 	exitPath := filepath.Join(cfg.SessionDir, ExitFile)
 
-	snapInfo, err := os.Stat(snapPath)
+	tailInfo, err := os.Stat(tailPath)
 	if err != nil {
-		t.Fatalf("stat %s: %v", SnapshotFile, err)
+		t.Fatalf("stat %s: %v", IdentityTailFile, err)
 	}
 	exitInfo, err := os.Stat(exitPath)
 	if err != nil {
 		t.Fatalf("stat %s: %v", ExitFile, err)
 	}
-	// Both decode completely (content-completeness is the binding ordering proxy).
-	_ = decodeFinalSnapshot(t, cfg.SessionDir)
+	if tail := readTranscript(t, cfg.SessionDir); lastNonEmptyLine(tail) != "done" {
+		t.Fatalf("identity tail is incomplete after exit: %q", tail)
+	}
 	_ = readExitInfo(t, cfg.SessionDir)
 
-	if snapInfo.ModTime().After(exitInfo.ModTime()) {
-		t.Errorf("snapshot mtime %v is after exit.json mtime %v — snapshot must be written first",
-			snapInfo.ModTime(), exitInfo.ModTime())
+	if tailInfo.ModTime().After(exitInfo.ModTime()) {
+		t.Errorf("tail mtime %v is after exit.json mtime %v — tail must be flushed first",
+			tailInfo.ModTime(), exitInfo.ModTime())
 	}
+	assertNoArchivedCapture(t, cfg.SessionDir)
 }
 
 // lastNonEmptyLine returns the last non-blank line of s (CR/LF trimmed).

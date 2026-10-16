@@ -95,8 +95,8 @@ func TestPermissions_ShimLaunchConfig(t *testing.T) {
 
 // TestPermissions_ShimSocketAndSideFiles asserts E5.7/D-6 for the SHIM's own
 // artifacts. The shim is a separate process that inherits the daemon's umask, so
-// even under a fully permissive umask the per-session shim socket, the final-
-// snapshot side-file, and the exit side-file must all be owner-only (0600).
+// even under a fully permissive umask the per-session shim socket, identity
+// tail, and exit side-file must all be owner-only (0600).
 func TestPermissions_ShimSocketAndSideFiles(t *testing.T) {
 	old := syscall.Umask(0)
 	defer syscall.Umask(old)
@@ -109,7 +109,7 @@ func TestPermissions_ShimSocketAndSideFiles(t *testing.T) {
 	spawnRealShim(t, stateDir, sockID)
 	wantOwnerOnly(t, shimSocketPath(stateDir, sockID), 0o600)
 
-	// Side-files: a shim run to completion writes final-snapshot.bin then exit.json.
+	// Side-files: a shim run to completion flushes the identity tail then exit.json.
 	const exitID = "permexit"
 	sessionDir := filepath.Join(stateDir, exitID)
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
@@ -147,8 +147,8 @@ func TestPermissions_ShimSocketAndSideFiles(t *testing.T) {
 		t.Fatalf("bare shim did not exit within %s", pollTimeout)
 	}
 
-	// exit.json is written last (after the snapshot), so its presence implies both.
+	// exit.json is written last, after the identity tail.
 	waitFile(t, filepath.Join(sessionDir, shim.ExitFile), pollTimeout)
-	wantOwnerOnly(t, filepath.Join(sessionDir, shim.SnapshotFile), 0o600)
+	wantOwnerOnly(t, filepath.Join(sessionDir, shim.IdentityTailFile), 0o600)
 	wantOwnerOnly(t, filepath.Join(sessionDir, shim.ExitFile), 0o600)
 }

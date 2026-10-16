@@ -1,5 +1,11 @@
 # ADR-014: Paged interaction history — the transcript's past is read on demand, by item identity, with an honest floor
 
+> **Host-storage amendment 2026-10-16:** [ADR-033](ADR-033-live-only-supervisor-storage.md)
+> replaces durable generic discussion history with a bounded live RAM window and
+> truthful history floors. Small lifecycle/control state and accepted-operation,
+> replay and delivery custody remain durable. Provider-native history and existing
+> phone caches retain their ownership. The historical decisions below otherwise stand.
+
 **Status**: Accepted (Wave R6, Mirror M3.1/M3.3; bead agents-tracker-hggx.7), **amended by the
 R6 review fix-pack (A1-A5, 2026-08-19), by review round 2 (A6-A9, 2026-08-20) and by review
 round 3 (A10, 2026-08-20), and by the bounded anchorless repair amendment (A11,

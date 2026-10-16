@@ -76,7 +76,7 @@ func TestResumeRelocationNeverChains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Options["resume_relocate"] != "" || got.Cwd != source.Cwd || argvContains(got.Argv, "--cd") {
+	if got.Options["resume_relocate"] != "" || got.Cwd != source.Cwd || !argvContains(got.Argv, "--cd") || !argvContains(got.Argv, source.Cwd) || argvContains(got.Argv, "/wrong") {
 		t.Fatalf("an earlier relocation changed a later ordinary resume: %+v", got)
 	}
 }

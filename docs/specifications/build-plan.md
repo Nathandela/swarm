@@ -14,10 +14,10 @@ Epics are ordered topologically; build top to bottom. Each epic is sized for one
 |---|---|
 | G1 Wire framing | Every message on both sockets is a length-prefixed frame with a 1-byte type tag (CONTROL = JSON payload, DATA_IN/DATA_OUT/SNAPSHOT = binary). "NDJSON" applies inside CONTROL payloads only. One demux, no ambiguity. Amends ADR-002. |
 | G2 Shim wire schema | Same frame envelope; message set (`snapshot, stream, write, resize, signal, exit-report`) versioned in its own Go package, compat-tested old-shim × new-daemon (D-5 implies version skew here too). |
-| G3 Shim lifetime after agent exit | Shim writes a final grid snapshot + exit side-file into the session dir, then exits. Completed rows render the persisted snapshot read-only; no lingering processes. |
+| G3 Shim lifetime after agent exit | Amended by ADR-033: shim flushes its bounded identity tail, writes the exit side-file, then exits; no persisted final screen or lingering processes. |
 | G4 Hook callback transport | Hook/event commands invoke `swarm hook <event>` (same binary), which posts to the daemon socket; session token + socket path injected via env at spawn. |
 | G5 Callback replay | Callbacks carry token + monotonic sequence; daemon rejects non-increasing. |
-| G6 meta.json single writer | The daemon is the only writer of meta.json. Shims write only transcript, final-snapshot, and exit side-files; the daemon merges side-files on observation/reconnect. |
+| G6 meta.json single writer | The daemon is the only writer of meta.json. Shims write supervision side-files and bounded identity evidence; the daemon merges them on observation/reconnect. |
 
 ---
 
@@ -51,6 +51,11 @@ Epics are ordered topologically; build top to bottom. Each epic is sized for one
 **Depends on**: Epic 1.
 
 ## - [ ] Epic 3: Transcript capture
+
+**Amended by ADR-033 (2026-10-16):** the archive/rotation scope below is historical.
+Production retains only a fixed 64 KiB identity tail plus header; no persisted
+final screen. Live grid/attach, nonblocking draining and process-exit persistence
+remain binding. See the lightweight storage fixing plan for replacement gates.
 
 **Scope IN**: Append-only transcript writer: size cap, rotation, spinner/redraw-frame collapse before disk, 0600 perms, readable-prefix crash tolerance, disk-full degradation (drop tail, never block).
 **Scope OUT**: PTY, emulator internals (consumes the same byte stream).

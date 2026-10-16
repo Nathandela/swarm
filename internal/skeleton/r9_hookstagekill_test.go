@@ -2,8 +2,9 @@ package skeleton
 
 // R9 (bd agents-tracker-hggx.10) -- playbook 11.1 "Structured-spool daemon-kill tests at
 // every Claude hook stage": ONE table-driven matrix over EVERY hook stage the Claude
-// adapter maps x two daemon kill points, asserting exactly-once delivery per stage after
-// the daemon restarts. The R6 tests (r6_hookdrain_test.go, internal/shim/
+// adapter maps x two daemon kill points, asserting exactly-once ingress per stage after
+// the daemon restarts. Live prose is checked in its owning incarnation; durable
+// seen/fold receipts prevent replay after that prose has expired. The R6 tests (r6_hookdrain_test.go, internal/shim/
 // r6_hookspool_test.go) proved the drain machinery piecewise on single stages; this file
 // closes the release-gate gap that no test enumerated ALL stages against BOTH kill
 // points.
@@ -38,6 +39,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,6 +177,21 @@ func peekSpoolRecords(t *testing.T, hookSocketPath string, fromSeq uint64) []shi
 	return resp.Records
 }
 
+func assertHookStageSeenThrough(t *testing.T, sk *Daemon, sessionID string, through uint64) {
+	t.Helper()
+	raw, err := os.ReadFile(sk.hookSeqPath(sessionID))
+	if err != nil {
+		t.Fatalf("read durable ingress receipt: %v", err)
+	}
+	var receipt hookSeenRecord
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatalf("decode durable ingress receipt: %v", err)
+	}
+	if receipt.Floor != through || len(receipt.Above) != 0 {
+		t.Fatalf("durable ingress receipt = %+v, want exactly sequences 1 through %d", receipt, through)
+	}
+}
+
 func TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints(t *testing.T) {
 	stages := claudeHookStages(t)
 	n := len(stages)
@@ -205,6 +222,9 @@ func TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints(t *testin
 	for i, stage := range stages {
 		postStageEvent(t, h.cfg.HookSocketPath, sessionID, token, stage, "predrain:"+stage, uint64(i+1))
 	}
+	if _, err := os.Stat(sk1.hookSeqPath(sessionID)); !os.IsNotExist(err) {
+		t.Fatalf("never-drained incarnation already has an ingress receipt: %v", err)
+	}
 	if err := sk1.Close(); err != nil {
 		t.Fatalf("kill (close) the never-drained daemon incarnation: %v", err)
 	}
@@ -221,6 +241,10 @@ func TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints(t *testin
 	}
 	if applied1 != n || skipped1 != 0 {
 		t.Fatalf("killed-before-drain restart drain applied=%d skipped=%d, want applied=%d skipped=0 (one per stage)", applied1, skipped1, n)
+	}
+	assertHookStageSeenThrough(t, sk2, sessionID, uint64(n))
+	if got := readHookCursor(cursorPath); got != uint64(n) {
+		t.Fatalf("post-restart fold cursor = %d, want %d", got, n)
 	}
 	got1 := awaitJournalTexts(t, sk2, sessionID, n)
 	if len(got1) != n {
@@ -247,12 +271,17 @@ func TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints(t *testin
 	if applied2 != n || skipped2 != 0 {
 		t.Fatalf("pre-ack batch drain applied=%d skipped=%d, want applied=%d skipped=0", applied2, skipped2, n)
 	}
-	// Wait for the append floor to durably journal both batches BEFORE the kill, so
+	// Wait for the append floor to publish both live batches BEFORE the kill, so
 	// the kill point is genuinely "after drain, before ack".
-	awaitJournalTexts(t, sk2, sessionID, 2*n)
+	gotAll := awaitJournalTexts(t, sk2, sessionID, 2*n)
+	assertHookStageSeenThrough(t, sk2, sessionID, uint64(2*n))
+	if got := readHookCursor(cursorPath); got != uint64(2*n) {
+		t.Fatalf("pre-ack fold cursor = %d, want %d", got, 2*n)
+	}
 	// Prove the "before ack" premise: the drained batch is still re-offerable from
 	// the shim's spool (this drain's FoldSeq folded only the PRIOR batch).
-	if held := peekSpoolRecords(t, h.cfg.HookSocketPath, uint64(n)); len(held) != n {
+	held := peekSpoolRecords(t, h.cfg.HookSocketPath, uint64(n))
+	if len(held) != n {
 		t.Fatalf("shim spool re-offers %d record(s) past seq %d, want %d -- the pre-ack kill point needs the drained records still unfolded", len(held), n, n)
 	}
 	if err := sk2.Close(); err != nil {
@@ -267,6 +296,20 @@ func TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints(t *testin
 	t.Cleanup(func() { _ = sk3.Close() })
 	registerTestSession(sk3, sessionID, token)
 	echoCapture(sk3)
+	assertHookStageSeenThrough(t, sk3, sessionID, uint64(2*n))
+	if got := awaitJournalTexts(t, sk3, sessionID, 0); len(got) != 0 {
+		t.Fatalf("reopened live journal restored old prose: %v", got)
+	}
+	// Exercise the durable seen guard itself, independently of the fold cursor:
+	// every still-held body is rejected by the newly created daemon's cold ingress.
+	for i, rec := range held {
+		if rec.Seq != uint64(n+i+1) {
+			t.Fatalf("held stage %s has spool seq %d, want %d", stages[i], rec.Seq, n+i+1)
+		}
+		if err := sk3.ingestHookBytes(rec.Body); err == nil || !strings.Contains(err.Error(), "already ingested") {
+			t.Fatalf("replayed stage %s was not rejected by its durable ingress receipt: %v", stages[i], err)
+		}
+	}
 	hd3 := NewHookDrainer(sk3, sessionID, h.cfg.HookSocketPath, cursorPath)
 	applied3, skipped3, err := hd3.DrainOnce()
 	if err != nil {
@@ -276,9 +319,28 @@ func TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints(t *testin
 		t.Fatalf("post-kill drain applied=%d skipped=%d, want 0/0 -- the persisted fold cursor must already cover the drained-but-unacked batch", applied3, skipped3)
 	}
 
-	gotAll := awaitJournalTexts(t, sk3, sessionID, 2*n)
+	// New sequence identities still work after restart. Waiting for their exact
+	// live labels also catches any delayed duplicate publication from the replays.
+	for i, stage := range stages {
+		postStageEvent(t, h.cfg.HookSocketPath, sessionID, token, stage, "postrestart:"+stage, uint64(2*n+i+1))
+	}
+	applied4, skipped4, err := hd3.DrainOnce()
+	if err != nil || applied4 != n || skipped4 != 0 {
+		t.Fatalf("new-stage drain = applied %d, skipped %d, err %v; want %d/0/nil", applied4, skipped4, err, n)
+	}
+	gotLive := awaitJournalTexts(t, sk3, sessionID, n)
+	if len(gotLive) != n {
+		t.Fatalf("new incarnation holds %d live items, want %d fresh stages only", len(gotLive), n)
+	}
+	for i, stage := range stages {
+		if want := "postrestart:" + stage; gotLive[i] != want {
+			t.Errorf("new incarnation item %d = %q, want %q; an old stage replayed or a new stage was lost", i, gotLive[i], want)
+		}
+	}
+	assertHookStageSeenThrough(t, sk3, sessionID, uint64(3*n))
+
 	if len(gotAll) != 2*n {
-		t.Fatalf("journal holds %d item(s) across the whole matrix, want exactly %d (each stage once per kill point)", len(gotAll), 2*n)
+		t.Fatalf("prior incarnation held %d live item(s), want exactly %d (each stage once per kill point)", len(gotAll), 2*n)
 	}
 	counts := make(map[string]int, 2*n)
 	for _, text := range gotAll {
