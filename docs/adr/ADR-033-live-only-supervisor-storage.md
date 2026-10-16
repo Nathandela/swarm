@@ -42,6 +42,11 @@ durable. Historical display records never establish current approval authority.
 Current pending approvals must survive ordinary in-process history eviction;
 after supervisor restart fresh provider evidence is required.
 
+Operation-count pressure refuses new acceptance before effects occur; it never
+evicts unexpired guards or their exact outcomes. Existing retries keep their
+reserved slots. TTL expiry remains longer than the signed-command validity
+horizon, and repeated transitions compact the existing log.
+
 This supersedes the full raw-transcript/final-screen persistence requirements in
 ADR-003 and Epic 3, and the durable generic interaction-history retention/read
 assumptions in ADR-007 remote access, ADR-009 structured chat, ADR-013 and ADR-014,

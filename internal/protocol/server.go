@@ -2345,7 +2345,11 @@ func (cc *clientConn) handleTakeControl(c Control) {
 	// launch, take_control is never redriven; a consumed operation_id stays consumed.
 	if gated {
 		existed, err := claimer.ClaimOperation(c.OperationID, ActionTakeControl, local)
-		if err != nil || existed {
+		if err != nil {
+			cc.replyError("take_control: claim operation: " + err.Error())
+			return
+		}
+		if existed {
 			cc.replyErrorCode("take_control operation_id already used", CodeStaleApproval)
 			return
 		}

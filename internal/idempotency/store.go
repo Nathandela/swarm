@@ -8,7 +8,7 @@
 //
 // Durability is a fsync'd append-only log replayed on Open (last-write-wins per
 // operation_id); Compact rewrites it atomically (tmp+fsync+rename+dirsync)
-// dropping expired / over-cap records, degrading to "not compacted this cycle"
+// dropping expired records, degrading to "not compacted this cycle"
 // rather than losing the store if any step fails.
 package idempotency
 
@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 )
@@ -40,6 +39,9 @@ const MaxOperationIDLen = 128
 
 // logFile is the append-only durable log within the store dir.
 const logFile = "idempotency.log"
+
+// ErrCapacity refuses new effects without evicting an existing replay guard.
+var ErrCapacity = errors.New("idempotency: capacity reached; retry after protected operations expire")
 
 // Record is one operation's durable idempotency state.
 type Record struct {
@@ -62,7 +64,7 @@ type Record struct {
 // Options tune retention (TTL / cap) and the injected clock.
 type Options struct {
 	TTL        time.Duration    // drop records older than this on Compact (0 = no TTL)
-	MaxEntries int              // keep at most this many records on Compact (0 = no cap)
+	MaxEntries int              // new-operation admission limit; unexpired guards are never evicted (0 = no cap)
 	Clock      func() time.Time // record timestamp source (defaults to time.Now)
 }
 
@@ -72,9 +74,11 @@ type Store struct {
 	opts  Options
 	clock func() time.Time
 
-	mu      sync.Mutex
-	records map[string]Record
-	f       *os.File // append-only log handle
+	mu             sync.Mutex
+	records        map[string]Record
+	f              *os.File // append-only log handle
+	logRecords     int
+	pendingDirSync bool
 }
 
 // Open opens (or creates) the store at dir with default (no-TTL) retention.
@@ -97,6 +101,13 @@ func OpenWithOptions(dir string, opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The supplied parent is established state; persist this directory and log name.
+	for _, namespace := range []string{dir, filepath.Dir(filepath.Clean(dir))} {
+		if err := syncDir(namespace); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+	}
 	s.f = f
 	return s, nil
 }
@@ -118,6 +129,7 @@ func (s *Store) replay() error {
 		if len(line) == 0 {
 			continue
 		}
+		s.logRecords++
 		var rec Record
 		if json.Unmarshal(line, &rec) != nil {
 			continue // torn/corrupt line: tolerate
@@ -148,8 +160,14 @@ func (s *Store) PrepareBound(operationID, action, sessionID, sessionInstance, re
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.syncPendingDirectoryLocked(); err != nil {
+		return Record{}, false, err
+	}
 	if rec, ok := s.records[operationID]; ok {
 		return rec, true, nil
+	}
+	if err := s.admitLocked(); err != nil {
+		return Record{}, false, err
 	}
 	now := s.clock()
 	rec := Record{
@@ -264,6 +282,8 @@ func (s *Store) Redrive(operationID, action, newSessionID string) (Record, error
 	created := now
 	if old, ok := s.records[operationID]; ok {
 		created = old.CreatedAt
+	} else if err := s.admitLocked(); err != nil {
+		return Record{}, err
 	}
 	rec := Record{
 		OperationID: operationID,
@@ -280,13 +300,36 @@ func (s *Store) Redrive(operationID, action, newSessionID string) (Record, error
 	return rec, nil
 }
 
-// Compact drops TTL-expired and over-cap records (R-IDP.4), rewriting the log
+// Compact drops only TTL-expired records (R-IDP.4), rewriting the log
 // atomically (tmp+rename).
 func (s *Store) Compact() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.compactLocked(s.clock())
+}
 
+// Capacity refuses new effects; an exact retry keeps its existing guard and outcome.
+func (s *Store) admitLocked() error {
+	if s.opts.MaxEntries <= 0 || len(s.records) < s.opts.MaxEntries {
+		return nil
+	}
+	if s.opts.TTL <= 0 {
+		return ErrCapacity
+	}
 	now := s.clock()
+	protected := 0
+	for _, rec := range s.records {
+		if now.Sub(rec.UpdatedAt) <= s.opts.TTL {
+			protected++
+			if protected >= s.opts.MaxEntries {
+				return ErrCapacity
+			}
+		}
+	}
+	return s.compactLocked(now)
+}
+
+func (s *Store) compactLocked(now time.Time) error {
 	kept := make([]Record, 0, len(s.records))
 	for _, rec := range s.records {
 		if s.opts.TTL > 0 && now.Sub(rec.UpdatedAt) > s.opts.TTL {
@@ -294,12 +337,6 @@ func (s *Store) Compact() error {
 		}
 		kept = append(kept, rec)
 	}
-	// Newest first so an over-cap trim drops the oldest.
-	sort.Slice(kept, func(a, b int) bool { return kept[a].UpdatedAt.After(kept[b].UpdatedAt) })
-	if s.opts.MaxEntries > 0 && len(kept) > s.opts.MaxEntries {
-		kept = kept[:s.opts.MaxEntries]
-	}
-
 	if err := s.rewriteLocked(kept); err != nil {
 		return err
 	}
@@ -313,11 +350,33 @@ func (s *Store) Compact() error {
 // appendLocked writes one record as a JSON line and fsyncs BEFORE returning, so the
 // durable record precedes any side effect the caller performs next.
 func (s *Store) appendLocked(rec Record) error {
+	if err := s.syncPendingDirectoryLocked(); err != nil {
+		return err
+	}
+	if s.opts.MaxEntries > 0 && s.logRecords >= 2*s.opts.MaxEntries {
+		if err := s.compactLocked(s.clock()); err != nil {
+			return err
+		}
+	}
 	line := append(mustMarshal(rec), '\n')
 	if _, err := s.f.Write(line); err != nil {
 		return err
 	}
-	return s.f.Sync()
+	if err := s.f.Sync(); err != nil {
+		return err
+	}
+	s.logRecords++
+	return nil
+}
+
+func (s *Store) syncPendingDirectoryLocked() error {
+	if s.pendingDirSync {
+		if err := syncDir(s.dir); err != nil {
+			return err
+		}
+		s.pendingDirSync = false
+	}
+	return nil
 }
 
 // renameLog is os.Rename, a test seam so a Compact failure at the rename step can
@@ -348,8 +407,8 @@ var syncDir = func(dir string) error {
 // a successful rename unlinks the old inode, so continuing to write to the old handle
 // would fsync into a ghost that is gone on restart -- silently dropping records and
 // letting a still-valid replay execute twice ("usable" is not "durable"). A dir-sync
-// failure after the swap is surfaced, but the store is already on the durable
-// at-logPath inode.
+// failure after the swap leaves the new handle installed, but further writes and
+// acknowledgements wait for the pending directory durability barrier.
 func (s *Store) rewriteLocked(kept []Record) error {
 	tmp, err := os.CreateTemp(s.dir, logFile+".tmp*")
 	if err != nil {
@@ -372,6 +431,7 @@ func (s *Store) rewriteLocked(kept []Record) error {
 		_ = tmp.Close()
 		return err // rename never landed: s.f is still the valid pre-compaction handle
 	}
+	s.pendingDirSync = true
 	// Rename landed: logPath now names tmp's inode, and the OLD s.f names the unlinked
 	// (renamed-over) inode. tmp already names logPath, so swap onto it NOW -- before
 	// the dir sync -- so even a syncDir failure leaves the store writing to the live
@@ -382,9 +442,9 @@ func (s *Store) rewriteLocked(kept []Record) error {
 		_ = s.f.Close()
 	}
 	s.f = tmp
+	s.logRecords = len(kept)
 	// tmp's data is already fsync'd; syncDir makes the rename (the dir entry) durable.
-	// A failure here is surfaced but the store already writes to the durable inode.
-	return syncDir(s.dir)
+	return s.syncPendingDirectoryLocked()
 }
 
 func mustMarshal(rec Record) []byte {

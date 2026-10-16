@@ -54,8 +54,8 @@ var deleteWait = 10 * time.Second
 // valid past ~1h. The store GCs on UpdatedAt (not ExpiresAt), so a 24h TTL — far
 // larger than the 1h validity cap — can NEVER drop a record whose command is still
 // replayable: by the time a record ages out, any command it guards is long expired,
-// closing the R6 hole by construction. MaxEntries is a backstop against pathological
-// growth (the newest are kept); the interval bounds steady-state disk use.
+// closing the R6 hole by construction. MaxEntries refuses new operations at capacity;
+// compaction never removes unexpired guards to make room for unrelated commands.
 const (
 	idempotencyTTL             = 24 * time.Hour
 	idempotencyMaxEntries      = 100_000
@@ -380,7 +380,7 @@ func Open(cfg Config) (*Daemon, error) {
 	// Bound the idempotency log (C4): compact once at startup — AFTER
 	// resolveStaleLaunches has seen the full replayed set — so the NEXT restart's
 	// replay is bounded, then keep it bounded with a lifecycle-tied ticker. Both drop
-	// only TTL-expired / over-cap records; a within-validity command's replay guard is
+	// only TTL-expired records; a within-validity command's replay guard is
 	// never GC'd (R6, see idempotencyTTL). The initial Compact is best-effort: a
 	// failure must not block serving, so it is logged, not fatal.
 	if err := d.idem.Compact(); err != nil {

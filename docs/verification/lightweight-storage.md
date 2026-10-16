@@ -1,6 +1,6 @@
 # Lightweight supervisor storage verification
 
-2026-10-17 · `agents-tracker-bdp7`, `agents-tracker-sb4m`, `agents-tracker-cyhm`
+2026-10-17 · `agents-tracker-bdp7`, `agents-tracker-sb4m`, `agents-tracker-cyhm`, `agents-tracker-aivi`
 
 The owner-selected [fixing plan](../specifications/lightweight-storage-plan.md)
 and [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md) replace duplicate
@@ -20,6 +20,13 @@ checkpoint, not evidence of deployment or production space reclaimed.
 | Agent workspaces | Refuse requested and hook/finalizer-resolved cwd paths inside supervisor state, including aliases. Codex resume explicitly uses the saved/resolved project; legacy backend configs without a separate cwd also default to the agent project. |
 | Explicit deletion | Existing complete-family removal remains; deletion also erases that session's cached RAM discussion. Independent launches, handoffs and external projects retain their ownership. |
 | Test waste | Shared per-run binary cleanup now matches kernel executable paths on macOS/Linux, preserves unrelated same-name/argv processes, and removes TUI/skeleton helper binaries. |
+| Operation guards | The existing 100,000-entry cap refuses new operation IDs before effects, while duplicates retain exact outcomes. Compaction expires only TTL-old guards, preserves legacy over-cap records and also bounds repeated-transition rows. |
+
+The guard store seals its log directory and its entry under the supplied state
+root when opening. A landed replacement with a failed directory sync keeps the
+new file handle, but acknowledgements wait for that durability barrier to recover.
+This assumes an established durable state root; it does not recursively provision
+or guarantee arbitrary filesystem ancestors.
 
 The RAM event bound is not an RSS cap: structs, current approval pins, live VT
 screens and other existing bounded caches have additional memory overhead.
@@ -45,6 +52,7 @@ CPUs. No provider inference or existing-session deletion was used.
 | Real CLI/role `-race`: pilot workers and shim launch/re-exec | Pass |
 | Final skeleton integration `-race`: installed CLI refresh, real backend topology, all-stage hook kill matrix, tap latency | Pass; measured tap latency 335.5 ms against 1 s |
 | Real shim legacy backend cwd fallback/override and large no-consumer output `-race` | Pass; exact tail file bound 65,568 bytes |
+| Guard-pressure `-race`: all protected phases, legacy over-cap restart, exact outcomes, expiry, compaction failure, daemon admission, take-control refusal, sealed outbox replay | Pass; original count-pressure failures reproduced before the fix. Final full idempotency/protocol/gateway race suites also pass. |
 | macOS test-binary sweep, same-name non-target survival, TUI 50-session gate; Linux compile-only checks | Pass |
 | `golangci-lint run --new-from-rev=f87bf66b` | Pass, zero new issues |
 | Full lint | Existing 11 unused account-native declarations on macOS; tracked in `agents-tracker-nsxw` |
@@ -65,6 +73,29 @@ session-end ordering, fixed-tail failure handling and native cwd behavior.
 Reported blockers were corrected with direct regressions. The final source
 review found no remaining material issue within the chosen host live-only cut.
 
+## Native diagnostic transport characterization
+
+An isolated Claude 2.1.296 `auth status` probe, with an empty home/profile and no
+model call, emitted 14 complete records (1,598 bytes) through a named FIFO. The
+same command with an inherited pipe exposed through `/dev/fd` emitted none.
+This proves FIFO routing for that command, not a safe replacement proof channel.
+
+The native asynchronous append queue is per process; synchronous writes bypass
+it, additional writers can inherit the path, and the supported native-version
+range is broader than the tested binary. Writes larger than `PIPE_BUF` can
+interleave. Validating the resulting JSON lines cannot establish their original
+append boundaries. Independent review therefore rejected using uncharacterized
+FIFO bytes as exact model/request authority. Managed native containment also
+needs Linux runtime verification, unavailable while the VM is unreachable.
+
+After establishing writer/framing custody, the narrow candidate is a 256 KiB
+non-evicting cache of normalized main-request failure evidence, bounded draining,
+fail-closed saturation/loss, and a durable clean seal only after all native writers
+stop and pending evidence commits. It is not implemented. Stopped-session recovery
+still needs the sealed evidence, so ordinary session-end cleanup is too early.
+Alternatively, stopping this capture must hold automatic recovery whenever exact
+model proof is unavailable. That feature/storage tradeoff is pending owner choice.
+
 ## Remaining full-plan work
 
 - Source fixes have not been deployed, and old live shims still use their old
@@ -82,8 +113,8 @@ review found no remaining material issue within the chosen host live-only cut.
 - Managed Claude diagnostics remain an uncapped native writer. Its 16 MiB reader
   limit is not a disk bound. `agents-tracker-f9vv` records the required bounded
   ingestion characterization without discarding exact model-recovery proof.
-- Rate/count-pressure proof for still-valid operation guards remains the separate
-  `agents-tracker-aivi` investigation. Existing sealed outbound envelopes and
+- At operation capacity, new mutating requests wait for legitimate expiry instead
+  of displacing existing guards. Existing sealed outbound envelopes and
   ingress/control receipts were preserved; paired delivery still performs writes.
 
 No global quota manager, background janitor or native-history backfill service was

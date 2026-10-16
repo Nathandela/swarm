@@ -479,9 +479,13 @@ func TestIdempotency_CompactDirSyncFailureAfterRenameKeepsRecordsDurable(t *test
 		t.Fatalf("Compact with an injected post-rename dir-sync failure returned nil; want the failure surfaced")
 	}
 
-	// Write NEW records AFTER the failed compaction. These must land on the live
-	// at-logPath inode, not the unlinked ghost the old handle would name.
+	// No acknowledgement may bypass the failed directory barrier, even on the new fd.
 	const op = "devA:01JPOSTCOMPACT"
+	if _, _, err := s.Prepare(op, "kill", "sess2"); err == nil {
+		t.Fatal("Prepare acknowledged a new guard while the replacement namespace was not durable")
+	}
+	syncDir = orig
+	// After storage recovers, new records must land on the live at-logPath inode.
 	if _, _, err := s.Prepare(op, "kill", "sess2"); err != nil {
 		t.Fatalf("Prepare after failed Compact: %v", err)
 	}

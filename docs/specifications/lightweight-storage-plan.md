@@ -10,8 +10,9 @@ governed by [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md).
 
 The [2026-10-17 source checkpoint](../verification/lightweight-storage.md) records
 implemented prevention and deletion behavior. Deployment, verified per-host
-legacy cleanup, native diagnostic bounding and the remaining pressure proof are
-still open; the whole program is not complete.
+legacy cleanup and native diagnostic bounding are still open; the whole program
+is not complete. The operation-guard pressure flaw is also corrected in source
+and covered by pressure/restart regressions.
 
 ## Stop new accumulation
 
@@ -21,7 +22,7 @@ still open; the whole program is not complete.
 | Reduce raw terminal persistence | Keep only a small fixed-size identity-discovery tail for adapters that need it, with explicit generation tracking; remove historical rotations and final-screen persistence from new shims. Live attach continues using the shim's in-memory VT screen. | `agents-tracker-bdp7` |
 | Enforce the workspace boundary | Refuse agent working directories under supervisor state, including aliases and hook-resolved paths. Explicitly align Codex resume to the saved/resolved project so a legacy native cwd cannot silently re-enter state. Worktree creation remains opt-in. | `agents-tracker-sb4m` |
 | Stop test-generated waste | Remove run-owned temporary binaries and reap only processes using those unique executables on macOS and Linux. Preserve unrelated processes and shared compiler caches. | `agents-tracker-uh9e` |
-| Bound native Claude diagnostics | Still open: the native diagnostic writer is uncapped, while the reader stops at 16 MiB. Preserve exact current prompt/request/model proof; characterize bounded shim-owned ingestion rather than silently dropping evidence or guessing a model. | `agents-tracker-f9vv` |
+| Bound native Claude diagnostics | Still open: the native diagnostic writer is uncapped, while the reader stops at 16 MiB. FIFO routing was characterized, but serialized/framed writer custody is not established. Preserve exact current prompt/request/model proof; stopping capture instead requires holding affected automatic recovery. This feature/storage tradeoff is pending owner choice. | `agents-tracker-f9vv` |
 
 The implementation uses small bounds inside existing stores. It does not add a
 global quota manager, a background janitor, a new archive service, or native
@@ -69,8 +70,12 @@ Live approval authority remains tied to current CLI evidence. The current
 implementation does not reconstruct provider approval RPC authority from saved
 chat records after a supervisor restart. The lightweight change must never turn
 an old card or old connection's request ID into new authority. Protect current
-pending requests across ordinary RAM-history eviction; verify command guards and
-delivery custody under pressure (`agents-tracker-aivi`).
+pending requests across ordinary RAM-history eviction. The pressure fix refuses
+new operation IDs at the 100,000-entry admission ceiling while preserving exact
+retries, all still-valid guards and legacy over-cap records. Only the existing
+24-hour expiry releases their slots; signed commands expire within one hour.
+Repeated transitions compact the log. Pending approvals and exact sealed outbound
+custody have pressure/restart regressions (`agents-tracker-aivi`).
 
 ## Finish on both machines
 
