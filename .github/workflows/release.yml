@@ -34,8 +34,8 @@ jobs:
     name: container (pushgw-container.yml, reused)
     uses: ./.github/workflows/pushgw-container.yml
 
-  # This is the ONLY job in the repository allowed to write packages. The PR/branch
-  # container workflows above build and scan with contents:read only. Publication is
+  # This is the ONLY job in the repository allowed to write packages. The reusable
+  # container gate above builds and scans with contents:read only. Publication is
   # reachable solely from release.yml's tag trigger, after the exact Dockerfile passes
   # their vulnerability and hardening gates.
   publish_containers:

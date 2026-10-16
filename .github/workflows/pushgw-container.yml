@@ -1,12 +1,6 @@
 name: pushgw-container
 
 on:
-  push:
-    branches: ['**']
-  pull_request:
-  schedule:
-    - cron: '41 4 * * 1'
-  workflow_dispatch:
   workflow_call:
 
 permissions:
