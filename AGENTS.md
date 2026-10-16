@@ -28,6 +28,12 @@ go test ./...
 golangci-lint run
 ```
 
+## CI policy
+
+GitHub Actions runs only for release tags (`v*`), at the owner's request to limit Actions usage.
+`release.yml` calls the reusable CI and container gates before publishing. Do not add branch,
+pull-request, scheduled, or manual triggers. The former nightly stress workflow is removed.
+
 ## Beads workflow
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->

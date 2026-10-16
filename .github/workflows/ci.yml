@@ -1,13 +1,7 @@
 name: CI
 
 on:
-  # No `tags:` filter: release.yml's own `push: tags: [v*]` trigger calls this workflow via
-  # workflow_call, so a bare push trigger here would run the whole matrix a second time,
-  # redundantly, for every tag push. `branches: ['**']` keeps every branch push triggering
-  # (unchanged behavior) while a tag-only push no longer double-fires this workflow.
-  push:
-    branches: ['**']
-  pull_request:
+  # release.yml calls these gates once per release tag.
   workflow_call:
 
 # ADR-008. GOTOOLCHAIN defaults to `auto`, which is why the previous `go-version: '1.24'`
