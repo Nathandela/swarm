@@ -332,6 +332,22 @@ func (s *Store) Delete(id string) error {
 	if err != nil {
 		return err
 	}
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// Keep recovery/ownership metadata until all payloads have been removed.
+	for _, entry := range entries {
+		if entry.Name() == "meta.json" {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+			return err
+		}
+	}
 	return os.RemoveAll(dir)
 }
 

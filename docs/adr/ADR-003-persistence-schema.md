@@ -13,7 +13,7 @@ Draft 1 made a single `roster.json` the registry. A crash mid-write corrupts sta
 - Resume performs no implicit fresh launch. For an ended/lost Codex or Claude row created before durable identity capture, an explicit resume may lazily recover one unique native id from the daemon user's provider history and persist it before argv composition. Recovery is rooted at the trusted user home, bounded by entries/files/record bytes/total bytes, validates canonical UUID + cwd + launch-time evidence, and fails closed on ambiguity or malformed history. Symlinks are rejected except for the stable first provider component (`~/.codex` or `~/.claude`) when it is an absolute alias to a clean strict descendant of that same trusted home; the target component depth is capped, traversal stays within the anchored root, the alias is revalidated, and every link below it remains forbidden. OpenCode and AGY have no speculative history scanners.
 - `roster.json` is a rebuildable index; if missing or corrupt, the daemon reconstructs it by scanning session dirs.
 - Transcripts: 0600, size-capped, rotated; spinner redraw frames collapsed before disk.
-- State dir 0700. Retention: completed sessions persist until user deletion.
+- State dir 0700. Retention: completed discussions persist until user deletion. Explicit deletion removes every attempt in the validated resume family, including hidden predecessors, rather than archiving its files (ADR-024 amendment 2026-10-16). Failed cleanup retains compact ownership metadata for retry.
 
 ## Consequences
 

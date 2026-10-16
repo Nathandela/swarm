@@ -6,18 +6,7 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-// ProjectDiscussions returns visible resume attempts and the local IDs each
-// supersedes. It never deletes history. Only explicit resume lineage is grouped;
-// handoffs and independent launches remain separate. Conflicting live attempts
-// stay visible so an extra actor is never concealed.
-func ProjectDiscussions(metas []Meta) ([]Meta, map[string][]string) {
-	linked := false
-	for _, m := range metas {
-		linked = linked || m.ResumedFrom != "" || m.RosterHidden
-	}
-	if !linked {
-		return metas, nil
-	}
+func discussionGroups(metas []Meta) (map[string][]Meta, map[string][]string) {
 	agents := make(map[string]string, len(metas))
 	for _, m := range metas {
 		agents[m.ID] = m.AgentType
@@ -66,6 +55,35 @@ func ProjectDiscussions(metas []Meta) ([]Meta, map[string][]string) {
 		r := root(node)
 		nodes[r] = append(nodes[r], node)
 	}
+	return members, nodes
+}
+
+// DiscussionAttempts returns the explicit resume family, including hidden and
+// concurrently running attempts; native identity alone never merges discussions.
+func DiscussionAttempts(metas []Meta, id string) []Meta {
+	groups, _ := discussionGroups(metas)
+	for _, group := range groups {
+		for _, m := range group {
+			if m.ID == id {
+				return group
+			}
+		}
+	}
+	return nil
+}
+
+// ProjectDiscussions returns visible resume attempts and the local IDs each
+// supersedes. Only explicit resume lineage is grouped; handoffs and independent
+// launches remain separate. Conflicting live attempts stay visible.
+func ProjectDiscussions(metas []Meta) ([]Meta, map[string][]string) {
+	linked := false
+	for _, m := range metas {
+		linked = linked || m.ResumedFrom != "" || m.RosterHidden
+	}
+	if !linked {
+		return metas, nil
+	}
+	members, nodes := discussionGroups(metas)
 	visible := make(map[string]bool)
 	supersedes := make(map[string][]string)
 	for r, group := range members {

@@ -1368,7 +1368,13 @@ func preDeleteWorktree(m persist.Meta) error {
 		return nil
 	}
 	if m.AgentCwd != "" {
+		if _, err := os.Lstat(m.AgentCwd); os.IsNotExist(err) {
+			return nil
+		}
 		return worktree.RemoveAt(m.Cwd, m.AgentCwd)
+	}
+	if _, err := os.Lstat(filepath.Join(m.Cwd, ".swarm", "worktrees", m.ID)); os.IsNotExist(err) {
+		return nil
 	}
 	return worktree.Remove(m.Cwd, m.ID)
 }

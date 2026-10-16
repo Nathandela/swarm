@@ -187,11 +187,18 @@ as `swarm watch` and handoff lookup continue to address the requested attempt.
 source/replacement event reordering. Historical IDs remain usable for diagnostics;
 they are not aliases that redirect every operation to the newest process.
 
-Deleting the displayed attempt first archives its ended predecessors using durable
-`RosterHidden` metadata, then performs the requested deletion. It does not delete
-those predecessors' files or checkouts. The projection cannot conceal a running
-actor. Deletion that would remove a checkout still used by retained sessions is
-refused. An explicit resume from retained history can create a new visible attempt.
+**Amended 2026-10-16 by owner instruction:** explicit discussion deletion removes
+every retained attempt in that validated resume family, including hidden predecessors,
+and tears down its owned worktrees. It no longer archives predecessors. Independent
+launches and handoffs remain separate, even when native conversation IDs match.
+A multi-attempt discussion must be stopped first. Workspace sharing with an outside
+session (including nested directories and aliases) refuses deletion before any removal.
+The selected attempt is removed last, in an order that keeps remaining lineage reachable
+for retry; a cleanup failure retains ownership metadata and returns an error. Ordinary
+launch registration is fenced against workspace cleanup. Provider-native history and
+external project directories are outside this deletion. Daemon-wide journal/control stores
+keep their existing safety/retention semantics; this change is not a secure erase of
+provider history or previously delivered phone/relay copies.
 
 **Resume preserves the execution context.** The source's saved environment chooses
 the executable and credential store; its effective checkout, name, tag, launch

@@ -58,6 +58,8 @@ type coreAPI struct {
 	// externalResumeMu makes provider-native adoption idempotent across concurrent
 	// owner-tier requests: lookup and launch are one critical section.
 	externalResumeMu sync.Mutex
+	// Launches register their working directories before cleanup can inspect them.
+	workspaceMu sync.RWMutex
 
 	// historyResolver performs the lazy, read-only migration for an ended/lost
 	// source whose native id predates durable capture. recoveryMu protects only
@@ -663,37 +665,6 @@ func (a *coreAPI) Delete(id string) error {
 	return a.deleteDiscussion(id)
 }
 
-// The owner lifecycle fence must be acquired before the resume mutex, matching
-// withAuthResumeFence -> Launch. Reversing those locks deadlocks a racing delete.
-func (a *coreAPI) deleteDiscussion(id string) error {
-	a.externalResumeMu.Lock()
-	defer a.externalResumeMu.Unlock()
-	roster := a.core.List()
-	for _, child := range roster {
-		if child.ResumedFrom == id {
-			return fmt.Errorf("delete: session %q is retained history for %q; delete the current discussion instead", id, child.ID)
-		}
-	}
-	if source, ok := a.core.Get(id); ok && source.LaunchOptions[protocol.OptionWorktree] == "true" && source.AgentCwd != "" {
-		for _, other := range roster {
-			if other.ID != id && other.ProviderCwd() == source.AgentCwd {
-				return fmt.Errorf("delete: checkout is still used by retained session %q; delete would remove its work", other.ID)
-			}
-		}
-	}
-	// Deleting the visible attempt archives its older attempts; it must not make
-	// an old row reappear or destroy historical transcripts and checkout ownership.
-	_, supersedes := persist.ProjectDiscussions(roster)
-	for _, previous := range supersedes[id] {
-		if _, exists := a.core.Get(previous); exists {
-			if err := a.core.SetRosterHidden(previous, true); err != nil {
-				return err
-			}
-		}
-	}
-	a.pokeWatch()
-	return a.core.Delete(id)
-}
 func (a *coreAPI) Rename(id, name string) error {
 	err := a.core.Rename(id, name)
 	if err == nil {
@@ -1194,6 +1165,8 @@ var errCLIOlderThanSource = errors.New("launch: cli-older-than-source: the insta
 
 // launchResolved resolves the managed CLI identity and launches one bound attempt.
 func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, error) {
+	a.workspaceMu.RLock()
+	defer a.workspaceMu.RUnlock()
 	var err error
 	var managedIdentity *persist.CLIIdentity
 	if resolved.AccountBinding != nil && (resolved.AgentType == accounts.ProviderClaude || resolved.AgentType == accounts.ProviderCodex) {

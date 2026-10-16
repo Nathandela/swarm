@@ -110,8 +110,8 @@ type Config struct {
 	// It runs before any durable reservation or process spawn.
 	FinalizeLaunch func(id string, spec LaunchSpec) (LaunchSpec, error)
 
-	// PreDelete runs in Delete, before the session's directory is torn down. Its
-	// error is logged and returned, but never blocks the mandatory teardown.
+	// PreDelete runs in Delete, before the session's directory is torn down. An
+	// error preserves the session metadata so cleanup can be retried.
 	PreDelete func(m persist.Meta) error
 
 	// OnSessionStart and OnSessionEnd are optional status-engine wiring hooks (Epic
@@ -258,9 +258,10 @@ type Daemon struct {
 	// here. nil (a failed read) falls back to the live environ via PolicyEnv.
 	savedEnv []string
 
-	writeMu sync.Mutex     // serializes meta writes (single-writer, G6)
-	stopCh  chan struct{}  // closed by Close/abandon: stop monitors + accept loop
-	wg      sync.WaitGroup // accept loop + poll/launched supervisors (not the reapers)
+	writeMu  sync.Mutex     // serializes meta writes (single-writer, G6)
+	deleteMu sync.Mutex     // serializes cleanup after termination, preserving retryable rows
+	stopCh   chan struct{}  // closed by Close/abandon: stop monitors + accept loop
+	wg       sync.WaitGroup // accept loop + poll/launched supervisors (not the reapers)
 
 	// tombMu guards deleted, a set of ids removed by Delete. A concurrent exit-merge
 	// must not recreate a session's dir or registry entry after Delete removed it

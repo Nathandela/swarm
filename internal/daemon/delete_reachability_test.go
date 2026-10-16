@@ -234,10 +234,8 @@ func TestDelete_IdentityMismatch_NoSignal(t *testing.T) {
 // reconcile.go handleShimExit, firing concurrently with Delete) must not panic,
 // must leave the session cleanly gone, and must not resurrect the meta: once
 // Delete's tombstone lands, a racing finalize is a no-op rather than a second
-// write. d.writeMu is used directly (test is in-package) to force handleShimExit
-// to attempt its write only after Delete's registry removal + tombstone have
-// already landed (both happen before Delete's own writeMu-guarded store.Delete),
-// which is the interleaving where a resurrection bug would show up.
+// write. The directory-removal seam holds the writer fence while a natural
+// finalizer starts, so it cannot commit until deletion has tombstoned the row.
 func TestDelete_RacesNaturalShimExit(t *testing.T) {
 	cfg := daemonConfig(t)
 	d := openDaemon(t, cfg)
@@ -261,7 +259,14 @@ func TestDelete_RacesNaturalShimExit(t *testing.T) {
 	terminateForDeleteFn = func(*Daemon, string, persist.Meta) bool { return true }
 	t.Cleanup(func() { terminateForDeleteFn = orig })
 
-	d.writeMu.Lock() // hold the write choke point so Delete blocks AFTER Phase 2
+	removing, release := make(chan struct{}), make(chan struct{})
+	originalRemove := deleteSessionDirFn
+	deleteSessionDirFn = func(d *Daemon, id string) error {
+		close(removing)
+		<-release
+		return d.store.Delete(id)
+	}
+	t.Cleanup(func() { deleteSessionDirFn = originalRemove })
 
 	deleteDone := make(chan struct{})
 	go func() {
@@ -274,15 +279,11 @@ func TestDelete_RacesNaturalShimExit(t *testing.T) {
 		_ = d.Delete(id)
 	}()
 
-	// Wait for Delete's Phase 2 (tombstone) to land — it happens before Delete's
-	// writeMu.Lock() attempt, which is currently blocked by the lock held above.
-	deadline := time.Now().Add(3 * time.Second)
-	for !d.isDeleted(id) {
-		if time.Now().After(deadline) {
-			d.writeMu.Unlock()
-			t.Fatal("Delete's tombstone never landed within 3s")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-removing:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("Delete never reached directory removal")
 	}
 
 	exitDone := make(chan struct{})
@@ -293,10 +294,13 @@ func TestDelete_RacesNaturalShimExit(t *testing.T) {
 				t.Errorf("handleShimExit panicked racing Delete: %v", r)
 			}
 		}()
-		d.handleShimExit(id) // the monitor's natural-exit path (reconcile.go), blocks on writeMu too
+		d.finalizeTerminal(id, func(m persist.Meta) persist.Meta {
+			m.Status.Process = status.ProcessExited
+			return m
+		})
 	}()
 
-	d.writeMu.Unlock() // release both to contend for writeMu in whatever order
+	close(release)
 	<-deleteDone
 	<-exitDone
 

@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,14 @@ import (
 
 	"github.com/Nathandela/swarm/internal/status"
 )
+
+func captureLog(t *testing.T) *syncBuffer {
+	t.Helper()
+	sink := &syncBuffer{}
+	log.SetOutput(sink)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return sink
+}
 
 // TestEmitStatus_FailedPersistIsLoggedAndRetried pins swarm-ymm (R2 RC3): the engine
 // commits a status before emitting it, so a SetStatus that fails (ENOSPC on the

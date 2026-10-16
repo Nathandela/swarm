@@ -2,11 +2,31 @@ package persist
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/status"
 )
+
+func TestDiscussionAttemptsIncludesHiddenAndLiveMembersOnlyThroughResumeLinks(t *testing.T) {
+	a := Meta{ID: "a", AgentType: "codex", ConversationID: "thread", RosterHidden: true}
+	b, c, independent, handoff, wrong := a, a, a, a, a
+	b.ID, b.ResumedFrom, b.Status.Process = "b", a.ID, status.ProcessRunning
+	c.ID, c.ResumedFrom, c.Status.Process = "c", a.ID, status.ProcessRunning
+	independent.ID = "independent"
+	handoff.ID, handoff.SpawnedFrom = "handoff", a.ID
+	wrong.ID, wrong.ResumedFrom, wrong.ConversationID = "wrong", a.ID, "other-thread"
+	group := DiscussionAttempts([]Meta{a, b, c, independent, handoff, wrong}, b.ID)
+	var ids []string
+	for _, m := range group {
+		ids = append(ids, m.ID)
+	}
+	sort.Strings(ids)
+	if !reflect.DeepEqual(ids, []string{"a", "b", "c"}) {
+		t.Fatalf("wrong deletion family: %v", ids)
+	}
+}
 
 func TestProjectDiscussions(t *testing.T) {
 	row := func(id, parent string, n int, running bool) Meta {

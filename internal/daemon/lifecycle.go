@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"syscall"
 	"time"
 
@@ -45,14 +47,16 @@ func (d *Daemon) Kill(id string) error {
 // it to simulate a shim that cannot be confirmed dead (the mutate-nothing path).
 var terminateForDeleteFn = (*Daemon).terminateForDelete
 
+// deleteSessionDirFn permits a partial filesystem-removal failure in tests.
+var deleteSessionDirFn = func(d *Daemon, id string) error { return d.store.Delete(id) }
+
 // Delete removes a session (R-3). Termination is VERIFIED FIRST (R1.3.4): a
 // running session's shim is confirmed dead before ANY registry/tombstone/hook/
 // store mutation, so a session directory is never removed out from under a live
 // agent. If a live, identity-matched shim cannot be terminated, Delete returns an
 // error and mutates nothing (no orphaned live agent with a removed dir). Only once
-// termination is confirmed (or the session was not running, or the shim is already
-// gone) does the removal commit: registry removal + tombstone under d.mu (F3),
-// then the monitor stop, the engine retire, the pre-delete hook, and store.Delete.
+// termination is confirmed does cleanup begin. Metadata stays available for a retry
+// until the pre-delete hook, directory removal and deletion journal all succeed.
 func (d *Daemon) Delete(id string) error {
 	d.mu.Lock()
 	s, ok := d.sessions[id]
@@ -70,58 +74,75 @@ func (d *Daemon) Delete(id string) error {
 		}
 	}
 
-	// Phase 2 — COMMIT the removal. Tombstone within the same d.mu section as the
-	// registry removal, so a concurrent exit-merge's putMem/saveMeta sees it and
-	// cannot re-add or re-persist this id after the removal (F3). Presence is
-	// RE-CHECKED under d.mu (Phase 1's `ok` is stale — the termination step above has
-	// an up-to-deleteWait window): only the goroutine that actually removes the
-	// session owns closing its stop channel, so two concurrent Deletes of the same id
-	// never double-close it (a double close would panic).
+	// Termination can overlap; cleanup cannot, or two callers could tear down one worktree.
+	d.deleteMu.Lock()
+	defer d.deleteMu.Unlock()
+	if d.isDeleted(id) {
+		return nil
+	}
 	d.mu.Lock()
 	sess, present := d.sessions[id]
 	if present {
-		delete(d.sessions, id)
+		meta = sess.meta
 	}
-	d.tombstoneID(id)
 	d.mu.Unlock()
 
 	if present {
-		close(sess.stop) // stop this session's monitor WITHOUT finalizing it
-	}
-	// The session is being removed: retire its engine registration and token (S6).
-	if d.cfg.OnSessionEnd != nil {
-		d.cfg.OnSessionEnd(id)
+		if meta.Status.Process == status.ProcessRunning {
+			d.reapOrphanBackend(id)
+			exit, hasExit := readExitSideFile(d.sessionDir(id))
+			d.finalizeTerminal(id, func(current persist.Meta) persist.Meta {
+				if hasExit {
+					return mergeExit(current, exit)
+				}
+				current.Status.Process = status.ProcessLost
+				return current
+			})
+		}
+		if d.cfg.OnSessionEnd != nil {
+			d.cfg.OnSessionEnd(id)
+		}
+		meta, _ = d.Get(id)
 	}
 
-	var preDeleteErr error
 	if present && d.cfg.PreDelete != nil {
-		// Epic 12: an optional pre-delete hook (e.g. worktree teardown) runs before
-		// the session directory is removed below. Its error is logged here and
-		// returned below, but never skips the mandatory directory teardown (R-3).
-		// Gated on Phase 2's `present` winner check, same as close(sess.stop) above
-		// (ok is Phase 1's stale read: both racers of a concurrent same-id Delete
-		// see it true, but only the winner sees present, so only it runs the hook).
-		if preDeleteErr = d.cfg.PreDelete(meta); preDeleteErr != nil {
-			d.logf("delete %s: pre-delete hook: %v", id, preDeleteErr)
+		if err := d.cfg.PreDelete(meta); err != nil {
+			d.logf("delete %s: pre-delete hook: %v", id, err)
+			return err
 		}
 	}
 
-	// Remove the session directory under writeMu, mutually exclusive with saveMeta's
-	// tombstone-check + store.Save, so a merge racing this Delete cannot recreate the
-	// directory after it is removed (F3).
+	// Hold the writer fence through disk removal and tombstoning to prevent resurrection.
 	d.writeMu.Lock()
-	// Journal the tombstone WAL-first (before the dir is removed) into the daemon-wide
-	// journal, which lives outside the per-session dir so the `deleted` record outlives
-	// the removed session directory (R-JRN.7).
-	if _, jerr := d.journal.Append(journal.Record{SessionID: id, Type: journal.TypeDeleted}); jerr != nil {
-		d.logf("delete %s: journal tombstone: %v", id, jerr)
+	defer d.writeMu.Unlock()
+	d.mu.Lock()
+	if current, exists := d.sessions[id]; exists {
+		meta = current.meta
 	}
-	err := d.store.Delete(id)
-	d.writeMu.Unlock()
-	if err != nil {
+	d.mu.Unlock()
+	// WAL-first: a crash during directory removal must leave a durable deletion event.
+	if _, jerr := d.journal.Append(journal.Record{SessionID: id, Type: journal.TypeDeleted}); jerr != nil {
+		return jerr
+	}
+	if err := deleteSessionDirFn(d, id); err != nil {
+		if present {
+			if _, loadErr := d.store.Load(id); os.IsNotExist(loadErr) {
+				err = errors.Join(err, d.store.Save(meta))
+			}
+			// Restore the remote row after the failed deletion, retaining its cleanup owner.
+			_, stateErr := d.journal.Append(completeSessionRecord(meta, journal.TypeSessionState, nil))
+			err = errors.Join(err, stateErr)
+		}
 		return err
 	}
-	return preDeleteErr
+	d.mu.Lock()
+	delete(d.sessions, id)
+	d.tombstoneID(id)
+	d.mu.Unlock()
+	if present {
+		close(sess.stop)
+	}
+	return nil
 }
 
 // terminateForDelete confirms a running session's shim is dead before Delete

@@ -83,6 +83,10 @@ func TestResumeUsesSavedEnvironmentBeforeResolvingBinary(t *testing.T) {
 }
 
 func continuityAPI(t *testing.T, metas ...persist.Meta) *coreAPI {
+	return continuityAPIWithConfig(t, nil, metas...)
+}
+
+func continuityAPIWithConfig(t *testing.T, configure func(*daemon.Config), metas ...persist.Meta) *coreAPI {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "sw-cont-")
 	if err != nil {
@@ -98,15 +102,19 @@ func continuityAPI(t *testing.T, metas ...persist.Meta) *coreAPI {
 			t.Fatal(err)
 		}
 	}
-	core, err := daemon.Open(daemon.Config{StateDir: dir, SocketPath: filepath.Join(dir, "d.sock"), LockPath: filepath.Join(dir, "d.lock"), LogPath: filepath.Join(dir, "d.log")})
+	cfg := daemon.Config{StateDir: dir, SocketPath: filepath.Join(dir, "d.sock"), LockPath: filepath.Join(dir, "d.lock"), LogPath: filepath.Join(dir, "d.log"), MaxSessions: 16}
+	if configure != nil {
+		configure(&cfg)
+	}
+	core, err := daemon.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = core.Close() })
-	return &coreAPI{core: core, endpointID: testEndpoint}
+	return &coreAPI{core: core, endpointID: testEndpoint, stateDir: dir}
 }
 
-func TestDeleteDiscussionArchivesPriorAttempts(t *testing.T) {
+func TestDeleteDiscussionRemovesPriorAttempts(t *testing.T) {
 	src := endedCodexSource("original", nil)
 	src.CreatedAt = time.Unix(1, 0)
 	child := src
@@ -114,15 +122,21 @@ func TestDeleteDiscussionArchivesPriorAttempts(t *testing.T) {
 	child.ResumedFrom = src.ID
 	child.CreatedAt = time.Unix(2, 0)
 	api := continuityAPI(t, src, child)
+	for _, id := range []string{src.ID, child.ID} {
+		if err := os.WriteFile(filepath.Join(api.stateDir, id, "transcript.log"), []byte("private discussion"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := api.Delete(child.ID); err != nil {
 		t.Fatal(err)
 	}
-	history, ok := api.core.Get(src.ID)
-	if !ok || !history.RosterHidden {
-		t.Fatal("history lost or not archived")
-	}
-	if _, ok := api.core.Get(child.ID); ok {
-		t.Fatal("explicit deletion did not delete selected attempt")
+	for _, id := range []string{src.ID, child.ID} {
+		if _, ok := api.core.Get(id); ok {
+			t.Fatalf("deleted attempt %s retained in registry", id)
+		}
+		if _, err := os.Stat(filepath.Join(api.stateDir, id)); !os.IsNotExist(err) {
+			t.Fatalf("deleted attempt %s retained on disk: %v", id, err)
+		}
 	}
 	visible, _ := persist.ProjectDiscussions(api.List())
 	if len(visible) != 0 {

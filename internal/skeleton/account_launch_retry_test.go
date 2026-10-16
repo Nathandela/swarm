@@ -5,7 +5,6 @@ package skeleton
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,14 +79,6 @@ func (f *accountRetryFixture) launch(t *testing.T, name string) (persist.Meta, e
 		t.Cleanup(func() { _ = f.api.core.Kill(meta.ID) })
 	}
 	return meta, err
-}
-
-func captureLog(t *testing.T) *syncBuffer {
-	t.Helper()
-	sink := &syncBuffer{}
-	log.SetOutput(sink)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-	return sink
 }
 
 func TestBindAccountLaunch_RetriesTheNextAccountAfterAnAccountConfigurationConflict(t *testing.T) {

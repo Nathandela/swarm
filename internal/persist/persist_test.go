@@ -351,6 +351,40 @@ func TestDeleteRemovesSessionDir(t *testing.T) {
 	}
 }
 
+func TestDeleteFailureKeepsMetadataUntilPayloadsAreGone(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the permission failure")
+	}
+	s, root := newTestStore(t)
+	m := fullMeta()
+	if err := s.Save(m); err != nil {
+		t.Fatal(err)
+	}
+	blocked := filepath.Join(root, m.ID, "workspace")
+	if err := os.Mkdir(blocked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "payload"), []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0700) })
+	if err := s.Delete(m.ID); err == nil {
+		t.Fatal("deletion ignored the blocked payload")
+	}
+	if _, err := s.Load(m.ID); err != nil {
+		t.Fatalf("failed cleanup lost its durable ownership metadata: %v", err)
+	}
+	if err := os.Chmod(blocked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(m.ID); err != nil {
+		t.Fatalf("cleanup retry: %v", err)
+	}
+}
+
 // E1.8 — FilterEnv drops injection vectors (LD_PRELOAD, DYLD_INSERT_LIBRARIES) and unrelated
 // secrets (AWS_SECRET_ACCESS_KEY, arbitrary FOO), while passing through the normative allowlist
 // exactly: order-preserving, KEY=VALUE intact including values that themselves contain '='.
