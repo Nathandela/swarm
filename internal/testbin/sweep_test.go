@@ -1,6 +1,8 @@
 package testbin
 
 import (
+	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,29 +11,61 @@ import (
 	"time"
 )
 
-// TestKillProcessesOf_KillsADetachedSurvivorOfATestBinary pins the post-run sweep. Shims are
-// built to outlive the daemon that spawned them (ADR-001), so a test that launches a session and
-// returns without killing it leaves the shim and its agent running forever: 306 such processes,
-// 1.7-10.6 days old, were found on the owner's machine. Everything started from a binary this
-// run built is identified by /proc/<pid>/exe and must be killed when the run ends.
-func TestKillProcessesOf_KillsADetachedSurvivorOfATestBinary(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "swarm")
-	raw, err := os.ReadFile("/bin/sleep")
+func TestSweepProcess(t *testing.T) {
+	if os.Args[len(os.Args)-1] != "testbin-survivor" {
+		return
+	}
+	fmt.Println("ready")
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+func detachedBinary(t *testing.T, exe, argv0 string) <-chan struct{} {
+	t.Helper()
+	self, err := os.Executable()
 	if err != nil {
-		t.Skip("no /bin/sleep")
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(exe, raw, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(exe, "600")
+	cmd := exec.Command(exe, "-test.run=^TestSweepProcess$", "--", "testbin-survivor")
+	cmd.Args[0] = argv0
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detached, as a shim is
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
-	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	t.Cleanup(func() { _ = cmd.Process.Kill(); <-exited })
+	ready := make(chan bool, 1)
+	go func() {
+		line, err := bufio.NewReader(stdout).ReadString('\n')
+		ready <- err == nil && line == "ready\n"
+	}()
+	select {
+	case ok := <-ready:
+		if !ok {
+			t.Fatal("test-owned process exited before its ready signal")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("test-owned process did not become ready")
+	}
+	return exited
+}
 
+func TestKillProcessesOf_KillsADetachedSurvivorOfATestBinary(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "swarm")
+	exited := detachedBinary(t, exe, exe)
 	KillProcessesOf(exe)
 
 	select {
@@ -42,7 +76,7 @@ func TestKillProcessesOf_KillsADetachedSurvivorOfATestBinary(t *testing.T) {
 }
 
 // TestKillProcessesOf_MatchesABinaryBuiltUnderASymlinkedDir pins the sweep when TMPDIR is a
-// symlink: /proc/<pid>/exe names the resolved path, so an unresolved build path matched nothing
+// symlink: the kernel names the resolved path, so an unresolved build path matched nothing
 // and the sweep was a silent no-op.
 func TestKillProcessesOf_MatchesABinaryBuiltUnderASymlinkedDir(t *testing.T) {
 	real := t.TempDir()
@@ -50,28 +84,53 @@ func TestKillProcessesOf_MatchesABinaryBuiltUnderASymlinkedDir(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile("/bin/sleep")
-	if err != nil {
-		t.Skip("no /bin/sleep")
-	}
 	exe := filepath.Join(link, "swarm")
-	if err := os.WriteFile(exe, raw, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(exe, "600")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	exited := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(exited) }()
-	t.Cleanup(func() { _ = cmd.Process.Kill() })
-
+	exited := detachedBinary(t, exe, exe)
 	KillProcessesOf(exe)
 
 	select {
 	case <-exited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("a binary built under a symlinked dir survived the sweep")
+	}
+}
+
+func TestKillProcessesOf_PreservesAnotherExecutableWithTheSameNameAndArgv0(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "swarm")
+	exited := detachedBinary(t, exe, exe)
+	unrelated := filepath.Join(t.TempDir(), "swarm")
+	unrelatedExited := detachedBinary(t, unrelated, exe)
+
+	KillProcessesOf(exe, "")
+
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the test-owned process survived the sweep")
+	}
+	select {
+	case <-unrelatedExited:
+		t.Fatal("the sweep killed an unrelated executable with matching argv0")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSweep_EndsOwnedProcessesAndRemovesTheirDirectory(t *testing.T) {
+	dir := t.TempDir()
+	binaries := Binaries{Swarm: filepath.Join(dir, "swarm"), FakeAgent: filepath.Join(dir, "swarm-fake-agent")}
+	shimExited := detachedBinary(t, binaries.Swarm, binaries.Swarm)
+	agentExited := detachedBinary(t, binaries.FakeAgent, binaries.FakeAgent)
+
+	binaries.Sweep()
+
+	for _, exited := range []<-chan struct{}{shimExited, agentExited} {
+		select {
+		case <-exited:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a test-owned process survived Sweep")
+		}
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("test binary directory remains after Sweep: %v", err)
 	}
 }

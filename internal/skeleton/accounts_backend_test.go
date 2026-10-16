@@ -30,7 +30,7 @@ const accountFixtureDeviceCode = "synthetic-private-device-code"
 
 // The real swarm executable supplies the detached supervisor and runner. A copy
 // of this test executable supplies only the local native WebSocket fixture.
-func TestMain(m *testing.M) {
+func runAccountFixture() {
 	if name := filepath.Base(os.Args[0]); name == "claude" || name == "2.1.289" || name == "2.1.290" || name == "codex" || name == "0.160.0" || name == "0.162.1" {
 		if len(os.Args) == 2 && os.Args[1] == "--version" {
 			version := "2.1.289"
@@ -79,9 +79,6 @@ func TestMain(m *testing.M) {
 		accountFixtureCodex()
 		os.Exit(0)
 	}
-	code := m.Run()
-	testBins.Sweep() // shims outlive their daemon by design: end every session a test left running
-	os.Exit(code)
 }
 
 func accountFixtureCodex() {

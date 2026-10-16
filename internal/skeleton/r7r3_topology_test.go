@@ -65,13 +65,13 @@ func buildFakeCodex(t *testing.T) string {
 			return
 		}
 		out := filepath.Join(dir, "codex")
+		fakeCodexBin = out
 		cmd := exec.Command("go", "build", "-o", out, "github.com/Nathandela/swarm/cmd/swarm-fake-codex")
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			fakeCodexErr = err
 			return
 		}
-		fakeCodexBin = out
 	})
 	if fakeCodexErr != nil {
 		t.Skipf("cannot build the fake codex binary: %v", fakeCodexErr)

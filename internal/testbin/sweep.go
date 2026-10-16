@@ -4,29 +4,25 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"syscall"
 )
 
 // KillProcessesOf SIGKILLs every process other than this one whose executable is one of exes.
 // A test run calls it last with the binaries it built (and its own test binary, which agents
 // re-exec): shims deliberately outlive their daemon, so nothing else ends a session a test
-// forgot to kill. Exe paths are unique per run, so no other run's processes match. Linux only:
-// without /proc it does nothing.
+// forgot to kill. Kernel executable paths are unique per run, so no other run's processes match.
 func KillProcessesOf(exes ...string) {
 	exes = slices.Clone(exes)
-	for i, exe := range exes { // /proc/<pid>/exe names the resolved path
+	for i, exe := range exes {
 		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 			exes[i] = resolved
 		}
 	}
-	entries, _ := os.ReadDir("/proc")
-	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid == os.Getpid() {
+	for _, pid := range processIDs() {
+		if pid == os.Getpid() {
 			continue
 		}
-		if exe, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe")); err == nil && slices.Contains(exes, exe) {
+		if exe, err := processExecutable(pid); err == nil && exe != "" && slices.Contains(exes, exe) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}

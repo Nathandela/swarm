@@ -35,10 +35,8 @@ package tui
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -47,6 +45,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/skeleton"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 const (
@@ -66,40 +65,15 @@ const (
 // buildBinaries harnesses.
 // ---------------------------------------------------------------------------
 
-var (
-	gateBuildOnce sync.Once
-	gateSwarmBin  string
-	gateFakeBin   string
-	gateBuildErr  error
-)
+var gateBins testbin.Binaries
 
 func gateBuildBinaries(t *testing.T) {
 	t.Helper()
-	gateBuildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "tui-perfgate-bin")
-		if err != nil {
-			gateBuildErr = err
-			return
-		}
-		gateSwarmBin = filepath.Join(dir, "swarm")
-		gateFakeBin = filepath.Join(dir, "swarm-fake-agent")
-		for _, b := range []struct{ out, pkg string }{
-			{gateSwarmBin, "github.com/Nathandela/swarm/cmd/swarm"},
-			{gateFakeBin, "github.com/Nathandela/swarm/cmd/swarm-fake-agent"},
-		} {
-			cmd := exec.Command("go", "build", "-o", b.out, b.pkg)
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				gateBuildErr = err
-				return
-			}
-		}
-	})
 	// Fatal, not Skip: this is an enforced gate (must run in CI), so a broken
 	// build fails closed rather than silently disappearing.
-	if gateBuildErr != nil {
-		t.Fatalf("cannot build perf-gate binaries: %v", gateBuildErr)
-	}
+	gateBins.Build(t, "tui-perfgate-bin", func(t *testing.T, err error) {
+		t.Fatalf("cannot build perf-gate binaries: %v", err)
+	})
 }
 
 // gateAssemble stands up one real daemon assembly over a short-pathed state dir
@@ -118,9 +92,9 @@ func gateAssemble(t *testing.T) *skeleton.Daemon {
 		SocketPath:   filepath.Join(dir, "d.sock"),
 		LockPath:     filepath.Join(dir, "d.lock"),
 		LogPath:      filepath.Join(dir, "d.log"),
-		ShimBinary:   gateSwarmBin,
+		ShimBinary:   gateBins.Swarm,
 		MaxSessions:  gateSessionCount + 10,
-		FakeAgentBin: gateFakeBin,
+		FakeAgentBin: gateBins.FakeAgent,
 	})
 	if err != nil {
 		t.Fatalf("skeleton.Serve: %v", err)
