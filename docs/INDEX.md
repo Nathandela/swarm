@@ -24,6 +24,7 @@
 - [Clean v2 remote-control plan](specifications/remote-scale-to-zero-plan.md) — owner-directed zero-user replacement: no backward compatibility, direct on-demand push, legacy cleanup, safety gates and conditional cost budget; not deployed
 - [Scale-to-zero verification](verification/remote-scale-to-zero/README.md) — reproducible local runtime/emulator/interop tests and explicit unrun production gates
 - [Private mobile repository decision](research/mobile-private-repository.md) — source-access/IP benefits, APK/history limits, split/CI costs and release-continuity gates
+- [Lightweight storage strategies](research/swarm-lightweight-storage-strategies.md) — native history ownership, bounded caches, workspace growth, quota boundaries, and recovery trade-offs; research, not an implementation decision
 
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
 - [Build plan](specifications/build-plan.md) — 15 ordered epics, contracts, gap resolutions, implementation guidelines (Gate 3-approved)
