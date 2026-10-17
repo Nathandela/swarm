@@ -77,8 +77,8 @@ This is attempt-directory and owned-worktree deletion. The live-only supervisor
 conversion is tracked separately in `agents-tracker-bdp7`. Provider-native history, external project directories,
 daemon-wide journal/control stores, and previously delivered phone/relay copies
 retain their existing ownership and retention semantics. It is not secure erase.
-The change was not deployed or exercised against existing Mac/VM discussions;
-the running installed versions and existing files were left untouched.
+The initial source verification did not touch existing discussions. The later
+owner-authorized production rollout and cleanup are recorded below.
 
 ## Production cleanup follow-up — 2026-10-17
 
@@ -107,6 +107,11 @@ pinned linter passes. Native Mac full lint still reports the same 11 unused
 Linux-only account declarations recorded above; broader Mac baseline failures
 remain tracked in `agents-tracker-nsxw`.
 
-Release and two-host deployment of this follow-up are pending. Executed cleanup
-and retained WIP migration evidence belong in the
+[v0.18.2](https://github.com/Nathandela/swarm/releases/tag/v0.18.2), source
+`2f54b3e2835fbbd50247a7b722d0bf7ad88882a6`, passed all 17 release jobs and was
+deployed on both hosts. The corrected API permanently removed all 20 reviewed
+non-WIP VM attempts, including the previously retained account alias. All 220
+original protected WIP attempt directories remained. The Mac cleanup removed
+53 reviewed attempts and retained the discussion controlling this operation.
+Executed cleanup and retained WIP migration evidence belong in the
 [rollout record](lightweight-storage-rollout.md).

@@ -1,14 +1,15 @@
 # Lightweight storage release and rollout
 
-2026-10-17 · `v0.18.0` / `v0.18.1` · source `c9db413b` / `59e0ef84`
+2026-10-17 · through `v0.18.2` · source `2f54b3e2`
 
 The owner authorized release, deployment on the Mac and `tf_nathan`, and cleanup
 of reviewed legacy Swarm buildup. The release and both supervisor deployments
-completed. Final Mac checks found a Codex resume backend regression; v0.18.1
-corrects it and the independently found symlink-path bypass. Owner-approved
-native recovery restored two discussions; two require a native project-trust
-decision. This records the checked
-cleanup and runtime checkpoint; the
+completed. v0.18.1 corrected a Codex resume backend regression and a symlink-path
+bypass. v0.18.2 closes additional deletion boundaries exposed by the actual
+cleanup. The Mac now retains only the discussion controlling this operation;
+all VM WIP discussions and their unique work are protected. Later checkpoints
+below supersede earlier counts and recovery holds. This records the checked
+cleanup and runtime checkpoints; the
 [whole fixing plan](../specifications/lightweight-storage-plan.md) remains open.
 
 ## Release and deployment
@@ -276,6 +277,89 @@ relink or package upgrade may rewrite the launcher. Owner-process open-file and
 all-user executable-path checks found no removed-keg references; privileged
 all-user loaded-library coverage was unavailable. This does not establish that
 every application affected by the automatic cleanup was exercised.
+
+## v0.18.2 production deletion follow-up
+
+[Release run 39026876838](https://github.com/Nathandela/swarm/actions/runs/39026876838)
+passed all 17 jobs for source
+`2f54b3e2835fbbd50247a7b722d0bf7ad88882a6`, including full Linux tests and race
+tests, Mac lanes, lint, fuzz, mobile and signed publishing. The
+[v0.18.2 release](https://github.com/Nathandela/swarm/releases/tag/v0.18.2)
+was installed through the Mac's existing Homebrew cask ownership and the VM's
+signed upgrade path. Automatic Homebrew cleanup and autoremove were disabled.
+Both supervisor restarts preserved their existing native terminals. The Mac's
+active gateway was restarted; the VM gateway remained inactive.
+
+Production cleanup exposed canceled account aliases that acknowledged deletion
+of an absent successor while retaining the requested source. The fix completes
+the durably pinned target before deleting the explicitly requested alias family;
+unconfirmed cancellation durability and a frozen ledger refuse effects. Related
+regressions cover hidden-only terminal families, unknown IDs naming shared state
+and physical symlink/parent semantics. See
+[deletion verification](discussion-deletion.md).
+
+All new boundaries failed before the fix and passed afterward. Final connected
+native ARM race checks, native build/vet and Linux-target pinned lint passed.
+The full native Mac normal and race runs both completed with failures in nine
+existing platform/configuration/fixture packages, including the incompatible
+installed mobile binding tool. Full native lint still reports 11 existing unused
+Linux-only declarations. The green release gates do not imply a green full local
+Mac suite; those limitations remain tracked in `agents-tracker-nsxw`.
+
+### Owner-approved permanent cleanup
+
+The owner subsequently authorized deep removal of all reviewed Mac discussions
+except the controller of this operation, and all VM discussions outside the
+protected WIP set. This supersedes the earlier Mac native-trust holds: the
+affected Swarm attempts were deleted, with no trust configuration change.
+
+| Host | Executed cleanup | Protected material |
+|---|---|---|
+| Mac | 53 of 54 retained attempts permanently removed; state fell from approximately 65.4 GiB to approximately 26 MiB at the live checkpoint | Current controlling discussion, external projects and existing provider-native history |
+| VM | All 20 reviewed non-WIP attempts permanently removed; their pre-removal allocation was 1,281,400,832 bytes | Every original WIP discussion and its dependency closure: 220 retained attempts |
+
+The VM protection set includes hidden predecessors, native-conversation aliases,
+spawn lineage and workspace dependencies. Nineteen visible WIP discussions are
+therefore not nineteen independently disposable directories. All 220 original
+protected directories remained after the twenty removals.
+
+Filesystem permission repairs were limited to directories inside exact approved
+cleanup roots. On the VM, twenty root-owned Python cache directories required
+owner repair; no source-file ownership or contents were changed. The final
+privileged reference scan inspected 229 processes, found no target references
+and reported no inspection errors before deletion. Shared account/control stores
+and native histories were retained.
+
+Seven detached Mac legacy workers were stopped using frozen kernel identity and
+cwd checks. Two external temporary performance servers also exited during their
+parent stops; parent signal forwarding is a possible cause, not established
+proof. Their files were untouched, and the collateral exits were disclosed.
+Twenty-five stale Git worktree registrations inside deleted state were removed
+from two external repositories; branch, tag and stash references were unchanged.
+Two unused old patch binaries and one dangling internal link were also removed.
+The current controlling native process remains alive on its older shim, so its
+bounded legacy rotations are still present. The final Mac doctor found zero
+degraded sessions; existing agent-path and quiet-update-scheduler warnings remain.
+
+### Retained VM terminal handoffs
+
+The owner authorized one-at-a-time handoffs only when idle without a pending
+permission prompt, and confirmed no unsent drafts needed preservation. Three
+legacy terminals completed the guarded stop/resume and independent postcheck.
+Their exact native conversation IDs, selected projects, effective profiles,
+credential bindings, names/tags and policy files were preserved. Native history
+files remained on their original outside-state inodes. Native PID registry,
+machine/PID-namespace domain and kernel start tokens proved current custody.
+No prompt or model turn was sent, and no model override was supplied.
+
+New identity tails measured 13,530, 59,170 and 8,859 bytes, below the 65,568-byte
+ceiling, without raw transcript rotations or final-screen archives. Exactly
+3,480,290 content bytes of known, stopped-source capture files were retired;
+lineage metadata and hook/control custody were preserved. An already-bounded
+fourth terminal was left running. Two legacy originals remain held: one has a
+permission prompt and one is active. Neither was stopped or relaunched.
+Saved launch policy was checked; exact transient native model/permission UI
+state is not independently exposed and is not claimed equivalent.
 
 ## Remaining boundaries
 

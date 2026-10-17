@@ -10,11 +10,13 @@ governed by [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md).
 
 The [2026-10-17 source checkpoint](../verification/lightweight-storage.md) records
 implemented prevention and deletion behavior. [Release and rollout evidence](../verification/lightweight-storage-rollout.md)
-records v0.18.0 and corrective v0.18.1 deployed on the owner's Mac and VM, with
-checked legacy cleanup. Two previously degraded Mac discussions are recovered;
-two await a native project-trust decision. The patch's isolated native resume
-checks pass on both hosts.
-Recovery of retained unique/live work and native diagnostic bounding remain open;
+records v0.18.0 through corrective v0.18.2 deployed on the owner's Mac and VM,
+with checked legacy cleanup. The Mac retains only this operation's controlling
+discussion; the earlier trust-blocked discussions were subsequently deleted
+under the owner's explicit deep-clean instruction, without changing trust.
+Every VM WIP discussion is preserved. Idle legacy terminals are being handed off
+to bounded shims, and unique Git work is being relocated out of supervisor state.
+Completion of retained WIP migration and native diagnostic bounding remain open;
 the whole program is not complete. The operation-guard pressure flaw is also
 corrected and covered by pressure/restart regressions.
 
@@ -44,6 +46,11 @@ discussion removes all retained attempts in its validated resume family and
 their owned worktrees. It no longer hides predecessors while preserving their
 files. Shared workspace use refuses removal; cleanup errors remain retryable.
 [Verification](../verification/discussion-deletion.md).
+
+The v0.18.2 production follow-up closes canceled account-alias cleanup,
+fully hidden terminal families, unknown shared-state IDs and physical-path
+resolution during shared-workspace checks. The release passed all 17 jobs;
+both installed supervisors use that release.
 
 Deleting an owned attempt/worktree also removes work stored inside it. External
 projects, provider-native history, security receipts and previously delivered
