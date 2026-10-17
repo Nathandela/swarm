@@ -361,6 +361,43 @@ permission prompt and one is active. Neither was stopped or relaunched.
 Saved launch policy was checked; exact transient native model/permission UI
 state is not independently exposed and is not claimed equivalent.
 
+## Owner-directed simplification review
+
+The owner questioned the cost of moving whole legacy workspaces and proposed
+committing and pushing useful code/documents before deleting the rest. Three
+Luna agents reviewed Git work, loose artifacts and the preservation/deletion
+strategy in parallel, with follow-up checks of local-only refs and difficult
+working copies. The assessment is read-only: no project commits, pushes,
+workspace moves or further deletions were performed.
+
+The bulk relocation preflight produced a prepared receipt for 169 directories
+but applied zero moves. Its read-only preparation finished; the separate
+time-limited terminal watcher was stopped while waiting, with zero additional
+handoffs. Native WIP terminals remain untouched by this pause. The three earlier
+verified handoffs remain completed.
+
+The simpler route separates useful deliverables from the bulk of an old working
+copy. Existing topic commits can be published unchanged on reviewed preservation
+branches; small source/test/document changes can become focused commits.
+Rebasing, resolving feature integration and merging into a main branch are not
+required merely to preserve work. Only after the selected content is remotely
+retrievable should disposable workspaces and build output be removed.
+
+The review found substantive source/test patches and topic stacks, as well as
+loose drafts already represented by tracked documents or stronger tests. Raw
+logs, mail, checkpoint archives and operational evidence must not be swept into
+a Git commit. Some contain private production/account information or
+credential-like URLs. Canonical project checkouts also contain existing user
+changes, so they must not be blindly switched, staged or cleaned.
+
+Local-only branches and reflog revisions require content triage; an old revision
+is not automatically a useful deliverable, and absence from a stale external
+clone does not establish absence from the real remote. Linked worktrees and
+borrowed Git object stores still require dependency checks before removal.
+Provider-native discussion histories and WIP supervision records remain
+separate from workspace cleanup. Detailed per-project findings are kept private
+rather than publishing private project contents in this repository.
+
 ## Remaining boundaries
 
 Deployment and the verified batches do not complete legacy workspace recovery

@@ -14,9 +14,12 @@ records v0.18.0 through corrective v0.18.2 deployed on the owner's Mac and VM,
 with checked legacy cleanup. The Mac retains only this operation's controlling
 discussion; the earlier trust-blocked discussions were subsequently deleted
 under the owner's explicit deep-clean instruction, without changing trust.
-Every VM WIP discussion is preserved. Idle legacy terminals are being handed off
-to bounded shims, and unique Git work is being relocated out of supervisor state.
-Completion of retained WIP migration and native diagnostic bounding remain open;
+Every VM WIP discussion is preserved. Three idle legacy terminals were handed off
+to bounded shims; one was already bounded, and two remain held. The owner is
+reviewing a simpler workspace recovery strategy: commit and push useful work,
+then permanently remove disposable clones, builds and task artifacts. Bulk
+relocation was prepared but never applied; its automation is stopped.
+Completion of retained WIP recovery and native diagnostic bounding remain open;
 the whole program is not complete. The operation-guard pressure flaw is also
 corrected and covered by pressure/restart regressions.
 
@@ -33,6 +36,7 @@ corrected and covered by pressure/restart regressions.
 | Bound shared debug output | Still open: daemon and surviving shims share append-only log descriptors. Bound the recognized owned inode without leaving unlinked live writers; measure any between-check overshoot explicitly. | `agents-tracker-b3df` |
 | Retire folded stopped-hook payloads | Still open: final disk batches can remain after folding, up to 8 MiB per stopped attempt. Prove writer death and durable fold coverage, then compact payloads while preserving spool incarnation, floor and sequence controls. | `agents-tracker-j6bv` |
 | Define audit retention | Still open: remote launch activity records are audit-only and currently uncapped. A bounded policy reduces forensic history and must be explicit. | `agents-tracker-85yb` |
+| Retire obsolete native execution/profile assets | Still open: distinguish unused executable slots and regenerable cache from native history, credentials, active bindings and plugin work with local-only commits. Directory names alone do not prove disposability. | `agents-tracker-b0o6` |
 
 The implementation uses small bounds inside existing stores. It does not add a
 global quota manager, a background janitor, a new archive service, or native
@@ -63,7 +67,7 @@ promise is made.
 |---|---|
 | Generic structured journal history | Stream the legacy records with bounded memory, preserve durable cursor/control coordinates first, then remove duplicate conversation payloads. Startup interrupted at any point must remain retryable without cursor reuse. `agents-tracker-cyhm` joins this migration work. |
 | Terminal logs from old shims | Retire the old writer before reclaiming its captures. Unlinking a live file can hide its bytes while the process keeps consuming disk. |
-| Build-heavy legacy session workspaces | Inventory each affected native thread and actual writer, identify the intended project, and preserve any unique work before relocation/removal. Swarm's exited status alone is insufficient proof that no native writer exists. `agents-tracker-3bxu`. |
+| Build-heavy legacy session workspaces | Identify each discussion's useful code, tests and documents; prefer reviewed Git commits and remote verification before removing disposable workspaces. Existing committed topic branches need no rebase or integration merely to preserve them. Keep active work and unresolved useful/private outputs until classified. Swarm's exited status alone is insufficient writer proof. `agents-tracker-3bxu`, `agents-tracker-3x3c`. |
 | Previously hidden attempts | Discover them explicitly. Apply validated family/workspace ownership and stopped-writer checks; do not turn a version upgrade into an indiscriminate recursive deletion. |
 
 Produce a concrete per-host cleanup inventory before deleting existing workspace
