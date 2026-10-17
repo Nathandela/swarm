@@ -65,7 +65,8 @@
 
 ## Process traces
 - [Lightweight storage verification](verification/lightweight-storage.md) — live-only journal/tail, workspace prevention, crash/pressure tests, and explicit remaining rollout/cleanup work
-- [Storage cleanup inventory](verification/storage-cleanup-inventory.md) — measured Mac candidates, live native writers, missing recovery destination, and unreachable VM limits
+- [Native Linux storage gates](verification/lightweight-storage-linux.md) — complete normal/race suites, CPU/latency gates, fixture corrections, skipped coverage, and test-artifact retirement
+- [Storage cleanup inventory](verification/storage-cleanup-inventory.md) — measured Mac/VM state, live-writer limits, missing recovery destination, and explicit cleanup boundaries
 - [Discussion deletion](verification/discussion-deletion.md) — remove retained attempts and owned worktrees, retry failed cleanup, and preserve lifecycle ordering
 - [Personal account pool evidence](verification/account-pools-v0150.md) — implementation verification boundaries and outstanding authenticated release acceptance
 - [Account-pool v0.16.1 hotfix evidence](verification/account-pools-v0161.md) — owner-provided native configuration ingress regression and pending release verification

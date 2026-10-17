@@ -42,15 +42,12 @@ checksum verified). Tests use shared compiler/module caches, `TMPDIR=/private/tm
 private umask and no inherited `SWARM_*` variables. Final broad checks use four Go
 CPUs. No provider inference or existing-session deletion was used.
 
-Native Linux follow-up on 2026-10-17 reached `tf_nathan`. At source revision
-`edf7b89a`, build, vet and full pinned lint passed. The first complete ordinary
-suite took 596.6 seconds and exposed connected account fixtures whose projects
-still lived inside state, an obsolete PR-trigger assertion, an umask-sensitive
-credential fixture, and a fast-exit attach race. Long Go temporary paths also
-caused socket-bind failures. Fixture corrections retain the production guard and
-original safety assertions; fresh native normal/race results are still pending.
-The checkout, modules, compiler/lint caches and binaries use private executable
-RAM storage because both persistent VM volumes have less than 2 GiB free.
+The [native Linux follow-up](lightweight-storage-linux.md) on 2026-10-17 reached
+`tf_nathan` and completed both full normal/race suites, full lint, build, vet,
+CPU integration and non-race performance gates at `a72e7fd1`. Earlier runs exposed
+connected workspace fixtures, umask assumptions, an obsolete release-trigger
+assertion, a fast-exit attach race and long Go temporary paths; those were corrected
+before the final clean run. Production behavior/workflows were not weakened.
 
 | Check | Evidence |
 |---|---|
@@ -118,7 +115,7 @@ model proof is unavailable. That feature/storage tradeoff is pending owner choic
   candidate writer-free: several exited/lost rows still have native process cwd
   references, and the largest thread's original project directory is missing.
   Existing workspaces were not moved or purged (`agents-tracker-3bxu`).
-- The VM is reachable again and native Linux verification is in progress.
+- The VM is reachable again and native Linux host verification passed.
   The refreshed inventory measures 14.813 GiB under Swarm. Production deployment
   and before/after growth measurements remain unrun.
 - Managed Claude diagnostics remain an uncapped native writer. Its 16 MiB reader
@@ -130,6 +127,9 @@ model proof is unavailable. That feature/storage tradeoff is pending owner choic
   snapshot measured about 1 MB of debug log and 8.56 MB of hook spools; those do
   not explain its GiB-scale workspace allocation. Shared log descriptors and
   stopped-writer/fold-coordinate proof constrain safe retirement.
+- The deliberately skipped live-orphan launch crash window remains a distinct
+  custody/verification gap (`agents-tracker-69qr`); full host-suite success does
+  not establish that window's safety.
 - At operation capacity, new mutating requests wait for legitimate expiry instead
   of displacing existing guards. Existing sealed outbound envelopes and
   ingress/control receipts were preserved; paired delivery still performs writes.

@@ -93,6 +93,14 @@ is declared safe to delete, and no VM source/cache byte count is proved
 reclaimable. The RAM validation workspace, native CLIs and user data were not
 modified by this inventory. No detailed VM artifact was retained.
 
+The later [native validation](lightweight-storage-linux.md) completed at
+07:11:06 UTC. The machine remained live: a subsequent metadata-only observation
+found 239 rows (170 exited, 64 lost, five running), with new Claude rows outside
+the private test roots. At 07:18:48 UTC, after task RAM artifacts were removed,
+root/data free space was 0.472 / 0.391 GiB. These changing observations do not
+establish a cause, reclaimable bytes or a cleanup result; existing data was not
+purged and the new binary was not installed.
+
 ## Local detailed manifest
 
 Owner review artifact on the inspected Mac:
