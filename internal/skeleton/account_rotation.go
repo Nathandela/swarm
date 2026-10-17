@@ -1132,6 +1132,9 @@ func (m *accountRotationManager) ownerEnd(w *authWatcher, local, action string) 
 	if action != "kill" && action != "delete" {
 		return accounts.ErrIneligible
 	}
+	if w.stateErr != nil {
+		return protocol.ErrAccountsUnavailable
+	}
 	m.viewMu.RLock()
 	key := m.aliases[local]
 	m.viewMu.RUnlock()
@@ -1149,7 +1152,7 @@ func (m *accountRotationManager) ownerEnd(w *authWatcher, local, action string) 
 			target = rec.CandidateID
 		}
 	}
-	if rec.State != accountOwnerCanceled || rec.OwnerTarget == "" {
+	if rec.State != accountOwnerCanceled || rec.OwnerTarget == "" || w.claimUnconfirmed(rec.OriginalSource) {
 		rec.State = accountOwnerCanceled
 		rec.OwnerTarget = target
 		rec.Trial = nil
@@ -1167,7 +1170,17 @@ func (m *accountRotationManager) ownerEnd(w *authWatcher, local, action string) 
 	if w.clearRecycle != nil {
 		w.clearRecycle(target)
 	}
-	return m.endTarget(target, action)
+	if err := m.endTarget(target, action); err != nil {
+		return err
+	}
+	// Cancellation pins the live end effect; Delete also removes its retained alias.
+	if action == "delete" && local != target {
+		if w.clearRecycle != nil {
+			w.clearRecycle(local)
+		}
+		return m.endTarget(local, action)
+	}
+	return nil
 }
 
 // Commit is the durable authorization to release, so restart reconciliation

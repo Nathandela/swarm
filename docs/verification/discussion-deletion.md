@@ -79,3 +79,34 @@ daemon-wide journal/control stores, and previously delivered phone/relay copies
 retain their existing ownership and retention semantics. It is not secure erase.
 The change was not deployed or exercised against existing Mac/VM discussions;
 the running installed versions and existing files were left untouched.
+
+## Production cleanup follow-up — 2026-10-17
+
+Owner-authorized cleanup on v0.18.1 exposed additional deletion boundaries:
+
+- A canceled account alias could acknowledge deletion of an already absent
+  successor while retaining the requested source. Deletion now completes the
+  durably pinned target first, then removes the explicitly requested alias family.
+  Kill retains its existing target semantics; cancellation receipts remain intact.
+- Cancellation must be confirmed durable before either effect. After-rename
+  directory-sync failure retries repeat the same persistence barrier, and a
+  frozen recovery ledger refuses account owner effects.
+- Fully hidden, terminal families can be permanently deleted without temporarily
+  revealing metadata. A hidden predecessor of a visible discussion still refuses.
+- Unknown IDs with existing state payloads, including shared stores, refuse
+  without a deletion journal write. A genuinely absent ID remains an idempotent
+  no-op, including after restart.
+- Shared-workspace checks resolve physical `symlink/..` semantics before path
+  cleaning, including when trailing workspace descendants are missing.
+
+Each boundary has a failing-before/passing-after regression. Connected native
+macOS ARM64 race checks passed, including actual attempt-directory removal,
+injected partial deletion/retry, durable cancellation faults, running-family
+exclusion and unchanged cancellation target/receipt checks. The Linux-target
+pinned linter passes. Native Mac full lint still reports the same 11 unused
+Linux-only account declarations recorded above; broader Mac baseline failures
+remain tracked in `agents-tracker-nsxw`.
+
+Release and two-host deployment of this follow-up are pending. Executed cleanup
+and retained WIP migration evidence belong in the
+[rollout record](lightweight-storage-rollout.md).

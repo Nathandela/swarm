@@ -416,8 +416,94 @@ func TestAccountOwnerEndRetryKeepsDurableSuccessorTarget(t *testing.T) {
 	if err := m.ownerEnd(m.w, source.ID, "delete"); err != nil {
 		t.Fatal(err)
 	}
-	if len(targets) != 2 || targets[0] != rec.CandidateID || targets[1] != rec.CandidateID {
+	if len(targets) != 3 || targets[0] != rec.CandidateID || targets[1] != rec.CandidateID || targets[2] != source.ID {
 		t.Fatalf("repeated owner-end changed target: %v", targets)
+	}
+}
+
+func TestAccountOwnerEndRetryRequiresDurableCancellation(t *testing.T) {
+	store, root, bindings := accountTestStore(t, 2)
+	source := accountTestSource(t, root, bindings[0])
+	accountTestRollout(t, store, bindings[0], source.Cwd, "latest\n")
+	m, fake := rotationTestManager(t, store, root, source)
+	if err := m.reportFailure(m.w, source.ID, "quota", "exact-model", "owner-cancel-sync"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 6; i++ {
+		m.step()
+	}
+	rec := m.w.state.AccountRotations[source.ID]
+	if rec.State != accountCommitted || rec.CandidateID == "" {
+		t.Fatalf("no committed successor: %+v", rec)
+	}
+	var targets []string
+	m.endTarget = func(target, _ string) error {
+		targets = append(targets, target)
+		return nil
+	}
+	killsBefore := len(fake.killed)
+	writes := 0
+	m.w.writeState = func(path string, raw []byte) (bool, error) {
+		writes++
+		return writeAuthWatchStateWithOps(path, raw, authWatchStateWriteOps{
+			syncDir: func(string) error { return errors.New("after rename") },
+		})
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := m.ownerEnd(m.w, source.ID, "delete"); err == nil {
+			t.Fatal("unconfirmed cancellation authorized owner deletion")
+		}
+		if writes != attempt || len(targets) != 0 || len(fake.killed) != killsBefore {
+			t.Fatalf("owner end bypassed durable retry: writes=%d targets=%v kills=%v", writes, targets, fake.killed)
+		}
+		current := m.w.state.AccountRotations[source.ID]
+		if current.State != accountOwnerCanceled || current.OwnerTarget != rec.CandidateID || !m.w.claimUnconfirmed(source.ID) {
+			t.Fatalf("visible cancellation lost its pinned unconfirmed target: %+v", current)
+		}
+	}
+	m.w.writeState = nil
+	if err := m.ownerEnd(m.w, source.ID, "delete"); err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 || targets[0] != rec.CandidateID || targets[1] != source.ID || m.w.claimUnconfirmed(source.ID) {
+		t.Fatalf("durable cancellation did not retain target and clean alias: %v", targets)
+	}
+	loaded, err := loadAuthWatchStateChecked(root)
+	if err != nil || loaded.AccountRotations[source.ID].OwnerTarget != rec.CandidateID {
+		t.Fatalf("durable cancellation target changed: %+v, %v", loaded.AccountRotations[source.ID], err)
+	}
+}
+
+func TestAccountOwnerEndRefusesUnconfirmedStartupLedger(t *testing.T) {
+	store, root, bindings := accountTestStore(t, 1)
+	source := accountTestSource(t, root, bindings[0])
+	accountTestRollout(t, store, bindings[0], source.Cwd, "latest\n")
+	m, fake := rotationTestManager(t, store, root, source)
+	if err := m.reportFailure(m.w, source.ID, "quota", "exact-model", "owner-startup-sync"); err != nil {
+		t.Fatal(err)
+	}
+	m.endTarget = func(string, string) error { return nil }
+	if err := m.ownerEnd(m.w, source.ID, "kill"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadAuthWatchStateChecked(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.w.state = loaded
+	m.w.unconfirmedClaims = nil
+	m.w.stateErr = errors.New("startup directory sync failed")
+	effects := 0
+	m.endTarget = func(string, string) error { effects++; return nil }
+	m.w.clearRecycle = func(string) { effects++ }
+	killsBefore := len(fake.killed)
+	for _, action := range []string{"kill", "delete"} {
+		if err := m.ownerEnd(m.w, source.ID, action); err == nil {
+			t.Fatalf("%s bypassed the frozen startup ledger", action)
+		}
+	}
+	if effects != 0 || len(fake.killed) != killsBefore {
+		t.Fatalf("frozen ledger authorized owner effects: effects=%d kills=%v", effects, fake.killed)
 	}
 }
 

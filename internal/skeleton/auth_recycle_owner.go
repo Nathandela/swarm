@@ -125,6 +125,9 @@ func (d *Daemon) ownerDelete(local string) error {
 		return errors.New("skeleton: owner delete has no daemon core")
 	}
 	if _, ok := d.core.Get(local); !ok {
+		if d.api != nil {
+			return d.api.deleteDiscussion(local)
+		}
 		return d.core.Delete(local)
 	}
 	return d.withOwnerSessionEnd(local, func() error {

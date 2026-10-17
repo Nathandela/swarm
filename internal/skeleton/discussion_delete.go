@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -20,7 +21,15 @@ func (a *coreAPI) deleteDiscussion(id string) error {
 	roster := a.core.List()
 	attempts := persist.DiscussionAttempts(roster, id)
 	if len(attempts) == 0 {
-		return a.core.Delete(id)
+		// A completed deletion is retryable, but an unregistered state child
+		// has no discussion owner authorizing removal (including shared stores).
+		if !persist.ValidID(id) || a.stateDir == "" {
+			return fmt.Errorf("delete: unknown discussion %q", id)
+		}
+		if _, err := os.Lstat(filepath.Join(a.stateDir, id)); !os.IsNotExist(err) {
+			return fmt.Errorf("delete: unregistered state path for %q cannot be removed", id)
+		}
+		return nil
 	}
 	visible, _ := persist.ProjectDiscussions(roster)
 	current := false
@@ -28,7 +37,13 @@ func (a *coreAPI) deleteDiscussion(id string) error {
 		current = current || m.ID == id
 	}
 	if !current {
-		return fmt.Errorf("delete: session %q is retained history; delete the current discussion instead", id)
+		hiddenOnly := true
+		for _, m := range attempts {
+			hiddenOnly = hiddenOnly && m.RosterHidden && (m.Status.Process == status.ProcessExited || m.Status.Process == status.ProcessLost)
+		}
+		if !hiddenOnly {
+			return fmt.Errorf("delete: session %q is retained history; delete the current discussion instead", id)
+		}
 	}
 	members := make(map[string]bool, len(attempts))
 	for _, m := range attempts {
@@ -119,23 +134,35 @@ func cleanupContains(root, cwd string) bool {
 
 // Resolve existing ancestors too: an ended session's cwd may no longer exist.
 func canonicalCleanupPath(path string) (string, error) {
-	path, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
 	var suffix []string
 	for {
 		resolved, err := filepath.EvalSymlinks(path)
 		if err == nil {
+			resolved, err = filepath.Abs(resolved)
+			if err != nil {
+				return "", err
+			}
 			for i := len(suffix) - 1; i >= 0; i-- {
 				resolved = filepath.Join(resolved, suffix[i])
 			}
 			return resolved, nil
 		}
-		if !os.IsNotExist(err) || filepath.Dir(path) == path {
+		if !os.IsNotExist(err) {
 			return "", fmt.Errorf("delete: resolve workspace %q: %w", path, err)
 		}
-		suffix = append(suffix, filepath.Base(path))
-		path = filepath.Dir(path)
+		// Strip only the last raw component: Dir/Abs would clean symlink/..
+		// before the existing ancestor can be resolved physically.
+		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+			return "", fmt.Errorf("delete: resolve workspace %q: %w", path, err)
+		}
+		parent, base := filepath.Split(strings.TrimRight(path, string(filepath.Separator)))
+		if base == "" || base == "." || base == ".." {
+			return "", fmt.Errorf("delete: resolve workspace %q: %w", path, err)
+		}
+		suffix = append(suffix, base)
+		path = parent
+		if path == "" {
+			path = "."
+		}
 	}
 }
