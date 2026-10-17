@@ -110,7 +110,8 @@ model proof is unavailable. That feature/storage tradeoff is pending owner choic
 
 - v0.18.1 is [released and deployed on both hosts](lightweight-storage-rollout.md).
   The patch corrects Codex resume backend planning and physical-path validation.
-  Four previously degraded Mac native terminals await safe restart.
+  Two previously degraded Mac discussions are recovered; two await an explicit
+  native project-trust decision. The prepared trust edit has not been applied.
   Old live shims still use their old logging behavior until they retire.
   Native provider history and existing phone
   caches are unchanged. Host history after restart/eviction is unavailable;

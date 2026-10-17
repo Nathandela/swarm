@@ -5,8 +5,9 @@
 The owner authorized release, deployment on the Mac and `tf_nathan`, and cleanup
 of reviewed legacy Swarm buildup. The release and both supervisor deployments
 completed. Final Mac checks found a Codex resume backend regression; v0.18.1
-corrects it and the independently found symlink-path bypass. Existing affected
-native terminals still need a safe stop/resume cycle. This records the checked
+corrects it and the independently found symlink-path bypass. Owner-approved
+native recovery restored two discussions; two require a native project-trust
+decision. This records the checked
 cleanup and runtime checkpoint; the
 [whole fixing plan](../specifications/lightweight-storage-plan.md) remains open.
 
@@ -180,7 +181,7 @@ matched the installed release. The previously active Mac gateway was restarted
 and its loaded executable matched the installed patch after asynchronous restart
 settled. The VM gateway was inactive at the final check.
 
-| Final checkpoint | Mac | VM |
+| Patch deployment checkpoint, before native recovery | Mac | VM |
 |---|---:|---:|
 | Retained session metadata rows | 51 | 240 |
 | Live, adopted shims | 6 | 6 |
@@ -189,12 +190,12 @@ settled. The VM gateway was inactive at the final check.
 | Durable conversation records | 0 | 0 |
 | Running sessions with a recorded backend planning failure | 4 | 0 |
 
-The VM doctor had no failures. The Mac's four preexisting v0.18.0 degraded native
-terminals remain running; replacing a supervisor cannot add an omitted backend
-to an already-running shim. Owner confirmation of quiescence was requested
-because the external owner Kill API cannot atomically observe local controller
-leases or composer queues and could discard an unsent draft. No native process
-was interrupted for this recovery while confirmation remained pending.
+The VM doctor had no failures. At this checkpoint the Mac's four preexisting
+v0.18.0 degraded native terminals were still running; supervisor replacement
+cannot add an omitted backend to an already-running shim. Owner confirmation of
+quiescence was requested because the external owner Kill API cannot atomically
+observe local controller leases or composer queues and could discard an unsent
+draft. The subsequent approved recovery is recorded below.
 
 Both exact installed patches passed the strict isolated real-Codex smoke against
 Codex 0.163.0, without prompts or model turns. The first VM attempt used an
@@ -209,12 +210,49 @@ tails stayed at 65,568 bytes, no legacy captures appeared, exits succeeded and
 owned scratch data was removed. These checks establish the tested new-session
 behavior, not a whole-machine or long-term growth ceiling.
 
-All task-owned synthetic processes, VM RAM helper roots, Mac temporary tools,
+The initial task-owned synthetic processes, VM RAM helper roots, Mac temporary tools,
 raw reports, spent cleanup manifests and the extra smoke receipt were removed
 after identity/reference checks. The Mac task-root scan found zero open
-references and no inspection errors. Only the 11,319-byte private preservation
-inventory for unresolved unique/live work remains. No duplicate conversation
+references and no inspection errors. At that checkpoint only the 11,319-byte private preservation
+inventory for unresolved unique/live work remained. No duplicate conversation
 backup is retained; bounded ordinary binary rollback slots remain separate.
+
+## Approved native discussion recovery
+
+The owner explicitly approved restarting all four affected Mac native terminals
+and confirmed that no unsent drafts needed preservation. Exact source IDs,
+idle state, kernel process identity, native IDs, selected projects and absence
+of overlapping live conversations were checked before targeted stop/resume.
+A macOS process-exit probe race was corrected before continuing; no uncertain
+launch request was repeated.
+
+Two replacements are verified healthy: native conversation IDs, names, tags and
+selected projects are preserved; real backend/frontend processes use the correct
+cwd and remote endpoint; latest capability controls bind `structured_chat=true`
+to each current session instance. Independent verification found 54 retained
+metadata rows, five live sessions, a 1,000,769-byte/16-segment durable journal and
+zero persisted interaction records after loading these real native histories.
+
+One replacement exited during startup. A bounded, no-prompt direct native PTY
+probe captured Codex 0.163.0's project-trust refusal: the selected project has no
+exact trust entry beneath an explicitly untrusted ancestor. The selected path
+is already its physical Git root. Same model, environment and saved native
+history are present; changing to a broader directory would change the workspace.
+Official [remote trust-check source](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/tui/src/config_update.rs#L369-L382)
+confirms this distinct native gate. Remote cwd override itself is supported;
+its [native test](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/tui/src/app_server_session.rs#L3397-L3418)
+retains cwd without overriding saved permissions.
+
+The fourth source has the same missing-project-trust condition and remains
+running untouched. The failed second source and its history are retained.
+An owner decision is pending for exactly two project entries in the effective
+native config. The prepared, unapplied edit adds only those trust entries;
+parsed comparison proves the broader untrusted setting and every other existing
+value remain unchanged. No trust or sandbox permission change has been applied.
+The Mac doctor therefore still reports one running degraded terminal; the other
+blocked discussion is stopped. Six private recovery files totaling 33,626 bytes are retained only
+while that explicit security decision is pending; spent diagnostic files have
+been removed and no original native-config backup has been created.
 
 ## Homebrew collateral change and repair
 
