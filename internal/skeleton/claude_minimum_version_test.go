@@ -70,7 +70,7 @@ func TestBoundResume_NeverDowngradesBelowSourceCLI(t *testing.T) {
 	account := accountTestAdmit(t, m, accountTestCandidate(t, m, accounts.ProviderClaude, "downgrade-account"))
 	binding := accountTestBinding(t, m, account)
 	source := runningCodex("newer-source", identityA, status.TurnIdle, migratedConversationID)
-	source.AgentType, source.Cwd, source.Env, source.AccountBinding = accounts.ProviderClaude, m.stateRoot, env, &binding
+	source.AgentType, source.Cwd, source.Env, source.AccountBinding = accounts.ProviderClaude, accountTestProject(t), env, &binding
 	source.CLIIdentity = &persist.CLIIdentity{Path: alias, Version: "2.1.290", Fingerprint: "newer-writer"}
 	source.Status.Process, source.AccountProjectionRef = status.ProcessExited, strings.Repeat("a", 64)
 	store, err := persist.NewStore(m.stateRoot)
@@ -83,7 +83,7 @@ func TestBoundResume_NeverDowngradesBelowSourceCLI(t *testing.T) {
 	core := accountTestCore(t, m, nil)
 	api := &coreAPI{core: core, accounts: m, endpointID: testEndpoint}
 	before := len(core.List())
-	meta, err := api.launchResolved(daemon.LaunchSpec{AgentType: accounts.ProviderClaude, Argv: []string{alias}, Cwd: m.stateRoot, ClientEnv: env, AccountBinding: &binding, Options: map[string]string{protocol.OptionResumeFrom: testEndpoint + "/" + source.ID}, Cols: 80, Rows: 24})
+	meta, err := api.launchResolved(daemon.LaunchSpec{AgentType: accounts.ProviderClaude, Argv: []string{alias}, Cwd: source.Cwd, ClientEnv: env, AccountBinding: &binding, Options: map[string]string{protocol.OptionResumeFrom: testEndpoint + "/" + source.ID}, Cols: 80, Rows: 24})
 	if err == nil {
 		_ = core.Kill(meta.ID)
 	}
@@ -104,7 +104,7 @@ func TestCLIRefresh_BoundClaudeWithNewerOwnerCLIGetsASupportedTarget(t *testing.
 		t.Fatal(err)
 	}
 	session := runningCodex("bound-claude", identityA, status.TurnIdle, migratedConversationID)
-	session.AgentType, session.Cwd, session.Env, session.CLIIdentity = accounts.ProviderClaude, m.stateRoot, env, old
+	session.AgentType, session.Cwd, session.Env, session.CLIIdentity = accounts.ProviderClaude, accountTestProject(t), env, old
 	session.AccountBinding = &accounts.Binding{Provider: accounts.ProviderClaude, AccountID: "bound-account"}
 	f := newAuthFake(identityA)
 	f.add(session)

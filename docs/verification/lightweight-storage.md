@@ -42,6 +42,16 @@ checksum verified). Tests use shared compiler/module caches, `TMPDIR=/private/tm
 private umask and no inherited `SWARM_*` variables. Final broad checks use four Go
 CPUs. No provider inference or existing-session deletion was used.
 
+Native Linux follow-up on 2026-10-17 reached `tf_nathan`. At source revision
+`edf7b89a`, build, vet and full pinned lint passed. The first complete ordinary
+suite took 596.6 seconds and exposed connected account fixtures whose projects
+still lived inside state, an obsolete PR-trigger assertion, an umask-sensitive
+credential fixture, and a fast-exit attach race. Long Go temporary paths also
+caused socket-bind failures. Fixture corrections retain the production guard and
+original safety assertions; fresh native normal/race results are still pending.
+The checkout, modules, compiler/lint caches and binaries use private executable
+RAM storage because both persistent VM volumes have less than 2 GiB free.
+
 | Check | Evidence |
 |---|---|
 | `go build ./...`, `go vet ./...` | Pass |
@@ -85,8 +95,9 @@ it, additional writers can inherit the path, and the supported native-version
 range is broader than the tested binary. Writes larger than `PIPE_BUF` can
 interleave. Validating the resulting JSON lines cannot establish their original
 append boundaries. Independent review therefore rejected using uncharacterized
-FIFO bytes as exact model/request authority. Managed native containment also
-needs Linux runtime verification, unavailable while the VM is unreachable.
+FIFO bytes as exact model/request authority. This transport's Linux native-CLI
+behavior remains unverified; ordinary fixture tests cannot establish its framing
+contract.
 
 After establishing writer/framing custody, the narrow candidate is a 256 KiB
 non-evicting cache of normalized main-request failure evidence, bounded draining,
@@ -107,12 +118,18 @@ model proof is unavailable. That feature/storage tradeoff is pending owner choic
   candidate writer-free: several exited/lost rows still have native process cwd
   references, and the largest thread's original project directory is missing.
   Existing workspaces were not moved or purged (`agents-tracker-3bxu`).
-- The VM was unreachable over SSH during this follow-up. Its earlier figures
-  are historical; current Linux runtime and production before/after growth
-  measurements remain unrun.
+- The VM is reachable again and native Linux verification is in progress.
+  The refreshed inventory measures 14.813 GiB under Swarm. Production deployment
+  and before/after growth measurements remain unrun.
 - Managed Claude diagnostics remain an uncapped native writer. Its 16 MiB reader
   limit is not a disk bound. `agents-tracker-f9vv` records the required bounded
   ingestion characterization without discarding exact model-recovery proof.
+- Additional lifetime growth remains in shared `daemon.log` (`agents-tracker-b3df`),
+  audit-only `remote-activity.log` (`agents-tracker-85yb`), and final folded hook
+  batches retained by stopped attempts (`agents-tracker-j6bv`). The current VM
+  snapshot measured about 1 MB of debug log and 8.56 MB of hook spools; those do
+  not explain its GiB-scale workspace allocation. Shared log descriptors and
+  stopped-writer/fold-coordinate proof constrain safe retirement.
 - At operation capacity, new mutating requests wait for legitimate expiry instead
   of displacing existing guards. Existing sealed outbound envelopes and
   ingress/control receipts were preserved; paired delivery still performs writes.

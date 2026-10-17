@@ -31,6 +31,15 @@ func accountTestState(t *testing.T) string {
 	return canonical
 }
 
+func accountTestProject(t *testing.T) string {
+	t.Helper()
+	project := filepath.Join(accountTestState(t), "project")
+	if err := os.Mkdir(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return project
+}
+
 func accountTestManager(t *testing.T, root string) *accountManager {
 	t.Helper()
 	// Manager startup probes only version; an empty PATH keeps these tests
@@ -130,7 +139,7 @@ func accountTestBinding(t *testing.T, m *accountManager, account accounts.Accoun
 
 func accountTestLaunchEnvironment(t *testing.T, root string) (home, cwd string, env []string) {
 	t.Helper()
-	home, cwd = filepath.Join(root, "ordinary-home"), filepath.Join(root, "project")
+	home, cwd = filepath.Join(root, "ordinary-home"), accountTestProject(t)
 	for _, directory := range []string{home, filepath.Join(home, ".codex"), cwd} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)

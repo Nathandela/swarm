@@ -51,7 +51,7 @@ func driftLaunchFixture(t *testing.T, provider string) (directoryLaunchFixture, 
 	api := newCoreAPI(core, "", testEndpoint)
 	api.accounts = m
 	t.Cleanup(api.close)
-	f := directoryLaunchFixture{api: api, manager: m, env: env}
+	f := directoryLaunchFixture{api: api, manager: m, env: env, cwd: cwd}
 	return f, configurationOwnerClient(t, api, m.stateRoot), home, cwd
 }
 

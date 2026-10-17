@@ -23,6 +23,7 @@ type directoryLaunchFixture struct {
 	api     *coreAPI
 	manager *accountManager
 	env     []string
+	cwd     string
 	record  string
 }
 
@@ -34,7 +35,7 @@ func newDirectoryLaunchFixture(t *testing.T, provider string) directoryLaunchFix
 	if _, err := m.store.SetEnabled(accountTestRegistry(t, m).Revision, provider, true); err != nil {
 		t.Fatal(err)
 	}
-	_, _, env := accountTestLaunchEnvironment(t, m.stateRoot)
+	_, cwd, env := accountTestLaunchEnvironment(t, m.stateRoot)
 	bin, record := filepath.Join(m.stateRoot, provider), filepath.Join(m.stateRoot, "native-cwd")
 	version := "codex-cli 0.160.0"
 	if provider == "claude" {
@@ -57,7 +58,7 @@ func newDirectoryLaunchFixture(t *testing.T, provider string) directoryLaunchFix
 	api := newCoreAPI(core, "", testEndpoint)
 	api.accounts = m
 	t.Cleanup(api.close)
-	return directoryLaunchFixture{api: api, manager: m, env: env, record: record}
+	return directoryLaunchFixture{api: api, manager: m, env: env, cwd: cwd, record: record}
 }
 
 func (f directoryLaunchFixture) check(t *testing.T, meta persist.Meta, requested string, worktree bool) {
@@ -199,8 +200,8 @@ func TestLaunchDirectoryNormalizationPreservesSafety(t *testing.T) {
 	for _, path := range []string{"canonical", "trailing-separators", "root", "root-separators", "final-symlink", "ancestor-symlink", "parent-traversal", "symlink-parent-traversal"} {
 		t.Run(path, func(t *testing.T) {
 			f := newDirectoryLaunchFixture(t, "codex")
-			cwd := filepath.Join(f.manager.stateRoot, "project")
-			link := filepath.Join(f.manager.stateRoot, "linked")
+			cwd := f.cwd
+			link := filepath.Join(filepath.Dir(cwd), "linked")
 			if err := os.Mkdir(filepath.Join(cwd, "inner"), 0o700); err != nil {
 				t.Fatal(err)
 			}

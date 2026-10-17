@@ -459,7 +459,8 @@ func TestR7ShimBackend_ABackendThatNeverBecomesServableStillLaunchesTheAgent(t *
 // launched before R7, and every session of every other CLI forever, has Config.Backend == nil.
 // Nothing about it may change: no file written, no timeout waited, no handshake expected.
 func TestR7ShimBackend_ANilBackendIsThePreR7SessionByteForByte(t *testing.T) {
-	cfg := helperConfig(t, modeInfo, nil, nil)
+	// Hold the agent until attach so a fast clean exit cannot outrun the socket dial.
+	cfg := helperConfig(t, modeStreamBlock, nil, nil)
 	if cfg.Backend != nil {
 		t.Fatal("helperConfig set a Backend")
 	}
@@ -469,12 +470,16 @@ func TestR7ShimBackend_ANilBackendIsThePreR7SessionByteForByte(t *testing.T) {
 	c.startReader() // dialShim does not; every other test in this package starts it explicitly
 	c.hello(shimwire.Version)
 	c.attach()
-	if c.waitObserved("INFO_DONE", 15*time.Second) == "" {
+	if c.waitObserved("PHASE1_DONE", 15*time.Second) == "" {
 		_ = c.conn.Close()
 		t.Fatal("a session with no backend did not run its agent")
 	}
+	c.writeDataIn([]byte("go\n"))
+	c.waitControl(shimwire.TypeExitReport, 10*time.Second)
 	_ = c.conn.Close()
-	waitRun(t, done, 20*time.Second)
+	if result := waitRun(t, done, 20*time.Second); result.err != nil || result.exit != 0 {
+		t.Fatalf("no-backend agent outcome: %+v", result)
+	}
 
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Errorf("a no-backend session took %s; it must not wait on a handshake it never declared "+

@@ -313,6 +313,9 @@ func TestUnsafeNativePathsAndRegistryFIFO(t *testing.T) {
 				if err := os.WriteFile(path, raw, 0o644); err != nil {
 					t.Fatal(err)
 				}
+				if err := os.Chmod(path, 0o644); err != nil {
+					t.Fatal(err)
+				}
 			case "hardlink":
 				other := filepath.Join(c.ProfilePath, "other.json")
 				if err := os.WriteFile(other, raw, 0o600); err != nil {

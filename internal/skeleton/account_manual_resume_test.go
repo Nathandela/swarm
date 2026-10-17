@@ -43,6 +43,7 @@ func manualResumeFixture(t *testing.T) *accountManualResumeFixture {
 	t.Helper()
 	store, root, bindings := accountTestStore(t, 1)
 	source := accountTestSource(t, root, bindings[0])
+	source.Cwd = accountTestProject(t)
 	source.Status.Process = status.ProcessLost
 	source.ShimPID, source.ShimStartTime = 1<<30, 1
 	source.LaunchOptions = map[string]string{"model": "gpt-native-fixture"}

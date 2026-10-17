@@ -55,12 +55,43 @@ private project paths and provider thread identifiers.
   identities, preserving unique work, removing approved cache targets and
   measuring the result are separate steps. No bulk deletion was performed.
 
-## VM limit
+## Current VM allocation
 
-Both current SSH attempts timed out on port 22, so current state, process ownership
-and installed Go paths could not be checked. Previous measurements are historical:
-about 15.3 GiB Swarm state, with a later root/data free-space observation of
-918 MiB / 5.5 GiB. They are not present-state measurements or cleanup approval.
+Earlier SSH timeouts and the 15.3 GiB / 918 MiB root-free / 5.5 GiB data-free
+observations are historical. Read-only SSH succeeded on 2026-10-17. The
+allocation/free-space checkpoint was
+06:17:56 UTC; metadata and process coverage were sampled between 06:15:57 and
+06:17:21 UTC. The targeted Swarm-tree `du` completed without errors.
+
+| Class | Allocated GiB | Disposition |
+|---|---:|---|
+| Swarm parent state tree | 14.813 | Supersedes the historical 15.3 GiB observation |
+| Actual daemon state root | 14.813 | Includes session rows and control stores |
+| 236 session rows | 13.181 | Source, outputs and caches remain unclassified |
+| Accounts | 1.164 | Preserve provider/account state |
+| Structured journal | 0.434 | Existing legacy capture; no migration run here |
+| Other directories without metadata | 0.034 | Ownership and contents unchecked |
+
+Remote state used 24 KiB and the idempotency directory 4 KiB. Other state-root
+files and directory overhead used about 1.05 MiB. The eight largest session
+directories used 2.003, 1.678, 1.158, 1.155, 1.138, 1.084, 0.699 and 0.615 GiB;
+their private identifiers and project names are omitted. Root/data free and
+available space was 1.575 / 1.587 GiB respectively.
+
+An additional metadata-only checkpoint at 06:19:51 UTC found one `daemon.log`
+using 1,011,712 allocated bytes, 235 `hooks.spool` files using 8,560,640 bytes,
+and 537 known hook-spool sidecars using 1,232,896 bytes. These amounts are already
+included in the totals above. No `remote-activity.log` or numbered log rotations
+were present at the known parent/state-root paths; file contents were not read.
+
+The roster contained 170 exited, 64 lost and two running rows. No readable
+process cwd pointed into Swarm state. Of 41 same-user processes, 36 allowed cwd
+inspection; five denied it and had other process names, rather than native
+CLI, Swarm or node names. These observations do not prove writer absence: cwd
+inspection misses open files and access-denied processes. No session directory
+is declared safe to delete, and no VM source/cache byte count is proved
+reclaimable. The RAM validation workspace, native CLIs and user data were not
+modified by this inventory. No detailed VM artifact was retained.
 
 ## Local detailed manifest
 

@@ -23,6 +23,9 @@ and covered by pressure/restart regressions.
 | Enforce the workspace boundary | Refuse agent working directories under supervisor state, including aliases and hook-resolved paths. Explicitly align Codex resume to the saved/resolved project so a legacy native cwd cannot silently re-enter state. Worktree creation remains opt-in. | `agents-tracker-sb4m` |
 | Stop test-generated waste | Remove run-owned temporary binaries and reap only processes using those unique executables on macOS and Linux. Preserve unrelated processes and shared compiler caches. | `agents-tracker-uh9e` |
 | Bound native Claude diagnostics | Still open: the native diagnostic writer is uncapped, while the reader stops at 16 MiB. FIFO routing was characterized, but serialized/framed writer custody is not established. Preserve exact current prompt/request/model proof; stopping capture instead requires holding affected automatic recovery. This feature/storage tradeoff is pending owner choice. | `agents-tracker-f9vv` |
+| Bound shared debug output | Still open: daemon and surviving shims share append-only log descriptors. Bound the recognized owned inode without leaving unlinked live writers; measure any between-check overshoot explicitly. | `agents-tracker-b3df` |
+| Retire folded stopped-hook payloads | Still open: final disk batches can remain after folding, up to 8 MiB per stopped attempt. Prove writer death and durable fold coverage, then compact payloads while preserving spool incarnation, floor and sequence controls. | `agents-tracker-j6bv` |
+| Define audit retention | Still open: remote launch activity records are audit-only and currently uncapped. A bounded policy reduces forensic history and must be explicit. | `agents-tracker-85yb` |
 
 The implementation uses small bounds inside existing stores. It does not add a
 global quota manager, a background janitor, a new archive service, or native
@@ -55,8 +58,9 @@ Produce a concrete per-host cleanup inventory before deleting existing workspace
 contents. Development tests use temporary data. The source fixes themselves do
 not reclaim the hundreds of GiB already accumulated on the Mac or VM.
 The [current cleanup inventory](../verification/storage-cleanup-inventory.md)
-separates measured cache candidates, live writers and unresolved ownership;
-unreachable VM measurements remain historical.
+separates measured cache candidates, live writers and unresolved ownership. The
+VM is reachable again; its refreshed measurement supersedes the historical size,
+while native test results are recorded separately in the verification checkpoint.
 
 ## Keep the small safety state
 

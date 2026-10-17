@@ -21,6 +21,7 @@ import (
 func TestManagedClaudeActualLaunchUsesTheOwnerBinary(t *testing.T) {
 	buildBinaries(t)
 	m, env, source, alias := nativeRetentionFixture(t)
+	cwd := accountTestProject(t)
 	home := strings.TrimPrefix(env[0], "HOME=")
 	record := filepath.Join(m.stateRoot, "selected-child.json")
 	accountTestPut(t, filepath.Join(home, ".retention-fixture-record"), []byte(record))
@@ -30,14 +31,14 @@ func TestManagedClaudeActualLaunchUsesTheOwnerBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	upgradeOwnerClaude(t, source, alias)
-	owner, err := probeCLIIdentity(accounts.ProviderClaude, "", env, m.stateRoot)
+	owner, err := probeCLIIdentity(accounts.ProviderClaude, "", env, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A cli-refresh owner relaunch with rotation on resolves argv0 through the
 	// managed resolver; its probe must equal the refresh's expected identity.
 	unbound := runningCodex("ended-owner", identityA, status.TurnIdle, migratedConversationID)
-	unbound.AgentType, unbound.Cwd, unbound.Env, unbound.CLIIdentity = accounts.ProviderClaude, m.stateRoot, env, &persist.CLIIdentity{Path: alias, Version: "2.1.289", Fingerprint: "older"}
+	unbound.AgentType, unbound.Cwd, unbound.Env, unbound.CLIIdentity = accounts.ProviderClaude, cwd, env, &persist.CLIIdentity{Path: alias, Version: "2.1.289", Fingerprint: "older"}
 	unbound.Status.Process = status.ProcessExited
 	store, err := persist.NewStore(m.stateRoot)
 	if err != nil {
@@ -54,15 +55,15 @@ func TestManagedClaudeActualLaunchUsesTheOwnerBinary(t *testing.T) {
 	api := newCoreAPI(core, "", testEndpoint)
 	api.accounts = m
 	t.Cleanup(api.close)
-	relaunch := daemon.LaunchSpec{AgentType: accounts.ProviderClaude, Cwd: m.stateRoot, ClientEnv: env, Options: map[string]string{protocol.OptionResumeFrom: testEndpoint + "/" + unbound.ID}, ExpectedCLIIdentity: owner, Cols: 80, Rows: 24}
+	relaunch := daemon.LaunchSpec{AgentType: accounts.ProviderClaude, Cwd: cwd, ClientEnv: env, Options: map[string]string{protocol.OptionResumeFrom: testEndpoint + "/" + unbound.ID}, ExpectedCLIIdentity: owner, Cols: 80, Rows: 24}
 	composed, err := composeLaunchSpec(relaunch, testEndpoint, "", core.Get, api.accountLaunchResolver(relaunch))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if relaunched, err := probeCLIIdentity(accounts.ProviderClaude, composed.Argv[0], env, m.stateRoot); err != nil || *relaunched != *owner {
+	if relaunched, err := probeCLIIdentity(accounts.ProviderClaude, composed.Argv[0], env, cwd); err != nil || *relaunched != *owner {
 		t.Fatalf("owner relaunch with rotation on resolved another CLI: %+v %v", relaunched, err)
 	}
-	meta, err := api.Launch(daemon.LaunchSpec{AgentType: accounts.ProviderClaude, Cwd: m.stateRoot, ClientEnv: env, Options: map[string]string{}, Cols: 80, Rows: 24})
+	meta, err := api.Launch(daemon.LaunchSpec{AgentType: accounts.ProviderClaude, Cwd: cwd, ClientEnv: env, Options: map[string]string{}, Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +92,7 @@ func TestManagedClaudeActualLaunchUsesTheOwnerBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	observed := shim.ReadCLIObservation(filepath.Join(m.stateRoot, meta.ID))
-	if child.Executable != resolved || child.Argv0 != alias || child.Cwd != m.stateRoot || observed == nil || *observed != *owner {
+	if child.Executable != resolved || child.Argv0 != alias || child.Cwd != cwd || observed == nil || *observed != *owner {
 		t.Fatalf("child/observation selected another executable: %+v %+v", child, observed)
 	}
 	if _, err := os.Lstat(filepath.Join(m.stateRoot, "accounts", "native")); err == nil {
@@ -122,7 +123,7 @@ func TestRefreshTargetIdentity_StaleRetainedTargetFollowsTheOwnerCLI(t *testing.
 		t.Fatal(err)
 	}
 	session := runningCodex("bound-claude", identityA, status.TurnIdle, migratedConversationID)
-	session.AgentType, session.Cwd, session.Env, session.CLIIdentity = accounts.ProviderClaude, m.stateRoot, env, old
+	session.AgentType, session.Cwd, session.Env, session.CLIIdentity = accounts.ProviderClaude, accountTestProject(t), env, old
 	session.AccountBinding = &accounts.Binding{Provider: accounts.ProviderClaude, AccountID: "bound-account"}
 	w := testWatcher(t, newAuthFake(identityA))
 	w.state = emptyAuthWatchState()

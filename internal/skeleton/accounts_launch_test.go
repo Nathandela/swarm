@@ -30,7 +30,7 @@ func TestAccountLaunchPoolEnrollsOwnerLaunchesAndPreservesFrozenResume(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(persist.Meta{ID: "bound-source", AgentType: "codex", ConversationID: migratedConversationID, Cwd: m.stateRoot, AccountBinding: &binding, AccountProjectionRef: projection, CreatedAt: time.Now(), Status: status.Status{Process: status.ProcessExited}}); err != nil {
+	if err := store.Save(persist.Meta{ID: "bound-source", AgentType: "codex", ConversationID: migratedConversationID, Cwd: accountTestProject(t), AccountBinding: &binding, AccountProjectionRef: projection, CreatedAt: time.Now(), Status: status.Status{Process: status.ProcessExited}}); err != nil {
 		t.Fatal(err)
 	}
 	core := accountTestCore(t, m, nil)
@@ -86,8 +86,8 @@ func TestAccountLaunchFinalizesBothConfigurationsAfterActualCwd(t *testing.T) {
 	candidate := accountTestCandidate(t, m, "codex", "projected-account")
 	account := accountTestAdmit(t, m, candidate)
 	binding := accountTestBinding(t, m, account)
-	home, _, env := accountTestLaunchEnvironment(t, m.stateRoot)
-	actual := filepath.Join(m.stateRoot, "actual-worktree")
+	home, requested, env := accountTestLaunchEnvironment(t, m.stateRoot)
+	actual := filepath.Join(filepath.Dir(requested), "actual-worktree")
 	if err := os.Mkdir(actual, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestAccountLaunchInvalidBindingOrConfigurationStartsZeroChildren(t *testing
 			account := accountTestAdmit(t, m, candidate)
 			binding := accountTestBinding(t, m, account)
 			home, requested, env := accountTestLaunchEnvironment(t, m.stateRoot)
-			actual := filepath.Join(m.stateRoot, "actual-worktree")
+			actual := filepath.Join(filepath.Dir(requested), "actual-worktree")
 			if err := os.Mkdir(actual, 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -194,7 +194,7 @@ func TestAccountLaunchActualCLIAndBackendShareBoundProfileAndWorktree(t *testing
 	account := accountTestAdmit(t, m, candidate)
 	binding := accountTestBinding(t, m, account)
 	home, requested, env := accountTestLaunchEnvironment(t, m.stateRoot)
-	actual := filepath.Join(m.stateRoot, "actual-worktree")
+	actual := filepath.Join(filepath.Dir(requested), "actual-worktree")
 	if err := os.Mkdir(actual, 0o700); err != nil {
 		t.Fatal(err)
 	}

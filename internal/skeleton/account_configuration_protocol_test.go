@@ -114,7 +114,7 @@ func TestAccountConfigurationOwnerProtocolPreservesCustomOriginAndResume(t *test
 				env = append(env, "CLAUDE_CODE_NO_MODEL_FALLBACK=false")
 			}
 			owner := configurationOwnerClient(t, f.api, f.manager.stateRoot)
-			cwd := filepath.Join(f.manager.stateRoot, "project")
+			cwd := f.cwd
 			id, _, err := owner.Launch(protocol.LaunchReq{Agent: provider, Cwd: cwd + "/", Env: env, Cols: 80, Rows: 24})
 			if err != nil {
 				t.Fatal(err)
@@ -233,7 +233,7 @@ func TestAccountConfigurationOwnerProtocolRefusesSelectorsBeforeDestinationWrite
 			profiles := filepath.Join(f.manager.stateRoot, "accounts", "profiles")
 			projections := filepath.Join(f.manager.stateRoot, "accounts", "configurations")
 			before, beforeProjections := configurationFenceSnapshot(t, profiles), configurationFenceSnapshot(t, projections)
-			_, _, err := owner.Launch(protocol.LaunchReq{Agent: "claude", Cwd: filepath.Join(f.manager.stateRoot, "project"), Env: append(append([]string(nil), f.env...), selector), Cols: 80, Rows: 24})
+			_, _, err := owner.Launch(protocol.LaunchReq{Agent: "claude", Cwd: f.cwd, Env: append(append([]string(nil), f.env...), selector), Cols: 80, Rows: 24})
 			if err == nil || !strings.Contains(err.Error(), "provider-or-profile-selector") && !strings.Contains(err.Error(), "configuration-origin-not-characterized") {
 				t.Fatalf("owner selector disappeared before managed admission: %v", err)
 			}
@@ -283,7 +283,7 @@ func TestAccountConfigurationOwnerProtocolNilUsesSavedOriginEmptyDoesNot(t *test
 	// Change live environment after Open: only the daemon's saved origin is valid.
 	t.Setenv("CODEX_HOME", "/live-unavailable")
 	owner := configurationOwnerClient(t, f.api, f.manager.stateRoot)
-	cwd := filepath.Join(f.manager.stateRoot, "project")
+	cwd := f.cwd
 	id, _, err := owner.Launch(protocol.LaunchReq{Agent: "codex", Cwd: cwd, Env: nil, Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("nil owner environment did not use saved daemon origin: %v", err)
@@ -307,7 +307,7 @@ func TestAccountConfigurationOwnerProtocolNilRetainsSavedUnsupportedXDG(t *testi
 	profiles := filepath.Join(f.manager.stateRoot, "accounts", "profiles")
 	projections := filepath.Join(f.manager.stateRoot, "accounts", "configurations")
 	before, beforeProjections := configurationFenceSnapshot(t, profiles), configurationFenceSnapshot(t, projections)
-	_, _, err := owner.Launch(protocol.LaunchReq{Agent: "codex", Cwd: filepath.Join(f.manager.stateRoot, "project"), Env: nil, Cols: 80, Rows: 24})
+	_, _, err := owner.Launch(protocol.LaunchReq{Agent: "codex", Cwd: f.cwd, Env: nil, Cols: 80, Rows: 24})
 	if err == nil || !strings.Contains(err.Error(), "configuration-origin-not-characterized") {
 		t.Fatalf("nil owner environment lost saved unsupported XDG origin: %v", err)
 	}

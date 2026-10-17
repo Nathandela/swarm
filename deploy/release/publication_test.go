@@ -22,8 +22,9 @@ type job struct {
 }
 
 type workflow struct {
-	Permissions map[string]string `yaml:"permissions"`
-	Jobs        map[string]job    `yaml:"jobs"`
+	On          map[string]yaml.Node `yaml:"on"`
+	Permissions map[string]string    `yaml:"permissions"`
+	Jobs        map[string]job       `yaml:"jobs"`
 }
 
 func read(t *testing.T, path string) string {
@@ -56,8 +57,16 @@ func TestReleasePublishesOnlyImmutableTagImagesWithProvenance(t *testing.T) {
 	if strings.Contains(strings.ToLower(raw), ":latest") {
 		t.Fatal("release workflow must never publish a mutable latest tag")
 	}
-	if strings.Contains(raw, "pull_request:") || !strings.Contains(raw, "tags:") {
+	push, tagTriggered := wf.On["push"]
+	if !tagTriggered || len(wf.On) != 1 {
 		t.Fatal("release publication must be reachable only from a tag-triggered workflow")
+	}
+	var pushFilters map[string][]string
+	if err := push.Decode(&pushFilters); err != nil {
+		t.Fatalf("parse release push filters: %v", err)
+	}
+	if len(pushFilters) != 1 || len(pushFilters["tags"]) != 1 || pushFilters["tags"][0] != "v*" {
+		t.Fatalf("release push filters = %#v, want only tags: [v*]", pushFilters)
 	}
 	if wf.Permissions["packages"] == "write" {
 		t.Fatal("packages: write must not be granted workflow-wide")
@@ -142,14 +151,14 @@ func TestReleasePublishesOnlyImmutableTagImagesWithProvenance(t *testing.T) {
 	}
 }
 
-func TestPRContainerGatesCannotPublish(t *testing.T) {
+func TestReusableContainerGatesCannotPublish(t *testing.T) {
 	for _, path := range []string{
 		"../../.github/workflows/pushgw-container.yml",
 	} {
 		raw := read(t, path)
 		wf := parseWorkflow(t, path)
-		if !strings.Contains(raw, "pull_request:") {
-			t.Errorf("%s no longer runs on pull requests", path)
+		if _, callable := wf.On["workflow_call"]; !callable || len(wf.On) != 1 {
+			t.Errorf("%s must run only through workflow_call", path)
 		}
 		if strings.Contains(raw, "docker/login-action") || strings.Contains(raw, "push: true") {
 			t.Errorf("%s may authenticate or push from an untrusted build/scan lane", path)

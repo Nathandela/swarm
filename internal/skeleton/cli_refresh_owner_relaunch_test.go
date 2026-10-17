@@ -25,7 +25,7 @@ func TestCLIRefresh_OwnerRelaunchStaysUnboundWhenRotationIsOn(t *testing.T) {
 	old := &persist.CLIIdentity{Path: "/abs/claude", Version: "2.1.299", Fingerprint: "old"}
 	target := &persist.CLIIdentity{Path: "/abs/claude", Version: "2.1.300", Fingerprint: "new"}
 	source := runningCodex("source", identityA, status.TurnIdle, migratedConversationID)
-	source.AgentType, source.CLIIdentity, source.Cwd, source.CreatedAt = "claude", old, m.stateRoot, time.Now()
+	source.AgentType, source.CLIIdentity, source.Cwd, source.CreatedAt = "claude", old, accountTestProject(t), time.Now()
 	source.Status.Process = status.ProcessExited
 	store, err := persist.NewStore(m.stateRoot)
 	if err != nil {
