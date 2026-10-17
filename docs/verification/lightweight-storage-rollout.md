@@ -1,12 +1,13 @@
 # Lightweight storage release and rollout
 
-2026-10-17 · `v0.18.0` · source `c9db413b`
+2026-10-17 · `v0.18.0` / `v0.18.1` · source `c9db413b` / `59e0ef84`
 
 The owner authorized release, deployment on the Mac and `tf_nathan`, and cleanup
 of reviewed legacy Swarm buildup. The release and both supervisor deployments
-completed. Final Mac checks found a Codex resume backend regression, so a patch
-release is required before rollout sign-off. This records the checked cleanup
-and runtime checkpoint; the
+completed. Final Mac checks found a Codex resume backend regression; v0.18.1
+corrects it and the independently found symlink-path bypass. Existing affected
+native terminals still need a safe stop/resume cycle. This records the checked
+cleanup and runtime checkpoint; the
 [whole fixing plan](../specifications/lightweight-storage-plan.md) remains open.
 
 ## Release and deployment
@@ -19,7 +20,7 @@ remaining limits. The release gates supplement the
 [native Linux verification](lightweight-storage-linux.md); their documented
 skips and separate full-Mac-suite baseline failures remain limitations.
 
-Both machines now run the v0.18.0 supervisor. The Mac used its existing Homebrew
+Both machines initially received the v0.18.0 supervisor. The Mac used its existing Homebrew
 ownership and cask bookkeeping. Unattended convergence deferred with exit 2;
 the authorized daemon-only restart used the existing private saved environment,
 loaded in memory without displaying its values. Its previously running gateway
@@ -32,7 +33,7 @@ The VM used the standard signed release staging step. Its root-owned binary
 pair was installed atomically per file, while the supervisor remained owned by
 the ordinary Ubuntu user. Upgrade and daemon singleton locks fenced the offline
 journal transition and installation. The previously inactive gateway remained
-inactive. Normal rollback slots retain v0.17.10; no older journal snapshot may
+inactive. At this initial checkpoint, rollback slots retained v0.17.10; no older journal snapshot may
 be restored after the new supervisor has accepted writes.
 
 Native agents were not terminated for these daemon restarts. On the Mac,
@@ -89,8 +90,8 @@ machine activity and are not exact savings attributed to this batch.
 
 The VM's private RAM journal backups, tools and transient migration files were
 removed after a privileged scan found zero executable, cwd, descriptor or
-mapping references and no inspection errors. Normal v0.17.10 binary rollback
-slots remain; no conversation backup was retained for rollback.
+mapping references and no inspection errors. At this checkpoint, normal v0.17.10 binary rollback
+slots remained; no conversation backup was retained for rollback.
 
 The Mac permanently removed 96 verified Rust target directories, totaling
 9,223,294,976 allocated bytes (about 8.59 GiB). Each root had the expected Cargo
@@ -159,6 +160,61 @@ native TUI received the exact `--remote` endpoint and project `--cd`, proving
 the backend handshake. No prompt or model turn was sent. The native processes
 and scratch root were removed. This does not prove a real existing conversation
 resume or a billable model response.
+
+## Patch v0.18.1 deployment
+
+[Release run 39018530265](https://github.com/Nathandela/swarm/actions/runs/39018530265)
+passed all 17 jobs before [v0.18.1](https://github.com/Nathandela/swarm/releases/tag/v0.18.1)
+was installed on both hosts. Both installed builds embed clean source revision
+`59e0ef84c5144abd26f744d8537b13f4c33a78e7`. The Mac used the verified cask-only
+Homebrew upgrade with automatic cleanup and autoremove explicitly disabled. The
+VM used standard signed staging and activation, including its narrow sudo
+fallback for the root-owned binary pair. The supervisor remained Ubuntu-owned. Its ordinary binary rollback slot now
+contains v0.18.0; no journal rollback copy was retained.
+
+Saved-environment supervisor restarts preserved all six current live shims on
+each machine. Kernel PID/start identities and replacement-daemon roster entries
+were checked together. A new non-test VM session appeared during live activity;
+its metadata was retained along with the original five. Loaded runtime images
+matched the installed release. The previously active Mac gateway was restarted
+and its loaded executable matched the installed patch after asynchronous restart
+settled. The VM gateway was inactive at the final check.
+
+| Final checkpoint | Mac | VM |
+|---|---:|---:|
+| Retained session metadata rows | 51 | 240 |
+| Live, adopted shims | 6 | 6 |
+| Durable journal content bytes | 994,180 | 1,001,742 |
+| Journal segments | 16 | 16 |
+| Durable conversation records | 0 | 0 |
+| Running sessions with a recorded backend planning failure | 4 | 0 |
+
+The VM doctor had no failures. The Mac's four preexisting v0.18.0 degraded native
+terminals remain running; replacing a supervisor cannot add an omitted backend
+to an already-running shim. Owner confirmation of quiescence was requested
+because the external owner Kill API cannot atomically observe local controller
+leases or composer queues and could discard an unsent draft. No native process
+was interrupted for this recovery while confirmation remained pending.
+
+Both exact installed patches passed the strict isolated real-Codex smoke against
+Codex 0.163.0, without prompts or model turns. The first VM attempt used an
+incomplete leader-thread-only `/proc` child probe and is discarded as observation
+evidence. The corrected probe unions all shim threads, calibrates against the
+known live backend PID, and requires native frontend arguments and both OS
+working directories to match the outside project. Owned native children, shim,
+daemon and scratch data were confirmed stopped/removed afterward.
+
+Both installed patches also repeated the 22 MiB terminal-output test: identity
+tails stayed at 65,568 bytes, no legacy captures appeared, exits succeeded and
+owned scratch data was removed. These checks establish the tested new-session
+behavior, not a whole-machine or long-term growth ceiling.
+
+All task-owned synthetic processes, VM RAM helper roots, Mac temporary tools,
+raw reports, spent cleanup manifests and the extra smoke receipt were removed
+after identity/reference checks. The Mac task-root scan found zero open
+references and no inspection errors. Only the 11,319-byte private preservation
+inventory for unresolved unique/live work remains. No duplicate conversation
+backup is retained; bounded ordinary binary rollback slots remain separate.
 
 ## Homebrew collateral change and repair
 

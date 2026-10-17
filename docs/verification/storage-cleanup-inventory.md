@@ -1,7 +1,7 @@
 # Storage cleanup inventory — 2026-10-17
 
 This is the initial read-only inventory. The later
-[v0.18.0 rollout and cleanup](lightweight-storage-rollout.md) records deployment,
+[v0.18 rollout and cleanup](lightweight-storage-rollout.md) records deployment,
 executed removal batches and retained material; its results supersede these
 pre-cleanup allocation and authorization snapshots.
 

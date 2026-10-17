@@ -10,7 +10,9 @@ governed by [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md).
 
 The [2026-10-17 source checkpoint](../verification/lightweight-storage.md) records
 implemented prevention and deletion behavior. [Release and rollout evidence](../verification/lightweight-storage-rollout.md)
-records v0.18.0 deployed on the owner's Mac and VM, with checked legacy cleanup.
+records v0.18.0 and corrective v0.18.1 deployed on the owner's Mac and VM, with
+checked legacy cleanup. Four previously degraded Mac terminals await safe native
+restart; the patch's isolated native resume checks pass on both hosts.
 Recovery of retained unique/live work and native diagnostic bounding remain open;
 the whole program is not complete. The operation-guard pressure flaw is also
 corrected and covered by pressure/restart regressions.

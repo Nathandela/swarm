@@ -6,7 +6,7 @@ The owner-selected [fixing plan](../specifications/lightweight-storage-plan.md)
 and [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md) replace duplicate
 discussion archives with live supervision. This is a source implementation
 checkpoint, not evidence of deployment or production space reclaimed.
-The later [v0.18.0 rollout](lightweight-storage-rollout.md) records both-host
+The later [v0.18 rollout](lightweight-storage-rollout.md) records both-host
 deployment, executed cleanup and production journal migration.
 
 ## Implemented boundaries
@@ -108,7 +108,9 @@ model proof is unavailable. That feature/storage tradeoff is pending owner choic
 
 ## Remaining full-plan work
 
-- v0.18.0 is [released and deployed on both hosts](lightweight-storage-rollout.md).
+- v0.18.1 is [released and deployed on both hosts](lightweight-storage-rollout.md).
+  The patch corrects Codex resume backend planning and physical-path validation.
+  Four previously degraded Mac native terminals await safe restart.
   Old live shims still use their old logging behavior until they retire.
   Native provider history and existing phone
   caches are unchanged. Host history after restart/eviction is unavailable;
