@@ -15,10 +15,11 @@ with checked legacy cleanup. The Mac retains only this operation's controlling
 discussion; the earlier trust-blocked discussions were subsequently deleted
 under the owner's explicit deep-clean instruction, without changing trust.
 Every VM WIP discussion is preserved. Three idle legacy terminals were handed off
-to bounded shims; one was already bounded, and two remain held. The owner is
-reviewing a simpler workspace recovery strategy: commit and push useful work,
-then permanently remove disposable clones, builds and task artifacts. Bulk
-relocation was prepared but never applied; its automation is stopped.
+to bounded shims; one was already bounded, and two remain held. The owner approved
+curated Git recovery, then deferred the final workspace cleanup and requested
+only obvious disposal for now. That final batch removed 1.28 GiB of unused
+environments, dependencies, caches, previews and a compiled binary. Bulk
+relocation was never applied; its automation and temporary tooling are removed.
 Completion of retained WIP recovery and native diagnostic bounding remain open;
 the whole program is not complete. The operation-guard pressure flaw is also
 corrected and covered by pressure/restart regressions.

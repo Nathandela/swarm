@@ -398,6 +398,45 @@ Provider-native discussion histories and WIP supervision records remain
 separate from workspace cleanup. Detailed per-project findings are kept private
 rather than publishing private project contents in this repository.
 
+## Final obvious-only checkpoint
+
+The owner authorized curated Git recovery with tolerance for losing uncertain
+untracked work, then deferred the final recovery and requested only obvious
+cleanup for now. No WIP project commit or push was performed. Automatic approval
+review rejected the proposed whole-history branch push because its payload could
+include generated client-specific data. That action was not retried. Read-only
+source comparisons also found several candidate features already represented
+in published project branches. Remaining source-only curation is deferred.
+
+The final VM batch removed 27 exact cache, empty-directory, unused environment,
+dependency, compiled-binary and preview targets. Their allocation was
+1,377,144,832 bytes (1.28 GiB); the observed root-filesystem availability increase
+over this batch was the same. Only the nested virtual environment was removed
+from the larger evidence directory. Surrounding evidence, snapshots, source
+bundles, Git stores, account/profile state and native histories were retained.
+No broad sweep of loose files occurred.
+
+Immediately before removal, privileged inspection covered 238 processes and
+found zero target references or inspection errors. The 223 session rows and all
+six live shim PID/start identities remained. The unfinished merge, client-source
+bundle, external Git consumers and actively changing canonical projects were
+untouched. Spent bulk-relocation and handoff-watcher tooling was removed after
+the watcher stopped; no workspace relocation was applied.
+
+| Final observation | Mac | VM |
+|---|---:|---:|
+| Installed binary and running supervisor | v0.18.2 | v0.18.2 |
+| Health-check failures | 0 | 0 |
+| Retained attempt rows | 1 | 223 |
+| Allocated Swarm session-state bytes | 19,816,448 | 11,291,652,096 |
+
+The Mac state is approximately 19 MiB, down from the earlier 65.4 GiB checkpoint.
+The VM still retains approximately 10.5 GiB, primarily WIP workspace payloads and
+managed native CLI state. Its root filesystem had 5,590,700,032 bytes available
+after the batch. This is partial cleanup, with the remaining work deliberately
+left for later. Existing non-failure doctor warnings and the two held legacy VM
+terminals remain; neither permission prompts nor active work were interrupted.
+
 ## Remaining boundaries
 
 Deployment and the verified batches do not complete legacy workspace recovery
