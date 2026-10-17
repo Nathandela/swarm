@@ -150,6 +150,9 @@ func TestRetainedNativeIncompleteStageCustody(t *testing.T) {
 				err = os.Symlink("/bin/true", path)
 			case "public":
 				err = os.WriteFile(path, []byte("partial"), 0o644)
+				if err == nil {
+					err = os.Chmod(path, 0o644)
+				}
 			}
 			if err != nil {
 				t.Fatal(err)
