@@ -9,10 +9,11 @@ avoid repeating accepted actions. This is the implementation plan following the
 governed by [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md).
 
 The [2026-10-17 source checkpoint](../verification/lightweight-storage.md) records
-implemented prevention and deletion behavior. Deployment, verified per-host
-legacy cleanup and native diagnostic bounding are still open; the whole program
-is not complete. The operation-guard pressure flaw is also corrected in source
-and covered by pressure/restart regressions.
+implemented prevention and deletion behavior. [Release and rollout evidence](../verification/lightweight-storage-rollout.md)
+records v0.18.0 deployed on the owner's Mac and VM, with checked legacy cleanup.
+Recovery of retained unique/live work and native diagnostic bounding remain open;
+the whole program is not complete. The operation-guard pressure flaw is also
+corrected and covered by pressure/restart regressions.
 
 ## Stop new accumulation
 
@@ -58,10 +59,11 @@ promise is made.
 Produce a concrete per-host cleanup inventory before deleting existing workspace
 contents. Development tests use temporary data. The source fixes themselves do
 not reclaim the hundreds of GiB already accumulated on the Mac or VM.
-The [current cleanup inventory](../verification/storage-cleanup-inventory.md)
-separates measured cache candidates, live writers and unresolved ownership. The
-VM is reachable again; its refreshed measurement supersedes the historical size,
-while native test results are recorded separately in the verification checkpoint.
+The [initial cleanup inventory](../verification/storage-cleanup-inventory.md)
+separates measured cache candidates, live writers and unresolved ownership.
+The [rollout checkpoint](../verification/lightweight-storage-rollout.md) records
+the executed batches and retained material; its cleanup results supersede the
+read-only inventory. Native test results remain a separate verification record.
 
 ## Keep the small safety state
 

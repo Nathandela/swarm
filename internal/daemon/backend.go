@@ -181,7 +181,8 @@ func (d *Daemon) SendBackendAttach(id string, agentArgs []string, commandArgs ..
 // the session dir and the backend socket path -- exist for the first time; the assembly
 // resolves the plan from the session's adapter and performs the contract's own checks
 // (adapter.ResolveBackend: the program resolves through a prober, and no argument names an
-// absolute path outside the session dir).
+// absolute path outside the session dir, except the original resume --cd operand
+// retaining the core's final working directory).
 //
 // It exists because the two facts live in different packages and neither may import the
 // other: only the core knows the socket path, and only the assembly may touch an adapter.
@@ -194,4 +195,5 @@ func (d *Daemon) SendBackendAttach(id string, agentArgs []string, commandArgs ..
 // daemon's env in that case planned no backend for a session whose agent ran fine. A nil
 // agentEnv (a caller predating the launch path, or a test) lets the assembly fall back to
 // daemon policy.
-type BackendPlanner func(agentType, sessionDir, socketPath string, agentEnv, agentArgv []string) (*BackendSpec, error)
+// agentCwd is the final working directory after launch hooks, not adapter-supplied argv.
+type BackendPlanner func(agentType, sessionDir, socketPath, agentCwd string, agentEnv, agentArgv []string) (*BackendSpec, error)

@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"reflect"
 
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/codex"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"strings"
 	"testing"
@@ -49,7 +51,7 @@ func TestBackendPlanResolvesAgainstTheLaunchEnvNotTheDaemons(t *testing.T) {
 	sock := filepath.Join(sessionDir, "codex.sock")
 	agentEnv := []string{"PATH=" + bin, "HOME=" + t.TempDir()}
 
-	spec, err := d.planSessionBackend("codex", sessionDir, sock, agentEnv, []string{"codex", "resume", "thread", "--sandbox", "read-only"})
+	spec, err := d.planSessionBackend("codex", sessionDir, sock, "", agentEnv, []string{"codex", "resume", "thread", "--sandbox", "read-only"})
 	if err != nil {
 		t.Fatalf("planSessionBackend with a resolving launch env: %v", err)
 	}
@@ -77,7 +79,7 @@ func TestBackendPlanFailsWhenTheLaunchEnvCannotResolve(t *testing.T) {
 	sock := filepath.Join(sessionDir, "codex.sock")
 	agentEnv := []string{"PATH=" + filepath.Join(t.TempDir(), "empty")}
 
-	_, err := d.planSessionBackend("codex", sessionDir, sock, agentEnv, nil)
+	_, err := d.planSessionBackend("codex", sessionDir, sock, "", agentEnv, nil)
 	if err == nil {
 		t.Fatal("planSessionBackend consulted an env other than the supplied launch env")
 	}
@@ -96,12 +98,46 @@ func TestBackendPlanWithNoLaunchEnvFallsBackToDaemonPolicy(t *testing.T) {
 	sessionDir := t.TempDir()
 	sock := filepath.Join(sessionDir, "codex.sock")
 
-	spec, err := d.planSessionBackend("codex", sessionDir, sock, nil, nil)
+	spec, err := d.planSessionBackend("codex", sessionDir, sock, "", nil, nil)
 	if err != nil {
 		t.Fatalf("planSessionBackend with nil env against a resolving daemon PATH: %v", err)
 	}
 	if spec == nil {
 		t.Fatal("nil launch env must fall back to daemon policy, which resolves codex here")
+	}
+}
+
+func TestBackendPlanCodexResumePreservesRequestedProjectCwd(t *testing.T) {
+	bin := writeFakeCodex(t)
+	project := t.TempDir()
+	sessionDir := t.TempDir()
+	sock := filepath.Join(sessionDir, "codex.sock")
+	argv, err := codex.New().Resume(adapter.ResumeSpec{
+		ConversationID: "0199bb00-1234-7000-8000-000000000001",
+		Cwd:            project,
+		Options:        map[string]string{"model": "test-model", "sandbox": "read-only"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := append([]string(nil), argv...)
+	d := &Daemon{}
+	plan, err := d.planSessionBackend("codex", sessionDir, sock, project, []string{"PATH=" + bin}, argv)
+	if err != nil {
+		t.Fatalf("plan real Codex resume outside session state: %v", err)
+	}
+	if plan == nil {
+		t.Fatal("Codex resume planned no backend")
+	}
+	want := []string{"resume", argv[2], "-c", "check_for_update_on_startup=false", "--cd", project, "--model", "test-model"}
+	if !reflect.DeepEqual(plan.AgentCommandArgs, want) {
+		t.Fatalf("remote resume args = %v, want %v", plan.AgentCommandArgs, want)
+	}
+	if !reflect.DeepEqual(plan.AgentArgs, []string{"--remote", "unix://" + sock}) {
+		t.Fatalf("backend attachment args = %v", plan.AgentArgs)
+	}
+	if !reflect.DeepEqual(argv, original) {
+		t.Fatal("backend planning changed the standalone resume command")
 	}
 }
 

@@ -323,13 +323,21 @@ Additions to the existing list, all mechanical, all offline:
      `shim.Config` already states for the agent argv ("argv[0] = program; exec'd directly, never via
      a shell", `internal/shim/shim.go:44`). Fence: a test asserting `Path` is the `LookPath` result
      and that no element of the assembled command is a shell.
-   - **9c. The core REJECTS a plan that names a path outside the session dir.** For every element of
-     `Args` and `AgentArgs`, strip an optional `unix://` prefix; if what remains is an absolute path,
+   - **9c. The core contains session paths and narrowly retains its own resume cwd.** For every element of
+     `Args`, `AgentArgs` and `AgentCommandArgs`, strip an optional `unix://` prefix; if what remains is an absolute path,
      it must be within `filepath.Clean(sessionDir)`. This is a containment check the CORE performs on
      data it does not trust, not a claim the adapter makes about itself, and it is the only one of
      the three a malicious or merely buggy adapter cannot talk its way past. Fence, by mutation: a
      fixture adapter returning `{"--listen", "unix:///tmp/evil.sock"}` must be refused, and deleting
      the check must make that test fail.
+     Correction of 2026-10-17: an `AgentCommandArgs` resume may preserve exactly one original
+     `--cd` operand equal to the core-supplied final, absolute `BackendSpec.Cwd`, which the workspace
+     boundary validates without changing kernel path semantics.
+     The original and replacement must name the same conversation and use recognized operand
+     positions; duplicate, missing, mismatched or invented cwd operands fail closed. This exception
+     never applies to backend `Args`, attachment `AgentArgs`, or another option's value. It permits
+     Codex to override a saved native thread cwd without treating the selected project as session
+     state. Explicit worktree re-isolation on linked or external resume is refused before side effects.
 
 ### Non-goals, restated for this extension
 

@@ -160,7 +160,7 @@ func TestAccountLaunchInvalidBindingOrConfigurationStartsZeroChildren(t *testing
 				cfg.PreLaunch = func(_ string, _ daemon.LaunchSpec) (string, error) { return actual, nil }
 				cfg.FinalizeLaunch = assembly.prepareAccountLaunch
 				cfg.PreDelete = func(meta persist.Meta) error { rolledBack = meta.AgentCwd == actual; return nil }
-				cfg.BackendPlanner = func(_, _, _ string, _, _ []string) (*daemon.BackendSpec, error) { planned++; return nil, nil }
+				cfg.BackendPlanner = func(_, _, _, _ string, _, _ []string) (*daemon.BackendSpec, error) { planned++; return nil, nil }
 			})
 			_, err := core.Launch(daemon.LaunchSpec{AgentType: "codex", Argv: []string{"/fixture/codex", "--model", "gpt-fixed"}, Cwd: requested, ClientEnv: env, AccountBinding: &binding, AccountStateRoot: m.stateRoot, CLIIdentity: identity, Cols: 80, Rows: 24})
 			if err == nil || !rolledBack || planned != 0 || len(core.List()) != 0 {
@@ -217,7 +217,7 @@ func TestAccountLaunchActualCLIAndBackendShareBoundProfileAndWorktree(t *testing
 		cfg.ShimBinary = swarmBin
 		cfg.PreLaunch = func(_ string, _ daemon.LaunchSpec) (string, error) { return actual, nil }
 		cfg.FinalizeLaunch = assembly.prepareAccountLaunch
-		cfg.BackendPlanner = func(_, _, socket string, env, _ []string) (*daemon.BackendSpec, error) {
+		cfg.BackendPlanner = func(_, _, socket, _ string, env, _ []string) (*daemon.BackendSpec, error) {
 			return &daemon.BackendSpec{Program: native, Args: []string{"fixture-backend", socket, "-c", networkOverride}, Env: env}, nil
 		}
 	})

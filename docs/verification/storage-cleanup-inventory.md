@@ -1,5 +1,10 @@
 # Storage cleanup inventory — 2026-10-17
 
+This is the initial read-only inventory. The later
+[v0.18.0 rollout and cleanup](lightweight-storage-rollout.md) records deployment,
+executed removal batches and retained material; its results supersede these
+pre-cleanup allocation and authorization snapshots.
+
 Read-only follow-up for `agents-tracker-3bxu`. The checkpoint was
 2026-10-16 22:00:01 UTC; allocation and process scans ran around it while the
 machine remained live. These are snapshots, not a consistent backup or proof of

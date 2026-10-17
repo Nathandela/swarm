@@ -8,11 +8,12 @@ import (
 
 // State contains supervision records, never an agent's project or build tree.
 func (d *Daemon) validateWorkspace(cwd string) error {
-	abs, err := filepath.Abs(cwd)
+	// Resolve links before cleaning so link/.. matches the kernel's directory.
+	resolved, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return fmt.Errorf("launch: working directory: %w", err)
 	}
-	resolved, err := filepath.EvalSymlinks(abs)
+	resolved, err = filepath.Abs(resolved)
 	if err != nil {
 		return fmt.Errorf("launch: working directory: %w", err)
 	}

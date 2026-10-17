@@ -8,6 +8,7 @@ package skeleton
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/daemon"
@@ -125,5 +126,34 @@ func TestResumeMergeNeverMutatesTheRequestMap(t *testing.T) {
 	}
 	if !reflect.DeepEqual(reqOptions, want) {
 		t.Errorf("the caller's Options map was mutated: %v", reqOptions)
+	}
+}
+
+func TestResumeRejectsExplicitWorktreeBeforeResolvingSourceOrExecutable(t *testing.T) {
+	for _, sourceKey := range []string{protocol.OptionResumeFrom, protocol.OptionResumeConversationID} {
+		t.Run(sourceKey, func(t *testing.T) {
+			source := "0199bb00-1234-7000-8000-000000000001"
+			if sourceKey == protocol.OptionResumeFrom {
+				source = protocol.NamespacedID(testEndpoint, "source")
+			}
+			spec := daemon.LaunchSpec{AgentType: "codex", Cwd: t.TempDir(), Options: map[string]string{
+				sourceKey:               source,
+				protocol.OptionWorktree: "true",
+			}}
+			_, err := composeLaunchSpec(spec, testEndpoint, "", func(string) (persist.Meta, bool) {
+				t.Fatal("worktree resume resolved its source before refusing re-isolation")
+				return persist.Meta{}, false
+			}, func(string, []string) (string, error) {
+				t.Fatal("worktree resume resolved an executable before refusing re-isolation")
+				return "", nil
+			})
+			if err == nil || !strings.Contains(err.Error(), "worktree") {
+				t.Fatalf("explicit resume worktree error = %v", err)
+			}
+			// The API must reject before touching its core or migrating legacy identity.
+			if _, err := (&coreAPI{}).Launch(spec); err == nil || !strings.Contains(err.Error(), "worktree") {
+				t.Fatalf("API explicit resume worktree error = %v", err)
+			}
+		})
 	}
 }

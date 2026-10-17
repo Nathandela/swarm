@@ -34,6 +34,7 @@ package adapter
 // in internal/shim/r7_backend_test.go, where the exec.Cmd is actually built.
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -225,6 +226,63 @@ func TestR7BackendSource_ObligationNineC_ThePlanMayNameNoPathOutsideTheSessionDi
 	}
 	if _, _, err := ResolveBackend(r7BackendStub{ok: true, plan: benign}, prober, spec, dir); err != nil {
 		t.Errorf("ResolveBackend refused the benign plan %+v: %v", benign, err)
+	}
+}
+
+func TestResolveBackendResumeCwdIsOnlyTheOriginalTrustedOperand(t *testing.T) {
+	const dir, cwd = "/state/session", "/projects/requested"
+	command := []string{"resume", "thread", "-c", "check_for_update_on_startup=false", "--cd", cwd, "--model", "model"}
+	for _, tc := range []struct {
+		name     string
+		cwd      string
+		original []string
+		command  []string
+		args     []string
+		attach   []string
+		wantOK   bool
+	}{
+		{name: "exact original operand", cwd: cwd, original: command, command: command, wantOK: true},
+		{name: "flag-looking model value", cwd: cwd, original: []string{"resume", "thread", "--model", "--cd", "--cd", cwd}, command: []string{"resume", "thread", "--model", "--cd", "--cd", cwd}, wantOK: true},
+		{name: "missing trusted cwd", original: command, command: command},
+		{name: "relative trusted cwd", cwd: "projects/requested", original: command, command: command},
+		{name: "nonclean trusted cwd exact match", cwd: "/projects/other/../requested", original: []string{"resume", "thread", "--cd", "/projects/other/../requested"}, command: []string{"resume", "thread", "--cd", "/projects/other/../requested"}, wantOK: true},
+		{name: "nonclean trusted cwd mismatched spelling", cwd: "/projects/other/../requested", original: command, command: command},
+		{name: "different final cwd", cwd: "/projects/worktree", original: command, command: command},
+		{name: "invented operand", cwd: cwd, original: []string{"resume", "thread"}, command: command},
+		{name: "different original operand", cwd: cwd, original: []string{"resume", "thread", "--cd", "/projects/other"}, command: command},
+		{name: "different conversation", cwd: cwd, original: []string{"resume", "other-thread", "--cd", cwd}, command: command},
+		{name: "different replacement operand", cwd: cwd, original: command, command: []string{"resume", "thread", "--cd", "/projects/other"}},
+		{name: "duplicate cwd", cwd: cwd, original: command, command: []string{"resume", "thread", "--cd", cwd, "--cd", cwd}},
+		{name: "duplicate contained cwd", cwd: dir, original: []string{"resume", "thread", "--cd", dir}, command: []string{"resume", "thread", "--cd", dir, "--cd", dir}},
+		{name: "duplicate original cwd", cwd: cwd, original: []string{"resume", "thread", "--cd", cwd, "--cd", cwd}, command: command},
+		{name: "missing operand", cwd: cwd, original: command, command: []string{"resume", "thread", "--cd"}},
+		{name: "equals form is not the trusted operand", cwd: cwd, original: command, command: []string{"resume", "thread", "--cd=" + cwd}},
+		{name: "model operand is not a flag", cwd: cwd, original: command, command: []string{"resume", "thread", "--model", "--cd", cwd}},
+		{name: "original model operand is not a flag", cwd: cwd, original: []string{"resume", "thread", "--model", "--cd", cwd}, command: command},
+		{name: "unknown flag context", cwd: cwd, original: command, command: []string{"resume", "thread", "--config", "value", "--cd", cwd}},
+		{name: "after option terminator", cwd: cwd, original: command, command: []string{"resume", "thread", "--", "--cd", cwd}},
+		{name: "cwd as config value", cwd: cwd, original: command, command: []string{"resume", "thread", "-c", cwd, "--cd", cwd}},
+		{name: "cwd in backend args", cwd: cwd, original: command, command: command, args: []string{"--cd", cwd}},
+		{name: "cwd in attachment args", cwd: cwd, original: command, command: command, attach: []string{"--cd", cwd}},
+		{name: "non-resume replacement", cwd: cwd, original: command, command: []string{"--cd", cwd}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := BackendSpec{SocketPath: dir + "/codex.sock", Cwd: tc.cwd, AgentArgv: append([]string{"codex"}, tc.original...)}
+			plan := BackendPlan{Program: "codex", Args: tc.args, AgentArgs: tc.attach, AgentCommandArgs: tc.command}
+			original := append([]string(nil), spec.AgentArgv...)
+			commandBefore := append([]string(nil), tc.command...)
+			got, ok, err := ResolveBackend(r7BackendStub{ok: true, plan: plan}, fakeHostProber{path: "/usr/bin/codex"}, spec, dir)
+			if tc.wantOK {
+				if err != nil || !ok || !reflect.DeepEqual(got.AgentCommandArgs, tc.command) {
+					t.Fatalf("valid trusted cwd plan: ok=%v err=%v args=%v", ok, err, got.AgentCommandArgs)
+				}
+			} else if err == nil {
+				t.Fatal("untrusted cwd argument accepted")
+			}
+			if !reflect.DeepEqual(spec.AgentArgv, original) || !reflect.DeepEqual(tc.command, commandBefore) {
+				t.Fatal("validation mutated the original or replacement command")
+			}
+		})
 	}
 }
 

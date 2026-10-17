@@ -27,6 +27,8 @@ import (
 type BackendSpec struct {
 	// SocketPath is the per-session backend endpoint, inside the session state dir.
 	SocketPath string
+	// Cwd is the core's final agent working directory, independent of adapter argv.
+	Cwd string
 	// AgentArgv is the already composed standalone command, including argv[0].
 	AgentArgv []string
 }
@@ -117,10 +119,9 @@ func CheckBackendPlan(src BackendSource, spec BackendSpec) error {
 //
 //   - 9a: Program resolves through HostProber.LookPath, and a Program containing a path
 //     separator is refused OUTRIGHT before any lookup.
-//   - 9c: no element of Args/AgentArgs/AgentCommandArgs (after stripping an optional `unix://`) names an
-//     ABSOLUTE path outside the session dir. This is the one check a malicious or merely
-//     buggy adapter cannot talk its way past, because the core performs it on data it does
-//     not trust.
+//   - 9c: absolute paths stay inside the session dir, except the original resume
+//     command's --cd operand may retain the core's exact absolute Cwd. The exception
+//     applies only to AgentCommandArgs, never backend or attachment arguments.
 //
 // 9b -- exec'd DIRECTLY, never through a shell -- belongs to whoever builds the exec.Cmd
 // (internal/shim), which is where it is fenced.
@@ -142,9 +143,32 @@ func ResolveBackend(src BackendSource, prober HostProber, spec BackendSpec, sess
 		return BackendPlan{}, false, fmt.Errorf("backend Program %q does not resolve on PATH: %w", plan.Program, err)
 	}
 	dir := filepath.Clean(sessionDir)
-	for _, arg := range append(append(append([]string(nil), plan.Args...), plan.AgentArgs...), plan.AgentCommandArgs...) {
+	for _, arg := range append(append([]string(nil), plan.Args...), plan.AgentArgs...) {
 		if err := checkContained(arg, dir); err != nil {
 			return BackendPlan{}, false, err
+		}
+	}
+	cwdIndex, err := resumeCwdOperand(plan.AgentCommandArgs)
+	if err != nil {
+		return BackendPlan{}, false, err
+	}
+	if cwdIndex >= 0 {
+		var originalArgs []string
+		if len(spec.AgentArgv) > 0 {
+			originalArgs = spec.AgentArgv[1:]
+		}
+		originalIndex, originalErr := resumeCwdOperand(originalArgs)
+		if originalErr != nil || originalIndex < 0 || !filepath.IsAbs(spec.Cwd) ||
+			plan.AgentCommandArgs[cwdIndex] != spec.Cwd || originalArgs[originalIndex] != spec.Cwd ||
+			plan.AgentCommandArgs[1] != originalArgs[1] {
+			return BackendPlan{}, false, fmt.Errorf("backend resume --cd must retain the original command's core-supplied absolute cwd (obligation 9c)")
+		}
+	}
+	for i, arg := range plan.AgentCommandArgs {
+		if i != cwdIndex {
+			if err := checkContained(arg, dir); err != nil {
+				return BackendPlan{}, false, err
+			}
 		}
 	}
 	out := BackendPlan{
@@ -154,6 +178,40 @@ func ResolveBackend(src BackendSource, prober HostProber, spec BackendSpec, sess
 		AgentCommandArgs: append([]string(nil), plan.AgentCommandArgs...),
 	}
 	return out, true, nil
+}
+
+// resumeCwdOperand grants no authority to flag-looking option values or unknown grammar.
+func resumeCwdOperand(args []string) (int, error) {
+	if len(args) < 2 || args[0] != "resume" {
+		return -1, nil
+	}
+	// Other adapters' replacement commands retain the ordinary containment rule.
+	hasCwd := false
+	for _, arg := range args[2:] {
+		hasCwd = hasCwd || arg == "--cd" || strings.HasPrefix(arg, "--cd=")
+	}
+	if !hasCwd {
+		return -1, nil
+	}
+	index := -1
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "-c", "--model", "--sandbox", "--cd":
+			if i+1 == len(args) {
+				return -1, fmt.Errorf("backend resume option %q has no operand (obligation 9c)", args[i])
+			}
+			if args[i] == "--cd" {
+				if index >= 0 {
+					return -1, fmt.Errorf("backend resume repeats --cd (obligation 9c)")
+				}
+				index = i + 1
+			}
+			i++
+		default:
+			return -1, fmt.Errorf("backend resume has unsupported --cd context (obligation 9c)")
+		}
+	}
+	return index, nil
 }
 
 // checkContained is obligation 9c for one argument. A relative token (a flag, a
@@ -170,5 +228,5 @@ func checkContained(arg, dir string) error {
 	}
 	return fmt.Errorf(
 		"backend plan names absolute path %q, which is outside the session dir %q; the core supplies "+
-			"the ONE path a plan may name (obligation 9c)", clean, dir)
+			"the session paths a plan may name (obligation 9c)", clean, dir)
 }

@@ -12,6 +12,10 @@ import (
 )
 
 func validateResumeRelocation(spec daemon.LaunchSpec) error {
+	if spec.Options[protocol.OptionWorktree] == "true" &&
+		(spec.Options[protocol.OptionResumeFrom] != "" || spec.Options[protocol.OptionResumeConversationID] != "") {
+		return fmt.Errorf("resume: worktree isolation cannot be requested again; resume uses the selected checkout")
+	}
 	if relocate, present := spec.Options[protocol.OptionResumeRelocate]; present {
 		if relocate != "true" || spec.Options[protocol.OptionResumeFrom] == "" || spec.Options[protocol.OptionResumeConversationID] != "" {
 			return fmt.Errorf("resume: resume_relocate requires an owner-tier linked resume")

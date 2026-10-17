@@ -79,13 +79,12 @@ func (e errBackendProbe) Error() string { return string(e) }
 //
 // It is where the adapter contract's own checks run (adapter.ResolveBackend): obligation 9a --
 // Program is a NAME, resolved through the prober, refused outright if it contains a path
-// separator -- and obligation 9c -- no argument may name an absolute path outside the session
-// dir. 9c is the only one a malicious or merely buggy adapter cannot talk its way past,
-// because the core performs it on data it does not trust.
+// separator -- and obligation 9c -- paths stay inside the session dir, except the original
+// resume --cd operand may retain the core's final working directory.
 //
 // An adapter that proves no BackendSource answers (nil, nil), which is the ORDINARY case and
 // never a defect: most CLIs need no backend at all.
-func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string, agentEnv, agentArgv []string) (*daemon.BackendSpec, error) {
+func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath, agentCwd string, agentEnv, agentArgv []string) (*daemon.BackendSpec, error) {
 	ad, ok := registry.New(agentType)
 	if !ok {
 		return nil, nil
@@ -94,7 +93,7 @@ func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string, ag
 	if !ok {
 		return nil, nil // ADR-010 §5's posture: absence is a signal, not a defect
 	}
-	spec := adapter.BackendSpec{SocketPath: socketPath, AgentArgv: agentArgv}
+	spec := adapter.BackendSpec{SocketPath: socketPath, Cwd: agentCwd, AgentArgv: agentArgv}
 	// Obligation 8, checked before anything is resolved: a DECLARED backend that names no
 	// program is a session whose agent attaches to a socket nobody serves.
 	if err := adapter.CheckBackendPlan(src, spec); err != nil {

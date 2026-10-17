@@ -20,7 +20,16 @@ import (
 
 func TestLaunchPersistsTheBackendPlanRefusal(t *testing.T) {
 	cfg := daemonConfig(t)
-	cfg.BackendPlanner = func(agentType, sessionDir, socketPath string, agentEnv, agentArgv []string) (*BackendSpec, error) {
+	preCwd, finalCwd := t.TempDir(), t.TempDir()
+	cfg.PreLaunch = func(string, LaunchSpec) (string, error) { return preCwd, nil }
+	cfg.FinalizeLaunch = func(_ string, spec LaunchSpec) (LaunchSpec, error) {
+		spec.Cwd = finalCwd
+		return spec, nil
+	}
+	cfg.BackendPlanner = func(agentType, sessionDir, socketPath, agentCwd string, agentEnv, agentArgv []string) (*BackendSpec, error) {
+		if agentCwd != finalCwd {
+			t.Fatalf("backend planner cwd = %q, want final launch cwd %q", agentCwd, finalCwd)
+		}
 		return nil, errors.New(`backend Program "codex" does not resolve on PATH`)
 	}
 	d := openDaemon(t, cfg)

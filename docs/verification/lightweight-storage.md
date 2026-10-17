@@ -6,6 +6,8 @@ The owner-selected [fixing plan](../specifications/lightweight-storage-plan.md)
 and [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md) replace duplicate
 discussion archives with live supervision. This is a source implementation
 checkpoint, not evidence of deployment or production space reclaimed.
+The later [v0.18.0 rollout](lightweight-storage-rollout.md) records both-host
+deployment, executed cleanup and production journal migration.
 
 ## Implemented boundaries
 
@@ -106,18 +108,21 @@ model proof is unavailable. That feature/storage tradeoff is pending owner choic
 
 ## Remaining full-plan work
 
-- Source fixes have not been deployed, and old live shims still use their old
-  logging behavior until they retire. Native provider history and existing phone
+- v0.18.0 is [released and deployed on both hosts](lightweight-storage-rollout.md).
+  Old live shims still use their old logging behavior until they retire.
+  Native provider history and existing phone
   caches are unchanged. Host history after restart/eviction is unavailable;
   native CLI history remains the owner's history surface.
-- The [Mac cleanup inventory](storage-cleanup-inventory.md) measured 75.14 GiB
-  under Swarm, including 13.16 GiB of recognizable cache candidates. It proves no
-  candidate writer-free: several exited/lost rows still have native process cwd
-  references, and the largest thread's original project directory is missing.
-  Existing workspaces were not moved or purged (`agents-tracker-3bxu`).
+- The [initial Mac inventory](storage-cleanup-inventory.md) measured 75.14 GiB
+  under Swarm, including 13.16 GiB of recognizable cache candidates. The later
+  rollout revalidated selected targets; its record distinguishes removed data
+  from unique/live work still retained. Several initial exited/lost rows had
+  actual native cwd references, and the largest thread's original project
+  directory was missing. Whole workspaces were not purged (`agents-tracker-3bxu`).
 - The VM is reachable again and native Linux host verification passed.
-  The refreshed inventory measures 14.813 GiB under Swarm. Production deployment
-  and before/after growth measurements remain unrun.
+  The pre-rollout inventory measured 14.813 GiB under Swarm. Deployment, journal
+  migration and a checked cleanup batch subsequently completed. The new-shim
+  output smoke checks do not establish long-term whole-machine growth.
 - Managed Claude diagnostics remain an uncapped native writer. Its 16 MiB reader
   limit is not a disk bound. `agents-tracker-f9vv` records the required bounded
   ingestion characterization without discarding exact model-recovery proof.
