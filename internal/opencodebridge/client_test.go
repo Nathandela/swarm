@@ -20,7 +20,7 @@ func TestPrivateClientAndAsset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const token = "synthetic-private-bridge-token"
+	const token = "syntheticprivatebridgecredentialtoken"
 	streaming := make(chan struct{})
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+token {

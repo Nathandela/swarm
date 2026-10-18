@@ -241,7 +241,7 @@ func (c *Client) request(ctx context.Context, method, path string, input, out an
 		}
 		_ = json.Unmarshal(raw, &failure)
 		reason := "request_refused"
-		if len(failure.Reason) <= 64 && strings.Trim(failure.Reason, "abcdefghijklmnopqrstuvwxyz_") == "" && failure.Reason != "" {
+		if len(failure.Reason) <= 64 && strings.Trim(failure.Reason, "abcdefghijklmnopqrstuvwxyz_") == "" && failure.Reason != "" && !strings.Contains(failure.Reason, c.token) {
 			reason = failure.Reason
 		}
 		return &Error{Code: response.StatusCode, Reason: reason}
