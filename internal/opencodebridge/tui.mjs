@@ -135,6 +135,18 @@ export default { id: ID, async tui(api, options) {
     for (const part of message.parts) if (!object(part) || part.sessionID !== target || part.messageID !== info.id || !string(part.id) || !string(part.type)) throw fault("native_shape")
     return message
   }
+  function exactInputText(message, text) {
+    const seen = new Set()
+    let genuine = 0
+    for (const part of message.parts) {
+      if (seen.has(part.id) || (part.synthetic != null && typeof part.synthetic !== "boolean") || (part.ignored != null && typeof part.ignored !== "boolean") || (part.text != null && typeof part.text !== "string")) return false
+      seen.add(part.id)
+      if (part.synthetic === true || part.ignored === true) continue
+      if (part.type !== "text" || part.text !== text) return false
+      genuine++
+    }
+    return genuine === 1
+  }
   async function history(limit = 50, before = "") {
     const result = await read(opts => api.client.session.messages({ sessionID: binding.rootID, limit, ...(before ? { before } : {}) }, opts))
     const messages = list(result.data)
@@ -254,7 +266,7 @@ export default { id: ID, async tui(api, options) {
     do {
       try {
         const row = await lookupMessage(body.messageID), info = row?.info
-        if (info?.id === body.messageID && info.role === "user" && Number.isSafeInteger(info.time?.created) && info.time.created >= startedAt && info.agent === selection.agent && info.model?.providerID === selection.model.providerID && info.model?.modelID === selection.model.modelID && (info.model.variant ?? "default") === selection.variant && row.parts.filter(p => p.type === "text" && !p.synthetic).map(p => p.text).join("") === body.text) { admit(record); return }
+        if (info?.id === body.messageID && info.role === "user" && Number.isSafeInteger(info.time?.created) && info.time.created >= startedAt && info.agent === selection.agent && info.model?.providerID === selection.model.providerID && info.model?.modelID === selection.model.modelID && (info.model.variant ?? "default") === selection.variant && exactInputText(row, body.text)) { admit(record); return }
       } catch { /* Native acknowledgement remains uncertain until the exact row can be read. */ }
       if (disposed || Date.now() >= until) return
       await pause(100)
@@ -377,7 +389,7 @@ export default { id: ID, async tui(api, options) {
   async function reconcileInitial() {
     if (!initial || initial.status === "admitted" || initial.status === "rejected") return initial
     const result = await history()
-    const candidates = result.messages.filter(m => m.info.role === "user" && !initial.before.has(m.info.id) && m.info.time?.created >= initial.startedAt && m.parts.filter(p => p.type === "text" && !p.synthetic).map(p => p.text).join("") === initial.text)
+    const candidates = result.messages.filter(m => m.info.role === "user" && !initial.before.has(m.info.id) && Number.isSafeInteger(m.info.time?.created) && m.info.time.created >= initial.startedAt && exactInputText(m, initial.text))
     if (candidates.length === 1) {
       const info = candidates[0].info
       if (string(info.agent) && string(info.model?.providerID) && string(info.model?.modelID)) Object.assign(initial, { status: "admitted", reason: "", messageID: info.id, agent: info.agent, model: { providerID: info.model.providerID, modelID: info.model.modelID }, variant: info.model.variant ?? "default", selectionBasis: "native_composer", selectionMessageID: info.id })
