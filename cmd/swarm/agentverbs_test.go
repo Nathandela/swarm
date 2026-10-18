@@ -431,6 +431,12 @@ func TestRunWatch_MultipleAttentionStates(t *testing.T) {
 // Go's flag package stops at, so the generated command used to exit 1. The template
 // file is read from its source rather than copied, so this test breaks the moment the
 // generated order and runWatch's parser disagree again.
+//
+// Each command is fed a snapshot and an event that differ observably from the default
+// --until (needs_input): a ready_for_review event for the multi-state wait, and a
+// needs_input snapshot followed by a working event for the change wait. A parser that
+// ignored --until would match the default state (or time out) and print the wrong
+// group/name, so the returned view, not just the id, is asserted.
 func TestRunWatch_HandoffTemplateCommand(t *testing.T) {
 	raw, err := os.ReadFile("../../internal/tui/templates/handoff-source.md.tmpl")
 	if err != nil {
@@ -449,24 +455,57 @@ func TestRunWatch_HandoffTemplateCommand(t *testing.T) {
 	const id = "local/a1"
 	for _, cmd := range cmds {
 		t.Run(cmd, func(t *testing.T) {
+			if !strings.Contains(cmd, "--timeout 10m") {
+				t.Fatalf("template command %q lost its documented 10m deadline", cmd)
+			}
 			args := strings.Fields(strings.ReplaceAll(cmd, `"$child_id"`, id))
 			if len(args) < 3 || args[0] != "swarm" || args[1] != "watch" {
 				t.Fatalf("template command %q does not split into a swarm watch invocation", cmd)
 			}
-			args = args[2:]
-			client := newFakeAgentClient(view(id, "claude", "refactor", status.GroupNeedsInput))
-			// The change wait never matches the initial snapshot, so the stream carries
-			// a matching event; the multi-state wait exits on the snapshot first.
-			client.emit(view(id, "claude", "refactor", status.GroupNeedsInput))
+			// Keep the generated flag order but bound the deadline, so a parser that
+			// ignores --until fails the assertions below instead of hanging the test.
+			args = boundWatchTimeout(t, args[2:], "2s")
+
+			var snapshot, event protocol.SessionView
+			if strings.Contains(cmd, "--until change") {
+				// `change` must skip the needs_input snapshot (which the default
+				// --until would accept) and report the later working event.
+				snapshot = view(id, "claude", "waiting", status.GroupNeedsInput)
+				event = view(id, "claude", "changed", status.GroupWorking)
+			} else {
+				// ready_for_review is neither the default --until nor the snapshot:
+				// only the full multi-state predicate matches it.
+				snapshot = view(id, "claude", "waiting", status.GroupWorking)
+				event = view(id, "claude", "reviewable", status.GroupReadyForReview)
+			}
+			client := newFakeAgentClient(snapshot)
+			client.emit(event)
 			var stdout, stderr bytes.Buffer
 			if exit := runWatch(args, client, &stdout, &stderr); exit != 0 {
 				t.Fatalf("runWatch(%q) exit = %d, want 0; stderr=%q", args, exit, stderr.String())
 			}
-			if got := decodeView(t, stdout.Bytes()).ID; got != id {
-				t.Errorf("printed session id = %q, want %q", got, id)
+			got := decodeView(t, stdout.Bytes())
+			if got.ID != id || got.Group != event.Group || got.Name != event.Name {
+				t.Errorf("printed view (id=%q group=%q name=%q) = %+v, want id=%q group=%q name=%q",
+					got.ID, got.Group, got.Name, got, event.ID, event.Group, event.Name)
 			}
 		})
 	}
+}
+
+// boundWatchTimeout replaces the value of the generated --timeout flag, keeping the
+// command's flag order and the rest of its arguments intact.
+func boundWatchTimeout(t *testing.T, args []string, d string) []string {
+	t.Helper()
+	out := append([]string(nil), args...)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "--timeout" {
+			out[i+1] = d
+			return out
+		}
+	}
+	t.Fatalf("watch args %q have no --timeout value to bound", args)
+	return nil
 }
 
 // handoffWatchCommands extracts the backticked `swarm watch ...` commands from the
@@ -510,24 +549,36 @@ func TestParseWatchUntil_MultipleAttentionStatesValidation(t *testing.T) {
 	}
 }
 
-// TestRunWatch_Timeout pins the distinct timeout exit: no matching event before the
-// deadline is exit code 2 (not 0, not the generic error 1) with an explanation on
-// stderr, and nothing that could be mistaken for a SessionView on stdout.
+// TestRunWatch_Timeout pins the distinct timeout exit in both argument orders: no
+// matching event before the deadline is exit code 2 (not 0, not the generic error 1)
+// with an explanation on stderr, and nothing that could be mistaken for a
+// SessionView on stdout.
 func TestRunWatch_Timeout(t *testing.T) {
-	client := newFakeAgentClient(view("local/a1", "claude", "refactor", status.GroupWorking))
-	// One non-matching event so the timeout is proven against a live stream, not a dead one.
-	client.emit(view("local/a1", "claude", "refactor", status.GroupWorking))
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"flags first", []string{"--until", "completed", "--timeout", "80ms", "local/a1"}},
+		{"session first", []string{"local/a1", "--until", "completed", "--timeout", "80ms"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			client := newFakeAgentClient(view("local/a1", "claude", "refactor", status.GroupWorking))
+			// One non-matching event so the timeout is proven against a live stream,
+			// not a dead one.
+			client.emit(view("local/a1", "claude", "refactor", status.GroupWorking))
 
-	var stdout, stderr bytes.Buffer
-	exit := runWatch([]string{"--until", "completed", "--timeout", "80ms", "local/a1"}, client, &stdout, &stderr)
-	if exit != 2 {
-		t.Fatalf("runWatch on timeout exit = %d, want 2; stdout=%q stderr=%q", exit, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(strings.ToLower(stderr.String()), "timeout") && !strings.Contains(strings.ToLower(stderr.String()), "timed out") {
-		t.Errorf("stderr = %q, want a timeout explanation", stderr.String())
-	}
-	if strings.Contains(stdout.String(), "\"id\"") {
-		t.Errorf("stdout = %q, want no SessionView on a timeout", stdout.String())
+			var stdout, stderr bytes.Buffer
+			exit := runWatch(c.args, client, &stdout, &stderr)
+			if exit != 2 {
+				t.Fatalf("runWatch(%q) on timeout exit = %d, want 2; stdout=%q stderr=%q", c.args, exit, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(strings.ToLower(stderr.String()), "timeout") && !strings.Contains(strings.ToLower(stderr.String()), "timed out") {
+				t.Errorf("stderr = %q, want a timeout explanation", stderr.String())
+			}
+			if strings.Contains(stdout.String(), "\"id\"") {
+				t.Errorf("stdout = %q, want no SessionView on a timeout", stdout.String())
+			}
+		})
 	}
 }
 
