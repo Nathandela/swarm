@@ -61,7 +61,7 @@ func sameOpenCodeCustody(old, next persist.OpenCodeBinding) bool {
 		return true
 	}
 	a, b := old.Initial, next.Initial
-	return a.OperationID == b.OperationID && a.RequestHash == b.RequestHash && (a.MessageID == "" || *a == *b)
+	return a.OperationID == b.OperationID && a.RequestHash == b.RequestHash && (a.MessageID == "" && a.Phase != persist.OpenCodeInitialRejected || *a == *b)
 }
 
 func openCodeProgress(old, next persist.OpenCodeBinding) bool {
@@ -80,9 +80,9 @@ func openCodeProgress(old, next persist.OpenCodeBinding) bool {
 	case persist.OpenCodeInitialPrepared:
 		return b == persist.OpenCodeInitialStarted
 	case persist.OpenCodeInitialStarted:
-		return b == persist.OpenCodeInitialAdmitted || b == persist.OpenCodeInitialUncertain
+		return b == persist.OpenCodeInitialAdmitted || b == persist.OpenCodeInitialUncertain || b == persist.OpenCodeInitialRejected
 	case persist.OpenCodeInitialUncertain:
-		return b == persist.OpenCodeInitialAdmitted
+		return b == persist.OpenCodeInitialAdmitted || b == persist.OpenCodeInitialRejected
 	default:
 		return false
 	}

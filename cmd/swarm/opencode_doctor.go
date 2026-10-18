@@ -22,6 +22,10 @@ func doctorOpenCodeCheck(ctx context.Context, stateDir string, m persist.Meta) d
 	}
 	if initial := m.OpenCodeBinding.Initial; initial != nil && initial.Phase != persist.OpenCodeInitialAdmitted {
 		finding.Detail = "initial native admission is unconfirmed; no automatic resubmission is safe"
+		if initial.Phase == persist.OpenCodeInitialRejected {
+			finding.Detail = "initial native input was rejected before submission: " + initial.Reason
+			finding.Fix = "inspect and correct the requested model or agent; end this worker and use a new launch"
+		}
 		return finding
 	}
 	if ctx.Err() != nil {

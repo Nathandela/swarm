@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"syscall"
@@ -191,6 +192,9 @@ func (d *Daemon) joinOpenCode(ctx context.Context, id string) error {
 
 func (d *Daemon) admitOpenCodeInitial(ctx context.Context, c *opencodebridge.Client, b opencodebridge.Binding, m persist.Meta, text string) error {
 	i := m.OpenCodeBinding.Initial
+	if i.Phase == persist.OpenCodeInitialRejected {
+		return openCodeInitialRejectedError(i.Reason)
+	}
 	hash := sha256.Sum256([]byte(text))
 	if text == "" || hex.EncodeToString(hash[:]) != i.RequestHash {
 		return errors.New("OpenCode runtime: initial input custody mismatch")
@@ -216,6 +220,17 @@ func (d *Daemon) admitOpenCodeInitial(ctx context.Context, c *opencodebridge.Cli
 	} else {
 		receipt, err = c.InitialReceipt(ctx)
 	}
+	if err == nil && receipt != nil && receipt.Status == "rejected" && receipt.NativeEffect == "none" && !receipt.InFlight && sameOpenCodeIdentity(receipt.Identity, b) && receipt.OperationID == i.OperationID && receipt.RequestHash == i.RequestHash && receipt.MessageID == "" && receipt.Agent == "" && receipt.Model == nil && receipt.Variant == "" {
+		next := *persist.CloneOpenCodeBinding(m.OpenCodeBinding)
+		next.Revision++
+		next.Initial.Phase, next.Initial.Reason = persist.OpenCodeInitialRejected, receipt.Reason
+		if persist.ValidOpenCodeBinding(next) {
+			if saveErr := d.SetOpenCodeBinding(m.ID, m.OpenCodeBinding.Revision, next); saveErr != nil {
+				return saveErr
+			}
+			return openCodeInitialRejectedError(receipt.Reason)
+		}
+	}
 	if err != nil || receipt == nil || receipt.Status != "admitted" || !sameOpenCodeIdentity(receipt.Identity, b) || receipt.OperationID != i.OperationID || receipt.RequestHash != i.RequestHash || receipt.Model == nil {
 		if m.OpenCodeBinding.Initial.Phase != persist.OpenCodeInitialUncertain {
 			next := *persist.CloneOpenCodeBinding(m.OpenCodeBinding)
@@ -236,6 +251,10 @@ func (d *Daemon) admitOpenCodeInitial(ctx context.Context, c *opencodebridge.Cli
 		return err
 	}
 	return nil
+}
+
+func openCodeInitialRejectedError(reason string) error {
+	return fmt.Errorf("OpenCode runtime: initial input rejected before submission (%s); inspect the choices, end this worker and use a new launch; no automatic retry was sent", reason)
 }
 
 func (d *Daemon) releaseOpenCodeEmbargo(id string, lc shimSpawnConfig) error {
@@ -278,6 +297,9 @@ func (d *Daemon) openCodeRuntimeError(id string, err error) {
 		m.BackendPlanError = ""
 		if err != nil {
 			m.BackendPlanError = "OpenCode native binding or initial admission is unconfirmed; retain the recorded root and do not resend initial input"
+			if m.OpenCodeBinding != nil && m.OpenCodeBinding.Initial != nil && m.OpenCodeBinding.Initial.Phase == persist.OpenCodeInitialRejected {
+				m.BackendPlanError = openCodeInitialRejectedError(m.OpenCodeBinding.Initial.Reason).Error()
+			}
 		}
 		written, _ = d.saveMetaLocked(&m)
 	}

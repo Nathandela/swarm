@@ -316,6 +316,17 @@ func TestOpenCodeInitialDefiniteRejectionIsDurableAndNeverReposted(t *testing.T)
 			if loadErr != nil || saved.OpenCodeBinding.Initial.Phase != "rejected" || !strings.Contains(saved.BackendPlanError, "initial_model_unavailable") {
 				t.Fatalf("refusal not durable/actionable: %+v %v", saved, loadErr)
 			}
+			for _, change := range []func(*persist.OpenCodeBinding){func(b *persist.OpenCodeBinding) { b.Initial.Reason = "changed_reason" }, func(b *persist.OpenCodeBinding) {
+				b.Initial.Phase = persist.OpenCodeInitialStarted
+				b.Initial.Reason = ""
+			}} {
+				next := *persist.CloneOpenCodeBinding(saved.OpenCodeBinding)
+				next.Revision++
+				change(&next)
+				if f.d.SetOpenCodeBinding(saved.ID, saved.OpenCodeBinding.Revision, next) == nil {
+					t.Fatal("terminal rejection custody changed")
+				}
+			}
 			_ = f.d.joinOpenCode(ctx, f.m.ID)
 			if f.initialCalls.Load() != 1 || f.released.Load() {
 				t.Fatal("rejected initial was replayed or released")

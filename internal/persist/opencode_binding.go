@@ -22,6 +22,7 @@ const (
 	OpenCodeInitialStarted   = "started"
 	OpenCodeInitialAdmitted  = "admitted"
 	OpenCodeInitialUncertain = "uncertain"
+	OpenCodeInitialRejected  = "rejected"
 )
 
 // OpenCodeBinding holds identity custody; credentials and prompt text stay in private launch files.
@@ -39,6 +40,7 @@ type OpenCodeInitial struct {
 	OperationID string `json:"operation_id"`
 	RequestHash string `json:"request_hash"`
 	Phase       string `json:"phase"`
+	Reason      string `json:"reason,omitempty"`
 	MessageID   string `json:"message_id,omitempty"`
 	Agent       string `json:"agent,omitempty"`
 	Model       string `json:"model,omitempty"`
@@ -49,6 +51,7 @@ var (
 	openCodeMessageID  = regexp.MustCompile(`^msg_(?:[A-Za-z0-9]{26}|[0-9a-f]{32})$`)
 	openCodeGeneration = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	openCodeHash       = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	openCodeReason     = regexp.MustCompile(`^[a-z][a-z_]{0,63}$`)
 )
 
 // Only native configuration paths belong in durable public metadata.
@@ -108,6 +111,9 @@ func ValidOpenCodeBinding(b OpenCodeBinding) bool {
 	if !cleanOpenCodeText(i.Agent, 128) || !cleanOpenCodeText(i.Model, 256) || !cleanOpenCodeText(i.Variant, 128) {
 		return false
 	}
+	if i.Phase != OpenCodeInitialRejected && i.Reason != "" {
+		return false
+	}
 	switch i.Phase {
 	case OpenCodeInitialPrepared:
 		return i.MessageID == "" && i.Agent == "" && i.Model == "" && i.Variant == ""
@@ -118,6 +124,8 @@ func ValidOpenCodeBinding(b OpenCodeBinding) bool {
 		return b.Phase == OpenCodePhaseReady && i.MessageID != "" && i.Agent != "" && ok && provider != "" && model != ""
 	case OpenCodeInitialUncertain:
 		return b.Phase == OpenCodePhaseReady
+	case OpenCodeInitialRejected:
+		return b.Phase == OpenCodePhaseReady && openCodeReason.MatchString(i.Reason) && i.MessageID == "" && i.Agent == "" && i.Model == "" && i.Variant == ""
 	default:
 		return false
 	}
