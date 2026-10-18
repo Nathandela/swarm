@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -18,7 +19,31 @@ type nativeSupervisionEvent struct {
 
 func (d *Daemon) nativeSupervisionState(m persist.Meta) nativeSupervisionEvent {
 	view, _ := d.openCodeView(m.ID)
-	return openCodeSupervisionEvent(m, view)
+	event := openCodeSupervisionEvent(m, view)
+	if !event.Known || event.Fresh || event.Owned || event.InputID == "" {
+		return event
+	}
+	owned, ok := d.ownedOpenCodeInputs(m.ID, view)[event.InputID]
+	if !ok {
+		return event
+	}
+	record, ok := d.core.ComposerOperation(owned.operation)
+	if !ok || record.Phase == idempotency.PhaseFailed {
+		return event
+	}
+	evidence, err := readOpenCodeEvidence(record.Evidence)
+	if err != nil || !admissionMatchesIntent(evidence.Receipt, owned.operation, owned.intent) {
+		return event
+	}
+	for _, input := range view.Inputs {
+		if input.MessageID != event.InputID {
+			continue
+		}
+		observed, err := qualifyObservedOpenCodeAdmission(owned.operation, owned.intent, input)
+		event.Owned = err == nil && observed.Agent == evidence.Receipt.Agent && *observed.Model == *evidence.Receipt.Model && observed.Variant == evidence.Receipt.Variant
+		break
+	}
+	return event
 }
 
 // Native identity survives observer hydration; epochs and request-card expiry are not events.
