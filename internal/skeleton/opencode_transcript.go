@@ -261,6 +261,7 @@ func (p *openCodeTranscript) offer(kind, ref, turn, state string, at time.Time, 
 	}
 	hash := sha256.Sum256(body)
 	if exists && hash == old.hash {
+		p.touch(id)
 		return nil
 	}
 	if at.IsZero() {
@@ -290,15 +291,25 @@ func (p *openCodeTranscript) offer(kind, ref, turn, state string, at time.Time, 
 	if err = p.d.items.OfferBounded(p.local, raw, maxNativeProjectionItems); err != nil {
 		return err
 	}
-	if !exists {
-		p.order = append(p.order, id)
-	}
+	p.touch(id)
 	p.seen[id] = nativeProjectionSeen{hash: hash, provenance: provenance, at: at.UnixMilli(), status: state}
 	for len(p.order) > maxNativeProjectionItems {
 		delete(p.seen, p.order[0])
 		p.order = p.order[1:]
 	}
 	return nil
+}
+
+// Frequently reconciled outcomes must not be evicted by a stream of new prose.
+func (p *openCodeTranscript) touch(id string) {
+	for i, old := range p.order {
+		if old == id {
+			copy(p.order[i:], p.order[i+1:])
+			p.order = p.order[:len(p.order)-1]
+			break
+		}
+	}
+	p.order = append(p.order, id)
 }
 
 func (p *openCodeTranscript) event(ctx context.Context, reader openCodeReader, event opencode.Event) error {
