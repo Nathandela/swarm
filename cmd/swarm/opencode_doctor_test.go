@@ -68,14 +68,16 @@ func TestDoctorOpenCodeChecksExactPrivateBindingWithoutSubmitting(t *testing.T) 
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			stateDir:=root
-			if scenario=="symlink-state" {
-				stateDir=filepath.Join(t.TempDir(),"state")
-				if err:=os.Symlink(root,stateDir); err!=nil { t.Fatal(err) }
+			stateDir := root
+			if scenario == "symlink-state" {
+				stateDir = filepath.Join(t.TempDir(), "state")
+				if err := os.Symlink(root, stateDir); err != nil {
+					t.Fatal(err)
+				}
 			}
 			finding := doctorOpenCodeCheck(ctx, stateDir, m)
 			want := "warn"
-			if scenario == "healthy" || scenario=="symlink-state" {
+			if scenario == "healthy" || scenario == "symlink-state" {
 				want = "ok"
 			}
 			if finding.Status != want {

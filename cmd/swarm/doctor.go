@@ -16,6 +16,7 @@ package main
 // doctor_test.go holds the negative control.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -273,6 +274,8 @@ func doctorCredentialChecks(saved []string) []doctorFinding {
 // cron'd doctor would stay red forever after the very relaunch its fix line
 // asks for.
 func doctorSessionChecks(stateDir string) []doctorFinding {
+	nativeCtx, cancelNative := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelNative()
 	entries, err := os.ReadDir(stateDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return []doctorFinding{{Check: "sessions", Status: "ok", Detail: "no state dir yet; nothing has ever run here"}}
@@ -296,6 +299,9 @@ func doctorSessionChecks(stateDir string) []doctorFinding {
 			continue
 		}
 		total++
+		if m.AgentType == "opencode" && m.RequiredRuntime == persist.RequiredRuntimeOpenCode && m.Status.Process == status.ProcessRunning {
+			out = append(out, doctorOpenCodeCheck(nativeCtx, stateDir, m))
+		}
 		if m.BackendPlanError == "" {
 			continue
 		}
