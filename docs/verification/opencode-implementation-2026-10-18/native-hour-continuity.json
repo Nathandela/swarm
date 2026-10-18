@@ -1,0 +1,58 @@
+{
+  "pass": true,
+  "requested_duration_completed": true,
+  "elapsed_seconds": 3600.385,
+  "source_commit": "8cd022f3",
+  "binary_sha256": "df2ce321d96e8876c6f101d3b2d1ab58c1c3d9494def1d813285ff2b50903b18",
+  "fixture_source_sha256": "6cdcfb87f85f74abf7cb1eab73ca2c97fd3e925688dc4f017e4de8c6d7117aad",
+  "fixture_source": "native_fixture_6cdcfb87f85f.py",
+  "requested_duration_seconds": 3600,
+  "root_input_cycles": 302,
+  "daemon_sigkill_rejoins": 15,
+  "localhost_scripted_provider_requests": 1205,
+  "external_model_requests": 0,
+  "events": {
+    "swarm.bridge.connected": 1,
+    "session.updated": 2707,
+    "session.status": 3611,
+    "message.part.updated": 7829,
+    "question.asked": 302,
+    "permission.asked": 302,
+    "permission.replied": 302,
+    "question.replied": 302,
+    "message.updated": 6017,
+    "message.part.delta": 602,
+    "session.idle": 602,
+    "session.created": 300
+  },
+  "config_unchanged": true,
+  "all_owned_shim_exit_files": true,
+  "sampled_rss_peaks_kib": {
+    "daemon": 27696,
+    "shim": 23680,
+    "native": 1464448
+  },
+  "qualification": "One actual elapsed hour of native runtime/tool/question/permission/descendant/receipt/rejoin continuity with a scripted localhost provider. No external model execution or retrospective resource-budget qualification.",
+  "limits": [
+    "This older frozen binary includes the stream-slot cleanup fix but predates connected P4 projection, full phone controls, stricter admission/checkpoint review fixes, and bounded health checks.",
+    "24-hour and 72-hour runs remain unqualified.",
+    "Native RSS is measured separately; sampled peaks do not establish an asymptotic resource bound."
+  ],
+  "failure_history": [
+    {
+      "run": "q182748",
+      "result": "failed after about12min/61inputs/3rejoins"
+    },
+    {
+      "run": "q185301",
+      "result": "same failure after bounded definitive-refusal retries"
+    },
+    {
+      "root_cause": "Bun did not emit ServerResponse.close after abrupt peer loss; leaked event-stream slots were exhausted after daemon restarts."
+    },
+    {
+      "fix": "standard request-abort/error and socket-close cleanup; separate native anchor plus8 reconnects passed before restarting this hour."
+    }
+  ],
+  "raw_result_sha256": "993fcacf64e524b00781d6d78f29ddc695efa9051800edc402b2c091f7bd256e"
+}
