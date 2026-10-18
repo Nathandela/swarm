@@ -1,0 +1,109 @@
+== RED: go test ./internal/adapter/opencode/ -run 'TestDecodeEvent|TestDecodeStatusSnapshot' ==
+--- FAIL: TestDecodeEvent_SessionStatus (0.00s)
+    --- FAIL: TestDecodeEvent_SessionStatus/busy (0.00s)
+        native_test.go:53: envelope = ""/"", want evt_1/"session.status"
+    --- FAIL: TestDecodeEvent_SessionStatus/idle (0.00s)
+        native_test.go:53: envelope = ""/"", want evt_1/"session.status"
+    --- FAIL: TestDecodeEvent_SessionStatus/retry_with_action (0.00s)
+        native_test.go:53: envelope = ""/"", want evt_1/"session.status"
+    --- FAIL: TestDecodeEvent_SessionStatus/unknown_subtype_decodes_verbatim (0.00s)
+        native_test.go:53: envelope = ""/"", want evt_1/"session.status"
+--- FAIL: TestDecodeEvent_SessionIdle (0.00s)
+    native_test.go:77: idle event = {ID: Kind: SessionStatus:<nil> SessionIdle:<nil> SessionError:<nil> MessageUpdated:<nil> MessagePartUpdated:<nil>}
+--- FAIL: TestDecodeEvent_SessionError (0.00s)
+    native_test.go:88: session error fact = <nil>
+--- FAIL: TestDecodeEvent_MessageUpdatedUser (0.00s)
+    native_test.go:109: message fact missing
+--- FAIL: TestDecodeEvent_MessageUpdatedAssistant (0.00s)
+    --- FAIL: TestDecodeEvent_MessageUpdatedAssistant/terminal_error_keeps_full_error_data (0.00s)
+        native_test.go:131: message fact missing
+    --- FAIL: TestDecodeEvent_MessageUpdatedAssistant/assistant_summary_marker (0.00s)
+        native_test.go:152: message fact missing
+    --- FAIL: TestDecodeEvent_MessageUpdatedAssistant/session_id_filled_from_properties_when_info_omits_it (0.00s)
+        native_test.go:166: message fact missing
+--- FAIL: TestDecodeEvent_MessagePartUpdated (0.00s)
+    --- FAIL: TestDecodeEvent_MessagePartUpdated/text_part_flags_and_raw_retention (0.00s)
+        native_test.go:182: part fact missing
+    --- FAIL: TestDecodeEvent_MessagePartUpdated/tool_part_state (0.00s)
+        native_test.go:203: part fact missing
+    --- FAIL: TestDecodeEvent_MessagePartUpdated/session_id_filled_from_properties_when_part_omits_it (0.00s)
+        native_test.go:221: part fact missing
+--- FAIL: TestDecodeEvent_UnknownKindIsNotAnError (0.00s)
+    native_test.go:237: envelope = ""/"", want evt_q/"permission.updated"
+--- FAIL: TestDecodeEvent_MalformedKnownKindsAreErrors (0.00s)
+    native_test.go:262: DecodeEvent(not json) accepted malformed input
+--- FAIL: TestDecodeStatusSnapshot (0.00s)
+    native_test.go:274: snapshot = map[]
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/opencode	0.197s
+FAIL
+== RED: go test ./internal/skeleton/ -run 'TestOpenCodeState' ==
+--- FAIL: TestOpenCodeState_RequiresRootSessionID (0.00s)
+    opencode_state_test.go:109: empty root session id accepted
+--- FAIL: TestOpenCodeState_CanonicalTurnCorrelation (0.00s)
+    opencode_state_test.go:120: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_TerminalOutcomeClassification (0.00s)
+    --- FAIL: TestOpenCodeState_TerminalOutcomeClassification/aborted_error_is_cancelled (0.00s)
+        opencode_state_test.go:206: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+    --- FAIL: TestOpenCodeState_TerminalOutcomeClassification/content_filter_error_is_declined (0.00s)
+        opencode_state_test.go:206: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+    --- FAIL: TestOpenCodeState_TerminalOutcomeClassification/api_error_is_failed (0.00s)
+        opencode_state_test.go:206: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+    --- FAIL: TestOpenCodeState_TerminalOutcomeClassification/unknown_error_name_is_failed (0.00s)
+        opencode_state_test.go:206: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+    --- FAIL: TestOpenCodeState_TerminalOutcomeClassification/content-filter_finish_is_declined (0.00s)
+        opencode_state_test.go:206: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+    --- FAIL: TestOpenCodeState_TerminalOutcomeClassification/stop_finish_is_completed (0.00s)
+        opencode_state_test.go:206: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+    --- FAIL: TestOpenCodeState_TerminalOutcomeClassification/length_finish_is_completed (0.00s)
+        opencode_state_test.go:206: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_ErrorIsNotErasedByCompletion (0.00s)
+    --- FAIL: TestOpenCodeState_ErrorIsNotErasedByCompletion/late_completion_keeps_the_failure (0.00s)
+        opencode_state_test.go:224: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+    --- FAIL: TestOpenCodeState_ErrorIsNotErasedByCompletion/late_error_overwrites_the_completion (0.00s)
+        opencode_state_test.go:235: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+    --- FAIL: TestOpenCodeState_ErrorIsNotErasedByCompletion/equal-rank_replay_keeps_the_later_terminal (0.00s)
+        opencode_state_test.go:246: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_ToolCallsStepIsNeverTerminal (0.00s)
+    opencode_state_test.go:259: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_ForeignEventsAreIgnored (0.00s)
+    opencode_state_test.go:283: Apply({"id":"evt_s","type":"session.status","properties":{"sessionID":"ses_other","status":{"type":"busy"}}}) = "" (kind ""), want "ignored-foreign"
+--- FAIL: TestOpenCodeState_UnknownEventKindIsUntracked (0.00s)
+    opencode_state_test.go:296: Apply({"id":"evt_q","type":"permission.updated","properties":{"sessionID":"ses_root","anything":true}}) = "" (kind ""), want "ignored-untracked"
+--- FAIL: TestOpenCodeState_UnknownStatusSubtypeDegrades (0.00s)
+    opencode_state_test.go:307: Apply({"id":"evt_s","type":"session.status","properties":{"sessionID":"ses_root","status":{"type":"paused"}}}) = "" (kind ""), want "ignored-unqualified"
+--- FAIL: TestOpenCodeState_ReconcileRootStatus (0.00s)
+    opencode_state_test.go:331: snapshot for a stale epoch accepted
+--- FAIL: TestOpenCodeState_FailedStatusReadNeverClaimsIdle (0.00s)
+    opencode_state_test.go:381: failed read must not claim a state: {Root: Generation: Epoch:0 Degraded:false DegradedReason: Busy:false BusyKnown:false Retry:<nil> Error:<nil> Current:<nil> Inputs:[] Messages:[] Uncertain:[]}
+--- FAIL: TestOpenCodeState_EpochMismatchRefused (0.00s)
+    opencode_state_test.go:401: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "refused-epoch"
+--- FAIL: TestOpenCodeState_ParseFailureDesyncsUntilNewEpoch (0.00s)
+    opencode_state_test.go:411: Apply({"type":"message.updated","properties":) = "" (kind ""), want "refused-parse"
+--- FAIL: TestOpenCodeState_TerminalWithoutKnownInputBecomesUncertain (0.00s)
+    opencode_state_test.go:436: Apply({"id":"evt_a","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_g0","sessionID":"ses_root","role":"assistant","parentID":"msg_ghos...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_AutoContinueDoesNotFinishTheRequestedInput (0.00s)
+    opencode_state_test.go:468: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_CompactionArtifactsAreNotInputOrCompletion (0.00s)
+    opencode_state_test.go:505: Apply({"id":"evt_us","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_c1","sessionID":"ses_root","role":"user","time":{"created":900},"...) = "" (kind ""), want "ignored-unqualified"
+--- FAIL: TestOpenCodeState_PartsReorderedBeforeMessage (0.00s)
+    opencode_state_test.go:535: Apply({"id":"evt_p","type":"message.part.updated","properties":{"sessionID":"ses_root","part":{"id":"prt_1","sessionID":"ses_root","messageID":"msg_u1","type":"text",...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_PendingPartOverflowRefusedAtCap (0.00s)
+    opencode_state_test.go:558: Apply({"id":"evt_p","type":"message.part.updated","properties":{"sessionID":"ses_root","part":{"id":"prt_p0","sessionID":"ses_root","messageID":"msg_p0","type":"text"...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_InputCapacityEvictsTerminalThenRefuses (0.00s)
+    opencode_state_test.go:571: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_1","sessionID":"ses_root","role":"user","time":{"created":1000}}}}) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_MessageListStaysBounded (0.00s)
+    opencode_state_test.go:619: Apply({"id":"evt_a","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_a0","sessionID":"ses_root","role":"assistant","parentID":"","time"...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_ViewIsACopy (0.00s)
+    opencode_state_test.go:633: Apply({"id":"evt_sr","type":"session.status","properties":{"sessionID":"ses_root","status":{"type":"retry","attempt":1,"message":"slow","next":2000,"action":{"reason"...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_SessionErrorRecorded (0.00s)
+    opencode_state_test.go:655: Apply({"id":"evt_e","type":"session.error","properties":{"sessionID":"ses_root","error":{"name":"APIError","data":{"message":"quota exceeded"}}}}) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_RetryStatusIsActionable (0.00s)
+    opencode_state_test.go:665: Apply({"id":"evt_sr","type":"session.status","properties":{"sessionID":"ses_root","status":{"type":"retry","attempt":2,"message":"rate limited","next":1500,"action":{...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_PartTextIsClippedAtRuneBoundary (0.00s)
+    opencode_state_test.go:682: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+--- FAIL: TestOpenCodeState_DuplicateUpdatesConverge (0.00s)
+    opencode_state_test.go:701: Apply({"id":"evt_u","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}}}...) = "" (kind ""), want "applied"
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.223s
+FAIL
