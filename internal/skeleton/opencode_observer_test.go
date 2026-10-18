@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,7 +29,61 @@ func newOCReaderFake() *ocReaderFake {
 	return f
 }
 func (f *ocReaderFake) idleSnapshot() opencodebridge.Snapshot {
-	return opencodebridge.Snapshot{Identity: f.identity, Session: json.RawMessage(`{"id":"ses_root","directory":"/workspace","time":{"created":1}}`), Statuses: map[string]json.RawMessage{}, Messages: []json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Children: []json.RawMessage{}}
+	return opencodebridge.Snapshot{Identity: f.identity, Session: json.RawMessage(`{"id":"ses_root","directory":"/workspace","time":{"created":1}}`), Statuses: map[string]json.RawMessage{}, Messages: []json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Children: []json.RawMessage{}, Descendants: []json.RawMessage{}, HierarchyComplete: true, HierarchyScope: openCodeHierarchyScope}
+}
+
+func TestOpenCodeObserverRequestEventsRefreshCurrentSet(t *testing.T) {
+	f := newOCReaderFake()
+	var pending atomic.Bool
+	f.snapshot = func(int) opencodebridge.Snapshot {
+		snapshot := f.idleSnapshot()
+		if pending.Load() {
+			snapshot.Permissions = []json.RawMessage{ocPermission("per_root", "ses_root")}
+		}
+		return snapshot
+	}
+	views, ready, _ := runOCObserverTest(t, f)
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+	nextOCView(t, views, func(v OpenCodeView) bool { return v.BusyKnown })
+	pending.Store(true)
+	f.events <- opencodebridge.Event{Type: "permission.asked", Properties: ocPermission("per_root", "ses_root")}
+	v := nextOCView(t, views, func(v OpenCodeView) bool { return v.Attention })
+	if len(v.Pending) != 1 || v.Pending[0].ID != "per_root" {
+		t.Fatal("current native request not observed")
+	}
+	pending.Store(false)
+	f.events <- opencodebridge.Event{Type: "permission.replied", Properties: json.RawMessage(`{"sessionID":"ses_root","requestID":"per_root","reply":"once"}`)}
+	v = nextOCView(t, views, func(v OpenCodeView) bool { return !v.Attention && v.CurrentScopeKnown })
+	if len(v.Pending) != 0 {
+		t.Fatal("native request survived authoritative resolution")
+	}
+}
+
+func TestOpenCodeObserverChildStatusOverlapRefetches(t *testing.T) {
+	f := newOCReaderFake()
+	f.snapshot = func(n int) opencodebridge.Snapshot {
+		if n == 1 {
+			f.events <- opencodebridge.Event{Type: "session.status", Properties: json.RawMessage(`{"sessionID":"ses_child","status":{"type":"busy"}}`)}
+			<-f.handled
+		}
+		return f.idleSnapshot()
+	}
+	views, ready, _ := runOCObserverTest(t, f)
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+	v := nextOCView(t, views, func(v OpenCodeView) bool { return v.BusyKnown })
+	if v.Busy || !v.CurrentScopeKnown {
+		t.Fatal("old child status overrode current native scope")
+	}
+	f.mu.Lock()
+	reads := f.reads
+	f.mu.Unlock()
+	if reads < 2 {
+		t.Fatal("descendant status overlap was not reconciled")
+	}
 }
 func (f *ocReaderFake) Snapshot(ctx context.Context, _ int, _ string) (opencodebridge.Snapshot, error) {
 	select {
@@ -90,13 +145,15 @@ func runOCObserverTest(t *testing.T, f *ocReaderFake) (<-chan OpenCodeView, <-ch
 
 func nextOCView(t *testing.T, views <-chan OpenCodeView, want func(OpenCodeView) bool) OpenCodeView {
 	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
 	for {
 		select {
 		case v := <-views:
 			if want(v) {
 				return v
 			}
-		case <-time.After(3 * time.Second):
+		case <-deadline.C:
 			t.Fatal("missing expected native view")
 			return OpenCodeView{}
 		}

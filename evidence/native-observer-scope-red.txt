@@ -1,0 +1,9 @@
+--- FAIL: TestOpenCodeObserverRequestEventsRefreshCurrentSet (3.00s)
+    opencode_observer_test.go:52: missing expected native view
+--- FAIL: TestOpenCodeObserverChildStatusOverlapRefetches (0.00s)
+    opencode_observer_test.go:79: old child status overrode current native scope
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.328s
+FAIL
+
+exit=1

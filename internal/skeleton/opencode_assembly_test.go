@@ -89,7 +89,7 @@ func TestOpenCodeAssemblyObservesBeforeReleasingNativeInput(t *testing.T) {
 				t.Error("snapshot preceded event subscription")
 			}
 			row, _ := json.Marshal(map[string]any{"id": binding.RootID, "directory": binding.Directory, "time": map[string]int64{"created": 123}})
-			_ = json.NewEncoder(w).Encode(opencodebridge.Snapshot{Identity: identity, Session: row, Statuses: map[string]json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Messages: []json.RawMessage{}, Children: []json.RawMessage{}})
+			_ = json.NewEncoder(w).Encode(opencodebridge.Snapshot{Identity: identity, Session: row, Statuses: map[string]json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Messages: []json.RawMessage{}, Children: []json.RawMessage{}, Descendants: []json.RawMessage{}, HierarchyComplete: true, HierarchyScope: openCodeHierarchyScope})
 		default:
 			w.WriteHeader(404)
 		}
