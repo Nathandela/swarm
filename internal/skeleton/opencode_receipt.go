@@ -378,12 +378,13 @@ func (d *Daemon) checkpointOpenCodeOutcomes(local string, view OpenCodeView) {
 			} else if err != nil || !admissionMatchesIntent(evidence.Receipt, record.operation, record.intent) {
 				break
 			}
-			if evidence.Outcome != "" && evidence.OutcomeAt > input.OutcomeAt {
-				break
+			if evidence.Outcome != "" {
+				newRank, oldRank := ocOutcomeRank(input.Outcome), ocOutcomeRank(evidence.Outcome)
+				if newRank < oldRank || newRank == oldRank && input.OutcomeAt <= evidence.OutcomeAt {
+					break
+				}
 			}
-			if evidence.Outcome != input.Outcome || evidence.OutcomeAt != input.OutcomeAt {
-				evidence.Outcome, evidence.OutcomeSource, evidence.OutcomeAt = input.Outcome, input.OutcomeSource, input.OutcomeAt
-			}
+			evidence.Outcome, evidence.OutcomeSource, evidence.OutcomeAt = input.Outcome, input.OutcomeSource, input.OutcomeAt
 			next, _ := json.Marshal(evidence)
 			saved := bytes.Equal(next, current.Evidence)
 			if !saved {
