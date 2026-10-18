@@ -21,6 +21,7 @@ import (
 
 type openCodeSendFixture struct {
 	promptReceipt        func(opencodebridge.DispatchRequest, opencodebridge.Receipt) opencodebridge.Receipt
+	defaultNativeVariant bool
 	initialNativeMode    bool
 	nativeDecisionMode   bool
 	nativeQuestionMode   bool
@@ -43,6 +44,20 @@ type openCodeSendFixture struct {
 	historyPage          atomic.Value // optional read-only snapshot fixture
 	historyPagingFail    atomic.Bool
 	nativeEvents         chan opencodebridge.Event
+}
+
+func (f *openCodeSendFixture) nativeInputModel() map[string]string {
+	model := map[string]string{"providerID": "fixture", "modelID": "fixture-model"}
+	if !f.defaultNativeVariant {
+		model["variant"] = "max"
+	}
+	return model
+}
+func (f *openCodeSendFixture) nativeInputVariant() string {
+	if f.defaultNativeVariant {
+		return "default"
+	}
+	return "max"
 }
 
 // The real daemon, shim writer and owner protocol surround a private native bridge fixture.
@@ -110,9 +125,9 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 			}
 			f.calls.Add(1)
 			messageID := "msg_" + strings.Repeat("a", 32)
-			row, _ := json.Marshal(map[string]any{"info": map[string]any{"id": messageID, "sessionID": f.binding.RootID, "role": "user", "agent": "build", "model": map[string]string{"providerID": "fixture", "modelID": "fixture-model", "variant": "max"}, "time": map[string]int64{"created": time.Now().UnixMilli()}}, "parts": []any{map[string]any{"id": "prt_initial", "sessionID": f.binding.RootID, "messageID": messageID, "type": "text", "text": req.Text}}})
+			row, _ := json.Marshal(map[string]any{"info": map[string]any{"id": messageID, "sessionID": f.binding.RootID, "role": "user", "agent": "build", "model": f.nativeInputModel(), "time": map[string]int64{"created": time.Now().UnixMilli()}}, "parts": []any{map[string]any{"id": "prt_initial", "sessionID": f.binding.RootID, "messageID": messageID, "type": "text", "text": req.Text}}})
 			f.nativeRow.Store(json.RawMessage(row))
-			_ = json.NewEncoder(w).Encode(opencodebridge.Receipt{Identity: f.identity, OperationID: req.OperationID, RequestHash: req.RequestHash, Status: "admitted", MessageID: messageID, Agent: "build", Model: &opencodebridge.Model{ProviderID: "fixture", ModelID: "fixture-model"}, Variant: "max", SelectionBasis: "native_composer"})
+			_ = json.NewEncoder(w).Encode(opencodebridge.Receipt{Identity: f.identity, OperationID: req.OperationID, RequestHash: req.RequestHash, Status: "admitted", MessageID: messageID, Agent: "build", Model: &opencodebridge.Model{ProviderID: "fixture", ModelID: "fixture-model"}, Variant: f.nativeInputVariant(), SelectionBasis: "native_composer"})
 		case "/events":
 			w.Header().Set("Content-Type", "text/event-stream")
 			props, _ := json.Marshal(f.identity)
@@ -225,7 +240,7 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 				_ = json.NewEncoder(w).Encode(receipt)
 				return
 			}
-			row, _ := json.Marshal(map[string]any{"info": map[string]any{"id": req.MessageID, "sessionID": f.binding.RootID, "role": "user", "agent": "build", "model": map[string]string{"providerID": "fixture", "modelID": "fixture-model", "variant": "max"}, "time": map[string]int64{"created": time.Now().UnixMilli()}}, "parts": []any{map[string]any{"id": "prt_native", "sessionID": f.binding.RootID, "messageID": req.MessageID, "type": "text", "text": req.Text}}})
+			row, _ := json.Marshal(map[string]any{"info": map[string]any{"id": req.MessageID, "sessionID": f.binding.RootID, "role": "user", "agent": "build", "model": f.nativeInputModel(), "time": map[string]int64{"created": time.Now().UnixMilli()}}, "parts": []any{map[string]any{"id": "prt_native", "sessionID": f.binding.RootID, "messageID": req.MessageID, "type": "text", "text": req.Text}}})
 			f.nativeRow.Store(json.RawMessage(row))
 			if f.dropReply.Load() {
 				conn, _, err := w.(http.Hijacker).Hijack()
@@ -236,7 +251,7 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 				}
 				return
 			}
-			receipt := opencodebridge.Receipt{Identity: f.identity, Kind: "prompt", TargetID: f.binding.RootID, OperationID: req.OperationID, Status: "admitted", MessageID: req.MessageID, Agent: "build", Model: &opencodebridge.Model{ProviderID: "fixture", ModelID: "fixture-model"}, Variant: "max", SelectionBasis: "native_session_selection"}
+			receipt := opencodebridge.Receipt{Identity: f.identity, Kind: "prompt", TargetID: f.binding.RootID, OperationID: req.OperationID, Status: "admitted", MessageID: req.MessageID, Agent: "build", Model: &opencodebridge.Model{ProviderID: "fixture", ModelID: "fixture-model"}, Variant: f.nativeInputVariant(), SelectionBasis: "native_session_selection"}
 			if f.promptReceipt != nil {
 				receipt = f.promptReceipt(req, receipt)
 			}
