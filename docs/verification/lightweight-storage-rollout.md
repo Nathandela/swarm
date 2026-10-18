@@ -449,3 +449,59 @@ Older host conversation detail is intentionally unavailable after restart or
 RAM eviction; provider CLIs remain the history surface. Existing phone caches
 and delivered copies retain their own lifetimes. A fixed-workload production
 growth study and disposition of the retained unique/live work are still needed.
+
+## VM field check, 2026-10-18
+
+The installed binary and running daemon still report v0.18.2. Doctor reports
+226 persisted attempts, zero running or past degraded attempts, and no failed
+checks. Seven visible discussions are running. The three warnings concern agent
+discovery in the noninteractive SSH shell; those agents resolve in the saved
+daemon environment. The upgrade timer is installed, and its latest service run
+completed successfully. Remote control remains unpaired and off.
+
+Six running attempts use identity rings no larger than 65,568 bytes. Repeated
+measurements about a minute apart showed changed contents in busy rings with
+unchanged size. They have no raw terminal archives. One intentionally retained
+legacy active attempt still writes a raw transcript, approximately 13 MiB
+including its rotation. No terminals were restarted or given input. Procfs
+confirmed that all seven native CLI working directories are external projects,
+outside supervisor state.
+
+Allocated session state measured 11,300,618,240 bytes, compared with
+11,291,652,096 at the previous cleanup checkpoint: an increase of 8,966,144 bytes
+(8.55 MiB) over approximately 21 hours, with three additional attempt records.
+Most of the retained 10.5 GiB is still the deliberately deferred legacy
+workspace and managed-native payload. The journal uses approximately 1 MiB,
+daemon.log approximately 1 MiB, and remote state approximately 16 KiB. These
+observations support the new capture behavior; they do not establish bounds for
+the remaining log/custody exceptions or every future workload.
+
+Whole-machine disk management remains insufficient. Root availability fell from
+approximately 1.59 GB to 78 MB during this check, then recovered as other work
+changed. The data volume had approximately 19 GB available. Temporary storage on
+root occupied approximately 20.6 GB, including approximately 10.5 GB under the
+native Claude scratch root. Its payload includes repository clones, build
+output, virtual environments and repeated Terraform providers. Several large
+scratch trees belong to currently live native conversations. Active download
+and extraction work also changed temporary usage during the measurements.
+File modification times alone do not quantify net growth since deployment.
+Native histories remain on the data volume and were not purged.
+
+Under the owner's existing obvious-cleanup authorization, a bounded cleanup
+removed only 13 old generated Chrome component download caches, retaining
+browser profiles and all discussion scratch/source/history. Before deletion,
+privileged inspection covered 275 processes with zero inspection errors and
+zero references to the selected browser profile roots. The selected cache
+allocation was 747,233,280 bytes; root free space increased by exactly that
+amount, from 1,619,374,080 to 2,366,607,360 bytes. All seven live shim PID/start
+identities remained unchanged. No project or runtime configuration was changed.
+At the final 09:37 UTC check, root had 2,339,532,800 bytes available (96% used),
+the data volume had 19,043,004,416 bytes available (88% used), and doctor still
+reported no failed checks or degraded attempts.
+
+This is field verification of the supervisor fix and a small cache cleanup,
+not completion of the legacy recovery or a fixed-workload growth test. Follow-up
+`agents-tracker-r9vj` tracks root exhaustion from agent scratch artifacts;
+`agents-tracker-3x3c` and `agents-tracker-3bxu` retain the deferred WIP recovery.
+Moving scratch to the data volume would protect root headroom temporarily but
+would not itself reduce storage or establish a lifecycle for disposable work.
