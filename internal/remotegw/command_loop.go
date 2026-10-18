@@ -1162,6 +1162,11 @@ func opForAction(rc protocol.RemoteCommand) (string, error) {
 			return "", errors.New("remotegw: approve command missing its approve body in-envelope")
 		}
 		return protocol.OpApprove, nil
+	case protocol.ActionNativeDecide:
+		if rc.NativeDecision == nil {
+			return "", errors.New("remotegw: native decision command missing its body in-envelope")
+		}
+		return protocol.OpNativeDecide, nil
 	case protocol.ActionPushPrefs:
 		return protocol.OpPushPrefs, nil
 	case protocol.ActionSessionLaunch:

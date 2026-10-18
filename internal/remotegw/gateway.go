@@ -567,17 +567,30 @@ func flushTerminal(sink TerminalSink) error {
 // (IS-LIFE-4), nil for everything else. A fresh connection is used per command (pooling is a
 // later refinement).
 func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol.Control, error) {
-	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway)
+	caps := []string{protocol.CapRemoteGateway}
+	if op == protocol.OpNativeDecide {
+		caps = append(caps, protocol.CapNativeRequests)
+	}
+	dc, err := dialDaemon(g.socketPath, caps...)
 	if err != nil {
 		return protocol.Control{}, err
 	}
 	defer func() { _ = dc.Close() }()
+	within := 10 * time.Second
+	if op == protocol.OpNativeDecide {
+		if !dc.hasCap(protocol.CapNativeRequests) {
+			return protocol.Control{Op: protocol.OpError, OperationID: rc.OperationID, SessionID: rc.Session,
+				ErrorCode: protocol.CodeCapabilityRefused, Error: "native decisions are unavailable on this daemon"}, nil
+		}
+		within = 35 * time.Second
+		_ = dc.conn.SetDeadline(time.Now().Add(within))
+	}
 
 	if err := dc.writeControl(forwardControl(dc.endpointID, op, rc)); err != nil {
 		return protocol.Control{}, err
 	}
 	// The daemon replies OpOK / OpLaunch on success or OpError on refusal.
-	return dc.readControl(10 * time.Second)
+	return dc.readControl(within)
 }
 
 // forwardControl is ForwardCommand's ASSEMBLY, split out so it can be tested without a
@@ -596,16 +609,17 @@ func forwardControl(endpointID, op string, rc protocol.RemoteCommand) protocol.C
 	sessionID := rc.Session
 	exp := cmd.ExpiresAt
 	ctrl := protocol.Control{
-		Op:          op,
-		EndpointID:  endpointID,
-		SessionID:   sessionID,
-		OperationID: cmd.OperationID,
-		DeviceID:    cmd.DeviceID,
-		DeviceSig:   cmd.Sig,
-		ExpiresAt:   &exp,
-		Launch:      rc.Launch,
-		Approve:     rc.Approve,
-		BodyVersion: rc.BodyVersion,
+		Op:             op,
+		EndpointID:     endpointID,
+		SessionID:      sessionID,
+		OperationID:    cmd.OperationID,
+		DeviceID:       cmd.DeviceID,
+		DeviceSig:      cmd.Sig,
+		ExpiresAt:      &exp,
+		Launch:         rc.Launch,
+		Approve:        rc.Approve,
+		NativeDecision: rc.NativeDecision,
+		BodyVersion:    rc.BodyVersion,
 		// Wave R5: the session_launch preset body rides across unchanged (its content is
 		// bound by the phone's signature via SessionLaunchContentHash), and
 		// operation_status's query subject is copied onto its Control coordinate.
