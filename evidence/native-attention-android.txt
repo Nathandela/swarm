@@ -1,19 +1,74 @@
 To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.5.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
 Daemon will be stopped at the end of the build 
+Checking the license for package Android SDK Platform-Tools in /private/tmp/swarm-opencode-implementation-20261018/toolchains/android-sdk/licenses
+Warning: License for package Android SDK Platform-Tools not accepted.
+WARNING: platform-tools package is not installed. Please accept the installation licence to continue
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:preBuild UP-TO-DATE
+> Task :app:requireSwarmAar
+> Task :app:preDebugBuild
+> Task :app:checkDebugAarMetadata
+> Task :app:processDebugNavigationResources
+> Task :app:compileDebugNavigationResources
+> Task :app:generateDebugResValues
+> Task :app:mapDebugSourceSetPaths
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:mergeDebugResources
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug
+> Task :app:parseDebugLocalResources
+> Task :app:processDebugMainManifest
+> Task :app:processDebugManifest
+> Task :app:processDebugManifestForPackage
+> Task :app:javaPreCompileDebug
+> Task :app:preDebugUnitTestBuild UP-TO-DATE
+> Task :app:javaPreCompileDebugUnitTest FROM-CACHE
+> Task :app:mergeDebugShaders
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets
+> Task :app:processDebugResources
+> Task :app:processDebugUnitTestManifest
+> Task :app:packageDebugUnitTestForUnitTest
+> Task :app:generateDebugUnitTestConfig
+> Task :app:policyTestResources
+
+> Task :app:compileDebugKotlin
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Composer.kt:398:32 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/CtaButton.kt:142:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/FocusRing.kt:139:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Grain.kt:119:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Haptics.kt:203:29 'static field HAPTIC_FEEDBACK_ENABLED: String' is deprecated. Deprecated in Java.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Motion.kt:646:22 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/ScanReticle.kt:185:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/SignalField.kt:155:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/StatusDot.kt:72:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:110:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:144:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:192:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:226:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Surfaces.kt:257:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/main/kotlin/dev/swarm/phone/ui/kit/Toggle.kt:87:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+> Task :app:processDebugJavaRes
+> Task :app:bundleDebugClassesToCompileJar
+> Task :app:bundleDebugClassesToRuntimeJar
+
+> Task :app:compileDebugUnitTestKotlin
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/test/kotlin/dev/swarm/phone/ui/kit/HapticsTest.kt:56:29 'static field HAPTIC_FEEDBACK_ENABLED: String' is deprecated. Deprecated in Java.
+w: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelConnectionTest.kt:243:42 Unnecessary non-null assertion (!!) on a non-null receiver of type 'String'.
+
+> Task :app:compileDebugUnitTestJavaWithJavac NO-SOURCE
+> Task :app:processDebugUnitTestJavaRes
+> Task :app:testDebugUnitTest
 
 [Incubating] Problems report is available at: file:///private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/build/reports/problems/problems-report.html
-
-FAILURE: Build failed with an exception.
-
-* What went wrong:
-Could not determine the dependencies of task ':app:testDebugUnitTest'.
-> SDK location not found. Define a valid SDK location with an ANDROID_HOME environment variable or by setting the sdk.dir path in your project's local properties file at '/private/tmp/swarm-opencode-implementation-20261018/worktrees/state-astra/android/local.properties'.
-
-* Try:
-> Run with --stacktrace option to get the stack trace.
-> Run with --info or --debug option to get more log output.
-> Run with --scan to get full insights from a Build Scan (powered by Develocity).
-> Get more help at https://help.gradle.org.
 
 Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
 
@@ -21,6 +76,8 @@ You can use '--warning-mode all' to show the individual deprecation warnings and
 
 For more on this, please refer to https://docs.gradle.org/9.5.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
 
-BUILD FAILED in 29s
+BUILD SUCCESSFUL in 1m 21s
+31 actionable tasks: 30 executed, 1 from cache
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.5.1/userguide/configuration_cache_enabling.html
 
-exit=1
+exit=0
