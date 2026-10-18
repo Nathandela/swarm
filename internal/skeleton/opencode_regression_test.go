@@ -175,3 +175,56 @@ func TestOpenCodeRegressionHistoryDoesNotBecomeLiveCompletion(t *testing.T) {
 		t.Fatalf("exact previously live input source=%q", got)
 	}
 }
+
+func TestOpenCodeRegressionTerminalBeforeParentConverges(t *testing.T) {
+	s, e := newOCState(t, "ses_root")
+	s.Apply(ocAssistantMessage("ses_root", "msg_a1", "msg_u1", 1100, 1200, "stop"), e)
+	s.Apply(ocUserMessage("ses_root", "msg_u1", 1000), e)
+	s.Apply(ocUserTextPart("ses_root", "msg_u1", "prt_1", "hello"), e)
+	v := s.View()
+	if len(v.Uncertain) != 0 || ocInput(v, "msg_u1").Outcome != OpenCodeOutcomeCompleted {
+		t.Fatalf("exact delayed parent did not reconcile: %+v", v)
+	}
+}
+func TestOpenCodeRegressionMissingPartsWithholdAuthority(t *testing.T) {
+	s, e := newOCState(t, "ses_root")
+	s.Apply(ocStatus("ses_root", "idle"), e)
+	s.Apply(ocUserMessage("ses_root", "msg_u1", 1000), e)
+	if !s.View().Degraded {
+		t.Fatal("idle map plus unclassified pending input appeared fully observed")
+	}
+	s.Apply(ocUserTextPart("ses_root", "msg_u1", "prt_1", "hello"), e)
+	if s.View().Degraded {
+		t.Fatal("observed genuine parts did not resolve temporary classification hold")
+	}
+}
+func TestOpenCodeRegressionRetainedInputTextBudget(t *testing.T) {
+	s, e := newOCState(t, "ses_root")
+	s.Apply(ocUserMessage("ses_root", "msg_u1", 1000), e)
+	for i := 0; i < maxOCInputParts; i++ {
+		s.Apply(ocUserTextPart("ses_root", "msg_u1", fmt.Sprintf("prt_%d", i), strings.Repeat("x", maxOCPartText)), e)
+	}
+	n := 0
+	for _, p := range s.inputs["msg_u1"].parts {
+		n += len(p.text)
+	}
+	if n > maxOCInputText {
+		t.Fatalf("retained %d text bytes behind %d-byte input budget", n, maxOCInputText)
+	}
+	if !ocInput(s.View(), "msg_u1").TextTruncated {
+		t.Fatal("bounded retained text lost truncation disclosure")
+	}
+}
+func TestOpenCodeRegressionHistoryRejectsWholeForeignPage(t *testing.T) {
+	s, e := newOCState(t, "ses_root")
+	rows := []json.RawMessage{
+		json.RawMessage(`{"info":{"id":"msg_u1","sessionID":"ses_root","role":"user","time":{"created":1000}},"parts":[]}`),
+		json.RawMessage(`{"info":{"id":"msg_other","sessionID":"ses_other","role":"user","time":{"created":1001}},"parts":[]}`),
+	}
+	if err := s.ImportHistory(rows, e); err == nil {
+		t.Fatal("foreign history page accepted")
+	}
+	if len(s.View().Inputs) != 0 {
+		t.Fatal("failed history validation partially changed input authority")
+	}
+}

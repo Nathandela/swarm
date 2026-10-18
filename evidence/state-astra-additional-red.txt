@@ -1,0 +1,11 @@
+--- FAIL: TestOpenCodeRegressionTerminalBeforeParentConverges (0.00s)
+    opencode_regression_test.go:182: exact delayed parent did not reconcile: {Root:ses_root Generation:gen-1 Epoch:1 Degraded:false DegradedReason: Busy:false BusyKnown:false Retry:<nil> Error:<nil> Current:0x71fb026e1c00 Inputs:[{MessageID:msg_u1 Text:hello TextTruncated:false Synthetic:false Classified:true At:1000 Outcome: OutcomeSource: OutcomeAt:0 ErrorName:}] Messages:[{ParentID:msg_u1 ID:msg_a1 Role:assistant At:1100 Finish:stop ErrorName: Summary:false} {ParentID: ID:msg_u1 Role:user At:1000 Finish: ErrorName: Summary:false}] Uncertain:[{MessageID:msg_a1 InputID:msg_u1 Outcome:completed ErrorName: At:1200 Reason:terminal assistant message has no known requested input}]}
+--- FAIL: TestOpenCodeRegressionMissingPartsWithholdAuthority (0.00s)
+    opencode_regression_test.go:186: idle map plus unclassified pending input appeared fully observed
+--- FAIL: TestOpenCodeRegressionRetainedInputTextBudget (0.02s)
+    opencode_regression_test.go:194: retained 1048576 text bytes behind 65536-byte input budget
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.383s
+FAIL
+
+EXIT 1
