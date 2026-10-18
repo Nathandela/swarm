@@ -1,0 +1,84 @@
+{
+  "scope": "Actual owner CLI / protocol / core / shim / OpenCode SDK decision processing with scripted localhost responses; no external model execution or phone transport claim",
+  "source_head": "fb2dd269ae2e7f7e771e2ffbd01a94faeedd9320",
+  "swarm_binary_sha256": "6e0beb2f437a286aacd56d404d6486a7b7a138b5fc723b0e95b0ea10e8679d76",
+  "fixture_source_sha256": "45f82ff8044d0eda00175d04e83bdf440b243bd6048f702e79087a3767c9f3aa",
+  "private_evidence_directory": "/private/tmp/swarm-opencode-implementation-20261018/d2007",
+  "elapsed_seconds": 18.262,
+  "native_version": "1.19.3",
+  "provider_requests": 8,
+  "root_user_inputs": 3,
+  "all_owned_shim_exit_files": true,
+  "checks": [
+    "Root permission once and reject",
+    "Descendant permission always, with explicit native-pattern/session-pending scope",
+    "Root and descendant ordered multi-select/custom question answers",
+    "Root question rejection",
+    "CLI refuses stale observed content hash before creating an operation",
+    "Wrong generation returns exact typed rejected/no-effect receipt",
+    "Read-only original operation status preserves receipt",
+    "Same operation and same full body returns cached receipt without another native decision",
+    "Same operation with changed reply/answers conflicts",
+    "Permission/question rejection may leave original semantic input admitted without a qualified terminal outcome; no success inferred from idle"
+  ],
+  "decisions": [
+    {
+      "operation_id": "native:2YCAOQPXQI6WEUBTP6I7PECIUZ",
+      "native_session_id": "ses_2c57589e1c9492a823bf8a1d718a2fd6",
+      "request_id": "per_1502dec4d001iTWjea1Bxy51uH",
+      "kind": "permission_reply",
+      "state": "admitted",
+      "native_effect": "single_request",
+      "root_request": true
+    },
+    {
+      "operation_id": "native:ALINN7WCWNCYWBJFK5T5SHMWNN",
+      "native_session_id": "ses_2c57589e1c9492a823bf8a1d718a2fd6",
+      "request_id": "que_1502dec2b001ycWVbrlcyxm9kB",
+      "kind": "question_reply",
+      "state": "admitted",
+      "native_effect": "single_request",
+      "root_request": true
+    },
+    {
+      "operation_id": "native:3EYQGLDZ5KM67CVTQ32R5JBIBR",
+      "native_session_id": "ses_2c57589e1c9492a823bf8a1d718a2fd6",
+      "request_id": "per_1502dfa99001hMUO2TEg5gWp1y",
+      "kind": "permission_reply",
+      "state": "admitted",
+      "native_effect": "reject_session_pending_permissions",
+      "root_request": true
+    },
+    {
+      "operation_id": "native:HP7DJ27RLNMEZNWMWAKU64JOZY",
+      "native_session_id": "ses_2c57589e1c9492a823bf8a1d718a2fd6",
+      "request_id": "que_1502dfb2d001bibUMlXqGYnwoE",
+      "kind": "question_reject",
+      "state": "admitted",
+      "native_effect": "single_request",
+      "root_request": true
+    },
+    {
+      "operation_id": "native:WWJLYKLKEIKZQCIUGGNYTFBQDK",
+      "native_session_id": "ses_eafd20136ffeCLrSpzAgNcwtDr",
+      "request_id": "per_1502dff92001PU0RClsVyuZ113",
+      "kind": "permission_reply",
+      "state": "admitted",
+      "native_effect": "approve_native_patterns_and_matching_session_requests",
+      "root_request": false
+    },
+    {
+      "operation_id": "native:FSZSTL4T5MCQUBPKYYTBKNZNPB",
+      "native_session_id": "ses_eafd20136ffeCLrSpzAgNcwtDr",
+      "request_id": "que_1502e0025001KSjafxFMLKYGqp",
+      "kind": "question_reply",
+      "state": "admitted",
+      "native_effect": "single_request",
+      "root_request": false
+    }
+  ],
+  "preserved_prior_run": {
+    "directory": "/private/tmp/swarm-opencode-implementation-20261018/d2002",
+    "finding": "The initial fixture incorrectly expected a final tool-free assistant after native permission/question rejection. Native stopped idle with exact-parent tool errors; Swarm retained unconfirmed semantic outcome. Owner ready/attention projection was reported separately to the state implementation owner."
+  }
+}

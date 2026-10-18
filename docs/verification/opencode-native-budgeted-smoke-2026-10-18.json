@@ -1,0 +1,61 @@
+{
+  "scope": "Short resource-budget and actual descendant-read qualification; not a sustained-duration or external-model gate",
+  "source_head": "4937e3d7120506e9fa0c651267d41866ee7582fe",
+  "swarm_binary_sha256": "38cc6946cb9fe22fecf023bdc308ccec53c7e4bc58e03503a8f01e276c432292",
+  "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+  "native_version": "1.19.3",
+  "fixture_source_sha256": "6901b4b35276e20d2fde8292ad218f3cf8e5e49aa28e4ca49a641d384f068936",
+  "private_evidence_directory": "/private/tmp/swarm-opencode-implementation-20261018/h2016",
+  "pass": true,
+  "elapsed_seconds": 20.756,
+  "requested_duration_seconds": 0,
+  "requested_duration_completed": false,
+  "root_inputs": 3,
+  "daemon_restarts": 2,
+  "localhost_provider_requests": 9,
+  "declared_budgets": {
+    "swarm_rss_mib_per_process": 256,
+    "swarm_fds_per_process": 128,
+    "swarm_disk_mib": 256,
+    "dispatch_seconds": 30,
+    "rejoin_seconds": 15
+  },
+  "peak_rss_kib": {
+    "daemon": 24000,
+    "shim": 16016,
+    "native": 1119600
+  },
+  "peak_fds": {
+    "daemon": 16,
+    "shim": 12,
+    "native": 48
+  },
+  "peak_swarm_disk_bytes": 170155,
+  "max_dispatch_seconds": 0.19163291600125376,
+  "max_rejoin_seconds": 0.6435858749900945,
+  "native_store_bytes_final": {
+    "sqlite": 364544,
+    "-wal": 32992,
+    "-shm": 32768
+  },
+  "exact_completed_descendant_message": {
+    "session_id": "ses_eafc7f920ffeQg2BGo2khBI6U4",
+    "message_id": "msg_150380c61001wFo1Qwihrx6VAm"
+  },
+  "all_owned_shim_exit_files": true,
+  "negative_control": {
+    "private_evidence_directory": "/private/tmp/swarm-opencode-implementation-20261018/h2013neg",
+    "fixture_source_sha256": "e49c56390122d58d982b097ba9868bb92c8bf44817db0d5110107ff73023b41d",
+    "exit_status": 1,
+    "error": "('Swarm RSS budget', 'daemon', [{'pid': 47741, 'rss_kib': 21824}])",
+    "all_owned_shim_exit_files": true,
+    "difference_from_final_script": "Same RSS gate; final script additionally includes daemon stdout in disk usage, records native binary hash, and refuses Python optimization."
+  },
+  "limits": [
+    "Three root inputs and two daemon rejoins; no hour/24-hour/72-hour resource claim",
+    "RSS is checkpoint sampling, not an all-time peak",
+    "Native RSS/FDs/SQLite are reported separately from Swarm budgets",
+    "Goroutines and private queue depth are not exposed",
+    "Private localhost provider responses are deterministic fixtures, not model output"
+  ]
+}
