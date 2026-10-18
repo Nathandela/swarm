@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|message|peek|doctor|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -83,6 +83,11 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reatta
                    (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
   swarm message    submit a semantic message <session> --text s [--operation-id id]
                    or read its receipt with --status --operation-id id
+  swarm requests   list native pending requests <session>, or inspect one with
+                   --request-id id --native-session-id id
+  swarm decide     answer an inspected native request <session> with --request-id id
+                   --native-session-id id --request-hash hash --reply once|always|reject|answer
+                   [--answers JSON], or read its receipt with --status --operation-id id
   swarm peek       print a session's current screen <session> [--lines N]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)
