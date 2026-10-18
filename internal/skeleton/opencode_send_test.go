@@ -18,6 +18,8 @@ import (
 )
 
 type openCodeSendFixture struct {
+	rowAvailable    atomic.Bool
+	nativeRow       atomic.Value
 	d               *Daemon
 	client          *protocol.Client
 	binding         opencodebridge.Binding
@@ -81,6 +83,14 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 		case "/snapshot":
 			row, _ := json.Marshal(map[string]any{"id": f.binding.RootID, "directory": f.binding.Directory, "time": map[string]int64{"created": 123}})
 			_ = json.NewEncoder(w).Encode(opencodebridge.Snapshot{Identity: f.identity, Session: row, Statuses: map[string]json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Messages: []json.RawMessage{}, Children: []json.RawMessage{}})
+		case "/message":
+			raw, ok := f.nativeRow.Load().(json.RawMessage)
+			if !f.rowAvailable.Load() || !ok {
+				w.WriteHeader(404)
+				_ = json.NewEncoder(w).Encode(map[string]string{"reason": "native_message_missing"})
+				return
+			}
+			_, _ = w.Write(raw)
 		case "/dispatch":
 			var req opencodebridge.DispatchRequest
 			if json.NewDecoder(r.Body).Decode(&req) != nil {
@@ -104,6 +114,8 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 			if !ok || rec.Phase != idempotency.PhaseExecuting || len(rec.Request) == 0 {
 				t.Error("native effect preceded durable request and execution custody")
 			}
+			row, _ := json.Marshal(map[string]any{"info": map[string]any{"id": req.MessageID, "sessionID": f.binding.RootID, "role": "user", "agent": "build", "model": map[string]string{"providerID": "fixture", "modelID": "fixture-model", "variant": "max"}, "time": map[string]int64{"created": time.Now().UnixMilli()}}, "parts": []any{map[string]any{"id": "prt_native", "sessionID": f.binding.RootID, "messageID": req.MessageID, "type": "text", "text": req.Text}}})
+			f.nativeRow.Store(json.RawMessage(row))
 			if f.dropReply.Load() {
 				conn, _, err := w.(http.Hijacker).Hijack()
 				if err != nil {
