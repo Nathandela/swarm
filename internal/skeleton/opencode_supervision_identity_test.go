@@ -217,3 +217,43 @@ func TestNativeSupervisionObservesCurrentWorkWithoutInventingHistoryOwnership(t 
 		t.Fatal("exact admitted initial proof was not carried")
 	}
 }
+
+func TestNativeSupervisionRecoversDurablyOwnedInputBeforeObserverCheckpoint(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	id, err := protocol.NewSemanticOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.client.SemanticSend(id, f.request); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := f.d.core.ComposerOperation(id)
+	if !ok {
+		t.Fatal("missing durable native intent")
+	}
+	var intent openCodeSendIntent
+	if json.Unmarshal(rec.Request, &intent) != nil {
+		t.Fatal("invalid durable intent")
+	}
+	input := OpenCodeInput{MessageID: intent.MessageID, Text: f.request.Text, Classified: true, At: intent.NotBeforeMS + 1, Outcome: OpenCodeOutcomeCompleted, OutcomeSource: OpenCodeOutcomeSourceImported, OutcomeAt: intent.NotBeforeMS + 2, Agent: "build", ProviderID: "fixture", ModelID: "fixture-model", Variant: "max"}
+	view := OpenCodeView{Root: f.identity.RootID, Generation: f.identity.BackendGeneration, BusyKnown: true, CurrentScopeKnown: true, Inputs: []OpenCodeInput{input}}
+	f.d.openCode.mu.Lock()
+	f.d.openCode.sessions[f.binding.WorkerID].view = view
+	f.d.openCode.mu.Unlock()
+	f.d.nativeReceipts.mu.Lock()
+	f.d.nativeReceipts.sessions = nil
+	f.d.nativeReceipts.mu.Unlock()
+	meta, _ := f.d.core.Get(f.binding.WorkerID)
+	if got := f.d.nativeSupervisionState(meta); !got.Owned || got.InputID != intent.MessageID {
+		t.Fatal("admitted native input lost because active observation had not checkpointed")
+	}
+	f.d.openCode.mu.Lock()
+	f.d.openCode.sessions[f.binding.WorkerID].view.Inputs[0].Text = "conflicting native history"
+	f.d.openCode.mu.Unlock()
+	if f.d.nativeSupervisionState(meta).Owned {
+		t.Fatal("owned ID with conflicting native body became recovered attention")
+	}
+	if f.calls.Load() != 1 {
+		t.Fatal("ownership recovery posted another native message")
+	}
+}
