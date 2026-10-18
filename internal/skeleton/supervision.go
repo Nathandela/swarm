@@ -57,10 +57,11 @@ const supervisionRetry = 2 * time.Second
 
 // supervisionRecord is one passive child's durable supervision state (C4).
 type supervisionRecord struct {
-	Child              string `json:"child"`  // local id
-	Source             string `json:"source"` // local id of the session that receives notifications
-	LastGroup          string `json:"last_group"`
-	NativeDeliveredKey string `json:"native_delivered_key,omitempty"`
+	Child               string `json:"child"`  // local id
+	Source              string `json:"source"` // local id of the session that receives notifications
+	LastGroup           string `json:"last_group"`
+	NativeDeliveredKey  string `json:"native_delivered_key,omitempty"`
+	NativeObservedInput string `json:"native_observed_input,omitempty"`
 	// SeenWorking gates the first ready_for_review (C2): it is set only once an OBSERVED
 	// status carries raw Turn == active. The launch baseline (Turn unknown, which Derive
 	// also maps to working) must NOT count, or a heuristic idle read right after launch

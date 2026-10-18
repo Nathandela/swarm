@@ -12,8 +12,8 @@ import (
 )
 
 type nativeSupervisionEvent struct {
-	Key          string
-	Known, Fresh bool
+	Key, InputID, ObservedInputID string
+	Known, Fresh, Owned           bool
 }
 
 func (d *Daemon) nativeSupervisionState(m persist.Meta) nativeSupervisionEvent {
@@ -40,6 +40,10 @@ func openCodeSupervisionEvent(m persist.Meta, view OpenCodeView) nativeSupervisi
 	if view.Root != m.ConversationID || view.Generation != b.Generation || view.Degraded || !view.BusyKnown || !view.CurrentScopeKnown {
 		return nativeSupervisionEvent{}
 	}
+	observed := ""
+	if input := view.Current; view.Busy && input != nil && input.Classified && !input.Synthetic {
+		observed = input.MessageID
+	}
 	if len(view.Pending) > 0 {
 		if len(view.Pending) > 128 {
 			return nativeSupervisionEvent{}
@@ -58,10 +62,10 @@ func openCodeSupervisionEvent(m persist.Meta, view OpenCodeView) nativeSupervisi
 			keys = append(keys, key([]any{request.Kind, request.SessionID, request.ID, content}))
 		}
 		sort.Strings(keys)
-		return nativeSupervisionEvent{Key: key(keys), Known: true, Fresh: true}
+		return nativeSupervisionEvent{Key: key(keys), Known: true, Fresh: true, ObservedInputID: observed}
 	}
 	if view.Busy || view.Current != nil {
-		return nativeSupervisionEvent{Known: true}
+		return nativeSupervisionEvent{Known: true, ObservedInputID: observed}
 	}
 	var latest *OpenCodeInput
 	for i := range view.Inputs {
@@ -81,7 +85,7 @@ func openCodeSupervisionEvent(m persist.Meta, view OpenCodeView) nativeSupervisi
 	default:
 		return nativeSupervisionEvent{}
 	}
-	return nativeSupervisionEvent{Key: key([]string{"input", latest.MessageID, string(latest.Outcome)}), Known: true, Fresh: latest.OutcomeSource == OpenCodeOutcomeSourceLive || latest.OutcomeSource == OpenCodeOutcomeSourceReconciled}
+	return nativeSupervisionEvent{Key: key([]string{"input", latest.MessageID, string(latest.Outcome)}), InputID: latest.MessageID, Owned: b.Initial != nil && b.Initial.Phase == persist.OpenCodeInitialAdmitted && b.Initial.MessageID == latest.MessageID, Known: true, Fresh: latest.OutcomeSource == OpenCodeOutcomeSourceLive || latest.OutcomeSource == OpenCodeOutcomeSourceReconciled}
 }
 
 func (s *supervisor) evaluateNativeLocked(r *supervisionRecord, m persist.Meta) bool {
@@ -92,19 +96,34 @@ func (s *supervisor) evaluateNativeLocked(r *supervisionRecord, m persist.Meta) 
 	if !event.Known {
 		return r.Pending != nil
 	}
+	changed := false
+	if event.ObservedInputID != "" && event.ObservedInputID != r.NativeObservedInput {
+		r.NativeObservedInput = event.ObservedInputID
+		changed = true
+	}
 	if event.Key == "" || event.Key == r.NativeDeliveredKey {
 		if r.Pending != nil {
 			r.Pending = nil
+			changed = true
+		}
+		if changed {
 			s.persistLocked(r)
 		}
 		return false
 	}
 	if r.Pending != nil && r.Pending.NativeKey == event.Key {
+		if changed {
+			s.persistLocked(r)
+		}
 		return true
 	}
-	if !event.Fresh {
+	observed := event.InputID != "" && event.InputID == r.NativeObservedInput
+	if !event.Fresh && !event.Owned && !observed {
 		if r.Pending != nil {
 			r.Pending = nil
+			changed = true
+		}
+		if changed {
 			s.persistLocked(r)
 		}
 		return false
