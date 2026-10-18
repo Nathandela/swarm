@@ -77,7 +77,7 @@ func RouteSession(rec *schema.SessionCapabilities, profile schema.RemoteProfileV
 	if rec == nil || rec.Validate() != nil {
 		return DestinationStatusCard
 	}
-	if rec.StructuredChat {
+	if rec.StructuredChat || rec.NativeInteractionVersion == 2 {
 		return DestinationChat
 	}
 	// Written over BOTH booleans via the record's own accessor, every time: a gate that
@@ -95,7 +95,7 @@ func RouteSession(rec *schema.SessionCapabilities, profile schema.RemoteProfileV
 // provider that never had structured chat are different states with different
 // explanations, and only the record can tell them apart.
 func ComposerAvailable(rec *schema.SessionCapabilities, profile schema.RemoteProfileV1) bool {
-	return RouteSession(rec, profile) == DestinationChat
+	return rec != nil && rec.StructuredChat && RouteSession(rec, profile) == DestinationChat
 }
 
 // TerminalControlAvailable is ComposerAvailable's opposite number on the other destination,

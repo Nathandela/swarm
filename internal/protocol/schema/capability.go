@@ -12,14 +12,15 @@ import (
 // recover only through the machine's exact-current-sink proof path; SetStructuredChat below
 // remains the public degrade-only helper and cannot perform that recovery.
 type SessionCapabilities struct {
-	Provider         string `json:"provider"`          // adapter identity: claude, codex, opencode, agy, ...
-	ProviderVersion  string `json:"provider_version"`  // the DETECTED version of the installed CLI
-	AdapterRevision  string `json:"adapter_revision"`  // the revision of the Swarm adapter that produced the record
-	SessionInstance  string `json:"session_instance"`  // the per-incarnation identifier every generation and snapshot binds to (ADR-017 T8-a)
-	StructuredChat   bool   `json:"structured_chat"`   // true only when every T3 row passes against provider_version
-	TerminalFallback bool   `json:"terminal_fallback"` // whether the sanitized terminal view may be offered at all
-	TerminalControl  bool   `json:"terminal_control"`  // whether raw input may be entered on that view (ADR-017 T6-b)
-	Interrupt        bool   `json:"interrupt"`         // whether a semantic interrupt reaches the current turn
+	NativeInteractionVersion int    `json:"native_interaction_version,omitempty"` // independently proven native read projection
+	Provider                 string `json:"provider"`                             // adapter identity: claude, codex, opencode, agy, ...
+	ProviderVersion          string `json:"provider_version"`                     // the DETECTED version of the installed CLI
+	AdapterRevision          string `json:"adapter_revision"`                     // the revision of the Swarm adapter that produced the record
+	SessionInstance          string `json:"session_instance"`                     // the per-incarnation identifier every generation and snapshot binds to (ADR-017 T8-a)
+	StructuredChat           bool   `json:"structured_chat"`                      // true only when every T3 row passes against provider_version
+	TerminalFallback         bool   `json:"terminal_fallback"`                    // whether the sanitized terminal view may be offered at all
+	TerminalControl          bool   `json:"terminal_control"`                     // whether raw input may be entered on that view (ADR-017 T6-b)
+	Interrupt                bool   `json:"interrupt"`                            // whether a semantic interrupt reaches the current turn
 }
 
 // CurrentCapabilityRecordVersion is the SessionCapabilities record version a machine

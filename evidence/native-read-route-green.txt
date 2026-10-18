@@ -1,0 +1,2 @@
+ok  	github.com/Nathandela/swarm/internal/phonecore	1.427s
+ok  	github.com/Nathandela/swarm/internal/protocol/schema	1.231s
