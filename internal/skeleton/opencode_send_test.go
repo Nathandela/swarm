@@ -18,18 +18,19 @@ import (
 )
 
 type openCodeSendFixture struct {
-	rowAvailable    atomic.Bool
-	nativeRow       atomic.Value
-	d               *Daemon
-	client          *protocol.Client
-	binding         opencodebridge.Binding
-	identity        opencodebridge.Identity
-	request         protocol.ComposerSendReq
-	calls           atomic.Int32
-	dropReply       atomic.Bool
-	blockDispatch   atomic.Bool
-	dispatchEntered chan struct{}
-	dispatchRelease chan struct{}
+	historyPagingFail atomic.Bool
+	rowAvailable      atomic.Bool
+	nativeRow         atomic.Value
+	d                 *Daemon
+	client            *protocol.Client
+	binding           opencodebridge.Binding
+	identity          opencodebridge.Identity
+	request           protocol.ComposerSendReq
+	calls             atomic.Int32
+	dropReply         atomic.Bool
+	blockDispatch     atomic.Bool
+	dispatchEntered   chan struct{}
+	dispatchRelease   chan struct{}
 }
 
 // The real daemon, shim writer and owner protocol surround a private native bridge fixture.
@@ -81,8 +82,17 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 			w.(http.Flusher).Flush()
 			<-r.Context().Done()
 		case "/snapshot":
-			row, _ := json.Marshal(map[string]any{"id": f.binding.RootID, "directory": f.binding.Directory, "time": map[string]int64{"created": 123}})
-			_ = json.NewEncoder(w).Encode(opencodebridge.Snapshot{Identity: f.identity, Session: row, Statuses: map[string]json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Messages: []json.RawMessage{}, Children: []json.RawMessage{}, Descendants: []json.RawMessage{}, HierarchyComplete: true, HierarchyScope: openCodeHierarchyScope})
+			if f.historyPagingFail.Load() && r.URL.Query().Get("before") == "older" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"reason":"native_read_failed"}`))
+				return
+			}
+			cursor := ""
+			if f.historyPagingFail.Load() {
+				cursor = "older"
+			}
+			row, _ := json.Marshal(map[string]any{"id": f.binding.RootID, "directory": f.binding.Directory, "version": "1.19.3", "time": map[string]int64{"created": 123}})
+			_ = json.NewEncoder(w).Encode(opencodebridge.Snapshot{Identity: f.identity, Session: row, NextCursor: cursor, Statuses: map[string]json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Messages: []json.RawMessage{}, Children: []json.RawMessage{}, Descendants: []json.RawMessage{}, HierarchyComplete: true, HierarchyScope: openCodeHierarchyScope})
 		case "/message":
 			raw, ok := f.nativeRow.Load().(json.RawMessage)
 			if !f.rowAvailable.Load() || !ok {
