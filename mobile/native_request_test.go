@@ -126,3 +126,26 @@ func TestReplyNativeRequestRejectsChangedDisplayedContentBeforeSigning(t *testin
 		t.Fatalf("exact current displayed authority did not reach live-only gate: %v", err)
 	}
 }
+
+func TestNativeAnswerMatchesNativeQuestionBounds(t *testing.T) {
+	answers := make([]string, 65)
+	for i := range answers {
+		answers[i] = strings.Repeat("x", i+1)
+	}
+	raw, _ := json.Marshal([][]string{answers})
+	if _, err := nativeAnswer(schema.NativeDecisionReq{Kind: "question_reply"}, "question_reply", string(raw)); err != nil {
+		t.Fatalf("64 options plus custom answer refused: %v", err)
+	}
+	groups := make([][]string, 17)
+	for i := range groups {
+		groups[i] = []string{"one"}
+	}
+	raw, _ = json.Marshal(groups)
+	if _, err := nativeAnswer(schema.NativeDecisionReq{Kind: "question_reply"}, "question_reply", string(raw)); err == nil {
+		t.Fatal("more than16 question groups accepted before publication")
+	}
+	raw, _ = json.Marshal([][]string{{strings.Repeat("x", 4096), strings.Repeat("y", 4096), strings.Repeat("z", 4096), strings.Repeat("w", 4096)}})
+	if _, err := nativeAnswer(schema.NativeDecisionReq{Kind: "question_reply"}, "question_reply", string(raw)); err == nil {
+		t.Fatal("encoded answers above native16KiB boundary accepted")
+	}
+}
