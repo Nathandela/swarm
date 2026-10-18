@@ -104,6 +104,9 @@ func TestOpenCodeOwnerUncertainSendNeverReposts(t *testing.T) {
 	id, err := protocol.NewSemanticOperationID()
 	if err != nil { t.Fatal(err) }
 	for i := 0; i < 2; i++ { if err := f.client.SemanticSend(id, f.request); err == nil { t.Fatal("lost native receipt claimed admission") } }
+	later, err := protocol.NewSemanticOperationID()
+	if err != nil { t.Fatal(err) }
+	if err := f.client.SemanticSend(later, f.request); err == nil { t.Fatal("later input overtook unresolved native admission") }
 	rec, ok := f.d.core.ComposerOperation(id)
 	if !ok || rec.Phase != idempotency.PhaseExecuting || len(rec.Request) == 0 || f.calls.Load() != 1 {
 		t.Fatalf("ambiguous native effect lost its non-replay guard: %+v calls%d", rec, f.calls.Load())
