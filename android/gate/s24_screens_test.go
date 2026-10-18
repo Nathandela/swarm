@@ -1195,6 +1195,16 @@ var s24ScreenComponents = map[string]map[string]string{
 		"monoWell":      "the literal the decision is about, §5's one mono block spent again",
 		"ctaButton":     "one per `decisions[].label`, every one `.a2-more` -- IS-APR-4 keeps polarity machine-side",
 	},
+	// Native permission/question cards use the same approval material while preserving
+	// the complete request, individual question choices, and read-only authority state.
+	"dev/swarm/phone/ui/screens/NativeRequestView.kt": {
+		"approvalSheet": "the native request's decision card",
+		"monoWell":      "the complete machine-authored request being authorized",
+		"activityRow":   "the permission scope, question prompts, and option descriptions",
+		"ctaButton":     "native choices and the explicit reply or refusal controls",
+		"textField":     "a question's permitted custom answer, retained across redraws",
+		"emptyState":    "the explanation when current request authority is unavailable",
+	},
 	// The launch form HAS NO SCREEN INVENTORY ENTRY. The eight screens the artifacts draw are the
 	// inbox, the session detail, the terminal peek, machines, activity, settings, pairing and the
 	// approval sheet; starting a session is PB-APP-6's requirement and the mock never drew it. So
