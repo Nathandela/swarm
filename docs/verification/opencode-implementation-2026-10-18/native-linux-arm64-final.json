@@ -1,0 +1,175 @@
+{
+  "schema": 1,
+  "date": "2026-10-18",
+  "pass": true,
+  "source_head": "c5d2923214df0db247c0f6714f7d158f5a6caf1a",
+  "source_archive_sha256": "c72836e19a123effa979e30d44038f0eb0ae9d113bff9f3622b23aa66b920b10",
+  "swarm_binary_sha256": "2ffa408a6e149c4980562901b907717ba7801a89e77d03f903e1a1b0e12f5236",
+  "fixture_source_sha256": "5393e3598544c4043f206b2f974799b36504ecb50c614753ab3655c65053c279",
+  "fixture": "scripts/verification/opencode_native_loopback.py",
+  "build_command": "UID 1000, GOTOOLCHAIN=local GOCACHE=/gocache GOMODCACHE=/go/pkg/mod go build -o /out/swarm ./cmd/swarm, from exact git archive in /src",
+  "platform": {
+    "os": "Debian GNU/Linux 13.3 (trixie)",
+    "kernel": "6.10.14-linuxkit",
+    "architecture": "linux/arm64",
+    "execution": "Docker Desktop Linux VM; actual Linux native binary, ordinary UID/GID 1000",
+    "uid": 1000,
+    "gid": 1000,
+    "go_version": "go1.26.0 linux/arm64",
+    "container_image_digest": "golang@sha256:fb612b7831d53a89cbc0aaa7855b69ad7b0caf603715860cf538df854d047b84",
+    "container_image_id": "sha256:96f38f049761550e2d6926dd3c1ddd3be68322457316ef4269904d288618cf53",
+    "dependencies": {
+      "python3": "3.13.5-1",
+      "lsof": "4.99.4+dfsg-2",
+      "procps": "2:4.0.4-9",
+      "libc6:arm64": "2.41-12+deb13u1",
+      "ca-certificates": "20250419"
+    }
+  },
+  "native_package": {
+    "name": "opencode-linux-arm64",
+    "version": "1.19.3",
+    "metadata_url": "https://registry.npmjs.org/opencode-linux-arm64/1.19.3",
+    "metadata_sha256": "4df1570c82efdd4bc1d3be5445a9d1dc88cf7bf4413300530a26a0d87e241841",
+    "parent_metadata_url": "https://registry.npmjs.org/opencode-ai/1.19.3",
+    "parent_metadata_sha256": "817ecab7509c87ed5fbfb845be44492c39f1d224b88e859cceb623c4b0390131",
+    "parent_optional_dependency": "opencode-linux-arm64@1.19.3",
+    "tarball_url": "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.19.3.tgz",
+    "published_integrity": "sha512-Y1HIsJNK+zxbtd54TCrEI/G3m/RSALCaKbzAaaxJYF+ZHQE2PFlHmueqWDigQoT1tbiPi/8tPMirxpGgcXEprg==",
+    "integrity_verified": true,
+    "tarball_sha256": "2c97235c616d859b01c742744c6182d4c90512b34a914d1a17bdf47bd2fa70bc",
+    "binary_sha256": "e5309bc8df8deac0e4050fb4a65989839522703cf86f8a4561c2694f5157b8ca",
+    "reported_version": "1.19.3"
+  },
+  "run": {
+    "arguments": [
+      "--max-iterations",
+      "3",
+      "--restart-every",
+      "1",
+      "--tool-finish",
+      "stop",
+      "--final-delay-seconds",
+      "2"
+    ],
+    "workload_elapsed_seconds": 19.487,
+    "including_cleanup_elapsed_seconds": 23.568,
+    "requested_duration_seconds": 0,
+    "requested_duration_completed": false,
+    "root_inputs": 3,
+    "native_children_observed": 1,
+    "daemon_sigkill_rejoins": 2,
+    "provider_requests": 9,
+    "external_model_requests": 0,
+    "provider_errors": [],
+    "enabled_provider": "scripted loopback fixture",
+    "native_write_via_fake_user_seed": false,
+    "decision_scope": "public owner native_requests/native_decide with complete current context; authenticated phone transport is not exercised",
+    "turns": [
+      {
+        "kind": "initial",
+        "exact_completed_parent_matches": true,
+        "concurrent_permission_and_question": true,
+        "decision_count": 2,
+        "scope_settled": true,
+        "daemon_idle": true
+      },
+      {
+        "kind": "semantic",
+        "exact_completed_parent_matches": true,
+        "concurrent_permission_and_question": true,
+        "decision_count": 2,
+        "scope_settled": true,
+        "daemon_idle": true
+      },
+      {
+        "kind": "hierarchy",
+        "exact_completed_parent_matches": true,
+        "concurrent_permission_and_question": true,
+        "decision_count": 2,
+        "scope_settled": true,
+        "daemon_idle": true
+      }
+    ],
+    "semantic_duplicate_acknowledged": true,
+    "hierarchy_duplicate_acknowledged": true,
+    "semantic_terminal_state": "completed",
+    "hierarchy_terminal_state": "completed",
+    "config_unchanged": true,
+    "configured_variant": "max",
+    "ready": {
+      "nativeVersion": "1.19.3",
+      "bound": true,
+      "acknowledged": true,
+      "ready": true,
+      "initialSupported": true,
+      "draftGuardSupported": true,
+      "inFlight": false,
+      "degraded": []
+    },
+    "native_history": {
+      "newest_page_items": 1,
+      "continuation_page_items": 1,
+      "before_item_page_items": 1,
+      "native_provenance": [
+        "imported"
+      ],
+      "newest_has_opaque_next_cursor": true,
+      "continuation_excludes_newest_item": true,
+      "before_item_matches_cursor_continuation": true
+    }
+  },
+  "declared_budgets": {
+    "swarm_rss_mib_per_process": 256,
+    "swarm_fds_per_process": 128,
+    "swarm_disk_mib": 256,
+    "dispatch_seconds": 30,
+    "rejoin_seconds": 15
+  },
+  "measurements": {
+    "samples": 8,
+    "max_dispatch_seconds": 0.22375975099998868,
+    "max_rejoin_seconds": 0.3659880410000369,
+    "max_sampled_rss_kib": {
+      "daemon": 24116,
+      "shim": 23380,
+      "native": 1043860
+    },
+    "max_sampled_fds": {
+      "daemon": 17,
+      "shim": 13,
+      "native": 88
+    },
+    "max_swarm_disk_bytes": 165835
+  },
+  "isolation": {
+    "host_credentials_mounted": false,
+    "source_transferred_by": "git archive",
+    "native_binary_transferred_by": "verified package extraction and docker cp",
+    "profile_and_runtime_state": "fresh private container-local directories",
+    "shared_named_caches": [
+      "swarm-oc-impl-gomod",
+      "swarm-oc-impl-gocache"
+    ],
+    "dependency_install_scope": "disposable container only",
+    "host_profile_or_installed_binary_changes": false
+  },
+  "cleanup": {
+    "owner_cleanup_acknowledged": true,
+    "all_owned_shim_exit_files": true,
+    "live_native_workers_after_harness": 0,
+    "exited_shim_zombie_under_container_pid1": 1,
+    "container_removed": true,
+    "container_listing_empty_after_removal": true,
+    "shared_caches_preserved": true,
+    "ended_go_zombie_under_container_pid1": 1
+  },
+  "limits": [
+    "Linux ARM64 in the declared Docker kernel/image only; Linux amd64 and physical-machine environments were not exercised.",
+    "Short native integration check; no 24h/72h duration claim.",
+    "Scripted loopback responses qualify native wiring, not external provider/model execution or quality.",
+    "Owner protocol decisions exercised, not hosted relay or physical Android transport.",
+    "RSS/FD/disk values are sampled; no between-sample peak, asymptotic bound, goroutine count or queue-depth claim.",
+    "This integrated snapshot includes history/phone consumers, but the native Linux workload uses the owner protocol rather than a physical phone."
+  ]
+}
