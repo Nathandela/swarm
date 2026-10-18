@@ -1,18 +1,12 @@
 package skeleton
 
-// agents-tracker-xl6k: the FIRST-CLASS `swarm handoff` child used to inherit the
-// source's ROSTER cwd (SessionView.Cwd), which for a worktree-isolated source is the
-// repository root, while the source's agent actually worked in its provider worktree.
-// A git worktree is a separate checkout, so the successor resumed work in the wrong
-// tree -- the exact failure the hands-off path already closes (composeHandsOffLaunch
-// STEP 5b) and the resume path already closes (resumeDirectory).
-//
-// SessionView deliberately carries no AgentCwd (four reviewers refused widening the
-// frozen wire type), so the CLI can send nothing but the launch cwd; the daemon holds
-// the value the CLI is missing. These tests drive coreAPI.Launch -- the one point
-// every launch entry passes through -- and observe the spawn binding, the 0600
-// shim-launch.json whose Cwd is what the shim execs the agent with (the
-// e2e/worktree_e2e_test.go contract).
+// agents-tracker-xl6k: a first-class `swarm handoff` child used to inherit the
+// source's ROSTER cwd -- for a worktree-isolated source, the repository root -- while
+// the source's agent worked in its provider worktree, a separate checkout. The CLI
+// sends the roster cwd because SessionView carries no AgentCwd; the daemon holds the
+// authoritative value in the source's row. These tests drive coreAPI.Launch and
+// assert where the shim runs the agent (the spawn binding) and the persisted launch
+// cwd.
 
 import (
 	"encoding/json"

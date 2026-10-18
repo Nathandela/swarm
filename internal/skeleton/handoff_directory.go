@@ -1,15 +1,13 @@
 package skeleton
 
-// agents-tracker-xl6k: a first-class `swarm handoff` child inherits the wrong
-// checkout. The CLI (cmd/swarm/handoff.go) can send nothing but the source's roster
-// cwd -- SessionView deliberately carries no AgentCwd (four reviewers refused
-// widening that frozen wire type) -- and SessionView.Cwd is the LAUNCH cwd. For a
-// worktree-isolated source that is the repository root, while the source's agent
-// actually ran in <repo>/.swarm/worktrees/<slug>: a separate checkout with separate
-// files and possibly a different branch. The daemon holds the value the client is
-// missing in the source's persisted meta (persist.Meta.AgentCwd, behind
-// ProviderCwd), so -- exactly like the hands-off composition (STEP 5b) and the
-// resume path (resumeDirectory) -- it corrects rather than inherits.
+// agents-tracker-xl6k: a first-class `swarm handoff` child must launch in the
+// checkout the source's agent actually worked in. The CLI can send nothing but the
+// source's roster cwd -- SessionView carries no AgentCwd -- and for a
+// worktree-isolated source that is the repository root, not the
+// <repo>/.swarm/worktrees/<slug> checkout the agent ran in. The daemon owns the
+// authoritative value in the source's persisted meta (persist.Meta.AgentCwd, behind
+// ProviderCwd), so it corrects rather than inherits, as the hands-off composition
+// and the resume path do for their shapes.
 
 import (
 	"fmt"
@@ -21,15 +19,13 @@ import (
 )
 
 // isHandoffChildLaunch reports whether the spec is the first-class `swarm handoff`
-// wire shape: a handoff-intent lineaged launch WITH a supervision mode and WITHOUT
-// resume options. That shape is reachable only from the owner tier (the remote tier
-// refuses every supervision mode, R-POL.9) and only from the CLI: the hands-off form
-// composes supervision EMPTY by construction (composeHandsOffLaunch STEP 7), and
-// `swarm spawn` sends no supervision at all, so the mode is what marks the command
-// and overrides no caller's explicit choice of directory. A resume is excluded
-// because recycling a supervised handoff child (authwatch, cli_refresh) re-launches
-// it AS a resume with the ORIGINAL lineage fields still set -- the resume layer
-// already picks that directory from the child's own record (resumeDirectory).
+// shape: a lineaged launch with handoff intent and a supervision mode and without
+// resume options. The supervision mode is what marks the command -- the hands-off
+// form composes an empty one and `swarm spawn` sends none -- so the gating shape
+// overrides no caller's explicit choice of directory, and a resume is excluded
+// because recycling a supervised handoff child relaunches it AS a resume while the
+// original lineage fields remain set, and the resume layer already resolves that
+// directory.
 func isHandoffChildLaunch(spec daemon.LaunchSpec) bool {
 	return spec.SpawnedFrom != "" &&
 		spec.SpawnIntent == protocol.SpawnIntentHandoff &&
@@ -39,16 +35,11 @@ func isHandoffChildLaunch(spec daemon.LaunchSpec) bool {
 }
 
 // handoffDirectory resolves the working directory of a first-class `swarm handoff`
-// child: the source's ProviderCwd, the directory the agent was actually working in,
-// rather than the roster cwd the CLI sent.
-//
-// An absent lineage row is refused by the caller: with the row gone, nothing
-// confirms the caller's cwd names the source's checkout. A source recorded before
-// AgentCwd existed (ProviderCwd degrades to Cwd) changes nothing, since that Cwd is
-// what the CLI sent. The stat refusal mirrors the hands-off composition's: the
-// protocol layer stats the CLIENT's cwd and never this override, so a worktree torn
-// down since the source ran would otherwise surface as an obscure spawn failure
-// instead of a named refusal.
+// child: the source's ProviderCwd, not the roster cwd the CLI sent. A source
+// recorded before AgentCwd existed (ProviderCwd degrades to Cwd) keeps the cwd the
+// CLI sent, and a recorded directory that no longer exists refuses by name, so a
+// torn-down worktree surfaces as a clear refusal rather than a fallback launch.
+// An absent lineage row is refused by the caller, before this runs.
 func handoffDirectory(source persist.Meta) (string, error) {
 	// Mirror resumeDirectory's unknowable-checkout refusal: a worktree-isolated
 	// launch captured no AgentCwd, so its ProviderCwd degrades to the roster cwd --
