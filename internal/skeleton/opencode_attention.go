@@ -396,6 +396,30 @@ func (s *OpenCodeState) nativeView(view *OpenCodeView) {
 			view.DegradedReason = s.nativeUnknown
 		}
 	}
+	// A completed tool-bearing step cannot prove the requested input finished. Only
+	// its latest genuine input raises idle attention; older unresolved work stays visible.
+	if view.BusyKnown && !view.Busy {
+		var latest *ocInputState
+		for _, in := range s.inputs {
+			if in.classified && !in.synthetic && !in.compaction && (latest == nil || ocAfter(in.at, in.msgID, latest.at, latest.msgID)) {
+				latest = in
+			}
+		}
+		if latest != nil {
+			if latest.outcome == OpenCodeOutcomeNone && latest.unconfirmedTool {
+				view.Attention = true
+				view.AttentionReason = "Native input outcome is unconfirmed after tool execution"
+			}
+			if latest.outcome == OpenCodeOutcomeFailed && latest.outcomeSrc != OpenCodeOutcomeSourceImported {
+				view.Attention = true
+				view.AttentionReason = "Native input failed"
+				if view.Error == nil {
+					view.Error = &OpenCodeError{Name: latest.errorName, Message: "Native input failed"}
+				}
+			}
+		}
+	}
+
 }
 
 func openCodeProjectedStatus(view OpenCodeView) status.Status {

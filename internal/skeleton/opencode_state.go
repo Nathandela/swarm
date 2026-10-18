@@ -49,21 +49,22 @@ type OpenCodeState struct {
 // ocInputState is one requested input's tracked state: its text parts, the
 // composed (bounded) text, and the terminal outcome.
 type ocInputState struct {
-	plainTextInput bool
-	msgID          string
-	at             int64
-	synthetic      bool
-	classified     bool
-	compaction     bool
-	live           bool
-	text           string
-	textTrunc      bool
-	parts          []ocPartState
-	partIDs        map[string]int
-	agent          string
-	providerID     string
-	modelID        string
-	variant        string
+	plainTextInput  bool
+	unconfirmedTool bool
+	msgID           string
+	at              int64
+	synthetic       bool
+	classified      bool
+	compaction      bool
+	live            bool
+	text            string
+	textTrunc       bool
+	parts           []ocPartState
+	partIDs         map[string]int
+	agent           string
+	providerID      string
+	modelID         string
+	variant         string
 
 	outcome    OpenCodeOutcome
 	outcomeSrc string
@@ -217,6 +218,7 @@ type OpenCodeView struct {
 	RootBusyKnown     bool
 	CurrentScopeKnown bool
 	Attention         bool
+	AttentionReason   string
 	Pending           []OpenCodeRequest
 	Descendants       []OpenCodeDescendant
 
@@ -592,6 +594,9 @@ func (s *OpenCodeState) applyAssistantOutcome(m opencode.Message, source string)
 			return OCNeedsSnapshot
 		}
 		if m.ContinuingTools {
+			if in := s.inputs[m.ParentID]; in != nil && !in.compaction && m.Time.Created >= in.at {
+				in.unconfirmedTool = true
+			}
 			return OCApplied
 		}
 	}

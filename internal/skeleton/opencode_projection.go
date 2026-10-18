@@ -66,6 +66,9 @@ func openCodeProjection(meta persist.Meta, view OpenCodeView, observed bool) pro
 	out.Busy, out.BusyKnown, out.RootBusy, out.RootBusyKnown = view.Busy, view.BusyKnown, view.RootBusy, view.RootBusyKnown
 	out.CurrentScopeKnown, out.Attention, out.Degraded = view.CurrentScopeKnown, view.Attention, view.Degraded
 	out.Reason = text(view.DegradedReason, 256)
+	if out.Reason == "" {
+		out.Reason = text(view.AttentionReason, 256)
+	}
 	if view.Error != nil {
 		out.Error = text(view.Error.Name, 128)
 	}
