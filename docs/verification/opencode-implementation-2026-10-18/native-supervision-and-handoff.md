@@ -15,10 +15,11 @@ exit files after cleanup; native histories remain available.
 | Initial invalid choices | `86ce9507` | `ROOT/i190620/result.json` | Typo model and primary agent each produce durable named `rejected` custody, empty native history/draft, held input and **zero** provider requests. No replay. |
 | Handoff matrix | `86ce9507` | `ROOT/h191640/result.json` | Actual OpenCode-to-OpenCode preserves committed Plan/model and actual checkout with a new root. Native-to-Claude-fixture exports the exact root with provenance and preserves explicit target model; Claude-fixture-to-native admits the genuine handoff prompt with the selected tuple. Six localhost requests. The Claude side is a fixture CLI/transcript, not a Claude generation. |
 | Passive supervision | `fe7a805f` | `ROOT/s192020/result.json` | Separate Swarm children notify a real native parent. Owner control, actual unsent draft and native busy state each defer delivery. Release/clear/completion admits exactly one native user message per event with build/fixture/fixture/max. Daemon SIGKILL/rejoin preserves native identity and does not repeat delivered completion. Twelve localhost requests. |
+| Completion while daemon is down | `061c490b` | `ROOT/s193100/result.json` | A second genuine child input was checkpointed while active, finished after daemon SIGKILL, then generated exactly one additional notice on rejoin. Parent/child native process identities survived. The original idle-restart, control, draft and busy cases also passed. Eighteen localhost requests. |
 
 Reproduction scripts are retained in `ROOT/attached-tui/`:
 `native_initial_choice_probe.py`, `native_handoff_matrix_probe.py` and
-`native_supervision_probe.py`. They accept `--swarm`, `--source-head` and a fresh
+`native_supervision_probe.py`, and `native_supervision_offline_probe.py`. They accept `--swarm`, `--source-head` and a fresh
 short `--run-dir`; the script and binary hashes are recorded in each result.
 The supervision binary SHA256 was
 `5607f9ddf21fe5eb18710aa06aa143647612b616dafd60b49f6df1b4e6dfa701`.
@@ -35,7 +36,12 @@ The initial/handoff binary SHA256 was
   1 had already been admitted, with no new child input. `fe7a805f` keys native
   attention by the exact genuine input/outcome or canonical current request set,
   persists the delivered key only after admission, and preserves pending identity
-  across unknown/reconnect. Imported unseen history does not create fresh notices.
+  across unknown/reconnect. Unowned imported history does not create fresh notices.
+  Follow-up `061c490b` checkpoints the exact observed active input and recognizes
+  exact admitted initial ownership, so an owned completion while the daemon is
+  down recovers once. A further race regression covers admission before an observer
+  checkpoint by reusing the existing native custody index and validating the exact
+  imported body and actual tuple; this performs no provider write.
 - `ROOT/s191040`: clearing the actual native draft left the generic direct-input
   marker sticky, preventing passive delivery. `fe7a805f` removes that marker only
   from managed-native supervisor readiness; actual native Prompt emptiness, shim
@@ -45,6 +51,9 @@ The initial/handoff binary SHA256 was
   Their provider histories and cleanup are retained; the successful reruns above
   are the qualification evidence.
 
-The focused OpenCode and generic-supervisor race suites passed. These checks do
+The offline-completion binary SHA256 was
+`8ca4d4b211f41ef79f0311205fc39a12a9da0344b217a3d63921227d73ca69b9`.
+The focused OpenCode and generic-supervisor race suites passed (19.702 seconds
+after the final owned-input recovery change). These checks do
 not qualify external provider quotas, successful DeepSeek/GLM inference, a new
 OpenCode version, cross-provider model quality, or a fresh-handoff variant setter.
