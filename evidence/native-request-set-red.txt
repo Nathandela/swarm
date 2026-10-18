@@ -1,0 +1,9 @@
+--- FAIL: TestNativeRequestSetWithdrawsOnGapAndResolvesOnlyQualifiedAbsence (0.00s)
+    native_interaction_test.go:127: current request-set gap was ignored
+--- FAIL: TestNativeRequestSetContentReplacementAndHistoryCannotAuthorize (0.00s)
+    native_interaction_test.go:155: changed set authorized old displayed content
+--- FAIL: TestNativeRequestCardNeedsCompleteBoundedDetails (0.00s)
+    native_interaction_test.go:172: incomplete or oversized native context remained actionable
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	0.743s
+FAIL

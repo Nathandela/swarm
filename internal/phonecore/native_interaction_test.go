@@ -21,7 +21,7 @@ func nativeTestMessage(text string) map[string]any {
 }
 func nativeTestRequest() map[string]any {
 	expiry := time.Now().Add(time.Hour).UTC()
-	return map[string]any{"v": 2, "item_id": "native-request", "kind": "permission_request", "status": "in_progress", "ts": "2026-10-18T12:00:00Z", "provenance": "reconciled", "authority_valid": true, "request": schema.NativeRequestView{Session: "ep/worker", SessionInstance: "instance", RootID: "ses_root", Generation: "generation", NativeSessionID: "ses_child", RequestID: "per_child", RequestHash: strings.Repeat("a", 64), ExpiresAt: &expiry, Kind: "permission", Permission: "bash", Patterns: []string{"echo *"}, Always: []string{"echo *"}}}
+	return map[string]any{"v": 2, "item_id": "native-request", "kind": "permission_request", "status": "in_progress", "ts": "2026-10-18T12:00:00Z", "provenance": "reconciled", "authority_valid": true, "request": schema.NativeRequestView{Session: "ep/worker", SessionInstance: "instance", RootID: "ses_root", Generation: "generation", NativeSessionID: "ses_child", RequestID: "per_child", RequestHash: strings.Repeat("a", 64), ExpiresAt: &expiry, Kind: "permission", Permission: "bash", Patterns: []string{"echo *"}, Always: []string{"echo *"}, DetailsJSON: `{"id":"per_child","sessionID":"ses_child","permission":"bash","patterns":["echo *"],"always":["echo *"],"metadata":{}}`}}
 }
 
 func TestNativeSnapshotsReplaceWithoutChangingLegacyDeltas(t *testing.T) {
@@ -114,5 +114,62 @@ func TestNativeRequestsCoexistAndOnlyExactResolutionReleasesRetention(t *testing
 	}
 	if _, ok := store.PendingNativeRequest("ep/worker", "request-two"); !ok {
 		t.Fatal("one resolution removed another request")
+	}
+}
+
+func nativeTestRequestSet(complete bool, ids map[string]string) map[string]any {
+	return map[string]any{"v": 2, "item_id": "native-set", "kind": "request_set", "ts": "2026-10-18T12:00:00Z", "provenance": "reconciled", "complete": complete, "session_instance": "instance", "root_id": "ses_root", "generation": "generation", "requests": ids}
+}
+func TestNativeRequestSetWithdrawsOnGapAndResolvesOnlyQualifiedAbsence(t *testing.T) {
+	s := NewItemStore()
+	s.Apply(nativeTestRecord(t, 1, nativeTestRequest()))
+	if !s.Apply(nativeTestRecord(t, 2, nativeTestRequestSet(false, map[string]string{}))) {
+		t.Fatal("current request-set gap was ignored")
+	}
+	if _, ok := s.PendingNativeRequest("ep/worker", "native-request"); ok {
+		t.Fatal("gap retained request authority")
+	}
+	items := s.Session("ep/worker")
+	if len(items) != 1 || items[0].Resolved {
+		t.Fatal("gap resolved request or exposed control record")
+	}
+	s.Apply(nativeTestRecord(t, 3, nativeTestRequestSet(true, map[string]string{"native-request": strings.Repeat("a", 64)})))
+	if _, ok := s.PendingNativeRequest("ep/worker", "native-request"); !ok {
+		t.Fatal("current exact set did not restore authority")
+	}
+	s.Apply(nativeTestRecord(t, 4, nativeTestRequestSet(true, map[string]string{})))
+	if _, ok := s.PendingNativeRequest("ep/worker", "native-request"); ok || !s.Session("ep/worker")[0].Resolved {
+		t.Fatal("qualified absence did not close exact old request")
+	}
+	s.Apply(nativeTestRecord(t, 1, nativeTestRequest()))
+	if _, ok := s.PendingNativeRequest("ep/worker", "native-request"); ok {
+		t.Fatal("old request replay revived resolved authority")
+	}
+}
+func TestNativeRequestSetContentReplacementAndHistoryCannotAuthorize(t *testing.T) {
+	s := NewItemStore()
+	s.Apply(nativeTestRecord(t, 1, nativeTestRequest()))
+	set := nativeTestRequestSet(true, map[string]string{"native-request": strings.Repeat("b", 64)})
+	s.Apply(nativeTestRecord(t, 2, set))
+	if _, ok := s.PendingNativeRequest("ep/worker", "native-request"); ok {
+		t.Fatal("changed set authorized old displayed content")
+	}
+	historical := nativeTestRequestSet(true, map[string]string{"native-request": strings.Repeat("a", 64)})
+	historical["provenance"] = "imported"
+	if s.Apply(nativeTestRecord(t, 3, historical)) {
+		t.Fatal("historical request-set became current authority")
+	}
+}
+func TestNativeRequestCardNeedsCompleteBoundedDetails(t *testing.T) {
+	for _, details := range []string{"", strings.Repeat("x", 13<<10)} {
+		s := NewItemStore()
+		item := nativeTestRequest()
+		req := item["request"].(schema.NativeRequestView)
+		req.DetailsJSON = details
+		item["request"] = req
+		s.Apply(nativeTestRecord(t, 1, item))
+		if _, ok := s.PendingNativeRequest("ep/worker", "native-request"); ok {
+			t.Fatal("incomplete or oversized native context remained actionable")
+		}
 	}
 }
