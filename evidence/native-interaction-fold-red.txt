@@ -1,0 +1,9 @@
+# github.com/Nathandela/swarm/internal/phonecore [github.com/Nathandela/swarm/internal/phonecore.test]
+internal/phonecore/native_interaction_test.go:31:16: s.PendingNativeRequest undefined (type *ItemStore has no field or method PendingNativeRequest)
+internal/phonecore/native_interaction_test.go:36:82: store.PendingNativeRequest undefined (type *ItemStore has no field or method PendingNativeRequest)
+internal/phonecore/native_interaction_test.go:44:17: store.PendingNativeRequest undefined (type *ItemStore has no field or method PendingNativeRequest)
+internal/phonecore/native_interaction_test.go:45:17: store.PendingNativeRequest undefined (type *ItemStore has no field or method PendingNativeRequest)
+internal/phonecore/native_interaction_test.go:47:17: store.PendingNativeRequest undefined (type *ItemStore has no field or method PendingNativeRequest)
+internal/phonecore/native_interaction_test.go:48:17: store.PendingNativeRequest undefined (type *ItemStore has no field or method PendingNativeRequest)
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL
