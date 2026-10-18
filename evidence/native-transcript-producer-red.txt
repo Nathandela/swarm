@@ -1,0 +1,10 @@
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/opencode_transcript_test.go:13:13: undefined: nativeProjectionScope
+internal/skeleton/opencode_transcript_test.go:14:50: undefined: nativeProjectionScope
+internal/skeleton/opencode_transcript_test.go:15:18: undefined: nativeProjectionID
+internal/skeleton/opencode_transcript_test.go:16:75: undefined: nativeProjectionScope
+internal/skeleton/opencode_transcript_test.go:17:5: undefined: nativeProjectionID
+internal/skeleton/opencode_transcript_test.go:23:14: undefined: newOpenCodeTranscript
+internal/skeleton/opencode_transcript_test.go:39:14: undefined: newOpenCodeTranscript
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
