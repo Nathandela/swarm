@@ -100,3 +100,13 @@ func TestOpenCodePlanWithholdsPromptPreservesFlagsAndHasNoBackend(t *testing.T) 
 		t.Fatal("profile origin was dropped")
 	}
 }
+
+func TestOpenCodeInitialEncodedBoundIncludesRequestedChoices(t *testing.T) {
+	d := openDaemon(t, daemonConfig(t))
+	dir := t.TempDir()
+	spec := LaunchSpec{AgentType: "opencode", RequiredRuntime: persist.RequiredRuntimeOpenCode, Cwd: t.TempDir(), Argv: []string{"/native/opencode"}, InitialPrompt: strings.Repeat("\x01", 10800), Options: map[string]string{"model": "opencode/" + strings.Repeat("m", 503), "agent": strings.Repeat("a", 128)}, OpenCodeEnv: []string{}}
+	m := persist.Meta{ID: "native", AgentType: "opencode", Cwd: spec.Cwd}
+	if d.prepareOpenCodeLaunch(&spec, &m, dir) == nil {
+		t.Fatal("oversized initial envelope was deferred until after native launch")
+	}
+}

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -20,15 +21,16 @@ import (
 )
 
 type openCodeRuntimeFixture struct {
-	d            *Daemon
-	m            persist.Meta
-	b            opencodebridge.Binding
-	initialCalls atomic.Int32
-	released     atomic.Bool
-	observing    atomic.Bool
-	dropReply    atomic.Bool
-	haveReceipt  atomic.Bool
-	wrongRoot    atomic.Bool
+	initialRequest atomic.Value
+	d              *Daemon
+	m              persist.Meta
+	b              opencodebridge.Binding
+	initialCalls   atomic.Int32
+	released       atomic.Bool
+	observing      atomic.Bool
+	dropReply      atomic.Bool
+	haveReceipt    atomic.Bool
+	wrongRoot      atomic.Bool
 }
 
 func newOpenCodeRuntimeFixture(t *testing.T) *openCodeRuntimeFixture {
@@ -91,6 +93,13 @@ func newOpenCodeRuntimeFixture(t *testing.T) *openCodeRuntimeFixture {
 			_ = json.NewEncoder(w).Encode(ready)
 		case "/initial":
 			if r.Method == http.MethodPost {
+				var request opencodebridge.InitialRequest
+				if json.NewDecoder(r.Body).Decode(&request) != nil {
+					t.Error("invalid initial request")
+					w.WriteHeader(400)
+					return
+				}
+				f.initialRequest.Store(request)
 				f.initialCalls.Add(1)
 				m, _ := f.d.Get(f.m.ID)
 				if !f.observing.Load() || m.OpenCodeBinding.Initial.Phase != persist.OpenCodeInitialStarted {
@@ -241,6 +250,29 @@ func TestOpenCodeRuntimeRetirementAfterDurableBindingNeverPanicsOrReleases(t *te
 			}
 			if phase != "admitted" && f.initialCalls.Load() != 0 {
 				t.Fatal("retirement crossed native initial write")
+			}
+		})
+	}
+}
+
+func TestOpenCodeInitialCarriesRequestedChoicesToNativePreflight(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(fmt.Sprint(explicit), func(t *testing.T) {
+			f := newOpenCodeRuntimeFixture(t)
+			if explicit {
+				f.m.LaunchOptions = map[string]string{"model": "opencode/deepseek-v4.1-flash-free", "agent": "plan"}
+				if err := f.d.saveMeta(f.m); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := f.d.joinOpenCode(ctx, f.m.ID); err != nil {
+				t.Fatal(err)
+			}
+			request := f.initialRequest.Load().(opencodebridge.InitialRequest)
+			if request.ExpectedModel != f.m.LaunchOptions["model"] || request.ExpectedAgent != f.m.LaunchOptions["agent"] {
+				t.Fatal("native preflight did not receive exact requested choices")
 			}
 		})
 	}
