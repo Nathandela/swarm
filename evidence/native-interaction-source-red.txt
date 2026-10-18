@@ -1,0 +1,14 @@
+# github.com/Nathandela/swarm/internal/adapter/opencode [github.com/Nathandela/swarm/internal/adapter/opencode.test]
+internal/adapter/opencode/interaction_test.go:14:10: undefined: NativeInteractions
+internal/adapter/opencode/interaction_test.go:20:56: undefined: NativeMessageRowEvent
+internal/adapter/opencode/interaction_test.go:21:44: undefined: adapter.KindMessageSnapshot
+internal/adapter/opencode/interaction_test.go:31:9: undefined: NativeInteractions
+internal/adapter/opencode/interaction_test.go:31:69: undefined: NativeMessageRowEvent
+internal/adapter/opencode/interaction_test.go:36:8: undefined: NativeInteractions
+internal/adapter/opencode/interaction_test.go:36:68: undefined: NativeMessageRowEvent
+internal/adapter/opencode/interaction_test.go:42:11: undefined: NativeInteractions
+internal/adapter/opencode/interaction_test.go:42:71: undefined: NativeMessageRowEvent
+internal/adapter/opencode/interaction_test.go:45:10: undefined: NativeInteractions
+internal/adapter/opencode/interaction_test.go:45:10: too many errors
+FAIL	github.com/Nathandela/swarm/internal/adapter/opencode [build failed]
+FAIL
