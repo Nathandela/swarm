@@ -1,0 +1,5 @@
+--- FAIL: TestNativeHistoryPlanAnchorUsesLatestSnapshot (0.00s)
+    opencode_history_page_test.go:301: repeated plan anchor skipped rows before latest snapshot: [{"item_id":"2TK27B34E1YSD27C9TY28MDKQP","kind":"message_snapshot","native_message_id":"msg_00000000000000000000000000000001","native_root_id":"ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","native_session_id":"ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","provenance":"imported","role":"assistant","source":"","status":"completed","text":"row1:a","ts":"1970-01-01T00:00:00.002Z","turn_id":"0Y7Z4V7717NY6PKXMP79RYWFFG","v":2}] <nil>
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.376s
+FAIL

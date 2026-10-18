@@ -280,3 +280,24 @@ func TestNativeHistoryAnchorsUseFullSnapshotShapes(t *testing.T) {
 		t.Fatalf("outcome anchor: %+v %v", page, err)
 	}
 }
+
+func TestNativeHistoryPlanAnchorUsesLatestSnapshot(t *testing.T) {
+	f := newNativePageReadFake(t)
+	for n := 1; n <= 5; n++ {
+		raw := f.row(n, 1, 1)
+		if n == 2 || n == 4 {
+			var row map[string]any
+			_ = json.Unmarshal(raw, &row)
+			id := row["info"].(map[string]any)["id"]
+			row["parts"] = []any{map[string]any{"id": fmt.Sprintf("prt_plan%d", n), "messageID": id, "sessionID": f.meta.ConversationID, "type": "tool", "tool": "todowrite", "state": map[string]any{"status": "completed", "input": map[string]any{}, "output": "done", "metadata": map[string]any{"todos": []any{map[string]any{"content": fmt.Sprint(n), "status": "completed"}}}}}}
+			raw, _ = json.Marshal(row)
+		}
+		f.rows = append(f.rows, raw)
+	}
+	scope, _ := nativeProjectionScope(f.meta)
+	req := schema.InteractionHistoryReq{Native: true, Limit: 1, BeforeItem: nativeProjectionID(scope, "plan_snapshot", f.meta.ConversationID+":plan:"+f.meta.ConversationID)}
+	page, _, err := paginateNativeHistory(context.Background(), f.meta, req, f.read)
+	if err != nil || len(page.Items) != 1 || !strings.Contains(string(page.Items[0]), "row3:") {
+		t.Fatalf("repeated plan anchor skipped rows before latest snapshot: %s %v", page.Items, err)
+	}
+}
