@@ -60,7 +60,7 @@ func TestNativeRequestCardsKeepMultipleExactAuthoritiesAndExpiry(t *testing.T) {
 	if err != nil || cards[0].RequestHash != oldHash || !cards[0].ExpiresAt.Equal(oldExpiry) {
 		t.Fatalf("read refreshed or changed authority: %+v %v", cards, err)
 	}
-	view.Pending[0].Raw = json.RawMessage(strings.Replace(string(view.Pending[0].Raw), "printf marker", "printf changed", -1))
+	view.Pending[0].Raw = json.RawMessage(strings.ReplaceAll(string(view.Pending[0].Raw), "printf marker", "printf changed"))
 	cards, err = f.d.openCodeRequestCards(f.binding.WorkerID, view)
 	if err != nil || cards[0].RequestHash == oldHash || !cards[0].ExpiresAt.Equal(now.Add(5*time.Minute)) {
 		t.Fatalf("content change retained authority: %+v %v", cards, err)

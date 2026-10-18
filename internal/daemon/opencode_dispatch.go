@@ -33,7 +33,7 @@ func (d *Daemon) DispatchOpenCode(ctx context.Context, id string, req opencodebr
 	if err != nil {
 		return opencodebridge.Receipt{}, errors.New("OpenCode runtime: dispatch channel unavailable")
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if !caps.OpenCodeDispatch {
 		return opencodebridge.Receipt{}, errors.New("OpenCode runtime: shim dispatch fence unavailable")
 	}

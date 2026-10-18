@@ -78,7 +78,7 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 			w.Header().Set("Content-Type", "text/event-stream")
 			props, _ := json.Marshal(f.identity)
 			frame, _ := json.Marshal(opencodebridge.Event{Type: "swarm.bridge.connected", Properties: props})
-			fmt.Fprintf(w, "data: %s\n\n", frame)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", frame)
 			w.(http.Flusher).Flush()
 			<-r.Context().Done()
 		case "/snapshot":
