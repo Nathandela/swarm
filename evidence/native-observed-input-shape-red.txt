@@ -1,0 +1,11 @@
+--- FAIL: TestOpenCodeObservedAdmissionRequiresCompleteSingleTextShape (0.01s)
+    --- FAIL: TestOpenCodeObservedAdmissionRequiresCompleteSingleTextShape/file (0.00s)
+        opencode_input_shape_test.go:24: extra genuine context minted observed admission
+    --- FAIL: TestOpenCodeObservedAdmissionRequiresCompleteSingleTextShape/text (0.00s)
+        opencode_input_shape_test.go:24: extra genuine context minted observed admission
+    --- FAIL: TestOpenCodeObservedAdmissionRequiresCompleteSingleTextShape/agent (0.00s)
+        opencode_input_shape_test.go:24: extra genuine context minted observed admission
+    opencode_input_shape_test.go:42: partial events proved absence of additional genuine context
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.411s
+FAIL
