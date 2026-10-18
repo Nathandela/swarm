@@ -187,3 +187,17 @@ func TestNativeRequestWithoutCurrentSetCannotAuthorize(t *testing.T) {
 		t.Fatal("request without current set still displayed controls")
 	}
 }
+
+func TestNativeRequestSetRetainsUnrenderablePendingIdentity(t *testing.T) {
+	s := NewItemStore()
+	s.Apply(nativeTestRecord(t, 1, nativeTestRequest()))
+	if !s.Apply(nativeTestRecord(t, 2, nativeTestRequestSet(true, map[string]string{"native-request": ""}))) {
+		t.Fatal("current unrenderable request identity was refused")
+	}
+	if s.Session("ep/worker")[0].Resolved {
+		t.Fatal("omitting oversized context falsely resolved native request")
+	}
+	if _, ok := s.PendingNativeRequest("ep/worker", "native-request"); ok {
+		t.Fatal("unrenderable native request remained actionable")
+	}
+}

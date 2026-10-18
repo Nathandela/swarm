@@ -1,0 +1,5 @@
+--- FAIL: TestNativeRequestSetRetainsUnrenderablePendingIdentity (0.00s)
+    native_interaction_test.go:195: current unrenderable request identity was refused
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	0.476s
+FAIL
