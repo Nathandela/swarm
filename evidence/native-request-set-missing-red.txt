@@ -1,0 +1,5 @@
+--- FAIL: TestNativeRequestWithoutCurrentSetCannotAuthorize (0.00s)
+    native_interaction_test.go:181: request card without current request-set proof enabled a decision
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	0.465s
+FAIL

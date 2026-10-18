@@ -173,3 +173,14 @@ func TestNativeRequestCardNeedsCompleteBoundedDetails(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeRequestWithoutCurrentSetCannotAuthorize(t *testing.T) {
+	s := NewItemStore()
+	s.Apply(nativeTestRecord(t, 1, nativeTestRequest()))
+	if _, ok := s.PendingNativeRequest("ep/worker", "native-request"); ok {
+		t.Fatal("request card without current request-set proof enabled a decision")
+	}
+	if !s.Session("ep/worker")[0].Degraded {
+		t.Fatal("request without current set still displayed controls")
+	}
+}
