@@ -10,7 +10,13 @@ func TestRequestTimeoutRetiresConnectionBeforeLateMutationReceipt(t *testing.T) 
 	stub := newDurableComposerStub()
 	stub.commitEntered = make(chan struct{})
 	stub.releaseCommit = make(chan struct{})
-	sock := serveOwnerAPI(t, stub)
+	sock := tmpSock(t)
+	server, err := Serve(stub, sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.endpointID = "machine"
+	t.Cleanup(func() { _ = server.Close() })
 	c, err := Dial(sock, []string{CapSemanticSend})
 	if err != nil {
 		t.Fatal(err)

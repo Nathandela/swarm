@@ -729,13 +729,23 @@ func (c *Client) clearPairing(sess *PairingSession) {
 
 // request performs one synchronous control round-trip.
 func (c *Client) request(req Control) (Control, error) {
+	return c.requestWithTimeout(req, clientTimeout)
+}
+
+func (c *Client) requestWithTimeout(req Control, timeout time.Duration) (Control, error) {
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
+	select {
+	case <-c.done:
+		return Control{}, errors.New("protocol: connection closed")
+	default:
+	}
 	select { // drop any stale response
 	case <-c.respCh:
 	default:
 	}
 	if err := c.writeControl(req); err != nil {
+		_ = c.Close()
 		return Control{}, err
 	}
 	select {
@@ -743,7 +753,9 @@ func (c *Client) request(req Control) (Control, error) {
 		return resp, nil
 	case <-c.done:
 		return Control{}, errors.New("protocol: connection closed")
-	case <-time.After(clientTimeout):
+	case <-time.After(timeout):
+		// Replies carry no request sequence; a late reply must never satisfy another request.
+		_ = c.Close()
 		return Control{}, errors.New("protocol: request timed out")
 	}
 }
