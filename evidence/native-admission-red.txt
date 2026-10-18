@@ -1,0 +1,7 @@
+# github.com/Nathandela/swarm/internal/remotegw [github.com/Nathandela/swarm/internal/remotegw.test]
+internal/remotegw/native_admission_test.go:12:16: queue.OfferBounded undefined (type *ItemAdmission has no field or method OfferBounded)
+internal/remotegw/native_admission_test.go:13:16: queue.OfferBounded undefined (type *ItemAdmission has no field or method OfferBounded)
+internal/remotegw/native_admission_test.go:14:16: queue.OfferBounded undefined (type *ItemAdmission has no field or method OfferBounded)
+internal/remotegw/native_admission_test.go:15:16: queue.OfferBounded undefined (type *ItemAdmission has no field or method OfferBounded)
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+FAIL
