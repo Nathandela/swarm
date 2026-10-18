@@ -175,3 +175,10 @@ including unknown metadata, binds that proof into the operation cache, and check
 expiry again in the final route/invoke callback. The public host requires these
 proofs; direct private SDK fixture calls may omit both. Native SDK reply methods
 have no atomic expected-content argument, so this is a dispatch precondition.
+
+A bound, acknowledged initial preflight refusal is retained as `status: rejected`,
+`nativeEffect: none`, with the exact operation/text hash and no native message or
+selection tuple. `GET /initial` can recover it after a lost daemon response; it
+never searches later owner input for a rejected attempt. The host must persist
+that terminal refusal and never resubmit it. Native configured agents can return
+`hidden: null`; the visible-primary check accepts null, omitted, or false only.

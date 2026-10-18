@@ -716,9 +716,11 @@ test("initial catalogue read failure and route changes cannot submit", async t =
   const f = await fixture(t, ({ binding, state }) => { binding.initialPrompt = true; state.messages = [] })
   f.api.client.config.providers = async () => ({ data: null })
   assert.equal((await f.call("POST", "/initial", initialBody({ expectedModel: "opencode/valid" }))).body.reason, "native_read_failed")
-  f.api.client.config.providers = async () => { f.state.route = { name: "home" }; return { data: { providers: [{ id: "opencode", models: { valid: {} } }] } } }
-  assert.equal((await f.call("POST", "/initial", initialBody({ expectedModel: "opencode/valid" }))).body.reason, "route_mismatch")
   assert.equal(f.state.calls.filter(call => call.name === "nativeSubmit").length, 0)
+  const g = await fixture(t, ({ binding, state }) => { binding.initialPrompt = true; state.messages = [] })
+  g.api.client.config.providers = async () => { g.state.route = { name: "home" }; return { data: { providers: [{ id: "opencode", models: { valid: {} } }] } } }
+  assert.equal((await g.call("POST", "/initial", initialBody({ expectedModel: "opencode/valid" }))).body.reason, "route_mismatch")
+  assert.equal(g.state.calls.filter(call => call.name === "nativeSubmit").length, 0)
 })
 
 test("initial model IDs retain namespace slashes and omitted choices retain native defaults", async t => {
@@ -750,4 +752,31 @@ test("request expiry is checked after native preflight and before SDK reply", as
   f.api.client.session.status = async () => { await pause(75); return { data: {} } }
   assert.equal((await f.call("POST", "/dispatch", body)).body.reason, "request_expired")
   assert.equal(f.state.calls.filter(call => call.name === "permissionReply").length, 0)
+})
+
+test("configured native primary agent with nullable hidden remains selectable", async t => {
+  const f = await fixture(t, ({ binding, state, api }) => { binding.initialPrompt = true; state.messages = []; api.client.app.agents = async () => ({ data: [{ name: "build", mode: "primary", hidden: null }] }) })
+  const result = (await f.call("POST", "/initial", initialBody({ expectedAgent: "build" }))).body
+  assert.equal(result.status, "admitted")
+  assert.equal(f.state.calls.filter(call => call.name === "nativeSubmit").length, 1)
+})
+
+test("initial preflight refusal is a cached no-effect receipt and cannot later match owner text", async t => {
+  const f = await fixture(t, ({ binding, state }) => { binding.initialPrompt = true; state.messages = [] })
+  const body = initialBody({ expectedModel: "opencode/typo" })
+  const response = await f.call("POST", "/initial", body)
+  assert.equal(response.code, 200)
+  assert.equal(response.body.status, "rejected")
+  assert.equal(response.body.reason, "initial_model_unavailable")
+  assert.equal(response.body.nativeEffect, "none")
+  assert.equal(response.body.operationID, body.operationID)
+  assert.equal(response.body.requestHash, body.requestHash)
+  assert.equal(response.body.inFlight, false)
+  assert.equal(response.body.messageID, undefined)
+  f.state.messages = [{ info: { id: messageID, sessionID: rootID, role: "user", time: { created: Date.now() }, ...tuple }, parts: [{ id: "prt_owner", sessionID: rootID, messageID, type: "text", text: body.text }] }]
+  assert.equal((await f.call("GET", "/initial")).body.status, "rejected")
+  assert.equal((await f.call("POST", "/initial", body)).body.status, "rejected")
+  assert.equal((await f.call("POST", "/initial", { ...body, expectedModel: "opencode/deepseek-v4.1-flash-free" })).body.reason, "initial_conflict")
+  assert.equal(f.state.calls.filter(call => call.name === "nativeSubmit").length, 0)
+  assert.deepEqual(f.state.prompt.current, { input: "", parts: [] })
 })
