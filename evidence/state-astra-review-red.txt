@@ -1,0 +1,22 @@
+ok  	github.com/Nathandela/swarm/internal/adapter/opencode	1.357s
+--- FAIL: TestReviewOCOrdinaryDiffSummaryRemainsInput (0.00s)
+    review_overlay_test.go:6: ordinary native user diff-summary treated as compaction: {Root:ses_root Generation:gen-1 Epoch:1 Degraded:true DegradedReason:compaction summary message is not a requested input Busy:false BusyKnown:false Retry:<nil> Error:<nil> Current:0xc000491d50 Inputs:[{MessageID:msg_u1 Text:edit file TextTruncated:false Synthetic:false At:1000 Outcome: OutcomeSource: OutcomeAt:0 ErrorName:}] Messages:[{ID:msg_u1 Role:user At:1000 Finish: ErrorName: Summary:true}] Uncertain:[]}
+--- FAIL: TestReviewOCCompactionPartIsNotRequestedInput (0.00s)
+    review_overlay_test.go:11: real native compaction carrier is presented as requested Current: &{MessageID:msg_compact Text: TextTruncated:false Synthetic:false At:1000 Outcome: OutcomeSource: OutcomeAt:0 ErrorName:}
+--- FAIL: TestReviewOCCompletedTimestampWithoutFinishCannotComplete (0.00s)
+    review_overlay_test.go:16: native overflow/cleanup message manufactured completion: &{MessageID:msg_u1 Text: TextTruncated:false Synthetic:false At:1000 Outcome:completed OutcomeSource:live OutcomeAt:1200 ErrorName:}
+--- FAIL: TestReviewOCConflictingNativeScopeCannotComplete (0.00s)
+    review_overlay_test.go:21: foreign native info completed root input: &{MessageID:msg_u1 Text: TextTruncated:false Synthetic:false At:1000 Outcome:completed OutcomeSource:live OutcomeAt:1200 ErrorName:}
+--- FAIL: TestReviewOCEvictedInputCannotReopenFromDuplicate (0.02s)
+    review_overlay_test.go:28: late duplicate reopened evicted terminal input: &{MessageID:msg_u0 Text: TextTruncated:false Synthetic:false At:1000 Outcome: OutcomeSource: OutcomeAt:0 ErrorName:}
+--- FAIL: TestReviewOCSyntheticAfterTerminalStillDegrades (0.00s)
+    review_overlay_test.go:32: unqualified synthetic outcome escaped degradation after reordered part: &{MessageID:msg_auto Text:continue TextTruncated:false Synthetic:true At:1000 Outcome:completed OutcomeSource:live OutcomeAt:1200 ErrorName:}
+--- FAIL: TestReviewOCCurrentUsesNativeInputTime (0.00s)
+    review_overlay_test.go:36: late old input became Current: &{MessageID:msg_old Text:old TextTruncated:false Synthetic:false At:1000 Outcome: OutcomeSource: OutcomeAt:0 ErrorName:}
+--- FAIL: TestReviewOCMessageCacheEvictionDoesNotLoseInputParts (0.00s)
+    review_overlay_test.go:42: informational cache eviction blocked live input authority: &{MessageID:msg_u1 Text: TextTruncated:false Synthetic:false At:1000 Outcome: OutcomeSource: OutcomeAt:0 ErrorName:}
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	1.019s
+FAIL
+
+EXIT 1

@@ -1,0 +1,11 @@
+--- FAIL: TestDecodeEventRejectsAmbiguousScopeAndUnboundedData (0.00s)
+    native_test.go:302: accepted malformed scope/envelope: null
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/opencode	0.267s
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/opencode_regression_test.go:158:14: s.ImportHistory undefined (type *OpenCodeState has no field or method ImportHistory)
+internal/skeleton/opencode_regression_test.go:171:17: live.ImportHistory undefined (type *OpenCodeState has no field or method ImportHistory)
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+
+EXIT 1

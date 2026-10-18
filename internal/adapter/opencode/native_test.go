@@ -227,7 +227,7 @@ func TestDecodeEvent_MessagePartUpdated(t *testing.T) {
 }
 
 func TestDecodeEvent_UnknownKindIsNotAnError(t *testing.T) {
-	for _, kind := range []string{"permission.updated", "session.created", "session.turn.started", "message.updated.v2", "question.asked", ""} {
+	for _, kind := range []string{"permission.updated", "session.created", "session.turn.started", "message.updated.v2", "question.asked"} {
 		raw := `{"id":"evt_q","type":"` + kind + `","properties":{"sessionID":"ses_root","anything":true}}`
 		ev, err := DecodeEvent([]byte(raw))
 		if err != nil {
@@ -289,5 +289,21 @@ func TestDecodeStatusSnapshot(t *testing.T) {
 		if _, err := DecodeStatusSnapshot([]byte(bad)); err == nil {
 			t.Fatalf("DecodeStatusSnapshot(%s) accepted malformed input", bad)
 		}
+	}
+}
+
+func TestDecodeEventRejectsAmbiguousScopeAndUnboundedData(t *testing.T) {
+	for _, raw := range []string{
+		`null`, `{}`, `{"type":""}`, `{"type":"session.status","properties":{"sessionID":"ses_root"}}`,
+		`{"type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_u1","sessionID":"ses_other","role":"user","time":{"created":1}}}}`,
+		`{"type":"message.part.updated","properties":{"sessionID":"ses_root","part":{"id":"prt_1","messageID":"msg_u1","sessionID":"ses_other","type":"text","text":"x"}}}`,
+	} {
+		if _, err := DecodeEvent([]byte(raw)); err == nil {
+			t.Fatalf("accepted malformed scope/envelope: %s", raw)
+		}
+	}
+	raw := []byte(`{"type":"message.part.updated","properties":{"sessionID":"ses_root","part":{"id":"prt_1","messageID":"msg_u1","sessionID":"ses_root","type":"text","text":"` + string(bytes.Repeat([]byte("x"), 2<<20)) + `"}}}`)
+	if _, err := DecodeEvent(raw); err == nil {
+		t.Fatal("unbounded raw event accepted")
 	}
 }

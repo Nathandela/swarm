@@ -204,6 +204,7 @@ func TestOpenCodeState_TerminalOutcomeClassification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st, epoch := newOCState(t, root)
 			ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
+			ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
 			ocApply(t, st, epoch, tc.raw(), OCApplied)
 			in := ocInput(st.View(), "msg_u1")
 			if in == nil {
@@ -222,6 +223,7 @@ func TestOpenCodeState_ErrorIsNotErasedByCompletion(t *testing.T) {
 	t.Run("late completion keeps the failure", func(t *testing.T) {
 		st, epoch := newOCState(t, root)
 		ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
+		ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
 		ocApply(t, st, epoch, ocAssistantError(root, "msg_a1", "msg_u1", 1100, 1200, "APIError"), OCApplied)
 		ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1300, "stop"), OCApplied)
 		in := ocInput(st.View(), "msg_u1")
@@ -233,6 +235,7 @@ func TestOpenCodeState_ErrorIsNotErasedByCompletion(t *testing.T) {
 	t.Run("late error overwrites the completion", func(t *testing.T) {
 		st, epoch := newOCState(t, root)
 		ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
+		ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
 		ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1200, "stop"), OCApplied)
 		ocApply(t, st, epoch, ocAssistantError(root, "msg_a2", "msg_u1", 1300, 1400, "APIError"), OCApplied)
 		in := ocInput(st.View(), "msg_u1")
@@ -244,6 +247,7 @@ func TestOpenCodeState_ErrorIsNotErasedByCompletion(t *testing.T) {
 	t.Run("equal-rank replay keeps the later terminal", func(t *testing.T) {
 		st, epoch := newOCState(t, root)
 		ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
+		ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
 		ocApply(t, st, epoch, ocAssistantError(root, "msg_a1", "msg_u1", 1100, 1500, "MessageAbortedError"), OCApplied)
 		ocApply(t, st, epoch, ocAssistantError(root, "msg_a1", "msg_u1", 1100, 1400, "APIError"), OCApplied)
 		in := ocInput(st.View(), "msg_u1")
@@ -257,6 +261,7 @@ func TestOpenCodeState_ToolCallsStepIsNeverTerminal(t *testing.T) {
 	const root = "ses_root"
 	st, epoch := newOCState(t, root)
 	ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
+	ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
 	// Completion metadata present, but finish tool-calls means the message is a
 	// step, not the turn's terminal answer.
 	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1200, "tool-calls"), OCApplied)
@@ -424,8 +429,8 @@ func TestOpenCodeState_ParseFailureDesyncsUntilNewEpoch(t *testing.T) {
 	ocApply(t, st, next, ocUserMessage(root, "msg_u2", 1100), OCApplied)
 	ocApply(t, st, epoch, ocUserMessage(root, "msg_u3", 1200), OCRefusedEpoch)
 	v = st.View()
-	if v.Degraded || ocInput(v, "msg_u2") == nil || ocInput(v, "msg_u1") != nil {
-		t.Fatalf("new epoch did not recover: %+v", v)
+	if !v.Degraded || v.BusyKnown || ocInput(v, "msg_u2") == nil || ocInput(v, "msg_u1") != nil {
+		t.Fatalf("new epoch lost input custody or silently healed history: %+v", v)
 	}
 }
 
@@ -466,6 +471,7 @@ func TestOpenCodeState_AutoContinueDoesNotFinishTheRequestedInput(t *testing.T) 
 	st, epoch := newOCState(t, root)
 
 	ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
+	ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
 	ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_1", "do the thing"), OCApplied)
 	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1200, "stop"), OCApplied)
 
@@ -499,29 +505,24 @@ func TestOpenCodeState_AutoContinueDoesNotFinishTheRequestedInput(t *testing.T) 
 func TestOpenCodeState_CompactionArtifactsAreNotInputOrCompletion(t *testing.T) {
 	const root = "ses_root"
 	st, epoch := newOCState(t, root)
-
-	// A user message carrying a summary object is compaction context, never a
-	// requested input.
-	ocApply(t, st, epoch, ocUserMessageWithSummary(root, "msg_c1", 900), OCIgnoredUnqualified)
+	// Native compaction emits a user row followed by a compaction part, not user.summary metadata.
+	ocApply(t, st, epoch, ocUserMessage(root, "msg_c1", 900), OCApplied)
+	raw := []byte(`{"type":"message.part.updated","properties":{"sessionID":"ses_root","part":{"id":"prt_c","messageID":"msg_c1","sessionID":"ses_root","type":"compaction","auto":true}}}`)
+	ocApply(t, st, epoch, raw, OCIgnoredUnqualified)
 	v := st.View()
-	if len(v.Inputs) != 0 {
-		t.Fatalf("compaction artifact fabricated an input: %+v", v.Inputs)
+	if len(v.Inputs) != 0 || v.Current != nil || !v.Degraded {
+		t.Fatalf("compaction invented requested input authority: %+v", v)
 	}
 	if len(v.Messages) != 1 || !v.Messages[0].Summary {
-		t.Fatalf("compaction artifact message = %+v", v.Messages)
-	}
-	if !v.Degraded || !strings.Contains(v.DegradedReason, "compaction") {
-		t.Fatalf("compaction not degraded: %+v", v)
+		t.Fatalf("compaction message = %+v", v.Messages)
 	}
 	ocApply(t, st, epoch, ocUserTextPart(root, "msg_c1", "prt_c1", "summary body"), OCIgnoredUntracked)
-
-	// An assistant summary message closes no outcome, even with a parent and
-	// completion metadata.
 	ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
+	ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
 	ocApply(t, st, epoch, ocAssistantSummary(root, "msg_s1", "msg_u1", 1100, 1200), OCIgnoredUnqualified)
 	v = st.View()
 	if got := ocInput(v, "msg_u1"); got.Outcome != OpenCodeOutcomeNone {
-		t.Fatalf("summary message finished the request: %+v", got)
+		t.Fatalf("summary finished requested input: %+v", got)
 	}
 	if len(v.Messages) != 3 || !v.Messages[2].Summary {
 		t.Fatalf("summary message not recorded: %+v", v.Messages)
@@ -543,7 +544,7 @@ func TestOpenCodeState_PartsReorderedBeforeMessage(t *testing.T) {
 	}
 
 	// A tool part that was buffered before its assistant message drains too.
-	ocApply(t, st, epoch, ocToolPart(root, "msg_a1", "prt_t1", "bash"), OCApplied)
+	ocApply(t, st, epoch, ocToolPart(root, "msg_a1", "prt_t1", "bash"), OCIgnoredUntracked)
 	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 0, "tool-calls"), OCApplied)
 	if len(st.View().Messages) != 2 {
 		t.Fatalf("assistant message with buffered part = %+v", st.View().Messages)
@@ -569,6 +570,7 @@ func TestOpenCodeState_InputCapacityEvictsTerminalThenRefuses(t *testing.T) {
 	st, epoch := newOCState(t, root)
 
 	ocApply(t, st, epoch, ocUserMessage(root, "msg_1", 1000), OCApplied)
+	ocApply(t, st, epoch, ocUserTextPart(root, "msg_1", "prt_request", "request"), OCApplied)
 	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_1", 1001, 1010, "stop"), OCApplied)
 	for i := 2; i <= maxOCInputs; i++ {
 		ocApply(t, st, epoch, ocUserMessage(root, fmt.Sprintf("msg_%d", i), int64(1000+i)), OCApplied)
@@ -616,7 +618,7 @@ func TestOpenCodeState_MessageListStaysBounded(t *testing.T) {
 	const root = "ses_root"
 	st, epoch := newOCState(t, root)
 	for i := 0; i < 200; i++ {
-		ocApply(t, st, epoch, ocAssistantMessage(root, fmt.Sprintf("msg_a%d", i), "", 1000, 0, ""), OCApplied)
+		ocApply(t, st, epoch, ocAssistantMessage(root, fmt.Sprintf("msg_a%d", i), "msg_unobserved", 1000, 0, ""), OCApplied)
 	}
 	v := st.View()
 	if len(v.Messages) != maxOCMessages {
