@@ -56,7 +56,8 @@ swarm decide SESSION --status --operation-id OPERATION
 ```
 
 Question groups and answers preserve native order. Permission `always` installs
-the native patterns and can resolve matching requests in that native session;
+approval patterns for future matching requests in the native instance and can
+resolve matching requests already pending in the target native session;
 permission `reject` rejects its pending permission requests. Question rejection
 targets the exact question. These effects are displayed on the card.
 
