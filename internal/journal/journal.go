@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -190,8 +191,13 @@ type segment struct {
 	lastCursor uint64
 }
 
-// Journal is the daemon-wide append-only log. Retained records are mirrored in
-// memory (bounded by retention) so ReadFrom is atomic under one lock.
+type segmentFile interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+// Journal is the daemon-wide durable event journal and its retained in-memory mirror.
 type Journal struct {
 	dir   string
 	opts  Options
@@ -202,7 +208,7 @@ type Journal struct {
 	records       []Record   // retained records, ascending cursor
 	segments      []*segment // ascending seq; the last is the active segment
 	active        *segment
-	activeF       *os.File
+	activeF       segmentFile
 	nextSeq       uint64
 	closed        bool
 	subs          map[chan Record]struct{} // live subscribers (fan-out), guarded by mu
@@ -212,7 +218,7 @@ type Journal struct {
 	pins          map[string]livePin
 	suppressed    map[string]struct{}
 	cacheDisabled map[string]bool
-	liveErr       error
+	storageErr    error
 }
 
 // subscriberBuffer bounds each live subscriber's per-channel buffer. Append does a
@@ -312,6 +318,24 @@ func Open(dir string, opts Options) (*Journal, error) {
 	return j, nil
 }
 
+// writeDurableLineLocked must never be retried on this segment after failure:
+// a partial write may have left a JSON prefix without its terminating newline.
+func (j *Journal) writeDurableLineLocked(line []byte) error {
+	n, err := j.activeF.Write(line)
+	if err != nil {
+		return err
+	}
+	if n != len(line) {
+		return io.ErrShortWrite
+	}
+	return j.activeF.Sync()
+}
+
+func (j *Journal) failStorageLocked(err error) error {
+	j.storageErr = fmt.Errorf("journal: storage failed; reopen after recovery: %w", err)
+	return j.storageErr
+}
+
 // Append stamps the next cursor/schema/time. Controls are fsync'd before return;
 // live interactions reserve durable cursor custody but retain their payload in RAM.
 func (j *Journal) Append(r Record) (Record, error) {
@@ -320,13 +344,13 @@ func (j *Journal) Append(r Record) (Record, error) {
 	if j.closed {
 		return Record{}, errors.New("journal: closed")
 	}
+	if j.storageErr != nil {
+		return Record{}, j.storageErr
+	}
 	if j.opts.LiveBytes > 0 {
-		if j.liveErr != nil {
-			return Record{}, j.liveErr
-		}
 		if r.Type == TypeInteraction {
 			if err := j.reserveCursorLocked(); err != nil {
-				return Record{}, j.failLiveLocked(err)
+				return Record{}, j.failStorageLocked(err)
 			}
 		} else {
 			// Controls follow the ceiling on disk; old readers must also replay in order.
@@ -335,7 +359,7 @@ func (j *Journal) Append(r Record) (Record, error) {
 	}
 
 	if j.cursor == math.MaxUint64 {
-		return Record{}, j.failLiveLocked(errors.New("journal: cursor space exhausted"))
+		return Record{}, j.failStorageLocked(errors.New("journal: cursor space exhausted"))
 	}
 	r.Cursor = j.cursor + 1
 	if j.opts.LiveBytes == 0 {
@@ -351,15 +375,12 @@ func (j *Journal) Append(r Record) (Record, error) {
 	}
 	if !transient && j.opts.MaxBytes > 0 && j.active.bytes > 0 && j.active.bytes+int64(len(line)) > j.opts.MaxBytes {
 		if err := j.rotateLocked(); err != nil {
-			return Record{}, j.failLiveLocked(err)
+			return Record{}, j.failStorageLocked(err)
 		}
 	}
 	if !transient {
-		if _, err := j.activeF.Write(line); err != nil {
-			return Record{}, j.failLiveLocked(err)
-		}
-		if err := j.activeF.Sync(); err != nil { // durable before the cursor is acked
-			return Record{}, j.failLiveLocked(err)
+		if err := j.writeDurableLineLocked(line); err != nil {
+			return Record{}, j.failStorageLocked(err)
 		}
 		j.active.bytes += int64(len(line))
 		j.active.count++
@@ -392,8 +413,8 @@ func (j *Journal) Append(r Record) (Record, error) {
 		j.trimLiveLocked()
 	}
 	j.enforceRetentionLocked()
-	if j.opts.LiveBytes > 0 && j.liveErr != nil {
-		return Record{}, j.liveErr
+	if j.opts.LiveBytes > 0 && j.storageErr != nil {
+		return Record{}, j.storageErr
 	}
 	// Live fan-out: deliver the newly-appended record to every subscriber. The send
 	// is NON-BLOCKING so a slow/wedged subscriber never blocks the write-critical
