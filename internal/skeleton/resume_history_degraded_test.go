@@ -82,12 +82,19 @@ func TestResumeHistory_CodexMatchesADegradedLaunchStartedAfterTheBackendBudget(t
 // unmanaged resolver and the per-account ones look for the marker under the state dir.
 func TestResumeHistory_ProductionResolversReadTheDegradedMarker(t *testing.T) {
 	sk := assemble(t)
-	account, ok := sk.api.historyResolver.(*accountResumeHistoryResolver)
+	native, ok := sk.api.historyResolver.(*openCodeHistoryResolver)
+	if !ok || native.core != sk.core {
+		t.Fatalf("historyResolver is %T, want the connected native resolver", sk.api.historyResolver)
+	}
+	account, ok := native.fallback.(*accountResumeHistoryResolver)
 	if !ok {
-		t.Fatalf("historyResolver is %T, want the account-aware resolver", sk.api.historyResolver)
+		t.Fatalf("native fallback is %T, want the account-aware resolver", native.fallback)
 	}
 	unmanaged, ok := account.unmanaged.(*filesystemResumeHistoryResolver)
-	if !ok || unmanaged.stateDir == "" || unmanaged.stateDir != account.stateRoot {
+	if !ok {
+		t.Fatalf("account fallback is %T, want filesystem resolver", account.unmanaged)
+	}
+	if unmanaged.stateDir == "" || unmanaged.stateDir != account.stateRoot {
 		t.Fatalf("unmanaged resolver stateDir = %q, want the state dir %q", unmanaged.stateDir, account.stateRoot)
 	}
 }

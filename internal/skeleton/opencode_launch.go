@@ -20,6 +20,12 @@ func (a *coreAPI) captureOpenCodeOrigin(spec *daemon.LaunchSpec) error {
 		if e != nil {
 			return e
 		}
+		if err := validateStoredResumeConversationID(source); err != nil {
+			return err
+		}
+		if source.ConversationID == "" {
+			return errors.New("resume: source has no captured conversation id; OpenCode requires an exact durable native binding")
+		}
 		if source.RequiredRuntime != persist.RequiredRuntimeOpenCode || source.OpenCodeBinding == nil || source.OpenCodeBinding.NativeCreatedAtMS <= 0 {
 			return errors.New("OpenCode runtime: resume requires a durable native binding")
 		}
