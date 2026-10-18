@@ -170,6 +170,10 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchAgentVerb(runSend, args[1:], nil, stdout, stderr)
 	case "message":
 		return dispatchAgentVerb(runMessage, args[1:], []string{protocol.CapSemanticSend}, stdout, stderr)
+	case "requests":
+		return dispatchAgentVerb(runNativeRequests, args[1:], []string{protocol.CapNativeRequests}, stdout, stderr)
+	case "decide":
+		return dispatchAgentVerb(runNativeDecide, args[1:], []string{protocol.CapNativeRequests}, stdout, stderr)
 	case "peek":
 		return dispatchAgentVerb(runPeek, args[1:], nil, stdout, stderr)
 	case "version", "--version":
