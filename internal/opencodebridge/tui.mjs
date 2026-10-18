@@ -504,7 +504,12 @@ export default { id: ID, async tui(api, options) {
         if (streams.size >= 4) throw fault("event_clients_full")
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" })
         const stream = { res, queue: [], bytes: 0, blocked: false, drain() { while (!this.closing && !this.blocked && this.queue.length) { const item = this.queue.shift(); this.bytes -= Buffer.byteLength(item); this.blocked = !res.write(item) } } }
-        streams.add(stream); res.on("drain", () => { stream.blocked = false; stream.drain() }); res.on("close", () => streams.delete(stream))
+        streams.add(stream)
+        const release = () => { stream.closing = true; stream.queue = []; stream.bytes = 0; streams.delete(stream); if (!res.destroyed) res.destroy() }
+        // Bun 1.3.14 reports peer loss on request/socket, without a response close event.
+        req.once("aborted", release); req.on("error", release); req.socket?.once("close", release)
+        res.once("close", release); res.on("error", release)
+        res.on("drain", () => { stream.blocked = false; stream.drain() })
         res.write("data: " + JSON.stringify({ type: "swarm.bridge.connected", properties: identity() }) + "\n\n"); return
       }
       if (req.method !== "POST" || !["/ack", "/initial", "/dispatch"].includes(url.pathname)) return rejected(res, "unsupported_route", 404)

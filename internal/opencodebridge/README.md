@@ -182,3 +182,9 @@ selection tuple. `GET /initial` can recover it after a lost daemon response; it
 never searches later owner input for a rejected attempt. The host must persist
 that terminal refusal and never resubmit it. Native configured agents can return
 `hidden: null`; the visible-primary check accepts null, omitted, or false only.
+
+OpenCode 1.19.3 embeds Bun 1.3.14, whose HTTP response does not emit `close`
+when an SSE peer disconnects. The listener releases stream capacity and queued
+bytes on request abort/error and socket close as well as response close/error.
+Actual native reconnect qualification retains one live stream while repeatedly
+closing eight peers; disconnected daemon observers cannot consume the four slots.

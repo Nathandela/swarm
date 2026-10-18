@@ -780,3 +780,28 @@ test("initial preflight refusal is a cached no-effect receipt and cannot later m
   assert.equal(f.state.calls.filter(call => call.name === "nativeSubmit").length, 0)
   assert.deepEqual(f.state.prompt.current, { input: "", parts: [] })
 })
+
+test("SSE peer disconnect releases capacity when Bun omits ServerResponse close", async t => {
+  const originalEmit = http.ServerResponse.prototype.emit
+  http.ServerResponse.prototype.emit = function(event, ...args) {
+    if (event === "close") return false
+    return originalEmit.call(this, event, ...args)
+  }
+  t.after(() => { http.ServerResponse.prototype.emit = originalEmit })
+  const f = await fixture(t)
+  const open = () => new Promise((resolve, reject) => {
+    const req = http.get({ socketPath: f.binding.socketPath, path: "/events", headers: { authorization: "Bearer " + f.binding.token } }, res => {
+      res.once("data", () => resolve({ req, res, status: res.statusCode }))
+      res.on("error", () => {})
+    })
+    req.on("error", reject)
+  })
+  const anchor = await open()
+  t.after(() => { anchor.res.destroy(); anchor.req.destroy() })
+  for (let i = 0; i < 8; i++) {
+    const client = await open()
+    client.res.destroy(); client.req.destroy()
+    assert.equal(client.status, 200, `reconnect ${i} exhausted leaked stream slots`)
+    await pause(15)
+  }
+})
