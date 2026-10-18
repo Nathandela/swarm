@@ -104,7 +104,7 @@ func TestNativeAnswerSuccessfulAppendLostReplySurvivesNewApp(t *testing.T) {
 		}
 	}}
 	sc.cl = appender
-	op, err := a.appendNativeDecision(a.core, sc, "native-first", "native-request", body.Request, []byte("sealed first answer"))
+	op, err := a.appendNativeDecisionLocked(a.core, sc, "native-first", "native-request", body.Request, []byte("sealed first answer"))
 	if err != nil || op == nil {
 		t.Fatalf("append: %+v %v", op, err)
 	}
@@ -119,7 +119,7 @@ func TestNativeAnswerSuccessfulAppendLostReplySurvivesNewApp(t *testing.T) {
 	if out, err := a2.Outcome(op.OperationID); err != nil || out.Code != "outcome_unknown" {
 		t.Fatalf("fresh app forgot lost reply: %+v %v", out, err)
 	}
-	op2, err := a2.appendNativeDecision(a2.core, sc2, "native-second", "native-request", body.Request, []byte("would duplicate answer"))
+	op2, err := a2.appendNativeDecisionLocked(a2.core, sc2, "native-second", "native-request", body.Request, []byte("would duplicate answer"))
 	if err != nil || op2.OperationID != op.OperationID || len(appender.envelopes()) != 1 {
 		t.Fatalf("restart republished answer: %+v %v", op2, err)
 	}
@@ -147,7 +147,7 @@ func TestNativeAnswerRetainsOperationAfterMailboxResponseLoss(t *testing.T) {
 				}
 			}
 		}
-		op, err := a.appendNativeDecision(a.core, sc, "native-lost", "native-request", body, []byte("exact sealed envelope"))
+		op, err := a.appendNativeDecisionLocked(a.core, sc, "native-lost", "native-request", body, []byte("exact sealed envelope"))
 		if err != nil || op == nil || op.OperationID != "native-lost" {
 			t.Fatalf("ambiguous append discarded its operation: %+v %v", op, err)
 		}

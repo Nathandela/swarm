@@ -190,6 +190,25 @@ func TestNativeDecisionAdmissionSurvivesLateErrorAfterResolution(t *testing.T) {
 	}
 }
 
+func TestNativeDecisionAdmissionProofDoesNotAliasStateReaders(t *testing.T) {
+	c := publicationCore(t)
+	body := nativeCustodyRequest()
+	if _, _, err := c.BeginNativeDecision("op", "item", body, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ctrl, _ := c.NativeDecisionOutcome("op", time.Now())
+	ctrl.NativeDecisionReceipt.State = "admitted"
+	if err := c.RecordOutcome(ctrl); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.NativeDecisionReceipt.State = "rejected"
+	read := c.State()
+	read.OpOutcomes["op"].NativeDecisionReceipt.State = "uncertain"
+	if got := c.State().OpOutcomes["op"].NativeDecisionReceipt.State; got != "admitted" {
+		t.Fatalf("state reader mutated durable proof: %s", got)
+	}
+}
+
 func TestNativeDecisionIgnoresWrongScopeAndRequiresNoEffectForRejection(t *testing.T) {
 	c := publicationCore(t)
 	body := nativeCustodyRequest()

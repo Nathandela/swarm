@@ -48,6 +48,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -110,6 +111,7 @@ func fullState() State {
 		Sessions:                   []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
 		Snapshots:                  []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
 		PendingOps:                 []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
+		NativeDecisions:            []NativeDecisionCustody{{ItemID: "native-item", RequestHash: fmt.Sprintf("%064x", 1), ChoiceHash: fmt.Sprintf("%064x", 2), DeadlineMS: 1700000060000, Receipt: nativeDecisionReceipt("native-op", nativeCustodyRequest())}},
 		PendingPublications: []PendingPublication{
 			{
 				LogicalID: "logical-pending", OperationID: "op-publication", Kind: PublicationComposer,

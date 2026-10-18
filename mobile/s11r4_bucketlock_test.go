@@ -205,8 +205,8 @@ func TestS11R4_EveryBucketAppendAllocatesItsSeqUnderTheBucketLock(t *testing.T) 
 
 			lockPos := s11r4LockPos(fd.Body)
 			if lockPos == token.NoPos {
-				if fd.Name.Name == s11r4LockedAppendHelper &&
-					s11r4EveryLockedHelperCallerIsProtected(src, s11r4LockedAppendHelper) {
+				if (fd.Name.Name == s11r4LockedAppendHelper || fd.Name.Name == "appendNativeDecisionLocked") &&
+					s11r4EveryLockedHelperCallerIsProtected(src, fd.Name.Name) {
 					continue
 				}
 				t.Errorf("%s appends to the phone -> machine bucket without taking a.%s.\n"+

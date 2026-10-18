@@ -49,6 +49,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strconv"
@@ -174,6 +175,7 @@ func s15State() State {
 		Sessions:                   []CachedSession{{SessionID: s15SessionID, Present: true}},
 		Snapshots:                  []Snapshot{{Session: s15SessionID, Lines: []string{s15SnapLine}, Cols: 80, Rows: 24}},
 		PendingOps:                 []QueuedOp{{Op: s15QueuedOp, SessionID: s15SessionID}},
+		NativeDecisions:            []NativeDecisionCustody{{ItemID: "s15-native-item", RequestHash: fmt.Sprintf("%064x", 1), ChoiceHash: fmt.Sprintf("%064x", 2), DeadlineMS: 1700000060000, Receipt: nativeDecisionReceipt("s15-native-operation", nativeCustodyRequest())}},
 		PendingPublications: []PendingPublication{{
 			LogicalID: s15PublicationID + "-logical", OperationID: s15PublicationID,
 			Kind: PublicationComposer, SessionID: s15SessionID, SessionInstance: "s15-instance",
@@ -413,6 +415,7 @@ func s15Inventory() []s15Tier {
 		// is why it sits in the content tier's KEPT container beside the replay-guard
 		// coordinates rather than in the purgeable one beside the caches.
 		{field: "PendingOps", tier: "content", needles: s15Str(s15QueuedOp)},
+		{field: "NativeDecisions", tier: "content", needles: s15Str("s15-native-operation")},
 		{field: "PendingPublications", tier: "content", needles: append(
 			append(s15Str(s15PublicationID), s15Str(s15PublicationText)...),
 			s15Str(s15PublicationEnvelope)...),
