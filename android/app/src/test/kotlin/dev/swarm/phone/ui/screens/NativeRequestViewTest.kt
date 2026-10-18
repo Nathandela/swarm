@@ -45,7 +45,7 @@ class NativeRequestViewTest {
         val sent = mutableListOf<String>()
         lateinit var card: View
         card = nativeRequestCard(context, block(request())) { _, item, decision, answers ->
-            assertTrue(all(card).filter { it.isClickable }.none { it.isEnabled })
+            assertTrue(all(card).filter { it.tag in setOf("native-request-action", "native-request-option", "native-request-input") }.none { it.isEnabled })
             sent.addAll(listOf(item, decision, answers))
         }
         val text = all(card).filterIsInstance<TextView>()
@@ -83,8 +83,26 @@ class NativeRequestViewTest {
     @Test fun unqualifiedOrExpiredRequestsHaveNoDecisionControls() {
         for (value in listOf(block(request(), false), block(request().copy(expiresAt = Instant.EPOCH.toString())))) {
             val card = nativeRequestCard(context, value) { _, _, _, _ -> fail("read-only request dispatched") }
-            assertTrue(all(card).none { it.isClickable && it.isEnabled })
+            assertTrue(all(card).none { it.tag == "native-request-action" && it.isEnabled })
             assertTrue(all(card).filterIsInstance<TextView>().any { it.text.toString().contains("printf marker") })
         }
+    }
+
+    @Test fun realTranscriptPathPreservesDraftAcrossAnAuthorityRenewal() {
+        val req = request("question").copy(
+            questions = listOf(NativeQuestionFields("Your answer?", "Answer", emptyList(), false, true)),
+            decisions = listOf(NativeDecisionFields("question_reply", "Send answers", "single_request")),
+        )
+        val old = transcriptView(context, TranscriptPanel(listOf(block(req)), ""), onNativeDecision = { _, _, _, _ -> })
+        all(old).filterIsInstance<EditText>().single().setText("keep this draft")
+        var sent = ""
+        val fresh = transcriptView(context, TranscriptPanel(listOf(block(req.copy(expiresAt = Instant.now().plusSeconds(120).toString()))), ""), onNativeDecision = { _, _, _, body -> sent = body })
+        copyNativeRequestDrafts(old, fresh)
+        assertEquals("keep this draft", all(fresh).filterIsInstance<EditText>().single().text.toString())
+        all(fresh).filterIsInstance<TextView>().single { it.text.toString() == "Send answers" }.performClick()
+        assertEquals("keep this draft", JSONArray(sent).getJSONArray(0).getString(0))
+        val foreign = nativeRequestCard(context, block(req.copy(requestHash = "another-request"))) { _, _, _, _ -> }
+        copyNativeRequestDrafts(old, foreign)
+        assertEquals("", all(foreign).filterIsInstance<EditText>().single().text.toString())
     }
 }

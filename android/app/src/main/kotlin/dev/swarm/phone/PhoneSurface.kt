@@ -116,6 +116,7 @@ import dev.swarm.phone.ui.screens.machinesPanelView
 import dev.swarm.phone.ui.screens.approvalSheetView
 import dev.swarm.phone.ui.screens.pairOnlyView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
+import dev.swarm.phone.ui.screens.copyNativeRequestDrafts
 import dev.swarm.phone.ui.screens.sessionDetailRedraw
 import dev.swarm.phone.ui.screens.sessionDetailView
 import dev.swarm.phone.ui.screens.syncPillView
@@ -2988,6 +2989,9 @@ class PhoneSurface(
         // updated in place keeps its FIRST record's cursor (IS-LAYER-3), so paging past the tail
         // would miss exactly the updates the event fired for.
         val chat = bridge.transcript(open, JOURNAL_FROM_THE_START, WHOLE_JOURNAL)
+        chat.items.filter { it.resolved }.forEach { item ->
+            nativeAnswers.remove(item.itemId)?.let(nativeAnswerSaid::remove)
+        }
         composerSends.observeEchoes(
             open,
             chat.items.filter { it.kind == "user_message" }.mapNotNullTo(mutableSetOf()) { item ->
@@ -3060,7 +3064,7 @@ class PhoneSurface(
                 // argument, including what is not yet reachable). A SET because the model takes
                 // one; at most one answer is ever in flight from this surface, because the sheet
                 // disables the control it was pressed on for as long as the work is crossing.
-                answering = answeringItemId.takeIf { it.isNotEmpty() }?.let(::setOf).orEmpty(),
+                answering = answeringItemId.takeIf { it.isNotEmpty() }?.let(::setOf).orEmpty() + nativeAnswers.keys,
                 // OWNER RULING R6: the message this phone has sent and not yet seen come back.
                 //
                 // WITHOUT IT THE MESSAGE IS NOWHERE. Local sealing exact-match clears the live
@@ -3456,6 +3460,7 @@ class PhoneSurface(
                 // R4's answer rides the patch path too: a decision rebuilt without it loses its
                 // buttons the moment the agent writes one more line.
                 onDecision = ::answerDecision,
+                onNativeDecision = ::answerNativeRequest,
             )
         ) {
             detailDrawn = panel
@@ -3512,6 +3517,7 @@ class PhoneSurface(
                 // in the order the wire sent them, and IS-APR-4 keeps the verdict machine-side.
                 // The screen draws them; only this surface may reach `App.Approve` from one.
                 onDecision = ::answerDecision,
+                onNativeDecision = ::answerNativeRequest,
             ),
         )
     }
@@ -4166,6 +4172,7 @@ class PhoneSurface(
 
     /** Put [view] under the bar, and record which destination it is. */
     private fun hostContent(view: View?) {
+        copyNativeRequestDrafts(contentHost, view)
         contentShows = destination
         detachHostedViews()
         contentHost.removeAllViews()
@@ -4449,6 +4456,44 @@ class PhoneSurface(
         }
     }
 
+    private val nativeAnswers = linkedMapOf<String, String>()
+    private val nativeAnswerSaid = mutableSetOf<String>()
+
+    private fun answerNativeRequest(pressed: View, itemId: String, decision: String, answers: String) {
+        if (nativeAnswers.containsKey(itemId)) return
+        if (nativeAnswers.size >= 256) {
+            say(PressFeedback.ofRefusal("Too many native answers are awaiting confirmation.", "Refresh the pending requests before sending another answer."))
+            return
+        }
+        val target = session
+        nativeAnswers[itemId] = ""
+        press(pressed) {
+            Press(
+                SendPlane.COMMAND,
+                verb = { app -> app.replyNativeRequest(target, itemId, decision, answers) },
+                settle = { answer -> (answer as? Op)?.let { nativeAnswers[itemId] = it.operationID } },
+                refused = { refusal ->
+                    if (refusal.state == ErrorState.INVALID_REQUEST || refusal.state == ErrorState.NOT_FOUND) nativeAnswers.remove(itemId)
+                },
+            )
+        }
+    }
+
+    private fun renderNativeAnswerVerdicts(bridge: FacadeBridge) {
+        nativeAnswers.toMap().forEach { (item, operation) ->
+            if (operation.isEmpty() || operation in nativeAnswerSaid) return@forEach
+            val answer = try { bridge.launchOutcome(operation) } catch (_: Exception) { return@forEach }
+            if (answer.operationId != operation || answer.code.isEmpty()) return@forEach
+            nativeAnswerSaid.add(operation)
+            if (answer.code == "native_admitted") return@forEach
+            if (answer.code != "outcome_unknown") {
+                nativeAnswers.remove(item)
+                nativeAnswerSaid.remove(operation)
+            }
+            say(PressFeedback.ofRefusal("Your machine could not confirm the native answer.", answer.message))
+        }
+    }
+
     private fun approvalAction(panel: ApprovalSheetPanel, decision: ApprovalDecision): View =
         actionButton(decision.label, CtaKind.MORE) {
             // THE ANSWER IS IN FLIGHT FROM THIS INSTANT, and the item it answers is what the
@@ -4659,6 +4704,7 @@ class PhoneSurface(
     private fun renderVerdicts(bridge: FacadeBridge, app: App) {
         renderKillVerdict(bridge)
         renderApprovalVerdict(bridge)
+        renderNativeAnswerVerdicts(bridge)
         // Wave R6's four, on the same program and for the same reason (review round 2): every
         // one of them has an ANSWER, and none of them was claimed.
         renderComposerVerdict(bridge, app)

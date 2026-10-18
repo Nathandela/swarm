@@ -254,6 +254,7 @@ fun transcriptView(
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -279,7 +280,7 @@ fun transcriptView(
             panel.blocks.forEach { block ->
                 transcriptBlockViews(
                     context, block, onApproval, onToolTap, onDetail,
-                    onOutput, onDiff, onDecision,
+                    onOutput, onDiff, onDecision, onNativeDecision,
                 ).forEach(::addView)
             }
         },
@@ -319,6 +320,7 @@ internal fun transcriptBlockViews(
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
 ): List<View> {
     val views = mutableListOf<View>()
     // BOUND BEFORE THE `when`, so the arm that uses it never depends on a smart cast surviving a
@@ -367,6 +369,7 @@ internal fun transcriptBlockViews(
                     onDiff?.let { open -> setOnClickListener { open(block.itemId) } }
                 }
             }
+            block.nativeRequest != null -> nativeRequestCard(context, block, onNativeDecision)
             block.approval || block.unrenderable -> decisionCard(context, block, onApproval, onDecision)
             else -> rowFor(context, block, onToolTap)
         },

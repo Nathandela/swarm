@@ -351,6 +351,7 @@ fun sessionDetailView(
      * build if one rides along. "Allow/Deny" is precisely the copy this surface may not author.
      */
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -434,7 +435,7 @@ fun sessionDetailView(
     column.addView(
         transcriptView(
             context, panel.transcript, onApproval, onToolTap, onDetail,
-            onOutput = onOutput, onDiff = onDiff, onDecision = onDecision,
+            onOutput = onOutput, onDiff = onDiff, onDecision = onDecision, onNativeDecision = onNativeDecision,
         ).apply { tag = DetailTag.TRANSCRIPT },
     )
 
@@ -629,6 +630,7 @@ fun sessionDetailRedraw(
      * watched them disappear while the agent was still waiting.
      */
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
 ): Boolean {
     if (drawn == null) return false
     // THE FIELDS A NEW CONVERSATION MOVES ON ITS OWN, and no others. Wave R6 gave the panel four
@@ -667,7 +669,7 @@ fun sessionDetailRedraw(
         slot.removeAllViews()
         val rebuilt = transcriptView(
             slot.context, next.transcript, onApproval, onToolTap, onDetail,
-            onOutput = onOutput, onDiff = onDiff, onDecision = onDecision,
+            onOutput = onOutput, onDiff = onDiff, onDecision = onDecision, onNativeDecision = onNativeDecision,
         )
         (rebuilt.parent as? ViewGroup)?.removeView(rebuilt)
         slot.addView(rebuilt)
@@ -677,7 +679,7 @@ fun sessionDetailRedraw(
         list, drawn.transcript.blocks, next.transcript.blocks, onApproval, onToolTap, onDetail,
         onOutput = onOutput,
         onDiff = onDiff,
-        onDecision = onDecision,
+        onDecision = onDecision, onNativeDecision = onNativeDecision,
         // THE SUPPRESSION IS PASSED IN, NOT DERIVED HERE. "Auto-scroll to the newest message is
         // suppressed while a decision is unanswered" is the drawing's own rule, and it is inert
         // unless somebody spends it: a transcript that kept following the agent would carry the
@@ -716,6 +718,7 @@ private fun patchConversation(
     // Carried for the same reason as the two above: a block rebuilt here must be the block the
     // column composed, and a decision rebuilt without its handler loses its buttons mid-question.
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
     decisionPending: Boolean = false,
 ) {
     val mutations = TranscriptIncremental.reconcileBlocks(drawn, next)
@@ -744,13 +747,15 @@ private fun patchConversation(
             is BlockMutation.Rebind -> {
                 if (mutation.index >= current.size) continue
                 val at = childOffsetOf(current, mutation.index, onDetail, onOutput)
+                val nativeDraft = nativeRequestDraft(list.getChildAt(at))
                 removeRun(list, at, transcriptBlockViewCount(current[mutation.index], onDetail, onOutput))
-                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff, onDecision)
+                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff, onDecision, onNativeDecision)
+                restoreNativeRequestDraft(nativeDraft, list.getChildAt(at))
                 current[mutation.index] = mutation.block
             }
             is BlockMutation.Insert -> {
                 val at = childOffsetOf(current, minOf(mutation.index, current.size), onDetail, onOutput)
-                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff, onDecision)
+                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff, onDecision, onNativeDecision)
                 current.add(minOf(mutation.index, current.size), mutation.block)
             }
         }
@@ -861,10 +866,11 @@ private fun insertRun(
     onOutput: ((String) -> Unit)?,
     onDiff: ((String) -> Unit)?,
     onDecision: ((View, String, ApprovalDecision) -> Unit)?,
+    onNativeDecision: ((View, String, String, String) -> Unit)?,
 ) {
     transcriptBlockViews(
         list.context, block, onApproval, onToolTap, onDetail,
-        onOutput = onOutput, onDiff = onDiff, onDecision = onDecision,
+        onOutput = onOutput, onDiff = onDiff, onDecision = onDecision, onNativeDecision = onNativeDecision,
     ).forEachIndexed { offset, view -> list.addView(view, at + offset) }
 }
 
