@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -92,10 +93,25 @@ func qualifyOpenCodeAdmission(operationID string, intent openCodeSendIntent, raw
 	}
 	return opencodebridge.Receipt{Identity: intent.Identity, OperationID: operationID, Status: "admitted", Kind: "prompt", TargetID: intent.Identity.RootID, MessageID: intent.MessageID, RequestHash: intent.TextHash, Agent: row.Info.Agent, Model: &opencodebridge.Model{ProviderID: row.Info.Model.ProviderID, ModelID: row.Info.Model.ModelID}, Variant: variant, SelectionBasis: "native_message_receipt", SelectionMessageID: intent.MessageID, NativeEffect: "observed_native_user_message"}, nil
 }
+func qualifyObservedOpenCodeAdmission(operationID string, intent openCodeSendIntent, input OpenCodeInput) (opencodebridge.Receipt, error) {
+	refuse := errors.New("native observed input does not prove admission")
+	if input.MessageID != intent.MessageID || !input.Classified || input.Synthetic || input.TextTruncated || input.At < intent.NotBeforeMS || !nativeSelectionText(input.Agent, 128) || !nativeSelectionText(input.ProviderID, 128) || !nativeSelectionText(input.ModelID, 256) || len(input.Variant) > 128 || strings.ContainsFunc(input.Variant, unicode.IsControl) {
+		return opencodebridge.Receipt{}, refuse
+	}
+	hash := sha256.Sum256([]byte(input.Text))
+	if hex.EncodeToString(hash[:]) != intent.TextHash {
+		return opencodebridge.Receipt{}, refuse
+	}
+	return opencodebridge.Receipt{Identity: intent.Identity, OperationID: operationID, Status: "admitted", Kind: "prompt", TargetID: intent.Identity.RootID, MessageID: intent.MessageID, RequestHash: intent.TextHash, Agent: input.Agent, Model: &opencodebridge.Model{ProviderID: input.ProviderID, ModelID: input.ModelID}, Variant: input.Variant, SelectionBasis: "native_observed_input", SelectionMessageID: intent.MessageID, NativeEffect: "observed_native_user_message"}, nil
+}
+
 func validOpenCodeIntent(operationID, local string, intent openCodeSendIntent) bool {
 	id := intent.Identity
-	return id.Version == 1 && id.WorkerID == local && id.NativeCreatedAtMS > 0 && id.SessionInstance == id.BackendGeneration && id.BackendGeneration != "" && id.Directory != "" && adapter.IsOpenCodeConversationID(id.RootID) && intent.NotBeforeMS > 0 && len(intent.TextHash) == 64 && intent.MessageID == openCodeMessageID(operationID, id)
+	generation, ge := hex.DecodeString(id.BackendGeneration)
+	hash, he := hex.DecodeString(intent.TextHash)
+	return id.Version == 1 && id.WorkerID == local && id.NativeCreatedAtMS > 0 && id.NativeCreatedAtMS <= 9007199254740991 && id.SessionInstance == id.BackendGeneration && ge == nil && len(generation) == 16 && strings.ToLower(id.BackendGeneration) == id.BackendGeneration && filepath.IsAbs(id.Directory) && filepath.Clean(id.Directory) == id.Directory && !strings.ContainsFunc(id.Directory, unicode.IsControl) && adapter.IsOpenCodeConversationID(id.RootID) && intent.NotBeforeMS >= id.NativeCreatedAtMS && intent.NotBeforeMS <= 9007199254740991 && he == nil && len(hash) == 32 && strings.ToLower(intent.TextHash) == intent.TextHash && intent.MessageID == openCodeMessageID(operationID, id)
 }
+
 func readOpenCodeEvidence(raw []byte) (openCodeEvidence, error) {
 	var evidence openCodeEvidence
 	if len(raw) == 0 {
@@ -104,7 +120,11 @@ func readOpenCodeEvidence(raw []byte) (openCodeEvidence, error) {
 	if json.Unmarshal(raw, &evidence) != nil {
 		return evidence, errors.New("native evidence unreadable")
 	}
-	if evidence.Version == 0 {
+	var shape struct {
+		Receipt json.RawMessage `json:"receipt"`
+	}
+	_ = json.Unmarshal(raw, &shape)
+	if len(shape.Receipt) == 0 {
 		var receipt opencodebridge.Receipt
 		if json.Unmarshal(raw, &receipt) != nil {
 			return evidence, errors.New("native receipt unreadable")
@@ -199,7 +219,7 @@ func (d *Daemon) semanticOperation(local, operationID string) (protocol.Semantic
 		return result, nil
 	}
 	evidence, err := readOpenCodeEvidence(rec.Evidence)
-	if err != nil || !admissionMatchesIntent(evidence.Receipt, operationID, intent) {
+	if err != nil || !admissionMatchesIntent(evidence.Receipt, operationID, intent) || evidence.Outcome != "" && evidence.OutcomeAt < intent.NotBeforeMS {
 		result.State = "uncertain"
 		result.Reason = "retained native receipt identity is unconfirmed"
 		return result, nil
@@ -255,6 +275,8 @@ func (d *Daemon) reconcileOpenCodeAdmission(local, operationID string, intent op
 	return qualifyOpenCodeAdmission(operationID, intent, raw)
 }
 
+const maxOpenCodeReceiptIndex = 100_000
+
 type openCodeOwnedInput struct {
 	operation string
 	intent    openCodeSendIntent
@@ -283,6 +305,10 @@ func (d *Daemon) trackOpenCodeIntent(local, operation string, intent openCodeSen
 		index = &openCodeOwnedIndex{generation: intent.Identity.BackendGeneration, inputs: map[string]openCodeOwnedInput{}}
 		d.nativeReceipts.sessions[local] = index
 	}
+	if _, exists := index.inputs[intent.MessageID]; !exists && len(index.inputs) >= maxOpenCodeReceiptIndex {
+		index.inputs = map[string]openCodeOwnedInput{}
+		index.loaded = false
+	}
 	if old, ok := index.inputs[intent.MessageID]; !ok || old.operation == operation {
 		index.inputs[intent.MessageID] = openCodeOwnedInput{operation: operation, intent: intent}
 	}
@@ -300,6 +326,9 @@ func (d *Daemon) ownedOpenCodeInputs(local string, view OpenCodeView) map[string
 	}
 	if !index.loaded {
 		for _, id := range d.core.SemanticRequestOperations(local) {
+			if len(index.inputs) >= maxOpenCodeReceiptIndex {
+				break
+			}
 			record, ok := d.core.ComposerOperation(id)
 			if !ok || record.Phase == idempotency.PhaseFailed {
 				continue
@@ -328,17 +357,22 @@ func (d *Daemon) checkpointOpenCodeOutcomes(local string, view OpenCodeView) {
 	owned := d.ownedOpenCodeInputs(local, view)
 	for _, input := range view.Inputs {
 		record, ok := owned[input.MessageID]
-		if !ok || !input.Classified || input.Synthetic || input.At < record.intent.NotBeforeMS || !qualifiedOpenCodeOutcome(input.Outcome, input.OutcomeSource, input.OutcomeAt) || (record.outcome == input.Outcome && record.source == input.OutcomeSource && record.at == input.OutcomeAt) {
+		if !ok || !input.Classified || input.Synthetic || input.At < record.intent.NotBeforeMS || input.OutcomeAt < input.At || !qualifiedOpenCodeOutcome(input.Outcome, input.OutcomeSource, input.OutcomeAt) || (record.outcome == input.Outcome && record.source == input.OutcomeSource && record.at == input.OutcomeAt) {
 			continue
 		}
-		// Admission may still be reconciled by the owner status read after a lost write reply.
 		for attempt := 0; attempt < 3; attempt++ {
 			current, ok := d.core.ComposerOperation(record.operation)
 			if !ok {
 				break
 			}
 			evidence, err := readOpenCodeEvidence(current.Evidence)
-			if err != nil || !admissionMatchesIntent(evidence.Receipt, record.operation, record.intent) {
+			if len(current.Evidence) == 0 {
+				receipt, qualificationErr := qualifyObservedOpenCodeAdmission(record.operation, record.intent, input)
+				if qualificationErr != nil {
+					break
+				}
+				evidence = openCodeEvidence{Version: 1, Receipt: receipt}
+			} else if err != nil || !admissionMatchesIntent(evidence.Receipt, record.operation, record.intent) {
 				break
 			}
 			if evidence.Outcome != "" && evidence.OutcomeAt > input.OutcomeAt {
@@ -346,7 +380,15 @@ func (d *Daemon) checkpointOpenCodeOutcomes(local string, view OpenCodeView) {
 			}
 			evidence.Outcome, evidence.OutcomeSource, evidence.OutcomeAt = input.Outcome, input.OutcomeSource, input.OutcomeAt
 			next, _ := json.Marshal(evidence)
-			if bytes.Equal(next, current.Evidence) || d.core.CheckpointSemanticReceipt(record.operation, current.Evidence, next) == nil {
+			saved := bytes.Equal(next, current.Evidence)
+			if !saved {
+				if len(current.Evidence) == 0 {
+					saved = d.core.ObserveSemanticReceipt(record.operation, next) == nil
+				} else {
+					saved = d.core.CheckpointSemanticReceipt(record.operation, current.Evidence, next) == nil
+				}
+			}
+			if saved {
 				d.nativeReceipts.mu.Lock()
 				if index := d.nativeReceipts.sessions[local]; index != nil && index.generation == view.Generation {
 					entry := index.inputs[input.MessageID]

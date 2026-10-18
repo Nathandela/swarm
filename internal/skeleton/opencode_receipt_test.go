@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/opencodebridge"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"path/filepath"
@@ -115,14 +117,80 @@ func TestOpenCodeTerminalCheckpointSurvivesViewEvictionAndDaemonRestart(t *testi
 	}
 }
 
-func TestOpenCodeObservedTerminalRetainsAdmissionWhenDispatchReplyWasLost(t *testing.T){
- f:=newOpenCodeSendFixture(t);f.dropReply.Store(true);id,_:=protocol.NewSemanticOperationID();_ =f.client.SemanticSend(id,f.request)
- rec,_:=f.d.core.ComposerOperation(id);var intent openCodeSendIntent;_ =json.Unmarshal(rec.Request,&intent)
- in:=OpenCodeInput{MessageID:intent.MessageID,Classified:true,Text:f.request.Text,At:intent.NotBeforeMS+1,Agent:"build",ProviderID:"fixture",ModelID:"fixture-model",Variant:"max",Outcome:OpenCodeOutcomeFailed,OutcomeSource:OpenCodeOutcomeSourceLive,OutcomeAt:intent.NotBeforeMS+2}
- view:=OpenCodeView{Root:intent.Identity.RootID,Generation:intent.Identity.BackendGeneration,Inputs:[]OpenCodeInput{in}}
- f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID,view)
- view.Inputs=nil;f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID,view)
- receipt,err:=f.client.SemanticOperation(f.request.Session,id)
- if err!=nil||receipt.State!="failed"||receipt.NativeMessageID!=intent.MessageID||receipt.Model!="fixture/fixture-model"||receipt.OutcomeSource!="live"{t.Fatalf("lostreplyterminal notretained: %+v %v",receipt,err)}
- if f.calls.Load()!=1{t.Fatal("terminalcheckpoint resubmitted")}
+func TestOpenCodeObservedTerminalRetainsAdmissionWhenDispatchReplyWasLost(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	f.dropReply.Store(true)
+	id, _ := protocol.NewSemanticOperationID()
+	_ = f.client.SemanticSend(id, f.request)
+	rec, _ := f.d.core.ComposerOperation(id)
+	var intent openCodeSendIntent
+	_ = json.Unmarshal(rec.Request, &intent)
+	in := OpenCodeInput{MessageID: intent.MessageID, Classified: true, Text: f.request.Text, At: intent.NotBeforeMS + 1, Agent: "build", ProviderID: "fixture", ModelID: "fixture-model", Variant: "max", Outcome: OpenCodeOutcomeFailed, OutcomeSource: OpenCodeOutcomeSourceLive, OutcomeAt: intent.NotBeforeMS + 2}
+	view := OpenCodeView{Root: intent.Identity.RootID, Generation: intent.Identity.BackendGeneration, Inputs: []OpenCodeInput{in}}
+	f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID, view)
+	view.Inputs = nil
+	f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID, view)
+	receipt, err := f.client.SemanticOperation(f.request.Session, id)
+	if err != nil || receipt.State != "failed" || receipt.NativeMessageID != intent.MessageID || receipt.Model != "fixture/fixture-model" || receipt.OutcomeSource != "live" {
+		t.Fatalf("lostreplyterminal notretained: %+v %v", receipt, err)
+	}
+	if f.calls.Load() != 1 {
+		t.Fatal("terminalcheckpoint resubmitted")
+	}
+}
+
+func TestOpenCodeEvidenceReadsEarlierRawReceiptWithoutChangingProof(t *testing.T) {
+	intent, raw := nativeReceiptFixture()
+	receipt, err := qualifyOpenCodeAdmission("semantic:owned", intent, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, _ := json.Marshal(receipt)
+	evidence, err := readOpenCodeEvidence(legacy)
+	if err != nil || evidence.Version != 1 || evidence.Receipt.MessageID != intent.MessageID || evidence.Receipt.Agent != "plan" {
+		t.Fatalf("earlier raw receipt was lost: %+v %v", evidence, err)
+	}
+}
+
+func TestOpenCodeExecutingReplayReconcilesWithoutAnotherNativeWrite(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	f.dropReply.Store(true)
+	id, _ := protocol.NewSemanticOperationID()
+	if f.client.SemanticSend(id, f.request) == nil {
+		t.Fatal("lost response claimed success")
+	}
+	f.rowAvailable.Store(true)
+	if err := f.client.SemanticSend(id, f.request); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := f.d.core.ComposerOperation(id)
+	if rec.Phase != idempotency.PhaseCompleted || f.calls.Load() != 1 {
+		t.Fatal("executing replay did not resolve through readonly exact history")
+	}
+}
+func TestOpenCodeExpiredOperationCanReconcileReadOnly(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	id := fmt.Sprintf("semantic:%d:%s", time.Now().Add(-2*time.Hour).UnixMilli(), strings.Repeat("e", 32))
+	hash := sha256.Sum256([]byte(f.request.Text))
+	intent := openCodeSendIntent{Identity: f.identity, MessageID: openCodeMessageID(id, f.identity), TextHash: hex.EncodeToString(hash[:]), NotBeforeMS: time.Now().UnixMilli()}
+	if _, _, err := f.d.core.ClaimComposerOperation(id, protocol.OpSemanticSend, f.binding.WorkerID, f.request.SessionInstance, "hash"); err != nil {
+		t.Fatal(err)
+	}
+	descriptor, _ := json.Marshal(intent)
+	if err := f.d.core.BindSemanticRequest(id, descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.core.BeginComposerOperation(id); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"info": map[string]any{"id": intent.MessageID, "sessionID": intent.Identity.RootID, "role": "user", "agent": "plan", "model": map[string]string{"providerID": "fixture", "modelID": "fixture-model"}, "time": map[string]int64{"created": intent.NotBeforeMS + 1}}, "parts": []any{map[string]any{"id": "prt_exact", "sessionID": intent.Identity.RootID, "messageID": intent.MessageID, "type": "text", "text": f.request.Text}}})
+	f.nativeRow.Store(json.RawMessage(raw))
+	f.rowAvailable.Store(true)
+	receipt, err := f.client.SemanticOperation(f.request.Session, id)
+	if err != nil || receipt.State != "admitted" || receipt.NativeMessageID != intent.MessageID || receipt.Agent != "plan" || f.calls.Load() != 0 {
+		t.Fatalf("expired readonly recovery refused or submitted: %+v %v", receipt, err)
+	}
+	if f.client.SemanticSend(id, f.request) == nil || f.calls.Load() != 0 {
+		t.Fatal("expired receipt granted fresh execution")
+	}
 }
