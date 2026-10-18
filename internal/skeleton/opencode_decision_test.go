@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -207,5 +208,57 @@ func TestNativeDecisionUsesApprovalPolicyAndSignedAnswers(t *testing.T) {
 		if authorizeCommand(reg, now, auth) == nil {
 			t.Fatal("changed answers retained a valid device signature")
 		}
+	}
+}
+
+func TestNativeDecisionStatusRefusesContradictoryOrUnboundTerminalEvidence(t *testing.T) {
+	f, body := newNativeDecisionFixture(t)
+	for _, tc := range []struct {
+		name             string
+		success, proof   bool
+		instance, target string
+	}{
+		{name: "failed claims admission"},
+		{name: "wrong instance", success: true, proof: true, instance: "another-instance"},
+		{name: "wrong native target", success: true, proof: true, target: "ses_other"},
+		{name: "completed without native proof", success: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "native-corrupt-" + strings.ReplaceAll(tc.name, " ", "-")
+			hash := hex.EncodeToString(schema.NativeDecisionContentHash(&body))
+			if _, _, err := f.d.core.ClaimComposerOperation(id, protocol.OpNativeDecide, f.binding.WorkerID, body.SessionInstance, hash); err != nil {
+				t.Fatal(err)
+			}
+			if tc.proof {
+				intent := nativeDecisionIntent{Identity: f.identity, Request: body}
+				if err := f.d.core.BindNativeDecisionRequest(id, mustNativeDecisionJSON(t, intent)); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.d.core.BeginComposerOperation(id); err != nil {
+					t.Fatal(err)
+				}
+				evidence := opencodebridge.Receipt{Identity: f.identity, OperationID: id, Kind: body.Kind, TargetID: body.NativeSessionID, RequestID: body.RequestID, Status: "admitted", NativeEffect: nativeDecisionEffect(body)}
+				if err := f.d.core.ObserveNativeDecisionReceipt(id, mustNativeDecisionJSON(t, evidence)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			receipt := nativeDecisionResult(id, body)
+			receipt.State = "admitted"
+			if tc.instance != "" {
+				receipt.SessionInstance = tc.instance
+			}
+			if tc.target != "" {
+				receipt.NativeSessionID = tc.target
+			}
+			if err := f.d.core.CommitComposerOperation(id, mustNativeDecisionJSON(t, nativeDecisionOutcome{Receipt: receipt}), tc.success); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := f.client.NativeDecisionStatus(body.Session, id); err == nil {
+				t.Fatalf("contradictory terminal proof became a receipt: %+v", got)
+			}
+		})
+	}
+	if f.calls.Load() != 0 {
+		t.Fatal("status verification wrote a native decision")
 	}
 }

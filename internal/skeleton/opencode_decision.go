@@ -383,8 +383,22 @@ func (d *Daemon) NativeDecisionStatus(local, id string) (protocol.NativeDecision
 	}
 	if record.Phase == idempotency.PhaseCompleted || record.Phase == idempotency.PhaseFailed {
 		var outcome nativeDecisionOutcome
-		if json.Unmarshal(record.Outcome, &outcome) != nil || outcome.Receipt.OperationID != id || outcome.Receipt.Session != protocol.NamespacedID(d.machineID(), local) {
+		if json.Unmarshal(record.Outcome, &outcome) != nil || outcome.Receipt.OperationID != id || outcome.Receipt.Session != protocol.NamespacedID(d.machineID(), local) || outcome.Receipt.SessionInstance != record.SessionInstance ||
+			record.Phase == idempotency.PhaseCompleted && outcome.Receipt.State != "admitted" || record.Phase == idempotency.PhaseFailed && (outcome.Receipt.State != "rejected" || outcome.Receipt.NativeEffect != "none") {
 			return protocol.NativeDecisionReceipt{}, errors.New("native decision receipt custody is unconfirmed")
+		}
+		var intent nativeDecisionIntent
+		if len(record.Request) > 0 {
+			if json.Unmarshal(record.Request, &intent) != nil || hex.EncodeToString(schema.NativeDecisionContentHash(&intent.Request)) != record.RequestHash || intent.Identity.WorkerID != local || intent.Identity.RootID != intent.Request.RootID || intent.Identity.BackendGeneration != intent.Request.Generation || intent.Identity.NativeCreatedAtMS <= 0 ||
+				outcome.Receipt.Session != intent.Request.Session || outcome.Receipt.SessionInstance != intent.Request.SessionInstance || outcome.Receipt.RootID != intent.Request.RootID || outcome.Receipt.Generation != intent.Request.Generation || outcome.Receipt.NativeSessionID != intent.Request.NativeSessionID || outcome.Receipt.RequestID != intent.Request.RequestID || outcome.Receipt.Kind != intent.Request.Kind {
+				return protocol.NativeDecisionReceipt{}, errors.New("native decision receipt differs from its durable intent")
+			}
+		}
+		if record.Phase == idempotency.PhaseCompleted {
+			var proof opencodebridge.Receipt
+			if len(record.Request) == 0 || json.Unmarshal(record.Evidence, &proof) != nil || proof.Status != "admitted" || proof.Identity != intent.Identity || proof.OperationID != id || proof.Kind != intent.Request.Kind || proof.TargetID != intent.Request.NativeSessionID || proof.RequestID != intent.Request.RequestID || proof.NativeEffect != nativeDecisionEffect(intent.Request) || outcome.Receipt.NativeEffect != proof.NativeEffect {
+				return protocol.NativeDecisionReceipt{}, errors.New("native decision admission has no matching durable evidence")
+			}
 		}
 		return outcome.Receipt, nil
 	}
