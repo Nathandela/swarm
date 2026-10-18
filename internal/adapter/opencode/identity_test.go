@@ -31,15 +31,3 @@ func TestNativeConversationIDValidation(t *testing.T) {
 		}
 	}
 }
-
-func TestResumeRejectsUnsafeNativeIdentity(t *testing.T) {
-	for _, id := range []string{"--help", "ses_abcdefghij", "ses_0123456789abcdef0123456789abcdef/other"} {
-		argv, err := New().Resume(adapter.ResumeSpec{ConversationID: id})
-		if err == nil || len(argv) != 0 {
-			t.Fatalf("unsafe native identity composed argv: %v, %v", argv, err)
-		}
-		if strings.Contains(err.Error(), id) {
-			t.Fatal("identity refusal must not echo the supplied token")
-		}
-	}
-}

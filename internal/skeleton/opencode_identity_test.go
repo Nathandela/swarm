@@ -27,6 +27,25 @@ func TestComposeExternalOpenCodeIdentity(t *testing.T) {
 	}
 }
 
+func TestComposeExternalOpenCodeRefusesUnsafeIdentityBeforeResolution(t *testing.T) {
+	for _, id := range []string{"--help", "ses_abcdefghij", "ses_0123456789abcdef0123456789abcdef/other"} {
+		resolved := false
+		_, err := composeLaunchSpec(daemon.LaunchSpec{
+			AgentType: "opencode", Cwd: "/work",
+			Options: map[string]string{protocol.OptionResumeConversationID: id},
+		}, testEndpoint, "", srcGetter("", persist.Meta{}), func(name string, env []string) (string, error) {
+			resolved = true
+			return stubLookPath(name, env)
+		})
+		if err == nil || !strings.Contains(err.Error(), "identity is invalid") || resolved {
+			t.Fatalf("unsafe identity reached argv resolution: resolved=%v err=%v", resolved, err)
+		}
+		if strings.Contains(err.Error(), id) {
+			t.Fatal("identity refusal must not echo the supplied token")
+		}
+	}
+}
+
 func TestExternalOpenCodeValidatesBeforeDeduplication(t *testing.T) {
 	for _, tc := range []struct {
 		id   string

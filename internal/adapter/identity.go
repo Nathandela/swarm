@@ -71,6 +71,26 @@ func IsCanonicalConversationID(id string) bool {
 	return true
 }
 
+// IsOpenCodeConversationID accepts 1.19.3's 26 alphanumeric native suffix or
+// a caller-owned 32-character lowercase hex suffix.
+func IsOpenCodeConversationID(id string) bool {
+	if (len(id) != 30 && len(id) != 36) || id[:4] != "ses_" {
+		return false
+	}
+	for i := 4; i < len(id); i++ {
+		c := id[i]
+		digit := c >= '0' && c <= '9'
+		if len(id) == 36 {
+			if !digit && (c < 'a' || c > 'f') {
+				return false
+			}
+		} else if !digit && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
 // CanonicalTopLevelConversationID reads exactly one named string field from one
 // top-level JSON object. It rejects duplicate keys (including duplicates with the
 // same value), trailing JSON and oversized bodies so an adapter cannot guess an

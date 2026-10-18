@@ -1059,7 +1059,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		if spec.Options[protocol.OptionResumeFrom] != "" {
 			return persist.Meta{}, fmt.Errorf("resume: external conversation id cannot be combined with resume_from")
 		}
-		if !adapter.IsCanonicalConversationID(conversationID) {
+		if !validProviderConversationID(spec.AgentType, conversationID) {
 			return persist.Meta{}, fmt.Errorf("resume: external conversation identity is invalid")
 		}
 		a.externalResumeMu.Lock()
@@ -1343,7 +1343,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if spec.Options[protocol.OptionResumeFrom] != "" {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: external conversation id cannot be combined with resume_from")
 		}
-		if !adapter.IsCanonicalConversationID(conversationID) {
+		if !validProviderConversationID(spec.AgentType, conversationID) {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: external conversation identity is invalid")
 		}
 		if spec.AgentType == "codex" && spec.Options["sandbox"] != "" {
@@ -1685,7 +1685,7 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 // unrelated session's conversation", which is both a wrong-context handoff and a
 // cross-session content disclosure. Guessing here is strictly worse than not guessing.
 func handsOffConversationID(local string, source persist.Meta, resolver resumeHistoryResolver) (string, error) {
-	if adapter.IsCanonicalConversationID(source.ConversationID) {
+	if validProviderConversationID(source.AgentType, source.ConversationID) {
 		return source.ConversationID, nil
 	}
 	// Unlike the resume path's recovery this neither refuses a running source nor
@@ -1696,7 +1696,7 @@ func handsOffConversationID(local string, source persist.Meta, resolver resumeHi
 	provider := source.AgentType
 	switch result.Outcome {
 	case resumeHistoryFound:
-		if !adapter.IsCanonicalConversationID(result.ConversationID) {
+		if !validProviderConversationID(source.AgentType, result.ConversationID) {
 			return "", fmt.Errorf("handoff: %s conversation history returned an unsafe identity", provider)
 		}
 		return result.ConversationID, nil

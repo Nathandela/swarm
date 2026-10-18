@@ -110,6 +110,10 @@ func (opencodeAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 	return []string{binary, "--session", spec.ConversationID}, nil
 }
 
+func (opencodeAdapter) IsValidConversationID(id string) bool {
+	return adapter.IsOpenCodeConversationID(id)
+}
+
 // ExtractConversationID recovers the session id from the raw capture, falling
 // back to the rendered grid. It is total (a nil/garbage grid and tail never
 // panic) and deterministic; ok==true implies a non-empty id.

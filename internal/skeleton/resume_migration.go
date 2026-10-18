@@ -14,6 +14,19 @@ type resumeRecoveryCall struct {
 	err  error
 }
 
+// Only OpenCode has qualified non-UUID external/history identities here.
+func validProviderConversationID(provider, id string) bool {
+	if provider != "opencode" && !adapter.IsCanonicalConversationID(id) {
+		return false
+	}
+	if ad, ok := registry.New(provider); ok {
+		if validator, ok := adapter.AsConversationIDValidator(ad); ok {
+			return validator.IsValidConversationID(id)
+		}
+	}
+	return adapter.IsCanonicalConversationID(id)
+}
+
 // ensureResumeConversationID is a bounded per-source singleflight. The map holds
 // only in-flight calls and is pruned as each completes; unrelated sources resolve
 // concurrently while a burst of retries for one source performs one disk scan.
@@ -108,7 +121,7 @@ func (a *coreAPI) recoverResumeConversationID(local string, source persist.Meta)
 	case resumeHistoryUnreadable:
 		return fmt.Errorf("resume: could not read %s conversation history safely", provider)
 	case resumeHistoryFound:
-		if !adapter.IsCanonicalConversationID(result.ConversationID) {
+		if !validProviderConversationID(source.AgentType, result.ConversationID) {
 			return fmt.Errorf("resume: %s conversation history returned an unsafe identity", provider)
 		}
 	default:
