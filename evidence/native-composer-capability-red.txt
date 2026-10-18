@@ -1,0 +1,8 @@
+2026/10/18 19:58:09 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- FAIL: TestOpenCodeComposerCapabilityNeedsCurrentQualifiedProjection (4.61s)
+    opencode_native_composer_test.go:12: qualified native composer not independently available: {NativeInteractionVersion:2 NativeComposer:false Provider:opencode ProviderVersion: AdapterRevision:r8 SessionInstance:8bb03d2ccdef0f2f1f35e4cca4472a7c StructuredChat:false TerminalFallback:true TerminalControl:true Interrupt:false}
+--- FAIL: TestOpenCodeComposerCapabilityCannotRecoverFromDiskRecordAlone (0.00s)
+    opencode_native_composer_test.go:36: persisted record restored native authority before rejoin: {NativeInteractionVersion:0 NativeComposer:true Provider:opencode ProviderVersion: AdapterRevision: SessionInstance:instance StructuredChat:false TerminalFallback:true TerminalControl:false Interrupt:false}
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	5.165s
+FAIL
