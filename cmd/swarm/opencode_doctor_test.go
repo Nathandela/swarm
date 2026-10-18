@@ -21,11 +21,15 @@ import (
 func TestDoctorOpenCodeChecksExactPrivateBindingWithoutSubmitting(t *testing.T) {
 	for _, scenario := range []string{"healthy", "symlink-state", "foreign-ready", "missing-socket", "uncertain-initial"} {
 		t.Run(scenario, func(t *testing.T) {
-			root, err := os.MkdirTemp("/private/tmp", "ocdr-")
+			root, err := os.MkdirTemp("/tmp", "ocdr-")
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = os.RemoveAll(root) })
+			root, err = filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
 			dir := filepath.Join(root, "worker")
 			if err := os.Mkdir(dir, 0o700); err != nil {
 				t.Fatal(err)
