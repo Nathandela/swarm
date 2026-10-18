@@ -18,6 +18,13 @@ An **interaction item** is one durable, replayable unit of a conversation: a mes
 run, a file change, an approval, a plan revision, a status marker. The phone renders a
 transcript of items and nothing else.
 
+The additive native v2 history page is a read-only exception to journal carriage:
+it contains imported replacement snapshots under `Control.native_history`, with
+no fabricated journal cursor. See [native history protocol](protocol.md#composer_send--turn_interrupt--interaction_history--interaction_detail-wave-r6).
+These pages cannot grant request authority, operation ownership or input outcome
+proof; their cursor belongs to the native source and is retained separately in the
+encrypted phone cache.
+
 > AMENDED BY ADR-017 (2026-08-15): the no-grid rule is re-scoped to `structured_chat` sessions, not repealed. For a `structured_chat` session there is no terminal emulation and no raw grid on the phone (ADR-009), unamended. A `terminal_fallback` session (ADR-017 T1-T4 — incomplete providers, plus a version-skewed Claude or Codex build per T3's *Version skew* row; never a healthy `structured_chat` session, T2 rule 4) may render the machine-sanitized `TerminalViewV1` snapshot instead — never raw PTY bytes, never a VT parser on the phone — and never promotes anything it shows into this transcript (ADR-017 T10).
 
 > SUPERSEDED ON ANDROID BY ADR-017 (2026-08-30): every open session renders this interaction

@@ -115,7 +115,8 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `native_requests` | `*NativeRequestsReq` | Owner-only, negotiated native pending-request read; no selectors lists bounded summaries, exact request/native-session selectors return one full authoritative card. |
 | `native_requests_result` | `*NativeRequestsReply` | Owner native request summaries or one full bound request card; unknown scope or clipped details never issue write authority. |
 | `turn_interrupt`   | `*TurnInterruptReq` | Wave R6 `turn_interrupt` body, added by the review fix-pack (finding B7): the semantic Stop's subject under the wire name `turn_interrupt`, carrying `session` / `expected_turn`, bound into the device signature via `TurnInterruptContentHash` so a gateway cannot re-point a valid Stop at a different turn. `expected_turn` is REQUIRED and non-empty — the op was BODYLESS when it landed, and a Stop with no turn coordinate typed the cancel sequence into whatever turn was current on arrival, including one the owner had just started at the terminal |
-| `interaction_history` | `*InteractionHistoryReq` | Wave R6 `interaction_history` body (Mirror M3.1, ADR-014): the unsigned paged read under the wire name `interaction_history`, carrying `session` / `before_item` / `limit`; non-empty `before_item` means strictly older than that item, empty means the newest retained page; the reply rides the existing `journal` carrier, ascending by cursor |
+| `interaction_history` | `*InteractionHistoryReq` | Unsigned paged read carrying `session` / `before_item` / `limit`; optional `native` / `native_cursor` select imported native history. The ordinary reply uses `journal`; native pages use `native_history`. |
+| `native_history` | `*NativeHistoryPage` | Native history reply: version `v:2`, imported replacement `items`, exact opaque `next_cursor`, `floor` and stable native `scope`; separate from journal cursors and live authority. |
 | `interaction_detail` | `*InteractionDetailReq` | Wave R6 `interaction_detail` body (Mirror M3.3, IS-CAP-2): the unsigned detail read under the wire name `interaction_detail`, carrying `session` / `item_id`; the reply is exactly one `journal` record whose `item` is the FULL pre-truncation body, or the sealed `unavailable` refusal outside retention (IS-CAP-3) |
 | `history_floor`    | bool                | Wave R6 `interaction_history` reply: nothing older than the returned page is retained, so the phone renders a retention floor instead of offering "load earlier" forever (Mirror M3.1) |
 | `terminal_control_begin` | `*TerminalControlBeginReq` | Wave R8 `terminal_control_begin` compatibility body (ADR-017 T6; no production Android caller): the SIGNED request that mints one non-transferable control generation over a `terminal_fallback` session, under the wire name `terminal_control_begin`, carrying `session` / `session_instance` / `profile` / `expires_at`, bound into the device signature via `TerminalControlBeginContentHash` so a gateway cannot re-point a valid begin at another session, another incarnation or another profile. The session instance is REQUIRED: a generation that binds no incarnation authorises raw bytes into the PTY that replaced the one the user was reading |
@@ -925,6 +926,16 @@ may publish an ordered recovery `{true,false,false}` for that exact instance. On
 the composer accepted again; the history marker is not erased. Until then the refusal is
 **`structured_unsupported`** and nothing is typed.
 
+Managed OpenCode uses an independent `native_composer` capability beside
+`native_interaction_version:2`. It requires the current qualified native Prompt
+sink, exact worker instance and healthy observer; it is never restored from a
+saved capability record. Its generic `structured_chat` descriptor remains false.
+The phone's existing signed `composer_send` body enters durable native input
+custody with source `phone`, under the same shim/controller/draft and unknown-input
+fences as owner semantic messages. Admission requires the exact native user
+message, with the full input hash qualifying a clipped echo. It does not use the
+legacy hook/text attribution described above.
+
 > Compatibility note. A capability record that exists and says false is refused; a durable
 > gap marker with no record is also refused. Absence with no marker retains the narrow local
 > startup-window compatibility behavior. Remote routing remains fail-closed on an absent or
@@ -1013,6 +1024,25 @@ message that stops early. ADR-014 A6 carries the full accounting. `interaction_d
 whose `item` is the FULL pre-truncation body retained at capture time; outside the bounded
 retention window it answers the sealed **`unavailable`** with no records at all (IS-CAP-3:
 never a partial body presented as whole).
+
+For qualified OpenCode content, `interaction_history` may carry `native:true` and
+an opaque `native_cursor` (at most 8192 bytes). The read retains the same sealed
+epoch envelope, negotiated journal capability and kill-switch gates; it does not
+gain a device signature or mutation body version. The reply carries no `journal`
+records: `native_history` has `v:2`, at most 200 imported replacement `items`, a
+64-character lowercase hexadecimal scope, `next_cursor` and `floor`. The complete
+encoded page is bounded to 512 KiB. A non-floor page must return a native cursor;
+a floor page must not. An unrepresentable whole native row is refused rather than
+advancing a cursor past omitted content.
+
+Native scope binds the physical profile/root/creation identity. Native cursors
+never become Swarm journal cursors or journal high-water marks. Imported pages
+cannot contain pending request authority, input outcomes, owned operation IDs or
+input hashes. They merge atomically into the bounded encrypted phone cache;
+current live rows win. The exact pending read, current worker instance, scope and
+accepted reply sequence fence late or foreign pages. Explicit newest-page reads
+reset native paging; a capacity refusal preserves the prior cursor. Ordinary
+interaction history retains the journal behavior above.
 
 ### `terminal_subscribe` / `terminal_snapshot`
 
