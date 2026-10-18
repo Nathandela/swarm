@@ -294,6 +294,9 @@ func (s *Store) transition(operationID string, phase Phase, outcome []byte, setO
 	if !ok {
 		return fmt.Errorf("idempotency: unknown operation_id %q", operationID)
 	}
+	if phase == PhaseFailed && rec.Action == "semantic_send" && len(rec.Evidence) > 0 {
+		return errors.New("idempotency: native evidence cannot become a failed delivery")
+	}
 	rec.Phase = phase
 	rec.UpdatedAt = s.clock()
 	if setOutcome {
@@ -537,4 +540,43 @@ func (s *Store) rewriteLocked(kept []Record) error {
 func mustMarshal(rec Record) []byte {
 	b, _ := json.Marshal(rec) // Record is always marshalable
 	return b
+}
+
+// CompareEvidence checkpoints newer qualified evidence without changing delivery state.
+func (s *Store) CompareEvidence(operationID string, expected, next []byte) error {
+	if len(expected) == 0 || len(next) == 0 || len(next) > 64<<10 || !json.Valid(next) {
+		return errors.New("idempotency: invalid evidence checkpoint")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.records[operationID]
+	if !ok || !bytes.Equal(rec.Evidence, expected) {
+		return errors.New("idempotency: stale evidence checkpoint")
+	}
+	if rec.Phase != PhaseExecuting && rec.Phase != PhaseOutcomeUnknown && rec.Phase != PhaseCompleted {
+		return errors.New("idempotency: evidence checkpoint has no native execution")
+	}
+	if bytes.Equal(expected, next) {
+		return nil
+	}
+	rec.Evidence = append(json.RawMessage(nil), next...)
+	rec.UpdatedAt = s.clock()
+	if err := s.appendLocked(rec); err != nil {
+		return err
+	}
+	s.records[operationID] = rec
+	return nil
+}
+
+// RequestOperations builds a worker's derived request index once, without copying payloads.
+func (s *Store) RequestOperations(action, session string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []string
+	for id, rec := range s.records {
+		if rec.Action == action && rec.SessionID == session && len(rec.Request) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

@@ -101,6 +101,7 @@ type coreAPI struct {
 	// loudly rather than pretending (ApproveInteraction's rule).
 	composer              func(machine, operationID string, req protocol.ComposerSendReq) (protocol.ErrorCode, error)
 	composerTransactional func(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error)
+	semanticStatus        func(local, operationID string) (protocol.SemanticMessageReceipt, error)
 	semanticComposer      func(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error)
 	interrupt             func(machine, operationID string, req protocol.TurnInterruptReq) (protocol.ErrorCode, error)
 	history               func(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error)
@@ -599,6 +600,15 @@ func (a *coreAPI) SemanticSendTransactional(machine, operationID string, req pro
 	}
 	return a.semanticComposer(machine, operationID, req, begin)
 }
+
+func (a *coreAPI) SemanticOperation(local, operationID string) (protocol.SemanticMessageReceipt, error) {
+	if a.semanticStatus == nil {
+		return protocol.SemanticMessageReceipt{}, errors.New("native semantic receipt reader is unavailable")
+	}
+	return a.semanticStatus(local, operationID)
+}
+
+var _ protocol.SemanticOperationReader = (*coreAPI)(nil)
 
 var _ protocol.SemanticComposerSender = (*coreAPI)(nil)
 

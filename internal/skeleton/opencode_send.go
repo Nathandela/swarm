@@ -96,6 +96,7 @@ func (d *Daemon) sendOpenCodeSemantic(local, operationID string, req protocol.Co
 		if err := d.core.BindSemanticRequest(operationID, raw); err != nil {
 			return err
 		}
+		d.trackOpenCodeIntent(local, operationID, intent)
 		if begin == nil {
 			return errors.New("OpenCode requires a durable native execution boundary")
 		}
@@ -119,11 +120,7 @@ func (d *Daemon) sendOpenCodeSemantic(local, operationID string, req protocol.Co
 		if receipt.Status != "admitted" || receipt.Identity != identity || receipt.Kind != "prompt" || receipt.TargetID != b.RootID || receipt.MessageID != intent.MessageID || receipt.Agent == "" || receipt.Model == nil || receipt.Model.ProviderID == "" || receipt.Model.ModelID == "" || receipt.SelectionBasis != "native_session_selection" {
 			return fmt.Errorf("%w: exact native user admission is unconfirmed", protocol.ErrComposerOutcomeUnknown)
 		}
-		evidence, err := json.Marshal(receipt)
-		if err != nil {
-			return fmt.Errorf("%w: cannot encode native receipt", protocol.ErrComposerOutcomeUnknown)
-		}
-		if err := d.core.ObserveSemanticReceipt(operationID, evidence); err != nil {
+		if err := d.recordOpenCodeAdmission(operationID, intent, receipt); err != nil {
 			return fmt.Errorf("%w: native receipt persistence failed", protocol.ErrComposerOutcomeUnknown)
 		}
 		return nil

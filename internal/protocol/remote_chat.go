@@ -229,6 +229,14 @@ func (cc *clientConn) handleComposerSend(c Control) {
 				cc.replyComposerCached(c.SessionID, raw)
 				return
 			case composerPhaseExecuting, composerPhaseOutcomeUnknown:
+				if reader, ok := cc.srv.d.(SemanticOperationReader); ok && c.Op == OpSemanticSend {
+					_, _ = reader.SemanticOperation(local, c.OperationID)
+					phase, raw, readErr := exec.ClaimComposerOperation(c.OperationID, action, local, body.SessionInstance, requestHash)
+					if readErr == nil && phase == composerPhaseCompleted {
+						cc.replyComposerCached(c.SessionID, raw)
+						return
+					}
+				}
 				cc.replyErrorCode("composer_send: prior attempt outcome unknown; message was not replayed", schema.CodeOutcomeUnknown)
 				return
 			case composerPhasePrepared:

@@ -48,6 +48,8 @@ func (cc *clientConn) handleSemanticStatus(c Control) {
 		cc.replyErrorCode("semantic receipts are not supported by this daemon", CodeNotImplemented)
 		return
 	}
+	unlock := cc.srv.lockComposerOperation(c.OperationID)
+	defer unlock()
 	receipt, err := reader.SemanticOperation(local, c.OperationID)
 	if err != nil {
 		cc.replyError("semantic receipt: " + err.Error())
