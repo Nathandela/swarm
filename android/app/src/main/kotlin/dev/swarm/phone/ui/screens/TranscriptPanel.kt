@@ -833,6 +833,7 @@ object TranscriptScreen {
     private fun openTurnOf(items: List<InteractionItem>): String {
         var open = ""
         for (item in items) {
+            if (item.kind in NATIVE_KINDS) continue
             open = item.turnId
             if (item.kind == AGENT_MESSAGE && terminal(item.status)) open = ""
         }
@@ -913,7 +914,7 @@ object TranscriptScreen {
                 )
             }
 
-            TOOL_RUN -> {
+            TOOL_RUN, "tool_snapshot" -> {
                 // agents-tracker-dwwv.1.2: the one place `status` (§4) is read at all. `RUNNING`
                 // is deliberately NOT the wire's own word -- unlike a plan step's `in_progress`
                 // (shown verbatim, `plan_update` below), a lone tool_run has no sibling values
@@ -972,7 +973,7 @@ object TranscriptScreen {
             // here and drew the unified diff into the flow on every changed file, unconditionally
             // -- see [FileChangeChip] for what that cost and for the answer to the argument that
             // kept it. The sentence is unchanged; what moved is where the diff is drawn.
-            FILE_CHANGE -> TranscriptBlock(
+            FILE_CHANGE, "file_snapshot" -> TranscriptBlock(
                 itemId = item.itemId,
                 kind = item.kind,
                 line = joined(fields.change, movedPath(fields), sizeOf(fields)),
@@ -992,7 +993,7 @@ object TranscriptScreen {
                 },
             )
 
-            PLAN_UPDATE -> TranscriptBlock(
+            PLAN_UPDATE, "plan_snapshot" -> TranscriptBlock(
                 itemId = item.itemId,
                 kind = item.kind,
                 // ONE BLOCK AND NOT ONE ROW PER STEP. IS-PLAN-1 makes a plan_update latest-state
@@ -1001,6 +1002,30 @@ object TranscriptScreen {
                 // item's row land between two of its steps.
                 line = fields.steps.joinToString(separator = "\n") { joined(it.state, it.text) },
             )
+
+            "message_snapshot" -> {
+                if (fields.nativeRole == "user") {
+                    val attributed = item.source == "owner" || item.source == "phone"
+                    TranscriptBlock(itemId=item.itemId,kind=item.kind,line=item.text,bubble=attributed,
+                        secondary=if (attributed) "" else if (item.source == "derived") "Automatic input" else "Native input",
+                        sendState=BubbleState.SETTLED)
+                } else {
+                    val markdown=Markdown.parse(item.text)
+                    TranscriptBlock(itemId=item.itemId,kind=item.kind,line=Markdown.plainText(markdown),
+                        markdown=markdown,well=Markdown.codeText(markdown))
+                }
+            }
+            "permission_request", "question_request" -> {
+                val request=fields.nativeRequest
+                val available=fields.nativeAuthorityValid && !item.resolved && !item.truncated && !item.degraded && item.status == STATUS_IN_PROGRESS
+                TranscriptBlock(itemId=item.itemId,kind=item.kind,
+                    line=request?.let { if (it.kind == "permission") it.permission else it.questions.joinToString("\n") { question -> question.question } } ?: "Native request unavailable",
+                    nativeRequest=request,nativeAuthorityValid=available,
+                    locked=!available || answering.contains(item.itemId),unrenderable=request==null,
+                    askedAt=askedLabel(item.tsUnixMs))
+            }
+            "input_outcome" -> TranscriptBlock(itemId=item.itemId,kind=item.kind,
+                line=(if (fields.nativeProvenance == "imported") "Earlier input " else "Input ") + item.status)
 
             APPROVAL_REQUEST -> approvalBlock(item, answering)
 
@@ -1346,6 +1371,7 @@ object TranscriptScreen {
     // as English -- see the file KDoc.
     private const val USER_MESSAGE = "user_message"
     private const val AGENT_MESSAGE = "agent_message"
+    private val NATIVE_KINDS = setOf("message_snapshot", "tool_snapshot", "file_snapshot", "plan_snapshot", "permission_request", "question_request", "input_outcome", "request_set")
     private const val TOOL_RUN = "tool_run"
     private const val FILE_CHANGE = "file_change"
     private const val APPROVAL_REQUEST = "approval_request"
