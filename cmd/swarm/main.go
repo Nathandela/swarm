@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|doctor|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|message|peek|doctor|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -81,6 +81,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reatta
   swarm kill       terminate a session
   swarm send       type into a session <session>
                    (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
+  swarm message    submit a semantic message <session> --text s [--operation-id id]
   swarm peek       print a session's current screen <session> [--lines N]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)
@@ -166,6 +167,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchAgentVerb(runKill, args[1:], nil, stdout, stderr)
 	case "send":
 		return dispatchAgentVerb(runSend, args[1:], nil, stdout, stderr)
+	case "message":
+		return dispatchAgentVerb(runMessage, args[1:], []string{protocol.CapSemanticSend}, stdout, stderr)
 	case "peek":
 		return dispatchAgentVerb(runPeek, args[1:], nil, stdout, stderr)
 	case "version", "--version":

@@ -17,7 +17,7 @@ type semanticCall struct {
 
 type fakeSemanticClient struct {
 	*fakeSteerClient
-	messages []semanticCall
+	messages   []semanticCall
 	messageErr error
 }
 
@@ -37,7 +37,9 @@ func (c *fakeSemanticClient) SemanticSend(operation string, req protocol.Compose
 func TestMessageUsesExactSemanticPayloadAndIncarnation(t *testing.T) {
 	c := newFakeSemanticClient()
 	id, err := protocol.NewSemanticOperationID()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	var out, stderr bytes.Buffer
 	payload := "Please inspect this.\nKeep the line break."
 	if code := runMessage([]string{"local/ami", "--text", payload, "--operation-id", id}, c, &out, &stderr); code != 0 {
@@ -58,9 +60,12 @@ func TestMessageRefusesLegacyOrUnboundSessionsWithoutTerminalFallback(t *testing
 			c := newFakeSemanticClient()
 			var client agentClient = c
 			switch kind {
-			case "legacy": client = c.fakeSteerClient
-			case "unbound": c.sessions[0].Capabilities = nil
-			case "uncertain": c.messageErr = errors.New("outcome unknown")
+			case "legacy":
+				client = c.fakeSteerClient
+			case "unbound":
+				c.sessions[0].Capabilities = nil
+			case "uncertain":
+				c.messageErr = errors.New("outcome unknown")
 			}
 			var out, stderr bytes.Buffer
 			if code := runMessage([]string{"local/ami", "--text", "do it"}, client, &out, &stderr); code == 0 || out.Len() != 0 || len(c.sendCalls()) != 0 {
