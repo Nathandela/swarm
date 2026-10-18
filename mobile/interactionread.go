@@ -65,11 +65,13 @@ func (a *App) LoadEarlierInteractions(session, beforeItem string, limit int) (op
 		return nil, classed(ErrClassInvalidRequest, errors.New(
 			"swarmmobile: LoadEarlierInteractions needs a positive page limit no larger than the frame bound"))
 	}
-	if _, err = a.ready(); err != nil {
+	core, err := a.ready()
+	if err != nil {
 		return nil, err
 	}
+	req := core.HistoryRequest(session, beforeItem, limit)
 	return a.unsignedRead(schema.ActionInteractionHistory, session, readBody{
-		history: &schema.InteractionHistoryReq{Session: session, BeforeItem: beforeItem, Limit: limit},
+		history: &req,
 	})
 }
 

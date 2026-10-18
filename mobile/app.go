@@ -1189,7 +1189,7 @@ func (a *App) ReadTranscript(session string, from int64, limit int) (page *Trans
 	out := &TranscriptPage{next: from, stale: a.streamStale(phonecore.StreamJournal)}
 	nativeOperations := core.NativeDecisionOperations(session)
 	for _, it := range core.Router().Items().Session(session) {
-		if int64(it.Cursor) <= from {
+		if int64(it.Cursor) <= from && !(from == 0 && it.Cursor == 0 && it.Backfilled) {
 			continue
 		}
 		if it.Kind == "permission_request" || it.Kind == "question_request" {

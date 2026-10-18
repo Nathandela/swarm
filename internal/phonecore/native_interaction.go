@@ -67,8 +67,13 @@ func (s *ItemStore) applyNativeLocked(rec schema.JournalRecord, backfill bool) b
 		if rec.Cursor <= old.LastCursor || old.Kind != w.Kind {
 			return false
 		}
-		next.Cursor, next.Backfilled = old.Cursor, old.Backfilled
-		s.items[i] = next
+		if old.Cursor == 0 && old.Backfilled && rec.Cursor > 0 {
+			s.items = append(s.items[:i:i], s.items[i+1:]...)
+			s.insertLocked(next)
+		} else {
+			next.Cursor, next.Backfilled = old.Cursor, old.Backfilled
+			s.items[i] = next
+		}
 	} else {
 		s.insertLocked(next)
 	}

@@ -781,8 +781,14 @@ func (r *MailboxRouter) apply(f inboundFrame) {
 			st := r.core.State()
 			verdict := f.reply
 			verdict.Journal = nil
+			verdict.NativeHistory = nil
 			committed, ok := st.OpOutcomes[f.reply.OperationID]
-			if ok && reflect.DeepEqual(committed, verdict) &&
+			nativeMatch := true
+			if f.reply.NativeHistory != nil {
+				saved := st.NativeHistory[f.reply.SessionID]
+				nativeMatch = saved.AppliedOperationID == f.reply.OperationID && saved.AppliedBucket == f.bucket && saved.AppliedSequence == f.seq
+			}
+			if ok && nativeMatch && reflect.DeepEqual(committed, verdict) &&
 				(f.reply.Op == schema.ActionInteractionHistory || f.reply.Op == schema.ActionInteractionDetail) {
 				r.replaceItems(st.Items)
 			}

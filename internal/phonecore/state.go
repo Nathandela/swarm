@@ -246,6 +246,7 @@ type State struct {
 	// HistoryFloor is the machine's retained-history floor for the oldest page this phone
 	// actually held. HistoryCapped is the distinct handset-capacity refusal. Both are sparse:
 	// absent means false, and both are content-tier transcript facts destroyed with Items.
+	NativeHistory map[string]NativeHistoryState
 	HistoryFloor  map[string]bool
 	HistoryCapped map[string]bool
 	// PushToken is the provider push token PB-STATE-9 assigns to the WAKE tier and
@@ -359,6 +360,7 @@ func (s State) clone() State {
 	s.Sessions = slices.Clone(s.Sessions)
 	s.Snapshots = slices.Clone(s.Snapshots)
 	s.Items = slices.Clone(s.Items)
+	s.NativeHistory = maps.Clone(s.NativeHistory)
 	s.HistoryFloor = maps.Clone(s.HistoryFloor)
 	s.HistoryCapped = maps.Clone(s.HistoryCapped)
 	s.PendingOps = slices.Clone(s.PendingOps)
@@ -611,12 +613,13 @@ type keptContainer struct {
 // decrypted, exactly like the sessions and grids beside it, and is the most revealing of the
 // set.
 type purgeableContainer struct {
-	Sessions      []CachedSession           `json:"sessions,omitempty"`
-	Snapshots     []Snapshot                `json:"snapshots,omitempty"`
-	OpOutcomes    map[string]schema.Control `json:"op_outcomes,omitempty"`
-	Items         []Item                    `json:"items,omitempty"`
-	HistoryFloor  map[string]bool           `json:"history_floor,omitempty"`
-	HistoryCapped map[string]bool           `json:"history_capped,omitempty"`
+	Sessions      []CachedSession               `json:"sessions,omitempty"`
+	Snapshots     []Snapshot                    `json:"snapshots,omitempty"`
+	OpOutcomes    map[string]schema.Control     `json:"op_outcomes,omitempty"`
+	Items         []Item                        `json:"items,omitempty"`
+	NativeHistory map[string]NativeHistoryState `json:"native_history,omitempty"`
+	HistoryFloor  map[string]bool               `json:"history_floor,omitempty"`
+	HistoryCapped map[string]bool               `json:"history_capped,omitempty"`
 }
 
 // sendSeqRecord is one epoch's durable send-seq reservation ceiling.
@@ -796,6 +799,9 @@ func (s *fileStore) Save(st State) error {
 // it so changing s.st and persisting the change are one critical section rather than an
 // unlock/relock window in which an old snapshot can restore the retired generation.
 func (s *fileStore) saveLocked(st State) error {
+	if !validNativeHistoryState(st.NativeHistory) {
+		return fmt.Errorf("invalid native history custody")
+	}
 	if !validNativeDecisionCustody(st.NativeDecisions) {
 		return fmt.Errorf("native answer custody is invalid")
 	}
@@ -917,7 +923,7 @@ func (s *fileStore) refuseUnreadableContentWrite(st State) error {
 		return fmt.Errorf("%w: %d send-seq ceiling(s), %d receive high-water(s), %d pending op(s) and %d pending publication(s) "+
 			"cannot be recorded", ErrContentTierLocked, len(st.SendSeq), len(st.Receive), len(st.PendingOps), len(st.PendingPublications))
 	}
-	if !s.purgeable.opened && (len(st.Sessions) > 0 || len(st.Snapshots) > 0 || len(st.OpOutcomes) > 0 || len(st.Items) > 0) {
+	if !s.purgeable.opened && (len(st.Sessions) > 0 || len(st.Snapshots) > 0 || len(st.OpOutcomes) > 0 || len(st.Items) > 0 || len(st.NativeHistory) > 0) {
 		return fmt.Errorf("%w: %d session(s), %d snapshot(s), %d outcome(s) and %d transcript item(s) cannot be recorded",
 			ErrContentTierLocked, len(st.Sessions), len(st.Snapshots), len(st.OpOutcomes), len(st.Items))
 	}
@@ -980,7 +986,7 @@ func keptContainerOf(st State) keptContainer {
 func purgeableContainerOf(st State) purgeableContainer {
 	return purgeableContainer{
 		Sessions: st.Sessions, Snapshots: st.Snapshots, OpOutcomes: st.OpOutcomes, Items: st.Items,
-		HistoryFloor: st.HistoryFloor, HistoryCapped: st.HistoryCapped,
+		HistoryFloor: st.HistoryFloor, HistoryCapped: st.HistoryCapped, NativeHistory: st.NativeHistory,
 	}
 }
 
@@ -1013,7 +1019,7 @@ func purgeableContainerOf(st State) purgeableContainer {
 func dropContentMaterial(st State) State {
 	st.Keys.ContentKey = crypto.ContentKey{}
 	st.Sessions, st.Snapshots, st.OpOutcomes, st.Items = nil, nil, nil, nil
-	st.HistoryFloor, st.HistoryCapped = nil, nil
+	st.HistoryFloor, st.HistoryCapped, st.NativeHistory = nil, nil, nil
 	st.SendSeq, st.Receive, st.PendingOps, st.PendingPublications, st.NativeDecisions = nil, nil, nil, nil, nil
 	return st
 }
@@ -1727,7 +1733,10 @@ func (s *fileStore) loadContentState(st *State, f stateFile, path string) error 
 			return fmt.Errorf("%w: %s: decrypted cache container: %v", ErrCorruptState, path, err)
 		}
 		st.Sessions, st.Snapshots, st.OpOutcomes, st.Items = c.Sessions, c.Snapshots, c.OpOutcomes, c.Items
-		st.HistoryFloor, st.HistoryCapped = c.HistoryFloor, c.HistoryCapped
+		if !validNativeHistoryState(c.NativeHistory) {
+			return fmt.Errorf("%w: invalid native history custody", ErrCorruptState)
+		}
+		st.HistoryFloor, st.HistoryCapped, st.NativeHistory = c.HistoryFloor, c.HistoryCapped, c.NativeHistory
 	}
 	return nil
 }

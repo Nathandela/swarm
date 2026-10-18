@@ -102,8 +102,9 @@ type PendingPublication struct {
 	// independent of the slice's logical FIFO position: a long-lived admitted head may settle
 	// after newer sends and must not be evicted as though its old insertion position were age.
 	// Zero is the migrated legacy value and sorts older than every authored ordinal.
-	ResultOrder uint64    `json:"result_order,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	NativeHistoryScope string    `json:"native_history_scope,omitempty"`
+	ResultOrder        uint64    `json:"result_order,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 func (p PendingPublication) clone() PendingPublication {
@@ -162,7 +163,7 @@ func validatePendingPublication(p PendingPublication) error {
 		}
 	case PublicationHistory:
 		if p.History == nil || p.Command.Action != schema.ActionInteractionHistory ||
-			p.History.Session != p.SessionID {
+			p.History.Session != p.SessionID || (!p.History.Native && p.History.NativeCursor != "") || (p.NativeHistoryScope != "" && (!p.History.Native || !validNativeHistoryScope(p.NativeHistoryScope))) || len(p.History.NativeCursor) > schema.MaxNativeHistoryCursorBytes || (p.History.Native && (p.History.Limit <= 0 || p.History.Limit > schema.MaxNativeHistoryItems)) {
 			return ErrPublicationState
 		}
 	case PublicationDetail:
@@ -300,7 +301,7 @@ func replyMatchesPublication(p PendingPublication, ctrl schema.Control) bool {
 	if ctrl.Op == controlOpError || ctrl.ErrorCode != "" {
 		// Error replies carry no session by protocol. The globally unique operation id is the
 		// exact command binding; the reply must not carry a contradictory non-empty session.
-		return len(ctrl.Journal) == 0 && (ctrl.SessionID == "" || ctrl.SessionID == p.SessionID)
+		return ctrl.NativeHistory == nil && len(ctrl.Journal) == 0 && (ctrl.SessionID == "" || ctrl.SessionID == p.SessionID)
 	}
 	var expected string
 	switch p.Kind {
@@ -319,7 +320,13 @@ func replyMatchesPublication(p PendingPublication, ctrl schema.Control) bool {
 	if p.Kind == PublicationComposer {
 		// Composer admission carries only a verdict. Accepting an attached journal payload
 		// would make an operation id a second transcript-authority channel.
-		return len(ctrl.Journal) == 0
+		return ctrl.NativeHistory == nil && len(ctrl.Journal) == 0
+	}
+	if p.Kind == PublicationHistory && p.History != nil && p.History.Native {
+		return len(ctrl.Journal) == 0 && validNativeHistoryPage(ctrl.NativeHistory)
+	}
+	if ctrl.NativeHistory != nil {
+		return false
 	}
 	for _, rec := range ctrl.Journal {
 		if rec.SessionID != p.SessionID {
@@ -496,6 +503,20 @@ func (c *Core) PreparePublication(p PendingPublication) error {
 		!bytes.Equal(p.AuthorityPub, c.st.MachineRelayAuthPub) || c.st.Disowned {
 		return ErrPublicationState
 	}
+	if p.Kind == PublicationHistory && p.History != nil && p.History.Native {
+		if !nativeHistoryAvailable(c.st, p.SessionID) || len(p.History.NativeCursor) > schema.MaxNativeHistoryCursorBytes {
+			return ErrPublicationState
+		}
+		saved := c.st.NativeHistory[p.SessionID]
+		p.SessionInstance = nativeHistoryInstance(c.st, p.SessionID)
+		p.NativeHistoryScope = saved.Scope
+		if p.History.NativeCursor != "" && (p.History.NativeCursor != saved.Cursor || saved.SessionInstance != p.SessionInstance) {
+			return ErrPublicationConflict
+		}
+		if _, exists := c.st.NativeHistory[p.SessionID]; !exists && len(c.st.NativeHistory) >= maxNativeHistorySessions {
+			return ErrPublicationQueueFull
+		}
+	}
 	for _, current := range c.st.PendingPublications {
 		if current.LogicalID == p.LogicalID && current.OperationID != p.OperationID {
 			return ErrPublicationConflict
@@ -518,6 +539,16 @@ func (c *Core) PreparePublication(p PendingPublication) error {
 		return ErrPublicationQueueFull
 	}
 	st := c.st.clone()
+	if p.Kind == PublicationHistory && p.History != nil && p.History.Native {
+		if st.NativeHistory == nil {
+			st.NativeHistory = map[string]NativeHistoryState{}
+		}
+		saved := st.NativeHistory[p.SessionID]
+		saved.PendingOperationID = p.OperationID
+		saved.SessionInstance = p.SessionInstance
+		st.NativeHistory[p.SessionID] = saved
+	}
+
 	// A bounded terminal projection is history, not unresolved work. Drop its oldest row only
 	// when accepting a newer intent; no prepared/sealed/admitted record is ever evicted.
 	if len(st.PendingPublications) > 0 {

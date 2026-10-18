@@ -837,6 +837,7 @@ func (c *Core) recordOutcome(ctrl schema.Control, onlyAbsent bool) error {
 		return errors.New("phonecore: outcome carries no operation id")
 	}
 	ctrl.Journal = nil
+	ctrl.NativeHistory = nil
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, exists := c.st.OpOutcomes[ctrl.OperationID]; onlyAbsent && exists {
@@ -1057,6 +1058,9 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 			// it as this operation's verdict would let the malformed reply settle the wrong intent.
 			return
 		}
+		if f.reply.NativeHistory != nil && (!pending || !nativeHistoryReplyCurrent(*st, publication, f.reply.NativeHistory)) {
+			return
+		}
 		if st.OpOutcomes == nil {
 			st.OpOutcomes = map[string]schema.Control{}
 		}
@@ -1065,6 +1069,7 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 			return
 		}
 		verdict.Journal = nil
+		verdict.NativeHistory = nil
 		st.OpOutcomes[f.reply.OperationID] = verdict
 		if !pending {
 			return
@@ -1085,13 +1090,31 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 		scratch := itemStoreFrom(st.Items)
 		switch publication.Kind {
 		case PublicationHistory:
-			held := scratch.ApplyPage(f.reply.Journal)
+			held := false
+			floor := f.reply.HistoryFloor
+			if publication.History != nil && publication.History.Native {
+				page := f.reply.NativeHistory
+				held = scratch.applyNativeHistory(publication.SessionID, page, publication.History.BeforeItem == "" && publication.History.NativeCursor == "")
+				saved := st.NativeHistory[publication.SessionID]
+				saved.PendingOperationID = ""
+				if held {
+					saved.Scope = page.Scope
+					saved.AppliedOperationID = f.reply.OperationID
+					saved.AppliedBucket = f.bucket
+					saved.AppliedSequence = f.seq
+					saved.Cursor = page.NextCursor
+					floor = page.Floor
+				}
+				st.NativeHistory[publication.SessionID] = saved
+			} else {
+				held = scratch.ApplyPage(f.reply.Journal)
+			}
 			if held {
 				st.Items = scratch.All()
 				if st.HistoryFloor == nil {
 					st.HistoryFloor = map[string]bool{}
 				}
-				if f.reply.HistoryFloor {
+				if floor {
 					st.HistoryFloor[publication.SessionID] = true
 				} else {
 					delete(st.HistoryFloor, publication.SessionID)

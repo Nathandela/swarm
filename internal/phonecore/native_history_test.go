@@ -181,3 +181,52 @@ func TestNativeHistoryIgnoredRepeatCannotEraseLiveOnlyGapItems(t *testing.T) {
 		t.Fatal("ignored native page replay erased live-only gap content")
 	}
 }
+
+func TestNativeHistoryPageRejectsAuthorityAndEveryBound(t *testing.T) {
+	valid := schema.NativeHistoryPage{Version: 2, Scope: strings.Repeat("a", 64), Floor: true, Items: []json.RawMessage{nativeHistoryItem("id", "history")}}
+	for _, tc := range []struct {
+		name   string
+		change func(*schema.NativeHistoryPage)
+	}{
+		{"version", func(p *schema.NativeHistoryPage) { p.Version = 1 }},
+		{"scope", func(p *schema.NativeHistoryPage) { p.Scope = strings.Repeat("A", 64) }},
+		{"cursor", func(p *schema.NativeHistoryPage) {
+			p.Floor = false
+			p.NextCursor = strings.Repeat("x", schema.MaxNativeHistoryCursorBytes+1)
+		}},
+		{"items", func(p *schema.NativeHistoryPage) { p.Items = make([]json.RawMessage, 201) }},
+		{"item bytes", func(p *schema.NativeHistoryPage) {
+			p.Items = []json.RawMessage{nativeHistoryItem("id", strings.Repeat("x", 17<<10))}
+		}},
+		{"page bytes", func(p *schema.NativeHistoryPage) {
+			p.Items = nil
+			for i := 0; i < 100; i++ {
+				p.Items = append(p.Items, nativeHistoryItem(fmt.Sprint(i), strings.Repeat("x", 6000)))
+			}
+		}},
+		{"phone attribution", func(p *schema.NativeHistoryPage) {
+			p.Items[0] = json.RawMessage(strings.Replace(string(p.Items[0]), `"source":"native"`, `"source":"phone"`, 1))
+		}},
+		{"live provenance", func(p *schema.NativeHistoryPage) {
+			p.Items[0] = json.RawMessage(strings.Replace(string(p.Items[0]), `"imported"`, `"live"`, 1))
+		}},
+		{"operation attribution", func(p *schema.NativeHistoryPage) {
+			p.Items[0] = json.RawMessage(strings.Replace(string(p.Items[0]), `"v":2`, `"v":2,"operation_id":"owned"`, 1))
+		}},
+		{"input proof", func(p *schema.NativeHistoryPage) {
+			p.Items[0] = json.RawMessage(strings.Replace(string(p.Items[0]), `"v":2`, `"v":2,"input_sha256":"owned"`, 1))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := valid
+			p.Items = append([]json.RawMessage(nil), valid.Items...)
+			tc.change(&p)
+			if validNativeHistoryPage(&p) {
+				t.Fatal("unqualified page accepted")
+			}
+		})
+	}
+	if !validNativeHistoryPage(&valid) {
+		t.Fatal("valid imported page refused")
+	}
+}
