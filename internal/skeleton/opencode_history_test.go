@@ -146,11 +146,13 @@ func TestOpenCodeEndedHistoryExportsExactProfileAndRefusesMissingStorage(t *test
 	}
 	source := handsOffSource("native", project, "ses_"+strings.Repeat("a", 32))
 	source.AgentType = "opencode"
+	source.LaunchOptions = map[string]string{"model": "opencode/glm-5.3-flash-free", "agent": "build"}
 	source.Status.Process = status.ProcessExited
 	source.RequiredRuntime = persist.RequiredRuntimeOpenCode
 	source.OpenCodeBinding = &persist.OpenCodeBinding{Revision: 3, Generation: strings.Repeat("b", 32), Mode: persist.OpenCodeModeCreate, Phase: persist.OpenCodePhaseReady, NativeCreatedAtMS: 123, ProfileEnv: []string{"XDG_DATA_HOME=" + profile}}
 	id := nativeHistoryIdentity(source)
 	page := ocHistoryPage(id, "msg_"+strings.Repeat("m", 26), "")
+	page.Session = json.RawMessage(strings.Replace(string(page.Session), `"version":"1.19.3"`, `"version":"1.19.3","agent":"plan","model":{"providerID":"opencode","id":"deepseek-v4.1-flash-free","variant":"max"}`, 1))
 	payload, _ := json.Marshal(openCodeHistoryExport{Info: page.Session, Messages: page.Messages})
 	bin := filepath.Join(project, "opencode")
 	marker := filepath.Join(project, "exported")
@@ -204,6 +206,13 @@ func TestOpenCodeEndedHistoryExportsExactProfileAndRefusesMissingStorage(t *test
 	if resume.Cwd != project || resume.OpenCodeBinding.NativeCreatedAtMS != 123 {
 		t.Fatal("resume lost exact native cwd or creation identity")
 	}
+	if resume.Options["model"] != "opencode/deepseek-v4.1-flash-free" || resume.Options["agent"] != "plan" {
+		t.Fatal("resume reused stale initial launch options")
+	}
+	changed := daemon.LaunchSpec{AgentType: "opencode", Cwd: project, Options: map[string]string{protocol.OptionResumeFrom: protocol.NamespacedID(testEndpoint, source.ID), "model": "opencode/glm-5.3-flash-free"}}
+	if api.captureOpenCodeOrigin(&changed) == nil {
+		t.Fatal("resume silently accepted model override ignored by native history hydration")
+	}
 	resume.Options[protocol.OptionResumeRelocate] = "true"
 	if api.captureOpenCodeOrigin(&resume) == nil {
 		t.Fatal("native resume allowed an unqualified relocation")
@@ -215,7 +224,7 @@ func TestOpenCodeEndedHistoryExportsExactProfileAndRefusesMissingStorage(t *test
 		t.Fatal("missing native profile accepted")
 	}
 	calls, _ := os.ReadFile(marker)
-	if string(calls) != "x" {
+	if string(calls) != "xxx" {
 		t.Fatal("missing profile executed native export")
 	}
 }

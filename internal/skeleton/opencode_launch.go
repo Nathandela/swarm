@@ -33,6 +33,16 @@ func (a *coreAPI) captureOpenCodeOrigin(spec *daemon.LaunchSpec) error {
 		spec.Cwd = cwd
 		spec.OpenCodeBinding = persist.CloneOpenCodeBinding(source.OpenCodeBinding)
 		spec.OpenCodeEnv, err = a.core.OpenCodeResumeEnvironment(local)
+		if err != nil {
+			return err
+		}
+		selection, selectionErr := a.resumeOpenCodeSelection(source)
+		if selectionErr != nil {
+			return selectionErr
+		}
+		if err = applyOpenCodeCommittedSelection(spec, selection, true); err != nil {
+			return err
+		}
 	} else {
 		origin := spec.OpenCodeEnv
 		if origin == nil {

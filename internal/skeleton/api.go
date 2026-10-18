@@ -1617,6 +1617,20 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 		return daemon.LaunchSpec{}, handsOffTranscriptError(source.AgentType, convID, outcome)
 	}
 
+	if managedOpenCode && spec.AgentType == "opencode" {
+		_, explicitModel := spec.Options["model"]
+		_, explicitAgent := spec.Options["agent"]
+		if !explicitModel || !explicitAgent {
+			selection, selectionErr := openCodeHandoffSelection(transcript, source)
+			if selectionErr != nil {
+				return daemon.LaunchSpec{}, selectionErr
+			}
+			if err := applyOpenCodeCommittedSelection(&spec, selection, false); err != nil {
+				return daemon.LaunchSpec{}, err
+			}
+		}
+	}
+
 	// STEP 5b. THE SUCCESSOR STARTS WHERE THE SOURCE WAS WORKING, not where the client
 	// guessed. The TUI holds only a protocol.SessionView, which carries no AgentCwd -- that
 	// frozen wire type was deliberately not widened -- so the client can send nothing but

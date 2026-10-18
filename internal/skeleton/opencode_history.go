@@ -280,14 +280,13 @@ func (w *boundedNativeExport) Write(p []byte) (int, error) {
 	}
 	return w.data.Write(p)
 }
-func (r *openCodeHistoryResolver) exportEnded(ctx context.Context, m persist.Meta) (openCodeHistoryExport, error) {
-	var result openCodeHistoryExport
+func (r *openCodeHistoryResolver) nativeExportCommand(ctx context.Context, m persist.Meta) (*exec.Cmd, error) {
 	if m.CLIIdentity == nil || m.CLIIdentity.Version != "1.19.3" || !persist.MatchCLIFingerprint(m.CLIIdentity.Path, m.CLIIdentity.Fingerprint) {
-		return result, errors.New("native history executable unconfirmed")
+		return nil, errors.New("native history executable unconfirmed")
 	}
 	native, err := r.core.OpenCodeResumeEnvironment(m.ID)
 	if err != nil {
-		return result, err
+		return nil, err
 	}
 	env := mergeNativeOpenCodeEnvironment(m.Env, native)
 	// Missing storage must refuse before the CLI can create a replacement empty profile.
@@ -303,27 +302,35 @@ func (r *openCodeHistoryResolver) exportEnded(ctx context.Context, m persist.Met
 	}
 	if data == "" {
 		if home == "" {
-			return result, errors.New("native history profile unconfirmed")
+			return nil, errors.New("native history profile unconfirmed")
 		}
 		data = filepath.Join(home, ".local", "share")
 	}
 	if fi, err := os.Stat(filepath.Join(data, "opencode", "opencode.db")); err != nil || !fi.Mode().IsRegular() {
-		return result, errors.New("native history profile unavailable")
+		return nil, errors.New("native history profile unavailable")
 	}
 	observed, err := probeCLIIdentity("opencode", m.CLIIdentity.Path, env, m.ProviderCwd())
 	if err != nil || observed == nil || *observed != *m.CLIIdentity {
-		return result, errors.New("native history executable changed")
+		return nil, errors.New("native history executable changed")
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	cmd := exec.CommandContext(ctx, m.CLIIdentity.Path, "export", m.ConversationID)
 	cmd.Env, cmd.Dir = env, m.ProviderCwd()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 100 * time.Millisecond
+	cmd.Stderr = &cappedCLIOutput{}
+	return cmd, nil
+}
+func (r *openCodeHistoryResolver) exportEnded(ctx context.Context, m persist.Meta) (openCodeHistoryExport, error) {
+	var result openCodeHistoryExport
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd, err := r.nativeExportCommand(ctx, m)
+	if err != nil {
+		return result, err
+	}
 	output := &boundedNativeExport{cancel: cancel}
 	cmd.Stdout = output
-	cmd.Stderr = &cappedCLIOutput{}
 	if cmd.Run() != nil || !persist.MatchCLIFingerprint(m.CLIIdentity.Path, m.CLIIdentity.Fingerprint) {
 		return result, errors.New("native history export unavailable")
 	}
