@@ -26,9 +26,18 @@ func openCodeMessageID(operationID string, identity opencodebridge.Identity) str
 	return fmt.Sprintf("msg_%x", hash[:16])
 }
 
-func (d *Daemon) sendOpenCodeSemantic(local, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error) {
+func (d *Daemon) sendOpenCodeSemantic(local, operationID string, req protocol.ComposerSendReq, begin func() error, lane *composerLane) (protocol.ErrorCode, error) {
+	lane.endMu.Lock()
+	defer lane.endMu.Unlock()
 	var code protocol.ErrorCode
 	attempt := func() error {
+		lane.mu.Lock()
+		ending := lane.ownerEnding || lane.retired || lane.recycling
+		lane.mu.Unlock()
+		if ending {
+			code = protocol.CodeInputBusy
+			return errors.New("OpenCode session is ending or recycling; nothing was submitted")
+		}
 		if d.core.UnobservedSemanticExecution(local, operationID) {
 			return fmt.Errorf("%w: a prior native input has unconfirmed admission; no later message was submitted", protocol.ErrComposerOutcomeUnknown)
 		}

@@ -18,14 +18,14 @@ import (
 )
 
 type openCodeSendFixture struct {
-	d         *Daemon
-	client    *protocol.Client
-	binding   opencodebridge.Binding
-	identity  opencodebridge.Identity
-	request   protocol.ComposerSendReq
-	calls     atomic.Int32
-	dropReply atomic.Bool
-	blockDispatch atomic.Bool
+	d               *Daemon
+	client          *protocol.Client
+	binding         opencodebridge.Binding
+	identity        opencodebridge.Identity
+	request         protocol.ComposerSendReq
+	calls           atomic.Int32
+	dropReply       atomic.Bool
+	blockDispatch   atomic.Bool
 	dispatchEntered chan struct{}
 	dispatchRelease chan struct{}
 }
@@ -89,8 +89,17 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 				return
 			}
 			f.calls.Add(1)
-			select { case f.dispatchEntered <- struct{}{}: default: }
-			if f.blockDispatch.Load() { select { case <-f.dispatchRelease: case <-r.Context().Done(): return } }
+			select {
+			case f.dispatchEntered <- struct{}{}:
+			default:
+			}
+			if f.blockDispatch.Load() {
+				select {
+				case <-f.dispatchRelease:
+				case <-r.Context().Done():
+					return
+				}
+			}
 			rec, ok := f.d.core.ComposerOperation(req.OperationID)
 			if !ok || rec.Phase != idempotency.PhaseExecuting || len(rec.Request) == 0 {
 				t.Error("native effect preceded durable request and execution custody")
@@ -177,33 +186,64 @@ func TestOpenCodeOwnerUncertainSendNeverReposts(t *testing.T) {
 
 func TestOpenCodeOwnerEndWinsBeforeNativeSubmission(t *testing.T) {
 	f := newOpenCodeSendFixture(t)
-	if err := f.d.withOwnerSessionEnd(f.binding.WorkerID, func() error { return nil }); err != nil { t.Fatal(err) }
+	if err := f.d.withOwnerSessionEnd(f.binding.WorkerID, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
 	id, err := protocol.NewSemanticOperationID()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := f.client.SemanticSend(id, f.request); err == nil || f.calls.Load() != 0 {
 		t.Fatal("native submission crossed an owner end intent while Process was still running")
 	}
 	rec, ok := f.d.core.ComposerOperation(id)
-	if !ok || rec.Phase == idempotency.PhaseExecuting || len(rec.Evidence) != 0 { t.Fatal("owner end refusal crossed native execution boundary") }
+	if !ok || rec.Phase == idempotency.PhaseExecuting || len(rec.Evidence) != 0 {
+		t.Fatal("owner end refusal crossed native execution boundary")
+	}
 }
 
 func TestOpenCodeNativeSubmissionAndOwnerEndShareOneLifecycleFence(t *testing.T) {
 	f := newOpenCodeSendFixture(t)
 	f.blockDispatch.Store(true)
-	t.Cleanup(func() { select { case <-f.dispatchRelease: default: close(f.dispatchRelease) } })
+	t.Cleanup(func() {
+		select {
+		case <-f.dispatchRelease:
+		default:
+			close(f.dispatchRelease)
+		}
+	})
 	id, err := protocol.NewSemanticOperationID()
-	if err != nil { t.Fatal(err) }
-	sent := make(chan error,1)
-	go func() { sent <- f.client.SemanticSend(id,f.request) }()
-	select { case <-f.dispatchEntered: case <-time.After(5*time.Second): t.Fatal("native write never reached guarded dispatch") }
-	ownerStarted, ownerAction, ownerDone := make(chan struct{}), make(chan struct{}), make(chan error,1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := make(chan error, 1)
+	go func() { sent <- f.client.SemanticSend(id, f.request) }()
+	select {
+	case <-f.dispatchEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native write never reached guarded dispatch")
+	}
+	ownerStarted, ownerAction, ownerDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	go func() {
 		close(ownerStarted)
-		ownerDone <- f.d.withOwnerSessionEnd(f.binding.WorkerID,func() error { close(ownerAction); return nil })
+		ownerDone <- f.d.withOwnerSessionEnd(f.binding.WorkerID, func() error { close(ownerAction); return nil })
 	}()
 	<-ownerStarted
-	select { case <-ownerAction: t.Fatal("owner terminal action crossed an in-flight native dispatch"); case <-time.After(50*time.Millisecond): }
+	select {
+	case <-ownerAction:
+		t.Fatal("owner terminal action crossed an in-flight native dispatch")
+	case <-time.After(50 * time.Millisecond):
+	}
 	close(f.dispatchRelease)
-	if err := <-sent; err != nil { t.Fatal(err) }
-	select { case err := <-ownerDone: if err != nil { t.Fatal(err) }; case <-time.After(time.Second): t.Fatal("owner terminal action did not resume") }
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-ownerDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("owner terminal action did not resume")
+	}
 }

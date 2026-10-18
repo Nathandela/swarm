@@ -568,7 +568,7 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 		}
 	}
 	if source == adapter.SourceOwner && meta.RequiredRuntime == persist.RequiredRuntimeOpenCode {
-		return d.sendOpenCodeSemantic(local, operationID, req, begin)
+		return d.sendOpenCodeSemantic(local, operationID, req, begin, lane)
 	}
 	if code, err := d.requireStructuredComposer(local, req.Session); err != nil {
 		return code, err
