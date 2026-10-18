@@ -1,0 +1,5 @@
+--- FAIL: TestInteractionDetailRefusesAnUnsendableWholeFrame (1.00s)
+    native_detail_bound_test.go:23: oversized/malformed detail silently dropped instead of named refusal: read unix ->/tmp/swp1756412585/d.sock: i/o timeout
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	1.255s
+FAIL
