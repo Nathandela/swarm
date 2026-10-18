@@ -1,0 +1,47 @@
+[
+  {
+    "source": "r172921/result.json",
+    "sha256": "e99cf8c37a889f96fd48d501134bd55831d63877d0ecaee328b0e46bb8d95a55",
+    "native_version": "1.19.3",
+    "model_calls": 0,
+    "method": "production managed launch via actual Swarm owner protocol and native1.19.3; private wrapper adds only native test-home fixture isolation",
+    "launch_seconds": 3.49,
+    "embargo_held": false,
+    "selection_visible": true,
+    "config_unchanged": true,
+    "pass": true
+  },
+  {
+    "source": "r174701/result.json",
+    "sha256": "fb6d6327608cd4f923fd518f0789f8c84423dffd3e2212446b87b884286b5e64",
+    "native_version": "1.19.3",
+    "model_calls": 0,
+    "method": "production managed launch via actual Swarm owner protocol and native1.19.3; private wrapper adds only native test-home fixture isolation",
+    "launch_seconds": 4.287,
+    "embargo_held": false,
+    "selection_visible": true,
+    "config_unchanged": true,
+    "pass": true
+  },
+  {
+    "source": "review-bridge/native-message-173934/result.json",
+    "sha256": "ae9ae64bf57c74bdebe9078f117a12624cf92338685fade5415bcc4a218400f7",
+    "native_version": "1.19.3",
+    "model_calls": 0,
+    "config_unchanged": true,
+    "history_unchanged": true,
+    "owned_process_stopped": true,
+    "credentials_written_to_disk": false
+  },
+  {
+    "source": "review-bridge/native-draft-175415/result.json",
+    "sha256": "3985bad83e51a10a05ae5909efea9b2752a53ce10d82128c894ef5ed96acb980",
+    "native_version": "1.19.3",
+    "model_calls": 0,
+    "config_unchanged": true,
+    "history_unchanged": true,
+    "owned_process_stopped": true,
+    "native_password_written_to_disk": false,
+    "bridge_token_retired": true
+  }
+]

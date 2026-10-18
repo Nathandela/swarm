@@ -82,6 +82,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reatta
   swarm send       type into a session <session>
                    (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
   swarm message    submit a semantic message <session> --text s [--operation-id id]
+                   or read its receipt with --status --operation-id id
   swarm peek       print a session's current screen <session> [--lines N]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)
