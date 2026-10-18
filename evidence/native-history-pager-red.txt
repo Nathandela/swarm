@@ -1,0 +1,14 @@
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/opencode_history_page_test.go:33:81: undefined: nativeHistorySlice
+internal/skeleton/opencode_history_page_test.go:39:11: undefined: nativeHistorySlice
+internal/skeleton/opencode_history_page_test.go:50:9: undefined: nativeHistorySlice
+internal/skeleton/opencode_history_page_test.go:58:18: undefined: paginateNativeHistory
+internal/skeleton/opencode_history_page_test.go:66:17: undefined: paginateNativeHistory
+internal/skeleton/opencode_history_page_test.go:76:17: undefined: paginateNativeHistory
+internal/skeleton/opencode_history_page_test.go:84:18: undefined: paginateNativeHistory
+internal/skeleton/opencode_history_page_test.go:91:18: undefined: paginateNativeHistory
+internal/skeleton/opencode_history_page_test.go:104:18: undefined: paginateNativeHistory
+internal/skeleton/opencode_history_page_test.go:111:18: undefined: paginateNativeHistory
+internal/skeleton/opencode_history_page_test.go:111:18: too many errors
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
