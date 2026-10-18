@@ -1,0 +1,11 @@
+--- FAIL: TestDecodeEvent_MessageUpdatedAssistant (0.00s)
+    --- FAIL: TestDecodeEvent_MessageUpdatedAssistant/message_requires_its_native_session_id (0.00s)
+        native_test.go:162: outer scope synthesized missing message identity
+--- FAIL: TestDecodeEvent_MessagePartUpdated (0.00s)
+    --- FAIL: TestDecodeEvent_MessagePartUpdated/part_requires_its_native_session_id (0.00s)
+        native_test.go:210: outer scope synthesized missing part identity
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/opencode	0.207s
+FAIL
+
+exit=1

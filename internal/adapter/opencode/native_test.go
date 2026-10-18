@@ -156,17 +156,10 @@ func TestDecodeEvent_MessageUpdatedAssistant(t *testing.T) {
 		}
 	})
 
-	t.Run("session id filled from properties when info omits it", func(t *testing.T) {
-		raw := `{"id":"evt_7","type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_a2","role":"assistant","time":{"created":2000}}}}`
-		ev, err := DecodeEvent([]byte(raw))
-		if err != nil {
-			t.Fatalf("DecodeEvent: %v", err)
-		}
-		if ev.MessageUpdated == nil {
-			t.Fatal("message fact missing")
-		}
-		if got := ev.MessageUpdated.Info.SessionID; got != "ses_root" {
-			t.Fatalf("SessionID = %q, want ses_root", got)
+	t.Run("message requires its native session id", func(t *testing.T) {
+		raw := `{"type":"message.updated","properties":{"sessionID":"ses_root","info":{"id":"msg_a2","role":"assistant","time":{"created":2000}}}}`
+		if _, err := DecodeEvent([]byte(raw)); err == nil {
+			t.Fatal("outer scope synthesized missing message identity")
 		}
 	})
 }
@@ -211,17 +204,10 @@ func TestDecodeEvent_MessagePartUpdated(t *testing.T) {
 		}
 	})
 
-	t.Run("session id filled from properties when part omits it", func(t *testing.T) {
-		raw := `{"id":"evt_10","type":"message.part.updated","properties":{"sessionID":"ses_root","part":{"id":"prt_2","messageID":"msg_u1","type":"text","text":"hi"}}}`
-		ev, err := DecodeEvent([]byte(raw))
-		if err != nil {
-			t.Fatalf("DecodeEvent: %v", err)
-		}
-		if ev.MessagePartUpdated == nil {
-			t.Fatal("part fact missing")
-		}
-		if got := ev.MessagePartUpdated.Part.SessionID; got != "ses_root" {
-			t.Fatalf("SessionID = %q, want ses_root", got)
+	t.Run("part requires its native session id", func(t *testing.T) {
+		raw := `{"type":"message.part.updated","properties":{"sessionID":"ses_root","part":{"id":"prt_2","messageID":"msg_u1","type":"text","text":"hi"}}}`
+		if _, err := DecodeEvent([]byte(raw)); err == nil {
+			t.Fatal("outer scope synthesized missing part identity")
 		}
 	})
 }

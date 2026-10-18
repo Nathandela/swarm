@@ -186,6 +186,63 @@ func TestOpenCodeRegressionTerminalBeforeParentConverges(t *testing.T) {
 		t.Fatalf("exact delayed parent did not reconcile: %+v", v)
 	}
 }
+
+func TestOpenCodeRegressionImportedOrphanDoesNotBlockNewInput(t *testing.T) {
+	s, e := newOCState(t, "ses_root")
+	rows := []json.RawMessage{json.RawMessage(`{"info":{"id":"msg_old","sessionID":"ses_root","role":"assistant","parentID":"msg_before_page","time":{"created":1100,"completed":1200},"finish":"stop"},"parts":[]}`)}
+	if err := s.ImportHistory(rows, e); err != nil {
+		t.Fatal(err)
+	}
+	s.Apply(ocUserMessage("ses_root", "msg_new", 2000), e)
+	s.Apply(ocUserTextPart("ses_root", "msg_new", "prt_new", "new task"), e)
+	v := s.View()
+	if len(v.Uncertain) != 1 || v.Current == nil || v.Current.MessageID != "msg_new" || v.Degraded {
+		t.Fatalf("partial imported history disabled current observation: %+v", v)
+	}
+	// Replaying the same old terminal through the live feed cannot promote its source.
+	s.Apply(ocAssistantMessage("ses_root", "msg_old", "msg_before_page", 1100, 1200, "stop"), e)
+	if s.View().Degraded {
+		t.Fatal("imported duplicate became a live missing-parent hold")
+	}
+	s.Apply(ocAssistantMessage("ses_root", "msg_live", "msg_missing_live", 2100, 2200, "stop"), e)
+	if !s.View().Degraded {
+		t.Fatal("unseen live input lost its missing-parent hold")
+	}
+}
+
+func TestOpenCodeRegressionOldCompactionHistoryDoesNotPoisonLiveState(t *testing.T) {
+	s, e := newOCState(t, "ses_root")
+	rows := []json.RawMessage{
+		json.RawMessage(`{"info":{"id":"msg_compact","sessionID":"ses_root","role":"user","time":{"created":1000}},"parts":[{"id":"prt_c","messageID":"msg_compact","sessionID":"ses_root","type":"compaction","auto":true}]}`),
+		json.RawMessage(`{"info":{"id":"msg_summary","sessionID":"ses_root","role":"assistant","parentID":"msg_compact","summary":true,"time":{"created":1100,"completed":1200},"finish":"stop"},"parts":[]}`),
+		json.RawMessage(`{"info":{"id":"msg_cleanup","sessionID":"ses_root","role":"assistant","parentID":"msg_compact","time":{"created":1201,"completed":1300}},"parts":[]}`),
+	}
+	if err := s.ImportHistory(rows, e); err != nil {
+		t.Fatal(err)
+	}
+	s.Apply(ocUserMessage("ses_root", "msg_new", 2000), e)
+	s.Apply(ocUserTextPart("ses_root", "msg_new", "prt_new", "new task"), e)
+	if v := s.View(); v.Degraded || v.Current == nil || v.Current.MessageID != "msg_new" {
+		t.Fatalf("old compaction disabled native observation: %+v", v)
+	}
+}
+
+func TestOpenCodeRegressionImportedOrphanCapacityPreservesLiveFacts(t *testing.T) {
+	s, e := newOCState(t, "ses_root")
+	s.Apply(ocAssistantMessage("ses_root", "msg_live", "msg_missing", 2000, 2100, "stop"), e)
+	var rows []json.RawMessage
+	for i := 0; i < maxOCUncertain+5; i++ {
+		rows = append(rows, json.RawMessage(fmt.Sprintf(`{"info":{"id":"msg_old_%d","sessionID":"ses_root","role":"assistant","parentID":"msg_before_page","time":{"created":1000,"completed":1100},"finish":"stop"},"parts":[]}`, i)))
+	}
+	if err := s.ImportHistory(rows, e); err != nil {
+		t.Fatal(err)
+	}
+	s.Apply(ocUserMessage("ses_root", "msg_missing", 1900), e)
+	s.Apply(ocUserTextPart("ses_root", "msg_missing", "prt_live", "task"), e)
+	if v := s.View(); v.Degraded || ocInput(v, "msg_missing").Outcome != OpenCodeOutcomeCompleted {
+		t.Fatalf("old orphan history evicted live correlation: %+v", v)
+	}
+}
 func TestOpenCodeRegressionMissingPartsWithholdAuthority(t *testing.T) {
 	s, e := newOCState(t, "ses_root")
 	s.Apply(ocStatus("ses_root", "idle"), e)
