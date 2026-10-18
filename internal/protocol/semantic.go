@@ -1,7 +1,11 @@
 package protocol
 
 import (
+	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -9,6 +13,38 @@ import (
 
 const semanticReplayWindow = time.Hour
 const semanticClockSkew = 30 * time.Second
+
+// NewSemanticOperationID creates an owner operation ID to persist before sending.
+func NewSemanticOperationID() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("semantic:%d:%x", time.Now().UnixMilli(), nonce), nil
+}
+
+// SemanticSend submits one incarnation-bound message; a receipt is not model completion.
+func (c *Client) SemanticSend(operationID string, req ComposerSendReq) error {
+	if !slices.Contains(c.caps, CapSemanticSend) {
+		return errors.New("protocol: semantic messages require an updated daemon; run swarm daemon restart")
+	}
+	if !validSemanticOperationID(operationID, time.Now()) {
+		return errors.New("protocol: invalid or expired semantic operation ID")
+	}
+	resp, err := c.requestWithTimeout(Control{Op: OpSemanticSend, EndpointID: c.endpointID,
+		SessionID: req.Session, OperationID: operationID, BodyVersion: 1, ComposerSend: &req}, 35*time.Second)
+	if err != nil {
+		return err
+	}
+	if resp.Op == OpError {
+		return fmt.Errorf("protocol: semantic message: %s (%s)", resp.Error, resp.ErrorCode)
+	}
+	if resp.Op != OpOK || resp.OperationID != operationID {
+		_ = c.Close()
+		return errors.New("protocol: semantic message received an uncorrelated receipt; outcome unknown")
+	}
+	return nil
+}
 
 func validSemanticOperationID(id string, now time.Time) bool {
 	if len(id) > 128 {
