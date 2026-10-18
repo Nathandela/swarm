@@ -53,12 +53,13 @@ type pilotHistoryClient interface {
 }
 
 type pilotPending struct {
-	SentAt       time.Time                 `json:"sent_at"`
-	Cursor       uint64                    `json:"cursor"`
-	HistoryReady bool                      `json:"history_ready"`
-	OperationID  string                    `json:"operation_id,omitempty"`
-	Request      *protocol.ComposerSendReq `json:"request,omitempty"`
-	Uncertain    bool                      `json:"uncertain,omitempty"`
+	SentAt       time.Time                        `json:"sent_at"`
+	Cursor       uint64                           `json:"cursor"`
+	HistoryReady bool                             `json:"history_ready"`
+	OperationID  string                           `json:"operation_id,omitempty"`
+	Request      *protocol.ComposerSendReq        `json:"request,omitempty"`
+	Uncertain    bool                             `json:"uncertain,omitempty"`
+	Receipt      *protocol.SemanticMessageReceipt `json:"receipt,omitempty"`
 }
 
 func dispatchPilot(args []string, stdout, stderr io.Writer) int {
@@ -76,7 +77,7 @@ func dispatchPilot(args []string, stdout, stderr io.Writer) int {
 		return runPilot(args, nil, stdout, stderr)
 	}
 	caps := []string{protocol.CapJournal, protocol.CapSubscribe}
-	if fs.NArg() > 0 && fs.Arg(0) == "send" {
+	if fs.NArg() > 0 && (fs.Arg(0) == "send" || fs.Arg(0) == "await") {
 		caps = append(caps, protocol.CapSemanticSend)
 	}
 	if fs.NArg() > 0 && fs.Arg(0) == "watch" {
@@ -229,6 +230,11 @@ func runPilot(args []string, c agentClient, stdout, stderr io.Writer) int {
 			var result map[string]any
 			if json.Unmarshal(data.Bytes(), &result) == nil && result["reply_confirmed"] == true {
 				env.Receipt = "reply_received"
+				if operation, ok := result["operation"].(map[string]any); ok {
+					if state, ok := operation["state"].(string); ok {
+						env.Receipt = "input_" + state
+					}
+				}
 			}
 		}
 	}
@@ -462,12 +468,20 @@ func pilotSend(path string, args []string, c agentClient, stdout, stderr io.Writ
 		return 1
 	}
 	pending.Uncertain = false
+	if reader, ok := c.(semanticReceiptClient); ok {
+		if receipt, err := reader.SemanticOperation(id, pending.OperationID); err == nil {
+			pending.Receipt = &receipt
+		}
+	}
 	if err := savePilotPending(pilotPendingPath(path, id), pending); err != nil {
 		_, _ = fmt.Fprintf(stderr, "pilot: send: operation_id=%s: submitted, but saving its receipt failed: %v\n", pending.OperationID, err)
 		return 1
 	}
 	*outbound = map[string]string{"discussion_id": id, "text": *payload}
 	receipt := map[string]any{"discussion_id": id, "operation_id": pending.OperationID}
+	if pending.Receipt != nil {
+		receipt["operation"] = pending.Receipt
+	}
 	if pending.HistoryReady {
 		receipt["watch_after_cursor"] = pending.Cursor
 	}
@@ -602,6 +616,42 @@ func pilotAwait(path string, args []string, remaining time.Duration, c agentClie
 			}
 		}
 	}
+	refreshOperation := func() {
+		reader, ok := c.(semanticReceiptClient)
+		if !ok || pending.OperationID == "" {
+			return
+		}
+		receipt, err := reader.SemanticOperation(id, pending.OperationID)
+		if err != nil || receipt.NativeMessageID == "" {
+			return
+		}
+		if pending.Receipt != nil && pending.Receipt.NativeMessageID != "" && pending.Receipt.NativeMessageID != receipt.NativeMessageID {
+			return
+		}
+		pending.Receipt = &receipt
+		if pending.Uncertain && (receipt.State == "admitted" || receipt.State == "running" || pilotNativeInputTerminal(&receipt)) {
+			unlock, err := lockPilot(path)
+			if err != nil {
+				return
+			}
+			defer unlock()
+			if _, err := readPilotContext(path, c); err != nil {
+				return
+			}
+			data, err := os.ReadFile(pilotPendingPath(path, id))
+			var current pilotPending
+			if err != nil || json.Unmarshal(data, &current) != nil || current.OperationID != pending.OperationID {
+				return
+			}
+			current.Uncertain, current.Receipt = false, &receipt
+			if err := savePilotPending(pilotPendingPath(path, id), current); err != nil {
+				_, _ = fmt.Fprintf(stderr, "pilot: await: save reconciled operation: %v\n", err)
+				return
+			}
+			pending.Uncertain = false
+		}
+	}
+	refreshOperation()
 	// Subscribe before the roster read, as swarm watch does. The listener is a
 	// process-local cancellation endpoint; exit connects to it and closes this wait.
 	events, err := c.Subscribe()
@@ -620,14 +670,19 @@ func pilotAwait(path string, args []string, remaining time.Duration, c agentClie
 		_, _ = fmt.Fprintf(stderr, "pilot: await: %v\n", err)
 		return 1
 	}
+	if pilotNativeInputTerminal(pending.Receipt) {
+		return pilotJSON(stdout, stderr, map[string]any{"state": row, "operation": pending.Receipt, "reply_confirmed": true})
+	}
 	if pilotHasFreshReply(c, id, pending) {
 		return pilotAwaitReceipt(c, row, true, stdout, stderr)
 	}
-	if !pending.Uncertain && pilotNewReply(row, pending.SentAt) {
+	if !pending.Uncertain && !pilotHasNativeInput(pending) && pilotNewReply(row, pending.SentAt) {
 		return pilotAwaitReceipt(c, row, false, stdout, stderr)
 	}
 	deadline := time.NewTimer(*timeout)
 	defer deadline.Stop()
+	poll := time.NewTicker(time.Second)
+	defer poll.Stop()
 	for {
 		select {
 		case <-stop:
@@ -641,7 +696,11 @@ func pilotAwait(path string, args []string, remaining time.Duration, c agentClie
 			if ev.Session.ID != id {
 				continue
 			}
-			if pending.Uncertain {
+			refreshOperation()
+			if pilotNativeInputTerminal(pending.Receipt) {
+				return pilotJSON(stdout, stderr, map[string]any{"state": ev.Session, "operation": pending.Receipt, "reply_confirmed": true})
+			}
+			if pending.Uncertain || pilotHasNativeInput(pending) {
 				continue
 			}
 			replied := pilotHasFreshReply(c, id, pending)
@@ -650,6 +709,16 @@ func pilotAwait(path string, args []string, remaining time.Duration, c agentClie
 				continue
 			}
 			return pilotAwaitReceipt(c, ev.Session, replied, stdout, stderr)
+		case <-poll.C:
+			refreshOperation()
+			if pilotNativeInputTerminal(pending.Receipt) {
+				current, err := pilotTarget(c, id)
+				if err != nil {
+					_, _ = fmt.Fprintf(stderr, "pilot: await: %v\n", err)
+					return 1
+				}
+				return pilotJSON(stdout, stderr, map[string]any{"state": current, "operation": pending.Receipt, "reply_confirmed": true})
+			}
 		case <-deadline.C:
 			current, err := pilotTarget(c, id)
 			if err != nil {
@@ -660,9 +729,28 @@ func pilotAwait(path string, args []string, remaining time.Duration, c agentClie
 			if pending.Uncertain {
 				result["status"], result["operation_id"] = "delivery_uncertain", pending.OperationID
 			}
+			if pending.Receipt != nil {
+				result["operation"] = pending.Receipt
+			}
 			_ = pilotJSON(stdout, stderr, result)
 			return watchTimeoutExit
 		}
+	}
+}
+
+func pilotHasNativeInput(pending pilotPending) bool {
+	return pending.Receipt != nil && pending.Receipt.NativeMessageID != ""
+}
+
+func pilotNativeInputTerminal(receipt *protocol.SemanticMessageReceipt) bool {
+	if receipt == nil || receipt.NativeMessageID == "" {
+		return false
+	}
+	switch receipt.State {
+	case "completed", "failed", "cancelled", "declined":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -672,7 +760,7 @@ func pilotNewReply(row protocol.SessionView, sentAt time.Time) bool {
 }
 
 func pilotHasFreshReply(c agentClient, id string, pending pilotPending) bool {
-	if pending.SentAt.IsZero() || !pending.HistoryReady || pending.Uncertain {
+	if pending.SentAt.IsZero() || !pending.HistoryReady || pending.Uncertain || pilotHasNativeInput(pending) {
 		return false
 	}
 	h, ok := c.(pilotHistoryClient)

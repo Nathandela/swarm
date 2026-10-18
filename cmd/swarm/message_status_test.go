@@ -71,13 +71,17 @@ func TestPilotAwaitDoesNotBorrowAnotherInputsReadyState(t *testing.T) {
 }
 
 func TestPilotAwaitNativeReconciliationUnblocksNextMessage(t *testing.T) {
-	c := &fakeSemanticReceiptClient{fakeSemanticClient:newFakeSemanticClient(),receipt:protocol.SemanticMessageReceipt{State:"completed",NativeMessageID:"msg_owned"}}
-	path := enterPilotForTest(t,c)
+	c := &fakeSemanticReceiptClient{fakeSemanticClient: newFakeSemanticClient(), receipt: protocol.SemanticMessageReceipt{State: "completed", NativeMessageID: "msg_owned"}}
+	path := enterPilotForTest(t, c)
 	c.messageErr = errors.New("original reply lost")
-	if code,_,_ := pilotCall(c,"--context",path,"send","local/ami","--text","original input"); code == 0 { t.Fatal("lost receipt returned success") }
-	if code,_,stderr := pilotCall(c,"--context",path,"await","local/ami","--timeout","1ms"); code != 0 { t.Fatal(stderr) }
+	if code, _, _ := pilotCall(c, "--context", path, "send", "local/ami", "--text", "original input"); code == 0 {
+		t.Fatal("lost receipt returned success")
+	}
+	if code, _, stderr := pilotCall(c, "--context", path, "await", "local/ami", "--timeout", "1ms"); code != 0 {
+		t.Fatal(stderr)
+	}
 	c.messageErr = nil
-	if code,out,stderr := pilotCall(c,"--context",path,"send","local/ami","--text","next input"); code != 0 || len(c.messages) != 2 || c.messages[0].operation == c.messages[1].operation {
-		t.Fatalf("reconciled input kept blocking a fresh message: exit%d %s %s",code,out,stderr)
+	if code, out, stderr := pilotCall(c, "--context", path, "send", "local/ami", "--text", "next input"); code != 0 || len(c.messages) != 2 || c.messages[0].operation == c.messages[1].operation {
+		t.Fatalf("reconciled input kept blocking a fresh message: exit%d %s %s", code, out, stderr)
 	}
 }

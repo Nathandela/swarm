@@ -59,7 +59,7 @@ func TestMessageUsesExactSemanticPayloadAndIncarnation(t *testing.T) {
 		t.Fatalf("message crossed the wrong boundary: %+v", c.messages)
 	}
 	var receipt map[string]string
-	if err := json.Unmarshal(out.Bytes(), &receipt); err != nil || receipt["operation_id"] != id || receipt["receipt"] != "submitted" {
+	if err := json.Unmarshal(out.Bytes(), &receipt); err != nil || receipt["operation_id"] != id || receipt["state"] != "submitted" {
 		t.Fatalf("uncorrelated receipt %q: %v", out.String(), err)
 	}
 }
