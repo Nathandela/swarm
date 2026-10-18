@@ -4466,14 +4466,14 @@ class PhoneSurface(
             return
         }
         val target = session
-        nativeAnswers[itemId] = ""
         press(pressed) {
+            nativeAnswers[itemId] = ""
             Press(
                 SendPlane.COMMAND,
                 verb = { app -> app.replyNativeRequest(target, itemId, decision, answers) },
                 settle = { answer -> (answer as? Op)?.let { nativeAnswers[itemId] = it.operationID } },
                 refused = { refusal ->
-                    if (refusal.state == ErrorState.INVALID_REQUEST || refusal.state == ErrorState.NOT_FOUND) nativeAnswers.remove(itemId)
+                    if (refusal.state == ErrorState.INVALID_REQUEST || refusal.state == ErrorState.NOT_FOUND || refusal.state == ErrorState.OFFLINE) nativeAnswers.remove(itemId)
                 },
             )
         }
