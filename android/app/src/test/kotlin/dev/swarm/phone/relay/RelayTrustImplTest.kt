@@ -3,6 +3,7 @@ package dev.swarm.phone.relay
 import android.net.http.X509TrustManagerExtensions
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
+import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import javax.net.ssl.TrustManagerFactory
@@ -158,7 +159,13 @@ class RelayTrustImplTest {
             authType: String,
             host: String,
         ): List<X509Certificate> {
-            delegate.checkServerTrusted(chain, authType)
+            try {
+                delegate.checkServerTrusted(chain, authType)
+            } catch (rejected: CertificateException) {
+                // SunJSSE's private cert-path cause differs from Android's public certificate
+                // error domain. Preserve the actual rejection and its cause across the adapter.
+                throw CertificateException("JVM trust manager rejected the chain", rejected)
+            }
             return chain.toList()
         }
     }
