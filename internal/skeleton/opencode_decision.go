@@ -312,7 +312,6 @@ func (d *Daemon) acceptNativeDecisionReceipt(id string, intent nativeDecisionInt
 	result.State = "admitted"
 	result.Reason = ""
 	result.NativeEffect = receipt.NativeEffect
-	return
 }
 
 func (d *Daemon) reconcileNativeDecision(local, id string, req protocol.NativeDecisionReq) (protocol.NativeDecisionReceipt, protocol.ErrorCode, error) {
