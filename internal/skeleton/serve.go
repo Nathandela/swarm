@@ -495,6 +495,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.composerTransactional = d.composerSendTransactional
 	d.api.semanticComposer = d.semanticSendTransactional
 	d.api.semanticStatus = d.semanticOperation
+	d.api.nativeDecision = d.ApplyNativeDecision
+	d.api.nativeRequestRead = d.NativeRequests
+	d.api.nativeDecisionStatus = d.NativeDecisionStatus
 	d.api.interrupt = d.interruptTurn
 	d.api.history = d.interactionHistory
 	d.api.detail = d.interactionDetail

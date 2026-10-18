@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,25 +19,34 @@ import (
 )
 
 type openCodeSendFixture struct {
+	nativeDecisionMode   bool
+	nativeQuestionMode   bool
+	lastDecisionDispatch atomic.Value
+	pendingNative        atomic.Value
+	decisionReceipt      atomic.Value
+	receiptAvailable     atomic.Bool
+	rowAvailable         atomic.Bool
+	nativeRow            atomic.Value
+	d                    *Daemon
+	client               *protocol.Client
+	binding              opencodebridge.Binding
+	identity             opencodebridge.Identity
+	request              protocol.ComposerSendReq
+	calls                atomic.Int32
+	dropReply            atomic.Bool
+	blockDispatch        atomic.Bool
+	dispatchEntered      chan struct{}
+	dispatchRelease      chan struct{}
 	historyPagingFail atomic.Bool
-	rowAvailable      atomic.Bool
-	nativeRow         atomic.Value
-	d                 *Daemon
-	client            *protocol.Client
-	binding           opencodebridge.Binding
-	identity          opencodebridge.Identity
-	request           protocol.ComposerSendReq
-	calls             atomic.Int32
-	dropReply         atomic.Bool
-	blockDispatch     atomic.Bool
-	dispatchEntered   chan struct{}
-	dispatchRelease   chan struct{}
 }
 
 // The real daemon, shim writer and owner protocol surround a private native bridge fixture.
-func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
+func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture)) *openCodeSendFixture {
 	t.Helper()
 	f := &openCodeSendFixture{d: assemble(t), dispatchEntered: make(chan struct{}, 4), dispatchRelease: make(chan struct{})}
+	for _, option := range configure {
+		option(f)
+	}
 	spec := daemon.LaunchSpec{AgentType: "opencode", RequiredRuntime: persist.RequiredRuntimeOpenCode, Argv: []string{fakeAgentBin, mustScript(t, "idle 60s\n")}, Cwd: t.TempDir(), OpenCodeEnv: []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}, Cols: 80, Rows: 24}
 	launch := make(chan error, 1)
 	go func() {
@@ -66,6 +76,13 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if f.nativeDecisionMode {
+		kind, prefix := "permission", "per_"
+		if f.nativeQuestionMode {
+			kind, prefix = "question", "que_"
+		}
+		f.pendingNative.Store([]json.RawMessage{nativeRequestFixture(t, f.binding.RootID, prefix+strings.Repeat("a", 32), kind).Raw})
+	}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+f.binding.Token {
 			w.WriteHeader(401)
@@ -91,8 +108,17 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 			if f.historyPagingFail.Load() {
 				cursor = "older"
 			}
+			permissions, questions := []json.RawMessage{}, []json.RawMessage{}
+			if f.nativeDecisionMode {
+				pending, _ := f.pendingNative.Load().([]json.RawMessage)
+				if f.nativeQuestionMode {
+					questions = pending
+				} else {
+					permissions = pending
+				}
+			}
 			row, _ := json.Marshal(map[string]any{"id": f.binding.RootID, "directory": f.binding.Directory, "version": "1.19.3", "time": map[string]int64{"created": 123}})
-			_ = json.NewEncoder(w).Encode(opencodebridge.Snapshot{Identity: f.identity, Session: row, NextCursor: cursor, Statuses: map[string]json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Messages: []json.RawMessage{}, Children: []json.RawMessage{}, Descendants: []json.RawMessage{}, HierarchyComplete: true, HierarchyScope: openCodeHierarchyScope})
+			_ = json.NewEncoder(w).Encode(opencodebridge.Snapshot{Identity: f.identity, Session: row, NextCursor: cursor, Statuses: map[string]json.RawMessage{}, Permissions: permissions, Questions: questions, Messages: []json.RawMessage{}, Children: []json.RawMessage{}, Descendants: []json.RawMessage{}, HierarchyComplete: true, HierarchyScope: openCodeHierarchyScope})
 		case "/message":
 			raw, ok := f.nativeRow.Load().(json.RawMessage)
 			if !f.rowAvailable.Load() || !ok {
@@ -101,6 +127,12 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 				return
 			}
 			_, _ = w.Write(raw)
+		case "/receipt":
+			if f.receiptAvailable.Load() {
+				_ = json.NewEncoder(w).Encode(f.decisionReceipt.Load())
+			} else {
+				_ = json.NewEncoder(w).Encode(nil)
+			}
 		case "/dispatch":
 			var req opencodebridge.DispatchRequest
 			if json.NewDecoder(r.Body).Decode(&req) != nil {
@@ -123,6 +155,32 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 			rec, ok := f.d.core.ComposerOperation(req.OperationID)
 			if !ok || rec.Phase != idempotency.PhaseExecuting || len(rec.Request) == 0 {
 				t.Error("native effect preceded durable request and execution custody")
+			}
+			if f.nativeDecisionMode {
+				f.lastDecisionDispatch.Store(req)
+				if rec.Action != protocol.OpNativeDecide || len(req.ExpectedRequest) == 0 || req.RequestExpiresAtMS <= time.Now().UnixMilli() {
+					t.Error("native decision effect lacks durable content/expiry proof")
+				}
+				effect := "single_request"
+				if req.Reply == "always" {
+					effect = "approve_native_patterns_and_matching_session_requests"
+				}
+				if req.Reply == "reject" {
+					effect = "reject_session_pending_permissions"
+				}
+				receipt := opencodebridge.Receipt{Identity: f.identity, Kind: req.Kind, TargetID: req.TargetID, RequestID: req.RequestID, OperationID: req.OperationID, Status: "admitted", NativeStatus: 200, NativeEffect: effect}
+				f.decisionReceipt.Store(receipt)
+				if f.dropReply.Load() {
+					conn, _, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Error(err)
+					} else {
+						_ = conn.Close()
+					}
+					return
+				}
+				_ = json.NewEncoder(w).Encode(receipt)
+				return
 			}
 			row, _ := json.Marshal(map[string]any{"info": map[string]any{"id": req.MessageID, "sessionID": f.binding.RootID, "role": "user", "agent": "build", "model": map[string]string{"providerID": "fixture", "modelID": "fixture-model", "variant": "max"}, "time": map[string]int64{"created": time.Now().UnixMilli()}}, "parts": []any{map[string]any{"id": "prt_native", "sessionID": f.binding.RootID, "messageID": req.MessageID, "type": "text", "text": req.Text}}})
 			f.nativeRow.Store(json.RawMessage(row))

@@ -294,7 +294,7 @@ func (s *Store) transition(operationID string, phase Phase, outcome []byte, setO
 	if !ok {
 		return fmt.Errorf("idempotency: unknown operation_id %q", operationID)
 	}
-	if phase == PhaseFailed && rec.Action == "semantic_send" && len(rec.Evidence) > 0 {
+	if phase == PhaseFailed && (rec.Action == "semantic_send" || rec.Action == "native_decide") && len(rec.Evidence) > 0 {
 		return errors.New("idempotency: native evidence cannot become a failed delivery")
 	}
 	rec.Phase = phase
@@ -440,7 +440,7 @@ func (s *Store) compactLocked(now time.Time) error {
 
 func (s *Store) expired(rec Record, now time.Time) bool {
 	// An unresolved native write must never age into a fresh owner semantic send.
-	if rec.Action == "semantic_send" && unresolvedPhase(rec.Phase) {
+	if (rec.Action == "semantic_send" || rec.Action == "native_decide") && unresolvedPhase(rec.Phase) {
 		return false
 	}
 	return s.opts.TTL > 0 && now.Sub(rec.UpdatedAt) > s.opts.TTL
@@ -585,6 +585,22 @@ func (s *Store) RequestOperations(action, session string) []string {
 	for id, rec := range s.records {
 		if rec.Action == action && rec.SessionID == session && len(rec.Request) > 0 {
 			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// PendingRequestOperations skips confirmed history before callers inspect request bodies.
+func (s *Store) PendingRequestOperations(action, session, instance string, limit int) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []string
+	for id, rec := range s.records {
+		if rec.Action == action && rec.SessionID == session && rec.SessionInstance == instance && len(rec.Request) > 0 && len(rec.Evidence) == 0 && unresolvedPhase(rec.Phase) {
+			ids = append(ids, id)
+			if len(ids) > limit {
+				break
+			}
 		}
 	}
 	return ids

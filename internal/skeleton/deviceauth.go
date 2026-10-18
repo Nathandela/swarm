@@ -25,7 +25,7 @@ func actionClass(action string) (device.Action, bool) {
 		// today (handleRefusalOp), but the capability GATE is real now, ahead of the
 		// handler that will use it.
 		return device.ActionControl, true
-	case protocol.ActionApprove:
+	case protocol.ActionApprove, protocol.ActionNativeDecide:
 		return device.ActionApprove, true
 	case protocol.ActionOperationStatus:
 		// READ, on ActionPushPrefs's own precedent below: it cannot start, stop or type

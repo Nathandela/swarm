@@ -79,8 +79,12 @@ func TestNativeRequestCardsKeepMultipleExactAuthoritiesAndExpiry(t *testing.T) {
 		t.Fatal("removed native requests retained authority")
 	}
 	view.Pending[0].Raw = json.RawMessage(strings.Replace(string(view.Pending[0].Raw), "printf changed", strings.Repeat("x", 13000), 1))
-	if cards, err = f.d.openCodeRequestCards(f.binding.WorkerID, view); err == nil || len(cards) != 0 {
+	if cards, err = f.d.openCodeRequestCards(f.binding.WorkerID, view); err != nil || len(cards) != 0 {
 		t.Fatal("oversized context retained approval authority")
+	}
+	view.Pending = append(view.Pending, nativeRequestFixture(t, f.identity.RootID, "per_other", "permission"))
+	if cards, err = f.d.openCodeRequestCards(f.binding.WorkerID, view); err != nil || len(cards) != 1 || cards[0].RequestID != "per_other" {
+		t.Fatal("one oversized request withheld another complete request")
 	}
 	view.CurrentScopeKnown = false
 	if cards, err = f.d.openCodeRequestCards(f.binding.WorkerID, view); err == nil || len(cards) != 0 {

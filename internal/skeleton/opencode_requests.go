@@ -46,7 +46,10 @@ func (d *Daemon) openCodeRequestCards(local string, view OpenCodeView) ([]protoc
 	next := make(map[string]nativeRequestAuthority, len(view.Pending))
 	cards := make([]protocol.NativeRequestView, 0, len(view.Pending))
 	for _, pending := range view.Pending {
-		if len(pending.Raw) == 0 || len(pending.Raw) > 32<<10 {
+		if len(pending.Raw) > 32<<10 {
+			continue
+		}
+		if len(pending.Raw) == 0 {
 			return refuse()
 		}
 		request, err := decodeOpenCodeRequest(pending.Kind, pending.Raw)
@@ -74,7 +77,6 @@ func (d *Daemon) openCodeRequestCards(local string, view OpenCodeView) ([]protoc
 		if guard.hash != card.RequestHash || !now.Before(guard.expires) {
 			guard = nativeRequestAuthority{hash: card.RequestHash, expires: now.Add(5 * time.Minute)}
 		}
-		next[key] = guard
 		expires := guard.expires
 		card.ExpiresAt = &expires
 		if request.Kind == "permission" {
@@ -94,9 +96,13 @@ func (d *Daemon) openCodeRequestCards(local string, view OpenCodeView) ([]protoc
 			card.Decisions = []protocol.NativeDecisionOption{{ID: "question_reply", Label: "Send answers", Effect: "single_request"}, {ID: "question_reject", Label: "Reject this question", Effect: "single_request"}}
 		}
 		encoded, err := json.Marshal(card)
-		if err != nil || len(encoded) > schema.MaxNativeRequestViewBytes {
+		if err != nil {
 			return refuse()
 		}
+		if len(encoded) > schema.MaxNativeRequestViewBytes {
+			continue
+		}
+		next[key] = guard
 		cards = append(cards, card)
 	}
 	if d.nativeRequests.sessions == nil {
