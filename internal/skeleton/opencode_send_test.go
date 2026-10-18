@@ -25,12 +25,15 @@ type openCodeSendFixture struct {
 	request   protocol.ComposerSendReq
 	calls     atomic.Int32
 	dropReply atomic.Bool
+	blockDispatch atomic.Bool
+	dispatchEntered chan struct{}
+	dispatchRelease chan struct{}
 }
 
 // The real daemon, shim writer and owner protocol surround a private native bridge fixture.
 func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 	t.Helper()
-	f := &openCodeSendFixture{d: assemble(t)}
+	f := &openCodeSendFixture{d: assemble(t), dispatchEntered: make(chan struct{}, 4), dispatchRelease: make(chan struct{})}
 	spec := daemon.LaunchSpec{AgentType: "opencode", RequiredRuntime: persist.RequiredRuntimeOpenCode, Argv: []string{fakeAgentBin, mustScript(t, "idle 60s\n")}, Cwd: t.TempDir(), OpenCodeEnv: []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}, Cols: 80, Rows: 24}
 	launch := make(chan error, 1)
 	go func() {
@@ -86,6 +89,8 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 				return
 			}
 			f.calls.Add(1)
+			select { case f.dispatchEntered <- struct{}{}: default: }
+			if f.blockDispatch.Load() { select { case <-f.dispatchRelease: case <-r.Context().Done(): return } }
 			rec, ok := f.d.core.ComposerOperation(req.OperationID)
 			if !ok || rec.Phase != idempotency.PhaseExecuting || len(rec.Request) == 0 {
 				t.Error("native effect preceded durable request and execution custody")
@@ -168,4 +173,37 @@ func TestOpenCodeOwnerUncertainSendNeverReposts(t *testing.T) {
 	if !ok || rec.Phase != idempotency.PhaseExecuting || len(rec.Request) == 0 || f.calls.Load() != 1 {
 		t.Fatalf("ambiguous native effect lost its non-replay guard: %+v calls%d", rec, f.calls.Load())
 	}
+}
+
+func TestOpenCodeOwnerEndWinsBeforeNativeSubmission(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	if err := f.d.withOwnerSessionEnd(f.binding.WorkerID, func() error { return nil }); err != nil { t.Fatal(err) }
+	id, err := protocol.NewSemanticOperationID()
+	if err != nil { t.Fatal(err) }
+	if err := f.client.SemanticSend(id, f.request); err == nil || f.calls.Load() != 0 {
+		t.Fatal("native submission crossed an owner end intent while Process was still running")
+	}
+	rec, ok := f.d.core.ComposerOperation(id)
+	if !ok || rec.Phase == idempotency.PhaseExecuting || len(rec.Evidence) != 0 { t.Fatal("owner end refusal crossed native execution boundary") }
+}
+
+func TestOpenCodeNativeSubmissionAndOwnerEndShareOneLifecycleFence(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	f.blockDispatch.Store(true)
+	t.Cleanup(func() { select { case <-f.dispatchRelease: default: close(f.dispatchRelease) } })
+	id, err := protocol.NewSemanticOperationID()
+	if err != nil { t.Fatal(err) }
+	sent := make(chan error,1)
+	go func() { sent <- f.client.SemanticSend(id,f.request) }()
+	select { case <-f.dispatchEntered: case <-time.After(5*time.Second): t.Fatal("native write never reached guarded dispatch") }
+	ownerStarted, ownerAction, ownerDone := make(chan struct{}), make(chan struct{}), make(chan error,1)
+	go func() {
+		close(ownerStarted)
+		ownerDone <- f.d.withOwnerSessionEnd(f.binding.WorkerID,func() error { close(ownerAction); return nil })
+	}()
+	<-ownerStarted
+	select { case <-ownerAction: t.Fatal("owner terminal action crossed an in-flight native dispatch"); case <-time.After(50*time.Millisecond): }
+	close(f.dispatchRelease)
+	if err := <-sent; err != nil { t.Fatal(err) }
+	select { case err := <-ownerDone: if err != nil { t.Fatal(err) }; case <-time.After(time.Second): t.Fatal("owner terminal action did not resume") }
 }
