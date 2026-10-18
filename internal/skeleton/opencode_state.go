@@ -55,6 +55,10 @@ type ocInputState struct {
 	textTrunc  bool
 	parts      []ocPartState
 	partIDs    map[string]int
+	agent      string
+	providerID string
+	modelID    string
+	variant    string
 
 	outcome    OpenCodeOutcome
 	outcomeSrc string
@@ -153,6 +157,10 @@ type OpenCodeInput struct {
 	OutcomeSource string
 	OutcomeAt     int64
 	ErrorName     string
+	Agent         string
+	ProviderID    string
+	ModelID       string
+	Variant       string
 }
 
 // OpenCodeMessage is one observed native message (informational).
@@ -441,6 +449,13 @@ func (s *OpenCodeState) applyMessage(m opencode.Message, source string) OpenCode
 		if !ok {
 			return OCRefusedCap
 		}
+		if m.Agent != "" && m.Model != nil {
+			if in.agent != "" && (in.agent != m.Agent || in.providerID != m.Model.ProviderID || in.modelID != m.Model.ModelID || in.variant != m.Model.Variant) {
+				s.degradeStream("native input selection changed")
+				return OCIgnoredUnqualified
+			}
+			in.agent, in.providerID, in.modelID, in.variant = m.Agent, m.Model.ProviderID, m.Model.ModelID, m.Model.Variant
+		}
 		if source == OpenCodeOutcomeSourceLive && in.outcome == OpenCodeOutcomeNone {
 			in.live = true
 		}
@@ -679,6 +694,18 @@ func (s *OpenCodeState) applyPartFact(p opencode.Part) OpenCodeDisposition {
 	if p.Type != "text" && p.Type != "file" {
 		return OCIgnoredUntracked
 	}
+	synthetic := p.Synthetic || p.Ignored
+	// Retain owner text ahead of injected context; only genuine text can prove a send's body.
+	if !synthetic {
+		for i := range in.parts {
+			if in.parts[i].synthetic {
+				in.parts[i].text = ""
+				in.parts[i].truncated = false
+			}
+		}
+	} else if in.classified && !in.synthetic {
+		p.Text = ""
+	}
 	budget := maxOCInputText
 	for _, old := range in.parts {
 		if old.id != p.ID {
@@ -686,7 +713,6 @@ func (s *OpenCodeState) applyPartFact(p opencode.Part) OpenCodeDisposition {
 		}
 	}
 	text := clampBytes(p.Text, min(maxOCPartText, budget))
-	synthetic := p.Synthetic || p.Ignored
 	if idx, ok := in.partIDs[p.ID]; ok {
 		old := in.parts[idx]
 		if len(old.text) > len(text) && strings.HasPrefix(old.text, text) {
@@ -726,6 +752,11 @@ func (in *ocInputState) recompute() {
 			synthetic = true
 		} else {
 			genuine = true
+		}
+	}
+	for _, p := range in.parts {
+		if genuine && p.synthetic {
+			continue
 		}
 		if p.truncated {
 			truncated = true
@@ -894,7 +925,7 @@ func (s *OpenCodeState) resolveUncertain(in *ocInputState) {
 }
 
 func (in *ocInputState) view() OpenCodeInput {
-	v := OpenCodeInput{MessageID: in.msgID, Text: in.text, TextTruncated: in.textTrunc, Synthetic: in.synthetic, Classified: in.classified, At: in.at}
+	v := OpenCodeInput{MessageID: in.msgID, Text: in.text, TextTruncated: in.textTrunc, Synthetic: in.synthetic, Classified: in.classified, At: in.at, Agent: in.agent, ProviderID: in.providerID, ModelID: in.modelID, Variant: in.variant}
 	if in.classified && !in.compaction {
 		v.Outcome = in.outcome
 		v.OutcomeSource = in.outcomeSrc

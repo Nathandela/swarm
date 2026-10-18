@@ -90,11 +90,20 @@ type Message struct {
 	Time      MessageTime
 	Finish    string
 	Error     *MessageError
+	Agent     string
+	Model     *UserModel
 	// Summary is ordinary diff metadata on user messages and a compaction marker
 	// only when an assistant carries summary:true.
 	Summary json.RawMessage
 	// Raw is the complete native `info` object as received.
 	Raw json.RawMessage
+}
+
+// UserModel is the actual native user-message selection; absent fields remain absent.
+type UserModel struct {
+	ProviderID string `json:"providerID"`
+	ModelID    string `json:"modelID"`
+	Variant    string `json:"variant"`
 }
 
 // IsAssistantSummary reports the assistant-side compaction marker
@@ -311,6 +320,9 @@ func decodeMessage(raw json.RawMessage, outerSession string) (Message, error) {
 	if w.ID == "" || len(w.ID) > 128 || len(w.ParentID) > 128 || len(w.Finish) > 64 || (w.Role != "user" && w.Role != "assistant") || w.Time.Created <= 0 || (w.Error != nil && (w.Error.Name == "" || len(w.Error.Name) > 128)) {
 		return Message{}, fmt.Errorf("opencode: malformed message identity or lifecycle")
 	}
+	if len(w.Agent) > 256 || w.Model != nil && (w.Model.ProviderID == "" || w.Model.ModelID == "" || len(w.Model.ProviderID) > 256 || len(w.Model.ModelID) > 256 || len(w.Model.Variant) > 256) {
+		return Message{}, fmt.Errorf("opencode: malformed native user selection")
+	}
 	m := w.message()
 	m.SessionID = sid
 	m.Raw = append(json.RawMessage(nil), raw...)
@@ -368,6 +380,8 @@ type wireMessage struct {
 	Finish    string            `json:"finish"`
 	Error     *wireMessageError `json:"error"`
 	Summary   json.RawMessage   `json:"summary"`
+	Agent     string            `json:"agent"`
+	Model     *UserModel        `json:"model"`
 }
 
 func (w wireMessage) message() Message {
@@ -379,6 +393,8 @@ func (w wireMessage) message() Message {
 		Time:      w.Time,
 		Finish:    w.Finish,
 		Summary:   append(json.RawMessage(nil), w.Summary...),
+		Agent:     w.Agent,
+		Model:     w.Model,
 	}
 	if w.Error != nil {
 		e := w.Error.messageError()
