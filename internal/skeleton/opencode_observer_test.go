@@ -13,6 +13,7 @@ import (
 )
 
 type ocReaderFake struct {
+	message       func(string) (json.RawMessage, error)
 	mu            sync.Mutex
 	identity      opencodebridge.Identity
 	subscribed    chan struct{}
@@ -85,6 +86,13 @@ func TestOpenCodeObserverChildStatusOverlapRefetches(t *testing.T) {
 		t.Fatal("descendant status overlap was not reconciled")
 	}
 }
+func (f *ocReaderFake) Message(_ context.Context, id string) (json.RawMessage, error) {
+	if f.message == nil {
+		return nil, errors.New("unexpected message read")
+	}
+	return f.message(id)
+}
+
 func (f *ocReaderFake) Snapshot(ctx context.Context, _ int, _ string) (opencodebridge.Snapshot, error) {
 	select {
 	case <-f.subscribed:

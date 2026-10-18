@@ -31,6 +31,25 @@ func ocApply(t *testing.T, st *OpenCodeState, epoch uint64, raw []byte, want Ope
 	}
 }
 
+// ocReadAssistant supplies the complete native row needed to qualify success.
+func ocReadAssistant(t *testing.T, st *OpenCodeState, epoch uint64, raw []byte) {
+	t.Helper()
+	event, err := opencode.DecodeEvent(raw)
+	if err != nil || event.MessageUpdated == nil {
+		t.Fatalf("assistant fixture: %v", err)
+	}
+	row, err := json.Marshal(struct {
+		Info  json.RawMessage   `json:"info"`
+		Parts []json.RawMessage `json:"parts"`
+	}{event.MessageUpdated.Info.Raw, []json.RawMessage{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.reconcileMessage(event.MessageUpdated.Info.ID, row, epoch); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func clipForTest(raw []byte) string {
 	if len(raw) > 160 {
 		return string(raw[:160]) + "..."
@@ -155,8 +174,8 @@ func TestOpenCodeState_CanonicalTurnCorrelation(t *testing.T) {
 		t.Fatalf("idle closed the turn: %+v", *got)
 	}
 
-	// The terminal update of the same native assistant message closes it.
-	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1200, "stop"), OCApplied)
+	// A complete later assistant row without continuing tools closes it.
+	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_final", "msg_u1", 1150, 1200, "stop"))
 	v = st.View()
 	in = ocInput(v, "msg_u1")
 	if in.Outcome != OpenCodeOutcomeCompleted || in.OutcomeSource != "live" || in.OutcomeAt != 1200 || in.ErrorName != "" {
@@ -165,7 +184,7 @@ func TestOpenCodeState_CanonicalTurnCorrelation(t *testing.T) {
 	if v.Current != nil {
 		t.Fatalf("current = %+v, want nil", v.Current)
 	}
-	if len(v.Messages) != 2 || v.Messages[0].ID != "msg_u1" || v.Messages[1].ID != "msg_a1" {
+	if len(v.Messages) != 3 || v.Messages[0].ID != "msg_u1" || v.Messages[1].ID != "msg_a1" || v.Messages[2].ID != "msg_final" {
 		t.Fatalf("messages = %+v", v.Messages)
 	}
 }
@@ -205,7 +224,7 @@ func TestOpenCodeState_TerminalOutcomeClassification(t *testing.T) {
 			st, epoch := newOCState(t, root)
 			ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
 			ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
-			ocApply(t, st, epoch, tc.raw(), OCApplied)
+			ocReadAssistant(t, st, epoch, tc.raw())
 			in := ocInput(st.View(), "msg_u1")
 			if in == nil {
 				t.Fatal("input missing")
@@ -225,7 +244,7 @@ func TestOpenCodeState_ErrorIsNotErasedByCompletion(t *testing.T) {
 		ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
 		ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
 		ocApply(t, st, epoch, ocAssistantError(root, "msg_a1", "msg_u1", 1100, 1200, "APIError"), OCApplied)
-		ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1300, "stop"), OCApplied)
+		ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1300, "stop"))
 		in := ocInput(st.View(), "msg_u1")
 		if in.Outcome != OpenCodeOutcomeFailed || in.ErrorName != "APIError" || in.OutcomeAt != 1200 {
 			t.Fatalf("late completion overwrote the error: %+v", *in)
@@ -236,7 +255,7 @@ func TestOpenCodeState_ErrorIsNotErasedByCompletion(t *testing.T) {
 		st, epoch := newOCState(t, root)
 		ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
 		ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
-		ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1200, "stop"), OCApplied)
+		ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1200, "stop"))
 		ocApply(t, st, epoch, ocAssistantError(root, "msg_a2", "msg_u1", 1300, 1400, "APIError"), OCApplied)
 		in := ocInput(st.View(), "msg_u1")
 		if in.Outcome != OpenCodeOutcomeFailed || in.ErrorName != "APIError" || in.OutcomeAt != 1400 {
@@ -268,7 +287,7 @@ func TestOpenCodeState_ToolCallsStepIsNeverTerminal(t *testing.T) {
 	if in := ocInput(st.View(), "msg_u1"); in.Outcome != OpenCodeOutcomeNone {
 		t.Fatalf("tool-calls step with completion metadata closed the turn: %+v", *in)
 	}
-	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1300, "stop"), OCApplied)
+	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1300, "stop"))
 	if in := ocInput(st.View(), "msg_u1"); in.Outcome != OpenCodeOutcomeCompleted || in.OutcomeAt != 1300 {
 		t.Fatalf("final stop did not complete: %+v", *in)
 	}
@@ -438,7 +457,7 @@ func TestOpenCodeState_TerminalWithoutKnownInputBecomesUncertain(t *testing.T) {
 	const root = "ses_root"
 	st, epoch := newOCState(t, root)
 
-	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_g0", "msg_ghost0", 1000, 1100, "stop"), OCApplied)
+	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_g0", "msg_ghost0", 1000, 1100, "stop"))
 	v := st.View()
 	if len(v.Inputs) != 0 {
 		t.Fatalf("uncertain terminal fabricated an input: %+v", v.Inputs)
@@ -452,7 +471,7 @@ func TestOpenCodeState_TerminalWithoutKnownInputBecomesUncertain(t *testing.T) {
 	}
 
 	for i := 1; i < maxOCUncertain+1; i++ {
-		ocApply(t, st, epoch, ocAssistantMessage(root, fmt.Sprintf("msg_g%d", i), fmt.Sprintf("msg_ghost%d", i), 1000, int64(1100+i), "stop"), OCApplied)
+		ocReadAssistant(t, st, epoch, ocAssistantMessage(root, fmt.Sprintf("msg_g%d", i), fmt.Sprintf("msg_ghost%d", i), 1000, int64(1100+i), "stop"))
 	}
 	v = st.View()
 	if len(v.Uncertain) != maxOCUncertain {
@@ -473,7 +492,7 @@ func TestOpenCodeState_AutoContinueDoesNotFinishTheRequestedInput(t *testing.T) 
 	ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
 	ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_request", "request"), OCApplied)
 	ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_1", "do the thing"), OCApplied)
-	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1200, "stop"), OCApplied)
+	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_u1", 1100, 1200, "stop"))
 
 	// The auto-continue user message is synthetic: recorded, not the owner.
 	ocApply(t, st, epoch, ocUserMessage(root, "msg_u2", 1400), OCApplied)
@@ -489,7 +508,7 @@ func TestOpenCodeState_AutoContinueDoesNotFinishTheRequestedInput(t *testing.T) 
 
 	// Its terminal outcome lands on the synthetic record and flags the epoch;
 	// the requested input is already complete and is not touched.
-	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a2", "msg_u2", 1450, 1500, "stop"), OCApplied)
+	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_a2", "msg_u2", 1450, 1500, "stop"))
 	v = st.View()
 	if got := ocInput(v, "msg_u2"); got.Outcome != OpenCodeOutcomeCompleted || got.OutcomeSource != "live" || got.OutcomeAt != 1500 {
 		t.Fatalf("synthetic outcome = %+v", got)
@@ -571,7 +590,7 @@ func TestOpenCodeState_InputCapacityEvictsTerminalThenRefuses(t *testing.T) {
 
 	ocApply(t, st, epoch, ocUserMessage(root, "msg_1", 1000), OCApplied)
 	ocApply(t, st, epoch, ocUserTextPart(root, "msg_1", "prt_request", "request"), OCApplied)
-	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_1", 1001, 1010, "stop"), OCApplied)
+	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_a1", "msg_1", 1001, 1010, "stop"))
 	for i := 2; i <= maxOCInputs; i++ {
 		ocApply(t, st, epoch, ocUserMessage(root, fmt.Sprintf("msg_%d", i), int64(1000+i)), OCApplied)
 	}
@@ -608,7 +627,7 @@ func TestOpenCodeState_InputCapacityEvictsTerminalThenRefuses(t *testing.T) {
 	}
 
 	// The refused message's terminal answer is explicit uncertainty.
-	ocApply(t, st, epoch, ocAssistantMessage(root, fmt.Sprintf("msg_ar"), refused, 2110, 2120, "stop"), OCApplied)
+	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, fmt.Sprintf("msg_ar"), refused, 2110, 2120, "stop"))
 	if got := st.View().Uncertain; len(got) != 1 || got[0].InputID != refused {
 		t.Fatalf("uncertain = %+v", got)
 	}
@@ -635,7 +654,7 @@ func TestOpenCodeState_ViewIsACopy(t *testing.T) {
 	ocApply(t, st, epoch, ocRetryStatus(root, 1, "slow", 2000, "wait"), OCApplied)
 	ocApply(t, st, epoch, ocUserMessage(root, "msg_u1", 1000), OCApplied)
 	ocApply(t, st, epoch, ocUserTextPart(root, "msg_u1", "prt_1", "hi"), OCApplied)
-	ocApply(t, st, epoch, ocAssistantMessage(root, "msg_g", "msg_ghost", 1100, 1200, "stop"), OCApplied)
+	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_g", "msg_ghost", 1100, 1200, "stop"))
 	ocApply(t, st, epoch, ocSessionError(root, "APIError", "boom"), OCApplied)
 
 	v := st.View()
@@ -731,7 +750,7 @@ func TestOpenCodeState_HighRateStaysBoundedAndDeterministic(t *testing.T) {
 			case 2:
 				st.Apply(ocUserTextPart(root, fmt.Sprintf("msg_u%d", n), fmt.Sprintf("prt_%d", i), "chunk"), epoch)
 			case 3:
-				st.Apply(ocAssistantMessage(root, fmt.Sprintf("msg_a%d", n), fmt.Sprintf("msg_u%d", n), int64(1001+n), int64(1100+n), "stop"), epoch)
+				ocReadAssistant(t, st, epoch, ocAssistantMessage(root, fmt.Sprintf("msg_a%d", n), fmt.Sprintf("msg_u%d", n), int64(1001+n), int64(1100+n), "stop"))
 			case 4:
 				st.Apply([]byte(fmt.Sprintf(`{"id":"evt_x%d","type":"session.turn.started","properties":{}}`, i)), epoch)
 			}

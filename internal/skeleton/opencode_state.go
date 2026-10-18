@@ -499,6 +499,21 @@ func (s *OpenCodeState) applyMessage(m opencode.Message, source string) OpenCode
 	return s.applyAssistantOutcome(m, source)
 }
 
+// reconcileMessage qualifies a live terminal candidate from an exact complete native row.
+func (s *OpenCodeState) reconcileMessage(messageID string, raw []byte, epoch uint64) error {
+	if epoch != s.epoch {
+		return fmt.Errorf("skeleton: stale native message epoch")
+	}
+	m, _, err := opencode.DecodeMessageRow(raw)
+	if err != nil || m.ID != messageID || m.SessionID != s.root || m.Role != "assistant" {
+		return fmt.Errorf("skeleton: native terminal message identity could not be verified")
+	}
+	if got := s.applyMessage(m, OpenCodeOutcomeSourceLive); got == OCRefusedCap {
+		return fmt.Errorf("skeleton: native message capacity reached")
+	}
+	return nil
+}
+
 // ImportHistory adds bounded native rows without turning old completions into live events.
 // It does not heal a stream gap: missing rows or outstanding inputs still need reconciliation.
 func (s *OpenCodeState) ImportHistory(rows []json.RawMessage, epoch uint64) error {
@@ -558,6 +573,14 @@ func (s *OpenCodeState) applyAssistantOutcome(m opencode.Message, source string)
 			return OCIgnoredUnqualified
 		}
 		return OCApplied
+	}
+	if outcome == OpenCodeOutcomeCompleted {
+		if !m.PartsKnown {
+			return OCNeedsSnapshot
+		}
+		if m.ContinuingTools {
+			return OCApplied
+		}
 	}
 	at := m.Time.Completed
 	if at == 0 {

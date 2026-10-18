@@ -83,15 +83,18 @@ type MessageUpdatedEvent struct {
 
 // Message is a normalized native message record.
 type Message struct {
-	ID        string
-	SessionID string
-	Role      string
-	ParentID  string
-	Time      MessageTime
-	Finish    string
-	Error     *MessageError
-	Agent     string
-	Model     *UserModel
+	// Full row reads qualify whether native tool work continues after finish:stop.
+	PartsKnown      bool
+	ContinuingTools bool
+	ID              string
+	SessionID       string
+	Role            string
+	ParentID        string
+	Time            MessageTime
+	Finish          string
+	Error           *MessageError
+	Agent           string
+	Model           *UserModel
 	// Summary is ordinary diff metadata on user messages and a compaction marker
 	// only when an assistant carries summary:true.
 	Summary json.RawMessage
@@ -141,16 +144,17 @@ type MessagePartUpdatedEvent struct {
 // Part is a normalized native message part. Only the fields this module
 // tracks are typed; Raw retains the exact part bytes for everything else.
 type Part struct {
-	ID        string
-	SessionID string
-	MessageID string
-	Type      string
-	Text      string
-	Synthetic bool
-	Ignored   bool
-	CallID    string
-	Tool      string
-	State     *ToolState
+	ProviderExecuted bool
+	ID               string
+	SessionID        string
+	MessageID        string
+	Type             string
+	Text             string
+	Synthetic        bool
+	Ignored          bool
+	CallID           string
+	Tool             string
+	State            *ToolState
 	// Auto is the compaction part's marker (type "compaction").
 	Auto bool
 	Raw  json.RawMessage
@@ -158,6 +162,9 @@ type Part struct {
 
 // ToolState is a tool part's execution state.
 type ToolState struct {
+	Metadata struct {
+		Interrupted bool `json:"interrupted"`
+	} `json:"metadata"`
 	Status string          `json:"status"`
 	Title  string          `json:"title"`
 	Input  json.RawMessage `json:"input"`
@@ -301,6 +308,12 @@ func DecodeMessageRow(raw []byte) (Message, []Part, error) {
 		seen[p.ID] = true
 		parts = append(parts, p)
 	}
+	m.PartsKnown = true
+	for _, part := range parts {
+		if part.Type == "tool" && !part.ProviderExecuted && !(part.State != nil && part.State.Status == "error" && part.State.Metadata.Interrupted) {
+			m.ContinuingTools = true
+		}
+	}
 	return m, parts, nil
 }
 
@@ -404,6 +417,9 @@ func (w wireMessage) message() Message {
 }
 
 type wirePart struct {
+	Metadata struct {
+		ProviderExecuted bool `json:"providerExecuted"`
+	} `json:"metadata"`
 	ID        string     `json:"id"`
 	SessionID string     `json:"sessionID"`
 	MessageID string     `json:"messageID"`
@@ -419,17 +435,18 @@ type wirePart struct {
 
 func (w wirePart) part() Part {
 	return Part{
-		ID:        w.ID,
-		SessionID: w.SessionID,
-		MessageID: w.MessageID,
-		Type:      w.Type,
-		Text:      w.Text,
-		Synthetic: w.Synthetic,
-		Ignored:   w.Ignored,
-		CallID:    w.CallID,
-		Tool:      w.Tool,
-		State:     w.State,
-		Auto:      w.Auto,
+		ProviderExecuted: w.Metadata.ProviderExecuted,
+		ID:               w.ID,
+		SessionID:        w.SessionID,
+		MessageID:        w.MessageID,
+		Type:             w.Type,
+		Text:             w.Text,
+		Synthetic:        w.Synthetic,
+		Ignored:          w.Ignored,
+		CallID:           w.CallID,
+		Tool:             w.Tool,
+		State:            w.State,
+		Auto:             w.Auto,
 	}
 }
 

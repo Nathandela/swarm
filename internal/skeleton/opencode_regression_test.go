@@ -50,7 +50,7 @@ func TestOpenCodeRegressionEvictedInputCannotReopenFromDuplicate(t *testing.T) {
 		a := fmt.Sprintf("msg_a%d", i)
 		s.Apply(ocUserMessage("ses_root", u, int64(1000+i)), e)
 		s.Apply(ocUserTextPart("ses_root", u, "prt_g", "request"), e)
-		s.Apply(ocAssistantMessage("ses_root", a, u, int64(1100+i), int64(1200+i), "stop"), e)
+		ocReadAssistant(t, s, e, ocAssistantMessage("ses_root", a, u, int64(1100+i), int64(1200+i), "stop"))
 	}
 	if ocInput(s.View(), "msg_u0") != nil {
 		t.Fatal("fixture did not evict oldest input")
@@ -63,7 +63,7 @@ func TestOpenCodeRegressionEvictedInputCannotReopenFromDuplicate(t *testing.T) {
 func TestOpenCodeRegressionSyntheticAfterTerminalStillDegrades(t *testing.T) {
 	s, e := newOCState(t, "ses_root")
 	s.Apply(ocUserMessage("ses_root", "msg_auto", 1000), e)
-	s.Apply(ocAssistantMessage("ses_root", "msg_a1", "msg_auto", 1100, 1200, "stop"), e)
+	ocReadAssistant(t, s, e, ocAssistantMessage("ses_root", "msg_a1", "msg_auto", 1100, 1200, "stop"))
 	s.Apply(ocSyntheticTextPart("ses_root", "msg_auto", "prt_s", "continue"), e)
 	if v := s.View(); !v.Degraded {
 		t.Fatalf("unqualified synthetic outcome escaped degradation after reordered part: %+v", ocInput(v, "msg_auto"))
@@ -121,7 +121,7 @@ func TestOpenCodeRegressionNilSnapshotDoesNotProveIdle(t *testing.T) {
 func TestOpenCodeRegressionDuplicateUnknownTerminalDoesNotExhaustCapacity(t *testing.T) {
 	s, e := newOCState(t, "ses_root")
 	for i := 0; i < maxOCUncertain+5; i++ {
-		s.Apply(ocAssistantMessage("ses_root", "msg_a1", "msg_missing", 1100, 1200, "stop"), e)
+		ocReadAssistant(t, s, e, ocAssistantMessage("ses_root", "msg_a1", "msg_missing", 1100, 1200, "stop"))
 	}
 	if v := s.View(); len(v.Uncertain) != 1 {
 		t.Fatalf("duplicate terminal consumed %d uncertainty entries", len(v.Uncertain))
@@ -140,7 +140,7 @@ func TestOpenCodeRegressionPendingUpdatesCoalesce(t *testing.T) {
 func TestOpenCodeRegressionMissingPartsHaveNoOwnerAuthority(t *testing.T) {
 	s, e := newOCState(t, "ses_root")
 	s.Apply(ocUserMessage("ses_root", "msg_u1", 1000), e)
-	s.Apply(ocAssistantMessage("ses_root", "msg_a1", "msg_u1", 1100, 1200, "stop"), e)
+	ocReadAssistant(t, s, e, ocAssistantMessage("ses_root", "msg_a1", "msg_u1", 1100, 1200, "stop"))
 	if v := s.View(); v.Current != nil || ocInput(v, "msg_u1").Outcome != "" {
 		t.Fatalf("unclassified user record claimed owner authority: %+v", v)
 	}
@@ -161,7 +161,7 @@ func TestOpenCodeRegressionHistoryDoesNotBecomeLiveCompletion(t *testing.T) {
 	if got := ocInput(s.View(), "msg_u1").OutcomeSource; got != OpenCodeOutcomeSourceImported {
 		t.Fatalf("old history source=%q", got)
 	}
-	s.Apply(ocAssistantMessage("ses_root", "msg_a1", "msg_u1", 1100, 1200, "stop"), e)
+	ocReadAssistant(t, s, e, ocAssistantMessage("ses_root", "msg_a1", "msg_u1", 1100, 1200, "stop"))
 	if got := ocInput(s.View(), "msg_u1").OutcomeSource; got != OpenCodeOutcomeSourceImported {
 		t.Fatalf("duplicate live event woke imported completion: %q", got)
 	}
@@ -178,7 +178,7 @@ func TestOpenCodeRegressionHistoryDoesNotBecomeLiveCompletion(t *testing.T) {
 
 func TestOpenCodeRegressionTerminalBeforeParentConverges(t *testing.T) {
 	s, e := newOCState(t, "ses_root")
-	s.Apply(ocAssistantMessage("ses_root", "msg_a1", "msg_u1", 1100, 1200, "stop"), e)
+	ocReadAssistant(t, s, e, ocAssistantMessage("ses_root", "msg_a1", "msg_u1", 1100, 1200, "stop"))
 	s.Apply(ocUserMessage("ses_root", "msg_u1", 1000), e)
 	s.Apply(ocUserTextPart("ses_root", "msg_u1", "prt_1", "hello"), e)
 	v := s.View()
@@ -200,11 +200,11 @@ func TestOpenCodeRegressionImportedOrphanDoesNotBlockNewInput(t *testing.T) {
 		t.Fatalf("partial imported history disabled current observation: %+v", v)
 	}
 	// Replaying the same old terminal through the live feed cannot promote its source.
-	s.Apply(ocAssistantMessage("ses_root", "msg_old", "msg_before_page", 1100, 1200, "stop"), e)
+	ocReadAssistant(t, s, e, ocAssistantMessage("ses_root", "msg_old", "msg_before_page", 1100, 1200, "stop"))
 	if s.View().Degraded {
 		t.Fatal("imported duplicate became a live missing-parent hold")
 	}
-	s.Apply(ocAssistantMessage("ses_root", "msg_live", "msg_missing_live", 2100, 2200, "stop"), e)
+	ocReadAssistant(t, s, e, ocAssistantMessage("ses_root", "msg_live", "msg_missing_live", 2100, 2200, "stop"))
 	if !s.View().Degraded {
 		t.Fatal("unseen live input lost its missing-parent hold")
 	}
@@ -229,7 +229,7 @@ func TestOpenCodeRegressionOldCompactionHistoryDoesNotPoisonLiveState(t *testing
 
 func TestOpenCodeRegressionImportedOrphanCapacityPreservesLiveFacts(t *testing.T) {
 	s, e := newOCState(t, "ses_root")
-	s.Apply(ocAssistantMessage("ses_root", "msg_live", "msg_missing", 2000, 2100, "stop"), e)
+	ocReadAssistant(t, s, e, ocAssistantMessage("ses_root", "msg_live", "msg_missing", 2000, 2100, "stop"))
 	var rows []json.RawMessage
 	for i := 0; i < maxOCUncertain+5; i++ {
 		rows = append(rows, json.RawMessage(fmt.Sprintf(`{"info":{"id":"msg_old_%d","sessionID":"ses_root","role":"assistant","parentID":"msg_before_page","time":{"created":1000,"completed":1100},"finish":"stop"},"parts":[]}`, i)))

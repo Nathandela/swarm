@@ -13,6 +13,7 @@ import (
 )
 
 type openCodeReader interface {
+	Message(context.Context, string) (json.RawMessage, error)
 	Snapshot(context.Context, int, string) (opencodebridge.Snapshot, error)
 	Events(context.Context, func(opencodebridge.Event) error) error
 }
@@ -116,6 +117,14 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 		}
 		switch state.Apply(raw, epoch).Disposition {
 		case OCNeedsSnapshot:
+			if event.MessageUpdated != nil {
+				id := event.MessageUpdated.Info.ID
+				row, err := reader.Message(ctx, id)
+				if err != nil {
+					return false, err
+				}
+				return false, state.reconcileMessage(id, row, epoch)
+			}
 			return true, nil
 		case OCRefusedCap, OCRefusedParse, OCRefusedDegraded:
 			return false, errors.New("native event could not be retained")
