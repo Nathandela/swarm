@@ -349,9 +349,6 @@ func sessionScope(outer, inner string) (string, error) {
 	if inner != "" {
 		return inner, nil
 	}
-	if outer != "" {
-		return outer, nil
-	}
 	return "", fmt.Errorf("opencode: missing session identity")
 }
 

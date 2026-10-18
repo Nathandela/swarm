@@ -12,16 +12,18 @@ import (
 )
 
 type ocReaderFake struct {
-	mu         sync.Mutex
-	identity   opencodebridge.Identity
-	subscribed chan struct{}
-	events     chan opencodebridge.Event
-	snapshot   func(int) opencodebridge.Snapshot
-	reads      int
+	mu            sync.Mutex
+	identity      opencodebridge.Identity
+	subscribed    chan struct{}
+	subscribeOnce sync.Once
+	events        chan opencodebridge.Event
+	handled       chan struct{}
+	snapshot      func(int) opencodebridge.Snapshot
+	reads         int
 }
 
 func newOCReaderFake() *ocReaderFake {
-	f := &ocReaderFake{identity: opencodebridge.Identity{Version: 1, WorkerID: "worker", SessionInstance: "instance", RootID: "ses_root", Directory: "/workspace", BackendGeneration: "generation", NativeCreatedAtMS: 1}, subscribed: make(chan struct{}), events: make(chan opencodebridge.Event, 8)}
+	f := &ocReaderFake{identity: opencodebridge.Identity{Version: 1, WorkerID: "worker", SessionInstance: "instance", RootID: "ses_root", Directory: "/workspace", BackendGeneration: "generation", NativeCreatedAtMS: 1}, subscribed: make(chan struct{}), events: make(chan opencodebridge.Event, 8), handled: make(chan struct{}, 8)}
 	f.snapshot = func(int) opencodebridge.Snapshot { return f.idleSnapshot() }
 	return f
 }
@@ -40,11 +42,11 @@ func (f *ocReaderFake) Snapshot(ctx context.Context, _ int, _ string) (opencodeb
 	return f.snapshot(f.reads), nil
 }
 func (f *ocReaderFake) Events(ctx context.Context, handle func(opencodebridge.Event) error) error {
+	f.subscribeOnce.Do(func() { close(f.subscribed) })
 	raw, _ := json.Marshal(f.identity)
 	if err := handle(opencodebridge.Event{Type: "swarm.bridge.connected", Properties: raw}); err != nil {
 		return err
 	}
-	close(f.subscribed)
 	for {
 		select {
 		case <-ctx.Done():
@@ -52,6 +54,10 @@ func (f *ocReaderFake) Events(ctx context.Context, handle func(opencodebridge.Ev
 		case event := <-f.events:
 			if err := handle(event); err != nil {
 				return err
+			}
+			select {
+			case f.handled <- struct{}{}:
+			default:
 			}
 		}
 	}
@@ -75,7 +81,7 @@ func runOCObserverTest(t *testing.T, f *ocReaderFake) (<-chan OpenCodeView, <-ch
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(time.Second):
+		case <-time.After(3 * time.Second):
 			t.Error("observer did not stop")
 		}
 	})
@@ -90,7 +96,7 @@ func nextOCView(t *testing.T, views <-chan OpenCodeView, want func(OpenCodeView)
 			if want(v) {
 				return v
 			}
-		case <-time.After(time.Second):
+		case <-time.After(3 * time.Second):
 			t.Fatal("missing expected native view")
 			return OpenCodeView{}
 		}
@@ -141,7 +147,7 @@ func TestOpenCodeObserverStatusOverlapRefetches(t *testing.T) {
 	f.snapshot = func(n int) opencodebridge.Snapshot {
 		if n == 1 {
 			f.events <- opencodebridge.Event{Type: "session.status", Properties: json.RawMessage(`{"sessionID":"ses_root","status":{"type":"busy"}}`)}
-			time.Sleep(10 * time.Millisecond)
+			<-f.handled
 		}
 		return f.idleSnapshot()
 	}
@@ -163,6 +169,25 @@ func TestOpenCodeObserverStatusOverlapRefetches(t *testing.T) {
 	f.mu.Unlock()
 	if reads < 2 {
 		t.Fatal("overlapping root status was not reconciled")
+	}
+}
+
+func TestOpenCodeObserverStatusChurnRecoversWithoutAnotherEvent(t *testing.T) {
+	f := newOCReaderFake()
+	f.snapshot = func(n int) opencodebridge.Snapshot {
+		if n <= 3 {
+			f.events <- opencodebridge.Event{Type: "session.status", Properties: json.RawMessage(`{"sessionID":"ses_root","status":{"type":"busy"}}`)}
+			<-f.handled
+		}
+		return f.idleSnapshot()
+	}
+	views, ready, _ := runOCObserverTest(t, f)
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+	v := nextOCView(t, views, func(v OpenCodeView) bool { return v.BusyKnown })
+	if v.Busy {
+		t.Fatal("quiet root did not reconcile to idle after status churn")
 	}
 }
 

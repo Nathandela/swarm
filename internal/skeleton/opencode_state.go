@@ -173,7 +173,7 @@ type OpenCodeMessage struct {
 // into an input.
 type OpenCodeUncertain struct {
 	createdAt int64
-	source    string
+	Source    string
 	MessageID string
 	InputID   string
 	Outcome   OpenCodeOutcome
@@ -362,9 +362,11 @@ func (s *OpenCodeState) View() OpenCodeView {
 			v.Current = &current
 		}
 	}
-	if len(s.uncertain) > 0 && !v.Degraded {
-		v.Degraded = true
-		v.DegradedReason = "native terminal outcome lacks its requested input"
+	for _, u := range s.uncertain {
+		if u.Source != OpenCodeOutcomeSourceImported && !v.Degraded {
+			v.Degraded = true
+			v.DegradedReason = "native terminal outcome lacks its requested input"
+		}
 	}
 	sort.SliceStable(v.Inputs, func(i, j int) bool {
 		return ocAfter(v.Inputs[j].At, v.Inputs[j].MessageID, v.Inputs[i].At, v.Inputs[i].MessageID)
@@ -453,7 +455,9 @@ func (s *OpenCodeState) applyMessage(m opencode.Message, source string) OpenCode
 		return OCApplied
 	}
 	if m.IsAssistantSummary() {
-		s.degradeStream("native compaction continuation is not a requested-input outcome")
+		if source != OpenCodeOutcomeSourceImported {
+			s.degradeStream("native compaction continuation is not a requested-input outcome")
+		}
 		return OCIgnoredUnqualified
 	}
 	return s.applyAssistantOutcome(m, source)
@@ -513,7 +517,7 @@ func ocAfter(at int64, id string, otherAt int64, otherID string) bool {
 func (s *OpenCodeState) applyAssistantOutcome(m opencode.Message, source string) OpenCodeDisposition {
 	outcome, errName, terminal := ocTerminalOutcome(m)
 	if !terminal {
-		if m.Time.Completed > 0 && m.Finish != "tool-calls" {
+		if m.Time.Completed > 0 && m.Finish != "tool-calls" && source != OpenCodeOutcomeSourceImported {
 			s.degradeStream("completed native message has no qualified terminal reason")
 			return OCIgnoredUnqualified
 		}
@@ -529,7 +533,7 @@ func (s *OpenCodeState) applyAssistantOutcome(m opencode.Message, source string)
 		// capacity). The terminal fact is explicit uncertainty rather than a
 		// fabricated outcome.
 		s.recordUncertain(OpenCodeUncertain{
-			createdAt: m.Time.Created, source: source,
+			createdAt: m.Time.Created, Source: source,
 			MessageID: m.ID,
 			InputID:   m.ParentID,
 			Outcome:   outcome,
@@ -550,7 +554,7 @@ func (s *OpenCodeState) applyAssistantOutcome(m opencode.Message, source string)
 		source = OpenCodeOutcomeSourceReconciled
 	}
 	in.recordOutcome(outcome, errName, at, source)
-	if in.synthetic {
+	if in.synthetic && source != OpenCodeOutcomeSourceImported {
 		// The assistant answered a synthetic auto-continue prompt. Recording it
 		// on that record is exact; finishing the requested input it may continue
 		// would be a guess, so the epoch says so instead.
@@ -667,7 +671,9 @@ func (s *OpenCodeState) applyPartFact(p opencode.Part) OpenCodeDisposition {
 		if i, ok := s.msgIndex[p.MessageID]; ok {
 			s.msgOrder[i].Summary = true
 		}
-		s.degradeStream("native compaction requires continuation reconciliation")
+		if in.live {
+			s.degradeStream("native compaction requires continuation reconciliation")
+		}
 		return OCIgnoredUnqualified
 	}
 	if p.Type != "text" && p.Type != "file" {
@@ -701,7 +707,7 @@ func (s *OpenCodeState) applyPartFact(p opencode.Part) OpenCodeDisposition {
 	}
 	in.classified = true
 	in.recompute()
-	if in.synthetic && in.outcome != OpenCodeOutcomeNone {
+	if in.synthetic && in.outcome != OpenCodeOutcomeNone && in.live {
 		s.degradeStream("auto-continue outcome is not attributable to a requested input")
 	}
 	return OCApplied
@@ -846,9 +852,22 @@ func (s *OpenCodeState) recordUncertain(u OpenCodeUncertain) {
 		}
 	}
 	if len(s.uncertain) >= maxOCUncertain {
-		copy(s.uncertain, s.uncertain[1:])
+		drop := -1
+		for i, old := range s.uncertain {
+			if old.Source == OpenCodeOutcomeSourceImported {
+				drop = i
+				break
+			}
+		}
+		if drop < 0 {
+			if u.Source == OpenCodeOutcomeSourceImported {
+				return
+			}
+			drop = 0
+			s.degradeStream("uncertain live outcome records exceeded capacity")
+		}
+		copy(s.uncertain[drop:], s.uncertain[drop+1:])
 		s.uncertain = s.uncertain[:len(s.uncertain)-1]
-		s.degradeStream("uncertain outcome records exceeded capacity; the oldest was dropped")
 	}
 	s.uncertain = append(s.uncertain, u)
 }
@@ -864,7 +883,7 @@ func (s *OpenCodeState) resolveUncertain(in *ocInputState) {
 			s.degradeStream("assistant predates its requested input")
 			continue
 		}
-		source := u.source
+		source := u.Source
 		if source == OpenCodeOutcomeSourceImported && in.live {
 			source = OpenCodeOutcomeSourceReconciled
 		}
