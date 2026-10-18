@@ -27,3 +27,17 @@ func TestNativeReadRouteDoesNotGrantComposerOrTerminalControl(t *testing.T) {
 		t.Fatal("native read change removed a legacy qualified composer")
 	}
 }
+
+func TestNativeComposerRequiresItsIndependentCurrentProof(t *testing.T) {
+	record := &schema.SessionCapabilities{Provider: "opencode", SessionInstance: "instance", NativeInteractionVersion: 2, NativeComposer: true}
+	if !ComposerAvailable(record, r8Profile()) {
+		t.Fatal("independently proven native composer is unavailable")
+	}
+	if ComposerAvailable(record, schema.RemoteProfileV1{}) {
+		t.Fatal("native composer bypassed profile trust")
+	}
+	record.NativeComposer = false
+	if ComposerAvailable(record, r8Profile()) {
+		t.Fatal("native read proof survived withdrawal as a composer grant")
+	}
+}
