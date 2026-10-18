@@ -4,9 +4,33 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type semanticBoundaryStub struct {
+	*durableComposerStub
+	ownerCalls atomic.Int64
+}
+
+func (s *semanticBoundaryStub) SemanticSendTransactional(machine, id string, req ComposerSendReq, begin func() error) (ErrorCode, error) {
+	s.ownerCalls.Add(1)
+	return s.durableComposerStub.ComposerSendTransactional(machine, id, req, begin)
+}
+
+func TestOwnerSemanticSendUsesOwnerAttributionBoundary(t *testing.T) {
+	stub := &semanticBoundaryStub{durableComposerStub: newDurableComposerStub()}
+	rc := rawDial(t, serveOwnerAPI(t, stub))
+	rep := rc.hello(Version, []string{"semantic-send"})
+	rc.writeControl(semanticTestFrame(rep, semanticTestID(time.Now(), "c"), "owner automation"))
+	if got := rc.readControl(); got.Op != OpOK {
+		t.Fatalf("owner send: %+v", got)
+	}
+	if stub.ownerCalls.Load() != 1 {
+		t.Fatal("owner semantic send went through the phone-only attribution seam")
+	}
+}
 
 func semanticTestFrame(rep Control, id, text string) Control {
 	session := rep.EndpointID + "/sess1"
