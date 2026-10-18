@@ -1,12 +1,26 @@
 package swarmmobile
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 
+	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
+
+func (a *App) appendNativeDecision(core *phonecore.Core, sc sendCtx, id string, body schema.NativeDecisionReq, envelope []byte) (*Op, error) {
+	if _, err := sc.cl.MailboxAppend(context.Background(), sc.target, envelope); err != nil {
+		receipt := &schema.NativeDecisionReceipt{OperationID: id, Session: body.Session, SessionInstance: body.SessionInstance,
+			RootID: body.RootID, Generation: body.Generation, NativeSessionID: body.NativeSessionID, RequestID: body.RequestID,
+			Kind: body.Kind, State: "uncertain", Reason: "Mailbox admission is unconfirmed; keep this operation ID and inspect its outcome."}
+		if saveErr := core.RecordOutcomeIfAbsent(schema.Control{Op: schema.ActionNativeDecide, OperationID: id, SessionID: body.Session, NativeDecisionReceipt: receipt}); saveErr != nil {
+			return nil, errors.New("swarmmobile: native answer operation_id=" + id + " is uncertain and its local receipt could not be retained")
+		}
+	}
+	return &Op{Action: schema.ActionNativeDecide, SessionID: body.Session, OperationID: id}, nil
+}
 
 // ReplyNativeRequest answers the exact full card this handset holds. Answers are JSON string groups.
 func (a *App) ReplyNativeRequest(session, itemID, decisionID, answersJSON string) (op *Op, err error) {

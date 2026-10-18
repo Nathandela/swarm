@@ -1012,6 +1012,11 @@ func (a *App) signedCommand(action, session string, contentHash []byte, body com
 		return nil, err
 	}
 	a.issue(op)
+	if body.nativeDecision != nil {
+		if known, err := a.Outcome(op.OperationID); err == nil && known.Resolved {
+			a.resolve(op.OperationID)
+		}
+	}
 	return op, nil
 }
 
@@ -1265,6 +1270,9 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 		// the dead keyboard the floor was making. Recording a request whose append then fails
 		// costs nothing: the operation id is freshly minted, so no reply can ever name it.
 		core.Leases().Requested(session, id, expiresAt)
+	}
+	if body.nativeDecision != nil {
+		return a.appendNativeDecision(core, sc, id, *body.nativeDecision, env)
 	}
 	if _, err := sc.cl.MailboxAppend(context.Background(), sc.target, env); err != nil {
 		return nil, err

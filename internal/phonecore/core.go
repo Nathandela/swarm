@@ -810,12 +810,24 @@ func (c *Core) installGrant(g *crypto.EpochGrant, cursor uint64) (opened bool, e
 // API for callers that did not arrive through the mailbox router; it must never become a second
 // way to persist an uncommitted journal payload.
 func (c *Core) RecordOutcome(ctrl schema.Control) error {
+	return c.recordOutcome(ctrl, false)
+}
+
+// RecordOutcomeIfAbsent retains local uncertainty without replacing an earlier machine reply.
+func (c *Core) RecordOutcomeIfAbsent(ctrl schema.Control) error {
+	return c.recordOutcome(ctrl, true)
+}
+
+func (c *Core) recordOutcome(ctrl schema.Control, onlyAbsent bool) error {
 	if ctrl.OperationID == "" {
 		return errors.New("phonecore: outcome carries no operation id")
 	}
 	ctrl.Journal = nil
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if _, exists := c.st.OpOutcomes[ctrl.OperationID]; onlyAbsent && exists {
+		return nil
+	}
 	st := c.st.clone()
 	if st.OpOutcomes == nil {
 		st.OpOutcomes = map[string]schema.Control{}
