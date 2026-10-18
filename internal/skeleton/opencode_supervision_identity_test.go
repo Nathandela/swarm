@@ -141,3 +141,79 @@ func TestNativeSupervisionClearedDraftUsesActualNativeFence(t *testing.T) {
 		t.Fatal("native input fence did not admit once")
 	}
 }
+
+func TestNativeSupervisionRecoversOnlyObservedOfflineCompletion(t *testing.T) {
+	parent := plainMeta("parent", stReady)
+	child := plainMeta("kid", stWorking)
+	child.RequiredRuntime = persist.RequiredRuntimeOpenCode
+	child.SpawnedFrom = "parent"
+	child.SpawnIntent = protocol.SpawnIntentHandoff
+	child.Supervision = protocol.SupervisionPassive
+	f := newSupFakes(parent, child)
+	event := nativeSupervisionEvent{Known: true, ObservedInputID: "msg_seen_active"}
+	s := &supervisor{endpointID: supEndpoint, dir: t.TempDir(), get: f.get, getSource: f.get, controlled: f.isControlled, send: f.send, records: map[string]*supervisionRecord{}, nativeEvent: func(persist.Meta) nativeSupervisionEvent { return event }}
+	s.arm(child)
+	s.signal("kid")
+	raw, err := os.ReadFile(filepath.Join(s.dir, "kid.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loaded supervisionRecord
+	if json.Unmarshal(raw, &loaded) != nil || loaded.NativeObservedInput != "msg_seen_active" {
+		t.Fatal("active input was not checkpointed before crash")
+	}
+	s.records["kid"] = &loaded
+	event = nativeSupervisionEvent{}
+	s.signal("kid")
+	event = nativeSupervisionEvent{Known: true, Key: "input:seen:completed", InputID: "msg_seen_active"}
+	f.setStatus("kid", stReady)
+	s.signal("kid")
+	if !s.pending("kid") {
+		t.Fatal("exact observed input completed offline but was lost on import")
+	}
+	s.deliver("kid", "parent", *s.records["kid"].Pending)
+	event.Known = false
+	s.signal("kid")
+	event.Known = true
+	s.signal("kid")
+	if s.pending("kid") || len(f.delivered()) != 1 {
+		t.Fatal("offline outcome replayed after subsequent restart")
+	}
+	event = nativeSupervisionEvent{Known: true, Key: "input:unrelated:completed", InputID: "msg_unrelated_history"}
+	s.signal("kid")
+	if s.pending("kid") {
+		t.Fatal("unobserved imported historical outcome became a new notice")
+	}
+	event = nativeSupervisionEvent{Known: true, Owned: true, Key: "input:owned:completed", InputID: "msg_owned_initial"}
+	s.signal("kid")
+	if !s.pending("kid") {
+		t.Fatal("durably admitted initial input lost offline completion")
+	}
+}
+
+func TestNativeSupervisionObservesCurrentWorkWithoutInventingHistoryOwnership(t *testing.T) {
+	m := plainMeta("kid", stWorking)
+	m.RequiredRuntime = persist.RequiredRuntimeOpenCode
+	m.ConversationID = "ses_" + strings.Repeat("a", 32)
+	m.OpenCodeBinding = &persist.OpenCodeBinding{Generation: strings.Repeat("b", 32), Phase: persist.OpenCodePhaseReady, NativeCreatedAtMS: 123}
+	input := OpenCodeInput{MessageID: "msg_work", Classified: true}
+	view := OpenCodeView{Root: m.ConversationID, Generation: m.OpenCodeBinding.Generation, BusyKnown: true, Busy: true, CurrentScopeKnown: true, Current: &input}
+	if got := openCodeSupervisionEvent(m, view); !got.Known || got.ObservedInputID != input.MessageID {
+		t.Fatal("qualified active input was not observed")
+	}
+	view.Busy = false
+	if openCodeSupervisionEvent(m, view).ObservedInputID != "" {
+		t.Fatal("idle unresolved history invented active ownership")
+	}
+	view.Current = nil
+	input.Outcome = OpenCodeOutcomeCompleted
+	input.OutcomeSource = OpenCodeOutcomeSourceImported
+	view.Inputs = []OpenCodeInput{input}
+	if openCodeSupervisionEvent(m, view).Owned {
+		t.Fatal("arbitrary imported input was treated as admitted initial")
+	}
+	m.OpenCodeBinding.Initial = &persist.OpenCodeInitial{Phase: persist.OpenCodeInitialAdmitted, MessageID: input.MessageID}
+	if got := openCodeSupervisionEvent(m, view); !got.Owned || got.InputID != input.MessageID {
+		t.Fatal("exact admitted initial proof was not carried")
+	}
+}
