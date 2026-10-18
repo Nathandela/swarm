@@ -204,5 +204,5 @@ func (s *ItemStore) nativeRequestCurrentLocked(session, itemID string, request s
 	if set, exists := s.nativeRequestSetLocked(session); exists {
 		return set.Complete && set.SessionInstance == request.SessionInstance && set.RootID == request.RootID && set.Generation == request.Generation && set.Requests[itemID] == request.RequestHash
 	}
-	return true
+	return false
 }

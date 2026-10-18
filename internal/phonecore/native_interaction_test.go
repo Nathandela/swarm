@@ -53,6 +53,7 @@ func TestNativeRequestBindingRequiresCurrentUntruncatedAuthority(t *testing.T) {
 	s := NewItemStore()
 	card := nativeTestRequest()
 	s.Apply(nativeTestRecord(t, 1, card))
+	s.Apply(nativeTestRecord(t, 2, nativeTestRequestSet(true, map[string]string{"native-request": strings.Repeat("a", 64)})))
 	binding, ok := s.PendingNativeRequest("ep/worker", "native-request")
 	if !ok || binding.Request.Kind != "permission_reply" || binding.Request.NativeSessionID != "ses_child" || binding.Request.RequestHash != strings.Repeat("a", 64) {
 		t.Fatalf("exact native request binding missing: %+v %v", binding, ok)
@@ -79,6 +80,7 @@ func TestNativeRequestBindingRequiresCurrentUntruncatedAuthority(t *testing.T) {
 			}
 			item["request"] = request
 			store.Apply(nativeTestRecord(t, 1, item))
+			store.Apply(nativeTestRecord(t, 2, nativeTestRequestSet(true, map[string]string{"native-request": strings.Repeat("a", 64)})))
 			if _, ok := store.PendingNativeRequest("ep/worker", "native-request"); ok {
 				t.Fatal("stale/unshown native authority enabled a decision")
 			}
@@ -93,10 +95,11 @@ func TestNativeRequestsCoexistAndOnlyExactResolutionReleasesRetention(t *testing
 		card["item_id"] = id
 		store.Apply(nativeTestRecord(t, uint64(i+1), card))
 	}
+	store.Apply(nativeTestRecord(t, 3, nativeTestRequestSet(true, map[string]string{"request-one": strings.Repeat("a", 64), "request-two": strings.Repeat("a", 64)})))
 	for i := 0; i < MaxItemsPerSession+5; i++ {
 		msg := nativeTestMessage("prose")
 		msg["item_id"] = strings.Repeat("x", i+1)
-		store.Apply(nativeTestRecord(t, uint64(i+3), msg))
+		store.Apply(nativeTestRecord(t, uint64(i+4), msg))
 	}
 	if _, ok := store.PendingNativeRequest("ep/worker", "request-one"); !ok {
 		t.Fatal("pending request evicted by prose")
