@@ -831,3 +831,37 @@ test("exact descendant reads prove current ancestry without depending on active 
   f.state.row.time.created++
   assert.equal((await f.call("GET", route)).body.reason, "native_binding_mismatch")
 })
+
+
+test("prompt admission requires one exact genuine text part on both native routes", { concurrency: true }, async t => {
+  const cases = [
+    ["ignored-only text", false, row => { row.parts[0].ignored = true }],
+    ["synthetic-only text", false, row => { row.parts[0].synthetic = true }],
+    ["genuine attachment", false, row => { row.parts.push({ ...row.parts[0], id: "prt_file", type: "file", text: undefined, url: "file:///attachment" }) }],
+    ["multiple genuine texts", false, row => { const part = row.parts[0]; row.parts = [{ ...part, text: part.text.slice(0, 1) }, { ...part, id: "prt_second", text: part.text.slice(1) }] }],
+    ["duplicate synthetic identity", false, row => { row.parts.push({ ...row.parts[0], synthetic: true }) }],
+    ["foreign synthetic identity", false, row => { row.parts.push({ ...row.parts[0], id: "prt_foreign", sessionID: "ses_" + "d".repeat(32), synthetic: true }) }],
+    ["malformed ignored marker", false, row => { row.parts[0].ignored = "false" }],
+    ["plain text", true, () => {}],
+    ["injected synthetic and ignored context", true, row => { row.parts.push({ ...row.parts[0], id: "prt_synthetic", synthetic: true, text: "native context" }, { ...row.parts[0], id: "prt_ignored", ignored: true, text: "ignored context" }) }],
+    ["null flags and unknown metadata", true, row => { Object.assign(row.parts[0], { synthetic: null, ignored: null, metadata: null, nativeUnknown: { value: true } }) }],
+  ]
+  await Promise.all(["prompt", "initial"].flatMap(route => cases.map(([name, admitted, mutate]) => t.test(`${route}: ${name}`, { timeout: 10000 }, async t => {
+    const f = await fixture(t, ({ binding, state }) => { if (route === "initial") { binding.initialPrompt = true; state.messages = [] } })
+    if (route === "prompt") {
+      const submit = f.api.client.session.promptAsync
+      f.api.client.session.promptAsync = async (...args) => { const reply = await submit(...args); mutate(f.state.messages.at(-1)); return reply }
+    } else {
+      const submit = f.state.prompt.submit
+      f.state.prompt.submit = function() { submit.call(this); queueMicrotask(() => mutate(f.state.messages.at(-1))) }
+    }
+    const body = route === "initial" ? initialBody() : undefined
+    const receipt = (route === "initial" ? await f.call("POST", "/initial", body) : await f.dispatch()).body
+    assert.equal(receipt.status, admitted ? "admitted" : "uncertain", JSON.stringify(receipt))
+    const query = route === "initial" ? "/initial" : "/receipt?operationID=" + receipt.operationID
+    const refreshed = (await f.call("GET", query)).body
+    if (admitted) assert.equal(refreshed.status, "admitted")
+    else assert.notEqual(refreshed.status, "admitted")
+    assert.equal(f.state.calls.filter(call => call.name === (route === "initial" ? "nativeSubmit" : "prompt")).length, 1)
+  }))))
+})
