@@ -195,6 +195,9 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 				return err
 			}
 			if projection != nil {
+				if err := projection.recoverOwnedInputs(ctx, reader, state, epoch); err != nil {
+					return err
+				}
 				if err := projection.history(snapshot.Messages, "imported"); err != nil {
 					return err
 				}
