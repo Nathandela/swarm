@@ -60,11 +60,11 @@ func nativeAnswer(body schema.NativeDecisionReq, decision, answersJSON string) (
 			body.Kind = "question_reject"
 			return body, nil
 		}
-		if decision != "question_reply" || len(answersJSON) > 32<<10 || json.Unmarshal([]byte(answersJSON), &body.Answers) != nil || len(body.Answers) == 0 || len(body.Answers) > 32 {
+		if decision != "question_reply" || len(answersJSON) > 32<<10 || json.Unmarshal([]byte(answersJSON), &body.Answers) != nil || len(body.Answers) == 0 || len(body.Answers) > 16 {
 			return body, invalid
 		}
 		for _, group := range body.Answers {
-			if len(group) == 0 || len(group) > 64 {
+			if len(group) == 0 || len(group) > 128 {
 				return body, invalid
 			}
 			for _, answer := range group {
@@ -72,6 +72,10 @@ func nativeAnswer(body schema.NativeDecisionReq, decision, answersJSON string) (
 					return body, errors.New("swarmmobile: each native answer must contain 1 to 4096 bytes")
 				}
 			}
+		}
+		encoded, _ := json.Marshal(body.Answers)
+		if len(encoded) > 16384 {
+			return body, invalid
 		}
 	default:
 		return body, invalid
