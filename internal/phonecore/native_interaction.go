@@ -21,6 +21,7 @@ func nativeRequestKind(kind string) bool {
 
 type nativeWireItem struct {
 	wireItem
+	InputSHA256     string                    `json:"input_sha256"`
 	Role            string                    `json:"role"`
 	Provenance      string                    `json:"provenance"`
 	AuthorityValid  bool                      `json:"authority_valid"`
