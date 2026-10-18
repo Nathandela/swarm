@@ -6,13 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/Nathandela/swarm/internal/adapter"
-	"github.com/Nathandela/swarm/internal/opencodebridge"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/opencodebridge"
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -185,8 +185,17 @@ func (m *nativePhoneJournalMailbox) MailboxAppend(_ context.Context, _ string, r
 }
 
 func TestOpenCodePhonePacketComposerEchoSettlesDurableBubble(t *testing.T) {
-	for _, text := range []string{"genuine phone native input", strings.Repeat("<", 4096)} {
-		t.Run(map[bool]string{false: "plain", true: "clipped_full_hash"}[len(text) == 4096], func(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		lost       bool
+	}{
+		{"plain", "genuine phone native input", false},
+		{"clipped_full_hash", strings.Repeat("<", 4096), false},
+		{"lost_reply", "genuine phone native input", true},
+		{"clipped_lost_reply", strings.Repeat("<", 4096), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := tc.text
 			d, socket := assembleWithRemote(t)
 			f := newOpenCodeSendFixture(t, func(f *openCodeSendFixture) { f.d = d })
 			caps, ok := d.sessionCapabilities(f.binding.WorkerID)
@@ -255,9 +264,12 @@ func TestOpenCodePhonePacketComposerEchoSettlesDurableBubble(t *testing.T) {
 			if err != nil || frame.Command.Action != protocol.ActionComposerSend {
 				t.Fatalf("phone composer envelope: %+v %v", frame, err)
 			}
-			reply, err := gw.ForwardCommand(protocol.OpComposerSend, frame.Command)
-			if err != nil || reply.Op == protocol.OpError {
-				t.Fatalf("signed phone composer refused: %+v %v", reply, err)
+			f.dropReply.Store(tc.lost)
+			for attempt := 0; attempt < 2; attempt++ {
+				reply, err := gw.ForwardCommand(protocol.OpComposerSend, frame.Command)
+				if err != nil || (tc.lost && (reply.Op != protocol.OpError || reply.ErrorCode != protocol.CodeOutcomeUnknown)) || (!tc.lost && reply.Op == protocol.OpError) {
+					t.Fatalf("signed phone composer lost=%v: %+v %v", tc.lost, reply, err)
+				}
 			}
 			if f.calls.Load() != 1 || len(phone.PendingPublications()) != 1 {
 				t.Fatal("delivery acknowledgement fabricated native echo settlement")
@@ -304,5 +316,66 @@ func TestOpenCodePhonePacketComposerEchoSettlesDurableBubble(t *testing.T) {
 				t.Fatal("native phone settlement had no exact native user row or wrote twice")
 			}
 		})
+	}
+}
+
+func TestOpenCodePhonePacketSlowComposerAdmissionUsesNativeBudget(t *testing.T) {
+	d, socket := assembleWithRemote(t)
+	f := newOpenCodeSendFixture(t, func(f *openCodeSendFixture) { f.d = d })
+	signer := registerPhone(t, d, device.CapFull)
+	key := crypto.ContentKey{1, 4, 8}
+	const operation = "phone:slow-native-composer"
+	cmd, err := phonecore.SignComposerSend(signer, phonecore.ComposerSendInput{Machine: d.api.endpointID, OperationID: operation, ExpiresAt: time.Now().Add(time.Minute), Session: f.request.Session, SessionInstance: f.request.SessionInstance, Text: f.request.Text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet, err := phonecore.SealComposerSendEnvelope(key, 1, 1, cmd, &f.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := remotegw.OpenMailboxFrame(crypto.NewMailboxReceiver(), key, packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.blockDispatch.Store(true)
+	released := false
+	defer func() {
+		if !released {
+			close(f.dispatchRelease)
+		}
+	}()
+	gw := remotegw.New(socket, nil)
+	type result struct {
+		reply protocol.Control
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		reply, err := gw.ForwardCommand(protocol.OpComposerSend, frame.Command)
+		done <- result{reply, err}
+	}()
+	select {
+	case <-f.dispatchEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("signed slow phone input never reached native dispatch")
+	}
+	select {
+	case result := <-done:
+		t.Fatalf("gateway ended before legitimate native admission: %+v %v", result.reply, result.err)
+	case <-time.After(11 * time.Second):
+	}
+	close(f.dispatchRelease)
+	released = true
+	select {
+	case result := <-done:
+		if result.err != nil || result.reply.Op == protocol.OpError {
+			t.Fatalf("slow native admission: %+v %v", result.reply, result.err)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("native admission did not return inside its remaining budget")
+	}
+	reply, err := gw.ForwardCommand(protocol.OpComposerSend, frame.Command)
+	if err != nil || reply.Op == protocol.OpError || f.calls.Load() != 1 {
+		t.Fatalf("slow admission duplicate: %+v %v calls=%d", reply, err, f.calls.Load())
 	}
 }
