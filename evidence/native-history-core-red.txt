@@ -1,0 +1,6 @@
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/opencode_history_page_test.go:167:25: f.d.api.NativeInteractionHistory undefined (type *coreAPI has no field or method NativeInteractionHistory)
+internal/skeleton/opencode_history_page_test.go:171:24: f.d.api.NativeInteractionHistory undefined (type *coreAPI has no field or method NativeInteractionHistory)
+internal/skeleton/opencode_history_page_test.go:182:21: f.d.api.NativeInteractionHistory undefined (type *coreAPI has no field or method NativeInteractionHistory)
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL

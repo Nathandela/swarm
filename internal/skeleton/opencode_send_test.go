@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -38,6 +39,7 @@ type openCodeSendFixture struct {
 	blockDispatch        atomic.Bool
 	dispatchEntered      chan struct{}
 	dispatchRelease      chan struct{}
+	historyPage          atomic.Value // optional read-only snapshot fixture
 	historyPagingFail    atomic.Bool
 	nativeEvents         chan opencodebridge.Event
 }
@@ -115,6 +117,13 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 				}
 			}
 		case "/snapshot":
+			if read, ok := f.historyPage.Load().(func(int, string) (opencodebridge.Snapshot, error)); ok {
+				limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+				page, err := read(limit, r.URL.Query().Get("before"))
+				if err != nil { w.WriteHeader(http.StatusServiceUnavailable); return }
+				_ = json.NewEncoder(w).Encode(page)
+				return
+			}
 			if f.historyPagingFail.Load() && r.URL.Query().Get("before") == "older" {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				_, _ = w.Write([]byte(`{"reason":"native_read_failed"}`))

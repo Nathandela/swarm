@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Nathandela/swarm/internal/persist"
+"github.com/Nathandela/swarm/internal/opencodebridge"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"strings"
 	"testing"
@@ -147,4 +148,52 @@ func TestNativeHistoryContinuationRejectsNonOlderRows(t *testing.T) {
   _,_,err:=paginateNativeHistory(context.Background(),f.meta,schema.InteractionHistoryReq{Native:true,Limit:1,NativeCursor:token},read)
   if (err==nil)!=(n==1) {t.Fatalf("same-time ID ordering n=%d: %v",n,err)}
  }
+}
+
+func TestNativeHistoryCoreReadUsesBoundSnapshotWithoutPublishing(t *testing.T) {
+ f := newOpenCodeSendFixture(t)
+ f.d.stopOpenCodeObservation(f.binding.WorkerID)
+ meta, _ := f.d.core.Get(f.binding.WorkerID)
+ source := newNativePageReadFake(t)
+ source.meta = meta
+ source.rows=[]json.RawMessage{source.row(1,1,20000),source.row(2,1,1)}
+ // The production reader validates both the bridge identity and the native row.
+ f.historyPage.Store(func(limit int,before string)(opencodebridge.Snapshot,error){
+  p,e:=source.read(context.Background(),limit,before)
+  p.Session=json.RawMessage(strings.ReplaceAll(string(p.Session),`"created":1`,`"created":123`))
+  return opencodebridge.Snapshot{Identity:f.identity,Session:p.Session,Messages:p.Messages,NextCursor:p.NextCursor,Statuses:map[string]json.RawMessage{},Permissions:[]json.RawMessage{},Questions:[]json.RawMessage{},Children:[]json.RawMessage{},Descendants:[]json.RawMessage{},HierarchyComplete:true,HierarchyScope:openCodeHierarchyScope},e
+ })
+ req:=schema.InteractionHistoryReq{Session:f.request.Session,Native:true,Limit:1}
+ page,code,err:=f.d.api.NativeInteractionHistory(req)
+ if err!=nil {t.Fatalf("wired native history: %s %v",code,err)}
+ if page.Floor||len(page.Items)!=1 {t.Fatalf("first page: %+v",page)}
+ req.NativeCursor=page.NextCursor
+ page,code,err=f.d.api.NativeInteractionHistory(req)
+ if err!=nil||!page.Floor||len(page.Items)!=1 {t.Fatalf("next page: %+v %s %v",page,code,err)}
+ var item map[string]any
+ if err=json.Unmarshal(page.Items[0],&item);err!=nil {t.Fatal(err)}
+ if item["provenance"]!="imported"||item["operation_id"]!=nil||item["source"]=="phone" {t.Fatal("history acquired live authority")}
+ full,_,err:=f.d.interactionDetail(req.Session,item["item_id"].(string))
+ if err!=nil||len(full)<=len(page.Items[0]) {t.Fatal("clipped history lost its retained full detail")}
+ if f.calls.Load()!=0 {t.Fatal("history read submitted native input")}
+ now,_:=f.d.core.Get(meta.ID)
+ if now.Status!=meta.Status {t.Fatal("history read mutated native status")}
+ req.Session="foreign/"+meta.ID
+ if _,_,err=f.d.api.NativeInteractionHistory(req);err==nil {t.Fatal("history crossed machine scope")}
+}
+func TestNativeHistoryFilteredAndEndedPages(t *testing.T) {
+ f:=newNativePageReadFake(t)
+ f.rows=[]json.RawMessage{f.row(1,1,1),f.row(2,0,0),f.row(3,0,0)}
+ req:=schema.InteractionHistoryReq{Native:true,Limit:1}
+ for _,live:=range []bool{true,false} {
+  var page schema.NativeHistoryPage;var err error
+  if live {page,_,err=paginateNativeHistory(context.Background(),f.meta,req,f.read)} else {page,_,err=paginateEndedNativeHistory(f.meta,req,f.rows)}
+  if err!=nil||!page.Floor||len(page.Items)!=1||!strings.Contains(string(page.Items[0]),"row1:") {t.Fatalf("filtered rows live=%v: %+v %v",live,page,err)}
+ }
+ f.rows=[]json.RawMessage{f.row(1,1,1),f.row(2,1,1),f.row(3,1,1)}
+ page,_,err:=paginateEndedNativeHistory(f.meta,req,f.rows)
+ if err!=nil||page.Floor {t.Fatal(err)}
+ req.NativeCursor=page.NextCursor
+ page,_,err=paginateEndedNativeHistory(f.meta,req,f.rows)
+ if err!=nil||len(page.Items)!=1||!strings.Contains(string(page.Items[0]),"row2:") {t.Fatalf("ended cursor: %+v %v",page,err)}
 }
