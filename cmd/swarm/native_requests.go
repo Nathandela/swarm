@@ -52,7 +52,34 @@ func runNativeDecide(args []string, c agentClient, stdout, stderr io.Writer) int
 	hash := fs.String("request-hash", "", "content hash of the complete request you inspected")
 	reply := fs.String("reply", "", "once|always|reject for permissions; answer|reject for questions")
 	answers := fs.String("answers", "", "JSON array of answer groups, in question order")
-	if fs.Parse(rest) != nil || fs.NArg() != 0 || *request == "" || *target == "" || *hash == "" || *reply == "" {
+	status := fs.Bool("status", false, "read the original operation receipt without submitting")
+	operationID := fs.String("operation-id", "", "original operation ID for --status")
+	if fs.Parse(rest) != nil || fs.NArg() != 0 {
+		return misuseExit
+	}
+	if *status || *operationID != "" {
+		writeFlag := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name != "status" && f.Name != "operation-id" {
+				writeFlag = true
+			}
+		})
+		if !*status || *operationID == "" || writeFlag {
+			return nativeRequestFailure(stderr, errors.New("receipt reads require --status --operation-id ID without decision flags"), misuseExit)
+		}
+		reader, ok := c.(interface {
+			NativeDecisionStatus(string, string) (protocol.NativeDecisionReceipt, error)
+		})
+		if !ok {
+			return nativeRequestFailure(stderr, errors.New("native decision status requires an updated daemon"), 1)
+		}
+		receipt, err := reader.NativeDecisionStatus(id, *operationID)
+		if err != nil {
+			return nativeRequestFailure(stderr, err, 1)
+		}
+		return pilotJSON(stdout, stderr, receipt)
+	}
+	if *request == "" || *target == "" || *hash == "" || *reply == "" {
 		return nativeRequestFailure(stderr, errors.New("decide requires --request-id, --native-session-id, --request-hash and --reply"), misuseExit)
 	}
 	client, ok := c.(nativeRequestClient)

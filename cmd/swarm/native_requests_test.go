@@ -12,12 +12,13 @@ import (
 
 type nativeRequestCLIStub struct {
 	*fakeSemanticClient
-	card      protocol.NativeRequestView
-	decisions []protocol.NativeDecisionReq
-	selectors []protocol.NativeRequestsReq
+	card        protocol.NativeRequestView
+	decisions   []protocol.NativeDecisionReq
+	selectors   []protocol.NativeRequestsReq
 	statusReads []string
-	statusErr error
+	statusErr   error
 }
+
 func (c *nativeRequestCLIStub) NativeDecisionStatus(session, operation string) (protocol.NativeDecisionReceipt, error) {
 	c.statusReads = append(c.statusReads, session+"/"+operation)
 	return protocol.NativeDecisionReceipt{Session: session, OperationID: operation, State: "uncertain"}, c.statusErr
