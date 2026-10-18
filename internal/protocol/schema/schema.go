@@ -138,7 +138,8 @@ type Control struct {
 	// Wave R6 complete-chat additive fields (Mirror M2.4 / M3.1 / M3.3, ADR-009 (8)).
 	// ComposerSend is the composer_send body: one structured message plus the turn it was
 	// rendered against, bound into the device signature via ComposerSendContentHash.
-	ComposerSend *ComposerSendReq `json:"composer_send,omitempty"`
+	ComposerSend    *ComposerSendReq        `json:"composer_send,omitempty"`
+	SemanticReceipt *SemanticMessageReceipt `json:"semantic_receipt,omitempty"`
 	// TurnInterrupt is the turn_interrupt body (Wave R6 review fix-pack B7): the session
 	// plus the turn the phone RENDERED the Stop against, bound into the device signature
 	// via TurnInterruptContentHash. See schema/chat.go for why the op stopped being

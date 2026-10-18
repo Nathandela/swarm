@@ -1367,6 +1367,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleComposerSend(c)
 	case OpSemanticSend:
 		cc.handleSemanticSend(c)
+	case OpSemanticStatus:
+		cc.handleSemanticStatus(c)
 	case OpOperationStatus:
 		// The REAL Wave R5 handler. Names no session instance: pinned like
 		// session_launch above.

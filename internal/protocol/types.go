@@ -151,6 +151,7 @@ const (
 	OpSessionLaunch        = "session_launch"
 	OpComposerSend         = "composer_send"
 	OpSemanticSend         = "semantic_send"
+	OpSemanticStatus       = "semantic_status"
 	OpOperationStatus      = "operation_status"
 	OpTurnInterrupt        = "turn_interrupt"
 	OpTerminalControlBegin = "terminal_control_begin"
@@ -402,6 +403,12 @@ type ComposerOperationExecutor interface {
 // SemanticComposerSender keeps owner automation distinct from phone attribution.
 type SemanticComposerSender interface {
 	SemanticSendTransactional(machine, operationID string, req ComposerSendReq, begin func() error) (ErrorCode, error)
+}
+
+type SemanticMessageReceipt = schema.SemanticMessageReceipt
+
+type SemanticOperationReader interface {
+	SemanticOperation(local, operationID string) (SemanticMessageReceipt, error)
 }
 
 // TransactionalComposerSender lets the production daemon cross the durable executing
