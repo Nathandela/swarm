@@ -176,14 +176,14 @@ func (p *openCodeTranscript) row(row json.RawMessage, provenance string) error {
 	}
 	p.remember(info)
 	for _, item := range opencode.NativeInteractions().Interactions(adapter.HookPayload{Event: opencode.NativeMessageRowEvent, Raw: row}) {
-		if err := p.interaction(info, item, provenance); err != nil {
+		if err := p.interaction(info, item, provenance, row); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (p *openCodeTranscript) interaction(info opencode.Message, item adapter.Interaction, provenance string) error {
+func (p *openCodeTranscript) interaction(info opencode.Message, item adapter.Interaction, provenance string, row json.RawMessage) error {
 	if err := item.Validate(); err != nil {
 		return err
 	}
@@ -205,15 +205,10 @@ func (p *openCodeTranscript) interaction(info opencode.Message, item adapter.Int
 	}
 	fields["native_session_id"] = info.SessionID
 	if info.SessionID == p.identity.RootID && item.MessageRole == "user" && item.Source == adapter.SourceNative {
-		input := OpenCodeInput{MessageID: info.ID, Text: item.Text, Classified: true, At: info.Time.Created, Agent: info.Agent}
-		if info.Model != nil {
-			input.ProviderID = info.Model.ProviderID
-			input.ModelID = info.Model.ModelID
-			input.Variant = info.Model.Variant
-		}
+		input := OpenCodeInput{MessageID: info.ID}
 		owned := p.d.ownedOpenCodeInputs(p.local, OpenCodeView{Root: p.identity.RootID, Generation: p.identity.BackendGeneration, Inputs: []OpenCodeInput{input}})
 		if own, ok := owned[info.ID]; ok {
-			if _, err := qualifyObservedOpenCodeAdmission(own.operation, own.intent, input); err == nil {
+			if _, err := qualifyOpenCodeAdmission(own.operation, own.intent, row); err == nil {
 				fields["source"] = adapter.SourceOwner
 				if own.intent.Source == "phone" {
 					fields["source"] = adapter.SourcePhone
@@ -223,6 +218,9 @@ func (p *openCodeTranscript) interaction(info opencode.Message, item adapter.Int
 				}
 				fields["operation_id"] = own.operation
 				fields["input_sha256"] = own.intent.TextHash
+				if provenance == "imported" {
+					provenance = "reconciled"
+				}
 			}
 		}
 	}
@@ -246,7 +244,12 @@ func (p *openCodeTranscript) offer(kind, ref, turn, state string, at time.Time, 
 		return nil
 	}
 	if exists {
-		provenance = old.provenance
+		operation, _ := fields["operation_id"].(string)
+		hash, _ := fields["input_sha256"].(string)
+		reconciledUser := kind == "message_snapshot" && fields["role"] == "user" && operation != "" && hash != "" && provenance == "reconciled" && old.provenance == "imported"
+		if !reconciledUser {
+			provenance = old.provenance
+		}
 	}
 	fields["provenance"] = provenance
 	body, err := json.Marshal(struct {
@@ -330,7 +333,7 @@ func (p *openCodeTranscript) event(ctx context.Context, reader openCodeReader, e
 			return fmt.Errorf("native part %s has no retained message context", part.ID)
 		}
 		for _, item := range opencode.NativePartInteractions(info, part) {
-			if err := p.interaction(info, item, "live"); err != nil {
+			if err := p.interaction(info, item, "live", nil); err != nil {
 				return err
 			}
 		}
