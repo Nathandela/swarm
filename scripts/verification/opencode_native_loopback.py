@@ -19,6 +19,7 @@ parser.add_argument("--duration-seconds", type=int, default=0)
 parser.add_argument("--max-iterations", type=int, default=500)
 parser.add_argument("--interval-seconds", type=float, default=10)
 parser.add_argument("--restart-every", type=int, default=20)
+parser.add_argument("--variant", choices=["max", "default"], default="max")
 parser.add_argument(
     "--tool-finish", choices=["tool_calls", "stop"], default="tool_calls"
 )
@@ -397,8 +398,8 @@ config_value = {
     "default_agent": "build",
     "compaction": {"auto": False},
     "agent": {
-        "build": {"model": "fixture/fixture", "variant": "max"},
-        "general": {"model": "fixture/fixture", "variant": "max"},
+        "build": {"model": "fixture/fixture"},
+        "general": {"model": "fixture/fixture"},
     },
     "permission": {"*": "deny", "bash": "ask", "question": "allow", "task": "allow"},
     "provider": {
@@ -420,6 +421,9 @@ config_value = {
         }
     },
 }
+if args.variant != "default":
+    for agent in config_value["agent"].values():
+        agent["variant"] = args.variant
 config.write_text(json.dumps(config_value) + "\n")
 tui = PROFILE / "config/opencode/tui.json"
 tui.write_text(json.dumps({"theme": "opencode", "scroll_speed": 3}) + "\n")
@@ -428,7 +432,7 @@ tui.write_text(json.dumps({"theme": "opencode", "scroll_speed": 3}) + "\n")
         {
             "recent": [{"providerID": "fixture", "modelID": "fixture"}],
             "favorite": [],
-            "variant": {"fixture/fixture": "max"},
+            "variant": {} if args.variant == "default" else {"fixture/fixture": args.variant},
         }
     )
     + "\n"
@@ -499,6 +503,7 @@ result = {
     "qualification": "actual native runtime, SDK, tool and observer integration with SCRIPTED LOCAL responses; not external model quality/execution qualification",
     "external_model_requests": 0,
     "enabled_provider": "fixture",
+    "fixture_profile_variant": args.variant,
     "native_write_via_fake_user_seed": False,
     "request_decision_scope": "public owner native_requests/native_decide with complete current context; authenticated phone transport is not exercised",
     "declared_budgets": budgets,
@@ -910,7 +915,7 @@ try:
     assert (
         meta["opencode_binding"]["initial"]["model"] == "fixture/fixture"
         and meta["opencode_binding"]["initial"]["agent"] == "build"
-        and meta["opencode_binding"]["initial"]["variant"] == "max"
+        and meta["opencode_binding"]["initial"]["variant"] == args.variant
     )
     result["ready"] = bridge("/ready")
     assert result["ready"]["acknowledged"]

@@ -20,6 +20,12 @@ python3 scripts/verification/opencode_native_loopback.py \
 
 Omit `--duration-seconds` for three root inputs and one native child. Use `--restart-every 1` to exercise two daemon restarts in that short run. `--tool-finish stop` deliberately emits ordinary tool calls with the provider's stop marker; receipts must remain admitted until the later tool-free assistant response proves completion.
 
+The fixture profile selects `max` by default. Use `--variant default` for a second
+short run with no native agent or persisted model variant selected. This checks
+the native default representation; it does not add a Swarm variant bootstrap API.
+The third input also verifies native newest-page, opaque continuation and exact
+item-anchor history reads, separate from the live journal.
+
 The script tests genuine initial input, semantic submission, public owner request cards and decisions, exact native message identities, completed-child reads, duplicate semantic operations, reducer completion, and current native activity after daemon SIGKILL/rejoin. It records concurrent permission/question requests and checks that active child scope settles. A transient write refusal permits a fresh operation only after a fully correlated, durable no-effect rejection. Unknown outcomes stop the workload; they are never replayed.
 
 ## Declared gates
