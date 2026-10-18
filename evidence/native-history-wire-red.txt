@@ -1,0 +1,11 @@
+# github.com/Nathandela/swarm/internal/protocol/schema [github.com/Nathandela/swarm/internal/protocol/schema.test]
+internal/protocol/schema/native_history_test.go:18:62: unknown field Native in struct literal of type InteractionHistoryReq
+internal/protocol/schema/native_history_test.go:18:76: unknown field NativeCursor in struct literal of type InteractionHistoryReq
+internal/protocol/schema/native_history_test.go:19:38: unknown field NativeHistory in struct literal of type Control
+internal/protocol/schema/native_history_test.go:19:54: undefined: NativeHistoryPage
+internal/protocol/schema/native_history_test.go:28:18: got.History.Native undefined (type *InteractionHistoryReq has no field or method Native)
+internal/protocol/schema/native_history_test.go:28:40: got.History.NativeCursor undefined (type *InteractionHistoryReq has no field or method NativeCursor)
+internal/protocol/schema/native_history_test.go:28:64: request.NativeCursor undefined (type InteractionHistoryReq has no field or method NativeCursor)
+internal/protocol/schema/native_history_test.go:28:84: got.NativeHistory undefined (type Control has no field or method NativeHistory)
+FAIL	github.com/Nathandela/swarm/internal/protocol/schema [build failed]
+FAIL
