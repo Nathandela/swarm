@@ -230,3 +230,14 @@ func TestNativeHistoryPageRejectsAuthorityAndEveryBound(t *testing.T) {
 		t.Fatal("valid imported page refused")
 	}
 }
+
+func TestNativeHistoryStateBodyIsNotMutableThroughSnapshot(t *testing.T) {
+	c := nativeHistoryCore(t)
+	prepareNativePage(t, c, "body", "")
+	deliverNativePage(t, c, "body", schema.NativeHistoryPage{Version: 2, Scope: strings.Repeat("a", 64), Floor: true, Items: []json.RawMessage{nativeHistoryItem("old", "retained")}}, 1)
+	snapshot := c.State()
+	snapshot.Items[0].Body[0] = 'x'
+	if !json.Valid(c.State().Items[0].Body) {
+		t.Fatal("state snapshot mutated retained native history body")
+	}
+}
