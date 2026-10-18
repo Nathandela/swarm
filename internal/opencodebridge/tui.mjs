@@ -344,7 +344,8 @@ export default { id: ID, async tui(api, options) {
         if (!exactKeys(body, ["version", "sessionInstance", "backendGeneration", "rootID", "nativeCreatedAtMS"]) || body.nativeCreatedAtMS !== createdAt) throw fault("binding_mismatch")
         acknowledged = true; return response(res, 200, readiness())
       }
-      response(res, 200, url.pathname === "/initial" ? await submitInitial(body, check) : await dispatch(body, check))
+      const receipt = url.pathname === "/initial" ? await submitInitial(body, check) : await dispatch(body, check)
+      response(res, 200, { ...receipt, inFlight: active !== null })
     } catch (err) { rejected(res, err[reasonKey] ?? "native_unavailable") }
   }
   const server = http.createServer((req, res) => { void handler(req, res) })

@@ -73,6 +73,7 @@ test("native empty successful status map allows idle, cached missing status does
   const f = await fixture(t)
   const result = await f.dispatch()
   assert.equal(result.body.status, "admitted")
+  assert.equal(result.body.inFlight, false)
   assert.equal(f.state.calls.filter(x => x.name === "prompt").length, 1)
   assert.ok(f.state.calls.some(x => x.name === "status"))
 })
