@@ -15,13 +15,13 @@ import (
 func (p *openCodeTranscript) recoverOwnedInputs(ctx context.Context, reader openCodeReader, state *OpenCodeState, epoch uint64) error {
 	view := state.View()
 	meta, current := p.d.core.Get(p.local)
-	if view.Root != p.identity.RootID || view.Generation != p.identity.BackendGeneration || !current || !openCodeMetaMatches(meta, p.identity) {
+	if view.Epoch != epoch || view.Root != p.identity.RootID || view.Generation != p.identity.BackendGeneration || !current || !openCodeMetaMatches(meta, p.identity) {
 		return errors.New("native input recovery binding changed")
 	}
 	lookup := OpenCodeView{Root: view.Root, Generation: view.Generation}
 	seen := map[string]bool{}
 	add := func(parent string) {
-		if parent != "" && state.inputs[parent] == nil && !seen[parent] {
+		if parent != "" && !seen[parent] {
 			seen[parent] = true
 			lookup.Inputs = append(lookup.Inputs, OpenCodeInput{MessageID: parent})
 		}
@@ -34,11 +34,17 @@ func (p *openCodeTranscript) recoverOwnedInputs(ctx context.Context, reader open
 	for _, outcome := range view.Uncertain {
 		add(outcome.InputID)
 	}
-	// Candidate count is bounded by the existing message and uncertain-outcome caches.
+	for _, input := range view.Inputs {
+		if input.PlainTextInput {
+			add(input.MessageID)
+		}
+	}
+	// Existing bounded caches limit candidates; complete current inputs need no native read.
 	owned := p.d.ownedOpenCodeInputs(p.local, lookup)
 	for _, candidate := range lookup.Inputs {
 		entry, expected := initialOpenCodeRecovery(meta, p.identity, candidate.MessageID)
 		needsAdmission := false
+		var retainedOutcome openCodeEvidence
 		if expected == nil {
 			var ok bool
 			entry, ok = owned[candidate.MessageID]
@@ -55,18 +61,26 @@ func (p *openCodeTranscript) recoverOwnedInputs(ctx context.Context, reader open
 					continue
 				}
 				expected = &retained.Receipt
+				retainedOutcome = retained
 			} else if operation.Phase == idempotency.PhaseExecuting || operation.Phase == idempotency.PhaseOutcomeUnknown {
 				needsAdmission = true
 			} else {
 				continue
 			}
 		}
-		row, err := p.readMessage(ctx, reader, candidate.MessageID)
-		if err != nil {
-			return err
+		var row json.RawMessage
+		var observed opencodebridge.Receipt
+		var err error
+		input := state.inputs[candidate.MessageID]
+		if input != nil && input.plainTextInput {
+			observed, err = qualifyObservedOpenCodeAdmission(entry.operation, entry.intent, input.view())
+		} else {
+			row, err = p.readMessage(ctx, reader, candidate.MessageID)
+			if err == nil {
+				observed, err = qualifyOpenCodeAdmission(entry.operation, entry.intent, row)
+			}
 		}
-		observed, err := qualifyOpenCodeAdmission(entry.operation, entry.intent, row)
-		if err != nil || expected != nil && (observed.Agent != expected.Agent || *observed.Model != *expected.Model || observed.Variant != expected.Variant) {
+		if err != nil || expected != nil && (observed.Agent != expected.Agent || *observed.Model != *expected.Model || !sameOpenCodeVariant(observed.Variant, expected.Variant)) {
 			return errors.New("native recovered user differs from owned input")
 		}
 		if needsAdmission {
@@ -74,12 +88,30 @@ func (p *openCodeTranscript) recoverOwnedInputs(ctx context.Context, reader open
 				return err
 			}
 		}
-		if err := state.ImportHistory([]json.RawMessage{row}, epoch); err != nil {
-			return err
+		if row != nil {
+			if err := state.ImportHistory([]json.RawMessage{row}, epoch); err != nil {
+				return err
+			}
+			if err := p.row(row, "reconciled"); err != nil {
+				return err
+			}
+			input = state.inputs[candidate.MessageID]
 		}
-		if err := p.row(row, "reconciled"); err != nil {
-			return err
+		if input != nil && retainedOutcome.Outcome != "" {
+			if retainedOutcome.OutcomeAt < input.at {
+				return errors.New("retained native outcome predates recovered input")
+			}
+			outcome, name, at, source := input.outcome, input.errorName, input.outcomeAt, input.outcomeSrc
+			// Replay retained evidence first so equal rank/time keeps the original outcome and source.
+			retainedName := ""
+			if outcome == retainedOutcome.Outcome && at == retainedOutcome.OutcomeAt {
+				retainedName = name
+			}
+			input.outcome = OpenCodeOutcomeNone
+			input.recordOutcome(retainedOutcome.Outcome, retainedName, retainedOutcome.OutcomeAt, retainedOutcome.OutcomeSource)
+			input.recordOutcome(outcome, name, at, source)
 		}
+
 	}
 	return nil
 }

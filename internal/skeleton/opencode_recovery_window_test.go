@@ -16,7 +16,7 @@ import (
 
 func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 	fixture := newOpenCodeSendFixture(t)
-	for _, scenario := range []string{"exact", "lost admission", "lost admission wrong body", "unowned parent", "wrong body", "foreign row", "synthetic text", "old row", "initial exact", "initial wrong body", "initial foreign row", "initial wrong tuple", "retained failure", "retained completion newer", "native error later", "retained completion tie", "retained failure tie", "retained failure present", "retained completion tie present", "initial omitted variant", "semantic omitted variant", "lost omitted variant", "variant mismatch"} {
+	for _, scenario := range []string{"exact", "lost admission", "lost admission wrong body", "unowned parent", "wrong body", "foreign row", "synthetic text", "old row", "initial exact", "initial wrong body", "initial foreign row", "initial wrong tuple", "retained failure", "retained completion newer", "native error later", "retained completion tie", "retained failure tie", "retained failure present", "retained completion tie present", "initial omitted variant", "semantic omitted variant", "lost omitted variant", "variant mismatch", "retained named failure tie present"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := fixture
 			initial := strings.HasPrefix(scenario, "initial ")
@@ -62,7 +62,7 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 				parent = "msg_other_compaction_input"
 			}
 			wantOutcome := OpenCodeOutcomeCompleted
-			if scenario == "retained failure" || scenario == "retained failure tie" || scenario == "retained failure present" {
+			if scenario == "retained failure" || scenario == "retained failure tie" || scenario == "retained failure present" || scenario == "retained named failure tie present" {
 				wantOutcome = OpenCodeOutcomeFailed
 			}
 			if scenario == "native error later" {
@@ -76,10 +76,14 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 					finish = "stop"
 				}
 				row, _ := json.Marshal(map[string]any{"info": map[string]any{"id": fmt.Sprintf("msg_history_%03d", n), "sessionID": f.identity.RootID, "role": "assistant", "parentID": parent, "finish": finish, "time": map[string]int64{"created": assistantAt + int64(n) + 1, "completed": assistantAt + int64(n) + 2}}, "parts": []any{}})
-				if (scenario == "native error later" || scenario == "retained failure tie") && n == 49 {
+				if (scenario == "native error later" || scenario == "retained failure tie" || scenario == "retained named failure tie present") && n == 49 {
 					var final map[string]any
 					_ = json.Unmarshal(row, &final)
-					final["info"].(map[string]any)["error"] = map[string]any{"name": "MessageAbortedError", "data": map[string]string{"message": "cancelled"}}
+					name := "MessageAbortedError"
+					if scenario == "retained named failure tie present" {
+						name = "APIError"
+					}
+					final["info"].(map[string]any)["error"] = map[string]any{"name": name, "data": map[string]string{"message": "fixture error"}}
 					row, _ = json.Marshal(final)
 				}
 				rows = append(rows, row)
@@ -118,7 +122,7 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 					prior = OpenCodeOutcomeCompleted
 					at = assistantAt + 200
 				}
-				if strings.HasPrefix(scenario, "retained completion tie") || scenario == "retained failure tie" {
+				if strings.HasPrefix(scenario, "retained completion tie") || scenario == "retained failure tie" || scenario == "retained named failure tie present" {
 					at = assistantAt + 51
 				}
 				inputAt := int64(info["time"].(map[string]any)["created"].(float64))
@@ -172,6 +176,12 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 					}
 					if (strings.HasPrefix(scenario, "retained completion tie") || scenario == "retained failure tie") && view.Inputs[0].OutcomeSource != OpenCodeOutcomeSourceLive {
 						t.Fatal("equal-time retained outcome lost first source")
+					}
+					if scenario == "retained named failure tie present" && (view.Inputs[0].ErrorName != "APIError" || view.Inputs[0].OutcomeSource != OpenCodeOutcomeSourceLive) {
+						t.Fatal("matching retained/native terminal lost known error or durable source")
+					}
+					if scenario == "retained failure tie" && view.Inputs[0].ErrorName != "" {
+						t.Fatal("retained failure borrowed a different tied cancellation error")
 					}
 					reader.events <- opencodebridge.Event{Type: "permission.replied", Properties: json.RawMessage(`{"sessionID":"` + f.identity.RootID + `","requestID":"per_done","reply":"once"}`)}
 					deadline := time.Now().Add(2 * time.Second)
