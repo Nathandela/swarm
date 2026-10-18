@@ -1,0 +1,60 @@
+{
+  "source_head": "66201fc3",
+  "native_version": "1.19.3",
+  "qualification": "Scripted local provider; actual native compaction/runtime/SDK/ownerreceipt. No external model requests.",
+  "cases": [
+    {
+      "run": "c184200",
+      "mode": "usage",
+      "provider_request_count": 6,
+      "original_input_id": "msg_1adb8e9b331d78b905118cf7df0d9ad9",
+      "compaction_user_ids": [
+        "msg_14fe09c2d001MRaDnoT4VhMAnL"
+      ],
+      "summary_assistant_ids": [
+        "msg_14fe09c310011yJ57kLeKmVYUg"
+      ],
+      "new_continuation_user_ids": [
+        "msg_14fe09c570019xmVlTUhJFLM7y"
+      ],
+      "final_assistant": {
+        "id": "msg_14fe09c59001a81t1qWsS30ENw",
+        "parentID": "msg_14fe09c570019xmVlTUhJFLM7y"
+      },
+      "original_receipt_state": "admitted",
+      "original_receipt_outcome": null,
+      "original_id_link_present_in_continuation_info": false,
+      "synthetic_marker": true,
+      "replay_text_matches_original": false,
+      "all_owned_shim_exit_files": true,
+      "elapsed_seconds": 6.167
+    },
+    {
+      "run": "c184300",
+      "mode": "overflow",
+      "provider_request_count": 7,
+      "original_input_id": "msg_8304851750cb6e8ddb7fe2de8a687b43",
+      "compaction_user_ids": [
+        "msg_14fe0e1d2001v17s6dOvDbn7IW"
+      ],
+      "summary_assistant_ids": [
+        "msg_14fe0e1e00018s1Nzj03W6jDpE"
+      ],
+      "new_continuation_user_ids": [
+        "msg_14fe0e20d001CV7IP9eX2LZxsF"
+      ],
+      "final_assistant": {
+        "id": "msg_14fe0e3f6001z9WMs6LiMovkqj",
+        "parentID": "msg_14fe0e20d001CV7IP9eX2LZxsF"
+      },
+      "original_receipt_state": "admitted",
+      "original_receipt_outcome": null,
+      "original_id_link_present_in_continuation_info": false,
+      "synthetic_marker": false,
+      "replay_text_matches_original": true,
+      "all_owned_shim_exit_files": true,
+      "elapsed_seconds": 6.032
+    }
+  ],
+  "private_result_sha256": "69d2142c1e139748df5397e276d682ef86c7b7f7907c0c0bec7f863a6316795b"
+}

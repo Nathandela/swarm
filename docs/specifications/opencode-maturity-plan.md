@@ -63,13 +63,13 @@ Delivery is tracked by **`agents-tracker-vyhy`**. P1–P9 correspond to `agents-
 flowchart LR
   A[Claude Codex OpenCode agents] --> C[Swarm CLI and pilot]
   C --> D[Daemon orchestration and existing operation custody]
-  D --> H[Concrete OpenCode HTTP driver]
+  D --> H[Concrete OpenCode SDK bridge driver]
   D --> J[Bounded interaction journal and capability publication]
   J --> P[Existing phone and TUI surfaces]
-  S[Per-worker shim] --> B[Owned authenticated OpenCode serve]
-  S --> T[Attached OpenCode TUI in sacred PTY]
-  T --> B
-  H --> B
+  S[Per-worker shim] --> T[Normal OpenCode TUI in sacred PTY]
+  T --> B[Native worker and public plugin SDK]
+  H --> U[Authenticated private Unix socket]
+  U --> B
   B --> N[Native profile and durable history]
   B --> L[Qualified legacy events and messages]
   L --> H
@@ -142,11 +142,11 @@ For pinned 1.19.3, prefer narrowly qualified caller-ID session creation followed
 
 Managed startup uses normal native model/agent flags and withholds `--prompt`. After plugin routing, the native Home-only prompt handler ignores it; if the plugin fails, native startup can instead submit it into a fresh root. A keyboard embargo alone does not prevent that. Missing plugins, unsupported configuration and startup deadline failures must therefore fail explicitly without a second conversation or automatic standalone fallback. Keep terminal-only operation as a separate **fresh launch choice before allocation**.
 
-The public native `Prompt` component and forwarding ref preserve native selection for initial submission. Forward reactive host props, its original ref, callbacks and the right-hand slot. Unknown competing composer plugins must refuse before allocation: the public replacement slot renders every contribution and exposes no ownership inspection. The narrow initial-input qualification does not establish later shell-mode, draft or modal authority, and `submit()`/`onSubmit` are not native admission receipts. Explicit variant bootstrap remains unsupported; preserving a native selected variant is a separate property.
+The public native `Prompt` component and forwarding ref preserve native selection for initial submission. Forward reactive host props, its original ref, callbacks and the right-hand slot. Unknown competing composer plugins must withhold managed writes: the public replacement slot renders every contribution and exposes no ownership inspection. The integrated wrapper verifies an enabled, visible, exact-root empty Prompt immediately before SDK dispatch. This does not establish shell-mode or picker authority, and `submit()`/`onSubmit` are not native admission receipts. Explicit variant bootstrap remains unsupported; preserving a native selected variant is a separate property.
 
 If daemon death happens after native admission but before receipt persistence, recover by stable native ID only where content-bound replay is proved; otherwise retain uncertainty. If a backend dies, disable native actions, retain identity/history and re-establish ownership before resume. If TUI `/new`, fork, session selector or `/resume` changes what is displayed, either rebind through a proven handshake or visibly suspend semantic actions. Never keep sending to an old hidden root while `peek` shows another conversation.
 
-Pinned 1.19.3 source has no authoritative server-side current-view read: normal navigation changes local TUI state, and `/tui/select-session` is a command without a focus acknowledgement. The implementation therefore qualifies a small TUI plugin that checks `api.route.current` and invokes an exact-root legacy SDK action in the same callback. Earlier focus telemetry does not authorize daemon writes. This proves the view at dispatch, not an atomic native admission fence; subsequent navigation cannot retarget an already dispatched operation. The public plugin API also lacks a global live-draft getter, so Swarm's direct-input guard remains necessary and the bridge must not claim draft authority. Preserve existing native configuration origins and pure mode; unavailable bridge support leaves semantic mutations unavailable while native observation remains useful.
+Pinned 1.19.3 source has no authoritative server-side current-view read: normal navigation changes local TUI state, and `/tui/select-session` is a command without a focus acknowledgement. The implementation therefore qualifies a small TUI plugin that checks `api.route.current` and invokes an exact-root legacy SDK action in the same callback. Earlier focus telemetry does not authorize daemon writes. This proves the view at dispatch, not an atomic native admission fence; subsequent navigation cannot retarget an already dispatched operation. The public plugin API has no global live-draft getter; the qualified replacement Prompt ref supplies the narrow empty-composer guard alongside Swarm's direct-input fence. Preserve existing native configuration origins and pure mode; unavailable bridge support leaves semantic mutations unavailable while native observation remains useful.
 
 ## Work packages in dependency order
 

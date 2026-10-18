@@ -1,0 +1,36 @@
+{
+  "source_head": "66201fc3",
+  "binary_sha256": "519e371381f1f274a9097965badc366026727dd20debcda56d30a2dc2783c477",
+  "fixture_sha256": "f0e1500fcae7855ec05a43634020b1d5579e9437e6449227cb56d30dc91aab8f",
+  "private_result_sha256": "c203c11b6803c65a2307fc209c26fb5961af916ab953faec9f6b45bae5f2f7a2",
+  "native_version": "1.19.3",
+  "qualification": "Actual native TUI and SDK with scripted localhost model provider; provider stop with ordinary tool calls and two-second final response delay.",
+  "external_model_requests": 0,
+  "cases": {
+    "semantic": {
+      "intermediate_read_count": 21,
+      "intermediate_states": [
+        "admitted"
+      ],
+      "terminal_state": "completed",
+      "outcome_source": "live",
+      "native_message_id": "msg_87b6bf7ee3a8592d42c493c682748e5c",
+      "native_model": "fixture/fixture",
+      "variant": "max"
+    },
+    "hierarchy": {
+      "intermediate_read_count": 21,
+      "intermediate_states": [
+        "admitted"
+      ],
+      "terminal_state": "completed",
+      "outcome_source": "live",
+      "native_message_id": "msg_952e55ea19e8c0cf0ac387ba3c385fe7",
+      "native_model": "fixture/fixture",
+      "variant": "max"
+    }
+  },
+  "config_unchanged": true,
+  "all_owned_shim_exit_files": true,
+  "passed": true
+}
