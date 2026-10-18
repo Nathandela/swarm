@@ -34,7 +34,7 @@ func TestReplyNativeRequestRefusesMissingCardAndMalformedAnswers(t *testing.T) {
 	}
 	a.core.Router().Items().Apply(itemRecord(10, "m1/s1", nativeDecisionCard(t, "question")))
 	for _, payload := range []string{"", "null", "[]", "[[]]", "[42]", "[\"flat\"]", "[[\"one\"]] trailing"} {
-		if _, err := a.ReplyNativeRequest("m1/s1", "native-request", "answer", payload); err == nil || !strings.Contains(err.Error(), ErrClassInvalidRequest) {
+		if _, err := a.ReplyNativeRequest("m1/s1", "native-request", "question_reply", payload); err == nil || !strings.Contains(err.Error(), ErrClassInvalidRequest) {
 			t.Fatalf("malformed question answers %q: %v", payload, err)
 		}
 	}
@@ -47,7 +47,7 @@ func TestReplyNativeRequestIsLiveOnlyAndNeverQueuesAnswers(t *testing.T) {
 			a.core.Router().Items().Apply(itemRecord(10, "m1/s1", nativeDecisionCard(t, kind)))
 			decision, answers := "once", ""
 			if kind == "question" {
-				decision, answers = "answer", `[["one"]]`
+				decision, answers = "question_reply", `[["one"]]`
 			}
 			if _, err := a.ReplyNativeRequest("m1/s1", "native-request", decision, answers); err == nil || !strings.Contains(err.Error(), ErrClassOffline) {
 				t.Fatalf("offline native answer: %v", err)
@@ -65,10 +65,18 @@ func TestNativeDecisionOutcomeDistinguishesAdmissionAndUncertainty(t *testing.T)
 		ctrl := schema.Control{Op: schema.ActionNativeDecide, OperationID: "op", SessionID: "m/s", NativeDecisionReceipt: &schema.NativeDecisionReceipt{OperationID: "op", Session: "m/s", State: state}}
 		got := outcomeOf(ctrl)
 		want := "outcome_unknown"
-		if state == "admitted" { want = "native_admitted" }
-		if state == "rejected" { want = "native_rejected" }
-		if got.Code != want { t.Errorf("native %s became %s", state, got.Code) }
+		if state == "admitted" {
+			want = "native_admitted"
+		}
+		if state == "rejected" {
+			want = "native_rejected"
+		}
+		if got.Code != want {
+			t.Errorf("native %s became %s", state, got.Code)
+		}
 		ctrl.NativeDecisionReceipt.OperationID = "another-op"
-		if got := outcomeOf(ctrl); got.Code != "outcome_unknown" { t.Fatal("uncorrelated native reply claimed an answer") }
+		if got := outcomeOf(ctrl); got.Code != "outcome_unknown" {
+			t.Fatal("uncorrelated native reply claimed an answer")
+		}
 	}
 }

@@ -215,6 +215,7 @@ method App.RefreshLaunchPresets() (*Op, error)
 method App.RefreshRoster() error
 method App.RegisterPushToken(string) error
 method App.ReleaseControl(string) (*Op, error)
+method App.ReplyNativeRequest(string, string, string, string) (*Op, error)
 method App.Resize(string, int, int) error
 method App.Resync(string) error
 method App.ResyncPending(string) (bool, error)

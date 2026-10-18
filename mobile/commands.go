@@ -975,7 +975,8 @@ type commandBody struct {
 	// approve is IS-LIFE-4's ApproveReq. Like gate it changes both halves -- the signature
 	// covers the body's content_hash and the envelope carries the body -- and for the same
 	// reason the derivation is phonecore's (SignApprove), not this package's.
-	approve *schema.ApproveReq
+	approve        *schema.ApproveReq
+	nativeDecision *schema.NativeDecisionReq
 	// sessionLaunch is Wave R5's preset confirmation body. Launch's own shape: the body
 	// rides beside the signed tuple (SealSessionLaunchEnvelope) and is bound into the
 	// signature via ContentHash = schema.SessionLaunchContentHash(it).
@@ -1057,12 +1058,19 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 	// now+TTLSeconds and a 30-minute cap, so one flat short TTL makes the SIGNATURE the
 	// thing that ends a typing session.
 	expiresAt := time.Now().Add(phonecore.CommandTTLFor(action))
+	if body.nativeDecision != nil && body.nativeDecision.ExpiresAt != nil && body.nativeDecision.ExpiresAt.Before(expiresAt) {
+		expiresAt = *body.nativeDecision.ExpiresAt
+	}
 	// take_control signs a DIFFERENT tuple: its content hash is SHA256(gate token), and the
 	// rule that it is is phonecore's, not this package's. Re-deriving it here would be the
 	// same forbidden duplication as re-deriving LaunchContentHash -- a divergence produces a
 	// signature the daemon rejects, with no compile error and no message naming the cause.
 	var cmd schema.DeviceCommandAuth
 	switch {
+	case body.nativeDecision != nil:
+		cmd, err = phonecore.SignNativeDecision(core.KeyStore(), phonecore.NativeDecisionInput{
+			Machine: core.State().Machine, OperationID: id, ExpiresAt: expiresAt, Request: *body.nativeDecision,
+		})
 	case body.gate != "":
 		cmd, err = phonecore.SignTakeControl(core.KeyStore(), phonecore.TakeControlInput{
 			Machine:     core.State().Machine,
@@ -1224,6 +1232,8 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 		// the daemon validates against -- launch's shape, for the other action whose payload the
 		// daemon reads.
 		env, err = phonecore.SealApproveEnvelope(sc.key, sc.epoch, seq, cmd, *body.approve)
+	case body.nativeDecision != nil:
+		env, err = phonecore.SealNativeDecisionEnvelope(sc.key, sc.epoch, seq, cmd, body.nativeDecision)
 	case body.gate != "":
 		// The wire token rides beside the signed tuple so the gateway can rebuild the
 		// take_control Control the daemon verifies against. The requested lifetime is the

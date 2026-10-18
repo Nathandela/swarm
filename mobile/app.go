@@ -1742,6 +1742,26 @@ func (a *App) PendingOpCount() (n int, err error) {
 const machineGaveNoReason = "the machine gave no reason"
 
 func outcomeOf(ctrl schema.Control) *Outcome {
+	if ctrl.Op == schema.ActionNativeDecide {
+		out := &Outcome{OperationID: ctrl.OperationID, Code: "outcome_unknown", Message: "Native reply admission is unconfirmed; do not submit another answer.", Resolved: true}
+		receipt := ctrl.NativeDecisionReceipt
+		if receipt == nil || receipt.OperationID != ctrl.OperationID || receipt.Session != ctrl.SessionID {
+			return out
+		}
+		if receipt.Reason != "" {
+			out.Message = receipt.Reason
+		}
+		switch receipt.State {
+		case "admitted":
+			out.Code, out.Message = "native_admitted", "The native reply was admitted; request resolution is tracked separately."
+		case "rejected":
+			out.Code = "native_rejected"
+			if receipt.Reason == "" {
+				out.Message = "The native request rejected this answer."
+			}
+		}
+		return out
+	}
 	code := string(ctrl.ErrorCode)
 	if code == "" {
 		code = ctrl.Op
