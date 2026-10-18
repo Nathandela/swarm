@@ -1,0 +1,480 @@
+{
+  "version": 1,
+  "verdict": "pass",
+  "recorded_at": "2026-10-18T19:34:03.297970+00:00",
+  "build_source": {
+    "head": "cd88cb37f1a3977d94c4959b83bc2e676852c63a",
+    "tree": "54298d7fbb2f24a854f113eed8ba4154250b6349",
+    "integration_head": "f25fe625",
+    "git_status_before": "",
+    "git_status_after": ""
+  },
+  "android_test_source": {
+    "head": "1d471d52dd3c7a7b528326bebe9f544a6abf5eb7",
+    "tree": "69efa4e1bebf4ad050f98bd3d9c7c0cd2b83b811",
+    "git_status_before": "",
+    "git_status_after": ""
+  },
+  "production_equivalence": {
+    "compared_root_head": "785e79aa7bd1917c7a0cb0a19b34748f2c97b21f",
+    "changed_paths_since_integration": [
+      "android/app/src/test/kotlin/dev/swarm/phone/relay/RelayTrustImplTest.kt",
+      "android/gate/s24_screens_test.go",
+      "evidence/native-plan-anchor-green.txt",
+      "evidence/native-plan-anchor-red.txt",
+      "internal/skeleton/opencode_default_variant_test.go",
+      "internal/skeleton/opencode_history_page.go",
+      "internal/skeleton/opencode_history_page_test.go",
+      "internal/skeleton/opencode_receipt.go",
+      "internal/skeleton/opencode_recovery.go",
+      "internal/skeleton/opencode_recovery_window_test.go",
+      "internal/skeleton/opencode_send_test.go",
+      "internal/skeleton/opencode_state.go",
+      "internal/skeleton/opencode_supervision_identity.go"
+    ],
+    "android_mobile_phonecore_protocol_production_changed": false,
+    "note": "Later root changes are host skeleton, evidence, and reviewed Android test-only fixtures/contracts; no AAR production inputs changed."
+  },
+  "toolchain": {
+    "go": "1.26.9 darwin/arm64",
+    "jdk": "21.0.12.1+1",
+    "gradle": "9.5.1",
+    "android_ndk": "27.2.12479018",
+    "inherited_SWARM_environment": "stripped"
+  },
+  "artifacts": {
+    "debug": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/app/libs/swarm.aar",
+      "sha256": "2478a67e537074f97bb57bbdc777c894b15da710fa0ba11df64c3ad33ed961ad",
+      "bytes": 13286295,
+      "mtime_ns": 1792351052263887862,
+      "native_libraries": [
+        "jni/arm64-v8a/libgojni.so",
+        "jni/x86_64/libgojni.so"
+      ],
+      "reply_native_request_signature": [
+        "public native swarmmobile.Op replyNativeRequest(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String) throws java.lang.Exception;"
+      ]
+    },
+    "release": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/app/build/generated/release-swarm-aar/swarm.aar",
+      "sha256": "2478a67e537074f97bb57bbdc777c894b15da710fa0ba11df64c3ad33ed961ad",
+      "bytes": 13286295,
+      "mtime_ns": 1792351794614475004,
+      "native_libraries": [
+        "jni/arm64-v8a/libgojni.so",
+        "jni/x86_64/libgojni.so"
+      ],
+      "reply_native_request_signature": [
+        "public native swarmmobile.Op replyNativeRequest(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String) throws java.lang.Exception;"
+      ]
+    }
+  },
+  "artifact_observations": {
+    "debug_before_build": null,
+    "debug_after_build": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/app/libs/swarm.aar",
+      "sha256": "2478a67e537074f97bb57bbdc777c894b15da710fa0ba11df64c3ad33ed961ad",
+      "bytes": 13286295,
+      "mtime_ns": 1792351052263887862,
+      "native_libraries": [
+        "jni/arm64-v8a/libgojni.so",
+        "jni/x86_64/libgojni.so"
+      ]
+    },
+    "debug_before_final_android": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/app/libs/swarm.aar",
+      "sha256": "2478a67e537074f97bb57bbdc777c894b15da710fa0ba11df64c3ad33ed961ad",
+      "bytes": 13286295,
+      "mtime_ns": 1792351052263887862,
+      "native_libraries": [
+        "jni/arm64-v8a/libgojni.so",
+        "jni/x86_64/libgojni.so"
+      ]
+    },
+    "debug_after_final_android": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/app/libs/swarm.aar",
+      "sha256": "2478a67e537074f97bb57bbdc777c894b15da710fa0ba11df64c3ad33ed961ad",
+      "bytes": 13286295,
+      "mtime_ns": 1792351052263887862,
+      "native_libraries": [
+        "jni/arm64-v8a/libgojni.so",
+        "jni/x86_64/libgojni.so"
+      ]
+    },
+    "release_before_fixture_reruns": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/app/build/generated/release-swarm-aar/swarm.aar",
+      "sha256": "2478a67e537074f97bb57bbdc777c894b15da710fa0ba11df64c3ad33ed961ad",
+      "bytes": 13286295,
+      "mtime_ns": 1792351100551955728,
+      "native_libraries": [
+        "jni/arm64-v8a/libgojni.so",
+        "jni/x86_64/libgojni.so"
+      ],
+      "native_request_methods": [
+        "public native swarmmobile.Op replyNativeRequest(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String) throws java.lang.Exception;"
+      ]
+    },
+    "release_after_final_android": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/app/build/generated/release-swarm-aar/swarm.aar",
+      "sha256": "2478a67e537074f97bb57bbdc777c894b15da710fa0ba11df64c3ad33ed961ad",
+      "bytes": 13286295,
+      "mtime_ns": 1792351431977046596,
+      "native_libraries": [
+        "jni/arm64-v8a/libgojni.so",
+        "jni/x86_64/libgojni.so"
+      ],
+      "reply_native_request_signature": [
+        "public native swarmmobile.Op replyNativeRequest(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String) throws java.lang.Exception;"
+      ]
+    },
+    "debug_after_all_gates": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/app/libs/swarm.aar",
+      "sha256": "2478a67e537074f97bb57bbdc777c894b15da710fa0ba11df64c3ad33ed961ad",
+      "bytes": 13286295,
+      "mtime_ns": 1792351052263887862,
+      "native_libraries": [
+        "jni/arm64-v8a/libgojni.so",
+        "jni/x86_64/libgojni.so"
+      ],
+      "reply_native_request_signature": [
+        "public native swarmmobile.Op replyNativeRequest(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String) throws java.lang.Exception;"
+      ]
+    },
+    "release_after_all_gates": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/app/build/generated/release-swarm-aar/swarm.aar",
+      "sha256": "2478a67e537074f97bb57bbdc777c894b15da710fa0ba11df64c3ad33ed961ad",
+      "bytes": 13286295,
+      "mtime_ns": 1792351794614475004,
+      "native_libraries": [
+        "jni/arm64-v8a/libgojni.so",
+        "jni/x86_64/libgojni.so"
+      ],
+      "reply_native_request_signature": [
+        "public native swarmmobile.Op replyNativeRequest(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String) throws java.lang.Exception;"
+      ]
+    }
+  },
+  "go_race": {
+    "source_head": "cd88cb37f1a3977d94c4959b83bc2e676852c63a",
+    "command": [
+      "/Users/Nathan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.9.darwin-arm64/bin/go",
+      "test",
+      "-race",
+      "./internal/phonecore",
+      "./mobile",
+      "-count=1"
+    ],
+    "exit_code": 0,
+    "started_at": "2026-10-18T19:17:17.218563+00:00",
+    "finished_at": "2026-10-18T19:18:40.462738+00:00",
+    "elapsed_seconds": 83.24290354200639,
+    "packages": {
+      "internal/phonecore": "ok 69.172s",
+      "mobile": "ok 57.775s"
+    },
+    "binding_checks": [
+      "TestPBBIND2_NoExportedSymbolIsBindIllegal",
+      "TestPBBIND2_GuardDetectsAKnownIllegalSurface",
+      "TestPBBIND1_FacadeIsTheOnlyBoundSurface",
+      "TestPBBIND1_GomobileBindProducesAnAAR",
+      "TestPBBIND0_AllowlistMovedToTheFacade"
+    ],
+    "sdk_configured": true,
+    "short": false
+  },
+  "android": {
+    "command": [
+      "sh",
+      "-c",
+      ". ./toolchain.env && ./gradlew --offline --no-daemon --continue --rerun-tasks :app:testDebugUnitTest :app:testReleaseUnitTest"
+    ],
+    "exit_code": 0,
+    "started_at": "2026-10-18T19:23:35.189186+00:00",
+    "finished_at": "2026-10-18T19:25:36.725175+00:00",
+    "elapsed_seconds": 121.52540816699911,
+    "tasks_executed": 62,
+    "variants": {
+      "debug": {
+        "tests": 1764,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "suites": 219,
+        "xml_timestamp_start": "2026-10-18T19:24:27.764Z",
+        "xml_timestamp_end": "2026-10-18T19:25:00.405Z",
+        "xml_mtime_ns_min": 1792351501908026002,
+        "xml_mtime_ns_max": 1792351501922428202
+      },
+      "release": {
+        "tests": 1764,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "suites": 219,
+        "xml_timestamp_start": "2026-10-18T19:25:03.069Z",
+        "xml_timestamp_end": "2026-10-18T19:25:35.054Z",
+        "xml_mtime_ns_min": 1792351536080587887,
+        "xml_mtime_ns_max": 1792351536100789658
+      }
+    }
+  },
+  "fixture_history": [
+    {
+      "head": "cd88cb37",
+      "debug": {
+        "tests": 1764,
+        "failures": 6,
+        "skipped": 0
+      },
+      "release": {
+        "tests": 1764,
+        "failures": 6,
+        "skipped": 0
+      },
+      "reason": "Host SunJSSE X509TrustManager lacks Android required checkServerTrusted(X509Certificate[], String, String) method; fixture failed before production verifier."
+    },
+    {
+      "head": "417dd905",
+      "debug": {
+        "tests": 1764,
+        "failures": 1,
+        "skipped": 0
+      },
+      "release": {
+        "tests": 1764,
+        "failures": 1,
+        "skipped": 0
+      },
+      "reason": "Real SunJSSE untrusted-chain rejection had private SunCertPathBuilderException cause; production correctly refused as unavailable rather than Android certificate verdict."
+    },
+    {
+      "head": "1d471d52",
+      "debug": {
+        "tests": 1764,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "suites": 219,
+        "xml_timestamp_start": "2026-10-18T19:24:27.764Z",
+        "xml_timestamp_end": "2026-10-18T19:25:00.405Z",
+        "xml_mtime_ns_min": 1792351501908026002,
+        "xml_mtime_ns_max": 1792351501922428202
+      },
+      "release": {
+        "tests": 1764,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "suites": 219,
+        "xml_timestamp_start": "2026-10-18T19:25:03.069Z",
+        "xml_timestamp_end": "2026-10-18T19:25:35.054Z",
+        "xml_mtime_ns_min": 1792351536080587887,
+        "xml_mtime_ns_max": 1792351536100789658
+      },
+      "reason": "Test-only adapter preserves actual CA verification and wraps only checked CertificateException while retaining original cause. Production TLS, SAN enforcement, test expectations, and private inaccessible-delegate negative unchanged."
+    }
+  ],
+  "limits": [
+    "JVM/Robolectric and native Go binding gates; no physical Android handset or hosted-relay end-to-end execution claimed.",
+    "Connected sealed phone/native packet tests use the real application path with a bounded SDK fixture; actual native owner/runtime qualification is recorded separately."
+  ],
+  "raw_evidence": {
+    "final-phone-aar.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-aar.json",
+      "sha256": "5c1851cd52f7651b4a07ba3c595e458bd2c673150a3dca19b1073197c3b73ca1"
+    },
+    "final-phone-aar.log": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-aar.log",
+      "sha256": "660285d85b92d682f9f934668a482e4c36adc1029fdd7e89f658d357a503573b"
+    },
+    "final-phone-go.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-go.json",
+      "sha256": "77fa4247f67dad834f38fbfac46663cde38a6df672a240d6b42e077006f15343"
+    },
+    "final-phone-go.log": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-go.log",
+      "sha256": "e07673b551f5dac58adae8bc1ecacf373ed140c06ebd3d35805b55cd829fe2be"
+    },
+    "final-phone-jvm.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-jvm.json",
+      "sha256": "cc5f8a3147b5d7c0f092a6444afb7b984b1fb4836515eb4198b2457bf9fbfa19"
+    },
+    "final-phone-jvm.log": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-jvm.log",
+      "sha256": "8e208649308f591ac1bd467bbdef6fc9d7942f6682390dc4516b8e6a2c2d87c3"
+    },
+    "final-phone-jvm-red.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-jvm-red.json",
+      "sha256": "3bbacbdd549ab4fb73b05a520807ecf4c67fb054f6cd9fb66ef1bd6d80b53c83"
+    },
+    "final-phone-jvm-red.log": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-jvm-red.log",
+      "sha256": "3fc99f08045dd72ec25d50b38afe8954e08954b518f898c26961d583ebf23167"
+    },
+    "final-phone-jvm-provider-red.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-jvm-provider-red.json",
+      "sha256": "d553467b44e8517da552d41bdb7184a674541a07ea7a16b46b372ed82d622d84"
+    },
+    "final-phone-jvm-provider-red.log": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-jvm-provider-red.log",
+      "sha256": "8a82225fbcf0614416a81607d33f4cfd7e3643ca3a5d55938b8fc310a74fc289"
+    },
+    "final-phone-artifacts.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-artifacts.json",
+      "sha256": "8b14bbfe75fb18687e1ac2dab71b08cf91936b521eeeab31a74aedcfd8cb0b5e"
+    },
+    "final_phone_gate.py": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final_phone_gate.py",
+      "sha256": "8421a143cc7c88feec99aa9636038e9bfcc285338bd6d93aab2fb0022bdabfc0"
+    },
+    "final-phone-gate.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-gate.json",
+      "sha256": "713b93041e0310255fe0e1a929d417f403ae070cf2de7cdf51099b89e9c466aa"
+    },
+    "final-phone-gate.log": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-gate.log",
+      "sha256": "679905bcff34119323db5b3275b8d36933e6f64f58962fa7f025436bbcd8828b"
+    },
+    "final-phone-gate-red.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-gate-red.json",
+      "sha256": "d3cbc4d2197afde4e8714f2fbd5dfaa59b51d5f7e053a01c6ec6d0094441f420"
+    },
+    "final-phone-gate-red.log": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-gate-red.log",
+      "sha256": "93cdf4cbfc374c60d5c00ed76bd1e6884b6de09f809cf2cc0fdc89af9c473258"
+    },
+    "final-phone-lint-offline.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-lint-offline.json",
+      "sha256": "8a8fb5928afedc5f7d98c598a7e48fb3561f63830a297b03cfd094c384fc6902"
+    },
+    "final-phone-lint-offline.log": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-lint-offline.log",
+      "sha256": "4eb62dad1abb1a9d25c7caa84494ac24e13ab94e1e80cb38bbe8a859885c5eb0"
+    },
+    "final-phone-lint-online.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-lint-online.json",
+      "sha256": "2e99896b7454cc6e9d297e34a79aa18038c1715852ecd2ba0737d59bbe4fe001"
+    },
+    "final-phone-lint-online.log": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-lint-online.log",
+      "sha256": "308cd6be628511284d55abfb3fa24642bb2461908d1aefbe2c396e00ff9f99b9"
+    },
+    "final-phone-lint-debug.xml": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-lint-debug.xml",
+      "sha256": "77170d12f99a8ca67fb28748e200a922f675350baf01f9b217122c0eb66e6140"
+    },
+    "final-phone-lint-release.xml": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-lint-release.xml",
+      "sha256": "77170d12f99a8ca67fb28748e200a922f675350baf01f9b217122c0eb66e6140"
+    },
+    "final-phone-dependency-before.json": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-dependency-before.json",
+      "sha256": "4077351f6274213c178b8ff7b2628cf820ed532e5c31e95b23defc7cb9cd2c37"
+    },
+    "final-phone-junit-xml.zip": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-junit-xml.zip",
+      "sha256": "e2b1ca7f284fb12fa6ff8a66ffdc074041a5f8386d27c27dea75a45d6175e3b1"
+    },
+    "final-libs-javap.txt": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-libs-javap.txt",
+      "sha256": "db8af11a7b395194af785206acfdaa8edf9e866148ad164e6dad6e09635989ac"
+    },
+    "final-release-swarm-aar-javap.txt": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-release-swarm-aar-javap.txt",
+      "sha256": "db8af11a7b395194af785206acfdaa8edf9e866148ad164e6dad6e09635989ac"
+    }
+  },
+  "android_contract_gate": {
+    "source_head": "a1fa1a291dbba7688d152f2c6310103903c5ef07",
+    "source_tree": "ffe0ad650d1fb4207c5d0b3ce34aa666276ec4f9",
+    "command": [
+      "/Users/Nathan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.9.darwin-arm64/bin/go",
+      "test",
+      "-json",
+      "-race",
+      "./android/gate",
+      "-count=1"
+    ],
+    "exit_code": 0,
+    "started_at": "2026-10-18T19:29:55.990155+00:00",
+    "finished_at": "2026-10-18T19:32:55.612002+00:00",
+    "elapsed_seconds": 179.57206975000736,
+    "test_totals": {
+      "pass": 570,
+      "fail": 0,
+      "skip": 0
+    },
+    "top_level_pass_count": 487,
+    "package_test_seconds": 156.513,
+    "initial_failure": {
+      "pass": 569,
+      "fail": 1,
+      "skip": 0,
+      "reason": "NativeRequestView.kt lacked its required exhaustive composition-table claim. Test-only a1fa1a29 adds its six actual kit primitives without changing production."
+    },
+    "source_status": "Only untracked final evidence documents; tracked source clean."
+  },
+  "android_lint": {
+    "source_head": "1d471d52dd3c7a7b528326bebe9f544a6abf5eb7",
+    "source_tree": "69efa4e1bebf4ad050f98bd3d9c7c0cd2b83b811",
+    "command": [
+      "sh",
+      "-c",
+      ". ./toolchain.env && ./gradlew --no-daemon --continue :app:lintDebug :app:lintRelease"
+    ],
+    "exit_code": 0,
+    "started_at": "2026-10-18T19:28:51.353672+00:00",
+    "finished_at": "2026-10-18T19:31:57.751101+00:00",
+    "elapsed_seconds": 186.37915070800227,
+    "variants": {
+      "debug": {
+        "errors": 0,
+        "warnings": 34,
+        "report_path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-lint-debug.xml",
+        "report_mtime_ns": 1792351903878683128,
+        "warnings_by_id": {
+          "RedundantLabel": 1,
+          "GradleDependency": 6,
+          "NewerVersionAvailable": 2,
+          "UseCompatLoadingForDrawables": 3,
+          "UseCompatTextViewDrawableApis": 1,
+          "ObsoleteSdkInt": 1,
+          "UnusedResources": 2,
+          "ViewConstructor": 3,
+          "UseKtx": 13,
+          "SetTextI18n": 2
+        }
+      },
+      "release": {
+        "errors": 0,
+        "warnings": 34,
+        "report_path": "/private/tmp/swarm-opencode-implementation-20261018/review-phone/final-phone-lint-release.xml",
+        "report_mtime_ns": 1792351917111703597,
+        "warnings_by_id": {
+          "RedundantLabel": 1,
+          "GradleDependency": 6,
+          "NewerVersionAvailable": 2,
+          "UseCompatLoadingForDrawables": 3,
+          "UseCompatTextViewDrawableApis": 1,
+          "ObsoleteSdkInt": 1,
+          "UnusedResources": 2,
+          "ViewConstructor": 3,
+          "UseKtx": 13,
+          "SetTextI18n": 2
+        }
+      }
+    },
+    "initial_offline_result": {
+      "exit_code": 1,
+      "reason": "Pinned lint-gradle31.13.2 and four existing runtime artifacts were absent from offline cache; no source analysis completed."
+    },
+    "resolution": "Authorized download through declared official repositories and existing dependency verification; no versions, sources, or checksums changed.",
+    "verification_metadata_before": {
+      "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/gradle/verification-metadata.xml": "dbae92ea6ab2e9b9dbe76e2967a0fff73e273e2ec080bbb259fc761f7b3b1f77"
+    },
+    "verification_metadata_after": {
+      "/private/tmp/swarm-opencode-implementation-20261018/worktrees/phone-integration-astra/android/gradle/verification-metadata.xml": "dbae92ea6ab2e9b9dbe76e2967a0fff73e273e2ec080bbb259fc761f7b3b1f77"
+    }
+  }
+}
