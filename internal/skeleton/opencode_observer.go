@@ -19,16 +19,24 @@ type openCodeReader interface {
 }
 
 // observeOpenCode owns the reducer. The first result is a subscription/snapshot barrier.
-func observeOpenCode(ctx context.Context, reader openCodeReader, identity opencodebridge.Identity, state *OpenCodeState, publish func(OpenCodeView), ready func(error)) {
+func observeOpenCode(ctx context.Context, reader openCodeReader, identity opencodebridge.Identity, state *OpenCodeState, publish func(OpenCodeView), ready func(error), projection *openCodeTranscript) {
 	for {
-		_ = observeOpenCodeEpoch(ctx, reader, identity, state, publish, ready)
+		_ = observeOpenCodeEpoch(ctx, reader, identity, state, publish, ready, projection)
 		ready = nil
 		if ctx.Err() != nil {
 			return
 		}
+		if projection != nil {
+			projection.ready.Store(false)
+		}
 		state.Degrade("native event stream was interrupted")
 		state.MarkRootStatusUnknown("native observation requires reconciliation")
 		state.nativeUnknown = "native current activity requires reconciliation"
+		if projection != nil {
+			if err := projection.view(state.View()); err != nil {
+				projection.ready.Store(false)
+			}
+		}
 		publish(state.View())
 		timer := time.NewTimer(time.Second)
 		select {
@@ -40,7 +48,7 @@ func observeOpenCode(ctx context.Context, reader openCodeReader, identity openco
 	}
 }
 
-func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity opencodebridge.Identity, state *OpenCodeState, publish func(OpenCodeView), ready func(error)) (result error) {
+func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity opencodebridge.Identity, state *OpenCodeState, publish func(OpenCodeView), ready func(error), projection *openCodeTranscript) (result error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	notify := func(err error) {
@@ -51,11 +59,19 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 	}
 	defer func() { notify(result) }()
 	epoch := state.BeginEpoch()
+	if projection != nil {
+		projection.ready.Store(false)
+	}
 	if state.scope == nil {
 		state.scope = map[string]OpenCodeDescendant{}
 	}
 	state.nativeUnknown = "native current activity has not been reconciled"
 	state.MarkRootStatusUnknown("native snapshot has not been reconciled")
+	if projection != nil {
+		if err := projection.view(state.View()); err != nil {
+			projection.ready.Store(false)
+		}
+	}
 	publish(state.View())
 	events := make(chan []byte, 128)
 	finished := make(chan error, 1)
@@ -123,11 +139,22 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 				if err != nil {
 					return false, err
 				}
-				return false, state.reconcileMessage(id, row, epoch)
+				if err := state.reconcileMessage(id, row, epoch); err != nil {
+					return false, err
+				}
+				if projection != nil {
+					return false, projection.row(row, "live")
+				}
+				return false, nil
 			}
 			return true, nil
 		case OCRefusedCap, OCRefusedParse, OCRefusedDegraded:
 			return false, errors.New("native event could not be retained")
+		}
+		if projection != nil {
+			if err := projection.event(ctx, reader, event); err != nil {
+				return false, err
+			}
 		}
 		return false, nil
 	}
@@ -142,6 +169,11 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 			}
 			if err := state.ImportHistory(snapshot.Messages, epoch); err != nil {
 				return err
+			}
+			if projection != nil {
+				if err := projection.history(snapshot.Messages, "imported"); err != nil {
+					return err
+				}
 			}
 			dirty := false
 		Drain:
@@ -159,7 +191,13 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 				}
 			}
 			if !dirty {
-				return state.reconcileNative(snapshot, epoch)
+				if err := state.reconcileNative(snapshot, epoch); err != nil {
+					return err
+				}
+				if projection != nil {
+					projection.ready.Store(true)
+				}
+				return nil
 			}
 			state.MarkRootStatusUnknown("native status changed during reconciliation")
 			state.nativeUnknown = "native current activity changed during reconciliation"
@@ -168,6 +206,11 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 	}
 	if err := refresh(); err != nil {
 		return err
+	}
+	if projection != nil {
+		if err := projection.view(state.View()); err != nil {
+			projection.ready.Store(false)
+		}
 	}
 	publish(state.View())
 	notify(nil)
@@ -190,11 +233,21 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 					return err
 				}
 			}
+			if projection != nil {
+				if err := projection.view(state.View()); err != nil {
+					projection.ready.Store(false)
+				}
+			}
 			publish(state.View())
 		case <-timer.C:
-			if !state.View().BusyKnown {
+			if !state.View().BusyKnown || projection != nil && !projection.ready.Load() {
 				if err := refresh(); err != nil {
 					return err
+				}
+			}
+			if projection != nil {
+				if err := projection.view(state.View()); err != nil {
+					projection.ready.Store(false)
 				}
 			}
 			publish(state.View())

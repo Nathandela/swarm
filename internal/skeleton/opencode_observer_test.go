@@ -138,7 +138,7 @@ func runOCObserverTest(t *testing.T, f *ocReaderFake) (<-chan OpenCodeView, <-ch
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		observeOpenCode(ctx, f, f.identity, state, func(v OpenCodeView) { views <- v }, func(err error) { ready <- err })
+		observeOpenCode(ctx, f, f.identity, state, func(v OpenCodeView) { views <- v }, func(err error) { ready <- err }, nil)
 	}()
 	t.Cleanup(func() {
 		cancel()

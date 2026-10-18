@@ -1,0 +1,5 @@
+=== RUN   TestOpenCodeTranscriptEscapedPublicInputNeedsFullHash
+    opencode_transcript_test.go:137: public text bytes=4096 journal bytes=12518 visible text bytes=2048 full bytes=24756
+--- PASS: TestOpenCodeTranscriptEscapedPublicInputNeedsFullHash (0.03s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/skeleton	1.499s

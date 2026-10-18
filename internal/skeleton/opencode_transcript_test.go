@@ -6,7 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"crypto/sha256"
+	"encoding/hex"
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol"
 )
 
 func TestOpenCodeTranscriptStableIDsAcrossBackendGenerations(t *testing.T) {
@@ -57,22 +61,30 @@ func TestOpenCodeTranscriptUsesSharedBoundedJournalAndImportedProvenance(t *test
 	if legacyRefs != 0 {
 		t.Fatal("native objects grew the session-lifetime legacy ref map")
 	}
-	time.Sleep(200 * time.Millisecond)
 	result, err := fixture.d.core.JournalReadFrom(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
-	for _, record := range result.Events {
-		if strings.Contains(string(record.Payload), "earlier answer") {
-			var item map[string]any
-			if err := json.Unmarshal(record.Payload, &item); err != nil {
-				t.Fatal(err)
+	for until := time.Now().Add(2 * time.Second); !found && time.Now().Before(until); {
+		result, err = fixture.d.core.JournalReadFrom(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range result.Events {
+			if strings.Contains(string(record.Payload), "earlier answer") {
+				var item map[string]any
+				if err := json.Unmarshal(record.Payload, &item); err != nil {
+					t.Fatal(err)
+				}
+				if item["kind"] != "message_snapshot" || item["v"] != float64(2) || item["provenance"] != "imported" {
+					t.Fatalf("native history was published as live/v1: %s", record.Payload)
+				}
+				found = true
 			}
-			if item["kind"] != "message_snapshot" || item["v"] != float64(2) || item["provenance"] != "imported" {
-				t.Fatalf("native history was published as live/v1: %s", record.Payload)
-			}
-			found = true
+		}
+		if !found {
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	if !found {
@@ -107,4 +119,67 @@ func TestOpenCodeTranscriptCapabilityNeedsCurrentProjectorProof(t *testing.T) {
 	if !ok || caps.NativeInteractionVersion != 0 {
 		t.Fatal("stopped projector still advertises native reads")
 	}
+}
+
+func TestOpenCodeTranscriptEscapedPublicInputNeedsFullHash(t *testing.T) {
+	text := strings.Repeat("<", 4096)
+	raw, full, err := fitItem(daemon.InteractionItem{V: 2, ItemID: "native", TS: time.Now(), Kind: "message_snapshot"}, map[string]any{"text": text, "role": "user", "source": "phone", "provenance": "live", "operation_id": "operation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Truncated bool   `json:"truncated"`
+		Text      string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Truncated || len(full) == 0 || body.Text == text {
+		t.Fatal("expected escaped4096-byte public input to demonstrate whole-item clipping")
+	}
+	t.Logf("public text bytes=%d journal bytes=%d visible text bytes=%d full bytes=%d", len(text), len(raw), len(body.Text), len(full))
+}
+
+func TestOpenCodeTranscriptQualifiedOwnedEchoKeepsHashWhenClipped(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	f.request.Text = strings.Repeat("<", 4096)
+	id, err := protocol.NewSemanticOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.SemanticSend(id, f.request); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := f.d.core.Get(f.binding.WorkerID)
+	source, err := newOpenCodeTranscript(f.d, meta, f.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := f.nativeRow.Load().(json.RawMessage)
+	if err := source.row(row, "live"); err != nil {
+		t.Fatal(err)
+	}
+	expected := sha256.Sum256([]byte(f.request.Text))
+	for until := time.Now().Add(2 * time.Second); time.Now().Before(until); {
+		records, err := f.d.core.JournalReadFrom(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range records.Events {
+			var item struct {
+				OperationID string `json:"operation_id"`
+				Hash        string `json:"input_sha256"`
+				Source      string `json:"source"`
+				Truncated   bool   `json:"truncated"`
+			}
+			if json.Unmarshal(record.Payload, &item) == nil && item.OperationID == id {
+				if item.Hash != hex.EncodeToString(expected[:]) || item.Source != "owner" || !item.Truncated {
+					t.Fatalf("qualified echo lost original body proof: %+v", item)
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("owned echo was not journalled")
 }

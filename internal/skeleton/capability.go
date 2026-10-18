@@ -75,7 +75,8 @@ import (
 // structured_chat, which is the very bug this fixes, merely deferred. The side-file has
 // the session's own lifetime by construction.
 type sessionCapabilityStore struct {
-	mu sync.Mutex
+	nativeProof map[string]nativeTranscriptProof
+	mu          sync.Mutex
 	// authorMu makes the read-before-register test in the initial state publisher
 	// single-flight. Without it two launch/attach seams could both observe absence
 	// and append duplicate instance-establishing records.
@@ -274,6 +275,10 @@ func (d *Daemon) lookupCapabilitiesLocked(sessionID string) (protocol.SessionCap
 	c, ok := d.rawCapabilitiesLocked(sessionID)
 	if !ok {
 		return protocol.SessionCapabilities{}, false
+	}
+	c.NativeInteractionVersion = 0
+	if proof := d.capStore.nativeProof[sessionID]; proof.observation != nil && proof.instance == c.SessionInstance {
+		c.NativeInteractionVersion = 2
 	}
 	if d.sessionDegradedLocked(sessionID) {
 		// THE DEGRADE IS NOT APPLIED TO AN ALREADY-INCONSISTENT RECORD (ADR-017 T2-b, closing

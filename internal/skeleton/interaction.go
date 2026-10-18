@@ -767,7 +767,7 @@ var itemUnclippedFields = map[string]bool{
 	"type":      true, "state": true, // action.type (§7), steps[].state (§3.7)
 	"process": true, "turn": true, "interaction": true, "attention": true, "group": true, // session_status (§3.8)
 	"decision": true, "by": true, // approval_resolved (§3.6)
-	"content_hash": true, "interaction_id": true, "operation_id": true, // the minted ids and the digest
+	"content_hash": true, "interaction_id": true, "operation_id": true, "input_sha256": true, // the minted ids and the digest
 }
 
 // clipStrings clips every non-enum string in f to ceiling bytes, in place, at a rune boundary.
@@ -855,6 +855,10 @@ func newItemID() string {
 	if _, err := rand.Read(b[6:]); err != nil {
 		panic("skeleton: crypto/rand failed while minting an interaction item id: " + err.Error())
 	}
+	return encodeItemID(b)
+}
+
+func encodeItemID(b [16]byte) string {
 	out := make([]byte, 26)
 	// 128 bits into 26 base32 characters: the first character carries the top 2 bits (ULIDs are
 	// 130 bit-slots wide and the top 2 are always zero here), the rest 5 bits each.

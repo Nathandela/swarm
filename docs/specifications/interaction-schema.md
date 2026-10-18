@@ -471,3 +471,40 @@ Stated so no implementation slice reads a payload schema as licence to move a bo
   decided separately and implemented post-v1.
 
   > AMENDED BY ADR-018 (2026-08-15): "single device" names the phone-per-machine axis (ADR-011's N devices on one machine), not the machine axis. Multi-machine — one phone, N independent machine pairings — is ADR-018 and is in scope for the first complete remote product; each pairing is its own `SenderKeyID = 0` relationship, and none of them is a second device against any single pairing's epoch.
+
+
+## Native OpenCode replacement items (version 2)
+
+Managed OpenCode publishes `v:2` items through the existing interaction journal and append
+floor. Its disjoint kinds are `message_snapshot`, `tool_snapshot`, `file_snapshot`,
+`plan_snapshot`, `permission_request`, `question_request`, `input_outcome`, and the hidden
+`request_set` control record. Every update replaces the complete item body; it is never a
+v1 text increment. Older clients skip these unknown kinds without poisoning v1 records in
+the same journal. Full native message/part reads establish text, tool and file snapshots;
+unsequenced native token deltas do not establish authoritative stored text.
+
+IDs are deterministic within the resolved native profile, root ID and native creation
+instant. Rejoining a backend preserves these IDs. A native request keeps its logical card
+ID across content or expiry changes; a decision also pins the hash shown to the reader.
+`provenance` is `live`, `imported`, or `reconciled`. Imported assistant messages do not
+finish a fresh input. `input_outcome` names an exact native input, independently of later
+assistant/tool activity. Unqualified user origins are `native`; only exact durable input
+ownership can stamp `owner`, `phone`, or supervisor `derived` plus `operation_id` and
+`input_sha256`. The latter remains the full verified input hash if display text is clipped.
+
+Request cards carry the complete bounded `request` object and `authority_valid`. Their
+current `request_set` carries `session_instance`, `root_id`, `generation`, `complete`, and
+`requests` (logical card ID to content hash). An empty hash means a verified pending request
+whose full context cannot be offered as an actionable card. `complete:false` withdraws
+controls without resolving requests. Only absence from a complete matching set proves a
+request is no longer pending; it does not prove which reply caused that resolution. A
+missing current set, clipped context, an expired binding or a changed displayed hash never
+authorizes a reply. Historical request sets cannot grant current authority.
+
+`SessionCapabilities.native_interaction_version:2` advertises this read projection only
+after the current process has accepted the exact root subscription and scoped snapshot.
+The proof binds the current observer and generic session instance, and is withdrawn on
+observer loss or stop. A record on disk cannot restore it before rejoin. This independent
+read capability opens the native transcript without granting the legacy `structured_chat`
+composer. Native composer availability requires its own qualified managed sink and current
+non-degraded native authority; busy state remains a separate dispatch eligibility check.

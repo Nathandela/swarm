@@ -26,6 +26,7 @@ type openCodeObservation struct {
 	view          OpenCodeView
 	lastStatus    status.Status
 	persistFailed bool
+	transcript    *openCodeTranscript
 }
 
 // openCodeReady is the native launch barrier: observe before any prompt is dispatched.
@@ -76,6 +77,12 @@ func (d *Daemon) openCodeReady(ctx context.Context, meta persist.Meta) error {
 		d.openCode.mu.Unlock()
 		return err
 	}
+	transcript, err := newOpenCodeTranscript(d, current, identity)
+	if err != nil {
+		client.Close()
+		d.openCode.mu.Unlock()
+		return err
+	}
 	state, err := NewOpenCodeState(identity.RootID, identity.BackendGeneration)
 	if err != nil {
 		client.Close()
@@ -84,7 +91,8 @@ func (d *Daemon) openCodeReady(ctx context.Context, meta persist.Meta) error {
 	}
 	observeCtx, cancel := context.WithCancel(context.Background())
 	stopStartupCancellation := context.AfterFunc(ctx, cancel)
-	observation := &openCodeObservation{identity: identity, cancel: cancel, done: make(chan struct{}), ready: make(chan struct{})}
+	observation := &openCodeObservation{transcript: transcript, identity: identity, cancel: cancel, done: make(chan struct{}), ready: make(chan struct{})}
+	transcript.owner = observation
 	if d.openCode.sessions == nil {
 		d.openCode.sessions = make(map[string]*openCodeObservation)
 	}
@@ -99,11 +107,12 @@ func (d *Daemon) openCodeReady(ctx context.Context, meta persist.Meta) error {
 	go func() {
 		defer close(observation.done)
 		defer client.Close()
+		defer d.setOpenCodeTranscriptCapability(meta.ID, observation, false)
 		observeOpenCode(observeCtx, client, identity, state, func(view OpenCodeView) { d.publishOpenCodeView(meta.ID, observation, view) }, func(err error) {
 			stopStartupCancellation()
 			observation.readyErr = err
 			close(observation.ready)
-		})
+		}, transcript)
 	}()
 	select {
 	case <-ctx.Done():
@@ -146,6 +155,7 @@ func (d *Daemon) publishOpenCodeView(local string, observation *openCodeObservat
 		}
 	}
 	d.openCode.mu.Unlock()
+	d.setOpenCodeTranscriptCapability(local, observation, observation.transcript != nil && observation.transcript.ready.Load() && view.CurrentScopeKnown && view.BusyKnown)
 	d.checkpointOpenCodeOutcomes(local, view)
 	if d.api != nil {
 		d.api.pokeWatch()
@@ -235,4 +245,57 @@ func (d *Daemon) stopOpenCodeObservations() {
 	d.nativeReceipts.mu.Lock()
 	d.nativeReceipts.sessions = nil
 	d.nativeReceipts.mu.Unlock()
+}
+
+type nativeTranscriptProof struct {
+	observation *openCodeObservation
+	instance    string
+}
+
+// Native read support is process-local proof, never a persisted claim restored before rejoin.
+func (d *Daemon) setOpenCodeTranscriptCapability(local string, observation *openCodeObservation, available bool) {
+	d.openCode.mu.Lock()
+	if available && (d.openCode.closed || d.openCode.sessions[local] != observation) {
+		d.openCode.mu.Unlock()
+		return
+	}
+	d.capStore.transitionMu.Lock()
+	defer d.capStore.transitionMu.Unlock()
+	d.capStore.mu.Lock()
+	old := d.capStore.nativeProof[local]
+	if available {
+		if old.observation == observation {
+			d.capStore.mu.Unlock()
+			d.openCode.mu.Unlock()
+			return
+		}
+		if d.capStore.nativeProof == nil {
+			d.capStore.nativeProof = map[string]nativeTranscriptProof{}
+		}
+		instance, _, ok := d.sessionInstanceLocked(local)
+		if !ok {
+			d.capStore.mu.Unlock()
+			d.openCode.mu.Unlock()
+			return
+		}
+		d.capStore.nativeProof[local] = nativeTranscriptProof{observation: observation, instance: instance}
+	} else {
+		if old.observation != observation {
+			d.capStore.mu.Unlock()
+			d.openCode.mu.Unlock()
+			return
+		}
+		delete(d.capStore.nativeProof, local)
+	}
+	record, ok := d.lookupCapabilitiesLocked(local)
+	d.capStore.mu.Unlock()
+	d.openCode.mu.Unlock()
+	if ok {
+		if err := d.publishCapabilityTransition(local, record); err != nil {
+			d.scheduleCapabilityTransitionRetry(local, record)
+		}
+	}
+	if d.api != nil {
+		d.api.pokeWatch()
+	}
 }
