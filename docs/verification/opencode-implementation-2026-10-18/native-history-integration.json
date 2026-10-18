@@ -1,0 +1,82 @@
+{
+  "measured_at": "2026-10-18",
+  "purpose": "Actual same-runtime native on-demand history paging; not phone transport or sustained-duration qualification.",
+  "native_version": "1.19.3",
+  "source_head": "e4a6d464",
+  "binary_sha256": "51baa8b66ac47edaf54b3b1fb1018969454d4a1db32ccf62e8f49b9bed92a717",
+  "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+  "fixture_source_sha256": "4b0b625154efeb8d4b5b94c167b13fdd45248abc75c5092baa78e25e8642c505",
+  "pass": true,
+  "elapsed_seconds_including_cleanup": 29.244,
+  "root_input_iterations": 3,
+  "daemon_restarts": 2,
+  "provider_requests": 9,
+  "external_model_requests": 0,
+  "provider_errors": [],
+  "all_owned_shim_exit_files": true,
+  "declared_budgets": {
+    "swarm_rss_mib_per_process": 256,
+    "swarm_fds_per_process": 128,
+    "swarm_disk_mib": 256,
+    "dispatch_seconds": 30,
+    "rejoin_seconds": 15
+  },
+  "max_dispatch_seconds": 0.10192545800236985,
+  "max_rejoin_seconds": 0.656073040998308,
+  "pages": {
+    "newest": {
+      "items": 1,
+      "floor": false,
+      "scope": "aca24863f03addb9bbea840122ee92faf50512c5c1c06d424f950137a098b869",
+      "cursor_bytes": 331,
+      "item_ids": [
+        "0TXDV4A7FJ5ACEF75R7K6JQT2R"
+      ],
+      "provenance": [
+        "imported"
+      ]
+    },
+    "continuation": {
+      "items": 1,
+      "floor": false,
+      "scope": "aca24863f03addb9bbea840122ee92faf50512c5c1c06d424f950137a098b869",
+      "cursor_bytes": 331,
+      "item_ids": [
+        "7NDKT60J2M9V7XS5JY4BAFPD4T"
+      ],
+      "provenance": [
+        "imported"
+      ]
+    },
+    "before_item": {
+      "items": 1,
+      "floor": false,
+      "scope": "aca24863f03addb9bbea840122ee92faf50512c5c1c06d424f950137a098b869",
+      "cursor_bytes": 331,
+      "item_ids": [
+        "7NDKT60J2M9V7XS5JY4BAFPD4T"
+      ],
+      "provenance": [
+        "imported"
+      ]
+    }
+  },
+  "exact_before_item_equals_opaque_continuation": true,
+  "negative_control": {
+    "source_head": "cfa42ee3",
+    "pass": false,
+    "defect": "Native history request returned the existing Swarm journal instead of a native page.",
+    "all_owned_shim_exit_files": true,
+    "external_model_requests": 0
+  },
+  "raw_evidence": [
+    "/private/tmp/oc-history-red-20261018/result.json",
+    "/private/tmp/oc-history-green-20261018/result.json"
+  ],
+  "limits": [
+    "Scripted loopback provider, no external model generation.",
+    "Owner native read path; sealed phone round trip is a separate gate.",
+    "Three inputs, not elapsed one-hour/24-hour/72-hour qualification.",
+    "Later recovery and late-child/detail fixes require final-source revalidation."
+  ]
+}
