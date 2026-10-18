@@ -111,6 +111,7 @@ func fullState() State {
 		Sessions:                   []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
 		Snapshots:                  []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
 		PendingOps:                 []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
+		NativeHistory:              map[string]NativeHistoryState{"m1/s1": {Scope: fmt.Sprintf("%064x", 7), Cursor: "native-state-cursor", SessionInstance: "instance"}},
 		NativeDecisions:            []NativeDecisionCustody{{ItemID: "native-item", RequestHash: fmt.Sprintf("%064x", 1), ChoiceHash: fmt.Sprintf("%064x", 2), DeadlineMS: 1700000060000, Receipt: nativeDecisionReceipt("native-op", nativeCustodyRequest())}},
 		PendingPublications: []PendingPublication{
 			{
@@ -445,6 +446,7 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 	want, got := fullState(), store.Load()
 	// This pinned checkpoint predates the optional native-answer custody field.
 	want.NativeDecisions = nil
+	want.NativeHistory = nil
 	wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
 	for i := 0; i < wv.NumField(); i++ {
 		name := wv.Type().Field(i).Name

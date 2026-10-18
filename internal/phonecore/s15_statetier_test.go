@@ -175,6 +175,7 @@ func s15State() State {
 		Sessions:                   []CachedSession{{SessionID: s15SessionID, Present: true}},
 		Snapshots:                  []Snapshot{{Session: s15SessionID, Lines: []string{s15SnapLine}, Cols: 80, Rows: 24}},
 		PendingOps:                 []QueuedOp{{Op: s15QueuedOp, SessionID: s15SessionID}},
+		NativeHistory:              map[string]NativeHistoryState{s15SessionID: {Scope: fmt.Sprintf("%064x", 7), Cursor: "native-tier-cursor", SessionInstance: "instance"}},
 		NativeDecisions:            []NativeDecisionCustody{{ItemID: "s15-native-item", RequestHash: fmt.Sprintf("%064x", 1), ChoiceHash: fmt.Sprintf("%064x", 2), DeadlineMS: 1700000060000, Receipt: nativeDecisionReceipt("s15-native-operation", nativeCustodyRequest())}},
 		PendingPublications: []PendingPublication{{
 			LogicalID: s15PublicationID + "-logical", OperationID: s15PublicationID,
@@ -416,6 +417,7 @@ func s15Inventory() []s15Tier {
 		// coordinates rather than in the purgeable one beside the caches.
 		{field: "PendingOps", tier: "content", needles: s15Str(s15QueuedOp)},
 		{field: "NativeDecisions", tier: "content", needles: s15Str("s15-native-operation")},
+		{field: "NativeHistory", tier: "content", needles: s15Str("native-tier-cursor")},
 		{field: "PendingPublications", tier: "content", needles: append(
 			append(s15Str(s15PublicationID), s15Str(s15PublicationText)...),
 			s15Str(s15PublicationEnvelope)...),

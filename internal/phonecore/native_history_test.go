@@ -167,3 +167,17 @@ func TestNativeHistoryKeepsNewestLogicalPlanAndLivePromotion(t *testing.T) {
 		t.Fatalf("live row retained cursorless history authority: %+v", got)
 	}
 }
+
+func TestNativeHistoryIgnoredRepeatCannotEraseLiveOnlyGapItems(t *testing.T) {
+	c := nativeHistoryCore(t)
+	prepareNativePage(t, c, "first", "")
+	page := schema.NativeHistoryPage{Version: 2, Scope: strings.Repeat("a", 64), NextCursor: "next", Items: []json.RawMessage{nativeHistoryItem("old", "old")}}
+	deliverNativePage(t, c, "first", page, 1)
+	live := strings.Replace(string(nativeHistoryItem("gap-only", "visible after gap")), `"imported"`, `"live"`, 1)
+	c.Router().Items().Apply(schema.JournalRecord{Type: RecordTypeInteraction, SessionID: "m1/s1", Cursor: 90, Item: json.RawMessage(live)})
+	page.Scope = strings.Repeat("b", 64)
+	deliverNativePage(t, c, "first", page, 2)
+	if _, ok := c.Router().Items().Resolve("m1/s1", "gap-only"); !ok {
+		t.Fatal("ignored native page replay erased live-only gap content")
+	}
+}
