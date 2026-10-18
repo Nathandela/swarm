@@ -1,0 +1,322 @@
+{
+  "schema": 1,
+  "date": "2026-10-18",
+  "platform": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "macos_version": "27.0.1"
+  },
+  "scope": "Actual OpenCode 1.19.3 standalone TUI and SDK with scripted loopback provider; owned native process paused for 15 seconds after initial input settled. No external model requests. Public allowlisted evidence excludes private bindings, tokens and profile paths.",
+  "fixture_base": "scripts/verification/opencode_native_loopback.py at 2db7f8e1",
+  "fixture_extension": "After initial idle sample, identify the single native process holding this fixture SQLite database, SIGSTOP, poll owner roster every second 15 times, SIGCONT in finally, and observe recovery; run remaining semantic/native-child stages and normal fixture cleanup.",
+  "runs": [
+    {
+      "label": "before_health_fix",
+      "source_head": "a7b68507a18c93398a3b7d89b8c8b101fddd8c2e",
+      "swarm_binary_sha256": "fba3df5ef2d048fe10ba5aacfb4727185d2ed8ccf172f4352aa9ceedc4c874f6",
+      "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+      "fixture_source_sha256": "7d38b636fa184aa9678fef49536d7d0ce2f3905f693c4e9e17633e6ca9d8eca9",
+      "native_version": "1.19.3",
+      "elapsed_seconds": 34.124,
+      "requested_duration_seconds": 0,
+      "requested_duration_completed": false,
+      "root_inputs": 3,
+      "native_child_observed": true,
+      "daemon_restarts": 0,
+      "provider_requests": 9,
+      "external_model_requests": 0,
+      "declared_budgets": {
+        "swarm_rss_mib_per_process": 256,
+        "swarm_fds_per_process": 128,
+        "swarm_disk_mib": 256,
+        "dispatch_seconds": 30,
+        "rejoin_seconds": 15
+      },
+      "max_observed_dispatch_seconds": 0.10715629199694376,
+      "config_unchanged": true,
+      "all_owned_shim_exit_files": true,
+      "cleanup_acknowledged": true,
+      "fixture_pass": true,
+      "paused_samples": [
+        {
+          "seconds_paused": 1.001,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 2.011,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 3.016,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 4.022,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 5.024,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 6.034,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 7.049,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 8.05,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 9.053,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 10.061,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 11.063,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 12.073,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 13.077,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 14.077,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 15.079,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        }
+      ],
+      "recovery_seconds": null
+    },
+    {
+      "label": "after_health_fix",
+      "source_head": "bfa5ea401ab5b84f5ce74a4981ed8d9298b50bf4",
+      "swarm_binary_sha256": "1f110e26bc237b69bb8916505ec70ee01aa6b272598c6a6d9a4f186437f704b1",
+      "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+      "fixture_source_sha256": "28f0c76f41497fa36377a7c21f42dd5515176cb928f61f91c712489a40bd1450",
+      "native_version": "1.19.3",
+      "elapsed_seconds": 32.948,
+      "requested_duration_seconds": 0,
+      "requested_duration_completed": false,
+      "root_inputs": 3,
+      "native_child_observed": true,
+      "daemon_restarts": 0,
+      "provider_requests": 9,
+      "external_model_requests": 0,
+      "declared_budgets": {
+        "swarm_rss_mib_per_process": 256,
+        "swarm_fds_per_process": 128,
+        "swarm_disk_mib": 256,
+        "dispatch_seconds": 30,
+        "rejoin_seconds": 15
+      },
+      "max_observed_dispatch_seconds": 0.07995845799450763,
+      "config_unchanged": true,
+      "all_owned_shim_exit_files": true,
+      "cleanup_acknowledged": true,
+      "fixture_pass": true,
+      "paused_samples": [
+        {
+          "seconds_paused": 1.007,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 2.011,
+          "turn": "idle",
+          "group": "ready_for_review",
+          "busy_known": true,
+          "current_scope_known": true,
+          "degraded": false
+        },
+        {
+          "seconds_paused": 3.022,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 4.023,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 5.024,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 6.031,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 7.033,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 8.044,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 9.045,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 10.055,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 11.066,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 12.067,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 13.076,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 14.087,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        },
+        {
+          "seconds_paused": 15.09,
+          "turn": "unknown",
+          "group": "working",
+          "busy_known": false,
+          "current_scope_known": false,
+          "degraded": true
+        }
+      ],
+      "recovery_seconds": 0.108
+    }
+  ],
+  "limits": [
+    "Short native runtime checks, not 24h/72h qualification.",
+    "Owner protocol decisions exercised; hosted relay and physical phone transport not exercised.",
+    "Scripted local provider does not qualify external model execution or model quality.",
+    "RSS/FD/disk checks are checkpoint measurements, not between-sample peaks; goroutine/queue counts are unavailable."
+  ]
+}
