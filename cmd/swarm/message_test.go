@@ -34,6 +34,16 @@ func (c *fakeSemanticClient) SemanticSend(operation string, req protocol.Compose
 	return c.messageErr
 }
 
+func (c *fakeSemanticClient) List() ([]protocol.SessionView, error) {
+	rows, err := c.fakeSteerClient.List()
+	for i := range rows {
+		if rows[i].Capabilities == nil {
+			rows[i].Capabilities = &protocol.SessionCapabilities{SessionInstance: "native-incarnation"}
+		}
+	}
+	return rows, err
+}
+
 func TestMessageUsesExactSemanticPayloadAndIncarnation(t *testing.T) {
 	c := newFakeSemanticClient()
 	id, err := protocol.NewSemanticOperationID()
@@ -63,7 +73,7 @@ func TestMessageRefusesLegacyOrUnboundSessionsWithoutTerminalFallback(t *testing
 			case "legacy":
 				client = c.fakeSteerClient
 			case "unbound":
-				c.sessions[0].Capabilities = nil
+				c.sessions[0].Capabilities = &protocol.SessionCapabilities{}
 			case "uncertain":
 				c.messageErr = errors.New("outcome unknown")
 			}

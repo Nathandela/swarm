@@ -53,9 +53,12 @@ type pilotHistoryClient interface {
 }
 
 type pilotPending struct {
-	SentAt       time.Time `json:"sent_at"`
-	Cursor       uint64    `json:"cursor"`
-	HistoryReady bool      `json:"history_ready"`
+	SentAt       time.Time                 `json:"sent_at"`
+	Cursor       uint64                    `json:"cursor"`
+	HistoryReady bool                      `json:"history_ready"`
+	OperationID  string                    `json:"operation_id,omitempty"`
+	Request      *protocol.ComposerSendReq `json:"request,omitempty"`
+	Uncertain    bool                      `json:"uncertain,omitempty"`
 }
 
 func dispatchPilot(args []string, stdout, stderr io.Writer) int {
@@ -73,6 +76,9 @@ func dispatchPilot(args []string, stdout, stderr io.Writer) int {
 		return runPilot(args, nil, stdout, stderr)
 	}
 	caps := []string{protocol.CapJournal, protocol.CapSubscribe}
+	if fs.NArg() > 0 && fs.Arg(0) == "send" {
+		caps = append(caps, protocol.CapSemanticSend)
+	}
 	if fs.NArg() > 0 && fs.Arg(0) == "watch" {
 		caps = append(caps, protocol.CapJournalSubscribeFrom)
 	}
@@ -209,7 +215,7 @@ func runPilot(args []string, c agentClient, stdout, stderr io.Writer) int {
 	env := pilotEnvelope{TrustedGuidance: pilotReminder, WorkerData: json.RawMessage(data.Bytes()), Receipt: op, Outbound: outbound}
 	switch op {
 	case "send":
-		env.Receipt = "sent"
+		env.Receipt = "submitted"
 	case "create":
 		env.Receipt = "created"
 	case "resume":
@@ -403,18 +409,35 @@ func pilotSend(path string, args []string, c agentClient, stdout, stderr io.Writ
 	if fs.Parse(rest) != nil || fs.NArg() != 0 || *payload == "" {
 		return pilotMisuse(stderr, "send requires --text <exact message>")
 	}
-	row, err := pilotTarget(c, id)
+	sender, req, err := semanticRequest(c, id, *payload)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "pilot: send: %v\n", err)
 		return 1
 	}
-	if row.Status.Process != status.ProcessRunning {
-		_, _ = fmt.Fprintln(stderr, "pilot: send: discussion is not running; resume it explicitly")
+	pending := pilotPending{}
+	if data, readErr := os.ReadFile(pilotPendingPath(path, id)); readErr == nil {
+		if json.Unmarshal(data, &pending) != nil {
+			_, _ = fmt.Fprintln(stderr, "pilot: send: pending operation is corrupt; nothing was sent")
+			return 1
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		_, _ = fmt.Fprintf(stderr, "pilot: send: read pending operation: %v\n", readErr)
 		return 1
 	}
-	sentAt := time.Now()
-	pending := pilotPending{SentAt: sentAt}
-	if h, ok := c.(pilotHistoryClient); ok {
+	if pending.Uncertain {
+		if pending.OperationID == "" || pending.Request == nil || *pending.Request != req {
+			_, _ = fmt.Fprintf(stderr, "pilot: send: operation_id=%s remains uncertain; only its exact request can be retried\n", pending.OperationID)
+			return 1
+		}
+	} else {
+		operationID, err := protocol.NewSemanticOperationID()
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "pilot: send: operation ID: %v\n", err)
+			return 1
+		}
+		pending = pilotPending{SentAt: time.Now(), OperationID: operationID, Request: &req}
+	}
+	if h, ok := c.(pilotHistoryClient); ok && !pending.Uncertain {
 		if items, err := h.InteractionHistory(id, 20); err == nil {
 			pending.HistoryReady = true
 			for _, item := range items {
@@ -424,22 +447,54 @@ func pilotSend(path string, args []string, c agentClient, stdout, stderr io.Writ
 			}
 		}
 	}
-	marker, _ := json.Marshal(pending)
-	if err := os.WriteFile(pilotPendingPath(path, id), marker, 0o600); err != nil {
+	pending.Uncertain = true
+	if err := savePilotPending(pilotPendingPath(path, id), pending); err != nil {
 		_, _ = fmt.Fprintf(stderr, "pilot: send: save pending request: %v\n", err)
 		return 1
 	}
-	if err := c.SendInput(id, protocol.SendInputReq{Text: *payload, Submit: true}); err != nil {
-		_ = os.Remove(pilotPendingPath(path, id))
-		_, _ = fmt.Fprintf(stderr, "pilot: send: %v\n", err)
+	if err := sender.SemanticSend(pending.OperationID, req); err != nil {
+		_, _ = fmt.Fprintf(stderr, "pilot: send: operation_id=%s: %v\n", pending.OperationID, err)
+		return 1
+	}
+	pending.Uncertain = false
+	if err := savePilotPending(pilotPendingPath(path, id), pending); err != nil {
+		_, _ = fmt.Fprintf(stderr, "pilot: send: operation_id=%s: submitted, but saving its receipt failed: %v\n", pending.OperationID, err)
 		return 1
 	}
 	*outbound = map[string]string{"discussion_id": id, "text": *payload}
-	receipt := map[string]any{"discussion_id": id}
+	receipt := map[string]any{"discussion_id": id, "operation_id": pending.OperationID}
 	if pending.HistoryReady {
 		receipt["watch_after_cursor"] = pending.Cursor
 	}
 	return pilotJSON(stdout, stderr, receipt)
+}
+
+func savePilotPending(path string, pending pilotPending) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".pending-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if err := json.NewEncoder(tmp).Encode(pending); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }
 
 func pilotPendingPath(path, id string) string {

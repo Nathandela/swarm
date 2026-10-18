@@ -388,9 +388,9 @@ func TestPilotWatchOnceExplicitZeroReplaysBeforeCheckpointAdvances(t *testing.T)
 }
 
 func TestPilotSendReceiptExposesPreSendWatchCursorWhenAvailable(t *testing.T) {
-	base := newFakeSteerClient()
+	base := newFakeSemanticClient()
 	base.sessions = []protocol.SessionView{view("local/ami", "codex", "AMI", status.GroupWorking)}
-	c := &fakePilotHistoryClient{fakeSteerClient: base, history: []protocol.JournalRecord{{Cursor: 7, SessionID: "local/ami", Type: "interaction"}}}
+	c := &fakePilotHistoryClient{fakeSemanticClient: base, history: []protocol.JournalRecord{{Cursor: 7, SessionID: "local/ami", Type: "interaction"}}}
 	path := enterPilotForTest(t, c)
 	code, out, errs := pilotCall(c, "--context", path, "send", "local/ami", "--text", "status?")
 	if code != 0 {
@@ -404,7 +404,7 @@ func TestPilotSendReceiptExposesPreSendWatchCursorWhenAvailable(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &receipt); err != nil || receipt.WorkerData.WatchAfterCursor == nil || *receipt.WorkerData.WatchAfterCursor != 7 {
 		t.Fatalf("missing pre-send cursor: %q err=%v", out, err)
 	}
-	base2 := newFakeSteerClient()
+	base2 := newFakeSemanticClient()
 	base2.sessions = base.sessions
 	path2 := enterPilotForTest(t, base2)
 	code, out, errs = pilotCall(base2, "--context", path2, "send", "local/ami", "--text", "status?")
