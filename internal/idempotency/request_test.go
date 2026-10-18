@@ -67,3 +67,19 @@ func TestRequestCustodyRefusesMissingInvalidAndLateDescriptors(t *testing.T) {
 		t.Fatal("post-effect descriptor invented request authority")
 	}
 }
+
+func TestObservedEvidenceRequiresExecutionAndSurvivesTerminalCommit(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil { t.Fatal(err) }
+	if _, _, err := s.Prepare("op", "semantic_send", "worker"); err != nil { t.Fatal(err) }
+	evidence := []byte(`{"status":"admitted","message_id":"msg_exact"}`)
+	if err := s.SetEvidence("op", evidence); err == nil { t.Fatal("evidence preceded native execution") }
+	if err := s.Begin("op"); err != nil { t.Fatal(err) }
+	if err := s.SetEvidence("op", evidence); err != nil { t.Fatal(err) }
+	if err := s.SetEvidence("op", []byte(`{"message_id":"msg_other"}`)); err == nil { t.Fatal("native proof was rebound") }
+	if err := s.Complete("op", []byte(`{"ok":true}`)); err != nil { t.Fatal(err) }
+	rec, _ := s.Get("op")
+	if !bytes.Equal(rec.Evidence, evidence) || string(rec.Outcome) != `{"ok":true}` { t.Fatalf("terminal commit lost native proof: %+v", rec) }
+	rec.Evidence[2] = 'X'
+	if next, _ := s.Get("op"); bytes.Equal(next.Evidence, rec.Evidence) { t.Fatal("native evidence aliases durable state") }
+}
