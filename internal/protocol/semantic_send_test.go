@@ -47,6 +47,51 @@ func semanticTestID(at time.Time, nonce string) string {
 	return fmt.Sprintf("semantic:%d:%s", at.UnixMilli(), strings.Repeat(nonce, 32))
 }
 
+func TestSemanticClientPreservesOperationAndPayloadAcrossRetry(t *testing.T) {
+	stub := newDurableComposerStub()
+	c, err := Dial(serveOwnerAPI(t, stub), []string{CapSemanticSend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	id, err := NewSemanticOperationID()
+	if err != nil || !validSemanticOperationID(id, time.Now()) {
+		t.Fatalf("generated operation ID = %q, %v", id, err)
+	}
+	req := ComposerSendReq{Session: c.EndpointID() + "/sess1", SessionInstance: "test-instance", Text: "exact\nmessage"}
+	for i := 0; i < 2; i++ {
+		if err := c.SemanticSend(id, req); err != nil {
+			t.Fatalf("send/retry %d: %v", i, err)
+		}
+	}
+	if _, sends, _ := stub.snapshot(id); sends != 1 {
+		t.Fatalf("one operation caused %d sends", sends)
+	}
+	req.Text = "changed"
+	if err := c.SemanticSend(id, req); err == nil {
+		t.Fatal("a changed payload reused the cached receipt")
+	}
+}
+
+func TestSemanticClientRefusesUnnegotiatedRoute(t *testing.T) {
+	stub := newDurableComposerStub()
+	c, err := Dial(serveOwnerAPI(t, stub), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	id, err := NewSemanticOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SemanticSend(id, ComposerSendReq{Session: c.EndpointID() + "/sess1", SessionInstance: "test-instance", Text: "never send"}); err == nil {
+		t.Fatal("unnegotiated semantic message succeeded")
+	}
+	if _, sends, claims := stub.snapshot(id); sends != 0 || claims != 0 {
+		t.Fatal("unnegotiated client performed provider/custody I/O")
+	}
+}
+
 func TestOwnerSemanticSendUsesDurableComposerBoundary(t *testing.T) {
 	stub := newDurableComposerStub()
 	rc := rawDial(t, serveOwnerAPI(t, stub))
