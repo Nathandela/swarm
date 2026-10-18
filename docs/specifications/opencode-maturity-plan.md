@@ -2,7 +2,7 @@
 
 This plan makes OpenCode a dependable Swarm worker for long-running work, cross-CLI communication, supervision, recovery, and structured phone interaction. It reuses Swarm's shim lifecycle, protocol, interaction journal, composer operation custody, and existing UI. It does not introduce another scheduler, broker, transcript archive, or provider framework.
 
-**Implementation status:** model discovery, watch arguments and supervised handoff checkout preservation are implemented locally. The built-in DeepSeek V4.1 Flash Free and GLM-5.3 Flash Free workers produced the first changes and cross-reviews. After their native free quota was exhausted, the owner authorized Sol/Astra to continue implementation. Native runtime and projection remain under implementation and qualification. The [implementation evidence](../verification/opencode-implementation-2026-10-18.md), [baseline audit](../verification/opencode-parity-2026-10-18.md), [model strategy reviews and new API experiments](../verification/opencode-plan-review-2026-10-18.md), and source distinguish completed checks from proposed behavior; schema availability alone does not establish runtime guarantees.
+**Implementation status:** the model selector, watch/worktree fixes, owned native runtime, observation, correlated semantic messages, supervision, transcript and public owner/phone controls are implemented locally. Native on-demand paging and late long-input recovery fixes are in final integration; combined release gates remain open. The built-in DeepSeek V4.1 Flash Free and GLM-5.3 Flash Free workers produced the first changes and cross-reviews. After their native free quota was exhausted, the owner authorized Sol/Astra to continue implementation. The [implementation evidence](../verification/opencode-implementation-2026-10-18.md), [baseline audit](../verification/opencode-parity-2026-10-18.md), [model strategy reviews and new API experiments](../verification/opencode-plan-review-2026-10-18.md), and source distinguish completed checks from proposed behavior. The historical one-hour workload passed; actual 24h/72h qualification remains outstanding.
 
 ## Decisions and evidence
 
@@ -77,7 +77,13 @@ flowchart LR
   V -. gated .-> H
 ```
 
-Adapters stay pure. `internal/daemon` and `internal/shim` own resources; `internal/skeleton` composes them. A concrete `internal/opencodehttp` client owns bounded HTTP/SSE I/O, not worker lifecycle. Do not pretend HTTP is Codex JSON-RPC or create a general transport registry for hypothetical providers.
+Adapters stay pure. `internal/daemon` and `internal/shim` own resources;
+`internal/skeleton` composes them. The selected `internal/opencodebridge` client
+owns bounded SDK bridge I/O over the private Unix socket; the public native plugin
+forwards SDK events from the same TUI-owned runtime. The separately qualified
+`internal/opencodehttp` experiment is not the selected runtime. Neither client
+owns worker lifecycle. Do not create a general transport registry for hypothetical
+providers.
 
 ## Required behavior
 
@@ -326,6 +332,17 @@ P1's optional v2 experiments can run alongside the legacy observation implementa
 - Commit/review one work package at a time, record exact supported versions and evidence, and close Beads work only against its acceptance criteria. Markdown sections are design, not a second task tracker.
 - A failed qualification produces a named unsupported capability or revised decision. Do not bypass uncertainty with screen matching, timeout-based completion, latest-by-cwd identity, duplicate sends, permission widening or a second hidden conversation.
 
-## Remaining design gates
+## Remaining qualification gates
 
-The primary legacy path is selected for early observation, not assumed sufficient for every action. P1 still must qualify complete attached-TUI event/request coverage, lost-create recovery, native busy/send rules, and execution/cancellation semantics. The newer v2 path has promising durable storage but a measured runtime/projection split; adopting it for semantic actions requires a successful same-runtime model/TUI/permission/child test, not only stored admissions. Strict Stop without an expected-turn precondition may require an upstream change or an accurately different product capability. These are explicit build gates, not omitted work.
+The selected normal-TUI SDK bridge has actual native launch, permission/question,
+child, semantic admission, supervision, crash/rejoin and one-hour continuity
+evidence. Late paging/recovery integration, final complete-source checks and the
+P9 sustained/platform matrix still gate release. Exact frozen revisions and
+fixture-versus-provider boundaries belong in the implementation evidence.
+
+The newer v2 path retains its measured runtime/projection split; stored admissions
+do not authorize using it for semantic execution. Strict Stop without an
+expected-turn precondition needs an upstream change or a separately specified
+product capability. Native compaction currently lacks authoritative continuation
+lineage, so original input outcomes remain unresolved. These are measured
+capability limits, not inferred task success.

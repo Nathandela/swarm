@@ -2,6 +2,58 @@
 
 Implementation is active under `agents-tracker-vyhy`. This record covers accepted changes and measured contracts; it does not certify the full maturity plan or a release. Installed Swarm remains unchanged.
 
+## Current maturity
+
+| Surface | Implemented locally | Qualification boundary |
+| --- | --- | --- |
+| Launch and model selection | Existing editable picker, complete native model IDs, target-project defaults, exact native binding before initial input | OpenCode 1.19.3; explicit fresh-session variant bootstrap remains unsupported |
+| Monitoring and communication | Native busy/attention/error state, exact input receipts, owner/pilot messages, passive supervision and separate native-child hierarchy | Idle and tool-step completion never prove task completion; compaction cannot transfer ownership without native lineage |
+| Continuity | Shim-owned normal TUI, daemon crash/rejoin, exact resume, native history export and actual source checkout preservation | Actual OpenCode-to-OpenCode passed; the Claude side of the mixed-harness handoff matrix was a fixture |
+| Structured interaction | Bounded live transcript, request sets, owner permission/question controls, signed phone decisions and native phone composer | Strict turn Stop is unavailable; native APIs cannot protect a newer turn with an expected-turn precondition |
+| Phone history | Separate imported native pages, encrypted cursor custody, live-row precedence and immutable phone state snapshots | Host paging is under final integration; native history does not create journal cursors, input ownership or decision authority |
+| Operations | Pinned runtime/version checks, health-based capability withdrawal, safe unsupported refresh and observed quota/compaction outcomes | Account rotation, relogin and Swarm-driven compaction remain unavailable |
+
+The model-selection request is implemented: opening the OpenCode launch form uses
+the existing selector, including built-in free models, with editable manual entry
+for other exact IDs. Leaving it untouched preserves OpenCode's target-project
+default instead of choosing the first catalogue entry.
+
+## Integrated controls and independent review
+
+Native permission and question decisions now run through public owner CLI,
+protocol, durable operation custody, shim input fences and the private SDK bridge.
+The complete observed request hash, worker instance, root, generation, exact native
+target and expiry fence each decision. Same-operation retries inspect retained
+evidence; unknown writes are not posted again. `swarm decide --status` performs a
+receipt read. The [native controls matrix](opencode-native-controls-2026-10-18.json)
+exercised actual root/child requests, permission once/always/reject, grouped custom
+questions, stale hashes, wrong generations, duplicate decisions and changed answers.
+
+The phone path preserves the displayed request hash through the facade and signed
+body. It durably records answer custody before mailbox append, keeps unresolved
+answers across restart, prevents a second append after reply loss, and releases
+retry only after qualified no-effect refusal or request resolution. Native phone
+messages use the same native input custody as owner/supervisor messages, including
+exact source and operation attribution. A clipped echo settles only with the
+qualified full input hash. The [phone review](opencode-implementation-2026-10-18/phone-request-review.md)
+and [connected packet checks](opencode-implementation-2026-10-18/native-phone-packet.md)
+separate real signing/encryption/gateway/core/journal/phone processing from the
+in-memory mailbox and scripted SDK fixture used by those checks.
+
+Independent Astra review fixed three further failures: direct bridge recovery
+accepted ambiguous user-input shapes, retained terminal outcomes could be
+downgraded by weaker later evidence, and a silent native process freeze left
+composer authority looking fresh. Exact full-row input qualification, ranked
+durable outcome updates and the existing observer's bounded health read now cover
+those boundaries. An actual native SIGSTOP test withdrew health within 3.022
+seconds and recovered after SIGCONT. [Frozen review and native results](opencode-implementation-2026-10-18/final-native-review.md).
+
+Late review also reproduced unfinished-input ownership expiry after 24 hours and
+missed completion when a single input pushed its user row out of the startup
+window while the daemon was offline. These fixes and native paging remain active
+integration gates; they are not counted as accepted merely because the failures
+have deterministic reproductions.
+
 The first implementation workers ran through an isolated Swarm daemon in separate Git worktrees using **`opencode/deepseek-v4.1-flash-free`** and **`opencode/glm-5.3-flash-free`**, with the native catalogue's supported `reasoningEffort: max` option. Native message records verify those provider/model identities and report zero model cost. GLM reviewed DeepSeek changes and DeepSeek reviewed GLM changes; independent Astra reviews and supervisor tests determine integration. A lifecycle prototype written before failing tests was rejected and preserved separately; its replacement began from the clean baseline with a test-only commit.
 
 At 14:25 UTC the native UI showed **Free limit reached**, **Free usage exceeded**, and a retry in about 9½ hours for four workers. This is the built-in free service's quota, separate from the earlier incorrect OpenRouter route. The local authentication inventory has no OpenCode Zen credential. The owner then explicitly authorized Sol/Astra to implement the remaining work. Quota-bound workers were retired through Swarm, preserving their code, native bindings and review evidence; replacement agents work in separate worktrees. [Quota observations](opencode-implementation-2026-10-18/free-quota-observations.json), [native screen](opencode-implementation-2026-10-18/identity-free-quota-screen.txt).
@@ -20,9 +72,9 @@ The integrated standalone runtime now persists schema-3 native binding custody, 
 
 Managed OpenCode history now exports through the exact live SDK binding or the pinned CLI for an ended source. The immutable 0600 native JSON export includes provenance and bounded pagination/content; mixed roots, foreign part identities, creation mismatch, duplicate rows, cursor loops and exceeded limits refuse. Live/ended exports and exact resume passed against the native runtime; successful cross-provider model execution is still a separate gate.
 
-Owner semantic sends now enter durable operation custody with immutable native-input coordinates and retained admission evidence. `swarm message` and pilot preserve the terminal `swarm send` contract. Regression tests cover late unsequenced client replies, uncertain retry retention, lifecycle ending races and exact original-input waits despite later work. Actual native SDK probes verified exact existing/missing-message responses and the live Prompt ref's empty/draft/empty transitions without submitting. Native permission/question processing is implemented in the bridge; public decision authorization and complete phone interaction publication remain under implementation.
+Owner semantic sends now enter durable operation custody with immutable native-input coordinates and retained admission evidence. `swarm message` and pilot preserve the terminal `swarm send` contract. Regression tests cover late unsequenced client replies, uncertain retry retention, lifecycle ending races and exact original-input waits despite later work. Actual native SDK probes verified exact existing/missing-message responses and the live Prompt ref's empty/draft/empty transitions without submitting. Public decision authorization and phone interaction publication are integrated as described above.
 
-Owner roster, watch, pilot and TUI reads now negotiate a bounded native observation with current children, pending requests, input outcomes, provenance and explicit truncation. Historical children remain native history rather than an ever-growing live roster. Passive notices into managed OpenCode use stable event/attempt operation IDs and the same durable native admission path; uncertain delivery is reconciled by exact native evidence without another submission. A quiet supervisor may receive new notices even when a prior input's completion cannot be correlated. Native child readiness requires qualified input settlement rather than a bare idle status. These changes have focused race coverage; the actual passive mixed-worker delivery matrix is still being qualified.
+Owner roster, watch, pilot and TUI reads now negotiate a bounded native observation with current children, pending requests, input outcomes, provenance and explicit truncation. Historical children remain native history rather than an ever-growing live roster. Passive notices into managed OpenCode use stable event/attempt operation IDs and the same durable native admission path; uncertain delivery is reconciled by exact native evidence without another submission. A quiet supervisor may receive new notices even when a prior input's completion cannot be correlated. Native child readiness requires qualified input settlement rather than a bare idle status. Actual native draft/control/busy deferral, once-only delivery and completion while the daemon was down passed the [supervision matrix](opencode-implementation-2026-10-18/native-supervision-and-handoff.md).
 
 Actual native tool-loop testing exposed and fixed premature completion from a provider `stop` that also contains ordinary tools. Successful outcomes now require the exact completed native message and its persisted parts; the pinned native loop continues when ordinary tool parts remain. In the updated root and native-child probes, 21 intermediate receipt reads per stage stayed admitted through the continuing tool loop, and only the final tool-free response completed the original input. The provider was a scripted localhost fixture, with no external model requests. [Native tool-completion evidence](opencode-implementation-2026-10-18/native-tool-completion.json), [source ordering proof](../../evidence/native-terminal-parts-source.md).
 
@@ -34,9 +86,9 @@ The non-generating OpenCode 1.19.3 creation probe verifies correct versus absent
 
 An independent Astra test of a frozen, uncommitted HTTP client snapshot passed against the real isolated 1.19.3 server without model calls. It covers authentication, caller-ID create/retry, binding mismatch refusal, legacy reads, SSE subscription before create, native child creation/events, empty status/request/history reads, cancellation, and exact session/child persistence across restart. This initial smoke does not qualify populated history, request decisions, generation, process ownership, or the final changing client revision. [Initial native client run](opencode-implementation-2026-10-18/http-native-client-initial.txt).
 
-Review found concrete client defects requiring further test-first corrections: ambiguous write errors treated as definite rejection; malformed `null` snapshots treated as empty; native opaque history cursors rejected; foreign direct-child rows accepted; and permission/question/history fields lost through display-oriented structs. These are not accepted as production-ready behavior. A populated-history qualification uses native `noReply` append calls only after pinned source establishes that they return before model, title and compaction execution.
+That initial review found concrete client defects: ambiguous write errors treated as definite rejection; malformed `null` snapshots treated as empty; native opaque history cursors rejected; foreign direct-child rows accepted; and permission/question/history fields lost through display-oriented structs. They were corrected before acceptance. A populated-history qualification used native `noReply` append calls only after pinned source established that they return before model, title and compaction execution.
 
-Those client findings, including missing/null message parts, are fixed in isolated final revision `c81f0db5`. Astra's frozen-source adversarial race checks and real native populated-history/restart checks pass. The client remains outside the integrated runtime while the selected SDK/Unix-socket topology is implemented; unused transport code is not a maturity claim. [Final native check](opencode-implementation-2026-10-18/http-native-client-c81f0db5.txt), [adversarial check](opencode-implementation-2026-10-18/http-adversarial-c81f0db5.txt).
+Those client findings, including missing/null message parts, are fixed in isolated final revision `c81f0db5`. Astra's frozen-source adversarial race checks and real native populated-history/restart checks pass. That experimental HTTP client remains outside the selected SDK/Unix-socket runtime; unused transport code is not a maturity claim. [Final native check](opencode-implementation-2026-10-18/http-native-client-c81f0db5.txt), [adversarial check](opencode-implementation-2026-10-18/http-adversarial-c81f0db5.txt).
 
 The live supervision run also confirmed that a successful terminal `send` during busy work is not a native prompt receipt. A review instruction was absent from native history and was re-delivered while idle, then verified by its exact native message ID. The semantic route must retain separate delivery, admission and correlated outcome states.
 
@@ -48,8 +100,43 @@ The replacement uses the normal TUI and a public plugin SDK bridge. Actual probe
 
 A minimal forwarding wrapper around the public native Prompt component preserved reactive host props, original ref/callbacks and the right-hand slot. It submitted one genuine input to the exact root with the native-selected Plan/DeepSeek/max tuple. Max came from private persisted native state; explicit variant bootstrap is not established. The provider subsequently returned 403 FreeTierError at zero reported cost, so successful generation is not claimed. Unknown competing composer plugins were refused before root creation; the public slot API cannot inspect ownership and replacement renders every contribution. Durable binding acknowledgement, receipts, later draft/shell/modal races, custom TUI configuration and broader plugin coexistence remain implementation gates. [Prompt qualification](opencode-implementation-2026-10-18/prompt-slot-verdict.json), [source proof](opencode-implementation-2026-10-18/prompt-slot-source-proof.json).
 
+## Sustained and platform evidence
+
+The actual one-hour continuity workload passed on frozen `8cd022f3`: **3600.385
+seconds, 302 root inputs, 300 native children, 15 daemon SIGKILL/rejoins and 1205
+scripted localhost provider requests**, with zero external model requests and all
+owned shims cleaned up. Two earlier runs reproduced a native SSE cleanup leak;
+the socket/aborted cleanup fix preceded the successful run. This historical run
+predates final phone/history/review changes and did not declare resource budgets
+before launch. It establishes continuity, not final-source bounded production
+readiness. [Exact source, failures and limits](opencode-implementation-2026-10-18/native-hour-continuity.json).
+
+The checked-in [native workload](../../scripts/verification/README-opencode-native.md)
+adds declared Swarm RSS/FD/disk and dispatch/rejoin gates, an impossible-RSS
+negative control, exact binary/script identities, workload results and owned
+process cleanup. Actual budgeted smoke tests passed on macOS ARM64 and Debian
+13 ARM64 under an ordinary user. The [Linux native run](opencode-implementation-2026-10-18/native-linux-arm64.md)
+used the integrity-verified official OpenCode 1.19.3 Linux ARM64 package, three
+inputs, a child, native public decisions and two crash recoveries. Neither run
+certifies AMD64, physical Android or external-provider inference.
+
+Full Linux application build, vet and race checks passed at `2663afde` under an
+ordinary user with pinned Go/mobile tools: 78 package suites passed, seven had no
+tests. Android's SDK/AAR gate was separate. [Frozen Linux gate](opencode-implementation-2026-10-18/linux-connected-gates.json).
+A newer combined application run and final complete-source Android AAR/debug and
+release test runs are in progress; earlier results do not cover those later files.
+
 ## Qualification limits
 
 The full macOS baseline predating these changes fails existing Linux-managed-account fixtures, platform-specific reachability checks, and an installed x86 gobind binary on this ARM host. This is tracked by `agents-tracker-vyhy.10`. Linux qualification ran in an isolated ordinary-user container with pinned Go/mobile tools and private source/cache storage: vet and full application-package race tests passed at `8f8d6eff`; the mobile AAR test failed because the pinned Android NDK was absent. macOS lint also reports eleven pre-existing unused Linux-managed-account symbols, while Linux-target full lint passes after the handoff integration. [Linux lint](opencode-implementation-2026-10-18/linux-handoff-lint.txt). Neither the missing Android leg nor later runtime changes are covered by that earlier full race run.
 
-The runtime, bridge, native reducer, history export, bounded hierarchy/owner projection, durable terminal receipts and owner delivery path are integrated locally; full transcript projection, public decision controls and composition qualification are still being completed. The additive attention status preserves active work while displaying pending input; 33 focused Android decoder/render tests passed on an isolated ARM JDK and pinned SDK. The native Go AAR now builds successfully for both pinned arm64-v8a and x86_64 ABIs using the pinned NDK. That build predates the pending phone decision facade. Updated Linux application build/vet/race tests and an actual one-hour native workload are running. Full repository race/release gates, the final Android facade, mixed-harness fault tests, and actual 24h/72h workloads remain qualification gates. No short smoke test substitutes for elapsed sustained qualification.
+Runtime, bridge, reducer, bounded live transcript, hierarchy, history export,
+durable receipts, semantic supervision and public decision/phone paths are
+integrated locally. The real private native Go AAR built for arm64-v8a and x86_64;
+54 targeted Android request/transcript/detail/surface tests passed without skips.
+That artifact predates the final history and runtime source, so a fresh complete
+artifact and full debug/release tests remain required. Actual 24h/72h workloads,
+physical phone/hosted relay, a complete real-model cross-harness matrix and final
+release gates remain unqualified. No short test substitutes for elapsed sustained
+qualification. Changes remain local; no release or installed-binary replacement
+has occurred.
