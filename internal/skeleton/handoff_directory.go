@@ -42,15 +42,20 @@ func isHandoffChildLaunch(spec daemon.LaunchSpec) bool {
 // child: the source's ProviderCwd, the directory the agent was actually working in,
 // rather than the roster cwd the CLI sent.
 //
-// A source that is not on this daemon leaves the client's cwd untouched: the CLI
-// verifies roster membership before the launch, and lineage stays metadata
-// everywhere else the daemon treats SpawnedFrom. A source recorded before AgentCwd
-// existed (ProviderCwd degrades to Cwd) changes nothing, since that Cwd is what the
-// CLI sent. The stat refusals mirror the hands-off composition's: the protocol layer
-// stats the CLIENT's cwd and never this override, so a worktree torn down since the
-// source ran would otherwise surface as an obscure spawn failure instead of a named
-// refusal.
+// An absent lineage row is refused by the caller: with the row gone, nothing
+// confirms the caller's cwd names the source's checkout. A source recorded before
+// AgentCwd existed (ProviderCwd degrades to Cwd) changes nothing, since that Cwd is
+// what the CLI sent. The stat refusal mirrors the hands-off composition's: the
+// protocol layer stats the CLIENT's cwd and never this override, so a worktree torn
+// down since the source ran would otherwise surface as an obscure spawn failure
+// instead of a named refusal.
 func handoffDirectory(source persist.Meta) (string, error) {
+	// Mirror resumeDirectory's unknowable-checkout refusal: a worktree-isolated
+	// launch captured no AgentCwd, so its ProviderCwd degrades to the roster cwd --
+	// the wrong checkout, presented as if it were the confirmed one.
+	if source.LaunchOptions[protocol.OptionWorktree] == "true" && source.AgentCwd == "" {
+		return "", fmt.Errorf("handoff: source worktree path was not captured; refusing to hand off in another checkout")
+	}
 	providerCwd := source.ProviderCwd()
 	if providerCwd == "" {
 		return source.Cwd, nil

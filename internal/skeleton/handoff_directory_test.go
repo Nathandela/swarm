@@ -232,6 +232,30 @@ func TestUnsupervisedSpawnChildKeepsItsClientCwd(t *testing.T) {
 	}
 }
 
+// TestHandoffChildRefusesAnUncapturedWorktreeSource mirrors resumeDirectory's
+// unknowable-checkout refusal: a source whose roster row says its launch was
+// worktree-isolated but recorded no captured AgentCwd offers no directory the
+// successor can trust -- ProviderCwd degrades to the roster cwd, which is exactly
+// the wrong checkout, now presented as if it were correct. Refuse by name like the
+// resume path does.
+func TestHandoffChildRefusesAnUncapturedWorktreeSource(t *testing.T) {
+	src, _, _ := handoffWorktreeSource(t, "uncaptured-src", false)
+	src.LaunchOptions = map[string]string{protocol.OptionWorktree: "true"}
+	api, _ := handoffDirFixture(t, src)
+
+	child, err := api.Launch(handoffChildSpec(t, src, t.TempDir()))
+	t.Cleanup(func() { killSpawnedShim(t, child) })
+	if err == nil {
+		t.Fatalf("a handoff child was launched although the source's worktree path was not captured, placing it in the roster checkout")
+	}
+	if !strings.Contains(err.Error(), "handoff:") || !strings.Contains(err.Error(), "not captured") {
+		t.Fatalf("uncaptured-worktree refusal = %q, want the handoff refusal matching resumeDirectory's", err)
+	}
+	if got := len(api.List()); got != 1 {
+		t.Fatalf("after the refusal the roster holds %d rows (the source only), want no new session", got)
+	}
+}
+
 // TestResumeBeatsTheHandoffShapeForALineageChildReLaunch guards the authwatch
 // recycle interaction: recycling a SUPERVISED handoff child re-launches it as a
 // RESUME (Options resume_from) while carrying the ORIGINAL lineage fields verbatim.
@@ -260,40 +284,47 @@ func TestResumeBeatsTheHandoffShapeForALineageChildReLaunch(t *testing.T) {
 		SpawnedFrom: grandparent.ID,
 		SpawnIntent: protocol.SpawnIntentHandoff,
 		Supervision: protocol.SupervisionPassive,
-		Options:     map[string]string{protocol.OptionResumeFrom: protocol.NamespacedID(testEndpoint, endedChild.ID)},
+		// The endpoint prefix is the FIXTURE'S OWN so the resume resolves inside
+		// this daemon (a prefix naming another endpoint fails at the roster
+		// lookup, before any cwd layer, and the test would then prove nothing).
+		Options: map[string]string{protocol.OptionResumeFrom: protocol.NamespacedID(api.endpointID, endedChild.ID)},
 	}
 	_, err := api.Launch(spec)
 	if err == nil {
 		t.Fatal("the recycle would need a codex binary; launching anyway is out of this test's scope")
+	}
+	// The resume's own layers must own the outcome: it has to REACH argv
+	// resolution (the only failure this PATH can produce) -- anything earlier
+	// means the resume resolution never happened, and any worktree refusal means
+	// the handoff correction leaked into the resume.
+	if !strings.Contains(err.Error(), "not found on the agent PATH") {
+		t.Fatalf("lineage resume failure = %q, want the intended codex binary-resolution failure after resumeDirectory ran", err)
 	}
 	if strings.Contains(err.Error(), "no longer a directory") || strings.Contains(err.Error(), staleWorktree) {
 		t.Fatalf("the handoff cwd correction leaked into a resume launch: %q", err)
 	}
 }
 
-// TestHandoffChildAbsentSourceKeepsTheClientCwd pins the missing-source boundary:
-// lineage metadata may name a row this roster no longer holds (the daemon already
-// tolerates that everywhere it treats SpawnedFrom as metadata), so the correction
-// must stand down and launch with the client's cwd rather than refuse a launch
-// whose every other purpose stands.
-func TestHandoffChildAbsentSourceKeepsTheClientCwd(t *testing.T) {
-	_, callerCwd, worktree := handoffWorktreeSource(t, "ghost-parent-holder", true)
-	// Keep the fixture worktree on disk so a poisoned gate that corrects from an
-	// absent source would be observable as a launch there.
-	if _, err := os.Stat(worktree); err != nil {
-		t.Fatal(err)
-	}
-	api, dir := handoffDirFixture(t)
+// TestHandoffChildRefusesAMissingSource pins the race the CLI cannot close: the
+// CLI resolves the source on its own roster and sends that source's identity, but
+// the row can be deleted between its List and the daemon's launch. Launching with
+// the caller's cwd then repeats the wrong-checkout bug the correction exists to
+// close, so the already-narrow first-class shape refuses an absent lineage row by
+// name instead, with no reservation and no spawn.
+func TestHandoffChildRefusesAMissingSource(t *testing.T) {
+	src, _, worktree := handoffWorktreeSource(t, "ghost-parent", true)
+	callerCwd := t.TempDir()
+	api, dir := handoffDirFixture(t) // the roster deliberately holds no row
 
-	spec := handoffChildSpec(t, persist.Meta{ID: "ghost-parent"}, callerCwd)
-	spec.SpawnedFrom = "sess-never-persisted"
-	child, err := api.Launch(spec)
-	if err != nil {
-		t.Fatalf("handoff launch with an absent lineage source refused: %v", err)
-	}
+	child, err := api.Launch(handoffChildSpec(t, src, callerCwd))
 	t.Cleanup(func() { killSpawnedShim(t, child) })
-
-	if got := spawnBinding(t, dir, child.ID); got != callerCwd {
-		t.Fatalf("child's agent runs in %q, want the unchanged client cwd %q after the lineage row was absent", got, callerCwd)
+	if err == nil {
+		t.Fatalf("a handoff child was launched despite missing lineage %q; binding cwd=%q, and no source row confirms the worktree %q at all", src.ID, spawnBinding(t, dir, child.ID), worktree)
+	}
+	if !strings.Contains(err.Error(), "handoff:") || !strings.Contains(err.Error(), src.ID) {
+		t.Fatalf("missing-source refusal = %q, want a handoff refusal naming %q", err, src.ID)
+	}
+	if got := len(api.List()); got != 0 {
+		t.Fatalf("after the refusal the roster holds %d rows, want none: the refusal must not reserve a session", got)
 	}
 }

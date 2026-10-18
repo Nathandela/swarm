@@ -1049,16 +1049,19 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// like the hands-off composition above. This branch runs only on the first-class
 	// shape (isHandoffChildLaunch), so it overrides neither the hands-off path (which
 	// just corrected spec.Cwd itself and composes supervision empty) nor a resume
-	// (resumeDirectory owns its cwd), and a legacy or absent source row changes
-	// nothing.
+	// (resumeDirectory owns its cwd). A legacy row falls back to its launch cwd; an
+	// absent row refuses, because with the row gone nothing confirms the caller's
+	// cwd names the source's checkout.
 	if isHandoffChildLaunch(spec) {
-		if source, ok := a.core.Get(spec.SpawnedFrom); ok {
-			providerCwd, err := handoffDirectory(source)
-			if err != nil {
-				return persist.Meta{}, err
-			}
-			spec.Cwd = providerCwd
+		source, ok := a.core.Get(spec.SpawnedFrom)
+		if !ok {
+			return persist.Meta{}, fmt.Errorf("handoff: the lineage source %q is no longer in this daemon's roster, so its working directory cannot be confirmed; the successor is refused rather than launched in the caller's cwd", spec.SpawnedFrom)
 		}
+		providerCwd, err := handoffDirectory(source)
+		if err != nil {
+			return persist.Meta{}, err
+		}
+		spec.Cwd = providerCwd
 	}
 	if conversationID := spec.Options[protocol.OptionResumeConversationID]; conversationID != "" {
 		if spec.Options[protocol.OptionResumeFrom] != "" {
