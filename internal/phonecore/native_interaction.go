@@ -159,6 +159,12 @@ func (s *ItemStore) applyNativeRequestSetLocked(rec schema.JournalRecord, w nati
 		return false
 	}
 	for id, hash := range w.Requests {
+		if hash == "" {
+			if id == "" || len(id) > 128 {
+				return false
+			}
+			continue
+		}
 		decoded, err := hex.DecodeString(hash)
 		if id == "" || len(id) > 128 || err != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != hash {
 			return false
