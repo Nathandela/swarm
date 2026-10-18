@@ -78,7 +78,7 @@ func (d *Daemon) prepareOpenCodeLaunch(spec *LaunchSpec, m *persist.Meta, dir st
 		}
 		hash := sha256.Sum256([]byte(spec.InitialPrompt))
 		b.Initial = &persist.OpenCodeInitial{OperationID: op[:32], RequestHash: hex.EncodeToString(hash[:]), Phase: persist.OpenCodeInitialPrepared}
-		body, _ := json.Marshal(opencodebridge.InitialRequest{Version: 1, SessionInstance: b.Generation, BackendGeneration: b.Generation, RootID: spec.ConversationID, OperationID: b.Initial.OperationID, RequestHash: b.Initial.RequestHash, Text: spec.InitialPrompt})
+		body, _ := json.Marshal(opencodebridge.InitialRequest{Version: 1, SessionInstance: b.Generation, BackendGeneration: b.Generation, RootID: spec.ConversationID, OperationID: b.Initial.OperationID, RequestHash: b.Initial.RequestHash, Text: spec.InitialPrompt, ExpectedModel: spec.Options["model"], ExpectedAgent: spec.Options["agent"]})
 		if len(body) > 64<<10 {
 			return errors.New("OpenCode runtime: encoded initial input exceeds the bridge boundary")
 		}

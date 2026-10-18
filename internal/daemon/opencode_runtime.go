@@ -211,7 +211,7 @@ func (d *Daemon) admitOpenCodeInitial(ctx context.Context, c *opencodebridge.Cli
 		if err != nil {
 			return err
 		}
-		r, callErr := c.Initial(ctx, opencodebridge.InitialRequest{Version: 1, SessionInstance: b.SessionInstance, BackendGeneration: b.BackendGeneration, RootID: b.RootID, OperationID: i.OperationID, RequestHash: i.RequestHash, Text: text})
+		r, callErr := c.Initial(ctx, opencodebridge.InitialRequest{Version: 1, SessionInstance: b.SessionInstance, BackendGeneration: b.BackendGeneration, RootID: b.RootID, OperationID: i.OperationID, RequestHash: i.RequestHash, Text: text, ExpectedModel: m.LaunchOptions["model"], ExpectedAgent: m.LaunchOptions["agent"]})
 		receipt, err = &r, callErr
 	} else {
 		receipt, err = c.InitialReceipt(ctx)
