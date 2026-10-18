@@ -25,7 +25,12 @@ func TestNativeDecisionCustodyPrecedesPublicationAndSurvivesRestart(t *testing.T
 	if !ok || out.NativeDecisionReceipt.State != "pending" {
 		t.Fatal("live pending attempt became immediate uncertainty")
 	}
-	c2, err := Resume(Config{Machine: "m1", State: c.store})
+	saved := c.store.(*fileStore)
+	reopened, openErr := OpenStore(saved.path, "m1", saved.wake, saved.content)
+	if openErr != nil {
+		t.Fatal(openErr)
+	}
+	c2, err := Resume(Config{Machine: "m1", State: reopened})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +108,7 @@ func TestNativeDecisionCustodyOnlyReleasesQualifiedResolutionOrRejection(t *test
 	st := c.State()
 	set := map[string]any{"v": 2, "kind": "request_set", "item_id": "set", "ts": time.Now().UTC(), "provenance": "reconciled", "complete": false, "session_instance": body.SessionInstance, "root_id": body.RootID, "generation": body.Generation, "requests": map[string]string{}}
 	raw, _ := json.Marshal(set)
-	st.Items = []Item{{SessionID: body.Session, ItemID: "set", Kind: "request_set", Body: raw}}
+	st.Items = []Item{{SessionID: body.Session, ItemID: "set", Kind: "request_set", LastCursor: 1, Body: raw}}
 	if err := c.Save(st); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +120,7 @@ func TestNativeDecisionCustodyOnlyReleasesQualifiedResolutionOrRejection(t *test
 	raw, _ = json.Marshal(set)
 	st = c.State()
 	st.Items[0].Body = raw
+	st.Items[0].LastCursor = 2
 	if err := c.Save(st); err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +131,20 @@ func TestNativeDecisionCustodyOnlyReleasesQualifiedResolutionOrRejection(t *test
 	raw, _ = json.Marshal(set)
 	st = c.State()
 	st.Items[0].Body = raw
+	st.Items[0].LastCursor = 3
 	if err := c.Save(st); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.NativeDecisionOperations(body.Session)) != 0 {
 		t.Fatal("qualified native absence did not release card")
+	}
+	set["requests"] = map[string]string{"item": body.RequestHash}
+	raw, _ = json.Marshal(set)
+	st = c.State()
+	st.Items[0].Body = raw
+	st.Items[0].LastCursor = 4
+	if err := c.Save(st); err != nil {
+		t.Fatal(err)
 	}
 	_, fresh, err := c.BeginNativeDecision("next", "item", body, time.Now())
 	if err != nil || !fresh {
@@ -137,11 +152,71 @@ func TestNativeDecisionCustodyOnlyReleasesQualifiedResolutionOrRejection(t *test
 	}
 	ctrl, _ := c.NativeDecisionOutcome("next", time.Now())
 	ctrl.NativeDecisionReceipt.State = "rejected"
+	ctrl.NativeDecisionReceipt.NativeEffect = "none"
 	if err := c.RecordOutcome(ctrl); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.NativeDecisionOperations(body.Session)) != 0 {
 		t.Fatal("definite rejection did not release custody")
+	}
+}
+
+func TestNativeDecisionAdmissionSurvivesLateErrorAfterResolution(t *testing.T) {
+	c := publicationCore(t)
+	body := nativeCustodyRequest()
+	if _, _, err := c.BeginNativeDecision("op", "item", body, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ctrl, _ := c.NativeDecisionOutcome("op", time.Now())
+	ctrl.NativeDecisionReceipt.State = "admitted"
+	if err := c.RecordOutcome(ctrl); err != nil {
+		t.Fatal(err)
+	}
+	st := c.State()
+	raw, _ := json.Marshal(map[string]any{"v": 2, "kind": "request_set", "item_id": "set", "ts": time.Now().UTC(), "provenance": "reconciled", "complete": true, "session_instance": body.SessionInstance, "root_id": body.RootID, "generation": body.Generation, "requests": map[string]string{}})
+	st.Items = []Item{{SessionID: body.Session, ItemID: "set", Kind: "request_set", LastCursor: 1, Body: raw}}
+	if err := c.Save(st); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.State().NativeDecisions) != 0 || len(c.nativeDecisionLive) != 0 {
+		t.Fatal("qualified resolution did not retire bounded custody")
+	}
+	if err := c.RecordOutcome(schema.Control{Op: "error", OperationID: "op", SessionID: body.Session, Error: "late transport error"}); err != nil {
+		t.Fatal(err)
+	}
+	got := c.State().OpOutcomes["op"].NativeDecisionReceipt
+	if got == nil || got.State != "admitted" {
+		t.Fatal("late generic reply downgraded admitted operation after request resolution")
+	}
+}
+
+func TestNativeDecisionIgnoresWrongScopeAndRequiresNoEffectForRejection(t *testing.T) {
+	c := publicationCore(t)
+	body := nativeCustodyRequest()
+	if _, _, err := c.BeginNativeDecision("op", "item", body, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ctrl, _ := c.NativeDecisionOutcome("op", time.Now())
+	ctrl.NativeDecisionReceipt.State = "rejected"
+	ctrl.NativeDecisionReceipt.NativeEffect = "none"
+	ctrl.NativeDecisionReceipt.Generation = "foreign"
+	if err := c.RecordOutcome(ctrl); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.NativeDecisionReceipt.Generation = body.Generation
+	ctrl.NativeDecisionReceipt.NativeEffect = "unknown"
+	if err := c.RecordOutcome(ctrl); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.NativeDecisionOperations(body.Session)) != 1 {
+		t.Fatal("unqualified rejection released custody")
+	}
+	if err := c.RecordOutcome(schema.Control{Op: "error", OperationID: "op", SessionID: body.Session}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := c.NativeDecisionOutcome("op", time.Now())
+	if got.NativeDecisionReceipt.State != "uncertain" {
+		t.Fatal("generic failure claimed known no-effect rejection")
 	}
 }
 func TestNativeDecisionCustodyIsBoundedWithoutEvictingUncertainWork(t *testing.T) {
