@@ -84,7 +84,9 @@ func TestOpenCodeNativeDecisionLostReplyNeverRepostsAndCanReconcile(t *testing.T
 			t.Fatalf("lost reply: %+v %v", receipt, err)
 		}
 	}
-	if _, err := f.client.NativeDecide("native-bypass", body); err == nil || f.calls.Load() != 1 {
+	refused, err := f.client.NativeDecide("native-bypass", body)
+	assertNativeDecisionRejected(t, "native-bypass", body, refused, err)
+	if f.calls.Load() != 1 {
 		t.Fatal("new operation bypassed unresolved same-request custody")
 	}
 	f.pendingNative.Store([]json.RawMessage{})
@@ -108,16 +110,15 @@ func TestOpenCodeNativeDecisionRefusesStaleAuthorityAndEndingOwner(t *testing.T)
 	for i, change := range []func(*protocol.NativeDecisionReq){func(r *protocol.NativeDecisionReq) { r.RequestHash = strings.Repeat("b", 64) }, func(r *protocol.NativeDecisionReq) { r.Generation = "stale" }, func(r *protocol.NativeDecisionReq) { r.NativeSessionID = "ses_other" }, func(r *protocol.NativeDecisionReq) { v := time.Now().Add(-time.Second); r.ExpiresAt = &v }} {
 		changed := body
 		change(&changed)
-		if _, err := f.client.NativeDecide("native-stale-"+string(rune('a'+i)), changed); err == nil {
-			t.Fatal("stale request authority accepted")
-		}
+		id := "native-stale-" + string(rune('a'+i))
+		receipt, err := f.client.NativeDecide(id, changed)
+		assertNativeDecisionRejected(t, id, changed, receipt, err)
 	}
 	if err := f.d.withOwnerSessionEnd(f.binding.WorkerID, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.client.NativeDecide("native-after-end", body); err == nil {
-		t.Fatal("owner-ending request reached native")
-	}
+	receipt, err := f.client.NativeDecide("native-after-end", body)
+	assertNativeDecisionRejected(t, "native-after-end", body, receipt, err)
 	if f.calls.Load() != 0 {
 		t.Fatal("stale/ending request produced an effect")
 	}
@@ -169,8 +170,10 @@ func TestOpenCodeNativeDecisionRespectsOwnerControllerAndDirtyInput(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.client.NativeDecide("native-controlled", body); err == nil {
-		t.Fatal("controlled native worker accepted decision")
+	controlled, err := f.client.NativeDecide("native-controlled", body)
+	assertNativeDecisionRejected(t, "native-controlled", body, controlled, err)
+	if f.calls.Load() != 0 || !f.d.srv.IsControlled(f.binding.WorkerID) {
+		t.Fatal("decision changed controller custody or reached native SDK")
 	}
 	if err := attachment.Input([]byte("owner draft")); err != nil {
 		t.Fatal(err)
@@ -179,9 +182,7 @@ func TestOpenCodeNativeDecisionRespectsOwnerControllerAndDirtyInput(t *testing.T
 		t.Fatal(err)
 	}
 	receipt, err := f.client.NativeDecide("native-dirty", body)
-	if err != nil || receipt.State != "rejected" || receipt.NativeEffect != "none" {
-		t.Fatalf("dirty input: %+v %v", receipt, err)
-	}
+	assertNativeDecisionRejected(t, "native-dirty", body, receipt, err)
 	if f.calls.Load() != 0 {
 		t.Fatal("controller or dirty input reached native SDK")
 	}
@@ -260,5 +261,13 @@ func TestNativeDecisionStatusRefusesContradictoryOrUnboundTerminalEvidence(t *te
 	}
 	if f.calls.Load() != 0 {
 		t.Fatal("status verification wrote a native decision")
+	}
+}
+
+func assertNativeDecisionRejected(t *testing.T, id string, req protocol.NativeDecisionReq, got protocol.NativeDecisionReceipt, err error) {
+	t.Helper()
+	want := protocol.NativeDecisionReceipt{OperationID: id, Session: req.Session, SessionInstance: req.SessionInstance, RootID: req.RootID, Generation: req.Generation, NativeSessionID: req.NativeSessionID, RequestID: req.RequestID, Kind: req.Kind, State: "rejected", Reason: got.Reason, NativeEffect: "none"}
+	if err != nil || got != want || got.Reason == "" {
+		t.Fatalf("missing exact no-effect rejection: %+v %v", got, err)
 	}
 }
