@@ -57,6 +57,7 @@ type Record struct {
 	// for words that were never delivered.
 	RequestHash string          `json:"request_hash,omitempty"`
 	Request     json.RawMessage `json:"request,omitempty"`
+	Evidence    json.RawMessage `json:"evidence,omitempty"`
 	Phase       Phase           `json:"phase"`
 	Outcome     json.RawMessage `json:"outcome,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
@@ -239,6 +240,35 @@ func (s *Store) SetRequest(operationID string, request []byte) error {
 	return nil
 }
 
+// SetEvidence retains the first qualified native receipt without replacing the protocol outcome.
+func (s *Store) SetEvidence(operationID string, evidence []byte) error {
+	if len(evidence) == 0 || len(evidence) > 64<<10 || !json.Valid(evidence) {
+		return errors.New("idempotency: invalid native evidence")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.records[operationID]
+	if !ok {
+		return errors.New("idempotency: unknown evidence operation")
+	}
+	if len(rec.Evidence) != 0 {
+		if bytes.Equal(rec.Evidence, evidence) {
+			return nil
+		}
+		return errors.New("idempotency: native evidence conflict")
+	}
+	if rec.Phase != PhaseExecuting && rec.Phase != PhaseOutcomeUnknown {
+		return errors.New("idempotency: native evidence requires unresolved execution")
+	}
+	rec.Evidence = append(json.RawMessage(nil), evidence...)
+	rec.UpdatedAt = s.clock()
+	if err := s.appendLocked(rec); err != nil {
+		return err
+	}
+	s.records[operationID] = rec
+	return nil
+}
+
 // Complete transitions -> completed (fsync), after the side effect commits.
 func (s *Store) Complete(operationID string, outcome []byte) error {
 	return s.transition(operationID, PhaseCompleted, outcome, true)
@@ -282,8 +312,21 @@ func (s *Store) Get(operationID string) (Record, bool) {
 	defer s.mu.Unlock()
 	rec, ok := s.records[operationID]
 	rec.Request = append(json.RawMessage(nil), rec.Request...)
+	rec.Evidence = append(json.RawMessage(nil), rec.Evidence...)
 	rec.Outcome = append(json.RawMessage(nil), rec.Outcome...)
 	return rec, ok
+}
+
+// UnobservedExecution excludes operations whose native admission receipt is already durable.
+func (s *Store) UnobservedExecution(action, session, except string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, rec := range s.records {
+		if id != except && rec.Action == action && rec.SessionID == session && len(rec.Evidence) == 0 && (rec.Phase == PhaseExecuting || rec.Phase == PhaseOutcomeUnknown) {
+			return true
+		}
+	}
+	return false
 }
 
 // List returns a snapshot of every record (order unspecified). The daemon's
@@ -295,6 +338,7 @@ func (s *Store) List() []Record {
 	out := make([]Record, 0, len(s.records))
 	for _, rec := range s.records {
 		rec.Request = append(json.RawMessage(nil), rec.Request...)
+		rec.Evidence = append(json.RawMessage(nil), rec.Evidence...)
 		rec.Outcome = append(json.RawMessage(nil), rec.Outcome...)
 		out = append(out, rec)
 	}

@@ -36,6 +36,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/appserver"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/submitframe"
@@ -565,6 +566,9 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 			return protocol.CodeStaleInstance, errIsLife5(
 				"composer send names session incarnation %q, but %q is current; refresh before sending", req.SessionInstance, currentInstance)
 		}
+	}
+	if source == adapter.SourceOwner && meta.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+		return d.sendOpenCodeSemantic(local, operationID, req, begin)
 	}
 	if code, err := d.requireStructuredComposer(local, req.Session); err != nil {
 		return code, err
