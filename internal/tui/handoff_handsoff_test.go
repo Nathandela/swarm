@@ -195,11 +195,11 @@ func TestHandsOff_SubmitIssuesOneLaunchAndNoSendInput(t *testing.T) {
 // discarded the user's selection; this pins both halves.
 func TestHandsOff_EmptyModelIsOmittedFromOptions(t *testing.T) {
 	noDefault := func() []AgentInfo {
-		return []AgentInfo{{Name: "claude", Installed: true, InRange: true, Options: []adapter.OptionSpec{
-			{Key: "model", Label: "Model", Type: "string"},
+		return []AgentInfo{{Name: "opencode", Installed: true, InRange: true, Options: []adapter.OptionSpec{
+			{Key: "model", Label: "Model", Type: "string", Suggest: []string{"opencode/deepseek-v4.1-flash-free", "opencode/glm-5.3-flash-free"}},
 		}}}
 	}
-	f := newHandsOffClient(sPrompt("endpoint/source", "claude", "/repo", "q", time.Minute))
+	f := newHandsOffClient(sPrompt("endpoint/source", "opencode", "/repo", "q", time.Minute))
 	m := newModel(t, f, noDefault)
 	m = send(m, detectMsg{agents: noDefault()})
 	m = selectMethod(t, send(m, keyH), handoffMethodHandsOff)
@@ -217,6 +217,23 @@ func TestHandsOff_EmptyModelIsOmittedFromOptions(t *testing.T) {
 	}
 	if reqs[0].Options[protocol.OptionHandoffFrom] != "endpoint/source" {
 		t.Errorf("empty model lost the handoff source: %+v", reqs[0].Options)
+	}
+
+	f = newHandsOffClient(sPrompt("endpoint/source", "opencode", "/repo", "q", time.Minute))
+	m = newModel(t, f, noDefault)
+	m = send(m, detectMsg{agents: noDefault()})
+	m = send(m, keyH)
+	m = send(m, keyTab)   // model field
+	m = send(m, keyRight) // first explicit catalogue choice
+	if got := m.(rootModel).handoff.model.text; got != "opencode/deepseek-v4.1-flash-free" {
+		t.Fatalf("cycled model = %q, want exact first catalogue ID", got)
+	}
+	m = selectMethod(t, m, handoffMethodHandsOff)
+	_, cmd = m.Update(keyEnter)
+	execCmd(cmd)
+	reqs = f.launchReqs()
+	if len(reqs) != 1 || reqs[0].Options["model"] != "opencode/deepseek-v4.1-flash-free" {
+		t.Fatalf("selected model did not reach launch exactly: %+v", reqs)
 	}
 }
 

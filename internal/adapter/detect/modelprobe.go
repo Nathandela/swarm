@@ -43,7 +43,7 @@ func ProbeModels(name string) (configured string, models []adapter.ModelChoice) 
 			configured = claudeModelFromJSON(data)
 		}
 	case "opencode":
-		configured, models = probeOpenCodeModels()
+		models = probeOpenCodeModels()
 	}
 	return configured, models
 }

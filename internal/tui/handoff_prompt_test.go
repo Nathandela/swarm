@@ -50,6 +50,9 @@ func TestRenderHandoffPrompt_SupervisionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(lineContaining(got, `child_id="$(swarm handoff`), "--model") {
+		t.Fatal("untouched model selection forced a model in the child launch")
+	}
 	for _, want := range []string{
 		"swarm watch \"$child_id\" --until needs_input,ready_for_review,completed --timeout 10m",
 		"swarm peek \"$child_id\"",

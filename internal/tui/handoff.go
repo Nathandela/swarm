@@ -125,12 +125,6 @@ func (m *handoffModel) loadModelDefault() {
 	value := ""
 	if spec, ok := m.modelSpec(); ok {
 		value = spec.Default
-		if value == "" {
-			values := handoffModelValues(spec)
-			if len(values) > 0 {
-				value = values[0]
-			}
-		}
 	}
 	m.model.set(value)
 }

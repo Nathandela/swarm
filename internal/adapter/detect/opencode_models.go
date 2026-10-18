@@ -17,25 +17,21 @@ import (
 // shortcut: catalogues over 4 MiB fall back to editable input; raise this cap if a real profile exceeds it.
 const maxOpenCodeProbeOutput = 4 << 20
 
-func probeOpenCodeModels() (string, []adapter.ModelChoice) {
+func probeOpenCodeModels() []adapter.ModelChoice {
 	path, err := exec.LookPath("opencode")
 	if err != nil {
-		return "", nil
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
-	var models []adapter.ModelChoice
-	// shortcut: project-local providers/defaults reflect Swarm's cwd; re-probe by form cwd if target-project settings are needed.
+	// shortcut: project-local providers reflect Swarm's cwd; re-probe by form cwd if target-project catalogues are needed.
 	if data, ok := runOpenCodeProbe(ctx, cancel, path, "models", "--verbose"); ok {
-		models = parseOpenCodeModels(data)
+		return parseOpenCodeModels(data)
 	}
-	if data, ok := runOpenCodeProbe(ctx, cancel, path, "debug", "config"); ok {
-		return parseOpenCodeDefault(data), models
-	}
-	return "", models
+	return nil
 }
 
-// runOpenCodeProbe captures only bounded stdout. Both calls share a 5s deadline;
+// runOpenCodeProbe captures only bounded stdout. The deadline is 5s;
 // WaitDelay may add up to 1s to close inherited pipes after cancellation.
 func runOpenCodeProbe(ctx context.Context, cancel context.CancelFunc, path string, args ...string) ([]byte, bool) {
 	if ctx.Err() != nil {
@@ -101,16 +97,6 @@ func parseOpenCodeModels(data []byte) []adapter.ModelChoice {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
-}
-
-func parseOpenCodeDefault(data []byte) string {
-	var config struct {
-		Model string `json:"model"`
-	}
-	if json.Unmarshal(data, &config) == nil && validOpenCodeModel(config.Model) {
-		return config.Model
-	}
-	return ""
 }
 
 func validOpenCodeModel(id string) bool {

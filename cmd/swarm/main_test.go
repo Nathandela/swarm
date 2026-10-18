@@ -313,7 +313,6 @@ func TestOpenCodeDiscoveredModelsReachLaunchOptions(t *testing.T) {
 		if a.Name() == "opencode" {
 			return adapter.Detection{
 				Found: true, InRange: true,
-				ConfiguredModel: "opencode/glm-5.3-flash-free",
 				Models: []adapter.ModelChoice{
 					{ID: "opencode/deepseek-v4.1-flash-free", Display: "DeepSeek V4.1 Flash Free"},
 					{ID: "opencode/glm-5.3-flash-free", Display: "GLM 5.3 Flash Free"},
@@ -329,8 +328,8 @@ func TestOpenCodeDiscoveredModelsReachLaunchOptions(t *testing.T) {
 		for _, option := range agent.Options {
 			if option.Key == "model" {
 				want := []string{"opencode/deepseek-v4.1-flash-free", "opencode/glm-5.3-flash-free"}
-				if option.Default != "opencode/glm-5.3-flash-free" || !reflect.DeepEqual(option.Suggest, want) || option.Type != "string" {
-					t.Fatalf("OpenCode model option = %+v, want editable default and native choices %v", option, want)
+				if option.Default != "" || !reflect.DeepEqual(option.Suggest, want) || option.Type != "string" {
+					t.Fatalf("OpenCode model option = %+v, want no explicit default and native choices %v", option, want)
 				}
 				return
 			}

@@ -46,35 +46,19 @@ func TestParseOpenCodeModels(t *testing.T) {
 	}
 }
 
-func TestParseOpenCodeDefault(t *testing.T) {
-	for _, tc := range []struct{ raw, want string }{
-		{`{"model":"openrouter/~anthropic/claude-fable-latest","provider":{"openrouter":{"apiKey":"synthetic-secret"}}}`, "openrouter/~anthropic/claude-fable-latest"},
-		{`{"model":"opencode/glm-5.3-flash-free"}`, "opencode/glm-5.3-flash-free"},
-		{`{"small_model":"opencode/big-pickle"}`, ""},
-		{`{"model":"bad\nvalue"}`, ""},
-		{`{"model":"no-provider"}`, ""},
-		{`{`, ""},
-	} {
-		if got := parseOpenCodeDefault([]byte(tc.raw)); got != tc.want {
-			t.Errorf("default from %q = %q, want %q", tc.raw, got, tc.want)
-		}
-	}
-}
-
 func TestProbeModelsOpenCodeUsesNativeCLIAndFallsBack(t *testing.T) {
 	bin := t.TempDir()
 	path := filepath.Join(bin, "opencode")
 	script := "#!/bin/sh\ncase \"$1 $2\" in\n" +
 		"  'models --verbose') cat <<'MODELS'\n" + openCodeCatalogFixture + "MODELS\n;;\n" +
-		"  'debug config') printf '%s\\n' '{\"model\":\"opencode/glm-5.3-flash-free\"}' ;;\n" +
 		"  *) exit 3 ;;\nesac\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	configured, models := ProbeModels("opencode")
-	if configured != "opencode/glm-5.3-flash-free" || len(models) != 3 {
-		t.Fatalf("probe = (%q, %+v), want configured GLM and three selectable IDs", configured, models)
+	if configured != "" || len(models) != 3 {
+		t.Fatalf("probe = (%q, %+v), want native default and three selectable IDs", configured, models)
 	}
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 9\n"), 0o755); err != nil {
 		t.Fatal(err)
