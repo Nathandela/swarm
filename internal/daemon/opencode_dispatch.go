@@ -65,7 +65,7 @@ func (d *Daemon) DispatchOpenCode(ctx context.Context, id string, req opencodebr
 		return opencodebridge.Receipt{}, errors.New("OpenCode runtime: native dispatch outcome uncertain")
 	}
 	var receipt opencodebridge.Receipt
-	if json.Unmarshal(result.OpenCodeReceipt, &receipt) != nil || !sameOpenCodeIdentity(receipt.Identity, b) || receipt.OperationID != req.OperationID {
+	if json.Unmarshal(result.OpenCodeReceipt, &receipt) != nil || !sameOpenCodeIdentity(receipt.Identity, b) || receipt.OperationID != req.OperationID || receipt.Kind != req.Kind || receipt.TargetID != req.TargetID || receipt.MessageID != req.MessageID || receipt.RequestID != req.RequestID {
 		return opencodebridge.Receipt{}, errors.New("OpenCode runtime: dispatch receipt identity unconfirmed")
 	}
 	return receipt, nil
