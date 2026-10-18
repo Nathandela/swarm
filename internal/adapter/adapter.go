@@ -90,10 +90,10 @@ type Detection struct {
 	// ConfiguredModel and Models are ADDITIVE DATA ONLY — the frozen contract
 	// gains fields, no behavior. The CORE Detect above never sets them (it stays
 	// I/O-free); they are filled by the host-I/O model probe in
-	// internal/adapter/detect (reading each CLI's on-disk config) and consumed by
+	// internal/adapter/detect (reading config or a native CLI catalogue) and consumed by
 	// the launch-form model-option overlay in cmd/swarm.
 	ConfiguredModel string        // the model the CLI is actually configured to default to (best-effort; empty when unknown), pre-filling the launch form's model field
-	Models          []ModelChoice // the model choices the CLI exposes, discovered from its config (best-effort; nil when the CLI has no enumeration or none could be read)
+	Models          []ModelChoice // the model choices the CLI exposes, discovered from config or native CLI (best-effort; nil when none could be read)
 }
 
 // ModelChoice is one model a CLI exposes: ID is the launch value (the slug the

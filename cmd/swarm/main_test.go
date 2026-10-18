@@ -308,6 +308,38 @@ func TestOverlayModelOptions(t *testing.T) {
 	}
 }
 
+func TestOpenCodeDiscoveredModelsReachLaunchOptions(t *testing.T) {
+	agents := detectAgentsWith("", func(a adapter.Adapter) adapter.Detection {
+		if a.Name() == "opencode" {
+			return adapter.Detection{
+				Found: true, InRange: true,
+				ConfiguredModel: "opencode/glm-5.3-flash-free",
+				Models: []adapter.ModelChoice{
+					{ID: "opencode/deepseek-v4.1-flash-free", Display: "DeepSeek V4.1 Flash Free"},
+					{ID: "opencode/glm-5.3-flash-free", Display: "GLM 5.3 Flash Free"},
+				},
+			}
+		}
+		return adapter.Detection{}
+	})()
+	for _, agent := range agents {
+		if agent.Name != "opencode" {
+			continue
+		}
+		for _, option := range agent.Options {
+			if option.Key == "model" {
+				want := []string{"opencode/deepseek-v4.1-flash-free", "opencode/glm-5.3-flash-free"}
+				if option.Default != "opencode/glm-5.3-flash-free" || !reflect.DeepEqual(option.Suggest, want) || option.Type != "string" {
+					t.Fatalf("OpenCode model option = %+v, want editable default and native choices %v", option, want)
+				}
+				return
+			}
+		}
+		t.Fatal("OpenCode model option missing")
+	}
+	t.Fatal("OpenCode adapter missing from picker")
+}
+
 // A1 — skeletonConfigFromEnv must wire a NEW opt-in env var,
 // SWARM_DAEMON_REMOTE_SOCK, into skeleton.Config.RemoteSocketPath so `swarm
 // daemon` actually stands up the dedicated REMOTE-tier unix socket

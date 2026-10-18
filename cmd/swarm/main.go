@@ -377,14 +377,14 @@ type agentDetectFunc func(ad adapter.Adapter) adapter.Detection
 // exec-based detect.Host, so the picker greys an agent that is missing or
 // out-of-supported-range (L-2). The reserved dev/test "fake" agent is appended when
 // SWARM_FAKE_AGENT_BIN is set (unset in a real install). Detection runs the free
-// `--version` probe only — never a billable agent run.
+// `--version` and native model-catalogue probes only — never a billable agent run.
 func detectAgents(fakeBin string) tui.DetectFunc {
 	host := detect.Host{}
 	return detectAgentsWith(fakeBin, func(ad adapter.Adapter) adapter.Detection {
 		det := adapter.Detect(ad, host)
 		// Piggyback the best-effort model discovery on the same probe: pre-fill
 		// the form's model field with the real configured default and cycle the
-		// CLI's real choices (v0.5, bead e5i). Read failures leave these empty
+		// CLI's real choices (v0.5, bead e5i). Discovery failures leave these empty
 		// and the option renders exactly as before.
 		det.ConfiguredModel, det.Models = detect.ProbeModels(ad.Name())
 		return det
@@ -450,7 +450,7 @@ func detectAgentsWith(fakeBin string, probe agentDetectFunc) tui.DetectFunc {
 }
 
 // overlayModelOptions augments the "model" launch option with what the CLI is
-// actually configured to use, discovered from its on-disk config: the real
+// actually configured to use, discovered from its config or native CLI: the real
 // default pre-fills the field (Default) and the discovered choices become the
 // left/right cycle values (Suggest, layered over any curated aliases). Non-model
 // options, and adapters with nothing discovered, are returned untouched. The

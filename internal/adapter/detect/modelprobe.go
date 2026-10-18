@@ -18,10 +18,9 @@ import (
 const maxConfigSize = 1 << 20 // 1 MiB
 
 // ProbeModels discovers, best-effort, the model the named CLI is configured to
-// default to and the model choices it exposes, by reading the CLI's on-disk
-// config. name is the registry adapter name ("codex" / "claude"). Any missing or
-// corrupt file yields empty results, never an error: model discovery piggybacks
-// the async, generation-stamped detection and must never block or fail it.
+// default to and the model choices it exposes. Codex/Claude use their on-disk
+// config; OpenCode uses its bounded, non-billable CLI catalogue. Discovery
+// failures leave the editable launch field available.
 func ProbeModels(name string) (configured string, models []adapter.ModelChoice) {
 	switch name {
 	case "codex":
@@ -43,6 +42,8 @@ func ProbeModels(name string) (configured string, models []adapter.ModelChoice) 
 		if data, ok := readCapped(filepath.Join(os.Getenv("HOME"), ".claude", "settings.json")); ok {
 			configured = claudeModelFromJSON(data)
 		}
+	case "opencode":
+		configured, models = probeOpenCodeModels()
 	}
 	return configured, models
 }
