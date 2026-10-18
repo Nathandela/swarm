@@ -1,0 +1,97 @@
+{
+  "reviewed_head": "c5d2923214df0db247c0f6714f7d158f5a6caf1a",
+  "verdict": "no_remaining_code_review_blockers",
+  "production_files": [
+    {
+      "path": "internal/skeleton/opencode_recovery.go",
+      "reviewed_commit": "1f5a8395",
+      "exact_match": true,
+      "sha256": "e5e77b97fd0a0b78c9ce795ca684b69b8d0f48aa5630a11b00bc5fbc42249bf3"
+    },
+    {
+      "path": "internal/skeleton/opencode_receipt.go",
+      "reviewed_commit": "1f5a8395",
+      "exact_match": true,
+      "sha256": "191ab939814571346ca8ebfcc153db17f6c52186880cb65a01cd0c62dd2ce726"
+    },
+    {
+      "path": "internal/skeleton/opencode_state.go",
+      "reviewed_commit": "1f5a8395",
+      "exact_match": true,
+      "sha256": "32859bc86e8340e2ec1ae11e3aba4906d9c02630b7fe22a9246033e494f3c25b"
+    },
+    {
+      "path": "internal/skeleton/opencode_supervision_identity.go",
+      "reviewed_commit": "1f5a8395",
+      "exact_match": true,
+      "sha256": "ef10877517beeebe37f8ef87757262bb9d2d5cefeddeb0b89160b4abccbe3ad6"
+    },
+    {
+      "path": "internal/skeleton/opencode_observer.go",
+      "reviewed_commit": "1f5a8395",
+      "exact_match": true,
+      "sha256": "def45efd1ec7a7b2da8433880ce1de0fcd1475b4869918a64593ec20e2288a5c"
+    },
+    {
+      "path": "internal/remotegw/gateway.go",
+      "reviewed_commit": "52cfca4e",
+      "exact_match": true,
+      "sha256": "511d927be4b029648ec159dc0dd8b7ec7d6007f119d6457e366836c9f7fc8eff"
+    },
+    {
+      "path": "internal/skeleton/opencode_history_page.go",
+      "reviewed_commit": "00fbfac0",
+      "exact_match": true,
+      "sha256": "dc64fadf788ca1a8389ccf2c87b687dca9b436a04665ff89c36017495a80d154"
+    },
+    {
+      "path": "internal/protocol/remote_chat.go",
+      "reviewed_commit": "b385c2ee",
+      "exact_match": true,
+      "sha256": "0ebdd8890f1b32b11b7a2ef021a516961586478642e83c34fe5fbd68c16d6a67"
+    },
+    {
+      "path": "android/app/src/main/kotlin/dev/swarm/phone/ui/screens/TranscriptPanel.kt",
+      "reviewed_commit": "8856b31d",
+      "exact_match": true,
+      "sha256": "c5fd5428045cfeff2fd818c6ca02fa369b41fb318a348ef307dbbafe74bb179b"
+    },
+    {
+      "path": "internal/skeleton/opencode_transcript.go",
+      "reviewed_commit": "747a6564",
+      "exact_match": true,
+      "sha256": "c2af751bbc311d70d05509264f3aa418b3de3754d027853a187974ab8ed499d1"
+    }
+  ],
+  "composition_note": "Transcript equals integrated747a6564: late-child89fdfd98 plus reviewed health6b370687; the root readMessage signature and observer recovery hook are preserved.",
+  "independent_race_seconds": {
+    "default_variant": 6.628,
+    "selected_recovery": 6.334
+  },
+  "fixed_findings": [
+    {
+      "issue": "Initial default variant representation mismatch",
+      "fix": [
+        "6f6a0276",
+        "1f5a8395"
+      ]
+    },
+    {
+      "issue": "Present owned input lost retained outcome precedence",
+      "fix": [
+        "1f5a8395"
+      ]
+    },
+    {
+      "issue": "Repeated plan anchor skipped intervening native rows",
+      "red": "ccedb82a",
+      "green": "00fbfac0"
+    }
+  ],
+  "additional_reviewed_test_only_commits": [
+    "417dd905",
+    "1d471d52",
+    "a1fa1a29"
+  ],
+  "release_gates": "Full frozen-head Linux/macOS/native/Android/lint release evidence is owned and reported separately by the corresponding gate owners."
+}
