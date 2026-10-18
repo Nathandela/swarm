@@ -17,7 +17,7 @@ type openCodeReader interface {
 }
 
 // observeOpenCode owns the reducer. The first result is a subscription/snapshot barrier.
-func observeOpenCode(ctx context.Context, reader openCodeReader, identity opencodebridge.Identity, state *OpenCodeState, publish func(OpenCodeView), ready chan<- error) {
+func observeOpenCode(ctx context.Context, reader openCodeReader, identity opencodebridge.Identity, state *OpenCodeState, publish func(OpenCodeView), ready func(error)) {
 	for {
 		observeOpenCodeEpoch(ctx, reader, identity, state, publish, ready)
 		ready = nil
@@ -37,12 +37,12 @@ func observeOpenCode(ctx context.Context, reader openCodeReader, identity openco
 	}
 }
 
-func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity opencodebridge.Identity, state *OpenCodeState, publish func(OpenCodeView), ready chan<- error) (result error) {
+func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity opencodebridge.Identity, state *OpenCodeState, publish func(OpenCodeView), ready func(error)) (result error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	notify := func(err error) {
 		if ready != nil {
-			ready <- err
+			ready(err)
 			ready = nil
 		}
 	}
@@ -76,10 +76,14 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 	}()
 	// The event producer must release all references before this epoch can be replaced.
 	defer func() { cancel(); <-done }()
+	preludeDeadline := time.NewTimer(5 * time.Second)
+	defer preludeDeadline.Stop()
 	var first []byte
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-preludeDeadline.C:
+		return errors.New("native event subscription did not identify itself")
 	case <-finished:
 		return errors.New("native event subscription failed")
 	case first = <-events:
@@ -176,8 +180,8 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 				if err := refresh(); err != nil {
 					return err
 				}
-				publish(state.View())
 			}
+			publish(state.View())
 		}
 	}
 }

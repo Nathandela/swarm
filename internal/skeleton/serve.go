@@ -252,8 +252,9 @@ type Daemon struct {
 	// app-server connection registry plus the outstanding server-request table, and `pump`
 	// is the producer-edge delta batcher. They ride their OWN mutexes rather than itemMu,
 	// with the lock order stated in backend.go: pumpMu -> itemMu, and backendMu taken alone.
-	backend backendState
-	pump    backendPump
+	backend  backendState
+	openCode openCodeObservations
+	pump     backendPump
 	// backendReady overrides backendReadyDeadline. Test-only, and unset in production: the
 	// degrade paths are only reachable after a dial gives up, and waiting 90 s per case is a
 	// test suite nobody runs.
@@ -329,6 +330,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		PreDelete:      preDeleteWorktree,
 		OnSessionStart: d.registerSession,
 		OnSessionEnd:   d.endSession,
+		OpenCodeReady:  d.openCodeReady,
 		// Wave R7 (backendconnect.go): the core asks the ASSEMBLY whether a session needs a
 		// side process, because only the assembly may touch an adapter and only the core
 		// knows the session dir the plan is contained against.
@@ -723,7 +725,11 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 			token = ""
 		}
 	}
-	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
+	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+		d.eng.EndSession(m.ID)
+	} else {
+		d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
+	}
 	// ADR-017 T2-a / D-NIL: THE CORE'S OWN SESSION-START HOOK AUTHORS THE RECORD.
 	// This fires for every session the core starts, whichever client asked -- so it is the
 	// one place that covers a launch, a resume and a reconcile alike. The d.core guard is
@@ -839,6 +845,7 @@ func (d *Daemon) anyControlled(local string) bool {
 // engine registration and token (S6). Ending an unregistered session (e.g. one
 // adopted by reconcile, never registered) is a harmless no-op.
 func (d *Daemon) endSession(id string) {
+	d.stopOpenCodeObservation(id)
 	// A final conversation-id capture before the engine retires the session: a
 	// session attached-until-exit (the grid tap never sampled it) or a very
 	// short-lived one still gets its id from the transcript tail on disk (C1). This
@@ -926,7 +933,7 @@ func (d *Daemon) tapOnce(ctx context.Context) {
 		if m.Status.Process != status.ProcessRunning {
 			continue
 		}
-		if d.controlled == nil || !d.controlled(m.ID) {
+		if m.RequiredRuntime != persist.RequiredRuntimeOpenCode && (d.controlled == nil || !d.controlled(m.ID)) {
 			d.sampleGridAsync(ctx, m.ID)
 		}
 		d.captureConversationIDAsync(ctx, m.ID) // attach-independent id capture (C1)
@@ -1235,6 +1242,7 @@ func (d *Daemon) Core() *daemon.Daemon { return d.core }
 func (d *Daemon) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closing)
+		d.stopOpenCodeObservations()
 		if d.authw != nil {
 			// FIRST (codex finding 7): the watcher's recycle launches sessions
 			// through the whole assembly (hook drains, capability authoring, the
