@@ -320,16 +320,20 @@ func (s *Store) Get(operationID string) (Record, bool) {
 	return rec, ok
 }
 
-// UnobservedExecution excludes operations whose native admission receipt is already durable.
+// UnobservedExecution reports delivery that still requires a qualified terminal commit.
 func (s *Store) UnobservedExecution(action, session, except string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, rec := range s.records {
-		if id != except && rec.Action == action && rec.SessionID == session && len(rec.Evidence) == 0 && (rec.Phase == PhaseExecuting || rec.Phase == PhaseOutcomeUnknown) {
+		if id != except && rec.Action == action && rec.SessionID == session && unresolvedPhase(rec.Phase) {
 			return true
 		}
 	}
 	return false
+}
+
+func unresolvedPhase(phase Phase) bool {
+	return phase != PhasePrepared && phase != PhaseCompleted && phase != PhaseFailed
 }
 
 // List returns a snapshot of every record (order unspecified). The daemon's
@@ -431,7 +435,7 @@ func (s *Store) compactLocked(now time.Time) error {
 
 func (s *Store) expired(rec Record, now time.Time) bool {
 	// An unresolved native write must never age into a fresh owner semantic send.
-	if rec.Action == "semantic_send" && (rec.Phase == PhaseExecuting || rec.Phase == PhaseOutcomeUnknown) {
+	if rec.Action == "semantic_send" && unresolvedPhase(rec.Phase) {
 		return false
 	}
 	return s.opts.TTL > 0 && now.Sub(rec.UpdatedAt) > s.opts.TTL
