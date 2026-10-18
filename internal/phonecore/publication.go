@@ -341,6 +341,11 @@ func replyMatchesPublication(p PendingPublication, ctrl schema.Control) bool {
 		if json.Unmarshal(ctrl.Journal[0].Item, &detail) != nil || detail.ItemID != p.Detail.ItemID {
 			return false
 		}
+		if nativeKind(detail.Kind) {
+			if _, ok := decodeNativeDetailItem(ctrl.Journal[0].Item); !ok {
+				return false
+			}
+		}
 	}
 	return true
 }

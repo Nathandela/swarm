@@ -34,8 +34,24 @@ type nativeWireItem struct {
 }
 
 func decodeNativeItem(raw []byte) (nativeWireItem, bool) {
+	return decodeNativeItemWithin(raw, 16<<10)
+}
+
+// Full detail rides one bounded read frame, while ordinary snapshots remain16KiB.
+func decodeNativeDetailItem(raw []byte) (nativeWireItem, bool) {
+	w, ok := decodeNativeItemWithin(raw, 1<<20)
+	if !ok {
+		return w, false
+	}
+	switch w.Kind {
+	case "message_snapshot", "tool_snapshot", "file_snapshot", "plan_snapshot":
+		return w, true
+	}
+	return w, false
+}
+func decodeNativeItemWithin(raw []byte, limit int) (nativeWireItem, bool) {
 	var w nativeWireItem
-	if len(raw) > 16<<10 || json.Unmarshal(raw, &w) != nil || w.V != 2 || w.ItemID == "" || w.TS.IsZero() || !nativeKind(w.Kind) {
+	if len(raw) > limit || json.Unmarshal(raw, &w) != nil || w.V != 2 || w.ItemID == "" || w.TS.IsZero() || !nativeKind(w.Kind) {
 		return w, false
 	}
 	switch w.Provenance {
@@ -82,7 +98,7 @@ func (s *ItemStore) applyNativeLocked(rec schema.JournalRecord, backfill bool) b
 }
 
 func (s *ItemStore) applyNativeDetailLocked(rec schema.JournalRecord) bool {
-	w, ok := decodeNativeItem(rec.Item)
+	w, ok := decodeNativeDetailItem(rec.Item)
 	if !ok || nativeRequestKind(w.Kind) || w.Kind == "input_outcome" || w.Kind == "request_set" {
 		return false
 	}

@@ -53,7 +53,7 @@ func nativeHistoryAvailable(st State, session string) bool {
 	}
 	for _, item := range st.Items {
 		if item.SessionID == session {
-			if _, ok := decodeNativeItem(item.Body); ok {
+			if _, ok := decodeNativeItemWithin(item.Body, 1<<20); ok {
 				return true
 			}
 		}
