@@ -1,0 +1,23 @@
+# Bounded native history recovery — 2026-10-18
+
+A real 110-tool-step input exposed an outcome-custody gap: when the daemon stayed offline through native completion, the startup 50-row page omitted the original user. The exact final assistant still named the admitted user as its parent, but the reducer had no input record, so the owner receipt stayed admitted and supervision could not identify the completion. The same gap affected initial launch inputs held in launch metadata.
+
+The online-rejoin control passed because OpenCode emits later updates for the original user while continuing its tool loop. That control does not cover completion while the daemon is offline. The tightened probes keep the private daemon down through the final delayed response, then rejoin after the original user has left even a 100-row page. They do not seed users or modify native history.
+
+| Actual native probe | Before | After |
+| --- | --- | --- |
+| Semantic input, daemon offline through completion | Exact parent retained; receipt remained admitted; zero recovered inputs | Exact owned user recovered; receipt completed with imported provenance |
+| Genuine initial launch input, daemon offline through completion | One original native user; zero recovered inputs | Same launch input recovered with completed outcome |
+| Initial launch with no selected variant, daemon offline through completion | Native original user omits variant; admission receipt spells it `default` | Exact input recovered as completed/imported while preserving both spellings |
+
+The fix uses the existing bounded message/input/outcome caches to identify candidate parents. It validates current-generation ownership, exact body/hash/time/full-row shape and model tuple. Complete current input proof avoids another native read; absent user proof uses one exact native message lookup. It accepts initial launch custody without registering or replaying a semantic operation. An executing operation whose admission response was lost can retain exact native admission evidence before folding its outcome. Unknown compaction parents cannot borrow another input's ownership.
+
+Retained outcome rank and source also restore into reducer state, including inputs already present in the startup page, so phone/supervision facts agree with durable receipts. Terminal errors outrank completion; newer equal-rank outcomes win; ties keep the retained outcome/source while preserving a known matching error name. Native absent/default variant spelling compares equivalently without rewriting recorded tuples; nondefault mismatches still refuse.
+
+A separate injected-clock regression found that successful delivery entered `completed` before native execution settled, allowing ordinary 24-hour cleanup to remove unfinished ownership. Bound native owner/phone inputs now remain retained until a qualified terminal envelope exists. Capacity remains a hard admission limit, including unresolved compaction. Qualified settlement starts the ordinary retention interval; generic owner/phone operations and native decisions keep their previous expiry behavior. This is clock-injected evidence, not a 25-hour elapsed workload.
+
+The [sanitized evidence](long-input-recovery.json) records exact native source/binary/fixture hashes, negative controls, original-input counts, scripted tool steps, daemon loss, outcomes and cleanup. Each successful long-input run used 118 scripted localhost requests and zero external model requests. The final default-variant probe on `1f5a8395` passed in 78.664 seconds including cleanup: the original initial input completed while the daemon was offline, recovered with imported provenance, and the following semantic and child stages also completed. Admission-response-loss composition is covered by assembled fixture tests; the actual long-loop probes retain admission before daemon death.
+
+At frozen `1f5a8395`, the composed `OpenCode|NativeSupervision|DefaultVariant` skeleton race suite passed in 80.507 seconds. Independent review found no source blocker; selected variant/rank/error-name regressions passed under race in 6.334 seconds. The first private default probe qualified initial recovery but asserted its later semantic receipt before observer settlement; its corrected retry uses the normal daemon-idle wait for that later stage. An incorrectly selected native executable was separately rejected by the version guard before worker launch. These fixture corrections required no production change.
+
+These probes qualify bounded recovery behavior, not elapsed 24h/72h reliability, external provider/model quality, or physical phone transport. They do not add native replay, infer compaction lineage, or replace native history with a transcript archive.
