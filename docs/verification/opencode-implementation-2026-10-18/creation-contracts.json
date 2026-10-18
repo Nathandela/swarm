@@ -1,0 +1,139 @@
+{
+  "native_version": "1.19.3",
+  "cases": [
+    {
+      "name": "authenticated-health-no-ownership-claim",
+      "passed": true
+    },
+    {
+      "name": "caller-id-explicit-binding",
+      "passed": true,
+      "response": {
+        "id": "ses_ef8e9dc448de854f0d1663fd12e5df3b",
+        "projectID": "global",
+        "agent": "build",
+        "model": {
+          "id": "deepseek-v4.1-flash-free",
+          "providerID": "opencode",
+          "variant": "max"
+        },
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "time": {
+          "created": 1792329383107,
+          "updated": 1792329383107
+        },
+        "title": "New session - 2026-10-18T13:16:23.107Z",
+        "location": {
+          "directory": "/private/tmp/swarm-opencode-implementation-20261018/contracts/project"
+        },
+        "subpath": "private/tmp/swarm-opencode-implementation-20261018/contracts/project"
+      }
+    },
+    {
+      "name": "changed-create-retains-original-needs-validation",
+      "passed": true
+    },
+    {
+      "name": "changed-create-location-model-retains-original",
+      "passed": true
+    },
+    {
+      "name": "legacy-binding-readable",
+      "passed": true,
+      "response": {
+        "id": "ses_ef8e9dc448de854f0d1663fd12e5df3b",
+        "slug": "proud-pixel",
+        "projectID": "global",
+        "directory": "/private/tmp/swarm-opencode-implementation-20261018/contracts/project",
+        "path": "private/tmp/swarm-opencode-implementation-20261018/contracts/project",
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "title": "New session - 2026-10-18T13:16:23.107Z",
+        "agent": "build",
+        "model": {
+          "id": "deepseek-v4.1-flash-free",
+          "providerID": "opencode",
+          "variant": "max"
+        },
+        "version": "1.19.3",
+        "time": {
+          "created": 1792329383107,
+          "updated": 1792329383107
+        }
+      }
+    },
+    {
+      "name": "unset-selection-under-native-config",
+      "passed": true,
+      "response": {
+        "id": "ses_d1d28021904f91d75e3ad37f6125754e",
+        "projectID": "global",
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "time": {
+          "created": 1792329383199,
+          "updated": 1792329383199
+        },
+        "title": "New session - 2026-10-18T13:16:23.199Z",
+        "location": {
+          "directory": "/private/tmp/swarm-opencode-implementation-20261018/contracts/project"
+        },
+        "subpath": "private/tmp/swarm-opencode-implementation-20261018/contracts/project"
+      }
+    },
+    {
+      "name": "create-sent-close-without-response-recovered-exact-id",
+      "passed": true
+    },
+    {
+      "name": "read-/session/status",
+      "passed": true,
+      "response": {}
+    },
+    {
+      "name": "read-/permission",
+      "passed": true,
+      "response": []
+    },
+    {
+      "name": "read-/question",
+      "passed": true,
+      "response": []
+    },
+    {
+      "name": "read-/session/ses_ef8e9dc448de854f0d1663fd12e5df3b/children",
+      "passed": true,
+      "response": []
+    },
+    {
+      "name": "caller-id-recovery-after-server-restart",
+      "passed": true
+    }
+  ],
+  "passed": true
+}

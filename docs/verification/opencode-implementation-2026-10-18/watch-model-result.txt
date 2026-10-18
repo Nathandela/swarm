@@ -1,0 +1,27 @@
+Test refinement committed; production unchanged (`git diff 55be0ff2..HEAD -- cmd/swarm/agentverbs.go` is empty).
+
+**Commit:** `073c409d` — `test: prove swarm watch honors --until and short timeouts`
+
+**Test changes (`cmd/swarm/agentverbs_test.go` only)**
+- Template regression now feeds each generated command observably distinct states and asserts returned `group` + `name`:
+  - multistate wait: `working` snapshot → `ready_for_review` event, asserted `ready_for_review`/`reviewable` (default `needs_input` matches neither).
+  - `change` wait: `needs_input` snapshot (which default `--until` would accept) → `working` event, asserted `working`/`changed`.
+  - Generated `--timeout 10m` is still pinned, then bounded to `2s` via `boundWatchTimeout` so a regression fails instead of hanging.
+- `TestRunWatch_Timeout` is now table-driven with both `flags first` and `session first` short-timeout variants (exit 2, timeout stderr, no stdout view).
+
+**Negative controls (TDD)** — temporary mutations, fully reverted:
+1. Pre-fix parser (`55be0ff2^`): template commands fail exit 1; session-first timeout fails `exit = 1, want 2`.
+2. Ignored `--until` (temporary `parseWatchUntil(needs_input)` mutation): multistate times out exit 2; change prints the snapshot `group=needs_input name=waiting`, failing the new assertions.
+
+**Commands**
+```
+go test -p 2 ./cmd/swarm -run 'TestRunWatch|TestParseWatchUntil|TestUsage_ListsAgentVerbs' -count=1 -timeout=3m -v
+```
+RED exit 1 (pre-fix parser, final tests); GREEN exit 0. Also green: `go build ./cmd/swarm`, `go vet ./cmd/swarm`, `gofmt` clean.
+
+**Evidence** (canonical external path still sandbox-denied; files are in-worktree, untracked):
+`evidence/watch-red.txt`, `evidence/watch-green.txt`, `evidence/watch-test-negative-control-prefix-parser.txt`, `evidence/watch-test-negative-control-until-ignored.txt`.
+
+**Risks / untested:** bounded fake-client unit seam only; no real daemon/socket run, whole-repo suite, `-race`, or lint (root integration). Fully interleaved argument order remains out of scope by design.
+
+IMPLEMENTATION_READY

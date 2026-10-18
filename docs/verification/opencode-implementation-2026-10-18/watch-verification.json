@@ -1,0 +1,112 @@
+{
+  "issue": "agents-tracker-79si",
+  "commits": [
+    "e1844845",
+    "8f8d6eff"
+  ],
+  "author_model": "opencode/deepseek-v4.1-flash-free",
+  "reasoning": "max",
+  "peer_review_model": "opencode/glm-5.3-flash-free",
+  "independent_review": "gpt-6-astra ultra",
+  "status": "implemented and locally verified",
+  "checks": [
+    {
+      "argv": [
+        "/Users/Nathan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.9.darwin-arm64/bin/go",
+        "build",
+        "-o",
+        "/private/tmp/swarm-opencode-implementation-20261018/bin/swarm-dev",
+        "./cmd/swarm"
+      ],
+      "exit": 0,
+      "seconds": 3.342
+    },
+    {
+      "argv": [
+        "/Users/Nathan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.9.darwin-arm64/bin/go",
+        "test",
+        "-p",
+        "2",
+        "./cmd/swarm",
+        "-count=1",
+        "-timeout=3m"
+      ],
+      "exit": 0,
+      "seconds": 43.364
+    },
+    {
+      "argv": [
+        "/Users/Nathan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.9.darwin-arm64/bin/go",
+        "test",
+        "-race",
+        "./cmd/swarm",
+        "-run",
+        "TestRunWatch|TestParseWatchUntil",
+        "-count=1",
+        "-timeout=3m"
+      ],
+      "exit": 0,
+      "seconds": 7.433
+    },
+    {
+      "argv": [
+        "/Users/Nathan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.9.darwin-arm64/bin/go",
+        "vet",
+        "./cmd/swarm"
+      ],
+      "exit": 0,
+      "seconds": 0.607
+    },
+    {
+      "argv": [
+        "/private/tmp/swarm-opencode-implementation-20261018/bin/swarm-dev",
+        "watch",
+        "ep-37f4ece7/hrq2hyyyz644hrgn",
+        "--until",
+        "needs_input,ready_for_review,completed",
+        "--timeout",
+        "2s"
+      ],
+      "exit": 0,
+      "seconds": 0.378
+    },
+    {
+      "argv": [
+        "/private/tmp/swarm-opencode-implementation-20261018/bin/swarm-dev",
+        "watch",
+        "ep-37f4ece7/hrq2hyyyz644hrgn",
+        "--until",
+        "change",
+        "--timeout",
+        "10ms"
+      ],
+      "exit": 2,
+      "seconds": 0.027
+    },
+    {
+      "argv": [
+        "/private/tmp/swarm-opencode-implementation-20261018/bin/swarm-dev",
+        "watch",
+        "ep-37f4ece7/hrq2hyyyz644hrgn",
+        "--bogus"
+      ],
+      "exit": 1,
+      "seconds": 0.02
+    },
+    {
+      "argv": [
+        "/private/tmp/swarm-opencode-implementation-20261018/bin/swarm-dev",
+        "watch",
+        "ep-37f4ece7/hrq2hyyyz644hrgn",
+        "extra"
+      ],
+      "exit": 1,
+      "seconds": 0.017
+    }
+  ],
+  "limitations": [
+    "Fully interleaved flag/id order remains unsupported; documented flags-first and session-first forms supported.",
+    "Private development binary tested; installed Swarm is unchanged."
+  ],
+  "publication": "local only"
+}

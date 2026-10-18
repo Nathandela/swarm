@@ -2,7 +2,7 @@
 
 This plan makes OpenCode a dependable Swarm worker for long-running work, cross-CLI communication, supervision, recovery, and structured phone interaction. It reuses Swarm's shim lifecycle, protocol, interaction journal, composer operation custody, and existing UI. It does not introduce another scheduler, broker, transcript archive, or provider framework.
 
-**Implementation status:** model discovery for the existing launch selector is implemented locally in this work session. The native integration described below is proposed work. The [baseline audit](../verification/opencode-parity-2026-10-18.md), [model strategy reviews and new API experiments](../verification/opencode-plan-review-2026-10-18.md), and source are the evidence; schema availability alone does not establish runtime guarantees.
+**Implementation status:** model discovery and the shared watch argument fix are implemented locally. Native implementation and qualification are in progress through Swarm workers using the built-in DeepSeek V4.1 Flash Free and GLM-5.3 Flash Free models. The [implementation evidence](../verification/opencode-implementation-2026-10-18.md), [baseline audit](../verification/opencode-parity-2026-10-18.md), [model strategy reviews and new API experiments](../verification/opencode-plan-review-2026-10-18.md), and source distinguish completed checks from proposed behavior; schema availability alone does not establish runtime guarantees.
 
 ## Decisions and evidence
 
@@ -141,6 +141,8 @@ For pinned 1.19.3, prefer narrowly qualified caller-ID session creation followed
 `attach` has no standalone model/agent/prompt flags. Apply selections through the qualified session/prompt API; prove that the first human prompt sees the intended model/agent. The current shim's 20-second fallback to original standalone argv is unsafe after native allocation: managed-required startup must fail explicitly or attach the exact saved root. Keep a terminal-only fallback as a separate **fresh launch choice before allocation**, not an automatic side effect after failure.
 
 If daemon death happens after native admission but before receipt persistence, recover by stable native ID only where content-bound replay is proved; otherwise retain uncertainty. If a backend dies, disable native actions, retain identity/history and re-establish ownership before resume. If TUI `/new`, fork, session selector or `/resume` changes what is displayed, either rebind through a proven handshake or visibly suspend semantic actions. Never keep sending to an old hidden root while `peek` shows another conversation.
+
+Pinned 1.19.3 source has no authoritative server-side current-view read: normal navigation changes local TUI state, and `/tui/select-session` is a command without a focus acknowledgement. The implementation therefore qualifies a small TUI plugin that checks `api.route.current` and invokes an exact-root legacy SDK action in the same callback. Earlier focus telemetry does not authorize daemon writes. This proves the view at dispatch, not an atomic native admission fence; subsequent navigation cannot retarget an already dispatched operation. The public plugin API also lacks a global live-draft getter, so Swarm's direct-input guard remains necessary and the bridge must not claim draft authority. Preserve existing native configuration origins and pure mode; unavailable bridge support leaves semantic mutations unavailable while native observation remains useful.
 
 ## Work packages in dependency order
 

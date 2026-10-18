@@ -1,0 +1,110 @@
+=== RUN   TestRunWatch_ImmediateMatch
+=== RUN   TestRunWatch_ImmediateMatch/needs_input
+=== RUN   TestRunWatch_ImmediateMatch/ready_for_review
+=== RUN   TestRunWatch_ImmediateMatch/completed
+--- PASS: TestRunWatch_ImmediateMatch (0.00s)
+    --- PASS: TestRunWatch_ImmediateMatch/needs_input (0.00s)
+    --- PASS: TestRunWatch_ImmediateMatch/ready_for_review (0.00s)
+    --- PASS: TestRunWatch_ImmediateMatch/completed (0.00s)
+=== RUN   TestRunWatch_MatchAfterEvents
+=== RUN   TestRunWatch_MatchAfterEvents/group_predicate
+=== RUN   TestRunWatch_MatchAfterEvents/change_matches_any_event_for_the_session
+--- PASS: TestRunWatch_MatchAfterEvents (0.00s)
+    --- PASS: TestRunWatch_MatchAfterEvents/group_predicate (0.00s)
+    --- PASS: TestRunWatch_MatchAfterEvents/change_matches_any_event_for_the_session (0.00s)
+=== RUN   TestRunWatch_MultipleAttentionStates
+=== RUN   TestRunWatch_MultipleAttentionStates/needs_input
+=== RUN   TestRunWatch_MultipleAttentionStates/ready_for_review
+=== RUN   TestRunWatch_MultipleAttentionStates/completed
+--- PASS: TestRunWatch_MultipleAttentionStates (0.00s)
+    --- PASS: TestRunWatch_MultipleAttentionStates/needs_input (0.00s)
+    --- PASS: TestRunWatch_MultipleAttentionStates/ready_for_review (0.00s)
+    --- PASS: TestRunWatch_MultipleAttentionStates/completed (0.00s)
+=== RUN   TestRunWatch_HandoffTemplateCommand
+=== RUN   TestRunWatch_HandoffTemplateCommand/swarm_watch_"$child_id"_--until_needs_input,ready_for_review,completed_--timeout_10m
+=== RUN   TestRunWatch_HandoffTemplateCommand/swarm_watch_"$child_id"_--until_change_--timeout_10m
+=== RUN   TestRunWatch_HandoffTemplateCommand/swarm_watch_"$child_id"_--until_change_--timeout_10m#01
+--- PASS: TestRunWatch_HandoffTemplateCommand (0.00s)
+    --- PASS: TestRunWatch_HandoffTemplateCommand/swarm_watch_"$child_id"_--until_needs_input,ready_for_review,completed_--timeout_10m (0.00s)
+    --- PASS: TestRunWatch_HandoffTemplateCommand/swarm_watch_"$child_id"_--until_change_--timeout_10m (0.00s)
+    --- PASS: TestRunWatch_HandoffTemplateCommand/swarm_watch_"$child_id"_--until_change_--timeout_10m#01 (0.00s)
+=== RUN   TestParseWatchUntil_MultipleAttentionStatesValidation
+--- PASS: TestParseWatchUntil_MultipleAttentionStatesValidation (0.00s)
+=== RUN   TestRunWatch_Timeout
+--- PASS: TestRunWatch_Timeout (0.08s)
+=== RUN   TestRunWatch_BadArgs
+=== RUN   TestRunWatch_BadArgs/no_session_id
+=== RUN   TestRunWatch_BadArgs/unknown_--until_value
+=== RUN   TestRunWatch_BadArgs/unknown_session
+=== RUN   TestRunWatch_BadArgs/extra_positional_after_id
+=== RUN   TestRunWatch_BadArgs/extra_positional_after_flags-first_id
+=== RUN   TestRunWatch_BadArgs/empty_id_then_a_real_id
+=== RUN   TestRunWatch_BadArgs/empty_id_before_flags
+=== RUN   TestRunWatch_BadArgs/unknown_flag_after_id
+=== RUN   TestRunWatch_BadArgs/missing_flag_value_after_id
+=== RUN   TestRunWatch_BadArgs/unknown_--until_value_after_id
+--- PASS: TestRunWatch_BadArgs (0.00s)
+    --- PASS: TestRunWatch_BadArgs/no_session_id (0.00s)
+    --- PASS: TestRunWatch_BadArgs/unknown_--until_value (0.00s)
+    --- PASS: TestRunWatch_BadArgs/unknown_session (0.00s)
+    --- PASS: TestRunWatch_BadArgs/extra_positional_after_id (0.00s)
+    --- PASS: TestRunWatch_BadArgs/extra_positional_after_flags-first_id (0.00s)
+    --- PASS: TestRunWatch_BadArgs/empty_id_then_a_real_id (0.00s)
+    --- PASS: TestRunWatch_BadArgs/empty_id_before_flags (0.00s)
+    --- PASS: TestRunWatch_BadArgs/unknown_flag_after_id (0.00s)
+    --- PASS: TestRunWatch_BadArgs/missing_flag_value_after_id (0.00s)
+    --- PASS: TestRunWatch_BadArgs/unknown_--until_value_after_id (0.00s)
+=== RUN   TestUsage_ListsAgentVerbs
+--- PASS: TestUsage_ListsAgentVerbs (0.00s)
+=== RUN   TestReviewerWatchArgumentGrammar
+=== RUN   TestReviewerWatchArgumentGrammar/bare
+=== RUN   TestReviewerWatchArgumentGrammar/old_flags_first
+=== RUN   TestReviewerWatchArgumentGrammar/new_session_first
+=== RUN   TestReviewerWatchArgumentGrammar/new_equals_form
+=== RUN   TestReviewerWatchArgumentGrammar/old_single_dash_form
+=== RUN   TestReviewerWatchArgumentGrammar/old_end_flags
+=== RUN   TestReviewerWatchArgumentGrammar/plain_delimiter
+=== RUN   TestReviewerWatchArgumentGrammar/trailing_delimiter
+=== RUN   TestReviewerWatchArgumentGrammar/new_flags_then_delimiter
+=== RUN   TestReviewerWatchArgumentGrammar/new_change_must_use_event
+=== RUN   TestReviewerWatchArgumentGrammar/new_multi_must_honor_nondefault
+=== RUN   TestReviewerWatchArgumentGrammar/new_timeout_honored
+=== RUN   TestReviewerWatchArgumentGrammar/missing_id
+=== RUN   TestReviewerWatchArgumentGrammar/only_delimiter
+=== RUN   TestReviewerWatchArgumentGrammar/empty_id
+=== RUN   TestReviewerWatchArgumentGrammar/empty_extra_after_id
+=== RUN   TestReviewerWatchArgumentGrammar/empty_before_delimiter
+=== RUN   TestReviewerWatchArgumentGrammar/empty_until
+=== RUN   TestReviewerWatchArgumentGrammar/bad_timeout
+=== RUN   TestReviewerWatchArgumentGrammar/missing_timeout_value
+=== RUN   TestReviewerWatchArgumentGrammar/unknown_flag
+=== RUN   TestReviewerWatchArgumentGrammar/delimiter_preserves_positional_tail
+=== RUN   TestReviewerWatchArgumentGrammar/old_trailing_flags_remain_refusal
+=== RUN   TestReviewerWatchArgumentGrammar/extra_positional
+--- PASS: TestReviewerWatchArgumentGrammar (0.01s)
+    --- PASS: TestReviewerWatchArgumentGrammar/bare (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/old_flags_first (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/new_session_first (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/new_equals_form (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/old_single_dash_form (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/old_end_flags (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/plain_delimiter (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/trailing_delimiter (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/new_flags_then_delimiter (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/new_change_must_use_event (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/new_multi_must_honor_nondefault (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/new_timeout_honored (0.01s)
+    --- PASS: TestReviewerWatchArgumentGrammar/missing_id (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/only_delimiter (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/empty_id (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/empty_extra_after_id (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/empty_before_delimiter (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/empty_until (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/bad_timeout (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/missing_timeout_value (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/unknown_flag (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/delimiter_preserves_positional_tail (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/old_trailing_flags_remain_refusal (0.00s)
+    --- PASS: TestReviewerWatchArgumentGrammar/extra_positional (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/cmd/swarm	0.538s

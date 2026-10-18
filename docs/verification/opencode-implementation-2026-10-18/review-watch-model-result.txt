@@ -1,0 +1,38 @@
+All checks complete. Final consolidated review report:
+
+---
+
+## REVIEW — 55be0ff2 "fix: accept session-first swarm watch arguments" (agents-tracker-79si)
+
+**Read-only honored:** reviewed tree untouched (detached HEAD = 55be0ff2, `git status` clean); no source edits, commits, pushes, or bd calls.
+
+### Verification performed independently (this session)
+- `go build ./...` OK; `go vet ./cmd/swarm` OK; `gofmt -l cmd/swarm` clean.
+- Focused & associated-verb suite **PASS**: `TestRunWatch_*` (immediate-match, event-filter, multi-state, timeout/exit 2, BadArgs ×10 adversarial, HandoffTemplateCommand ×3 template subtests), `TestParseWatchUntil_*`, `TestRunKill`, `TestRunSend`, `TestRunPeek`, `TestRunLS`, with `-race` (race-clean), plus full `go test ./cmd/swarm` (41s, PASS).
+- Environment: all 6 `SWARM_*` env keys unloaded before every run (0 remaining; values never printed), native `go1.26.9` first in PATH, `GOTOOLCHAIN=local`. **Deviation:** sandbox denies the instructed `GOCACHE=/private/tmp/swarm-opencode-plan-gocache`/`TMPDIR=/private/tmp/ocimptmp` paths; equivalent ephemeral cache/tmpl used under the allowed `/private/tmp/ocimptmp/opencode/*`.
+- Negative control not rerun per Root's direction (Root verified RED independently; Astra ran the 24-case semantics matrix). My static trace of the pre-fix parser independently predicts exactly 4 focused RED failures (template test + the 3 id-then-bad-flag cases whose old "need exactly one session id" message lacks the asserted cause) — consistent with Root's attestation.
+
+### Correctness probes (all resolved clean)
+| Challenge | Verdict | Evidence |
+|---|---|---|
+| Flag value resembling a flag | Safe | Peel only skips leading tokens starting `-` (agentverbs.go:109); values after flags are consumed by FlagSet; real ids can never start `-` (`persist.ValidID`, internal/persist/persist.go:184) |
+| Empty args/id | Safe | `""` never peeled, never becomes id; `["",id]`/`["",flags]`/`[id,""]` all refuse exit 1 (agentverbs_test.go:551-552) |
+| `--` terminator | Consistent | `-- --until` leftover → arity refusal; `-- local/a1` pre-existing good path preserved; `[id,--,extra]` → exclusions → refusal |
+| Extra positionals / trailing flags | Still strict, pinned | agentverbs_test.go:549-555; message-precedence for id-first `--bogus` shifted arity→flag error, still exit 1, intentional |
+| Template regression faithfulness | Faithful for current text | Reads real template (lines 51/53/54), replaces literal `"$child_id"`, Field-splits ≙ post-shell argv; drives real `runWatch` through BOTH match paths (snapshot for multi-state; stream for `change`), asserts JSON id |
+| Snapshot-before-stream | Unchanged | Subscribe-before-List retained (agentverbs.go:136-143); diff touches only arg peeling |
+| Error/help compat | Unchanged contract | ContinueOnError→stderr+usage, exit 1; timeout exit 2 and unknown-session exit 1 untouched |
+| Accidental broad parse | None | Change confined to `runWatch`; `runLS`/`runKill`/`sendpeek`/dispatcher (`main.go:164`, verbatim `args[1:]`) untouched; aligns with ADR-010 A4's documented session-first form and `takeSessionID` precedent (sendpeek.go:135) |
+
+### Findings (actionable only)
+1. **(Minor, already in flight by author)** `TestRunWatch_HandoffTemplateCommand` (cmd/swarm/agentverbs_test.go:434-470) cannot distinguish the `--until change` subtests from default-predicate behavior (fixture snapshot needs_input == flag default), nor observe the `--timeout 10m` value (10m == default). Text assertions at lines 442-443 partially cover. Root confirms the author is now strengthening change-vs-default and session-first timeout — should land alongside.
+2. **(Nit, optional)** Usage text cmd/swarm/main.go:79-80 omits `<session>` on the `swarm watch` help line while `send`/`peek` lines show it — pre-dates the fix; one-line alignment would complete the "documented form" story.
+3. **(Nit, optional)** Two session-first peels now coexist with slightly divergent empty-string handling (`takeSessionID`, sendpeek.go:135-139, tolerates `""` as id; `runWatch`'s inline peel, agentverbs.go:108-112, skips it). Justified divergence (watch must also accept flags-first, send/peek refuse at exit 2), both fail safely; a shared helper or cross-reference comment would prevent future drift.
+4. **(Informational)** `swarm watch <id> --` (no-op trailing terminator) is newly accepted pre/post — consistent with `swarm watch <id>`, not a hazard. `golangci-lint` could not run here (binary "Bad CPU type"); build+vet+fmt+tests cover this diff's surface.
+
+### Verdict
+**Production-ready within its stated scope** (accept session-first and flags-first forms for `swarm watch` while rejecting malformed options/extra arguments): minimal, faithful-tested, race-clean, consistent with existing session-first conventions, no accidental widening beyond one harmless no-op `--` case. Missing decisive evidence: none for this scope (RED/GREEN attested by Root, GREEN independently re-verified here; RED analystically confirmed). This fixes bug 79si only — the worktree-carry handoff bug (xl6k) and the broader OpenCode-parity backlog in docs/verification/opencode-parity-2026-10-18.md remain open and are explicitly **not** covered by this verdict.
+
+F1 should be tracked to completion with the in-flight test strengthening; no further implementation iterations are requested for the parser itself.
+
+REVIEW_COMPLETE
