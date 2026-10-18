@@ -1,0 +1,6 @@
+# github.com/Nathandela/swarm/internal/phonecore [github.com/Nathandela/swarm/internal/phonecore.test]
+internal/phonecore/native_read_route_test.go:9:85: unknown field NativeInteractionVersion in struct literal of type schema.SessionCapabilities
+internal/phonecore/native_read_route_test.go:13:9: record.NativeInteractionVersion undefined (type *schema.SessionCapabilities has no field or method NativeInteractionVersion)
+internal/phonecore/native_read_route_test.go:15:9: record.NativeInteractionVersion undefined (type *schema.SessionCapabilities has no field or method NativeInteractionVersion)
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL
