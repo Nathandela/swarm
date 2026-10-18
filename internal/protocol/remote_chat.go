@@ -229,7 +229,7 @@ func (cc *clientConn) handleComposerSend(c Control) {
 				cc.replyComposerCached(c.SessionID, raw)
 				return
 			case composerPhaseExecuting, composerPhaseOutcomeUnknown:
-				if reader, ok := cc.srv.d.(SemanticOperationReader); ok && c.Op == OpSemanticSend {
+				if reader, ok := cc.srv.d.(SemanticOperationReader); ok {
 					_, _ = reader.SemanticOperation(local, c.OperationID)
 					phase, raw, readErr := exec.ClaimComposerOperation(c.OperationID, action, local, body.SessionInstance, requestHash)
 					if readErr == nil && phase == composerPhaseCompleted {

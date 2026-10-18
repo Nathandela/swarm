@@ -443,8 +443,14 @@ func recordLocalPublicationOutcome(st *State, p PendingPublication, code string)
 
 func settleComposerItems(st *State) {
 	for _, echoed := range st.Items {
-		if echoed.Kind != KindUserMessage || echoed.Source != "phone" || echoed.OperationID == "" {
+		if echoed.Source != "phone" || echoed.OperationID == "" {
 			continue
+		}
+		if echoed.Kind != KindUserMessage {
+			w, ok := decodeNativeItem(echoed.Body)
+			if !ok || w.Kind != "message_snapshot" || w.Role != "user" || w.Provenance == "imported" || w.Truncated || echoed.Truncated || w.Source != echoed.Source || w.OperationID != echoed.OperationID || w.Text != echoed.Text {
+				continue
+			}
 		}
 		for i := range st.PendingPublications {
 			p := st.PendingPublications[i]

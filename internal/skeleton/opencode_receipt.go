@@ -106,6 +106,9 @@ func qualifyObservedOpenCodeAdmission(operationID string, intent openCodeSendInt
 }
 
 func validOpenCodeIntent(operationID, local string, intent openCodeSendIntent) bool {
+	if intent.Source != "" && intent.Source != adapter.SourceOwner && intent.Source != adapter.SourcePhone && intent.Source != "supervisor" {
+		return false
+	}
 	id := intent.Identity
 	generation, ge := hex.DecodeString(id.BackendGeneration)
 	hash, he := hex.DecodeString(intent.TextHash)
@@ -181,7 +184,7 @@ func (d *Daemon) recordOpenCodeAdmission(operationID string, intent openCodeSend
 
 func (d *Daemon) semanticOperation(local, operationID string) (protocol.SemanticMessageReceipt, error) {
 	rec, ok := d.core.ComposerOperation(operationID)
-	if !ok || rec.Action != protocol.OpSemanticSend || rec.SessionID != local {
+	if !ok || rec.Action != protocol.OpSemanticSend && rec.Action != protocol.ActionComposerSend || rec.SessionID != local {
 		return protocol.SemanticMessageReceipt{}, errors.New("semantic operation does not belong to this session")
 	}
 	result := protocol.SemanticMessageReceipt{OperationID: operationID, Session: local, SessionInstance: rec.SessionInstance, State: "uncertain"}

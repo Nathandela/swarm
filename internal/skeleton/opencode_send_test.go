@@ -37,7 +37,7 @@ type openCodeSendFixture struct {
 	blockDispatch        atomic.Bool
 	dispatchEntered      chan struct{}
 	dispatchRelease      chan struct{}
-	historyPagingFail atomic.Bool
+	historyPagingFail    atomic.Bool
 }
 
 // The real daemon, shim writer and owner protocol surround a private native bridge fixture.

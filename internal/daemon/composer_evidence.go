@@ -11,11 +11,14 @@ func (d *Daemon) ComposerOperation(operationID string) (idempotency.Record, bool
 }
 
 func (d *Daemon) UnobservedSemanticExecution(session, exceptOperation string) bool {
-	return d.idem.UnobservedExecution("semantic_send", session, exceptOperation)
+	return d.UnobservedSemanticOperation(session, exceptOperation) != ""
 }
 
 func (d *Daemon) UnobservedSemanticOperation(session, exceptOperation string) string {
-	return d.idem.UnobservedOperation("semantic_send", session, exceptOperation)
+	if id := d.idem.UnobservedOperation("semantic_send", session, exceptOperation); id != "" {
+		return id
+	}
+	return d.idem.UnobservedOperation("composer_send", session, exceptOperation)
 }
 
 func (d *Daemon) BindSemanticRequest(operationID string, request []byte) error {
@@ -25,7 +28,7 @@ func (d *Daemon) BindSemanticRequest(operationID string, request []byte) error {
 	}
 	defer unlock()
 	rec, ok := d.idem.Get(operationID)
-	if !ok || rec.Action != "semantic_send" {
+	if !ok || !nativeInputAction(rec.Action) {
 		return errors.New("native request has no semantic operation custody")
 	}
 	return d.idem.SetRequest(operationID, request)
@@ -38,14 +41,14 @@ func (d *Daemon) ObserveSemanticReceipt(operationID string, receipt []byte) erro
 	}
 	defer unlock()
 	rec, ok := d.idem.Get(operationID)
-	if !ok || rec.Action != "semantic_send" {
+	if !ok || !nativeInputAction(rec.Action) {
 		return errors.New("native receipt has no semantic operation custody")
 	}
 	return d.idem.SetEvidence(operationID, receipt)
 }
 
 func (d *Daemon) SemanticRequestOperations(session string) []string {
-	return d.idem.RequestOperations("semantic_send", session)
+	return append(d.idem.RequestOperations("semantic_send", session), d.idem.RequestOperations("composer_send", session)...)
 }
 func (d *Daemon) CheckpointSemanticReceipt(operationID string, expected, next []byte) error {
 	unlock, err := d.lockComposerCustody()
@@ -54,10 +57,14 @@ func (d *Daemon) CheckpointSemanticReceipt(operationID string, expected, next []
 	}
 	defer unlock()
 	rec, ok := d.idem.Get(operationID)
-	if !ok || rec.Action != "semantic_send" || len(rec.Request) == 0 {
+	if !ok || !nativeInputAction(rec.Action) || len(rec.Request) == 0 {
 		return errors.New("native checkpoint has no semantic request custody")
 	}
 	return d.idem.CompareEvidence(operationID, expected, next)
+}
+
+func nativeInputAction(action string) bool {
+	return action == "semantic_send" || action == "composer_send"
 }
 
 // Composer writers share Close's final writer barrier before singleton handoff.

@@ -567,8 +567,18 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 				"composer send names session incarnation %q, but %q is current; refresh before sending", req.SessionInstance, currentInstance)
 		}
 	}
-	if source == adapter.SourceOwner && meta.RequiredRuntime == persist.RequiredRuntimeOpenCode {
-		return d.sendOpenCodeSemantic(local, operationID, req, begin, lane)
+	if meta.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+		if source == adapter.SourcePhone {
+			cap, ok := d.sessionCapabilities(local)
+			if !ok || cap.Validate() != nil || !cap.NativeComposer {
+				return protocol.CodeStructuredUnsupported, errors.New("OpenCode native phone composer is not currently proven; nothing was submitted")
+			}
+		}
+		code, err := d.sendOpenCodeSemantic(local, operationID, req, begin, lane, source)
+		if err == nil && source == adapter.SourcePhone {
+			d.notePhoneActivity(local)
+		}
+		return code, err
 	}
 	if code, err := d.requireStructuredComposer(local, req.Session); err != nil {
 		return code, err

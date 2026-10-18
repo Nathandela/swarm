@@ -294,7 +294,7 @@ func (s *Store) transition(operationID string, phase Phase, outcome []byte, setO
 	if !ok {
 		return fmt.Errorf("idempotency: unknown operation_id %q", operationID)
 	}
-	if phase == PhaseFailed && (rec.Action == "semantic_send" || rec.Action == "native_decide") && len(rec.Evidence) > 0 {
+	if phase == PhaseFailed && (rec.Action == "semantic_send" || rec.Action == "native_decide" || rec.Action == "composer_send" && len(rec.Request) > 0) && len(rec.Evidence) > 0 {
 		return errors.New("idempotency: native evidence cannot become a failed delivery")
 	}
 	rec.Phase = phase
@@ -439,8 +439,8 @@ func (s *Store) compactLocked(now time.Time) error {
 }
 
 func (s *Store) expired(rec Record, now time.Time) bool {
-	// An unresolved native write must never age into a fresh owner semantic send.
-	if (rec.Action == "semantic_send" || rec.Action == "native_decide") && unresolvedPhase(rec.Phase) {
+	// An unresolved native write must never age into another fresh input or decision.
+	if (rec.Action == "semantic_send" || rec.Action == "native_decide" || rec.Action == "composer_send" && len(rec.Request) > 0) && unresolvedPhase(rec.Phase) {
 		return false
 	}
 	return s.opts.TTL > 0 && now.Sub(rec.UpdatedAt) > s.opts.TTL

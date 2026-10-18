@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -59,7 +60,9 @@ func TestOpenCodePhoneSendRetainsNativeAdmissionAndPhoneAttribution(t *testing.T
 		t.Fatalf("phone send lacks exact durable native custody: %+v intent=%+v calls=%d", record, intent, f.calls.Load())
 	}
 	// Rebuild attribution from durable custody, as a new daemon does.
-	f.d.nativeReceipts = openCodeReceiptIndexes{}
+	f.d.nativeReceipts.mu.Lock()
+	f.d.nativeReceipts.sessions = nil
+	f.d.nativeReceipts.mu.Unlock()
 	view := OpenCodeView{Root: intent.Identity.RootID, Generation: intent.Identity.BackendGeneration, Inputs: []OpenCodeInput{{MessageID: intent.MessageID}}}
 	owned := f.d.ownedOpenCodeInputs(f.binding.WorkerID, view)
 	if owned[intent.MessageID].operation != "phone:admitted" || owned[intent.MessageID].intent.Source != adapter.SourcePhone {
@@ -78,7 +81,7 @@ func TestOpenCodeLostPhoneAdmissionFencesOtherSourcesAndReconcilesWithoutPost(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.client.SemanticSend(id, f.request); !errors.Is(err, protocol.ErrSemanticSendRejected) || f.calls.Load() != 1 {
+	if err := f.client.SemanticSend(id, f.request); err == nil || !strings.Contains(err.Error(), string(protocol.CodeOutcomeUnknown)) || f.calls.Load() != 1 {
 		t.Fatalf("owner overtook unconfirmed phone input: err=%v calls=%d", err, f.calls.Load())
 	}
 	f.rowAvailable.Store(true)

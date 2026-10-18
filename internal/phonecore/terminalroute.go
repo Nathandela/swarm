@@ -95,7 +95,7 @@ func RouteSession(rec *schema.SessionCapabilities, profile schema.RemoteProfileV
 // provider that never had structured chat are different states with different
 // explanations, and only the record can tell them apart.
 func ComposerAvailable(rec *schema.SessionCapabilities, profile schema.RemoteProfileV1) bool {
-	return rec != nil && rec.StructuredChat && RouteSession(rec, profile) == DestinationChat
+	return rec != nil && (rec.StructuredChat || rec.NativeComposer) && RouteSession(rec, profile) == DestinationChat
 }
 
 // TerminalControlAvailable is ComposerAvailable's opposite number on the other destination,

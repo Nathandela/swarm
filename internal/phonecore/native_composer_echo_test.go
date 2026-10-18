@@ -11,7 +11,7 @@ import (
 func TestNativeComposerSettlementRequiresExactQualifiedPhoneUserSnapshot(t *testing.T) {
 	for _, tc := range []struct {
 		name, role, provenance, source, operation, text string
-		truncated, delivered bool
+		truncated, delivered                            bool
 	}{
 		{"exact_live", "user", "live", "phone", "op-native", "hello", false, true},
 		{"exact_reconciled", "user", "reconciled", "phone", "op-native", "hello", false, true},
