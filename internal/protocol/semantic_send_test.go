@@ -96,7 +96,9 @@ func TestSemanticClientRefusesUnnegotiatedRoute(t *testing.T) {
 func TestSemanticClientDoesNotDiscardPriorCustodyOnExpiredRetry(t *testing.T) {
 	stub := newDurableComposerStub()
 	c, err := Dial(serveOwnerAPI(t, stub), []string{CapSemanticSend})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = c.Close() })
 	req := ComposerSendReq{Session: c.EndpointID() + "/sess1", SessionInstance: "test-instance", Text: "original"}
 	err = c.SemanticSend(semanticTestID(time.Now().Add(-2*time.Hour), "e"), req)

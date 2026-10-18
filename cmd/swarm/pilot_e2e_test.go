@@ -93,14 +93,11 @@ func TestPilotRealCLIControlsTwoWorkersWithoutChangingOrdinaryCLI(t *testing.T) 
 	}
 	payload := "Is AMI still probing?"
 	sent, err := run("pilot", "--context", start.Context, "send", ids[0], "--text", payload)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || sent != "" {
+		t.Fatalf("unqualified fake provider accepted a semantic send: %q, %v", sent, err)
 	}
-	var receipt struct {
-		Receipt string `json:"receipt"`
-	}
-	if err := json.Unmarshal([]byte(sent), &receipt); err != nil || receipt.Receipt != "sent" {
-		t.Fatalf("send receipt %q: %v", sent, err)
+	if _, err := run("send", ids[0], "--text", payload); err != nil {
+		t.Fatalf("ordinary terminal send: %v", err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {

@@ -14,6 +14,8 @@ import (
 const semanticReplayWindow = time.Hour
 const semanticClockSkew = 30 * time.Second
 
+var ErrSemanticSendRejected = errors.New("semantic message rejected without a new effect")
+
 // NewSemanticOperationID creates an owner operation ID to persist before sending.
 func NewSemanticOperationID() (string, error) {
 	var nonce [16]byte
@@ -29,7 +31,7 @@ func (c *Client) SemanticSend(operationID string, req ComposerSendReq) error {
 		return errors.New("protocol: semantic messages require an updated daemon; run swarm daemon restart")
 	}
 	if !validSemanticOperationID(operationID, time.Now()) {
-		return errors.New("protocol: invalid or expired semantic operation ID")
+		return errors.New("protocol: invalid or expired semantic operation ID; an earlier attempt may still have an effect")
 	}
 	resp, err := c.requestWithTimeout(Control{Op: OpSemanticSend, EndpointID: c.endpointID,
 		SessionID: req.Session, OperationID: operationID, BodyVersion: 1, ComposerSend: &req}, 35*time.Second)
@@ -37,6 +39,9 @@ func (c *Client) SemanticSend(operationID string, req ComposerSendReq) error {
 		return err
 	}
 	if resp.Op == OpError {
+		if resp.ErrorCode == CodeInputBusy || resp.ErrorCode == CodeStaleTurn || resp.ErrorCode == CodeStaleInstance || resp.ErrorCode == CodeStructuredUnsupported {
+			return fmt.Errorf("%w: %s (%s)", ErrSemanticSendRejected, resp.Error, resp.ErrorCode)
+		}
 		return fmt.Errorf("protocol: semantic message: %s (%s)", resp.Error, resp.ErrorCode)
 	}
 	if resp.Op != OpOK || resp.OperationID != operationID {

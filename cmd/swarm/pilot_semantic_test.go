@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Nathandela/swarm/internal/protocol"
 	"os"
 	"testing"
 	"time"
-	"github.com/Nathandela/swarm/internal/protocol"
 )
 
 func TestPilotSemanticUncertainSendPreservesExactRetryCustody(t *testing.T) {
@@ -73,7 +73,9 @@ func TestPilotUncertainSubmissionDoesNotClaimAnUnrelatedFreshReply(t *testing.T)
 	c.sessions[0].Group = "ready_for_review"
 	c.sessions[0].GroupEnteredAt = time.Now().Add(time.Second)
 	code, out, stderr := pilotCall(c, "--context", path, "await", "local/ami", "--timeout", "1ms")
-	var receipt struct { Receipt string `json:"receipt"` }
+	var receipt struct {
+		Receipt string `json:"receipt"`
+	}
 	if json.Unmarshal([]byte(out), &receipt) != nil || code != watchTimeoutExit || receipt.Receipt != "waiting" {
 		t.Fatalf("ambiguous submission borrowed an unrelated reply: exit%d %q %q", code, out, stderr)
 	}

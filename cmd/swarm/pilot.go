@@ -453,6 +453,11 @@ func pilotSend(path string, args []string, c agentClient, stdout, stderr io.Writ
 		return 1
 	}
 	if err := sender.SemanticSend(pending.OperationID, req); err != nil {
+		if errors.Is(err, protocol.ErrSemanticSendRejected) {
+			if removeErr := os.Remove(pilotPendingPath(path, id)); removeErr != nil {
+				_, _ = fmt.Fprintf(stderr, "pilot: send: remove rejected pending operation: %v\n", removeErr)
+			}
+		}
 		_, _ = fmt.Fprintf(stderr, "pilot: send: operation_id=%s: %v\n", pending.OperationID, err)
 		return 1
 	}
@@ -618,7 +623,7 @@ func pilotAwait(path string, args []string, remaining time.Duration, c agentClie
 	if pilotHasFreshReply(c, id, pending) {
 		return pilotAwaitReceipt(c, row, true, stdout, stderr)
 	}
-	if pilotNewReply(row, pending.SentAt) {
+	if !pending.Uncertain && pilotNewReply(row, pending.SentAt) {
 		return pilotAwaitReceipt(c, row, false, stdout, stderr)
 	}
 	deadline := time.NewTimer(*timeout)
@@ -636,6 +641,9 @@ func pilotAwait(path string, args []string, remaining time.Duration, c agentClie
 			if ev.Session.ID != id {
 				continue
 			}
+			if pending.Uncertain {
+				continue
+			}
 			replied := pilotHasFreshReply(c, id, pending)
 			if !replied && ev.Session.Status.Process == status.ProcessRunning &&
 				(ev.Session.Group == status.GroupWorking || !pilotNewReply(ev.Session, pending.SentAt)) {
@@ -648,7 +656,11 @@ func pilotAwait(path string, args []string, remaining time.Duration, c agentClie
 				_, _ = fmt.Fprintf(stderr, "pilot: await: %v\n", err)
 				return 1
 			}
-			_ = pilotJSON(stdout, stderr, map[string]any{"state": current, "status": "no_fresh_reply_confirmed"})
+			result := map[string]any{"state": current, "status": "no_fresh_reply_confirmed"}
+			if pending.Uncertain {
+				result["status"], result["operation_id"] = "delivery_uncertain", pending.OperationID
+			}
+			_ = pilotJSON(stdout, stderr, result)
 			return watchTimeoutExit
 		}
 	}
@@ -660,7 +672,7 @@ func pilotNewReply(row protocol.SessionView, sentAt time.Time) bool {
 }
 
 func pilotHasFreshReply(c agentClient, id string, pending pilotPending) bool {
-	if pending.SentAt.IsZero() || !pending.HistoryReady {
+	if pending.SentAt.IsZero() || !pending.HistoryReady || pending.Uncertain {
 		return false
 	}
 	h, ok := c.(pilotHistoryClient)
