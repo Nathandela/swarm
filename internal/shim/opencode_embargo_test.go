@@ -66,11 +66,11 @@ func TestOpenCodeRuntimeRejectsUngatedNativeStartup(t *testing.T) {
 	for _, args := range [][]string{{"--prompt", "hello"}, {"--prompt=hello"}, {"--session", "ses_" + strings.Repeat("a", 32)}, {"--continue"}, {"--fork"}, {"--port", "0"}} {
 		cfg := base
 		cfg.Argv = append([]string{"/native/opencode"}, args...)
-		if validateOpenCodeConfig(cfg) == nil {
+		if ValidateOpenCodeConfig(cfg) == nil {
 			t.Fatalf("native startup bypass accepted: %q", args)
 		}
 	}
-	if err := validateOpenCodeConfig(base); err != nil {
+	if err := ValidateOpenCodeConfig(base); err != nil {
 		t.Fatal(err)
 	}
 }

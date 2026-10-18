@@ -14,7 +14,7 @@ import (
 func TestAccountEmbargoBlocksEveryUserInputPlaneUntilDurableRelease(t *testing.T) {
 	dir := t.TempDir()
 	cfg := Config{SessionDir: dir, AccountBinding: &accounts.Binding{}, InputEmbargo: "incident", InputEmbargoToken: strings.Repeat("a", 32)}
-	e, err := openAccountEmbargo(cfg)
+	e, err := openInputEmbargo(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestAccountEmbargoBlocksEveryUserInputPlaneUntilDurableRelease(t *testing.T
 	if err := e.release(cfg.InputEmbargo, strings.Repeat("b", 32)); err == nil {
 		t.Fatal("wrong authority released embargo")
 	}
-	reopened, err := openAccountEmbargo(cfg)
+	reopened, err := openInputEmbargo(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestAccountEmbargoRejectsUnsafePersistedRecord(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, AccountInputEmbargoFile)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openAccountEmbargo(Config{SessionDir: dir, AccountBinding: &accounts.Binding{}, InputEmbargo: "incident", InputEmbargoToken: strings.Repeat("a", 32)}); err == nil {
+	if _, err := openInputEmbargo(Config{SessionDir: dir, AccountBinding: &accounts.Binding{}, InputEmbargo: "incident", InputEmbargoToken: strings.Repeat("a", 32)}); err == nil {
 		t.Fatal("symlink released input")
 	}
 }

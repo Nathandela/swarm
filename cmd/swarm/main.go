@@ -627,6 +627,7 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
+	OpenCode             *shim.OpenCodeConfig `json:"opencode,omitempty"`
 	AccountBinding       *accounts.Binding    `json:"account_binding,omitempty"`
 	AccountProjectionRef string               `json:"account_projection_ref,omitempty"`
 	AccountStateRoot     string               `json:"account_state_root,omitempty"`
@@ -683,6 +684,7 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
+		OpenCode:             lc.OpenCode,
 		AccountBinding:       lc.AccountBinding,
 		AccountProjectionRef: lc.AccountProjectionRef,
 		AccountStateRoot:     lc.AccountStateRoot,
@@ -738,6 +740,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 	fs := flag.NewFlagSet("shim", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "path to the JSON launch config")
+	requireOpenCode := fs.Bool("require-opencode-tui", false, "require a managed OpenCode TUI launch")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprint(stderr, shimUsage)
 		return 2
@@ -755,6 +758,10 @@ func runShim(args []string, _, stderr io.Writer) int {
 	var lc shimLaunchConfig
 	if err := json.Unmarshal(data, &lc); err != nil {
 		_, _ = fmt.Fprintf(stderr, "shim: parse config: %v\n", err)
+		return 2
+	}
+	if err := validateShimRuntime(lc, *requireOpenCode); err != nil {
+		_, _ = fmt.Fprintln(stderr, "shim:", err)
 		return 2
 	}
 
@@ -780,6 +787,13 @@ func runShim(args []string, _, stderr io.Writer) int {
 		}
 	}
 	return exit
+}
+
+func validateShimRuntime(lc shimLaunchConfig, required bool) error {
+	if required != (lc.OpenCode != nil) {
+		return fmt.Errorf("managed OpenCode launch requires matching --require-opencode-tui and runtime configuration")
+	}
+	return shim.ValidateOpenCodeConfig(shimConfigFromLaunch(lc))
 }
 
 // ensureSession makes the shim a session leader (E4.1). It returns:

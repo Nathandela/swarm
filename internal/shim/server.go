@@ -233,7 +233,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, AccountInputEmbargo: true})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, AccountInputEmbargo: true, OpenCodeInputEmbargo: true})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -243,9 +243,15 @@ func (s *server) serveConn(conn net.Conn) {
 				continue // ignore attach/resize/signal until the client has said hello
 			}
 			switch ctrl.Type {
+			case shimwire.TypeOpenCodeEmbargoRelease:
+				result := shimwire.Control{Type: shimwire.TypeOpenCodeEmbargoResult}
+				if s.ptyIn.embargo == nil || s.ptyIn.embargo.file != OpenCodeInputEmbargoFile || s.ptyIn.embargo.release(ctrl.IncidentID, ctrl.Token) != nil {
+					result.Refused = shimwire.RefusedOpenCodeStarting
+				}
+				cw.writeControl(result)
 			case shimwire.TypeAccountEmbargoRelease:
 				result := shimwire.Control{Type: shimwire.TypeAccountEmbargoResult}
-				if s.ptyIn.embargo == nil || s.ptyIn.embargo.release(ctrl.IncidentID, ctrl.Token) != nil {
+				if s.ptyIn.embargo == nil || s.ptyIn.embargo.file != AccountInputEmbargoFile || s.ptyIn.embargo.release(ctrl.IncidentID, ctrl.Token) != nil {
 					result.Refused = shimwire.RefusedAccountSwitching
 				}
 				cw.writeControl(result)
@@ -880,7 +886,7 @@ func (p *ptyWriter) WriteInput(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.embargo != nil && p.embargo.held.Load() {
-		return 0, errAccountSwitching
+		return 0, p.embargo.refusal
 	}
 	n, err := p.writeLocked(b)
 	p.inputLine.apply(b[:n])
@@ -912,7 +918,7 @@ func (p *ptyWriter) submitMessage(text []byte, gap time.Duration) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.embargo != nil && p.embargo.held.Load() {
-		return errAccountSwitching
+		return p.embargo.refusal
 	}
 	if p.inputLine.dirty() {
 		return errInputBusy

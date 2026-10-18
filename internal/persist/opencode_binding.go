@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/Nathandela/swarm/internal/adapter"
 )
 
 const OpenCodeSchemaVersion = 3
@@ -44,13 +46,10 @@ type OpenCodeInitial struct {
 }
 
 var (
-	openCodeNativeID   = regexp.MustCompile(`^ses_(?:[A-Za-z0-9]{26}|[0-9a-f]{32})$`)
 	openCodeMessageID  = regexp.MustCompile(`^msg_(?:[A-Za-z0-9]{26}|[0-9a-f]{32})$`)
 	openCodeGeneration = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	openCodeHash       = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
-
-func IsNativeOpenCodeConversationID(id string) bool { return openCodeNativeID.MatchString(id) }
 
 // Only native configuration paths belong in durable public metadata.
 func OpenCodeProfileKey(key string) bool {
@@ -138,6 +137,6 @@ func CloneOpenCodeBinding(b *OpenCodeBinding) *OpenCodeBinding {
 }
 
 func validOpenCodeMeta(m Meta) bool {
-	return m.RequiredRuntime == RequiredRuntimeOpenCode && m.AgentType == "opencode" && IsNativeOpenCodeConversationID(m.ConversationID) &&
+	return m.RequiredRuntime == RequiredRuntimeOpenCode && m.AgentType == "opencode" && adapter.IsOpenCodeConversationID(m.ConversationID) &&
 		m.OpenCodeBinding != nil && ValidOpenCodeBinding(*m.OpenCodeBinding) && m.AccountBinding == nil && m.AccountProjectionRef == "" && m.InputEmbargo == "" && m.AccountClaudeFallback == nil
 }

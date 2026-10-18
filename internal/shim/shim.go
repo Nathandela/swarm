@@ -43,6 +43,7 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
+	OpenCode             *OpenCodeConfig
 	AccountBinding       *accounts.Binding
 	AccountProjectionRef string
 	AccountStateRoot     string
@@ -127,6 +128,9 @@ func Run(cfg Config) (agentExit int, err error) {
 	if len(cfg.Argv) == 0 {
 		return 0, errors.New("shim: empty Argv (no program to exec)")
 	}
+	if err := ValidateOpenCodeConfig(cfg); err != nil {
+		return 0, err
+	}
 	managed, err := beginManagedNativeScope(cfg)
 	if err != nil {
 		return 0, err
@@ -140,7 +144,7 @@ func Run(cfg Config) (agentExit int, err error) {
 		return 0, err
 	}
 
-	embargo, err := openAccountEmbargo(cfg)
+	embargo, err := openInputEmbargo(cfg)
 	if err != nil {
 		return 0, err
 	}
