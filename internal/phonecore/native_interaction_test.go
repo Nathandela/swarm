@@ -201,3 +201,32 @@ func TestNativeRequestSetRetainsUnrenderablePendingIdentity(t *testing.T) {
 		t.Fatal("unrenderable native request remained actionable")
 	}
 }
+
+func TestNativeDetailUsesFullReadBoundWithoutWideningLiveSnapshots(t *testing.T) {
+	s := NewItemStore()
+	small := nativeTestMessage("clipped")
+	small["truncated"] = true
+	small["detail"] = true
+	if !s.Apply(nativeTestRecord(t, 3, small)) {
+		t.Fatal("fixture snapshot refused")
+	}
+	full := nativeTestRecord(t, 0, nativeTestMessage(strings.Repeat("x", 40<<10)))
+	if !s.ApplyDetail(full) {
+		t.Fatal("retained full native detail above16KiB was refused")
+	}
+	it, _ := s.Resolve("ep/worker", "native-message")
+	if it.Text != strings.Repeat("x", 40<<10) || it.Cursor != 3 || it.Truncated {
+		t.Fatal("detail changed live identity or failed full replacement")
+	}
+	live := full
+	live.Cursor = 4
+	if s.Apply(live) {
+		t.Fatal("detail allowance widened ordinary native journal bound")
+	}
+	if s.ApplyDetail(nativeTestRecord(t, 0, nativeTestMessage(strings.Repeat("x", 1<<20)))) {
+		t.Fatal("native detail exceeded transport bound")
+	}
+	if s.ApplyDetail(nativeTestRecord(t, 0, nativeTestRequest())) {
+		t.Fatal("native detail granted request authority")
+	}
+}
