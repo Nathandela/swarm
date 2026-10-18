@@ -150,10 +150,10 @@ func TestHandoffChildLaunchesInTheSourceProviderWorktree(t *testing.T) {
 	}
 }
 
-// TestHandoffChildKeepsTheClientCwdForALegacySource pins the fallback: a source
-// recorded before AgentCwd existed offers no captured checkout, and everything
-// derivable from it is exactly the cwd the CLI already sent. The correction may not
-// invent a different directory for what it cannot know.
+// TestHandoffChildKeepsTheClientCwdForALegacySource pins the fallback: a row
+// recorded before AgentCwd existed offers no captured checkout, so the launch uses
+// the source's recorded launch cwd (the same cwd the CLI sends; the daemon trusts
+// the row, not the caller's copy).
 func TestHandoffChildKeepsTheClientCwdForALegacySource(t *testing.T) {
 	src, repo, _ := handoffWorktreeSource(t, "legacy-src", false) // AgentCwd stays empty
 	api, dir := handoffDirFixture(t, src)

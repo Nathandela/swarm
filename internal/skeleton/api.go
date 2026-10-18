@@ -1042,16 +1042,8 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		}
 		spec = composed
 	}
-	// FIRST-CLASS `swarm handoff` (agents-tracker-xl6k): the CLI sends the source's
-	// roster cwd because SessionView carries no AgentCwd, so a worktree source's
-	// successor would launch into the repo root it was never working in. The daemon
-	// holds the value the client is missing; correct rather than inherit, exactly
-	// like the hands-off composition above. This branch runs only on the first-class
-	// shape (isHandoffChildLaunch), so it overrides neither the hands-off path (which
-	// just corrected spec.Cwd itself and composes supervision empty) nor a resume
-	// (resumeDirectory owns its cwd). A legacy row falls back to its launch cwd; an
-	// absent row refuses, because with the row gone nothing confirms the caller's
-	// cwd names the source's checkout.
+	// First-class `swarm handoff` (agents-tracker-xl6k): the roster view omits
+	// AgentCwd, so resolve the source's authoritative checkout before spawning.
 	if isHandoffChildLaunch(spec) {
 		source, ok := a.core.Get(spec.SpawnedFrom)
 		if !ok {
