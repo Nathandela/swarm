@@ -76,7 +76,7 @@ func dispatchPilot(args []string, stdout, stderr io.Writer) int {
 	if fs.NArg() == 1 && fs.Arg(0) == "exit" {
 		return runPilot(args, nil, stdout, stderr)
 	}
-	caps := []string{protocol.CapJournal, protocol.CapSubscribe}
+	caps := []string{protocol.CapJournal, protocol.CapSubscribe, protocol.CapOpenCodeObservation}
 	if fs.NArg() > 0 && (fs.Arg(0) == "send" || fs.Arg(0) == "await") {
 		caps = append(caps, protocol.CapSemanticSend)
 	}

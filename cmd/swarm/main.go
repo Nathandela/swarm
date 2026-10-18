@@ -124,7 +124,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		}
 		return dispatchAgentVerb(func(_ []string, c agentClient, out, errOut io.Writer) int {
 			return runPilotEntry(c, out, errOut)
-		}, nil, []string{protocol.CapJournal}, stdout, stderr)
+		}, nil, []string{protocol.CapJournal, protocol.CapOpenCodeObservation}, stdout, stderr)
 	case "pilot":
 		return dispatchPilot(args[1:], stdout, stderr)
 	case "daemon":
@@ -146,7 +146,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case "reattach":
 		return dispatchAgentVerb(runReattach, args[1:], []string{protocol.CapExternalResume}, stdout, stderr)
 	case "ls":
-		return dispatchAgentVerb(runLS, args[1:], nil, stdout, stderr)
+		return dispatchAgentVerb(runLS, args[1:], []string{protocol.CapOpenCodeObservation}, stdout, stderr)
 	case "doctor":
 		// NOT dispatchAgentVerb: that seam ensures a daemon (D-1), and doctor's
 		// whole contract is that it never starts one (see doctor.go's header).
@@ -163,7 +163,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		// never starts a daemon.
 		return runUpgrade(args[1:], stdout, stderr)
 	case "watch":
-		return dispatchAgentVerb(runWatch, args[1:], []string{"subscribe"}, stdout, stderr)
+		return dispatchAgentVerb(runWatch, args[1:], []string{protocol.CapSubscribe, protocol.CapOpenCodeObservation}, stdout, stderr)
 	case "kill":
 		return dispatchAgentVerb(runKill, args[1:], nil, stdout, stderr)
 	case "send":
@@ -308,7 +308,7 @@ func clientConfig() (daemon.ClientConfig, error) {
 // attachDialer's per-attach dial deliberately does NOT use this set: it offers
 // {"attach"} and never submits a launch.
 func tuiCaps() []string {
-	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapAccountsManage}
+	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapAccountsManage, protocol.CapOpenCodeObservation}
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
