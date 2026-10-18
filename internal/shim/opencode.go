@@ -36,7 +36,11 @@ func ValidateOpenCodeConfig(cfg Config) error {
 		return nil
 	}
 	b := cfg.OpenCode
-	if cfg.AccountBinding != nil || cfg.InputEmbargo != "" || cfg.Backend != nil || !adapter.IsOpenCodeConversationID(b.RootID) || !validHex(b.Generation, 16) || !validHex(b.EmbargoToken, 32) || !filepath.IsAbs(cfg.SessionDir) || b.BindingFile != filepath.Join(cfg.SessionDir, OpenCodeBindingFile) || len(cfg.Argv) == 0 {
+	dir, err := filepath.EvalSymlinks(cfg.SessionDir)
+	if err != nil {
+		return errOpenCodeStarting
+	}
+	if cfg.AccountBinding != nil || cfg.InputEmbargo != "" || cfg.Backend != nil || !adapter.IsOpenCodeConversationID(b.RootID) || !validHex(b.Generation, 16) || !validHex(b.EmbargoToken, 32) || !filepath.IsAbs(cfg.SessionDir) || b.BindingFile != filepath.Join(dir, OpenCodeBindingFile) || len(cfg.Argv) == 0 {
 		return errOpenCodeStarting
 	}
 	for _, arg := range cfg.Argv[1:] {

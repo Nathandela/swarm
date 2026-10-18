@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 func openCodeMeta() persist.Meta {
@@ -61,5 +62,35 @@ func TestOpenCodeBindingSnapshotsAndCASOwnTheirMemory(t *testing.T) {
 	bad.Phase = persist.OpenCodePhasePlanned
 	if err := d.SetOpenCodeBinding("native", 2, bad); err == nil {
 		t.Fatal("binding phase regressed")
+	}
+}
+
+func TestOpenCodeStatusFencesGenerationAndClosedDaemon(t *testing.T) {
+	d := openDaemon(t, daemonConfig(t))
+	m := openCodeMeta()
+	m.Status = status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle}
+	if err := d.saveMeta(m); err != nil {
+		t.Fatal(err)
+	}
+	active := status.Status{Process: status.ProcessRunning, Turn: status.TurnActive}
+	if err := d.SetOpenCodeStatus(m.ID, strings.Repeat("e", 32), active); err == nil {
+		t.Fatal("stale generation wrote status")
+	}
+	got, _ := d.Get(m.ID)
+	if got.Status != m.Status {
+		t.Fatal("stale status mutation")
+	}
+	if err := d.SetOpenCodeStatus(m.ID, m.OpenCodeBinding.Generation, active); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = d.Get(m.ID)
+	if got.Status.Turn != active.Turn {
+		t.Fatal("current generation not published")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetOpenCodeStatus(m.ID, m.OpenCodeBinding.Generation, m.Status); err == nil {
+		t.Fatal("closed daemon wrote status")
 	}
 }

@@ -10,7 +10,10 @@ import (
 )
 
 func TestManagedOpenCodeShimRequiresExecutionCriticalFlag(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	lc := shimLaunchConfig{SessionDir: dir, Argv: []string{"/native/opencode"}, OpenCode: &shim.OpenCodeConfig{RootID: "ses_" + strings.Repeat("a", 32), Generation: strings.Repeat("b", 32), BindingFile: filepath.Join(dir, shim.OpenCodeBindingFile), EmbargoToken: strings.Repeat("c", 64)}}
 	if validateShimRuntime(lc, false) == nil {
 		t.Fatal("runtime state silently accepted without required flag")

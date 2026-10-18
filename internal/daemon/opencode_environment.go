@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -74,6 +75,20 @@ func (d *Daemon) OpenCodeEnvironment(env []string) ([]string, error) {
 		if profile && (!filepath.IsAbs(value) || filepath.Clean(value) != value) {
 			return nil, errors.New("OpenCode runtime: native configuration paths must be canonical absolute paths")
 		}
+		if profile {
+			origin := value
+			if key == "OPENCODE_CONFIG" {
+				origin = filepath.Dir(value)
+			}
+			canonical, err := canonicalOpenCodeDirectory(origin)
+			if err != nil {
+				return nil, errors.New("OpenCode runtime: native configuration directory unavailable")
+			}
+			if key == "OPENCODE_CONFIG" {
+				canonical = filepath.Join(canonical, filepath.Base(value))
+			}
+			entry = key + "=" + canonical
+		}
 		if flag {
 			if value != "true" && value != "false" && value != "0" && value != "1" {
 				return nil, errors.New("OpenCode runtime: unsupported native boolean selector")
@@ -85,4 +100,26 @@ func (d *Daemon) OpenCodeEnvironment(env []string) ([]string, error) {
 		out = append(out, entry)
 	}
 	return out, nil
+}
+
+func canonicalOpenCodeDirectory(path string) (string, error) {
+	var tail []string
+	for {
+		physical, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				physical = filepath.Join(physical, tail[i])
+			}
+			return physical, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", err
+		}
+		tail = append(tail, filepath.Base(path))
+		path = parent
+	}
 }

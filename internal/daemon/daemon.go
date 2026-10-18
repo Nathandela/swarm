@@ -452,6 +452,18 @@ func (d *Daemon) Get(id string) (persist.Meta, bool) {
 // exited or lost session. It is a no-op for an unchanged status and an error for
 // an unknown session; a tombstoned (deleted) session is dropped by saveMeta.
 func (d *Daemon) SetStatus(id string, s status.Status) error {
+	return d.setStatus(id, s, "")
+}
+
+// SetOpenCodeStatus fences native observations at the sole durable writer.
+func (d *Daemon) SetOpenCodeStatus(id, generation string, s status.Status) error {
+	if generation == "" {
+		return fmt.Errorf("daemon: missing OpenCode status generation")
+	}
+	return d.setStatus(id, s, generation)
+}
+
+func (d *Daemon) setStatus(id string, s status.Status, generation string) error {
 	// Hold writeMu across the whole read-modify-write so the status write is an
 	// ATOMIC RMW against the CURRENT meta under one serialization boundary. Every
 	// process-dimension writer (handleShimExit/markLost/reconcile via saveMeta)
@@ -461,6 +473,7 @@ func (d *Daemon) SetStatus(id string, s status.Status) error {
 	d.writeMu.Lock()
 	d.mu.Lock()
 	sess, ok := d.sessions[id]
+	closed := d.closed
 	var m persist.Meta
 	if ok {
 		m = sess.meta
@@ -469,6 +482,10 @@ func (d *Daemon) SetStatus(id string, s status.Status) error {
 	if !ok {
 		d.writeMu.Unlock()
 		return fmt.Errorf("daemon: unknown session %q", id)
+	}
+	if generation != "" && (closed || m.RequiredRuntime != persist.RequiredRuntimeOpenCode || m.OpenCodeBinding == nil || m.OpenCodeBinding.Generation != generation) {
+		d.writeMu.Unlock()
+		return fmt.Errorf("daemon: stale OpenCode status observation")
 	}
 	// Refuse to persist activity for a session that is no longer running: the
 	// daemon stays the sole authority on the process dimension, so a late engine
@@ -686,6 +703,8 @@ func (d *Daemon) Close() error {
 
 	_ = d.listener.Close() // unlinks the socket (clean shutdown)
 	d.wg.Wait()            // accept loop + supervisors drain on stopCh
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 	_ = d.journal.Close()
 	// The idempotency store fsyncs every write, so dropping its handle loses nothing;
 	// it exposes no Close (internal/idempotency), so the fd is released on GC.
@@ -756,6 +775,9 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 // reaching here, or the unfiltered value will reach the in-memory registry
 // (store.Save only protects disk, since it filters its own copy of m).
 func (d *Daemon) saveMetaLocked(m *persist.Meta) (written bool, err error) {
+	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+		m.SchemaVersion = persist.OpenCodeSchemaVersion
+	}
 	if d.isDeleted(m.ID) {
 		return false, nil // session was deleted; do not resurrect its on-disk state
 	}

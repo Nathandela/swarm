@@ -143,6 +143,9 @@ func (d *Daemon) registerRunning(m persist.Meta) {
 			d.cfg.OnSessionStart(m, token)
 		}
 	}
+	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+		d.rejoinOpenCode(m.ID)
+	}
 }
 
 // readShimLaunchToken re-reads a session's per-session hook token out of the 0600

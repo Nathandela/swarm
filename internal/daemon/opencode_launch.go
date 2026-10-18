@@ -25,6 +25,19 @@ func (d *Daemon) prepareOpenCodeLaunch(spec *LaunchSpec, m *persist.Meta, dir st
 	if spec.RequiredRuntime != persist.RequiredRuntimeOpenCode || spec.AgentType != "opencode" || spec.AccountBinding != nil || spec.Backend != nil {
 		return errors.New("OpenCode runtime: incompatible launch contract")
 	}
+	physicalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return errors.New("OpenCode runtime: private session directory unavailable")
+	}
+	dir = physicalDir
+	physicalCwd, err := filepath.EvalSymlinks(spec.Cwd)
+	if err != nil {
+		return errors.New("OpenCode runtime: native working directory unavailable")
+	}
+	if physicalCwd != spec.Cwd {
+		spec.Cwd = physicalCwd
+		m.AgentCwd = physicalCwd
+	}
 	nativeEnv, err := d.OpenCodeEnvironment(spec.OpenCodeEnv)
 	if err != nil {
 		return err
@@ -55,7 +68,7 @@ func (d *Daemon) prepareOpenCodeLaunch(spec *LaunchSpec, m *persist.Meta, dir st
 		}
 		b.Mode, b.NativeCreatedAtMS = persist.OpenCodeModeResume, prior.NativeCreatedAtMS
 	}
-	if len(spec.InitialPrompt) > 32<<10 || !utf8.ValidString(spec.InitialPrompt) || strings.ContainsRune(spec.InitialPrompt, 0) {
+	if len(spec.InitialPrompt) > 16<<10 || !utf8.ValidString(spec.InitialPrompt) || strings.ContainsRune(spec.InitialPrompt, 0) {
 		return errors.New("OpenCode runtime: initial input exceeds the qualified text boundary")
 	}
 	if spec.InitialPrompt != "" {
@@ -65,6 +78,10 @@ func (d *Daemon) prepareOpenCodeLaunch(spec *LaunchSpec, m *persist.Meta, dir st
 		}
 		hash := sha256.Sum256([]byte(spec.InitialPrompt))
 		b.Initial = &persist.OpenCodeInitial{OperationID: op[:32], RequestHash: hex.EncodeToString(hash[:]), Phase: persist.OpenCodeInitialPrepared}
+		body, _ := json.Marshal(opencodebridge.InitialRequest{Version: 1, SessionInstance: b.Generation, BackendGeneration: b.Generation, RootID: spec.ConversationID, OperationID: b.Initial.OperationID, RequestHash: b.Initial.RequestHash, Text: spec.InitialPrompt})
+		if len(body) > 64<<10 {
+			return errors.New("OpenCode runtime: encoded initial input exceeds the bridge boundary")
+		}
 	}
 	args := make([]string, 0, len(spec.Argv))
 	for i := 0; i < len(spec.Argv); i++ {

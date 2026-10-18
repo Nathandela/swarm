@@ -18,6 +18,13 @@ func (d *Daemon) SetOpenCodeBinding(id string, expected uint64, next persist.Ope
 		return errors.New("daemon: invalid OpenCode binding update")
 	}
 	d.writeMu.Lock()
+	d.mu.Lock()
+	closed := d.closed
+	d.mu.Unlock()
+	if closed {
+		d.writeMu.Unlock()
+		return errors.New("daemon: closed")
+	}
 	m, ok := d.Get(id)
 	if !ok || m.RequiredRuntime != persist.RequiredRuntimeOpenCode || m.OpenCodeBinding == nil {
 		d.writeMu.Unlock()

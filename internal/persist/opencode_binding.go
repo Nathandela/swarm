@@ -66,7 +66,7 @@ func cleanOpenCodeText(s string, max int) bool {
 }
 
 func ValidOpenCodeBinding(b OpenCodeBinding) bool {
-	if b.Revision == 0 || !openCodeGeneration.MatchString(b.Generation) || b.NativeCreatedAtMS < 0 {
+	if b.Revision == 0 || !openCodeGeneration.MatchString(b.Generation) || b.NativeCreatedAtMS < 0 || b.NativeCreatedAtMS > 9007199254740991 {
 		return false
 	}
 	if b.Mode != OpenCodeModeCreate && b.Mode != OpenCodeModeResume {

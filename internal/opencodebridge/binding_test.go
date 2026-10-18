@@ -10,7 +10,11 @@ import (
 
 func readerFixture(t *testing.T) (string, Binding) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/private/tmp", "ocb-")
+	dir, err := os.MkdirTemp("/tmp", "ocb-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err = filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

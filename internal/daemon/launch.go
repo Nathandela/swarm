@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -581,6 +582,16 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// reap.
 	if !d.waitShimServing(sock, launchConfirmTimeout) {
 		return m, fmt.Errorf("daemon: shim for session %s did not confirm serving", id)
+	}
+	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+		ctx, cancel := context.WithTimeout(context.Background(), openCodeJoinTimeout)
+		err := d.joinOpenCode(ctx, id)
+		cancel()
+		d.openCodeRuntimeError(id, err)
+		m, _ = d.Get(id)
+		if err != nil {
+			return m, err
+		}
 	}
 	if probe != nil {
 		if err := probe(phaseSpawned, m); err != nil {

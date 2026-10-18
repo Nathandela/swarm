@@ -9,7 +9,10 @@ import (
 )
 
 func TestOpenCodeEmbargoBlocksInputUntilGenerationRelease(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := Config{SessionDir: dir, Argv: []string{"/native/opencode", "--model", "opencode/model"}, OpenCode: &OpenCodeConfig{
 		RootID: "ses_" + strings.Repeat("a", 32), Generation: strings.Repeat("b", 32), BindingFile: filepath.Join(dir, OpenCodeBindingFile), EmbargoToken: strings.Repeat("c", 64)}}
 	e, err := openInputEmbargo(cfg)
@@ -61,7 +64,10 @@ func TestOpenCodeEmbargoBlocksInputUntilGenerationRelease(t *testing.T) {
 }
 
 func TestOpenCodeRuntimeRejectsUngatedNativeStartup(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	base := Config{SessionDir: dir, Argv: []string{"/native/opencode"}, OpenCode: &OpenCodeConfig{RootID: "ses_" + strings.Repeat("a", 32), Generation: strings.Repeat("b", 32), BindingFile: filepath.Join(dir, OpenCodeBindingFile), EmbargoToken: strings.Repeat("c", 64)}}
 	for _, args := range [][]string{{"--prompt", "hello"}, {"--prompt=hello"}, {"--session", "ses_" + strings.Repeat("a", 32)}, {"--continue"}, {"--fork"}, {"--port", "0"}} {
 		cfg := base
