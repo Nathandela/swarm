@@ -360,6 +360,9 @@ func (s State) clone() State {
 	s.Sessions = slices.Clone(s.Sessions)
 	s.Snapshots = slices.Clone(s.Snapshots)
 	s.Items = slices.Clone(s.Items)
+	for i := range s.Items {
+		s.Items[i].Body = slices.Clone(s.Items[i].Body)
+	}
 	s.NativeHistory = maps.Clone(s.NativeHistory)
 	s.HistoryFloor = maps.Clone(s.HistoryFloor)
 	s.HistoryCapped = maps.Clone(s.HistoryCapped)
