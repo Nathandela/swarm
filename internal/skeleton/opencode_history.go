@@ -201,13 +201,13 @@ func (r *openCodeHistoryResolver) LocateTranscript(m persist.Meta, id string) (s
 	var result openCodeHistoryExport
 	source := "live_sdk"
 	if current.Status.Process == status.ProcessRunning {
-		c, err := opencodebridge.NewClient(b.SocketPath, b.Token)
-		if err != nil {
+		c, clientErr := opencodebridge.NewClient(b.SocketPath, b.Token)
+		if clientErr != nil {
 			return "", resumeHistoryUnreadable
 		}
 		defer c.Close()
-		ready, err := c.Ready(ctx)
-		if err != nil || !ready.Bound || !ready.Acknowledged || !ready.Ready || ready.Identity != identity {
+		ready, readyErr := c.Ready(ctx)
+		if readyErr != nil || !ready.Bound || !ready.Acknowledged || !ready.Ready || ready.Identity != identity {
 			return "", resumeHistoryUnreadable
 		}
 		result, err = collectOpenCodeHistory(ctx, identity, c.Snapshot)
@@ -232,7 +232,7 @@ func (r *openCodeHistoryResolver) LocateTranscript(m persist.Meta, id string) (s
 	if err != nil {
 		return "", resumeHistoryUnreadable
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	var nonce [16]byte
 	if _, err = rand.Read(nonce[:]); err != nil {
 		return "", resumeHistoryUnreadable
