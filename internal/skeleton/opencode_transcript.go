@@ -21,7 +21,10 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
-const maxNativeProjectionItems = 256
+const (
+	maxNativeProjectionItems        = 256
+	maxNativeProjectionFingerprints = 512
+)
 
 type nativeProjectionSeen struct {
 	hash       [32]byte
@@ -293,7 +296,7 @@ func (p *openCodeTranscript) offer(kind, ref, turn, state string, at time.Time, 
 	}
 	p.touch(id)
 	p.seen[id] = nativeProjectionSeen{hash: hash, provenance: provenance, at: at.UnixMilli(), status: state}
-	for len(p.order) > maxNativeProjectionItems {
+	for len(p.order) > maxNativeProjectionFingerprints {
 		delete(p.seen, p.order[0])
 		p.order = p.order[1:]
 	}
