@@ -8,9 +8,7 @@ import (
 	"time"
 )
 
-// The two item kinds the admission queue must tell apart to order and merge correctly
-// (interaction-schema.md §3). Every other kind is handled generically, so adding a kind to
-// the schema costs this file nothing (IS-COMPAT-1/-3).
+// Legacy delta and approval kinds have distinct merge rules; v2 snapshots replace whole bodies.
 //
 // They are duplicated as string literals rather than imported from the item producer on
 // purpose: this package is the gateway's, it must not link the daemon, and the two names are
@@ -152,6 +150,18 @@ func NewItemAdmission(cfg ItemAdmissionConfig) *ItemAdmission {
 // malformed item's): being queued is never an error, exactly as being coalesced is never one
 // for a terminal snapshot.
 func (a *ItemAdmission) Offer(session string, item json.RawMessage) error {
+	return a.offer(session, item, 0)
+}
+
+// OfferBounded keeps a native producer within the shared queue budget; retained items still coalesce.
+func (a *ItemAdmission) OfferBounded(session string, item json.RawMessage, maxPending int) error {
+	if maxPending <= 0 {
+		return errors.New("interaction: invalid queue bound")
+	}
+	return a.offer(session, item, maxPending)
+}
+
+func (a *ItemAdmission) offer(session string, item json.RawMessage, maxPending int) error {
 	itemID, kind, err := itemIdentity(item)
 	if err != nil {
 		return err
@@ -174,6 +184,14 @@ func (a *ItemAdmission) Offer(session string, item json.RawMessage) error {
 		// recomputing one, so nothing downstream could correct it.
 		a.uniq++
 		key = fmt.Sprintf("%s\x00#%d", key, a.uniq)
+	}
+	if _, held := a.pending[key]; !held && maxPending > 0 && len(a.order) >= maxPending {
+		if err := a.release(a.now()); err != nil {
+			return err
+		}
+		if len(a.order) >= maxPending {
+			return errors.New("interaction: native queue capacity reached")
+		}
 	}
 	if p, held := a.pending[key]; held {
 		if err := p.fold(item); err != nil {
@@ -254,9 +272,9 @@ const (
 
 func itemClass(kind string) int {
 	switch kind {
-	case itemKindApprovalRequest:
+	case itemKindApprovalRequest, "permission_request", "question_request", "request_set":
 		return classApproval
-	case itemKindAgentMessage:
+	case itemKindAgentMessage, "message_snapshot":
 		return classAgentMessage
 	default:
 		return classOther
@@ -276,6 +294,12 @@ func itemClass(kind string) int {
 // per-field arithmetic this seam cannot do -- it does not know which §5 cap clipped what --
 // and the pair's job is to tell a consumer "something here was clipped", which survives.
 func (p *pendingItem) fold(next json.RawMessage) error {
+	switch p.kind {
+	case "message_snapshot", "tool_snapshot", "file_snapshot", "plan_snapshot", "permission_request", "question_request", "input_outcome", "request_set":
+		p.raw = next
+		p.merged = nil
+		return nil
+	}
 	if p.merged == nil {
 		m, err := decodeItemObject(p.raw)
 		if err != nil {
