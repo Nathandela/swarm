@@ -2,9 +2,12 @@ package skeleton
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"github.com/Nathandela/swarm/internal/opencodebridge"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"testing"
+	"time"
 )
 
 func TestOpenCodeComposerCapabilityNeedsCurrentQualifiedProjection(t *testing.T) {
@@ -42,10 +45,13 @@ func TestOpenCodeComposerCapabilityCannotRecoverFromDiskRecordAlone(t *testing.T
 type openCodeQualifiedReadyFake struct {
 	*ocReaderFake
 	ready opencodebridge.Ready
+	err   error
 }
 
 func (f *openCodeQualifiedReadyFake) Ready(context.Context) (opencodebridge.Ready, error) {
-	return f.ready, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ready, f.err
 }
 func TestOpenCodeComposerSinkProofChecksEveryNativeReadyFence(t *testing.T) {
 	for _, change := range []string{"valid", "version", "binding", "ack", "bound", "ready", "draft"} {
@@ -72,5 +78,98 @@ func TestOpenCodeComposerSinkProofChecksEveryNativeReadyFence(t *testing.T) {
 				t.Fatal("native writer capability bypassed ready fence")
 			}
 		})
+	}
+}
+
+func TestOpenCodeComposerReadyProofRecoversWithoutNativeEvents(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	meta, _ := f.d.core.Get(f.binding.WorkerID)
+	projection, err := newOpenCodeTranscript(f.d, meta, f.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &openCodeQualifiedReadyFake{ocReaderFake: newOCReaderFake()}
+	reader.identity = f.identity
+	reader.ready = opencodebridge.Ready{Identity: f.identity, NativeVersion: "1.19.3", Acknowledged: true, Bound: true, Ready: true}
+	root, _ := json.Marshal(map[string]any{"id": f.identity.RootID, "directory": f.identity.Directory, "time": map[string]int64{"created": f.identity.NativeCreatedAtMS}})
+	reader.snapshot = func(int) opencodebridge.Snapshot {
+		snapshot := reader.idleSnapshot()
+		snapshot.Session = root
+		return snapshot
+	}
+	state, err := NewOpenCodeState(f.identity.RootID, f.identity.BackendGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done, ready := make(chan struct{}), make(chan error, 1)
+	views := make(chan OpenCodeView, 16)
+	go func() {
+		defer close(done)
+		observeOpenCode(ctx, reader, f.identity, state, func(view OpenCodeView) {
+			select {
+			case views <- view:
+			case <-ctx.Done():
+			}
+		}, func(err error) { ready <- err }, projection)
+	}()
+	defer func() { cancel(); <-done }()
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+	if projection.sinkQualified.Load() {
+		t.Fatal("unmounted composer gained write proof")
+	}
+	reader.mu.Lock()
+	reader.ready.DraftGuardSupported = true
+	reader.mu.Unlock()
+	await := func(label string, want func(OpenCodeView) bool) {
+		t.Helper()
+		timer := time.NewTimer(3 * time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case view := <-views:
+				if want(view) {
+					return
+				}
+			case <-timer.C:
+				t.Fatal(label)
+			}
+		}
+	}
+	await("native composer stayed disabled after exact Ready became usable without a native event", func(OpenCodeView) bool { return projection.sinkQualified.Load() })
+	reader.mu.Lock()
+	reader.ready.Ready = false
+	reader.ready.DraftGuardSupported = false
+	reader.mu.Unlock()
+	await("healthy unavailable composer retained write proof or withdrew native reads", func(view OpenCodeView) bool {
+		return !projection.sinkQualified.Load() && projection.ready.Load() && view.BusyKnown && view.CurrentScopeKnown
+	})
+	reader.mu.Lock()
+	reader.err = errors.New("native bridge stopped responding")
+	reader.mu.Unlock()
+	await("silent native failure retained fresh status", func(view OpenCodeView) bool {
+		return !projection.sinkQualified.Load() && !projection.ready.Load() && !view.BusyKnown && !view.CurrentScopeKnown
+	})
+	reader.mu.Lock()
+	reads := reader.reads
+	reader.mu.Unlock()
+	if reads != 1 {
+		t.Fatalf("Ready requalification fetched full native history %d times", reads)
+	}
+	reader.mu.Lock()
+	reader.err = nil
+	reader.ready.Ready = true
+	reader.ready.DraftGuardSupported = true
+	reader.mu.Unlock()
+	await("native health recovery did not reconcile current state", func(view OpenCodeView) bool {
+		return projection.sinkQualified.Load() && projection.ready.Load() && view.BusyKnown && view.CurrentScopeKnown && !view.Degraded
+	})
+	reader.mu.Lock()
+	reads = reader.reads
+	reader.mu.Unlock()
+	if reads != 2 {
+		t.Fatalf("native recovery performed %d history reads, want startup and one recovery", reads)
 	}
 }
