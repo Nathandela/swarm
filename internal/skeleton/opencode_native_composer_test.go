@@ -73,7 +73,11 @@ func TestOpenCodeComposerSinkProofChecksEveryNativeReadyFence(t *testing.T) {
 				reader.ready.DraftGuardSupported = false
 			}
 			projection := &openCodeTranscript{identity: reader.identity}
-			projection.qualifySink(context.Background(), reader)
+			err := projection.qualifySink(context.Background(), reader)
+			wantHealthy := change != "version" && change != "binding" && change != "bound"
+			if (err == nil) != wantHealthy {
+				t.Fatal("native transport identity and composer availability were conflated")
+			}
 			if projection.sinkQualified.Load() != (change == "valid") {
 				t.Fatal("native writer capability bypassed ready fence")
 			}

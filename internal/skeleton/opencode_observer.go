@@ -173,6 +173,15 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 		}
 		return false, nil
 	}
+	checkHealth := func() bool {
+		if projection == nil || projection.qualifySink(ctx, reader) == nil {
+			return true
+		}
+		projection.ready.Store(false)
+		state.MarkRootStatusUnknown("native bridge health is unconfirmed")
+		state.nativeUnknown = "native current activity requires health reconciliation"
+		return false
+	}
 	refresh := func() error {
 		for attempt := 0; attempt < 3; attempt++ {
 			snapshot, err := reader.Snapshot(ctx, 50, "")
@@ -210,8 +219,7 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 					return err
 				}
 				if projection != nil {
-					projection.qualifySink(ctx, reader)
-					projection.ready.Store(true)
+					projection.ready.Store(checkHealth())
 				}
 				return nil
 			}
@@ -256,7 +264,7 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 			}
 			publish(state.View())
 		case <-timer.C:
-			if !state.View().BusyKnown || projection != nil && !projection.ready.Load() {
+			if checkHealth() && (!state.View().BusyKnown || projection != nil && !projection.ready.Load()) {
 				if err := refresh(); err != nil {
 					return err
 				}

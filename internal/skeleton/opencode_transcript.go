@@ -427,16 +427,21 @@ func (p *openCodeTranscript) requests(view OpenCodeView) error {
 	return nil
 }
 
-func (p *openCodeTranscript) qualifySink(ctx context.Context, reader openCodeReader) {
+func (p *openCodeTranscript) qualifySink(ctx context.Context, reader openCodeReader) error {
 	readyReader, ok := reader.(interface {
 		Ready(context.Context) (opencodebridge.Ready, error)
 	})
 	if !ok {
 		p.sinkQualified.Store(false)
-		return
+		return errors.New("native bridge health reader unavailable")
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	ready, err := readyReader.Ready(readyCtx)
-	p.sinkQualified.Store(err == nil && ready.Identity == p.identity && ready.NativeVersion == "1.19.3" && ready.Acknowledged && ready.Bound && ready.Ready && ready.DraftGuardSupported)
+	healthy := err == nil && ready.Identity == p.identity && ready.NativeVersion == "1.19.3" && ready.Bound
+	p.sinkQualified.Store(healthy && ready.Acknowledged && ready.Ready && ready.DraftGuardSupported)
+	if !healthy {
+		return errors.New("native bridge health is unconfirmed")
+	}
+	return nil
 }
