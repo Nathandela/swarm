@@ -101,6 +101,23 @@ func TestOpenCodeSupervisionReconcilesUncertainAdmissionWithoutRepost(t *testing
 	}
 }
 
+func TestOpenCodeSupervisionReconcilesSupersededUncertainNotice(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	f.dropReply.Store(true)
+	if err := f.d.sendSupervision(f.binding.WorkerID, protocol.SendInputReq{Text: "earlier attention", Submit: true}, "semantic:supervision:earlier"); err == nil {
+		t.Fatal("lost reply claimed admission")
+	}
+	f.rowAvailable.Store(true)
+	f.dropReply.Store(false)
+	if err := f.d.sendSupervision(f.binding.WorkerID, protocol.SendInputReq{Text: "replacement attention", Submit: true}, "semantic:supervision:replacement"); err != nil {
+		t.Fatalf("superseded notice retained an unreconciled write fence: %v", err)
+	}
+	old, _ := f.d.core.ComposerOperation("semantic:supervision:earlier")
+	if old.Phase != idempotency.PhaseCompleted || f.calls.Load() != 2 {
+		t.Fatalf("old notice replayed or failed to release qualified custody: %+v calls=%d", old, f.calls.Load())
+	}
+}
+
 func TestOpenCodeSupervisionRetriesOnlyBeforeNativeExecution(t *testing.T) {
 	f := newOpenCodeSendFixture(t)
 	req := protocol.SendInputReq{Text: "[swarm child attention]", Submit: true}
