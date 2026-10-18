@@ -546,6 +546,7 @@ def rpc(op, timeout=65, **kw):
                     "semantic-send",
                     "opencode-observation",
                     "native-requests-v1",
+                    "journal",
                 ],
             },
         )
@@ -1150,6 +1151,44 @@ try:
                 assert (
                     intermediate_receipts
                 ), "no native stop+tool intermediate row was observed"
+        if stage_index == 2:
+            def native_history(**selectors):
+                reply = rpc(
+                    "interaction_history",
+                    session_id=sid,
+                    operation_id="qualification:history:" + secrets.token_hex(8),
+                    interaction_history={
+                        "session": sid,
+                        "native": True,
+                        "limit": 1,
+                        **selectors,
+                    },
+                )
+                assert reply["op"] == "interaction_history", reply
+                page = reply.get("native_history")
+                assert page and page["v"] == 2 and page["items"], reply
+                assert not reply.get("journal"), reply
+                assert len(page["scope"]) == 64, page
+                for item in page["items"]:
+                    assert item["provenance"] == "imported", item
+                    assert item["kind"] in [
+                        "message_snapshot", "tool_snapshot", "file_snapshot", "plan_snapshot"
+                    ], item
+                    assert not item.get("operation_id") and not item.get("input_sha256"), item
+                return page
+
+            newest = native_history()
+            assert not newest["floor"] and newest.get("next_cursor"), newest
+            earlier = native_history(native_cursor=newest["next_cursor"])
+            anchored = native_history(before_item=newest["items"][0]["item_id"])
+            assert newest["scope"] == earlier["scope"] == anchored["scope"]
+            assert earlier == anchored, (earlier, anchored)
+            assert not {x["item_id"] for x in newest["items"]} & {
+                x["item_id"] for x in earlier["items"]
+            }, (newest, earlier)
+            result["native_history_pages"] = {
+                "newest": newest, "continuation": earlier, "before_item": anchored
+            }
         turns.append(
             {
                 "iteration": stage_index,
