@@ -14,6 +14,10 @@ func (d *Daemon) UnobservedSemanticExecution(session, exceptOperation string) bo
 	return d.idem.UnobservedExecution("semantic_send", session, exceptOperation)
 }
 
+func (d *Daemon) UnobservedSemanticOperation(session, exceptOperation string) string {
+	return d.idem.UnobservedOperation("semantic_send", session, exceptOperation)
+}
+
 func (d *Daemon) BindSemanticRequest(operationID string, request []byte) error {
 	unlock, err := d.lockComposerCustody()
 	if err != nil {

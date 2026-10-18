@@ -322,14 +322,19 @@ func (s *Store) Get(operationID string) (Record, bool) {
 
 // UnobservedExecution reports delivery that still requires a qualified terminal commit.
 func (s *Store) UnobservedExecution(action, session, except string) bool {
+	return s.UnobservedOperation(action, session, except) != ""
+}
+
+// UnobservedOperation selects one unresolved delivery without copying retained payloads.
+func (s *Store) UnobservedOperation(action, session, except string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, rec := range s.records {
 		if id != except && rec.Action == action && rec.SessionID == session && unresolvedPhase(rec.Phase) {
-			return true
+			return id
 		}
 	}
-	return false
+	return ""
 }
 
 func unresolvedPhase(phase Phase) bool {

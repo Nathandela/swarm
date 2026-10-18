@@ -46,6 +46,12 @@ func (d *Daemon) sendSupervision(local string, input protocol.SendInputReq, oper
 			return errors.New("native notification has an unqualified durable phase; nothing was replayed")
 		}
 	}
+	if prior := d.core.UnobservedSemanticOperation(local, operationID); prior != "" {
+		receipt, err := d.semanticOperation(local, prior)
+		if err != nil || !nativeNotificationAdmitted(receipt.State) || d.core.UnobservedSemanticExecution(local, operationID) {
+			return errors.New("prior native admission remains unconfirmed; the new notification was not submitted")
+		}
+	}
 	instance, ok := d.sessionInstance(local)
 	if !ok {
 		return errors.New("native notification source incarnation is unavailable")
