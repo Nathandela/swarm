@@ -762,6 +762,7 @@ func capFields(f map[string]any) bool {
 // an approval_request with multi-byte prompt lines still reaches (a1-carriage.md measured 128
 // and 64).
 var itemUnclippedFields = map[string]bool{
+	"role": true, "provenance": true, "native_root_id": true, "native_session_id": true, "native_message_id": true,
 	"source": true, "stop_reason": true, "change": true, "mode": true, // top level
 	"tool_kind": true,                // §7's closed vocabulary mirrored flat (M2.2); half an enum is invalid, not smaller
 	"type":      true, "state": true, // action.type (§7), steps[].state (§3.7)

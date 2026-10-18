@@ -500,6 +500,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.nativeDecisionStatus = d.NativeDecisionStatus
 	d.api.interrupt = d.interruptTurn
 	d.api.history = d.interactionHistory
+	d.api.nativeHistory = d.nativeInteractionHistory
 	d.api.detail = d.interactionDetail
 	d.api.directInputObserver = d.markDirectInputUnresolved
 	d.api.statusObserver = d.noteDirectInputStatus

@@ -191,23 +191,10 @@ func (p *openCodeTranscript) interaction(info opencode.Message, item adapter.Int
 	if err := item.Validate(); err != nil {
 		return err
 	}
-	kind := item.Kind
-	fields := interactionFields(item)
-	switch kind {
-	case adapter.KindMessageSnapshot:
-		fields["text"] = item.Text
-		fields["role"] = item.MessageRole
-		fields["source"] = item.Source
-	case adapter.KindToolRun:
-		kind = "tool_snapshot"
-	case adapter.KindFileChange:
-		kind = "file_snapshot"
-	case adapter.KindPlanUpdate:
-		kind = "plan_snapshot"
-	default:
+	kind, fields := nativeSnapshotFields(p.identity.RootID, info, item)
+	if fields == nil {
 		return nil
 	}
-	fields["native_session_id"] = info.SessionID
 	if info.SessionID == p.identity.RootID && item.MessageRole == "user" && item.Source == adapter.SourceNative {
 		input := OpenCodeInput{MessageID: info.ID}
 		owned := p.d.ownedOpenCodeInputs(p.local, OpenCodeView{Root: p.identity.RootID, Generation: p.identity.BackendGeneration, Inputs: []OpenCodeInput{input}})
@@ -444,4 +431,27 @@ func (p *openCodeTranscript) qualifySink(ctx context.Context, reader openCodeRea
 		return errors.New("native bridge health is unconfirmed")
 	}
 	return nil
+}
+
+func nativeSnapshotFields(root string, info opencode.Message, item adapter.Interaction) (string, map[string]any) {
+	kind := item.Kind
+	fields := interactionFields(item)
+	switch kind {
+	case adapter.KindMessageSnapshot:
+		fields["text"] = item.Text
+		fields["role"] = item.MessageRole
+		fields["source"] = item.Source
+	case adapter.KindToolRun:
+		kind = "tool_snapshot"
+	case adapter.KindFileChange:
+		kind = "file_snapshot"
+	case adapter.KindPlanUpdate:
+		kind = "plan_snapshot"
+	default:
+		return "", nil
+	}
+	fields["native_session_id"] = info.SessionID
+	fields["native_root_id"] = root
+	fields["native_message_id"] = info.ID
+	return kind, fields
 }

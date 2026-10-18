@@ -1,0 +1,1 @@
+ok  	github.com/Nathandela/swarm/internal/skeleton	9.547s

@@ -120,7 +120,10 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 			if read, ok := f.historyPage.Load().(func(int, string) (opencodebridge.Snapshot, error)); ok {
 				limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 				page, err := read(limit, r.URL.Query().Get("before"))
-				if err != nil { w.WriteHeader(http.StatusServiceUnavailable); return }
+				if err != nil {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
 				_ = json.NewEncoder(w).Encode(page)
 				return
 			}

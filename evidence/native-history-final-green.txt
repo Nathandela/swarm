@@ -1,0 +1,2 @@
+ok  	github.com/Nathandela/swarm/internal/skeleton	14.258s
+ok  	github.com/Nathandela/swarm/internal/protocol	1.398s

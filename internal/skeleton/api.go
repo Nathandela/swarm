@@ -22,6 +22,7 @@ import (
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
@@ -108,6 +109,7 @@ type coreAPI struct {
 	semanticComposer      func(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error)
 	interrupt             func(machine, operationID string, req protocol.TurnInterruptReq) (protocol.ErrorCode, error)
 	history               func(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error)
+	nativeHistory         func(schema.InteractionHistoryReq) (schema.NativeHistoryPage, protocol.ErrorCode, error)
 	detail                func(session, itemID string) (json.RawMessage, protocol.ErrorCode, error)
 	// The durable direct-input marker and its authoritative status consumer.
 	// Both are nil in bare coreAPI tests and wired before Server construction.
@@ -633,6 +635,15 @@ func (a *coreAPI) InteractionHistory(session, beforeItem string, limit int) ([]p
 	}
 	return a.history(session, beforeItem, limit)
 }
+
+func (a *coreAPI) NativeInteractionHistory(req schema.InteractionHistoryReq) (schema.NativeHistoryPage, protocol.ErrorCode, error) {
+	if a.nativeHistory == nil {
+		return schema.NativeHistoryPage{}, protocol.CodeUnavailable, errors.New("native history is unavailable")
+	}
+	return a.nativeHistory(req)
+}
+
+var _ protocol.NativeInteractionHistorian = (*coreAPI)(nil)
 
 // InteractionDetail makes coreAPI a protocol.InteractionDetailer (Wave R6, M3.3).
 func (a *coreAPI) InteractionDetail(session, itemID string) (json.RawMessage, protocol.ErrorCode, error) {
