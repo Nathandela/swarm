@@ -1,0 +1,1024 @@
+{
+  "date": "2026-10-18",
+  "harness": "Swarm0.18.2 -> OpenCode1.19.3 -> OpenRouter",
+  "packet_sha256": "b03b87ee4cc6d868639729e367a61901e73129de8fd0ef745b8dbd698e4202b0",
+  "reviews": {
+    "deepseek": {
+      "requested_model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "rounds": [
+        {
+          "round": 1,
+          "swarm_session_id": "ep-49c12ef9/ac3usxukipawj3zi",
+          "native_session_id": "ses_eb10d9b50ffeptMInhuVf21pJN",
+          "user_message_id": "msg_14ef26534001ocJgOFHIRBe60o",
+          "assistant_message_id": "msg_14ef2656e001DNFL6P7q2DGlWU",
+          "actual_provider": "openrouter",
+          "actual_model": "deepseek/deepseek-v4.1-flash",
+          "started_epoch_ms": 1792325870900,
+          "completed_epoch_ms": 1792325895766,
+          "seconds": 24.866,
+          "finish": "stop",
+          "error": null,
+          "tokens": {
+            "total": 10253,
+            "input": 4559,
+            "output": 1553,
+            "reasoning": 2349,
+            "cache": {
+              "write": 0,
+              "read": 1792
+            }
+          },
+          "native_reported_cost_usd": 0.002583486,
+          "response_file": "deepseek-round1.md",
+          "request_sha256": "0bc345882d642924c6e8d96be89836eb88ffd62831acdedb55b4b69f8ab8279f"
+        },
+        {
+          "round": 2,
+          "swarm_session_id": "ep-49c12ef9/ac3usxukipawj3zi",
+          "native_session_id": "ses_eb10d9b50ffeptMInhuVf21pJN",
+          "user_message_id": "msg_14ef60490001LvpuIs8vVk8Laq",
+          "assistant_message_id": "msg_14ef6049e001sHGBKFGBPn9n1U",
+          "actual_provider": "openrouter",
+          "actual_model": "deepseek/deepseek-v4.1-flash",
+          "started_epoch_ms": 1792326108304,
+          "completed_epoch_ms": 1792326118405,
+          "seconds": 10.101,
+          "finish": "stop",
+          "error": null,
+          "tokens": {
+            "total": 12740,
+            "input": 4266,
+            "output": 806,
+            "reasoning": 1396,
+            "cache": {
+              "write": 0,
+              "read": 6272
+            }
+          },
+          "native_reported_cost_usd": 0.001584676,
+          "response_file": "deepseek-round2.md",
+          "request_sha256": "a6e3611c7fe76d378c03767e1d35e78b5163027abbe7eac6afbaf70ccc104abf"
+        }
+      ]
+    },
+    "glm": {
+      "requested_model": "openrouter/z-ai/glm-5.3-flash",
+      "rounds": [
+        {
+          "round": 1,
+          "swarm_session_id": "ep-49c12ef9/ttvoxsemwxxahd5s",
+          "native_session_id": "ses_eb10d9abbffeSA8YmrbE9UM5sa",
+          "user_message_id": "msg_14ef26554001xbraXm6p2JwW3H",
+          "assistant_message_id": "msg_14ef2663c001v4u0Phajje1lLG",
+          "actual_provider": "openrouter",
+          "actual_model": "z-ai/glm-5.3-flash",
+          "started_epoch_ms": 1792325870932,
+          "completed_epoch_ms": 1792325958594,
+          "seconds": 87.662,
+          "finish": "stop",
+          "error": null,
+          "tokens": {
+            "total": 11497,
+            "input": 6078,
+            "output": 1726,
+            "reasoning": 3693,
+            "cache": {
+              "write": 0,
+              "read": 0
+            }
+          },
+          "native_reported_cost_usd": 0.001375544,
+          "response_file": "glm-round1.md",
+          "request_sha256": "681319bb069f3501e6de258098fc576161ccfce2a540bf7909e873139ebd8906"
+        },
+        {
+          "round": 2,
+          "swarm_session_id": "ep-49c12ef9/ttvoxsemwxxahd5s",
+          "native_session_id": "ses_eb10d9abbffeSA8YmrbE9UM5sa",
+          "user_message_id": "msg_14ef6058c001AmgMqq7tpYe66P",
+          "assistant_message_id": "msg_14ef60596001vYfXckiqxCjez9",
+          "actual_provider": "openrouter",
+          "actual_model": "z-ai/glm-5.3-flash",
+          "started_epoch_ms": 1792326108556,
+          "completed_epoch_ms": 1792326148573,
+          "seconds": 40.017,
+          "finish": "stop",
+          "error": null,
+          "tokens": {
+            "total": 13465,
+            "input": 2939,
+            "output": 894,
+            "reasoning": 1581,
+            "cache": {
+              "write": 0,
+              "read": 8051
+            }
+          },
+          "native_reported_cost_usd": 0.000684378,
+          "response_file": "glm-round2.md",
+          "request_sha256": "d2c005549722f30a0326f7399385880abed0aef11353a1ca1aa5423951f4603c"
+        }
+      ]
+    }
+  },
+  "qualification": {
+    "v2-probe-before-restart.json": {
+      "version": "1.19.3",
+      "server_port0_result": 4096,
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/session",
+          "body": {
+            "id": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "agent": "build",
+            "model": {
+              "id": "deepseek/deepseek-v4.1-flash",
+              "providerID": "openrouter"
+            },
+            "location": {
+              "directory": "/private/tmp/swarm-oc-plan-20261018/work"
+            }
+          },
+          "status": 200,
+          "response": {
+            "data": {
+              "id": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "projectID": "global",
+              "agent": "build",
+              "model": {
+                "id": "deepseek/deepseek-v4.1-flash",
+                "providerID": "openrouter",
+                "variant": "default"
+              },
+              "cost": 0,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": {
+                  "read": 0,
+                  "write": 0
+                }
+              },
+              "time": {
+                "created": 1792325866534,
+                "updated": 1792325866534
+              },
+              "title": "New session - 2026-10-18T12:17:46.534Z",
+              "location": {
+                "directory": "/private/tmp/swarm-oc-plan-20261018/work"
+              },
+              "subpath": "private/tmp/swarm-oc-plan-20261018/work"
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/session",
+          "body": {
+            "id": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "agent": "build",
+            "model": {
+              "id": "deepseek/deepseek-v4.1-flash",
+              "providerID": "openrouter"
+            },
+            "location": {
+              "directory": "/private/tmp/swarm-oc-plan-20261018/work"
+            }
+          },
+          "status": 200,
+          "response": {
+            "data": {
+              "id": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "projectID": "global",
+              "agent": "build",
+              "model": {
+                "id": "deepseek/deepseek-v4.1-flash",
+                "providerID": "openrouter",
+                "variant": "default"
+              },
+              "cost": 0,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": {
+                  "read": 0,
+                  "write": 0
+                }
+              },
+              "time": {
+                "created": 1792325866534,
+                "updated": 1792325866534
+              },
+              "title": "New session - 2026-10-18T12:17:46.534Z",
+              "location": {
+                "directory": "/private/tmp/swarm-oc-plan-20261018/work"
+              },
+              "subpath": "private/tmp/swarm-oc-plan-20261018/work"
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/session",
+          "body": {
+            "id": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "agent": "plan",
+            "model": {
+              "id": "deepseek/deepseek-v4.1-flash",
+              "providerID": "openrouter"
+            },
+            "location": {
+              "directory": "/private/tmp/swarm-oc-plan-20261018/work"
+            }
+          },
+          "status": 200,
+          "response": {
+            "data": {
+              "id": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "projectID": "global",
+              "agent": "build",
+              "model": {
+                "id": "deepseek/deepseek-v4.1-flash",
+                "providerID": "openrouter",
+                "variant": "default"
+              },
+              "cost": 0,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": {
+                  "read": 0,
+                  "write": 0
+                }
+              },
+              "time": {
+                "created": 1792325866534,
+                "updated": 1792325866534
+              },
+              "title": "New session - 2026-10-18T12:17:46.534Z",
+              "location": {
+                "directory": "/private/tmp/swarm-oc-plan-20261018/work"
+              },
+              "subpath": "private/tmp/swarm-oc-plan-20261018/work"
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708",
+          "body": null,
+          "status": 200,
+          "response": {
+            "data": {
+              "id": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "projectID": "global",
+              "agent": "build",
+              "model": {
+                "id": "deepseek/deepseek-v4.1-flash",
+                "providerID": "openrouter",
+                "variant": "default"
+              },
+              "cost": 0,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": {
+                  "read": 0,
+                  "write": 0
+                }
+              },
+              "time": {
+                "created": 1792325866534,
+                "updated": 1792325866534
+              },
+              "title": "New session - 2026-10-18T12:17:46.534Z",
+              "location": {
+                "directory": "/private/tmp/swarm-oc-plan-20261018/work"
+              },
+              "subpath": "private/tmp/swarm-oc-plan-20261018/work"
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/session/ses_56dc6b22a768c6f04ed54728db1df708?directory=/private/tmp/swarm-oc-plan-20261018/work",
+          "body": null,
+          "status": 200,
+          "response": {
+            "id": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "slug": "calm-panda",
+            "projectID": "global",
+            "directory": "/private/tmp/swarm-oc-plan-20261018/work",
+            "path": "private/tmp/swarm-oc-plan-20261018/work",
+            "cost": 0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "title": "New session - 2026-10-18T12:17:46.534Z",
+            "agent": "build",
+            "model": {
+              "id": "deepseek/deepseek-v4.1-flash",
+              "providerID": "openrouter"
+            },
+            "version": "1.19.3",
+            "time": {
+              "created": 1792325866534,
+              "updated": 1792325866534
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/session?directory=/private/tmp/swarm-oc-plan-20261018/work",
+          "body": {
+            "title": "AUDIT_PLAN legacy-v2 bridge",
+            "metadata": {
+              "purpose": "plan-api-qualification"
+            }
+          },
+          "status": 200,
+          "response": {
+            "id": "ses_eb10da871ffeH0GhlzfUKBmpgS",
+            "slug": "neon-tiger",
+            "projectID": "global",
+            "directory": "/private/tmp/swarm-oc-plan-20261018/work",
+            "path": "private/tmp/swarm-oc-plan-20261018/work",
+            "cost": 0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "title": "AUDIT_PLAN legacy-v2 bridge",
+            "version": "1.19.3",
+            "metadata": {
+              "purpose": "plan-api-qualification"
+            },
+            "time": {
+              "created": 1792325867406,
+              "updated": 1792325867406
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/session/ses_eb10da871ffeH0GhlzfUKBmpgS",
+          "body": null,
+          "status": 200,
+          "response": {
+            "data": {
+              "id": "ses_eb10da871ffeH0GhlzfUKBmpgS",
+              "projectID": "global",
+              "cost": 0,
+              "tokens": {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": {
+                  "read": 0,
+                  "write": 0
+                }
+              },
+              "time": {
+                "created": 1792325867406,
+                "updated": 1792325867406
+              },
+              "title": "AUDIT_PLAN legacy-v2 bridge",
+              "location": {
+                "directory": "/private/tmp/swarm-oc-plan-20261018/work"
+              },
+              "subpath": "private/tmp/swarm-oc-plan-20261018/work"
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/prompt",
+          "body": {
+            "id": "msg_583959d4fe92e9c9e4b6044976090151",
+            "prompt": {
+              "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+            },
+            "delivery": "queue",
+            "resume": false
+          },
+          "status": 200,
+          "response": {
+            "data": {
+              "admittedSeq": 1,
+              "id": "msg_583959d4fe92e9c9e4b6044976090151",
+              "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "prompt": {
+                "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+              },
+              "delivery": "queue",
+              "timeCreated": 1792325867432
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/prompt",
+          "body": {
+            "id": "msg_583959d4fe92e9c9e4b6044976090151",
+            "prompt": {
+              "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+            },
+            "delivery": "queue",
+            "resume": false
+          },
+          "status": 200,
+          "response": {
+            "data": {
+              "admittedSeq": 1,
+              "id": "msg_583959d4fe92e9c9e4b6044976090151",
+              "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "prompt": {
+                "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+              },
+              "delivery": "queue",
+              "timeCreated": 1792325867432
+            }
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/prompt",
+          "body": {
+            "id": "msg_583959d4fe92e9c9e4b6044976090151",
+            "prompt": {
+              "text": "DIFFERENT_PAYLOAD"
+            },
+            "delivery": "queue",
+            "resume": false
+          },
+          "status": 409,
+          "response": {
+            "_tag": "ConflictError",
+            "message": "Prompt message ID conflicts with an existing durable record: msg_583959d4fe92e9c9e4b6044976090151",
+            "resource": "msg_583959d4fe92e9c9e4b6044976090151"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/history?after=0&limit=2",
+          "body": null,
+          "status": 200,
+          "response": {
+            "data": [
+              {
+                "id": "evt_14ef257a80015XTTwTUbYAMjFU",
+                "type": "session.next.prompt.admitted",
+                "durable": {
+                  "aggregateID": "ses_56dc6b22a768c6f04ed54728db1df708",
+                  "seq": 1,
+                  "version": 1
+                },
+                "data": {
+                  "timestamp": 1792325867432,
+                  "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+                  "messageID": "msg_583959d4fe92e9c9e4b6044976090151",
+                  "prompt": {
+                    "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+                  },
+                  "delivery": "queue"
+                }
+              }
+            ],
+            "hasMore": false
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/history?after=0&limit=100",
+          "body": null,
+          "status": 200,
+          "response": {
+            "data": [
+              {
+                "id": "evt_14ef257a80015XTTwTUbYAMjFU",
+                "type": "session.next.prompt.admitted",
+                "durable": {
+                  "aggregateID": "ses_56dc6b22a768c6f04ed54728db1df708",
+                  "seq": 1,
+                  "version": 1
+                },
+                "data": {
+                  "timestamp": 1792325867432,
+                  "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+                  "messageID": "msg_583959d4fe92e9c9e4b6044976090151",
+                  "prompt": {
+                    "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+                  },
+                  "delivery": "queue"
+                }
+              }
+            ],
+            "hasMore": false
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/message?limit=10&order=asc",
+          "body": null,
+          "status": 200,
+          "response": {
+            "data": [],
+            "cursor": {
+              "previous": null,
+              "next": null
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/session/active",
+          "body": null,
+          "status": 200,
+          "response": {
+            "data": {}
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/context",
+          "body": null,
+          "status": 200,
+          "response": {
+            "data": []
+          }
+        }
+      ],
+      "v2_session": "ses_56dc6b22a768c6f04ed54728db1df708",
+      "legacy_session": "ses_eb10da871ffeH0GhlzfUKBmpgS",
+      "replayed_events": [
+        {
+          "id": "evt_14ef257a80015XTTwTUbYAMjFU",
+          "type": "session.next.prompt.admitted",
+          "durable": {
+            "aggregateID": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "seq": 1,
+            "version": 1
+          },
+          "data": {
+            "timestamp": 1792325867432,
+            "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "messageID": "msg_583959d4fe92e9c9e4b6044976090151",
+            "prompt": {
+              "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+            },
+            "delivery": "queue"
+          }
+        }
+      ],
+      "message_id": "msg_583959d4fe92e9c9e4b6044976090151"
+    },
+    "v2-probe-after-restart.json": [
+      {
+        "method": "GET",
+        "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708",
+        "body": null,
+        "status": 200,
+        "response": {
+          "data": {
+            "id": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "projectID": "global",
+            "agent": "build",
+            "model": {
+              "id": "deepseek/deepseek-v4.1-flash",
+              "providerID": "openrouter",
+              "variant": "default"
+            },
+            "cost": 0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "time": {
+              "created": 1792325866534,
+              "updated": 1792325866534
+            },
+            "title": "New session - 2026-10-18T12:17:46.534Z",
+            "location": {
+              "directory": "/private/tmp/swarm-oc-plan-20261018/work"
+            },
+            "subpath": "private/tmp/swarm-oc-plan-20261018/work"
+          }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/prompt",
+        "body": {
+          "id": "msg_583959d4fe92e9c9e4b6044976090151",
+          "prompt": {
+            "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+          },
+          "delivery": "queue",
+          "resume": false
+        },
+        "status": 200,
+        "response": {
+          "data": {
+            "admittedSeq": 1,
+            "id": "msg_583959d4fe92e9c9e4b6044976090151",
+            "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "prompt": {
+              "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+            },
+            "delivery": "queue",
+            "timeCreated": 1792325867432
+          }
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/prompt",
+        "body": {
+          "id": "msg_583959d4fe92e9c9e4b6044976090151",
+          "prompt": {
+            "text": "CHANGED_AFTER_RESTART"
+          },
+          "delivery": "queue",
+          "resume": false
+        },
+        "status": 409,
+        "response": {
+          "_tag": "ConflictError",
+          "message": "Prompt message ID conflicts with an existing durable record: msg_583959d4fe92e9c9e4b6044976090151",
+          "resource": "msg_583959d4fe92e9c9e4b6044976090151"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/history?after=0&limit=100",
+        "body": null,
+        "status": 200,
+        "response": {
+          "data": [
+            {
+              "id": "evt_14ef257a80015XTTwTUbYAMjFU",
+              "type": "session.next.prompt.admitted",
+              "durable": {
+                "aggregateID": "ses_56dc6b22a768c6f04ed54728db1df708",
+                "seq": 1,
+                "version": 1
+              },
+              "data": {
+                "timestamp": 1792325867432,
+                "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+                "messageID": "msg_583959d4fe92e9c9e4b6044976090151",
+                "prompt": {
+                  "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+                },
+                "delivery": "queue"
+              }
+            }
+          ],
+          "hasMore": false
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/history?after=1&limit=100",
+        "body": null,
+        "status": 200,
+        "response": {
+          "data": [],
+          "hasMore": false
+        }
+      }
+    ],
+    "v2-tui-read-bridge.json": {
+      "deepseek": {
+        "session": "ses_eb10d9b50ffeptMInhuVf21pJN",
+        "count": 0,
+        "hasMore": false,
+        "types": []
+      },
+      "glm": {
+        "session": "ses_eb10d9abbffeSA8YmrbE9UM5sa",
+        "count": 0,
+        "hasMore": false,
+        "types": []
+      }
+    },
+    "v2-resume-prompt.json": {
+      "data": {
+        "admittedSeq": 1,
+        "id": "msg_583959d4fe92e9c9e4b6044976090151",
+        "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+        "prompt": {
+          "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+        },
+        "delivery": "queue",
+        "timeCreated": 1792325867432
+      }
+    },
+    "v2-legacy-tui-bridge-final.json": {
+      "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/history?after=0&limit=100": {
+        "data": [
+          {
+            "id": "evt_14ef257a80015XTTwTUbYAMjFU",
+            "type": "session.next.prompt.admitted",
+            "durable": {
+              "aggregateID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "seq": 1,
+              "version": 1
+            },
+            "data": {
+              "timestamp": 1792325867432,
+              "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "messageID": "msg_583959d4fe92e9c9e4b6044976090151",
+              "prompt": {
+                "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+              },
+              "delivery": "queue"
+            }
+          },
+          {
+            "id": "evt_14ef55304001FBkPhW3muLQ1hh",
+            "type": "session.next.prompted",
+            "durable": {
+              "aggregateID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "seq": 2,
+              "version": 1
+            },
+            "data": {
+              "timestamp": 1792325867432,
+              "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "messageID": "msg_583959d4fe92e9c9e4b6044976090151",
+              "prompt": {
+                "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed."
+              },
+              "delivery": "queue"
+            }
+          }
+        ],
+        "hasMore": false
+      },
+      "/api/session/ses_56dc6b22a768c6f04ed54728db1df708/message?limit=20&order=asc": {
+        "data": [
+          {
+            "id": "msg_583959d4fe92e9c9e4b6044976090151",
+            "time": {
+              "created": 1792325867432
+            },
+            "text": "AUDIT_PLAN_QUEUED_ONLY. Reply with QUEUE_OK if executed.",
+            "type": "user"
+          }
+        ],
+        "cursor": {
+          "previous": "eyJpZCI6Im1zZ181ODM5NTlkNGZlOTJlOWM5ZTRiNjA0NDk3NjA5MDE1MSIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoicHJldmlvdXMifQ",
+          "next": "eyJpZCI6Im1zZ181ODM5NTlkNGZlOTJlOWM5ZTRiNjA0NDk3NjA5MDE1MSIsIm9yZGVyIjoiYXNjIiwiZGlyZWN0aW9uIjoibmV4dCJ9"
+        }
+      },
+      "/session/ses_56dc6b22a768c6f04ed54728db1df708/message?directory=/private/tmp/swarm-oc-plan-20261018/work": [
+        {
+          "info": {
+            "id": "msg_14ef8ed4a001u2fOYb0U5o3PK3",
+            "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "role": "user",
+            "time": {
+              "created": 1792326298954
+            },
+            "summary": {
+              "diffs": []
+            },
+            "agent": "build",
+            "model": {
+              "providerID": "openrouter",
+              "modelID": "deepseek/deepseek-v4.1-flash"
+            }
+          },
+          "parts": [
+            {
+              "id": "prt_14ef8ed4c001nZfQDUqgcpGFIF",
+              "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "messageID": "msg_14ef8ed4a001u2fOYb0U5o3PK3",
+              "type": "text",
+              "text": "Reply with exactly LEGACY_ATTACH_OK. Do not use any tools."
+            }
+          ]
+        },
+        {
+          "info": {
+            "id": "msg_14ef8ed60001eKtmMfdHnJkrmE",
+            "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+            "role": "assistant",
+            "time": {
+              "created": 1792326298976,
+              "completed": 1792326300341
+            },
+            "parentID": "msg_14ef8ed4a001u2fOYb0U5o3PK3",
+            "modelID": "deepseek/deepseek-v4.1-flash",
+            "providerID": "openrouter",
+            "mode": "build",
+            "agent": "build",
+            "path": {
+              "cwd": "/private/tmp/swarm-oc-plan-20261018/work",
+              "root": "/"
+            },
+            "cost": 0.00019215,
+            "tokens": {
+              "total": 3744,
+              "input": 3735,
+              "output": 9,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "finish": "stop"
+          },
+          "parts": [
+            {
+              "id": "prt_14ef8f27b001bEajSQ3QGQGC55",
+              "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "messageID": "msg_14ef8ed60001eKtmMfdHnJkrmE",
+              "type": "step-start"
+            },
+            {
+              "id": "prt_14ef8f27e001d5LKKcecfMsori",
+              "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "messageID": "msg_14ef8ed60001eKtmMfdHnJkrmE",
+              "type": "text",
+              "text": "LEGACY_ATTACH_OK",
+              "time": {
+                "start": 1792326300286,
+                "end": 1792326300334
+              }
+            },
+            {
+              "id": "prt_14ef8f2b1001Sm1qmTTqV05Hhh",
+              "sessionID": "ses_56dc6b22a768c6f04ed54728db1df708",
+              "messageID": "msg_14ef8ed60001eKtmMfdHnJkrmE",
+              "type": "step-finish",
+              "reason": "stop",
+              "cost": 0.00019215,
+              "tokens": {
+                "total": 3744,
+                "input": 3735,
+                "output": 9,
+                "reasoning": 0,
+                "cache": {
+                  "read": 0,
+                  "write": 0
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "ports": {
+      "first_port0": 4096,
+      "second_concurrent_port0": 53199,
+      "auth_without_credentials": 401,
+      "auth_with_credentials": 200
+    }
+  },
+  "initial_attempt": {
+    "deepseek": "Read permissions blocked file packet; model reported REVIEW_BLOCKED without fabricating review. Replaced with inline packet.",
+    "glm": "First file-based session stopped without usable review; inline retry used for results."
+  },
+  "limits": [
+    "one task and two rounds per model, not benchmark",
+    "round2 used different peer objections",
+    "metadata verifies requested/native model IDs, not general model quality",
+    "no deployment or source changes by reviewer workers"
+  ],
+  "model_picker": {
+    "source_commits": [
+      "f90cfa03",
+      "e8eb4065",
+      "d6bdfd5f"
+    ],
+    "behavior": "native catalogue suggestions, blank native default until explicit selection; bounded editable fallback",
+    "probe_timeout_seconds": 5,
+    "pipe_cleanup_ceiling_seconds": 1,
+    "stdout_cap_bytes": 4194304,
+    "live_openrouter_catalogue_models": 385,
+    "test_outputs": {
+      "picker-final-packages.log": [
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/detect\t9.609s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/tui\t39.637s",
+        "ok  \tgithub.com/Nathandela/swarm/cmd/swarm\t27.388s"
+      ],
+      "picker-final-race.log": [
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/detect\t2.572s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/tui\t1.365s",
+        "ok  \tgithub.com/Nathandela/swarm/cmd/swarm\t1.390s"
+      ],
+      "picker-build.log": [],
+      "picker-vet.log": [],
+      "picker-lint-linux.log": [
+        "0 issues."
+      ]
+    },
+    "lint": {
+      "version": "2.12.2",
+      "go": "1.26.0",
+      "target": "linux/amd64",
+      "official_archive_sha256": "a9c54498731b3128f79e090be6110f3e5fffccc617b08142ed244d4126c73f29"
+    },
+    "full_darwin_lint": "11 unused Linux-only account helpers; CI-target lint passed; no unrelated code changed",
+    "installed_release_replaced": false,
+    "validation_exit_codes": {
+      "full_changed_packages": 0,
+      "focused_race": 0,
+      "build_all": 0,
+      "vet_changed_packages": 0,
+      "lint_ci_target": 0
+    }
+  },
+  "cleanup": {
+    "before": [
+      {
+        "id": "ep-49c12ef9/ac3usxukipawj3zi",
+        "name": "plan-review-deepseek-inline",
+        "status": {
+          "Process": "running",
+          "Turn": "active",
+          "Interaction": "none"
+        }
+      },
+      {
+        "id": "ep-49c12ef9/ttvoxsemwxxahd5s",
+        "name": "plan-review-glm-inline",
+        "status": {
+          "Process": "running",
+          "Turn": "active",
+          "Interaction": "none"
+        }
+      },
+      {
+        "id": "ep-49c12ef9/vepkeqx5xnishnym",
+        "name": "v2-attached-tui-qualification",
+        "status": {
+          "Process": "running",
+          "Turn": "active",
+          "Interaction": "none"
+        }
+      },
+      {
+        "id": "ep-49c12ef9/ogtl6u66np2v3m6c",
+        "name": "plan-review-deepseek",
+        "status": {
+          "Process": "exited",
+          "Turn": "active",
+          "Interaction": "none"
+        }
+      },
+      {
+        "id": "ep-49c12ef9/kb6o7xla66jwnowv",
+        "name": "plan-review-glm",
+        "status": {
+          "Process": "exited",
+          "Turn": "unknown",
+          "Interaction": "none"
+        }
+      }
+    ],
+    "killed": [
+      "ep-49c12ef9/ac3usxukipawj3zi",
+      "ep-49c12ef9/ttvoxsemwxxahd5s",
+      "ep-49c12ef9/vepkeqx5xnishnym"
+    ],
+    "remaining": [],
+    "servers_stopped": [
+      {
+        "port": 4096,
+        "pid": 6694
+      },
+      {
+        "port": 53199,
+        "pid": 13926
+      }
+    ],
+    "daemon_stopped": 163,
+    "remaining_listeners": []
+  }
+}

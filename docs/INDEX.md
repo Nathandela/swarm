@@ -17,6 +17,8 @@
 
 ## The plan
 
+- [OpenCode maturity implementation plan](specifications/opencode-maturity-plan.md) — dependency-ordered native lifecycle, observation, semantic messaging, controls, continuity, model selection and release qualification, reviewed through Swarm by DeepSeek and GLM
+
 - [Reconnection and attention plan](specifications/reconnect-attention-plan.md) — Astra-reviewed terminal recovery and structured attention contracts
 - [Reconnection and attention decision](adr/ADR-030-reconnection-and-attention.md) — additive error status and authoritative recovery semantics
 - [Reconnection and attention verification](verification/reconnect-attention.md) — regression, race, compatibility, review and release evidence
@@ -64,6 +66,7 @@
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
 
 ## Process traces
+- [OpenCode strategy model reviews](verification/opencode-plan-review-2026-10-18.md) — actual DeepSeek V4.1 Flash and GLM-5.3 Flash critiques, two-round observations, selected evidence, native API runtime qualification and model selector verification
 - [OpenCode parity and live verification](verification/opencode-parity-2026-10-18.md) — current adapter and Claude/Codex comparison, two-worker communication, daemon/provider crash and resume tests, native HTTP/SSE/permission probes, and unattended orchestration gaps
 - [Lightweight storage verification](verification/lightweight-storage.md) — live-only journal/tail, workspace prevention, crash/pressure tests, and remaining lifetime-growth work
 - [Native Linux storage gates](verification/lightweight-storage-linux.md) — complete normal/race suites, CPU/latency gates, fixture corrections, skipped coverage, and test-artifact retirement
