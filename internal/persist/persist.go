@@ -108,6 +108,8 @@ type Meta struct {
 	AccountProjectionRef  string                `json:"account_projection_ref,omitempty"`
 	AccountClaudeFallback *ClaudeFallbackPolicy `json:"account_claude_fallback,omitempty"`
 	InputEmbargo          string                `json:"input_embargo,omitempty"`
+	RequiredRuntime       string                `json:"required_runtime,omitempty"`
+	OpenCodeBinding       *OpenCodeBinding      `json:"opencode_binding,omitempty"`
 	// CLIIdentity is the selected installation observed at launch; nil is unknown.
 	// It does not attest a running process or a wrapper's dependencies.
 	CLIIdentity *CLIIdentity `json:"cli_identity,omitempty"`
@@ -243,7 +245,12 @@ func (s *Store) Save(m Meta) error {
 	}
 	m.Env = FilterEnv(m.Env)
 	m.SchemaVersion = SchemaVersion
-	if m.AccountBinding != nil {
+	if m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
+		if !validOpenCodeMeta(m) {
+			return fmt.Errorf("persist: invalid OpenCode runtime binding")
+		}
+		m.SchemaVersion = OpenCodeSchemaVersion
+	} else if m.AccountBinding != nil {
 		if !validManagedMeta(m) {
 			return fmt.Errorf("persist: invalid managed account binding")
 		}
@@ -367,8 +374,14 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	if m.ID != wantID {
 		return Meta{}, fmt.Errorf("meta id %q does not match session directory %q", m.ID, wantID)
 	}
-	if m.SchemaVersion > ManagedSchemaVersion {
-		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, ManagedSchemaVersion)
+	if m.SchemaVersion > OpenCodeSchemaVersion {
+		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, OpenCodeSchemaVersion)
+	}
+	if m.SchemaVersion == OpenCodeSchemaVersion || m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
+		if m.SchemaVersion != OpenCodeSchemaVersion || !validOpenCodeMeta(m) {
+			return Meta{}, fmt.Errorf("invalid OpenCode runtime binding")
+		}
+		return m, nil
 	}
 	if m.SchemaVersion == ManagedSchemaVersion && m.AccountBinding == nil {
 		return Meta{}, fmt.Errorf("managed session record has no account binding")

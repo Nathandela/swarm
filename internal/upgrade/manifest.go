@@ -33,10 +33,10 @@ type CompatManifest struct {
 	AccountConfig    int    `json:"account_config"`
 	AccountInventory int    `json:"account_inventory"`
 	AccountAuth      int    `json:"account_auth"` // 1: the registry reader accepts auth_reason
-	Version          string `json:"version"`  // the release tag
-	Shimwire         int    `json:"shimwire"` // internal/shimwire.Version
-	Protocol         int    `json:"protocol"` // internal/protocol.Version
-	Schema           int    `json:"schema"`   // internal/persist.SchemaVersion
+	Version          string `json:"version"`      // the release tag
+	Shimwire         int    `json:"shimwire"`     // internal/shimwire.Version
+	Protocol         int    `json:"protocol"`     // internal/protocol.Version
+	Schema           int    `json:"schema"`       // internal/persist.SchemaVersion
 }
 
 // CurrentManifest is THIS build's card -- what the emitter writes at release,
@@ -46,7 +46,7 @@ func CurrentManifest(tag string) CompatManifest {
 		Version:       tag,
 		Shimwire:      shimwire.Version,
 		Protocol:      protocol.Version,
-		Schema:        persist.ManagedSchemaVersion,
+		Schema:        persist.OpenCodeSchemaVersion,
 		AccountSchema: accounts.SchemaVersion, AccountJobs: 1, AccountRecovery: accounts.RecoverySchemaVersion, AccountWorker: MinimumClaudeWorkerCapability, AccountShim: shim.ManagedWriterSchemaVersion, AccountConfig: accountconfig.CompatibilityVersion,
 		AccountInventory: accounts.NativeInventorySchemaVersion, AccountAuth: 1,
 	}

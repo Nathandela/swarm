@@ -420,7 +420,7 @@ func (d *Daemon) List() []persist.Meta {
 	defer d.mu.Unlock()
 	out := make([]persist.Meta, 0, len(d.sessions))
 	for _, s := range d.sessions {
-		out = append(out, s.meta)
+		out = append(out, cloneOpenCodeMeta(s.meta))
 	}
 	return out
 }
@@ -433,7 +433,7 @@ func (d *Daemon) Get(id string) (persist.Meta, bool) {
 	if !ok {
 		return persist.Meta{}, false
 	}
-	return s.meta, true
+	return cloneOpenCodeMeta(s.meta), true
 }
 
 // SetStatus routes an engine-derived status change through the daemon's single

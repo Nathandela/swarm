@@ -253,7 +253,7 @@ func (d *Daemon) putMem(m persist.Meta) *session {
 		s = &session{stop: make(chan struct{})}
 		d.sessions[m.ID] = s
 	}
-	s.meta = m
+	s.meta = cloneOpenCodeMeta(m)
 	s.persisted = true // now known to disk; a launch reservation flips from its pre-save false
 	return s
 }
