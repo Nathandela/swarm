@@ -639,13 +639,14 @@ func Serve(cfg Config) (*Daemon, error) {
 				d.accounts.retry = d.accountRotation.RetryAvailability
 				d.accounts.move = d.accountRotation.RequestMove
 			},
-			ready:     d.authRecoveryReady,
-			cliUnsafe: d.directInputUnresolved,
-			restore:   d.restoreAuthRecycle,
-			clear:     d.clearAuthRecycle,
-			fresh:     d.withAuthRecycleFence,
-			claimed:   d.withClaimedAuthRecycleFence,
-			resume:    d.withAuthResumeFence,
+			openCodeEnv: d.core.OpenCodeResumeEnvironment,
+			ready:       d.authRecoveryReady,
+			cliUnsafe:   d.directInputUnresolved,
+			restore:     d.restoreAuthRecycle,
+			clear:       d.clearAuthRecycle,
+			fresh:       d.withAuthRecycleFence,
+			claimed:     d.withClaimedAuthRecycleFence,
+			resume:      d.withAuthResumeFence,
 		})
 
 	d.accounts.startQuotaFetching()

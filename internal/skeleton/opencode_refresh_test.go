@@ -24,6 +24,7 @@ func nativeRefreshRig(t *testing.T) (*authWatcher, *authFake, *persist.CLIIdenti
 	m.OpenCodeBinding = &persist.OpenCodeBinding{Generation: strings.Repeat("b", 32), NativeCreatedAtMS: 123, Phase: persist.OpenCodePhaseReady}
 	m.LaunchOptions = map[string]string{protocol.OptionWorktree: "true"}
 	w.sessionIdentity = nil
+	w.openCodeEnv = func(string) ([]string, error) { return []string{"XDG_CONFIG_HOME=/native/profile"}, nil }
 	return w, f, target
 }
 
@@ -78,5 +79,42 @@ func TestOpenCodeLegacyRefreshDoesNotProbeOwnerProfile(t *testing.T) {
 	w.tickCLIRefresh(true)
 	if len(w.state.CLI) != 0 {
 		t.Fatal("legacy native worker acquired managed refresh state")
+	}
+}
+
+func TestOpenCodeRefreshProbesOnlyCapturedProfileAndPhysicalCheckout(t *testing.T) {
+	w, f, target := nativeRefreshRig(t)
+	f.sessions["source"].Env = []string{"PATH=/native/bin", "XDG_CONFIG_HOME=/wrong/profile"}
+	w.openCodeEnv = func(id string) ([]string, error) {
+		if id != "source" {
+			t.Fatal("wrong worker profile")
+		}
+		return []string{"XDG_CONFIG_HOME=/private/native/profile"}, nil
+	}
+	called := false
+	w.cliProbe = func(agent, path string, env []string, cwd string) (*persist.CLIIdentity, error) {
+		called = true
+		if agent != "opencode" || path != "" || cwd != "/physical/worktree ü" || strings.Join(env, "|") != "PATH=/native/bin|XDG_CONFIG_HOME=/private/native/profile" {
+			t.Fatal("native refresh probe escaped captured origin")
+		}
+		return target, nil
+	}
+	w.discoverCLIRefreshes()
+	if !called {
+		t.Fatal("native installation was not checked")
+	}
+}
+
+func TestOpenCodeRefreshUnconfirmedProfileBlocksBeforeProbe(t *testing.T) {
+	w, _, _ := nativeRefreshRig(t)
+	w.openCodeEnv = func(string) ([]string, error) { return nil, errors.New("private details must not leak") }
+	w.cliProbe = func(string, string, []string, string) (*persist.CLIIdentity, error) {
+		t.Fatal("unconfirmed profile executed native CLI")
+		return nil, nil
+	}
+	w.discoverCLIRefreshes()
+	report, err := CLIRefreshStatus(w.stateDir)
+	if err != nil || len(report.Records) != 1 || report.Records[0].State != cliRefreshBlocked || strings.Contains(report.Records[0].LastError, "private details") {
+		t.Fatalf("profile refusal missing or leaked: %+v %v", report, err)
 	}
 }

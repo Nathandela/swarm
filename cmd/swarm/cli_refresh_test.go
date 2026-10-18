@@ -52,3 +52,22 @@ func TestCLIRefreshRejectsInvalidArgumentsBeforeWriting(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIRefreshReportsBlockedOpenCodeTarget(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"identities":{},"cli_refresh":{"source":{"agent_type":"opencode","target":{"path":"/native/opencode","version":"1.20.0","fingerprint":"target"},"state":"blocked","last_error":"only native 1.19.3 is qualified; worker retained"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "auth-watch-state.json"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{nil, {"--json"}} {
+		var out, stderr bytes.Buffer
+		if code := runCLIRefresh(args, dir, &out, &stderr); code != 0 {
+			t.Fatalf("blocked native report unreadable: %d %s", code, &stderr)
+		}
+		for _, want := range []string{"opencode", "blocked", "1.20.0", "1.19.3"} {
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("missing %s: %s", want, &out)
+			}
+		}
+	}
+}

@@ -245,6 +245,7 @@ type authWatchState struct {
 // durable pre-crash claim may consume a restored embargo.
 type authRecycleCoordination struct {
 	managedInit func(*authWatcher)
+	openCodeEnv func(string) ([]string, error)
 	ready       func(persist.Meta) bool
 	cliUnsafe   func(local string) bool
 	restore     func(local string)
@@ -275,6 +276,7 @@ type authWatcher struct {
 	resolve         func(name string, env []string) (string, error)
 	cliProbe        func(agentType, executable string, env []string, cwd string) (*persist.CLIIdentity, error)
 	cliObserve      func(local string) *persist.CLIIdentity
+	openCodeEnv     func(string) ([]string, error)
 	cliUnsafe       func(local string) bool
 	now             func() time.Time
 	// unsafe covers every live authority/effect fact absent from persisted Status:
@@ -336,6 +338,7 @@ func newAuthWatcher(stateDir, endpointID string, agents []string,
 		unsafe:         unsafe,
 		ready:          coord.ready,
 		cliUnsafe:      coord.cliUnsafe,
+		openCodeEnv:    coord.openCodeEnv,
 		restoreRecycle: coord.restore, clearRecycle: coord.clear,
 		withRecycleFence: coord.fresh, withClaimedRecycleFence: coord.claimed,
 		withResumeFence: coord.resume,

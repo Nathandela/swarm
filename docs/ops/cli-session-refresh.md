@@ -106,3 +106,33 @@ shared `auth-watch-state.json` before downgrading. An older build does not under
 the CLI refresh records and may discard that recovery information when it saves
 its own auth state. Mid-refresh downgrade is therefore not a supported automatic
 recovery path; retained source history remains available for manual recovery.
+
+## Managed OpenCode policy
+
+Managed OpenCode currently qualifies native **1.19.3**. The watcher checks the
+installation selected by the worker's saved native profile, PATH and physical
+checkout. A changed installation is reported as **blocked** by `swarm refresh`
+and `swarm refresh --json`, including workers in dedicated worktrees. Detection
+runs when automatic refresh is enabled. A newer version, a downgrade or a
+same-version reinstall never authorizes an automatic OpenCode shutdown. Old or
+restored pending records also stop before the lifecycle boundary. Other providers
+keep their existing refresh policy.
+
+Keep the running worker when this warning appears. Record its Swarm ID and exact
+native root, and preserve the original checkout and native profile. `swarm doctor`
+reports managed binding health; the native TUI retains the provider's actionable
+quota, unavailable-model or sign-in explanation. Do not substitute another model
+or credential profile to clear the warning, and do not delete binding or operation
+records. A provider refusal is a failed execution, not successful task completion.
+
+Before an explicit restart, confirm the native worker is idle, has no unresolved
+permission/question or current input, and that its actual composer has no draft.
+Read any uncertain semantic operation with
+`swarm message <session> --status --operation-id <id>`; an unknown
+admission is not permission to submit it again. Preserve worktree changes and
+native history before ending the worker. Resume uses the exact saved root and
+native profile and refuses changed or unqualified executable identity. If that
+identity can no longer be confirmed, keep the retained source and use native
+manual recovery after verifying its directory and root; Swarm does not select a
+latest session by working directory. Automatic native relogin, account rotation,
+and destructive refresh are not enabled by this policy.

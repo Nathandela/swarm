@@ -8,6 +8,7 @@ package skeleton
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -272,7 +273,9 @@ func validCLIIdentity(id *persist.CLIIdentity) bool {
 	return id != nil && id.Path != "" && id.Version != "" && id.Fingerprint != ""
 }
 
-func refreshProvider(agent string) bool { return agent == "codex" || agent == "claude" }
+func refreshProvider(agent string) bool {
+	return agent == "codex" || agent == "claude" || agent == "opencode"
+}
 
 func (w *authWatcher) clock() time.Time {
 	if w.now != nil {
@@ -356,7 +359,10 @@ func (w *authWatcher) discoverCLIRefreshes() {
 		if _, exists := w.state.CLI[m.ID]; exists {
 			continue
 		}
-		if m.LaunchOptions[protocol.OptionWorktree] == "true" {
+		if m.AgentType == "opencode" && (m.RequiredRuntime != persist.RequiredRuntimeOpenCode || m.OpenCodeBinding == nil) {
+			continue
+		}
+		if m.AgentType != "opencode" && m.LaunchOptions[protocol.OptionWorktree] == "true" {
 			w.once("cli-worktree:"+m.ID, "cli-refresh: %s session %s (%s) is worktree-isolated; refresh it manually", m.AgentType, m.ID, m.Name)
 			continue
 		}
@@ -372,7 +378,20 @@ func (w *authWatcher) discoverCLIRefreshes() {
 			w.once("cli-noconv:"+m.ID, "cli-refresh: %s session %s (%s) has no captured conversation id; leaving it untouched", m.AgentType, m.ID, m.Name)
 			continue
 		}
-		key := m.AgentType + "\x00" + m.Cwd + "\x00" + strings.Join(m.Env, "\x00")
+		env, cwd := m.Env, m.Cwd
+		if m.AgentType == "opencode" {
+			if w.openCodeEnv == nil {
+				continue
+			}
+			native, err := w.openCodeEnv(m.ID)
+			if err != nil {
+				w.state.CLI[m.ID] = cliRefreshRecord{AgentType: m.AgentType, Target: *m.CLIIdentity, State: cliRefreshBlocked, LastError: "OpenCode native profile is unconfirmed; worker retained", UpdatedAt: w.clock()}
+				dirty = true
+				continue
+			}
+			env, cwd = mergeNativeOpenCodeEnvironment(m.Env, native), m.ProviderCwd()
+		}
+		key := m.AgentType + "\x00" + cwd + "\x00" + strings.Join(env, "\x00")
 		result, ok := cache[key]
 		if !ok {
 			if probes >= maxCLIRefreshProbesPerTick {
@@ -380,9 +399,17 @@ func (w *authWatcher) discoverCLIRefreshes() {
 				w.cliCursor = previousCursor
 				break
 			}
-			result.id, result.err = w.cliProbe(m.AgentType, "", m.Env, m.Cwd)
+			result.id, result.err = w.cliProbe(m.AgentType, "", env, cwd)
 			cache[key] = result
 			probes++
+		}
+		if m.AgentType == "opencode" {
+			if result.err == nil && validCLIIdentity(result.id) && *result.id != *m.CLIIdentity {
+				w.state.CLI[m.ID] = cliRefreshRecord{AgentType: m.AgentType, Target: *result.id, State: cliRefreshBlocked, LastError: openCodeRefreshRefusal, UpdatedAt: w.clock()}
+				delete(w.state.CLICandidates, m.ID)
+				dirty = true
+			}
+			continue
 		}
 		if result.err != nil || !validCLIIdentity(result.id) || !cliIdentityNewer(result.id, m.CLIIdentity) {
 			if _, ok := w.state.CLICandidates[m.ID]; ok {
@@ -466,6 +493,10 @@ func (w *authWatcher) workCLIRefresh(allowNewKills bool) {
 		m, ok := w.get(source)
 		if !ok || m.RosterHidden {
 			w.blockCLIRefresh(source, "source session was deleted or archived before refresh completed")
+			continue
+		}
+		if m.AgentType == "opencode" || rec.AgentType == "opencode" {
+			w.blockCLIRefresh(source, openCodeRefreshRefusal)
 			continue
 		}
 		if replacement, found, ambiguous := w.findReplacement(source, rec.AgentType); ambiguous != "" {
@@ -594,9 +625,14 @@ func (w *authWatcher) prepareCLIRefreshTarget(source persist.Meta) bool {
 	return true
 }
 
+const openCodeRefreshRefusal = "OpenCode automatic refresh is blocked: only native 1.19.3 is qualified; keep the current worker and exact native profile for manual recovery"
+
 // validateCLIRefreshTarget is called inside the composer/direct-input fence,
 // immediately before the durable claim and kill.
 func (w *authWatcher) validateCLIRefreshTarget(m persist.Meta) error {
+	if m.AgentType == "opencode" || w.state.CLI[m.ID].AgentType == "opencode" {
+		return errors.New(openCodeRefreshRefusal)
+	}
 	rec, ok := w.state.CLI[m.ID]
 	if !ok {
 		if m.AccountBinding == nil && w.accountEnrollmentEnabled(m.AgentType) {
