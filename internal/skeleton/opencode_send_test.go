@@ -43,9 +43,12 @@ type openCodeSendFixture struct {
 // The real daemon, shim writer and owner protocol surround a private native bridge fixture.
 func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture)) *openCodeSendFixture {
 	t.Helper()
-	f := &openCodeSendFixture{d: assemble(t), dispatchEntered: make(chan struct{}, 4), dispatchRelease: make(chan struct{})}
+	f := &openCodeSendFixture{dispatchEntered: make(chan struct{}, 4), dispatchRelease: make(chan struct{})}
 	for _, option := range configure {
 		option(f)
+	}
+	if f.d == nil {
+		f.d = assemble(t)
 	}
 	spec := daemon.LaunchSpec{AgentType: "opencode", RequiredRuntime: persist.RequiredRuntimeOpenCode, Argv: []string{fakeAgentBin, mustScript(t, "idle 60s\n")}, Cwd: t.TempDir(), OpenCodeEnv: []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}, Cols: 80, Rows: 24}
 	launch := make(chan error, 1)
