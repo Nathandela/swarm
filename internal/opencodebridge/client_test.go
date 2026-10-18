@@ -2,6 +2,7 @@ package opencodebridge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -86,5 +87,47 @@ func TestPrivateClientAndAsset(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Close did not cancel active events")
+	}
+}
+
+func TestRequestReceiptClient(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "requests.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/dispatch" {
+			var fields map[string]json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+				t.Error(err)
+			}
+			for _, field := range []string{"messageID", "text", "reply"} {
+				if _, ok := fields[field]; ok {
+					t.Errorf("irrelevant prompt/permission field %s", field)
+				}
+			}
+			if string(fields["answers"]) != `[["A"],[]]` || string(fields["requestID"]) != `"que_target"` {
+				t.Errorf("wrong answer body: %v", fields)
+			}
+		} else if r.URL.Path != "/receipt" || r.URL.Query().Get("operationID") != "opaque+/?=" {
+			t.Errorf("wrong receipt request: %s", r.URL)
+		}
+		fmt.Fprint(w, `{"status":"admitted","operationID":"opaque+/?=","kind":"question_reply","requestID":"que_target","targetID":"ses_child"}`)
+	})}
+	go func() { _ = server.Serve(listener) }()
+	defer server.Close()
+	client, err := NewClient(socket, "syntheticprivatebridgecredentialtoken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	receipt, err := client.Dispatch(context.Background(), DispatchRequest{Kind: "question_reply", RequestID: "que_target", TargetID: "ses_child", Answers: [][]string{{"A"}, {}}})
+	if err != nil || receipt.Kind != "question_reply" || receipt.RequestID != "que_target" || receipt.TargetID != "ses_child" {
+		t.Fatalf("request receipt: %+v %v", receipt, err)
+	}
+	saved, err := client.OperationReceipt(context.Background(), "opaque+/?=")
+	if err != nil || saved == nil || saved.Status != "admitted" {
+		t.Fatalf("saved receipt: %+v %v", saved, err)
 	}
 }

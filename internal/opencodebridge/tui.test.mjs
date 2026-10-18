@@ -17,7 +17,7 @@ async function fixture(t, change = () => {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ocb-")))
   fs.chmodSync(dir, 0o700)
   const binding = { ...identity, mode: "create", nativeCreatedAtMS: 0, initialPrompt: false, socketPath: path.join(dir, "bridge.sock"), token: crypto.randomBytes(24).toString("hex") }
-  const row = { id: rootID, directory: binding.directory, location: { directory: binding.directory }, time: { created: 123456 }, title: "Root" }
+  const row = { id: rootID, directory: binding.directory, location: { directory: binding.directory }, time: { created: 123456 }, title: "Root", agent: tuple.agent, model: { id: tuple.model.modelID, providerID: tuple.model.providerID, variant: tuple.model.variant } }
   const state = { route: { name: "session", params: { sessionID: rootID } }, row, version: "1.19.3", ready: true, statuses: {}, permissions: [], questions: [], children: [], messages: [{ info: { id: messageID, sessionID: rootID, role: "user", ...tuple }, parts: [{ id: "prt_" + "a".repeat(32), sessionID: rootID, messageID, type: "text", text: "previous" }] }], calls: [], disposers: [], events: new Map(), plugins: [], dialog: false, ack: false, autoAck: true }
   const result = data => ({ data, response: { status: 200, headers: new Headers() } })
   const read = (name, value) => async (...args) => { state.calls.push({ name, args }); return result(value()) }
@@ -38,6 +38,28 @@ async function fixture(t, change = () => {}) {
     },
   }
   state.prompt = { current: { input: "", parts: [] }, set(value) { this.current = value }, submit() { state.calls.push({ name: "nativeSubmit" }); const text = this.current.input; this.current = { input: "", parts: [] }; state.promptProps.onSubmit?.(); queueMicrotask(() => { state.messages = [...state.messages, { info: { id: "msg_" + "c".repeat(32), sessionID: rootID, role: "user", time: { created: Date.now() }, ...tuple }, parts: [{ id: "prt_" + "c".repeat(32), sessionID: rootID, messageID: "msg_" + "c".repeat(32), type: "text", text }] }]; state.events.get("message.updated")?.({ type: "message.updated", properties: { info: state.messages.at(-1).info } }) }) } }
+  api.client.session.message = async ({ messageID }) => { const data = state.messages.find(message => message.info.id === messageID); return { data, response: { status: data ? 200 : 404 } } }
+  api.client.permission.reply = async input => {
+    state.calls.push({ name: "permissionReply", input })
+    const pending = state.permissions.find(request => request.id === input.requestID)
+    state.permissions = state.permissions.filter(request => request.id !== input.requestID)
+    state.events.get("permission.replied")?.({ type: "permission.replied", properties: { sessionID: pending.sessionID, requestID: input.requestID, reply: input.reply } })
+    return { data: true, response: { status: 200 } }
+  }
+  api.client.question.reply = async input => {
+    state.calls.push({ name: "questionReply", input })
+    const pending = state.questions.find(request => request.id === input.requestID)
+    state.questions = state.questions.filter(request => request.id !== input.requestID)
+    state.events.get("question.replied")?.({ type: "question.replied", properties: { sessionID: pending.sessionID, requestID: input.requestID, answers: input.answers } })
+    return { data: true, response: { status: 200 } }
+  }
+  api.client.question.reject = async input => {
+    state.calls.push({ name: "questionReject", input })
+    const pending = state.questions.find(request => request.id === input.requestID)
+    state.questions = state.questions.filter(request => request.id !== input.requestID)
+    state.events.get("question.rejected")?.({ type: "question.rejected", properties: { sessionID: pending.sessionID, requestID: input.requestID } })
+    return { data: true, response: { status: 200 } }
+  }
   change({ state, api, binding })
   fs.writeFileSync(path.join(dir, "binding.json"), state.bindingRaw?.(binding) ?? JSON.stringify(binding), { mode: 0o600 })
   if (state.hardlinkBinding) fs.linkSync(path.join(dir, "binding.json"), path.join(dir, "linked.json"))
@@ -85,7 +107,7 @@ test("route is checked again after native status read and before SDK invocation"
   assert.equal(f.state.calls.filter(x => x.name === "prompt").length, 0)
 })
 
-test("semantic prompt forwards latest committed native tuple, never an implicit default", async t => {
+test("semantic prompt forwards the authoritative native session tuple, never an implicit default", async t => {
   const f = await fixture(t, ({ state }) => { state.statuses[rootID] = { type: "idle" } })
   assert.equal((await f.dispatch()).body.status, "admitted")
   const sent = f.state.calls.find(x => x.name === "prompt")
@@ -131,7 +153,7 @@ test("204 without the exact native user row is uncertain", { timeout: 9000 }, as
   f.api.client.session.promptAsync = async () => ({ response: { status: 204 } })
   const out = await f.dispatch()
   assert.equal(out.body.status, "uncertain")
-  assert.equal(out.body.messageID, "")
+  assert.match(out.body.messageID, /^msg_/)
 })
 
 test("binding is persisted and acknowledged before genuine native initial submission", async t => {
@@ -195,12 +217,13 @@ test("weak bridge tokens and non-native message IDs refuse", async t => {
   assert.equal(f.state.calls.filter(x => x.name === "prompt").length, 0)
 })
 
-test("foreign history parts cannot authorize a semantic write", async t => {
+test("missing native session selection refuses and does not guess from old history", async t => {
   const f = await fixture(t)
-  f.state.messages[0].parts[0].sessionID = "ses_" + "d".repeat(32)
-  assert.equal((await f.dispatch()).body.reason, "native_shape")
+  delete f.state.row.model
+  assert.equal((await f.dispatch()).body.reason, "selection_unavailable")
   assert.equal(f.state.calls.filter(x => x.name === "prompt").length, 0)
 })
+
 
 test("failed status reads never become idle", async t => {
   const f = await fixture(t)
@@ -290,14 +313,13 @@ test("host disconnect during native reads prevents a later SDK write", async t =
   assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
 })
 
-test("a pre-existing matching native row is not a new admission receipt", async t => {
+test("a pre-existing native message ID refuses before native mutation", async t => {
   const f = await fixture(t)
   f.state.messages[0].info.time = { created: 1 }
   f.state.messages[0].parts[0].text = "hello"
-  f.api.client.session.promptAsync = async () => ({ response: { status: 204 } })
   const receipt = (await f.dispatch({ messageID })).body
-  assert.notEqual(receipt.status, "admitted")
-  assert.equal(receipt.messageID ?? "", "")
+  assert.equal(receipt.reason, "native_message_exists")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
 })
 
 
@@ -321,4 +343,180 @@ test("an unexpected response error after native invocation remains uncertain", a
   const f = await fixture(t)
   f.api.client.session.promptAsync = async () => ({ get response() { throw new Error("invalid native response") } })
   assert.equal((await f.dispatch()).body.status, "uncertain")
+})
+
+
+const permissionID = "per_" + "f".repeat(32)
+const questionID = "que_" + "f".repeat(32)
+const requestBody = extra => ({ version: 1, sessionInstance: identity.sessionInstance, backendGeneration: identity.backendGeneration, rootID, operationID: crypto.randomBytes(16).toString("hex"), kind: "permission_reply", targetID: rootID, requestID: permissionID, reply: "once", ...extra })
+const question = (extra = {}) => ({ question: "Choose", header: "Choice", options: [{ label: "A", description: "first" }, { label: "B", description: "second" }], ...extra })
+
+test("permission reply targets one exact pending request while the native root is busy", async t => {
+  const f = await fixture(t)
+  f.state.statuses[rootID] = { type: "busy" }
+  f.state.permissions = [{ id: permissionID, sessionID: rootID }, { id: "per_" + "e".repeat(32), sessionID: rootID }]
+  const body = requestBody(), receipt = (await f.call("POST", "/dispatch", body)).body
+  assert.equal(receipt.status, "admitted")
+  assert.equal(receipt.kind, body.kind)
+  assert.equal(receipt.requestID, permissionID)
+  assert.equal(receipt.targetID, rootID)
+  assert.equal(receipt.nativeEffect, "single_request")
+  assert.equal(receipt.inFlight, false)
+  assert.deepEqual(f.state.calls.find(call => call.name === "permissionReply").input, { requestID: permissionID, reply: "once" })
+  assert.equal(f.state.permissions.length, 1)
+})
+
+test("request replies verify nested ancestry and refuse unrelated sessions", async t => {
+  const f = await fixture(t), child = "ses_" + "d".repeat(32), middle = "ses_" + "e".repeat(32)
+  const rows = new Map([[rootID, f.state.row], [child, { id: child, parentID: middle }], [middle, { id: middle, parentID: rootID }]])
+  f.api.client.session.get = async ({ sessionID }) => ({ data: rows.get(sessionID), response: { status: 200 } })
+  f.state.permissions = [{ id: permissionID, sessionID: child }]
+  assert.equal((await f.call("POST", "/dispatch", requestBody({ targetID: child }))).body.status, "admitted")
+  delete rows.get(middle).parentID
+  const otherID = "per_" + "e".repeat(32)
+  f.state.permissions = [{ id: otherID, sessionID: child }]
+  assert.equal((await f.call("POST", "/dispatch", requestBody({ targetID: child, requestID: otherID }))).body.reason, "request_unrelated")
+  assert.equal(f.state.calls.filter(call => call.name === "permissionReply").length, 1)
+})
+
+test("stale, duplicated, mismatched and route-drifted requests never reach native reply", async t => {
+  const f = await fixture(t)
+  assert.equal((await f.call("POST", "/dispatch", requestBody())).body.reason, "request_stale")
+  f.state.permissions = [{ id: permissionID, sessionID: rootID }, { id: permissionID, sessionID: rootID }]
+  assert.equal((await f.call("POST", "/dispatch", requestBody())).body.reason, "native_shape")
+  f.state.permissions.pop()
+  assert.equal((await f.call("POST", "/dispatch", requestBody({ targetID: "ses_" + "c".repeat(32) }))).body.reason, "request_target_mismatch")
+  f.api.client.permission.list = async () => { f.state.route = { name: "home" }; return { data: f.state.permissions, response: { status: 200 } } }
+  assert.equal((await f.call("POST", "/dispatch", requestBody())).body.reason, "route_mismatch")
+  assert.equal(f.state.calls.filter(call => call.name === "permissionReply").length, 0)
+})
+
+test("question answers honor option restrictions, custom defaults and multiple selections", async t => {
+  const f = await fixture(t)
+  f.state.questions = [{ id: questionID, sessionID: rootID, questions: [question({ custom: false }), question({ multiple: true })] }]
+  const body = requestBody({ kind: "question_reply", requestID: questionID, reply: undefined, answers: [["outside"], ["A", "B"]] })
+  assert.equal((await f.call("POST", "/dispatch", body)).body.reason, "answer_invalid")
+  body.answers = [["A", "B"], []]
+  assert.equal((await f.call("POST", "/dispatch", body)).body.reason, "answer_invalid")
+  body.answers = [["A"], ["custom\nanswer", "B"]]
+  const receipt = (await f.call("POST", "/dispatch", body)).body
+  assert.equal(receipt.status, "admitted")
+  assert.deepEqual(f.state.calls.find(call => call.name === "questionReply").input, { requestID: questionID, answers: body.answers })
+})
+
+test("an awaited native true reply qualifies even when the event is delayed", async t => {
+  const f = await fixture(t)
+  f.state.permissions = [{ id: permissionID, sessionID: rootID }]
+  f.api.client.permission.reply = async () => ({ data: true, response: { status: 200 } })
+  assert.equal((await f.call("POST", "/dispatch", requestBody())).body.status, "admitted")
+})
+
+test("native disappearance and an unrelated acknowledgement never prove a request reply", async t => {
+  const f = await fixture(t)
+  f.state.permissions = [{ id: permissionID, sessionID: rootID }]
+  f.api.client.permission.reply = async () => {
+    f.state.permissions = []
+    f.state.events.get("permission.replied")({ type: "permission.replied", properties: { sessionID: rootID, requestID: permissionID, reply: "always" } })
+    return { data: false, response: { status: 200 } }
+  }
+  const body = requestBody()
+  assert.equal((await f.call("POST", "/dispatch", body)).body.status, "uncertain")
+  assert.equal((await f.call("GET", "/receipt?operationID=" + body.operationID)).body.status, "uncertain")
+})
+
+test("lost reply response reconciles from an exact late event without a second write", async t => {
+  const f = await fixture(t)
+  f.state.permissions = [{ id: permissionID, sessionID: rootID }]
+  let calls = 0
+  f.api.client.permission.reply = async () => { calls++; throw new Error("lost native response") }
+  const body = requestBody()
+  assert.equal((await f.call("POST", "/dispatch", body)).body.status, "uncertain")
+  assert.equal((await f.call("POST", "/dispatch", body)).body.status, "uncertain")
+  assert.equal((await f.call("POST", "/dispatch", { ...body, reply: "always" })).body.reason, "operation_conflict")
+  assert.equal((await f.call("POST", "/dispatch", { ...body, operationID: "another_operation" })).body.reason, "request_unresolved")
+  f.state.events.get("permission.replied")({ type: "permission.replied", properties: { sessionID: rootID, requestID: permissionID, reply: "once" } })
+  assert.equal((await f.call("GET", "/receipt?operationID=" + body.operationID)).body.status, "admitted")
+  assert.equal((await f.call("POST", "/dispatch", body)).body.status, "admitted")
+  assert.equal(calls, 1)
+  assert.equal((await f.call("GET", "/receipt?operationID=missing_operation")).body, null)
+})
+
+test("question rejection and answer reconciliation require the exact native event", async t => {
+  const f = await fixture(t)
+  f.state.questions = [{ id: questionID, sessionID: rootID, questions: [question()] }]
+  f.api.client.question.reply = () => { throw new Error("lost response") }
+  const answer = requestBody({ kind: "question_reply", requestID: questionID, reply: undefined, answers: [["A"]] })
+  assert.equal((await f.call("POST", "/dispatch", answer)).body.status, "uncertain")
+  f.state.events.get("question.replied")({ type: "question.replied", properties: { sessionID: rootID, requestID: questionID, answers: [["B"]] } })
+  assert.equal((await f.call("GET", "/receipt?operationID=" + answer.operationID)).body.status, "uncertain")
+  f.state.events.get("question.replied")({ type: "question.replied", properties: { sessionID: rootID, requestID: questionID, answers: [["A"]] } })
+  assert.equal((await f.call("GET", "/receipt?operationID=" + answer.operationID)).body.status, "admitted")
+  const secondID = "que_" + "e".repeat(32)
+  f.state.questions = [{ id: secondID, sessionID: rootID, questions: [question()] }]
+  const reject = requestBody({ kind: "question_reject", requestID: secondID, reply: undefined })
+  assert.equal((await f.call("POST", "/dispatch", reject)).body.status, "admitted")
+  assert.deepEqual(f.state.calls.find(call => call.name === "questionReject").input, { requestID: secondID })
+})
+
+
+test("uncertain prompt receipts retain caller identity and recover by exact native message without replay", async t => {
+  const f = await fixture(t)
+  const operationID = "late_prompt", id = "msg_" + "e".repeat(32)
+  let calls = 0, request
+  f.api.client.session.promptAsync = async input => { calls++; request = input; return { response: { status: 204 } } }
+  const first = (await f.dispatch({ operationID, messageID: id })).body
+  assert.equal(first.status, "uncertain")
+  assert.equal(first.messageID, id)
+  assert.equal((await f.dispatch({ operationID, messageID: id, text: "different" })).body.reason, "operation_conflict")
+  f.api.client.session.messages = () => { throw new Error("receipt recovery must use the exact message endpoint") }
+  f.state.messages.push({ info: { id, sessionID: rootID, role: "user", time: { created: Date.now() }, agent: request.agent, model: { ...request.model, variant: request.variant } }, parts: [{ id: "prt_" + "e".repeat(32), sessionID: rootID, messageID: id, type: "text", text: request.parts[0].text }] })
+  assert.equal((await f.call("GET", "/receipt?operationID=" + operationID)).body.status, "admitted")
+  assert.equal((await f.dispatch({ operationID, messageID: id })).body.status, "admitted")
+  assert.equal(calls, 1)
+})
+
+
+for (const [reply, effect] of [["reject", "reject_session_pending_permissions"], ["always", "approve_native_patterns_and_matching_session_requests"]]) test(`permission ${reply} exposes its native scope`, async t => {
+  const f = await fixture(t)
+  f.state.permissions = [{ id: permissionID, sessionID: rootID }]
+  const receipt = (await f.call("POST", "/dispatch", requestBody({ reply }))).body
+  assert.equal(receipt.status, "admitted")
+  assert.equal(receipt.nativeEffect, effect)
+  assert.equal(f.state.calls.find(call => call.name === "permissionReply").input.reply, reply)
+})
+
+test("receipt capacity retains uncertain records and only evicts terminal ones", async t => {
+  const f = await fixture(t)
+  let calls = 0
+  f.api.client.permission.reply = async () => { calls++; return { data: false, response: { status: 200 } } }
+  for (let i = 0; i < 128; i++) {
+    const id = "per_" + i.toString(16).padStart(32, "0")
+    f.state.permissions = [{ id, sessionID: rootID }]
+    assert.equal((await f.call("POST", "/dispatch", requestBody({ operationID: "capacity_" + i, requestID: id }))).body.status, "uncertain")
+  }
+  const body = requestBody({ operationID: "capacity_next" })
+  f.state.permissions = [{ id: permissionID, sessionID: rootID }]
+  assert.equal((await f.call("POST", "/dispatch", body)).body.reason, "receipt_capacity")
+  assert.equal(calls, 128)
+  assert.equal((await f.call("GET", "/receipt?operationID=capacity_0")).body.status, "uncertain")
+  f.state.events.get("permission.replied")({ type: "permission.replied", properties: { sessionID: rootID, requestID: "per_" + "0".repeat(32), reply: "once" } })
+  assert.equal((await f.call("POST", "/dispatch", body)).body.status, "uncertain")
+  assert.equal(calls, 129)
+  assert.equal((await f.call("GET", "/receipt?operationID=capacity_0")).body, null)
+  assert.equal((await f.call("GET", "/receipt?operationID=capacity_1")).body.status, "uncertain")
+})
+
+
+for (const status of [200, 401, 500]) test(`message lookup ${status} never proves caller ID unused`, async t => {
+  const f = await fixture(t)
+  f.api.client.session.message = async () => ({ response: { status } })
+  assert.equal((await f.dispatch()).body.status, "rejected")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
+})
+
+test("a thrown message lookup never becomes absence", async t => {
+  const f = await fixture(t)
+  f.api.client.session.message = () => { throw { status: 404 } }
+  assert.equal((await f.dispatch()).body.reason, "native_read_failed")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
 })

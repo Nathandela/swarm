@@ -31,8 +31,8 @@ bounded to 128 queued events and 2 MiB; an event is at most 1 MiB.
 
 All writes require the acknowledged binding, exact current root route and
 working directory, supported native version, no modal, a successful current
-native status read, and no pending request in the root's verified ancestry
-subtree. An unresolved or cyclic request ancestry refuses dispatch. Reads and
+native status read, and a verified target. New prompts additionally require an
+idle root with no pending request in its verified ancestry subtree. An unresolved or cyclic request ancestry refuses dispatch. Reads and
 request bodies are bounded. The final route and request-liveness checks and SDK
 invocation share one JavaScript callback. This is a check at dispatch; the native
 API has no atomic expected-view or expected-turn admission fence.
@@ -51,14 +51,59 @@ repeated operation reads that live-process receipt; it never submits again.
 `GET /initial` reconciles late rows without resubmission. Lost-process or absent
 receipts do not authorize replay of a host operation already marked started.
 
-`/dispatch` currently accepts semantic text prompts. It explicitly reuses the
-latest committed native user agent/model/variant from bounded history and labels
-that selection basis. It does not claim the current picker or draft. Native 204
-alone is uncertain: admission requires a newly observed exact message ID,
-matching text and tuple. A call whose promise ignores abort keeps the mutation
-lane occupied until it settles. The host must retain uncertain custody records
-and must not blindly replay them. Permission/question mutations, queue/steer,
-and Stop with an expected turn are outside this vertical.
+`/dispatch` accepts `prompt`, `permission_reply`, `question_reply`, and
+`question_reject`. Prompts explicitly reuse the authoritative native session
+agent/model/variant (`native_session_selection`); missing metadata refuses.
+This is not the unsent TUI picker. The native session stores its resolved model
+selection before writing each native user message. No configuration default is
+guessed and no history-page search decides selection.
+
+Before a new prompt write, an exact native message lookup must return HTTP 404
+for the supplied caller message ID. Existing messages, transport errors, and
+other statuses refuse. Native prompt 204 alone remains uncertain: admission
+requires the exact newly observed user row with matching text and tuple. The
+caller message ID is retained on uncertain receipts; only `status: admitted`
+means admission was proved. The native API still has no atomic create-if-absent
+or expected-view fence; the host must use unique deterministic IDs and custody.
+
+Request replies require an exact current pending ID, exact target session, and
+verified root ancestry. They do not require idle: answering a blocked worker is
+the purpose of these actions. Questions preserve answer order, allow empty
+arrays for skipped items, enforce single/multiple selections, and honor explicit
+`custom: false` (omission allows custom answers). An awaited native HTTP 200 with
+boolean `true`, or an exact matching native replied/rejected event after
+invocation, confirms processing. Disappearance from the pending list does not.
+
+Permission choices retain native semantics, exposed in `nativeEffect`:
+
+| Reply | Native effect |
+| --- | --- |
+| `once` | Resolve the selected request. |
+| `reject` | Reject the selected request and other pending permissions in that native session. |
+| `always` | Add native in-memory approval patterns and resolve matching pending permissions in that session; those rules also affect later requests. |
+
+The bridge retains at most 128 live operation records and 2 MiB of request
+payloads. It evicts only terminal records; unresolved records remain until
+processing is proved or the plugin ends. Full unresolved capacity refuses new
+writes. Repeating an owned operation with its unchanged body reads its receipt;
+a changed body conflicts. `GET /receipt?operationID=...` also reads/reconciles
+without submitting. Prompt reconciliation uses the exact native message GET,
+so a message moving outside the latest history page does not prevent recovery.
+Late reply events reconcile request receipts. A missing or evicted receipt never
+authorizes replay; durable host custody remains authoritative. The bridge's
+`requestHash` is its own normalized content digest, separate from host custody
+hashes and the initial-prompt text hash.
+
+An SDK promise which ignores abort keeps the mutation lane occupied until it
+settles. The host retains uncertain operations and never blindly replays them.
+Queue/steer and Stop with an expected turn remain unsupported. Mock hierarchy
+and multiple-request tests do not qualify the full native interaction source;
+that requires separate native integration evidence.
+
+Pinned primary source: [request effects](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/permission/index.ts#L109),
+[awaited reply handler](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/server/routes/instance/httpapi/handlers/permission.ts#L16),
+[question effects](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/question/index.ts#L114),
+and [native session selection](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/session/prompt.ts#L613).
 
 ## Verification
 

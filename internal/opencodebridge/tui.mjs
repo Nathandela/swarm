@@ -60,7 +60,7 @@ export default { id: ID, async tui(api, options) {
   let binding
   try { binding = bindingFrom(options) } catch { throw fault("binding_invalid") }
   const token = Buffer.from(digest(binding.token), "hex")
-  const streams = new Set(), controllers = new Set(), unsubscribers = []
+  const streams = new Set(), controllers = new Set(), unsubscribers = [], operations = new Map()
   let bound = false, acknowledged = false, disposed = false, bootstrapReason = "binding_pending"
   let createdAt = binding.nativeCreatedAtMS, active = null, initial = null, promptRef, promptProps
   const identity = () => ({ version: 1, workerID: binding.workerID, sessionInstance: binding.sessionInstance, rootID: binding.rootID, directory: binding.directory, backendGeneration: binding.backendGeneration, nativeCreatedAtMS: createdAt })
@@ -122,16 +122,21 @@ export default { id: ID, async tui(api, options) {
     if (createdAt && row.time.created !== createdAt) throw fault("native_binding_mismatch")
     return row
   }
+  function checkedMessage(message) {
+    const info = message?.info
+    if (!object(info) || info.sessionID !== binding.rootID || !messageID(info.id) || !["user", "assistant"].includes(info.role) || !Array.isArray(message.parts)) throw fault("native_shape")
+    for (const part of message.parts) if (!object(part) || part.sessionID !== binding.rootID || part.messageID !== info.id || !string(part.id) || !string(part.type)) throw fault("native_shape")
+    return message
+  }
   async function history(limit = 50, before = "") {
     const result = await read(opts => api.client.session.messages({ sessionID: binding.rootID, limit, ...(before ? { before } : {}) }, opts))
     const messages = list(result.data)
     const ids = new Set()
     if (messages.length > limit) throw fault("native_shape")
     for (const message of messages) {
-      const info = message?.info
-      if (!object(info) || info.sessionID !== binding.rootID || !messageID(info.id) || !["user", "assistant"].includes(info.role) || ids.has(info.id) || !Array.isArray(message.parts)) throw fault("native_shape")
+      const info = checkedMessage(message).info
+      if (ids.has(info.id)) throw fault("native_shape")
       ids.add(info.id)
-      for (const part of message.parts) if (!object(part) || part.sessionID !== binding.rootID || part.messageID !== info.id || !string(part.id) || !string(part.type)) throw fault("native_shape")
     }
     const nextCursor = result.response?.headers?.get("x-next-cursor") ?? ""
     if (typeof nextCursor !== "string" || nextCursor.length > 4096 || /[\x00-\x20\x7f]/.test(nextCursor)) throw fault("native_shape")
@@ -147,16 +152,11 @@ export default { id: ID, async tui(api, options) {
     rowMatches(session.data)
     return { session: session.data, statuses: map(statuses.data), permissions: list(permissions.data), questions: list(questions.data) }
   }
-  async function idle(snapshot, check) {
-    const status = snapshot.statuses[binding.rootID]
-    if (status !== undefined && (!object(status) || status.type !== "idle")) throw fault("native_busy")
-    const requests = [...snapshot.permissions, ...snapshot.questions]
-    if (requests.length > 128) throw fault("native_shape")
+  function requestScope(check) {
     const scope = new Map([[binding.rootID, true]])
     let reads = 0
-    for (const request of requests) {
-      if (!object(request) || !sessionID(request.sessionID)) throw fault("native_shape")
-      let id = request.sessionID
+    return async function related(id) {
+      if (!sessionID(id)) throw fault("native_shape")
       const trail = new Set()
       while (!scope.has(id)) {
         if (trail.has(id) || trail.size >= 8 || reads++ >= 32) throw fault("request_scope_unknown")
@@ -167,67 +167,157 @@ export default { id: ID, async tui(api, options) {
         if (!row.parentID) { scope.set(id, false); break }
         id = row.parentID
       }
-      const related = scope.get(id)
-      for (const entry of trail) scope.set(entry, related)
-      if (related) throw fault("native_request_pending")
+      const result = scope.get(id)
+      for (const entry of trail) scope.set(entry, result)
+      return result
     }
   }
-  async function latestSelection(check) {
-    let before = ""
-    for (let page = 0; page < 4; page++) {
-      const result = await history(50, before)
-      check()
-      const user = result.messages.findLast(m => m.info.role === "user")?.info
-      if (user) {
-        if (!string(user.agent) || !string(user.model?.providerID) || !string(user.model?.modelID) || (user.model.variant !== undefined && !string(user.model.variant))) throw fault("selection_unqualified")
-        return { agent: user.agent, model: { providerID: user.model.providerID, modelID: user.model.modelID }, variant: user.model.variant ?? "default", selectionBasis: "latest_committed_user", selectionMessageID: user.id }
-      }
-      if (!result.nextCursor || result.nextCursor === before) break
-      before = result.nextCursor
+  async function idle(snapshot, check) {
+    const status = snapshot.statuses[binding.rootID]
+    if (status !== undefined && (!object(status) || status.type !== "idle")) throw fault("native_busy")
+    const requests = [...snapshot.permissions, ...snapshot.questions], related = requestScope(check)
+    if (requests.length > 128) throw fault("native_shape")
+    for (const request of requests) {
+      if (!object(request)) throw fault("native_shape")
+      if (await related(request.sessionID)) throw fault("native_request_pending")
     }
-    throw fault("selection_unavailable")
   }
-  async function observePrompt(body, selection, startedAt) {
-    const until = Date.now() + 2000
-    while (!disposed && Date.now() < until) {
-      const row = (await history()).messages.find(m => m.info.id === body.messageID)
-      const info = row?.info
-      if (info?.role === "user" && Number.isSafeInteger(info.time?.created) && info.time.created >= startedAt && info.agent === selection.agent && info.model?.providerID === selection.model.providerID && info.model?.modelID === selection.model.modelID && (info.model.variant ?? "default") === selection.variant && row.parts.filter(p => p.type === "text" && !p.synthetic).map(p => p.text).join("") === body.text) return true
+  async function requireUnusedMessage(id) {
+    let result
+    try { result = await bounded(signal => api.client.session.message({ sessionID: binding.rootID, messageID: id }, { throwOnError: false, signal })) }
+    catch { throw fault("native_read_failed") }
+    if (result?.response?.status === 200) throw fault("native_message_exists")
+    if (result?.response?.status !== 404) throw fault("native_read_failed")
+  }
+  function nativeSelection(session) {
+    if (!string(session.agent) || !string(session.model?.providerID) || !string(session.model?.id) || (session.model.variant !== undefined && !string(session.model.variant))) throw fault("selection_unavailable")
+    return { agent: session.agent, model: { providerID: session.model.providerID, modelID: session.model.id }, variant: session.model.variant ?? "default", selectionBasis: "native_session_selection", selectionMessageID: "" }
+  }
+  function operationHash(body) {
+    return digest(JSON.stringify([body.version, body.sessionInstance, body.backendGeneration, body.rootID, body.kind, body.targetID, body.messageID ?? null, body.text ?? null, body.requestID ?? null, body.reply ?? null, body.answers ?? null]))
+  }
+  function operationReceipt(record) {
+    return record ? { ...identity(), ...record.receipt, inFlight: active !== null } : null
+  }
+  function admit(record) { record.receipt.status = "admitted"; record.receipt.reason = "" }
+  function remember(body, selection) {
+    const bytes = Buffer.byteLength(JSON.stringify(body))
+    while (operations.size >= 128 || [...operations.values()].reduce((total, entry) => total + entry.bytes, bytes) > RESPONSE_LIMIT) {
+      const terminal = [...operations.entries()].find(([, entry]) => entry.receipt.status !== "uncertain")
+      if (!terminal) throw fault("receipt_capacity")
+      operations.delete(terminal[0])
+    }
+    const nativeEffect = body.kind === "prompt" ? "" : body.kind === "permission_reply" && body.reply === "reject" ? "reject_session_pending_permissions" : body.kind === "permission_reply" && body.reply === "always" ? "approve_native_patterns_and_matching_session_requests" : "single_request"
+    const record = { body, bytes, selection, startedAt: Date.now(), invoked: false, receipt: { operationID: body.operationID, requestHash: operationHash(body), kind: body.kind, targetID: body.targetID, nativeEffect, ...(body.messageID ? { messageID: body.messageID } : { requestID: body.requestID }), ...selection, status: "uncertain", reason: "native_ack_unobserved" } }
+    operations.set(body.operationID, record)
+    return record
+  }
+  async function reconcilePrompt(record, wait = 0) {
+    if (record.body.kind !== "prompt" || !record.invoked || record.receipt.status !== "uncertain") return
+    const { body, selection, startedAt } = record, until = Date.now() + wait
+    do {
+      try {
+        const row = checkedMessage((await read(opts => api.client.session.message({ sessionID: binding.rootID, messageID: body.messageID }, opts))).data), info = row.info
+        if (info.id === body.messageID && info.role === "user" && Number.isSafeInteger(info.time?.created) && info.time.created >= startedAt && info.agent === selection.agent && info.model?.providerID === selection.model.providerID && info.model?.modelID === selection.model.modelID && (info.model.variant ?? "default") === selection.variant && row.parts.filter(p => p.type === "text" && !p.synthetic).map(p => p.text).join("") === body.text) { admit(record); return }
+      } catch { /* Native acknowledgement remains uncertain until the exact row can be read. */ }
+      if (disposed || Date.now() >= until) return
       await pause(100)
+    } while (!disposed)
+  }
+  async function savedOperation(body) {
+    const record = operations.get(body.operationID)
+    if (!record) return null
+    if (record.receipt.requestHash !== operationHash(body)) throw fault("operation_conflict")
+    await reconcilePrompt(record)
+    return operationReceipt(record)
+  }
+  function observeReply(event) {
+    const properties = event?.properties
+    if (!object(properties)) return
+    for (const record of operations.values()) {
+      const body = record.body
+      if (!record.invoked || record.receipt.status !== "uncertain" || properties.sessionID !== body.targetID || properties.requestID !== body.requestID) continue
+      if ((body.kind === "permission_reply" && event.type === "permission.replied" && properties.reply === body.reply) ||
+          (body.kind === "question_reply" && event.type === "question.replied" && JSON.stringify(properties.answers) === JSON.stringify(body.answers)) ||
+          (body.kind === "question_reject" && event.type === "question.rejected")) admit(record)
     }
-    return false
   }
   function envelope(body, extra) {
     scoped(body)
     if (!exactKeys(body, ["version", "sessionInstance", "backendGeneration", "rootID", "operationID", "text", ...extra]) || !string(body.operationID) || typeof body.text !== "string" || !body.text || Buffer.byteLength(body.text) > 16384) throw fault("bad_envelope")
   }
+  function answersMatch(questions, answers) {
+    if (!Array.isArray(questions) || !questions.length || questions.length > 16 || !Array.isArray(answers) || answers.length !== questions.length || Buffer.byteLength(JSON.stringify(answers)) > 16384) throw fault("answer_invalid")
+    for (let index = 0; index < questions.length; index++) {
+      const question = questions[index], answer = answers[index]
+      if (!object(question) || !Array.isArray(question.options) || question.options.length > 128 || (question.custom !== undefined && typeof question.custom !== "boolean") || (question.multiple !== undefined && typeof question.multiple !== "boolean")) throw fault("native_shape")
+      const labels = new Set()
+      for (const option of question.options) { if (!object(option) || typeof option.label !== "string" || labels.has(option.label)) throw fault("native_shape"); labels.add(option.label) }
+      if (!Array.isArray(answer) || answer.length > 128 || (!question.multiple && answer.length > 1) || new Set(answer).size !== answer.length) throw fault("answer_invalid")
+      for (const label of answer) if (typeof label !== "string" || !label.length || Buffer.byteLength(label) > 4096 || label.includes("\0") || (question.custom === false && !labels.has(label))) throw fault("answer_invalid")
+    }
+  }
   async function dispatch(body, check) {
-    envelope(body, ["kind", "targetID", "messageID"])
-    if (body.kind !== "prompt") throw fault("unsupported_kind")
-    if (body.targetID !== binding.rootID || !messageID(body.messageID)) throw fault("target_invalid")
+    scoped(body)
+    const prompt = body.kind === "prompt", permission = body.kind === "permission_reply"
+    if (prompt) {
+      envelope(body, ["kind", "targetID", "messageID"])
+      if (body.targetID !== binding.rootID || !messageID(body.messageID)) throw fault("target_invalid")
+    } else {
+      if (!["permission_reply", "question_reply", "question_reject"].includes(body.kind)) throw fault("unsupported_kind")
+      const fields = permission ? ["reply"] : body.kind === "question_reply" ? ["answers"] : []
+      if (!exactKeys(body, ["version", "sessionInstance", "backendGeneration", "rootID", "operationID", "kind", "targetID", "requestID", ...fields]) || !string(body.operationID) || !sessionID(body.targetID) || typeof body.requestID !== "string" || !(permission ? /^per_[A-Za-z0-9]{10,124}$/ : /^que_[A-Za-z0-9]{10,124}$/).test(body.requestID) || (permission && !["once", "always", "reject"].includes(body.reply))) throw fault("bad_envelope")
+    }
+    const saved = await savedOperation(body)
+    if (saved) return saved
     if (binding.initialPrompt && initial?.status !== "admitted") throw fault("initial_pending")
     if (active) throw fault("busy")
-    const lane = {}; active = lane
-    let selection
-    try {
-      view(); const snapshot = await current(); await idle(snapshot, check)
-      selection = await latestSelection(check)
-      // The final route read and native invocation share one JS callback; no await separates them.
-      check(); view()
-      const startedAt = Date.now()
-      const request = { sessionID: binding.rootID, messageID: body.messageID, parts: [{ type: "text", text: body.text }], agent: selection.agent, model: selection.model, variant: selection.variant }
-      let result
-      try { result = await bounded(signal => { lane.invoked = true; return api.client.session.promptAsync(request, { throwOnError: true, signal }) }, NATIVE_TIMEOUT, lane) }
-      catch (err) { return { ...identity(), operationID: body.operationID, status: "uncertain", reason: err[reasonKey] ?? "native_error", ...selection, inFlight: active !== null } }
-      const status = result?.response?.status
-      let outcome = [400,401,403,404,405,409,422].includes(status) ? "rejected" : "uncertain"
-      if (status === 204 && result.error === undefined) {
-        try { if (await observePrompt(body, selection, startedAt)) outcome = "admitted" } catch { /* The write already crossed the native boundary. */ }
+    for (const record of operations.values()) {
+      if (prompt ? record.body.messageID === body.messageID : record.body.requestID === body.requestID && record.body.targetID === body.targetID) {
+        if (record.receipt.status === "uncertain") throw fault("request_unresolved")
+        if (record.receipt.status === "admitted") throw fault("request_stale")
       }
-      return { ...identity(), operationID: body.operationID, messageID: outcome === "admitted" ? body.messageID : "", status: outcome, reason: outcome === "admitted" ? "" : status === 204 ? "native_message_unobserved" : "native_response", nativeStatus: Number.isInteger(status) ? status : 0, ...selection, inFlight: active !== null }
+    }
+    const lane = {}; active = lane
+    let record
+    try {
+      view(); const snapshot = await current()
+      let selection, invoke
+      if (prompt) {
+        await idle(snapshot, check); selection = nativeSelection(snapshot.session)
+        await requireUnusedMessage(body.messageID)
+        const request = { sessionID: binding.rootID, messageID: body.messageID, parts: [{ type: "text", text: body.text }], agent: selection.agent, model: selection.model, variant: selection.variant }
+        invoke = options => api.client.session.promptAsync(request, options)
+      } else {
+        const requests = permission ? snapshot.permissions : snapshot.questions
+        if (requests.length > 128) throw fault("native_shape")
+        const matches = requests.filter(request => object(request) && request.id === body.requestID)
+        if (matches.length > 1) throw fault("native_shape")
+        if (!matches.length) throw fault("request_stale")
+        const pending = matches[0]
+        if (pending.sessionID !== body.targetID) throw fault("request_target_mismatch")
+        if (!await requestScope(check)(pending.sessionID)) throw fault("request_unrelated")
+        if (body.kind === "question_reply") answersMatch(pending.questions, body.answers)
+        invoke = options => permission ? api.client.permission.reply({ requestID: body.requestID, reply: body.reply }, options) : body.kind === "question_reply" ? api.client.question.reply({ requestID: body.requestID, answers: body.answers }, options) : api.client.question.reject({ requestID: body.requestID }, options)
+      }
+      // The final route read and native invocation share one JS callback; no await separates them.
+      check(); view(); record = remember(body, selection)
+      let result
+      try { result = await bounded(signal => { record.invoked = true; return invoke({ throwOnError: true, signal }) }, NATIVE_TIMEOUT, lane) }
+      catch (err) { if (record.receipt.status !== "admitted") record.receipt.reason = err[reasonKey] ?? "native_error"; return operationReceipt(record) }
+      const status = result?.response?.status
+      record.receipt.nativeStatus = Number.isInteger(status) ? status : 0
+      if (!prompt && status === 200 && result.data === true && result.error === undefined) admit(record)
+      if (record.receipt.status !== "admitted") {
+        record.receipt.reason = "native_ack_unobserved"
+        if ([400,401,403,404,405,409,422].includes(status)) { record.receipt.status = "rejected"; record.receipt.reason = "native_response" }
+      }
+      if (prompt && status === 204 && result.error === undefined) await reconcilePrompt(record, 2000)
+      return operationReceipt(record)
     } catch (err) {
-      if (!lane.invoked) throw err
-      return { ...identity(), operationID: body.operationID, status: "uncertain", reason: "native_error", ...selection, inFlight: active !== null }
+      if (!record?.invoked) throw err
+      if (record.receipt.status !== "admitted") record.receipt.reason = "native_error"
+      return operationReceipt(record)
     } finally { lane.returned = true; if (!lane.pending && active === lane) active = null }
   }
 
@@ -287,6 +377,7 @@ export default { id: ID, async tui(api, options) {
   }
 
   function emit(event) {
+    observeReply(event)
     if (![...streams].some(stream => !stream.closing)) return
     let frame
     try { frame = "data: " + JSON.stringify(event) + "\n\n" } catch { return }
@@ -313,6 +404,13 @@ export default { id: ID, async tui(api, options) {
     try {
       const url = new URL(req.url, "http://swarm-bridge")
       if (req.method === "GET" && url.pathname === "/ready") return response(res, 200, readiness())
+      if (req.method === "GET" && url.pathname === "/receipt") {
+        const operationID = url.searchParams.get("operationID")
+        if (!string(operationID)) throw fault("bad_envelope")
+        const record = operations.get(operationID)
+        if (record) await reconcilePrompt(record)
+        return response(res, 200, operationReceipt(record))
+      }
       if (req.method === "GET" && url.pathname === "/initial") { if (initial) await reconcileInitial(); return response(res, 200, initialReceipt()) }
       if (req.method === "GET" && url.pathname === "/snapshot") {
         if (!bound) throw fault(bootstrapReason)

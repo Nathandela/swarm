@@ -76,15 +76,18 @@ type InitialRequest struct {
 }
 
 type DispatchRequest struct {
-	Version           int    `json:"version"`
-	SessionInstance   string `json:"sessionInstance"`
-	BackendGeneration string `json:"backendGeneration"`
-	RootID            string `json:"rootID"`
-	OperationID       string `json:"operationID"`
-	Kind              string `json:"kind"`
-	TargetID          string `json:"targetID"`
-	MessageID         string `json:"messageID"`
-	Text              string `json:"text"`
+	Version           int        `json:"version"`
+	SessionInstance   string     `json:"sessionInstance"`
+	BackendGeneration string     `json:"backendGeneration"`
+	RootID            string     `json:"rootID"`
+	OperationID       string     `json:"operationID"`
+	Kind              string     `json:"kind"`
+	TargetID          string     `json:"targetID"`
+	MessageID         string     `json:"messageID,omitempty"`
+	Text              string     `json:"text,omitempty"`
+	RequestID         string     `json:"requestID,omitempty"`
+	Reply             string     `json:"reply,omitempty"`
+	Answers           [][]string `json:"answers,omitempty"`
 }
 
 type Model struct {
@@ -94,6 +97,9 @@ type Model struct {
 
 type Receipt struct {
 	Identity
+	Kind               string `json:"kind"`
+	RequestID          string `json:"requestID"`
+	TargetID           string `json:"targetID"`
 	Status             string `json:"status"`
 	Reason             string `json:"reason"`
 	OperationID        string `json:"operationID"`
@@ -105,6 +111,7 @@ type Receipt struct {
 	SelectionBasis     string `json:"selectionBasis"`
 	SelectionMessageID string `json:"selectionMessageID"`
 	NativeStatus       int    `json:"nativeStatus"`
+	NativeEffect       string `json:"nativeEffect"`
 	InFlight           bool   `json:"inFlight"`
 }
 
@@ -174,6 +181,16 @@ func (c *Client) InitialReceipt(ctx context.Context) (*Receipt, error) {
 func (c *Client) Dispatch(ctx context.Context, in DispatchRequest) (Receipt, error) {
 	var out Receipt
 	err := c.request(ctx, "POST", "/dispatch", in, &out)
+	return out, err
+}
+
+// OperationReceipt never submits. A missing live receipt does not authorize replay.
+func (c *Client) OperationReceipt(ctx context.Context, operationID string) (*Receipt, error) {
+	var out *Receipt
+	if operationID == "" || len(operationID) > 128 || strings.ContainsAny(operationID, "\x00\r\n") {
+		return nil, errors.New("opencode bridge: invalid operation ID")
+	}
+	err := c.request(ctx, "GET", "/receipt?operationID="+url.QueryEscape(operationID), nil, &out)
 	return out, err
 }
 func (c *Client) Snapshot(ctx context.Context, limit int, before string) (Snapshot, error) {
