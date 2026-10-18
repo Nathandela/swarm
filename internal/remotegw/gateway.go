@@ -577,20 +577,25 @@ func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol
 	}
 	defer func() { _ = dc.Close() }()
 	within := 10 * time.Second
+	if op == protocol.OpNativeDecide || op == protocol.OpComposerSend {
+		within = 35 * time.Second
+	}
 	if op == protocol.OpNativeDecide {
 		if !dc.hasCap(protocol.CapNativeRequests) {
 			return protocol.Control{Op: protocol.OpError, OperationID: rc.OperationID, SessionID: rc.Session,
 				ErrorCode: protocol.CodeCapabilityRefused, Error: "native decisions are unavailable on this daemon"}, nil
 		}
-		within = 35 * time.Second
-		_ = dc.conn.SetDeadline(time.Now().Add(within))
+	}
+	deadline := time.Now().Add(within)
+	if err := dc.conn.SetDeadline(deadline); err != nil {
+		return protocol.Control{}, err
 	}
 
 	if err := dc.writeControl(forwardControl(dc.endpointID, op, rc)); err != nil {
 		return protocol.Control{}, err
 	}
 	// The daemon replies OpOK / OpLaunch on success or OpError on refusal.
-	return dc.readControl(within)
+	return dc.readControl(time.Until(deadline))
 }
 
 // forwardControl is ForwardCommand's ASSEMBLY, split out so it can be tested without a
