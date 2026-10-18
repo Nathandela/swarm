@@ -42,7 +42,11 @@ func (p *openCodeTranscript) recoverOwnedInputs(ctx context.Context, reader open
 			continue
 		}
 		retained, err := readOpenCodeEvidence(operation.Evidence)
-		if err != nil || !admissionMatchesIntent(retained.Receipt, entry.operation, entry.intent) {
+		if len(operation.Evidence) > 0 {
+			if err != nil || !admissionMatchesIntent(retained.Receipt, entry.operation, entry.intent) {
+				continue
+			}
+		} else if operation.Phase != idempotency.PhaseExecuting && operation.Phase != idempotency.PhaseOutcomeUnknown {
 			continue
 		}
 		row, err := p.readMessage(ctx, reader, candidate.MessageID)
@@ -50,8 +54,13 @@ func (p *openCodeTranscript) recoverOwnedInputs(ctx context.Context, reader open
 			return err
 		}
 		observed, err := qualifyOpenCodeAdmission(entry.operation, entry.intent, row)
-		if err != nil || observed.Agent != retained.Receipt.Agent || *observed.Model != *retained.Receipt.Model || observed.Variant != retained.Receipt.Variant {
-			return errors.New("native recovered user differs from retained admission")
+		if err != nil || len(operation.Evidence) > 0 && (observed.Agent != retained.Receipt.Agent || *observed.Model != *retained.Receipt.Model || observed.Variant != retained.Receipt.Variant) {
+			return errors.New("native recovered user differs from owned input")
+		}
+		if len(operation.Evidence) == 0 {
+			if err := p.d.recordOpenCodeAdmission(entry.operation, entry.intent, observed); err != nil {
+				return err
+			}
 		}
 		if err := state.ImportHistory([]json.RawMessage{row}, epoch); err != nil {
 			return err
