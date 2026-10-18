@@ -72,7 +72,7 @@ func TestOpenCodeObservationOnlyChangePublishesRosterEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	store, err := persist.NewStore(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestOpenCodeObservationOnlyChangePublishesRosterEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { core.Close() })
+	t.Cleanup(func() { _ = core.Close() })
 	var attention atomic.Bool
 	api := newCoreAPI(core, "", "ep")
 	t.Cleanup(api.close)

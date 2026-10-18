@@ -310,7 +310,8 @@ func DecodeMessageRow(raw []byte) (Message, []Part, error) {
 	}
 	m.PartsKnown = true
 	for _, part := range parts {
-		if part.Type == "tool" && !part.ProviderExecuted && !(part.State != nil && part.State.Status == "error" && part.State.Metadata.Interrupted) {
+		interrupted := part.State != nil && part.State.Status == "error" && part.State.Metadata.Interrupted
+		if part.Type == "tool" && !part.ProviderExecuted && !interrupted {
 			m.ContinuingTools = true
 		}
 	}

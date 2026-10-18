@@ -75,11 +75,11 @@ func TestOpenCodeObservationNeverAdvertisedOrPublishedRemotely(t *testing.T) {
 
 func TestOpenCodeObservationSharedFanoutSeparatesNegotiatedClients(t *testing.T) {
 	server := NewServer(&openCodeObservationStub{newStubDaemon()}, "stable")
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	var clients []*clientConn
 	for _, caps := range [][]string{{CapOpenCodeObservation}, nil} {
 		a, b := net.Pipe()
-		t.Cleanup(func() { a.Close(); b.Close() })
+		t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
 		cc := &clientConn{endpointID: "stable", caps: caps, eventQ: make(chan []byte, 1), conn: a, done: make(chan struct{})}
 		clients = append(clients, cc)
 		server.subMu.Lock()

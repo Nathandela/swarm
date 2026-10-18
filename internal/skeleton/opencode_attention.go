@@ -179,7 +179,8 @@ func decodeOpenCodeRequest(kind string, raw json.RawMessage) (OpenCodeRequest, e
 			return request, errors.New("invalid native request tool identity")
 		}
 	}
-	if kind == "permission" {
+	switch kind {
+	case "permission":
 		var extra struct {
 			Metadata json.RawMessage `json:"metadata"`
 		}
@@ -195,7 +196,7 @@ func decodeOpenCodeRequest(kind string, raw json.RawMessage) (OpenCodeRequest, e
 				}
 			}
 		}
-	} else if kind == "question" {
+	case "question":
 		if len(request.Questions) == 0 || len(request.Questions) > 16 {
 			return request, errors.New("invalid native question")
 		}
@@ -229,7 +230,7 @@ func decodeOpenCodeRequest(kind string, raw json.RawMessage) (OpenCodeRequest, e
 				}
 			}
 		}
-	} else {
+	default:
 		return request, errors.New("unknown native request kind")
 	}
 	request.Raw = append(json.RawMessage(nil), raw...)

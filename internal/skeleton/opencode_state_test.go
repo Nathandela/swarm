@@ -627,7 +627,7 @@ func TestOpenCodeState_InputCapacityEvictsTerminalThenRefuses(t *testing.T) {
 	}
 
 	// The refused message's terminal answer is explicit uncertainty.
-	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, fmt.Sprintf("msg_ar"), refused, 2110, 2120, "stop"))
+	ocReadAssistant(t, st, epoch, ocAssistantMessage(root, "msg_ar", refused, 2110, 2120, "stop"))
 	if got := st.View().Uncertain; len(got) != 1 || got[0].InputID != refused {
 		t.Fatalf("uncertain = %+v", got)
 	}

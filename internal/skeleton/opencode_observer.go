@@ -21,7 +21,7 @@ type openCodeReader interface {
 // observeOpenCode owns the reducer. The first result is a subscription/snapshot barrier.
 func observeOpenCode(ctx context.Context, reader openCodeReader, identity opencodebridge.Identity, state *OpenCodeState, publish func(OpenCodeView), ready func(error)) {
 	for {
-		observeOpenCodeEpoch(ctx, reader, identity, state, publish, ready)
+		_ = observeOpenCodeEpoch(ctx, reader, identity, state, publish, ready)
 		ready = nil
 		if ctx.Err() != nil {
 			return
