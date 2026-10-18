@@ -13,6 +13,7 @@ import (
 // remains the public degrade-only helper and cannot perform that recovery.
 type SessionCapabilities struct {
 	NativeInteractionVersion int    `json:"native_interaction_version,omitempty"` // independently proven native read projection
+	NativeComposer           bool   `json:"native_composer,omitempty"`            // current native sink proof, independent of generic chat
 	Provider                 string `json:"provider"`                             // adapter identity: claude, codex, opencode, agy, ...
 	ProviderVersion          string `json:"provider_version"`                     // the DETECTED version of the installed CLI
 	AdapterRevision          string `json:"adapter_revision"`                     // the revision of the Swarm adapter that produced the record
@@ -62,6 +63,9 @@ func (c *SessionCapabilities) Validate() error {
 	}
 	if c.SessionInstance == "" {
 		return fmt.Errorf("%w: no session_instance", ErrCapabilityInconsistent)
+	}
+	if c.NativeComposer && (c.Provider != "opencode" || c.NativeInteractionVersion != 2 || c.StructuredChat) {
+		return fmt.Errorf("%w: native composer requires the exact OpenCode read contract", ErrCapabilityInconsistent)
 	}
 	return nil
 }
