@@ -1,0 +1,19 @@
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/opencode_observation_test.go:14:62: undefined: OpenCodeObservationView
+internal/protocol/opencode_observation_test.go:15:9: undefined: OpenCodeObservationView
+internal/protocol/opencode_observation_test.go:23:57: undefined: CapOpenCodeObservation
+internal/protocol/opencode_observation_test.go:33:15: rows[0].OpenCode undefined (type SessionView has no field or method OpenCode)
+internal/protocol/opencode_observation_test.go:34:67: rows[0].OpenCode undefined (type SessionView has no field or method OpenCode)
+internal/protocol/opencode_observation_test.go:54:21: event.Session.OpenCode undefined (type SessionView has no field or method OpenCode)
+internal/protocol/opencode_observation_test.go:63:45: undefined: CapOpenCodeObservation
+internal/protocol/opencode_observation_test.go:67:9: row.OpenCode undefined (type *SessionView has no field or method OpenCode)
+internal/protocol/opencode_observation_test.go:70:68: undefined: CapOpenCodeObservation
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/opencode_projection_test.go:21:16: undefined: openCodeProjection
+internal/skeleton/opencode_projection_test.go:26:16: undefined: maxOpenCodeProjectionBytes
+internal/skeleton/opencode_projection_test.go:48:16: undefined: openCodeProjection
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+
+exit=1
