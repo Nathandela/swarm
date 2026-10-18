@@ -97,3 +97,12 @@ func TestDoctorOpenCodeChecksExactPrivateBindingWithoutSubmitting(t *testing.T) 
 		})
 	}
 }
+
+func TestDoctorOpenCodeNamesDefiniteInitialRefusal(t *testing.T) {
+	m := persist.Meta{ID: "worker", SchemaVersion: persist.OpenCodeSchemaVersion, OpenCodeBinding: &persist.OpenCodeBinding{Phase: persist.OpenCodePhaseReady, NativeCreatedAtMS: 123}}
+	_ = json.Unmarshal([]byte(`{"phase":"rejected","reason":"initial_agent_unavailable"}`), &m.OpenCodeBinding.Initial)
+	finding := doctorOpenCodeCheck(context.Background(), t.TempDir(), m)
+	if !strings.Contains(finding.Detail, "initial_agent_unavailable") || strings.Contains(finding.Detail, "unconfirmed") || !strings.Contains(finding.Fix, "new launch") {
+		t.Fatalf("definite refusal lacks actionable explanation: %+v", finding)
+	}
+}

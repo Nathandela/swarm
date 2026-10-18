@@ -110,3 +110,22 @@ func TestOpenCodeRuntimeUsesExecutionCriticalSchemaOnly(t *testing.T) {
 		t.Fatalf("ordinary schema changed: %+v %v", ordinary, err)
 	}
 }
+
+func TestOpenCodeInitialRejectedRequiresReasonAndNoNativeMessage(t *testing.T) {
+	b := plannedOpenCode()
+	b.Phase = OpenCodePhaseReady
+	b.NativeCreatedAtMS = 123
+	raw := `{"operation_id":"` + strings.Repeat("b", 32) + `","request_hash":"` + strings.Repeat("c", 64) + `","phase":"rejected","reason":"initial_agent_unavailable"}`
+	if err := json.Unmarshal([]byte(raw), &b.Initial); err != nil {
+		t.Fatal(err)
+	}
+	if !ValidOpenCodeBinding(b) {
+		t.Fatal("qualified initial refusal rejected")
+	}
+	for _, replacement := range []string{`"reason":""`, `"reason":"raw credential or body"`, `"reason":"initial_agent_unavailable","message_id":"msg_` + strings.Repeat("m", 26) + `"`} {
+		_ = json.Unmarshal([]byte(strings.Replace(raw, `"reason":"initial_agent_unavailable"`, replacement, 1)), &b.Initial)
+		if ValidOpenCodeBinding(b) {
+			t.Fatal("ambiguous or unsafe rejected initial accepted")
+		}
+	}
+}

@@ -22,6 +22,8 @@ import (
 
 type openCodeRuntimeFixture struct {
 	initialRequest atomic.Value
+	rejectReason   atomic.Value
+	rejectBadProof atomic.Bool
 	d              *Daemon
 	m              persist.Meta
 	b              opencodebridge.Binding
@@ -118,6 +120,14 @@ func newOpenCodeRuntimeFixture(t *testing.T) *openCodeRuntimeFixture {
 			}
 			if !f.haveReceipt.Load() {
 				_ = json.NewEncoder(w).Encode(nil)
+				return
+			}
+			if reason, ok := f.rejectReason.Load().(string); ok && reason != "" {
+				effect := "none"
+				if f.rejectBadProof.Load() {
+					effect = "unknown"
+				}
+				_ = json.NewEncoder(w).Encode(opencodebridge.Receipt{Identity: identity, Status: "rejected", Reason: reason, NativeEffect: effect, OperationID: f.m.OpenCodeBinding.Initial.OperationID, RequestHash: f.m.OpenCodeBinding.Initial.RequestHash})
 				return
 			}
 			_ = json.NewEncoder(w).Encode(opencodebridge.Receipt{Identity: identity, Status: "admitted", OperationID: f.m.OpenCodeBinding.Initial.OperationID, RequestHash: f.m.OpenCodeBinding.Initial.RequestHash,
@@ -275,5 +285,53 @@ func TestOpenCodeInitialCarriesRequestedChoicesToNativePreflight(t *testing.T) {
 				t.Fatal("native preflight did not receive exact requested choices")
 			}
 		})
+	}
+}
+
+func TestOpenCodeInitialDefiniteRejectionIsDurableAndNeverReposted(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		t.Run(fmt.Sprint(lost), func(t *testing.T) {
+			f := newOpenCodeRuntimeFixture(t)
+			f.rejectReason.Store("initial_model_unavailable")
+			f.dropReply.Store(lost)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			err := f.d.joinOpenCode(ctx, f.m.ID)
+			if lost {
+				if err == nil {
+					t.Fatal("lost reply accepted")
+				}
+				err = f.d.joinOpenCode(ctx, f.m.ID)
+			}
+			if err == nil || !strings.Contains(err.Error(), "initial_model_unavailable") || strings.Contains(err.Error(), "uncertain") {
+				t.Fatalf("definite refusal mislabeled: %v", err)
+			}
+			m, _ := f.d.Get(f.m.ID)
+			raw, _ := json.Marshal(m.OpenCodeBinding.Initial)
+			if m.OpenCodeBinding.Initial.Phase != "rejected" || !strings.Contains(string(raw), `"reason":"initial_model_unavailable"`) || f.released.Load() {
+				t.Fatalf("definite rejection not retained: %s", raw)
+			}
+			f.d.openCodeRuntimeError(f.m.ID, err)
+			saved, loadErr := f.d.store.Load(f.m.ID)
+			if loadErr != nil || saved.OpenCodeBinding.Initial.Phase != "rejected" || !strings.Contains(saved.BackendPlanError, "initial_model_unavailable") {
+				t.Fatalf("refusal not durable/actionable: %+v %v", saved, loadErr)
+			}
+			_ = f.d.joinOpenCode(ctx, f.m.ID)
+			if f.initialCalls.Load() != 1 || f.released.Load() {
+				t.Fatal("rejected initial was replayed or released")
+			}
+		})
+	}
+}
+func TestOpenCodeInitialRejectionWithoutNoEffectProofStaysUncertain(t *testing.T) {
+	f := newOpenCodeRuntimeFixture(t)
+	f.rejectReason.Store("initial_model_unavailable")
+	f.rejectBadProof.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = f.d.joinOpenCode(ctx, f.m.ID)
+	m, _ := f.d.Get(f.m.ID)
+	if m.OpenCodeBinding.Initial.Phase != persist.OpenCodeInitialUncertain || f.released.Load() {
+		t.Fatal("unqualified rejection became a no-effect proof")
 	}
 }
