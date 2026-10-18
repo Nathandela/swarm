@@ -379,25 +379,45 @@ export default { id: ID, async tui(api, options) {
   }
   function initialReceipt() {
     if (!initial) return null
-    const { before, text, startedAt, ...receipt } = initial
+    const { before, text, startedAt, intentHash, ...receipt } = initial
     return { ...identity(), ...receipt, inFlight: active !== null }
   }
+  async function initialChoices(model, agent) {
+    await Promise.all([
+      model ? (async () => {
+        const [providerID, ...rest] = model.split("/"), modelID = rest.join("/")
+        const result = await read(opts => api.client.config.providers({}, opts))
+        const providers = list(map(result.data).providers).filter(provider => provider?.id === providerID)
+        if (providers.length !== 1 || !object(providers[0].models) || !Object.hasOwn(providers[0].models, modelID) || !object(providers[0].models[modelID])) throw fault("initial_model_unavailable")
+      })() : undefined,
+      agent ? (async () => {
+        const agents = list((await read(opts => api.client.app.agents({}, opts))).data).filter(value => value?.name === agent)
+        if (agents.length !== 1 || !["primary", "all"].includes(agents[0].mode) || (agents[0].hidden !== undefined && agents[0].hidden !== false)) throw fault("initial_agent_unavailable")
+      })() : undefined,
+    ])
+  }
   async function submitInitial(body, check) {
-    envelope(body, ["requestHash"])
+    envelope(body, ["requestHash", "expectedModel", "expectedAgent"])
+    const model = body.expectedModel ?? "", agent = body.expectedAgent ?? ""
+    for (const [key, max] of [["expectedModel", 512], ["expectedAgent", 128]]) if (body[key] !== undefined && body[key] !== "" && !string(body[key], max)) throw fault("initial_choice_invalid")
+    if (model && (!model.includes("/") || model.startsWith("/") || model.endsWith("/"))) throw fault("initial_choice_invalid")
+    const intentHash = digest(JSON.stringify([body.requestHash, model, agent]))
     if (!binding.initialPrompt || !/^[a-f0-9]{64}$/.test(body.requestHash) || digest(body.text) !== body.requestHash) throw fault("initial_invalid")
     if (initial) {
-      if (initial.operationID !== body.operationID || initial.requestHash !== body.requestHash) throw fault("initial_conflict")
+      if (initial.operationID !== body.operationID || initial.intentHash !== intentHash) throw fault("initial_conflict")
       await reconcileInitial(); return initialReceipt()
     }
     if (active) throw fault("busy")
     const lane = {}; active = lane
     try {
       view(); await idle(await current(), check); const baseline = await history()
+      if (binding.mode === "create" && (baseline.messages.length || baseline.nextCursor)) throw fault("initial_history_present")
+      await initialChoices(model, agent)
       if (conflict()) throw fault("initial_plugin_conflict")
       if (body.text.trimStart().startsWith("/") || ["exit", "quit", ":q"].includes(body.text.trim())) throw fault("initial_command_unsupported")
       if (!promptAvailable()) throw fault("native_draft_unavailable")
       check(); view()
-      initial = { operationID: body.operationID, requestHash: body.requestHash, text: body.text, before: new Set(baseline.messages.map(m => m.info.id)), startedAt: Date.now(), status: "uncertain", reason: "native_message_unobserved" }
+      initial = { operationID: body.operationID, requestHash: body.requestHash, intentHash, text: body.text, before: new Set(baseline.messages.map(m => m.info.id)), startedAt: Date.now(), status: "uncertain", reason: "native_message_unobserved" }
       // Host keeps the launch input embargo until this genuine native user message is observed.
       try { promptRef.set({ input: body.text, parts: [] }); promptRef.submit() } catch { return initialReceipt() }
       const until = Date.now() + 6000

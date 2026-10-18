@@ -66,6 +66,8 @@ type AckRequest struct {
 }
 
 type InitialRequest struct {
+	ExpectedModel     string `json:"expectedModel,omitempty"`
+	ExpectedAgent     string `json:"expectedAgent,omitempty"`
 	Version           int    `json:"version"`
 	SessionInstance   string `json:"sessionInstance"`
 	BackendGeneration string `json:"backendGeneration"`

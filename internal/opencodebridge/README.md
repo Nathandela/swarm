@@ -76,6 +76,16 @@ relies on the fresh launch composer and held startup embargo. Normal
 owner configuration remains the host's responsibility; unsupported profiles
 must be reported, not silently replaced. CLI initial text must be withheld.
 
+Optional `expectedModel` (`provider/model`, retaining any slashes in the model ID)
+and `expectedAgent` bind the host's requested launch choices. Before touching the
+composer, the bridge checks a fresh `config.providers` catalogue and `app.agents`
+list using the native TUI's active-model and visible-primary-agent rules. An
+unavailable choice refuses before native submission instead of allowing native
+CLI fallback. Blank choices preserve defaults. Create-mode initial submission
+also requires empty native history. Changed choices conflict with an existing
+initial operation. These checks establish availability, not an unsent picker
+read; the observed native tuple is still audited after admission.
+
 Prompt submission callbacks are not admission receipts. `/initial` observes a
 new matching native user row and records its actual agent/model/variant. A
 repeated operation reads that live-process receipt; it never submits again.
@@ -153,3 +163,8 @@ prompt forwarding, bounded event queues, and request ancestry. These tests do
 not call a provider. `go test -race ./internal/opencodebridge` verifies the host
 client and stream cancellation. Actual native TUI qualification is a separate
 integration gate; mocked admission does not establish provider execution.
+
+Launch-choice preflight follows pinned OpenCode 1.19.3
+[`sync.tsx`](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/sync.tsx#L458),
+[`local.tsx`](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/local.tsx#L64), and the
+[`config providers handler`](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/server/routes/instance/httpapi/handlers/config.ts#L24).

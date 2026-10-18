@@ -168,3 +168,24 @@ func TestExactNativeMessageRead(t *testing.T) {
 		t.Fatalf("native absence: %v", err)
 	}
 }
+
+func TestInitialChoiceFields(t *testing.T) {
+	raw, err := json.Marshal(InitialRequest{ExpectedModel: "fixture/namespace/model", ExpectedAgent: "build"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["expectedModel"]) != `"fixture/namespace/model"` || string(fields["expectedAgent"]) != `"build"` {
+		t.Fatalf("launch choices missing: %s", raw)
+	}
+	raw, err = json.Marshal(InitialRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "expectedModel") || strings.Contains(string(raw), "expectedAgent") {
+		t.Fatalf("blank defaults were sent: %s", raw)
+	}
+}

@@ -34,6 +34,8 @@ async function fixture(t, change = () => {}) {
     client: {
       v2: { session: { create: read("create", () => ({ data: state.row })), get: read("v2get", () => ({ data: state.row })) } },
       session: { get: read("get", () => state.row), status: read("status", () => state.statuses), children: read("children", () => state.children), messages: read("messages", () => state.messages), promptAsync: async (input, options) => { state.calls.push({ name: "prompt", input, options, route: state.route }); state.messages.push({ info: { id: input.messageID, sessionID: rootID, role: "user", time: { created: Date.now() }, agent: input.agent, model: { ...input.model, variant: input.variant } }, parts: input.parts.map((part, i) => ({ ...part, id: "prt_" + input.messageID.slice(4) + i, sessionID: rootID, messageID: input.messageID })) }); return { response: { status: 204 } } } },
+      config: { providers: read("providers", () => ({ providers: [{ id: tuple.model.providerID, models: { [tuple.model.modelID]: { id: tuple.model.modelID } } }] })) },
+      app: { agents: read("agents", () => [{ name: tuple.agent, mode: "primary" }]) },
       permission: { list: read("permissions", () => state.permissions) }, question: { list: read("questions", () => state.questions) },
     },
   }
@@ -664,4 +666,63 @@ test("binding-valid preflight refusal is a correlated receipt rather than an unc
   assert.equal(result.body.reason, "route_mismatch")
   assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
   assert.equal((await f.dispatch({ rootID: "ses_" + "f".repeat(32) })).code, 422)
+})
+
+function initialBody(extra = {}) {
+  const text = "Genuine initial instructions"
+  return { version: 1, rootID, sessionInstance: identity.sessionInstance, backendGeneration: identity.backendGeneration, operationID: "initial_preflight", text, requestHash: crypto.createHash("sha256").update(text).digest("hex"), ...extra }
+}
+
+test("initial requested choices use the fresh native launch catalogue before touching the composer", async t => {
+  const f = await fixture(t, ({ binding, state }) => { binding.initialPrompt = true; state.messages = [] })
+  const body = initialBody({ expectedModel: "opencode/deepseek-v4.1-flash-free", expectedAgent: "plan" })
+  assert.equal((await f.call("POST", "/initial", body)).body.status, "admitted")
+  const names = f.state.calls.map(call => call.name)
+  assert.ok(names.indexOf("providers") >= 0 && names.indexOf("providers") < names.indexOf("nativeSubmit"))
+  assert.ok(names.indexOf("agents") >= 0 && names.indexOf("agents") < names.indexOf("nativeSubmit"))
+  assert.equal((await f.call("POST", "/initial", { ...body, expectedAgent: "build" })).body.reason, "initial_conflict")
+  assert.equal(f.state.calls.filter(call => call.name === "nativeSubmit").length, 1)
+})
+
+for (const [choices, reason] of [
+  [{ expectedModel: "opencode/typo" }, "initial_model_unavailable"],
+  [{ expectedModel: "disconnected/deepseek-v4.1-flash-free" }, "initial_model_unavailable"],
+  [{ expectedModel: "missing-slash" }, "initial_choice_invalid"],
+  [{ expectedModel: "opencode/" }, "initial_choice_invalid"],
+  [{ expectedModel: "opencode/" + "x".repeat(513) }, "initial_choice_invalid"],
+  [{ expectedAgent: "typo" }, "initial_agent_unavailable"],
+  [{ expectedAgent: null }, "initial_choice_invalid"],
+]) test(`initial invalid requested choice refuses without native submission: ${reason} ${JSON.stringify(choices).slice(0, 70)}`, async t => {
+  const f = await fixture(t, ({ binding, state }) => { binding.initialPrompt = true; state.messages = [] })
+  const out = await f.call("POST", "/initial", initialBody(choices))
+  assert.equal(out.body.reason, reason)
+  assert.equal(f.state.calls.filter(call => call.name === "nativeSubmit").length, 0)
+  assert.deepEqual(f.state.prompt.current, { input: "", parts: [] })
+})
+
+for (const agent of [{ name: "plan", mode: "subagent" }, { name: "plan", mode: "primary", hidden: true }]) test(`initial agent cannot silently fall back from ${JSON.stringify(agent)}`, async t => {
+  const f = await fixture(t, ({ binding, state, api }) => { binding.initialPrompt = true; state.messages = []; api.client.app.agents = async () => ({ data: [agent] }) })
+  assert.equal((await f.call("POST", "/initial", initialBody({ expectedAgent: "plan" }))).body.reason, "initial_agent_unavailable")
+  assert.equal(f.state.calls.filter(call => call.name === "nativeSubmit").length, 0)
+})
+
+test("initial create refuses native history that arrived before submission", async t => {
+  const f = await fixture(t, ({ binding }) => { binding.initialPrompt = true })
+  assert.equal((await f.call("POST", "/initial", initialBody())).body.reason, "initial_history_present")
+  assert.equal(f.state.calls.filter(call => call.name === "nativeSubmit").length, 0)
+})
+
+test("initial catalogue read failure and route changes cannot submit", async t => {
+  const f = await fixture(t, ({ binding, state }) => { binding.initialPrompt = true; state.messages = [] })
+  f.api.client.config.providers = async () => ({ data: null })
+  assert.equal((await f.call("POST", "/initial", initialBody({ expectedModel: "opencode/valid" }))).body.reason, "native_read_failed")
+  f.api.client.config.providers = async () => { f.state.route = { name: "home" }; return { data: { providers: [{ id: "opencode", models: { valid: {} } }] } } }
+  assert.equal((await f.call("POST", "/initial", initialBody({ expectedModel: "opencode/valid" }))).body.reason, "route_mismatch")
+  assert.equal(f.state.calls.filter(call => call.name === "nativeSubmit").length, 0)
+})
+
+test("initial model IDs retain namespace slashes and omitted choices retain native defaults", async t => {
+  const f = await fixture(t, ({ binding, state, api }) => { binding.initialPrompt = true; state.messages = []; api.client.config.providers = async () => ({ data: { providers: [{ id: "fixture", models: { "namespace/model": { id: "namespace/model" } } }] } }) })
+  assert.equal((await f.call("POST", "/initial", initialBody({ expectedModel: "fixture/namespace/model" }))).body.status, "admitted")
+  assert.equal(f.state.calls.some(call => call.name === "agents"), false)
 })
