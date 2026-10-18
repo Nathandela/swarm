@@ -443,7 +443,34 @@ func (s *Store) expired(rec Record, now time.Time) bool {
 	if (rec.Action == "semantic_send" || rec.Action == "native_decide" || rec.Action == "composer_send" && len(rec.Request) > 0) && unresolvedPhase(rec.Phase) {
 		return false
 	}
+	if rec.Phase == PhaseCompleted && len(rec.Request) > 0 && (rec.Action == "semantic_send" || rec.Action == "composer_send") && !settledNativeInputEvidence(rec.Evidence) {
+		return false
+	}
 	return s.opts.TTL > 0 && now.Sub(rec.UpdatedAt) > s.opts.TTL
+}
+
+// Delivery completion retains native input custody until its qualified outcome envelope settles.
+func settledNativeInputEvidence(raw json.RawMessage) bool {
+	var envelope struct {
+		Version int `json:"version"`
+		Receipt struct {
+			Status string `json:"status"`
+		} `json:"receipt"`
+		Outcome string `json:"outcome"`
+		Source  string `json:"outcome_source"`
+		At      int64  `json:"outcome_at"`
+	}
+	if len(raw) == 0 || len(raw) > 64<<10 || json.Unmarshal(raw, &envelope) != nil || envelope.Version != 1 || envelope.Receipt.Status != "admitted" || envelope.At <= 0 {
+		return false
+	}
+	if envelope.Source != "live" && envelope.Source != "imported" && envelope.Source != "reconciled" {
+		return false
+	}
+	switch envelope.Outcome {
+	case "completed", "failed", "cancelled", "declined":
+		return true
+	}
+	return false
 }
 
 // appendLocked writes one record as a JSON line and fsyncs BEFORE returning, so the
