@@ -35,4 +35,14 @@ class NativeTranscriptTest {
         assertEquals("Earlier input completed",screen.blocks.single().line)
         assertEquals("",screen.latestTurnId)
     }
+    @Test fun `clipped native messages offer retained detail and retire unavailable offers`() {
+        for (role in listOf("user", "assistant")) {
+            val item = InteractionItem(itemId="clipped", cursor=0, kind="message_snapshot", text="partial", truncated=true, detail=true, body="""{"role":"$role","provenance":"imported"}""")
+            assertTrue(TranscriptScreen.of(listOf(item)).blocks.single().offersDetail)
+            assertFalse(TranscriptScreen.of(listOf(item), withoutDetail=setOf(item.itemId)).blocks.single().offersDetail)
+            assertFalse(TranscriptScreen.of(listOf(item.copy(truncated=false))).blocks.single().offersDetail)
+            assertFalse(TranscriptScreen.of(listOf(item.copy(detail=false))).blocks.single().offersDetail)
+        }
+    }
+
 }
