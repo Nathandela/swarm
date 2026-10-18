@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/opencodebridge"
@@ -11,6 +12,37 @@ import (
 func ocAttentionSnapshot() opencodebridge.Snapshot {
 	return opencodebridge.Snapshot{Identity: opencodebridge.Identity{Version: 1, RootID: "ses_root", BackendGeneration: "gen-1"},
 		Statuses: map[string]json.RawMessage{}, Messages: []json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Children: []json.RawMessage{}, Descendants: []json.RawMessage{}, HierarchyComplete: true, HierarchyScope: "current_activity_requests"}
+}
+
+func TestOpenCodeAttentionRejectsMissingAndNullNativeRequestFields(t *testing.T) {
+	for _, raw := range []string{
+		`{"id":"per_a","sessionID":"ses_root","permission":"bash","patterns":[null],"always":[],"metadata":{}}`,
+		`{"id":"que_a","sessionID":"ses_root","questions":[{"question":"Which?","options":[]}]}`,
+		`{"id":"que_a","sessionID":"ses_root","questions":[{"header":"Choose","question":"Which?","custom":null,"options":[]}]}`,
+		`{"id":"que_a","sessionID":"ses_root","questions":[{"header":"Choose","question":"Which?","multiple":null,"options":[]}]}`,
+		`{"id":"que_a","sessionID":"ses_root","questions":[{"header":"Choose","question":"Which?","options":[{"label":"a"}]}]}`,
+	} {
+		kind := "question"
+		if strings.Contains(raw, `"permission"`) {
+			kind = "permission"
+		}
+		if _, err := decodeOpenCodeRequest(kind, json.RawMessage(raw)); err == nil {
+			t.Fatalf("malformed required native request field accepted: %s", raw)
+		}
+	}
+}
+
+func TestOpenCodeAttentionMalformedHierarchyEventWithdrawsAuthority(t *testing.T) {
+	s, e := newOCState(t, "ses_root")
+	if err := s.reconcileNative(ocAttentionSnapshot(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Apply([]byte(`{"type":"session.deleted","properties":{}}`), e); got.Disposition != OCNeedsSnapshot {
+		t.Fatal("unscoped hierarchy mutation silently ignored")
+	}
+	if s.View().BusyKnown {
+		t.Fatal("malformed hierarchy event retained idle proof")
+	}
 }
 
 func ocNativeChild(id, parent string) json.RawMessage {

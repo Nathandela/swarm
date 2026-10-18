@@ -1,0 +1,9 @@
+--- FAIL: TestOpenCodeAttentionRejectsMissingAndNullNativeRequestFields (0.00s)
+    opencode_attention_test.go:30: malformed required native request field accepted: {"id":"per_a","sessionID":"ses_root","permission":"bash","patterns":[null],"always":[],"metadata":{}}
+--- FAIL: TestOpenCodeAttentionMalformedHierarchyEventWithdrawsAuthority (0.00s)
+    opencode_attention_test.go:41: unscoped hierarchy mutation silently ignored
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.377s
+FAIL
+
+exit=1
