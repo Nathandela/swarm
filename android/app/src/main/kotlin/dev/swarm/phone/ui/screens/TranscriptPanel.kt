@@ -1025,7 +1025,7 @@ object TranscriptScreen {
                 // the three dimensions are a state for a screen. Printing both would put the
                 // machine's sentence next to a restatement of what it is about.
                 line = fields.note.ifEmpty {
-                    joined(fields.process, fields.turn, fields.interaction)
+                    joined(fields.process, fields.turn, fields.interaction, if (fields.attention) "Needs input" else "")
                 },
             )
 

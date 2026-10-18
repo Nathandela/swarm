@@ -497,6 +497,7 @@ func (d *Daemon) setStatus(id string, s status.Status, generation string) error 
 	next := m.Status
 	next.Turn = s.Turn
 	next.Interaction = s.Interaction
+	next.Attention = s.Attention
 	if next == m.Status {
 		d.writeMu.Unlock()
 		return nil // no activity change to persist

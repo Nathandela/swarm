@@ -53,20 +53,18 @@ type Status struct {
 	Process     Process
 	Turn        Turn
 	Interaction Interaction
+	// Attention keeps a verified pending request visible during concurrent work.
+	Attention bool `json:",omitempty"`
 }
 
-// Derive maps a Status to its display Group, per the precedence hierarchy
-// in system-spec.md:51-56:
-//
-//  1. Any process other than running (exited or lost) is Completed,
-//     regardless of turn or interaction.
-//  2. Otherwise, an active or unknown turn is Working: the spec's Working
-//     rule ORs in both with no interaction qualifier, so it wins outright.
-//  3. Otherwise (running and idle), interaction decides: prompt or
-//     permission or error is Needs input; none or unknown is Ready for review.
+// Derive prioritizes terminal lifecycle, then verified attention, then the
+// ordinary turn/interaction rules. Attention does not falsify active sibling work.
 func Derive(s Status) Group {
 	if s.Process != ProcessRunning {
 		return GroupCompleted
+	}
+	if s.Attention {
+		return GroupNeedsInput
 	}
 	if s.Turn == TurnActive || s.Turn == TurnUnknown {
 		return GroupWorking

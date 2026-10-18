@@ -765,7 +765,7 @@ var itemUnclippedFields = map[string]bool{
 	"source": true, "stop_reason": true, "change": true, "mode": true, // top level
 	"tool_kind": true,                // §7's closed vocabulary mirrored flat (M2.2); half an enum is invalid, not smaller
 	"type":      true, "state": true, // action.type (§7), steps[].state (§3.7)
-	"process": true, "turn": true, "interaction": true, "group": true, // session_status (§3.8)
+	"process": true, "turn": true, "interaction": true, "attention": true, "group": true, // session_status (§3.8)
 	"decision": true, "by": true, // approval_resolved (§3.6)
 	"content_hash": true, "interaction_id": true, "operation_id": true, // the minted ids and the digest
 }

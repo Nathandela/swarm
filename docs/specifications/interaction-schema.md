@@ -222,6 +222,7 @@ Fields below are additional to the envelope. Every string field is capped per §
 | `process` | string | `running` \| `exited` \| `lost` |
 | `turn` | string | `active` \| `idle` \| `unknown` |
 | `interaction` | string | `none` \| `prompt` \| `permission` \| `unknown` |
+| `attention` | bool, optional | a verified pending request remains visible while other native work is active; omitted when false |
 | `group` | string | the server-derived display group |
 | `exit_code` | int | on `exited` |
 | `note` | string | a neutral transcript marker, e.g. the spike-SA overlay-transition placeholder |

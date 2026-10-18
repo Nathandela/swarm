@@ -1,0 +1,6 @@
+ok  	github.com/Nathandela/swarm/internal/status	1.254s
+ok  	github.com/Nathandela/swarm/internal/daemon	7.865s
+ok  	github.com/Nathandela/swarm/internal/phonecore	1.475s
+ok  	github.com/Nathandela/swarm/internal/protocol	1.353s
+
+exit=0

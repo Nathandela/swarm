@@ -396,6 +396,9 @@ func (d *Daemon) sessionStatusItem(session string, now time.Time) []json.RawMess
 		"interaction": string(st.Interaction),
 		"group":       string(status.Derive(st)),
 	}
+	if st.Attention {
+		fields["attention"] = true
+	}
 	if exit != nil {
 		fields["exit_code"] = *exit
 	}

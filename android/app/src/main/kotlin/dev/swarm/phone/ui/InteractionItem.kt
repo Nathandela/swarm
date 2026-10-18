@@ -201,6 +201,7 @@ data class ItemFields(
     val process: String = "",
     val turn: String = "",
     val interaction: String = "",
+    val attention: Boolean = false,
     val note: String = "",
 )
 
@@ -225,6 +226,7 @@ private fun decode(item: JSONObject): ItemFields = ItemFields(
     process = item.optString(PROCESS),
     turn = item.optString(TURN),
     interaction = item.optString(INTERACTION),
+    attention = item.optBoolean("attention", false),
     note = item.optString(NOTE),
 )
 

@@ -46,14 +46,18 @@ Three orthogonal dimensions (audit finding: one enum conflates unrelated facts):
 - **turn**: `active` (agent computing) | `idle` (waiting on user) | `unknown` (detection inconclusive or stale)
 - **interaction**: `none` | `prompt` (free-text input expected) | `permission` (approval requested) | `error` (provider-reported failed turn/thread) | `unknown`
 
+An optional **attention** flag records a verified current native request. It can coexist with an active turn when a sibling task is computing; it is omitted when false for compatibility.
+
 Derived view groups:
 
 | Group | Rule |
 |---|---|
-| Needs input | running ∧ idle ∧ (permission ∨ prompt-after-question ∨ error) |
+| Needs input | running ∧ (attention ∨ (idle ∧ (permission ∨ prompt-after-question ∨ error))) |
 | Working | running ∧ (active ∨ turn unknown, marked `?`) |
 | Ready for review | running ∧ idle ∧ turn-completed |
 | Completed | exited ∨ lost |
+
+Completed takes precedence, then attention, then the existing turn/interaction rules. Attention never changes the actual turn dimension.
 
 ## EARS Requirements
 
