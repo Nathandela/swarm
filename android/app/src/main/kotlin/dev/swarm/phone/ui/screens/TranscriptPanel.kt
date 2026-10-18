@@ -1004,15 +1004,16 @@ object TranscriptScreen {
             )
 
             "message_snapshot" -> {
+                val detailAvailable = item.truncated && item.detail && !withoutDetail.contains(item.itemId)
                 if (fields.nativeRole == "user") {
                     val attributed = item.source == "owner" || item.source == "phone"
                     TranscriptBlock(itemId=item.itemId,kind=item.kind,line=item.text,bubble=attributed,
                         secondary=if (attributed) "" else if (item.source == "derived") "Automatic input" else "Native input",
-                        sendState=BubbleState.SETTLED)
+                        sendState=BubbleState.SETTLED, offersDetail=detailAvailable)
                 } else {
                     val markdown=Markdown.parse(item.text)
                     TranscriptBlock(itemId=item.itemId,kind=item.kind,line=Markdown.plainText(markdown),
-                        markdown=markdown,well=Markdown.codeText(markdown))
+                        markdown=markdown,well=Markdown.codeText(markdown),offersDetail=detailAvailable)
                 }
             }
             "permission_request", "question_request" -> {
