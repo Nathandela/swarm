@@ -1,0 +1,6 @@
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/opencode_observer_test.go:72:3: undefined: observeOpenCode
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+
+exit=1
