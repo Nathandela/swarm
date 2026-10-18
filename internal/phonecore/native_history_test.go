@@ -138,3 +138,32 @@ func TestNativeHistoryLiveWinsAndCapacityIsAtomic(t *testing.T) {
 		t.Fatal("capacity refusal partially retained native page")
 	}
 }
+
+func TestNativeHistoryKeepsNewestLogicalPlanAndLivePromotion(t *testing.T) {
+	c := nativeHistoryCore(t)
+	scope := strings.Repeat("a", 64)
+	plan := func(at int64, text string) json.RawMessage {
+		raw, _ := json.Marshal(map[string]any{"v": 2, "kind": "plan_snapshot", "item_id": "plan", "ts": time.Unix(at, 0).UTC(), "text": text, "provenance": "imported"})
+		return raw
+	}
+	prepareNativePage(t, c, "plans", "")
+	deliverNativePage(t, c, "plans", schema.NativeHistoryPage{Version: 2, Scope: scope, NextCursor: "older", Items: []json.RawMessage{plan(10, "older"), plan(20, "newest"), plan(15, "middle")}}, 1)
+	got, _ := c.Router().Items().Resolve("m1/s1", "plan")
+	if got.Text != "newest" {
+		t.Fatalf("within-page plan regressed: %+v", got)
+	}
+	prepareNativePage(t, c, "older-plan", "plan")
+	deliverNativePage(t, c, "older-plan", schema.NativeHistoryPage{Version: 2, Scope: scope, Floor: true, Items: []json.RawMessage{plan(5, "oldest")}}, 2)
+	got, _ = c.Router().Items().Resolve("m1/s1", "plan")
+	if got.Text != "newest" {
+		t.Fatal("older page regressed newer imported plan")
+	}
+	live := strings.Replace(string(plan(30, "live")), `"imported"`, `"live"`, 1)
+	if !c.Router().Items().Apply(schema.JournalRecord{Type: RecordTypeInteraction, SessionID: "m1/s1", Cursor: 99, Item: json.RawMessage(live)}) {
+		t.Fatal("live promotion refused")
+	}
+	got, _ = c.Router().Items().Resolve("m1/s1", "plan")
+	if got.Text != "live" || got.Cursor != 99 || got.Backfilled {
+		t.Fatalf("live row retained cursorless history authority: %+v", got)
+	}
+}
