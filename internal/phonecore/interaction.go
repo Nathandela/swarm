@@ -335,6 +335,9 @@ func (s *ItemStore) ApplyDetail(rec schema.JournalRecord) bool {
 	if err := json.Unmarshal(rec.Item, &w); err != nil {
 		return false
 	}
+	if nativeKind(w.Kind) {
+		return s.applyNativeDetailLocked(rec)
+	}
 	if w.V == 0 || w.ItemID == "" || !knownKind(w.Kind) {
 		return false // IS-ENV-3, exactly as the fold path applies it
 	}
@@ -392,6 +395,9 @@ func (s *ItemStore) applyLocked(rec schema.JournalRecord, backfill bool) bool {
 	// without them emits nothing -- so one that arrives without them is not a partial item to
 	// render. IS-COMPAT-1 puts an unknown kind in the same bucket: skipped, cursor advanced,
 	// stream NOT stale.
+	if nativeKind(w.Kind) {
+		return s.applyNativeLocked(rec, backfill)
+	}
 	if w.V == 0 || w.ItemID == "" || !knownKind(w.Kind) {
 		return false
 	}
@@ -598,7 +604,7 @@ func (s *ItemStore) trimLocked(session string) {
 
 // pendingApproval reports whether it is an approval_request still awaiting its resolution.
 func pendingApproval(it Item) bool {
-	return it.Kind == KindApprovalRequest && !it.Resolved
+	return (it.Kind == KindApprovalRequest || nativeRequestKind(it.Kind)) && !it.Resolved
 }
 
 // indexOf finds a folded item by (session, item_id) -- IS-ENV-2's key, never a position.
