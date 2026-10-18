@@ -32,7 +32,7 @@ func TestOpenCodePhoneHistoryPacketUsesNativeCursorWithoutJournalAuthority(t *te
 	meta, _ := d.core.Get(f.binding.WorkerID)
 	source := newNativePageReadFake(t)
 	source.meta = meta
-	source.rows = []json.RawMessage{source.row(1000, 1, 20), source.row(2000, 1, 20), source.row(3000, 1, 20)}
+	source.rows = []json.RawMessage{source.row(1000, 1, 40000), source.row(2000, 1, 20), source.row(3000, 1, 20)}
 	var sdkReads atomic.Int32
 	f.historyPage.Store(func(limit int, before string) (opencodebridge.Snapshot, error) {
 		sdkReads.Add(1)
@@ -122,6 +122,45 @@ func TestOpenCodePhoneHistoryPacketUsesNativeCursorWithoutJournalAuthority(t *te
 	if len(held) != 2 || second.Scope != first.Scope || second.NextCursor == first.NextCursor || !strings.Contains(held[0].Text, "row2000:") {
 		t.Fatalf("native continuation repeated or reordered history: %+v", held)
 	}
+
+	third := read("native-history-third", held[0].ItemID, 3)
+	held = phone.Router().Items().Session(f.request.Session)
+	if !third.Floor || len(held) != 3 || !held[0].Truncated || !held[0].Detail {
+		t.Fatalf("clipped final history page lacks retained detail: %+v", held)
+	}
+	detail := schema.InteractionDetailReq{Session: f.request.Session, ItemID: held[0].ItemID}
+	detailID := "native-detail"
+	auth := schema.DeviceCommandAuth{Action: schema.ActionInteractionDetail, Machine: d.api.endpointID, Session: detail.Session, OperationID: detailID}
+	publication := phonecore.PendingPublication{LogicalID: detailID, OperationID: detailID, Kind: phonecore.PublicationDetail, SessionID: detail.Session, Machine: d.api.endpointID, EpochID: 1, Target: "machine-mailbox", AuthorityPub: authority, Command: auth, Detail: &detail, CreatedAt: time.Now()}
+	if err := phone.PreparePublication(publication); err != nil {
+		t.Fatal(err)
+	}
+	packet, err := phonecore.SealInteractionDetailEnvelope(keys.ContentKey, 1, 4, auth, &detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.SealPublication(detailID, 4, packet); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := remotegw.OpenMailboxFrame(recv, keys.ContentKey, packet)
+	if err != nil || frame.Command.Sig != "" {
+		t.Fatalf("unsigned detail envelope: %v", err)
+	}
+	detailReply, err := gw.ForwardCommand(protocol.OpInteractionDetail, frame.Command)
+	if err != nil || detailReply.Op != protocol.OpInteractionDetail || len(detailReply.Journal) != 1 {
+		t.Fatalf("native detail route refused: %+v %v", detailReply, err)
+	}
+	sealed, err := remotegw.SealControlReply(keys.ContentKey, 1, 4, detailReply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := phone.Router().AcceptCommit(sealed, 4); err != nil {
+		t.Fatal(err)
+	}
+	held = phone.Router().Items().Session(f.request.Session)
+	if len(held[0].Text) < 40000 || held[0].Truncated {
+		t.Fatal("full native detail above16KiB did not reach retained phone item")
+	}
 	for _, item := range held {
 		var fields map[string]any
 		if json.Unmarshal(item.Body, &fields) != nil {
@@ -135,8 +174,26 @@ func TestOpenCodePhoneHistoryPacketUsesNativeCursorWithoutJournalAuthority(t *te
 		t.Fatal("readonly native history changed live journal highwater or submitted input")
 	}
 	afterJournal, err := d.core.JournalReadFrom(0)
-	if err != nil || afterJournal.Cursor != beforeJournal.Cursor {
-		t.Fatal("native page synthesis published a journal record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Roster/status work may still append after stopping the observer. No imported
+	// history item may acquire a journal position through this read.
+	for _, record := range afterJournal.Events {
+		if record.Cursor <= beforeJournal.Cursor {
+			continue
+		}
+		var item struct {
+			ID string `json:"item_id"`
+		}
+		if json.Unmarshal(record.Payload, &item) != nil {
+			continue
+		}
+		for _, imported := range held {
+			if item.ID == imported.ItemID {
+				t.Fatal("native page synthesis published an imported item as a journal record")
+			}
+		}
 	}
 	baseline := sdkReads.Load()
 	// Exact existing capability gate, without a signing shortcut or provider request.

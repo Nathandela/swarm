@@ -571,6 +571,9 @@ func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol
 	if op == protocol.OpNativeDecide {
 		caps = append(caps, protocol.CapNativeRequests)
 	}
+	if op == protocol.OpInteractionHistory || op == protocol.OpInteractionDetail {
+		caps = append(caps, protocol.CapJournal)
+	}
 	dc, err := dialDaemon(g.socketPath, caps...)
 	if err != nil {
 		return protocol.Control{}, err
