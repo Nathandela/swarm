@@ -21,7 +21,7 @@ func (s *durableComposerStub) SemanticSendTransactional(machine, id string, req 
 
 func (s *semanticBoundaryStub) SemanticSendTransactional(machine, id string, req ComposerSendReq, begin func() error) (ErrorCode, error) {
 	s.ownerCalls.Add(1)
-	return s.durableComposerStub.ComposerSendTransactional(machine, id, req, begin)
+	return s.ComposerSendTransactional(machine, id, req, begin)
 }
 
 func TestOwnerSemanticSendUsesOwnerAttributionBoundary(t *testing.T) {

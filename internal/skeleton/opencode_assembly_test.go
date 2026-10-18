@@ -72,7 +72,7 @@ func TestOpenCodeAssemblyObservesBeforeReleasingNativeInput(t *testing.T) {
 			subscribed.Store(true)
 			identityRaw, _ := json.Marshal(identity)
 			frame, _ := json.Marshal(opencodebridge.Event{Type: "swarm.bridge.connected", Properties: identityRaw})
-			fmt.Fprintf(w, "data: %s\n\n", frame)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", frame)
 			w.(http.Flusher).Flush()
 			for {
 				select {
@@ -80,7 +80,7 @@ func TestOpenCodeAssemblyObservesBeforeReleasingNativeInput(t *testing.T) {
 					return
 				case event := <-events:
 					raw, _ := json.Marshal(event)
-					fmt.Fprintf(w, "data: %s\n\n", raw)
+					_, _ = fmt.Fprintf(w, "data: %s\n\n", raw)
 					w.(http.Flusher).Flush()
 				}
 			}
