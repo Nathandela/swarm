@@ -199,6 +199,11 @@ func cloneOpenCodeView(view OpenCodeView) OpenCodeView {
 }
 
 func (d *Daemon) stopOpenCodeObservation(local string) {
+	defer func() {
+		d.nativeRequests.mu.Lock()
+		delete(d.nativeRequests.sessions, local)
+		d.nativeRequests.mu.Unlock()
+	}()
 	d.openCode.mu.Lock()
 	observation := d.openCode.sessions[local]
 	delete(d.openCode.sessions, local)
@@ -215,6 +220,7 @@ func (d *Daemon) stopOpenCodeObservation(local string) {
 }
 
 func (d *Daemon) stopOpenCodeObservations() {
+	defer func() { d.nativeRequests.mu.Lock(); d.nativeRequests.sessions = nil; d.nativeRequests.mu.Unlock() }()
 	d.openCode.mu.Lock()
 	d.openCode.closed = true
 	sessions := d.openCode.sessions

@@ -255,6 +255,7 @@ type Daemon struct {
 	backend        backendState
 	openCode       openCodeObservations
 	nativeReceipts openCodeReceiptIndexes
+	nativeRequests openCodeRequestAuthorities
 	pump           backendPump
 	// backendReady overrides backendReadyDeadline. Test-only, and unset in production: the
 	// degrade paths are only reachable after a dial gives up, and waiting 90 s per case is a
