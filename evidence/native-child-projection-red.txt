@@ -1,0 +1,6 @@
+2026/10/18 21:06:14 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- FAIL: TestOpenCodeTranscriptReadsLateChildThroughExactAncestryProof (4.12s)
+    opencode_child_transcript_test.go:26: late child not read with exact native scope: calls=0 row= err=<nil>
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	4.449s
+FAIL
