@@ -159,7 +159,8 @@ func paginateNativeHistory(ctx context.Context, meta persist.Meta, req schema.In
 			if err != nil {
 				return empty, nil, err
 			}
-			for i, row := range page.Messages {
+			for i := len(page.Messages) - 1; i >= 0; i-- {
+				row := page.Messages[i]
 				match := nativeHistoryHasItem(scope, meta.ConversationID, row, anchor)
 				if cursor.Mode == "export" {
 					info, _, _ := opencode.DecodeMessageRow(row)
