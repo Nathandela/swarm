@@ -108,6 +108,9 @@ func TestRequestReceiptClient(t *testing.T) {
 					t.Errorf("irrelevant prompt/permission field %s", field)
 				}
 			}
+			if string(fields["expectedRequest"]) != `{"id":"que_target","metadata":{"exact":true}}` || string(fields["requestExpiresAtMS"]) != `123456` {
+				t.Error("native request proof was changed")
+			}
 			if string(fields["answers"]) != `[["A"],[]]` || string(fields["requestID"]) != `"que_target"` {
 				t.Errorf("wrong answer body: %v", fields)
 			}
@@ -123,7 +126,7 @@ func TestRequestReceiptClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	receipt, err := client.Dispatch(context.Background(), DispatchRequest{Kind: "question_reply", RequestID: "que_target", TargetID: "ses_child", Answers: [][]string{{"A"}, {}}})
+	receipt, err := client.Dispatch(context.Background(), DispatchRequest{ExpectedRequest: json.RawMessage(`{"id":"que_target","metadata":{"exact":true}}`), RequestExpiresAtMS: 123456, Kind: "question_reply", RequestID: "que_target", TargetID: "ses_child", Answers: [][]string{{"A"}, {}}})
 	if err != nil || receipt.Kind != "question_reply" || receipt.RequestID != "que_target" || receipt.TargetID != "ses_child" {
 		t.Fatalf("request receipt: %+v %v", receipt, err)
 	}

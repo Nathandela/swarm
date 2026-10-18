@@ -78,18 +78,20 @@ type InitialRequest struct {
 }
 
 type DispatchRequest struct {
-	Version           int        `json:"version"`
-	SessionInstance   string     `json:"sessionInstance"`
-	BackendGeneration string     `json:"backendGeneration"`
-	RootID            string     `json:"rootID"`
-	OperationID       string     `json:"operationID"`
-	Kind              string     `json:"kind"`
-	TargetID          string     `json:"targetID"`
-	MessageID         string     `json:"messageID,omitempty"`
-	Text              string     `json:"text,omitempty"`
-	RequestID         string     `json:"requestID,omitempty"`
-	Reply             string     `json:"reply,omitempty"`
-	Answers           [][]string `json:"answers,omitempty"`
+	ExpectedRequest    json.RawMessage `json:"expectedRequest,omitempty"`
+	RequestExpiresAtMS int64           `json:"requestExpiresAtMS,omitempty"`
+	Version            int             `json:"version"`
+	SessionInstance    string          `json:"sessionInstance"`
+	BackendGeneration  string          `json:"backendGeneration"`
+	RootID             string          `json:"rootID"`
+	OperationID        string          `json:"operationID"`
+	Kind               string          `json:"kind"`
+	TargetID           string          `json:"targetID"`
+	MessageID          string          `json:"messageID,omitempty"`
+	Text               string          `json:"text,omitempty"`
+	RequestID          string          `json:"requestID,omitempty"`
+	Reply              string          `json:"reply,omitempty"`
+	Answers            [][]string      `json:"answers,omitempty"`
 }
 
 type Model struct {

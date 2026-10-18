@@ -726,3 +726,28 @@ test("initial model IDs retain namespace slashes and omitted choices retain nati
   assert.equal((await f.call("POST", "/initial", initialBody({ expectedModel: "fixture/namespace/model" }))).body.status, "admitted")
   assert.equal(f.state.calls.some(call => call.name === "agents"), false)
 })
+
+test("request content guard binds fresh native metadata and live receipt identity", async t => {
+  const f = await fixture(t)
+  const pending = { id: permissionID, sessionID: rootID, patterns: ["safe command"], metadata: { detail: "original" } }
+  f.state.permissions = [pending]
+  const body = requestBody({ expectedRequest: structuredClone(pending), requestExpiresAtMS: Date.now() + 5000 })
+  f.state.permissions[0].metadata.detail = "changed"
+  assert.equal((await f.call("POST", "/dispatch", body)).body.reason, "request_content_changed")
+  assert.equal(f.state.calls.filter(call => call.name === "permissionReply").length, 0)
+  f.state.permissions[0].metadata.detail = "original"
+  body.expectedRequest = { metadata: { detail: "original" }, patterns: ["safe command"], sessionID: rootID, id: permissionID }
+  assert.equal((await f.call("POST", "/dispatch", body)).body.status, "admitted")
+  assert.equal((await f.call("POST", "/dispatch", { ...body, expectedRequest: { ...body.expectedRequest, extra: "changed" } })).body.reason, "operation_conflict")
+  assert.equal(f.state.calls.filter(call => call.name === "permissionReply").length, 1)
+})
+
+test("request expiry is checked after native preflight and before SDK reply", async t => {
+  const f = await fixture(t)
+  const pending = { id: permissionID, sessionID: rootID }
+  f.state.permissions = [pending]
+  const body = requestBody({ expectedRequest: pending, requestExpiresAtMS: Date.now() + 50 })
+  f.api.client.session.status = async () => { await pause(75); return { data: {} } }
+  assert.equal((await f.call("POST", "/dispatch", body)).body.reason, "request_expired")
+  assert.equal(f.state.calls.filter(call => call.name === "permissionReply").length, 0)
+})

@@ -168,3 +168,10 @@ Launch-choice preflight follows pinned OpenCode 1.19.3
 [`sync.tsx`](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/sync.tsx#L458),
 [`local.tsx`](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/local.tsx#L64), and the
 [`config providers handler`](https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/server/routes/instance/httpapi/handlers/config.ts#L24).
+
+P7 host decisions supply private `expectedRequest` (full observed native JSON) and
+`requestExpiresAtMS` together. The bridge compares the fresh pending row structurally,
+including unknown metadata, binds that proof into the operation cache, and checks
+expiry again in the final route/invoke callback. The public host requires these
+proofs; direct private SDK fixture calls may omit both. Native SDK reply methods
+have no atomic expected-content argument, so this is a dispatch precondition.

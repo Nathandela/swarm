@@ -14,6 +14,7 @@ const sessionID = value => typeof value === "string" && /^ses_[A-Za-z0-9]{10,124
 const messageID = value => typeof value === "string" && /^msg_[A-Za-z0-9]{10,124}$/.test(value)
 const string = (value, max = 128) => typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= max && !/[\x00-\x1f\x7f]/.test(value)
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value)
+const canonical = value => JSON.stringify(value, (_key, item) => object(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)
 const digest = value => crypto.createHash("sha256").update(value).digest("hex")
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 const reasonKey = Symbol("bridgeReason")
@@ -228,7 +229,7 @@ export default { id: ID, async tui(api, options) {
     return { agent: session.agent, model: { providerID: session.model.providerID, modelID: session.model.id }, variant: session.model.variant ?? "default", selectionBasis: "native_session_selection", selectionMessageID: "" }
   }
   function operationHash(body) {
-    return digest(JSON.stringify([body.version, body.sessionInstance, body.backendGeneration, body.rootID, body.kind, body.targetID, body.messageID ?? null, body.text ?? null, body.requestID ?? null, body.reply ?? null, body.answers ?? null]))
+    return digest(JSON.stringify([body.version, body.sessionInstance, body.backendGeneration, body.rootID, body.kind, body.targetID, body.messageID ?? null, body.text ?? null, body.requestID ?? null, body.reply ?? null, body.answers ?? null, body.expectedRequest === undefined ? null : canonical(body.expectedRequest), body.requestExpiresAtMS ?? null]))
   }
   function operationReceipt(record) {
     return record ? { ...identity(), ...record.receipt, inFlight: active !== null } : null
@@ -301,7 +302,10 @@ export default { id: ID, async tui(api, options) {
     } else {
       if (!["permission_reply", "question_reply", "question_reject"].includes(body.kind)) throw fault("unsupported_kind")
       const fields = permission ? ["reply"] : body.kind === "question_reply" ? ["answers"] : []
-      if (!exactKeys(body, ["version", "sessionInstance", "backendGeneration", "rootID", "operationID", "kind", "targetID", "requestID", ...fields]) || !string(body.operationID) || !sessionID(body.targetID) || typeof body.requestID !== "string" || !(permission ? /^per_[A-Za-z0-9]{10,124}$/ : /^que_[A-Za-z0-9]{10,124}$/).test(body.requestID) || (permission && !["once", "always", "reject"].includes(body.reply))) throw fault("bad_envelope")
+      if (!exactKeys(body, ["version", "sessionInstance", "backendGeneration", "rootID", "operationID", "kind", "targetID", "requestID", "expectedRequest", "requestExpiresAtMS", ...fields]) || !string(body.operationID) || !sessionID(body.targetID) || typeof body.requestID !== "string" || !(permission ? /^per_[A-Za-z0-9]{10,124}$/ : /^que_[A-Za-z0-9]{10,124}$/).test(body.requestID) || (permission && !["once", "always", "reject"].includes(body.reply))) throw fault("bad_envelope")
+      if (body.expectedRequest !== undefined || body.requestExpiresAtMS !== undefined) {
+        if (!object(body.expectedRequest) || Buffer.byteLength(JSON.stringify(body.expectedRequest)) > 32768 || !Number.isSafeInteger(body.requestExpiresAtMS) || body.requestExpiresAtMS <= 0) throw fault("bad_envelope")
+      }
     }
     const saved = await savedOperation(body)
     if (saved) return saved
@@ -331,12 +335,15 @@ export default { id: ID, async tui(api, options) {
         if (!matches.length) throw fault("request_stale")
         const pending = matches[0]
         if (pending.sessionID !== body.targetID) throw fault("request_target_mismatch")
+        if (body.expectedRequest !== undefined && canonical(pending) !== canonical(body.expectedRequest)) throw fault("request_content_changed")
         if (!await requestScope(check).contains(pending.sessionID)) throw fault("request_unrelated")
         if (body.kind === "question_reply") answersMatch(pending.questions, body.answers)
         invoke = options => permission ? api.client.permission.reply({ requestID: body.requestID, reply: body.reply }, options) : body.kind === "question_reply" ? api.client.question.reply({ requestID: body.requestID, answers: body.answers }, options) : api.client.question.reject({ requestID: body.requestID }, options)
       }
       // The final route read and native invocation share one JS callback; no await separates them.
-      check(); view(); if (prompt) emptyDraft(); record = remember(body, selection)
+      check(); view(); if (prompt) emptyDraft()
+      if (!prompt && body.requestExpiresAtMS !== undefined && Date.now() >= body.requestExpiresAtMS) throw fault("request_expired")
+      record = remember(body, selection)
       let result
       try { result = await bounded(signal => { record.invoked = true; return invoke({ throwOnError: true, signal }) }, NATIVE_TIMEOUT, lane) }
       catch (err) { if (record.receipt.status !== "admitted") record.receipt.reason = err?.[reasonKey] ?? "native_error"; return operationReceipt(record) }
