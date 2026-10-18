@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/persist"
 )
@@ -56,6 +57,7 @@ func TestOpenCodeTranscriptUsesSharedBoundedJournalAndImportedProvenance(t *test
 	if legacyRefs != 0 {
 		t.Fatal("native objects grew the session-lifetime legacy ref map")
 	}
+	time.Sleep(200 * time.Millisecond)
 	result, err := fixture.d.core.JournalReadFrom(0)
 	if err != nil {
 		t.Fatal(err)
@@ -91,5 +93,18 @@ func TestOpenCodeTranscriptRefusesForeignRows(t *testing.T) {
 	}
 	if len(source.seen) != 0 {
 		t.Fatal("foreign row changed projection")
+	}
+}
+
+func TestOpenCodeTranscriptCapabilityNeedsCurrentProjectorProof(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	caps, ok := f.d.sessionCapabilities(f.binding.WorkerID)
+	if !ok || caps.NativeInteractionVersion != 2 || caps.StructuredChat {
+		t.Fatalf("connected native read capability absent or grants writes: %+v", caps)
+	}
+	f.d.stopOpenCodeObservation(f.binding.WorkerID)
+	caps, ok = f.d.sessionCapabilities(f.binding.WorkerID)
+	if !ok || caps.NativeInteractionVersion != 0 {
+		t.Fatal("stopped projector still advertises native reads")
 	}
 }

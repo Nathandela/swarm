@@ -1,0 +1,6 @@
+2026/10/18 19:39:45 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- FAIL: TestOpenCodeTranscriptCapabilityNeedsCurrentProjectorProof (3.11s)
+    opencode_transcript_test.go:103: connected native read capability absent or grants writes: {NativeInteractionVersion:0 Provider:opencode ProviderVersion: AdapterRevision:r8 SessionInstance:439e69ab280449cd2dbb24baf596dd9f StructuredChat:false TerminalFallback:true TerminalControl:true Interrupt:false}
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.542s
+FAIL
