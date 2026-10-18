@@ -10,7 +10,7 @@ Implementation is active under `agents-tracker-vyhy`. This record covers accepte
 | Monitoring and communication | Native busy/attention/error state, exact input receipts, owner/pilot messages, passive supervision and separate native-child hierarchy | Idle and tool-step completion never prove task completion; compaction cannot transfer ownership without native lineage |
 | Continuity | Shim-owned normal TUI, daemon crash/rejoin, exact resume, native history export and actual source checkout preservation | Actual OpenCode-to-OpenCode passed; the Claude side of the mixed-harness handoff matrix was a fixture |
 | Structured interaction | Bounded live transcript, request sets, owner permission/question controls, signed phone decisions and native phone composer | Strict turn Stop is unavailable; native APIs cannot protect a newer turn with an expected-turn precondition |
-| Phone history | Separate imported native pages, encrypted cursor custody, live-row precedence and immutable phone state snapshots | Host paging is under final integration; native history does not create journal cursors, input ownership or decision authority |
+| Phone history | Live/ended native pages, encrypted cursor custody, live-row precedence and immutable phone state snapshots | Actual native SDK paging and sealed three-page phone reads passed; imported history cannot create journal cursors, input ownership or decision authority |
 | Operations | Pinned runtime/version checks, health-based capability withdrawal, safe unsupported refresh and observed quota/compaction outcomes | Account rotation, relogin and Swarm-driven compaction remain unavailable |
 
 The model-selection request is implemented: opening the OpenCode launch form uses
@@ -48,11 +48,25 @@ durable outcome updates and the existing observer's bounded health read now cove
 those boundaries. An actual native SIGSTOP test withdrew health within 3.022
 seconds and recovered after SIGCONT. [Frozen review and native results](opencode-implementation-2026-10-18/final-native-review.md).
 
-Late review also reproduced unfinished-input ownership expiry after 24 hours and
-missed completion when a single input pushed its user row out of the startup
-window while the daemon was offline. These fixes and native paging remain active
-integration gates; they are not counted as accepted merely because the failures
-have deterministic reproductions.
+Late review reproduced and fixed unfinished-input ownership expiry after 24 hours
+and missed completion when one input pushed its user row out of the startup
+window while the daemon stayed offline through the final response. Recovery now
+uses exact initial custody, retained admission or an executing intent plus a
+qualified full native row. Existing complete input proof needs no extra read.
+Retained outcome rank/time/source survives both sides of the startup window;
+native default variant spellings compare consistently. The actual 110-step
+default-variant initial task recovered after offline completion, then completed
+subsequent semantic and child work: 118 localhost requests, zero external calls
+and owned-process cleanup. The 25-hour retention test uses an injected clock;
+it is not elapsed 24-hour qualification. [Recovery proof and controls](opencode-implementation-2026-10-18/long-input-recovery.md).
+
+Native on-demand paging passed actual SDK newest/opaque-continuation/item-anchor
+checks, and the sealed phone path passed three pages plus a 40 KiB detail read.
+The gateway now negotiates the existing journal-read capability for history and
+detail; missing capability and remote-off checks refuse before native reads.
+Repeated logical plan snapshots anchor at the newest matching native revision.
+Unsendable whole details receive a named refusal. [Actual paging proof](opencode-implementation-2026-10-18/native-history-integration.json),
+[independent final review](opencode-implementation-2026-10-18/architecture-final-review.md).
 
 The first implementation workers ran through an isolated Swarm daemon in separate Git worktrees using **`opencode/deepseek-v4.1-flash-free`** and **`opencode/glm-5.3-flash-free`**, with the native catalogue's supported `reasoningEffort: max` option. Native message records verify those provider/model identities and report zero model cost. GLM reviewed DeepSeek changes and DeepSeek reviewed GLM changes; independent Astra reviews and supervisor tests determine integration. A lifecycle prototype written before failing tests was rejected and preserved separately; its replacement began from the clean baseline with a test-only commit.
 
@@ -123,20 +137,51 @@ certifies AMD64, physical Android or external-provider inference.
 Full Linux application build, vet and race checks passed at `2663afde` under an
 ordinary user with pinned Go/mobile tools: 78 package suites passed, seven had no
 tests. Android's SDK/AAR gate was separate. [Frozen Linux gate](opencode-implementation-2026-10-18/linux-connected-gates.json).
-A newer combined application run and final complete-source Android AAR/debug and
-release test runs are in progress; earlier results do not cover those later files.
+The final frozen `c5d29232` Linux application build, vet and full race run passed:
+**78 package suites**, seven packages without tests, under an ordinary user.
+Android's contract package passed separately with the configured SDK and real
+AAR. macOS all-package build/vet, Linux-target full Go lint (zero issues), and all
+98 bridge Node tests also passed. Actual final macOS max/default-profile and Linux
+ARM64 native runs passed the updated history and crash-recovery checks.
+[Combined final gates](opencode-implementation-2026-10-18/final-connected-gates.json),
+[final Linux native run](opencode-implementation-2026-10-18/native-linux-arm64-final.md).
+
+Final phone gates passed with a fresh real AAR for arm64-v8a and x86_64: **1,764
+debug and 1,764 release tests**, zero failures/errors/skips, **570 Android contract
+results**, full phonecore/mobile races and native bindings. Both lint variants
+passed with zero errors and 34 warnings each. Source/artifact equality, unchanged
+dependency verification, XML freshness and two host-JDK fixture corrections are
+recorded in the [complete phone gate](opencode-implementation-2026-10-18/final-phone-gates.md).
+Later host-only commits do not change the AAR's production code.
 
 ## Qualification limits
 
-The full macOS baseline predating these changes fails existing Linux-managed-account fixtures, platform-specific reachability checks, and an installed x86 gobind binary on this ARM host. This is tracked by `agents-tracker-vyhy.10`. Linux qualification ran in an isolated ordinary-user container with pinned Go/mobile tools and private source/cache storage: vet and full application-package race tests passed at `8f8d6eff`; the mobile AAR test failed because the pinned Android NDK was absent. macOS lint also reports eleven pre-existing unused Linux-managed-account symbols, while Linux-target full lint passes after the handoff integration. [Linux lint](opencode-implementation-2026-10-18/linux-handoff-lint.txt). Neither the missing Android leg nor later runtime changes are covered by that earlier full race run.
+The earlier whole-macOS baseline fails existing Linux-managed-account and
+platform-specific process fixtures; this remains tracked by
+`agents-tracker-vyhy.10`. Darwin lint also reports eleven existing unused
+Linux-account symbols. These checks were not weakened, and whole-Darwin green is
+not claimed. The old missing native gobind/NDK verification leg was resolved with
+the isolated ARM toolchain and complete final Android gate above.
 
-Runtime, bridge, reducer, bounded live transcript, hierarchy, history export,
+Runtime, bridge, reducer, bounded live transcript, hierarchy, native paging/export,
 durable receipts, semantic supervision and public decision/phone paths are
-integrated locally. The real private native Go AAR built for arm64-v8a and x86_64;
-54 targeted Android request/transcript/detail/surface tests passed without skips.
-That artifact predates the final history and runtime source, so a fresh complete
-artifact and full debug/release tests remain required. Actual 24h/72h workloads,
-physical phone/hosted relay, a complete real-model cross-harness matrix and final
-release gates remain unqualified. No short test substitutes for elapsed sustained
-qualification. Changes remain local; no release or installed-binary replacement
-has occurred.
+integrated locally. Ended native exports have an 8 MiB/4,096-message bound and
+refuse larger sources explicitly; conversation storage remains native. Phone
+backfill is bounded to 200 imported items per session. These limits do not expire
+an unfinished native input's durable operation custody.
+
+Actual 24h/72h workloads, physical phone/hosted relay and a complete real-model
+cross-harness matrix remain unqualified. Native RSS/history growth is measured
+separately from declared Swarm resource budgets. No short test or injected clock
+substitutes for elapsed sustained qualification. Changes remain local; no release
+or installed-binary replacement has occurred.
+
+A new frozen-source **1h → 24h → 72h** qualification queue is active. Later stages
+start only after the previous workload passes its actual elapsed-duration and
+resource/cleanup assertions. It is not counted as passed while running.
+[Live evidence and monitoring](opencode-implementation-2026-10-18/sustained-qualification.md).
+
+Two additional Sol ultra reviews traced the final protocol/phone and runtime/
+recovery/storage paths and found no confirmed code blockers. Their scope and
+execution boundary are recorded in the combined gate JSON; they supplement the
+Astra reviews and measured tests, rather than certify unrun release scenarios.

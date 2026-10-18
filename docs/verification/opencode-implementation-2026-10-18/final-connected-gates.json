@@ -1,0 +1,172 @@
+{
+  "recorded_at": "2026-10-18T19:47:42.140587+00:00",
+  "production_source_head": "c5d2923214df0db247c0f6714f7d158f5a6caf1a",
+  "verdict": "Selected implementation checks passed; sustained and complete release qualification remain open.",
+  "macos_build_vet": {
+    "go": "1.26.9",
+    "commands": [
+      "go build ./...",
+      "go vet ./..."
+    ],
+    "exit_code": 0
+  },
+  "go_lint": {
+    "version": "golangci-lint2.12.2",
+    "target": "linux",
+    "command": "golangci-lint run --timeout=8m",
+    "exit_code": 0,
+    "issues": 0,
+    "darwin_limit": "Eleven unrelated existing Linux-account symbols are unused on Darwin; no Darwin whole-lint-green claim."
+  },
+  "bridge_node_tests": {
+    "tests": 98,
+    "pass": 98,
+    "fail": 0,
+    "skipped": 0
+  },
+  "linux_application": {
+    "image": "golang@sha256:fb612b7831d53a89cbc0aaa7855b69ad7b0caf603715860cf538df854d047b84",
+    "platform": "linux/arm64",
+    "uid": 1000,
+    "go": "1.26.0",
+    "commands": [
+      "go build ./...",
+      "go vet ./...",
+      "go test -race -p 2 APPLICATION_PACKAGES -count=1 -timeout=20m"
+    ],
+    "exit_code": 0,
+    "passing_package_suites": 78,
+    "packages_without_tests": 7,
+    "separate_package": "android/gate passed on native SDK host with570passingresults/0skips, recorded in final-phone-gates.json",
+    "runner_sha256": "20ee187c003880990c5f07027be3367a8d6da817ab4b4982fd23d104326d3d68",
+    "notable_suites": [
+      "ok  \tgithub.com/Nathandela/swarm/cmd/swarm\t39.725s",
+      "ok  \tgithub.com/Nathandela/swarm/internal/protocol\t30.919s",
+      "ok  \tgithub.com/Nathandela/swarm/internal/shim\t179.012s",
+      "ok  \tgithub.com/Nathandela/swarm/internal/skeleton\t471.105s",
+      "ok  \tgithub.com/Nathandela/swarm/mobile\t20.927s"
+    ]
+  },
+  "actual_macos_native": {
+    "max": {
+      "source_head": "c5d29232",
+      "binary_sha256": "0eb06eb38617413c96d55c4da2a1ff26e5714ad07369030561008399d50039c5",
+      "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+      "fixture_source_sha256": "5393e3598544c4043f206b2f974799b36504ecb50c614753ab3655c65053c279",
+      "pass": true,
+      "declared_budgets": {
+        "swarm_rss_mib_per_process": 256,
+        "swarm_fds_per_process": 128,
+        "swarm_disk_mib": 256,
+        "dispatch_seconds": 30,
+        "rejoin_seconds": 15
+      },
+      "daemon_restarts": 2,
+      "external_model_requests": 0,
+      "all_owned_shim_exit_files": true,
+      "config_unchanged": true,
+      "max_observed_dispatch_seconds": 0.8259159169974737,
+      "max_observed_rejoin_seconds": 0.9731905000080587,
+      "elapsed_seconds_including_cleanup": 50.177,
+      "iterations": 3,
+      "provider_requests": 9,
+      "provider_errors": [],
+      "native_history_opaque_equals_before_item": true,
+      "sampled_max_rss_kib": {
+        "daemon": 23264,
+        "shim": 15376,
+        "native": 839072
+      },
+      "sampled_max_fds": {
+        "daemon": 16,
+        "shim": 12,
+        "native": 60
+      },
+      "sampled_max_swarm_disk_bytes": 171318,
+      "raw_result": "/private/tmp/oc-final-max-20261018/result.json"
+    },
+    "default": {
+      "source_head": "c5d29232",
+      "binary_sha256": "0eb06eb38617413c96d55c4da2a1ff26e5714ad07369030561008399d50039c5",
+      "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+      "fixture_source_sha256": "5393e3598544c4043f206b2f974799b36504ecb50c614753ab3655c65053c279",
+      "pass": true,
+      "declared_budgets": {
+        "swarm_rss_mib_per_process": 256,
+        "swarm_fds_per_process": 128,
+        "swarm_disk_mib": 256,
+        "dispatch_seconds": 30,
+        "rejoin_seconds": 15
+      },
+      "daemon_restarts": 2,
+      "external_model_requests": 0,
+      "all_owned_shim_exit_files": true,
+      "config_unchanged": true,
+      "max_observed_dispatch_seconds": 0.08586058299988508,
+      "max_observed_rejoin_seconds": 0.6168287080072332,
+      "elapsed_seconds_including_cleanup": 23.638,
+      "iterations": 3,
+      "provider_requests": 9,
+      "provider_errors": [],
+      "native_history_opaque_equals_before_item": true,
+      "sampled_max_rss_kib": {
+        "daemon": 24800,
+        "shim": 16112,
+        "native": 1258352
+      },
+      "sampled_max_fds": {
+        "daemon": 16,
+        "shim": 12,
+        "native": 47
+      },
+      "sampled_max_swarm_disk_bytes": 171263,
+      "raw_result": "/private/tmp/oc-final-default-20261018/result.json"
+    }
+  },
+  "actual_linux_native_record": "native-linux-arm64-final.json",
+  "full_android_record": "final-phone-gates.json",
+  "native_long_input_record": "long-input-recovery.json",
+  "astra_review_record": "architecture-final-review.json",
+  "additional_sol_code_reviews": [
+    {
+      "task": "sol_final_protocol_review",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "ultra",
+      "source_head": "c5d2923214df0db247c0f6714f7d158f5a6caf1a",
+      "verdict": "No confirmed production blocker in scoped protocol/gateway/custody/DTO review; no additional execution claimed."
+    },
+    {
+      "task": "sol_final_runtime_review",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "ultra",
+      "source_head": "c5d2923214df0db247c0f6714f7d158f5a6caf1a",
+      "verdict": "No confirmed actionable blocker in lifetime/recovery/supervision/history/idempotency review; no additional execution claimed."
+    }
+  ],
+  "raw_logs": {
+    "root-final-native-build-vet-c5d29232.txt": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/evidence/root-final-native-build-vet-c5d29232.txt",
+      "sha256": "080b50f35e8d3f00167f26191e7a99cf34d1a02a3d2231a8ae47d3853f75cf2c"
+    },
+    "root-final-lint-c5d29232.txt": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/evidence/root-final-lint-c5d29232.txt",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "root-final-node-c5d29232.txt": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/evidence/root-final-node-c5d29232.txt",
+      "sha256": "0a4421e5d2f5ca2d10338b669d3437a3dca970e0e56087b125de012e046a2330"
+    },
+    "linux-app-final-c5d29232.txt": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/evidence/linux-app-final-c5d29232.txt",
+      "sha256": "3abb324655e493a742828d523dc6f3be8eaa289264aac5d588b6c13d6350e142"
+    }
+  },
+  "limits": [
+    "Elapsed24h/72h not yet qualified; sequential1h/24h/72h queue is running, not passed.",
+    "Scripted localhost provider in runtime checks, not a complete real-model cross-harness matrix.",
+    "Physical phone/hosted relay/Linuxamd64 not qualified.",
+    "NativeRSS/history measured separately from Swarm budgets; no production goroutine/private-queue peak instrumentation.",
+    "Existing unrelated fullDarwin account/process baseline failures remain recorded; no test weakening.",
+    "No publication, release, installedSwarm or installedAndroid changes."
+  ]
+}
