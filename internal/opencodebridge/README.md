@@ -56,11 +56,23 @@ request bodies are bounded. The final route and request-liveness checks and SDK
 invocation share one JavaScript callback. This is a check at dispatch; the native
 API has no atomic expected-view or expected-turn admission fence.
 
-`/initial` forwards the genuine native Prompt only for an initial launch with no
-other enabled external plugin, a mounted visible/enabled same-root empty
-composer, and the host's input embargo still held. The wrapper preserves native
+A clean managed profile forwards the genuine native Prompt for all sessions,
+including blank launches and resumes. Immediately before every semantic prompt
+write, the bridge rechecks the mounted visible/enabled same-root native ref and
+requires both its input and parts to be empty. A PTY Enter/reset is not evidence
+of an empty native composer. `draftGuardSupported` is true only while this actual
+empty-draft guard is usable. Profiles with other enabled external plugins keep
+their existing composer; reads remain available but semantic prompting is
+unqualified. Request replies do not require an enabled composer because native
+pending questions/permissions can hide or disable it.
+
+`/initial` submits through that genuine native Prompt only for an initial launch
+with no other enabled external plugin and the host's input embargo still held. The wrapper preserves native
 reactive props, refs, submit callbacks, and the right-hand slot. Public APIs do
-not expose the live model-picker readiness or composer slot ownership. Normal
+not expose the live model-picker readiness, composer slot ownership, or hidden
+normal/shell mode. Semantic text dispatch is an explicit SDK chat prompt; it
+does not submit/clear the composer or claim its mode/picker. Initial forwarding
+relies on the fresh launch composer and held startup embargo. Normal
 owner configuration remains the host's responsibility; unsupported profiles
 must be reported, not silently replaced. CLI initial text must be withheld.
 
@@ -113,8 +125,16 @@ authorizes replay; durable host custody remains authoritative. The bridge's
 `requestHash` is its own normalized content digest, separate from host custody
 hashes and the initial-prompt text hash.
 
-An SDK promise which ignores abort keeps the mutation lane occupied until it
-settles. The host retains uncertain operations and never blindly replays them.
+Binding-valid preflight refusals return correlated rejected receipts; they do
+not become ambiguous transport failures after the host has persisted Begin.
+Errors after native invocation remain uncertain unless processing is proved.
+
+An SDK promise which ignores abort keeps the bridge mutation lane occupied until
+it settles. The host retains uncertain semantic operations and never blindly
+replays or lets later semantic automation overtake them. After the bounded call
+ends, manual owner input intentionally remains possible for inspection or
+explicit intervention. This is not an indefinite keyboard embargo or an atomic
+native expected-turn fence.
 Queue/steer and Stop with an expected turn remain unsupported. Mock hierarchy
 and multiple-request tests do not qualify the full native interaction source;
 that requires separate native integration evidence.

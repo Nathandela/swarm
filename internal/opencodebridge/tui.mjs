@@ -79,11 +79,17 @@ export default { id: ID, async tui(api, options) {
   }
   function readiness() {
     let reason
-    try { view(false) } catch (err) { reason = err[reasonKey] ?? "native_not_ready" }
-    return { ...identity(), nativeVersion: api.app.version, bound, acknowledged, ready: !reason, initialSupported: !reason && promptAvailable(), draftGuardSupported: false, inFlight: active !== null, degraded: reason ? [reason] : [], route: api.route.current }
+    try { view(false) } catch (err) { reason = err?.[reasonKey] ?? "native_not_ready" }
+    return { ...identity(), nativeVersion: api.app.version, bound, acknowledged, ready: !reason, initialSupported: !reason && binding.initialPrompt && promptAvailable(), draftGuardSupported: !reason && promptAvailable(), inFlight: active !== null, degraded: reason ? [reason] : [], route: api.route.current }
+  }
+  function emptyDraft() {
+    if (conflict() || !promptRef || promptProps?.session_id !== binding.rootID || promptProps.disabled || promptProps.visible === false) throw fault("native_draft_unavailable")
+    const draft = promptRef.current
+    if (!object(draft) || typeof draft.input !== "string" || !Array.isArray(draft.parts)) throw fault("native_draft_unavailable")
+    if (draft.input !== "" || draft.parts.length) throw fault("native_draft_occupied")
   }
   function promptAvailable() {
-    try { return binding.initialPrompt && !conflict() && !!promptRef && promptProps?.session_id === binding.rootID && !promptProps.disabled && promptProps.visible !== false && promptRef.current.input === "" && Array.isArray(promptRef.current.parts) && promptRef.current.parts.length === 0 } catch { return false }
+    try { emptyDraft(); return true } catch { return false }
   }
   function scoped(body) {
     if (!object(body) || body.version !== 1 || body.sessionInstance !== binding.sessionInstance || body.backendGeneration !== binding.backendGeneration || body.rootID !== binding.rootID) throw fault("binding_mismatch")
@@ -115,7 +121,7 @@ export default { id: ID, async tui(api, options) {
       if (!result || result.error !== undefined || result.data === undefined || result.data === null) throw fault("native_read_failed")
       if (Buffer.byteLength(JSON.stringify(result.data)) > RESPONSE_LIMIT) throw fault("response_oversized")
       return result
-    } catch (err) { throw fault(err[reasonKey] ?? "native_read_failed") }
+    } catch (err) { throw fault(err?.[reasonKey] ?? "native_read_failed") }
   }
   function rowMatches(row) {
     if (!object(row) || row.id !== binding.rootID || (row.location?.directory ?? row.directory) !== binding.directory || !Number.isSafeInteger(row.time?.created) || row.time.created <= 0) throw fault("native_binding_mismatch")
@@ -330,10 +336,10 @@ export default { id: ID, async tui(api, options) {
         invoke = options => permission ? api.client.permission.reply({ requestID: body.requestID, reply: body.reply }, options) : body.kind === "question_reply" ? api.client.question.reply({ requestID: body.requestID, answers: body.answers }, options) : api.client.question.reject({ requestID: body.requestID }, options)
       }
       // The final route read and native invocation share one JS callback; no await separates them.
-      check(); view(); record = remember(body, selection)
+      check(); view(); if (prompt) emptyDraft(); record = remember(body, selection)
       let result
       try { result = await bounded(signal => { record.invoked = true; return invoke({ throwOnError: true, signal }) }, NATIVE_TIMEOUT, lane) }
-      catch (err) { if (record.receipt.status !== "admitted") record.receipt.reason = err[reasonKey] ?? "native_error"; return operationReceipt(record) }
+      catch (err) { if (record.receipt.status !== "admitted") record.receipt.reason = err?.[reasonKey] ?? "native_error"; return operationReceipt(record) }
       const status = result?.response?.status
       record.receipt.nativeStatus = Number.isInteger(status) ? status : 0
       if (!prompt && status === 200 && result.data === true && result.error === undefined) admit(record)
@@ -351,8 +357,7 @@ export default { id: ID, async tui(api, options) {
   }
 
   function installPrompt() {
-    if (!binding.initialPrompt) return
-    if (conflict()) throw fault("initial_plugin_conflict")
+    if (conflict()) { if (binding.initialPrompt) throw fault("initial_plugin_conflict"); return }
     api.slots.register({ slots: { session_prompt: (_context, props) => {
       promptProps = props
       return api.ui.Prompt({
@@ -428,6 +433,7 @@ export default { id: ID, async tui(api, options) {
     const deadline = Date.now() + 12000
     const check = () => { if (res.destroyed || req.aborted) throw fault("channel_closed"); if (Date.now() >= deadline) throw fault("native_deadline") }
     if (disposed) return rejected(res, "disposed", 503)
+    let operationBody
     const authorization = req.headers.authorization
     if (typeof authorization !== "string" || !authorization.startsWith("Bearer ") || !crypto.timingSafeEqual(Buffer.from(digest(authorization.slice(7)), "hex"), token)) return rejected(res, "unauthorized", 401)
     try {
@@ -475,9 +481,17 @@ export default { id: ID, async tui(api, options) {
         if (!exactKeys(body, ["version", "sessionInstance", "backendGeneration", "rootID", "nativeCreatedAtMS"]) || body.nativeCreatedAtMS !== createdAt) throw fault("binding_mismatch")
         acknowledged = true; return response(res, 200, readiness())
       }
+      if (url.pathname === "/dispatch") { scoped(body); if (string(body.operationID)) operationBody = body }
       const receipt = url.pathname === "/initial" ? await submitInitial(body, check) : await dispatch(body, check)
       response(res, 200, { ...receipt, inFlight: active !== null })
-    } catch (err) { rejected(res, err[reasonKey] ?? "native_unavailable") }
+    } catch (err) {
+      const reason = err?.[reasonKey] ?? "native_unavailable"
+      if (operationBody) {
+        const body = operationBody
+        return response(res, 200, { ...identity(), operationID: body.operationID, kind: body.kind, targetID: body.targetID, messageID: body.messageID, requestID: body.requestID, status: "rejected", reason, inFlight: active !== null })
+      }
+      rejected(res, reason)
+    }
   }
   const server = http.createServer((req, res) => { void handler(req, res) })
   server.headersTimeout = 4000; server.requestTimeout = 8000; server.keepAliveTimeout = 1000
@@ -505,5 +519,5 @@ export default { id: ID, async tui(api, options) {
     const row = rowMatches(result.data.data); createdAt = row.time.created
     api.route.navigate("session", { sessionID: binding.rootID }); bound = true; bootstrapReason = ""
     view(false)
-  } catch (err) { bootstrapReason = err[reasonKey] ?? "native_binding_failed"; bound = false }
+  } catch (err) { bootstrapReason = err?.[reasonKey] ?? "native_binding_failed"; bound = false }
 } }

@@ -612,3 +612,56 @@ test("cached ancestry cannot hide a descendant beyond the depth bound", async t 
   f.state.statuses = { [id(8)]: { type: "busy" }, [id(9)]: { type: "busy" } }
   assert.equal((await f.call("GET", "/snapshot")).body.reason, "request_scope_unknown")
 })
+
+
+test("managed non-initial sessions guard the actual native composer after a shim Enter reset", async t => {
+  const f = await fixture(t)
+  assert.equal((await f.call("GET", "/ready")).body.draftGuardSupported, true)
+  assert.equal(f.state.hostRef, f.state.prompt)
+  f.state.prompt.current = { input: "native queued or refused draft", parts: [] }
+  // A cleared PTY line tracker is not proof that the native composer accepted Enter.
+  f.state.shimLine = ""
+  assert.equal((await f.call("GET", "/ready")).body.draftGuardSupported, false)
+  assert.equal((await f.dispatch()).body.reason, "native_draft_occupied")
+  assert.equal(f.state.prompt.current.input, "native queued or refused draft")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
+  f.state.prompt.current = { input: "", parts: [{ type: "file", url: "file:///private/draft" }] }
+  assert.equal((await f.dispatch()).body.reason, "native_draft_occupied")
+  f.state.prompt.current = { input: "", parts: [] }
+  assert.equal((await f.dispatch()).body.status, "admitted")
+})
+
+test("native composer is rechecked after asynchronous reads immediately before dispatch", async t => {
+  const f = await fixture(t)
+  const lookup = f.api.client.session.message
+  f.api.client.session.message = async input => { const result = await lookup(input); f.state.prompt.current.input = "late native draft"; return result }
+  assert.equal((await f.dispatch()).body.reason, "native_draft_occupied")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
+})
+
+test("non-initial external-plugin profiles preserve their composer and withhold draft qualification", async t => {
+  const f = await fixture(t, ({ state }) => { state.plugins = [{ id: "owner-plugin", source: "file", enabled: true }] })
+  const ready = (await f.call("GET", "/ready")).body
+  assert.equal(ready.bound, true)
+  assert.equal(ready.draftGuardSupported, false)
+  assert.equal(f.state.promptProps, undefined)
+  assert.equal((await f.dispatch()).body.reason, "native_draft_unavailable")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
+})
+
+
+test("binding-valid preflight refusal is a correlated receipt rather than an uncertain transport error", async t => {
+  const f = await fixture(t), operationID = "definitive_refusal", id = "msg_" + "e".repeat(32)
+  f.state.route = { name: "home" }
+  const result = await f.dispatch({ operationID, messageID: id })
+  assert.equal(result.code, 200)
+  assert.equal(result.body.status, "rejected")
+  assert.equal(result.body.operationID, operationID)
+  assert.equal(result.body.messageID, id)
+  assert.equal(result.body.kind, "prompt")
+  assert.equal(result.body.targetID, rootID)
+  assert.equal(result.body.nativeCreatedAtMS, 123456)
+  assert.equal(result.body.reason, "route_mismatch")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
+  assert.equal((await f.dispatch({ rootID: "ses_" + "f".repeat(32) })).code, 422)
+})
