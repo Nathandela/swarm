@@ -141,6 +141,10 @@ data class InteractionItem(
  * line: it carries buttons, an id a signed command names, and a fallback mode.
  */
 data class ItemFields(
+    val nativeRequest: NativeRequestFields? = null,
+    val nativeAuthorityValid: Boolean = false,
+    val nativeRole: String = "",
+    val nativeProvenance: String = "",
     /** §3.3: the adapter-reported tool name (`Read`, `Bash`, `Edit`, ...). */
     val tool: String = "",
     /**
@@ -208,7 +212,13 @@ data class ItemFields(
 /** §3.7: one step of a plan, and where it has got to. */
 data class PlanStep(val text: String, val state: String)
 
-private fun decode(item: JSONObject): ItemFields = ItemFields(
+private fun decode(item: JSONObject): ItemFields {
+    val request = nativeRequestOf(item)
+    return ItemFields(
+    nativeRequest = request,
+    nativeAuthorityValid = request != null && item.optBoolean("authority_valid", false),
+    nativeRole = item.optString("role"),
+    nativeProvenance = item.optString("provenance"),
     tool = item.optString(TOOL),
     target = actionOf(item.optJSONObject(ACTION)),
     output = item.optString(OUTPUT_EXCERPT),
@@ -229,6 +239,7 @@ private fun decode(item: JSONObject): ItemFields = ItemFields(
     attention = item.optBoolean("attention", false),
     note = item.optString(NOTE),
 )
+}
 
 /** §7's four fields, read the way `ApprovalItem` already reads them. See [ItemFields.target]. */
 private fun actionOf(action: JSONObject?): String {

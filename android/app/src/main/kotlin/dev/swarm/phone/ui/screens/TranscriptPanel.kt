@@ -4,6 +4,7 @@ import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.ApprovalItem
 import dev.swarm.phone.ui.InteractionItem
 import dev.swarm.phone.ui.ItemFields
+import dev.swarm.phone.ui.NativeRequestFields
 import dev.swarm.phone.ui.kit.BubbleState
 import dev.swarm.phone.ui.kit.Markdown
 import dev.swarm.phone.ui.kit.MarkdownBlock
@@ -186,6 +187,8 @@ data class PendingSend(
 )
 
 data class TranscriptBlock(
+    val nativeRequest: NativeRequestFields? = null,
+    val nativeAuthorityValid: Boolean = false,
     /** IS-APR-1: the `item_id`, which is what a signed `ActionApprove` names as `interaction_id`. */
     val itemId: String,
     /** §3's kind, verbatim. Carried so the view can tag what it drew. */
