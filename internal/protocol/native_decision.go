@@ -130,7 +130,7 @@ func (cc *clientConn) handleNativeDecide(c Control) {
 		return
 	}
 	receipt, code, err := applier.ApplyNativeDecision(cc.endpointID, c.OperationID, *c.NativeDecision)
-	if err != nil && !(receipt.State == "rejected" && receipt.NativeEffect == "none" && nativeDecisionReceiptMatches(receipt, c.OperationID, *c.NativeDecision)) {
+	if err != nil && (receipt.State != "rejected" || receipt.NativeEffect != "none" || !nativeDecisionReceiptMatches(receipt, c.OperationID, *c.NativeDecision)) {
 		cc.replyErrorCode("native decision: "+err.Error(), code)
 		return
 	}
