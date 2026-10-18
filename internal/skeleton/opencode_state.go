@@ -38,8 +38,12 @@ type OpenCodeState struct {
 	inputFloorAt int64
 	inputFloorID string
 
-	uncertain []OpenCodeUncertain
-	pending   []opencode.Part
+	uncertain       []OpenCodeUncertain
+	pending         []opencode.Part
+	scope           map[string]OpenCodeDescendant
+	foreignSessions map[string]bool
+	pendingRequests map[string]OpenCodeRequest
+	nativeUnknown   string
 }
 
 // ocInputState is one requested input's tracked state: its text parts, the
@@ -106,7 +110,8 @@ const (
 	// OCRefusedParse: the event did not decode; the epoch is desynchronized.
 	OCRefusedParse OpenCodeDisposition = "refused-parse"
 	// OCRefusedCap: a bounded capacity refused the event.
-	OCRefusedCap OpenCodeDisposition = "refused-cap"
+	OCRefusedCap    OpenCodeDisposition = "refused-cap"
+	OCNeedsSnapshot OpenCodeDisposition = "needs-snapshot"
 )
 
 // OpenCodeApply is Apply's result for one event.
@@ -201,9 +206,15 @@ type OpenCodeView struct {
 	Degraded       bool
 	DegradedReason string
 
-	Busy      bool
-	BusyKnown bool
-	Retry     *opencode.SessionStatus
+	Busy              bool
+	BusyKnown         bool
+	Retry             *opencode.SessionStatus
+	RootBusy          bool
+	RootBusyKnown     bool
+	CurrentScopeKnown bool
+	Attention         bool
+	Pending           []OpenCodeRequest
+	Descendants       []OpenCodeDescendant
 
 	Error *OpenCodeError
 
@@ -235,6 +246,9 @@ func (s *OpenCodeState) BeginEpoch() uint64 {
 	s.epoch++
 	s.desynced = false
 	s.setBusy(false, false, nil)
+	if s.scope != nil {
+		s.nativeUnknown = "native current activity requires reconciliation"
+	}
 	if s.epoch > 1 {
 		s.statusUnknown = "native status must be reconciled after reconnect"
 	}
@@ -261,6 +275,10 @@ func (s *OpenCodeState) Apply(raw []byte, epoch uint64) OpenCodeApply {
 		return OpenCodeApply{Disposition: OCRefusedParse}
 	}
 	apply := OpenCodeApply{Kind: ev.Kind, EventID: ev.ID}
+	if disposition, handled := s.applyNativeActivity(ev, raw); handled {
+		apply.Disposition = disposition
+		return apply
+	}
 	switch ev.Kind {
 	case opencode.EventSessionStatus:
 		if f := ev.SessionStatus; f == nil || !s.mine(f.SessionID) {
@@ -381,6 +399,7 @@ func (s *OpenCodeState) View() OpenCodeView {
 	})
 	v.Messages = append(v.Messages, s.msgOrder...)
 	v.Uncertain = append(v.Uncertain, s.uncertain...)
+	s.nativeView(&v)
 	return v
 }
 
@@ -406,6 +425,7 @@ func (s *OpenCodeState) degradeStream(reason string) {
 func (s *OpenCodeState) applyStatus(st *opencode.SessionStatus) OpenCodeDisposition {
 	switch st.Type {
 	case "busy":
+		s.sessionErr = nil
 		s.setBusy(true, true, nil)
 		s.statusUnknown = ""
 		return OCApplied
@@ -414,6 +434,7 @@ func (s *OpenCodeState) applyStatus(st *opencode.SessionStatus) OpenCodeDisposit
 		s.statusUnknown = ""
 		return OCApplied
 	case "retry":
+		s.sessionErr = nil
 		s.setBusy(true, true, cloneStatus(st))
 		s.statusUnknown = ""
 		return OCApplied
