@@ -612,7 +612,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		d.remoteSrv.SetInputGateFunc(inputGate)
 	}
 	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
-		d.supervisionMeta, supervisorUnsafeSource, d.sendSupervision)
+		d.supervisionMeta, d.core.Get, supervisorUnsafeSource, d.sendSupervision)
 	if err != nil {
 		return nil, err // defer'd cleanup tears down d.api + core
 	}

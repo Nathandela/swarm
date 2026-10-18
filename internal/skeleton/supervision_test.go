@@ -194,7 +194,7 @@ func passiveChild(id, source string, st status.Status) persist.Meta {
 func newTestSupervisor(t *testing.T, f *supFakes) (*supervisor, string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "supervision")
-	s, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.isControlled, f.send)
+	s, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.get, f.isControlled, f.send)
 	if err != nil {
 		t.Fatalf("newSupervisor: %v", err)
 	}
@@ -724,7 +724,7 @@ func TestSupervisor_RestartReplaysUndeliveredEventExactlyOnce(t *testing.T) {
 	}
 
 	f.setStatus("src", stReady) // safe now, and no signal will come
-	s2, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.isControlled, f.send)
+	s2, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.get, f.isControlled, f.send)
 	if err != nil {
 		t.Fatalf("second newSupervisor over the same dir: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestSupervisor_RestartAfterDeliveryReplaysNothing(t *testing.T) {
 	awaitDelivered(t, f, 1)
 	s1.close()
 
-	s2, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.isControlled, f.send)
+	s2, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.get, f.isControlled, f.send)
 	if err != nil {
 		t.Fatalf("second newSupervisor over the same dir: %v", err)
 	}
@@ -778,7 +778,7 @@ func TestSupervisor_ReArmAfterRestartKeepsSeq(t *testing.T) {
 	awaitDelivered(t, f, 1)
 	s1.close()
 
-	s2, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.isControlled, f.send)
+	s2, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.get, f.isControlled, f.send)
 	if err != nil {
 		t.Fatalf("second newSupervisor: %v", err)
 	}
@@ -833,7 +833,7 @@ func TestSupervisor_RestartEvaluatesAChildThatEndedWhileDown(t *testing.T) {
 	s1.close()
 
 	f.setStatus("kid", stExited) // ended while no supervisor was running
-	s2, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.isControlled, f.send)
+	s2, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.get, f.isControlled, f.send)
 	if err != nil {
 		t.Fatalf("second newSupervisor over the same dir: %v", err)
 	}

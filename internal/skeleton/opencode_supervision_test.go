@@ -33,7 +33,7 @@ func TestOpenCodeSupervisionUsesNativeAdmissionOnce(t *testing.T) {
 func TestSupervisionAdvancesAttemptOnlyOnProvenNoEffect(t *testing.T) {
 	f := newSupFakes(plainMeta("parent", stReady))
 	f.setSendErr(errors.New("outcome unknown"))
-	s := &supervisor{endpointID: supEndpoint, dir: t.TempDir(), get: f.get, controlled: f.isControlled, records: map[string]*supervisionRecord{}}
+	s := &supervisor{endpointID: supEndpoint, dir: t.TempDir(), get: f.get, getSource: f.get, controlled: f.isControlled, records: map[string]*supervisionRecord{}}
 	var ids []string
 	s.send = func(local string, req protocol.SendInputReq, operationID string) error {
 		ids = append(ids, operationID)

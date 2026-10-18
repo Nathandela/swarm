@@ -85,6 +85,7 @@ type supervisor struct {
 	dir        string
 	retry      time.Duration
 	get        func(local string) (persist.Meta, bool)
+	getSource  func(local string) (persist.Meta, bool)
 	controlled func(local string) bool
 	send       func(local string, req protocol.SendInputReq, operationID string) error
 
@@ -102,6 +103,7 @@ type supervisor struct {
 // Anything loaded pending is delivered by the retry cadence with no signal (C4).
 func newSupervisor(endpointID, dir string, retry time.Duration,
 	get func(local string) (persist.Meta, bool),
+	getSource func(local string) (persist.Meta, bool),
 	controlled func(local string) bool,
 	send func(local string, req protocol.SendInputReq, operationID string) error) (*supervisor, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -112,7 +114,7 @@ func newSupervisor(endpointID, dir string, retry time.Duration,
 	}
 	s := &supervisor{
 		endpointID: endpointID, dir: dir, retry: retry,
-		get: get, controlled: controlled, send: send,
+		get: get, getSource: getSource, controlled: controlled, send: send,
 		records: map[string]*supervisionRecord{},
 		wake:    make(chan struct{}, 1),
 		stop:    make(chan struct{}),
@@ -334,7 +336,7 @@ func supervisionOperationID(child, source string, ev supervisionEvent) string {
 // gone from the roster is unsafe forever: the record stays pending as the orphan the
 // roster shows (C4).
 func (s *supervisor) sourceSafe(source string) bool {
-	m, ok := s.get(source)
+	m, ok := s.getSource(source)
 	return ok && m.Status.Process == status.ProcessRunning &&
 		m.Status.Turn == status.TurnIdle &&
 		m.Status.Interaction != status.InteractionPermission &&
