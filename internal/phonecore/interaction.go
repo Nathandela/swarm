@@ -593,7 +593,7 @@ func (s *ItemStore) trimLocked(session string) {
 	}
 	for i := 0; i < len(s.items) && n > MaxItemsPerSession; i++ {
 		it := s.items[i]
-		if it.SessionID != session || it.Backfilled || pendingApproval(it) {
+		if it.SessionID != session || it.Backfilled || pendingApproval(it) || it.Kind == "request_set" {
 			continue
 		}
 		s.items = append(s.items[:i:i], s.items[i+1:]...)
@@ -648,7 +648,13 @@ func (s *ItemStore) Session(sessionID string) []Item {
 	defer s.mu.Unlock()
 	var out []Item
 	for _, it := range s.items {
-		if it.SessionID == sessionID {
+		if it.SessionID == sessionID && it.Kind != "request_set" {
+			if nativeRequestKind(it.Kind) {
+				card, ok := decodeNativeItem(it.Body)
+				if !ok || card.Request == nil || !s.nativeRequestCurrentLocked(sessionID, it.ItemID, *card.Request) {
+					it.Degraded = true
+				}
+			}
 			out = append(out, it)
 		}
 	}
