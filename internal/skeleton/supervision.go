@@ -36,6 +36,7 @@ package skeleton
 // cannot inject instructions into its supervisor through this channel.
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -72,6 +73,7 @@ type supervisionRecord struct {
 // which tells a prompt from a permission request) as the record's Seq-th event.
 type supervisionEvent struct {
 	Seq         uint64             `json:"seq"`
+	Attempt     uint64             `json:"attempt,omitempty"`
 	Group       status.Group       `json:"group"`
 	Interaction status.Interaction `json:"interaction"`
 }
@@ -84,7 +86,7 @@ type supervisor struct {
 	retry      time.Duration
 	get        func(local string) (persist.Meta, bool)
 	controlled func(local string) bool
-	send       func(local string, req protocol.SendInputReq) error
+	send       func(local string, req protocol.SendInputReq, operationID string) error
 
 	mu      sync.Mutex
 	records map[string]*supervisionRecord // by child local id
@@ -101,7 +103,7 @@ type supervisor struct {
 func newSupervisor(endpointID, dir string, retry time.Duration,
 	get func(local string) (persist.Meta, bool),
 	controlled func(local string) bool,
-	send func(local string, req protocol.SendInputReq) error) (*supervisor, error) {
+	send func(local string, req protocol.SendInputReq, operationID string) error) (*supervisor, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -294,7 +296,16 @@ func (s *supervisor) deliver(child, source string, ev supervisionEvent) {
 		return
 	}
 	req := protocol.SendInputReq{Text: supervisionNotification(protocol.NamespacedID(s.endpointID, child), ev), Submit: true}
-	if err := s.send(source, req); err != nil {
+	operationID := supervisionOperationID(child, source, ev)
+	if err := s.send(source, req, operationID); err != nil {
+		if errors.Is(err, errSupervisionRetry) {
+			s.mu.Lock()
+			if r := s.records[child]; r != nil && r.Pending != nil && r.Pending.Seq == ev.Seq && r.Pending.Attempt == ev.Attempt {
+				r.Pending.Attempt++
+				s.persistLocked(r)
+			}
+			s.mu.Unlock()
+		}
 		log.Printf("skeleton: supervision notification %s#%d to %s not delivered, will retry: %v", child, ev.Seq, source, err)
 		return
 	}
@@ -310,6 +321,11 @@ func (s *supervisor) deliver(child, source string, ev supervisionEvent) {
 		return
 	}
 	s.persistLocked(r)
+}
+
+func supervisionOperationID(child, source string, ev supervisionEvent) string {
+	hash := sha256.Sum256(fmt.Appendf(nil, "%s\x00%s\x00%d\x00%d", child, source, ev.Seq, ev.Attempt))
+	return fmt.Sprintf("semantic:supervision:%x", hash[:])
 }
 
 // sourceSafe is C3's gate: the source is running, its turn is idle, it is waiting on

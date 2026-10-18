@@ -134,14 +134,12 @@ func (d *Daemon) publishOpenCodeView(local string, observation *openCodeObservat
 	}
 	observation.view = view
 	nativeStatus := openCodeProjectedStatus(view)
-	changed := nativeStatus != observation.lastStatus
-	if changed {
+	if nativeStatus != observation.lastStatus {
 		if err := d.core.SetOpenCodeStatus(local, observation.identity.BackendGeneration, nativeStatus); err != nil {
 			if !observation.persistFailed {
 				log.Printf("skeleton: OpenCode status persistence failed for %s: %v", local, err)
 			}
 			observation.persistFailed = true
-			changed = false
 		} else {
 			observation.persistFailed = false
 			observation.lastStatus = nativeStatus
@@ -152,7 +150,7 @@ func (d *Daemon) publishOpenCodeView(local string, observation *openCodeObservat
 	if d.api != nil {
 		d.api.pokeWatch()
 	}
-	if changed && d.sup != nil {
+	if d.sup != nil {
 		d.sup.signal(local)
 	}
 }

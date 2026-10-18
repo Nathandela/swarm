@@ -111,7 +111,7 @@ func (f *supFakes) isControlled(local string) bool {
 	return f.controlled[local]
 }
 
-func (f *supFakes) send(local string, req protocol.SendInputReq) error {
+func (f *supFakes) send(local string, req protocol.SendInputReq, _ string) error {
 	f.mu.Lock()
 	err, delay := f.sendErr, f.sendDelay
 	f.mu.Unlock()

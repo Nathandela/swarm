@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/opencodebridge"
@@ -15,6 +16,7 @@ import (
 )
 
 type openCodeSendIntent struct {
+	Source      string                  `json:"source,omitempty"`
 	Identity    opencodebridge.Identity `json:"identity"`
 	MessageID   string                  `json:"message_id"`
 	TextHash    string                  `json:"text_hash"`
@@ -81,7 +83,11 @@ func (d *Daemon) sendOpenCodeSemantic(local, operationID string, req protocol.Co
 			return errors.New("OpenCode submission has no matching durable owner operation")
 		}
 		hash := sha256.Sum256([]byte(req.Text))
-		intent := openCodeSendIntent{Identity: identity, MessageID: openCodeMessageID(operationID, identity), TextHash: hex.EncodeToString(hash[:]), NotBeforeMS: time.Now().UnixMilli()}
+		source := "owner"
+		if strings.HasPrefix(operationID, "semantic:supervision:") {
+			source = "supervisor"
+		}
+		intent := openCodeSendIntent{Source: source, Identity: identity, MessageID: openCodeMessageID(operationID, identity), TextHash: hex.EncodeToString(hash[:]), NotBeforeMS: time.Now().UnixMilli()}
 		if len(record.Request) != 0 {
 			var saved openCodeSendIntent
 			if json.Unmarshal(record.Request, &saved) != nil || saved.Identity != identity || saved.MessageID != intent.MessageID || saved.TextHash != intent.TextHash || saved.NotBeforeMS <= 0 {
