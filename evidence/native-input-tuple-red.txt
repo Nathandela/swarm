@@ -1,0 +1,16 @@
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/opencode_input_tuple_test.go:23:8: in.Agent undefined (type *OpenCodeInput has no field or method Agent)
+internal/skeleton/opencode_input_tuple_test.go:23:30: in.ProviderID undefined (type *OpenCodeInput has no field or method ProviderID)
+internal/skeleton/opencode_input_tuple_test.go:23:61: in.ModelID undefined (type *OpenCodeInput has no field or method ModelID)
+internal/skeleton/opencode_input_tuple_test.go:23:105: in.Variant undefined (type *OpenCodeInput has no field or method Variant)
+internal/skeleton/opencode_input_tuple_test.go:27:58: ocInput(v, "msg_user").Agent undefined (type *OpenCodeInput has no field or method Agent)
+internal/skeleton/opencode_input_tuple_test.go:47:8: in.Agent undefined (type *OpenCodeInput has no field or method Agent)
+internal/skeleton/opencode_input_tuple_test.go:47:30: in.ModelID undefined (type *OpenCodeInput has no field or method ModelID)
+internal/skeleton/opencode_input_tuple_test.go:47:74: in.Variant undefined (type *OpenCodeInput has no field or method Variant)
+internal/skeleton/opencode_input_tuple_test.go:51:48: in.Agent undefined (type *OpenCodeInput has no field or method Agent)
+internal/skeleton/opencode_input_tuple_test.go:51:66: in.ModelID undefined (type *OpenCodeInput has no field or method ModelID)
+internal/skeleton/opencode_input_tuple_test.go:51:66: too many errors
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+
+exit=1
