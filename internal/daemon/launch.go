@@ -270,6 +270,11 @@ func (d *Daemon) CommitIdempotentOp(op string, ok bool) error {
 // Unlike kill/delete, an executing composer operation is never safe to redrive: the provider
 // may have accepted the message before its reply or our terminal commit was lost.
 func (d *Daemon) ClaimComposerOperation(op, action, session, instance, requestHash string) (phase string, outcome []byte, err error) {
+	unlock, err := d.lockComposerCustody()
+	if err != nil {
+		return "", nil, err
+	}
+	defer unlock()
 	rec, existed, err := d.idem.PrepareBound(op, action, session, instance, requestHash)
 	if err != nil {
 		return "", nil, err
@@ -284,11 +289,23 @@ func (d *Daemon) ClaimComposerOperation(op, action, session, instance, requestHa
 
 // BeginComposerOperation durably crosses the at-most-once boundary immediately before
 // provider/shim I/O. Begin accepts only prepared, so concurrent replays cannot both execute.
-func (d *Daemon) BeginComposerOperation(op string) error { return d.idem.Begin(op) }
+func (d *Daemon) BeginComposerOperation(op string) error {
+	unlock, err := d.lockComposerCustody()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return d.idem.Begin(op)
+}
 
 // CommitComposerOperation stores the exact protocol outcome for replay. success chooses the
 // terminal phase; outcome carries the coded result without importing the wire package here.
 func (d *Daemon) CommitComposerOperation(op string, outcome []byte, success bool) error {
+	unlock, err := d.lockComposerCustody()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if success {
 		return d.idem.Complete(op, outcome)
 	}
