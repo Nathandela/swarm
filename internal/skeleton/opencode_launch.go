@@ -27,8 +27,7 @@ func (a *coreAPI) captureOpenCodeOrigin(spec *daemon.LaunchSpec) error {
 		if e != nil {
 			return errors.New("OpenCode runtime: saved native directory unavailable")
 		}
-		requested, e := filepath.EvalSymlinks(spec.Cwd)
-		if spec.Cwd != "" && (e != nil || requested != cwd) {
+		if spec.Options[protocol.OptionResumeRelocate] != "" {
 			return errors.New("OpenCode runtime: resume cannot change the native working directory")
 		}
 		spec.Cwd = cwd
@@ -54,17 +53,7 @@ func (a *coreAPI) qualifyOpenCodeLaunch(spec *daemon.LaunchSpec) error {
 	if len(spec.Argv) == 0 {
 		return errors.New("OpenCode runtime: native executable unavailable")
 	}
-	env := append([]string(nil), spec.ClientEnv...)
-	for _, entry := range spec.OpenCodeEnv {
-		key, _, _ := strings.Cut(entry, "=")
-		filtered := env[:0]
-		for _, old := range env {
-			if !strings.HasPrefix(old, key+"=") {
-				filtered = append(filtered, old)
-			}
-		}
-		env = append(filtered, entry)
-	}
+	env := mergeNativeOpenCodeEnvironment(spec.ClientEnv, spec.OpenCodeEnv)
 	identity, err := probeCLIIdentity("opencode", spec.Argv[0], env, spec.Cwd)
 	if err != nil || identity == nil || identity.Version != "1.19.3" {
 		return errors.New("OpenCode runtime: native version 1.19.3 is required")
@@ -75,4 +64,19 @@ func (a *coreAPI) qualifyOpenCodeLaunch(spec *daemon.LaunchSpec) error {
 	spec.RequiredRuntime = persist.RequiredRuntimeOpenCode
 	spec.CLIIdentity, spec.ExpectedCLIIdentity = identity, identity
 	return nil
+}
+
+func mergeNativeOpenCodeEnvironment(base, native []string) []string {
+	env := append([]string(nil), base...)
+	for _, entry := range native {
+		key, _, _ := strings.Cut(entry, "=")
+		filtered := env[:0]
+		for _, old := range env {
+			if !strings.HasPrefix(old, key+"=") {
+				filtered = append(filtered, old)
+			}
+		}
+		env = append(filtered, entry)
+	}
+	return env
 }

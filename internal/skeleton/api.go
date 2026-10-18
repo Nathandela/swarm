@@ -1577,7 +1577,8 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 	ad, _ := registry.New(source.AgentType)
 	_, byCwd := adapter.AsTranscriptLayout(ad)
 	_, byDay := adapter.AsDatedTranscriptLayout(ad)
-	if !byCwd && !byDay {
+	managedOpenCode := source.AgentType == "opencode" && source.RequiredRuntime == persist.RequiredRuntimeOpenCode && source.OpenCodeBinding != nil && source.OpenCodeBinding.NativeCreatedAtMS > 0
+	if !byCwd && !byDay && !managedOpenCode {
 		return daemon.LaunchSpec{}, fmt.Errorf("handoff: source agent %q has no characterized transcript layout; hands-off supports claude and codex sources", source.AgentType)
 	}
 	if resolver == nil {
