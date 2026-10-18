@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -35,17 +35,16 @@ type nativeProjectionSeen struct {
 
 // The observer owns these bounded caches. Stable IDs do not require a lifetime ref map.
 type openCodeTranscript struct {
-	ready         atomic.Bool
-	sinkQualified atomic.Bool
-	owner         *openCodeObservation
-	d             *Daemon
-	local, scope  string
-	identity      opencodebridge.Identity
-	seen          map[string]nativeProjectionSeen
-	order         []string
-	headers       map[string]opencode.Message
-	headerOrder   []string
-	descendants   map[string]bool
+	ready            atomic.Bool
+	sinkQualified    atomic.Bool
+	owner            *openCodeObservation
+	d                *Daemon
+	local, scope     string
+	identity         opencodebridge.Identity
+	seen             map[string]nativeProjectionSeen
+	order            []string
+	priorDescendants []string
+	descendants      map[string]bool
 }
 
 func nativeProjectionScope(meta persist.Meta) (string, error) {
@@ -110,7 +109,7 @@ func newOpenCodeTranscript(d *Daemon, meta persist.Meta, identity opencodebridge
 		return nil, err
 	}
 	d.initInteractions()
-	return &openCodeTranscript{d: d, local: meta.ID, scope: scope, identity: identity, seen: map[string]nativeProjectionSeen{}, headers: map[string]opencode.Message{}, descendants: map[string]bool{}}, nil
+	return &openCodeTranscript{d: d, local: meta.ID, scope: scope, identity: identity, seen: map[string]nativeProjectionSeen{}, descendants: map[string]bool{}}, nil
 }
 
 func (p *openCodeTranscript) current() bool {
@@ -118,22 +117,7 @@ func (p *openCodeTranscript) current() bool {
 	return ok && openCodeMetaMatches(meta, p.identity)
 }
 func (p *openCodeTranscript) inScope(id string) bool {
-	return id == p.identity.RootID || p.descendants[id]
-}
-
-func (p *openCodeTranscript) remember(info opencode.Message) {
-	key := info.SessionID + ":" + info.ID
-	if _, ok := p.headers[key]; !ok {
-		p.headerOrder = append(p.headerOrder, key)
-	}
-	info.Raw = nil
-	info.Error = nil
-	info.Model = nil
-	p.headers[key] = info
-	for len(p.headerOrder) > 64 {
-		delete(p.headers, p.headerOrder[0])
-		p.headerOrder = p.headerOrder[1:]
-	}
+	return id == p.identity.RootID || p.descendants[id] || slices.Contains(p.priorDescendants, id)
 }
 
 func (p *openCodeTranscript) history(rows []json.RawMessage, provenance string) error {
@@ -178,7 +162,6 @@ func (p *openCodeTranscript) row(row json.RawMessage, provenance string) error {
 	if !p.inScope(info.SessionID) {
 		return errors.New("native transcript row is outside its verified scope")
 	}
-	p.remember(info)
 	for _, item := range opencode.NativeInteractions().Interactions(adapter.HookPayload{Event: opencode.NativeMessageRowEvent, Raw: row}) {
 		if err := p.interaction(info, item, provenance, row); err != nil {
 			return err
@@ -304,43 +287,35 @@ func (p *openCodeTranscript) touch(id string) {
 }
 
 func (p *openCodeTranscript) event(ctx context.Context, reader openCodeReader, event opencode.Event) (json.RawMessage, error) {
+	var target, id string
 	if event.MessageUpdated != nil {
-		info := event.MessageUpdated.Info
-		if !p.inScope(info.SessionID) {
-			return nil, nil
-		}
-		p.remember(info)
-		if info.SessionID == p.identity.RootID {
-			row, err := p.readMessage(ctx, reader, info.ID)
-			if err != nil {
-				return nil, err
-			}
-			return row, nil
-		}
+		target, id = event.MessageUpdated.Info.SessionID, event.MessageUpdated.Info.ID
 	}
 	if event.MessagePartUpdated != nil {
-		part := event.MessagePartUpdated.Part
-		if !p.inScope(part.SessionID) {
-			return nil, nil
-		}
-		info, ok := p.headers[part.SessionID+":"+part.MessageID]
-		if part.SessionID == p.identity.RootID {
-			row, err := p.readMessage(ctx, reader, part.MessageID)
-			if err != nil {
-				return nil, err
-			}
-			return row, nil
-		}
-		if !ok {
-			return nil, fmt.Errorf("native part %s has no retained message context", part.ID)
-		}
-		for _, item := range opencode.NativePartInteractions(info, part) {
-			if err := p.interaction(info, item, "live", nil); err != nil {
-				return nil, err
-			}
-		}
+		target, id = event.MessagePartUpdated.Part.SessionID, event.MessagePartUpdated.Part.MessageID
 	}
-	return nil, nil
+	if !p.inScope(target) {
+		return nil, nil
+	}
+	if target == p.identity.RootID {
+		return p.readMessage(ctx, reader, id)
+	}
+	scoped, ok := reader.(interface {
+		MessageForSession(context.Context, string, string) (json.RawMessage, error)
+	})
+	if !ok {
+		return nil, errors.New("native descendant message reader is unavailable")
+	}
+	// Retained IDs select candidates only. Every read proves current ancestry in the bridge.
+	row, err := scoped.MessageForSession(ctx, target, id)
+	if err != nil {
+		return nil, err
+	}
+	info, _, err := opencode.DecodeMessageRow(row)
+	if err != nil || info.SessionID != target || info.ID != id {
+		return nil, errors.New("native descendant message read returned another identity")
+	}
+	return row, nil
 }
 
 func (p *openCodeTranscript) view(view OpenCodeView) error {
@@ -348,6 +323,13 @@ func (p *openCodeTranscript) view(view OpenCodeView) error {
 	if view.CurrentScopeKnown {
 		for _, child := range view.Descendants {
 			p.descendants[child.SessionID] = true
+			if i := slices.Index(p.priorDescendants, child.SessionID); i >= 0 {
+				p.priorDescendants = slices.Delete(p.priorDescendants, i, i+1)
+			}
+			p.priorDescendants = append(p.priorDescendants, child.SessionID)
+			if len(p.priorDescendants) > 64 {
+				p.priorDescendants = p.priorDescendants[1:]
+			}
 		}
 	}
 	if err := p.requests(view); err != nil {
