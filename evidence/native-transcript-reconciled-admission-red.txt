@@ -1,0 +1,10 @@
+2026/10/18 19:59:59 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+2026/10/18 20:00:00 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- FAIL: TestOpenCodeTranscriptReconcilesOwnedPhoneAdmissionFromHistory (3.82s)
+    --- FAIL: TestOpenCodeTranscriptReconcilesOwnedPhoneAdmissionFromHistory/fresh_projector (2.71s)
+        opencode_transcript_test.go:223: exact owned native admission remained historical and cannot settle lost phone send
+    --- FAIL: TestOpenCodeTranscriptReconcilesOwnedPhoneAdmissionFromHistory/previously_unattributed (1.11s)
+        opencode_transcript_test.go:223: exact owned native admission remained historical and cannot settle lost phone send
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	4.224s
+FAIL

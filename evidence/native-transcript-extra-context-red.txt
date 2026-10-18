@@ -1,0 +1,6 @@
+2026/10/18 20:00:50 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- FAIL: TestOpenCodeTranscriptExtraGenuineContextCannotClaimOwnedInput (3.38s)
+    opencode_transcript_test.go:260: extra genuine context was laundered as exact owned input: map[input_sha256:c3bd55ec37d97f5c53307e1ca242bdae461b6dfacdcbb6f8f4f476e6da593973 item_id:1D4YP1R63MQD9F1DEBNCRZE357 kind:message_snapshot native_session_id:ses_1ac268f11509fe55e5eee53a4005cda8 operation_id:phone:extra-context provenance:imported role:user source:phone text:exact native message ts:2026-10-18T18:00:51.356Z turn_id:58A6PSMRG9WJ1KG3AEKSG0GBHQ v:2]
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.764s
+FAIL

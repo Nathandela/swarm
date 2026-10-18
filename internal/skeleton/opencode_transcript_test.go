@@ -183,3 +183,98 @@ func TestOpenCodeTranscriptQualifiedOwnedEchoKeepsHashWhenClipped(t *testing.T) 
 	}
 	t.Fatal("owned echo was not journalled")
 }
+
+func TestOpenCodeTranscriptReconcilesOwnedPhoneAdmissionFromHistory(t *testing.T) {
+	for _, priorImported := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fresh_projector", true: "previously_unattributed"}[priorImported], func(t *testing.T) {
+			f := newOpenCodeSendFixture(t)
+			f.enablePhoneComposer(t)
+			f.dropReply.Store(true)
+			if _, err := f.phoneSend(t, "phone:lost-history"); err == nil {
+				t.Fatal("fixture did not lose native response")
+			}
+			record, _ := f.d.core.ComposerOperation("phone:lost-history")
+			var intent openCodeSendIntent
+			if err := json.Unmarshal(record.Request, &intent); err != nil {
+				t.Fatal(err)
+			}
+			row := f.nativeRow.Load().(json.RawMessage)
+			meta, _ := f.d.core.Get(f.binding.WorkerID)
+			source, err := newOpenCodeTranscript(f.d, meta, f.identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if priorImported {
+				f.d.nativeReceipts.mu.Lock()
+				f.d.nativeReceipts.sessions = map[string]*openCodeOwnedIndex{f.binding.WorkerID: {generation: f.identity.BackendGeneration, loaded: true, inputs: map[string]openCodeOwnedInput{}}}
+				f.d.nativeReceipts.mu.Unlock()
+				if err := source.history([]json.RawMessage{row}, "imported"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.d.nativeReceipts.mu.Lock()
+			f.d.nativeReceipts.sessions = nil
+			f.d.nativeReceipts.mu.Unlock()
+			if err := source.history([]json.RawMessage{row}, "imported"); err != nil {
+				t.Fatal(err)
+			}
+			id := nativeProjectionID(source.scope, "message_snapshot", f.identity.RootID+":"+intent.MessageID)
+			if source.seen[id].provenance != "reconciled" {
+				t.Fatal("exact owned native admission remained historical and cannot settle lost phone send")
+			}
+			if f.calls.Load() != 1 {
+				t.Fatal("history reconciliation submitted another native input")
+			}
+		})
+	}
+}
+
+func TestOpenCodeTranscriptExtraGenuineContextCannotClaimOwnedInput(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	f.enablePhoneComposer(t)
+	if _, err := f.phoneSend(t, "phone:extra-context"); err != nil {
+		t.Fatal(err)
+	}
+	var row map[string]any
+	if err := json.Unmarshal(f.nativeRow.Load().(json.RawMessage), &row); err != nil {
+		t.Fatal(err)
+	}
+	info := row["info"].(map[string]any)
+	messageID := info["id"].(string)
+	row["parts"] = append(row["parts"].([]any), map[string]any{"id": "prt_added_context", "sessionID": f.identity.RootID, "messageID": messageID, "type": "file", "mime": "text/plain", "url": "file:///tmp/extra-context"})
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := f.d.core.Get(f.binding.WorkerID)
+	source, err := newOpenCodeTranscript(f.d, meta, f.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.history([]json.RawMessage{raw}, "imported"); err != nil {
+		t.Fatal(err)
+	}
+	itemID := nativeProjectionID(source.scope, "message_snapshot", f.identity.RootID+":"+messageID)
+	item := nativeTranscriptJournalItem(t, f, itemID)
+	if item["source"] != "native" || item["operation_id"] != nil || item["input_sha256"] != nil || item["provenance"] != "imported" {
+		t.Fatalf("extra genuine context was laundered as exact owned input: %+v", item)
+	}
+}
+func nativeTranscriptJournalItem(t *testing.T, f *openCodeSendFixture, id string) map[string]any {
+	t.Helper()
+	for until := time.Now().Add(2 * time.Second); time.Now().Before(until); {
+		records, err := f.d.core.JournalReadFrom(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range records.Events {
+			var item map[string]any
+			if json.Unmarshal(record.Payload, &item) == nil && item["item_id"] == id {
+				return item
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("native item did not reach journal")
+	return nil
+}
