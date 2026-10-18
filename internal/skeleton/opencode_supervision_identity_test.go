@@ -236,7 +236,7 @@ func TestNativeSupervisionRecoversDurablyOwnedInputBeforeObserverCheckpoint(t *t
 		t.Fatal("invalid durable intent")
 	}
 	input := OpenCodeInput{MessageID: intent.MessageID, Text: f.request.Text, Classified: true, At: intent.NotBeforeMS + 1, Outcome: OpenCodeOutcomeCompleted, OutcomeSource: OpenCodeOutcomeSourceImported, OutcomeAt: intent.NotBeforeMS + 2, Agent: "build", ProviderID: "fixture", ModelID: "fixture-model", Variant: "max"}
-	view := OpenCodeView{Root: f.identity.RootID, Generation: f.identity.BackendGeneration, BusyKnown: true, CurrentScopeKnown: true, Inputs: []OpenCodeInput{input}}
+	view := OpenCodeView{Root: f.identity.RootID, Generation: f.identity.BackendGeneration, Epoch: 1, BusyKnown: true, CurrentScopeKnown: true, Inputs: []OpenCodeInput{input}}
 	f.d.openCode.mu.Lock()
 	f.d.openCode.sessions[f.binding.WorkerID].view = view
 	f.d.openCode.mu.Unlock()
