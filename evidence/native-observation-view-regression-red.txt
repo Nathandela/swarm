@@ -1,0 +1,11 @@
+--- FAIL: TestOpenCodeObservationRequiresOwnerNegotiationForListAndEvents (0.00s)
+    opencode_observation_test.go:35: negotiated native list presence=false want=true
+--- FAIL: TestOpenCodeObservationSharedFanoutSeparatesNegotiatedClients (0.00s)
+    opencode_observation_test.go:89: shared native observation leaked or lost: client 0
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.436s
+--- FAIL: TestOpenCodeProjectionMarksClippedSingleInput (0.00s)
+    opencode_projection_test.go:65: clipped input was presented as complete
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.409s
+FAIL
