@@ -46,6 +46,7 @@ func SavedEnvPath(stateDir string) string {
 func writeSavedEnv(stateDir string) error {
 	original := daemonEnviron()
 	env := append(PolicyEnv(original), NativeConfigurationEnvironment(original)...)
+	env = append(env, openCodeSavedEnvironment(original)...)
 
 	var buf strings.Builder
 	for _, kv := range env {

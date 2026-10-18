@@ -113,21 +113,24 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
-	AccountBinding       *accounts.Binding    `json:"account_binding,omitempty"`
-	AccountProjectionRef string               `json:"account_projection_ref,omitempty"`
-	AccountStateRoot     string               `json:"account_state_root,omitempty"`
-	InputEmbargo         string               `json:"input_embargo,omitempty"`
-	InputEmbargoToken    string               `json:"input_embargo_token,omitempty"`
-	CLIIdentity          *persist.CLIIdentity `json:"cli_identity,omitempty"`
-	SessionID            string               `json:"session_id"`
-	Argv                 []string             `json:"argv"`
-	Cwd                  string               `json:"cwd"`
-	Env                  []string             `json:"env"`
-	SocketPath           string               `json:"socket_path"`
-	SessionDir           string               `json:"session_dir"`
-	Cols                 int                  `json:"cols"`
-	Rows                 int                  `json:"rows"`
-	GraceMS              int                  `json:"grace_ms"`
+	OpenCode              *shim.OpenCodeConfig `json:"opencode,omitempty"`
+	OpenCodeEnv           []string             `json:"opencode_env,omitempty"`
+	OpenCodeInitialPrompt string               `json:"opencode_initial_prompt,omitempty"`
+	AccountBinding        *accounts.Binding    `json:"account_binding,omitempty"`
+	AccountProjectionRef  string               `json:"account_projection_ref,omitempty"`
+	AccountStateRoot      string               `json:"account_state_root,omitempty"`
+	InputEmbargo          string               `json:"input_embargo,omitempty"`
+	InputEmbargoToken     string               `json:"input_embargo_token,omitempty"`
+	CLIIdentity           *persist.CLIIdentity `json:"cli_identity,omitempty"`
+	SessionID             string               `json:"session_id"`
+	Argv                  []string             `json:"argv"`
+	Cwd                   string               `json:"cwd"`
+	Env                   []string             `json:"env"`
+	SocketPath            string               `json:"socket_path"`
+	SessionDir            string               `json:"session_dir"`
+	Cols                  int                  `json:"cols"`
+	Rows                  int                  `json:"rows"`
+	GraceMS               int                  `json:"grace_ms"`
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1). "" is the
 	// pre-R6 compat default the shim reads as "bind no hook listener at all".
 	HookSocketPath string `json:"hook_socket_path"`
@@ -296,6 +299,13 @@ func (d *Daemon) CommitComposerOperation(op string, outcome []byte, success bool
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT
 // cleanup, modelling a crash whose orphan/phantom reconcile later resolves.
 func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error) {
+	if spec.RequiredRuntime != "" && spec.OpenCodeEnv == nil {
+		var err error
+		spec.OpenCodeEnv, err = d.OpenCodeEnvironment(spec.ClientEnv)
+		if err != nil {
+			return persist.Meta{}, err
+		}
+	}
 	if err := d.validateWorkspace(spec.Cwd); err != nil {
 		return persist.Meta{}, err
 	}
@@ -321,6 +331,8 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	id := d.freshIDLocked()
 	now := time.Now()
 	m := persist.Meta{
+		RequiredRuntime:       spec.RequiredRuntime,
+		OpenCodeBinding:       persist.CloneOpenCodeBinding(spec.OpenCodeBinding),
 		AccountBinding:        spec.AccountBinding,
 		AccountProjectionRef:  spec.AccountProjectionRef,
 		AccountClaudeFallback: spec.AccountClaudeFallback,
@@ -345,7 +357,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		Supervision:           spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
 		Status:                status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 	}
-	s := &session{meta: m, stop: make(chan struct{})}
+	s := &session{meta: cloneOpenCodeMeta(m), stop: make(chan struct{})}
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
 	d.mu.Unlock()
 
@@ -484,14 +496,18 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			return persist.Meta{}, err
 		}
 	}
+	if err := d.prepareOpenCodeLaunch(&spec, &m, dir); err != nil {
+		d.rollbackReserved(id, m, preLaunchOK)
+		return persist.Meta{}, err
+	}
 	// Phase 1 — reserve: persist the running meta before any shim exists.
 	if err := d.saveMeta(m); err != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
 	}
 	if probe != nil {
-		if err := probe(phaseReserved, m); err != nil {
-			return m, err // crash: no cleanup — reconcile resolves the reserved phantom
+		if err := probe(phaseReserved, cloneOpenCodeMeta(m)); err != nil {
+			return cloneOpenCodeMeta(m), err // crash: no cleanup — reconcile resolves the reserved phantom
 		}
 	}
 
@@ -591,7 +607,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			d.logf("launch %s: record applied outcome for %s: %v", id, spec.OperationID, cerr)
 		}
 	}
-	return m, nil
+	return cloneOpenCodeMeta(m), nil
 }
 
 // spawnShim writes the shim launch config and starts a detached `swarm shim
@@ -616,6 +632,10 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		return nil, "", err
 	}
 	agentEnv := PolicyEnv(spec.ClientEnv)
+	if spec.OpenCodeLaunch != nil {
+		agentEnv = mergeOpenCodeEnv(agentEnv, spec.OpenCodeEnv)
+		agentEnv = append(agentEnv, "OPENCODE_TUI_CONFIG="+filepath.Join(dir, "opencode-tui.json"))
+	}
 	if spec.AgentType == "claude" && spec.AccountNativeContext {
 		agentEnv = append(agentEnv, "CLAUDE_CODE_DIAGNOSTICS_FILE="+filepath.Join(d.cfg.StateDir, id, "claude-model-diagnostics.jsonl"))
 		if policy := spec.AccountClaudeFallback; policy != nil {
@@ -627,6 +647,8 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		}
 	}
 	lc := shimSpawnConfig{
+		OpenCode:             spec.OpenCodeLaunch,
+		OpenCodeEnv:          append([]string(nil), spec.OpenCodeEnv...),
 		AccountBinding:       spec.AccountBinding,
 		AccountProjectionRef: spec.AccountProjectionRef,
 		AccountStateRoot:     spec.AccountStateRoot,
@@ -644,6 +666,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		HookSocketPath:       hookSock,
 		HookDrainToken:       drainToken,
 	}
+	if spec.OpenCodeLaunch != nil {
+		lc.OpenCodeInitialPrompt = spec.InitialPrompt
+	}
 	if spec.InputEmbargo != "" {
 		if spec.AccountBinding == nil {
 			return nil, "", errors.New("daemon: unmanaged input embargo")
@@ -658,7 +683,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	// backend socket path -- exist. Either way this package never derives it: it holds no
 	// adapter and could not.
 	backendSock := backendSocketPath(d.cfg.StateDir, id)
-	if spec.Backend == nil && d.cfg.BackendPlanner != nil {
+	if spec.OpenCodeLaunch == nil && spec.Backend == nil && d.cfg.BackendPlanner != nil {
 		plan, perr := d.cfg.BackendPlanner(spec.AgentType, dir, backendSock, spec.Cwd, spec.ClientEnv, spec.Argv)
 		if perr != nil {
 			// A backend failure is a failure for the BACKEND only (playbook §6.1's posture):
@@ -693,7 +718,12 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		return nil, "", err
 	}
 
-	cmd = exec.Command(d.cfg.ShimBinary, "shim", "--config", cfgPath)
+	shimArgs := []string{"shim"}
+	if spec.OpenCodeLaunch != nil {
+		shimArgs = append(shimArgs, "--require-opencode-tui")
+	}
+	shimArgs = append(shimArgs, "--config", cfgPath)
+	cmd = exec.Command(d.cfg.ShimBinary, shimArgs...)
 	cmd.Env = os.Environ() // the shim PROCESS env; the agent env is lc.Env (filtered)
 	logf, err := openDaemonLog(d.cfg.LogPath)
 	if err != nil {

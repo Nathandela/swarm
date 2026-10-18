@@ -8,6 +8,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -127,6 +129,8 @@ type Config struct {
 	// the assembly retires the engine session and its token (S6).
 	OnSessionStart func(m persist.Meta, token string)
 	OnSessionEnd   func(id string)
+	// OpenCodeReady arms native observation before initial input or owner-input release.
+	OpenCodeReady func(context.Context, persist.Meta) error
 
 	// BackendPlanner, when non-nil, is asked at spawn whether a session needs a SIDE
 	// PROCESS (Wave R7, Mirror M4.1; backend.go). nil -- and a nil answer -- is the
@@ -147,6 +151,10 @@ type Config struct {
 
 // LaunchSpec is a request to launch a new session.
 type LaunchSpec struct {
+	RequiredRuntime                 string                   `json:"-"`
+	OpenCodeBinding                 *persist.OpenCodeBinding `json:"-"`
+	OpenCodeEnv                     []string                 `json:"-"`
+	OpenCodeLaunch                  *shim.OpenCodeConfig     `json:"-"`
 	AccountBinding                  *accounts.Binding
 	AccountProjectionRef            string
 	AccountNativeModel              string                        `json:"-"`
