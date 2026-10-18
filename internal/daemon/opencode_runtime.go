@@ -64,6 +64,14 @@ func (d *Daemon) OpenCodeResumeEnvironment(id string) ([]string, error) {
 	return d.OpenCodeEnvironment(lc.OpenCodeEnv)
 }
 
+func (d *Daemon) openCodeCurrentMeta(b opencodebridge.Binding) (persist.Meta, error) {
+	m, ok := d.Get(b.WorkerID)
+	if !ok || m.RequiredRuntime != persist.RequiredRuntimeOpenCode || m.OpenCodeBinding == nil || m.OpenCodeBinding.Generation != b.BackendGeneration || m.ConversationID != b.RootID || m.ProviderCwd() != b.Directory || (m.OpenCodeBinding.Initial != nil) != b.InitialPrompt || b.NativeCreatedAtMS > 0 && m.OpenCodeBinding.NativeCreatedAtMS != b.NativeCreatedAtMS {
+		return persist.Meta{}, errors.New("OpenCode runtime: session retired or native binding changed")
+	}
+	return m, nil
+}
+
 func sameOpenCodeIdentity(i opencodebridge.Identity, b opencodebridge.Binding) bool {
 	return i.Version == 1 && i.WorkerID == b.WorkerID && i.SessionInstance == b.SessionInstance && i.RootID == b.RootID && i.Directory == b.Directory && i.BackendGeneration == b.BackendGeneration && i.NativeCreatedAtMS > 0 && (b.NativeCreatedAtMS == 0 || i.NativeCreatedAtMS == b.NativeCreatedAtMS)
 }
@@ -122,9 +130,9 @@ func (d *Daemon) joinOpenCode(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	m, ok := d.Get(id)
-	if !ok {
-		return errors.New("OpenCode runtime: session retired")
+	m, err := d.openCodeCurrentMeta(b)
+	if err != nil {
+		return err
 	}
 	if m.OpenCodeBinding.Phase == persist.OpenCodePhasePlanned {
 		next := *persist.CloneOpenCodeBinding(m.OpenCodeBinding)
@@ -134,7 +142,10 @@ func (d *Daemon) joinOpenCode(ctx context.Context, id string) error {
 		if err := d.SetOpenCodeBinding(id, m.OpenCodeBinding.Revision, next); err != nil {
 			return err
 		}
-		m, _ = d.Get(id)
+		m, err = d.openCodeCurrentMeta(b)
+		if err != nil {
+			return err
+		}
 	}
 	b.NativeCreatedAtMS = m.OpenCodeBinding.NativeCreatedAtMS
 	ack, err := c.Ack(ctx, opencodebridge.AckRequest{Version: 1, SessionInstance: b.SessionInstance, BackendGeneration: b.BackendGeneration, RootID: b.RootID, NativeCreatedAtMS: b.NativeCreatedAtMS})
@@ -148,7 +159,10 @@ func (d *Daemon) joinOpenCode(ctx context.Context, id string) error {
 		if err := d.SetOpenCodeBinding(id, m.OpenCodeBinding.Revision, next); err != nil {
 			return err
 		}
-		m, _ = d.Get(id)
+		m, err = d.openCodeCurrentMeta(b)
+		if err != nil {
+			return err
+		}
 	}
 	if d.cfg.OpenCodeReady != nil {
 		if err := d.cfg.OpenCodeReady(ctx, cloneOpenCodeMeta(m)); err != nil {
@@ -159,7 +173,10 @@ func (d *Daemon) joinOpenCode(ctx context.Context, id string) error {
 		if err := d.admitOpenCodeInitial(ctx, c, b, m, lc.OpenCodeInitialPrompt); err != nil {
 			return err
 		}
-		m, _ = d.Get(id)
+		m, err = d.openCodeCurrentMeta(b)
+		if err != nil {
+			return err
+		}
 	}
 	if initial := m.OpenCodeBinding.Initial; initial != nil {
 		if requested := m.LaunchOptions["model"]; requested != "" && requested != initial.Model {
@@ -190,7 +207,10 @@ func (d *Daemon) admitOpenCodeInitial(ctx context.Context, c *opencodebridge.Cli
 		if err := d.SetOpenCodeBinding(m.ID, m.OpenCodeBinding.Revision, next); err != nil {
 			return err
 		}
-		m, _ = d.Get(m.ID)
+		m, err = d.openCodeCurrentMeta(b)
+		if err != nil {
+			return err
+		}
 		r, callErr := c.Initial(ctx, opencodebridge.InitialRequest{Version: 1, SessionInstance: b.SessionInstance, BackendGeneration: b.BackendGeneration, RootID: b.RootID, OperationID: i.OperationID, RequestHash: i.RequestHash, Text: text})
 		receipt, err = &r, callErr
 	} else {
