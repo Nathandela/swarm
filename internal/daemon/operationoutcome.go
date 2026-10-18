@@ -57,7 +57,7 @@ func (d *Daemon) OperationOutcome(operationID string) (OpOutcome, bool) {
 	}
 	d.mu.Lock()
 	s, present := d.sessions[rec.SessionID]
-	usable := present && s.meta.Status.Process != status.ProcessLost && s.meta.ShimPID != 0
+	usable := present && s.meta.Status.Process != status.ProcessLost && s.meta.ShimPID != 0 && openCodeLaunchComplete(s.meta)
 	d.mu.Unlock()
 	// composer_send owns an exact coded terminal outcome in the idempotency record, but
 	// operation_status's launch-era vocabulary can express only applied/outcome_unknown.

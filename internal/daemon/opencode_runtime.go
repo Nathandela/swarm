@@ -277,3 +277,11 @@ func (d *Daemon) rejoinOpenCode(id string) {
 		d.openCodeRuntimeError(id, err)
 	}()
 }
+
+func openCodeLaunchComplete(m persist.Meta) bool {
+	if m.RequiredRuntime != persist.RequiredRuntimeOpenCode {
+		return true
+	}
+	b := m.OpenCodeBinding
+	return b != nil && b.Phase == persist.OpenCodePhaseReady && (b.Initial == nil || b.Initial.Phase == persist.OpenCodeInitialAdmitted) && m.BackendPlanError == ""
+}

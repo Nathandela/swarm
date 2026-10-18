@@ -645,7 +645,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	agentEnv := PolicyEnv(spec.ClientEnv)
 	if spec.OpenCodeLaunch != nil {
 		agentEnv = mergeOpenCodeEnv(agentEnv, spec.OpenCodeEnv)
-		agentEnv = append(agentEnv, "OPENCODE_TUI_CONFIG="+filepath.Join(dir, "opencode-tui.json"))
+		agentEnv = append(agentEnv, "OPENCODE_TUI_CONFIG="+filepath.Join(filepath.Dir(spec.OpenCodeLaunch.BindingFile), "opencode-tui.json"))
 	}
 	if spec.AgentType == "claude" && spec.AccountNativeContext {
 		agentEnv = append(agentEnv, "CLAUDE_CODE_DIAGNOSTICS_FILE="+filepath.Join(d.cfg.StateDir, id, "claude-model-diagnostics.jsonl"))
@@ -903,6 +903,9 @@ func (d *Daemon) resolveReplay(opID, freshID string) (redrive bool, stale string
 	defer d.mu.Unlock()
 	rec, _ := d.idem.Get(opID)
 	if s, ok := d.sessions[rec.SessionID]; ok {
+		if s.meta.RequiredRuntime == persist.RequiredRuntimeOpenCode && (s.meta.Status.Process == status.ProcessLost || !openCodeLaunchComplete(s.meta)) {
+			return false, "", persist.Meta{}, persist.Meta{}, fmt.Errorf("%w: native binding retained for session %s", ErrLaunchOutcomeUnknown, rec.SessionID)
+		}
 		if s.meta.Status.Process != status.ProcessLost {
 			// ROUND 4, review MAJOR 2: the SAME phantom rule the status read applies
 			// (OperationOutcome's ShimPID!=0 clause), now on the primary launch reply.
@@ -978,7 +981,7 @@ func (d *Daemon) resolveStaleLaunches() {
 		if rec.Phase != idempotency.PhasePrepared && rec.Phase != idempotency.PhaseExecuting {
 			continue
 		}
-		if m, ok := d.Get(rec.SessionID); ok && m.Status.Process != status.ProcessLost {
+		if m, ok := d.Get(rec.SessionID); ok && (m.RequiredRuntime == persist.RequiredRuntimeOpenCode || m.Status.Process != status.ProcessLost) {
 			continue // a usable session survived: leave the record alone
 		}
 		if err := d.idem.Fail(rec.OperationID, nil); err != nil {

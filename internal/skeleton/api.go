@@ -1007,6 +1007,9 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 			spec.AccountOriginalConfigurationEnv = daemon.NativeConfigurationEnvironment(spec.ClientEnv)
 		}
 	}
+	if err := a.captureOpenCodeOrigin(&spec); err != nil {
+		return persist.Meta{}, err
+	}
 	// The launch ENVIRONMENT is resolved before argv, because argv depends on it: the
 	// adapter's argv[0] is a bare binary name resolved against the AGENT's own PATH
 	// (lookPathIn). A remote/preset launch carries no client env by design (ADR-007 D8
@@ -1223,6 +1226,9 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 			}
 			resolved.ExpectedCLIIdentity = observed
 		}
+	}
+	if err := a.qualifyOpenCodeLaunch(&resolved); err != nil {
+		return persist.Meta{}, err
 	}
 	m, err := a.core.Launch(resolved)
 	if err != nil {
