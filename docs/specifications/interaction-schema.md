@@ -506,5 +506,6 @@ after the current process has accepted the exact root subscription and scoped sn
 The proof binds the current observer and generic session instance, and is withdrawn on
 observer loss or stop. A record on disk cannot restore it before rejoin. This independent
 read capability opens the native transcript without granting the legacy `structured_chat`
-composer. Native composer availability requires its own qualified managed sink and current
-non-degraded native authority; busy state remains a separate dispatch eligibility check.
+composer. `native_composer:true` additionally requires this process to verify the exact managed
+Ready binding, native version `1.19.3`, acknowledgement and supported draft guard, with
+current non-degraded native authority; busy state remains a separate dispatch eligibility check.

@@ -49,20 +49,21 @@ type OpenCodeState struct {
 // ocInputState is one requested input's tracked state: its text parts, the
 // composed (bounded) text, and the terminal outcome.
 type ocInputState struct {
-	msgID      string
-	at         int64
-	synthetic  bool
-	classified bool
-	compaction bool
-	live       bool
-	text       string
-	textTrunc  bool
-	parts      []ocPartState
-	partIDs    map[string]int
-	agent      string
-	providerID string
-	modelID    string
-	variant    string
+	plainTextInput bool
+	msgID          string
+	at             int64
+	synthetic      bool
+	classified     bool
+	compaction     bool
+	live           bool
+	text           string
+	textTrunc      bool
+	parts          []ocPartState
+	partIDs        map[string]int
+	agent          string
+	providerID     string
+	modelID        string
+	variant        string
 
 	outcome    OpenCodeOutcome
 	outcomeSrc string
@@ -71,6 +72,7 @@ type ocInputState struct {
 }
 
 type ocPartState struct {
+	kind      string
 	id        string
 	text      string
 	synthetic bool
@@ -148,9 +150,11 @@ type OpenCodeError struct {
 
 // OpenCodeInput is one requested user input and its terminal outcome.
 type OpenCodeInput struct {
-	MessageID     string
-	Text          string
-	TextTruncated bool
+	// PlainTextInput is qualified by a complete native row with exactly one genuine text part.
+	PlainTextInput bool
+	MessageID      string
+	Text           string
+	TextTruncated  bool
 	// Synthetic: the message consisted only of synthetic/ignored text parts --
 	// an auto-continue re-prompt, not owner text. It is recorded (and its own
 	// terminal outcome is), but it is never the owner's current input and its
@@ -244,6 +248,9 @@ func NewOpenCodeState(root, generation string) (*OpenCodeState, error) {
 // interleave a resync. A new epoch withdraws status proof and retains prior history gaps.
 func (s *OpenCodeState) BeginEpoch() uint64 {
 	s.epoch++
+	for _, in := range s.inputs {
+		in.plainTextInput = false
+	}
 	s.desynced = false
 	s.setBusy(false, false, nil)
 	if s.scope != nil {
@@ -477,6 +484,9 @@ func (s *OpenCodeState) applyMessage(m opencode.Message, source string) OpenCode
 			}
 			in.agent, in.providerID, in.modelID, in.variant = m.Agent, m.Model.ProviderID, m.Model.ModelID, m.Model.Variant
 		}
+		if source == OpenCodeOutcomeSourceLive {
+			in.plainTextInput = false
+		}
 		if source == OpenCodeOutcomeSourceLive && in.outcome == OpenCodeOutcomeNone {
 			in.live = true
 		}
@@ -552,6 +562,9 @@ func (s *OpenCodeState) ImportHistory(rows []json.RawMessage, epoch uint64) erro
 		}
 		for _, p := range r.parts {
 			s.applyPart(p)
+		}
+		if in := s.inputs[r.message.ID]; in != nil && r.message.Role == "user" {
+			in.plainTextInput = qualifiedOpenCodePlainInput(r.message, r.parts, in)
 		}
 	}
 	return nil
@@ -685,6 +698,9 @@ func (s *OpenCodeState) applyPart(p opencode.Part) OpenCodeDisposition {
 	if p.SessionID != s.root {
 		return OCIgnoredForeign
 	}
+	if in := s.inputs[p.MessageID]; in != nil {
+		in.plainTextInput = false
+	}
 	if p.Type != "text" && p.Type != "compaction" && p.Type != "file" {
 		return OCIgnoredUntracked
 	}
@@ -759,6 +775,10 @@ func (s *OpenCodeState) applyPartFact(p opencode.Part) OpenCodeDisposition {
 	text := clampBytes(p.Text, min(maxOCPartText, budget))
 	if idx, ok := in.partIDs[p.ID]; ok {
 		old := in.parts[idx]
+		if old.kind != p.Type {
+			s.degradeStream("native input part changed type")
+			return OCIgnoredUnqualified
+		}
 		if len(old.text) > len(text) && strings.HasPrefix(old.text, text) {
 			return OCApplied
 		}
@@ -766,14 +786,14 @@ func (s *OpenCodeState) applyPartFact(p opencode.Part) OpenCodeDisposition {
 			s.degradeStream("native input part changed content")
 			return OCIgnoredUnqualified
 		}
-		in.parts[idx] = ocPartState{id: p.ID, text: text, synthetic: synthetic, truncated: len(p.Text) > len(text)}
+		in.parts[idx] = ocPartState{kind: p.Type, id: p.ID, text: text, synthetic: synthetic, truncated: len(p.Text) > len(text)}
 	} else {
 		if len(in.parts) >= maxOCInputParts {
 			s.degradeStream("input text part capacity reached")
 			return OCRefusedCap
 		}
 		in.partIDs[p.ID] = len(in.parts)
-		in.parts = append(in.parts, ocPartState{id: p.ID, text: text, synthetic: synthetic, truncated: len(p.Text) > len(text)})
+		in.parts = append(in.parts, ocPartState{kind: p.Type, id: p.ID, text: text, synthetic: synthetic, truncated: len(p.Text) > len(text)})
 	}
 	in.classified = true
 	in.recompute()
@@ -969,7 +989,7 @@ func (s *OpenCodeState) resolveUncertain(in *ocInputState) {
 }
 
 func (in *ocInputState) view() OpenCodeInput {
-	v := OpenCodeInput{MessageID: in.msgID, Text: in.text, TextTruncated: in.textTrunc, Synthetic: in.synthetic, Classified: in.classified, At: in.at, Agent: in.agent, ProviderID: in.providerID, ModelID: in.modelID, Variant: in.variant}
+	v := OpenCodeInput{PlainTextInput: in.plainTextInput, MessageID: in.msgID, Text: in.text, TextTruncated: in.textTrunc, Synthetic: in.synthetic, Classified: in.classified, At: in.at, Agent: in.agent, ProviderID: in.providerID, ModelID: in.modelID, Variant: in.variant}
 	if in.classified && !in.compaction {
 		v.Outcome = in.outcome
 		v.OutcomeSource = in.outcomeSrc
@@ -991,4 +1011,31 @@ func cloneStatus(st *opencode.SessionStatus) *opencode.SessionStatus {
 		c.Action = &a
 	}
 	return &c
+}
+
+func qualifiedOpenCodePlainInput(message opencode.Message, parts []opencode.Part, in *ocInputState) bool {
+	if !message.PartsKnown || message.Agent == "" || message.Model == nil || in.compaction || !in.classified || in.synthetic || in.textTrunc || in.agent != message.Agent || in.providerID != message.Model.ProviderID || in.modelID != message.Model.ModelID || in.variant != message.Model.Variant {
+		return false
+	}
+	genuine := 0
+	for _, part := range parts {
+		if part.Synthetic || part.Ignored {
+			continue
+		}
+		if part.Type != "text" || part.Text != in.text {
+			return false
+		}
+		genuine++
+	}
+	retained := 0
+	for _, part := range in.parts {
+		if part.synthetic {
+			continue
+		}
+		if part.kind != "text" {
+			return false
+		}
+		retained++
+	}
+	return genuine == 1 && retained == 1
 }

@@ -152,8 +152,23 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 			return false, errors.New("native event could not be retained")
 		}
 		if projection != nil {
-			if err := projection.event(ctx, reader, event); err != nil {
+			row, err := projection.event(ctx, reader, event)
+			if err != nil {
 				return false, err
+			}
+			if row != nil {
+				info, _, err := opencode.DecodeMessageRow(row)
+				if err != nil {
+					return false, err
+				}
+				if info.SessionID == identity.RootID && info.Role == "user" {
+					if err := state.ImportHistory([]json.RawMessage{row}, epoch); err != nil {
+						return false, err
+					}
+				}
+				if err := projection.row(row, "live"); err != nil {
+					return false, err
+				}
 			}
 		}
 		return false, nil
@@ -195,6 +210,7 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 					return err
 				}
 				if projection != nil {
+					projection.qualifySink(ctx, reader)
 					projection.ready.Store(true)
 				}
 				return nil

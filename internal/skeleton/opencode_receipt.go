@@ -95,7 +95,7 @@ func qualifyOpenCodeAdmission(operationID string, intent openCodeSendIntent, raw
 }
 func qualifyObservedOpenCodeAdmission(operationID string, intent openCodeSendIntent, input OpenCodeInput) (opencodebridge.Receipt, error) {
 	refuse := errors.New("native observed input does not prove admission")
-	if input.MessageID != intent.MessageID || !input.Classified || input.Synthetic || input.TextTruncated || input.At < intent.NotBeforeMS || !nativeSelectionText(input.Agent, 128) || !nativeSelectionText(input.ProviderID, 128) || !nativeSelectionText(input.ModelID, 256) || len(input.Variant) > 128 || strings.ContainsFunc(input.Variant, unicode.IsControl) {
+	if input.MessageID != intent.MessageID || !input.PlainTextInput || !input.Classified || input.Synthetic || input.TextTruncated || input.At < intent.NotBeforeMS || !nativeSelectionText(input.Agent, 128) || !nativeSelectionText(input.ProviderID, 128) || !nativeSelectionText(input.ModelID, 256) || len(input.Variant) > 128 || strings.ContainsFunc(input.Variant, unicode.IsControl) {
 		return opencodebridge.Receipt{}, refuse
 	}
 	hash := sha256.Sum256([]byte(input.Text))

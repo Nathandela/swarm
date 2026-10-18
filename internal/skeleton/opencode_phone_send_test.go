@@ -41,6 +41,11 @@ func (f *openCodeSendFixture) enablePhoneComposer(t *testing.T) {
 
 func TestOpenCodePhoneSendRequiresCurrentNativeComposerProof(t *testing.T) {
 	f := newOpenCodeSendFixture(t)
+	f.d.openCode.mu.Lock()
+	observer := f.d.openCode.sessions[f.binding.WorkerID]
+	f.d.openCode.mu.Unlock()
+	observer.transcript.sinkQualified.Store(false)
+	f.d.setOpenCodeTranscriptCapability(f.binding.WorkerID, observer, true, false)
 	code, err := f.phoneSend(t, "phone:no-proof")
 	record, _ := f.d.core.ComposerOperation("phone:no-proof")
 	if err == nil || code != protocol.CodeStructuredUnsupported || f.calls.Load() != 0 || record.Phase != idempotency.PhasePrepared {

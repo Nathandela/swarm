@@ -127,7 +127,7 @@ func TestOpenCodeObservedTerminalRetainsAdmissionWhenDispatchReplyWasLost(t *tes
 	rec, _ := f.d.core.ComposerOperation(id)
 	var intent openCodeSendIntent
 	_ = json.Unmarshal(rec.Request, &intent)
-	in := OpenCodeInput{MessageID: intent.MessageID, Classified: true, Text: f.request.Text, At: intent.NotBeforeMS + 1, Agent: "build", ProviderID: "fixture", ModelID: "fixture-model", Variant: "max", Outcome: OpenCodeOutcomeFailed, OutcomeSource: OpenCodeOutcomeSourceLive, OutcomeAt: intent.NotBeforeMS + 2}
+	in := OpenCodeInput{PlainTextInput: true, MessageID: intent.MessageID, Classified: true, Text: f.request.Text, At: intent.NotBeforeMS + 1, Agent: "build", ProviderID: "fixture", ModelID: "fixture-model", Variant: "max", Outcome: OpenCodeOutcomeFailed, OutcomeSource: OpenCodeOutcomeSourceLive, OutcomeAt: intent.NotBeforeMS + 2}
 	view := OpenCodeView{Root: intent.Identity.RootID, Generation: intent.Identity.BackendGeneration, Inputs: []OpenCodeInput{in}}
 	f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID, view)
 	view.Inputs = nil

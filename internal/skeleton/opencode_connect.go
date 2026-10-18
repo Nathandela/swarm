@@ -107,7 +107,7 @@ func (d *Daemon) openCodeReady(ctx context.Context, meta persist.Meta) error {
 	go func() {
 		defer close(observation.done)
 		defer client.Close()
-		defer d.setOpenCodeTranscriptCapability(meta.ID, observation, false)
+		defer d.setOpenCodeTranscriptCapability(meta.ID, observation, false, false)
 		observeOpenCode(observeCtx, client, identity, state, func(view OpenCodeView) { d.publishOpenCodeView(meta.ID, observation, view) }, func(err error) {
 			stopStartupCancellation()
 			observation.readyErr = err
@@ -155,7 +155,7 @@ func (d *Daemon) publishOpenCodeView(local string, observation *openCodeObservat
 		}
 	}
 	d.openCode.mu.Unlock()
-	d.setOpenCodeTranscriptCapability(local, observation, observation.transcript != nil && observation.transcript.ready.Load() && view.CurrentScopeKnown && view.BusyKnown)
+	d.setOpenCodeTranscriptCapability(local, observation, observation.transcript != nil && observation.transcript.ready.Load() && view.CurrentScopeKnown && view.BusyKnown, observation.transcript != nil && observation.transcript.sinkQualified.Load() && !view.Degraded)
 	d.checkpointOpenCodeOutcomes(local, view)
 	if d.api != nil {
 		d.api.pokeWatch()
@@ -248,12 +248,13 @@ func (d *Daemon) stopOpenCodeObservations() {
 }
 
 type nativeTranscriptProof struct {
+	composer    bool
 	observation *openCodeObservation
 	instance    string
 }
 
 // Native read support is process-local proof, never a persisted claim restored before rejoin.
-func (d *Daemon) setOpenCodeTranscriptCapability(local string, observation *openCodeObservation, available bool) {
+func (d *Daemon) setOpenCodeTranscriptCapability(local string, observation *openCodeObservation, available, composer bool) {
 	d.openCode.mu.Lock()
 	if available && (d.openCode.closed || d.openCode.sessions[local] != observation) {
 		d.openCode.mu.Unlock()
@@ -264,7 +265,7 @@ func (d *Daemon) setOpenCodeTranscriptCapability(local string, observation *open
 	d.capStore.mu.Lock()
 	old := d.capStore.nativeProof[local]
 	if available {
-		if old.observation == observation {
+		if old.observation == observation && old.composer == composer {
 			d.capStore.mu.Unlock()
 			d.openCode.mu.Unlock()
 			return
@@ -278,7 +279,7 @@ func (d *Daemon) setOpenCodeTranscriptCapability(local string, observation *open
 			d.openCode.mu.Unlock()
 			return
 		}
-		d.capStore.nativeProof[local] = nativeTranscriptProof{observation: observation, instance: instance}
+		d.capStore.nativeProof[local] = nativeTranscriptProof{observation: observation, instance: instance, composer: composer}
 	} else {
 		if old.observation != observation {
 			d.capStore.mu.Unlock()

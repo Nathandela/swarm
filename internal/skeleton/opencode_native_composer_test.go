@@ -1,6 +1,8 @@
 package skeleton
 
 import (
+	"context"
+	"github.com/Nathandela/swarm/internal/opencodebridge"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"testing"
 )
@@ -34,5 +36,41 @@ func TestOpenCodeComposerCapabilityCannotRecoverFromDiskRecordAlone(t *testing.T
 	caps, ok := d.sessionCapabilities("worker")
 	if !ok || caps.NativeComposer || caps.NativeInteractionVersion != 0 {
 		t.Fatalf("persisted record restored native authority before rejoin: %+v", caps)
+	}
+}
+
+type openCodeQualifiedReadyFake struct {
+	*ocReaderFake
+	ready opencodebridge.Ready
+}
+
+func (f *openCodeQualifiedReadyFake) Ready(context.Context) (opencodebridge.Ready, error) {
+	return f.ready, nil
+}
+func TestOpenCodeComposerSinkProofChecksEveryNativeReadyFence(t *testing.T) {
+	for _, change := range []string{"valid", "version", "binding", "ack", "bound", "ready", "draft"} {
+		t.Run(change, func(t *testing.T) {
+			reader := &openCodeQualifiedReadyFake{ocReaderFake: newOCReaderFake()}
+			reader.ready = opencodebridge.Ready{Identity: reader.identity, NativeVersion: "1.19.3", Acknowledged: true, Bound: true, Ready: true, DraftGuardSupported: true}
+			switch change {
+			case "version":
+				reader.ready.NativeVersion = "1.19.4"
+			case "binding":
+				reader.ready.BackendGeneration = "another"
+			case "ack":
+				reader.ready.Acknowledged = false
+			case "bound":
+				reader.ready.Bound = false
+			case "ready":
+				reader.ready.Ready = false
+			case "draft":
+				reader.ready.DraftGuardSupported = false
+			}
+			projection := &openCodeTranscript{identity: reader.identity}
+			projection.qualifySink(context.Background(), reader)
+			if projection.sinkQualified.Load() != (change == "valid") {
+				t.Fatal("native writer capability bypassed ready fence")
+			}
+		})
 	}
 }

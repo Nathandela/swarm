@@ -35,16 +35,17 @@ type nativeProjectionSeen struct {
 
 // The observer owns these bounded caches. Stable IDs do not require a lifetime ref map.
 type openCodeTranscript struct {
-	ready        atomic.Bool
-	owner        *openCodeObservation
-	d            *Daemon
-	local, scope string
-	identity     opencodebridge.Identity
-	seen         map[string]nativeProjectionSeen
-	order        []string
-	headers      map[string]opencode.Message
-	headerOrder  []string
-	descendants  map[string]bool
+	ready         atomic.Bool
+	sinkQualified atomic.Bool
+	owner         *openCodeObservation
+	d             *Daemon
+	local, scope  string
+	identity      opencodebridge.Identity
+	seen          map[string]nativeProjectionSeen
+	order         []string
+	headers       map[string]opencode.Message
+	headerOrder   []string
+	descendants   map[string]bool
 }
 
 func nativeProjectionScope(meta persist.Meta) (string, error) {
@@ -315,44 +316,44 @@ func (p *openCodeTranscript) touch(id string) {
 	p.order = append(p.order, id)
 }
 
-func (p *openCodeTranscript) event(ctx context.Context, reader openCodeReader, event opencode.Event) error {
+func (p *openCodeTranscript) event(ctx context.Context, reader openCodeReader, event opencode.Event) (json.RawMessage, error) {
 	if event.MessageUpdated != nil {
 		info := event.MessageUpdated.Info
 		if !p.inScope(info.SessionID) {
-			return nil
+			return nil, nil
 		}
 		p.remember(info)
 		if info.SessionID == p.identity.RootID {
 			row, err := p.readMessage(ctx, reader, info.ID)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			return p.row(row, "live")
+			return row, nil
 		}
 	}
 	if event.MessagePartUpdated != nil {
 		part := event.MessagePartUpdated.Part
 		if !p.inScope(part.SessionID) {
-			return nil
+			return nil, nil
 		}
 		info, ok := p.headers[part.SessionID+":"+part.MessageID]
 		if part.SessionID == p.identity.RootID {
 			row, err := p.readMessage(ctx, reader, part.MessageID)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			return p.row(row, "live")
+			return row, nil
 		}
 		if !ok {
-			return fmt.Errorf("native part %s has no retained message context", part.ID)
+			return nil, fmt.Errorf("native part %s has no retained message context", part.ID)
 		}
 		for _, item := range opencode.NativePartInteractions(info, part) {
 			if err := p.interaction(info, item, "live", nil); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 func (p *openCodeTranscript) view(view OpenCodeView) error {
@@ -424,4 +425,18 @@ func (p *openCodeTranscript) requests(view OpenCodeView) error {
 		}
 	}
 	return nil
+}
+
+func (p *openCodeTranscript) qualifySink(ctx context.Context, reader openCodeReader) {
+	readyReader, ok := reader.(interface {
+		Ready(context.Context) (opencodebridge.Ready, error)
+	})
+	if !ok {
+		p.sinkQualified.Store(false)
+		return
+	}
+	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	ready, err := readyReader.Ready(readyCtx)
+	p.sinkQualified.Store(err == nil && ready.Identity == p.identity && ready.NativeVersion == "1.19.3" && ready.Acknowledged && ready.Bound && ready.Ready && ready.DraftGuardSupported)
 }

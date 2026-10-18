@@ -277,8 +277,10 @@ func (d *Daemon) lookupCapabilitiesLocked(sessionID string) (protocol.SessionCap
 		return protocol.SessionCapabilities{}, false
 	}
 	c.NativeInteractionVersion = 0
-	if proof := d.capStore.nativeProof[sessionID]; proof.observation != nil && proof.instance == c.SessionInstance {
+	c.NativeComposer = false
+	if proof := d.capStore.nativeProof[sessionID]; proof.observation != nil && proof.instance == c.SessionInstance && c.Provider == "opencode" {
 		c.NativeInteractionVersion = 2
+		c.NativeComposer = proof.composer && !c.StructuredChat
 	}
 	if d.sessionDegradedLocked(sessionID) {
 		// THE DEGRADE IS NOT APPLIED TO AN ALREADY-INCONSISTENT RECORD (ADR-017 T2-b, closing
