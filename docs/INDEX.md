@@ -18,6 +18,7 @@
 ## The plan
 
 - [OpenCode maturity implementation plan](specifications/opencode-maturity-plan.md) — dependency-ordered native lifecycle, observation, semantic messaging, controls, continuity, model selection and release qualification, reviewed through Swarm by DeepSeek and GLM
+- [Managed OpenCode operations](ops/opencode-native.md) — native session monitoring, semantic receipts, exact request decisions and recovery limits
 
 - [Reconnection and attention plan](specifications/reconnect-attention-plan.md) — Astra-reviewed terminal recovery and structured attention contracts
 - [Reconnection and attention decision](adr/ADR-030-reconnection-and-attention.md) — additive error status and authoritative recovery semantics
