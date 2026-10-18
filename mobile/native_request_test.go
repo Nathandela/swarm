@@ -29,12 +29,12 @@ func nativeDecisionCard(t *testing.T, kind string) string {
 
 func TestReplyNativeRequestRefusesMissingCardAndMalformedAnswers(t *testing.T) {
 	a := approveApp(t)
-	if _, err := a.ReplyNativeRequest("m1/s1", "missing", "once", ""); err == nil || !strings.Contains(err.Error(), ErrClassNotFound) {
+	if _, err := a.ReplyNativeRequest("m1/s1", "missing", strings.Repeat("a", 64), "once", ""); err == nil || !strings.Contains(err.Error(), ErrClassNotFound) {
 		t.Fatalf("missing native card: %v", err)
 	}
 	a.core.Router().Items().Apply(itemRecord(10, "m1/s1", nativeDecisionCard(t, "question")))
 	for _, payload := range []string{"", "null", "[]", "[[]]", "[42]", "[\"flat\"]", "[[\"one\"]] trailing"} {
-		if _, err := a.ReplyNativeRequest("m1/s1", "native-request", "question_reply", payload); err == nil || !strings.Contains(err.Error(), ErrClassInvalidRequest) {
+		if _, err := a.ReplyNativeRequest("m1/s1", "native-request", strings.Repeat("a", 64), "question_reply", payload); err == nil || !strings.Contains(err.Error(), ErrClassInvalidRequest) {
 			t.Fatalf("malformed question answers %q: %v", payload, err)
 		}
 	}
@@ -49,7 +49,7 @@ func TestReplyNativeRequestIsLiveOnlyAndNeverQueuesAnswers(t *testing.T) {
 			if kind == "question" {
 				decision, answers = "question_reply", `[["one"]]`
 			}
-			if _, err := a.ReplyNativeRequest("m1/s1", "native-request", decision, answers); err == nil || !strings.Contains(err.Error(), ErrClassOffline) {
+			if _, err := a.ReplyNativeRequest("m1/s1", "native-request", strings.Repeat("a", 64), decision, answers); err == nil || !strings.Contains(err.Error(), ErrClassOffline) {
 				t.Fatalf("offline native answer: %v", err)
 			}
 			n, err := a.PendingOpCount()
@@ -109,5 +109,20 @@ func TestNativeAnswerRetainsOperationAfterMailboxResponseLoss(t *testing.T) {
 		if pubs := a.core.State().PendingPublications; len(pubs) != 0 {
 			t.Fatal("uncertain native answer was queued for later submission")
 		}
+	}
+}
+
+func TestReplyNativeRequestRejectsChangedDisplayedContentBeforeSigning(t *testing.T) {
+	a := approveApp(t)
+	raw := nativeDecisionCard(t, "permission")
+	a.core.Router().Items().Apply(itemRecord(10, "m1/s1", raw))
+	a.core.Router().Items().Apply(itemRecord(11, "m1/s1", strings.Replace(raw, strings.Repeat("a", 64), strings.Repeat("b", 64), 1)))
+	for _, shown := range []string{strings.Repeat("a", 64), ""} {
+		if _, err := a.ReplyNativeRequest("m1/s1", "native-request", shown, "once", ""); err == nil || !strings.Contains(err.Error(), ErrClassInvalidRequest) {
+			t.Fatalf("displayed authority silently rebound: %v", err)
+		}
+	}
+	if _, err := a.ReplyNativeRequest("m1/s1", "native-request", strings.Repeat("b", 64), "once", ""); err == nil || !strings.Contains(err.Error(), ErrClassOffline) {
+		t.Fatalf("exact current displayed authority did not reach live-only gate: %v", err)
 	}
 }
