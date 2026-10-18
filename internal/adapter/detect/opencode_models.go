@@ -35,8 +35,8 @@ func probeOpenCodeModels() (string, []adapter.ModelChoice) {
 	return "", models
 }
 
-// runOpenCodeProbe captures only bounded stdout; OpenCode owns provider filtering
-// and excludes deprecated catalogue entries without any credential reads here.
+// runOpenCodeProbe captures only bounded stdout. Both calls share a 5s deadline;
+// WaitDelay may add up to 1s to close inherited pipes after cancellation.
 func runOpenCodeProbe(ctx context.Context, cancel context.CancelFunc, path string, args ...string) ([]byte, bool) {
 	if ctx.Err() != nil {
 		return nil, false

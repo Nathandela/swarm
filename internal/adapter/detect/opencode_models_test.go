@@ -85,6 +85,7 @@ func TestProbeModelsOpenCodeUsesNativeCLIAndFallsBack(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("PATH", bin)
 	if configured, models := ProbeModels("opencode"); configured != "" || models != nil {
 		t.Fatalf("missing binary probe = (%q, %+v), want editable fallback", configured, models)
 	}
