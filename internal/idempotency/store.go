@@ -319,7 +319,7 @@ func (s *Store) admitLocked() error {
 	now := s.clock()
 	protected := 0
 	for _, rec := range s.records {
-		if now.Sub(rec.UpdatedAt) <= s.opts.TTL {
+		if !s.expired(rec, now) {
 			protected++
 			if protected >= s.opts.MaxEntries {
 				return ErrCapacity
@@ -332,7 +332,7 @@ func (s *Store) admitLocked() error {
 func (s *Store) compactLocked(now time.Time) error {
 	kept := make([]Record, 0, len(s.records))
 	for _, rec := range s.records {
-		if s.opts.TTL > 0 && now.Sub(rec.UpdatedAt) > s.opts.TTL {
+		if s.expired(rec, now) {
 			continue
 		}
 		kept = append(kept, rec)
@@ -345,6 +345,14 @@ func (s *Store) compactLocked(now time.Time) error {
 		s.records[rec.OperationID] = rec
 	}
 	return nil
+}
+
+func (s *Store) expired(rec Record, now time.Time) bool {
+	// An unresolved native write must never age into a fresh owner semantic send.
+	if rec.Action == "semantic_send" && (rec.Phase == PhaseExecuting || rec.Phase == PhaseOutcomeUnknown) {
+		return false
+	}
+	return s.opts.TTL > 0 && now.Sub(rec.UpdatedAt) > s.opts.TTL
 }
 
 // appendLocked writes one record as a JSON line and fsyncs BEFORE returning, so the
