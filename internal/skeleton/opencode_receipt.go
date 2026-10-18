@@ -378,7 +378,9 @@ func (d *Daemon) checkpointOpenCodeOutcomes(local string, view OpenCodeView) {
 			if evidence.Outcome != "" && evidence.OutcomeAt > input.OutcomeAt {
 				break
 			}
-			evidence.Outcome, evidence.OutcomeSource, evidence.OutcomeAt = input.Outcome, input.OutcomeSource, input.OutcomeAt
+			if evidence.Outcome != input.Outcome || evidence.OutcomeAt != input.OutcomeAt {
+				evidence.Outcome, evidence.OutcomeSource, evidence.OutcomeAt = input.Outcome, input.OutcomeSource, input.OutcomeAt
+			}
 			next, _ := json.Marshal(evidence)
 			saved := bytes.Equal(next, current.Evidence)
 			if !saved {

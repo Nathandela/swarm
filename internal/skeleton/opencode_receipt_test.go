@@ -87,6 +87,8 @@ func TestOpenCodeTerminalCheckpointSurvivesViewEvictionAndDaemonRestart(t *testi
 	}
 	view := OpenCodeView{Root: intent.Identity.RootID, Generation: intent.Identity.BackendGeneration, Inputs: []OpenCodeInput{{MessageID: intent.MessageID, Classified: true, At: intent.NotBeforeMS + 1, Outcome: OpenCodeOutcomeCompleted, OutcomeSource: OpenCodeOutcomeSourceLive, OutcomeAt: intent.NotBeforeMS + 2}}}
 	f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID, view)
+	view.Inputs[0].OutcomeSource = OpenCodeOutcomeSourceImported
+	f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID, view)
 	view.Inputs = nil
 	f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID, view)
 	receipt, err := f.client.SemanticOperation(f.request.Session, id)
