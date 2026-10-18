@@ -253,7 +253,7 @@ Questions need distinct choices, multi-select/custom-answer semantics and reques
 
 Strict turn Stop remains disabled unless native preconditions prevent an old action from interrupting newer owner work. Today's session-scoped abort/interrupt APIs have no expected-turn argument. If only session-wide stop can be offered, it needs an explicit product contract and accurate label; do not silently weaken the existing strict capability. Characterize child/tool cancellation and queued-work survival after stop.
 
-**Exit:** root plus two child requests and a question coexist; resolving one affects only that ID. Every once/always/reject/question/stop action passes stale/replay/owner-race and generation tests. Machine, phone and TUI show the same authoritative result. Capability publication and degraded/reconnect states reach the real gateway and client assemblers, not merely a unit seam.
+**Exit:** root plus two child requests and a question coexist; native side effects are shown accurately. A once permission or question decision targets its exact ID. Native permission reject also rejects pending permissions in that native session; always installs native approval rules and may resolve matching requests in that session. Every once/always/reject/question/stop action passes stale/replay/owner-race and generation tests. Machine, phone and TUI show the same authoritative result. Capability publication and degraded/reconnect states reach the real gateway and client assemblers, not merely a unit seam.
 
 ### P8 Lifecycle operations and provider compatibility
 
