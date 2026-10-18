@@ -351,7 +351,7 @@ fun sessionDetailView(
      * build if one rides along. "Allow/Deny" is precisely the copy this surface may not author.
      */
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
-    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String, String) -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -630,7 +630,7 @@ fun sessionDetailRedraw(
      * watched them disappear while the agent was still waiting.
      */
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
-    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String, String) -> Unit)? = null,
 ): Boolean {
     if (drawn == null) return false
     // THE FIELDS A NEW CONVERSATION MOVES ON ITS OWN, and no others. Wave R6 gave the panel four
@@ -718,7 +718,7 @@ private fun patchConversation(
     // Carried for the same reason as the two above: a block rebuilt here must be the block the
     // column composed, and a decision rebuilt without its handler loses its buttons mid-question.
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
-    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String, String) -> Unit)? = null,
     decisionPending: Boolean = false,
 ) {
     val mutations = TranscriptIncremental.reconcileBlocks(drawn, next)
@@ -866,7 +866,7 @@ private fun insertRun(
     onOutput: ((String) -> Unit)?,
     onDiff: ((String) -> Unit)?,
     onDecision: ((View, String, ApprovalDecision) -> Unit)?,
-    onNativeDecision: ((View, String, String, String) -> Unit)?,
+    onNativeDecision: ((View, String, String, String, String) -> Unit)?,
 ) {
     transcriptBlockViews(
         list.context, block, onApproval, onToolTap, onDetail,

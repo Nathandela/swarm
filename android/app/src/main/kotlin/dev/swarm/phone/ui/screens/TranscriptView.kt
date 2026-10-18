@@ -254,7 +254,7 @@ fun transcriptView(
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
-    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String, String) -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -320,7 +320,7 @@ internal fun transcriptBlockViews(
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
-    onNativeDecision: ((View, String, String, String) -> Unit)? = null,
+    onNativeDecision: ((View, String, String, String, String) -> Unit)? = null,
 ): List<View> {
     val views = mutableListOf<View>()
     // BOUND BEFORE THE `when`, so the arm that uses it never depends on a smart cast surviving a

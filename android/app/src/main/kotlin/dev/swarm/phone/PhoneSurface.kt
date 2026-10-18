@@ -4459,7 +4459,7 @@ class PhoneSurface(
     private val nativeAnswers = linkedMapOf<String, String>()
     private val nativeAnswerSaid = mutableSetOf<String>()
 
-    private fun answerNativeRequest(pressed: View, itemId: String, decision: String, answers: String) {
+    private fun answerNativeRequest(pressed: View, itemId: String, expectedRequestHash: String, decision: String, answers: String) {
         if (nativeAnswers.containsKey(itemId)) return
         if (nativeAnswers.size >= 256) {
             say(PressFeedback.ofRefusal("Too many native answers are awaiting confirmation.", "Refresh the pending requests before sending another answer."))
@@ -4470,7 +4470,7 @@ class PhoneSurface(
             nativeAnswers[itemId] = ""
             Press(
                 SendPlane.COMMAND,
-                verb = { app -> app.replyNativeRequest(target, itemId, decision, answers) },
+                verb = { app -> app.replyNativeRequest(target, itemId, expectedRequestHash, decision, answers) },
                 settle = { answer -> (answer as? Op)?.let { nativeAnswers[itemId] = it.operationID } },
                 refused = { refusal ->
                     if (refusal.state == ErrorState.INVALID_REQUEST || refusal.state == ErrorState.NOT_FOUND || refusal.state == ErrorState.OFFLINE) nativeAnswers.remove(itemId)

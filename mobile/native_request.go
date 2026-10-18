@@ -23,7 +23,7 @@ func (a *App) appendNativeDecision(core *phonecore.Core, sc sendCtx, id string, 
 }
 
 // ReplyNativeRequest answers the exact full card this handset holds. Answers are JSON string groups.
-func (a *App) ReplyNativeRequest(session, itemID, decisionID, answersJSON string) (op *Op, err error) {
+func (a *App) ReplyNativeRequest(session, itemID, expectedRequestHash, decisionID, answersJSON string) (op *Op, err error) {
 	defer barrier(&err)
 	core, err := a.ready()
 	if err != nil {
@@ -32,6 +32,9 @@ func (a *App) ReplyNativeRequest(session, itemID, decisionID, answersJSON string
 	binding, ok := core.Router().Items().PendingNativeRequest(session, itemID)
 	if !ok {
 		return nil, classed(ErrClassNotFound, errors.New("swarmmobile: this native request is unavailable, incomplete, expired, or already resolved"))
+	}
+	if expectedRequestHash == "" || binding.Request.RequestHash != expectedRequestHash {
+		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: this native request changed after it was displayed; inspect its current content before answering"))
 	}
 	body, err := nativeAnswer(binding.Request, decisionID, answersJSON)
 	if err != nil {

@@ -55,7 +55,7 @@ internal fun copyNativeRequestDrafts(from: View?, to: View?) {
 internal fun nativeRequestCard(
     context: Context,
     block: TranscriptBlock,
-    onDecision: ((View, String, String, String) -> Unit)?,
+    onDecision: ((View, String, String, String, String) -> Unit)?,
 ): View {
     val request = requireNotNull(block.nativeRequest)
     val contents = ctaStack(context)
@@ -96,7 +96,7 @@ internal fun nativeRequestCard(
         } else ""
         submitted = true
         update()
-        onDecision?.invoke(pressed, block.itemId, decision, body)
+        onDecision?.invoke(pressed, block.itemId, request.requestHash, decision, body)
     }
     contents.addView(monoWell(context, request.detailsJson).scrolledHorizontally())
     if (request.kind == "permission") {
