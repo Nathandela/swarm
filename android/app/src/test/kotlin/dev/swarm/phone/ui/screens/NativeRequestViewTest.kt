@@ -105,4 +105,25 @@ class NativeRequestViewTest {
         copyNativeRequestDrafts(old, foreign)
         assertEquals("", all(foreign).filterIsInstance<EditText>().single().text.toString())
     }
+
+    @Test fun definiteLocalRefusalUnlocksTheExistingCardWithoutLosingItsDraft() {
+        val req = request("question").copy(
+            questions = listOf(NativeQuestionFields("Answer?", "Answer", emptyList(), false, true)),
+            decisions = listOf(NativeDecisionFields("question_reply", "Send answers", "single_request")),
+        )
+        var calls = 0
+        val card = nativeRequestCard(context, block(req)) { _, _, _, _, _ -> calls++ }
+        val field = all(card).filterIsInstance<EditText>().single()
+        field.setText("retain this answer")
+        val send = all(card).filterIsInstance<TextView>().single { it.text.toString() == "Send answers" }
+        send.performClick()
+        assertEquals(1, calls)
+        assertFalse(field.isEnabled)
+        resetNativeRequestSubmission(send)
+        assertTrue(field.isEnabled)
+        assertTrue(send.isEnabled)
+        assertEquals("retain this answer", field.text.toString())
+        send.performClick()
+        assertEquals(2, calls)
+    }
 }
