@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
@@ -59,5 +60,21 @@ func TestPilotSemanticMarkerFailurePreventsNativeWrite(t *testing.T) {
 	}
 	if code, out, _ := pilotCall(c, "--context", path, "send", "local/ami", "--text", "do it"); code == 0 || out != "" || len(c.messages) != 0 || len(c.sendCalls()) != 0 {
 		t.Fatal("native effect preceded durable pilot custody")
+	}
+}
+
+func TestPilotUncertainSubmissionDoesNotClaimAnUnrelatedFreshReply(t *testing.T) {
+	c := newFakeSemanticClient()
+	path := enterPilotForTest(t, c)
+	c.messageErr = errors.New("connection closed after write")
+	if code, _, _ := pilotCall(c, "--context", path, "send", "local/ami", "--text", "question"); code == 0 {
+		t.Fatal("ambiguous send returned success")
+	}
+	c.sessions[0].Group = "ready_for_review"
+	c.sessions[0].GroupEnteredAt = time.Now().Add(time.Second)
+	code, out, stderr := pilotCall(c, "--context", path, "await", "local/ami", "--timeout", "1ms")
+	var receipt struct { Receipt string `json:"receipt"` }
+	if json.Unmarshal([]byte(out), &receipt) != nil || code != watchTimeoutExit || receipt.Receipt != "waiting" {
+		t.Fatalf("ambiguous submission borrowed an unrelated reply: exit%d %q %q", code, out, stderr)
 	}
 }
