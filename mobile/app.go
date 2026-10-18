@@ -1187,9 +1187,13 @@ func (a *App) ReadTranscript(session string, from int64, limit int) (page *Trans
 		limit = journalLogSize
 	}
 	out := &TranscriptPage{next: from, stale: a.streamStale(phonecore.StreamJournal)}
+	nativeOperations := core.NativeDecisionOperations(session)
 	for _, it := range core.Router().Items().Session(session) {
 		if int64(it.Cursor) <= from {
 			continue
+		}
+		if it.Kind == "permission_request" || it.Kind == "question_request" {
+			it.OperationID = nativeOperations[it.ItemID]
 		}
 		out.items = append(out.items, transcriptItem(it))
 		if c := int64(it.Cursor); c > out.next {
@@ -1702,6 +1706,13 @@ func (a *App) Outcome(operationID string) (out *Outcome, err error) {
 	// live-only because it arrived behind a gap, or may have failed the pending publication's
 	// action/session binding; only commitReceive may author OpOutcomes.
 	_, _ = core.Router().Replies().TakeFor(operationID)
+	if ctrl, ok := core.NativeDecisionOutcome(operationID, time.Now()); ok {
+		outcome := outcomeOf(ctrl)
+		if outcome.Resolved {
+			a.resolve(operationID)
+		}
+		return outcome, nil
+	}
 	if ctrl, ok := core.State().OpOutcomes[operationID]; ok {
 		// Wave R5: a launch_presets reply claimed here is also the moment its list
 		// becomes the machine-published preset cache LaunchPresets renders.
@@ -1752,6 +1763,8 @@ func outcomeOf(ctrl schema.Control) *Outcome {
 			out.Message = receipt.Reason
 		}
 		switch receipt.State {
+		case "pending":
+			out.Code, out.Message, out.Resolved = "", "", false
 		case "admitted":
 			out.Code, out.Message = "native_admitted", "The native reply was admitted; request resolution is tracked separately."
 		case "rejected":

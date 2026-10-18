@@ -122,6 +122,7 @@ var requiredScreenElements = []string{
 	"transcript.read",              // ADR-009: the chat itself, which no existing verb serves
 	"transcript.approvals_pending", // IS-LIFE-3: a card the machine is blocked on, kept answerable
 	"transcript.approve",           // IS-LIFE-4: ANSWERING one -- a card with no answering verb leaves the machine blocked
+	"transcript.native_decide",     // OpenCode P7: answer the exact displayed native permission or question card
 
 	// ADDED BY agents-tracker-ksvb.1, additively and for the reason S16's block states.
 	//

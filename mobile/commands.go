@@ -977,6 +977,7 @@ type commandBody struct {
 	// reason the derivation is phonecore's (SignApprove), not this package's.
 	approve        *schema.ApproveReq
 	nativeDecision *schema.NativeDecisionReq
+	nativeItem     string
 	// sessionLaunch is Wave R5's preset confirmation body. Launch's own shape: the body
 	// rides beside the signed tuple (SealSessionLaunchEnvelope) and is bound into the
 	// signature via ContentHash = schema.SessionLaunchContentHash(it).
@@ -1272,7 +1273,7 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 		core.Leases().Requested(session, id, expiresAt)
 	}
 	if body.nativeDecision != nil {
-		return a.appendNativeDecision(core, sc, id, *body.nativeDecision, env)
+		return a.appendNativeDecisionLocked(core, sc, id, body.nativeItem, *body.nativeDecision, env)
 	}
 	if _, err := sc.cl.MailboxAppend(context.Background(), sc.target, env); err != nil {
 		return nil, err

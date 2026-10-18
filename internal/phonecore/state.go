@@ -214,6 +214,7 @@ type State struct {
 	Sessions            []CachedSession           // journal-derived session model
 	Snapshots           []Snapshot                // server-rendered terminal grids, latest per session
 	PendingOps          []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
+	NativeDecisions     []NativeDecisionCustody   // bounded native reply custody; no replay payload
 	PendingPublications []PendingPublication      // crash-safe exact-envelope publications awaiting settlement
 	OpOutcomes          map[string]schema.Control // durable operation outcomes, keyed by operation id
 	Stale               map[Bucket]bool           // buckets whose content may not be trusted until reconciled
@@ -362,7 +363,15 @@ func (s State) clone() State {
 	s.HistoryCapped = maps.Clone(s.HistoryCapped)
 	s.PendingOps = slices.Clone(s.PendingOps)
 	s.PendingPublications = clonePendingPublications(s.PendingPublications)
+	s.NativeDecisions = append([]NativeDecisionCustody(nil), s.NativeDecisions...)
 	s.OpOutcomes = maps.Clone(s.OpOutcomes)
+	for id, outcome := range s.OpOutcomes {
+		if outcome.NativeDecisionReceipt != nil {
+			receipt := *outcome.NativeDecisionReceipt
+			outcome.NativeDecisionReceipt = &receipt
+			s.OpOutcomes[id] = outcome
+		}
+	}
 	s.Stale = maps.Clone(s.Stale)
 	s.StaleStreams = maps.Clone(s.StaleStreams)
 	s.lastProfile = cloneRemoteProfilePtr(s.lastProfile)
@@ -590,10 +599,11 @@ type wakeContainer struct {
 // content that no machine-sealed frame produced, so they belong to the kept half rather than
 // the decrypted machine-cache half.
 type keptContainer struct {
-	SendSeq             []sendSeqRecord      `json:"send_seq,omitempty"`
-	Receive             []receiveRecord      `json:"receive,omitempty"`
-	PendingOps          []QueuedOp           `json:"pending_ops,omitempty"`
-	PendingPublications []PendingPublication `json:"pending_publications,omitempty"`
+	SendSeq             []sendSeqRecord         `json:"send_seq,omitempty"`
+	Receive             []receiveRecord         `json:"receive,omitempty"`
+	PendingOps          []QueuedOp              `json:"pending_ops,omitempty"`
+	PendingPublications []PendingPublication    `json:"pending_publications,omitempty"`
+	NativeDecisions     []NativeDecisionCustody `json:"native_decisions,omitempty"`
 }
 
 // purgeableContainer is the plaintext of stateFile.ContentPurgeable: the decrypted caches
@@ -786,6 +796,9 @@ func (s *fileStore) Save(st State) error {
 // it so changing s.st and persisting the change are one critical section rather than an
 // unlock/relock window in which an old snapshot can restore the retired generation.
 func (s *fileStore) saveLocked(st State) error {
+	if !validNativeDecisionCustody(st.NativeDecisions) {
+		return fmt.Errorf("native answer custody is invalid")
+	}
 	if err := validatePendingPublicationAuthority(st.PendingPublications, st.MachineRelayAuthPub); err != nil {
 		return fmt.Errorf("pending publications: %w", err)
 	}
@@ -900,7 +913,7 @@ func validateRelayHomeAuthority(st State) error {
 // write the previous blob back and the caller's coordinate would simply vanish, which is the
 // class of defect PB-STATE-9 was written to close one level down. See ErrContentTierLocked.
 func (s *fileStore) refuseUnreadableContentWrite(st State) error {
-	if !s.kept.opened && (len(st.SendSeq) > 0 || len(st.Receive) > 0 || len(st.PendingOps) > 0 || len(st.PendingPublications) > 0) {
+	if !s.kept.opened && (len(st.SendSeq) > 0 || len(st.Receive) > 0 || len(st.PendingOps) > 0 || len(st.PendingPublications) > 0 || len(st.NativeDecisions) > 0) {
 		return fmt.Errorf("%w: %d send-seq ceiling(s), %d receive high-water(s), %d pending op(s) and %d pending publication(s) "+
 			"cannot be recorded", ErrContentTierLocked, len(st.SendSeq), len(st.Receive), len(st.PendingOps), len(st.PendingPublications))
 	}
@@ -947,7 +960,7 @@ func wakeContainerOf(st State) wakeContainer {
 }
 
 func keptContainerOf(st State) keptContainer {
-	c := keptContainer{PendingOps: st.PendingOps, PendingPublications: st.PendingPublications}
+	c := keptContainer{PendingOps: st.PendingOps, PendingPublications: st.PendingPublications, NativeDecisions: st.NativeDecisions}
 	for epoch, ceiling := range st.SendSeq {
 		c.SendSeq = append(c.SendSeq, sendSeqRecord{Epoch: epoch, Ceiling: ceiling})
 	}
@@ -1001,7 +1014,7 @@ func dropContentMaterial(st State) State {
 	st.Keys.ContentKey = crypto.ContentKey{}
 	st.Sessions, st.Snapshots, st.OpOutcomes, st.Items = nil, nil, nil, nil
 	st.HistoryFloor, st.HistoryCapped = nil, nil
-	st.SendSeq, st.Receive, st.PendingOps, st.PendingPublications = nil, nil, nil, nil
+	st.SendSeq, st.Receive, st.PendingOps, st.PendingPublications, st.NativeDecisions = nil, nil, nil, nil, nil
 	return st
 }
 
@@ -1309,6 +1322,9 @@ func (s *fileStore) adoptKeptContainer(st *State, plain []byte) error {
 	if err := json.Unmarshal(plain, &c); err != nil {
 		return fmt.Errorf("%w: %s: content state container: %v", ErrCorruptState, s.path, err)
 	}
+	if !validNativeDecisionCustody(c.NativeDecisions) {
+		return fmt.Errorf("%w: native answer custody is invalid", ErrCorruptState)
+	}
 	if err := validatePendingPublicationAuthority(c.PendingPublications, st.MachineRelayAuthPub); err != nil {
 		return fmt.Errorf("%w: %s: pending publications: %v", ErrCorruptState, s.path, err)
 	}
@@ -1321,6 +1337,9 @@ func (s *fileStore) adoptKeptContainer(st *State, plain []byte) error {
 	}
 	if len(st.PendingPublications) == 0 {
 		st.PendingPublications = clonePendingPublications(c.PendingPublications)
+	}
+	if len(st.NativeDecisions) == 0 {
+		st.NativeDecisions = append([]NativeDecisionCustody(nil), c.NativeDecisions...)
 	}
 	s.kept.opened = true
 	return nil
@@ -1687,10 +1706,14 @@ func (s *fileStore) loadContentState(st *State, f stateFile, path string) error 
 			return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
 		}
 		st.PendingOps = c.PendingOps
+		if !validNativeDecisionCustody(c.NativeDecisions) {
+			return fmt.Errorf("%w: native answer custody is invalid", ErrCorruptState)
+		}
 		if err := validatePendingPublicationAuthority(c.PendingPublications, st.MachineRelayAuthPub); err != nil {
 			return fmt.Errorf("%w: %s: pending publications: %v", ErrCorruptState, path, err)
 		}
 		st.PendingPublications = clonePendingPublications(c.PendingPublications)
+		st.NativeDecisions = append([]NativeDecisionCustody(nil), c.NativeDecisions...)
 	}
 
 	tier, plain, err = s.openContentContainer(f.ContentPurgeable, path, "decrypted caches")

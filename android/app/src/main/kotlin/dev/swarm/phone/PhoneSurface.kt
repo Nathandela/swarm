@@ -117,6 +117,7 @@ import dev.swarm.phone.ui.screens.approvalSheetView
 import dev.swarm.phone.ui.screens.pairOnlyView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
 import dev.swarm.phone.ui.screens.copyNativeRequestDrafts
+import dev.swarm.phone.ui.screens.resetNativeRequestSubmission
 import dev.swarm.phone.ui.screens.sessionDetailRedraw
 import dev.swarm.phone.ui.screens.sessionDetailView
 import dev.swarm.phone.ui.screens.syncPillView
@@ -2989,6 +2990,10 @@ class PhoneSurface(
         // updated in place keeps its FIRST record's cursor (IS-LAYER-3), so paging past the tail
         // would miss exactly the updates the event fired for.
         val chat = bridge.transcript(open, JOURNAL_FROM_THE_START, WHOLE_JOURNAL)
+        val visibleNativeItems = chat.items.filter { it.kind == "permission_request" || it.kind == "question_request" }.mapTo(mutableSetOf()) { it.itemId }
+        nativeAnswers.keys.retainAll(visibleNativeItems)
+        nativeAnswerSaid.retainAll(nativeAnswers.values.toSet())
+        chat.items.filter { !it.resolved && it.itemId in visibleNativeItems && it.operationId.isNotEmpty() }.forEach { nativeAnswers[it.itemId] = it.operationId }
         chat.items.filter { it.resolved }.forEach { item ->
             nativeAnswers.remove(item.itemId)?.let(nativeAnswerSaid::remove)
         }
@@ -4462,6 +4467,7 @@ class PhoneSurface(
     private fun answerNativeRequest(pressed: View, itemId: String, expectedRequestHash: String, decision: String, answers: String) {
         if (nativeAnswers.containsKey(itemId)) return
         if (nativeAnswers.size >= 256) {
+            resetNativeRequestSubmission(pressed)
             say(PressFeedback.ofRefusal("Too many native answers are awaiting confirmation.", "Refresh the pending requests before sending another answer."))
             return
         }
@@ -4473,7 +4479,10 @@ class PhoneSurface(
                 verb = { app -> app.replyNativeRequest(target, itemId, expectedRequestHash, decision, answers) },
                 settle = { answer -> (answer as? Op)?.let { nativeAnswers[itemId] = it.operationID } },
                 refused = { refusal ->
-                    if (refusal.state == ErrorState.INVALID_REQUEST || refusal.state == ErrorState.NOT_FOUND || refusal.state == ErrorState.OFFLINE) nativeAnswers.remove(itemId)
+                    if (refusal.state == ErrorState.INVALID_REQUEST || refusal.state == ErrorState.NOT_FOUND || refusal.state == ErrorState.OFFLINE) {
+                        nativeAnswers.remove(itemId)
+                        resetNativeRequestSubmission(pressed)
+                    }
                 },
             )
         }
@@ -4489,6 +4498,7 @@ class PhoneSurface(
             if (answer.code != "outcome_unknown") {
                 nativeAnswers.remove(item)
                 nativeAnswerSaid.remove(operation)
+                detailDrawn = null // Rebuild even if a rejection arrived before the locked panel was drawn.
             }
             say(PressFeedback.ofRefusal("Your machine could not confirm the native answer.", answer.message))
         }

@@ -443,6 +443,8 @@ func TestStateStore_PinnedSealedFixturesStillLoad(t *testing.T) {
 		t.Fatalf("OpenStore on current v2 fixture: %v", err)
 	}
 	want, got := fullState(), store.Load()
+	// This pinned checkpoint predates the optional native-answer custody field.
+	want.NativeDecisions = nil
 	wv, gv := reflect.ValueOf(want), reflect.ValueOf(got)
 	for i := 0; i < wv.NumField(); i++ {
 		name := wv.Type().Field(i).Name

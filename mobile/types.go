@@ -338,6 +338,8 @@ type TranscriptItem struct {
 	// R6). A message drawn on the phone stays PENDING until its own id comes back on an
 	// item, because a send is acknowledged when the daemon wrote bytes into a PTY and not
 	// when the CLI accepted them -- so the echo, and only the echo, is the delivery.
+	// Native request cards use this field for this handset's retained reply operation;
+	// it locks the card but never proves request resolution.
 	// Empty on every item nobody claimed.
 	OperationID string
 }

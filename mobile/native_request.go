@@ -5,18 +5,27 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
-func (a *App) appendNativeDecision(core *phonecore.Core, sc sendCtx, id string, body schema.NativeDecisionReq, envelope []byte) (*Op, error) {
+// appendNativeDecisionLocked shares the caller's allocation-to-append bucket lock.
+func (a *App) appendNativeDecisionLocked(core *phonecore.Core, sc sendCtx, id, itemID string, body schema.NativeDecisionReq, envelope []byte) (*Op, error) {
+	operation, fresh, err := core.BeginNativeDecision(id, itemID, body, time.Now())
+	if err != nil {
+		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: native answer was not published: "+err.Error()))
+	}
+	if !fresh {
+		return &Op{Action: schema.ActionNativeDecide, SessionID: body.Session, OperationID: operation}, nil
+	}
 	if _, err := sc.cl.MailboxAppend(context.Background(), sc.target, envelope); err != nil {
 		receipt := &schema.NativeDecisionReceipt{OperationID: id, Session: body.Session, SessionInstance: body.SessionInstance,
 			RootID: body.RootID, Generation: body.Generation, NativeSessionID: body.NativeSessionID, RequestID: body.RequestID,
 			Kind: body.Kind, State: "uncertain", Reason: "Mailbox admission is unconfirmed; keep this operation ID and inspect its outcome."}
 		if saveErr := core.RecordOutcomeIfAbsent(schema.Control{Op: schema.ActionNativeDecide, OperationID: id, SessionID: body.Session, NativeDecisionReceipt: receipt}); saveErr != nil {
-			return nil, errors.New("swarmmobile: native answer operation_id=" + id + " is uncertain and its local receipt could not be retained")
+			return nil, classed(ErrClassInternal, errors.New("swarmmobile: native answer operation_id="+id+" is uncertain and its local receipt could not be retained"))
 		}
 	}
 	return &Op{Action: schema.ActionNativeDecide, SessionID: body.Session, OperationID: id}, nil
@@ -38,13 +47,13 @@ func (a *App) ReplyNativeRequest(session, itemID, expectedRequestHash, decisionI
 	}
 	body, err := nativeAnswer(binding.Request, decisionID, answersJSON)
 	if err != nil {
-		return nil, classed(ErrClassInvalidRequest, err)
+		return nil, err
 	}
-	return a.signedCommand(schema.ActionNativeDecide, session, nil, commandBody{nativeDecision: &body})
+	return a.signedCommand(schema.ActionNativeDecide, session, nil, commandBody{nativeDecision: &body, nativeItem: itemID})
 }
 
 func nativeAnswer(body schema.NativeDecisionReq, decision, answersJSON string) (schema.NativeDecisionReq, error) {
-	invalid := errors.New("swarmmobile: native answer does not match the request kind or answer format")
+	invalid := classed(ErrClassInvalidRequest, errors.New("swarmmobile: native answer does not match the request kind or answer format"))
 	body.Reply, body.Answers = "", nil
 	switch body.Kind {
 	case "permission_reply":
@@ -68,8 +77,8 @@ func nativeAnswer(body schema.NativeDecisionReq, decision, answersJSON string) (
 				return body, invalid
 			}
 			for _, answer := range group {
-				if answer == "" || len(answer) > 4096 {
-					return body, errors.New("swarmmobile: each native answer must contain 1 to 4096 bytes")
+				if answer == "" || len(answer) > 4096 || strings.ContainsRune(answer, 0) {
+					return body, classed(ErrClassInvalidRequest, errors.New("swarmmobile: each native answer must contain 1 to 4096 bytes"))
 				}
 			}
 		}

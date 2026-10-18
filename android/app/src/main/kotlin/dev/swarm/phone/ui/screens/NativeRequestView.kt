@@ -29,6 +29,7 @@ internal data class NativeRequestDraft(
 private class NativeRequestForm(
     val snapshot: () -> NativeRequestDraft,
     val restore: (NativeRequestDraft) -> Unit,
+    val resetSubmission: () -> Unit,
 )
 
 internal fun nativeRequestDraft(view: View?): NativeRequestDraft? =
@@ -36,6 +37,14 @@ internal fun nativeRequestDraft(view: View?): NativeRequestDraft? =
 
 internal fun restoreNativeRequestDraft(draft: NativeRequestDraft?, view: View?) {
     if (draft != null) (view?.tag as? NativeRequestForm)?.restore?.invoke(draft)
+}
+
+internal fun resetNativeRequestSubmission(pressed: View) {
+    var current: View? = pressed
+    while (current != null) {
+        (current.tag as? NativeRequestForm)?.let { it.resetSubmission(); return }
+        current = current.parent as? View
+    }
 }
 
 internal fun copyNativeRequestDrafts(from: View?, to: View?) {
@@ -156,6 +165,7 @@ internal fun nativeRequestCard(
     update()
     return approvalSheet(context, "", block.line, well = contents).apply {
         tag = NativeRequestForm(
+            resetSubmission = { submitted = false; update() },
             snapshot = { NativeRequestDraft(request.requestHash, request.requestId, selections.map { it.toList() }, custom.map { it?.text?.toString().orEmpty() }) },
             restore = { draft ->
                 if (draft.requestHash == request.requestHash && draft.requestId == request.requestId && draft.selections.size == selections.size && draft.custom.size == custom.size) {
