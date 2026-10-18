@@ -579,6 +579,8 @@ func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol
 	within := 10 * time.Second
 	if op == protocol.OpNativeDecide || op == protocol.OpComposerSend {
 		within = 35 * time.Second
+	} else if op == protocol.OpInteractionHistory && rc.History != nil && rc.History.Native {
+		within = 25 * time.Second
 	}
 	if op == protocol.OpNativeDecide {
 		if !dc.hasCap(protocol.CapNativeRequests) {

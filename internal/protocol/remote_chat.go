@@ -135,6 +135,11 @@ type InteractionHistorian interface {
 	InteractionHistory(session, beforeItem string, limit int) ([]schema.JournalRecord, bool, ErrorCode, error)
 }
 
+// NativeInteractionHistorian reads native snapshots with an independent opaque cursor.
+type NativeInteractionHistorian interface {
+	NativeInteractionHistory(schema.InteractionHistoryReq) (schema.NativeHistoryPage, ErrorCode, error)
+}
+
 // InteractionDetailer is the optional DaemonAPI seam behind interaction_detail (M3.3):
 // one item's FULL pre-truncation body, or IS-CAP-3's `unavailable` outside retention.
 type InteractionDetailer interface {
@@ -439,6 +444,28 @@ func (cc *clientConn) handleInteractionHistory(c Control) {
 	req := c.History
 	if req == nil {
 		cc.replyErrorCode("interaction_history: missing interaction_history body", CodeInvalidField)
+		return
+	}
+	if req.Native {
+		if req.Limit <= 0 || len(req.NativeCursor) > schema.MaxNativeHistoryCursorBytes || len(req.BeforeItem) > 128 {
+			cc.replyErrorCode("interaction_history: invalid native page bounds", CodeInvalidField)
+			return
+		}
+		native, ok := cc.srv.d.(NativeInteractionHistorian)
+		if !ok {
+			cc.replyErrorCode("interaction_history: native history unavailable", CodeNotImplemented)
+			return
+		}
+		page, code, err := native.NativeInteractionHistory(*req)
+		if err != nil {
+			cc.replyErrorCode("interaction_history: "+err.Error(), code)
+			return
+		}
+		_ = cc.writeControl(Control{Op: OpInteractionHistory, EndpointID: cc.endpointID, OperationID: cc.opID, SessionID: req.Session, NativeHistory: &page})
+		return
+	}
+	if req.NativeCursor != "" {
+		cc.replyErrorCode("interaction_history: native cursor requires native mode", CodeInvalidField)
 		return
 	}
 	h, ok := cc.srv.d.(InteractionHistorian)
