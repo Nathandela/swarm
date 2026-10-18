@@ -1,0 +1,9 @@
+--- FAIL: TestNativeHistoryContinuationRejectsNonOlderRows (0.01s)
+    --- FAIL: TestNativeHistoryContinuationRejectsNonOlderRows/false (0.01s)
+        opencode_history_page_test.go:136: native continuation accepted an equal or newer boundary row
+    --- FAIL: TestNativeHistoryContinuationRejectsNonOlderRows/true (0.00s)
+        opencode_history_page_test.go:136: native continuation accepted an equal or newer boundary row
+    opencode_history_page_test.go:148: same-time ID ordering n=2: <nil>
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.358s
+FAIL

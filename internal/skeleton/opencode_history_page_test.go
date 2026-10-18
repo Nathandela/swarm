@@ -122,3 +122,29 @@ func TestNativeHistoryRefusesForeignScopeCursorAndRows(t *testing.T) {
 		t.Fatal("foreign native messages entered history")
 	}
 }
+
+func TestNativeHistoryContinuationRejectsNonOlderRows(t *testing.T) {
+ for _, newer := range []bool{false, true} {
+  t.Run(fmt.Sprint(newer), func(t *testing.T) {
+   f := newNativePageReadFake(t)
+   f.rows = []json.RawMessage{f.row(1, 1, 1), f.row(2, 1, 1)}
+   page, _, err := paginateNativeHistory(context.Background(), f.meta, schema.InteractionHistoryReq{Native:true,Limit:1}, f.read)
+   if err != nil { t.Fatal(err) }
+   bad := f.row(2,1,1)
+   if newer { bad = f.row(3,1,1) }
+   read := func(ctx context.Context, limit int, before string) (nativeHistorySlice,error) { p,e := f.read(ctx,limit,before); p.Messages=[]json.RawMessage{bad}; return p,e }
+   if _,_,err := paginateNativeHistory(context.Background(),f.meta,schema.InteractionHistoryReq{Native:true,Limit:1,NativeCursor:page.NextCursor},read); err == nil { t.Fatal("native continuation accepted an equal or newer boundary row") }
+  })
+ }
+ f := newNativePageReadFake(t)
+ f.rows=[]json.RawMessage{f.row(1,1,1),f.row(2,1,1)}
+ scope,_ := nativeProjectionScope(f.meta)
+ token,_ := encodeNativeHistoryCursor(scope,"sdk","opaque/1",f.row(2,1,1))
+ f.cursors["opaque/1"]=1
+ for _, n := range []int{1,2,3} {
+  raw:=json.RawMessage(strings.ReplaceAll(string(f.row(n,1,1)),fmt.Sprintf(`"created":%d`,n+1),`"created":3`))
+  read:=func(ctx context.Context,limit int,before string)(nativeHistorySlice,error){p,e:=f.read(ctx,limit,before);p.Messages=[]json.RawMessage{raw};return p,e}
+  _,_,err:=paginateNativeHistory(context.Background(),f.meta,schema.InteractionHistoryReq{Native:true,Limit:1,NativeCursor:token},read)
+  if (err==nil)!=(n==1) {t.Fatalf("same-time ID ordering n=%d: %v",n,err)}
+ }
+}
