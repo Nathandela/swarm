@@ -1,0 +1,8 @@
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/opencode_connect_test.go:29:14: d.openCodeReady undefined (type *Daemon has no field or method openCodeReady)
+internal/skeleton/opencode_connect_test.go:36:11: undefined: cloneOpenCodeView
+internal/skeleton/opencode_connect_test.go:39:12: undefined: cloneOpenCodeView
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+
+exit=1
