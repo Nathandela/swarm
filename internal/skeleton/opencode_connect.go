@@ -133,33 +133,26 @@ func (d *Daemon) publishOpenCodeView(local string, observation *openCodeObservat
 		return
 	}
 	observation.view = view
-	nativeStatus := status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionUnknown}
-	if view.BusyKnown {
-		nativeStatus.Turn = status.TurnIdle
-		if view.Busy {
-			nativeStatus.Turn = status.TurnActive
+	nativeStatus := openCodeProjectedStatus(view)
+	changed := nativeStatus != observation.lastStatus
+	if changed {
+		if err := d.core.SetOpenCodeStatus(local, observation.identity.BackendGeneration, nativeStatus); err != nil {
+			if !observation.persistFailed {
+				log.Printf("skeleton: OpenCode status persistence failed for %s: %v", local, err)
+			}
+			observation.persistFailed = true
+			changed = false
+		} else {
+			observation.persistFailed = false
+			observation.lastStatus = nativeStatus
 		}
 	}
-	if nativeStatus == observation.lastStatus {
-		d.openCode.mu.Unlock()
-		return
-	}
-	if err := d.core.SetOpenCodeStatus(local, observation.identity.BackendGeneration, nativeStatus); err != nil {
-		if !observation.persistFailed {
-			log.Printf("skeleton: OpenCode status persistence failed for %s: %v", local, err)
-		}
-		observation.persistFailed = true
-		d.openCode.mu.Unlock()
-		return
-	}
-	observation.persistFailed = false
-	observation.lastStatus = nativeStatus
 	d.openCode.mu.Unlock()
+	d.checkpointOpenCodeOutcomes(local, view)
 	if d.api != nil {
-		d.api.observeStatus(local)
 		d.api.pokeWatch()
 	}
-	if d.sup != nil {
+	if changed && d.sup != nil {
 		d.sup.signal(local)
 	}
 }
@@ -182,6 +175,19 @@ func cloneOpenCodeView(view OpenCodeView) OpenCodeView {
 	view.Inputs = append([]OpenCodeInput(nil), view.Inputs...)
 	view.Messages = append([]OpenCodeMessage(nil), view.Messages...)
 	view.Uncertain = append([]OpenCodeUncertain(nil), view.Uncertain...)
+	view.Pending = append([]OpenCodeRequest(nil), view.Pending...)
+	for i := range view.Pending {
+		view.Pending[i] = cloneOpenCodeRequest(view.Pending[i])
+	}
+	view.Descendants = append([]OpenCodeDescendant(nil), view.Descendants...)
+	for i := range view.Descendants {
+		child := &view.Descendants[i]
+		child.Status = *cloneStatus(&child.Status)
+		if child.Error != nil {
+			value := *child.Error
+			child.Error = &value
+		}
+	}
 	view.Retry = cloneStatus(view.Retry)
 	if view.Current != nil {
 		value := *view.Current
@@ -205,6 +211,9 @@ func (d *Daemon) stopOpenCodeObservation(local string) {
 	if observation != nil {
 		<-observation.done
 	}
+	d.nativeReceipts.mu.Lock()
+	delete(d.nativeReceipts.sessions, local)
+	d.nativeReceipts.mu.Unlock()
 }
 
 func (d *Daemon) stopOpenCodeObservations() {
@@ -219,4 +228,7 @@ func (d *Daemon) stopOpenCodeObservations() {
 	for _, observation := range sessions {
 		<-observation.done
 	}
+	d.nativeReceipts.mu.Lock()
+	d.nativeReceipts.sessions = nil
+	d.nativeReceipts.mu.Unlock()
 }

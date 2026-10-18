@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -26,6 +27,7 @@ func observeOpenCode(ctx context.Context, reader openCodeReader, identity openco
 		}
 		state.Degrade("native event stream was interrupted")
 		state.MarkRootStatusUnknown("native observation requires reconciliation")
+		state.nativeUnknown = "native current activity requires reconciliation"
 		publish(state.View())
 		timer := time.NewTimer(time.Second)
 		select {
@@ -48,6 +50,10 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 	}
 	defer func() { notify(result) }()
 	epoch := state.BeginEpoch()
+	if state.scope == nil {
+		state.scope = map[string]OpenCodeDescendant{}
+	}
+	state.nativeUnknown = "native current activity has not been reconciled"
 	state.MarkRootStatusUnknown("native snapshot has not been reconciled")
 	publish(state.View())
 	events := make(chan []byte, 128)
@@ -104,11 +110,13 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 		if err != nil {
 			return false, err
 		}
-		rootStatus := event.SessionStatus != nil && event.SessionStatus.SessionID == identity.RootID || event.SessionIdle != nil && event.SessionIdle.SessionID == identity.RootID
-		if snapshot && rootStatus {
+		currentChange := event.SessionStatus != nil || event.SessionIdle != nil || strings.HasPrefix(event.Kind, "permission.") || strings.HasPrefix(event.Kind, "question.") || event.Kind == "session.created" || event.Kind == "session.updated" || event.Kind == "session.deleted"
+		if snapshot && currentChange {
 			return true, nil
 		}
 		switch state.Apply(raw, epoch).Disposition {
+		case OCNeedsSnapshot:
+			return true, nil
 		case OCRefusedCap, OCRefusedParse, OCRefusedDegraded:
 			return false, errors.New("native event could not be retained")
 		}
@@ -124,14 +132,6 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 				return err
 			}
 			if err := state.ImportHistory(snapshot.Messages, epoch); err != nil {
-				return err
-			}
-			raw, err := json.Marshal(snapshot.Statuses)
-			if err != nil {
-				return err
-			}
-			statuses, err := opencode.DecodeStatusSnapshot(raw)
-			if err != nil {
 				return err
 			}
 			dirty := false
@@ -150,9 +150,10 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 				}
 			}
 			if !dirty {
-				return state.ReconcileRootStatus(epoch, statuses)
+				return state.reconcileNative(snapshot, epoch)
 			}
 			state.MarkRootStatusUnknown("native status changed during reconciliation")
+			state.nativeUnknown = "native current activity changed during reconciliation"
 		}
 		return nil
 	}
@@ -171,8 +172,14 @@ func observeOpenCodeEpoch(ctx context.Context, reader openCodeReader, identity o
 			return errors.New("native event stream ended")
 		case raw := <-events:
 			buffered.Add(-int64(len(raw)))
-			if _, err := apply(raw, false); err != nil {
+			needsSnapshot, err := apply(raw, false)
+			if err != nil {
 				return err
+			}
+			if needsSnapshot {
+				if err := refresh(); err != nil {
+					return err
+				}
 			}
 			publish(state.View())
 		case <-timer.C:

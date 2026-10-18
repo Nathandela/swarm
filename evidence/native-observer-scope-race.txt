@@ -1,0 +1,3 @@
+ok  	github.com/Nathandela/swarm/internal/skeleton	7.299s
+
+exit=0

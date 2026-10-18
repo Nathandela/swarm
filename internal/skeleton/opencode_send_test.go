@@ -82,7 +82,7 @@ func newOpenCodeSendFixture(t *testing.T) *openCodeSendFixture {
 			<-r.Context().Done()
 		case "/snapshot":
 			row, _ := json.Marshal(map[string]any{"id": f.binding.RootID, "directory": f.binding.Directory, "time": map[string]int64{"created": 123}})
-			_ = json.NewEncoder(w).Encode(opencodebridge.Snapshot{Identity: f.identity, Session: row, Statuses: map[string]json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Messages: []json.RawMessage{}, Children: []json.RawMessage{}})
+			_ = json.NewEncoder(w).Encode(opencodebridge.Snapshot{Identity: f.identity, Session: row, Statuses: map[string]json.RawMessage{}, Permissions: []json.RawMessage{}, Questions: []json.RawMessage{}, Messages: []json.RawMessage{}, Children: []json.RawMessage{}, Descendants: []json.RawMessage{}, HierarchyComplete: true, HierarchyScope: openCodeHierarchyScope})
 		case "/message":
 			raw, ok := f.nativeRow.Load().(json.RawMessage)
 			if !f.rowAvailable.Load() || !ok {
