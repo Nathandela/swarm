@@ -315,10 +315,11 @@ type RemoteCommand struct {
 	// it on the content -- riding instead inside the epoch-sealed frame, unforgeable by the
 	// relay and alterable only by the gateway, which is the documented D4/D5 owner-uid
 	// residual and not a new one.
-	Approve    *ApproveReq `json:"approve,omitempty"`
-	Launch     *LaunchReq  `json:"launch,omitempty"`
-	GateToken  string      `json:"gate_token,omitempty"`  // take_control: one-shot gate token; the gateway reconstructs Control.GateToken from it. Bound into the signature via ContentHash=SHA256(GateToken), not carried in the signed tuple.
-	TTLSeconds int         `json:"ttl_seconds,omitempty"` // take_control: caller-requested control-session lifetime (seconds), clamped server-side. Not signed (cosmetic like Cols/Rows).
+	NativeDecision *NativeDecisionReq `json:"native_decision,omitempty"`
+	Approve        *ApproveReq        `json:"approve,omitempty"`
+	Launch         *LaunchReq         `json:"launch,omitempty"`
+	GateToken      string             `json:"gate_token,omitempty"`  // take_control: one-shot gate token; the gateway reconstructs Control.GateToken from it. Bound into the signature via ContentHash=SHA256(GateToken), not carried in the signed tuple.
+	TTLSeconds     int                `json:"ttl_seconds,omitempty"` // take_control: caller-requested control-session lifetime (seconds), clamped server-side. Not signed (cosmetic like Cols/Rows).
 	// ResyncCursor is journal_resync's from-cursor: the boundary the phone's session cache
 	// currently stands at. The gateway's journal_read(from) answers with the complete roster
 	// as-of a new boundary plus the events in between, which is exactly JournalReseed's
