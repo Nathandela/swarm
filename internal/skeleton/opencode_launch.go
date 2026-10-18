@@ -35,7 +35,11 @@ func (a *coreAPI) captureOpenCodeOrigin(spec *daemon.LaunchSpec) error {
 		spec.OpenCodeBinding = persist.CloneOpenCodeBinding(source.OpenCodeBinding)
 		spec.OpenCodeEnv, err = a.core.OpenCodeResumeEnvironment(local)
 	} else {
-		spec.OpenCodeEnv, err = a.core.OpenCodeEnvironment(spec.ClientEnv)
+		origin := spec.OpenCodeEnv
+		if origin == nil {
+			origin = spec.ClientEnv
+		}
+		spec.OpenCodeEnv, err = a.core.OpenCodeEnvironment(origin)
 	}
 	return err
 }

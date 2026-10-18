@@ -76,12 +76,21 @@ var remoteForbiddenOptions = map[string]string{
 // entirely (R-POL.5): it is an unauthenticated channel (LaunchContentHash excludes Env),
 // so filtering is not enough — it must not survive at all.
 func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
-	var clientEnv, configurationEnv []string
+	var clientEnv, configurationEnv, openCodeEnv []string
 	if !remote && req.Env != nil {
 		// Capture owner configuration origins before the launch allowlist removes
 		// them. Nil still requests daemon policy; an explicit empty env stays empty.
 		configurationEnv = daemon.NativeConfigurationEnvironment(req.Env)
 		clientEnv = persist.FilterEnv(req.Env)
+		if req.Agent == "opencode" {
+			openCodeEnv = make([]string, 0)
+			for _, entry := range req.Env {
+				key, _, _ := strings.Cut(entry, "=")
+				if persist.OpenCodeProfileKey(key) || strings.HasPrefix(key, "OPENCODE_") || key == "SWARM_OPENCODE_UNSUPPORTED_ORIGIN" {
+					openCodeEnv = append(openCodeEnv, entry)
+				}
+			}
+		}
 	}
 	return daemon.LaunchSpec{
 		AgentType: req.Agent,
@@ -91,6 +100,7 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		Tag:                             strings.TrimSpace(SanitizeName(req.Tag)),
 		Cwd:                             req.Cwd,
 		ClientEnv:                       clientEnv,
+		OpenCodeEnv:                     openCodeEnv,
 		AccountOriginalConfigurationEnv: configurationEnv,
 		Cols:                            req.Cols,
 		Rows:                            req.Rows,
