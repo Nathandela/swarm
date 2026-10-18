@@ -1,0 +1,986 @@
+{
+  "date": "2026-10-18",
+  "platform": "macOS arm64",
+  "versions": {
+    "swarm": "0.18.2",
+    "source": "3f07f3f6",
+    "opencode": "1.19.3",
+    "claude": "2.1.296",
+    "codex": "0.163.0",
+    "go": "1.26.9 darwin/arm64"
+  },
+  "scope": "Disposable test daemon/workspace/XDG store; no production sessions; selected synthetic evidence only.",
+  "runtime_changes": false,
+  "two_worker_exchange": {
+    "oc-g": {
+      "native_id": "ses_eb17b8871ffewLeuJiN2zTX6ms",
+      "messages": [
+        {
+          "id": "msg_14e8477f2001GQ68P5Q0yt6xpU",
+          "role": "user",
+          "time": {
+            "created": 1792318666738
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "Reply with exactly OC_G_READY. Do not use any tools."
+            }
+          ]
+        },
+        {
+          "id": "msg_14e847859001rb5aQvHNdybWrd",
+          "role": "assistant",
+          "time": {
+            "created": 1792318666841,
+            "completed": 1792318670541
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "OC_G_READY"
+            }
+          ]
+        },
+        {
+          "id": "msg_14e84e78f001yrci1DpSa16q8f",
+          "role": "user",
+          "time": {
+            "created": 1792318695311
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "Use the bash tool once to execute exactly: /usr/local/bin/swarm send ep-052b0420/x3riwdb4f33w7wua --text \"Reply with exactly OC_H_GOT_G. Do not use any tools.\". Then reply OC_G_SENT. Do not execute any other commands."
+            }
+          ]
+        },
+        {
+          "id": "msg_14e84e79a001NC7064H9wWyPT8",
+          "role": "assistant",
+          "time": {
+            "created": 1792318695322,
+            "completed": 1792318696907
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "tool",
+              "tool": "bash",
+              "status": "completed",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "id": "msg_14e84edcd001Q0CgFYCtDKnU0q",
+          "role": "assistant",
+          "time": {
+            "created": 1792318696909,
+            "completed": 1792318698109
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "OC_G_SENT"
+            }
+          ]
+        },
+        {
+          "id": "msg_14e864f2c001CNKkd4GY9Ms7xv",
+          "role": "user",
+          "time": {
+            "created": 1792318787372
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "Reply with exactly OC_G_GOT_H_AFTER_RESTART. Do not use any tools."
+            }
+          ]
+        },
+        {
+          "id": "msg_14e864faa001B2LnQEirtrjP2e",
+          "role": "assistant",
+          "time": {
+            "created": 1792318787498,
+            "completed": 1792318789319
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "OC_G_GOT_H_AFTER_RESTART"
+            }
+          ]
+        },
+        {
+          "id": "msg_14e8771bd001n3EdJr6HcA09SD",
+          "role": "user",
+          "time": {
+            "created": 1792318861757
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "Reply with exactly OC_RESUME_ALIVE. Do not use any tools."
+            }
+          ]
+        },
+        {
+          "id": "msg_14e8771d4001xRoojgnkbYEuoU",
+          "role": "assistant",
+          "time": {
+            "created": 1792318861780,
+            "completed": 1792318863955
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "OC_RESUME_ALIVE"
+            }
+          ]
+        }
+      ]
+    },
+    "oc-h": {
+      "native_id": "ses_eb17b896effe0IDY7t7rpzjjLy",
+      "messages": [
+        {
+          "id": "msg_14e8476d8001XE6FaUCfpaAM3N",
+          "role": "user",
+          "time": {
+            "created": 1792318666456
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "Reply with exactly OC_H_READY. Do not use any tools."
+            }
+          ]
+        },
+        {
+          "id": "msg_14e84772a001AvIKY7eNGxOwlx",
+          "role": "assistant",
+          "time": {
+            "created": 1792318666538,
+            "completed": 1792318670478
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "OC_H_READY"
+            }
+          ]
+        },
+        {
+          "id": "msg_14e84eda2001ISwqE61je6JF4H",
+          "role": "user",
+          "time": {
+            "created": 1792318696866
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "Reply with exactly OC_H_GOT_G. Do not use any tools."
+            }
+          ]
+        },
+        {
+          "id": "msg_14e84edbe001QHTq4Gg3pwEhMK",
+          "role": "assistant",
+          "time": {
+            "created": 1792318696894,
+            "completed": 1792318698022
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "OC_H_GOT_G"
+            }
+          ]
+        },
+        {
+          "id": "msg_14e864841001gz7SiD99y9OFx7",
+          "role": "user",
+          "time": {
+            "created": 1792318785604
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "Use the bash tool once to execute exactly: /usr/local/bin/swarm send ep-052b0420/gikuxcnygwhzb6mf --text \"Reply with exactly OC_G_GOT_H_AFTER_RESTART. Do not use any tools.\". Then reply OC_H_SENT_AFTER_RESTART. Do not execute any other commands."
+            }
+          ]
+        },
+        {
+          "id": "msg_14e864867001kT0pXg735PkcYN",
+          "role": "assistant",
+          "time": {
+            "created": 1792318785639,
+            "completed": 1792318787402
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "Executing the requested bash command now, then I\u2019ll reply with the exact confirmation string."
+            },
+            {
+              "type": "tool",
+              "tool": "bash",
+              "status": "completed",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "id": "msg_14e864f65001BHOLHQFTC7C239",
+          "role": "assistant",
+          "time": {
+            "created": 1792318787429,
+            "completed": 1792318789735
+          },
+          "error": null,
+          "parts": [
+            {
+              "type": "text",
+              "text": "OC_H_SENT_AFTER_RESTART"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "pilot_watch_missed_successful_replies": {
+    "command": [
+      "pilot",
+      "--context",
+      "/tmp/swarm-pilot-2558555133",
+      "watch",
+      "ep-052b0420/gikuxcnygwhzb6mf",
+      "ep-052b0420/x3riwdb4f33w7wua",
+      "--once",
+      "--timeout",
+      "12s"
+    ],
+    "exit": 2,
+    "start_epoch": 1792318695.301537,
+    "end_epoch": 1792318707.3165371,
+    "native_reply_completed_epochs": {
+      "OC_G_SENT": 1792318698.109,
+      "OC_H_GOT_G": 1792318698.022
+    },
+    "receipts": [
+      "snapshot",
+      "waiting"
+    ],
+    "observed_capabilities": {
+      "structured_chat": false,
+      "terminal_fallback": true,
+      "terminal_control": true,
+      "interrupt": false
+    }
+  },
+  "modal_send": {
+    "terminal_permission_modal_observed": true,
+    "observed_swarm_interaction": "none",
+    "sender_tool_completed": true,
+    "recipient_native_user_prompt_found": false,
+    "modal_keystroke_effect": "not established"
+  },
+  "daemon_crash": {
+    "before": {
+      "at": 1792318768.800755,
+      "sessions": {
+        "oc-a": {
+          "id": "ia4654bw5wiqn6iw",
+          "shim_pid": 92255,
+          "native_pid": 92256,
+          "native_identity": "92256 92255 Sun Oct 18 12:10:10 2026     /usr/local/bin/opencode",
+          "conversation_id": "",
+          "status": {
+            "Process": "running",
+            "Turn": "active",
+            "Interaction": "none"
+          },
+          "created_at": "2026-10-18T12:10:10.570798+02:00"
+        },
+        "oc-g": {
+          "id": "gikuxcnygwhzb6mf",
+          "shim_pid": 4433,
+          "native_pid": 4434,
+          "native_identity": "4434  4433 Sun Oct 18 12:17:42 2026     /usr/local/bin/opencode",
+          "conversation_id": "",
+          "status": {
+            "Process": "running",
+            "Turn": "active",
+            "Interaction": "none"
+          },
+          "created_at": "2026-10-18T12:17:42.62131+02:00"
+        },
+        "oc-h": {
+          "id": "x3riwdb4f33w7wua",
+          "shim_pid": 4437,
+          "native_pid": 4439,
+          "native_identity": "4439  4437 Sun Oct 18 12:17:42 2026     /usr/local/bin/opencode",
+          "conversation_id": "",
+          "status": {
+            "Process": "running",
+            "Turn": "active",
+            "Interaction": "none"
+          },
+          "created_at": "2026-10-18T12:17:42.772173+02:00"
+        }
+      },
+      "daemon_pid": 96001
+    },
+    "after": {
+      "at": 1792318784.875479,
+      "daemon_pid": 6981,
+      "sessions": {
+        "oc-a": {
+          "shim_pid": 92255,
+          "native_pid": 92256,
+          "same_identity": true,
+          "status": {
+            "Process": "running",
+            "Turn": "active",
+            "Interaction": "none"
+          }
+        },
+        "oc-g": {
+          "shim_pid": 4433,
+          "native_pid": 4434,
+          "same_identity": true,
+          "status": {
+            "Process": "running",
+            "Turn": "active",
+            "Interaction": "none"
+          }
+        },
+        "oc-h": {
+          "shim_pid": 4437,
+          "native_pid": 4439,
+          "same_identity": true,
+          "status": {
+            "Process": "running",
+            "Turn": "active",
+            "Interaction": "none"
+          }
+        }
+      }
+    },
+    "successful_native_exchange_after_restart": true
+  },
+  "abrupt_provider_death": {
+    "before": {
+      "at": 1792318841.610175,
+      "elapsed_seconds": 631.0291790962219,
+      "native_pid": 92256,
+      "shim_pid": 92255,
+      "conversation_id": ""
+    },
+    "after_status": {
+      "Process": "exited",
+      "Turn": "active",
+      "Interaction": "none"
+    },
+    "after_conversation_id": "",
+    "resume_exit": 1,
+    "resume_error": "pilot: resume: launch: resume: cannot resume \"ia4654bw5wiqn6iw\": no captured conversation id\n",
+    "native_history_destroyed": false
+  },
+  "graceful_resume": {
+    "old_native_id": "ses_eb17b8871ffewLeuJiN2zTX6ms",
+    "new_swarm_id": "ijh33wtol4mftzx2",
+    "native_id_after_resume": "ses_eb17b8871ffewLeuJiN2zTX6ms",
+    "native_assistant_marker": "OC_RESUME_ALIVE",
+    "status_after_reply": {
+      "Process": "running",
+      "Turn": "active",
+      "Interaction": "none"
+    }
+  },
+  "fixture_probes": {
+    "passive_parent": {
+      "endpoint_id": "ep-052b0420",
+      "id": "ep-052b0420/ia4654bw5wiqn6iw",
+      "agent": "opencode",
+      "name": "oc-a",
+      "cwd": "/private/tmp/swarm-oc-audit/work",
+      "status": {
+        "Process": "running",
+        "Turn": "active",
+        "Interaction": "none"
+      },
+      "group": "working",
+      "group_entered_at": "2026-10-18T12:10:10.570798+02:00",
+      "last_activity": "2026-10-18T12:10:10.570798+02:00",
+      "created_at": "2026-10-18T12:10:10.570798+02:00",
+      "summary": ""
+    },
+    "passive_child": {
+      "endpoint_id": "ep-052b0420",
+      "id": "ep-052b0420/lrohg6j3kxw3ood5",
+      "agent": "opencode",
+      "name": "fixture-passive",
+      "cwd": "/private/tmp/swarm-oc-audit/work",
+      "status": {
+        "Process": "exited",
+        "Turn": "unknown",
+        "Interaction": "none"
+      },
+      "group": "completed",
+      "group_entered_at": "2026-10-18T12:17:05.273527+02:00",
+      "last_activity": "2026-10-18T12:17:05.251375+02:00",
+      "created_at": "2026-10-18T12:17:04.008826+02:00",
+      "summary": "",
+      "spawned_from": "ia4654bw5wiqn6iw",
+      "spawn_intent": "handoff",
+      "supervision": "passive",
+      "supervision_pending": true
+    },
+    "worktree_source_id": "ep-052b0420/yzr4my3wv4xc5naw",
+    "worktree_child_id": "ep-052b0420/wcbgs42kaa4feulg",
+    "source_provider_cwd": "/private/tmp/swarm-oc-audit/git-root/.swarm/worktrees/fixture-worktree-source",
+    "child_provider_cwd": "/private/tmp/swarm-oc-audit/git-root",
+    "original_root": "/private/tmp/swarm-oc-audit/git-root",
+    "fixture_only": true
+  },
+  "native_http": {
+    "version": "1.19.3",
+    "schema": "local GET /doc OpenAPI3.1",
+    "explicit_parent_child_assertions": {
+      "child_in_children": true,
+      "child_parent_matches": true,
+      "both_in_list": true
+    },
+    "answer_session": "ses_eb17a54feffeGvFTB6HZA7nidC",
+    "answer_prompt_status": 204,
+    "answer_success": true,
+    "answer_messages": [
+      {
+        "id": "msg_14e85ab24001R2LXtNU96P5UFR",
+        "role": "user",
+        "parentID": null,
+        "completed": null,
+        "error": null,
+        "parts": [
+          {
+            "id": "prt_14e85ab29001zM3NKS7ENJcbNO",
+            "type": "text",
+            "text_excerpt": "Reply with only the exact token AUTH_HTTP_OK.",
+            "tool": null,
+            "state_status": null
+          }
+        ]
+      },
+      {
+        "id": "msg_14e85ab3700118hcTir52vX5mw",
+        "role": "assistant",
+        "parentID": "msg_14e85ab24001R2LXtNU96P5UFR",
+        "completed": 1792318747049,
+        "error": null,
+        "parts": [
+          {
+            "id": "prt_14e85b124001JM0iIL4sUDmuXS",
+            "type": "step-start",
+            "text_excerpt": "",
+            "tool": null,
+            "state_status": null
+          },
+          {
+            "id": "prt_14e85b128001qOrOGWyty1Ib0C",
+            "type": "text",
+            "text_excerpt": "AUTH_HTTP_OK",
+            "tool": null,
+            "state_status": null
+          },
+          {
+            "id": "prt_14e85b1a40017tW3iSHeyNzRzk",
+            "type": "step-finish",
+            "text_excerpt": "",
+            "tool": null,
+            "state_status": null
+          }
+        ]
+      }
+    ],
+    "permission_session": "ses_eb178a6deffeMxbFkILG5HTkNR",
+    "permission_ask": {
+      "id": "per_14e875dc400122PDpyu0JQQ8xw",
+      "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+      "permission": "bash",
+      "patterns": [
+        "sleep 1"
+      ],
+      "always": [
+        "sleep *"
+      ],
+      "metadata": {
+        "command": "sleep 1"
+      },
+      "tool": {
+        "messageID": "msg_14e875941001aHUbIlAszIW7kU",
+        "callID": "call_UTHSD6YRjU1YG4fIyGlVwyif"
+      }
+    },
+    "permission_reply_http": 200,
+    "permission_pending_after": [],
+    "permission_messages": [
+      {
+        "id": "msg_14e875931001UUmJBAO1em0ldj",
+        "role": "user",
+        "parentID": null,
+        "completed": null,
+        "error": null,
+        "parts": [
+          {
+            "type": "text",
+            "tool": null,
+            "text_excerpt": "Call the bash tool exactly once with command `sleep 1` and no other command. Wait for its result. Then reply with only LIVE_PERMISSION_OK.",
+            "state_status": null,
+            "command": null,
+            "exit": null
+          }
+        ]
+      },
+      {
+        "id": "msg_14e875941001aHUbIlAszIW7kU",
+        "role": "assistant",
+        "parentID": "msg_14e875931001UUmJBAO1em0ldj",
+        "completed": 1792318857734,
+        "error": null,
+        "parts": [
+          {
+            "type": "step-start",
+            "tool": null,
+            "text_excerpt": "",
+            "state_status": null,
+            "command": null,
+            "exit": null
+          },
+          {
+            "type": "text",
+            "tool": null,
+            "text_excerpt": "Running the requested bash command now.",
+            "state_status": null,
+            "command": null,
+            "exit": null
+          },
+          {
+            "type": "tool",
+            "tool": "bash",
+            "text_excerpt": "",
+            "state_status": "completed",
+            "command": "sleep 1",
+            "exit": 0
+          },
+          {
+            "type": "step-finish",
+            "tool": null,
+            "text_excerpt": "",
+            "state_status": null,
+            "command": null,
+            "exit": null
+          }
+        ]
+      },
+      {
+        "id": "msg_14e876210001T1HtwIW4HoM9tI",
+        "role": "assistant",
+        "parentID": "msg_14e875931001UUmJBAO1em0ldj",
+        "completed": 1792318859110,
+        "error": null,
+        "parts": [
+          {
+            "type": "step-start",
+            "tool": null,
+            "text_excerpt": "",
+            "state_status": null,
+            "command": null,
+            "exit": null
+          },
+          {
+            "type": "text",
+            "tool": null,
+            "text_excerpt": "LIVE_PERMISSION_OK",
+            "state_status": null,
+            "command": null,
+            "exit": null
+          },
+          {
+            "type": "step-finish",
+            "tool": null,
+            "text_excerpt": "",
+            "state_status": null,
+            "command": null,
+            "exit": null
+          }
+        ]
+      }
+    ],
+    "permission_events": [
+      {
+        "at": 1792318855.515674,
+        "id": "evt_14e875940001RBDMxpOQbQD9hG",
+        "type": "session.status",
+        "property_keys": [
+          "sessionID",
+          "status"
+        ],
+        "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+        "status": "busy",
+        "messageID": null,
+        "role": null,
+        "completed": null,
+        "permissionID": null,
+        "permission": null,
+        "patterns": null,
+        "reply": null,
+        "part_type": null,
+        "tool": null,
+        "tool_status": null
+      },
+      {
+        "at": 1792318855.5309,
+        "id": "evt_14e875969001YISvFeYxvprO9l",
+        "type": "session.status",
+        "property_keys": [
+          "sessionID",
+          "status"
+        ],
+        "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+        "status": "busy",
+        "messageID": null,
+        "role": null,
+        "completed": null,
+        "permissionID": null,
+        "permission": null,
+        "patterns": null,
+        "reply": null,
+        "part_type": null,
+        "tool": null,
+        "tool_status": null
+      },
+      {
+        "at": 1792318856.6484008,
+        "id": "evt_14e875dc4002XZ6aNbcMYNm8X0",
+        "type": "permission.asked",
+        "property_keys": [
+          "id",
+          "sessionID",
+          "permission",
+          "patterns",
+          "metadata",
+          "always",
+          "tool"
+        ],
+        "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+        "status": null,
+        "messageID": null,
+        "role": null,
+        "completed": null,
+        "permissionID": "per_14e875dc400122PDpyu0JQQ8xw",
+        "permission": "bash",
+        "patterns": [
+          "sleep 1"
+        ],
+        "reply": null,
+        "part_type": null,
+        "tool": null,
+        "tool_status": null
+      },
+      {
+        "at": 1792318856.6926012,
+        "id": "evt_14e875deb0011PLFmKxDDCEkgF",
+        "type": "permission.replied",
+        "property_keys": [
+          "sessionID",
+          "requestID",
+          "reply"
+        ],
+        "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+        "status": null,
+        "messageID": null,
+        "role": null,
+        "completed": null,
+        "permissionID": "per_14e875dc400122PDpyu0JQQ8xw",
+        "permission": null,
+        "patterns": null,
+        "reply": "once",
+        "part_type": null,
+        "tool": null,
+        "tool_status": null
+      },
+      {
+        "at": 1792318857.7690601,
+        "id": "evt_14e87620c0011OHOtBT5OHNgYh",
+        "type": "session.status",
+        "property_keys": [
+          "sessionID",
+          "status"
+        ],
+        "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+        "status": "busy",
+        "messageID": null,
+        "role": null,
+        "completed": null,
+        "permissionID": null,
+        "permission": null,
+        "patterns": null,
+        "reply": null,
+        "part_type": null,
+        "tool": null,
+        "tool_status": null
+      },
+      {
+        "at": 1792318857.803669,
+        "id": "evt_14e87624a001LuDgy5a2HDdQUH",
+        "type": "session.status",
+        "property_keys": [
+          "sessionID",
+          "status"
+        ],
+        "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+        "status": "busy",
+        "messageID": null,
+        "role": null,
+        "completed": null,
+        "permissionID": null,
+        "permission": null,
+        "patterns": null,
+        "reply": null,
+        "part_type": null,
+        "tool": null,
+        "tool_status": null
+      },
+      {
+        "at": 1792318859.117582,
+        "id": "evt_14e8767680017Iz296L8aTjgDR",
+        "type": "session.status",
+        "property_keys": [
+          "sessionID",
+          "status"
+        ],
+        "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+        "status": "busy",
+        "messageID": null,
+        "role": null,
+        "completed": null,
+        "permissionID": null,
+        "permission": null,
+        "patterns": null,
+        "reply": null,
+        "part_type": null,
+        "tool": null,
+        "tool_status": null
+      },
+      {
+        "at": 1792318859.11759,
+        "id": "evt_14e876769001ChnE8sdAjw0YcJ",
+        "type": "session.status",
+        "property_keys": [
+          "sessionID",
+          "status"
+        ],
+        "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+        "status": "idle",
+        "messageID": null,
+        "role": null,
+        "completed": null,
+        "permissionID": null,
+        "permission": null,
+        "patterns": null,
+        "reply": null,
+        "part_type": null,
+        "tool": null,
+        "tool_status": null
+      },
+      {
+        "at": 1792318859.1175969,
+        "id": "evt_14e87676a001uDg7b71LnpHyWT",
+        "type": "session.idle",
+        "property_keys": [
+          "sessionID"
+        ],
+        "sessionID": "ses_eb178a6deffeMxbFkILG5HTkNR",
+        "status": null,
+        "messageID": null,
+        "role": null,
+        "completed": null,
+        "permissionID": null,
+        "permission": null,
+        "patterns": null,
+        "reply": null,
+        "part_type": null,
+        "tool": null,
+        "tool_status": null
+      }
+    ],
+    "permission_success": true,
+    "not_qualified": [
+      "SSE replay",
+      "permission always/reject",
+      "permission.v2.*",
+      "native questions",
+      "abort/compaction races",
+      "autonomous subagent delegation"
+    ]
+  },
+  "watch_argument_order": [
+    {
+      "at": 1792318222.19871,
+      "seconds": 0.018,
+      "argv": [
+        "watch",
+        "ep-052b0420/ia4654bw5wiqn6iw",
+        "--until",
+        "completed",
+        "--timeout",
+        "1s"
+      ],
+      "code": 1,
+      "stdout": "",
+      "stderr": "watch: need exactly one session id: swarm watch <session>\n"
+    }
+  ],
+  "tests": {
+    "toolchain": "/Users/Nathan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.9.darwin-arm64/bin/go",
+    "environment": {
+      "GOTOOLCHAIN": "local",
+      "GOCACHE": "/private/tmp/swarm-oc-audit-gocache"
+    },
+    "commands": [
+      [
+        "go",
+        "test",
+        "./internal/adapter/...",
+        "./internal/engine/...",
+        "./internal/contextguard/...",
+        "-count=1"
+      ],
+      [
+        "go",
+        "test",
+        "-p",
+        "2",
+        "./cmd/swarm",
+        "./internal/skeleton",
+        "./internal/shim",
+        "./internal/protocol",
+        "./internal/e2e",
+        "-run",
+        "Test(Run(LS|Watch|Spawn|Send|Peek|Handoff)|HandsOff_|Supervisor_|Supervision_|E2E_(ReplayProductionPath_AgyOpencode|Scenario3_SurvivesClientClose|TypedStatusSurvivesDaemonRestart_L2)|Survival_|Pilot(Send|Await|Watch)|BackendAgentArgv)",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      [
+        "go",
+        "test",
+        "-race",
+        "-p",
+        "2",
+        "./internal/adapter/opencode",
+        "./internal/engine",
+        "./cmd/swarm",
+        "./internal/skeleton",
+        "./internal/shim",
+        "-run",
+        "Test(ParseVersion|Command_|Options_|SignalSources_|Resume_|ExtractConversationID|EnginePath_|Run(Watch|Spawn|Send|Peek|Handoff)|Supervisor_|Supervision_|Survival_)",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      [
+        "go",
+        "test",
+        "-race",
+        "./internal/engine",
+        "-count=1"
+      ]
+    ],
+    "outputs": {
+      "focused": [
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter\t0.209s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/agy\t0.292s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/claude\t0.325s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/codex\t0.311s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/detect\t8.147s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/fixtureio\t0.104s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/hermes\t0.317s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/opencode\t0.278s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/refadapter\t0.203s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/registry\t0.118s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/engine\t4.174s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/contextguard\t0.071s"
+      ],
+      "orchestration": [
+        "ok  \tgithub.com/Nathandela/swarm/cmd/swarm\t0.912s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/skeleton\t14.239s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/shim\t34.345s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/protocol\t0.689s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/e2e\t13.766s"
+      ],
+      "race": [
+        "ok  \tgithub.com/Nathandela/swarm/internal/adapter/opencode\t1.472s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/engine\t1.207s [no tests to run]",
+        "ok  \tgithub.com/Nathandela/swarm/cmd/swarm\t1.547s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/skeleton\t14.820s",
+        "ok  \tgithub.com/Nathandela/swarm/internal/shim\t44.520s"
+      ],
+      "engine-race": [
+        "ok  \tgithub.com/Nathandela/swarm/internal/engine\t26.209s"
+      ]
+    }
+  },
+  "cleanup": {
+    "native_servers_stopped": [
+      {
+        "port": 18943,
+        "pid": 95478
+      },
+      {
+        "port": 18944,
+        "pid": 6368
+      }
+    ],
+    "remaining_audit_listeners": [],
+    "isolated_daemon_stopped_pid": 6981,
+    "killed_session_ids": [
+      "ep-052b0420/ooj6xgkqgex6uput",
+      "ep-052b0420/x3riwdb4f33w7wua",
+      "ep-052b0420/yzr4my3wv4xc5naw",
+      "ep-052b0420/ijh33wtol4mftzx2",
+      "ep-052b0420/3ycbw4xdexipommf",
+      "ep-052b0420/d5exxzdmdcyox4a4",
+      "ep-052b0420/w2pgb5whz727mmgi"
+    ],
+    "remaining_running_sessions": []
+  },
+  "issues": {
+    "existing_status": "agents-tracker-93a",
+    "existing_native_integration": "agents-tracker-dwwv.6",
+    "watch_arguments": "agents-tracker-79si",
+    "handoff_worktree": "agents-tracker-xl6k",
+    "early_identity": "agents-tracker-rz40"
+  },
+  "limits": [
+    "631-second native process run, not overnight",
+    "no fresh Claude/Codex model workers",
+    "no handset or remote Linux acceptance",
+    "no machine sleep/reboot or credential-expiry testing"
+  ]
+}

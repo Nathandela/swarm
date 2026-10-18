@@ -64,6 +64,7 @@
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
 
 ## Process traces
+- [OpenCode parity and live verification](verification/opencode-parity-2026-10-18.md) — current adapter and Claude/Codex comparison, two-worker communication, daemon/provider crash and resume tests, native HTTP/SSE/permission probes, and unattended orchestration gaps
 - [Lightweight storage verification](verification/lightweight-storage.md) — live-only journal/tail, workspace prevention, crash/pressure tests, and remaining lifetime-growth work
 - [Native Linux storage gates](verification/lightweight-storage-linux.md) — complete normal/race suites, CPU/latency gates, fixture corrections, skipped coverage, and test-artifact retirement
 - [v0.18 storage rollout](verification/lightweight-storage-rollout.md) — release gates, both-host deployment, legacy-journal recovery, executed cleanup, runtime storage checks and retained work
