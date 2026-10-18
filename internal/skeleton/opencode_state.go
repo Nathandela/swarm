@@ -480,7 +480,7 @@ func (s *OpenCodeState) applyMessage(m opencode.Message, source string) OpenCode
 			return OCRefusedCap
 		}
 		if m.Agent != "" && m.Model != nil {
-			if in.agent != "" && (in.agent != m.Agent || in.providerID != m.Model.ProviderID || in.modelID != m.Model.ModelID || in.variant != m.Model.Variant) {
+			if in.agent != "" && (in.agent != m.Agent || in.providerID != m.Model.ProviderID || in.modelID != m.Model.ModelID || !sameOpenCodeVariant(in.variant, m.Model.Variant)) {
 				s.degradeStream("native input selection changed")
 				return OCIgnoredUnqualified
 			}
@@ -1019,7 +1019,7 @@ func cloneStatus(st *opencode.SessionStatus) *opencode.SessionStatus {
 }
 
 func qualifiedOpenCodePlainInput(message opencode.Message, parts []opencode.Part, in *ocInputState) bool {
-	if !message.PartsKnown || message.Agent == "" || message.Model == nil || in.compaction || !in.classified || in.synthetic || in.textTrunc || in.agent != message.Agent || in.providerID != message.Model.ProviderID || in.modelID != message.Model.ModelID || in.variant != message.Model.Variant {
+	if !message.PartsKnown || message.Agent == "" || message.Model == nil || in.compaction || !in.classified || in.synthetic || in.textTrunc || in.agent != message.Agent || in.providerID != message.Model.ProviderID || in.modelID != message.Model.ModelID || !sameOpenCodeVariant(in.variant, message.Model.Variant) {
 		return false
 	}
 	genuine := 0

@@ -30,6 +30,12 @@ type openCodeEvidence struct {
 func nativeSelectionText(value string, limit int) bool {
 	return value != "" && len(value) <= limit && !strings.ContainsFunc(value, unicode.IsControl)
 }
+
+// The native UI omits its default variant; bridge receipts spell it "default".
+func sameOpenCodeVariant(a, b string) bool {
+	return a == b || a == "" && b == "default" || a == "default" && b == ""
+}
+
 func qualifyOpenCodeAdmission(operationID string, intent openCodeSendIntent, raw json.RawMessage) (opencodebridge.Receipt, error) {
 	var row struct {
 		Info struct {
@@ -169,7 +175,7 @@ func (d *Daemon) recordOpenCodeAdmission(operationID string, intent openCodeSend
 		}
 		if len(rec.Evidence) > 0 {
 			prior, err := readOpenCodeEvidence(rec.Evidence)
-			if err != nil || !admissionMatchesIntent(prior.Receipt, operationID, intent) || prior.Receipt.Agent != receipt.Agent || *prior.Receipt.Model != *receipt.Model || prior.Receipt.Variant != receipt.Variant {
+			if err != nil || !admissionMatchesIntent(prior.Receipt, operationID, intent) || prior.Receipt.Agent != receipt.Agent || *prior.Receipt.Model != *receipt.Model || !sameOpenCodeVariant(prior.Receipt.Variant, receipt.Variant) {
 				return errors.New("native admission conflicts with retained receipt")
 			}
 			return nil

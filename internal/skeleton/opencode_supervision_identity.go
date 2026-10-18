@@ -40,7 +40,7 @@ func (d *Daemon) nativeSupervisionState(m persist.Meta) nativeSupervisionEvent {
 			continue
 		}
 		observed, err := qualifyObservedOpenCodeAdmission(owned.operation, owned.intent, input)
-		event.Owned = err == nil && observed.Agent == evidence.Receipt.Agent && *observed.Model == *evidence.Receipt.Model && observed.Variant == evidence.Receipt.Variant
+		event.Owned = err == nil && observed.Agent == evidence.Receipt.Agent && *observed.Model == *evidence.Receipt.Model && sameOpenCodeVariant(observed.Variant, evidence.Receipt.Variant)
 		break
 	}
 	return event
