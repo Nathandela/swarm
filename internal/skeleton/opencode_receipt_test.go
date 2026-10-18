@@ -196,3 +196,66 @@ func TestOpenCodeExpiredOperationCanReconcileReadOnly(t *testing.T) {
 		t.Fatal("expired receipt granted fresh execution")
 	}
 }
+
+func TestOpenCodeTerminalCheckpointPreservesOutcomeRankAfterHydration(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	cases := []struct {
+		name          string
+		before, after OpenCodeOutcome
+		delta         int64
+		replace       bool
+	}{
+		{"failure beats later completion", OpenCodeOutcomeFailed, OpenCodeOutcomeCompleted, 1, false},
+		{"cancellation beats later completion", OpenCodeOutcomeCancelled, OpenCodeOutcomeCompleted, 1, false},
+		{"decline beats later completion", OpenCodeOutcomeDeclined, OpenCodeOutcomeCompleted, 1, false},
+		{"earlier error beats completion", OpenCodeOutcomeCompleted, OpenCodeOutcomeFailed, -1, true},
+		{"equal-time error beats completion", OpenCodeOutcomeCompleted, OpenCodeOutcomeFailed, 0, true},
+		{"later equal-rank error wins", OpenCodeOutcomeFailed, OpenCodeOutcomeCancelled, 1, true},
+		{"earlier equal-rank error loses", OpenCodeOutcomeFailed, OpenCodeOutcomeCancelled, -1, false},
+		{"equal-time error preserves outcome and source", OpenCodeOutcomeFailed, OpenCodeOutcomeDeclined, 0, false},
+		{"equal completion preserves first source", OpenCodeOutcomeCompleted, OpenCodeOutcomeCompleted, 0, false},
+		{"later completion advances source", OpenCodeOutcomeCompleted, OpenCodeOutcomeCompleted, 1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, err := protocol.NewSemanticOperationID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.client.SemanticSend(id, f.request); err != nil {
+				t.Fatal(err)
+			}
+			rec, _ := f.d.core.ComposerOperation(id)
+			var intent openCodeSendIntent
+			if err := json.Unmarshal(rec.Request, &intent); err != nil {
+				t.Fatal(err)
+			}
+			input := OpenCodeInput{MessageID: intent.MessageID, Classified: true, At: intent.NotBeforeMS + 1, Outcome: tc.before, OutcomeSource: OpenCodeOutcomeSourceLive, OutcomeAt: intent.NotBeforeMS + 10}
+			view := OpenCodeView{Root: intent.Identity.RootID, Generation: intent.Identity.BackendGeneration, Inputs: []OpenCodeInput{input}}
+			f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID, view)
+			// Hydration rebuilds this derived index from retained durable evidence.
+			f.d.nativeReceipts.mu.Lock()
+			delete(f.d.nativeReceipts.sessions, f.binding.WorkerID)
+			f.d.nativeReceipts.mu.Unlock()
+			view.Inputs[0].Outcome = tc.after
+			view.Inputs[0].OutcomeSource = OpenCodeOutcomeSourceImported
+			view.Inputs[0].OutcomeAt += tc.delta
+			f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID, view)
+			rec, _ = f.d.core.ComposerOperation(id)
+			evidence, err := readOpenCodeEvidence(rec.Evidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := input
+			if tc.replace {
+				want = view.Inputs[0]
+			}
+			if evidence.Outcome != want.Outcome || evidence.OutcomeAt != want.OutcomeAt || evidence.OutcomeSource != want.OutcomeSource {
+				t.Fatalf("hydrated checkpoint = %s/%d/%s, want %s/%d/%s", evidence.Outcome, evidence.OutcomeAt, evidence.OutcomeSource, want.Outcome, want.OutcomeAt, want.OutcomeSource)
+			}
+		})
+	}
+	if f.calls.Load() != int32(len(cases)) {
+		t.Fatal("outcome reconciliation submitted a second native input")
+	}
+}
