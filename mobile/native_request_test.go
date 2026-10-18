@@ -80,3 +80,25 @@ func TestNativeDecisionOutcomeDistinguishesAdmissionAndUncertainty(t *testing.T)
 		}
 	}
 }
+
+func TestNativeAnswerRetainsOperationAfterMailboxResponseLoss(t *testing.T) {
+	for _, replyFirst := range []bool{false, true} {
+		a, sc := publicationApp(t, t.TempDir())
+		appender := &scriptedAppender{failures: 1}
+		sc.cl = appender
+		body := schema.NativeDecisionReq{Session: "m1/s1", SessionInstance: "instance", RootID: "ses_root", NativeSessionID: "ses_child", Generation: "generation", RequestID: "question", Kind: "question_reply"}
+		if replyFirst {
+			appender.onAppend = func() {
+				if err := a.core.RecordOutcome(schema.Control{Op: schema.ActionNativeDecide, OperationID: "native-lost", SessionID: body.Session, NativeDecisionReceipt: &schema.NativeDecisionReceipt{OperationID: "native-lost", Session: body.Session, State: "admitted"}}); err != nil { t.Error(err) }
+			}
+		}
+		op, err := a.appendNativeDecision(a.core, sc, "native-lost", body, []byte("exact sealed envelope"))
+		if err != nil || op == nil || op.OperationID != "native-lost" { t.Fatalf("ambiguous append discarded its operation: %+v %v", op, err) }
+		out, err := a.Outcome(op.OperationID)
+		want := "outcome_unknown"
+		if replyFirst { want = "native_admitted" }
+		if err != nil || out.Code != want || len(appender.envelopes()) != 1 { t.Fatalf("ambiguous native answer retried or overwrote proof: %+v %v", out, err) }
+		if pubs := a.core.State().PendingPublications; len(pubs) != 0 { t.Fatal("uncertain native answer was queued for later submission") }
+	}
+}
+
