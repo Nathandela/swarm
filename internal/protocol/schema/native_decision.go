@@ -96,3 +96,21 @@ type NativeDecisionOption struct {
 	Label  string `json:"label"`
 	Effect string `json:"effect"`
 }
+
+type NativeRequestsReq struct {
+	Session         string `json:"session"`
+	RequestID       string `json:"request_id,omitempty"`
+	NativeSessionID string `json:"native_session_id,omitempty"`
+}
+type NativeRequestSummary struct {
+	Kind            string `json:"kind"`
+	RequestID       string `json:"request_id"`
+	NativeSessionID string `json:"native_session_id"`
+	Summary         string `json:"summary"`
+}
+type NativeRequestsReply struct {
+	Session  string                 `json:"session"`
+	Requests []NativeRequestSummary `json:"requests,omitempty"`
+	Request  *NativeRequestView     `json:"request,omitempty"`
+	Reason   string                 `json:"reason,omitempty"`
+}

@@ -267,7 +267,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapAccountsManage,
-	CapSemanticSend, CapOpenCodeObservation,
+	CapSemanticSend, CapOpenCodeObservation, CapNativeRequests,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1380,6 +1380,10 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleSemanticSend(c)
 	case OpSemanticStatus:
 		cc.handleSemanticStatus(c)
+	case OpNativeDecide:
+		cc.handleNativeDecide(c)
+	case OpNativeRequests:
+		cc.handleNativeRequests(c)
 	case OpOperationStatus:
 		// The REAL Wave R5 handler. Names no session instance: pinned like
 		// session_launch above.
@@ -1462,8 +1466,12 @@ func (s *Server) supportedCaps() []string {
 	_, transactional := s.d.(TransactionalComposerSender)
 	_, semantic := s.d.(SemanticComposerSender)
 	_, nativeObservation := s.d.(OpenCodeObservationBackend)
+	_, nativeDecisions := s.d.(NativeDecisionApplier)
 	out := make([]string, 0, len(serverCaps))
 	for _, cap := range serverCaps {
+		if cap == CapNativeRequests && !nativeDecisions {
+			continue
+		}
 		if cap == CapOpenCodeObservation && (s.remoteTier || !nativeObservation) {
 			continue
 		}

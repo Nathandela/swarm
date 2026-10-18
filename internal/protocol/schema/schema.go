@@ -142,6 +142,8 @@ type Control struct {
 	SemanticReceipt       *SemanticMessageReceipt `json:"semantic_receipt,omitempty"`
 	NativeDecision        *NativeDecisionReq      `json:"native_decision,omitempty"`
 	NativeDecisionReceipt *NativeDecisionReceipt  `json:"native_decision_receipt,omitempty"`
+	NativeRequests        *NativeRequestsReq      `json:"native_requests,omitempty"`
+	NativeRequestsResult  *NativeRequestsReply    `json:"native_requests_result,omitempty"`
 	// TurnInterrupt is the turn_interrupt body (Wave R6 review fix-pack B7): the session
 	// plus the turn the phone RENDERED the Stop against, bound into the device signature
 	// via TurnInterruptContentHash. See schema/chat.go for why the op stopped being
