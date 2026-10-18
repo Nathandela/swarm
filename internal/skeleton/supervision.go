@@ -57,9 +57,10 @@ const supervisionRetry = 2 * time.Second
 
 // supervisionRecord is one passive child's durable supervision state (C4).
 type supervisionRecord struct {
-	Child     string `json:"child"`  // local id
-	Source    string `json:"source"` // local id of the session that receives notifications
-	LastGroup string `json:"last_group"`
+	Child              string `json:"child"`  // local id
+	Source             string `json:"source"` // local id of the session that receives notifications
+	LastGroup          string `json:"last_group"`
+	NativeDeliveredKey string `json:"native_delivered_key,omitempty"`
 	// SeenWorking gates the first ready_for_review (C2): it is set only once an OBSERVED
 	// status carries raw Turn == active. The launch baseline (Turn unknown, which Derive
 	// also maps to working) must NOT count, or a heuristic idle read right after launch
@@ -74,6 +75,7 @@ type supervisionRecord struct {
 type supervisionEvent struct {
 	Seq         uint64             `json:"seq"`
 	Attempt     uint64             `json:"attempt,omitempty"`
+	NativeKey   string             `json:"native_key,omitempty"`
 	Group       status.Group       `json:"group"`
 	Interaction status.Interaction `json:"interaction"`
 }
@@ -81,13 +83,14 @@ type supervisionEvent struct {
 // supervisor is the component. get, controlled and send are the assembly seams
 // (d.core.Get, d.srv.IsControlled, d.srv.SendInput in production; fakes in tests).
 type supervisor struct {
-	endpointID string
-	dir        string
-	retry      time.Duration
-	get        func(local string) (persist.Meta, bool)
-	getSource  func(local string) (persist.Meta, bool)
-	controlled func(local string) bool
-	send       func(local string, req protocol.SendInputReq, operationID string) error
+	endpointID  string
+	dir         string
+	retry       time.Duration
+	get         func(local string) (persist.Meta, bool)
+	getSource   func(local string) (persist.Meta, bool)
+	controlled  func(local string) bool
+	send        func(local string, req protocol.SendInputReq, operationID string) error
+	nativeEvent func(persist.Meta) nativeSupervisionEvent
 
 	mu      sync.Mutex
 	records map[string]*supervisionRecord // by child local id
@@ -105,7 +108,7 @@ func newSupervisor(endpointID, dir string, retry time.Duration,
 	get func(local string) (persist.Meta, bool),
 	getSource func(local string) (persist.Meta, bool),
 	controlled func(local string) bool,
-	send func(local string, req protocol.SendInputReq, operationID string) error) (*supervisor, error) {
+	send func(local string, req protocol.SendInputReq, operationID string) error, nativeEvent func(persist.Meta) nativeSupervisionEvent) (*supervisor, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -114,7 +117,7 @@ func newSupervisor(endpointID, dir string, retry time.Duration,
 	}
 	s := &supervisor{
 		endpointID: endpointID, dir: dir, retry: retry,
-		get: get, getSource: getSource, controlled: controlled, send: send,
+		get: get, getSource: getSource, controlled: controlled, send: send, nativeEvent: nativeEvent,
 		records: map[string]*supervisionRecord{},
 		wake:    make(chan struct{}, 1),
 		stop:    make(chan struct{}),
@@ -220,6 +223,9 @@ func (s *supervisor) evaluateLocked(r *supervisionRecord) bool {
 		s.retireLocked(r)
 		return false
 	}
+	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+		return s.evaluateNativeLocked(r, m)
+	}
 	changed := false
 	if m.Status.Turn == status.TurnActive && !r.SeenWorking {
 		r.SeenWorking = true // an OBSERVED active turn, never the launch baseline
@@ -297,6 +303,16 @@ func (s *supervisor) deliver(child, source string, ev supervisionEvent) {
 	if !s.sourceSafe(source) || !s.stillPending(child, ev.Seq) {
 		return
 	}
+	m, exists := s.get(child)
+	if ev.NativeKey != "" || exists && m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+		if !exists || ev.NativeKey == "" || s.nativeEvent == nil {
+			return
+		}
+		current := s.nativeEvent(m)
+		if !current.Known || current.Key != ev.NativeKey {
+			return
+		}
+	}
 	req := protocol.SendInputReq{Text: supervisionNotification(protocol.NamespacedID(s.endpointID, child), ev), Submit: true}
 	operationID := supervisionOperationID(child, source, ev)
 	if err := s.send(source, req, operationID); err != nil {
@@ -314,6 +330,12 @@ func (s *supervisor) deliver(child, source string, ev supervisionEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.records[child]
+	if ok && ev.NativeKey != "" {
+		r.NativeDeliveredKey = ev.NativeKey
+		if r.Pending == nil || r.Pending.Seq != ev.Seq {
+			s.persistLocked(r)
+		}
+	}
 	if !ok || r.Pending == nil || r.Pending.Seq != ev.Seq {
 		return // replaced or retired while in flight; the newer state has its own delivery
 	}

@@ -1279,6 +1279,11 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 // core's, its firing order relative to Launch's return is the core's to change, and the
 // two are one authoring function with two call sites rather than two rules.
 func (d *Daemon) authorLaunchedSessionCapabilities(m persist.Meta) {
+	defer func() {
+		if d.sup != nil && m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+			d.sup.signal(m.ID)
+		}
+	}()
 	inst, ad, version, ok := d.sessionCapabilityInputs(m.ID, m.AgentType, m.ShimPID, m.ShimStartTime)
 	if !ok {
 		return // no bindable instance: T2-a's honest status card

@@ -587,7 +587,14 @@ func Serve(cfg Config) (*Daemon, error) {
 			d.composerOutcomeUnresolved(local)
 	}
 	supervisorUnsafeSource := func(local string) bool {
-		return baseUnsafeSource(local) || d.directInputUnresolved(local) || d.composerRecycleInFlight(local)
+		if baseUnsafeSource(local) || d.composerRecycleInFlight(local) {
+			return true
+		}
+		m, ok := d.core.Get(local)
+		if ok && m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+			return false
+		} // Native Prompt and shim writer recheck the actual draft at dispatch.
+		return d.directInputUnresolved(local)
 	}
 	// A successfully signalled in-process recycle is unsafe to begin again while
 	// Core still reports Running. Restored claims deliberately carry
@@ -613,7 +620,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		d.remoteSrv.SetInputGateFunc(inputGate)
 	}
 	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
-		d.supervisionMeta, d.core.Get, supervisorUnsafeSource, d.sendSupervision)
+		d.supervisionMeta, d.core.Get, supervisorUnsafeSource, d.sendSupervision, d.nativeSupervisionState)
 	if err != nil {
 		return nil, err // defer'd cleanup tears down d.api + core
 	}

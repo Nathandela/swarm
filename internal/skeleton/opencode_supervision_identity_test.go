@@ -93,6 +93,11 @@ func TestNativeSupervisionKeyUsesExactInputAndRequestContent(t *testing.T) {
 	m.ConversationID = "ses_" + strings.Repeat("a", 32)
 	m.OpenCodeBinding = &persist.OpenCodeBinding{Generation: strings.Repeat("b", 32), Phase: persist.OpenCodePhaseReady, NativeCreatedAtMS: 123}
 	v := OpenCodeView{Root: m.ConversationID, Generation: m.OpenCodeBinding.Generation, BusyKnown: true, CurrentScopeKnown: true, Inputs: []OpenCodeInput{{MessageID: "msg_one", Classified: true, Outcome: OpenCodeOutcomeCompleted, OutcomeSource: OpenCodeOutcomeSourceLive}}}
+	m.OpenCodeBinding.Initial = &persist.OpenCodeInitial{Phase: persist.OpenCodeInitialStarted}
+	if openCodeSupervisionEvent(m, v).Known {
+		t.Fatal("pre-admission native initial outcome became notification authority")
+	}
+	m.OpenCodeBinding.Initial = nil
 	a := openCodeSupervisionEvent(m, v)
 	v.Epoch++
 	v.Inputs[0].OutcomeSource = OpenCodeOutcomeSourceImported

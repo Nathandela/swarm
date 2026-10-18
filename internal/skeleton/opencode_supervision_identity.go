@@ -1,0 +1,117 @@
+package skeleton
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"sort"
+
+	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/status"
+)
+
+type nativeSupervisionEvent struct {
+	Key          string
+	Known, Fresh bool
+}
+
+func (d *Daemon) nativeSupervisionState(m persist.Meta) nativeSupervisionEvent {
+	view, _ := d.openCodeView(m.ID)
+	return openCodeSupervisionEvent(m, view)
+}
+
+// Native identity survives observer hydration; epochs and request-card expiry are not events.
+func openCodeSupervisionEvent(m persist.Meta, view OpenCodeView) nativeSupervisionEvent {
+	b := m.OpenCodeBinding
+	if b == nil || b.Phase != persist.OpenCodePhaseReady || b.NativeCreatedAtMS <= 0 {
+		return nativeSupervisionEvent{}
+	}
+	key := func(value any) string {
+		raw, _ := json.Marshal([]any{m.ConversationID, b.NativeCreatedAtMS, value})
+		return fmt.Sprintf("%x", sha256.Sum256(raw))
+	}
+	if status.Derive(m.Status) == status.GroupCompleted {
+		return nativeSupervisionEvent{Key: key([]string{"process", b.Generation, string(m.Status.Process)}), Known: true, Fresh: true}
+	}
+	if b.Initial != nil && b.Initial.Phase != persist.OpenCodeInitialAdmitted {
+		return nativeSupervisionEvent{}
+	}
+	if view.Root != m.ConversationID || view.Generation != b.Generation || view.Degraded || !view.BusyKnown || !view.CurrentScopeKnown {
+		return nativeSupervisionEvent{}
+	}
+	if len(view.Pending) > 0 {
+		if len(view.Pending) > 128 {
+			return nativeSupervisionEvent{}
+		}
+		keys := make([]string, 0, len(view.Pending))
+		for _, request := range view.Pending {
+			if len(request.Raw) == 0 || len(request.Raw) > 32<<10 {
+				return nativeSupervisionEvent{}
+			}
+			var content map[string]any
+			decoder := json.NewDecoder(bytes.NewReader(request.Raw))
+			decoder.UseNumber()
+			if decoder.Decode(&content) != nil || content == nil || content["id"] != request.ID || content["sessionID"] != request.SessionID {
+				return nativeSupervisionEvent{}
+			}
+			keys = append(keys, key([]any{request.Kind, request.SessionID, request.ID, content}))
+		}
+		sort.Strings(keys)
+		return nativeSupervisionEvent{Key: key(keys), Known: true, Fresh: true}
+	}
+	if view.Busy || view.Current != nil {
+		return nativeSupervisionEvent{Known: true}
+	}
+	var latest *OpenCodeInput
+	for i := range view.Inputs {
+		input := &view.Inputs[i]
+		if !input.Classified || input.Synthetic {
+			continue
+		}
+		if latest == nil || input.At > latest.At || input.At == latest.At && input.MessageID > latest.MessageID {
+			latest = input
+		}
+	}
+	if latest == nil {
+		return nativeSupervisionEvent{Known: true}
+	}
+	switch latest.Outcome {
+	case OpenCodeOutcomeCompleted, OpenCodeOutcomeFailed, OpenCodeOutcomeCancelled, OpenCodeOutcomeDeclined:
+	default:
+		return nativeSupervisionEvent{}
+	}
+	return nativeSupervisionEvent{Key: key([]string{"input", latest.MessageID, string(latest.Outcome)}), Known: true, Fresh: latest.OutcomeSource == OpenCodeOutcomeSourceLive || latest.OutcomeSource == OpenCodeOutcomeSourceReconciled}
+}
+
+func (s *supervisor) evaluateNativeLocked(r *supervisionRecord, m persist.Meta) bool {
+	if s.nativeEvent == nil {
+		return r.Pending != nil
+	}
+	event := s.nativeEvent(m)
+	if !event.Known {
+		return r.Pending != nil
+	}
+	if event.Key == "" || event.Key == r.NativeDeliveredKey {
+		if r.Pending != nil {
+			r.Pending = nil
+			s.persistLocked(r)
+		}
+		return false
+	}
+	if r.Pending != nil && r.Pending.NativeKey == event.Key {
+		return true
+	}
+	if !event.Fresh {
+		if r.Pending != nil {
+			r.Pending = nil
+			s.persistLocked(r)
+		}
+		return false
+	}
+	r.Seq++
+	r.LastGroup = string(status.Derive(m.Status))
+	r.Pending = &supervisionEvent{Seq: r.Seq, NativeKey: event.Key, Group: status.Derive(m.Status), Interaction: m.Status.Interaction}
+	s.persistLocked(r)
+	return true
+}
