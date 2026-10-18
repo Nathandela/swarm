@@ -2,6 +2,8 @@ package phonecore
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -446,16 +448,26 @@ func settleComposerItems(st *State) {
 		if echoed.Source != "phone" || echoed.OperationID == "" {
 			continue
 		}
+		fullHash, clipped := "", false
 		if echoed.Kind != KindUserMessage {
 			w, ok := decodeNativeItem(echoed.Body)
-			if !ok || w.Kind != "message_snapshot" || w.Role != "user" || w.Provenance == "imported" || w.Truncated || echoed.Truncated || w.Source != echoed.Source || w.OperationID != echoed.OperationID || w.Text != echoed.Text {
+			if !ok || w.Kind != "message_snapshot" || w.Role != "user" || w.Provenance == "imported" || w.Source != echoed.Source || w.OperationID != echoed.OperationID || w.Text != echoed.Text {
 				continue
 			}
+			fullHash, clipped = w.InputSHA256, w.Truncated || echoed.Truncated
 		}
 		for i := range st.PendingPublications {
 			p := st.PendingPublications[i]
 			if p.Kind == PublicationComposer && p.OperationID == echoed.OperationID &&
-				p.SessionID == echoed.SessionID && p.Text == echoed.Text {
+				p.SessionID == echoed.SessionID {
+				exact := !clipped && p.Text == echoed.Text
+				if fullHash != "" {
+					hash := sha256.Sum256([]byte(p.Text))
+					exact = hex.EncodeToString(hash[:]) == fullHash
+				}
+				if !exact {
+					continue
+				}
 				st.PendingPublications = removePublicationAt(st.PendingPublications, i)
 				delete(st.OpOutcomes, p.OperationID)
 				break

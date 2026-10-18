@@ -16,7 +16,7 @@ func TestNativeComposerClippedEchoRequiresExactQualifiedFullInputHash(t *testing
 	hash := sha256.Sum256([]byte(text))
 	for _, tc := range []struct {
 		name, hash, role, source, operation, provenance string
-		delivered bool
+		delivered                                       bool
 	}{
 		{"exact", hex.EncodeToString(hash[:]), "user", "phone", "op-native", "live", true},
 		{"no_hash", "", "user", "phone", "op-native", "live", false},
