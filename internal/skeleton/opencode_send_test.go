@@ -38,12 +38,13 @@ type openCodeSendFixture struct {
 	dispatchEntered      chan struct{}
 	dispatchRelease      chan struct{}
 	historyPagingFail    atomic.Bool
+	nativeEvents         chan opencodebridge.Event
 }
 
 // The real daemon, shim writer and owner protocol surround a private native bridge fixture.
 func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture)) *openCodeSendFixture {
 	t.Helper()
-	f := &openCodeSendFixture{dispatchEntered: make(chan struct{}, 4), dispatchRelease: make(chan struct{})}
+	f := &openCodeSendFixture{dispatchEntered: make(chan struct{}, 4), dispatchRelease: make(chan struct{}), nativeEvents: make(chan opencodebridge.Event, 8)}
 	for _, option := range configure {
 		option(f)
 	}
@@ -100,7 +101,18 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 			frame, _ := json.Marshal(opencodebridge.Event{Type: "swarm.bridge.connected", Properties: props})
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", frame)
 			w.(http.Flusher).Flush()
-			<-r.Context().Done()
+			for {
+				select {
+				case event := <-f.nativeEvents:
+					frame, _ := json.Marshal(event)
+					if _, err := fmt.Fprintf(w, "data: %s\n\n", frame); err != nil {
+						return
+					}
+					w.(http.Flusher).Flush()
+				case <-r.Context().Done():
+					return
+				}
+			}
 		case "/snapshot":
 			if f.historyPagingFail.Load() && r.URL.Query().Get("before") == "older" {
 				w.WriteHeader(http.StatusServiceUnavailable)

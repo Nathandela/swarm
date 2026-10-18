@@ -1,8 +1,15 @@
 package skeleton
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/opencodebridge"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -161,5 +168,141 @@ func TestOpenCodePhonePacketLostNativeReplyNeverReposts(t *testing.T) {
 	}
 	if f.calls.Load() != 1 {
 		t.Fatalf("response loss/recovery caused%d native writes", f.calls.Load())
+	}
+}
+
+// The in-memory transport carries the production RelaySink's sealed journal envelopes
+// into the durable phone receive path. It does not stand in for any authorization decision.
+type nativePhoneJournalMailbox struct {
+	core   *phonecore.Core
+	cursor atomic.Uint64
+}
+
+func (m *nativePhoneJournalMailbox) MailboxAppend(_ context.Context, _ string, raw []byte) (uint64, error) {
+	cursor := m.cursor.Add(1)
+	_, err := m.core.Router().AcceptCommit(raw, cursor)
+	return cursor, err
+}
+
+func TestOpenCodePhonePacketComposerEchoSettlesDurableBubble(t *testing.T) {
+	for _, text := range []string{"genuine phone native input", strings.Repeat("<", 4096)} {
+		t.Run(map[bool]string{false: "plain", true: "clipped_full_hash"}[len(text) == 4096], func(t *testing.T) {
+			d, socket := assembleWithRemote(t)
+			f := newOpenCodeSendFixture(t, func(f *openCodeSendFixture) { f.d = d })
+			caps, ok := d.sessionCapabilities(f.binding.WorkerID)
+			if !ok || !caps.NativeComposer || caps.StructuredChat {
+				t.Fatalf("native composer lacks qualified production proof: %+v", caps)
+			}
+			phone, err := phonecore.Resume(phonecore.Config{Dir: t.TempDir(), Machine: d.api.endpointID, WakeSealer: s18NewSealer(t), ContentSealer: s18NewSealer(t)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			signer := phone.KeyStore()
+			if err := d.api.devices.Add(device.Record{DeviceID: device.DeviceIDFor(signer.CommandSigningPublic()), Name: "native packet phone", NoiseStaticPub: make([]byte, 32), RelayAuthPub: make([]byte, 32), CommandSignPub: signer.CommandSigningPublic(), RecipientPub: signer.RecipientPublic(), Capability: device.CapFull, PairedAt: time.Now(), GrantedEpoch: 1}); err != nil {
+				t.Fatal(err)
+			}
+			keys, err := crypto.NewEpochKeys()
+			if err != nil {
+				t.Fatal(err)
+			}
+			authority := bytes.Repeat([]byte{0x44}, 32)
+			if err := phone.Mutate(func(st *phonecore.State) {
+				st.EpochID = 1
+				st.Keys = keys
+				st.MachineRelayAuthPub = authority
+				st.OperatorNamespace = "owner"
+				st.RoutingID = "native-phone-packet"
+			}); err != nil {
+				t.Fatal(err)
+			}
+			body := f.request
+			body.Text = text
+			const operation = "phone:packet-composer"
+			cmd, err := phonecore.SignComposerSend(signer, phonecore.ComposerSendInput{Machine: d.api.endpointID, OperationID: operation, ExpiresAt: time.Now().Add(time.Minute), Session: body.Session, SessionInstance: body.SessionInstance, Text: body.Text})
+			if err != nil {
+				t.Fatal(err)
+			}
+			publication := phonecore.PendingPublication{LogicalID: operation, OperationID: operation, Kind: phonecore.PublicationComposer, SessionID: body.Session, SessionInstance: body.SessionInstance, Text: body.Text, Machine: d.api.endpointID, EpochID: 1, Target: "machine-mailbox", AuthorityPub: authority, Command: cmd, Composer: &body, CreatedAt: time.Now()}
+			if err := phone.PreparePublication(publication); err != nil {
+				t.Fatal(err)
+			}
+			seq, err := phone.Seq().NextCommand()
+			if err != nil {
+				t.Fatal(err)
+			}
+			packet, err := phonecore.SealComposerSendEnvelope(keys.ContentKey, 1, seq, cmd, &body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := phone.SealPublication(operation, seq, packet); err != nil {
+				t.Fatal(err)
+			}
+			mailbox := &nativePhoneJournalMailbox{core: phone}
+			sink := remotegw.NewRelaySink(remotegw.RelayConfig{Appender: mailbox, Target: "phone-mailbox", Machine: d.api.endpointID, EpochID: 1, Key: keys.ContentKey, SenderKeyID: [8]byte{9}})
+			gw := remotegw.New(socket, sink)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- gw.RunJournal(ctx) }()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("native journal gateway did not stop")
+				}
+			})
+			frame, err := remotegw.OpenMailboxFrame(crypto.NewMailboxReceiver(), keys.ContentKey, packet)
+			if err != nil || frame.Command.Action != protocol.ActionComposerSend {
+				t.Fatalf("phone composer envelope: %+v %v", frame, err)
+			}
+			reply, err := gw.ForwardCommand(protocol.OpComposerSend, frame.Command)
+			if err != nil || reply.Op == protocol.OpError {
+				t.Fatalf("signed phone composer refused: %+v %v", reply, err)
+			}
+			if f.calls.Load() != 1 || len(phone.PendingPublications()) != 1 {
+				t.Fatal("delivery acknowledgement fabricated native echo settlement")
+			}
+			record, exists := d.core.ComposerOperation(operation)
+			var intent openCodeSendIntent
+			if !exists || json.Unmarshal(record.Request, &intent) != nil || intent.Source != adapter.SourcePhone {
+				t.Fatalf("phone source was lost: %+v", intent)
+			}
+			f.rowAvailable.Store(true)
+			row := f.nativeRow.Load().(json.RawMessage)
+			var native struct {
+				Info json.RawMessage `json:"info"`
+			}
+			if err := json.Unmarshal(row, &native); err != nil {
+				t.Fatal(err)
+			}
+			props, _ := json.Marshal(map[string]json.RawMessage{"info": native.Info})
+			f.nativeEvents <- opencodebridge.Event{Type: "message.updated", Properties: props}
+			until := time.Now().Add(5 * time.Second)
+			for len(phone.PendingPublications()) != 0 && time.Now().Before(until) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if len(phone.PendingPublications()) != 0 {
+				t.Fatalf("native user journal did not settle phone bubble; sink error=%v", sink.Err())
+			}
+			wanted := sha256.Sum256([]byte(text))
+			found := false
+			for _, item := range phone.Router().Items().Session(body.Session) {
+				var wire struct {
+					Role, Source, Provenance string
+					OperationID              string `json:"operation_id"`
+					Hash                     string `json:"input_sha256"`
+					Truncated                bool
+				}
+				if json.Unmarshal(item.Body, &wire) == nil && wire.OperationID == operation {
+					if wire.Role != "user" || wire.Source != "phone" || wire.Provenance != "live" || wire.Hash != hex.EncodeToString(wanted[:]) || wire.Truncated != (len(text) == 4096) {
+						t.Fatalf("native phone echo lost exact source/body authority: %+v", wire)
+					}
+					found = true
+				}
+			}
+			if !found || f.calls.Load() != 1 {
+				t.Fatal("native phone settlement had no exact native user row or wrote twice")
+			}
+		})
 	}
 }
