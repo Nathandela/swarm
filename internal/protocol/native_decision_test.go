@@ -14,10 +14,14 @@ import (
 type nativeDecisionStub struct {
 	*stubDaemon
 	calls atomic.Int32
+	apply func(string, NativeDecisionReq) (NativeDecisionReceipt, ErrorCode, error)
 }
 
 func (s *nativeDecisionStub) ApplyNativeDecision(_, id string, req NativeDecisionReq) (NativeDecisionReceipt, ErrorCode, error) {
 	s.calls.Add(1)
+	if s.apply != nil {
+		return s.apply(id, req)
+	}
 	return NativeDecisionReceipt{OperationID: id, Session: req.Session, SessionInstance: req.SessionInstance, RootID: req.RootID, Generation: req.Generation, NativeSessionID: req.NativeSessionID, RequestID: req.RequestID, Kind: req.Kind, State: "admitted", NativeEffect: "single_request"}, "", nil
 }
 func nativeDecisionBody(session string) NativeDecisionReq {
@@ -81,5 +85,48 @@ func TestNativeDecisionInvalidBodyCannotReachBackend(t *testing.T) {
 		if response := rc.readControl(); response.Op != OpError || s.calls.Load() != 0 {
 			t.Fatalf("invalid request reached backend: %+v", response)
 		}
+	}
+}
+
+func TestNativeDecisionPreservesOnlyCorrelatedDefiniteRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*NativeDecisionReceipt)
+		typed  bool
+	}{
+		{name: "stale approval", typed: true},
+		{name: "input busy", typed: true},
+		{name: "another target", change: func(r *NativeDecisionReceipt) { r.NativeSessionID = "ses_other" }},
+		{name: "another instance", change: func(r *NativeDecisionReceipt) { r.SessionInstance = "other" }},
+		{name: "uncertain effect", change: func(r *NativeDecisionReceipt) { r.NativeEffect = "single_request" }},
+		{name: "uncertain result", change: func(r *NativeDecisionReceipt) { r.State = "uncertain" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &nativeDecisionStub{stubDaemon: newStubDaemon()}
+			s.apply = func(id string, req NativeDecisionReq) (NativeDecisionReceipt, ErrorCode, error) {
+				receipt := NativeDecisionReceipt{OperationID: id, Session: req.Session, SessionInstance: req.SessionInstance, RootID: req.RootID, Generation: req.Generation, NativeSessionID: req.NativeSessionID, RequestID: req.RequestID, Kind: req.Kind, State: "rejected", NativeEffect: "none", Reason: tc.name}
+				if tc.change != nil {
+					tc.change(&receipt)
+				}
+				return receipt, CodeInvalidField, errors.New(tc.name)
+			}
+			c, err := Dial(serveOwnerAPI(t, s), []string{CapNativeRequests})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = c.Close() }()
+			req := nativeDecisionBody(c.EndpointID() + "/sess1")
+			receipt, err := c.NativeDecide("definite-rejection", req)
+			if tc.typed {
+				if err != nil || receipt.State != "rejected" || receipt.NativeEffect != "none" || receipt.Reason != tc.name {
+					t.Fatalf("definite rejection lost: %+v %v", receipt, err)
+				}
+			} else if err == nil || receipt.State != "" {
+				t.Fatalf("uncorrelated or nondefinite result escaped coded error: %+v %v", receipt, err)
+			}
+			if s.calls.Load() != 1 {
+				t.Fatal("decision was retried")
+			}
+		})
 	}
 }

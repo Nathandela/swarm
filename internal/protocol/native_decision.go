@@ -91,11 +91,15 @@ func (c *Client) NativeDecide(operationID string, req NativeDecisionReq) (Native
 		return NativeDecisionReceipt{}, fmt.Errorf("native decision: %s (%s)", response.Error, response.ErrorCode)
 	}
 	receipt := response.NativeDecisionReceipt
-	if response.Op != OpNativeDecide || response.OperationID != operationID || receipt == nil || receipt.OperationID != operationID || receipt.Session != req.Session || receipt.SessionInstance != req.SessionInstance || receipt.RootID != req.RootID || receipt.Generation != req.Generation || receipt.NativeSessionID != req.NativeSessionID || receipt.RequestID != req.RequestID || receipt.Kind != req.Kind || !slices.Contains([]string{"admitted", "rejected", "uncertain"}, receipt.State) {
+	if response.Op != OpNativeDecide || response.OperationID != operationID || receipt == nil || !nativeDecisionReceiptMatches(*receipt, operationID, req) || !slices.Contains([]string{"admitted", "rejected", "uncertain"}, receipt.State) {
 		_ = c.Close()
 		return NativeDecisionReceipt{}, errors.New("native decision receipt identity is unconfirmed")
 	}
 	return *receipt, nil
+}
+
+func nativeDecisionReceiptMatches(receipt NativeDecisionReceipt, operationID string, req NativeDecisionReq) bool {
+	return receipt.OperationID == operationID && receipt.Session == req.Session && receipt.SessionInstance == req.SessionInstance && receipt.RootID == req.RootID && receipt.Generation == req.Generation && receipt.NativeSessionID == req.NativeSessionID && receipt.RequestID == req.RequestID && receipt.Kind == req.Kind
 }
 
 func (cc *clientConn) handleNativeDecide(c Control) {
@@ -126,7 +130,7 @@ func (cc *clientConn) handleNativeDecide(c Control) {
 		return
 	}
 	receipt, code, err := applier.ApplyNativeDecision(cc.endpointID, c.OperationID, *c.NativeDecision)
-	if err != nil {
+	if err != nil && !(receipt.State == "rejected" && receipt.NativeEffect == "none" && nativeDecisionReceiptMatches(receipt, c.OperationID, *c.NativeDecision)) {
 		cc.replyErrorCode("native decision: "+err.Error(), code)
 		return
 	}

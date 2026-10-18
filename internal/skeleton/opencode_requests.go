@@ -82,7 +82,7 @@ func (d *Daemon) openCodeRequestCards(local string, view OpenCodeView) ([]protoc
 		if request.Kind == "permission" {
 			card.Decisions = []protocol.NativeDecisionOption{
 				{ID: "once", Label: "Allow this request once", Effect: "single_request"},
-				{ID: "always", Label: "Allow these patterns and matching requests in this session", Effect: "approve_native_patterns_and_matching_session_requests"},
+				{ID: "always", Label: "Approve native patterns; allow matching pending requests in this session", Effect: "approve_native_patterns_and_matching_session_requests"},
 				{ID: "reject", Label: "Reject pending permission requests in this session", Effect: "reject_session_pending_permissions"},
 			}
 		} else {
