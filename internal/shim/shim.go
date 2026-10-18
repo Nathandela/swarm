@@ -274,6 +274,7 @@ func Run(cfg Config) (agentExit int, err error) {
 		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, cmd.Process.Pid, cfg.GraceTimeout, cfg.Metrics)
 		srv.managedSignals = managed != nil
 		srv.ptyIn.embargo = embargo
+		srv.openCode = cfg.OpenCode
 		replies = wireReplies(emu, srv)
 		startPlanes()
 	} else {
@@ -296,6 +297,7 @@ func Run(cfg Config) (agentExit int, err error) {
 		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, 0, cfg.GraceTimeout, cfg.Metrics)
 		srv.managedSignals = managed != nil
 		srv.ptyIn.embargo = embargo
+		srv.openCode = cfg.OpenCode
 		replies = wireReplies(emu, srv)
 		startPlanes()
 

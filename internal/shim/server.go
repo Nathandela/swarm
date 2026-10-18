@@ -1,7 +1,9 @@
 package shim
 
 import (
+	"encoding/json"
 	"errors"
+	"github.com/Nathandela/swarm/internal/opencodebridge"
 	"log"
 	"net"
 	"os"
@@ -56,6 +58,7 @@ var testHookAfterPTYResize func()
 // the hub still couples the pipeline to at most one live subscriber (S10), so a
 // later attach supersedes an earlier one.
 type server struct {
+	openCode       *OpenCodeConfig
 	hub            *hub
 	ptmx           *os.File
 	ptyIn          *ptyWriter // serialized writer to the PTY master (TDataIn + emulator replies)
@@ -233,7 +236,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, AccountInputEmbargo: true, OpenCodeInputEmbargo: true})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, AccountInputEmbargo: true, OpenCodeInputEmbargo: true, OpenCodeDispatch: s.openCode != nil})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -243,6 +246,25 @@ func (s *server) serveConn(conn net.Conn) {
 				continue // ignore attach/resize/signal until the client has said hello
 			}
 			switch ctrl.Type {
+			case shimwire.TypeOpenCodeDispatch:
+				result := shimwire.Control{Type: shimwire.TypeOpenCodeDispatchResult}
+				var req opencodebridge.DispatchRequest
+				if len(ctrl.OpenCodeRequest) > 64<<10 || json.Unmarshal(ctrl.OpenCodeRequest, &req) != nil {
+					result.Refused = "native_binding_mismatch"
+				} else {
+					receipt, err := s.ptyIn.dispatchOpenCode(s.openCode, req)
+					switch {
+					case err == nil:
+						result.OpenCodeReceipt, _ = json.Marshal(receipt)
+					case errors.Is(err, errNativeDispatchUnknown):
+						result.OpenCodeError = "native_dispatch_uncertain"
+					case errors.Is(err, errInputBusy):
+						result.Refused = shimwire.RefusedInputBusy
+					default:
+						result.Refused = "native_binding_mismatch"
+					}
+				}
+				cw.writeControl(result)
 			case shimwire.TypeOpenCodeEmbargoRelease:
 				result := shimwire.Control{Type: shimwire.TypeOpenCodeEmbargoResult}
 				if s.ptyIn.embargo == nil || s.ptyIn.embargo.file != OpenCodeInputEmbargoFile || s.ptyIn.embargo.release(ctrl.IncidentID, ctrl.Token) != nil {

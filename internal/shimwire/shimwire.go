@@ -17,6 +17,8 @@ import "encoding/json"
 
 // Message type vocabulary, shared verbatim between daemon and shim.
 const (
+	TypeOpenCodeDispatch       = "opencode_dispatch"
+	TypeOpenCodeDispatchResult = "opencode_dispatch_result"
 	TypeOpenCodeEmbargoRelease = "opencode_embargo_release"
 	TypeOpenCodeEmbargoResult  = "opencode_embargo_result"
 	RefusedOpenCodeStarting    = "opencode_starting"
@@ -107,17 +109,21 @@ const (
 // Control is the single message envelope for every shimwire control message;
 // which fields are meaningful depends on Type.
 type Control struct {
-	OpenCodeInputEmbargo bool   `json:"opencode_input_embargo,omitempty"`
-	AccountInputEmbargo  bool   `json:"account_input_embargo,omitempty"`
-	IncidentID           string `json:"incident_id,omitempty"`
-	Token                string `json:"token,omitempty"`
-	Type                 string `json:"type"`
-	WireVersion          int    `json:"wire_version,omitempty"` // hello
-	Cols                 int    `json:"cols,omitempty"`         // resize
-	Rows                 int    `json:"rows,omitempty"`         // resize
-	Sig                  string `json:"sig,omitempty"`          // signal: SigTerm|SigKill
-	ExitCode             *int   `json:"exit_code,omitempty"`    // exit_report
-	ExitSignal           string `json:"exit_signal,omitempty"`  // exit_report
+	OpenCodeDispatch     bool            `json:"opencode_dispatch,omitempty"`
+	OpenCodeRequest      json.RawMessage `json:"opencode_request,omitempty"`
+	OpenCodeReceipt      json.RawMessage `json:"opencode_receipt,omitempty"`
+	OpenCodeError        string          `json:"opencode_error,omitempty"`
+	OpenCodeInputEmbargo bool            `json:"opencode_input_embargo,omitempty"`
+	AccountInputEmbargo  bool            `json:"account_input_embargo,omitempty"`
+	IncidentID           string          `json:"incident_id,omitempty"`
+	Token                string          `json:"token,omitempty"`
+	Type                 string          `json:"type"`
+	WireVersion          int             `json:"wire_version,omitempty"` // hello
+	Cols                 int             `json:"cols,omitempty"`         // resize
+	Rows                 int             `json:"rows,omitempty"`         // resize
+	Sig                  string          `json:"sig,omitempty"`          // signal: SigTerm|SigKill
+	ExitCode             *int            `json:"exit_code,omitempty"`    // exit_report
+	ExitSignal           string          `json:"exit_signal,omitempty"`  // exit_report
 	// SnapshotChunking is an OPTIONAL hello capability advertised by BOTH peers:
 	// the daemon sets it in its hello to tell the shim it can reassemble a chunked
 	// snapshot, and the shim sets it in its hello reply to tell the daemon it will
@@ -168,6 +174,7 @@ type Control struct {
 // them (e.g. protocol.readSnapshot reassembles a chunked snapshot only when
 // SnapshotChunking was advertised — R1.2.2).
 type Caps struct {
+	OpenCodeDispatch     bool
 	OpenCodeInputEmbargo bool
 	AccountInputEmbargo  bool
 	SnapshotChunking     bool
@@ -179,6 +186,7 @@ type Caps struct {
 // Caps extracts the capability fields from a hello Control.
 func (c Control) Caps() Caps {
 	return Caps{
+		OpenCodeDispatch:     c.OpenCodeDispatch,
 		OpenCodeInputEmbargo: c.OpenCodeInputEmbargo,
 		AccountInputEmbargo:  c.AccountInputEmbargo,
 		SnapshotChunking:     c.SnapshotChunking,
