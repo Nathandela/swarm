@@ -145,6 +145,24 @@ class RelayTrustImplTest {
         -----END CERTIFICATE-----
     """.trimIndent()
 
+    /**
+     * Android's extension requires a public three-argument overload that the host JDK's
+     * SunJSSE manager does not expose. Keep actual JDK CA verification behind that test-only
+     * signature; RelayTrustImpl still performs its independent SAN/hostname verification.
+     */
+    class JvmTrustManagerAdapter(private val delegate: X509TrustManager) :
+        X509TrustManager by delegate {
+        @Suppress("UNUSED_PARAMETER")
+        fun checkServerTrusted(
+            chain: Array<X509Certificate>,
+            authType: String,
+            host: String,
+        ): List<X509Certificate> {
+            delegate.checkServerTrusted(chain, authType)
+            return chain.toList()
+        }
+    }
+
     /** A real X509TrustManagerExtensions over a trust store holding ONLY the given CA PEM. */
     private fun trustManagerFor(caPem: String): X509TrustManagerExtensions {
         val ks = KeyStore.getInstance(KeyStore.getDefaultType())
@@ -156,7 +174,7 @@ class RelayTrustImplTest {
         val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
         tmf.init(ks)
         val tm = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
-        return X509TrustManagerExtensions(tm)
+        return X509TrustManagerExtensions(JvmTrustManagerAdapter(tm))
     }
 
     @Test
@@ -247,10 +265,8 @@ class RelayTrustImplTest {
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
 
         // The exact reflective signature android.net.http.X509TrustManagerExtensions locates
-        // and delegates to (Conscrypt's own convention, shared with the desktop JDK's own
-        // trust manager -- the reason trustingExtensions() above, built from a plain
-        // TrustManagerFactory, already exercises this delegate path rather than the 2-arg
-        // fallback). PUBLIC on a PRIVATE nested class: the platform locates the method (it is
+        // and delegates to; JvmTrustManagerAdapter exposes the same Android signature above.
+        // PUBLIC on a PRIVATE nested class: the platform locates the method (it is
         // public) but cannot INVOKE it (the enclosing class is not), which is exactly the
         // "delegate could not be consulted" fault this test means to exercise -- not a chain
         // or certificate problem at all.
