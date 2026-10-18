@@ -218,7 +218,19 @@ alongside the group.
 | `supervision`   | string          | the persisted supervision mode of a handoff child: `passive`, `manual` or `none` (ADR-010 Amendment 3 C1); absent when none |
 | `supervision_pending` | bool      | an attention event of this handoff child awaits its source; live supervisor state, sampled like `remote_controlled` (ADR-010 Amendment 3 C5); absent when false |
 | `capabilities`  | `*SessionCapabilities` | daemon-authored per-session capability record (ADR-017 T2), absent on an older daemon or a session not yet stamped -- see "The `SessionCapabilities` record" below. Shares its wire name with `Control.capabilities` (the hello negotiated-capability list); the two are unrelated fields of unrelated messages that happen to share a name, and the GG-7 drift check treats the key as documented once it has one row |
+| `opencode` | `*OpenCodeObservationView` | bounded native root, current descendants, pending request summaries, input outcomes and provenance; owner tier only with negotiated `opencode-observation`; absent on legacy and remote connections |
 | `context_guard` | `*ContextGuardView` | optional owner-tier-only live guard projection for exactly supported sessions: integer `usage_percent`, `support`, `phase`, optional stable `last_result`, and optional stable `error_code`; absent for remote-tier rosters and never carries raw provider data (ADR-023) |
+
+The optional `opencode` observation has version `v:1` and a maximum encoded size of
+16 KiB. Counts describe the retained native projection; `truncated` marks clipped
+text or omitted rows. Descendants describe verified **current activity and
+requests**, not the complete historical child tree. `busy_known`,
+`root_busy_known`, and `current_scope_known` distinguish authority from an unknown
+connection. Input `outcome_source` distinguishes live, imported, and reconciled
+facts; an imported completion is not a newly completed turn. Text summaries remove
+terminal controls. Raw native request authorization objects, provider errors, and
+credentials are not included. This read capability grants no mutation authority
+and does not advertise structured chat.
 
 ## The `LaunchReq` message
 

@@ -324,7 +324,8 @@ type SessionView struct {
 	// occupancy can be observed exactly. It is absent for unsupported harnesses,
 	// older daemons, and every remote-tier roster. No provider payload or raw error
 	// is allowed onto this wire surface.
-	ContextGuard *ContextGuardView `json:"context_guard,omitempty"`
+	ContextGuard *ContextGuardView        `json:"context_guard,omitempty"`
+	OpenCode     *OpenCodeObservationView `json:"opencode,omitempty"`
 }
 
 // ContextGuardView is the bounded roster projection of one guard. UsagePercent

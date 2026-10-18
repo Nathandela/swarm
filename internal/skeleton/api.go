@@ -108,8 +108,9 @@ type coreAPI struct {
 	detail                func(session, itemID string) (json.RawMessage, protocol.ErrorCode, error)
 	// The durable direct-input marker and its authoritative status consumer.
 	// Both are nil in bare coreAPI tests and wired before Server construction.
-	directInputObserver func(local string, class protocol.DirectInputClass) error
-	statusObserver      func(local string, current status.Status)
+	directInputObserver   func(local string, class protocol.DirectInputClass) error
+	statusObserver        func(local string, current status.Status)
+	openCodeObservationFn atomic.Pointer[openCodeObservationFunc]
 
 	// pairing carries the machine-side pairing identity + enrollment material and the
 	// rendezvous seam BeginPairing hosts a real pairing on (slice A3.3-d). It is nil
@@ -2039,6 +2040,7 @@ type rosterSnap struct {
 	backendPlanError string
 	contextGuard     protocol.ContextGuardView
 	hasContextGuard  bool
+	openCodeHash     [32]byte
 }
 
 // watch samples the roster and emits a meta whenever a session's status, display
@@ -2058,6 +2060,7 @@ func (a *coreAPI) watch() {
 			present[m.ID] = struct{}{}
 			guard, hasGuard := a.ContextGuardView(m.ID)
 			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, rosterHidden: m.RosterHidden, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID), backendPlanError: m.BackendPlanError, contextGuard: guard, hasContextGuard: hasGuard}
+			cur.openCodeHash = a.openCodeObservationHash(m.ID)
 			if prev, ok := seen[m.ID]; ok && prev == cur {
 				continue
 			}

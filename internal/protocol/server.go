@@ -267,7 +267,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapAccountsManage,
-	CapSemanticSend,
+	CapSemanticSend, CapOpenCodeObservation,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -567,10 +567,9 @@ func (s *Server) fanoutLoop() {
 // distribute fans one status change out to every subscriber. Production
 // always assigns every connection the SAME stable endpoint id (skeleton's
 // NewServer(d.api, epID) assembly), so every subscriber's OpEvent Control is
-// byte-identical: the JSON marshal happens ONCE per event and the same
-// encoded frame is shared across every subscriber's queue, instead of
-// rebuilding + re-marshaling a near-identical Control per subscriber
-// (R3.3.1). Only the per-connection ep-<seq> fallback (Serve, or
+// byte-identical within each negotiated view: at most two encodings are shared
+// across subscriber queues (with and without owner native observations).
+// Only the per-connection ep-<seq> fallback (Serve, or
 // NewServer(d, "")) still marshals individually, since each connection's
 // endpoint id — and therefore its namespaced session id — differs there.
 func (s *Server) distribute(m persist.Meta) {
@@ -583,17 +582,29 @@ func (s *Server) distribute(m persist.Meta) {
 	pending := s.supervisionPending(m.ID)
 	sentAt := s.remoteActivityAt(m.ID)
 
-	var shared []byte
+	var shared, sharedNative []byte
 	if s.endpointID != "" {
-		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampSuperseded(s.stampView(s.endpointID, m, group, controlled, pending, sentAt), hidden, successor)})
+		view := stampSuperseded(s.stampView(s.endpointID, m, group, controlled, pending, sentAt), hidden, successor)
+		if view.OpenCode != nil {
+			sharedNative, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: view})
+			view.OpenCode = nil
+		}
+		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: view})
 	}
 
 	s.subMu.Lock()
 	var dead []*clientConn
 	for sc := range s.subs {
 		body := shared
+		if sc.hasCap(CapOpenCodeObservation) && sharedNative != nil {
+			body = sharedNative
+		}
 		if body == nil {
-			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampSuperseded(s.stampView(sc.endpointID, m, group, controlled, pending, sentAt), hidden, successor)})
+			view := stampSuperseded(s.stampView(sc.endpointID, m, group, controlled, pending, sentAt), hidden, successor)
+			if !sc.hasCap(CapOpenCodeObservation) {
+				view.OpenCode = nil
+			}
+			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: view})
 			if body == nil {
 				continue // Control marshaling cannot fail in practice; skip defensively
 			}
@@ -1450,8 +1461,12 @@ func (s *Server) supportedCaps() []string {
 	_, sender := s.d.(ComposerSender)
 	_, transactional := s.d.(TransactionalComposerSender)
 	_, semantic := s.d.(SemanticComposerSender)
+	_, nativeObservation := s.d.(OpenCodeObservationBackend)
 	out := make([]string, 0, len(serverCaps))
 	for _, cap := range serverCaps {
+		if cap == CapOpenCodeObservation && (s.remoteTier || !nativeObservation) {
+			continue
+		}
 		if cap == CapJournalSubscribeFrom && !journalFrom {
 			continue
 		}
@@ -3424,14 +3439,22 @@ func (cc *clientConn) resolveSession(c Control) (string, bool) {
 }
 
 func (cc *clientConn) stampView(m persist.Meta, group status.Group) *SessionView {
-	return cc.srv.stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID), cc.srv.supervisionPending(m.ID),
-		cc.srv.remoteActivityAt(m.ID))
+	view := cc.srv.stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID), cc.srv.supervisionPending(m.ID), cc.srv.remoteActivityAt(m.ID))
+	if !cc.hasCap(CapOpenCodeObservation) {
+		view.OpenCode = nil
+	}
+	return view
 }
 
 func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group, remoteControlled, supervisionPending bool, remoteActivityAt time.Time) *SessionView {
 	view := stampView(endpointID, m, group, remoteControlled, supervisionPending, remoteActivityAt)
 	if s.remoteTier {
 		return view
+	}
+	if source, ok := s.d.(OpenCodeObservationBackend); ok {
+		if native, present := source.OpenCodeObservation(m.ID); present {
+			view.OpenCode = &native
+		}
 	}
 	if source, ok := s.d.(ContextGuardViewBackend); ok {
 		if guard, present := source.ContextGuardView(m.ID); present {

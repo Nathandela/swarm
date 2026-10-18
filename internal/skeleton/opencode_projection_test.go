@@ -3,16 +3,16 @@ package skeleton
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 	"unicode"
-"os"
-"path/filepath"
-"sync/atomic"
-"time"
-"github.com/Nathandela/swarm/internal/daemon"
-"github.com/Nathandela/swarm/internal/protocol"
-"github.com/Nathandela/swarm/internal/status"
 
 	"github.com/Nathandela/swarm/internal/persist"
 )
@@ -59,23 +59,53 @@ func TestOpenCodeProjectionPublishesEarlyIdentityWithoutInventingReadiness(t *te
 }
 
 func TestOpenCodeProjectionMarksClippedSingleInput(t *testing.T) {
- meta:=persist.Meta{ConversationID:"ses_root",OpenCodeBinding:&persist.OpenCodeBinding{Generation:"generation"}}
- view:=OpenCodeView{Inputs:[]OpenCodeInput{{MessageID:"msg_user",Text:strings.Repeat("x",300)}}}
- got:=openCodeProjection(meta,view,true)
- if !got.Truncated||len(got.Inputs)!=1||len(got.Inputs[0].Text)>256{t.Fatal("clipped input was presented as complete")}
+	meta := persist.Meta{ConversationID: "ses_root", OpenCodeBinding: &persist.OpenCodeBinding{Generation: "generation"}}
+	view := OpenCodeView{Inputs: []OpenCodeInput{{MessageID: "msg_user", Text: strings.Repeat("x", 300)}}}
+	got := openCodeProjection(meta, view, true)
+	if !got.Truncated || len(got.Inputs) != 1 || len(got.Inputs[0].Text) > 256 {
+		t.Fatal("clipped input was presented as complete")
+	}
 }
 
 func TestOpenCodeObservationOnlyChangePublishesRosterEvent(t *testing.T) {
- dir,err:=os.MkdirTemp("/tmp","ocview");if err!=nil{t.Fatal(err)};t.Cleanup(func(){os.RemoveAll(dir)})
- store,err:=persist.NewStore(dir);if err!=nil{t.Fatal(err)}
- if err=store.Save(persist.Meta{ID:"native",AgentType:"opencode",Status:status.Status{Process:status.ProcessExited}});err!=nil{t.Fatal(err)}
- core,err:=daemon.Open(daemon.Config{StateDir:dir,SocketPath:filepath.Join(dir,"d.sock"),LockPath:filepath.Join(dir,"d.lock"),LogPath:filepath.Join(dir,"d.log")});if err!=nil{t.Fatal(err)};t.Cleanup(func(){core.Close()})
- var attention atomic.Bool
- api:=newCoreAPI(core,"","ep");t.Cleanup(api.close)
- source:=openCodeObservationFunc(func(string)(protocol.OpenCodeObservationView,bool){return protocol.OpenCodeObservationView{Version:1,RootID:"ses_root",Attention:attention.Load()},true})
- api.openCodeObservationFn.Store(&source)
- api.pokeWatch()
- select {case <-api.events:case <-time.After(time.Second):t.Fatal("initial roster event missing")}
- attention.Store(true);api.pokeWatch()
- select {case got:=<-api.events:if got.ID!="native"{t.Fatal("wrong session")};case <-time.After(time.Second):t.Fatal("native observation changed without a roster event")}
+	dir, err := os.MkdirTemp("/tmp", "ocview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	store, err := persist.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(persist.Meta{ID: "native", AgentType: "opencode", Status: status.Status{Process: status.ProcessExited}}); err != nil {
+		t.Fatal(err)
+	}
+	core, err := daemon.Open(daemon.Config{StateDir: dir, SocketPath: filepath.Join(dir, "d.sock"), LockPath: filepath.Join(dir, "d.lock"), LogPath: filepath.Join(dir, "d.log")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { core.Close() })
+	var attention atomic.Bool
+	api := newCoreAPI(core, "", "ep")
+	t.Cleanup(api.close)
+	source := openCodeObservationFunc(func(string) (protocol.OpenCodeObservationView, bool) {
+		return protocol.OpenCodeObservationView{Version: 1, RootID: "ses_root", Attention: attention.Load()}, true
+	})
+	api.openCodeObservationFn.Store(&source)
+	api.pokeWatch()
+	select {
+	case <-api.events:
+	case <-time.After(time.Second):
+		t.Fatal("initial roster event missing")
+	}
+	attention.Store(true)
+	api.pokeWatch()
+	select {
+	case got := <-api.events:
+		if got.ID != "native" {
+			t.Fatal("wrong session")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native observation changed without a roster event")
+	}
 }

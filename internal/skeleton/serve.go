@@ -347,6 +347,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.restoreDirectInputState(locals)
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	nativeObservation := openCodeObservationFunc(d.openCodeObservation)
+	d.api.openCodeObservationFn.Store(&nativeObservation)
 	d.accounts = openAccountManager(cfg.StateDir, cfg.ShimBinary, core.List)
 	d.api.accounts = d.accounts
 	d.api.contextGuardSettings = d.contextGuardSettings
