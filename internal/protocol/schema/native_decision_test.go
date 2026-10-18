@@ -39,3 +39,12 @@ func TestNativeDecisionHashBindsExactChoiceAndRequest(t *testing.T) {
 		t.Fatal("nil body did not hash safely")
 	}
 }
+
+func TestNativeDecisionHashMatchesOmittedEmptyAnswers(t *testing.T) {
+	a := NativeDecisionReq{Kind: "permission_reply", Reply: "once"}
+	b := a
+	b.Answers = [][]string{}
+	if !bytes.Equal(NativeDecisionContentHash(&a), NativeDecisionContentHash(&b)) {
+		t.Fatal("omitempty changed signed answer bytes")
+	}
+}

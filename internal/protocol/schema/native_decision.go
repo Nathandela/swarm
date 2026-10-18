@@ -7,6 +7,7 @@ import (
 )
 
 const ActionNativeDecide = "native_decide"
+const MaxNativeRequestViewBytes = 12 << 10
 
 // NativeDecisionReq binds an answer to one observed native request and worker incarnation.
 type NativeDecisionReq struct {
@@ -37,7 +38,11 @@ func NativeDecisionContentHash(req *NativeDecisionReq) []byte {
 		expiry = req.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	}
 	writeHashField(h, []byte(expiry))
-	answers, _ := json.Marshal(req.Answers)
+	var values [][]string
+	if len(req.Answers) != 0 {
+		values = req.Answers
+	}
+	answers, _ := json.Marshal(values)
 	writeHashField(h, answers)
 	return h.Sum(nil)
 }
@@ -67,6 +72,7 @@ type NativeRequestView struct {
 	RequestHash     string                 `json:"request_hash"`
 	ExpiresAt       *time.Time             `json:"expires_at"`
 	Kind            string                 `json:"kind"`
+	DetailsJSON     string                 `json:"details_json,omitempty"`
 	Permission      string                 `json:"permission,omitempty"`
 	Patterns        []string               `json:"patterns,omitempty"`
 	Always          []string               `json:"always,omitempty"`

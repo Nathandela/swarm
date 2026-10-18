@@ -41,6 +41,9 @@ func TestNativeRequestCardsKeepMultipleExactAuthoritiesAndExpiry(t *testing.T) {
 		if card.Session != f.request.Session || card.SessionInstance != f.request.SessionInstance || card.RootID != view.Root || card.Generation != view.Generation || len(card.RequestHash) != 64 || card.ExpiresAt == nil || !card.ExpiresAt.Equal(now.Add(5*time.Minute)) {
 			t.Fatalf("authority: %+v", card)
 		}
+		if card.DetailsJSON == "" || !json.Valid([]byte(card.DetailsJSON)) {
+			t.Fatal("full native metadata context missing")
+		}
 		if card.Kind == "permission" && (len(card.Decisions) != 3 || !strings.Contains(card.Decisions[2].Label, "session")) {
 			t.Fatalf("permission effects hidden: %+v", card)
 		}
@@ -74,6 +77,10 @@ func TestNativeRequestCardsKeepMultipleExactAuthoritiesAndExpiry(t *testing.T) {
 	f.d.nativeRequests.mu.Unlock()
 	if remaining != 1 {
 		t.Fatal("removed native requests retained authority")
+	}
+	view.Pending[0].Raw = json.RawMessage(strings.Replace(string(view.Pending[0].Raw), "printf changed", strings.Repeat("x", 13000), 1))
+	if cards, err = f.d.openCodeRequestCards(f.binding.WorkerID, view); err == nil || len(cards) != 0 {
+		t.Fatal("oversized context retained approval authority")
 	}
 	view.CurrentScopeKnown = false
 	if cards, err = f.d.openCodeRequestCards(f.binding.WorkerID, view); err == nil || len(cards) != 0 {

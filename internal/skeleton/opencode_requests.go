@@ -11,6 +11,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -52,7 +53,7 @@ func (d *Daemon) openCodeRequestCards(local string, view OpenCodeView) ([]protoc
 		if err != nil || request.ID != pending.ID || request.SessionID != pending.SessionID {
 			return refuse()
 		}
-		card := protocol.NativeRequestView{Session: protocol.NamespacedID(d.machineID(), local), SessionInstance: instance, RootID: view.Root, Generation: view.Generation, NativeSessionID: request.SessionID, RequestID: request.ID, Kind: request.Kind, Permission: request.Permission, Patterns: append([]string(nil), request.Patterns...), Always: append([]string(nil), request.Always...)}
+		card := protocol.NativeRequestView{Session: protocol.NamespacedID(d.machineID(), local), SessionInstance: instance, RootID: view.Root, Generation: view.Generation, NativeSessionID: request.SessionID, RequestID: request.ID, Kind: request.Kind, DetailsJSON: string(request.Raw), Permission: request.Permission, Patterns: append([]string(nil), request.Patterns...), Always: append([]string(nil), request.Always...)}
 		var content any
 		decoder := json.NewDecoder(bytes.NewReader(pending.Raw))
 		decoder.UseNumber()
@@ -91,6 +92,10 @@ func (d *Daemon) openCodeRequestCards(local string, view OpenCodeView) ([]protoc
 				card.Questions = append(card.Questions, item)
 			}
 			card.Decisions = []protocol.NativeDecisionOption{{ID: "question_reply", Label: "Send answers", Effect: "single_request"}, {ID: "question_reject", Label: "Reject this question", Effect: "single_request"}}
+		}
+		encoded, err := json.Marshal(card)
+		if err != nil || len(encoded) > schema.MaxNativeRequestViewBytes {
+			return refuse()
 		}
 		cards = append(cards, card)
 	}
