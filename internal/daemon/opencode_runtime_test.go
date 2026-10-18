@@ -215,3 +215,18 @@ func TestOpenCodeRuntimeWrongRootNeverBindsOrSubmits(t *testing.T) {
 		t.Fatal("wrong identity crossed binding boundary")
 	}
 }
+
+func TestOpenCodeRuntimeRetirementAfterDurableBindingNeverPanicsOrReleases(t *testing.T){
+ for _,phase:=range []string{"bound","ready","started","admitted"}{t.Run(phase,func(t *testing.T){
+  f:=newOpenCodeRuntimeFixture(t)
+  f.d.cfg.onMetaSave=func(m persist.Meta){
+   current:=m.OpenCodeBinding.Phase
+   if m.OpenCodeBinding.Initial!=nil&&(phase=="started"||phase=="admitted"){current=m.OpenCodeBinding.Initial.Phase}
+   if current==phase{f.d.mu.Lock();delete(f.d.sessions,m.ID);f.d.mu.Unlock()}
+  }
+  ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second);defer cancel()
+  if err:=f.d.joinOpenCode(ctx,f.m.ID);err==nil{t.Fatal("retired native session acknowledged success")}
+  if f.released.Load(){t.Fatal("retired native session released owner input")}
+  if phase!="admitted"&&f.initialCalls.Load()!=0{t.Fatal("retirement crossed native initial write")}
+ })}
+}
