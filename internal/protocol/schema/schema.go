@@ -151,7 +151,8 @@ type Control struct {
 	TurnInterrupt *TurnInterruptReq `json:"turn_interrupt,omitempty"`
 	// History is the interaction_history body (M3.1, ADR-014); the reply rides the
 	// existing Journal carrier plus HistoryFloor.
-	History *InteractionHistoryReq `json:"interaction_history,omitempty"`
+	History       *InteractionHistoryReq `json:"interaction_history,omitempty"`
+	NativeHistory *NativeHistoryPage     `json:"native_history,omitempty"`
 	// Detail is the interaction_detail body (M3.3, IS-CAP-2's unsigned read); the reply
 	// carries exactly one Journal record whose Item is the full pre-truncation body.
 	Detail *InteractionDetailReq `json:"interaction_detail,omitempty"`
