@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/opencodebridge"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
@@ -168,6 +169,39 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 			}
 			if receipt.State != want || exactReads.Load() != wantReads {
 				t.Fatalf("receipt=%s exact reads=%d, want %s/%d", receipt.State, exactReads.Load(), want, wantReads)
+			}
+		})
+	}
+}
+
+func TestOpenCodeInitialRecoveryRequiresExactAdmittedBinding(t *testing.T) {
+	f := newOpenCodeSendFixture(t, func(f *openCodeSendFixture) { f.initialNativeMode = true })
+	original, _ := f.d.core.Get(f.binding.WorkerID)
+	for _, scenario := range []string{"valid", "unadmitted", "wrong hash", "wrong generation", "wrong root", "wrong target", "missing creation"} {
+		t.Run(scenario, func(t *testing.T) {
+			meta := original
+			meta.OpenCodeBinding = persist.CloneOpenCodeBinding(original.OpenCodeBinding)
+			target := meta.OpenCodeBinding.Initial.MessageID
+			switch scenario {
+			case "unadmitted":
+				meta.OpenCodeBinding.Initial.Phase = persist.OpenCodeInitialUncertain
+			case "wrong hash":
+				meta.OpenCodeBinding.Initial.RequestHash = "bad"
+			case "wrong generation":
+				meta.OpenCodeBinding.Generation = strings.Repeat("e", 32)
+			case "wrong root":
+				meta.ConversationID = "ses_" + strings.Repeat("e", 32)
+			case "wrong target":
+				target = "msg_" + strings.Repeat("e", 32)
+			case "missing creation":
+				meta.OpenCodeBinding.NativeCreatedAtMS = 0
+			}
+			entry, expected := initialOpenCodeRecovery(meta, f.identity, target)
+			if (expected != nil) != (scenario == "valid") {
+				t.Fatalf("initial recovery accepted unqualified %s custody", scenario)
+			}
+			if expected != nil && (entry.intent.TextHash != meta.OpenCodeBinding.Initial.RequestHash || entry.intent.NotBeforeMS != f.identity.NativeCreatedAtMS) {
+				t.Fatal("initial recovery lost exact hash or native creation bound")
 			}
 		})
 	}
