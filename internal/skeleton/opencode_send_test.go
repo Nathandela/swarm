@@ -21,6 +21,7 @@ import (
 
 type openCodeSendFixture struct {
 	promptReceipt        func(opencodebridge.DispatchRequest, opencodebridge.Receipt) opencodebridge.Receipt
+	initialNativeMode    bool
 	nativeDecisionMode   bool
 	nativeQuestionMode   bool
 	lastDecisionDispatch atomic.Value
@@ -55,6 +56,9 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 		f.d = assemble(t)
 	}
 	spec := daemon.LaunchSpec{AgentType: "opencode", RequiredRuntime: persist.RequiredRuntimeOpenCode, Argv: []string{fakeAgentBin, mustScript(t, "idle 60s\n")}, Cwd: t.TempDir(), OpenCodeEnv: []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}, Cols: 80, Rows: 24}
+	if f.initialNativeMode {
+		spec.InitialPrompt = "exact initial input"
+	}
 	launch := make(chan error, 1)
 	go func() {
 		_, err := f.d.core.Launch(spec)
@@ -97,7 +101,18 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 		}
 		switch r.URL.Path {
 		case "/ready", "/ack":
-			_ = json.NewEncoder(w).Encode(opencodebridge.Ready{Identity: f.identity, NativeVersion: "1.19.3", Bound: true, Ready: true, Acknowledged: true, DraftGuardSupported: true})
+			_ = json.NewEncoder(w).Encode(opencodebridge.Ready{Identity: f.identity, NativeVersion: "1.19.3", Bound: true, Ready: true, Acknowledged: true, DraftGuardSupported: true, InitialSupported: f.initialNativeMode})
+		case "/initial":
+			var req opencodebridge.InitialRequest
+			if !f.initialNativeMode || json.NewDecoder(r.Body).Decode(&req) != nil {
+				w.WriteHeader(400)
+				return
+			}
+			f.calls.Add(1)
+			messageID := "msg_" + strings.Repeat("a", 32)
+			row, _ := json.Marshal(map[string]any{"info": map[string]any{"id": messageID, "sessionID": f.binding.RootID, "role": "user", "agent": "build", "model": map[string]string{"providerID": "fixture", "modelID": "fixture-model", "variant": "max"}, "time": map[string]int64{"created": time.Now().UnixMilli()}}, "parts": []any{map[string]any{"id": "prt_initial", "sessionID": f.binding.RootID, "messageID": messageID, "type": "text", "text": req.Text}}})
+			f.nativeRow.Store(json.RawMessage(row))
+			_ = json.NewEncoder(w).Encode(opencodebridge.Receipt{Identity: f.identity, OperationID: req.OperationID, RequestHash: req.RequestHash, Status: "admitted", MessageID: messageID, Agent: "build", Model: &opencodebridge.Model{ProviderID: "fixture", ModelID: "fixture-model"}, Variant: "max", SelectionBasis: "native_composer"})
 		case "/events":
 			w.Header().Set("Content-Type", "text/event-stream")
 			props, _ := json.Marshal(f.identity)

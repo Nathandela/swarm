@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,29 +15,37 @@ import (
 
 func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 	fixture := newOpenCodeSendFixture(t)
-	for _, scenario := range []string{"exact", "lost admission", "lost admission wrong body", "unowned parent", "wrong body", "foreign row", "synthetic text", "old row"} {
+	for _, scenario := range []string{"exact", "lost admission", "lost admission wrong body", "unowned parent", "wrong body", "foreign row", "synthetic text", "old row", "initial exact", "initial wrong body", "initial foreign row", "initial wrong tuple"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := fixture
-			if scenario == "lost admission" || scenario == "lost admission wrong body" {
-				f = newOpenCodeSendFixture(t)
+			initial := strings.HasPrefix(scenario, "initial ")
+			if initial || scenario == "lost admission" || scenario == "lost admission wrong body" {
+				f = newOpenCodeSendFixture(t, func(f *openCodeSendFixture) { f.initialNativeMode = initial })
 			}
 			id, err := protocol.NewSemanticOperationID()
 			if err != nil {
 				t.Fatal(err)
 			}
 			lost := scenario == "lost admission" || scenario == "lost admission wrong body"
-			f.dropReply.Store(lost)
-			err = f.client.SemanticSend(id, f.request)
-			f.dropReply.Store(false)
-			if (err != nil) != lost {
-				t.Fatalf("unexpected native delivery result for %s: %v", scenario, err)
-			}
-			record, _ := f.d.core.ComposerOperation(id)
 			var intent openCodeSendIntent
-			if err = json.Unmarshal(record.Request, &intent); err != nil {
-				t.Fatal(err)
+			if !initial {
+				f.dropReply.Store(lost)
+				err = f.client.SemanticSend(id, f.request)
+				f.dropReply.Store(false)
+				if (err != nil) != lost {
+					t.Fatalf("unexpected native delivery result for %s: %v", scenario, err)
+				}
+				record, _ := f.d.core.ComposerOperation(id)
+				if err = json.Unmarshal(record.Request, &intent); err != nil {
+					t.Fatal(err)
+				}
 			}
 			meta, _ := f.d.core.Get(f.binding.WorkerID)
+			if initial {
+				i := meta.OpenCodeBinding.Initial
+				id = i.OperationID
+				intent = openCodeSendIntent{Identity: f.identity, MessageID: i.MessageID, TextHash: i.RequestHash, NotBeforeMS: meta.OpenCodeBinding.NativeCreatedAtMS}
+			}
 			projection, err := newOpenCodeTranscript(f.d, meta, f.identity)
 			if err != nil {
 				t.Fatal(err)
@@ -72,10 +81,12 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 			info := user["info"].(map[string]any)
 			part := user["parts"].([]any)[0].(map[string]any)
 			switch scenario {
-			case "wrong body", "lost admission wrong body":
+			case "wrong body", "lost admission wrong body", "initial wrong body":
 				part["text"] = "different input"
-			case "foreign row":
+			case "foreign row", "initial foreign row":
 				info["sessionID"] = "ses_foreign"
+			case "initial wrong tuple":
+				info["agent"] = "different-agent"
 			case "synthetic text":
 				part["synthetic"] = true
 			case "old row":
@@ -106,7 +117,7 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 			}()
 			defer func() { cancel(); <-done }()
 			startupErr := <-ready
-			if scenario != "exact" && scenario != "lost admission" && scenario != "unowned parent" {
+			if scenario != "exact" && scenario != "initial exact" && scenario != "lost admission" && scenario != "unowned parent" {
 				if startupErr == nil {
 					t.Fatal("invalid full owned user row qualified startup")
 				}
@@ -115,7 +126,7 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 					t.Fatal(startupErr)
 				}
 				view := nextOCView(t, views, func(view OpenCodeView) bool { return view.BusyKnown })
-				if scenario == "exact" || scenario == "lost admission" {
+				if scenario == "exact" || scenario == "initial exact" || scenario == "lost admission" {
 					if len(view.Inputs) != 1 || !view.Inputs[0].PlainTextInput || view.Inputs[0].Outcome != OpenCodeOutcomeCompleted || len(view.Uncertain) != 0 {
 						t.Fatalf("bounded history did not recover exact owned input: %+v", view)
 					}
@@ -134,6 +145,12 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 					t.Fatal("unowned continuation borrowed original input")
 				}
 			}
+			if initial {
+				if len(f.d.core.SemanticRequestOperations(f.binding.WorkerID)) != 0 || exactReads.Load() != 1 {
+					t.Fatal("initial recovery used semantic custody or repeated native reads")
+				}
+				return
+			}
 			receipt, err := f.client.SemanticOperation(f.request.Session, id)
 			if err != nil {
 				t.Fatal(err)
@@ -143,7 +160,7 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 				want = "uncertain"
 			}
 			wantReads := int32(1)
-			if scenario == "exact" || scenario == "lost admission" {
+			if scenario == "exact" || scenario == "initial exact" || scenario == "lost admission" {
 				want = "completed"
 			}
 			if scenario == "unowned parent" {
