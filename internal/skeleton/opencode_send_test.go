@@ -19,6 +19,7 @@ import (
 )
 
 type openCodeSendFixture struct {
+	promptReceipt        func(opencodebridge.DispatchRequest, opencodebridge.Receipt) opencodebridge.Receipt
 	nativeDecisionMode   bool
 	nativeQuestionMode   bool
 	lastDecisionDispatch atomic.Value
@@ -208,7 +209,11 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 				}
 				return
 			}
-			_ = json.NewEncoder(w).Encode(opencodebridge.Receipt{Identity: f.identity, Kind: "prompt", TargetID: f.binding.RootID, OperationID: req.OperationID, Status: "admitted", MessageID: req.MessageID, Agent: "build", Model: &opencodebridge.Model{ProviderID: "fixture", ModelID: "fixture-model"}, Variant: "max", SelectionBasis: "native_session_selection"})
+			receipt := opencodebridge.Receipt{Identity: f.identity, Kind: "prompt", TargetID: f.binding.RootID, OperationID: req.OperationID, Status: "admitted", MessageID: req.MessageID, Agent: "build", Model: &opencodebridge.Model{ProviderID: "fixture", ModelID: "fixture-model"}, Variant: "max", SelectionBasis: "native_session_selection"}
+			if f.promptReceipt != nil {
+				receipt = f.promptReceipt(req, receipt)
+			}
+			_ = json.NewEncoder(w).Encode(receipt)
 		default:
 			w.WriteHeader(404)
 		}
