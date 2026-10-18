@@ -257,6 +257,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapAccountsManage,
+	CapSemanticSend,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1354,6 +1355,8 @@ func (cc *clientConn) handleControl(c Control) {
 		// The REAL Wave R6 handler (Mirror M2.4, IS-LIFE-5). Session-bound: the signed
 		// tuple's own subject is the wire session id, as for kill/approve.
 		cc.handleComposerSend(c)
+	case OpSemanticSend:
+		cc.handleSemanticSend(c)
 	case OpOperationStatus:
 		// The REAL Wave R5 handler. Names no session instance: pinned like
 		// session_launch above.
@@ -1430,14 +1433,20 @@ func (cc *clientConn) handleHello(c Control) {
 // DaemonAPI may still satisfy JournalBackend and serve the legacy read+subscribe path; advertising
 // subscribe-from to it would make a new gateway select an operation the server must then refuse.
 func (s *Server) supportedCaps() []string {
-	if _, ok := s.d.(JournalSubscribeFromBackend); ok {
-		return serverCaps
-	}
-	out := make([]string, 0, len(serverCaps)-1)
+	_, journalFrom := s.d.(JournalSubscribeFromBackend)
+	_, durable := s.d.(ComposerOperationExecutor)
+	_, sender := s.d.(ComposerSender)
+	_, transactional := s.d.(TransactionalComposerSender)
+	_, semantic := s.d.(SemanticComposerSender)
+	out := make([]string, 0, len(serverCaps))
 	for _, cap := range serverCaps {
-		if cap != CapJournalSubscribeFrom {
-			out = append(out, cap)
+		if cap == CapJournalSubscribeFrom && !journalFrom {
+			continue
 		}
+		if cap == CapSemanticSend && (s.remoteTier || !durable || !sender || !transactional || !semantic) {
+			continue
+		}
+		out = append(out, cap)
 	}
 	return out
 }

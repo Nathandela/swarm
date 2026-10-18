@@ -94,6 +94,7 @@ func allOps() []string {
 		OpEvent, OpLease, OpOK, OpError,
 		OpContextGuardGet, OpContextGuardSet,
 		OpAccountsManage,
+		OpSemanticSend,
 	}
 }
 

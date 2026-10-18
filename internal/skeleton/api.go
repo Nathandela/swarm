@@ -101,6 +101,7 @@ type coreAPI struct {
 	// loudly rather than pretending (ApproveInteraction's rule).
 	composer              func(machine, operationID string, req protocol.ComposerSendReq) (protocol.ErrorCode, error)
 	composerTransactional func(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error)
+	semanticComposer      func(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error)
 	interrupt             func(machine, operationID string, req protocol.TurnInterruptReq) (protocol.ErrorCode, error)
 	history               func(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error)
 	detail                func(session, itemID string) (json.RawMessage, protocol.ErrorCode, error)
@@ -591,6 +592,15 @@ func (a *coreAPI) ComposerSendTransactional(machine, operationID string, req pro
 	}
 	return a.composerTransactional(machine, operationID, req, begin)
 }
+
+func (a *coreAPI) SemanticSendTransactional(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error) {
+	if a.semanticComposer == nil {
+		return "", errors.New("skeleton: owner semantic composer is unavailable; nothing was sent")
+	}
+	return a.semanticComposer(machine, operationID, req, begin)
+}
+
+var _ protocol.SemanticComposerSender = (*coreAPI)(nil)
 
 var _ protocol.TransactionalComposerSender = (*coreAPI)(nil)
 

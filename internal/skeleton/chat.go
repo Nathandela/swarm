@@ -79,6 +79,7 @@ const pendingSendTTL = 10 * time.Second
 type pendingSend struct {
 	text        string
 	operationID string
+	source      string
 	// clientRef is the id THE DAEMON MINTED and handed to the CLI with the message
 	// (Codex's `clientUserMessageId`), echoed back on the item as `clientId`. When it is
 	// set the correlation is EXACT and text is never consulted -- which is the one place
@@ -518,6 +519,14 @@ func (d *Daemon) composerSend(machine, operationID string, req protocol.Composer
 }
 
 func (d *Daemon) composerSendTransactional(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error) {
+	return d.composerSendFrom(machine, operationID, req, begin, adapter.SourcePhone)
+}
+
+func (d *Daemon) semanticSendTransactional(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error) {
+	return d.composerSendFrom(machine, operationID, req, begin, adapter.SourceOwner)
+}
+
+func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.ComposerSendReq, begin func() error, source string) (protocol.ErrorCode, error) {
 	local, err := d.resolveChatSession(machine, req.Session)
 	if err != nil {
 		return protocol.CodeInvalidField, errIsLife5("composer send: %v", err)
@@ -616,7 +625,7 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 		if d.pendingSends == nil {
 			d.pendingSends = map[string][]pendingSend{}
 		}
-		pending = pendingSend{text: req.Text, operationID: operationID, at: d.chatNow()}
+		pending = pendingSend{text: req.Text, operationID: operationID, at: d.chatNow(), source: source}
 		if sink.backend != nil {
 			// The echo key is minted HERE, sent with the message, and read straight back off the
 			// item's `clientId`. Minting it under the same itemMu hold as the precondition means
@@ -664,7 +673,9 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 				// this exact operation was folded and consumed its pending correlation.
 				// Treat it as delivered and do not poison later FIFO heads with an
 				// uncertainty snapshot taken after the proof already advanced.
-				d.notePhoneActivity(local)
+				if source == adapter.SourcePhone {
+					d.notePhoneActivity(local)
+				}
 				return "", nil
 			}
 			return protocol.CodeOutcomeUnknown, err
@@ -693,10 +704,10 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 			}
 		})
 	}
-	// DELIVERED, so somebody is driving this session from a phone (ADR-010 Amendment 3 C3).
-	// Recorded only on the success path: a message the machine turned away is not somebody
-	// driving anything.
-	d.notePhoneActivity(local)
+	// Owner automation must not claim that a phone is driving the session.
+	if source == adapter.SourcePhone {
+		d.notePhoneActivity(local)
+	}
 	return "", nil
 }
 
@@ -1149,7 +1160,7 @@ func (d *Daemon) stampComposerEchoLocked(sessionID, text, clientRef string, fiel
 			if p.clientRef != clientRef {
 				continue
 			}
-			fields["source"] = adapter.SourcePhone
+			fields["source"] = p.inputSource()
 			fields["operation_id"] = p.operationID
 			live = append(live[:i:i], live[i+1:]...)
 			d.noteComposerProgress(sessionID)
@@ -1164,12 +1175,19 @@ func (d *Daemon) stampComposerEchoLocked(sessionID, text, clientRef string, fiel
 		if p.clientRef != "" || p.text != text {
 			continue
 		}
-		fields["source"] = adapter.SourcePhone
+		fields["source"] = p.inputSource()
 		fields["operation_id"] = p.operationID
 		live = append(live[:i:i], live[i+1:]...)
 		d.noteComposerProgress(sessionID)
 		return
 	}
+}
+
+func (p pendingSend) inputSource() string {
+	if p.source == adapter.SourceOwner {
+		return adapter.SourceOwner
+	}
+	return adapter.SourcePhone
 }
 
 func (d *Daemon) noteComposerProgress(sessionID string) {

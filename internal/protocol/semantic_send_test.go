@@ -14,6 +14,10 @@ type semanticBoundaryStub struct {
 	ownerCalls atomic.Int64
 }
 
+func (s *durableComposerStub) SemanticSendTransactional(machine, id string, req ComposerSendReq, begin func() error) (ErrorCode, error) {
+	return s.ComposerSendTransactional(machine, id, req, begin)
+}
+
 func (s *semanticBoundaryStub) SemanticSendTransactional(machine, id string, req ComposerSendReq, begin func() error) (ErrorCode, error) {
 	s.ownerCalls.Add(1)
 	return s.durableComposerStub.ComposerSendTransactional(machine, id, req, begin)

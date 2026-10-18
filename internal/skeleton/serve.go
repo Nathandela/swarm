@@ -487,6 +487,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// Left nil, each coreAPI method refuses rather than pretending.
 	d.api.composer = d.composerSend
 	d.api.composerTransactional = d.composerSendTransactional
+	d.api.semanticComposer = d.semanticSendTransactional
 	d.api.interrupt = d.interruptTurn
 	d.api.history = d.interactionHistory
 	d.api.detail = d.interactionDetail

@@ -150,6 +150,7 @@ const (
 	// op_not_implemented refusal via handleRefusalOp.
 	OpSessionLaunch        = "session_launch"
 	OpComposerSend         = "composer_send"
+	OpSemanticSend         = "semantic_send"
 	OpOperationStatus      = "operation_status"
 	OpTurnInterrupt        = "turn_interrupt"
 	OpTerminalControlBegin = "terminal_control_begin"
@@ -210,6 +211,7 @@ const (
 	// degrading against an older daemon that would otherwise only know version 1.
 	CapContextGuardSettings = "context-guard-settings"
 	CapAccountsManage       = "accounts.manage.v1"
+	CapSemanticSend         = "semantic-send"
 )
 
 // The closed spawn-intent vocabulary (ADR-010 D4), re-exported from the schema
@@ -395,6 +397,11 @@ type ComposerOperationExecutor interface {
 	ClaimComposerOperation(operationID, action, localSession, sessionInstance, requestHash string) (phase string, outcome []byte, err error)
 	BeginComposerOperation(operationID string) error
 	CommitComposerOperation(operationID string, outcome []byte, success bool) error
+}
+
+// SemanticComposerSender keeps owner automation distinct from phone attribution.
+type SemanticComposerSender interface {
+	SemanticSendTransactional(machine, operationID string, req ComposerSendReq, begin func() error) (ErrorCode, error)
 }
 
 // TransactionalComposerSender lets the production daemon cross the durable executing

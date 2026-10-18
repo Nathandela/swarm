@@ -161,6 +161,11 @@ func (cc *clientConn) requireJournalPlaneRead() bool {
 // alters text or expected_turn breaks the signature -- then the body-version gate, then the
 // structural checks, then the seam.
 func (cc *clientConn) handleComposerSend(c Control) {
+	durable := cc.srv.remoteTier || c.Op == OpSemanticSend
+	action := ActionComposerSend
+	if c.Op == OpSemanticSend {
+		action = OpSemanticSend
+	}
 	body := c.ComposerSend
 	if !cc.requireRemoteAuthz(c, ActionComposerSend, c.SessionID, schema.ComposerSendContentHash(body)) {
 		return
@@ -201,7 +206,7 @@ func (cc *clientConn) handleComposerSend(c Control) {
 	if !ok {
 		return
 	}
-	if cc.srv.remoteTier {
+	if durable {
 		unlock := cc.srv.lockComposerOperation(c.OperationID)
 		defer unlock()
 	}
@@ -210,10 +215,10 @@ func (cc *clientConn) handleComposerSend(c Control) {
 	// I/O and safe to resume; Begin fsyncs executing immediately before the seam; terminal
 	// records cache the exact code/message. An executing replay is outcome_unknown, never a
 	// blind second delivery.
-	if cc.srv.remoteTier {
+	if durable {
 		if exec, durable := cc.srv.d.(ComposerOperationExecutor); durable {
 			requestHash := composerRequestHash(body)
-			phase, raw, err := exec.ClaimComposerOperation(c.OperationID, ActionComposerSend,
+			phase, raw, err := exec.ClaimComposerOperation(c.OperationID, action,
 				local, body.SessionInstance, requestHash)
 			if err != nil {
 				cc.replyError("composer_send: claim operation: " + err.Error())
@@ -234,7 +239,12 @@ func (cc *clientConn) handleComposerSend(c Control) {
 
 			var code ErrorCode
 			var sendErr error
-			if transactional, ok := cc.srv.d.(TransactionalComposerSender); ok {
+			if semantic, ok := cc.srv.d.(SemanticComposerSender); ok && c.Op == OpSemanticSend {
+				code, sendErr = semantic.SemanticSendTransactional(
+					cc.endpointID, c.OperationID, *body,
+					func() error { return exec.BeginComposerOperation(c.OperationID) },
+				)
+			} else if transactional, ok := cc.srv.d.(TransactionalComposerSender); ok {
 				code, sendErr = transactional.ComposerSendTransactional(
 					cc.endpointID, c.OperationID, *body,
 					func() error { return exec.BeginComposerOperation(c.OperationID) },
