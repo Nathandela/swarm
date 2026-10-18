@@ -1,0 +1,8 @@
+--- FAIL: TestOpenCodeTerminalEventNeedsFullNativeParts (0.00s)
+    opencode_terminal_test.go:13: bare stop metadata completed an input before native tool parts were read
+--- FAIL: TestOpenCodeTerminalFullRowChecksNativeContinuationGuard (0.00s)
+    --- FAIL: TestOpenCodeTerminalFullRowChecksNativeContinuationGuard/stop_with_tool (0.00s)
+        opencode_terminal_test.go:28: stop+tool outcome="completed" want complete=false
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.518s
+FAIL
