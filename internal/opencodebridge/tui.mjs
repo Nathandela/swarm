@@ -153,41 +153,69 @@ export default { id: ID, async tui(api, options) {
     return { session: session.data, statuses: map(statuses.data), permissions: list(permissions.data), questions: list(questions.data) }
   }
   function requestScope(check) {
-    const scope = new Map([[binding.rootID, true]])
+    const scope = new Map([[binding.rootID, true]]), depths = new Map([[binding.rootID, 0]]), rows = new Map()
     let reads = 0
-    return async function related(id) {
+    async function contains(id) {
       if (!sessionID(id)) throw fault("native_shape")
-      const trail = new Set()
+      const trail = new Map()
       while (!scope.has(id)) {
         if (trail.has(id) || trail.size >= 8 || reads++ >= 32) throw fault("request_scope_unknown")
-        trail.add(id)
         const row = (await read(opts => api.client.session.get({ sessionID: id }, opts))).data
         check()
         if (!object(row) || row.id !== id || (row.parentID !== undefined && !sessionID(row.parentID))) throw fault("request_scope_unknown")
+        trail.set(id, row)
         if (!row.parentID) { scope.set(id, false); break }
         id = row.parentID
       }
       const result = scope.get(id)
-      for (const entry of trail) scope.set(entry, result)
+      let depth = depths.get(id) ?? 0
+      for (const [entry, row] of [...trail].reverse()) {
+        if (result && ++depth > 8) throw fault("request_scope_unknown")
+        scope.set(entry, result)
+        if (result) { depths.set(entry, depth); rows.set(entry, row) }
+      }
       return result
     }
+    return { contains, rows }
+  }
+  async function activityScope(snapshot, check) {
+    const candidates = new Set(), requests = [...snapshot.permissions, ...snapshot.questions]
+    if (requests.length > 128) throw fault("scope_limit")
+    for (const [id, status] of Object.entries(snapshot.statuses)) {
+      if (!sessionID(id) || !object(status) || !["idle", "busy", "retry"].includes(status.type)) throw fault("native_shape")
+      if (status.type !== "idle") candidates.add(id)
+    }
+    for (const request of requests) {
+      if (!object(request) || !sessionID(request.sessionID)) throw fault("native_shape")
+      candidates.add(request.sessionID)
+    }
+    if (candidates.size > 128) throw fault("scope_limit")
+    const scope = requestScope(check)
+    for (const id of candidates) { await scope.contains(id); check() }
+    const descendants = [...scope.rows.values()]
+    return { descendants, children: descendants.filter(row => row.parentID === binding.rootID), hierarchyComplete: true, hierarchyScope: "current_activity_requests" }
   }
   async function idle(snapshot, check) {
-    const status = snapshot.statuses[binding.rootID]
-    if (status !== undefined && (!object(status) || status.type !== "idle")) throw fault("native_busy")
-    const requests = [...snapshot.permissions, ...snapshot.questions], related = requestScope(check)
-    if (requests.length > 128) throw fault("native_shape")
-    for (const request of requests) {
-      if (!object(request)) throw fault("native_shape")
-      if (await related(request.sessionID)) throw fault("native_request_pending")
+    const hierarchy = await activityScope(snapshot, check), related = new Set([binding.rootID, ...hierarchy.descendants.map(row => row.id)])
+    for (const id of related) {
+      const status = snapshot.statuses[id]
+      if (status !== undefined && status.type !== "idle") throw fault("native_busy")
     }
+    if ([...snapshot.permissions, ...snapshot.questions].some(request => related.has(request.sessionID))) throw fault("native_request_pending")
   }
-  async function requireUnusedMessage(id) {
+  async function lookupMessage(id) {
     let result
     try { result = await bounded(signal => api.client.session.message({ sessionID: binding.rootID, messageID: id }, { throwOnError: false, signal })) }
     catch { throw fault("native_read_failed") }
-    if (result?.response?.status === 200) throw fault("native_message_exists")
-    if (result?.response?.status !== 404) throw fault("native_read_failed")
+    if (result?.response?.status === 404) return null
+    if (result?.response?.status !== 200 || result.error !== undefined || !object(result.data)) throw fault("native_read_failed")
+    if (Buffer.byteLength(JSON.stringify(result.data)) > RESPONSE_LIMIT) throw fault("response_oversized")
+    const message = checkedMessage(result.data)
+    if (message.info.id !== id) throw fault("native_shape")
+    return message
+  }
+  async function requireUnusedMessage(id) {
+    if (await lookupMessage(id)) throw fault("native_message_exists")
   }
   function nativeSelection(session) {
     if (!string(session.agent) || !string(session.model?.providerID) || !string(session.model?.id) || (session.model.variant !== undefined && !string(session.model.variant))) throw fault("selection_unavailable")
@@ -215,10 +243,11 @@ export default { id: ID, async tui(api, options) {
   async function reconcilePrompt(record, wait = 0) {
     if (record.body.kind !== "prompt" || !record.invoked || record.receipt.status !== "uncertain") return
     const { body, selection, startedAt } = record, until = Date.now() + wait
+    try { rowMatches((await read(opts => api.client.session.get({ sessionID: binding.rootID }, opts))).data) } catch { return }
     do {
       try {
-        const row = checkedMessage((await read(opts => api.client.session.message({ sessionID: binding.rootID, messageID: body.messageID }, opts))).data), info = row.info
-        if (info.id === body.messageID && info.role === "user" && Number.isSafeInteger(info.time?.created) && info.time.created >= startedAt && info.agent === selection.agent && info.model?.providerID === selection.model.providerID && info.model?.modelID === selection.model.modelID && (info.model.variant ?? "default") === selection.variant && row.parts.filter(p => p.type === "text" && !p.synthetic).map(p => p.text).join("") === body.text) { admit(record); return }
+        const row = await lookupMessage(body.messageID), info = row?.info
+        if (info?.id === body.messageID && info.role === "user" && Number.isSafeInteger(info.time?.created) && info.time.created >= startedAt && info.agent === selection.agent && info.model?.providerID === selection.model.providerID && info.model?.modelID === selection.model.modelID && (info.model.variant ?? "default") === selection.variant && row.parts.filter(p => p.type === "text" && !p.synthetic).map(p => p.text).join("") === body.text) { admit(record); return }
       } catch { /* Native acknowledgement remains uncertain until the exact row can be read. */ }
       if (disposed || Date.now() >= until) return
       await pause(100)
@@ -296,7 +325,7 @@ export default { id: ID, async tui(api, options) {
         if (!matches.length) throw fault("request_stale")
         const pending = matches[0]
         if (pending.sessionID !== body.targetID) throw fault("request_target_mismatch")
-        if (!await requestScope(check)(pending.sessionID)) throw fault("request_unrelated")
+        if (!await requestScope(check).contains(pending.sessionID)) throw fault("request_unrelated")
         if (body.kind === "question_reply") answersMatch(pending.questions, body.answers)
         invoke = options => permission ? api.client.permission.reply({ requestID: body.requestID, reply: body.reply }, options) : body.kind === "question_reply" ? api.client.question.reply({ requestID: body.requestID, answers: body.answers }, options) : api.client.question.reject({ requestID: body.requestID }, options)
       }
@@ -404,6 +433,15 @@ export default { id: ID, async tui(api, options) {
     try {
       const url = new URL(req.url, "http://swarm-bridge")
       if (req.method === "GET" && url.pathname === "/ready") return response(res, 200, readiness())
+      if (req.method === "GET" && url.pathname === "/message") {
+        if (!bound) throw fault(bootstrapReason)
+        const id = url.searchParams.get("messageID")
+        if (!messageID(id)) throw fault("target_invalid")
+        rowMatches((await read(opts => api.client.session.get({ sessionID: binding.rootID }, opts))).data)
+        const message = await lookupMessage(id)
+        if (!message) return rejected(res, "native_message_missing", 404)
+        return response(res, 200, message)
+      }
       if (req.method === "GET" && url.pathname === "/receipt") {
         const operationID = url.searchParams.get("operationID")
         if (!string(operationID)) throw fault("bad_envelope")
@@ -416,14 +454,9 @@ export default { id: ID, async tui(api, options) {
         if (!bound) throw fault(bootstrapReason)
         const limit = Number(url.searchParams.get("limit") || 50) || 50, before = url.searchParams.get("before") ?? ""
         if (!Number.isInteger(limit) || limit < 1 || limit > 200 || before.length > 4096 || /[\x00-\x20\x7f]/.test(before)) throw fault("page_invalid")
-        const [snapshot, page, childResult] = await Promise.all([current(), history(limit, before), read(opts => api.client.session.children({ sessionID: binding.rootID }, opts))])
-        const children = list(childResult.data), seen = new Set()
-        if (children.length > 128) throw fault("native_shape")
-        for (const child of children) {
-          if (!object(child) || !sessionID(child.id) || child.id === binding.rootID || child.parentID !== binding.rootID || seen.has(child.id)) throw fault("native_shape")
-          seen.add(child.id)
-        }
-        return response(res, 200, { ...identity(), ...snapshot, ...page, children })
+        const [snapshot, page] = await Promise.all([current(), history(limit, before)])
+        const hierarchy = await activityScope(snapshot, check)
+        return response(res, 200, { ...identity(), ...snapshot, ...page, ...hierarchy })
       }
       if (req.method === "GET" && url.pathname === "/events") {
         if (!bound) throw fault(bootstrapReason)

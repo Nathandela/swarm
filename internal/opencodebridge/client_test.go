@@ -3,6 +3,7 @@ package opencodebridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -129,5 +130,41 @@ func TestRequestReceiptClient(t *testing.T) {
 	saved, err := client.OperationReceipt(context.Background(), "opaque+/?=")
 	if err != nil || saved == nil || saved.Status != "admitted" {
 		t.Fatalf("saved receipt: %+v %v", saved, err)
+	}
+}
+
+func TestExactNativeMessageRead(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "message.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const existing = "msg_0123456789abcdef"
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/message" {
+			t.Errorf("wrong route %s", r.URL)
+		}
+		if r.URL.Query().Get("messageID") != existing {
+			w.WriteHeader(404)
+			fmt.Fprint(w, `{"reason":"native_message_missing"}`)
+			return
+		}
+		fmt.Fprint(w, `{"info":{"id":"msg_0123456789abcdef","role":"user"},"parts":[],"nativeExtension":{"preserved":true}}`)
+	})}
+	go func() { _ = server.Serve(listener) }()
+	defer server.Close()
+	client, err := NewClient(socket, "syntheticprivatebridgecredentialtoken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	row, err := client.Message(context.Background(), existing)
+	if err != nil || !strings.Contains(string(row), `"nativeExtension":{"preserved":true}`) {
+		t.Fatalf("raw message: %s %v", row, err)
+	}
+	_, err = client.Message(context.Background(), "msg_aaaaaaaaaaaaaaaa")
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != 404 || refusal.Reason != "native_message_missing" {
+		t.Fatalf("native absence: %v", err)
 	}
 }

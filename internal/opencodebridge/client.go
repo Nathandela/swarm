@@ -117,13 +117,16 @@ type Receipt struct {
 
 type Snapshot struct {
 	Identity
-	Session     json.RawMessage            `json:"session"`
-	Statuses    map[string]json.RawMessage `json:"statuses"`
-	Permissions []json.RawMessage          `json:"permissions"`
-	Questions   []json.RawMessage          `json:"questions"`
-	Messages    []json.RawMessage          `json:"messages"`
-	NextCursor  string                     `json:"nextCursor"`
-	Children    []json.RawMessage          `json:"children"`
+	Session           json.RawMessage            `json:"session"`
+	Statuses          map[string]json.RawMessage `json:"statuses"`
+	Permissions       []json.RawMessage          `json:"permissions"`
+	Questions         []json.RawMessage          `json:"questions"`
+	Messages          []json.RawMessage          `json:"messages"`
+	NextCursor        string                     `json:"nextCursor"`
+	Children          []json.RawMessage          `json:"children"`
+	Descendants       []json.RawMessage          `json:"descendants"`
+	HierarchyComplete bool                       `json:"hierarchyComplete"`
+	HierarchyScope    string                     `json:"hierarchyScope"`
 }
 
 type Event struct {
@@ -181,6 +184,17 @@ func (c *Client) InitialReceipt(ctx context.Context) (*Receipt, error) {
 func (c *Client) Dispatch(ctx context.Context, in DispatchRequest) (Receipt, error) {
 	var out Receipt
 	err := c.request(ctx, "POST", "/dispatch", in, &out)
+	return out, err
+}
+
+// Message reads one native row from the bound root. Only Error.Code==404 with
+// Reason=="native_message_missing" establishes native message absence.
+func (c *Client) Message(ctx context.Context, messageID string) (json.RawMessage, error) {
+	var out json.RawMessage
+	if !strings.HasPrefix(messageID, "msg_") || len(messageID) < 14 || len(messageID) > 128 || strings.Trim(messageID[4:], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") != "" {
+		return nil, errors.New("opencode bridge: invalid native message ID")
+	}
+	err := c.request(ctx, "GET", "/message?messageID="+url.QueryEscape(messageID), nil, &out)
 	return out, err
 }
 

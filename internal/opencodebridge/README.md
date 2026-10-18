@@ -19,20 +19,39 @@ resume, validates directory and creation time, and navigates to it. `/ready`
 reports the resulting identity. The host persists that identity before `/ack`.
 A failed resume never creates another native session.
 
-`/snapshot` preserves native root/history/request/child JSON and the opaque
-pagination cursor. Children are direct, parent-validated children. Statuses and
-pending request arrays remain native global collections; consumers must scope
-them. `/events` starts with `swarm.bridge.connected` carrying the complete
-identity, then relays native event envelopes. There is no replay cursor. A gap,
-disconnection, or malformed stream requires a fresh snapshot. Streams are
-bounded to 128 queued events and 2 MiB; an event is at most 1 MiB.
+`/snapshot` preserves the native root/history/request JSON and opaque history
+pagination cursor. Status and pending request arrays remain native global
+collections. `descendants` contains only verified currently active/requested
+descendants and their necessary ancestors, ordered parent before child.
+`children` is the direct-child subset of that current scope. Neither field
+claims a complete historical tree. `hierarchyScope` is
+`current_activity_requests`; `hierarchyComplete: true` means every candidate in
+that current activity/request snapshot was classified. Classification is bounded
+to 128 candidates, 32 native ancestry reads, and depth eight; unknown ancestry,
+cycles, malformed statuses, or exhausted bounds reject the snapshot.
+
+Historical idle children are not enumerated on the readiness path. New prompts
+refuse currently busy/retrying descendants as well as related pending requests.
+A bounded snapshot is not atomic; consumers subscribe before reading it and
+reconcile overlapping root/descendant events. `/events` starts with
+`swarm.bridge.connected` carrying the complete identity, then relays native event
+envelopes. There is no replay cursor. A gap, disconnection, or malformed stream
+requires a fresh snapshot. Streams are bounded to 128 queued events and 2 MiB;
+an event is at most 1 MiB.
+
+`GET /message?messageID=...` reads one exact raw native message after rechecking
+the root's directory and creation time. Route drift does not block this read.
+An actual native 404 is exposed as HTTP 404 with `native_message_missing`;
+transport, binding, and other native failures are not proof of absence. This
+endpoint permits durable host reconciliation after the plugin's live receipt
+cache is lost, without submitting or rewriting native history.
 
 ## Mutation boundary
 
 All writes require the acknowledged binding, exact current root route and
 working directory, supported native version, no modal, a successful current
 native status read, and a verified target. New prompts additionally require an
-idle root with no pending request in its verified ancestry subtree. An unresolved or cyclic request ancestry refuses dispatch. Reads and
+idle current root/subtree with no related pending request. An unresolved or cyclic request ancestry refuses dispatch. Reads and
 request bodies are bounded. The final route and request-liveness checks and SDK
 invocation share one JavaScript callback. This is a check at dispatch; the native
 API has no atomic expected-view or expected-turn admission fence.

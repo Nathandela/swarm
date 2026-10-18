@@ -520,3 +520,95 @@ test("a thrown message lookup never becomes absence", async t => {
   assert.equal((await f.dispatch()).body.reason, "native_read_failed")
   assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
 })
+
+
+test("snapshot verifies current activity ancestry without enumerating historical children", async t => {
+  const f = await fixture(t), child = "ses_" + "d".repeat(32), middle = "ses_" + "e".repeat(32), unrelated = "ses_" + "f".repeat(32)
+  const rows = new Map([[rootID, f.state.row], [child, { id: child, parentID: middle, title: "Working child" }], [middle, { id: middle, parentID: rootID, title: "Required ancestor" }], [unrelated, { id: unrelated }]])
+  f.api.client.session.get = async ({ sessionID }) => ({ data: rows.get(sessionID), response: { status: 200 } })
+  f.api.client.session.children = () => { throw new Error("unpaginated historical children must not gate readiness") }
+  f.state.statuses = { [child]: { type: "retry", attempt: 1 }, [unrelated]: { type: "busy" } }
+  let snapshot = (await f.call("GET", "/snapshot")).body
+  assert.equal(snapshot.hierarchyComplete, true)
+  assert.equal(snapshot.hierarchyScope, "current_activity_requests")
+  assert.deepEqual(snapshot.descendants.map(row => row.id), [middle, child])
+  assert.deepEqual(snapshot.children.map(row => row.id), [middle])
+  assert.equal((await f.dispatch()).body.reason, "native_busy")
+  f.state.statuses = { [child]: { type: "idle" } }
+  snapshot = (await f.call("GET", "/snapshot")).body
+  assert.equal(snapshot.hierarchyComplete, true)
+  assert.deepEqual(snapshot.descendants, [])
+  assert.deepEqual(snapshot.children, [])
+  assert.equal((await f.dispatch()).body.status, "admitted")
+})
+
+test("quiet descendant requests remain in current scope and prevent new prompts", async t => {
+  const f = await fixture(t), child = "ses_" + "d".repeat(32)
+  f.api.client.session.get = async ({ sessionID }) => ({ data: sessionID === rootID ? f.state.row : { id: child, parentID: rootID }, response: { status: 200 } })
+  f.state.questions = [{ id: questionID, sessionID: child, questions: [question()] }]
+  const snapshot = (await f.call("GET", "/snapshot")).body
+  assert.equal(snapshot.hierarchyComplete, true)
+  assert.deepEqual(snapshot.descendants.map(row => row.id), [child])
+  assert.equal((await f.dispatch()).body.reason, "native_request_pending")
+  assert.equal((await f.call("POST", "/dispatch", requestBody({ kind: "question_reply", targetID: child, requestID: questionID, reply: undefined, answers: [["A"]] }))).body.status, "admitted")
+})
+
+test("unknown or cyclic active ancestry cannot become a complete quiet snapshot", async t => {
+  const f = await fixture(t), child = "ses_" + "d".repeat(32), other = "ses_" + "e".repeat(32)
+  f.state.statuses = { [child]: { type: "busy" } }
+  f.api.client.session.get = async ({ sessionID }) => ({ data: sessionID === rootID ? f.state.row : { id: sessionID, parentID: sessionID === child ? other : child }, response: { status: 200 } })
+  assert.equal((await f.call("GET", "/snapshot")).body.reason, "request_scope_unknown")
+  assert.equal((await f.dispatch()).body.reason, "request_scope_unknown")
+  f.api.client.session.get = async ({ sessionID }) => ({ data: sessionID === rootID ? f.state.row : null, response: { status: sessionID === rootID ? 200 : 404 } })
+  assert.equal((await f.call("GET", "/snapshot")).body.reason, "native_read_failed")
+  assert.equal((await f.dispatch()).body.status, "rejected")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 0)
+})
+
+test("activity candidates and native ancestry reads have explicit bounds", async t => {
+  const f = await fixture(t)
+  const id = i => "ses_" + i.toString(16).padStart(32, "0")
+  f.state.statuses = Object.fromEntries(Array.from({ length: 129 }, (_, i) => [id(i), { type: "busy" }]))
+  assert.equal((await f.call("GET", "/snapshot")).body.reason, "scope_limit")
+  f.state.statuses = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [id(i), { type: "busy" }]))
+  let reads = 0
+  f.api.client.session.get = async ({ sessionID }) => { if (sessionID !== rootID) reads++; return { data: sessionID === rootID ? f.state.row : { id: sessionID }, response: { status: 200 } } }
+  assert.equal((await f.call("GET", "/snapshot")).body.reason, "request_scope_unknown")
+  assert.equal(reads, 32)
+})
+
+
+test("exact message reads retain native data across route drift and distinguish native absence", async t => {
+  const f = await fixture(t)
+  f.state.route = { name: "home" }
+  f.state.messages[0].nativeExtension = { preserved: true }
+  const exact = await f.call("GET", "/message?messageID=" + messageID)
+  assert.equal(exact.code, 200)
+  assert.deepEqual(exact.body, f.state.messages[0])
+  const missing = await f.call("GET", "/message?messageID=msg_" + "0".repeat(32))
+  assert.equal(missing.code, 404)
+  assert.equal(missing.body.reason, "native_message_missing")
+  f.api.client.session.message = async () => ({ response: { status: 500 } })
+  assert.notEqual((await f.call("GET", "/message?messageID=" + messageID)).code, 404)
+  f.state.row.time.created++
+  assert.equal((await f.call("GET", "/message?messageID=" + messageID)).body.reason, "native_binding_mismatch")
+})
+
+test("exact message reads reject foreign native parts and IDs", async t => {
+  const f = await fixture(t)
+  f.state.messages[0].parts[0].sessionID = "ses_" + "0".repeat(32)
+  assert.equal((await f.call("GET", "/message?messageID=" + messageID)).body.reason, "native_shape")
+  f.state.messages[0].parts[0].sessionID = rootID
+  const original = f.api.client.session.message
+  f.api.client.session.message = () => original({ messageID })
+  assert.equal((await f.call("GET", "/message?messageID=msg_" + "0".repeat(32))).body.reason, "native_shape")
+})
+
+test("cached ancestry cannot hide a descendant beyond the depth bound", async t => {
+  const f = await fixture(t), id = depth => "ses_" + depth.toString(16).padStart(32, "0")
+  const rows = new Map([[rootID, f.state.row]])
+  for (let depth = 1; depth <= 9; depth++) rows.set(id(depth), { id: id(depth), parentID: depth === 1 ? rootID : id(depth - 1) })
+  f.api.client.session.get = async ({ sessionID }) => ({ data: rows.get(sessionID), response: { status: 200 } })
+  f.state.statuses = { [id(8)]: { type: "busy" }, [id(9)]: { type: "busy" } }
+  assert.equal((await f.call("GET", "/snapshot")).body.reason, "request_scope_unknown")
+})
