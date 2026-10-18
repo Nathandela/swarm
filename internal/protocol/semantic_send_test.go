@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -89,6 +90,23 @@ func TestSemanticClientRefusesUnnegotiatedRoute(t *testing.T) {
 	}
 	if _, sends, claims := stub.snapshot(id); sends != 0 || claims != 0 {
 		t.Fatal("unnegotiated client performed provider/custody I/O")
+	}
+}
+
+func TestSemanticClientDoesNotDiscardPriorCustodyOnExpiredRetry(t *testing.T) {
+	stub := newDurableComposerStub()
+	c, err := Dial(serveOwnerAPI(t, stub), []string{CapSemanticSend})
+	if err != nil { t.Fatal(err) }
+	t.Cleanup(func() { _ = c.Close() })
+	req := ComposerSendReq{Session: c.EndpointID() + "/sess1", SessionInstance: "test-instance", Text: "original"}
+	err = c.SemanticSend(semanticTestID(time.Now().Add(-2*time.Hour), "e"), req)
+	if err == nil || errors.Is(err, ErrSemanticSendRejected) {
+		t.Fatal("expired retry was treated as proof that the original operation had no effect")
+	}
+	stub.sendCode, stub.sendErr = CodeInputBusy, errors.New("input was dirty; nothing sent")
+	err = c.SemanticSend(semanticTestID(time.Now(), "f"), req)
+	if !errors.Is(err, ErrSemanticSendRejected) {
+		t.Fatalf("durably rejected operation did not expose its no-effect receipt: %v", err)
 	}
 }
 
