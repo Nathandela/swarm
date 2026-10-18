@@ -1,0 +1,4 @@
+ok  	github.com/Nathandela/swarm/internal/adapter/opencode	1.261s
+ok  	github.com/Nathandela/swarm/internal/skeleton	2.340s
+
+exit=0

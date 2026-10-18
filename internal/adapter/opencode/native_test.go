@@ -112,8 +112,8 @@ func TestDecodeEvent_MessageUpdatedUser(t *testing.T) {
 	if m.ID != "msg_u1" || m.Role != "user" || m.Time.Created != 1700 {
 		t.Fatalf("info = %+v", m)
 	}
-	if !m.HasUserSummary() || m.IsAssistantSummary() {
-		t.Fatalf("summary classification: user=%v assistant=%v", m.HasUserSummary(), m.IsAssistantSummary())
+	if !bytes.HasPrefix(bytes.TrimSpace(m.Summary), []byte("{")) || m.IsAssistantSummary() {
+		t.Fatalf("summary classification: user=%v assistant=%v", bytes.HasPrefix(bytes.TrimSpace(m.Summary), []byte("{")), m.IsAssistantSummary())
 	}
 	if !json.Valid(m.Raw) || !bytes.Contains(m.Raw, []byte(`"msg_u1"`)) {
 		t.Fatalf("raw retention lost: %s", m.Raw)
@@ -137,7 +137,7 @@ func TestDecodeEvent_MessageUpdatedAssistant(t *testing.T) {
 		if m.Error == nil || m.Error.Name != "APIError" {
 			t.Fatalf("error = %+v", m.Error)
 		}
-		if m.IsAssistantSummary() || m.HasUserSummary() {
+		if m.IsAssistantSummary() || bytes.HasPrefix(bytes.TrimSpace(m.Summary), []byte("{")) {
 			t.Fatal("plain assistant message misread as summary")
 		}
 	})
@@ -151,8 +151,8 @@ func TestDecodeEvent_MessageUpdatedAssistant(t *testing.T) {
 		if ev.MessageUpdated == nil {
 			t.Fatal("message fact missing")
 		}
-		if m := ev.MessageUpdated.Info; !m.IsAssistantSummary() || m.HasUserSummary() {
-			t.Fatalf("summary classification: assistant=%v user=%v", m.IsAssistantSummary(), m.HasUserSummary())
+		if m := ev.MessageUpdated.Info; !m.IsAssistantSummary() || bytes.HasPrefix(bytes.TrimSpace(m.Summary), []byte("{")) {
+			t.Fatalf("summary classification: assistant=%v user=%v", m.IsAssistantSummary(), bytes.HasPrefix(bytes.TrimSpace(m.Summary), []byte("{")))
 		}
 	})
 
