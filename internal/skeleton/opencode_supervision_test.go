@@ -72,6 +72,9 @@ func TestOpenCodeSupervisionIdleWithoutRequestedInputOutcomeIsNotReady(t *testin
 	if !ok || m.Status.Turn != status.TurnUnknown {
 		t.Fatal("native idle manufactured ready-for-review before the requested input completed")
 	}
+	if !f.d.sup.sourceSafe(f.binding.WorkerID) {
+		t.Fatal("unresolved prior completion prevented a quiet native supervisor from receiving a new attention notice")
+	}
 	view.Current = nil
 	f.d.publishOpenCodeView(f.binding.WorkerID, observation, view)
 	m, ok = f.d.supervisionMeta(f.binding.WorkerID)
