@@ -31,6 +31,7 @@ import (
 	"sync"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/wire"
 )
 
 // ErrComposerOutcomeUnknown means delivery crossed the at-most-once boundary but the
@@ -504,7 +505,13 @@ func (cc *clientConn) handleInteractionDetail(c Control) {
 		cc.replyErrorCode("interaction_detail: "+err.Error(), code)
 		return
 	}
-	_ = cc.writeControl(Control{Op: OpInteractionDetail, EndpointID: cc.endpointID,
+	reply := Control{Op: OpInteractionDetail, EndpointID: cc.endpointID,
 		OperationID: cc.opID, SessionID: req.Session,
-		Journal: []JournalRecord{{SessionID: req.Session, Type: "interaction", Item: full}}})
+		Journal: []JournalRecord{{SessionID: req.Session, Type: "interaction", Item: full}}}
+	body, err := EncodeControl(reply)
+	if err != nil || len(body) > wire.MaxFrame-1 {
+		cc.replyErrorCode("interaction_detail: full body exceeds the transport bound or is invalid", CodeUnavailable)
+		return
+	}
+	_ = cc.writeFrame(wire.TControl, body)
 }
