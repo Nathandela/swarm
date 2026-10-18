@@ -16,7 +16,7 @@ import (
 
 func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 	fixture := newOpenCodeSendFixture(t)
-	for _, scenario := range []string{"exact", "lost admission", "lost admission wrong body", "unowned parent", "wrong body", "foreign row", "synthetic text", "old row", "initial exact", "initial wrong body", "initial foreign row", "initial wrong tuple"} {
+	for _, scenario := range []string{"exact", "lost admission", "lost admission wrong body", "unowned parent", "wrong body", "foreign row", "synthetic text", "old row", "initial exact", "initial wrong body", "initial foreign row", "initial wrong tuple", "retained failure", "retained completion newer", "native error later", "retained completion tie", "retained failure tie"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := fixture
 			initial := strings.HasPrefix(scenario, "initial ")
@@ -58,6 +58,13 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 			if scenario == "unowned parent" {
 				parent = "msg_other_compaction_input"
 			}
+			wantOutcome := OpenCodeOutcomeCompleted
+			if scenario == "retained failure" || scenario == "retained failure tie" {
+				wantOutcome = OpenCodeOutcomeFailed
+			}
+			if scenario == "native error later" {
+				wantOutcome = OpenCodeOutcomeCancelled
+			}
 			rows := []json.RawMessage{}
 			assistantAt := time.Now().UnixMilli()
 			for n := 0; n < 50; n++ {
@@ -66,6 +73,12 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 					finish = "stop"
 				}
 				row, _ := json.Marshal(map[string]any{"info": map[string]any{"id": fmt.Sprintf("msg_history_%03d", n), "sessionID": f.identity.RootID, "role": "assistant", "parentID": parent, "finish": finish, "time": map[string]int64{"created": assistantAt + int64(n) + 1, "completed": assistantAt + int64(n) + 2}}, "parts": []any{}})
+				if (scenario == "native error later" || scenario == "retained failure tie") && n == 49 {
+					var final map[string]any
+					_ = json.Unmarshal(row, &final)
+					final["info"].(map[string]any)["error"] = map[string]any{"name": "MessageAbortedError", "data": map[string]string{"message": "cancelled"}}
+					row, _ = json.Marshal(final)
+				}
 				rows = append(rows, row)
 			}
 			root, _ := json.Marshal(map[string]any{"id": f.identity.RootID, "directory": f.identity.Directory, "time": map[string]int64{"created": f.identity.NativeCreatedAtMS}})
@@ -93,6 +106,19 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 			case "old row":
 				info["time"].(map[string]any)["created"] = intent.NotBeforeMS - 1
 			}
+			if scenario == "retained failure" || scenario == "retained completion newer" || scenario == "native error later" || scenario == "retained completion tie" || scenario == "retained failure tie" {
+				prior := OpenCodeOutcomeFailed
+				at := assistantAt + 1
+				if scenario == "retained completion newer" || scenario == "retained completion tie" {
+					prior = OpenCodeOutcomeCompleted
+					at = assistantAt + 200
+				}
+				if scenario == "retained completion tie" || scenario == "retained failure tie" {
+					at = assistantAt + 51
+				}
+				inputAt := int64(info["time"].(map[string]any)["created"].(float64))
+				f.d.checkpointOpenCodeOutcomes(f.binding.WorkerID, OpenCodeView{Root: f.identity.RootID, Generation: f.identity.BackendGeneration, Inputs: []OpenCodeInput{{MessageID: intent.MessageID, Classified: true, At: inputAt, Outcome: prior, OutcomeSource: OpenCodeOutcomeSourceLive, OutcomeAt: at}}})
+			}
 			raw, _ := json.Marshal(user)
 			var exactReads atomic.Int32
 			reader.message = func(message string) (json.RawMessage, error) {
@@ -118,7 +144,8 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 			}()
 			defer func() { cancel(); <-done }()
 			startupErr := <-ready
-			if scenario != "exact" && scenario != "initial exact" && scenario != "lost admission" && scenario != "unowned parent" {
+			qualified := scenario == "exact" || scenario == "initial exact" || scenario == "lost admission" || scenario == "retained failure" || scenario == "retained completion newer" || scenario == "native error later" || scenario == "retained completion tie" || scenario == "retained failure tie"
+			if !qualified && scenario != "unowned parent" {
 				if startupErr == nil {
 					t.Fatal("invalid full owned user row qualified startup")
 				}
@@ -127,9 +154,15 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 					t.Fatal(startupErr)
 				}
 				view := nextOCView(t, views, func(view OpenCodeView) bool { return view.BusyKnown })
-				if scenario == "exact" || scenario == "initial exact" || scenario == "lost admission" {
-					if len(view.Inputs) != 1 || !view.Inputs[0].PlainTextInput || view.Inputs[0].Outcome != OpenCodeOutcomeCompleted || len(view.Uncertain) != 0 {
-						t.Fatalf("bounded history did not recover exact owned input: %+v", view)
+				if qualified {
+					if len(view.Inputs) != 1 || !view.Inputs[0].PlainTextInput || view.Inputs[0].Outcome != wantOutcome || len(view.Uncertain) != 0 {
+						t.Fatalf("bounded history recovery inputs=%+v uncertain=%+v", view.Inputs, view.Uncertain)
+					}
+					if scenario == "retained completion newer" && (view.Inputs[0].OutcomeAt != assistantAt+200 || view.Inputs[0].OutcomeSource != OpenCodeOutcomeSourceLive) {
+						t.Fatal("newer retained outcome/source lost during hydration")
+					}
+					if (scenario == "retained completion tie" || scenario == "retained failure tie") && view.Inputs[0].OutcomeSource != OpenCodeOutcomeSourceLive {
+						t.Fatal("equal-time retained outcome lost first source")
 					}
 					reader.events <- opencodebridge.Event{Type: "permission.replied", Properties: json.RawMessage(`{"sessionID":"` + f.identity.RootID + `","requestID":"per_done","reply":"once"}`)}
 					deadline := time.Now().Add(2 * time.Second)
@@ -161,8 +194,8 @@ func TestOpenCodeOwnedInputRecoversBeyondStartupHistoryWindow(t *testing.T) {
 				want = "uncertain"
 			}
 			wantReads := int32(1)
-			if scenario == "exact" || scenario == "initial exact" || scenario == "lost admission" {
-				want = "completed"
+			if qualified {
+				want = string(wantOutcome)
 			}
 			if scenario == "unowned parent" {
 				wantReads = 0
