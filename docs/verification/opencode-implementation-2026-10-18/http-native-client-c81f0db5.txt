@@ -1,0 +1,18 @@
+commit=c81f0db5c11d9d3bd3a28562bed1286bd97386c7
+=== RUN   TestLiveOpenCode1193Metadata
+    live_interop_test.go:69: qualified binary version=1.19.3; no model execution requested
+    live_interop_test.go:75: wrong HTTP credential refused with 401
+    live_interop_test.go:80: get-before-create returned 404 for exact random caller ID
+    live_interop_test.go:101: legacy SSE open acknowledged before native session create
+    live_interop_test.go:126: caller-ID create, exact retry and legacy read retain build/free model/max metadata
+    live_interop_test.go:135: changed-agent create retry refused as binding mismatch
+    live_interop_test.go:160: native Status/Permissions/Questions/Messages/Children empty shapes decode
+    live_interop_test.go:169: legacy child metadata appears in Children and subscribed session.created event
+    live_interop_test.go:197: five text-only noReply appends yielded only user messages, unchanged title and no active work
+    live_interop_test.go:198: native populated Messages pages 2/2/1 preserve chronological page order and opaque X-Next-Cursor verbatim
+    live_interop_test.go:225: native restart retained exact root/model/agent/variant/child; get-before-create recovery passed
+    live_interop_test.go:226: populated user history and opaque pagination remained stable after native restart
+    live_interop_test.go:227: isolated native profile retained at /private/tmp/swarm-opencode-implementation-20261018/review-http-live/native-profile-1056466185 (server credentials were environment-only)
+--- PASS: TestLiveOpenCode1193Metadata (2.60s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/opencodehttp	2.821s

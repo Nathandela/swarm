@@ -1,0 +1,45 @@
+{
+  "conclusion": "A no-dependency forwarding wrapper around public api.ui.Prompt can submit a genuine first plain-text input to the already-bound native root using the composer's actual model/agent/variant. This is feasible only under a qualified clean-slot and fresh-composer startup gate; broad additive coexistence is not supported.",
+  "native_version": "1.19.3",
+  "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+  "admission": {
+    "passed": true,
+    "root": "ses_afa087eea147343d4b0093fc20f362d5",
+    "native_generated_message_id": "msg_14f676829001tSGU02Ja2YsFVP",
+    "agent": "plan",
+    "model": {
+      "providerID": "opencode",
+      "modelID": "deepseek-v4.1-flash-free",
+      "variant": "max"
+    },
+    "tools": 0
+  },
+  "execution": {
+    "passed": false,
+    "status": 403,
+    "error": "FreeTierError",
+    "cost": 0,
+    "message": "Provider rejected the request as unavailable to this native fixture. No successful generation or reasoning behavior is claimed."
+  },
+  "owner_composer_conflict": {
+    "passed": true,
+    "policy": "conservatively refuse any other enabled external plugin",
+    "wrapper_registered": false,
+    "native_sessions_created": 0
+  },
+  "files": {
+    "success_admission": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/slot-162535/results.json",
+    "conflict": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/slot-conflict-162436/results.json",
+    "source": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/prompt-slot-source-proof.json"
+  },
+  "limits": [
+    "Native --prompt is withheld; no fake user-message seed or PTY auto-submit used.",
+    "Native persisted max state is synthetic private fixture state, not a production variant setter.",
+    "No current-picker getter exists or is required for this native submit path.",
+    "Public ref.submit/onSubmit are not admission receipts; native message ID is generated after dispatch.",
+    "Normal/shell state, slash commands, editor attachments, remounts, modal/permission races, later owner typing and plugin changes need separate qualification.",
+    "Existing OPENCODE_TUI_CONFIG/pure-mode preservation and production shim embargo/persistence remain unresolved implementation gates.",
+    "No production code changed; all probe TUI processes stopped, credentials retired and config files unchanged."
+  ],
+  "fixture_correction": "slot-162436 stopped before submission because fixture asserted uppercase Max; native footer displays lowercase max. It retained zero messages. Corrected run is slot-162535."
+}

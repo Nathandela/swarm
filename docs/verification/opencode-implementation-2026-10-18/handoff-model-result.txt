@@ -1,0 +1,6 @@
+IMPLEMENTATION_READY — comment trim done
+
+- **Commit: `8dd3bca7`** ("Trim handoff cwd comments to why-lines"), comments only — no code, test, or error-handling changes. Branch `oc-impl/handoff`, local only.
+- api.go launch-branch block reduced to a single why-line ("the roster view omits AgentCwd, so resolve the source's authoritative checkout before spawning"); handoff_directory.go file-level essay removed; gate doc capped at three short lines, resolution doc at one sentence, worktree-refusal inline comment at two lines.
+- Inaccurate legacy claim corrected in both places: handoffDirectory doc and the test banner now say the launch uses the source's recorded launch cwd (the value the CLI sends for legacy rows), not that the daemon keeps the caller's copy.
+- Verified: gofmt clean, `go vet` clean, focused set green after the comment change (`ok github.com/Nathandela/swarm/internal/skeleton`). Final history: `196437d5` (initial fix), `8c60b22c` (reviewer round: refusals + resume-overlay test repair), `8e9cfa57` (invariants-only comments), `8dd3bca7` (final trim). Evidence files remain under `/private/tmp/swarm-opencode-implementation-20261018/evidence/`.

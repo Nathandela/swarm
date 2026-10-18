@@ -1,0 +1,21 @@
+## Final cross-review: 8e9cfa574e43fa450895ce5dba1046ebcba06f92 (8c60b22c + 8e9cfa57 atop 196437d5)
+
+Checked out detached at the exact hash; read-only, tree clean (`git status` empty; no source edits).
+
+**Verified requested behaviors**
+- **Absent lineage refuses.** api.go:1054-1065: `core.Get(spec.SpawnedFrom)` failure now returns `"handoff: the lineage source %q is no longer in this daemon's roster..."` before any reservation/compose. `TestHandoffChildRefusesAMissingSource` drives a real core (row deliberately not persisted), asserts refusal names the ID, and asserts `len(api.List())==0` (no reservation/spawn). The old unsafe `TestHandoffChildAbsentSourceKeepsTheClientCwd` is removed, not preserved (repo-wide grep shows no orphan reference).
+- **worktree=true / AgentCwd empty refuses.** handoff_directory.go:47-49 mirrors `resumeDirectory`'s unknowable-checkout check (`"source worktree path was not captured; refusing to hand off in another checkout"`), placed before `ProviderCwd()`/stat. `TestHandoffChildRefusesAnUncapturedWorktreeSource` passes with roster count 1.
+- **Generic `--dir` and valid ordinary legacy source remain.** Unchanged `TestUnsupervisedSpawnChildKeepsItsClientCwd` (no supervision → gate false, caller cwd honored, no AgentCwd) and `TestHandoffChildKeepsTheClientCwdForALegacySource` (non-worktree legacy row → Cwd fallback) both pass.
+- **Resume test fixed.** It now uses `api.endpointID` (fixture's own dir-derived endpoint), so `validateResumeSource` resolves; the new positive assertion `"not found on the agent PATH"` matches api.go:1519 and passed, proving the flow reached codex argv resolution after `resumeDirectory` set cwd from the child's own record. The stale-grandparent negative checks (no "no longer a directory"/path leak) still guard against gate leakage.
+- Comments: "four reviewers" count removed from both handoff files (grep clean); no behavior claims drifted.
+
+**Evidence (env stripped via `env -i`, Go 1.26.9 first, `GOTOOLCHAIN=local`, isolated GOCACHE/TMPDIR)**
+- New 7/7 PASS: worktree source, legacy, stale worktree, spawn cwd, uncaptured worktree, resume beat, missing source. Neighbor set `TestHandsOff|TestResume|TestHandoff|TestUnsupervisedSpawnChild` PASS; real-binary e2e `TestHandoffSupervision_PassiveChildWakesSourceThroughRealBinaries` PASS; `cmd/swarm TestHandoff|TestSpawn` PASS; `go vet` (skeleton/protocol/cmd) + `go build ./...` OK; `gofmt -l` and `git show --check` clean for both commits. Account suite not run (known baseline vyhy.10).
+
+**Must-fixes: none.**
+
+Optional nits (non-blocking): handoff_directory_test.go:65-66 helper doc is muddled — `withAgentCwd=false` records *no* AgentCwd; the stale shape is created by the caller assigning it, so the "An AgentCwd recorded..." clause describes the caller's manual mutation; api.go:1052's "A legacy row falls back to its launch cwd" is imprecise for legacy worktree rows (the helper refuses those), though handoff_directory.go:37-42 states the real rule.
+
+**Verdict**: PASS — both the worktree-cwd correction and the missing-source race are closed by exact gates with no-reservation refusals, the resume regression now exercises the intended path, and no regression observed in the focused surface.
+
+REVIEW_COMPLETE

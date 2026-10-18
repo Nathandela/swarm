@@ -2,7 +2,7 @@
 
 This plan makes OpenCode a dependable Swarm worker for long-running work, cross-CLI communication, supervision, recovery, and structured phone interaction. It reuses Swarm's shim lifecycle, protocol, interaction journal, composer operation custody, and existing UI. It does not introduce another scheduler, broker, transcript archive, or provider framework.
 
-**Implementation status:** model discovery and the shared watch argument fix are implemented locally. Native implementation and qualification are in progress through Swarm workers using the built-in DeepSeek V4.1 Flash Free and GLM-5.3 Flash Free models. The [implementation evidence](../verification/opencode-implementation-2026-10-18.md), [baseline audit](../verification/opencode-parity-2026-10-18.md), [model strategy reviews and new API experiments](../verification/opencode-plan-review-2026-10-18.md), and source distinguish completed checks from proposed behavior; schema availability alone does not establish runtime guarantees.
+**Implementation status:** model discovery, watch arguments and supervised handoff checkout preservation are implemented locally. The built-in DeepSeek V4.1 Flash Free and GLM-5.3 Flash Free workers produced the first changes and cross-reviews. After their native free quota was exhausted, the owner authorized Sol/Astra to continue implementation. Native runtime and projection remain under implementation and qualification. The [implementation evidence](../verification/opencode-implementation-2026-10-18.md), [baseline audit](../verification/opencode-parity-2026-10-18.md), [model strategy reviews and new API experiments](../verification/opencode-plan-review-2026-10-18.md), and source distinguish completed checks from proposed behavior; schema availability alone does not establish runtime guarantees.
 
 ## Decisions and evidence
 
@@ -10,7 +10,7 @@ The target is parity with the **actual** Claude/Codex implementation, plus the r
 
 | Decision | Reason and condition |
 | --- | --- |
-| One shim-owned authenticated OpenCode server, attached TUI, per worker | Preserve terminal close and daemon-crash survival, contain backend death, and bind observation/control to the actual running process. A per-worker server does not isolate the user's shared native profile. |
+| One shim-owned normal OpenCode TUI with an authenticated private plugin bridge | Live qualification found that `serve` plus `attach` ignores explicit startup model selection. The normal TUI preserves native CLI selection and owns its worker runtime; a public plugin reaches that same runtime through the native SDK without another server process. Native profiles remain shared unless the owner selects otherwise. |
 | Ship legacy HTTP/SSE observation first | Successful ordinary TUI replies and permission events are qualified. The newer durable API does not currently cover ordinary TUI activity in the tests below. Do not block the first useful monitoring slice on an incomplete runtime bridge. |
 | Qualify newer `/api/session` capabilities individually | Caller-ID creation can be used with the legacy execution path after its binding/default/resume gates pass. Durable queue admission/retry/history survived restart, but ordinary TUI history and execution are not unified with that runtime; its admission/execution capabilities stay separately gated. |
 | Persist native identity before useful work | Abrupt OpenCode death left Swarm unable to resume despite native history surviving. Never infer identity from newest session in a cwd. |
@@ -25,6 +25,8 @@ New experiments on OpenCode 1.19.3 changed the initial strategy:
 - A legacy-created session is readable through v2, and a v2-created session is readable through legacy. This is **row compatibility**, not proof of shared execution or event coverage.
 - Ordinary reviewer TUI conversations had empty v2 history despite successful replies. An attached TUI on a v2-created session produced `LEGACY_ATTACH_OK` through the legacy message path, while v2 history/projection retained only the earlier v2 admission/promotion. A v2 resume attempt did not establish a successful assistant reply in that probe. The two projections must not be merged by assumption.
 - `serve --port 0` first bound 4096; a second concurrent instance chose an available ephemeral port. Let the native server bind and read its actual endpoint; do not build a check-free-port/close/rebind allocator or assume every zero request is purely ephemeral.
+- An attached empty root ignored its stored model/agent; an inline default overlay still lost to agent-specific model configuration. This topology does not satisfy OC-02 for explicit startup choices.
+- The normal TUI's `--model`/`--agent` preserved the requested selection despite conflicting agent configuration. A public plugin created a caller-owned root, navigated to it, and relayed native reads/events over a private authenticated Unix socket with no TCP listener. Genuine native-composer submission preserved the actual selected tuple. This qualifies those primitives, not durable admission, recovery, arbitrary plugin coexistence, or successful model execution.
 
 DeepSeek V4.1 Flash and GLM-5.3 Flash reviewed the strategy through actual Swarm OpenCode sessions, then responded to these findings and one another's objections. Their useful objections are incorporated below; their claims are not substitutes for contracts or tests.
 
@@ -50,7 +52,7 @@ Delivery is tracked by **`agents-tracker-vyhy`**. P1–P9 correspond to `agents-
 | --- | --- |
 | Swarm worker | One shim-managed CLI process/session with a Swarm instance and lifecycle |
 | Native root | Exact OpenCode conversation to which that worker is bound |
-| Backend generation | One owned server process incarnation, proven by PID/start-time and auth custody |
+| Backend generation | One owned native runtime incarnation, proven by its TUI/shim lifecycle and private bridge custody |
 | Native input | One provider-admitted user/agent request, distinct from assistant tool steps |
 | Native child | An OpenCode descendant session; not automatically another Swarm worker |
 | Attention request | A currently pending permission or question addressed to an exact native session/request ID |
@@ -104,7 +106,7 @@ Names below describe required data and behavior, not an instruction to add a bro
 
 | Contract | Owner and consumers | Explicit and implicit obligations |
 | --- | --- | --- |
-| Backend launch descriptor | Adapter → daemon launch schema → CLI shim decoding | Closed backend kind, native listen policy, credential reference, required-managed startup; no shell commands/interpolation. Old Codex behavior remains compatible. |
+| Managed launch descriptor | Launch composition → daemon launch schema → CLI shim decoding | Closed required runtime kind, private bridge credential reference and startup embargo; no shell interpolation. Old Codex behavior remains compatible. |
 | Native binding | Shim/core persistence → driver, resume, control | Native root, profile/cwd scope, worker instance, backend PID/start/generation, endpoint/version, launch custody; atomic durability before action. Secret value excluded. |
 | Observation reducer | HTTP driver → engine and interaction capture | Exact source/generation, native work state plus request set, error/retry and input correlation; deterministic replay/snapshot fold; no terminal-grid overwrite of fresh native authority. |
 | Semantic receipt | Owner protocol/pilot/composer → existing operation store and native sink | Immutable payload identity, native IDs when known, definite rejection/conflict/admission versus uncertain write; per-session serialization and bounded queue/backpressure. |
@@ -120,25 +122,27 @@ sequenceDiagram
   participant C as Swarm client
   participant D as Daemon
   participant S as Shim
-  participant O as OpenCode server
-  participant T as Attached TUI
+  participant T as Normal OpenCode TUI
+  participant P as Native plugin and SDK
   C->>D: Launch with effective cwd and explicit selections
   D->>D: Persist launch intent and native identity custody
-  D->>S: Start managed HTTP backend
-  S->>O: Loopback serve with private auth environment
-  O-->>S: Actual bound endpoint
-  S->>S: Validate process and health; persist backend record
-  D->>O: Subscribe and create or recover exact native root
+  D->>S: Start required native runtime with input embargo
+  S->>T: Native CLI flags, withholding initial prompt
+  T->>P: Await public plugin startup
+  P->>P: Create or recover exact root; navigate to it
+  P-->>D: Authenticated root, cwd, creation time and generation
   D->>D: Persist and re-read exact binding
-  D->>S: Attach exact root; no standalone fallback
-  S->>T: attach URL --session root --dir cwd
-  D->>O: Admit initial prompt through qualified path
-  O-->>D: Admission and correlated observations
+  D->>P: Acknowledge durable binding
+  D->>P: Submit initial input through qualified native path
+  P-->>D: Correlated native user identity and observations
+  D->>S: Release owner input after startup contract completes
 ```
 
 For pinned 1.19.3, prefer narrowly qualified caller-ID session creation followed by the proven legacy execution/observation path; this does not enable v2 prompt execution or history authority. P1 must finish its binding/default/resume tests before enabling that combination. Persist the caller native ID before create. Repeated v2 create does not validate changed arguments, so verify returned profile/location/root and distinguish existing-session recovery from a fresh launch. A version using legacy creation instead needs a persisted random launch token in native metadata and qualified bounded ambiguous-create recovery. Neither path may select newest-by-cwd.
 
-`attach` has no standalone model/agent/prompt flags. Apply selections through the qualified session/prompt API; prove that the first human prompt sees the intended model/agent. The current shim's 20-second fallback to original standalone argv is unsafe after native allocation: managed-required startup must fail explicitly or attach the exact saved root. Keep a terminal-only fallback as a separate **fresh launch choice before allocation**, not an automatic side effect after failure.
+Managed startup uses normal native model/agent flags and withholds `--prompt`. After plugin routing, the native Home-only prompt handler ignores it; if the plugin fails, native startup can instead submit it into a fresh root. A keyboard embargo alone does not prevent that. Missing plugins, unsupported configuration and startup deadline failures must therefore fail explicitly without a second conversation or automatic standalone fallback. Keep terminal-only operation as a separate **fresh launch choice before allocation**.
+
+The public native `Prompt` component and forwarding ref preserve native selection for initial submission. Forward reactive host props, its original ref, callbacks and the right-hand slot. Unknown competing composer plugins must refuse before allocation: the public replacement slot renders every contribution and exposes no ownership inspection. The narrow initial-input qualification does not establish later shell-mode, draft or modal authority, and `submit()`/`onSubmit` are not native admission receipts. Explicit variant bootstrap remains unsupported; preserving a native selected variant is a separate property.
 
 If daemon death happens after native admission but before receipt persistence, recover by stable native ID only where content-bound replay is proved; otherwise retain uncertainty. If a backend dies, disable native actions, retain identity/history and re-establish ownership before resume. If TUI `/new`, fork, session selector or `/resume` changes what is displayed, either rebind through a proven handshake or visibly suspend semantic actions. Never keep sending to an old hidden root while `peek` shows another conversation.
 
@@ -166,13 +170,13 @@ Pinned 1.19.3 source has no authoritative server-side current-view read: normal 
 
 **Exit:** a written version-specific contract says which path is authoritative for every event/action; ordinary TUI and agent-originated activity both reach that path, or unsupported semantics remain false. Separate caller-ID creation qualification from admission/execution qualification, so useful identity primitives do not require adopting the incomplete runtime. Retain the current v2 execution/projection split as a regression. Wrong credentials are refused; two server instances have distinct owned endpoints; stale-port health alone cannot pass readiness.
 
-### P2 Shim-owned HTTP backend and early native identity
+### P2 Shim-owned native runtime and early identity
 
-**Scope:** extend the existing backend lifecycle just enough for OpenCode; exact startup/resume ownership, containment, private auth and failure semantics. Read-only inspection is the first running vertical slice.
+**Scope:** use the existing shim-owned normal TUI lifecycle and the private plugin bridge for exact startup/resume ownership, private auth and failure semantics. Read-only inspection and genuine initial input are the first running vertical slices.
 
 **Files:** `internal/adapter/backend.go`, `internal/adapter/opencode/`, `internal/daemon/{backend,launch}.go`, `cmd/swarm/main.go` launch decoding, `internal/shim/{backend,shim,server}.go`, new concrete HTTP client/driver, `internal/skeleton/backendconnect.go` dispatch, identity/persistence/reconcile tests. Requirements OC-02/03/13/14; depends on P1's chosen contract.
 
-**Tasks:** add a closed HTTP backend kind and additive endpoint record; reuse process-group/PID-start containment and sole metadata writer; continuously drain bounded startup output; validate numeric loopback endpoint, disabled redirects/proxies, version/health and auth; add the pure characterized OpenCode native-ID validator; persist exact native identity before initial prompt; re-read after the first-wins setter to prove binding; attach the selected root without unsupported flags. P6 extends the generic external-resume/handoff consumers of that validator. Keep API credentials out of argv, URLs, roster, journal, phone and errors.
+**Tasks:** add the closed required runtime kind `opencode-tui` and a bounded private Unix-socket bridge record; reuse process-group/PID-start containment, sole metadata writer and existing PTY ownership. Validate bridge custody, version, exact native root/profile/cwd and generation. Add the pure characterized OpenCode native-ID validator; persist identity before create, then persist and re-read the actual creation time and binding before initial input. Execution-critical metadata uses schema 3 and a required shim flag that older binaries reject before executing anything. Deep-copy new binding pointers at launch/Get/List boundaries. Preserve ordinary schema 1 and account schema 2. P6 extends generic resume/handoff consumers. Keep credentials out of argv, URLs, roster, journal, phone and errors.
 
 **Compatibility:** execution-critical managed-HTTP metadata must be rejected by older binaries/shims that cannot interpret it. Do not rely on an old daemon silently ignoring optional fields. Preserve old standalone records and Codex backend semantics; identify exact protocol/schema changes and the upgrade/downgrade refusal path before merging.
 
@@ -218,6 +222,8 @@ Reuse existing pending-send/history/detail and wire bounds rather than inventing
 | Uncertain | Bytes may have produced a native effect but its identity/outcome is unproved; reconcile or require intervention, never blind auto-replay |
 
 Legacy `prompt_async` success can yield definite admission only to the extent its response/history identity is qualified; a timeout after sending is not safely retryable. Caller message IDs alone do not prove content-bound retry safety. Native v2 admission may remove this ambiguity once its actual execution/TUI path passes P1; today's queue-storage result is insufficient. Preserve the payload identity and scope across retries, process restarts and model switches.
+
+Existing signed phone commands expire within one hour, while the operation store normally expires records after 24 hours. The new owner semantic route must explicitly enter durable custody and define its own replay horizon. Retain unresolved native-operation guards outside ordinary TTL eviction until reconciliation or explicit intervention; reaching the existing capacity limit must refuse new effects. An expired terminal receipt must never allow the same old owner request to become a fresh write. The initial-prompt marker alone does not protect later messages.
 
 For busy workers, use only a qualified native queue/steer contract. Otherwise return an explicit bounded busy refusal or uncertainty instead of inventing a durable Swarm inbox. Do not require a new generic messaging broker. Supervisor notices remain daemon-authored IDs/state, are revalidated at the real admission boundary, and do not embed child-authored instructions. Exactly-once PTY notice delivery is not promised.
 

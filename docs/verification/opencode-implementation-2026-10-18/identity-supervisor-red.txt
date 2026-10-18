@@ -1,0 +1,18 @@
+--- FAIL: TestNativeConversationIDValidation (0.00s)
+    identity_test.go:13: OpenCode must validate its native conversation IDs
+--- FAIL: TestResumeRejectsUnsafeNativeIdentity (0.00s)
+    identity_test.go:39: unsafe native identity composed argv: [opencode --session --help], <nil>
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/opencode	0.327s
+--- FAIL: TestComposeExternalOpenCodeIdentity (0.00s)
+    opencode_identity_test.go:22: external native resume: resume: external conversation identity is invalid
+--- FAIL: TestExternalOpenCodeValidatesBeforeDeduplication (0.16s)
+    --- FAIL: TestExternalOpenCodeValidatesBeforeDeduplication/ses_eb0e24fcfffezuXlKs7DaFmVfm (0.06s)
+        opencode_identity_test.go:47: exact native identity was not reused: {SchemaVersion:0 ID: AgentType: Name: NameSetAt:0001-01-01 00:00:00 +0000 UTC Tag: Cwd: AgentCwd: LaunchOptions:map[] Env:[] CreatedAt:0001-01-01 00:00:00 +0000 UTC Status:{Process: Turn: Interaction:} GroupEnteredAt:0001-01-01 00:00:00 +0000 UTC LastActivity:0001-01-01 00:00:00 +0000 UTC ShimPID:0 ShimStartTime:0 ConversationID: ShimWireVersion:0 BackendPlanError: AuthIdentity: AccountBinding:<nil> AccountProjectionRef: AccountClaudeFallback:<nil> InputEmbargo: CLIIdentity:<nil> ExitCode:<nil> RosterHidden:false ResumedFrom: SpawnedFrom: SpawnIntent: Supervision: LaunchNotice:} resume: external conversation identity is invalid
+    --- FAIL: TestExternalOpenCodeValidatesBeforeDeduplication/01a00339-a80e-72a0-966f-116427b6b9ce (0.05s)
+        opencode_identity_test.go:50: invalid identity bypassed validation through an existing row: {SchemaVersion:1 ID:resume-api-source AgentType:opencode Name: NameSetAt:0001-01-01 00:00:00 +0000 UTC Tag: Cwd:/tmp/swra-1659936864/work AgentCwd: LaunchOptions:map[] Env:[] CreatedAt:2026-10-18 14:34:37.863054 +0000 UTC Status:{Process:exited Turn: Interaction:} GroupEnteredAt:0001-01-01 00:00:00 +0000 UTC LastActivity:2026-10-18 14:34:37.863054 +0000 UTC ShimPID:0 ShimStartTime:0 ConversationID:01a00339-a80e-72a0-966f-116427b6b9ce ShimWireVersion:0 BackendPlanError: AuthIdentity: AccountBinding:<nil> AccountProjectionRef: AccountClaudeFallback:<nil> InputEmbargo: CLIIdentity:<nil> ExitCode:<nil> RosterHidden:false ResumedFrom: SpawnedFrom: SpawnIntent: Supervision: LaunchNotice:} <nil>
+--- FAIL: TestStoredOpenCodeIdentityRefusesBeforeHistoryOrBinaryResolution (0.06s)
+    opencode_identity_test.go:65: corrupt stored identity reached later resume phases: resume: agent binary "opencode" not found on the agent PATH
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	0.571s
+FAIL

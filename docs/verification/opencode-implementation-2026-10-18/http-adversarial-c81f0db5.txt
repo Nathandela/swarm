@@ -1,0 +1,23 @@
+commit=c81f0db5c11d9d3bd3a28562bed1286bd97386c7
+=== RUN   TestMessagesRequiresPartsArray
+=== RUN   TestMessagesRequiresPartsArray/null-parts
+=== RUN   TestMessagesRequiresPartsArray/missing-parts
+--- PASS: TestMessagesRequiresPartsArray (0.01s)
+    --- PASS: TestMessagesRequiresPartsArray/null-parts (0.00s)
+    --- PASS: TestMessagesRequiresPartsArray/missing-parts (0.00s)
+=== RUN   TestReviewerRawRowsOwnTheirInputBytes
+=== RUN   TestReviewerRawRowsOwnTheirInputBytes/message
+=== RUN   TestReviewerRawRowsOwnTheirInputBytes/permission
+=== RUN   TestReviewerRawRowsOwnTheirInputBytes/question
+--- PASS: TestReviewerRawRowsOwnTheirInputBytes (0.00s)
+    --- PASS: TestReviewerRawRowsOwnTheirInputBytes/message (0.00s)
+    --- PASS: TestReviewerRawRowsOwnTheirInputBytes/permission (0.00s)
+    --- PASS: TestReviewerRawRowsOwnTheirInputBytes/question (0.00s)
+=== RUN   TestReviewerMessagesRejectNullParts
+=== RUN   TestReviewerMessagesRejectNullParts/null
+=== RUN   TestReviewerMessagesRejectNullParts/missing
+--- PASS: TestReviewerMessagesRejectNullParts (0.00s)
+    --- PASS: TestReviewerMessagesRejectNullParts/null (0.00s)
+    --- PASS: TestReviewerMessagesRejectNullParts/missing (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/opencodehttp	1.256s

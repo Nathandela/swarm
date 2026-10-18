@@ -1,0 +1,198 @@
+{
+  "native_version": "1.19.3",
+  "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+  "opentui_version": "0.4.5",
+  "opentui_git_head_from_verified_npm_tarball": "0c8c4f7cff2927e3df63a9757a45eff9a343611c",
+  "claims": [
+    {
+      "id": "native_prompt_surface",
+      "finding": "Public session_prompt supplies session_id, visible, disabled, on_submit and host ref. Public api.ui.Prompt renders the exact native Prompt; native ref exposes current input/parts, set, submit and focus/reset methods. A wrapper can call it directly without importing React/Solid dependencies.",
+      "references": [
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/plugin/src/tui.ts#L201-L228",
+          "path": "packages/plugin/src/tui.ts",
+          "first_line": 201,
+          "last_line": 228
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/plugin/src/tui.ts#L455-L473",
+          "path": "packages/plugin/src/tui.ts",
+          "first_line": 455,
+          "last_line": 473
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/plugin/adapters.tsx#L239-L255",
+          "path": "packages/tui/src/plugin/adapters.tsx",
+          "first_line": 239,
+          "last_line": 255
+        }
+      ]
+    },
+    {
+      "id": "forwarding_requirements",
+      "finding": "Stock Session Prompt also supplies a session_prompt_right slot. A wrapper must forward sessionID, visible, disabled, onSubmit and host ref, plus reconstruct that right slot. Dynamic props need forwarding getters. Captured ref belongs only to this wrapper and must clear on unmount; this is not a global picker/draft API.",
+      "references": [
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/routes/session/index.tsx#L1246-L1267",
+          "path": "packages/tui/src/routes/session/index.tsx",
+          "first_line": 1246,
+          "last_line": 1267
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/component/prompt/index.tsx#L583-L615",
+          "path": "packages/tui/src/component/prompt/index.tsx",
+          "first_line": 583,
+          "last_line": 615
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/component/prompt/index.tsx#L626-L643",
+          "path": "packages/tui/src/component/prompt/index.tsx",
+          "first_line": 626,
+          "last_line": 643
+        }
+      ]
+    },
+    {
+      "id": "slot_conflict",
+      "finding": "session_prompt is mode=replace. OpenTUI 0.4.5 renders ALL matching contributions, sorted by order then registration order then ID. It is not a single winner or a decorator chain: adding a second composer duplicates composers. Public api.slots provides register only and public plugin statuses omit slot ownership. This fixture conservatively rejects every other enabled external plugin before creating a root or registering; precise coexistence and later plugin changes remain unsupported.",
+      "references": [
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/routes/session/index.tsx#L1248-L1256",
+          "path": "packages/tui/src/routes/session/index.tsx",
+          "first_line": 1248,
+          "last_line": 1256
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/plugin/src/tui.ts#L504-L517",
+          "path": "packages/plugin/src/tui.ts",
+          "first_line": 504,
+          "last_line": 517
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/plugin/src/tui.ts#L549-L556",
+          "path": "packages/plugin/src/tui.ts",
+          "first_line": 549,
+          "last_line": 556
+        },
+        {
+          "url": "https://github.com/anomalyco/opentui/blob/0c8c4f7cff2927e3df63a9757a45eff9a343611c/packages/solid/src/plugins/slot.tsx#L277-L287",
+          "path": "packages/solid/src/plugins/slot.tsx",
+          "first_line": 277,
+          "last_line": 287
+        },
+        {
+          "url": "https://github.com/anomalyco/opentui/blob/0c8c4f7cff2927e3df63a9757a45eff9a343611c/packages/core/src/plugins/registry.ts#L263-L303",
+          "path": "packages/core/src/plugins/registry.ts",
+          "first_line": 263,
+          "last_line": 303
+        }
+      ]
+    },
+    {
+      "id": "selection_and_generated_identity",
+      "finding": "Native submit samples the current local agent/model/variant and sends the exact existing session ID. Public PromptRef.submit returns void and native prompt request omits messageID, so native creates the user ID. Local onSubmit fires after initiating the promise, before admission/completion is known. Durable custody/replay cannot use that callback as a receipt; this probe reconciles native history after the call.",
+      "references": [
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/component/prompt/index.tsx#L957-L990",
+          "path": "packages/tui/src/component/prompt/index.tsx",
+          "first_line": 957,
+          "last_line": 990
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/component/prompt/index.tsx#L1092-L1133",
+          "path": "packages/tui/src/component/prompt/index.tsx",
+          "first_line": 1092,
+          "last_line": 1133
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/session/prompt.ts#L635-L672",
+          "path": "packages/opencode/src/session/prompt.ts",
+          "first_line": 635,
+          "last_line": 672
+        }
+      ]
+    },
+    {
+      "id": "draft_and_mode_limit",
+      "finding": "The captured ref reads the native store.prompt input/parts. Active normal/shell mode is a separate store.mode; ref.current does not reliably report it, and ref.set does not change it. Native submit can take shell or slash-command branches. The live test is limited to a fresh normal composer, no owner input, no dialog, plain text and no pending request; it does not qualify arbitrary later semantic messages or a universal draft/mode guard.",
+      "references": [
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/component/prompt/index.tsx#L284-L300",
+          "path": "packages/tui/src/component/prompt/index.tsx",
+          "first_line": 284,
+          "last_line": 300
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/component/prompt/index.tsx#L583-L614",
+          "path": "packages/tui/src/component/prompt/index.tsx",
+          "first_line": 583,
+          "last_line": 614
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/component/prompt/index.tsx#L1040-L1094",
+          "path": "packages/tui/src/component/prompt/index.tsx",
+          "first_line": 1040,
+          "last_line": 1094
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/routes/session/index.tsx#L235-L244",
+          "path": "packages/tui/src/routes/session/index.tsx",
+          "first_line": 235,
+          "last_line": 244
+        }
+      ]
+    },
+    {
+      "id": "persisted_variant_not_bootstrap_setter",
+      "finding": "The fixture seeds private native model.json with an already-selected max variant. Native reads and validates that persisted selection. The forwarding wrapper does not change the model, agent or variant; this proves preservation of actual composer selection, not a new explicit variant bootstrap mechanism.",
+      "references": [
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/local.tsx#L164-L195",
+          "path": "packages/tui/src/context/local.tsx",
+          "first_line": 164,
+          "last_line": 195
+        },
+        {
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/local.tsx#L362-L388",
+          "path": "packages/tui/src/context/local.tsx",
+          "first_line": 362,
+          "last_line": 388
+        }
+      ]
+    }
+  ],
+  "files": {
+    "opencode/packages/plugin/src/tui.ts": {
+      "local": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/plugin/src/tui.ts",
+      "sha256": "3b0ccca22ebf8558afb9dc055505c7c503930f2f622d1db8c3fb9ca3e9278e8c"
+    },
+    "opencode/packages/tui/src/plugin/adapters.tsx": {
+      "local": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/plugin/adapters.tsx",
+      "sha256": "ecff9bb3a2d1acf0f4ee6d1dacf213ee059d88fa22cedced8cafa51dfb4eb353"
+    },
+    "opencode/packages/tui/src/routes/session/index.tsx": {
+      "local": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/routes/session/index.tsx",
+      "sha256": "9e8452acfeef70858abaaa3c77a577ce626b598a866cf4b3499bcf5244caa479"
+    },
+    "opencode/packages/tui/src/component/prompt/index.tsx": {
+      "local": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/component/prompt/index.tsx",
+      "sha256": "e8c0153b5b9dcf5b00e334d6063126dfffe5cb41333b55621d92f54e8d18639c"
+    },
+    "opentui/packages/solid/src/plugins/slot.tsx": {
+      "local": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/opentui-0.4.5/source/packages/solid/src/plugins/slot.tsx",
+      "sha256": "89585a2f581e898f22a526c7f42cb1dd4df6dd04c00d7feca44c3335df54d849"
+    },
+    "opentui/packages/core/src/plugins/registry.ts": {
+      "local": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/opentui-0.4.5/source/packages/core/src/plugins/registry.ts",
+      "sha256": "614b82521bbd163c21359fe6cb6667e7020df1c819a2e1dd1694fa0f852141ee"
+    },
+    "opencode/packages/opencode/src/session/prompt.ts": {
+      "local": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/opencode/src/session/prompt.ts",
+      "sha256": "f0c5bc64c0f0e966693d4a57f7ede1e9d6e188b396152f04b55303dc75b9b768"
+    },
+    "opencode/packages/tui/src/context/local.tsx": {
+      "local": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/context/local.tsx",
+      "sha256": "a4501acaaead3270b48ec362127390ed6c96f547c3c6daed9ce59cfae52ee9df"
+    }
+  }
+}

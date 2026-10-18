@@ -1,0 +1,413 @@
+{
+  "version": "1.19.3",
+  "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+  "claims": [
+    {
+      "id": "standalone_selection",
+      "finding": "Standalone --agent sets the local agent and --model sets that agent's in-memory model slot, which precedes agent.model and global fallback. No variant argument exists; persisted local variant state remains authoritative. Live empty-root CLI selection beats conflicting agent.plan.model without changing native config.",
+      "references": [
+        {
+          "path": "packages/opencode/src/cli/cmd/tui.ts",
+          "first_line": 120,
+          "last_line": 155,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/cmd/tui.ts#L120-L155"
+        },
+        {
+          "path": "packages/tui/src/app.tsx",
+          "first_line": 467,
+          "last_line": 485,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/app.tsx#L467-L485"
+        },
+        {
+          "path": "packages/tui/src/context/local.tsx",
+          "first_line": 236,
+          "last_line": 243,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/local.tsx#L236-L243"
+        },
+        {
+          "path": "packages/tui/src/context/local.tsx",
+          "first_line": 320,
+          "last_line": 338,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/local.tsx#L320-L338"
+        },
+        {
+          "path": "packages/tui/src/context/local.tsx",
+          "first_line": 362,
+          "last_line": 388,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/local.tsx#L362-L388"
+        }
+      ]
+    },
+    {
+      "id": "runtime_transport",
+      "finding": "Standalone owns a Worker. Without explicit network flags it gives SDK an RPC-backed fetch/event source at opencode.internal. Worker fetch injects configured Basic auth and invokes Server.Default().app.fetch directly. TUI exit shuts down and terminates this worker; no separate serve process is needed.",
+      "references": [
+        {
+          "path": "packages/opencode/src/cli/cmd/tui.ts",
+          "first_line": 28,
+          "last_line": 56,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/cmd/tui.ts#L28-L56"
+        },
+        {
+          "path": "packages/opencode/src/cli/cmd/tui.ts",
+          "first_line": 249,
+          "last_line": 297,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/cmd/tui.ts#L249-L297"
+        },
+        {
+          "path": "packages/opencode/src/cli/tui/worker.ts",
+          "first_line": 23,
+          "last_line": 49,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/tui/worker.ts#L23-L49"
+        },
+        {
+          "path": "packages/opencode/src/cli/tui/worker.ts",
+          "first_line": 72,
+          "last_line": 80,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/tui/worker.ts#L72-L80"
+        }
+      ]
+    },
+    {
+      "id": "public_sdk",
+      "finding": "Public plugin api.client is the existing TUI SDK client. api.client.v2.session.create accepts caller id/agent/model/location at /api/session. Public legacy session reads share the transport.",
+      "references": [
+        {
+          "path": "packages/tui/src/plugin/adapters.tsx",
+          "first_line": 299,
+          "last_line": 304,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/plugin/adapters.tsx#L299-L304"
+        },
+        {
+          "path": "packages/tui/src/context/sdk.tsx",
+          "first_line": 23,
+          "last_line": 30,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/sdk.tsx#L23-L30"
+        },
+        {
+          "path": "packages/sdk/js/src/v2/gen/sdk.gen.ts",
+          "first_line": 5477,
+          "last_line": 5507,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/sdk/js/src/v2/gen/sdk.gen.ts#L5477-L5507"
+        },
+        {
+          "path": "packages/sdk/js/src/v2/gen/sdk.gen.ts",
+          "first_line": 7006,
+          "last_line": 7010,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/sdk/js/src/v2/gen/sdk.gen.ts#L7006-L7010"
+        },
+        {
+          "path": "packages/sdk/js/src/v2/gen/sdk.gen.ts",
+          "first_line": 7215,
+          "last_line": 7219,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/sdk/js/src/v2/gen/sdk.gen.ts#L7215-L7219"
+        }
+      ]
+    },
+    {
+      "id": "route_identity",
+      "finding": "Public route.navigate(session,{sessionID}) updates local route; route.current exposes exact ID. Create and validate first, then navigate. Nonexistent --session fails validation before plugin startup.",
+      "references": [
+        {
+          "path": "packages/tui/src/plugin/adapters.tsx",
+          "first_line": 41,
+          "last_line": 65,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/plugin/adapters.tsx#L41-L65"
+        },
+        {
+          "path": "packages/opencode/src/cli/tui/validate-session.ts",
+          "first_line": 8,
+          "last_line": 29,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/tui/validate-session.ts#L8-L29"
+        },
+        {
+          "path": "packages/opencode/src/cli/cmd/tui.ts",
+          "first_line": 290,
+          "last_line": 302,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/cmd/tui.ts#L290-L302"
+        }
+      ]
+    },
+    {
+      "id": "startup_and_failure",
+      "finding": "App awaits pluginHost.start before rendering Home/Session. An awaited initializer can create and navigate first. Native catches plugin failures and still renders; managed fail-closed behavior therefore requires shim input embargo, validated durable binding acknowledgement and deadline/failure handling. Other startup routes/plugins can compete, so the acknowledgement is not a lasting view lease.",
+      "references": [
+        {
+          "path": "packages/tui/src/app.tsx",
+          "first_line": 395,
+          "last_line": 408,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/app.tsx#L395-L408"
+        },
+        {
+          "path": "packages/tui/src/app.tsx",
+          "first_line": 467,
+          "last_line": 526,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/app.tsx#L467-L526"
+        },
+        {
+          "path": "packages/tui/src/app.tsx",
+          "first_line": 1061,
+          "last_line": 1079,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/app.tsx#L1061-L1079"
+        },
+        {
+          "path": "packages/opencode/src/plugin/tui/runtime.ts",
+          "first_line": 516,
+          "last_line": 544,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/plugin/tui/runtime.ts#L516-L544"
+        },
+        {
+          "path": "packages/opencode/src/plugin/tui/runtime.ts",
+          "first_line": 1109,
+          "last_line": 1121,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/plugin/tui/runtime.ts#L1109-L1121"
+        }
+      ]
+    },
+    {
+      "id": "native_initial_prompt",
+      "finding": "Only Home consumes and auto-submits args.prompt. Session consumes route.prompt instead. Successful pre-render navigation bypasses Home and ignores --prompt, measured live. If a plugin fails and Home renders, native can auto-submit --prompt to a fresh root despite a keyboard embargo. Withhold --prompt in managed startup; any post-ack SDK submission still needs explicit selection/default semantics.",
+      "references": [
+        {
+          "path": "packages/tui/src/routes/home.tsx",
+          "first_line": 42,
+          "last_line": 72,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/routes/home.tsx#L42-L72"
+        },
+        {
+          "path": "packages/tui/src/routes/session/index.tsx",
+          "first_line": 343,
+          "last_line": 352,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/routes/session/index.tsx#L343-L352"
+        },
+        {
+          "path": "packages/tui/src/component/prompt/index.tsx",
+          "first_line": 990,
+          "last_line": 1024,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/component/prompt/index.tsx#L990-L1024"
+        },
+        {
+          "path": "packages/tui/src/app.tsx",
+          "first_line": 1061,
+          "last_line": 1071,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/app.tsx#L1061-L1071"
+        }
+      ]
+    },
+    {
+      "id": "config_origins",
+      "finding": "TUI config merges global, explicit OPENCODE_TUI_CONFIG, project and .opencode/config-dir sources. Native retains individual plugin origins and resolves relative specs against their declaring file. An additive explicit plugin file preserves global origins when no prior explicit override exists, measured with a relative sentinel plugin. Replacing existing OPENCODE_TUI_CONFIG is not qualified. Pure mode omits external plugins and must remain honored.",
+      "references": [
+        {
+          "path": "packages/opencode/src/config/tui.ts",
+          "first_line": 146,
+          "last_line": 224,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/config/tui.ts#L146-L224"
+        },
+        {
+          "path": "packages/opencode/src/config/plugin.ts",
+          "first_line": 37,
+          "last_line": 77,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/config/plugin.ts#L37-L77"
+        },
+        {
+          "path": "packages/opencode/src/plugin/tui/runtime.ts",
+          "first_line": 1088,
+          "last_line": 1091,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/plugin/tui/runtime.ts#L1088-L1091"
+        }
+      ]
+    },
+    {
+      "id": "bounded_uds_relay",
+      "finding": "Public event.on(type,handler), not internal event.subscribe, supplies typed native events. Known SDK reads and events can be relayed over private UDS without TCP, measured live. No replay/sequence/reconciliation guarantee follows. Worker fetch buffers response.text, so do not substitute a streaming SSE fetch for the public event API.",
+      "references": [
+        {
+          "path": "packages/plugin/src/tui.ts",
+          "first_line": 519,
+          "last_line": 528,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/plugin/src/tui.ts#L519-L528"
+        },
+        {
+          "path": "packages/opencode/src/plugin/tui/runtime.ts",
+          "first_line": 593,
+          "last_line": 599,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/plugin/tui/runtime.ts#L593-L599"
+        },
+        {
+          "path": "packages/tui/src/context/event.ts",
+          "first_line": 8,
+          "last_line": 35,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/event.ts#L8-L35"
+        },
+        {
+          "path": "packages/tui/src/context/sdk.tsx",
+          "first_line": 46,
+          "last_line": 87,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/tui/src/context/sdk.tsx#L46-L87"
+        },
+        {
+          "path": "packages/opencode/src/cli/tui/worker.ts",
+          "first_line": 42,
+          "last_line": 48,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/tui/worker.ts#L42-L48"
+        }
+      ]
+    },
+    {
+      "id": "standalone_tcp_option",
+      "finding": "Explicit --port=0 starts the existing worker TCP listener; zero prefers 4096 then any free port. Actual URL returns through private worker RPC to TUI transport. These paths provide no serve readiness banner or public TuiPluginApi endpoint field. External actual-endpoint discovery is unqualified; internal SDK relay avoids it.",
+      "references": [
+        {
+          "path": "packages/opencode/src/cli/cmd/tui.ts",
+          "first_line": 272,
+          "last_line": 288,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/cmd/tui.ts#L272-L288"
+        },
+        {
+          "path": "packages/opencode/src/cli/tui/worker.ts",
+          "first_line": 54,
+          "last_line": 57,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/cli/tui/worker.ts#L54-L57"
+        },
+        {
+          "path": "packages/opencode/src/server/server.ts",
+          "first_line": 83,
+          "last_line": 95,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/server/server.ts#L83-L95"
+        },
+        {
+          "path": "packages/opencode/src/server/server.ts",
+          "first_line": 117,
+          "last_line": 122,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/server/server.ts#L117-L122"
+        },
+        {
+          "path": "packages/plugin/src/tui.ts",
+          "first_line": 581,
+          "last_line": 626,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/plugin/src/tui.ts#L581-L626"
+        }
+      ]
+    },
+    {
+      "id": "fixture_isolation",
+      "finding": "Native OPENCODE_TEST_HOME redirects native home discovery only in this private fixture; HOME was unchanged. This prevents home .opencode discovery and plugin dependency installation from touching owner files. XDG alone does not prevent those native plugin-loader effects.",
+      "references": [
+        {
+          "path": "packages/core/src/global.ts",
+          "first_line": 15,
+          "last_line": 27,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/core/src/global.ts#L15-L27"
+        },
+        {
+          "path": "packages/opencode/src/config/paths.ts",
+          "first_line": 24,
+          "last_line": 40,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/config/paths.ts#L24-L40"
+        },
+        {
+          "path": "packages/opencode/src/config/tui.ts",
+          "first_line": 228,
+          "last_line": 245,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/opencode/src/config/tui.ts#L228-L245"
+        },
+        {
+          "path": "packages/core/src/npm.ts",
+          "first_line": 136,
+          "last_line": 178,
+          "url": "https://github.com/anomalyco/opencode/blob/e3c4eb242585dcd77be1a867391b7c25fd47ce52/packages/core/src/npm.ts#L136-L178"
+        }
+      ]
+    }
+  ],
+  "files": {
+    "packages/opencode/src/cli/cmd/tui.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/opencode/src/cli/cmd/tui.ts",
+      "sha256": "41ffba0c213b48473dc57fd656fd49fd88ce602f29abba7fa22cd73305e52e1c"
+    },
+    "packages/tui/src/app.tsx": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/app.tsx",
+      "sha256": "b126d4b749fae8aba6692062970ec7de47ffaaab45f4e157a3f72fd698d157f4"
+    },
+    "packages/tui/src/context/local.tsx": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/context/local.tsx",
+      "sha256": "a4501acaaead3270b48ec362127390ed6c96f547c3c6daed9ce59cfae52ee9df"
+    },
+    "packages/opencode/src/cli/tui/worker.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/upstream-v1.19.3/packages/opencode/src/cli/tui/worker.ts",
+      "sha256": "e465f72b912ad05f67775db494e89a6ab5607a1c3c93676fce5f3cc3009b88d9"
+    },
+    "packages/tui/src/plugin/adapters.tsx": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/plugin/adapters.tsx",
+      "sha256": "ecff9bb3a2d1acf0f4ee6d1dacf213ee059d88fa22cedced8cafa51dfb4eb353"
+    },
+    "packages/tui/src/context/sdk.tsx": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/context/sdk.tsx",
+      "sha256": "4210d75fce8ae9f884d472c07792b5482a02a74f6512356f49a0fdcafb67c61c"
+    },
+    "packages/sdk/js/src/v2/gen/sdk.gen.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/sdk/js/src/v2/gen/sdk.gen.ts",
+      "sha256": "704370fa528777c75dd342f96dc02e440629735a370198d7b8dfb2fc2db6b236"
+    },
+    "packages/opencode/src/cli/tui/validate-session.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/opencode/src/cli/tui/validate-session.ts",
+      "sha256": "81e88be95eebd1e5b7230f36da87af6a599a29fc447edbb6522ffb4a917c644c"
+    },
+    "packages/opencode/src/plugin/tui/runtime.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/upstream-v1.19.3/packages/opencode/src/plugin/tui/runtime.ts",
+      "sha256": "f454bc0c2ec61d5cf605f4c65b2223692cd6731f501fd64a4a762a8868c69e70"
+    },
+    "packages/tui/src/routes/home.tsx": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/routes/home.tsx",
+      "sha256": "c96f3d42c2193086be8ddf6bc364d58b593edce81cc610a5c335212ff16c5128"
+    },
+    "packages/tui/src/routes/session/index.tsx": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/routes/session/index.tsx",
+      "sha256": "9e8452acfeef70858abaaa3c77a577ce626b598a866cf4b3499bcf5244caa479"
+    },
+    "packages/tui/src/component/prompt/index.tsx": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/tui/src/component/prompt/index.tsx",
+      "sha256": "e8c0153b5b9dcf5b00e334d6063126dfffe5cb41333b55621d92f54e8d18639c"
+    },
+    "packages/opencode/src/config/tui.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/opencode/src/config/tui.ts",
+      "sha256": "7d7b30d41d5c04ea443819727490142406d293e031dcc221babeb3da1db3e902"
+    },
+    "packages/opencode/src/config/plugin.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/upstream-v1.19.3/packages/opencode/src/config/plugin.ts",
+      "sha256": "8c450d5c8fdee1811bb93788462958c7e58ea551c73e18a4173c19917c734f6e"
+    },
+    "packages/plugin/src/tui.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/plugin/src/tui.ts",
+      "sha256": "3b0ccca22ebf8558afb9dc055505c7c503930f2f622d1db8c3fb9ca3e9278e8c"
+    },
+    "packages/tui/src/context/event.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/upstream-v1.19.3/packages/tui/src/context/event.ts",
+      "sha256": "1d70bafa669570c2dd4994d0d6a41d9851cadc9df00dd1ca464087ce8ddb12bc"
+    },
+    "packages/opencode/src/server/server.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/opencode/src/server/server.ts",
+      "sha256": "ba4503a8da66a7e8cda86ea7ad7ea0e8e4172abcaa87abd8c35835ffa0a494f9"
+    },
+    "packages/core/src/global.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/core/src/global.ts",
+      "sha256": "37c9aae045e01cd246cd4d8c489e84ea4849b6297d3a6f9ff9b1bca57f85c013"
+    },
+    "packages/opencode/src/config/paths.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/upstream-v1.19.3/packages/opencode/src/config/paths.ts",
+      "sha256": "cd86a34461b27caf1042f8cba140fbbed47790c4f30cd9691f87298e8d4d4444"
+    },
+    "packages/core/src/npm.ts": {
+      "local_path": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/source/packages/core/src/npm.ts",
+      "sha256": "f8b7a8e65606a2738cc1a5074860585b92a549643e9ea0a8101c346d1c390193"
+    }
+  },
+  "limits": [
+    "No current picker getter/setter added or inferred; empty/default tuple and selected variant remain ambiguous.",
+    "No real generation, native prompt admission, receipts, cancellation, recovery, races or sustained-load qualification.",
+    "Shim embargo/durable acknowledgement requirements are not implemented by this private fixture.",
+    "Other plugins may navigate later; same-callback route guard is not an atomic native-admission fence.",
+    "Existing OPENCODE_TUI_CONFIG and pure-mode support remain gated; no owner configuration normalization/copying."
+  ]
+}

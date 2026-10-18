@@ -1,0 +1,47 @@
+{
+  "native_version": "1.19.3",
+  "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+  "conclusion": "Feasible smaller topology for explicit model/agent, caller-owned early root and bounded native SDK observation over UDS, without a separate serve process. Native --prompt does not submit to the plugin-routed root; exact variant/default initial-input semantics and managed fail-closed implementation remain unresolved.",
+  "cases": [
+    {
+      "run": "st-161643",
+      "results": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/st-161643/results.json",
+      "native_root": "ses_9ea2a6ebd16451ffb7ab05923371acc6",
+      "model_agent_selection": "Plan / DeepSeek despite agent.plan.model=GLM",
+      "caller_id_route_read_event_uds": "PASS",
+      "native_tcp_listeners": 0,
+      "genuine_cli_prompt": "not supplied",
+      "store_counts": {
+        "session": 1,
+        "message": 0,
+        "part": 0
+      },
+      "config_files_unchanged": true,
+      "cleanup_complete": true
+    },
+    {
+      "run": "st-prompt-161802",
+      "results": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/st-prompt-161802/results.json",
+      "native_root": "ses_51d48c1152c305ccdfd30fc3c5179dd5",
+      "model_agent_selection": "Plan / DeepSeek despite agent.plan.model=GLM",
+      "caller_id_route_read_event_uds": "PASS",
+      "native_tcp_listeners": 0,
+      "genuine_cli_prompt": "IGNORED after plugin route; zero history",
+      "store_counts": {
+        "session": 1,
+        "message": 0,
+        "part": 0
+      },
+      "config_files_unchanged": true,
+      "cleanup_complete": true
+    }
+  ],
+  "limits": [
+    "No current picker getter/setter added or inferred; empty/default tuple and selected variant remain ambiguous.",
+    "No real generation, native prompt admission, receipts, cancellation, recovery, races or sustained-load qualification.",
+    "Shim embargo/durable acknowledgement requirements are not implemented by this private fixture.",
+    "Other plugins may navigate later; same-callback route guard is not an atomic native-admission fence.",
+    "Existing OPENCODE_TUI_CONFIG and pure-mode support remain gated; no owner configuration normalization/copying."
+  ],
+  "fixture_corrections": "First two attempts called internal event.subscribe instead of public event.on and failed after UDS authentication; preserved results contain zero sessions/messages/parts and cleanup. Corrected runs above are the qualified evidence."
+}

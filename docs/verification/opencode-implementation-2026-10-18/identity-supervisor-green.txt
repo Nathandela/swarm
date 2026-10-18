@@ -1,0 +1,17 @@
+gofmt -w internal/adapter/identity.go internal/adapter/opencode/opencode.go internal/adapter/opencode/identity_test.go internal/skeleton/resume_migration.go internal/skeleton/opencode_identity_test.go
+go test -race ./internal/adapter/... -count=1 -timeout=3m
+ok  	github.com/Nathandela/swarm/internal/adapter	1.689s
+ok  	github.com/Nathandela/swarm/internal/adapter/agy	1.368s
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	1.830s
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	1.426s
+ok  	github.com/Nathandela/swarm/internal/adapter/detect	9.600s
+ok  	github.com/Nathandela/swarm/internal/adapter/fixtureio	1.427s
+ok  	github.com/Nathandela/swarm/internal/adapter/hermes	1.730s
+ok  	github.com/Nathandela/swarm/internal/adapter/opencode	1.869s
+ok  	github.com/Nathandela/swarm/internal/adapter/refadapter	1.298s
+ok  	github.com/Nathandela/swarm/internal/adapter/registry	1.222s
+go test -race ./internal/skeleton -run TestComposeLaunchSpec|TestComposeExternalOpenCode|TestExternalOpenCode|TestExternalUUIDProviders|TestStoredOpenCodeIdentity|TestResumeMigration|TestHandsOff -count=1 -timeout=3m
+ok  	github.com/Nathandela/swarm/internal/skeleton	9.683s
+go vet ./internal/adapter/... ./internal/skeleton
+go build ./...
+go: writing stat cache: open /Users/Nathan/go/pkg/mod/cache/download/github.com/!nathandela/swarm/@v/v0.18.3-0.20261018143532-2a675e52aa5a.info396425741.tmp: operation not permitted

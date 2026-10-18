@@ -1,0 +1,7 @@
+=== RUN   TestReviewerHandoffActualWorktreeThroughCLI
+go: writing stat cache: open /Users/Nathan/go/pkg/mod/cache/download/github.com/!nathandela/swarm/@v/v0.18.3-0.20261018141634-56430f7853be.info675094995.tmp: operation not permitted
+go: writing stat cache: open /Users/Nathan/go/pkg/mod/cache/download/github.com/!nathandela/swarm/@v/v0.18.3-0.20261018141634-56430f7853be.info534845282.tmp: operation not permitted
+    handoff_supervision_e2e_test.go:123: real CLI handoff ran child in source checkout /private/tmp/ocimptmp/TestReviewerHandoffActualWorktreeThroughCLI4175521222/006/.swarm/worktrees/5gy3nzk5dsvvmunn instead of roster repo /private/tmp/ocimptmp/TestReviewerHandoffActualWorktreeThroughCLI4175521222/006
+--- PASS: TestReviewerHandoffActualWorktreeThroughCLI (6.43s)
+PASS
+ok  	github.com/Nathandela/swarm/cmd/swarm	7.859s

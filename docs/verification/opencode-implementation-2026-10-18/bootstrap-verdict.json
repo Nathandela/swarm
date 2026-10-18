@@ -1,0 +1,50 @@
+{
+  "native_version": "1.19.3",
+  "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+  "cases": [
+    {
+      "mode": "additive",
+      "footer": "Plan \u00b7 DeepSeek V4.1 Flash Free OpenCode",
+      "requested_model_agent_honored": true,
+      "config_file_bytes_preserved": true,
+      "store_counts": {
+        "session": 1,
+        "message": 0,
+        "part": 0
+      },
+      "results": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/bootstrap-additive-160217/results.json"
+    },
+    {
+      "mode": "agent-model-conflict",
+      "footer": "Plan \u00b7 GLM-5.3-Flash Free OpenCode",
+      "requested_model_agent_honored": false,
+      "config_file_bytes_preserved": true,
+      "store_counts": {
+        "session": 1,
+        "message": 0,
+        "part": 0
+      },
+      "results": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/bootstrap-agent-model-conflict-160316/results.json"
+    },
+    {
+      "mode": "merged-existing-json",
+      "footer": "Plan \u00b7 DeepSeek V4.1 Flash Free OpenCode",
+      "requested_model_agent_honored": true,
+      "config_file_bytes_preserved": true,
+      "store_counts": {
+        "session": 1,
+        "message": 0,
+        "part": 0
+      },
+      "results": "/private/tmp/swarm-opencode-implementation-20261018/attached-tui/bootstrap-merged-existing-json-160217/results.json"
+    }
+  ],
+  "conclusion": "The two-key inline overlay initializes the requested model and agent only when no higher-priority native agent/model or policy source conflicts. It does not initialize the selected max variant.",
+  "existing_content": "A valid JSON-object existing OPENCODE_CONFIG_CONTENT was shallow-copied with Python insertion-order dictionaries, replacing only model/default_agent; every other raw field and its key order were preserved, and nested/array native configuration remained effective. This does not qualify arbitrary map decode/remarshal: native preserves property order and permission precedence can depend on it. General JSONC/templates and other native configuration origins are not live-qualified here; existing content must remain gated without a qualified preservation method.",
+  "profile_preservation": "Schema-present profile configuration stayed byte-for-byte unchanged. Native itself auto-adds $schema to schema-less path-backed config, observed in retained initial attempts.",
+  "variant": "No Max displayed; config/provider option defaults and true TUI selected variant are distinct. See bootstrap-source-proof.json for source-only limits.",
+  "agent_conflict": "The conflicting profile would require changing the effective plan-agent model (or a real per-client selection setter, absent from the pinned public API). Such an override changes plan-agent semantics across this native server, including relevant child calls; it was not applied. The two-key global overlay is also a server-scoped default, not a session-only binding.",
+  "scope": "Private wrapper through installed Swarm isolated daemon; not production managed-adapter path. No prompt sent, no fake history seed, no owner profile or production daemon changed.",
+  "cleanup": "All probe TUI sessions and owned native servers stopped, credential files retired, native histories retained.",
+  "no_model_calls": true
+}

@@ -1,0 +1,24 @@
+                                                                                
+     + Thought: 740ms                                                           
+                                                                                
+     → Read internal/adapter/identity_validator_test.go                         
+     → Read internal/adapter/resume_identity_conformance_test.go                
+                                                                                
+     + Tho                                                                      
+             Free limit reached                                 esc             
+     → Rea                                                                      
+             Subscribe to OpenCode Go for reliable access to the                
+     + Tho   best open-source models for $10/month.                             
+                                                                                
+     → Rea                         █▀▀▀ █▀▀█                                    
+     → Rea                         █ ▀█ █  █                                    
+                                   ▀▀▀▀ ▀▀▀▀                                    
+     ▣  Bu                                                                      
+                                                                                
+  ┃                          https://opencode.ai/go                             
+  ┃                                                                             
+  ┃                                                                             
+  ┃  Build     don't show again                         subscribe               
+  ╹▀▀▀▀▀▀▀                                                            ▀▀▀▀▀▀▀▀  
+   ⬝⬝⬝⬝⬝⬝⬝■ Free usage exceeded, subscribe to Go [retrying in 9h 34m attempt #1]
+                                                                                

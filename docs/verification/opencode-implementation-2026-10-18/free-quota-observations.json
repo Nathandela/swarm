@@ -1,0 +1,53 @@
+{
+  "observed_utc": "2026-10-18T14:25:24.476817+00:00",
+  "models": [
+    "opencode/deepseek-v4.1-flash-free",
+    "opencode/glm-5.3-flash-free"
+  ],
+  "account_configured": false,
+  "observations": [
+    {
+      "lane": "identity",
+      "swarm_id": "ep-37f4ece7/f632pdqism6nfxkg",
+      "free_limit_modal": true,
+      "usage_exceeded": true,
+      "retry_lines": [
+        "\u2b1d\u2b1d\u2b1d\u2b1d\u2b1d\u2b1d\u2b1d\u25a0 Free usage exceeded, subscribe to Go [retrying in 9h 34m attempt #1]"
+      ]
+    },
+    {
+      "lane": "bridge",
+      "swarm_id": "ep-37f4ece7/squp2dwjve6tf6kz",
+      "free_limit_modal": true,
+      "usage_exceeded": true,
+      "retry_lines": [
+        "\u25a0\u25a0\u25a0\u25a0\u2b1d\u2b1d\u2b1d\u2b1d Free usage exceeded, subscribe to Go [retrying in 9h 34m attempt #1]"
+      ]
+    },
+    {
+      "lane": "review-watch",
+      "swarm_id": "ep-37f4ece7/dcug22if4odgofk5",
+      "free_limit_modal": true,
+      "usage_exceeded": true,
+      "retry_lines": [
+        "\u2b1d\u2b1d\u2b1d\u2b1d\u2b1d\u2b1d\u2b1d\u2b1d Free usage exceeded, subscribe to Go [retrying in 9h 34m attempt #1]"
+      ]
+    },
+    {
+      "lane": "state",
+      "swarm_id": "ep-37f4ece7/wkdzu3ys5qlxmgug",
+      "free_limit_modal": true,
+      "usage_exceeded": true,
+      "retry_lines": [
+        "\u2b1d\u2b1d\u2b1d\u2b1d\u2b1d\u2b1d\u25a0\u25a0 Free usage exceeded, subscribe to Go [retrying in 9h 34m attempt #1]"
+      ]
+    },
+    {
+      "lane": "lifecycle-tdd",
+      "swarm_id": "ep-37f4ece7/vwfkim7tigjjgged",
+      "free_limit_modal": false,
+      "usage_exceeded": false,
+      "retry_lines": []
+    }
+  ]
+}
