@@ -1198,3 +1198,17 @@ The owner-tier `account_manage` operation requires the negotiated `accounts.mana
 `AccountView.credentials_erased` is an optional boolean set only when every retained credential generation has completed local erasure. `retiring` continues to identify the account's durable lifecycle; a false or absent `credentials_erased` does not establish deletion. Erasure preserves discussion history and does not revoke a provider login.
 
 Resume roster projection groups explicit resume lineage (including shared missing ancestors), keeps the newest ended attempt or all running attempts, and leaves independent launches and handoffs separate. `list` returns all raw rows with projection annotations, retaining exact-ID lookup compatibility; `event` also retains actual session identity. The TUI and `swarm ls` apply the shared visibility filter. Clients must apply these annotations to avoid duplicate live rows. This projection does not alter the durable journal or phone journal reducer, which continue to expose raw session history.
+
+`native_requests` is an owner-only read negotiated with `native-requests-v1`. With
+no selectors it returns at most 128 short pending-request summaries; both
+`request_id` and `native_session_id` select one full bound card. Full cards are
+limited to 12 KiB and include complete native request JSON; a clipped card never
+issues decision authority. `native_decide` binds the complete permission reply
+or ordered question answers through `NativeDecisionContentHash`, including the
+worker instance, root, generation, native target, request hash and daemon expiry.
+
+`native_decision_status` is an owner-only read under the same capability. It takes
+`session_id` and `operation_id` and returns `native_decision_receipt`. It can
+reconcile the original durable intent through a private native receipt read; it
+never posts another decision or treats disappearance as proof of processing.
+Missing and expired request cards do not authorize a replacement operation.

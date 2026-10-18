@@ -1384,6 +1384,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleNativeDecide(c)
 	case OpNativeRequests:
 		cc.handleNativeRequests(c)
+	case OpNativeDecisionStatus:
+		cc.handleNativeDecisionStatus(c)
 	case OpOperationStatus:
 		// The REAL Wave R5 handler. Names no session instance: pinned like
 		// session_launch above.
