@@ -1,0 +1,37 @@
+{
+  "source_commit": "2663afde527d5bc001671d853e45eb8ed2f3f267",
+  "platform": "linux/arm64",
+  "go": "1.26.0",
+  "container_image": "golang@sha256:fb612b7831d53a89cbc0aaa7855b69ad7b0caf603715860cf538df854d047b84",
+  "execution_user_uid": 1000,
+  "source_transport": "git archive; fresh repository initialized inside isolated container",
+  "host_credentials_mounted": false,
+  "checks": [
+    {
+      "command": "go build ./...",
+      "exit": 0
+    },
+    {
+      "command": "go vet ./...",
+      "exit": 0
+    },
+    {
+      "command": "go test -race -p 2 APPLICATION_PACKAGES -count=1 -timeout=20m",
+      "exit": 0
+    }
+  ],
+  "package_results": {
+    "passed": 78,
+    "no_test_files": 7
+  },
+  "separate_gates": [
+    "android/gate requires the native SDK/JDK/NDK gate on the host",
+    "the container has no Android SDK; real gomobile AAR and Android JVM tests are qualified separately"
+  ],
+  "log_sha256": "90616e4574819194d6ce0f3579afb8c63280e47b26eb6a9af3f4ddd9eade4585",
+  "limits": [
+    "This is the frozen source above, not later bridge, capability, packet or history changes. Later affected packages require revalidation.",
+    "Known unrelated Darwin Linux-account fixture failures remain documented.",
+    "No release, installed binary replacement, hosted relay or physical Android qualification."
+  ]
+}
