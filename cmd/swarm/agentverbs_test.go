@@ -38,6 +38,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -424,6 +425,64 @@ func TestRunWatch_MultipleAttentionStates(t *testing.T) {
 	}
 }
 
+// TestRunWatch_HandoffTemplateCommand runs the watch commands the handoff source
+// template GENERATES through the parser they are meant to drive. The template emits
+// the session FIRST (`swarm watch "$child_id" --until ... --timeout 10m`), the order
+// Go's flag package stops at, so the generated command used to exit 1. The template
+// file is read from its source rather than copied, so this test breaks the moment the
+// generated order and runWatch's parser disagree again.
+func TestRunWatch_HandoffTemplateCommand(t *testing.T) {
+	raw, err := os.ReadFile("../../internal/tui/templates/handoff-source.md.tmpl")
+	if err != nil {
+		t.Fatalf("read handoff source template: %v", err)
+	}
+	cmds := handoffWatchCommands(string(raw))
+	var multiState, change bool
+	for _, cmd := range cmds {
+		multiState = multiState || strings.Contains(cmd, "--until needs_input,ready_for_review,completed")
+		change = change || strings.Contains(cmd, "--until change")
+	}
+	if !multiState || !change {
+		t.Fatalf("template watch commands = %q; want both the multi-state wait and the change wait", cmds)
+	}
+
+	const id = "local/a1"
+	for _, cmd := range cmds {
+		t.Run(cmd, func(t *testing.T) {
+			args := strings.Fields(strings.ReplaceAll(cmd, `"$child_id"`, id))
+			if len(args) < 3 || args[0] != "swarm" || args[1] != "watch" {
+				t.Fatalf("template command %q does not split into a swarm watch invocation", cmd)
+			}
+			args = args[2:]
+			client := newFakeAgentClient(view(id, "claude", "refactor", status.GroupNeedsInput))
+			// The change wait never matches the initial snapshot, so the stream carries
+			// a matching event; the multi-state wait exits on the snapshot first.
+			client.emit(view(id, "claude", "refactor", status.GroupNeedsInput))
+			var stdout, stderr bytes.Buffer
+			if exit := runWatch(args, client, &stdout, &stderr); exit != 0 {
+				t.Fatalf("runWatch(%q) exit = %d, want 0; stderr=%q", args, exit, stderr.String())
+			}
+			if got := decodeView(t, stdout.Bytes()).ID; got != id {
+				t.Errorf("printed session id = %q, want %q", got, id)
+			}
+		})
+	}
+}
+
+// handoffWatchCommands extracts the backticked `swarm watch ...` commands from the
+// handoff source template, in template order.
+func handoffWatchCommands(prompt string) []string {
+	var out []string
+	for _, line := range strings.Split(prompt, "\n") {
+		for _, seg := range strings.Split(line, "`") {
+			if seg = strings.TrimSpace(seg); strings.HasPrefix(seg, "swarm watch ") {
+				out = append(out, seg)
+			}
+		}
+	}
+	return out
+}
+
 func TestParseWatchUntil_MultipleAttentionStatesValidation(t *testing.T) {
 	m, err := parseWatchUntil(" needs_input, ready_for_review,completed,needs_input ")
 	if err != nil {
@@ -485,6 +544,15 @@ func TestRunWatch_BadArgs(t *testing.T) {
 		{"no session id", []string{"--until", "needs_input", "--timeout", "2s"}, "session"},
 		{"unknown --until value", []string{"--until", "bogus", "--timeout", "2s", "local/a1"}, "bogus"},
 		{"unknown session", []string{"--until", "needs_input", "--timeout", "2s", "local/nope"}, "local/nope"},
+		// The session-first order must not open the door to extra positionals or
+		// unparsed trailing flags: the generated form stays strict.
+		{"extra positional after id", []string{"local/a1", "local/b2"}, "session"},
+		{"extra positional after flags-first id", []string{"--until", "needs_input", "--timeout", "2s", "local/a1", "local/b2"}, "session"},
+		{"empty id then a real id", []string{"", "local/a1"}, "session"},
+		{"empty id before flags", []string{"", "--until", "needs_input", "--timeout", "2s"}, "session"},
+		{"unknown flag after id", []string{"local/a1", "--bogus"}, "bogus"},
+		{"missing flag value after id", []string{"local/a1", "--timeout"}, "timeout"},
+		{"unknown --until value after id", []string{"local/a1", "--until", "bogus", "--timeout", "2s"}, "bogus"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

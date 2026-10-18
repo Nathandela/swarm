@@ -101,6 +101,15 @@ func runLS(args []string, c agentClient, stdout, stderr io.Writer) int {
 // target group may never emit another event. Reaching the deadline is
 // watchTimeoutExit, distinct from the argument and daemon failures that exit 1.
 func runWatch(args []string, c agentClient, stdout, stderr io.Writer) int {
+	// The documented and template-generated order is `swarm watch <session>
+	// [--until ...] [--timeout d]`, but Go's flag package stops at the first
+	// positional. Peel a leading session id before parsing so both orders work;
+	// every other positional stays a refusal.
+	var id string
+	if len(args) > 0 && args[0] != "" && !strings.HasPrefix(args[0], "-") {
+		id = args[0]
+		args = args[1:]
+	}
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	until := fs.String("until", string(status.GroupNeedsInput), "wait for one or more comma-separated states: needs_input, ready_for_review, completed; or change")
@@ -108,11 +117,15 @@ func runWatch(args []string, c agentClient, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
-	if fs.NArg() != 1 {
+	positional := fs.Args()
+	if id != "" {
+		positional = append([]string{id}, positional...)
+	}
+	if len(positional) != 1 {
 		_, _ = fmt.Fprintln(stderr, "watch: need exactly one session id: swarm watch <session>")
 		return 1
 	}
-	id := fs.Arg(0)
+	id = positional[0]
 
 	matcher, err := parseWatchUntil(*until)
 	if err != nil {
