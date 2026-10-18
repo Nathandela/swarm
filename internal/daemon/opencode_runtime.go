@@ -257,7 +257,7 @@ func (d *Daemon) openCodeRuntimeError(id string, err error) {
 	if !closed && ok && m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
 		m.BackendPlanError = ""
 		if err != nil {
-			m.BackendPlanError = "OpenCode native binding or initial admission is unconfirmed; owner input remains held"
+			m.BackendPlanError = "OpenCode native binding or initial admission is unconfirmed; retain the recorded root and do not resend initial input"
 		}
 		written, _ = d.saveMetaLocked(&m)
 	}
