@@ -1,0 +1,16 @@
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/opencode_attention_test.go:39:14: s.reconcileNative undefined (type *OpenCodeState has no field or method reconcileNative)
+internal/skeleton/opencode_attention_test.go:43:34: v.RootBusy undefined (type OpenCodeView has no field or method RootBusy)
+internal/skeleton/opencode_attention_test.go:43:49: v.Attention undefined (type OpenCodeView has no field or method Attention)
+internal/skeleton/opencode_attention_test.go:43:68: v.Pending undefined (type OpenCodeView has no field or method Pending)
+internal/skeleton/opencode_attention_test.go:43:91: v.Descendants undefined (type OpenCodeView has no field or method Descendants)
+internal/skeleton/opencode_attention_test.go:46:8: undefined: openCodeProjectedStatus
+internal/skeleton/opencode_attention_test.go:50:16: undefined: OpenCodeRequest
+internal/skeleton/opencode_attention_test.go:51:19: v.Pending undefined (type OpenCodeView has no field or method Pending)
+internal/skeleton/opencode_attention_test.go:52:8: v.Pending undefined (type OpenCodeView has no field or method Pending)
+internal/skeleton/opencode_attention_test.go:53:18: v.Pending undefined (type OpenCodeView has no field or method Pending)
+internal/skeleton/opencode_attention_test.go:53:18: too many errors
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+
+exit=1
