@@ -143,7 +143,10 @@ func TestExactNativeMessageRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	const existing = "msg_0123456789abcdef"
+	const descendant = "ses_0123456789abcdef"
+	var seenTarget string
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenTarget = r.URL.Query().Get("sessionID")
 		if r.URL.Path != "/message" {
 			t.Errorf("wrong route %s", r.URL)
 		}
@@ -164,6 +167,13 @@ func TestExactNativeMessageRead(t *testing.T) {
 	row, err := client.Message(context.Background(), existing)
 	if err != nil || !strings.Contains(string(row), `"nativeExtension":{"preserved":true}`) {
 		t.Fatalf("raw message: %s %v", row, err)
+	}
+	row, err = client.MessageForSession(context.Background(), descendant, existing)
+	if err != nil || seenTarget != descendant || len(row) == 0 {
+		t.Fatalf("descendant route lost: target=%q row=%s err=%v", seenTarget, row, err)
+	}
+	if _, err := client.MessageForSession(context.Background(), "../../foreign", existing); err == nil {
+		t.Fatal("invalid native session accepted")
 	}
 	_, err = client.Message(context.Background(), "msg_aaaaaaaaaaaaaaaa")
 	var refusal *Error

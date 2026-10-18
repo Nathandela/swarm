@@ -129,10 +129,10 @@ export default { id: ID, async tui(api, options) {
     if (createdAt && row.time.created !== createdAt) throw fault("native_binding_mismatch")
     return row
   }
-  function checkedMessage(message) {
+  function checkedMessage(message, target = binding.rootID) {
     const info = message?.info
-    if (!object(info) || info.sessionID !== binding.rootID || !messageID(info.id) || !["user", "assistant"].includes(info.role) || !Array.isArray(message.parts)) throw fault("native_shape")
-    for (const part of message.parts) if (!object(part) || part.sessionID !== binding.rootID || part.messageID !== info.id || !string(part.id) || !string(part.type)) throw fault("native_shape")
+    if (!object(info) || info.sessionID !== target || !messageID(info.id) || !["user", "assistant"].includes(info.role) || !Array.isArray(message.parts)) throw fault("native_shape")
+    for (const part of message.parts) if (!object(part) || part.sessionID !== target || part.messageID !== info.id || !string(part.id) || !string(part.type)) throw fault("native_shape")
     return message
   }
   async function history(limit = 50, before = "") {
@@ -210,14 +210,14 @@ export default { id: ID, async tui(api, options) {
     }
     if ([...snapshot.permissions, ...snapshot.questions].some(request => related.has(request.sessionID))) throw fault("native_request_pending")
   }
-  async function lookupMessage(id) {
+  async function lookupMessage(id, target = binding.rootID) {
     let result
-    try { result = await bounded(signal => api.client.session.message({ sessionID: binding.rootID, messageID: id }, { throwOnError: false, signal })) }
+    try { result = await bounded(signal => api.client.session.message({ sessionID: target, messageID: id }, { throwOnError: false, signal })) }
     catch { throw fault("native_read_failed") }
     if (result?.response?.status === 404) return null
     if (result?.response?.status !== 200 || result.error !== undefined || !object(result.data)) throw fault("native_read_failed")
     if (Buffer.byteLength(JSON.stringify(result.data)) > RESPONSE_LIMIT) throw fault("response_oversized")
-    const message = checkedMessage(result.data)
+    const message = checkedMessage(result.data, target)
     if (message.info.id !== id) throw fault("native_shape")
     return message
   }
@@ -476,10 +476,12 @@ export default { id: ID, async tui(api, options) {
       if (req.method === "GET" && url.pathname === "/ready") return response(res, 200, readiness())
       if (req.method === "GET" && url.pathname === "/message") {
         if (!bound) throw fault(bootstrapReason)
-        const id = url.searchParams.get("messageID")
-        if (!messageID(id)) throw fault("target_invalid")
+        const id = url.searchParams.get("messageID"), target = url.searchParams.get("sessionID") ?? binding.rootID
+        if (!messageID(id) || !sessionID(target)) throw fault("target_invalid")
         rowMatches((await read(opts => api.client.session.get({ sessionID: binding.rootID }, opts))).data)
-        const message = await lookupMessage(id)
+        if (!await requestScope(check).contains(target)) throw fault("request_unrelated")
+        check()
+        const message = await lookupMessage(id, target)
         if (!message) return rejected(res, "native_message_missing", 404)
         return response(res, 200, message)
       }

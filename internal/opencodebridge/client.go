@@ -194,11 +194,24 @@ func (c *Client) Dispatch(ctx context.Context, in DispatchRequest) (Receipt, err
 // Message reads one native row from the bound root. Only Error.Code==404 with
 // Reason=="native_message_missing" establishes native message absence.
 func (c *Client) Message(ctx context.Context, messageID string) (json.RawMessage, error) {
+	return c.MessageForSession(ctx, "", messageID)
+}
+
+// MessageForSession reads an exact root or descendant row after the bridge proves
+// the target's current ancestry. Empty sessionID selects the bound root.
+func (c *Client) MessageForSession(ctx context.Context, sessionID, messageID string) (json.RawMessage, error) {
 	var out json.RawMessage
+	if sessionID != "" && (!strings.HasPrefix(sessionID, "ses_") || len(sessionID) < 14 || len(sessionID) > 128 || strings.Trim(sessionID[4:], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") != "") {
+		return nil, errors.New("opencode bridge: invalid native session ID")
+	}
 	if !strings.HasPrefix(messageID, "msg_") || len(messageID) < 14 || len(messageID) > 128 || strings.Trim(messageID[4:], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") != "" {
 		return nil, errors.New("opencode bridge: invalid native message ID")
 	}
-	err := c.request(ctx, "GET", "/message?messageID="+url.QueryEscape(messageID), nil, &out)
+	route := "/message?messageID=" + url.QueryEscape(messageID)
+	if sessionID != "" {
+		route += "&sessionID=" + url.QueryEscape(sessionID)
+	}
+	err := c.request(ctx, "GET", route, nil, &out)
 	return out, err
 }
 

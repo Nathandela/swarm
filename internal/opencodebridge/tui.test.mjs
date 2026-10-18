@@ -805,3 +805,29 @@ test("SSE peer disconnect releases capacity when Bun omits ServerResponse close"
     await pause(15)
   }
 })
+
+test("exact descendant reads prove current ancestry without depending on active membership", async t => {
+  const f = await fixture(t), target = "ses_" + "d".repeat(32), parent = "ses_" + "e".repeat(32)
+  const childRow = structuredClone(f.state.messages[0])
+  childRow.info.sessionID = target
+  for (const part of childRow.parts) part.sessionID = target
+  const rows = new Map([[rootID, f.state.row], [target, { id: target, parentID: parent }], [parent, { id: parent, parentID: rootID }]])
+  f.api.client.session.get = async ({ sessionID }) => ({ data: rows.get(sessionID), response: { status: 200 } })
+  let messageReads = 0
+  f.api.client.session.message = async input => { messageReads++; assert.equal(input.sessionID, target); return { data: childRow, response: { status: 200 } } }
+  f.state.route = { name: "home" }
+  assert.equal(Object.keys(f.state.statuses).length, 0)
+  const route = "/message?sessionID=" + target + "&messageID=" + messageID
+  assert.deepEqual((await f.call("GET", route)).body, childRow)
+  assert.equal(messageReads, 1)
+  rows.get(parent).parentID = target
+  assert.equal((await f.call("GET", route)).body.reason, "request_scope_unknown")
+  rows.set(parent, { id: parent })
+  assert.equal((await f.call("GET", route)).body.reason, "request_unrelated")
+  assert.equal(messageReads, 1, "unproven ancestry reached exact native message read")
+  rows.get(parent).parentID = rootID
+  childRow.parts[0].sessionID = rootID
+  assert.equal((await f.call("GET", route)).body.reason, "native_shape")
+  f.state.row.time.created++
+  assert.equal((await f.call("GET", route)).body.reason, "native_binding_mismatch")
+})
