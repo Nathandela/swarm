@@ -1,0 +1,14 @@
+# github.com/Nathandela/swarm/internal/status [github.com/Nathandela/swarm/internal/status.test]
+internal/status/attention_test.go:10:88: unknown field Attention in struct literal of type Status
+internal/status/attention_test.go:30:4: s.Attention undefined (type Status has no field or method Attention)
+internal/status/attention_test.go:33:58: got.Attention undefined (type Status has no field or method Attention)
+FAIL	github.com/Nathandela/swarm/internal/status [build failed]
+# github.com/Nathandela/swarm/internal/daemon [github.com/Nathandela/swarm/internal/daemon.test]
+internal/daemon/opencode_attention_test.go:16:124: unknown field Attention in struct literal of type status.Status
+internal/daemon/opencode_attention_test.go:21:17: got.Status.Attention undefined (type status.Status has no field or method Attention)
+internal/daemon/opencode_attention_test.go:24:7: next.Attention undefined (type status.Status has no field or method Attention)
+internal/daemon/opencode_attention_test.go:30:16: got.Status.Attention undefined (type status.Status has no field or method Attention)
+FAIL	github.com/Nathandela/swarm/internal/daemon [build failed]
+FAIL
+
+exit=1

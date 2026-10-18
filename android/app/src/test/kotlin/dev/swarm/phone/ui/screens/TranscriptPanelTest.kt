@@ -435,6 +435,13 @@ class TranscriptPanelTest {
     // ---- session_status ---------------------------------------------------
 
     @Test
+    fun `native attention remains visible while sibling work continues`() {
+        val block = blockOf(item("session_status", body = """{"process":"running","turn":"active","interaction":"permission","attention":true}"""))
+        assertTrue(block.line.contains("active"))
+        assertTrue(block.line.contains("Owner input required"))
+    }
+
+    @Test
     fun `a session status renders inline in the wire's own words`() {
         val block = blockOf(
             item(

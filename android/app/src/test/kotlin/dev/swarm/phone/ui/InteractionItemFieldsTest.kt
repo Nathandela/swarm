@@ -42,6 +42,14 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class InteractionItemFieldsTest {
 
+    @Test
+    fun `native attention preserves active work`() {
+        val fields = item("session_status", JSONObject("""{"turn":"active","attention":true}""")).fields()
+        assertEquals("active", fields.turn)
+        assertTrue(fields.attention)
+        assertEquals(false, item("session_status", JSONObject("{}")).fields().attention)
+    }
+
     private fun item(kind: String, body: JSONObject) = InteractionItem(
         sessionId = "m/s1",
         itemId = "res-1",
