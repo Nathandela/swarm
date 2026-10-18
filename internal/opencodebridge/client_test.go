@@ -30,18 +30,18 @@ func TestPrivateClientAndAsset(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/ready":
-			fmt.Fprint(w, `{"version":1,"rootID":"ses_abcdefghij","bound":true,"ready":true,"nativeCreatedAtMS":123}`)
+			_, _ = fmt.Fprint(w, `{"version":1,"rootID":"ses_abcdefghij","bound":true,"ready":true,"nativeCreatedAtMS":123}`)
 		case "/snapshot":
 			if r.URL.Query().Get("before") != "opaque+/?=" || r.URL.Query().Get("limit") != "2" {
 				t.Error("opaque cursor was changed")
 			}
-			fmt.Fprint(w, `{"messages":[],"nextCursor":"opaque-next","statuses":{},"permissions":[],"questions":[],"children":[]}`)
+			_, _ = fmt.Fprint(w, `{"messages":[],"nextCursor":"opaque-next","statuses":{},"permissions":[],"questions":[],"children":[]}`)
 		case "/dispatch":
 			w.WriteHeader(422)
-			fmt.Fprintf(w, `{"reason":%q}`, token)
+			_, _ = fmt.Fprintf(w, `{"reason":%q}`, token)
 		case "/events":
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"type\":\"swarm.bridge.connected\",\"properties\":{}}\n\n")
+			_, _ = fmt.Fprint(w, "data: {\"type\":\"swarm.bridge.connected\",\"properties\":{}}\n\n")
 			w.(http.Flusher).Flush()
 			close(streaming)
 			<-r.Context().Done()
@@ -114,10 +114,10 @@ func TestRequestReceiptClient(t *testing.T) {
 		} else if r.URL.Path != "/receipt" || r.URL.Query().Get("operationID") != "opaque+/?=" {
 			t.Errorf("wrong receipt request: %s", r.URL)
 		}
-		fmt.Fprint(w, `{"status":"admitted","operationID":"opaque+/?=","kind":"question_reply","requestID":"que_target","targetID":"ses_child"}`)
+		_, _ = fmt.Fprint(w, `{"status":"admitted","operationID":"opaque+/?=","kind":"question_reply","requestID":"que_target","targetID":"ses_child"}`)
 	})}
 	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	client, err := NewClient(socket, "syntheticprivatebridgecredentialtoken")
 	if err != nil {
 		t.Fatal(err)
@@ -146,13 +146,13 @@ func TestExactNativeMessageRead(t *testing.T) {
 		}
 		if r.URL.Query().Get("messageID") != existing {
 			w.WriteHeader(404)
-			fmt.Fprint(w, `{"reason":"native_message_missing"}`)
+			_, _ = fmt.Fprint(w, `{"reason":"native_message_missing"}`)
 			return
 		}
-		fmt.Fprint(w, `{"info":{"id":"msg_0123456789abcdef","role":"user"},"parts":[],"nativeExtension":{"preserved":true}}`)
+		_, _ = fmt.Fprint(w, `{"info":{"id":"msg_0123456789abcdef","role":"user"},"parts":[],"nativeExtension":{"preserved":true}}`)
 	})}
 	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	client, err := NewClient(socket, "syntheticprivatebridgecredentialtoken")
 	if err != nil {
 		t.Fatal(err)
