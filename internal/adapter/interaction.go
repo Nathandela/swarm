@@ -30,6 +30,7 @@ import (
 // It lives only inside the item payload: nothing here is ever written to
 // SenderKeyID or EpochID (IS-LAYER-2, PB-SYNC-1).
 const (
+	KindMessageSnapshot  = "message_snapshot" // v2 full text replacement; never a v1 delta
 	KindUserMessage      = "user_message"
 	KindAgentMessage     = "agent_message"
 	KindToolRun          = "tool_run"
@@ -139,6 +140,9 @@ func CaptureEvents(a Adapter) []string {
 // The KIND constants cover all eight (they are the wire vocabulary the daemon
 // reuses) and Validate accepts all eight, so a later agent-sourced cancel is an
 // additive field, not a contract change.
+// SourceNative leaves native user authorship unqualified until exact custody proves it.
+const SourceNative = "native"
+
 type Interaction struct {
 	// Kind is one of the eight kinds above. Required.
 	Kind string
@@ -201,9 +205,10 @@ type Interaction struct {
 
 	// user_message (§3.1) / agent_message (§3.2). Text on an agent_message is the
 	// INCREMENT this record appends, never the accumulated body (IS-DELTA-1).
-	Text       string
-	Source     string // user_message only: phone | owner | derived
-	StopReason string // agent_message terminal record only: end_turn | interrupted | error
+	MessageRole string // message_snapshot only: user | assistant
+	Text        string
+	Source      string // user_message only: phone | owner | derived
+	StopReason  string // agent_message terminal record only: end_turn | interrupted | error
 
 	// tool_run (§3.3). ExitCode is meaningful only for an execute action; the
 	// daemon omits it otherwise, so a zero here is not "exited 0" for a read.
@@ -409,15 +414,22 @@ func AsInteractionSource(a Adapter) (InteractionSource, bool) {
 // timestamps, and §3.5's hash/expiry are daemon-side and deliberately unchecked
 // here (ADR-010 §3).
 func (in Interaction) Validate() error {
-	if err := oneOf("kind", in.Kind, false, KindUserMessage, KindAgentMessage, KindToolRun,
+	if err := oneOf("kind", in.Kind, false, KindMessageSnapshot, KindUserMessage, KindAgentMessage, KindToolRun,
 		KindFileChange, KindApprovalRequest, KindApprovalResolved, KindPlanUpdate, KindSessionStatus); err != nil {
 		return err
+	}
+	if in.Kind == KindMessageSnapshot {
+		if err := oneOf("message role", in.MessageRole, false, "user", "assistant"); err != nil {
+			return err
+		}
 	}
 	if err := oneOf("status", in.Status, true, StatusInProgress, StatusCompleted, StatusFailed, StatusDeclined); err != nil {
 		return err
 	}
-	if err := oneOf("source", in.Source, true, SourcePhone, SourceOwner, SourceDerived, SourceSynthetic); err != nil {
-		return err
+	if in.Source != SourceNative || in.Kind != KindMessageSnapshot {
+		if err := oneOf("source", in.Source, true, SourcePhone, SourceOwner, SourceDerived, SourceSynthetic); err != nil {
+			return err
+		}
 	}
 	if err := oneOf("stop_reason", in.StopReason, true, "end_turn", "interrupted", "error"); err != nil {
 		return err
