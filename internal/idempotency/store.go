@@ -14,6 +14,7 @@ package idempotency
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +56,7 @@ type Record struct {
 	// reusing one key for different text could replay the first request's cached success
 	// for words that were never delivered.
 	RequestHash string          `json:"request_hash,omitempty"`
+	Request     json.RawMessage `json:"request,omitempty"`
 	Phase       Phase           `json:"phase"`
 	Outcome     json.RawMessage `json:"outcome,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
@@ -208,6 +210,35 @@ func (s *Store) Begin(operationID string) error {
 	return nil
 }
 
+// SetRequest preserves immutable reconciliation coordinates before an operation can execute.
+func (s *Store) SetRequest(operationID string, request []byte) error {
+	if len(request) == 0 || len(request) > 64<<10 || !json.Valid(request) {
+		return errors.New("idempotency: invalid request descriptor")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.records[operationID]
+	if !ok {
+		return errors.New("idempotency: unknown request operation")
+	}
+	if len(rec.Request) != 0 {
+		if bytes.Equal(rec.Request, request) {
+			return nil
+		}
+		return errors.New("idempotency: request descriptor conflict")
+	}
+	if rec.Phase != PhasePrepared {
+		return errors.New("idempotency: request must precede execution")
+	}
+	rec.Request = append(json.RawMessage(nil), request...)
+	rec.UpdatedAt = s.clock()
+	if err := s.appendLocked(rec); err != nil {
+		return err
+	}
+	s.records[operationID] = rec
+	return nil
+}
+
 // Complete transitions -> completed (fsync), after the side effect commits.
 func (s *Store) Complete(operationID string, outcome []byte) error {
 	return s.transition(operationID, PhaseCompleted, outcome, true)
@@ -250,6 +281,8 @@ func (s *Store) Get(operationID string) (Record, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.records[operationID]
+	rec.Request = append(json.RawMessage(nil), rec.Request...)
+	rec.Outcome = append(json.RawMessage(nil), rec.Outcome...)
 	return rec, ok
 }
 
@@ -261,6 +294,8 @@ func (s *Store) List() []Record {
 	defer s.mu.Unlock()
 	out := make([]Record, 0, len(s.records))
 	for _, rec := range s.records {
+		rec.Request = append(json.RawMessage(nil), rec.Request...)
+		rec.Outcome = append(json.RawMessage(nil), rec.Outcome...)
 		out = append(out, rec)
 	}
 	return out

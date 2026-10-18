@@ -152,7 +152,11 @@ func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
 		return "", "", errors.New("resume relocation requires an updated daemon; run swarm daemon restart")
 	}
 	r := req
-	resp, err := c.request(Control{Op: OpLaunch, EndpointID: c.endpointID, Launch: &r})
+	timeout := clientTimeout
+	if r.Agent == "opencode" {
+		timeout = 75 * time.Second
+	}
+	resp, err := c.requestWithTimeout(Control{Op: OpLaunch, EndpointID: c.endpointID, Launch: &r}, timeout)
 	if err != nil {
 		return "", "", err
 	}

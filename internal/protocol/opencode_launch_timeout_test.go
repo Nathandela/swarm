@@ -8,7 +8,7 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
-type slowNativeLaunch struct { *stubDaemon }
+type slowNativeLaunch struct{ *stubDaemon }
 
 func (s *slowNativeLaunch) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	time.Sleep(clientTimeout + 100*time.Millisecond)
@@ -16,10 +16,14 @@ func (s *slowNativeLaunch) Launch(spec daemon.LaunchSpec) (persist.Meta, error) 
 }
 
 func TestOpenCodeLaunchWaitsForNativeBindingBeyondOrdinaryRequestDeadline(t *testing.T) {
-	if testing.Short() { t.Skip("qualifies the real client deadline") }
+	if testing.Short() {
+		t.Skip("qualifies the real client deadline")
+	}
 	s := &slowNativeLaunch{newStubDaemon()}
 	c, err := Dial(serveOwnerAPI(t, s), nil)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = c.Close() })
 	req := validLaunch(t)
 	req.Agent = "opencode"
