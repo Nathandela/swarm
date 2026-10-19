@@ -54,8 +54,8 @@ func doctorOpenCodeCheck(ctx context.Context, stateDir string, m persist.Meta) d
 		finding.Detail = "native channel did not confirm the saved session identity"
 		return finding
 	}
-	if ready.NativeVersion != "1.19.3" {
-		finding.Detail = "native runtime version is outside the qualified contract"
+	if !opencodebridge.SupportedNativeVersion(ready.NativeVersion) {
+		finding.Detail = "native runtime version must be a stable release at or above " + opencodebridge.MinimumNativeVersion
 		return finding
 	}
 	if !ready.Ready {

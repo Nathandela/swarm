@@ -274,7 +274,7 @@ func (d *Daemon) reconcileOpenCodeAdmission(local, operationID string, intent op
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	ready, err := c.Ready(ctx)
-	if err != nil || !ready.Bound || ready.Identity != intent.Identity || ready.NativeVersion != "1.19.3" {
+	if err != nil || !ready.Bound || ready.Identity != intent.Identity || !opencodebridge.SupportedNativeVersion(ready.NativeVersion) {
 		return opencodebridge.Receipt{}, errors.New("native request profile identity unavailable")
 	}
 	raw, err := c.Message(ctx, intent.MessageID)

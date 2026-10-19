@@ -36,7 +36,7 @@ func openCodeSelectionFromInfo(raw json.RawMessage, identity opencodebridge.Iden
 		} `json:"time"`
 	}
 	refusal := errors.New("OpenCode committed native selection is unconfirmed")
-	if len(raw) > 256<<10 || json.Unmarshal(raw, &row) != nil || row.ID != identity.RootID || row.Directory != identity.Directory || row.Time.Created != identity.NativeCreatedAtMS || row.Version != "1.19.3" {
+	if len(raw) > 256<<10 || json.Unmarshal(raw, &row) != nil || row.ID != identity.RootID || row.Directory != identity.Directory || row.Time.Created != identity.NativeCreatedAtMS || !opencodebridge.SupportedNativeVersion(row.Version) {
 		return openCodeCommittedSelection{}, refusal
 	}
 	if row.Agent == "" && row.Model == nil {
@@ -52,7 +52,7 @@ func applyOpenCodeCommittedSelection(spec *daemon.LaunchSpec, selection openCode
 		return nil
 	}
 	if model := spec.Options["model"]; resume && model != "" && model != selection.Model {
-		return errors.New("OpenCode 1.19.3 restores the committed message model on resume; use a fresh handoff or select the new model in the native picker")
+		return errors.New("OpenCode restores the committed message model on resume; use a fresh handoff or select the new model in the native picker")
 	}
 	options := maps.Clone(spec.Options)
 	if options == nil {

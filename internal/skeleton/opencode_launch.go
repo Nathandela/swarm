@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/opencodebridge"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 )
@@ -71,8 +72,8 @@ func (a *coreAPI) qualifyOpenCodeLaunch(spec *daemon.LaunchSpec) error {
 	}
 	env := mergeNativeOpenCodeEnvironment(spec.ClientEnv, spec.OpenCodeEnv)
 	identity, err := probeCLIIdentity("opencode", spec.Argv[0], env, spec.Cwd)
-	if err != nil || identity == nil || identity.Version != "1.19.3" {
-		return errors.New("OpenCode runtime: native version 1.19.3 is required")
+	if err != nil || identity == nil || !opencodebridge.SupportedNativeVersion(identity.Version) {
+		return errors.New("OpenCode runtime: stable native version " + opencodebridge.MinimumNativeVersion + " or newer is required")
 	}
 	if expected := spec.ExpectedCLIIdentity; expected != nil && *expected != *identity {
 		return errors.New("OpenCode runtime: native installation changed")

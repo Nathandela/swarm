@@ -81,7 +81,7 @@ func waitOpenCodeReady(ctx context.Context, c *opencodebridge.Client, b opencode
 	for {
 		r, err := c.Ready(ctx)
 		if err == nil {
-			if r.Version != 1 || r.WorkerID != b.WorkerID || r.SessionInstance != b.SessionInstance || r.RootID != b.RootID || r.Directory != b.Directory || r.BackendGeneration != b.BackendGeneration || r.NativeVersion != "1.19.3" {
+			if r.Version != 1 || r.WorkerID != b.WorkerID || r.SessionInstance != b.SessionInstance || r.RootID != b.RootID || r.Directory != b.Directory || r.BackendGeneration != b.BackendGeneration || !opencodebridge.SupportedNativeVersion(r.NativeVersion) {
 				return r, errors.New("OpenCode runtime: native bridge identity mismatch")
 			}
 			if r.Bound && !sameOpenCodeIdentity(r.Identity, b) {

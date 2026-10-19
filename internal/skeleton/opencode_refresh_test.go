@@ -28,13 +28,13 @@ func nativeRefreshRig(t *testing.T) (*authWatcher, *authFake, *persist.CLIIdenti
 	return w, f, target
 }
 
-func TestOpenCodeRefreshReportsUnsupportedInstallWithoutKilling(t *testing.T) {
+func TestOpenCodeRefreshReportsChangedInstallWithoutKilling(t *testing.T) {
 	w, f, target := nativeRefreshRig(t)
 	for i := 0; i < 4; i++ {
 		w.tickCLIRefresh(true)
 	}
 	rec, ok := w.state.CLI["source"]
-	if !ok || rec.State != cliRefreshBlocked || rec.Target != *target || !strings.Contains(rec.LastError, "1.19.3") {
+	if !ok || rec.State != cliRefreshBlocked || rec.Target != *target || !strings.Contains(rec.LastError, "explicit end/resume") {
 		t.Fatalf("native installed change was silent: %+v", rec)
 	}
 	report, err := CLIRefreshStatus(w.stateDir)

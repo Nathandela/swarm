@@ -31,6 +31,7 @@ type openCodeSendFixture struct {
 	receiptAvailable     atomic.Bool
 	rowAvailable         atomic.Bool
 	nativeRow            atomic.Value
+	nativeVersion        atomic.Value
 	d                    *Daemon
 	client               *protocol.Client
 	binding              opencodebridge.Binding
@@ -116,7 +117,11 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 		}
 		switch r.URL.Path {
 		case "/ready", "/ack":
-			_ = json.NewEncoder(w).Encode(opencodebridge.Ready{Identity: f.identity, NativeVersion: "1.19.3", Bound: true, Ready: true, Acknowledged: true, DraftGuardSupported: true, InitialSupported: f.initialNativeMode})
+			version := "1.19.3"
+			if override, ok := f.nativeVersion.Load().(string); ok {
+				version = override
+			}
+			_ = json.NewEncoder(w).Encode(opencodebridge.Ready{Identity: f.identity, NativeVersion: version, Bound: true, Ready: true, Acknowledged: true, DraftGuardSupported: true, InitialSupported: f.initialNativeMode})
 		case "/initial":
 			var req opencodebridge.InitialRequest
 			if !f.initialNativeMode || json.NewDecoder(r.Body).Decode(&req) != nil {

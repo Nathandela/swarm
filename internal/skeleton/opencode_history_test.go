@@ -156,7 +156,7 @@ func TestOpenCodeEndedHistoryExportsExactProfileAndRefusesMissingStorage(t *test
 	payload, _ := json.Marshal(openCodeHistoryExport{Info: page.Session, Messages: page.Messages})
 	bin := filepath.Join(project, "opencode")
 	marker := filepath.Join(project, "exported")
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 1.19.3; exit 0; fi\n[ \"$1\" = export ] && [ \"$2\" = " + source.ConversationID + " ] || exit 91\n[ \"$XDG_DATA_HOME\" = " + strconv.Quote(profile) + " ] || exit 92\nprintf x >> " + strconv.Quote(marker) + "\ncat <<'NATIVE_HISTORY_EOF'\n" + string(payload) + "\nNATIVE_HISTORY_EOF\n"
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 2.0.0; exit 0; fi\n[ \"$1\" = export ] && [ \"$2\" = " + source.ConversationID + " ] || exit 91\n[ \"$XDG_DATA_HOME\" = " + strconv.Quote(profile) + " ] || exit 92\nprintf x >> " + strconv.Quote(marker) + "\ncat <<'NATIVE_HISTORY_EOF'\n" + string(payload) + "\nNATIVE_HISTORY_EOF\n"
 	if err = os.WriteFile(bin, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestOpenCodeEndedHistoryExportsExactProfileAndRefusesMissingStorage(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.CLIIdentity = &persist.CLIIdentity{Path: bin, Version: "1.19.3", Fingerprint: fingerprint}
+	source.CLIIdentity = &persist.CLIIdentity{Path: bin, Version: "2.0.0", Fingerprint: fingerprint}
 	source.Env = []string{"PATH=/usr/bin:/bin"}
 	api := continuityAPI(t, source)
 	dir, err := filepath.EvalSymlinks(filepath.Join(api.stateDir, source.ID))
@@ -196,8 +196,21 @@ func TestOpenCodeEndedHistoryExportsExactProfileAndRefusesMissingStorage(t *test
 		t.Fatal(err)
 	}
 	var exported openCodeHistoryExport
-	if json.Unmarshal(raw, &exported) != nil || exported.Provenance.Identity != id || exported.Provenance.Source != "native_cli_export" || len(exported.Messages) != 1 {
+	if json.Unmarshal(raw, &exported) != nil || exported.Provenance.Identity != id || exported.Provenance.Source != "native_cli_export" || exported.Provenance.NativeVersion != "2.0.0" || len(exported.Messages) != 1 {
 		t.Fatal("export lost native identity or rows")
+	}
+	var historical struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(exported.Info, &historical) != nil || historical.Version != "1.19.3" {
+		t.Fatal("runtime provenance rewrote historical session version")
+	}
+	changedIdentity := *source.CLIIdentity
+	changedIdentity.Fingerprint = "different"
+	changedSource := source
+	changedSource.CLIIdentity = &changedIdentity
+	if _, err := resolver.nativeExportCommand(context.Background(), changedSource); err == nil {
+		t.Fatal("newer version bypassed exact executable fingerprint")
 	}
 	resume := daemon.LaunchSpec{AgentType: "opencode", Cwd: t.TempDir(), Options: map[string]string{protocol.OptionResumeFrom: protocol.NamespacedID(testEndpoint, source.ID)}}
 	if err := api.captureOpenCodeOrigin(&resume); err != nil {

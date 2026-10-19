@@ -93,6 +93,59 @@ test("private listener authenticates and never echoes its token", async t => {
   assert.equal(fs.statSync(f.binding.socketPath).mode & 0o777, 0o600)
 })
 
+const supportedVersions = ["1.19.3", "1.19.4", "1.20.0", "2.0.0", "10000.0.0", "999999999999999999999999999999.0.0"]
+for (const mode of ["create", "resume"]) for (const version of supportedVersions) test(`${mode} binds stable OpenCode ${version} and dispatches`, async t => {
+  const f = await fixture(t, ({ binding, state }) => { binding.mode = mode; binding.nativeCreatedAtMS = mode === "resume" ? 123456 : 0; state.version = version })
+  const ready = (await f.call("GET", "/ready")).body
+  assert.equal(ready.nativeVersion, version)
+  assert.equal(ready.ready, true)
+  assert.equal(ready.acknowledged, true)
+  assert.equal(ready.draftGuardSupported, true)
+  assert.equal(f.state.calls.filter(call => call.name === (mode === "create" ? "create" : "v2get")).length, 1)
+  assert.equal((await f.dispatch()).body.status, "admitted")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 1)
+})
+
+for (const version of supportedVersions) test(`bound bridge remains ready and dispatches on stable OpenCode ${version}`, async t => {
+  const f = await fixture(t)
+  f.state.version = version
+  const ready = (await f.call("GET", "/ready")).body
+  assert.equal(ready.nativeVersion, version)
+  assert.equal(ready.ready, true)
+  assert.equal(ready.draftGuardSupported, true)
+  assert.equal((await f.dispatch()).body.status, "admitted")
+  assert.equal(f.state.calls.filter(call => call.name === "prompt").length, 1)
+})
+
+const unsupportedVersions = ["0.99.99", "1.18.99", "1.19.2", "1.19.3-rc.1", "1.19.4-beta", "2.0.0-rc.1", "1.19.3+build", "2.0.0+build", "v1.19.3", "01.19.3", "1.019.3", "1.19.03", "1.19", "1.19.3.0", "1.19.3\n", "1.19.3\r", "1.19.3 ", " 1.19.3", "1.19.+3", "1.19.x", "", null, 1193]
+for (const version of unsupportedVersions) test(`bootstrap refuses unsupported OpenCode ${JSON.stringify(version)} before native effects`, async t => {
+  const f = await fixture(t, ({ state }) => { state.version = version; state.autoAck = false; state.route = { name: "home" } })
+  const ready = (await f.call("GET", "/ready")).body
+  assert.equal(ready.nativeVersion, version)
+  assert.equal(ready.bound, false)
+  assert.equal(ready.ready, false)
+  assert.equal(ready.draftGuardSupported, false)
+  assert.equal((await f.dispatch()).body.status, "rejected")
+  assert.deepEqual(f.state.route, { name: "home" })
+  assert.deepEqual(f.state.calls, [])
+})
+
+for (const version of unsupportedVersions) test(`bound bridge refuses unsupported OpenCode ${JSON.stringify(version)} before native effects`, async t => {
+  const f = await fixture(t)
+  f.state.calls = []
+  f.state.version = version
+  const ready = (await f.call("GET", "/ready")).body
+  assert.equal(ready.nativeVersion, version)
+  assert.equal(ready.bound, true)
+  assert.equal(ready.ready, false)
+  assert.equal(ready.draftGuardSupported, false)
+  assert.deepEqual(ready.degraded, ["version_mismatch"])
+  const receipt = (await f.dispatch()).body
+  assert.equal(receipt.status, "rejected")
+  assert.equal(receipt.reason, "version_mismatch")
+  assert.deepEqual(f.state.calls, [])
+})
+
 test("native empty successful status map allows idle, cached missing status does not decide", async t => {
   const f = await fixture(t)
   const result = await f.dispatch()

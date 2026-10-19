@@ -56,7 +56,7 @@ func validateNativeHistory(result *openCodeHistoryExport, id opencodebridge.Iden
 			Created int64 `json:"created"`
 		} `json:"time"`
 	}
-	if json.Unmarshal(result.Info, &info) != nil || info.ID != id.RootID || info.Directory != id.Directory || info.Time.Created != id.NativeCreatedAtMS || info.Version != "1.19.3" || result.Messages == nil {
+	if json.Unmarshal(result.Info, &info) != nil || info.ID != id.RootID || info.Directory != id.Directory || info.Time.Created != id.NativeCreatedAtMS || !opencodebridge.SupportedNativeVersion(info.Version) || result.Messages == nil {
 		return errors.New("native history identity or version unconfirmed")
 	}
 	if len(result.Messages) > openCodeHistoryMaxMessages {
@@ -200,6 +200,7 @@ func (r *openCodeHistoryResolver) LocateTranscript(m persist.Meta, id string) (s
 	identity := nativeHistoryIdentity(current)
 	var result openCodeHistoryExport
 	source := "live_sdk"
+	nativeVersion := ""
 	if current.Status.Process == status.ProcessRunning {
 		c, clientErr := opencodebridge.NewClient(b.SocketPath, b.Token)
 		if clientErr != nil {
@@ -207,13 +208,17 @@ func (r *openCodeHistoryResolver) LocateTranscript(m persist.Meta, id string) (s
 		}
 		defer c.Close()
 		ready, readyErr := c.Ready(ctx)
-		if readyErr != nil || !ready.Bound || !ready.Acknowledged || !ready.Ready || ready.Identity != identity {
+		if readyErr != nil || !ready.Bound || !ready.Acknowledged || !ready.Ready || ready.Identity != identity || !opencodebridge.SupportedNativeVersion(ready.NativeVersion) {
 			return "", resumeHistoryUnreadable
 		}
+		nativeVersion = ready.NativeVersion
 		result, err = collectOpenCodeHistory(ctx, identity, c.Snapshot)
 	} else {
 		source = "native_cli_export"
 		result, err = r.exportEnded(ctx, current)
+		if err == nil {
+			nativeVersion = current.CLIIdentity.Version
+		}
 	}
 	if err != nil {
 		return "", resumeHistoryUnreadable
@@ -221,7 +226,7 @@ func (r *openCodeHistoryResolver) LocateTranscript(m persist.Meta, id string) (s
 	if err := validateNativeHistory(&result, identity); err != nil {
 		return "", resumeHistoryUnsafe
 	}
-	result.Provenance = openCodeHistoryProvenance{Identity: identity, Source: source, NativeVersion: "1.19.3", Scope: "exact root; native child references remain in original parts", CapturedAt: time.Now().UTC(), MutableDuringRead: true, Gaps: "native compaction and omitted native data are not reconstructed"}
+	result.Provenance = openCodeHistoryProvenance{Identity: identity, Source: source, NativeVersion: nativeVersion, Scope: "exact root; native child references remain in original parts", CapturedAt: time.Now().UTC(), MutableDuringRead: true, Gaps: "native compaction and omitted native data are not reconstructed"}
 	raw, err := json.MarshalIndent(result, "", "  ")
 	if err != nil || len(raw) > openCodeHistoryMaxBytes {
 		return "", resumeHistoryUnsafe
@@ -281,7 +286,7 @@ func (w *boundedNativeExport) Write(p []byte) (int, error) {
 	return w.data.Write(p)
 }
 func (r *openCodeHistoryResolver) nativeExportCommand(ctx context.Context, m persist.Meta) (*exec.Cmd, error) {
-	if m.CLIIdentity == nil || m.CLIIdentity.Version != "1.19.3" || !persist.MatchCLIFingerprint(m.CLIIdentity.Path, m.CLIIdentity.Fingerprint) {
+	if m.CLIIdentity == nil || !opencodebridge.SupportedNativeVersion(m.CLIIdentity.Version) || !persist.MatchCLIFingerprint(m.CLIIdentity.Path, m.CLIIdentity.Fingerprint) {
 		return nil, errors.New("native history executable unconfirmed")
 	}
 	native, err := r.core.OpenCodeResumeEnvironment(m.ID)

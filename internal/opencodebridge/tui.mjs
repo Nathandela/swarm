@@ -1,11 +1,10 @@
-// OpenCode 1.19.3 public TUI API. Native history remains native; this bridge owns no provider credentials.
+// OpenCode >=1.19.3 stable public TUI API. Native history remains native; this bridge owns no provider credentials.
 import http from "node:http"
 import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
 
 const ID = "swarm-opencode-guard"
-const VERSION = "1.19.3"
 const BODY_LIMIT = 64 << 10
 const RESPONSE_LIMIT = 2 << 20
 const EVENT_LIMIT = 1 << 20
@@ -23,6 +22,13 @@ const exactKeys = (value, keys) => object(value) && Object.keys(value).every(key
 const validPath = value => string(value, 4096) && path.isAbsolute(value) && path.normalize(value) === value
 const list = value => { if (!Array.isArray(value)) throw fault("native_shape"); return value }
 const map = value => { if (!object(value)) throw fault("native_shape"); return value }
+
+function supportedVersion(value) {
+  const match = typeof value === "string" && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.exec(value)
+  if (!match || match[0] !== value) return false
+  const [major, minor, patch] = match.slice(1).map(BigInt)
+  return major > 1n || major === 1n && (minor > 19n || minor === 19n && patch >= 3n)
+}
 
 function bindingFrom(options) {
   if (!exactKeys(options, ["bindingFile"]) || !validPath(options.bindingFile)) throw fault("binding_invalid")
@@ -70,7 +76,7 @@ export default { id: ID, async tui(api, options) {
   function view(requireAck = true) {
     if (disposed) throw fault("disposed")
     if (!bound) throw fault(bootstrapReason)
-    if (api.app.version !== VERSION) throw fault("version_mismatch")
+    if (!supportedVersion(api.app.version)) throw fault("version_mismatch")
     if (api.state.ready !== true || api.state.path.directory !== binding.directory) throw fault("native_not_ready")
     if (requireAck && !acknowledged) throw fault("binding_unacknowledged")
     const route = api.route.current
@@ -568,7 +574,7 @@ export default { id: ID, async tui(api, options) {
     installPrompt()
     const until = Date.now() + 15000
     while (!api.state.ready && !disposed && Date.now() < until) await pause(25)
-    if (disposed || !api.state.ready || api.app.version !== VERSION || api.state.path.directory !== binding.directory) throw fault("native_not_ready")
+    if (disposed || !api.state.ready || !supportedVersion(api.app.version) || api.state.path.directory !== binding.directory) throw fault("native_not_ready")
     const result = await read(opts => binding.mode === "create" ? api.client.v2.session.create({ id: binding.rootID, location: { directory: binding.directory } }, opts) : api.client.v2.session.get({ sessionID: binding.rootID }, opts))
     const row = rowMatches(result.data.data); createdAt = row.time.created
     api.route.navigate("session", { sessionID: binding.rootID }); bound = true; bootstrapReason = ""

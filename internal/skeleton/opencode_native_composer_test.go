@@ -60,7 +60,7 @@ func TestOpenCodeComposerSinkProofChecksEveryNativeReadyFence(t *testing.T) {
 			reader.ready = opencodebridge.Ready{Identity: reader.identity, NativeVersion: "1.19.3", Acknowledged: true, Bound: true, Ready: true, DraftGuardSupported: true}
 			switch change {
 			case "version":
-				reader.ready.NativeVersion = "1.19.4"
+				reader.ready.NativeVersion = "1.19.2"
 			case "binding":
 				reader.ready.BackendGeneration = "another"
 			case "ack":
@@ -80,6 +80,19 @@ func TestOpenCodeComposerSinkProofChecksEveryNativeReadyFence(t *testing.T) {
 			}
 			if projection.sinkQualified.Load() != (change == "valid") {
 				t.Fatal("native writer capability bypassed ready fence")
+			}
+		})
+	}
+}
+
+func TestOpenCodeComposerSinkAcceptsNewerStableNativeVersions(t *testing.T) {
+	for _, version := range []string{"1.19.3", "1.19.4", "1.20.0", "2.0.0"} {
+		t.Run(version, func(t *testing.T) {
+			reader := &openCodeQualifiedReadyFake{ocReaderFake: newOCReaderFake()}
+			reader.ready = opencodebridge.Ready{Identity: reader.identity, NativeVersion: version, Acknowledged: true, Bound: true, Ready: true, DraftGuardSupported: true}
+			projection := &openCodeTranscript{identity: reader.identity}
+			if err := projection.qualifySink(context.Background(), reader); err != nil || !projection.sinkQualified.Load() {
+				t.Fatalf("newer stable native version lost sink proof: %v", err)
 			}
 		})
 	}

@@ -19,7 +19,24 @@ import (
 )
 
 func TestDoctorOpenCodeChecksExactPrivateBindingWithoutSubmitting(t *testing.T) {
-	for _, scenario := range []string{"healthy", "symlink-state", "foreign-ready", "missing-socket", "uncertain-initial"} {
+	for _, tc := range []struct{ scenario, version, want string }{
+		{"healthy", "1.19.3", "ok"},
+		{"newer-patch", "1.19.4", "ok"},
+		{"newer-minor", "1.20.0", "ok"},
+		{"future-major", "2.0.0", "ok"},
+		{"below-floor", "1.19.2", "warn"},
+		{"prerelease", "1.20.0-rc.1", "warn"},
+		{"build-suffix", "1.20.0+build", "warn"},
+		{"leading-zero", "1.020.0", "warn"},
+		{"short-version", "1.20", "warn"},
+		{"prefixed-version", "v1.20.0", "warn"},
+		{"malformed-version", "unknown", "warn"},
+		{"symlink-state", "1.19.3", "ok"},
+		{"foreign-ready", "1.19.3", "warn"},
+		{"missing-socket", "1.19.3", "warn"},
+		{"uncertain-initial", "1.19.3", "warn"},
+	} {
+		scenario := tc.scenario
 		t.Run(scenario, func(t *testing.T) {
 			root, err := os.MkdirTemp("/tmp", "ocdr-")
 			if err != nil {
@@ -65,7 +82,7 @@ func TestDoctorOpenCodeChecksExactPrivateBindingWithoutSubmitting(t *testing.T) 
 					if scenario == "foreign-ready" {
 						identity.RootID = "ses_" + strings.Repeat("c", 32)
 					}
-					_ = json.NewEncoder(w).Encode(opencodebridge.Ready{Identity: identity, NativeVersion: "1.19.3", Bound: true, Acknowledged: true, Ready: true})
+					_ = json.NewEncoder(w).Encode(opencodebridge.Ready{Identity: identity, NativeVersion: tc.version, Bound: true, Acknowledged: true, Ready: true})
 				})}
 				go func() { _ = server.Serve(listener) }()
 				t.Cleanup(func() { _ = server.Close() })
@@ -80,18 +97,14 @@ func TestDoctorOpenCodeChecksExactPrivateBindingWithoutSubmitting(t *testing.T) 
 				}
 			}
 			finding := doctorOpenCodeCheck(ctx, stateDir, m)
-			want := "warn"
-			if scenario == "healthy" || scenario == "symlink-state" {
-				want = "ok"
-			}
-			if finding.Status != want {
+			if finding.Status != tc.want {
 				t.Fatalf("doctor %s: %+v", scenario, finding)
 			}
 			encoded, _ := json.Marshal(finding)
 			if strings.Contains(string(encoded), b.Token) || strings.Contains(string(encoded), "secret-token") {
 				t.Fatal("doctor disclosed private bridge credential")
 			}
-			if scenario == "healthy" && reads.Load() != 1 {
+			if tc.want == "ok" && reads.Load() != 1 {
 				t.Fatal("healthy native binding was not actually probed")
 			}
 		})

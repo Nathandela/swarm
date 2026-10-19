@@ -22,6 +22,7 @@ import (
 
 type openCodeRuntimeFixture struct {
 	initialRequest atomic.Value
+	nativeVersion  atomic.Value
 	rejectReason   atomic.Value
 	rejectBadProof atomic.Bool
 	d              *Daemon
@@ -82,7 +83,11 @@ func newOpenCodeRuntimeFixture(t *testing.T) *openCodeRuntimeFixture {
 		if f.wrongRoot.Load() {
 			identity.RootID = "ses_" + strings.Repeat("e", 32)
 		}
-		ready := opencodebridge.Ready{Identity: identity, NativeVersion: "1.19.3", Bound: true, Ready: true, InitialSupported: true}
+		version := "1.19.3"
+		if override, ok := f.nativeVersion.Load().(string); ok {
+			version = override
+		}
+		ready := opencodebridge.Ready{Identity: identity, NativeVersion: version, Bound: true, Ready: true, InitialSupported: true}
 		switch r.URL.Path {
 		case "/ready":
 			_ = json.NewEncoder(w).Encode(ready)

@@ -625,7 +625,7 @@ func (w *authWatcher) prepareCLIRefreshTarget(source persist.Meta) bool {
 	return true
 }
 
-const openCodeRefreshRefusal = "OpenCode automatic refresh is blocked: only native 1.19.3 is qualified; keep the current worker and exact native profile for manual recovery"
+const openCodeRefreshRefusal = "OpenCode automatic refresh is blocked: native worker replacement requires explicit end/resume; keep the current worker and exact native profile for manual recovery"
 
 // validateCLIRefreshTarget is called inside the composer/direct-input fence,
 // immediately before the durable claim and kill.

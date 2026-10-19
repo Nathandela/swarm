@@ -26,6 +26,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/vt"
+	"golang.org/x/mod/semver"
 )
 
 // binary is the `opencode` executable name on PATH.
@@ -61,17 +62,22 @@ func (opencodeAdapter) Binary() string { return binary }
 
 func (opencodeAdapter) VersionArgs() []string { return []string{"--version"} }
 
-// ParseVersion reads the first dotted-numeric token out of the version banner
+// ParseVersion reads the first canonical stable release from the version banner
 // (`opencode --version` prints a bare version, e.g. "1.17.9" — no CLI-name
 // prefix, unlike claude/codex). It is pure and total.
 func (opencodeAdapter) ParseVersion(output string) (string, bool) {
-	return firstDottedNumeric(output)
+	for _, field := range strings.Fields(output) {
+		version := "v" + field
+		if semver.IsValid(version) && semver.Canonical(version) == version && semver.Prerelease(version) == "" {
+			return field, true
+		}
+	}
+	return "", false
 }
 
-// SupportedVersions is the inclusive range this adapter drives. The floor pins
-// the characterized 1.x line; the ceiling is an open sentinel.
+// SupportedVersions accepts releases at or above the native runtime minimum.
 func (opencodeAdapter) SupportedVersions() adapter.VersionConstraint {
-	return adapter.VersionConstraint{Min: "1.0.0", Max: "9999.0.0"}
+	return adapter.VersionConstraint{Min: "1.19.3"}
 }
 
 // Command composes the launch argv: `opencode` + [--model provider/model] +
@@ -182,35 +188,4 @@ func gridText(snap *vt.Snap) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
-}
-
-// firstDottedNumeric scans output for the first "x.y[.z...]" all-numeric token
-// (tolerating a leading "v"). It is pure and total.
-func firstDottedNumeric(output string) (string, bool) {
-	for _, field := range strings.Fields(output) {
-		v := strings.TrimPrefix(field, "v")
-		parts := strings.Split(v, ".")
-		if len(parts) < 2 {
-			continue
-		}
-		if allNumeric(parts) {
-			return v, true
-		}
-	}
-	return "", false
-}
-
-// allNumeric reports whether every part is non-empty and all ASCII digits.
-func allNumeric(parts []string) bool {
-	for _, p := range parts {
-		if p == "" {
-			return false
-		}
-		for _, c := range p {
-			if c < '0' || c > '9' {
-				return false
-			}
-		}
-	}
-	return true
 }

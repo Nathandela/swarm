@@ -61,6 +61,20 @@ func TestParseVersion_RealBanner(t *testing.T) {
 	}
 }
 
+func TestParseVersionRequiresCanonicalStableRelease(t *testing.T) {
+	a := newAdapter()
+	for _, output := range []string{"1.19.3\n", "OpenCode 1.20.0\n", "2.0.0"} {
+		if _, ok := a.ParseVersion(output); !ok {
+			t.Errorf("ParseVersion(%q) rejected a stable release", output)
+		}
+	}
+	for _, output := range []string{"", "1.19", "1.19.3.0", "v1.19.3", "01.19.3", "1.019.3", "1.19.03", "1.19.3-rc.1", "1.19.3+build", "1.19.x", "not-a-version"} {
+		if version, ok := a.ParseVersion(output); ok || version != "" {
+			t.Errorf("ParseVersion(%q) = (%q, %v); want rejected", output, version, ok)
+		}
+	}
+}
+
 // TestBinaryAndVersionArgs — R-E1: the detection descriptors match the real CLI.
 func TestBinaryAndVersionArgs(t *testing.T) {
 	a := newAdapter()
@@ -83,22 +97,23 @@ type stubProber struct {
 func (s stubProber) LookPath(string) (string, error)      { return s.path, s.lookErr }
 func (s stubProber) Run(string, []string) (string, error) { return s.out, s.runErr }
 
-// TestDetect_VersionGreying_L2 — R-E1 / L-2: detection yields InRange=true for
-// the real version and InRange=false for a version below the supported floor.
+// TestDetect_VersionGreying_L2 — R-E1 / L-2: detection accepts stable releases
+// at or above the supported floor and greys out older versions.
 func TestDetect_VersionGreying_L2(t *testing.T) {
 	a := newAdapter()
 
-	ok := adapter.Detect(a, stubProber{path: "/usr/local/bin/opencode", out: realVersionBanner})
-	if !ok.Found || ok.Version != "1.17.9" || !ok.InRange {
-		t.Fatalf("Detect(real version) = %+v; want Found, Version 1.17.9, InRange true", ok)
+	for _, version := range []string{"1.19.3", "1.19.4", "1.20.0", "2.0.0", "10000.0.0"} {
+		got := adapter.Detect(a, stubProber{path: "/usr/local/bin/opencode", out: version + "\n"})
+		if !got.Found || got.Version != version || !got.InRange {
+			t.Errorf("Detect(%s) = %+v; want supported", version, got)
+		}
 	}
 
-	old := adapter.Detect(a, stubProber{path: "/usr/local/bin/opencode", out: "0.5.0\n"})
-	if !old.Found {
-		t.Fatalf("Detect(old version) not Found; want Found (binary present, version out of range)")
-	}
-	if old.InRange {
-		t.Errorf("Detect(old 0.5.0) InRange=true; an out-of-supported-range CLI must be greyed (L-2)")
+	for _, version := range []string{"0.5.0", "1.17.9", "1.19.2"} {
+		old := adapter.Detect(a, stubProber{path: "/usr/local/bin/opencode", out: version + "\n"})
+		if !old.Found || old.InRange {
+			t.Errorf("Detect(%s) = %+v; want found but unsupported", version, old)
+		}
 	}
 
 	missing := adapter.Detect(a, stubProber{lookErr: errNotFound})

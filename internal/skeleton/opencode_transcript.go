@@ -407,7 +407,7 @@ func (p *openCodeTranscript) qualifySink(ctx context.Context, reader openCodeRea
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	ready, err := readyReader.Ready(readyCtx)
-	healthy := err == nil && ready.Identity == p.identity && ready.NativeVersion == "1.19.3" && ready.Bound
+	healthy := err == nil && ready.Identity == p.identity && opencodebridge.SupportedNativeVersion(ready.NativeVersion) && ready.Bound
 	p.sinkQualified.Store(healthy && ready.Acknowledged && ready.Ready && ready.DraftGuardSupported)
 	if !healthy {
 		return errors.New("native bridge health is unconfirmed")
