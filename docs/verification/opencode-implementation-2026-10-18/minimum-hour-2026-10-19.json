@@ -1,0 +1,59 @@
+{
+  "recorded_at": "2026-10-19T20:57:25.068465+00:00",
+  "source_head": "d86cb92d05085826a1facca2759b0e7e6b3ae183",
+  "binary_sha256": "a94c3c089b858e4104d16a156945d69ea0013fdd0dfee673a1c6d6a202030b4d",
+  "native_version": "1.19.3",
+  "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+  "fixture_source_sha256": "3e369ef27596ba4876c8c3344466a7575a82113142afe052725ae377e0640b1e",
+  "finished": {
+    "pass": true,
+    "elapsed_seconds": 3600.654,
+    "iterations": 225,
+    "requested_duration_completed": true,
+    "error": null
+  },
+  "daemon_restarts": 11,
+  "provider_requests": 897,
+  "external_model_requests": 0,
+  "provider_errors": [],
+  "config_unchanged": true,
+  "all_owned_shim_exit_files": true,
+  "declared_budgets": {
+    "swarm_rss_mib_per_process": 256,
+    "swarm_fds_per_process": 128,
+    "swarm_disk_mib": 256,
+    "dispatch_seconds": 30,
+    "rejoin_seconds": 15
+  },
+  "max_observed_dispatch_seconds": 0.3815940830099862,
+  "max_observed_rejoin_seconds": 0.7977508339972701,
+  "sampled_max_rss_kib": {
+    "daemon": 31424,
+    "shim": 22432,
+    "native": 1404000
+  },
+  "sampled_max_fds": {
+    "daemon": 16,
+    "shim": 12,
+    "native": 47
+  },
+  "sampled_max_swarm_disk_bytes": 2726462,
+  "raw_evidence": {
+    "result.json": {
+      "sha256": "c89a1e1b00ffc108c543ca3ab839046d780f2e49d3c5cb5e42b2e24990f3dd18"
+    },
+    "finished.json": {
+      "sha256": "2b08778536844ac03245aa9f2a6c24bde11080d3b3a1012116a12390c3cb3054"
+    },
+    "metrics.jsonl": {
+      "sha256": "07a0315e9012d75402d1c0f2d5cc782fe2f495a1d32dd7a445035c9bd7a67131"
+    }
+  },
+  "subsequent_stage_at_recording": "24h running; 72h waits for actual 24h pass",
+  "limits": [
+    "Actual OpenCode 1.19.3 with scripted localhost provider; zero external model requests.",
+    "Private frozen source-candidate binary; signed release artifacts and deployment continuity are verified separately.",
+    "Native RSS/history growth is reported separately from Swarm budgets; sampled peaks do not establish an asymptotic bound.",
+    "Actual 24h/72h, physical phone/hosted relay and full real-model interoperability remain unqualified."
+  ]
+}

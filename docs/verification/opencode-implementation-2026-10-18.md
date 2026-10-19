@@ -1,6 +1,9 @@
 # OpenCode implementation evidence — 2026-10-18
 
-Implementation is active under `agents-tracker-vyhy`. This record covers accepted changes and measured contracts; it does not certify the full maturity plan or a release. Installed Swarm remains unchanged.
+Implementation is tracked under `agents-tracker-vyhy`. Accepted changes shipped in
+[Swarm v0.19.0](opencode-v0190-deployment.md), deployed on the Mac and existing
+Linux AMD64 VM on 2026-10-19 with all 18 existing live native workers preserved.
+This record covers measured contracts; full maturity qualification remains open.
 
 The [2026-10-19 minimum-version follow-up](opencode-minimum-version-2026-10-19.md)
 implements the owner's stable >=1.19.3 admission policy and records its additional
@@ -8,7 +11,7 @@ tests, the final one-hour result and corrected sustained queue.
 
 ## Current maturity
 
-| Surface | Implemented locally | Qualification boundary |
+| Surface | Shipped behavior | Qualification boundary |
 | --- | --- | --- |
 | Launch and model selection | Existing editable picker, complete native model IDs, target-project defaults, exact native binding before initial input | OpenCode 1.19.3; explicit fresh-session variant bootstrap remains unsupported |
 | Monitoring and communication | Native busy/attention/error state, exact input receipts, owner/pilot messages, passive supervision and separate native-child hierarchy | Idle and tool-step completion never prove task completion; compaction cannot transfer ownership without native lineage |
@@ -169,7 +172,7 @@ the isolated ARM toolchain and complete final Android gate above.
 
 Runtime, bridge, reducer, bounded live transcript, hierarchy, native paging/export,
 durable receipts, semantic supervision and public decision/phone paths are
-integrated locally. Ended native exports have an 8 MiB/4,096-message bound and
+shipped in v0.19.0. Ended native exports have an 8 MiB/4,096-message bound and
 refuse larger sources explicitly; conversation storage remains native. Phone
 backfill is bounded to 200 imported items per session. These limits do not expire
 an unfinished native input's durable operation custody.
@@ -177,10 +180,11 @@ an unfinished native input's durable operation custody.
 Actual 24h/72h workloads, physical phone/hosted relay and a complete real-model
 cross-harness matrix remain unqualified. Native RSS/history growth is measured
 separately from declared Swarm resource budgets. No short test or injected clock
-substitutes for elapsed sustained qualification. Changes remain local; no release
-or installed-binary replacement has occurred.
+substitutes for elapsed sustained qualification. The owner-authorized
+[v0.19.0 deployment](opencode-v0190-deployment.md) records publication and installed
+artifact/daemon continuity separately from these pending qualifications.
 
-The final frozen-source one-hour run passed: **3,600.476 seconds, 224 input
+The earlier `c5d29232` frozen-source one-hour run passed: **3,600.476 seconds, 224 input
 cycles and 11 daemon crash recoveries**, within its declared Swarm resource
 budgets. The subsequent 24h stage failed argument validation before launching a
 native worker: its 120-second interval exceeded the fixture's 60-second cap.
@@ -188,6 +192,10 @@ The 72h stage never started. This was a queue configuration error, not a native
 runtime failure. Every future stage is now preflighted before a queue starts.
 [Final one-hour evidence](opencode-implementation-2026-10-18/final-hour-2026-10-19.json),
 [queue status and monitoring](opencode-implementation-2026-10-18/sustained-qualification.md).
+
+After the minimum-version change, the new `d86cb92d` one-hour run passed
+**3,600.654 seconds, 225 inputs and 11 recoveries**; its corrected 24h stage is
+running. [New-source evidence](opencode-implementation-2026-10-18/minimum-hour-2026-10-19.json).
 
 Two additional Sol ultra reviews traced the final protocol/phone and runtime/
 recovery/storage paths and found no confirmed code blockers. Their scope and

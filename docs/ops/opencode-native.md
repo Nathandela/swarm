@@ -3,9 +3,11 @@
 Managed sessions require stable OpenCode **1.19.3 or newer**. The version floor
 permits newer releases; native API readiness, exact binding and action
 capabilities are still checked separately. Live qualification currently uses
-1.19.3. Release qualification is still in progress; consult the [implementation evidence](../verification/opencode-implementation-2026-10-18.md)
-for the tested source revisions and remaining gates. Existing standalone sessions
-retain their original behavior. Development builds do not replace the installed Swarm.
+1.19.3. These capabilities shipped in [Swarm v0.19.0](../verification/opencode-v0190-deployment.md),
+deployed on the owner's Mac and existing Linux VM. Full maturity qualification
+remains in progress; consult the [implementation evidence](../verification/opencode-implementation-2026-10-18.md)
+for tested source revisions and remaining gates. Existing standalone sessions
+retain their original behavior. Reopen an existing dashboard for the new picker.
 
 ## Start and monitor work
 

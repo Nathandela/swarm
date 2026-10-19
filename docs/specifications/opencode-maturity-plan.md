@@ -2,7 +2,7 @@
 
 This plan makes OpenCode a dependable Swarm worker for long-running work, cross-CLI communication, supervision, recovery, and structured phone interaction. It reuses Swarm's shim lifecycle, protocol, interaction journal, composer operation custody, and existing UI. It does not introduce another scheduler, broker, transcript archive, or provider framework.
 
-**Implementation status:** the model selector, watch/worktree fixes, owned native runtime, observation, correlated semantic messages, supervision, transcript, native paging/export and public owner/phone controls are implemented locally. Long-input restart, lost-admission, default-variant and retention fixes are integrated and independently reviewed; release qualification remains open. The built-in DeepSeek V4.1 Flash Free and GLM-5.3 Flash Free workers produced the first changes and cross-reviews. After their native free quota was exhausted, the owner authorized Sol/Astra to continue implementation. The [implementation evidence](../verification/opencode-implementation-2026-10-18.md), [baseline audit](../verification/opencode-parity-2026-10-18.md), [model strategy reviews and new API experiments](../verification/opencode-plan-review-2026-10-18.md), and source distinguish completed checks from proposed behavior. The final c5d29232 one-hour workload passed 224 inputs and 11 daemon recoveries; actual 24h/72h qualification remains outstanding after a queue argument error prevented the 24h launch. The owner subsequently selected stable OpenCode >=1.19.3 as the admission policy; newer-version admission does not establish live qualification or enable automatic worker replacement.
+**Implementation status:** the model selector, watch/worktree fixes, owned native runtime, observation, correlated semantic messages, supervision, transcript, native paging/export and public owner/phone controls shipped in [Swarm v0.19.0](../verification/opencode-v0190-deployment.md), deployed on the Mac and existing Linux VM. Long-input restart, lost-admission, default-variant and retention fixes are integrated and independently reviewed; full maturity qualification remains open. The built-in DeepSeek V4.1 Flash Free and GLM-5.3 Flash Free workers produced the first changes and cross-reviews. After their native free quota was exhausted, the owner authorized Sol/Astra to continue implementation. The [implementation evidence](../verification/opencode-implementation-2026-10-18.md), [baseline audit](../verification/opencode-parity-2026-10-18.md), [model strategy reviews and new API experiments](../verification/opencode-plan-review-2026-10-18.md), and source distinguish completed checks from proposed behavior. The new d86cb92d one-hour workload passed 225 inputs and 11 daemon recoveries; the corrected 24h stage is running and 72h waits for it. The owner selected stable OpenCode >=1.19.3 as the admission policy; newer-version admission does not establish live qualification or enable automatic worker replacement.
 
 ## Decisions and evidence
 
@@ -34,7 +34,7 @@ DeepSeek V4.1 Flash and GLM-5.3 Flash reviewed the strategy through actual Swarm
 
 | Milestone | User-visible result | Work packages |
 | --- | --- | --- |
-| M0 Discovery | OpenCode has the existing editable model selector; untouched forms preserve native defaults | P0, implemented locally |
+| M0 Discovery | OpenCode has the existing editable model selector; untouched forms preserve native defaults | P0, shipped in v0.19.0 |
 | M1 Reliable worker observation | Exact native ID before work; actual busy, attention, error and settled state; resume and daemon recovery; read-only monitors work | P1–P3, shared workflow fixes |
 | M2 Autonomous coordination | Correlated semantic messages and replies; safe passive supervision; native child attention; hands-off continuity across providers | P4–P6 |
 | M3 Structured interaction | Phone transcript, request controls and supported Stop semantics, with honest degraded states | P7 |
@@ -336,8 +336,10 @@ P1's optional v2 experiments can run alongside the legacy observation implementa
 
 The selected normal-TUI SDK bridge has actual native launch, permission/question,
 child, semantic admission, supervision, crash/rejoin and one-hour continuity
-evidence. Late paging/recovery integration, final complete-source checks and the
-P9 sustained/platform matrix still gate release. Exact frozen revisions and
+evidence. Late paging/recovery integration and final complete-source release
+checks passed for the owner-authorized v0.19.0 rollout. The remaining P9
+sustained/platform matrix still gates full operational maturity; deployment
+does not establish those missing results. Exact frozen revisions and
 fixture-versus-provider boundaries belong in the implementation evidence.
 
 The newer v2 path retains its measured runtime/projection split; stored admissions

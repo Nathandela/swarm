@@ -19,9 +19,12 @@ starting a replacement queue.
 After max/default native smoke passed, a new frozen candidate queue started at
 2026-10-19 18:05 UTC, production source `d86cb92d05085826a1facca2759b0e7e6b3ae183`.
 All three commands passed argument preflight **before** the first worker launched.
-It is currently running qualification; no requested duration is yet counted as
-passed for this source. The one-hour stage's initial heartbeat confirms genuine
-input, native child work, requests and history reads are progressing.
+The one-hour stage **passed**: 3,600.654 seconds including cleanup, 225 inputs,
+11 daemon recoveries, 897 loopback requests and zero external calls. Configuration
+was unchanged, declared budgets passed and all owned shims exited.
+See [new-source evidence](minimum-hour-2026-10-19.json). The 24-hour stage is now
+running; the 72-hour stage waits for its successful completion. Those durations
+are not yet counted as passes.
 
 | Stage | Duration | Interval | Maximum inputs |
 | --- | ---: | ---: | ---: |
@@ -99,6 +102,8 @@ SWARM_DAEMON_LOG=/private/tmp/oc-soak-1h-20261018/s/d.log \
 
 Read the queue status first and select the active stage directory. These private
 workers use the scripted fixture provider, not the free DeepSeek/GLM workers.
-No installed Swarm or Android artifact was replaced. Beads
+The queue itself replaces no installed artifact; the separate owner-authorized
+[v0.19.0 rollout](../opencode-v0190-deployment.md) updated installed Swarm on the
+Mac and Linux VM, without publishing an Android app. Beads
 `agents-tracker-vyhy.9` remains open until actual duration and release criteria are
 demonstrated; the queue does not publish or modify the tracker automatically.
