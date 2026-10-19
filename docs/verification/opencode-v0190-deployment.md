@@ -100,14 +100,16 @@ whole-Darwin baseline failures remain open. Strict turn Stop, account rotation,
 automatic relogin, automatic OpenCode replacement and Swarm-driven compaction
 remain unavailable as described in the [operations guide](../ops/opencode-native.md).
 
-The Mac's Intel-prefix Homebrew launcher could not execute its new portable Ruby.
+The Mac's Intel-prefix Homebrew launcher attempted its normal portable Ruby
+upgrade, but could not execute the downloaded Ruby.
 The normal cask engine was run with the existing native ARM Ruby and original
 Homebrew paths; it successfully upgraded Swarm and its receipts/symlinks.
-The command later failed during an unrelated installed-dependent `pkgconf` check
-because the Command Line Tools do not support the installed macOS version.
+The command later auto-tapped `homebrew/core` (about 1.4 GB) and failed during an
+unrelated installed-dependent `pkgconf` check because the Command Line Tools do
+not support the installed macOS version.
 Independent receipt, archive, executable and daemon checks establish the Swarm
 deployment. Repairing normal Homebrew Ruby/CLT operation remains tracked in
-`agents-tracker-vyhy.14`; no Ruby replacement, Rosetta installation or CLT repair
-was attempted. VM disk availability fluctuated during deployment; its final
+`agents-tracker-vyhy.14`; no separate manual Ruby repair, Rosetta installation or
+CLT repair was performed. VM disk availability fluctuated during deployment; its final
 read-only check reported 2,030,596,096 bytes free. Headroom assessment is tracked
 in `agents-tracker-vyhy.15`. No unrelated user data was removed.
