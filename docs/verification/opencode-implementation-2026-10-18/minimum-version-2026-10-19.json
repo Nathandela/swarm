@@ -1,0 +1,171 @@
+{
+  "recorded_at": "2026-10-19T18:07:08.079648+00:00",
+  "production_source_head": "d86cb92d05085826a1facca2759b0e7e6b3ae183",
+  "minimum_stable_native_version": "1.19.3",
+  "maximum_native_version": null,
+  "prereleases_or_build_metadata_accepted": false,
+  "upstream_latest_checked": {
+    "version": "1.19.3",
+    "source": "https://github.com/anomalyco/opencode/releases/tag/v1.19.3"
+  },
+  "root_build_vet": {
+    "scope": "go build ./...;go vet ./...;private cmd/swarm binary build",
+    "go": "1.26.9",
+    "exit_code": 0
+  },
+  "root_adapter_race": {
+    "passing_package_suites": 10,
+    "failures": 0
+  },
+  "linux_target_lint": {
+    "issues": 0,
+    "exit_code": 0
+  },
+  "focused_go_race": {
+    "packages": 5,
+    "passing_test_and_subtest_events": 396,
+    "failures": 0,
+    "skips": 0
+  },
+  "node_bridge": {
+    "tests": 162,
+    "pass": 162,
+    "fail": 0,
+    "skipped": 0,
+    "evidence": "Sol implementation lane report;64 version cases plus existing98 bridge tests."
+  },
+  "python_argument_preflight": {
+    "test_methods": 3,
+    "failures": 0,
+    "scenarios": "full corrected duration plans;original invalid120/180interval rejection;stable minimum version positives/negatives;zero worker/directory effects"
+  },
+  "actual_macos_native": {
+    "max": {
+      "pass": true,
+      "source_head": "d86cb92d05085826a1facca2759b0e7e6b3ae183",
+      "binary_sha256": "a94c3c089b858e4104d16a156945d69ea0013fdd0dfee673a1c6d6a202030b4d",
+      "native_version": "1.19.3",
+      "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+      "fixture_source_sha256": "3e369ef27596ba4876c8c3344466a7575a82113142afe052725ae377e0640b1e",
+      "daemon_restarts": 2,
+      "external_model_requests": 0,
+      "provider_errors": [],
+      "config_unchanged": true,
+      "all_owned_shim_exit_files": true,
+      "max_observed_dispatch_seconds": 0.09671275000437163,
+      "max_observed_rejoin_seconds": 0.5952109170029871,
+      "finished": {
+        "pass": true,
+        "elapsed_seconds": 24.476,
+        "iterations": 3,
+        "requested_duration_completed": false,
+        "error": null
+      },
+      "input_cycles": 3,
+      "provider_requests": 9
+    },
+    "default": {
+      "pass": true,
+      "source_head": "d86cb92d05085826a1facca2759b0e7e6b3ae183",
+      "binary_sha256": "a94c3c089b858e4104d16a156945d69ea0013fdd0dfee673a1c6d6a202030b4d",
+      "native_version": "1.19.3",
+      "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+      "fixture_source_sha256": "3e369ef27596ba4876c8c3344466a7575a82113142afe052725ae377e0640b1e",
+      "daemon_restarts": 2,
+      "external_model_requests": 0,
+      "provider_errors": [],
+      "config_unchanged": true,
+      "all_owned_shim_exit_files": true,
+      "max_observed_dispatch_seconds": 0.08735316598904319,
+      "max_observed_rejoin_seconds": 0.5199800840055104,
+      "finished": {
+        "pass": true,
+        "elapsed_seconds": 22.487,
+        "iterations": 3,
+        "requested_duration_completed": false,
+        "error": null
+      },
+      "input_cycles": 3,
+      "provider_requests": 9
+    }
+  },
+  "independent_review": "Independent architecture read-only review at d86cb92d: no actionable findings; no edits or broad tests. Verified version policy, identity/fingerprint checks, actual versus historical provenance and no account-pool or automatic-refresh enablement.",
+  "qualification_queue": {
+    "state_at_recording": "running",
+    "source_head": "d86cb92d05085826a1facca2759b0e7e6b3ae183",
+    "status_file": "/private/tmp/swarm-opencode-implementation-20261018/minimum-sustained/status.json",
+    "queue_pid": 19279,
+    "initial_worker_pid": 19283,
+    "all_stages_preflight_passed": true,
+    "plan": [
+      [
+        "1h",
+        3600,
+        10,
+        500
+      ],
+      [
+        "24h",
+        86400,
+        60,
+        2000
+      ],
+      [
+        "72h",
+        259200,
+        60,
+        6000
+      ]
+    ],
+    "elapsed_duration_qualified": false
+  },
+  "raw_evidence": {
+    "minimum-version-root-build.txt": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/evidence/minimum-version-root-build.txt",
+      "sha256": "d8f5eb10e276bd6cf62291abdf1cdd21108ac0471777304de0e341b56673da4a"
+    },
+    "minimum-version-root-adapters-race.txt": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/evidence/minimum-version-root-adapters-race.txt",
+      "sha256": "4a8f7d7a6ce418f54ea14819e7b00e66da06c2a2fb8ca4f8996eba4341240711"
+    },
+    "minimum-version-root-linux-lint.txt": {
+      "path": "/private/tmp/swarm-opencode-implementation-20261018/evidence/minimum-version-root-linux-lint.txt",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "swarm-opencode-minimum-race.jsonl": {
+      "path": "/private/tmp/swarm-opencode-minimum-race.jsonl",
+      "sha256": "51f46ba220335e8a38bc6d6a2d6fe06ed11d6f4f3504b1869ec25c6bb66826d0"
+    },
+    "/private/tmp/oc-min-max-20261019/result.json": {
+      "path": "/private/tmp/oc-min-max-20261019/result.json",
+      "sha256": "d22385c177b654c380e8d12c9eebfd27720ecaf80912595c7fd56a11d4eaf2c9"
+    },
+    "/private/tmp/oc-min-max-20261019/finished.json": {
+      "path": "/private/tmp/oc-min-max-20261019/finished.json",
+      "sha256": "62ca47569441e15090ab4330003fa4a1bb94ec26f1ce565af85ad0c77b1da141"
+    },
+    "/private/tmp/oc-min-default-20261019/result.json": {
+      "path": "/private/tmp/oc-min-default-20261019/result.json",
+      "sha256": "da067971cab92cecf67876d05e2cb1758bc9423479b55fd8f49107d5732d3129"
+    },
+    "/private/tmp/oc-min-default-20261019/finished.json": {
+      "path": "/private/tmp/oc-min-default-20261019/finished.json",
+      "sha256": "d43f6ae3bae5a3cb38d9cb166b023da8fb5d67c3e151300557a41d792b78e19b"
+    }
+  },
+  "limits": [
+    "Live native binary remains1.19.3;future patch/minor/major versions exercised via fixtures,not a live newer release.",
+    "Actual24h72h, physical phone/hosted relay and full real-model interoperability remain unqualified.",
+    "Prior wholeLinux/Android gates remain attached to c5d29232; this followup reran affected connected races,all adapter suites,all build/vet,lint and actualmacOSmax/default.",
+    "Generic adapter detection retains its preexisting fail-closed integer-overflow limit for implausibly large version components.",
+    "No publication,release or installed binary/profile changes."
+  ],
+  "upgrade_inspection": {
+    "baseline": "v0.18.2",
+    "shimwire_version_changed": false,
+    "owner_protocol_version_changed": false,
+    "new_opencode_schema": 3,
+    "baseline_max_schema": 2,
+    "rollback": "Existing schema guard refuses incompatible downgrade; native history/work must be preserved. No deployed migration or rollback performed."
+  }
+}

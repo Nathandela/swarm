@@ -1,0 +1,68 @@
+{
+  "recorded_at": "2026-10-19T18:00:35.629574+00:00",
+  "source_head": "c5d2923214df0db247c0f6714f7d158f5a6caf1a",
+  "binary_sha256": "0eb06eb38617413c96d55c4da2a1ff26e5714ad07369030561008399d50039c5",
+  "native_version": "1.19.3",
+  "native_binary_sha256": "6d3e6458fce4b649edf974c19959d5dbfe1e7f255a503dcfc01215b24ad3ea5b",
+  "fixture_source_sha256": "5393e3598544c4043f206b2f974799b36504ecb50c614753ab3655c65053c279",
+  "finished": {
+    "pass": true,
+    "elapsed_seconds": 3600.476,
+    "iterations": 224,
+    "requested_duration_completed": true,
+    "error": null
+  },
+  "daemon_restarts": 11,
+  "provider_requests": 893,
+  "external_model_requests": 0,
+  "provider_errors": [],
+  "config_unchanged": true,
+  "all_owned_shim_exit_files": true,
+  "declared_budgets": {
+    "swarm_rss_mib_per_process": 256,
+    "swarm_fds_per_process": 128,
+    "swarm_disk_mib": 256,
+    "dispatch_seconds": 30,
+    "rejoin_seconds": 15
+  },
+  "max_observed_dispatch_seconds": 11.273430333996657,
+  "max_observed_rejoin_seconds": 0.9966017499973532,
+  "sampled_max_rss_kib": {
+    "daemon": 32432,
+    "shim": 22528,
+    "native": 1369408
+  },
+  "sampled_max_fds": {
+    "daemon": 16,
+    "shim": 12,
+    "native": 53
+  },
+  "sampled_max_swarm_disk_bytes": 2720462,
+  "raw_evidence": {
+    "result.json": {
+      "path": "/private/tmp/oc-soak-1h-20261018/result.json",
+      "sha256": "05e4adee82d4e77c122e5691958028e92d4bc7e5ccca4876e4aec203fce74b4c"
+    },
+    "finished.json": {
+      "path": "/private/tmp/oc-soak-1h-20261018/finished.json",
+      "sha256": "79de3d4c1829ef5192f22c138f4c8de1ad830d1b1671bf42c5a8bfceec44e958"
+    },
+    "metrics.jsonl": {
+      "path": "/private/tmp/oc-soak-1h-20261018/metrics.jsonl",
+      "sha256": "92aaceadf145462cd79e731b9066829d01aaba05369c38fa4973a40febc75f6e"
+    }
+  },
+  "subsequent_queue_failure": {
+    "stage": "24h",
+    "exit_code": 2,
+    "native_worker_started": false,
+    "reason": "interval_seconds120 exceeds fixture maximum60;72h plan also had invalid180. No elapsed24h72h qualification.",
+    "raw_log": "/private/tmp/swarm-opencode-implementation-20261018/final-sustained/24h.log"
+  },
+  "limits": [
+    "Actual OpenCode1.19.3 with scripted localhost provider; no external-model quality claim.",
+    "Final sourcec5d29232 before subsequent owner-requested minimum-version change.",
+    "Native RSS/history growth is separate from Swarm budgets; sampling does not establish an asymptotic bound.",
+    "Actual24h72h, physical phone/hosted relay and full real-model interoperability remain unqualified."
+  ]
+}

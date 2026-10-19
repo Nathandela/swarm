@@ -2,6 +2,10 @@
 
 Implementation is active under `agents-tracker-vyhy`. This record covers accepted changes and measured contracts; it does not certify the full maturity plan or a release. Installed Swarm remains unchanged.
 
+The [2026-10-19 minimum-version follow-up](opencode-minimum-version-2026-10-19.md)
+implements the owner's stable >=1.19.3 admission policy and records its additional
+tests, the final one-hour result and corrected sustained queue.
+
 ## Current maturity
 
 | Surface | Implemented locally | Qualification boundary |
@@ -176,10 +180,14 @@ separately from declared Swarm resource budgets. No short test or injected clock
 substitutes for elapsed sustained qualification. Changes remain local; no release
 or installed-binary replacement has occurred.
 
-A new frozen-source **1h → 24h → 72h** qualification queue is active. Later stages
-start only after the previous workload passes its actual elapsed-duration and
-resource/cleanup assertions. It is not counted as passed while running.
-[Live evidence and monitoring](opencode-implementation-2026-10-18/sustained-qualification.md).
+The final frozen-source one-hour run passed: **3,600.476 seconds, 224 input
+cycles and 11 daemon crash recoveries**, within its declared Swarm resource
+budgets. The subsequent 24h stage failed argument validation before launching a
+native worker: its 120-second interval exceeded the fixture's 60-second cap.
+The 72h stage never started. This was a queue configuration error, not a native
+runtime failure. Every future stage is now preflighted before a queue starts.
+[Final one-hour evidence](opencode-implementation-2026-10-18/final-hour-2026-10-19.json),
+[queue status and monitoring](opencode-implementation-2026-10-18/sustained-qualification.md).
 
 Two additional Sol ultra reviews traced the final protocol/phone and runtime/
 recovery/storage paths and found no confirmed code blockers. Their scope and

@@ -162,11 +162,12 @@
     }
   },
   "limits": [
-    "Elapsed24h/72h not yet qualified; sequential1h/24h/72h queue is running, not passed.",
+    "Final c5d29232 actual1h PASSED224inputs/11recoveries. Queue failed before24h launch due invalid interval; elapsed24h72h remain unqualified. See final-hour-2026-10-19.json.",
     "Scripted localhost provider in runtime checks, not a complete real-model cross-harness matrix.",
     "Physical phone/hosted relay/Linuxamd64 not qualified.",
     "NativeRSS/history measured separately from Swarm budgets; no production goroutine/private-queue peak instrumentation.",
     "Existing unrelated fullDarwin account/process baseline failures remain recorded; no test weakening.",
     "No publication, release, installedSwarm or installedAndroid changes."
-  ]
+  ],
+  "sustained_followup_record": "final-hour-2026-10-19.json"
 }

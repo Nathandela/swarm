@@ -109,7 +109,9 @@ recovery path; retained source history remains available for manual recovery.
 
 ## Managed OpenCode policy
 
-Managed OpenCode currently qualifies native **1.19.3**. The watcher checks the
+Managed OpenCode admits stable native **1.19.3 and newer**; live qualification
+currently uses 1.19.3. Version admission does not enable automatic worker
+replacement. The watcher checks the
 installation selected by the worker's saved native profile, PATH and physical
 checkout. A changed installation is reported as **blocked** by `swarm refresh`
 and `swarm refresh --json`, including workers in dedicated worktrees. Detection

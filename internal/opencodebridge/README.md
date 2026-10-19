@@ -1,6 +1,8 @@
 # Private OpenCode TUI bridge
 
-This package targets the public OpenCode 1.19.3 TUI plugin API. It runs inside the
+This package targets the public TUI plugin API characterized on OpenCode 1.19.3.
+It admits stable native versions >=1.19.3, with native readiness and capabilities
+checked independently; later versions have not yet been live-qualified. It runs inside the
 normal standalone TUI and uses that TUI's authenticated native SDK. The host owns
 launch configuration, durable operation records, controller leases, and the PTY
 input fence. The bridge does not replace those controls.

@@ -26,7 +26,7 @@ directory or starting workers. Intervals are bounded to 60 seconds. Valid
 duration/interval/iteration plans include `3600/10/500`, `86400/60/2000` and
 `259200/60/6000`; the iteration budget must leave enough time for the full
 duration. Run the preflight regression checks with
-`python3 -m unittest discover -s scripts/verification -p 'test_*.py'`.
+`python3 -B -m unittest discover -s scripts/verification -p 'test_*.py'`.
 
 The fixture profile selects `max` by default. Use `--variant default` for a second
 short run with no native agent or persisted model variant selected. This checks

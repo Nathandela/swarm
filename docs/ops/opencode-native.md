@@ -1,7 +1,9 @@
 # Managed OpenCode sessions
 
-This implementation is qualified against OpenCode **1.19.3**. Release qualification
-is still in progress; consult the [implementation evidence](../verification/opencode-implementation-2026-10-18.md)
+Managed sessions require stable OpenCode **1.19.3 or newer**. The version floor
+permits newer releases; native API readiness, exact binding and action
+capabilities are still checked separately. Live qualification currently uses
+1.19.3. Release qualification is still in progress; consult the [implementation evidence](../verification/opencode-implementation-2026-10-18.md)
 for the tested source revisions and remaining gates. Existing standalone sessions
 retain their original behavior. Development builds do not replace the installed Swarm.
 

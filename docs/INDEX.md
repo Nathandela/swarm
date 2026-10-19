@@ -18,6 +18,7 @@
 ## The plan
 
 - [OpenCode maturity implementation plan](specifications/opencode-maturity-plan.md) — dependency-ordered native lifecycle, observation, semantic messaging, controls, continuity, model selection and release qualification, reviewed through Swarm by DeepSeek and GLM
+- [OpenCode minimum version and deployment status](verification/opencode-minimum-version-2026-10-19.md) — stable >=1.19.3 admission, connected checks, actual native recovery and sustained qualification boundaries
 - [Managed OpenCode operations](ops/opencode-native.md) — native session monitoring, semantic receipts, exact request decisions and recovery limits
 
 - [Reconnection and attention plan](specifications/reconnect-attention-plan.md) — Astra-reviewed terminal recovery and structured attention contracts
