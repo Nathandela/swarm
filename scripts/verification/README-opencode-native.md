@@ -1,8 +1,8 @@
 # Isolated OpenCode native qualification
 
-`opencode_native_loopback.py` runs a real standalone OpenCode 1.19.3 TUI through a supplied Swarm binary. It creates a fresh private XDG profile, project, state directory, and deterministic OpenAI-compatible HTTP fixture on loopback. The fixture supplies scripted text, safe `printf` tool calls, questions, and native task children. The primary, small/title, and child models all use the fixture provider. It does not seed user messages or mutate the native database.
+`opencode_native_loopback.py` runs a real standalone OpenCode TUI through a supplied Swarm binary. Its minimum stable version is 1.19.3; live qualification so far uses 1.19.3. It creates a fresh private XDG profile, project, state directory, and deterministic OpenAI-compatible HTTP fixture on loopback. The fixture supplies scripted text, safe `printf` tool calls, questions, and native task children. The primary, small/title, and child models all use the fixture provider. It does not seed user messages or mutate the native database.
 
-Python 3, `lsof`, an executable Swarm binary, and OpenCode 1.19.3 are required. The native provider package must already be available to OpenCode. Nothing is installed by the script. `HOME` is preserved; only the explicitly isolated test profile is configured. Existing run directories are refused. Keep the run path short enough for Unix sockets (the script checks the exact bound). Python optimization is refused because assertions enforce the gates.
+Python 3, `lsof`, an executable Swarm binary, and stable OpenCode >=1.19.3 are required. `--expected-opencode-version` must equal the actual supplied binary's version; accepting a newer version does not qualify it without running the checks. The native provider package must already be available to OpenCode. Nothing is installed by the script. `HOME` is preserved; only the explicitly isolated test profile is configured. Existing run directories are refused. Keep the run path short enough for Unix sockets (the script checks the exact bound). Python optimization is refused because assertions enforce the gates.
 
 Build the Swarm binary from the commit being qualified, then run:
 
@@ -19,6 +19,14 @@ python3 scripts/verification/opencode_native_loopback.py \
 ```
 
 Omit `--duration-seconds` for three root inputs and one native child. Use `--restart-every 1` to exercise two daemon restarts in that short run. `--tool-finish stop` deliberately emits ordinary tool calls with the provider's stop marker; receipts must remain admitted until the later tool-free assistant response proves completion.
+
+Add `--check-arguments` to each planned command before starting a sequential
+queue. This validates its arguments and socket path without creating a run
+directory or starting workers. Intervals are bounded to 60 seconds. Valid
+duration/interval/iteration plans include `3600/10/500`, `86400/60/2000` and
+`259200/60/6000`; the iteration budget must leave enough time for the full
+duration. Run the preflight regression checks with
+`python3 -m unittest discover -s scripts/verification -p 'test_*.py'`.
 
 The fixture profile selects `max` by default. Use `--variant default` for a second
 short run with no native agent or persisted model variant selected. This checks

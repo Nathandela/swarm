@@ -2,7 +2,7 @@
 No external provider is enabled; responses are scripted test data, not model output.
 """
 
-import argparse, shutil, hashlib, http.client, http.server, json, os, pathlib, secrets, signal, socket, sqlite3, struct, subprocess, tempfile, threading, time, traceback
+import argparse, shutil, hashlib, http.client, http.server, json, os, pathlib, re, secrets, signal, socket, sqlite3, struct, subprocess, tempfile, threading, time, traceback
 
 if not __debug__:
     raise SystemExit(
@@ -15,6 +15,7 @@ parser.add_argument("--opencode", required=True, type=pathlib.Path)
 parser.add_argument("--expected-opencode-version", required=True)
 parser.add_argument("--run-dir", required=True, type=pathlib.Path)
 parser.add_argument("--source-head", required=True)
+parser.add_argument("--check-arguments", action="store_true", help="validate a planned run without starting workers or creating its directory")
 parser.add_argument("--duration-seconds", type=int, default=0)
 parser.add_argument("--max-iterations", type=int, default=500)
 parser.add_argument("--interval-seconds", type=float, default=10)
@@ -41,8 +42,11 @@ if any(
     ]
 ):
     parser.error("resource budgets must be positive")
-if args.expected_opencode_version != "1.19.3":
-    parser.error("this public plugin contract is qualified only for OpenCode 1.19.3")
+if (
+    re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", args.expected_opencode_version) is None
+    or tuple(map(int, args.expected_opencode_version.split("."))) < (1, 19, 3)
+):
+    parser.error("a stable OpenCode version at least 1.19.3 is required")
 if not args.swarm.is_file() or not args.opencode.is_file():
     parser.error("explicit existing binaries are required")
 LSOF = shutil.which("lsof") or (
@@ -66,6 +70,8 @@ RUN = (
 )
 if len(str(RUN / "s" / ("x" * 16) / "oc.sock").encode()) > 100:
     parser.error("run directory is too long for the private native Unix socket")
+if args.check_arguments:
+    raise SystemExit(0)
 RUN.mkdir(mode=0o700)
 started_mono = time.monotonic()
 started_wall = time.time()
