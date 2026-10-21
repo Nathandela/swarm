@@ -1,0 +1,13 @@
+Layout persistence diff review (ADR-026)
+
+Reviewed internal/tui/layout_store.go, internal/tui/tui.go, internal/tui/options.go callers, layout_persist_test.go, and ADR-026.
+
+The shared save state is carried by a pointer on rootModel and initialized in New, so Bubble Tea's rootModel value copies retain one mutex and generation counter. Update is a value receiver, but copied models preserve that pointer. Normal production construction goes through New; the nil fallback in applyLayout also protects zero-value/manual model construction. A nil store returns before touching save state and preserves the old storeless behavior.
+
+Each apply increments the shared atomic generation. Commands lock the shared mutex, skip captures whose generation is stale before SaveLayout, and serialize active store calls. If commands start in reverse order, the newer command writes and the older command sees the newer generation and returns nil. If an older SaveLayout is already in progress when a newer layout is applied, it can finish first, but the new command waits and then writes the latest layout. This protects concurrent store implementations and the file store from out-of-order final contents. Board state mutation remains on the serialized Bubble Tea update path.
+
+ADR-026 says failed writes are bannered and the in-memory layout is not rolled back. The `layoutSavedMsg` handler retains that behavior. One edge case remains: a save that already passed the generation check and then fails after a newer apply will still return an unversioned error and show `layout not saved`, even if the newer save succeeds. This is a potentially stale banner, but the failed write is still bannered as the ADR specifies; consider tagging results with generation if stale failure notices prove confusing.
+
+The added overlapping test blocks the first write, applies the second layout while it is active, and confirms the latest layout is ultimately stored. A reverse-command-order regression would also be useful: execute the newer command first and then the older command to directly pin the stale-capture skip branch. No test/code edits were made.
+
+Focused check: `go test ./internal/tui -run 'TestLayoutSavesKeepApplyOrder|TestLayoutSaveFailureStillAppliesAndBanners' -count=1` passed with Go 1.26.9. The same focused test command with `-race` also passed.

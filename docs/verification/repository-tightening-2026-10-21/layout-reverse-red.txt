@@ -1,0 +1,5 @@
+--- FAIL: TestLayoutSaveCommandsIgnoreOlderReverseExecution (0.00s)
+    layout_persist_test.go:224: stored layout {Grouping:repo Ordering:arrival} after reverse command execution, want {Grouping:tag Ordering:name}
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/tui	0.330s
+FAIL

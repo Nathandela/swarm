@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -165,6 +166,96 @@ func TestLayoutSaveFailureStillAppliesAndBanners(t *testing.T) {
 		t.Fatalf("a failed layout save is silent; view:\n%s", got)
 	}
 	execCmd(cmd)
+}
+
+// TestLayoutSavesKeepApplyOrder blocks the first disk write while a newer
+// layout is applied. The second write may run later, but the older capture
+// must never become the final stored preference.
+func TestLayoutSavesKeepApplyOrder(t *testing.T) {
+	store := &orderedLayoutStore{firstEntered: make(chan struct{}), releaseFirst: make(chan struct{})}
+	m := newLayoutModel(t, newFakeClient(), detectMixed(), store).(rootModel)
+
+	first := m.applyLayout(groupByRepo, orderByArrival)
+	firstDone := make(chan struct{})
+	go func() { execCmd(first); close(firstDone) }()
+	select {
+	case <-store.firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first layout save did not start")
+	}
+
+	second := m.applyLayout(groupByTag, orderByName)
+	secondDone := make(chan struct{})
+	go func() { execCmd(second); close(secondDone) }()
+	// Let an independently scheduled second save complete if it can. The
+	// ordering guarantee is about the final value, not how quickly it waits.
+	select {
+	case <-secondDone:
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(store.releaseFirst)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first layout save did not finish")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second layout save did not finish")
+	}
+
+	if got, want := store.Loaded(), (BoardLayout{Grouping: "tag", Ordering: "name"}); got != want {
+		t.Fatalf("stored layout %+v, want most recently applied %+v", got, want)
+	}
+}
+
+func TestLayoutSaveCommandsIgnoreOlderReverseExecution(t *testing.T) {
+	store := &fakeLayoutStore{}
+	m := newLayoutModel(t, newFakeClient(), detectMixed(), store).(rootModel)
+
+	older := m.applyLayout(groupByRepo, orderByArrival)
+	newer := m.applyLayout(groupByTag, orderByName)
+	execCmd(newer)
+	execCmd(older)
+
+	want := BoardLayout{Grouping: "tag", Ordering: "name"}
+	if store.layout != want {
+		t.Fatalf("stored layout %+v after reverse command execution, want %+v", store.layout, want)
+	}
+	if len(store.saved) != 1 || store.saved[0] != want {
+		t.Fatalf("saved layouts %+v, want only the latest %+v", store.saved, want)
+	}
+}
+
+type orderedLayoutStore struct {
+	mu           sync.Mutex
+	layout       BoardLayout
+	firstEntered chan struct{}
+	releaseFirst chan struct{}
+}
+
+func (s *orderedLayoutStore) LoadLayout() (BoardLayout, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.layout, nil
+}
+
+func (s *orderedLayoutStore) SaveLayout(l BoardLayout) error {
+	if l.Grouping == "repo" {
+		close(s.firstEntered)
+		<-s.releaseFirst
+	}
+	s.mu.Lock()
+	s.layout = l
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *orderedLayoutStore) Loaded() BoardLayout {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.layout
 }
 
 // TestNoLayoutStoreKeepsTheDefaults: every test that builds a router without the

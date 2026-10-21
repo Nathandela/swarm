@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -49,14 +51,28 @@ func WithLayoutStore(s LayoutStore) Option {
 // layoutSavedMsg reports the outcome of one durable write.
 type layoutSavedMsg struct{ err error }
 
+// layoutSaveState is shared by rootModel value copies so commands can reject
+// stale captures and serialize access to the injected store.
+type layoutSaveState struct {
+	mu         sync.Mutex
+	generation atomic.Uint64
+}
+
 // saveLayoutCmd writes the layout off the update loop. A nil store yields no
 // command, so a storeless client dispatches nothing at all.
-func saveLayoutCmd(s LayoutStore, g groupingMode, o orderingMode) tea.Cmd {
+func saveLayoutCmd(s LayoutStore, state *layoutSaveState, generation uint64, g groupingMode, o orderingMode) tea.Cmd {
 	if s == nil {
 		return nil
 	}
 	l := BoardLayout{Grouping: groupingLabels[g], Ordering: orderingLabels[o]}
-	return func() tea.Msg { return layoutSavedMsg{err: s.SaveLayout(l)} }
+	return func() tea.Msg {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		if state.generation.Load() != generation {
+			return nil
+		}
+		return layoutSavedMsg{err: s.SaveLayout(l)}
+	}
 }
 
 // applyLayout commits a chosen layout to the board and returns the command that
@@ -64,7 +80,14 @@ func saveLayoutCmd(s LayoutStore, g groupingMode, o orderingMode) tea.Cmd {
 // write is a consequence of the choice, never a precondition for it.
 func (m *rootModel) applyLayout(g groupingMode, o orderingMode) tea.Cmd {
 	m.general.setLayout(g, o)
-	return saveLayoutCmd(m.layoutStore, g, o)
+	if m.layoutStore == nil {
+		return nil
+	}
+	if m.layoutSaves == nil {
+		m.layoutSaves = &layoutSaveState{}
+	}
+	generation := m.layoutSaves.generation.Add(1)
+	return saveLayoutCmd(m.layoutStore, m.layoutSaves, generation, g, o)
 }
 
 // restoreLayout seeds the board from durable custody before the first paint. An

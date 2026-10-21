@@ -249,6 +249,7 @@ type rootModel struct {
 	// layoutStore is the durable custody of the board layout (ADR-026). Nil means
 	// the pre-ADR behaviour: the grouping/ordering choice lives for one process.
 	layoutStore LayoutStore
+	layoutSaves *layoutSaveState
 
 	pairing *pairingModal // open SAS-gate overlay (nil -> no pairing modal), see pairing_modal.go
 }
@@ -280,6 +281,7 @@ func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 		rosterRefreshing:    initialRoster != nil,
 		rosterInvalidations: initialRoster != nil,
 		events:              events,
+		layoutSaves:         &layoutSaveState{},
 		ticking:             true, // Init arms the first repaint tick
 		clientVersion:       version.Version,
 	}

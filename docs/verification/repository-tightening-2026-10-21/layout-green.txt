@@ -1,0 +1,2 @@
+ok  	github.com/Nathandela/swarm/internal/tui	0.275s
+ok  	github.com/Nathandela/swarm/internal/tui	1.339s

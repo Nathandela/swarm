@@ -1,0 +1,5 @@
+--- FAIL: TestLayoutSavesKeepApplyOrder (0.00s)
+    layout_persist_test.go:209: stored layout {Grouping:repo Ordering:arrival}, want most recently applied {Grouping:tag Ordering:name}
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/tui	0.311s
+FAIL
