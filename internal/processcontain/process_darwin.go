@@ -9,11 +9,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func Running(pid int) bool {
-	proc, alive := observeDarwinProcess(pid)
-	return alive && (proc == nil || proc.Proc.P_stat != darwinZombieState)
-}
-
 func processAlive(pid int, start int64) bool {
 	proc, alive := observeDarwinProcess(pid)
 	if !alive {

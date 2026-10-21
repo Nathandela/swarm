@@ -11,9 +11,6 @@ import (
 )
 
 func TestDarwinIdentityAliveUsesProcessIncarnation(t *testing.T) {
-	if !Running(syscall.Getpid()) {
-		t.Fatal("current process was not observed as running")
-	}
 	start, err := procstart.StartTime(syscall.Getpid())
 	if err != nil {
 		t.Fatal(err)
@@ -55,10 +52,6 @@ func TestDarwinIdentityAliveRejectsDeadAndUnknownPIDs(t *testing.T) {
 	}
 	if identity.Alive() {
 		t.Fatal("dead child was observed as alive")
-	}
-	if Running(1 << 30) {
-		_, err := procstart.StartTime(1 << 30)
-		t.Fatalf("unknown PID lookup was not proved absent: %v", err)
 	}
 	if (Identity{PID: 1 << 30, StartTime: 1}).Alive() {
 		t.Fatal("unknown process identity was observed as alive")

@@ -54,9 +54,11 @@ package verify_test
 import (
 	"fmt"
 	"go/types"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -313,7 +315,12 @@ func TestB94_EveryExportedSymbolIsReachableFromProduction(t *testing.T) {
 
 	// Bidirectional: an allowlist entry that is now reachable must be deleted.
 	var stale []string
-	for k := range b94Allowed {
+	allowed := maps.Clone(b94Allowed)
+	if runtime.GOOS != "linux" {
+		allowed[b94Module+"/internal/processcontain.ContainDescendants"] = "Linux-only child containment entry used by enrollment/process_linux.go; Darwin deliberately returns ErrUnsupported and keeps no descendant-custody caller."
+		allowed[b94Module+"/internal/processcontain.ReapOrphans"] = "Linux-only orphan reaping entry used by enrollment/process_linux.go; Darwin deliberately leaves orphan reaping unsupported."
+	}
+	for k := range allowed {
 		if anyLive[k] {
 			stale = append(stale, k)
 		}
@@ -322,7 +329,7 @@ func TestB94_EveryExportedSymbolIsReachableFromProduction(t *testing.T) {
 	byPkg := map[string][]string{}
 	var flat [][2]string
 	for _, d := range dead {
-		if _, ok := b94Allowed[d.pkg+"."+d.sym]; ok {
+		if _, ok := allowed[d.pkg+"."+d.sym]; ok {
 			continue
 		}
 		byPkg[d.pkg] = append(byPkg[d.pkg], d.sym)
