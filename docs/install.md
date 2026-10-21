@@ -73,8 +73,8 @@ file's signature.
 swarm version
 ```
 
-prints the build version and Go toolchain version, e.g. `swarm v0.19.0
-(go1.26.5)`. Source builds report `dev`.
+prints the build version and Go toolchain version, e.g. `swarm 0.20.0
+(go1.26.10)`. Source builds report `dev`.
 
 ## Upgrading: the version/`swarm daemon restart` note (D-8)
 

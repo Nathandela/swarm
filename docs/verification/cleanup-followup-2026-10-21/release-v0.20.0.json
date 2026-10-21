@@ -1,0 +1,238 @@
+{
+  "tag": "v0.20.0",
+  "source": "ca7eb34d9707263b4c725d8095956c190cefe08e",
+  "signature": {
+    "public_key": "d7938ebe67f5cb7ff202724352a7890cd0af8ca422c22e3e7af32b6284e7885a",
+    "tamper_controls_rejected": true,
+    "verified": true
+  },
+  "checksums": {
+    "swarm-pushgw_0.20.0_darwin_amd64.tar.gz": "12fcbf0137233fbf48d353c03923cf821e7597882dd15d72f64fba0bdbb679c9",
+    "swarm-pushgw_0.20.0_darwin_arm64.tar.gz": "46a0b2eae98d335a997dd8b63a40fc3ffd3421cf9b9201094e0cf304ab72f76c",
+    "swarm-pushgw_0.20.0_linux_amd64.tar.gz": "b1f14391a323b600aa37f2ecd60a1e7e4183810fc5d7388e9e300356ba683f66",
+    "swarm-pushgw_0.20.0_linux_arm64.tar.gz": "406f250a1c0305e2046a7e182b7fffbc188f0c70df72069e5350655b29af9935",
+    "swarm_0.20.0_darwin_all.tar.gz": "e180f1cb68888ee61425d3a92be75a6291842ece36479b1a95d17eebde5b721a",
+    "swarm_0.20.0_linux_amd64.tar.gz": "087aefb079470b5d5f361d02e1081f907754e3c6e1e48568d5fd58e251ed9e14",
+    "swarm_0.20.0_linux_arm64.tar.gz": "9a37c4dfd50e9e3ca04c2be3e726258e6650f7c5bce0495b9a39c1eaf0d15b72"
+  },
+  "compatibility": {
+    "account_schema": 1,
+    "account_jobs": 1,
+    "account_recovery": 3,
+    "account_worker": 6,
+    "account_shim": 2,
+    "account_config": 4,
+    "account_inventory": 1,
+    "account_auth": 1,
+    "version": "v0.20.0",
+    "shimwire": 1,
+    "protocol": 1,
+    "schema": 3
+  },
+  "formats": {
+    "swarm-pushgw_0.20.0_darwin_amd64.tar.gz/swarm-pushgw": "Mach-O 64-bit executable x86_64",
+    "swarm-pushgw_0.20.0_darwin_arm64.tar.gz/swarm-pushgw": "Mach-O 64-bit executable arm64",
+    "swarm-pushgw_0.20.0_linux_amd64.tar.gz/swarm-pushgw": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=95TjUiJOl_ogXrkn3bOO/4mTmp5HSH6nPtTMWREid/LZX4noKLPbIM3nRRy9N3/8tV-KbPys0IoQ-PNz0k0, BuildID[sha1]=0b9d5686956cc75dcc31787dafacb7029327896b, stripped",
+    "swarm-pushgw_0.20.0_linux_arm64.tar.gz/swarm-pushgw": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, Go BuildID=BTtgW_EotkbBN4Q3fKzK/Up5OO980hdfVrp9SvIeV/7POQH-Bb2ohOm5VyqiNT/CNY6gpnkjIOF0q_XFlj2, BuildID[sha1]=6e8976196e42c104f98d2d1401542f40dbd9289d, stripped",
+    "swarm_0.20.0_darwin_all.tar.gz/swarm-remote": "Mach-O universal binary with 2 architectures: [x86_64:Mach-O 64-bit executable x86_64] [arm64]\n/private/tmp/swarm-v0200-artifacts/swarm_0.20.0_darwin_all/swarm-remote (for architecture x86_64):\tMach-O 64-bit executable x86_64\n/private/tmp/swarm-v0200-artifacts/swarm_0.20.0_darwin_all/swarm-remote (for architecture arm64):\tMach-O 64-bit executable arm64",
+    "swarm_0.20.0_darwin_all.tar.gz/swarm": "Mach-O universal binary with 2 architectures: [x86_64:Mach-O 64-bit executable x86_64] [arm64]\n/private/tmp/swarm-v0200-artifacts/swarm_0.20.0_darwin_all/swarm (for architecture x86_64):\tMach-O 64-bit executable x86_64\n/private/tmp/swarm-v0200-artifacts/swarm_0.20.0_darwin_all/swarm (for architecture arm64):\tMach-O 64-bit executable arm64",
+    "swarm_0.20.0_linux_amd64.tar.gz/swarm": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=2w9ImLdXHQpGNzIT_k8a/HNo_aKCbvk9NoKzgb-3c/_0I59jVgWwGTyBh84znM/AzslyJSHzqrBz38Pee2a, BuildID[sha1]=32b685839dc9c7cd1d3143bfb234bc0565735157, stripped",
+    "swarm_0.20.0_linux_amd64.tar.gz/swarm-remote": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=GSUjqVfClblhSSOAIEas/GzEamX6IaQB2C8FZB0oG/MCcY9ppXsQUzLSNym5v3/990Um59G7oQODDgkl5e5, BuildID[sha1]=16f7aa1efab5e3ebff8a2af6d12be0fa02245ccc, stripped",
+    "swarm_0.20.0_linux_arm64.tar.gz/swarm": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, Go BuildID=XmtFmo0a6NoPGII7L5ka/pBgrRjGGDG7ccsxct6xA/MXKEx_ww2z7DU1ILHKFN/sn5t_VvPCq-VvxQMKr-Y, BuildID[sha1]=d7896d7e2b3174d6f4160fd274942d5411ddb5e6, stripped",
+    "swarm_0.20.0_linux_arm64.tar.gz/swarm-remote": "ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, Go BuildID=NygjB93i8ObMjnWM2YJn/IUD_oiSSwqo1WlxQhQ44/BydaTVzA7up0hYYvKx6v/ZACunrxQaP8zngU5Bv6j, BuildID[sha1]=c65517a3c274e392eb482a8f969d90be600c2e1e, stripped"
+  },
+  "linux_builds": {
+    "swarm-pushgw_0.20.0_linux_amd64.tar.gz/swarm-pushgw": {
+      "toolchain": "go1.26.10",
+      "source": "ca7eb34d9707263b4c725d8095956c190cefe08e"
+    },
+    "swarm-pushgw_0.20.0_linux_arm64.tar.gz/swarm-pushgw": {
+      "toolchain": "go1.26.10",
+      "source": "ca7eb34d9707263b4c725d8095956c190cefe08e"
+    },
+    "swarm_0.20.0_linux_amd64.tar.gz/swarm": {
+      "toolchain": "go1.26.10",
+      "source": "ca7eb34d9707263b4c725d8095956c190cefe08e"
+    },
+    "swarm_0.20.0_linux_amd64.tar.gz/swarm-remote": {
+      "toolchain": "go1.26.10",
+      "source": "ca7eb34d9707263b4c725d8095956c190cefe08e"
+    },
+    "swarm_0.20.0_linux_arm64.tar.gz/swarm": {
+      "toolchain": "go1.26.10",
+      "source": "ca7eb34d9707263b4c725d8095956c190cefe08e"
+    },
+    "swarm_0.20.0_linux_arm64.tar.gz/swarm-remote": {
+      "toolchain": "go1.26.10",
+      "source": "ca7eb34d9707263b4c725d8095956c190cefe08e"
+    }
+  },
+  "native_version": "swarm 0.20.0 (go1.26.10)",
+  "container_manifest": {
+    "schema": 1,
+    "release": "v0.20.0",
+    "commit": "ca7eb34d9707263b4c725d8095956c190cefe08e",
+    "images": {
+      "pushgw": "ghcr.io/nathandela/swarm-pushgw@sha256:17255294d1134aa2767b9b5a89aa6725499c7015863c590a45db2d67cb559884"
+    }
+  },
+  "workflow": {
+    "headBranch": "v0.20.0",
+    "headSha": "ca7eb34d9707263b4c725d8095956c190cefe08e",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/Nathandela/swarm/actions/runs/39672385811",
+    "createdAt": "2026-10-21T20:40:49Z",
+    "updatedAt": "2026-10-21T20:58:26Z",
+    "jobs": [
+      {
+        "databaseId": 119473339106,
+        "name": "gates (ci.yml, reused) / docs (required files)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339212,
+        "name": "gates (ci.yml, reused) / fuzz (active, bounded fuzztime)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339359,
+        "name": "gates (ci.yml, reused) / release dry-run (goreleaser snapshot, E13.1)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339436,
+        "name": "gates (ci.yml, reused) / test-darwin (macos)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339446,
+        "name": "gates (ci.yml, reused) / lint (golangci-lint)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339462,
+        "name": "gates (ci.yml, reused) / remote v2 (workerd + Firestore emulator)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339475,
+        "name": "gates (ci.yml, reused) / build (linux/arm64)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339476,
+        "name": "container (pushgw-container.yml, reused) / build, scan, non-root, hardening",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339544,
+        "name": "gates (ci.yml, reused) / test (go test ./...)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339569,
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/amd64)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339592,
+        "name": "gates (ci.yml, reused) / build (darwin/arm64)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339696,
+        "name": "gates (ci.yml, reused) / build (linux/amd64)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339758,
+        "name": "gates (ci.yml, reused) / build (darwin/amd64)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473339768,
+        "name": "gates (ci.yml, reused) / android (aar + gradle gate)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119473340396,
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/arm64)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119479956640,
+        "name": "publish immutable pushgw image",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "databaseId": 119481617219,
+        "name": "publish (goreleaser release)",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "homebrew": {
+    "commit": "a8d0b463886af2cf6f466f85813e8c088b20a53a",
+    "cask_blob": "534f971eee8cda88035b40fa4047e1c4dcc1a9a2",
+    "url": "https://github.com/Nathandela/homebrew-swarm/commit/a8d0b463886af2cf6f466f85813e8c088b20a53a",
+    "version": "0.20.0",
+    "all_three_archive_hashes_match": true,
+    "both_companion_binaries_linked": true
+  },
+  "publication": {
+    "url": "https://github.com/Nathandela/swarm/releases/tag/v0.20.0",
+    "published_at": "2026-10-21T20:58:17Z",
+    "latest": true,
+    "draft": false,
+    "prerelease": false
+  },
+  "prior_candidates": [
+    {
+      "tag": "v0.20.0",
+      "source": "25de653e75ce9e53b3c4b3895aeaee08e3c80337",
+      "run_id": 39670086421,
+      "disposition": "Container blocked CVE-2026-111943; remaining work cancelled before publication. Owner explicitly authorized replacing unpublished tag."
+    },
+    {
+      "tag": "v0.20.1",
+      "source": "ca7eb34d9707263b4c725d8095956c190cefe08e",
+      "run_id": 39671432791,
+      "disposition": "Patched candidate cancelled and unpublished tag removed when owner selected v0.20.0."
+    }
+  ],
+  "patched_toolchain_local_checks": [
+    {
+      "gate": "build",
+      "exit": 0,
+      "seconds": 17.5
+    },
+    {
+      "gate": "vet",
+      "exit": 0,
+      "seconds": 10.3
+    },
+    {
+      "gate": "focused",
+      "exit": 0,
+      "seconds": 85.4
+    }
+  ]
+}

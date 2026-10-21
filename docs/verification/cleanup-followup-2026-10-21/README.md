@@ -2,7 +2,7 @@
 
 This continues the [repository tightening audit](../repository-tightening-2026-10-21/README.md).
 Luna agents authored bounded changes and reviewed other agents' work; the root
-integrated, checked and pushed the changes. No dependency or release-trigger
+integrated, checked and pushed the changes. No Go module dependency or release-trigger
 changes were made. The earlier dated audit and debt ledger remain unchanged.
 
 ## Implemented scope
@@ -97,14 +97,16 @@ All **79 testable packages** passed normal and race coverage across the complete
 sweeps and the corrected full-package reruns. The JSON preserves every original
 nonzero sweep exit and its exact failing test names; those exits are not relabeled
 as pristine whole-repository green commands. No reported failure remains
-unresolved in this batch. The full Linux release matrix, optional latency
-benchmark, physical handset and hosted rollout were not run.
+unresolved in this batch. During local cleanup the full Linux release matrix,
+optional latency benchmark, physical handset and hosted rollout were not run.
+The later release gates are recorded below.
 
 ## Operational limits
 
-This is source and local integration verification. No installed supervisor was
-restarted, no release was deployed, and no live activity log was compacted by
-this cleanup session. Audit retention reduces forensic history when an updated
+The initial cleanup checks were source and local integration verification;
+subsequent release publication is recorded below. No installed supervisor was
+restarted and no live activity log was compacted by this session.
+Audit retention reduces forensic history when an updated
 daemon next writes activity. It does not authorize deleting provider history or
 unexpired safety state.
 
@@ -112,3 +114,43 @@ Physical handset, hosted push and production rollout gates remain separate.
 The older quiet-mailbox issue `agents-tracker-y86g` asks for automatic recovery;
 explicit owner-authorized recovery and reconnect pacing do not close that
 separate product-policy question.
+
+## Published Swarm v0.20.0
+
+[v0.20.0](https://github.com/Nathandela/swarm/releases/tag/v0.20.0) was published
+2026-10-21 at 20:58:17 UTC from
+`ca7eb34d9707263b4c725d8095956c190cefe08e`. All **17 jobs** in the final
+[release workflow](https://github.com/Nathandela/swarm/actions/runs/39672385811)
+passed, including the full Linux race suite, native macOS checks, active fuzzing,
+remote/Firestore integration, Android artifacts, container security/hardening,
+image attestation, signed archives and Homebrew publication. This authoritative
+tag run supplements the earlier local sweep/rerun record above.
+
+The initial candidate was blocked by the container scanner: Go 1.26.9 carried
+[CVE-2026-111943 / GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809).
+The container builder, release publisher and matching dry-run were patched to
+Go 1.26.10, with the existing security gate and empty waiver file preserved.
+Native patched-toolchain build/vet and focused race checks passed, and the actual
+container scan then reported zero OS and zero Go vulnerability findings.
+
+The owner explicitly chose replacing the unpublished v0.20.0 tag. Both initial
+candidate runs were stopped before their publishing jobs ran; the original tag
+replacement and removal of the temporary v0.20.1 tag used exact expected-object
+leases. The published tag points to the patched source above. No published
+release assets were overwritten.
+
+Download verification confirmed the Ed25519 checksum signature against the
+release source's trusted key, with modified checksum/signature negative controls;
+all seven archive hashes; exact compatibility cards in the three Swarm bundles;
+both companion binaries; universal macOS and static Linux formats; and Go 1.26.10
+and source identity in the Linux binaries. The extracted native binary reports
+`swarm 0.20.0 (go1.26.10)`. The exact container manifest names the published tag,
+source commit and immutable image digest. The
+[Homebrew cask commit](https://github.com/Nathandela/homebrew-swarm/commit/a8d0b463886af2cf6f466f85813e8c088b20a53a)
+matches all three archive hashes and links both `swarm` and `swarm-remote`.
+[Artifact identities and job results](release-v0.20.0.json).
+
+This publishes distribution artifacts. No installed host was upgraded or
+supervisor restarted, and no Android Play release or physical-handset acceptance
+was performed. Automatic quiet-mailbox recovery and full OpenCode qualification
+remain separately tracked.
