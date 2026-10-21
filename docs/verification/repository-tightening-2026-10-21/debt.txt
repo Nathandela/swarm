@@ -1,0 +1,42 @@
+Ponytail debt ledger
+Scan: git grep --no-index --exclude-standard -nE '(#|//|/[*]) ?(shortcut|ponytail):'
+Result: 34 marker hits inspected with their contiguous comment context; 23 are actual deferrals/ceilings and 11 are contract-only explanations or design rationale.
+
+internal/accounts/native_inventory.go:26, retain later Codex inventories outside erasure; ceiling: only qualified files are erased; upgrade: qualify their files before extending erasure.
+internal/adapter/claude/claude.go:299, leave a leading-dash InitialPrompt unseparated in argv; ceiling: option-derived tokens are closed, but the positional prompt can still parse as a flag; upgrade: confirm live CLI accepts `--` and add the separator.
+internal/adapter/claude/interaction.go:70, classify Bash path risk with a character heuristic that misses bare relative filenames; ceiling: `touch Makefile`/`rm README` can reach native mode; upgrade: widen ADR-010 §5 or route every Bash PermissionRequest to prompt_card after an owner ruling. (The comment says this is latent until the prompt-card apply path exists.)
+internal/adapter/claude/interaction.go:242, deliver Claude prose only at turn end; ceiling: Stop is the only captured prose event, so no streaming; upgrade: use a producer that can emit increments (stream-json, SDK transport, or an increment-producing hook).
+internal/adapter/detect/opencode_models.go:17, fall back to editable input for catalogues above 4 MiB; ceiling: 4 MiB; upgrade: raise the cap if a real profile exceeds it.
+internal/adapter/detect/opencode_models.go:27, scope provider probing to Swarm's cwd; ceiling: project-local providers for another target project are not discovered; upgrade: re-probe using the form cwd if target-project catalogues are needed.
+internal/adapter/interaction.go:136, omit adapter fields for approval_resolved and session_status; ceiling: adapters do not source them; upgrade: add the field when an agent-sourced cancel/source exists (the existing resolver and roster-derived status cover current paths).
+internal/daemon/launch.go:435, re-drive a lost launch without tracking/reaping an orphan shim; ceiling: an unidentifiable live orphan can keep running beside the replacement, with repeated cycles accumulating agents; upgrade: follow-up 4c, persist shim PID around Start and terminate the prior attempt on re-drive.
+internal/engine/engine.go:655, retain balanced-counter handling for idless legacy hooks; ceiling: legacy idless-hook compatibility; upgrade: remove when legacy fixtures retire.
+internal/journal/live.go:22, disable a session cache after 4096 unfinished evictions; ceiling: 4096; upgrade: revisit if native concurrency reaches this limit.
+internal/phonecore/interaction.go:442, drop a late middle increment after a higher cursor was folded; ceiling: repair can miss a record within one item's run and the phone cannot insert it in order; upgrade: no concrete trigger/path named (no-trigger).
+internal/remotegw/coalesce.go:85, leave terminal release debt unclamped after journal appends; ceiling: an arbitrarily long burst can defer the terminal by one window per journal record; upgrade: no explicit trigger or clamp/recovery change named (no-trigger).
+internal/remotegw/itemadmission.go:227, keep the merged admission queue unbounded; ceiling: no hard queue bound; upgrade: define a drop policy through an ADR if a bound is needed (the comment estimates the floor binds above roughly 3–4 tool calls/s machine-wide).
+internal/remotegw/itemadmission.go:292, union `truncated`/`full_bytes` from the last clipped record rather than sum bytes; ceiling: merged metadata describes the last record, not total clipped bytes; upgrade: no explicit trigger or concrete arithmetic path named (no-trigger).
+internal/remotegw/push.go:168, leave the provider-trigger timer uncancelled/unheld; ceiling: shutdown may leave one pending trigger, with at most one timer armed and one window of delay; upgrade: no lifecycle trigger/path named (no-trigger).
+internal/skeleton/approval.go:58, use one proposed approval TTL instead of per-CLI windows; ceiling: one 120 s constant and no source-specific hold; upgrade: per-adapter windows when an adapter can source its own hold (capture extension is not implemented today).
+internal/skeleton/backend.go:680, retain one byID residue entry per approval until session end; ceiling: residue grows with approvals for the session lifetime; upgrade: no trigger or safe retention policy named (no-trigger).
+internal/skeleton/interaction.go:218, leave the generic snapshot-derived fallback as a no-op; ceiling: the fallback adapter is excluded from this program; upgrade: no explicit inclusion trigger/path named (no-trigger).
+internal/skeleton/interaction.go:349, keep CLI interaction fold keys for the session lifetime; ceiling: one entry per distinct interaction until endSession; upgrade: bounding needs a drop policy/ruling because dropping a mid-item key splits the item; no concrete trigger (no-trigger).
+internal/skeleton/interaction.go:503, omit daemon-authoritative approval binding fields from item shaping; ceiling: no agent_instance/content_hash/expires_at on approval_request; upgrade: add them with ApproveReq, where their consumer and validation land.
+internal/skeleton/interaction.go:754, retain enum fields in the unclipped set although the enum-size half cannot currently fire; ceiling: proposed §5 limits and 16 KiB item cap leave the enum half unreachable today; upgrade: re-derive the item cap when a ruling raises MaxSteps (the marker says a 64-step plan fits at current maxima).
+internal/skeleton/livename.go:22, re-read the whole Claude registry on every authenticated hook; ceiling: one small file per running process and under a millisecond per hook at current scale; upgrade: cache the matched file by mtime if the cost shows up.
+internal/tui/launch.go:603, skip symlinked repo directories; ceiling: e.IsDir() reflects the symlink itself; upgrade: resolve with os.Stat if symlinked repos matter.
+
+Skipped marker hits (not deferred work; contract/design rationale only):
+- internal/adapter/claude/interaction.go:401 — machine-side keystroke map is carried only to daemon and dropped before journaling; states the existing security boundary.
+- internal/adapter/interaction.go:100 — unknown capture values are treated as conformance violations; states validation semantics.
+- internal/adapter/interaction.go:245 — keystrokes are forbidden on the item/phone by invariants; states an existing placement rule.
+- internal/adapter/interaction.go:285 — verdict stays machine-side because no phone consumer exists; explains why no unused wire field is shipped.
+- internal/daemon/interaction.go:40 — this seam enforces the whole-item cap while per-field caps are enforced upstream by fitItem; explains current ownership, not omitted enforcement.
+- internal/daemon/interaction.go:130 — kind presence is checked here while the closed vocabulary belongs to kind types and forward compatibility is consumer-side; contract rationale.
+- internal/daemon/interaction.go:159 — rate admission is already performed by the producer queue upstream; explains seam ownership.
+- internal/daemon/interaction.go:163 — typed constructor delegates to the raw path and prevents future hand-rolled envelopes; explains API shape, not a deferred feature.
+- internal/daemon/reconcile.go:59 — canonical argv order places resume ID before flags; parsing rationale.
+- internal/skeleton/approval.go:339 — no interaction events are emitted for a session with no open items/approval; follows the transcript marker contract.
+- internal/skeleton/interaction.go:60 — constants are unexported because only the producer package shapes fields; visibility rationale.
+
+23 markers, 7 with no trigger.

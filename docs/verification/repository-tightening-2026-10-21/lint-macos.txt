@@ -1,0 +1,35 @@
+internal/skeleton/accounts_backend.go:69:2: field nativePublish is unused (unused)
+	nativePublish         func(*os.Root, string, string) error // publication fault injection only
+	^
+internal/skeleton/accounts_backend.go:70:2: field nativeSync is unused (unused)
+	nativeSync            func(*os.Root) error                 // post-publication fault injection only
+	^
+internal/skeleton/accounts_native.go:24:7: const maxNativeExecutableBytes is unused (unused)
+const maxNativeExecutableBytes = 1 << 30
+      ^
+internal/skeleton/accounts_native.go:26:6: type retainedClaudeManifest is unused (unused)
+type retainedClaudeManifest struct {
+     ^
+internal/skeleton/accounts_native.go:38:26: func (*accountManager).nativeRoot is unused (unused)
+func (m *accountManager) nativeRoot(create bool) (*os.Root, error) {
+                         ^
+internal/skeleton/accounts_native.go:73:26: func (*accountManager).retainedNative is unused (unused)
+func (m *accountManager) retainedNative(provider string) (*persist.CLIIdentity, error) {
+                         ^
+internal/skeleton/accounts_native.go:136:6: func providerVersionsDir is unused (unused)
+func providerVersionsDir(provider string, env []string) string {
+     ^
+internal/skeleton/accounts_native.go:151:26: func (*accountManager).retainNative is unused (unused)
+func (m *accountManager) retainNative(provider string, source *persist.CLIIdentity, env []string, cwd string) (*persist.CLIIdentity, error) {
+                         ^
+internal/skeleton/accounts_native.go:314:6: func nativeFileDigest is unused (unused)
+func nativeFileDigest(file *os.File) (string, error) {
+     ^
+internal/skeleton/accounts_native.go:326:6: func syncNativeRoot is unused (unused)
+func syncNativeRoot(root *os.Root) error {
+     ^
+internal/skeleton/accounts_native.go:335:6: func characterizedNativeVersion is unused (unused)
+func characterizedNativeVersion(provider string) string {
+     ^
+11 issues:
+* unused: 11

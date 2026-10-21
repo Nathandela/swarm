@@ -69,6 +69,7 @@
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
 
 ## Process traces
+- [Repository tightening audit and verification](verification/repository-tightening-2026-10-21/audit.md) — ten Luna audit/implementation/review lanes, confirmed fixes, retired Android code, complete shortcut ledger, and remaining platform/policy debt
 - [OpenCode strategy model reviews](verification/opencode-plan-review-2026-10-18.md) — actual DeepSeek V4.1 Flash and GLM-5.3 Flash critiques, two-round observations, selected evidence, native API runtime qualification and model selector verification
 - [OpenCode implementation evidence](verification/opencode-implementation-2026-10-18.md) — built-in free-model Swarm workers, test-first changes, cross-review corrections, native client contracts and qualification limits
 - [OpenCode parity and live verification](verification/opencode-parity-2026-10-18.md) — current adapter and Claude/Codex comparison, two-worker communication, daemon/provider crash and resume tests, native HTTP/SSE/permission probes, and unattended orchestration gaps

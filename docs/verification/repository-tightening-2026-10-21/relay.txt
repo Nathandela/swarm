@@ -1,0 +1,113 @@
+
+> swarm-relay-v2@0.0.0 test
+> sh test/run.sh
+
+PASS relay admission fails closed before Durable Object access
+(node:41179) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS workerd relay-v2 auth/home/pair/mailbox/dedupe/ack/revoke negative controls
+RELAY_V2_COST_OP cost-append-0 {"rowsRead":11,"rowsWritten":11,"statements":15}
+RELAY_V2_COST_OP cost-ack-0 {"rowsRead":19,"rowsWritten":5,"statements":14}
+RELAY_V2_COST_OP cost-append-99 {"rowsRead":11,"rowsWritten":11,"statements":15}
+RELAY_V2_COST_OP cost-ack-99 {"rowsRead":19,"rowsWritten":5,"statements":14}
+RELAY_V2_COST {"rowsRead":3000,"rowsWritten":1600,"statements":2900}
+ok  	github.com/Nathandela/swarm/internal/remote/relayv2	0.966s
+=== RUN   TestWorkerdDiscardRetryRecovery
+--- PASS: TestWorkerdDiscardRetryRecovery (0.08s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/remote/relayv2	0.198s
+=== RUN   TestWorkerdDiscardRecoverySurvivesCutoffExpiry
+--- PASS: TestWorkerdDiscardRecoverySurvivesCutoffExpiry (3.84s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/remote/relayv2	3.964s
+=== RUN   TestLoadPairingConfigUsesNativeRelayV2MachineControl
+2026/10/21 08:06:34 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestLoadPairingConfigUsesNativeRelayV2MachineControl (1.49s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/skeleton	1.845s
+=== RUN   TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold
+2026/10/21 08:06:36 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold (0.54s)
+PASS
+ok  	github.com/Nathandela/swarm/cmd/swarm	0.873s
+=== RUN   TestOperatorRelayV2RevokeAndDeferredRetry
+    machinedrive.go:190: deferred relay purge landed for routing id d9ccc458f786a3ae71ea2496624df8a2
+    machinedrive.go:201: deferred relay purge for routing id 3a738b9acb48faaf3e806ea9caf2f44b settled: its relay-v2 ceremony is retired
+--- PASS: TestOperatorRelayV2RevokeAndDeferredRetry (0.14s)
+PASS
+ok  	github.com/Nathandela/swarm/cmd/swarm	0.353s
+=== RUN   TestPairingUsesNativeRelayV2Transport
+--- PASS: TestPairingUsesNativeRelayV2Transport (1.10s)
+=== RUN   TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization
+--- PASS: TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization (2.11s)
+PASS
+ok  	github.com/Nathandela/swarm/mobile	3.456s
+=== RUN   TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval
+2026/10/21 08:06:45 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+2026/10/21 08:06:47 skeleton: conversation-id transcript scan failed for session r7vt7brazukvgtzz
+2026/10/21 08:06:47 skeleton: grid-tap snapshot failed for session r7vt7brazukvgtzz (1 total): dial unix /tmp/s193906040598/r7vt7brazukvgtzz/shim.sock: connect: no such file or directory
+--- PASS: TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval (6.51s)
+=== RUN   TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway
+2026/10/21 08:06:50 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway (0.29s)
+=== RUN   TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner
+2026/10/21 08:06:50 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner (0.27s)
+=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved
+2026/10/21 08:06:51 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/positive_control_a_leased_keystroke_reaches_the_pty
+=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/no_lease_the_server_refuses_the_keystroke
+=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/an_expired_lease_stops_accepting_keystrokes
+=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/a_replayed_input_envelope_does_not_type_twice
+=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/the_kill_switch_halts_a_lease_that_is_already_live
+--- PASS: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved (23.00s)
+    --- PASS: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/positive_control_a_leased_keystroke_reaches_the_pty (0.08s)
+    --- PASS: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/no_lease_the_server_refuses_the_keystroke (3.11s)
+    --- PASS: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/an_expired_lease_stops_accepting_keystrokes (6.19s)
+    --- PASS: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/a_replayed_input_envelope_does_not_type_twice (3.18s)
+    --- PASS: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved/the_kill_switch_halts_a_lease_that_is_already_live (10.16s)
+=== RUN   TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType
+2026/10/21 08:07:14 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType (3.41s)
+=== RUN   TestPBSEC7_TheDeviceLossChainRunsEndToEnd
+2026/10/21 08:07:17 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestPBSEC7_TheDeviceLossChainRunsEndToEnd (3.44s)
+=== RUN   TestPBSEC7_ARevokedDeviceCannotTakeControlAgain
+2026/10/21 08:07:21 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestPBSEC7_ARevokedDeviceCannotTakeControlAgain (4.45s)
+=== RUN   TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke
+2026/10/21 08:07:25 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke (12.42s)
+=== RUN   TestS19Workerd_InputLatencyPhoneToPTY
+    s19_latency_test.go:98: set SWARM_S6B_LATENCY=1 to run the full relay-v2 input benchmark
+--- SKIP: TestS19Workerd_InputLatencyPhoneToPTY (0.00s)
+=== RUN   TestS19_ARefusedLeaseReportsTheDaemonsReason
+2026/10/21 08:07:38 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestS19_ARefusedLeaseReportsTheDaemonsReason (0.31s)
+=== RUN   TestS19_PairingConfigCarriesTheEndpointIdTheDaemonServesUnder
+2026/10/21 08:07:38 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestS19_PairingConfigCarriesTheEndpointIdTheDaemonServesUnder (0.12s)
+=== RUN   TestS19_BeginPairingPublishesTheMachineEndpointID
+2026/10/21 08:07:38 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestS19_BeginPairingPublishesTheMachineEndpointID (0.21s)
+=== RUN   TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY
+2026/10/21 08:07:38 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY (2.47s)
+=== RUN   TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning
+2026/10/21 08:07:41 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+2026/10/21 08:07:41 protocol: launch refused agent=fake name="" handoff_from="" resume_from="": launch: cwd "/" is outside all 1 configured launch root(s)
+--- PASS: TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning (2.57s)
+=== RUN   TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn
+2026/10/21 08:07:43 authwatch: state unreadable; auth and CLI refresh are frozen: unsafe account storage path or permissions
+--- PASS: TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn (4.25s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/skeleton	63.977s
+=== RUN   TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream
+--- PASS: TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream (0.44s)
+PASS
+ok  	github.com/Nathandela/swarm/cmd/swarm	0.687s
+PASS alarm rowsRead bounded one=14 many=203 statements=9
+RELAY_V2_ALARM_COST alarm-one {"rowsRead":14,"rowsWritten":0,"statements":9}
+RELAY_V2_ALARM_COST alarm-300-multistream {"rowsRead":203,"rowsWritten":0,"statements":9}
+ok  	github.com/Nathandela/swarm/internal/remote/relayv2	3.739s
+PASS workerd native pre-auth route rate limit

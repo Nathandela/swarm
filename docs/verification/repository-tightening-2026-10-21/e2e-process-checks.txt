@@ -1,0 +1,1 @@
+ok  	github.com/Nathandela/swarm/internal/e2e	8.600s
