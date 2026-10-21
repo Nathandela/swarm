@@ -1,29 +1,9 @@
 package daemon
 
-// FAILING-FIRST daemon-integration test for kill/delete idempotency (slice DHI-3): the
-// durable backing of protocol.IdempotentExecutor. ClaimIdempotentOp returns the ORIGINAL
-// attempt's cached outcome on a replay — a committed-SUCCESS op replays as (existed=true,
-// priorOK=true); a committed-FAILURE op replays as (existed=true, priorOK=false), a cached
-// failure NEVER a false success. CommitIdempotentOp records that terminal outcome durably.
-// RED is undefined-only: these methods do not exist yet, so the daemon test package fails
-// to compile.
-//
-// Expected seam (the GREEN implementer's deliverable), backed by the existing two-phase
-// idempotency.Store (Prepare/Complete/Fail + the Phase constants):
-//
-//	func (d *Daemon) ClaimIdempotentOp(op, action, session string) (existed, priorOK bool, err error) {
-//	    rec, existed, err := d.idem.Prepare(op, action, session)
-//	    if err != nil || !existed { return existed, false, err }
-//	    switch rec.Phase {
-//	    case idempotency.PhaseCompleted: return true, true, nil
-//	    case idempotency.PhaseFailed:    return true, false, nil
-//	    default: return false, false, nil // prepared/executing: self-idempotent, safe to re-run
-//	    }
-//	}
-//	func (d *Daemon) CommitIdempotentOp(op string, ok bool) error {
-//	    if ok { return d.idem.Complete(op, nil) }
-//	    return d.idem.Fail(op, nil)
-//	}
+// These integration tests pin kill-operation idempotency against the durable store:
+// completed outcomes replay unchanged, and reusing an operation ID with a different
+// action or session is rejected in every phase. The implementation is shared with the
+// protocol executor; tests also ensure a cached failure can never become a success.
 
 import (
 	"testing"

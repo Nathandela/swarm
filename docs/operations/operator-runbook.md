@@ -5,9 +5,13 @@ The sole relay is the Cloudflare relay-v2 Worker at
 binary, VPS, Caddy, Docker, bbolt and GCP relay deployment paths. There is no
 staging relay and no self-hosted fallback.
 
-The Worker is currently admission-closed. Do not attempt pairing until its owner
-has authorized the machine namespace and the intended machine routing ID. Local
-workerd and emulator checks are not authorization to use the public Worker.
+The recorded owner-only relay pilot activated admission on 2026-09-06 for
+namespace `owner-v2-20260906` and one machine. The [deployment evidence](../verification/remote-scale-to-zero/implementation.md#owner-only-foreground-relay-activation)
+records the bounded hosted checks. This is a dated checkpoint, not a live-state
+assertion: verify the deployed Worker configuration and current authorization
+before operating it. Local workerd and emulator checks do not authorize public
+Worker use. The pilot did not complete push enrollment or all phone acceptance
+gates.
 
 The source of truth for Worker configuration and the bounded post-upload smoke
 check is [`services/relay/README.md`](../../services/relay/README.md). The
@@ -73,6 +77,8 @@ Relay-v2 stores durable state in Cloudflare Durable Objects; removing the old
 bbolt server does not remove backup/restore responsibilities. The v1 deployment
 source is retired, but no live GCP resource was deleted by that source change;
 see the [retained GCP inventory](gcp-production-iac.md). Cloudflare Worker
-deployment, admission changes, production credentials, payment changes and
-hosted end-to-end proof remain owner-controlled gates, not routine operator
-steps.
+deployment, admission changes, production credentials and payment changes
+remain owner-controlled gates, not routine operator steps. The 2026-09-06
+evidence records a relay pilot and bounded phone foreground acceptance; it does
+not establish current live state, push enrollment, background delivery or full
+remote-control acceptance.

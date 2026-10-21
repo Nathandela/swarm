@@ -4,6 +4,8 @@
 **Purpose**: The orchestration contract for building the 15 epics in [build-plan.md](build-plan.md). Each epic closes only when every one of its exit criteria is demonstrably true (a passing automated test, a produced artifact, or a recorded verification). The finished system is audited against this document.
 **Sources**: [system-spec.md](system-spec.md) (EARS ids), [system-invariants.md](../invariants/system-invariants.md) (S1–S12, L1–L3), ADR-001..004, Gate 3 gap resolutions G1–G6.
 
+This document defines the original epic acceptance scopes; it is not the current product inventory. In particular, GG-6 and Epic 11 below constrain the original v1.0 phase. Later adapters and separate product surfaces do not retroactively change those phase criteria. Current implementation and release boundaries are mapped in [docs/INDEX.md](../INDEX.md); accepted amendments stay linked at the criterion they amend.
+
 **Owner amendment 2026-10-16:** [ADR-033](../adr/ADR-033-live-only-supervisor-storage.md)
 supersedes the raw terminal archive, final-screen persistence and durable generic
 interaction-history criteria below. Epic 3 now requires a fixed 64 KiB identity
@@ -20,7 +22,7 @@ unchanged; the new acceptance gates are in the lightweight storage fixing plan.
 - **GG-3 EARS traceability**: every EARS requirement maps to at least one test, or an exclusion approved via ADR or audit waiver — never a bare "documented justification".
 - **GG-4 Quality gates**: at every epic close: `go build ./...`, `go vet ./...`, `golangci-lint run`, `go test ./...` all green; `-race` on every package that spawns goroutines.
 - **GG-5 TDD process**: tests written before implementation for each behavior; the failing-first run is evidenced (ordered commits or recorded test output kept with the epic's evidence file); reviewers reject implementation-first work.
-- **GG-6 v1.0 scope discipline**: adapters = Claude Code + Codex only, each characterized before implementation; no other CLI code in v1.0.
+- **GG-6 original v1.0 scope discipline**: adapters = Claude Code + Codex only, each characterized before implementation; no other CLI code in that phase. This remains the historical scope criterion; later adapter support is captured separately under T-7 and does not broaden Epic 11.
 - **GG-7 Docs stay true**: AGENTS.md remains a map; decision changes produce/amend an ADR; `docs/specifications/protocol.md` exists from Epic 6 on, and CI diffs its field table against the `wire` package's exported types (drift fails the build).
 - **GG-8 Swarm process**: code epics are built by subagent fleets per the orchestration protocol below; docs-only or mechanical epics may use a single implementer, but independent review is never waived; each epic ends with `bd close`, commit, and push.
 
@@ -41,7 +43,7 @@ Goal: add an owner-configured context-pressure guard without overriding harness 
 Goal: the repo itself is the contract for every later build session.
 - E0.1 `AGENTS.md` finalized as a map: entry points, doc links, build/test commands, beads workflow, verification exit criteria.
 - E0.2 agentic-codebase-manifesto vendored into `docs/governance/` with provenance (source repo + commit).
-- E0.3 CI skeleton exists and runs on push (lint/test jobs may be no-ops until Epic 1, but the pipeline is wired).
+- E0.3 CI skeleton exists and runs on push (lint/test jobs may be no-ops until Epic 1, but the pipeline is wired). **Original phase criterion:** current Actions runs are release-tag-only; see [AGENTS.md](../../AGENTS.md).
 - E0.4 ADR index in `docs/adr/`; `docs/INDEX.md` updated.
 - E0.5 N-7 limitation (host sleep pauses agents) documented where users will see it.
 - E0.6 Beads backlog verified to match the build plan (15 epics, dependency graph).

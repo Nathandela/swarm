@@ -1,6 +1,8 @@
 # Agent Instructions
 
-swarm is a terminal application that centralizes every coding-agent CLI session on a machine into one keyboard-driven, Agent View-style dashboard. A Go + Bubble Tea client talks to a per-user supervisor daemon, which orchestrates per-session shim processes that own the PTYs — so sessions survive terminal close and daemon crash/upgrade alike. Public and released; see the [releases page](https://github.com/Nathandela/swarm/releases). Epics 0-14 plus inter-session orchestration (ADR-010) are implemented with verification evidence under docs/verification/.
+swarm is a terminal application that centralizes coding-agent CLI sessions in one keyboard-driven dashboard. The Go + Bubble Tea client talks to a per-user supervisor daemon; per-session shims own the PTYs and preserve live sessions across terminal close and daemon restart. Public and released; see the [releases page](https://github.com/Nathandela/swarm/releases).
+
+The production adapters are Claude Code, Codex, agy, Hermes Agent, and OpenCode; adapter capabilities differ. OpenCode's native worker lifecycle and controls are deployed from v0.19.0, while its unattended status/attention parity and longer qualification remain open. Android remote control is a separate product surface: the current clean replacement is an accepted architecture with implementation and hosted/physical-device gates still open. See the current boundaries map in [docs/INDEX.md](docs/INDEX.md), then the linked source of truth before making claims about a capability.
 
 This file is a map, not a manual — read the linked source of truth before acting, don't rely on this summary.
 
@@ -24,9 +26,12 @@ floor without superseding ADR-005; to 1.26 by the `golang.org/x/net` CVE fix —
 
 ```bash
 go build ./...
+go vet ./...
 go test ./...
 golangci-lint run
 ```
+
+At an epic close, GG-4 also requires `-race` on every package that spawns goroutines.
 
 ## CI policy
 

@@ -4,7 +4,7 @@
 **Status**: Approved (Gate 2, 2026-07-16)
 **Author**: Nathan Delacrétaz (with Claude)
 **Created**: 2026-07-16
-**Revised**: Draft 2, after audit committee report `docs/verification/audit-001-system-spec.md`; remote threat model recorded under F-2 per ADR-007 B133 (2026-07-31)
+**Revised**: Draft 2, after audit committee report `docs/verification/audit-001-system-spec.md`; later accepted amendments are called out at their affected requirements. Remote threat model recorded under F-2 per ADR-007 B133 (2026-07-31).
 
 ## Goal
 
@@ -12,7 +12,7 @@
 
 ## Context
 
-Inspired by Claude Code's Agent View (see `docs/research/agent_view_landscape.md`), but agent-agnostic. V2 adds mobile remote control; v1 keeps the protocol evolvable for that without claiming remote-readiness (remote's auth/threat model is ADR-007 — see F-2 for the decided boundary). The codebase follows the agentic-codebase-manifesto. Four foundational decisions are recorded as ADR-001..004.
+Inspired by Claude Code's Agent View (see `docs/research/agent_view_landscape.md`), but agent-agnostic. This approved specification records the original terminal v1 scope and the remote threat boundary; it is not the current implementation/status index. Android remote control is a separate product surface. Its owner-approved replacement architecture is in [ADR-027](../adr/ADR-027-clean-remote-control-v2.md), while implementation and release gates remain open; see the [remote product playbook](remote-control-product-playbook.md). The codebase follows the agentic-codebase-manifesto. Four foundational decisions are recorded as ADR-001..004.
 
 ## Domain glossary
 
@@ -25,7 +25,7 @@ Inspired by Claude Code's Agent View (see `docs/research/agent_view_landscape.md
 | Roster | Rebuildable on-disk index of sessions; per-session metadata is the truth (ADR-003) |
 | General view | TUI home screen listing sessions grouped by status |
 | Attach / Detach | Full-screen raw PTY passthrough / return to general view |
-| Client | Anything speaking the daemon protocol (TUI now, mobile in V2) |
+| Client | A process speaking the daemon protocol; this spec's original terminal client is the TUI. Android remote control is a separate product surface with its own implementation and release gates. |
 | Grid | The VT-emulated screen state (cells, cursor, modes) a shim maintains per session |
 
 ## Process architecture (ADR-001)
@@ -127,12 +127,16 @@ Completed takes precedence, then attention, then the existing turn/interaction r
 ### Adapters and status detection (T)
 
 - **T-1** (Ubiquitous) Each supported agent SHALL be described by an adapter implementing one interface: binary detection + version range, launch-arg composition, declarative options schema (so the TUI renders options without code changes, keeping T-5 honest), status signal sources, resume capability + native conversation-id extraction.
-- **T-2** (Ubiquitous) Status detection SHALL prefer **typed signals** wherever the CLI offers them: Claude Code hooks (PermissionRequest/Notification/Stop), Codex app-server / typed events. OpenCode exposes an HTTP+SSE server (`opencode serve`, `GET /event`) carrying a single `session.status` event with a busy/idle/retry payload, plus separate permission/question request objects — not the per-transition typed events this engine's exact-event-name mapping expects today; v1.1 drives OpenCode via adapter-declared grid heuristics (T-3) instead, with typed-event wiring left as future work requiring a payload-to-turn subtype contract of its own. agy's future typed sources are print-mode `--output-format stream-json` (not usable for interactive sessions) and the file-configured `.agents/hooks.json` (not argv-injectable — wiring it would mutate workspace config, out of scope for v1.1); both are unimplemented in the v1.1 adapter, which is heuristic-only. Hermes Agent's classic CLI is likewise heuristic-only: its shell hooks are profile/config-file declarations rather than per-invocation status events, so swarm SHALL NOT mutate them into the user's configuration. The Hermes adapter forces `--cli` and declares a dedicated, fixture-backed grid signature for active, idle, approval and clarification frames; its JSON-RPC TUI Gateway remains future structured-backend work. Consequence: OpenCode declares no idle rule, so a settled OpenCode turn preserves its last committed status (ADR-007) until T-4's staleness guard downgrades it to `unknown`; either way it remains grouped under Working and never triggers the ready-for-review notification; busy-only signal quality is a known v1.1 limitation. Hook/callback delivery to the daemon SHALL be authenticated with a per-session token; hook installation SHALL be per-invocation (flags/env/project-local), never a non-atomic mutation of the user's global config.
+- **T-2** (Ubiquitous) Status detection SHALL prefer **typed signals** wherever the CLI offers them: Claude Code hooks (PermissionRequest/Notification/Stop), Codex app-server / typed events. Hook/callback delivery to the daemon SHALL be authenticated with a per-session token; hook installation SHALL be per-invocation (flags/env/project-local), never a non-atomic mutation of the user's global config.
+
+  **Current implementation status (2026-10-21; not a relaxation of T-2):** Claude and Codex use their characterized typed sources. OpenCode is a supported native worker with HTTP/SSE lifecycle, history, and permission/question controls in the v0.19.0 rollout; its Swarm status adapter still uses grid heuristics and has no conclusive idle signal. The upstream `session.status` busy/idle/retry event is not yet mapped into reliable typed status transitions. This remains an implementation gap under T-2, and OpenCode completion notifications and unattended orchestration remain limited; see [parity evidence](../verification/opencode-parity-2026-10-18.md), [deployment](../verification/opencode-v0190-deployment.md), and [minimum-version/qualification status](../verification/opencode-minimum-version-2026-10-19.md). A native lifecycle/control path must not be read as typed status parity.
+
+  agy remains heuristic-only: its print-mode `--output-format stream-json` is not usable for interactive sessions, and `.agents/hooks.json` is file-configured rather than argv-injectable. Hermes Agent's classic CLI is also heuristic-only: its shell hooks are profile/config-file declarations, so Swarm SHALL NOT mutate user configuration. Its adapter forces `--cli` and uses fixture-backed grid signatures for active, idle, approval, and clarification frames; the JSON-RPC TUI Gateway is not integrated. These distinctions describe current adapters and preserve the typed-signal requirement where characterized sources exist.
 - **T-3** (Ubiquitous) Grid-based heuristics (reading the emulated screen, never the raw byte stream) SHALL be the fallback for CLIs or states without typed signals; evaluated on output events with a low-frequency fallback poll.
 - **T-4** (Unwanted) IF no output AND no process CPU activity occurs for a threshold while turn=`active`, THEN turn SHALL become `unknown` (staleness guard: never confidently wrong). An inconclusive grid evaluation on live output PRESERVES the previously committed turn rather than mapping to `unknown` (revised per ADR-007: absence of evidence is not evidence of change; the silence-based staleness guard above is the evidence-based downgrade path).
 - **T-5** (Ubiquitous) Adding a new adapter SHALL require no changes to daemon core, protocol, or TUI.
 - **T-6** (Ubiquitous) BEFORE an adapter is built, a **characterization harness** SHALL record the CLI's real behavior (PTY fixtures per state, hook/event payloads, version) into the fixture corpus; the adapter's capability-matrix entry (signals, resume, options) is the harness's output and the adapter's acceptance baseline.
-- **T-7** (Ubiquitous) v1.0 shipped Claude Code and Codex adapters. v1.1 shipped agy (Antigravity CLI, Google's Gemini CLI successor — Gemini CLI itself stops serving non-Enterprise requests 2026-06-18) and OpenCode adapters. The next adapter expansion ships Hermes Agent's classic CLI on macOS arm64 and Linux (amd64/arm64), characterized from Hermes 0.20.6; Intel macOS is unsupported. vibe (Mistral) was evaluated and dropped by decision (2026-07-18); see docs/design/cli-trio-adapters.md appendix for the rationale.
+- **T-7** (Ubiquitous) v1.0 shipped Claude Code and Codex adapters. v1.1 shipped agy (Antigravity CLI, Google's Gemini CLI successor — Gemini CLI itself stops serving non-Enterprise requests 2026-06-18) and OpenCode adapters. The later Hermes Agent classic-CLI adapter is characterized from Hermes 0.20.6 for macOS arm64 and Linux (amd64/arm64); Intel macOS is unsupported. Current production adapter packages are Claude Code, Codex, agy, OpenCode, and Hermes Agent. This later set records implementation coverage, not equal capability or a rewrite of the original phase scopes. vibe (Mistral) was evaluated and dropped by decision (2026-07-18); see docs/design/cli-trio-adapters.md appendix for the rationale.
 
 ### ContextGuard (C) (ADR-023)
 
@@ -177,7 +181,7 @@ Completed takes precedence, then attention, then the existing turn/interaction r
 flowchart TB
   subgraph clients["clients"]
     TUI["swarm TUI (Bubble Tea)"]
-    MOB["mobile (V2, ADR-007)"]
+    MOB["Android remote client (separate product; ADR-007/027)"]
   end
   subgraph daemon["swarm daemon"]
     API["protocol server: NDJSON control + binary data frames"]
@@ -282,6 +286,6 @@ sequenceDiagram
 
 ## Out of scope (v1)
 
-OS notifications (v1.x), mobile/remote transport + auth (V2, ADR-007), multi-machine (V2, ADR-018), Windows, mouse passthrough, observer attach mode, session sharing, sandboxing, keep-awake (v1.x candidate).
+OS notifications (v1.x), Windows, mouse passthrough, observer attach mode, session sharing, sandboxing, keep-awake (v1.x candidate). Android remote control is developed as a separate product surface; its clean v2 replacement and production gates are not claimed complete (ADR-027).
 
 > AMENDED BY ADR-018 (2026-08-15): multi-machine is in scope for V2's first complete remote product (RC-D8); it is not a further-deferred phase within V2, which is how earlier remote planning (`remote-phaseB-requirements.md` §5) had it.

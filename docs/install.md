@@ -1,7 +1,8 @@
 # Installing swarm
 
-`swarm` ships as a single static binary — no runtime dependencies, no
-installer. Three ways to get it:
+The `swarm` terminal app is a static binary with no runtime dependencies. Remote
+control also needs the companion `swarm-remote` binary beside it; the release
+archives and Homebrew cask install both. Three ways to install the terminal app:
 
 ## Homebrew (macOS only)
 
@@ -24,25 +25,47 @@ the static binary download below.
 go install github.com/Nathandela/swarm/cmd/swarm@latest
 ```
 
-Builds from source with the Go toolchain already on your machine. Note: this
-path does not run the release `-ldflags` stamp, so `swarm version` reports
-`dev` rather than a release tag — functionally identical, just without a
-human-readable version string. Prefer Homebrew (macOS) or the static download
-below if you want `swarm version` to report something meaningful.
+Builds the terminal app from source with the Go toolchain already on your
+machine. This installs only `swarm`, so it supports terminal use but not
+`swarm remote init` or remote control. A source build reports `dev` because it
+does not use the release version stamp; the managed self-upgrader refuses dev
+builds, so `go install` owns updates for this installation. Release archives
+also include a `compat.json` card that source builds do not contain.
+
+For a remote-capable source install, build both commands from the same checkout
+and install them together:
+
+```sh
+go install ./cmd/swarm ./cmd/swarm-remote
+```
+
+Or install both at the same release tag by replacing `vX.Y.Z` with that tag:
+
+```sh
+go install github.com/Nathandela/swarm/cmd/swarm@vX.Y.Z
+go install github.com/Nathandela/swarm/cmd/swarm-remote@vX.Y.Z
+```
 
 ## Static binary download
 
-Download the archive for your platform from the
-[GitHub releases page](https://github.com/Nathandela/swarm/releases), matching
-one of the 4 artifacts the release pipeline produces (darwin/linux ×
-amd64/arm64), then verify it against the published `checksums.txt`:
+Download the Swarm archive for your platform from the
+[GitHub releases page](https://github.com/Nathandela/swarm/releases). The
+release has three Swarm archives: one universal macOS archive and Linux
+`amd64` and `arm64` archives. Each contains `swarm`, `swarm-remote`, and the
+release compatibility card. Verify the archive against `checksums.txt`:
 
 ```sh
 shasum -a 256 -c checksums.txt --ignore-missing   # macOS
 sha256sum -c checksums.txt --ignore-missing        # Linux
 ```
 
-Extract the tarball and put `swarm` on your `PATH`.
+Extract the tarball and put both `swarm` and `swarm-remote` on your `PATH`.
+
+Releases also publish a detached Ed25519 signature for `checksums.txt`.
+`swarm upgrade` verifies that signature against its built-in release key and
+checks the archive hash before staging an update. A standalone checksum check
+detects a mismatch with the downloaded checksum file; it does not verify that
+file's signature.
 
 ## Verifying the install
 
@@ -50,8 +73,8 @@ Extract the tarball and put `swarm` on your `PATH`.
 swarm version
 ```
 
-prints the build version and Go toolchain version, e.g. `swarm v1.2.3
-(go1.24.2)`.
+prints the build version and Go toolchain version, e.g. `swarm v0.19.0
+(go1.26.5)`. Source builds report `dev`.
 
 ## Upgrading: the version/`swarm daemon restart` note (D-8)
 

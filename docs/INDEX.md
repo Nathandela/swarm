@@ -1,5 +1,13 @@
 # Documentation Index
 
+## Current architecture and boundaries
+
+The terminal product is a Go + Bubble Tea client → per-user supervisor daemon → per-session PTY-owning shim → agent CLI. The daemon owns session metadata, orchestration, adapter coordination, and client protocol; shims own live PTYs and VT grids. The production adapter set is Claude Code, Codex, agy, Hermes Agent, and OpenCode, with capability differences recorded in adapter docs and verification. [OpenCode v0.19.0](verification/opencode-v0190-deployment.md) includes native worker lifecycle and controls; reliable unattended turn/attention status and full sustained qualification remain open ([parity evidence](verification/opencode-parity-2026-10-18.md), [qualification status](verification/opencode-minimum-version-2026-10-19.md)).
+
+Android remote control is a separate product surface, not a client in the original terminal v1 scope. The owner-approved [remote product playbook](specifications/remote-control-product-playbook.md) is an implementation plan, and [ADR-027](adr/ADR-027-clean-remote-control-v2.md) accepts a clean replacement whose implementation and hosted/physical-device release gates remain open. Release CI builds Android artifacts; that does not claim an Android publication or production remote service.
+
+The approved [system spec](specifications/system-spec.md), [build plan](specifications/build-plan.md), and [implementation goals](specifications/implementation-goals.md) preserve the original v1.0/v1.1 phase scopes and EARS/exit criteria. Later accepted amendments apply only where linked at the affected requirement or criterion; they do not erase historical evidence or imply that an open gate passed. Proposed ADRs remain proposals. For current operations and release status, use the evidence and runbooks linked below.
+
 ## Quick start
 - [AGENTS.md](../AGENTS.md) — agent entry point (finalized)
 - [README](../README.md) — project overview

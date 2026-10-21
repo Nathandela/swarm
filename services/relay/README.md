@@ -78,9 +78,12 @@ production-ready claim; active-use security and client gates remain separate.
 
 ## Owner-only foreground pilot
 
-Owner admission was explicitly activated on 2026-09-06. The sole live namespace is
-`owner-v2-20260906`; only the owner's machine is admitted. These two runtime values
-are operator-managed `secret_text` bindings, not checked-in defaults or test variables.
+The recorded owner-only pilot activated admission on 2026-09-06 for namespace
+`owner-v2-20260906` and one machine. The [deployment and acceptance evidence](../../docs/verification/remote-scale-to-zero/implementation.md#owner-only-foreground-relay-activation)
+records the hosted checks and limits of that checkpoint; it does not verify
+current live state. Before acting, confirm the deployed bindings and current
+authorization. These two runtime values are operator-managed `secret_text`
+bindings, not checked-in defaults or test variables.
 They are public identifiers, not authentication credentials: the machine must still
 prove possession of its relay-auth key. Do not change the namespace once useful state
 exists: that selects a different authority home, not a harmless label.

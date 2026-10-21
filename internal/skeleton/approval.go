@@ -56,8 +56,8 @@ import (
 // above spike-SC's 60 s one-tap floor.
 //
 // ponytail: PROPOSED AND UNRATIFIED on §5's own terms -- one constant, no per-CLI table. A
-// per-adapter window would be the right shape only once an adapter can source its own hold, and
-// no adapter implements the capture extension at all today.
+// per-adapter window needs characterized hold durations from adapters; the existing
+// InteractionSource implementations do not supply those durations.
 const approvalTTL = 120 * time.Second
 
 // §3.6's resolution vocabulary -- the six values `decision` may take.

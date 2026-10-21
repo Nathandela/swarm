@@ -4,6 +4,8 @@
 **Source spec**: [system-spec.md](system-spec.md) (Draft 2) · ADR-001..004 · [audit-001](../verification/audit-001-system-spec.md) · [system invariants](../invariants/system-invariants.md)
 **UI reference**: [docs/design/ui-preview.html](../design/ui-preview.html) — the interactive design preview (screens, keyboard dynamics, lifecycle, test strategy) is the canonical visual reference for Epics 7, 8, and 10. Published live at https://claude.ai/code/artifact/2959c9c2-1ab9-4ab1-ba35-e32d845ba0b7
 
+This is the approved plan for the original 15-epic implementation, not a current feature inventory. Its phase labels and scope exclusions (including Epic 11's Claude/Codex-only v1.0) remain historical acceptance boundaries. Its CI scaffolding describes the original build phase; current Actions runs are release-tag-only as described in [AGENTS.md](../../AGENTS.md). Later accepted amendments are identified at the affected contracts; see [docs/INDEX.md](../INDEX.md) for current implementation and release boundaries. Do not infer that a later adapter or product surface changes an earlier epic's acceptance criteria.
+
 Epics are ordered topologically; build top to bottom. Each epic is sized for one focused build session. Work is tracked in beads (one epic issue each, dependencies encoded).
 
 **Milestone — walking skeleton (end of Epic 8):** launch a fake agent, see it grouped in the general view, attach (grid snapshot paint), type, detach, kill -9 the daemon and reconnect with nothing lost. The full architecture is proven before any real CLI adapter exists.
@@ -135,10 +137,10 @@ remain binding. See the lightweight storage fixing plan for replacement gates.
 **Assumptions**: process-CPU sampling is portable enough via /proc + proc_pidinfo (verified in-epic).
 **Depends on**: Epics 6, 9.
 
-## - [ ] Epic 11: Claude Code + Codex adapters (v1.0 agents)
+## - [ ] Epic 11: Claude Code + Codex adapters (original v1.0 phase scope)
 
 **Scope IN**: For EACH of Claude Code and Codex, in order: (1) characterize via Epic 9 harness → fixtures + capability matrix committed; (2) build the adapter against its own fixtures (Claude: hooks PermissionRequest/Notification/Stop, per-invocation settings injection, `--resume` + conversation-id; Codex: typed turn/approval events per its app-server/exec interface, resume equivalent); (3) resume-as-new-session flow (R-2: offer on ended/lost rows, `resumed_from` link) — engine + TUI hook-up; grid-heuristic fallback rules per CLI. Split into 11a/11b mid-flight if one session overflows.
-**Scope OUT**: Gemini, OpenCode, AGY (v1.1 — AGY only after characterization).
+**Scope OUT**: Gemini, OpenCode, AGY (v1.1 — AGY only after characterization). This exclusion scopes the original Epic 11 deliverable; later adapter support is recorded by T-7 and does not rewrite this phase.
 **EARS**: T-2 (real), T-7, R-2; scenarios 4, 5, 12.
 **Contracts**: none new — proves Epic 9's interface under two different signal styles (that is the point).
 **Assumptions**: current Claude Code hook semantics and Codex event surface as recorded by the harness (fixtures pin versions; drift = re-characterize, T-6).

@@ -82,13 +82,11 @@ type CoalescingSink struct {
 // A slot in the past means the stream is idle and the next append is admitted at once, so
 // this stays a SPACING FLOOR and never a batching delay (IS-DELTA-2).
 //
-// ponytail: the debt is UNCLAMPED. A burst of journal records pushes the terminal's next
-// release out by one window each, and that is the honest arithmetic rather than a bug to cap:
-// those appends really were spent out of MailboxAppendPerMin, and the terminal is the only
-// stream that can pay them back (R-GW.5 forbids the journal doing it). The debt is bounded in
-// practice by the producer's own floor, which holds the journal side to one release per
-// window machine-wide (ADR-010 §7); the test fence asserts the peek recovers within a handful
-// of idle wakes after a saturated transcript, which is what would break if it were not.
+// shortcut: journal traffic can keep advancing nextFree while a terminal snapshot is pending;
+// no terminal-latency bound is promised by the shared append budget. Revisit if the producer
+// can keep the journal stream admitted continuously during a pending terminal, or if the
+// contract adds a terminal-latency guarantee; either change needs an owner-approved fairness
+// rule because journal records cannot be dropped (R-GW.5).
 func (c *CoalescingSink) debitLocked(now time.Time) {
 	if now.After(c.nextFree) {
 		c.nextFree = now

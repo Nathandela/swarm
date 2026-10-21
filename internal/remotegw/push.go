@@ -165,10 +165,9 @@ func NewPushNotifier(inner OutboundSink, cfg PushConfig) *PushNotifier {
 	}
 	after := cfg.After
 	if after == nil {
-		// ponytail: the timer is never cancelled and never held. At most one is armed at a
-		// time and it fires at most one window later, so a gateway shutting down leaves one
-		// pending provider trigger -- cheaper than a lifecycle this
-		// type does not otherwise have.
+		// shortcut: this callback is not owned by a gateway shutdown context, so one armed
+		// deferral can outlive the notifier. Bind it to service cancellation if gateway
+		// shutdown or revocation must cancel pending wakes.
 		after = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
 	}
 	return &PushNotifier{

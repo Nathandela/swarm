@@ -209,16 +209,15 @@ func (d *Daemon) serveHookInteractions(cb engine.Callback) {
 // shaped nothing and an event whose items were all refused are different outcomes.
 //
 // ADR-010 §5 IS THE FIRST BRANCH AND NOT AN ERROR PATH. An adapter that implements no capture
-// extension is complete and fully supported; native capture is an upgrade. Every adapter except
-// internal/adapter/claude is still in that state, so this returning 0 is a normal case, not a
-// defect.
+// extension is complete and fully supported. Claude and Codex shape captured callbacks here;
+// OpenCode's managed native history uses its dedicated shaper. agy and Hermes currently expose
+// no structured capture source, so this returning 0 for them is a normal case, not a defect.
 func (d *Daemon) captureInteractions(sessionID string, ad adapter.Adapter, p adapter.HookPayload) int {
 	src, ok := adapter.AsInteractionSource(ad)
 	if !ok {
-		// ponytail: the generic fallback itself (deriving items from the sanitized snapshot,
-		// ADR-010 §5) is NOT built here -- ADR-009's fallback adapter is excluded from this
-		// program. This is the decision point, and its no-op arm is the honest state of that
-		// decision today.
+		// This callback path produces no structured items without an InteractionSource.
+		// The separate terminal snapshot fallback does not synthesize journal items here;
+		// adapters without native capture remain supported but have no structured transcript.
 		return 0
 	}
 	d.initInteractions()
@@ -346,10 +345,9 @@ func (d *Daemon) shapeItem(sessionID string, in adapter.Interaction, p adapter.H
 //
 // An interaction with no Ref is self-contained: it gets a fresh id and is never folded into.
 //
-// ponytail: the map is per-session and cleared by endSession, which is the whole of its
-// retention policy. A session that ran for a week accumulates one entry per distinct CLI
-// interaction; bounding that is a drop policy (a fold key dropped mid-item splits one item in
-// two, which is worse than the memory) and needs a ruling, not a constant.
+// shortcut: fold keys live until session end so a later delta or replay can reuse its item id.
+// Retire a key earlier only when the producer contract guarantees a terminal record is final
+// for that ref and refs cannot recur; deleting it sooner can split one item into two.
 func (d *Daemon) itemIDLocked(sessionID, ref string) string {
 	if ref == "" {
 		return newItemID()
@@ -500,20 +498,10 @@ func (d *Daemon) resolveAdapter(agentType string) (adapter.Adapter, bool) {
 // "the byte length of the untruncated payload" and the only honest way to know it is to
 // serialize the untruncated item once.
 //
-// ponytail: an approval_request's `agent_instance`, `content_hash` and `expires_at` are
-// deliberately ABSENT. All three are daemon-authoritative D7 binding material whose only
-// consumer is IS-LIFE-4's ApproveReq wire body and its validation, which no slice has built --
-// and IS-APR-2 makes the phone echo them verbatim rather than compute them, so a hash minted
-// now with nothing to check it against would be a value nobody can verify. They land with
-// ApproveReq. The `keystrokes` map is absent for the opposite reason: IS-APR-3 FORBIDS it on
-// the item, and the daemon holds it machine-side.
-//
-// WHEN content_hash DOES LAND, IT IS HASHED OVER THE ITEM AS SHIPPED -- after fitItem, never
-// before. IS-APR-2 makes the phone echo the hash VERBATIM and forbids it computing one, and
-// ADR-007 D7 makes the daemon recompute and reject a mismatch; so a hash taken over the
-// pre-truncation content would name a body no surface holds, the rendered card could never
-// reproduce it, and every approve from a truncated card would be refused as stale. The rule is
-// one-directional and cheap to state: TRUNCATE, THEN HASH.
+// Approval binding fields are added by the daemon after fitItem: it hashes the shipped item
+// bytes, then adds agent_instance, content_hash, and expires_at for the phone to echo and the
+// daemon to validate (ADR-007 D7, IS-APR-2). The adapter's keystrokes map stays machine-side;
+// IS-APR-3 forbids putting it on the item.
 func interactionFields(in adapter.Interaction) map[string]any {
 	f := map[string]any{}
 	put := func(k string, v any) {

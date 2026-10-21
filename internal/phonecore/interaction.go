@@ -439,13 +439,9 @@ func (s *ItemStore) applyLocked(rec schema.JournalRecord, backfill bool) bool {
 			// records deliberately share one read cursor across sessions -- two records of one
 			// item at one cursor would be the same record.
 			//
-			// ponytail: the ceiling this leaves is a record MISSED inside one item's own run --
-			// the phone folded 10 and 12, and the repair returns 11. It stays missed: IS-DELTA-1
-			// reconstructs by concatenation in cursor order, and an item keeps a high water
-			// rather than a record of what it absorbed, so there is nowhere to put a late middle
-			// increment. Dropping it beats appending it in the wrong place, and rebuilding the
-			// item from the reseed instead would need the events half to be guaranteed WHOLE,
-			// which IS-CAP-4's cut is exactly the absence of.
+			// shortcut: a repair may return a missed middle delta after a later delta was folded;
+			// the high-water cursor cannot place it. Rebuild only when repair guarantees the
+			// complete item history in cursor order, so concatenation remains ordered.
 			return false
 		}
 		if terminal(prev.Status) {

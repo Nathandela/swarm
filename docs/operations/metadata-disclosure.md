@@ -11,8 +11,12 @@ The [v2 plan](../specifications/remote-scale-to-zero-plan.md) defines retention 
 requirements, and [relay source](../../services/relay/src/worker.mjs) defines the implemented
 storage. Push tokens and bounded transactional replay/quota state belong to the separate
 Firestore-backed gateway, not the relay. Foreground-only operation makes no background-delivery
-promise. Hosted admission is still closed; this is a source/architecture disclosure, not evidence
-of handset delivery or measured provider retention.
+promise. Owner-only relay admission was activated for one machine on 2026-09-06;
+the [recorded deployment and acceptance evidence](../verification/remote-scale-to-zero/implementation.md#owner-only-foreground-relay-activation)
+is a dated checkpoint, not confirmation of current live state. It records relay
+authentication and phone foreground pairing/connection, while push enrollment,
+background delivery and full phone acceptance remain separate gates. This
+source/architecture disclosure is not measured provider-retention evidence.
 
 Sections 1–2c below are historical v1 analysis, retained to explain the earlier disclosure
 corrections. Their token buckets, proxy quota maps, 78-byte relay wakes and compatibility window

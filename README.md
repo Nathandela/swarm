@@ -57,17 +57,19 @@ The terminal is only a view, and the daemon is replaceable. The per-session shim
 
 ## Install
 
-swarm ships as a single static binary with no runtime dependencies.
+The terminal app is a static binary with no runtime dependencies. Remote
+control also needs the `swarm-remote` companion; release packages and Homebrew
+install both.
 
 ```sh
 # Homebrew · macOS
 brew install --cask Nathandela/swarm/swarm
 
-# Go · macOS or Linux
+# Go · terminal only; see docs/install.md for remote-capable source installs
 go install github.com/Nathandela/swarm/cmd/swarm@latest
 ```
 
-Or download a signed archive and checksum from the [releases page](https://github.com/Nathandela/swarm/releases). See [docs/install.md](docs/install.md) for platform details and upgrade notes.
+Or download a platform archive from the [releases page](https://github.com/Nathandela/swarm/releases). See [docs/install.md](docs/install.md) for archive contents, platform details and upgrade notes.
 
 ```sh
 swarm version

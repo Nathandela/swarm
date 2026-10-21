@@ -224,12 +224,10 @@ func (a *ItemAdmission) Pending() int {
 
 // release forwards the head of the queue and consumes the shared slot. Caller holds a.mu.
 //
-// ponytail: the queue is UNBOUNDED, deliberately. §7 says the floor "merges rather than
-// drops", and every bound worth having here is a drop policy -- which would silently lose a
-// tool run or an approval and needs an ADR, not a constant. What keeps it finite in practice
-// is the merging: prose folds to one pending item per item_id, and a tool run's open and
-// close fold to one record, so the floor binds only above roughly 3-4 tool calls/s
-// machine-wide (ADR-010 §7's own arithmetic).
+// shortcut: Offer consumers have no hard queue bound because dropping a queued tool run or
+// approval would violate the lossless contract. If Pending keeps growing across flushes for
+// those consumers, choose a loss/retention policy in an ADR before adding a bound.
+// OfferBounded consumers already refuse admission at their configured capacity.
 func (a *ItemAdmission) release(now time.Time) error {
 	if len(a.order) == 0 || now.Sub(a.last) < a.window {
 		return nil
@@ -289,10 +287,9 @@ func itemClass(kind string) int {
 // half the card. Later-wins on a shared key is right for the envelope fields that genuinely
 // move (`ts`, `status`, `stop_reason`) and harmless for the ones that do not.
 //
-// ponytail: `truncated`/`full_bytes` are unioned like any other key, so a merged record
-// reports the LAST clipped record's byte count rather than the sum. The alternative is
-// per-field arithmetic this seam cannot do -- it does not know which §5 cap clipped what --
-// and the pair's job is to tell a consumer "something here was clipped", which survives.
+// shortcut: `truncated`/`full_bytes` follow later-wins union, so folded records describe the
+// latest clipped source item, not aggregate original bytes. Change this if the schema or a
+// consumer requires aggregate byte accounting; this seam lacks per-field pre-clip lengths.
 func (p *pendingItem) fold(next json.RawMessage) error {
 	switch p.kind {
 	case "message_snapshot", "tool_snapshot", "file_snapshot", "plan_snapshot", "permission_request", "question_request", "input_outcome", "request_set":

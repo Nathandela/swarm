@@ -677,9 +677,9 @@ func (d *Daemon) noteBackendRequest(local, itemRef string, id json.RawMessage, a
 // client, which the R1 gate recorded (frame-samples.json: the observer replied
 // {"decision":"accept"} and then received serverRequest/resolved on its own connection).
 //
-// ponytail: byID's residue is one small entry per approval for the session's life, dropped by
-// forgetBackend. Bounding it would need a drop policy, and a mapping dropped early is exactly
-// the card that never clears.
+// shortcut: an unanswered provider request can leave one reverse entry until its resolution
+// broadcast or backend teardown. Add expiry only if the backend contract guarantees a bounded
+// resolution window; evicting sooner can strand the approval card.
 func (d *Daemon) takeServerRequest(local, itemRef string) (json.RawMessage, bool) {
 	d.backend.mu.Lock()
 	defer d.backend.mu.Unlock()
