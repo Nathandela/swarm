@@ -131,16 +131,16 @@ class SessionDetailTest {
 }
 
 /**
- * PB-INPUT-2's three lease facts, and WHAT SURVIVED `TerminalPeekTest`.
+ * PB-INPUT-2's three lease facts, and WHAT SURVIVED the removed terminal peek tests.
  *
- * **This class was `TerminalPeekTest` and it is amended rather than deleted, because half of what
+ * **This class was the removed terminal peek tests and it is amended rather than deleted, because half of what
  * it asserted is untouched by the ruling that removed the other half.**
  *
  * DELETED WITH THE GRID: `the grid is the daemon-rendered text verbatim` (that the screen renders
  * `swarmmobile.Snapshot.Text` byte for byte, escape-looking input included) and `a stale grid is
  * banner-marked and the keyboard stays available` (PB-APP-8 over the snapshot). Both were about a
  * surface `docs/adr/ADR-009-structured-chat-interaction.md` (1)/(3) retires: there is no grid on any
- * screen, and (2) stops this app issuing a `terminal_watch` at all, so no snapshot arrives to be
+ * screen, and (2) stops this app issuing a `terminal watch` at all, so no snapshot arrives to be
  * fresh or stale. The verbatim-rendering property is not lost -- `android/gate/s16_ui_test.go` still
  * fences that no VT emulator exists on this side, and the machine-side choke point in
  * `internal/daemon/terminalrender.go` is explicitly unchanged by (2).

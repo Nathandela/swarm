@@ -1,0 +1,3 @@
+=== RUN   TestAlwaysChatShell_NoRetiredTerminalFallbackOrWatch
+--- PASS: TestAlwaysChatShell_NoRetiredTerminalFallbackOrWatch (0.09s)
+PASS

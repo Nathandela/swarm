@@ -1,0 +1,11 @@
+=== RUN   TestAlwaysChatShell_NoRetiredTerminalFallbackOrWatch
+    always_chat_shell_test.go:56: dev/swarm/phone/ui/screens/TerminalFallbackView.kt retains a retired Android terminal-fallback production symbol
+    always_chat_shell_test.go:62: dev/swarm/phone/ui/screens/TerminalFallbackView.kt retains the retired terminal variant of monoWell
+    always_chat_shell_test.go:56: dev/swarm/phone/PhoneSurface.kt retains a retired Android terminal-fallback production symbol
+    always_chat_shell_test.go:59: dev/swarm/phone/PhoneSurface.kt retains a production terminal-watch lane or call
+    always_chat_shell_test.go:56: dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt retains a retired Android terminal-fallback production symbol
+    always_chat_shell_test.go:59: dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt retains a production terminal-watch lane or call
+    always_chat_shell_test.go:59: dev/swarm/phone/TerminalWatchLane.kt retains a production terminal-watch lane or call
+    always_chat_shell_test.go:56: dev/swarm/phone/ui/FacadeBridge.kt retains a retired Android terminal-fallback production symbol
+--- FAIL: TestAlwaysChatShell_NoRetiredTerminalFallbackOrWatch (0.06s)
+FAIL

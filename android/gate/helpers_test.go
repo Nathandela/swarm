@@ -76,6 +76,53 @@ func exists(path string) bool {
 
 func statFile(path string) (os.FileInfo, error) { return os.Stat(path) }
 
+// allProductionKotlin reads every production source, including kit and theme files where a
+// retired surface or watch call could otherwise hide from narrower screen inventories.
+func allProductionKotlin(t *testing.T) map[string]string {
+	t.Helper()
+	root := s24KotlinRoot(t)
+	out := map[string]string{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".kt") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		out[filepath.ToSlash(rel)] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking production Kotlin under %s: %v", root, err)
+	}
+	if len(out) == 0 {
+		t.Fatalf("no production Kotlin found under %s", root)
+	}
+	return out
+}
+
+func kotlinMember(t *testing.T, code, decl string) string {
+	t.Helper()
+	i := strings.Index(code, decl)
+	if i < 0 {
+		t.Fatalf("the Kotlin source declares no %s", decl)
+	}
+	rest := code[i:]
+	j := strings.Index(rest, "\n    }")
+	if j < 0 {
+		t.Fatalf("could not find the end of %s", decl)
+	}
+	return rest[:j]
+}
+
 // ---------------------------------------------------------------------------
 // The toolchain pin, read the way a build reads it: by sourcing it.
 // ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ import org.robolectric.RobolectricTestRunner
  * well the app already has, scrollable both ways" -- and tables no copy for it, so every string on
  * it arrives from the caller and is the machine's own. The title is the sentence the transcript
  * already drew for the row; the body is the route's own text; the one word this file spends is the
- * back control's, which is `terminalFallbackView`'s and is kept verbatim rather than retyped.
+ * back control's, which is this screen's and is kept verbatim rather than retyped.
  *
  * **SCROLLABLE BOTH WAYS IS A CORRECTNESS CLAIM AND NOT A COMFORT.** `monoWell` sets
  * `setHorizontallyScrolling(true)`, which tells it to lay a line out whole rather than wrapping

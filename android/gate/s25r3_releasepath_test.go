@@ -287,13 +287,12 @@ func s25r3JudgedFiles(t *testing.T) map[string]string {
 		// where the teardown verbs now live, and the binding, whose thin wrappers are the one
 		// legal stray shape (the declaration rule below). Their absence fails loudly here --
 		// a deleted lane is the defect re-inlined somewhere this fence must then find.
-		"AppLifecycle.kt":      filepath.Join(dir, "AppLifecycle.kt"),
-		"LifecycleLane.kt":     filepath.Join(dir, "LifecycleLane.kt"),
-		"PhoneActivity.kt":     filepath.Join(dir, "PhoneActivity.kt"),
-		"PhoneRuntime.kt":      filepath.Join(dir, "PhoneRuntime.kt"),
-		"PhoneSurface.kt":      filepath.Join(dir, "PhoneSurface.kt"),
-		"SettingsSurface.kt":   filepath.Join(dir, "SettingsSurface.kt"),
-		"TerminalWatchLane.kt": filepath.Join(dir, "TerminalWatchLane.kt"),
+		"AppLifecycle.kt":    filepath.Join(dir, "AppLifecycle.kt"),
+		"LifecycleLane.kt":   filepath.Join(dir, "LifecycleLane.kt"),
+		"PhoneActivity.kt":   filepath.Join(dir, "PhoneActivity.kt"),
+		"PhoneRuntime.kt":    filepath.Join(dir, "PhoneRuntime.kt"),
+		"PhoneSurface.kt":    filepath.Join(dir, "PhoneSurface.kt"),
+		"SettingsSurface.kt": filepath.Join(dir, "SettingsSurface.kt"),
 	}
 }
 

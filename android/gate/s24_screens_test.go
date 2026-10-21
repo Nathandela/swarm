@@ -1314,19 +1314,6 @@ var s24ScreenComponents = map[string]map[string]string{
 	// THE PAIR-ONLY SCREEN, unclaimed since it landed and found by the same exhaustiveness fence.
 	// It is the whole app on a phone with no pairing, so what it composes is not a detail: the
 	// title, the one offer to pair, and the reason there is nothing else.
-	// WAVE R8 (ADR-017 T1/T4): the capability-routed terminal fallback. Every entry here is
-	// an obligation the ADR states, not a description of what the file happens to draw:
-	// the honest header, the machine's own grid, the interleaving warning and the read-only
-	// sentence are each a separate ruling, and a screen that quietly dropped one would
-	// otherwise still pass on "calls at least one kit factory".
-	"dev/swarm/phone/ui/screens/TerminalFallbackView.kt": {
-		"navHeaderDrill": "the drill header, whose title is the provider and its DETECTED version (playbook:280)",
-		"notice":         "the honest explanation, the staleness indicator, the control banner and the interleaving warning",
-		"monoWell":       "the machine-sanitized grid -- the one body ADR-009 (1) is re-scoped for",
-		"sectionLabel":   "the heading over the machine's own screen",
-		"readOnlyNote":   "T6-b's read-only state, STATED rather than inferred from a missing keyboard",
-		"ctaButton":      "T6's in-view Release -- never a drawer entry and never a second navigation step",
-	},
 	// WAVE E's TWO NEW SCREENS (owner rulings R8 and R9, docs/specifications/chat-surface-plan.md
 	// §8). They exist because the conversation deliberately will not carry two bodies: an opened
 	// tool run is bounded at twenty lines in the flow and a file change is one chip, and BOTH of

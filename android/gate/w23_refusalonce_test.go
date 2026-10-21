@@ -30,7 +30,7 @@ func TestW23_ARefusedSendIsSaidOnceAndNeverToasted(t *testing.T) {
 		t.Errorf("renderComposerVerdict never settles the operation's own ledger entry, so the "+
 			"refusal and machine detail reach no bubble. Body:\n%s", composer)
 	}
-	ledger := kotlinCodeOnly(r8AllProductionKotlin(t)["dev/swarm/phone/ui/screens/ComposerSendLedger.kt"])
+	ledger := kotlinCodeOnly(allProductionKotlin(t)["dev/swarm/phone/ui/screens/ComposerSendLedger.kt"])
 	if !strings.Contains(ledger, "detail = verdict.detail") {
 		t.Errorf("ComposerSendLedger discards verdict.detail, so once the toast is gone the " +
 			"machine's own words reach nobody (W2.3's detail cell)")

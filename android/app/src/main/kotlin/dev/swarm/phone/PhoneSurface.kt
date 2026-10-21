@@ -95,11 +95,6 @@ import dev.swarm.phone.ui.screens.SessionDetailOpen
 import dev.swarm.phone.ui.screens.SessionHistoryIntent
 import dev.swarm.phone.ui.screens.SessionHistoryRead
 import dev.swarm.phone.ui.screens.SessionDetailPanel
-import dev.swarm.phone.ui.screens.TerminalFallbackBinding
-import dev.swarm.phone.ui.screens.TerminalFallbackModel
-import dev.swarm.phone.ui.screens.TerminalGrid
-import dev.swarm.phone.ui.screens.TerminalSnapshotState
-import dev.swarm.phone.ui.screens.terminalFallbackView
 import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.SheetTag
 import dev.swarm.phone.ui.screens.TranscriptScreen
@@ -147,9 +142,9 @@ import swarmmobile.Op
  * remaining controls hang below it as [unrecomposedControls] until they have components of their
  * own. The session picker exists: rows are tappable and the scope bar narrows the list.
  *
- * IT WIRES S16'S SCREEN MODELS, IT DOES NOT REIMPLEMENT THEM. Every string on screen comes from
- * [PairingFlow], [dev.swarm.phone.ui.ConnectionBanner], [dev.swarm.phone.ui.TerminalPeek] or
- * [dev.swarm.phone.ui.RoutedError], reached through [FacadeBridge], which is the one place
+     * IT WIRES THE SCREEN MODELS, IT DOES NOT REIMPLEMENT THEM. Every string on screen comes from
+     * [PairingFlow], [dev.swarm.phone.ui.ConnectionBanner], [SessionDetailPanel] or
+     * [dev.swarm.phone.ui.RoutedError], reached through [FacadeBridge], which is the one place
  * those models meet the bound facade. A second copy of any of that wording here would be a
  * screen that disagrees with every test S16 wrote.
  *
@@ -1896,12 +1891,9 @@ class PhoneSurface(
         // PhoneActivity.onPause on the main looper -- a silent ANR, since
         // NetworkOnMainThreadException never fires for a socket Go opened. The enqueue sits
         // after `dispatch.detach()` and SURVIVES it: `VerbDispatch.enqueue` gates only the
-        // settle on attachment, never the work ([TerminalWatchLane.drop]'s recorded property),
+        // settle on attachment, never the work,
         // so the T8-b severance still reaches the core -- posted, prompt, never dropped.
         //
-        // THE TERMINAL WATCH USED TO BE WITHDRAWN HERE BESIDE IT. There is none left to
-        // withdraw: ADR-009 (2) stops this app issuing one at all, so the per-session render
-        // work it cost the daemon is not started rather than being cleaned up.
         lifecycle.background(
             disconnect =
                 ConnectivityPolicy.ruleFor(RuntimeState.BACKGROUND).socket == SocketDisposition.CLOSED,
@@ -1912,16 +1904,8 @@ class PhoneSurface(
      * Start observing, which nothing did -- and it is why PB-APP-3/4/5 were non-functional in
      * the shipping app rather than merely incomplete.
      *
-     * `SetEventListener`, `SubscribeJournal` and `TerminalWatch` appeared ZERO times in all
-     * Kotlin (residuals §2.9). So no listener was installed, journal delivery never started, and
-     * the machine was never asked to send terminal frames -- while the peek read `App.Peek`, a
-     * LOCAL cache that only a watched session ever fills. It was permanently empty, and it failed
-     * looking exactly like a quiet machine.
-     *
-     * THE THIRD VERB IS DELIBERATELY NOT CALLED HERE ANY MORE. ADR-009 (2) ends the watch rather
-     * than fixing it: with no grid on any screen, a phone that asked for terminal frames would be
-     * spending the machine-to-phone append budget (7) on frames nothing draws. The two remaining
-     * calls are what journal delivery needs, and interaction items ride that same journal.
+     * The event listener and journal subscription are what make roster and interaction updates
+     * reach the screen.
      *
      * IT IS IDEMPOTENT AND GUARDED, because [render] runs on every resume and after every gated
      * action. Installing the same listener twice is harmless; re-subscribing on every button
@@ -1941,17 +1925,6 @@ class PhoneSurface(
         PhoneEvents.observe { render() }
         observing = true
     }
-
-    /**
-     * WHERE `watch` AND `unwatch` USED TO BE, recorded rather than left as a gap.
-     *
-     * They asked `App.TerminalWatch` for the session on screen and `App.TerminalUnwatch` for the one
-     * before it, which is what filled the cache the peek read. `ADR-009-structured-chat-interaction`
-     * (2) ends both: "no phone surface issues a watch", so no snapshot frames are appended to a
-     * phone at all and the transcript inherits the whole of the machine-to-phone append budget the
-     * peek used to spend (7). The two verbs stay exported and stay on the wire -- nothing is deleted
-     * protocol-side -- and are ledgered unbound in `android/unbound-verbs.tsv`.
-     */
 
     /**
      * Connect, which nothing did before S19 -- and it is why PB-E2E-2's "observes, takes control,
@@ -2634,12 +2607,11 @@ class PhoneSurface(
      * survives a trip to Activity or Settings ([selectDestination] keeps it on purpose); what the
      * scaffold needs to know is what is on the glass right now.
      *
-     * THE FALLBACK IS EXCLUDED BY THE THIRD CLAUSE. ADR-017 T1 routes a `terminal_fallback`
-     * session to the sanitized terminal, which is not a conversation and keeps the tab bar it
-     * always had: it is a destination's content, not a place you go into.
+     * Every session opens in this conversation surface, including sessions whose capability
+     * record disables chat; that capability changes the composer state inline.
      */
     private val conversationOnScreen: Boolean
-        get() = contentShows == Destination.INBOX && detailDrawn != null && fallbackDrawn == null
+        get() = contentShows == Destination.INBOX && detailDrawn != null
 
     /**
      * The item whose literal is open on its own screen, or "" while the conversation itself is.
@@ -2911,7 +2883,6 @@ class PhoneSurface(
         if (promoted.isNotEmpty()) Haptics.play(activity, Haptics.Signal.NEEDS_YOU)
         inboxDrawn = screen
         detailDrawn = null
-        fallbackDrawn = null
         // THE APPROVAL HOST COMES BACK HERE, AND ONLY HERE ON THIS BRANCH (agents-tracker-
         // dwwv.2.4). It is [approvalSlot]'s and no longer [unrecomposedControls]'s fixed child, so
         // every draw that shows the list re-claims it -- at the position between the capability
@@ -2948,11 +2919,9 @@ class PhoneSurface(
      * costs no new traffic: the journal page is the whole retained log [drawActivity] already reads,
      * narrowed here to one session by `JournalRow.sessionId`.
      *
-     * IT USED TO READ A SECOND ONE -- the daemon-rendered grid, off `App.Peek`, for the session
-     * [watch] had asked the machine to render. Both are gone with the terminal well
-     * (`ADR-009-structured-chat-interaction.md` (2)/(3)): no phone surface issues a `terminal_watch`,
-     * so no snapshot frames are appended at all and the transcript inherits the whole of the
-     * machine-to-phone budget the peek used to spend.
+     * Android reads the transcript and capability record for this detail. The daemon snapshot
+     * renderer and terminal watch protocol remain available for compatibility consumers, while
+     * the Android route always stays in this conversation shell.
      *
      * @param bridge null on the branch where the phone core refused, where there is no detail to
      *  read. [renderUnavailable] closes the drill-down on that branch rather than leaving a user
@@ -3206,231 +3175,6 @@ class PhoneSurface(
      * exists to prevent.
      */
     /**
-     * ADR-017 T1/T4 -- the capability-routed terminal fallback, drawn for a session the MACHINE
-     * routed here and for no other.
-     *
-     * THE WATCH IS ASKED FOR BY THE SCREEN'S OWN BINDING, never by this surface: the app has
-     * exactly one place that may issue one, and `android/gate/r8_fallback_ui_test.go` names it by
-     * path. What this function owns is what every other destination's drawer owns -- when the
-     * screen is on the glass, and what it is handed.
-     *
-     * IT IS READ-ONLY IN THIS ROUND. No generation is opened here, so the banner is absent and the
-     * body draws T6-b's read-only sentence; entering control is R8b's own slice and is disclosed
-     * as such rather than half-wired.
-     */
-    private fun drawTerminalFallback(
-        bridge: FacadeBridge,
-        session: String,
-        model: TerminalFallbackModel,
-    ): Boolean {
-        val grid = try {
-            bridge.terminalRows(session)
-        } catch (unreadable: Exception) {
-            // Only Peek/NOT_FOUND is the ordinary first-frame window, and the binding already
-            // turns that into AWAITING_SNAPSHOT. Every other class reaches this visible routed
-            // boundary instead of escaping PhoneEvents' main-looper redraw and crashing the app.
-            val routed = bridge.routeFacadeErrorSafely(unreadable.message.orEmpty())
-            outcome.text = routed.message
-            TerminalGrid.unavailable(routed.message)
-        }
-        if (!grid.renderableFallback) return false
-        // THE REDRAW GUARD, for [drawDetail]'s reason one screen over. [drawContent] re-enters on
-        // every state change -- every journal event, every gated action, every resume -- and this
-        // drawer had none, so a working session rebuilt the whole view hierarchy at output rate
-        // and threw the grid back to the top under whoever was reading it.
-        val drawn = FallbackDraw(session, model, grid)
-        if (drawn == fallbackDrawn && contentShows == Destination.INBOX) return true
-        fallbackDrawn = drawn
-        detailDrawn = null
-        hostContent(
-            terminalFallbackView(
-                context = activity,
-                model = model,
-                rows = grid.rows,
-                gridRows = grid.gridRows,
-                snapshotAge = grid.ageMs,
-                streamStale = grid.streamStale,
-                snapshotNotice = grid.snapshotNotice,
-                snapshotUnavailable = grid.snapshotState == TerminalSnapshotState.UNAVAILABLE,
-                onBack = { closeSessionDetail() },
-            ),
-        )
-        return true
-    }
-
-    /** What [drawTerminalFallback] last put on the glass, for its redraw guard. */
-    private data class FallbackDraw(
-        val session: String,
-        val model: TerminalFallbackModel,
-        val grid: TerminalGrid,
-    )
-
-    private var fallbackDrawn: FallbackDraw? = null
-
-    /**
-     * The session whose terminal watch this surface currently holds, with the binding that holds
-     * it -- on [VerbDispatch]'s COMMAND LANE, never this thread (agents-tracker-jx1x). ADR-017
-     * T4-b: a watch is opened ONCE, renewed while its screen is up, and closed when it is not --
-     * so the machine never renders for a screen nobody is looking at.
-     *
-     * The verbs are relay appends behind awaitConn's five-second poll, exactly like every other
-     * command this surface issues, and they used to run INLINE here -- a silent ANR, because
-     * NetworkOnMainThreadException never fires for a socket Go opened. [TerminalWatchLane] owns
-     * the ordering (a replaced watch is unwatched BEFORE its successor is watched, on the one
-     * serial command thread) and the refusal path (a refused watch clears the hold on the
-     * settle, so this surface re-watches instead of renewing into nothing).
-     */
-    private val watchLane = TerminalWatchLane<TerminalFallbackBinding>(dispatch)
-
-    /**
-     * [renewHeldWatch]'s single-flight key ([VerbDispatch.enqueue]'s keyed fence). Renewals ride
-     * the redraw AND the 20-second tick; while one is crossing -- awaitConn can park it for five
-     * seconds -- a second says nothing the machine has not already heard, so it is dropped
-     * rather than queued behind the first.
-     */
-    private val watchRenewalCrossing = Any()
-
-    /**
-     * The clock that keeps a held watch alive while its screen is on the glass, and the interval
-     * it runs at.
-     *
-     * **WHY A CLOCK AT ALL, when the comment below says a timer is what T6-c bans.** The renewal
-     * used to ride the redraw alone, and the redraw is not guaranteed: [render] has exactly one
-     * lifecycle caller (`PhoneActivity.onResume`) plus `PhoneEvents.observe { render() }`, so an
-     * IDLE fallback screen watching an IDLE session produces no redraw at all -- for minutes.
-     * The machine's horizon is sixty seconds. It therefore reaps a watch the user is looking at,
-     * the peek ends from the gateway side, and the last grid stays on the glass.
-     *
-     * **WHY IT IS NOT THE THING T6-c BANS.** That ruling is about `terminal_control_keepalive`:
-     * a background emitter holding RAW INPUT AUTHORITY open with no screen displaying it. A
-     * watch grants NO INPUT AUTHORITY (T4), this tick is started only where a fallback is on the
-     * glass, it is cancelled in [release], and it RENEWS rather than watching -- and a renewal
-     * never starts a watch, so it can never acquire a peek the capability gate did not open. A
-     * timer the composition owns and tears down IS the composition; the banned one is the timer
-     * that outlives it.
-     */
-    private val watchRenewal = android.os.Handler(android.os.Looper.getMainLooper())
-
-    /**
-     * How often the held watch is renewed. A THIRD of the machine's horizon, so two consecutive
-     * missed ticks -- a descheduled main thread, a slow relay append -- still leave one inside
-     * the wall. Renewing at the wall itself would make every jittered tick a reap.
-     */
-    private val watchRenewalMillis = 20_000L
-
-    /**
-     * Bring the held watch into line with what is on the glass.
-     *
-     * A DIFFERENT SESSION, OR NONE, CLOSES THE OLD WATCH FIRST. The same session RENEWS, which is
-     * the machine's only evidence that anyone is still looking; the renewal is deliberately driven
-     * by the redraw rather than by a timer, because a timer is exactly the background emitter
-     * T6-c bans -- a renewal that outlives the composition is a machine rendering for nobody.
-     *
-     * Both verbs ride [watchLane] -- the command lane, agents-tracker-jx1x -- because they are
-     * relay appends: run here they blocked this thread for awaitConn's poll plus the append, and
-     * a refusal on the way out of a screen has no user to report to and must not take the draw
-     * down with it. The lane wraps both, and its settle is where a refused watch clears the hold.
-     */
-    private fun reconcileTerminalWatch(bridge: FacadeBridge?, session: String?) {
-        val current = watchLane.heldSession
-        if (current != null && current == session && !heldWatchLapsed()) {
-            renewHeldWatch()
-            return
-        }
-        watchLane.drop()
-        watchRenewal.removeCallbacksAndMessages(null)
-        if (session == null || bridge == null) return
-        // NULL IS THE CAPABILITY REFUSAL, and it is now a refusal this surface cannot route
-        // around: the binding's constructor is private and its one factory reads the machine's
-        // routing decision, so a session the machine did not send here yields no handle to watch
-        // with (closing review, finding 2).
-        val binding = try {
-            bridge.terminalFallbackBinding(session)
-        } catch (unreadable: Exception) {
-            // A NOT_FOUND roster race already becomes null in the binding factory. Everything
-            // else is a routed refusal, and no render-time JNI read may escape the main looper.
-            outcome.text = bridge.routeFacadeErrorSafely(unreadable.message.orEmpty()).message
-            return
-        } ?: return
-        // THE HOLD IS EAGER: state is written at enqueue time, so the redraw that follows renews
-        // instead of re-watching -- one append, not one per redraw. A watch the machine refuses
-        // clears the hold on the settle, and the tick below then finds nothing held and stops.
-        watchLane.hold(session, binding)
-        scheduleWatchRenewal()
-    }
-
-    /**
-     * Renew the held watch once, and queue the next renewal.
-     *
-     * It is the whole of the tick's body, so there is one place that decides what a clock may do
-     * on this plane: **renew, and nothing else**. It never calls `watch()` -- a renewal that
-     * could open one would be a way to acquire a peek with no user on the screen -- and it never
-     * touches the control plane, whose keepalive is bound to the foreground composition by a
-     * different and stricter rule (T6-c).
-     */
-    private fun scheduleWatchRenewal() {
-        watchRenewal.removeCallbacksAndMessages(null)
-        watchRenewal.postDelayed({
-            if (watchLane.heldSession == null) return@postDelayed
-            renewHeldWatch()
-            scheduleWatchRenewal()
-        }, watchRenewalMillis)
-    }
-
-    /**
-     * Tell the machine somebody is still looking. A refusal has no user to report to: the horizon
-     * lapses on its own if this never lands, the machine reaps the watch, and -- since round 3 --
-     * blanks the phone's copy rather than leaving a dead grid the screen would call fresh.
-     *
-     * ON THE COMMAND LANE, like the watch it renews (agents-tracker-jx1x): a renewal is a relay
-     * append behind awaitConn, and this function used to run it on the main thread from a
-     * 20-second main-looper tick. Keyed single-flight, so a renewal parked in awaitConn is not
-     * joined by the queue of its own successors.
-     */
-    private fun renewHeldWatch() {
-        val held = watchLane.held ?: return
-        dispatch.enqueue(
-            plane = SendPlane.COMMAND,
-            key = watchRenewalCrossing,
-            work = { held.renew() },
-            settle = {
-                // Deliberately silent; the machine's own horizon is the backstop.
-            },
-        )
-    }
-
-    /**
-     * Whether the watch this surface holds has LAPSED, so [reconcileTerminalWatch] must fall
-     * through to a full re-watch instead of renewing.
-     *
-     * THE DEFECT (closing review, finding 6). The same-session branch above renewed
-     * UNCONDITIONALLY, and `TerminalWatcher.Renew` is a documented no-op for a session with no
-     * live watch. One lapsed horizon -- sixty seconds of machine-side wall against a twenty-second
-     * tick, so three missed ticks on a descheduled UI thread, or a short offline window -- ended
-     * the stream PERMANENTLY for that screen, and this surface renewed into nothing forever while
-     * the user read a grid that stopped updating.
-     *
-     * The evidence is the SCREEN'S OWN AGE, which is the machine's clock and not this one's, and a
-     * refusal answers "not lapsed": a binding that cannot be read is not evidence of a reap, and
-     * re-watching on a transient failure would spend an append per redraw.
-     *
-     * AND IT IS THE WHOLE GRID THAT IS ASKED, not the age alone (closing round 2). The machine
-     * BLANKS the phone's copy when it reaps a watch, and that blank carries no render time -- so
-     * an age-only question answered NOT LAPSED for the very frame that says the watch is over, and
-     * this surface renewed into nothing while the user looked at a blank terminal. A snapshot that
-     * has not arrived at all is a REFUSAL from the facade, not a blank, so the arrival window
-     * still reads as "not lapsed" and no redraw tears down a peek that is still opening.
-     */
-    private fun heldWatchLapsed(): Boolean {
-        val binding = watchLane.held ?: return false
-        return try {
-            TerminalFallbackBinding.watchLapsed(binding.grid())
-        } catch (unreadable: Exception) {
-            false
-        }
-    }
-
-    /**
      * Draw one conversation: the fixed header, the pinned composer region, and the column.
      *
      * `internal` FOR ONE READER (phone refit W3.2): `PhoneSurfaceControlsTest`, on a JVM whose
@@ -3483,7 +3227,6 @@ class PhoneSurface(
         }
         detailDrawn = panel
         detailOutcomeDrawn = routed
-        fallbackDrawn = null
         drawComposerRegion(panel)
         loadEarlier.text = panel.loadEarlierLabel
         kill.text = panel.killLabel

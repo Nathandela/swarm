@@ -73,7 +73,7 @@ class FontPaddingTest {
         ),
         "ctaButton" to ctaButton(context, "Approve", CtaKind.APPROVE),
         "filterChip" to filterChip(context, "All machines", selected = false, present = null),
-        "monoWell" to monoWell(context, "$ swarm remote off", terminal = true),
+        "monoWell" to monoWell(context, "$ swarm remote off"),
         "notice" to notice(context, "The link dropped."),
     )
 

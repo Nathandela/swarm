@@ -39,8 +39,7 @@ import dev.swarm.phone.ui.kit.screenAir
  * `PhoneSurface.kt`'s `peekHost` / `PeekPanel` path and the screens under it" at slice I1's exit,
  * and (1) says why this screen is what is left: "the phone's only session surface is a structured
  * chat transcript ... no terminal emulation and no raw grid anywhere in the app". This file drew
- * that grid twice over -- `monoWell(terminal = true)` here, the same well one screen over -- and it
- * is the transcript below, not the well, that a person now reads a session on.
+ * that grid twice over, and it is the transcript below that a person now reads a session on.
  *
  * **PB-INPUT-2's SENTENCE AND THE TAKE CONTROL BUTTON ARRIVED WITH THAT DELETION.** They were the
  * peek's, because the peek was where the keyboard lived; the requirement is untouched by the ADR

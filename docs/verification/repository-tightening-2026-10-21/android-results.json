@@ -1,0 +1,29 @@
+{
+  "variants": {
+    "testDebugUnitTest": {
+      "suites": 216,
+      "tests": 1727,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "oldest_result_mtime": 1792562172.878869,
+      "newest_result_mtime": 1792562172.9909582
+    },
+    "testReleaseUnitTest": {
+      "suites": 216,
+      "tests": 1727,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "oldest_result_mtime": 1792562266.1820598,
+      "newest_result_mtime": 1792562266.1948428
+    }
+  },
+  "aar": {
+    "sha256": "1fd1ad6f6866d923ce9b5b8234491e894d96b53b644fbc26d58e941e5676c079",
+    "native_libraries": [
+      "jni/arm64-v8a/libgojni.so",
+      "jni/x86_64/libgojni.so"
+    ]
+  }
+}

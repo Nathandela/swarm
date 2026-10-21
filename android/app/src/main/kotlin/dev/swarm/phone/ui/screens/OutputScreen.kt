@@ -111,7 +111,7 @@ internal fun literalScreen(
     column.addView(
         navHeaderDrill(
             context,
-            // NO DESTINATION, NO CONTROL. The word is `terminalFallbackView`'s, kept verbatim
+            // NO DESTINATION, NO CONTROL. The word is this screen's, kept verbatim
             // rather than retyped -- this app spells its back control one way, and a second
             // spelling on a screen the drawing tables no copy for would be an invented string.
             back = if (onBack == null) null else BACK,
@@ -149,7 +149,7 @@ internal fun literalScreen(
 }
 
 /**
- * Where the drill chevron goes. `terminalFallbackView`'s own word, and the app's only one.
+ * Where the drill chevron goes. this screen's own word, and the app's only one.
  */
 private const val BACK = "Back"
 

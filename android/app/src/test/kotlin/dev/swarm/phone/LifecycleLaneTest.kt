@@ -27,7 +27,7 @@ import org.junit.Test
  *
  * WHAT THIS FILE TESTS, and what it cannot. [LifecycleLane] is the seam that puts the
  * background/foreground verbs on [VerbDispatch]'s command lane, the same idiom
- * [TerminalWatchLane] uses for the watch verbs. The production handle wraps the bound facade
+ * the production handle uses for lifecycle verbs. The production handle wraps the bound facade
  * and cannot be constructed on the unit-test JVM (libgojni), so the verbs are driven through
  * a fake [LifecycleHandle]. That `PhoneSurface.release()` and `converge()` actually route
  * through this lane is asserted as source text by android/gate/s25r3_releasepath_test.go;
@@ -351,7 +351,7 @@ class LifecycleLaneTest {
     }
 
     /**
-     * THE HOLD IS EAGER, [TerminalWatchLane]'s recorded idiom: state is written at enqueue
+     * THE HOLD IS EAGER, the lane's recorded idiom: state is written at enqueue
      * time, so the redraw that follows a foreground does not enqueue a second start --
      * `converge` runs on every render, and a lane full of idempotent no-op starts is still a
      * lane a real command has to queue behind.
@@ -415,7 +415,7 @@ class LifecycleLaneTest {
     /**
      * A STALE REFUSAL SPARES THE REPLACEMENT. The handle is cached per App, so identity alone
      * cannot tell a superseded start attempt from its successor -- which is why the lane keys
-     * the clawback on a per-attempt token rather than on [TerminalWatchLane]'s handle
+     * the clawback on a per-attempt token rather than on the lane's handle
      * identity. The refusal of a start that a background-then-foreground has already
      * superseded must not clear the successor's hold: that hold nulled is a release() that
      * skips the severance, a lease outliving the screen.

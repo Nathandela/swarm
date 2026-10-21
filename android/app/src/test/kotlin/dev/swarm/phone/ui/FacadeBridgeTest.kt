@@ -128,7 +128,7 @@ class FacadeBridgeTest {
     // `the answer carries no grid, and claims nothing about one` is DELETED rather than amended.
     // It asserted `FacadeBridge.noFrameYet`, the fallback `App.Peek`'s not-found refusal produced;
     // `docs/adr/ADR-009-structured-chat-interaction.md` (2)/(3) deletes the terminal well and the
-    // `terminal_watch` this app issued to fill it, so there is no grid fallback left to have an
+    // `terminal watch` this app issued to fill it, so there is no grid fallback left to have an
     // opinion about. `isAwaitingFirstFrame` survives the same deletion -- it now guards
     // [FacadeBridge.pendingApproval] instead, per that method's own KDoc -- and the four tests
     // above are its coverage, unchanged.

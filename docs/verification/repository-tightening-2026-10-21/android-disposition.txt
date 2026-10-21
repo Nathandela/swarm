@@ -1,0 +1,53 @@
+Android terminal-fallback cleanup report
+Date: 2026-10-21
+Bead: agents-tracker-rgk9.3 (parent marked in_progress; child claim initially hit embedded Dolt lock)
+Scope: Android Kotlin retired fallback/watch surface, Android static gates, and Android unbound-verb ledger. Go/mobile/protocol implementations were not edited.
+
+Implementation
+- Removed the dead PhoneSurface fallback drawer, watch reconciliation/renewal lane, associated handler/timer/hold and redraw state/reset references.
+- Deleted Android production TerminalFallbackScreen.kt, TerminalFallbackView.kt, and TerminalWatchLane.kt. Removed only the terminal-only FacadeBridge wrappers and their now-unused imports.
+- Removed MonoWell's `terminal` tint and `lines` floor options after confirming production call sites were limited to the retired view. The shared mono component and all remaining callers remain.
+- Added a production-wide Kotlin source fence in always_chat_shell_test.go for terminal fallback screen/view/model/binding names, terminal-watch lanes/calls, and the retired terminal MonoWell variant. Moved composer capability-read assertions into this always-chat gate.
+- Moved the production-Kotlin walker and member extractor into shared gate helpers because other surviving gates use them.
+- Removed fallback-specific exemptions/rows from Android gate inventories and the facade-binding reachability dimension. The generic App/FacadeBridge reachability, lifecycle/main-thread, no-watch, no-terminal-well, and composer gates remain.
+- Added Android-unbound ledger entries for App.Peek and terminal compatibility verbs, retaining the machine/wire contract. Removed TerminalFallbackBinding wrapper rows.
+
+Test and gate disposition
+
+| Subject | Disposition |
+|---|---|
+| TerminalFallbackViewTest.kt | Deleted; tested only the withdrawn fallback view/model presentation. |
+| TerminalFallbackWatchTest.kt | Deleted; tested only the withdrawn watch/staleness path. |
+| TerminalWatchLaneTest.kt | Deleted; tested only the withdrawn Android watch lane. |
+| r8_fallback_ui_test.go | Deleted fallback screen/watch/control/staleness assertions; its composer availability assertion moved to TestAlwaysChatShell_ComposerAvailabilityComesFromCapabilities. Its retired-symbol/watch/no-terminal-well rule is replaced by a production-wide fence in TestAlwaysChatShell_NoRetiredTerminalFallbackOrWatch. |
+| r8r3_fallback_ui_test.go | Deleted fallback binding assertions and the wrapper method enumerator; the obsolete binding dimension was removed from boundverbledger_test.go. |
+| r8r4_fallback_binding_test.go | Deleted capability-gated fallback binding assertions; binding and call no longer exist. |
+| r8r4_staleness_test.go, r8r5_blanklapse_test.go | Deleted fallback-only stale-grid/lapse assertions. |
+| always_chat_shell_test.go | Retained and strengthened: every session still opens the normal detail, no retired production fallback/watch/terminal MonoWell path may return, and composer availability still reads the capability record. |
+| wiring_test.go, i1_sheetandwell_test.go | Retained the general no-watch/no-retired-peek protections. |
+| boundverbledger_test.go | Retained generic App, bound type, and FacadeBridge reachability plus ledger rot checks; removed the deleted TerminalFallbackBinding-only dimension. |
+| s25_mainthread_test.go, s25r3_releasepath_test.go | Retained generic surface and lifecycle command-lane gates; removed only the TerminalWatchLane-specific subject and wrapper-derived assertions. |
+| lifecycle, facade, lease, composer, composer-send, and Robolectric tests for remaining surfaces | Retained. Composer-send and refusal gates now use the shared all-production Kotlin walker. |
+| mobile/internal Go and protocol tests, snapshot renderer and wire compatibility | No changes. |
+
+Failing-first / green evidence
+- Before deleting implementation: `go test ./android/gate -run 'TestAlwaysChatShell_(NoRetiredTerminalFallbackOrWatch|ComposerAvailabilityComesFromCapabilities)' -count=1` failed as intended. The new scan found TerminalFallbackView.kt, TerminalFallbackScreen.kt, the binding in FacadeBridge.kt, PhoneSurface.kt's drawer/watch path, and TerminalWatchLane.kt.
+- After deletion: targeted gate run passed:
+  `go test ./android/gate -run 'TestAlwaysChatShell|TestADR009_TheTerminalWellIsDeletedAtI1Exit|TestWiring_NoScreenIssuesATerminalWatch|TestS25_|TestS25R3_|TestBoundVerbs_' -count=1`
+  Result: `ok github.com/Nathandela/swarm/android/gate`.
+- Full `go test ./android/gate -count=1` ran all static gates. Its sole failure is the known stale `android/app/libs/swarm.aar` export surface: golden expects `App.replyNativeRequest(...)`, but the AAR does not export it. The parent is rebuilding the AAR before Gradle and a full gate rerun.
+- The full gate first also reported a missing MonoWell origin annotation after the initial simplification; restored `origin: .sheet2 .cmd` and the targeted gates pass afterward.
+
+Limitations
+- Gradle/JVM/Kotlin compile and Robolectric suites were not run here; parent is arranging the single Gradle lane with native JDK/SDK and rebuilding the stale AAR.
+- No physical handset verification was run. The current ADR explicitly removes the Android fallback route; Go/wire compatibility behavior remains outside this edit.
+
+Reviewer correction (2026-10-21)
+- Restored the general wrapper derivation in `s25_mainthread_test.go`. It derives any helper that calls a `sendContext` facade verb from all production Kotlin outside the direct-scan subjects, then requires calls to that helper to be dispatched on COMMAND and rejects a LIVE lane. The deleted TerminalFallbackBinding/watch-name floor is not restored.
+- Added a generic snippet-based negative control for: deriving an inline wrapper, ignoring a facade call already in dispatched work, reporting an inline wrapper caller, accepting a COMMAND-dispatched wrapper call, and rejecting a LIVE-dispatched waiting wrapper. No source-mutation controls were run.
+- Updated stale deleted-grid KDoc in PhoneSurface and FacadeBridge.
+- Re-ran focused shell, wrapper, main-thread, and bound-ledger gates: pass.
+- Re-ran the complete `go test ./android/gate -count=1` after the parent rebuilt the AAR: pass (`ok github.com/Nathandela/swarm/android/gate`).
+- Gradle/Kotlin tests and physical-device checks remain pending the parent's lane.
+- Final reviewer refinement: the generic wrapper guard also checks calls from other functions in the same Kotlin file as a wrapper. It excludes only the wrapper implementation function itself (which necessarily contains the underlying facade call), avoiding false positives for expression-bodied FacadeBridge methods while preserving same-file caller coverage.
+- Final full Android gate rerun after that refinement: `go test ./android/gate -count=1` passed (`ok github.com/Nathandela/swarm/android/gate`, 14.7s).

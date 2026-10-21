@@ -8,7 +8,7 @@ import (
 
 func TestComposerSendLedger_SurfaceDoesNotUseASingleOverwritableOperation(t *testing.T) {
 	const surface = "dev/swarm/phone/PhoneSurface.kt"
-	code := kotlinCodeOnly(r8AllProductionKotlin(t)[surface])
+	code := kotlinCodeOnly(allProductionKotlin(t)[surface])
 	for _, scalar := range []string{
 		"composerOp", "composerSendFor", "composerSentText", "composerSendState",
 		"composerRefusal", "composerRefusalDetail",
@@ -27,7 +27,7 @@ func TestComposerSendLedger_SurfaceDoesNotUseASingleOverwritableOperation(t *tes
 
 func TestComposerSendLedger_LocalSealClearsOnlyTheDraftThatWasSent(t *testing.T) {
 	const surface = "dev/swarm/phone/PhoneSurface.kt"
-	code := kotlinCodeOnly(r8AllProductionKotlin(t)[surface])
+	code := kotlinCodeOnly(allProductionKotlin(t)[surface])
 	remember := kotlinMember(t, code, "private fun rememberComposerSend(")
 	if !strings.Contains(remember, "typed.text") || !strings.Contains(remember, ".clear()") {
 		t.Errorf("rememberComposerSend does not clear the draft when the local command is sealed, " +
@@ -45,7 +45,7 @@ func TestComposerSendLedger_LocalSealClearsOnlyTheDraftThatWasSent(t *testing.T)
 }
 
 func TestComposerSendLedger_EachRefusalStaysOnItsOwnBubble(t *testing.T) {
-	all := r8AllProductionKotlin(t)
+	all := allProductionKotlin(t)
 	ledger := kotlinCodeOnly(all["dev/swarm/phone/ui/screens/ComposerSendLedger.kt"])
 	for _, required := range []string{
 		"notice = verdict.notice",

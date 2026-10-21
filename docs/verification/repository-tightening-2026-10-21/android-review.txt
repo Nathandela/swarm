@@ -1,0 +1,7 @@
+What this change does: It removes the Android terminal-fallback screen, its snapshot/watch wiring, and tests that only covered that retired route. The production Android diff leaves the conversation/composer route in place, retains the capability-backed composer state, and does not change Go or wire files.
+
+The generic wrapper-dispatch fence was restored in `s25_mainthread_test.go`: it still derives wrappers from waiting facade verbs across production Kotlin and checks dispatch placement, with terminal-specific fixtures removed. The retired production symbols/watch calls are gone; `MonoWell` callers use its remaining signature; output/diff and transcript wells retain horizontal scrolling; the session detail and output screen assertions remain. Composer availability is still checked against the capability record. Existing direct main-thread, lifecycle, generic facade, and screen-component fences remain.
+
+Looks good. No other concrete regression found.
+
+Not checked: I did not run Go gates, Gradle, JVM tests, lint, or an AAR build; the parent is running the build lane.

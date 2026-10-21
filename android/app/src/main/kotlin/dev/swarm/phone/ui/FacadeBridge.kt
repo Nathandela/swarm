@@ -9,8 +9,6 @@ import dev.swarm.phone.ui.screens.LaunchPresetScreen
 import dev.swarm.phone.ui.screens.MachineRowModel
 import dev.swarm.phone.ui.screens.PresetRowModel
 import dev.swarm.phone.ui.screens.SessionCapabilityFacts
-import dev.swarm.phone.ui.screens.TerminalFallbackBinding
-import dev.swarm.phone.ui.screens.TerminalGrid
 import swarmmobile.App
 import swarmmobile.Session
 
@@ -86,32 +84,6 @@ class FacadeBridge(private val app: App) {
         val s = app.session(sessionId)
         return SessionCapabilityFacts(structuredChat = s.structuredChat)
     }
-
-    /**
-     * The fallback screen's own binding to the facade, FOR A SESSION THE MACHINE ROUTED THERE
-     * AND FOR NO OTHER -- null otherwise.
-     *
-     * IT USED TO RETURN A LIVE HANDLE FOR ANY SESSION ID, and the closing review walked one line
-     * through every R8 gate with it: `bridge.terminalFallbackBinding(id).watch()`, appended to a
-     * structured chat screen, opened a real watch with no capability read anywhere on the path.
-     * The binding's constructor is now private and
-     * [TerminalFallbackBinding.forRoutedSession] performs the read, so this method cannot hand
-     * out what it does not have -- the refusal is a `null`, not a gate note.
-     */
-    fun terminalFallbackBinding(sessionId: String): TerminalFallbackBinding? =
-        TerminalFallbackBinding.forRoutedSession(app, sessionId)
-
-    /**
-     * The machine-sanitized grid for one fallback session.
-     *
-     * IT DELEGATES, AND THE DELEGATION IS THE POINT. The read used to be `app.peek(sessionId)`
-     * right here, and `App.Peek` reads the snapshot cache for ANY session id with no capability
-     * check -- so the fallback render path was reachable from a file that is not the fallback
-     * screen and does no record read, which is exactly what ADR-017's gate note forbids. The
-     * capability read and the peek now live together in the one allowlisted file.
-     */
-    fun terminalRows(sessionId: String): TerminalGrid =
-        terminalFallbackBinding(sessionId)?.grid() ?: TerminalGrid.ROUTE_GONE
 
     /**
      * PB-APP-2's screen, with its PB-APP-8 verdict READ OFF THE HANDLE THAT CARRIED IT.
@@ -339,17 +311,8 @@ class FacadeBridge(private val app: App) {
     data class MachinesSnapshot(val rows: List<MachineRowModel>, val cap: Int)
 
     /**
-     * WHAT IS LEFT OF PB-APP-4's grid read, and now of PB-INPUT-2's lease state too.
-     *
-     * `terminalPeek` stood here and asked `App.Peek` for the daemon-rendered snapshot. ADR-009
-     * (2)/(3) deleted both ends of that: no phone surface issues a `terminal_watch`, so the cache
-     * it read is never filled, and no screen draws a grid. What the call was ALSO carrying was the
-     * lease -- and owner ruling R1 (2026-08-26) deleted that in its turn, because composer_send
-     * takes none at any layer.
-     *
-     * SO WHAT CROSSES HERE IS THE LINK, and it is still worth crossing: input is live-only and
-     * never queued, so whether the composer may send at all turns on it. The read is a joining,
-     * which is what this adapter is for.
+     * The transport fact the composer reads: input is live-only and never queued, so whether it
+     * may send turns on the connection state.
      */
     fun sessionLease(sessionId: String): SessionLease =
         SessionLease(sessionId = sessionId, online = isOnline())
@@ -789,14 +752,12 @@ class FacadeBridge(private val app: App) {
         val REPAIR_CHANNELS: List<String> = listOf("journal", "terminal", "reply", "grant")
 
         /**
-         * Whether a refusal means this phone simply holds nothing yet for the session.
+         * Whether NOT_FOUND means this phone simply holds no pending approval for the session.
          *
          * IT IS AN EQUALITY AND NOT A SET, because exactly one class in the taxonomy means "not
          * yet" and every widening of it is a real failure rendered as a quiet screen.
          *
-         * IT OUTLIVED THE GRID IT WAS WRITTEN FOR. It guarded `App.Peek`, whose cache is empty for
-         * the whole round trip after a watch; the well is deleted (ADR-009 (3)) and the same shape
-         * of refusal now arrives from [pendingApproval], where a card the phone has already
+         * This predicate also serves [pendingApproval], where a card the phone has already
          * answered or never received is `NOT_FOUND` and is not a failure to report.
          */
         fun isAwaitingFirstFrame(errorClass: String): Boolean =

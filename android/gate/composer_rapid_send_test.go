@@ -9,7 +9,7 @@ import (
 // VerbDispatch.press's view-keyed fence would instead disable Send and discard the second draft.
 func TestComposerRapidSend_ProductionUsesTheUnfencedFIFOCommandLane(t *testing.T) {
 	const surface = "dev/swarm/phone/PhoneSurface.kt"
-	code := kotlinCodeOnly(r8AllProductionKotlin(t)[surface])
+	code := kotlinCodeOnly(allProductionKotlin(t)[surface])
 	send := code[strings.Index(code, "private val send:"):strings.Index(code, "private fun stopping(")]
 	if !strings.Contains(send, "delivery = PressDelivery.FIFO") {
 		t.Fatalf("composer Send still uses the generic single-flight press delivery; a held facade call disables/drops the next Send")
@@ -40,7 +40,7 @@ func TestComposerRapidSend_ProductionUsesTheUnfencedFIFOCommandLane(t *testing.T
 // input_busy is the daemon's explicit proof that the operation wrote no bytes. It is the only
 // outcome that may replace an operation id under the same logical bubble automatically.
 func TestComposerRapidSend_InputBusyRetriesTheLogicalBubbleWithFreshOperationOwnership(t *testing.T) {
-	all := r8AllProductionKotlin(t)
+	all := allProductionKotlin(t)
 	surface := kotlinCodeOnly(all["dev/swarm/phone/PhoneSurface.kt"])
 	verdict := kotlinMember(t, surface, "private fun renderComposerVerdict(")
 	for _, want := range []string{"verdict.retryable", "beginRetry(", "composerRetry.schedule(", "retryReady("} {
@@ -76,7 +76,7 @@ func TestComposerRapidSend_InputBusyRetriesTheLogicalBubbleWithFreshOperationOwn
 }
 
 func TestComposerRapidSend_RenderHydratesDurableOperationsBeforeClaimingOutcomes(t *testing.T) {
-	all := r8AllProductionKotlin(t)
+	all := allProductionKotlin(t)
 	surface := kotlinMember(t, kotlinCodeOnly(all["dev/swarm/phone/PhoneSurface.kt"]), "private fun renderReady(")
 	hydrate := strings.Index(surface, "composerSends.hydrate(bridge.composerPublications())")
 	verdicts := strings.Index(surface, "renderVerdicts(bridge, startup.app)")
@@ -97,7 +97,7 @@ func TestComposerRapidSend_RenderHydratesDurableOperationsBeforeClaimingOutcomes
 
 func TestComposerRapidSend_ReleaseCancelsEveryDelayedRetryGeneration(t *testing.T) {
 	const surface = "dev/swarm/phone/PhoneSurface.kt"
-	code := kotlinCodeOnly(r8AllProductionKotlin(t)[surface])
+	code := kotlinCodeOnly(allProductionKotlin(t)[surface])
 	release := kotlinMember(t, code, "fun release(")
 	if !strings.Contains(release, "composerRetry.cancel()") {
 		t.Fatalf("PhoneSurface.release does not cancel delayed composer retries; an old Activity can enqueue and render after replacement")

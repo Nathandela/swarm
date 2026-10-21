@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -10,7 +11,7 @@ import (
 // fence because the gomobile-backed Ready branch cannot run under Robolectric.
 func TestAlwaysChatShell_EveryOpenSessionUsesTheConversationDetail(t *testing.T) {
 	const surface = "dev/swarm/phone/PhoneSurface.kt"
-	code := kotlinCodeOnly(r8AllProductionKotlin(t)[surface])
+	code := kotlinCodeOnly(allProductionKotlin(t)[surface])
 	if code == "" {
 		t.Fatalf("%s does not exist", surface)
 	}
@@ -35,10 +36,46 @@ func TestAlwaysChatShell_EveryOpenSessionUsesTheConversationDetail(t *testing.T)
 
 func TestAlwaysChatShell_NoAndroidRouterCanSelectATerminalReplacement(t *testing.T) {
 	const bridge = "dev/swarm/phone/ui/FacadeBridge.kt"
-	code := kotlinCodeOnly(r8AllProductionKotlin(t)[bridge])
+	code := kotlinCodeOnly(allProductionKotlin(t)[bridge])
 	if strings.Contains(code, "fun terminalFallback(") {
 		t.Errorf("%s still exports terminalFallback as an Android navigation decision. The daemon's "+
 			"destination may remain on the compatibility wire, but every handset session uses the "+
 			"conversation shell and capability only changes its composer state.", bridge)
+	}
+}
+
+// The superseded Android destination has no production home. Keep the fence broad enough to
+// catch a renamed drawer, binding, model, view, or watch lane anywhere in production Kotlin.
+func TestAlwaysChatShell_NoRetiredTerminalFallbackOrWatch(t *testing.T) {
+	fallback := regexp.MustCompile(`\bTerminalFallback(?:View|Screen|Model|Binding)\b|\bterminalFallback(?:View|Screen|Model|Binding)\b`)
+	watch := regexp.MustCompile(`\b(?:TerminalWatchLane|TerminalWatchHandle)\b|\b[A-Za-z_]*[Tt]erminal[A-Za-z_]*[Ww]atch\s*\(`)
+	terminalWell := regexp.MustCompile(`monoWell\s*\([^)]*terminal\s*=\s*true`)
+	for name, src := range allProductionKotlin(t) {
+		code := kotlinCodeOnly(src)
+		if fallback.MatchString(code) {
+			t.Errorf("%s retains a retired Android terminal-fallback production symbol", name)
+		}
+		if watch.MatchString(code) {
+			t.Errorf("%s retains a production terminal-watch lane or call", name)
+		}
+		if terminalWell.MatchString(code) {
+			t.Errorf("%s retains the retired terminal variant of monoWell", name)
+		}
+	}
+}
+
+// Composer availability is a live capability contract and survives the removed destination.
+func TestAlwaysChatShell_ComposerAvailabilityComesFromCapabilities(t *testing.T) {
+	const panel = "dev/swarm/phone/ui/screens/SessionDetailPanel.kt"
+	src, ok := allProductionKotlin(t)[panel]
+	if !ok {
+		t.Fatalf("%s does not exist", panel)
+	}
+	code := kotlinCodeOnly(src)
+	if regexp.MustCompile(`structuredChat\s*=\s*!\s*transcript\.structureTorn`).MatchString(code) {
+		t.Errorf("%s derives composer availability from transcript shape", panel)
+	}
+	if !regexp.MustCompile(`\b(capabilities|structuredChatCapability|capabilityRecord)\b`).MatchString(code) {
+		t.Errorf("%s reads no capability record for composer availability", panel)
 	}
 }

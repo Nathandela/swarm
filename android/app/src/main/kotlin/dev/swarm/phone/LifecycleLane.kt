@@ -5,8 +5,7 @@ package dev.swarm.phone
  * authority on the way out (ADR-017 T8-b), withdraw journal delivery, drop the link, and dial
  * it again on the way back in.
  *
- * IT IS AN INTERFACE FOR [TerminalWatchHandle]'s recorded reason. The production
- * implementation -- [AppLifecycle] -- wraps the bound facade, which needs libgojni and cannot
+ * The production implementation -- [AppLifecycle] -- wraps the bound facade, which needs libgojni and cannot
  * be constructed on the unit-test JVM, and the THREADING of these verbs is exactly what the
  * committee's round-3 onPause finding requires to be testable: `LifecycleLaneTest` drives this
  * seam with a fake. THE NAMES ARE THE FACADE'S OWN, deliberately: the s25r3 gate judges
@@ -56,13 +55,11 @@ interface LifecycleHandle {
  *
  * THE SEVERANCE IS NEVER DROPPED (the owner-locked rule). [background] enqueues UNKEYED, and
  * [VerbDispatch.enqueue] gates only the SETTLE on attachment, never the work -- so the T8-b
- * severance still reaches the core after `release()` detaches the dispatch, exactly as
- * [TerminalWatchLane.drop]'s unwatch does. A posted severance that runs promptly in onPause's
+ * severance still reaches the core after `release()` detaches the dispatch. A posted severance that runs promptly in onPause's
  * background window is acceptable; a dropped one is a raw-input generation outliving the
  * screen that owns it.
  *
- * THE HOLD IS EAGER and the REFUSAL claws it back, [TerminalWatchLane]'s idiom -- with one
- * deliberate difference: the clawback is keyed on a PER-ATTEMPT TOKEN, not on handle
+ * THE HOLD IS EAGER and the REFUSAL claws it back, with the clawback keyed on a PER-ATTEMPT TOKEN, not on handle
  * identity, because the handle is cached per App (`PhoneSurface.lifecycleFor`), so identity
  * cannot tell a superseded start attempt from its successor. A stale refusal that cleared the
  * successor's hold would make the next `release()` skip the severance entirely.

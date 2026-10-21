@@ -31,7 +31,7 @@ import org.junit.Test
  * rather than a refactor made here. `SessionDetail` used to carry the journal AND the daemon-
  * rendered grid alongside the lease; IS-SS-1 splits the conversation from the roster ("a client
  * renders the roster from the latter and the transcript from the former"), and (1)/(2)/(3) delete
- * the grid and the terminal_watch that filled it. What is left on `SessionDetail` is the lease, the
+ * the grid and the terminal watch that filled it. What is left on `SessionDetail` is the lease, the
  * link and the Stop/Kill facts; the conversation is [TranscriptPanel]'s, built by [TranscriptScreen]
  * off the session's interaction items and handed to [SessionDetailScreen.of] as its own parameter.
  *

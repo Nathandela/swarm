@@ -25,27 +25,12 @@ import (
 	"testing"
 )
 
-// r1ExemptFile is the ONE screen R1 does not reach, and naming it is cheaper than a
-// narrower rule.
-//
-// The terminal fallback has a control lease OF ITS OWN -- ADR-017 T8's per-session,
-// per-device, horizon-bounded `terminal_control` generations -- which is a different
-// mechanism from the chat path's `take_control` and is governed by a different ruling. Its
-// entering-control slice is PARKED, not shipped: `beginControl`, `type` and `keepAlive` are
-// all in android/unbound-verbs.tsv with no production caller, and the screen says so at its
-// own site ("IT IS READ-ONLY IN THIS ROUND"). So its Release label names a verb this app
-// does not yet issue, and deleting it here would be deleting half of somebody else's slice.
-const r1ExemptFile = "TerminalFallbackScreen.kt"
-
-// r1ChatPathKotlin is production Kotlin with comments stripped, minus the exempt screen.
+// r1ChatPathKotlin is every production Kotlin file with comments stripped.
 func r1ChatPathKotlin(t *testing.T) string {
 	t.Helper()
 	root := filepath.Join(appModule(t), "src", "main")
 	var b strings.Builder
 	for _, f := range kotlinFiles(t, root) {
-		if filepath.Base(f) == r1ExemptFile {
-			continue
-		}
 		b.WriteString(readFileOrFail(t, f, "R1"))
 		b.WriteString("\n")
 	}
