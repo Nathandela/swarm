@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 
-ARG GO_VERSION=1.26.9-bookworm
+# Go 1.26.10 fixes the crypto/x509 trust issue CVE-2026-111943.
+ARG GO_VERSION=1.26.10-bookworm
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS builder
 WORKDIR /src
 

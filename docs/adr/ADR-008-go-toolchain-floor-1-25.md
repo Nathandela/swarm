@@ -82,3 +82,13 @@ CVE-2026-78669 (HIGH, `golang.org/x/net` net/http2) fails the container vulnerab
 binaries were already built with go1.26.9 and golangci-lint v2.12.2 is built with go1.26.2, so
 nothing shipped changes toolchain. Every CI pin, `android/toolchain.env`, CLAUDE.md and
 AGENTS.md move in the same change; the PB-TOOL gates enforce that.
+
+## Amendment 2 (2026-10-21): release builds use Go 1.26.10
+
+The release container scan rejects Go 1.26.9 for
+[CVE-2026-111943 / GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809).
+Pin the container builder, release publisher and matching GoReleaser dry-run to
+Go 1.26.10, which includes the `crypto/x509` trust fix. The module language floor
+and exact linter toolchain stay at 1.26.0; this updates the compiler/standard
+library in distributed artifacts without changing the language requirement.
+The security gate and empty waiver file remain enforced.

@@ -291,7 +291,7 @@ jobs:
         # Match the publish job's patched, reproducible release toolchain.
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
       - name: Set up goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:
