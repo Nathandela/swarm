@@ -82,17 +82,34 @@ func TestEveryBoundedHistoryOperationIsClaimed(t *testing.T) {
 			t.Errorf("bounded history reads still use overwriteable scalar state %q", scalar)
 		}
 	}
-	if !strings.Contains(surface, "private val historyReads = linkedMapOf<String, PendingHistoryRead>()") {
-		t.Error("PhoneSurface has no per-operation bounded-history claim ledger")
+	if !strings.Contains(surface, "private val interactionReads = InteractionReadLedger()") {
+		t.Error("PhoneSurface has no shared per-operation interaction-read claim ledger")
 	}
 	remember := reachableInFile(t, path, "rememberHistoryRead", 1)
-	if !strings.Contains(remember, "historyReads[issued.operationID]") {
-		t.Errorf("a sealed bounded-history operation is not added to the claim ledger:\n%s", remember)
+	if !strings.Contains(remember, "interactionReads.record(issued.operationID") ||
+		!strings.Contains(remember, "PendingInteractionRead.History(") {
+		t.Errorf("a sealed bounded-history operation is not added with its context to the claim ledger:\n%s", remember)
+	}
+	detail := reachableInFile(t, path, "rememberDetailRead", 1)
+	if !strings.Contains(detail, "interactionReads.record(issued.operationID") ||
+		!strings.Contains(detail, "PendingInteractionRead.Detail(") {
+		t.Errorf("a sealed clipped-detail operation is not added with its item context to the claim ledger:\n%s", detail)
 	}
 	render := reachableInFile(t, path, "renderReadVerdicts", 1)
-	if !strings.Contains(render, "for ((operationID, pending) in historyReads.toMap())") ||
-		!strings.Contains(render, "historyReads.remove(operationID)") {
-		t.Errorf("bounded-history outcomes are not each claimed and retired by operation id:\n%s", render)
+	if !strings.Contains(render, "interactionReads.pending()") ||
+		!strings.Contains(render, "interactionReads.answered(") {
+		t.Errorf("history/detail outcomes are not each admitted and retired by exact operation id and nonblank answer:\n%s", render)
+	}
+	ledgerPath := filepath.Join(repoRoot(t), "android/app/src/main/kotlin/dev/swarm/phone/InteractionReadLedger.kt")
+	ledger := string(readFileOrFail(t, ledgerPath, "interaction read claim semantics"))
+	for _, required := range []string{
+		"operationId.isEmpty() || reads.containsKey(operationId)",
+		"operationId != outcomeOperationId || code.isBlank()",
+		"reads.remove(operationId)",
+	} {
+		if !strings.Contains(ledger, required) {
+			t.Errorf("interaction-read ledger no longer protects exact answered claims with %q", required)
+		}
 	}
 }
 

@@ -273,9 +273,9 @@ func TestR6R2_EveryChatVerbsMachineAnswerIsClaimedOnTheSurface(t *testing.T) {
 			"M2.4 -- a Stop's refusal never reaches the reader"},
 		// History is a ledger rather than a scalar: cold-open and reader presses may both seal
 		// before either outcome arrives, so one `historyOp` would overwrite an unclaimed reply.
-		{"historyReads[issued.operationID]", "launchOutcome(operationID)",
+		{"interactionReads.record(issued.operationID", "launchOutcome(operationID)",
 			"app.loadEarlierInteractions(", "M3.1 -- a history page never folds"},
-		{"detailOp = ", "launchOutcome(detailOp)", "app.loadInteractionDetail(",
+		{"interactionReads.record(issued.operationID", "launchOutcome(operationID)", "app.loadInteractionDetail(",
 			"M3.3 -- a clipped card never expands"},
 	} {
 		if !strings.Contains(body, want.verb) {

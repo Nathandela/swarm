@@ -1441,22 +1441,14 @@ class PhoneSurface(
      */
     private var interruptOp: String = ""
 
-    /** One sealed history read waiting for its machine-authored outcome. */
-    private data class PendingHistoryRead(val target: String, val speaks: Boolean)
-
     /**
-     * Every history read this surface has issued and not yet claimed, by operation id.
+     * Every interaction read this surface has issued and not yet claimed, by operation id.
      *
      * A cold-open and a reader's Reload can seal before either reply arrives, and two sessions
-     * can do the same while the reader moves between them. One scalar latch lets the later seal
-     * overwrite the earlier id, leaving that reply forever unclaimed in `App.PendingOpCount`.
+     * can do the same while the reader moves between them. Clipped-detail reads have the same
+     * lifetime, so they share this ledger instead of using an overwriteable operation/context pair.
      */
-    private val historyReads = linkedMapOf<String, PendingHistoryRead>()
-
-    private var detailOp: String = ""
-
-    /** The item [detailOp] was issued for: a refusal is a fact about THAT card and no other. */
-    private var detailFor: String = ""
+    private val interactionReads = InteractionReadLedger()
 
     /**
      * The cards whose whole body the machine has TERMINALLY refused, by item_id (Wave R6 review
@@ -4403,8 +4395,7 @@ class PhoneSurface(
     /** Latch the kill this surface issued, so [renderKillVerdict] can claim its answer. */
     private fun rememberDetailRead(answer: Any?, itemId: String) {
         val issued = answer as? Op ?: return
-        detailOp = issued.operationID
-        detailFor = itemId
+        interactionReads.record(issued.operationID, PendingInteractionRead.Detail(itemId))
     }
 
     private fun renderKillVerdict(bridge: FacadeBridge) {
@@ -4584,20 +4575,30 @@ class PhoneSurface(
      * would reach the screen one journal event late.
      *
      * A REFUSED READ IS SAID OUT LOUD ONLY WHERE SOMEBODY PRESSED SOMETHING
-     * ([PendingHistoryRead.speaks]). The detail read is always a press, so it always speaks.
+     * ([PendingInteractionRead.History.speaks]). The detail read is always a press, so it always
+     * speaks.
      */
     private fun renderReadVerdicts(bridge: FacadeBridge) {
-        for ((operationID, pending) in historyReads.toMap()) {
+        // Preserve the prior history-before-detail feedback order when both reads resolve together.
+        val pendingReads = interactionReads.pending().sortedBy {
+            if (it.read is PendingInteractionRead.History) 0 else 1
+        }
+        for (pending in pendingReads) {
+            val operationID = pending.operationId
             val outcome = try {
                 bridge.launchOutcome(operationID)
             } catch (unreadable: Exception) {
                 null
             }
-            if (outcome != null && outcome.operationId == operationID && outcome.code.isNotBlank()) {
-                val speaks = pending.speaks
-                val target = pending.target
-                historyReads.remove(operationID)
-                when {
+            if (outcome == null) continue
+            when (
+                val read = interactionReads.answered(
+                    operationID,
+                    outcome.operationId,
+                    outcome.code,
+                )
+            ) {
+                is PendingInteractionRead.History -> when {
                     outcome.code != READ_HISTORY_OK -> {
                         // THE MACHINE'S OWN WORDS, in the detail cell (round 3, finding F4). This
                         // used to hand the wire code to `ErrorRouter.routeMachineCode` and pass
@@ -4608,8 +4609,12 @@ class PhoneSurface(
                         // recognise". Every other machine-answering verb on this surface says a
                         // verb-specific sentence and shows what the machine said; these two are
                         // no longer the exception.
-                        val verdict = CommandVerdict.of(outcome, outcome.operationId, READ_HISTORY_OK)
-                        if (speaks) {
+                        if (read.speaks) {
+                            val verdict = CommandVerdict.of(
+                                outcome,
+                                outcome.operationId,
+                                READ_HISTORY_OK,
+                            )
                             say(
                                 PressFeedback.ofRefusal(
                                     SessionDetailScreen.historyReadNoticeFor(verdict),
@@ -4622,49 +4627,47 @@ class PhoneSurface(
                     // is dropped by the panel on the same fact; this is the sentence that stops
                     // that from reading as "you have reached the beginning" -- said ONCE, at the
                     // moment it becomes true, where the finger that asked was.
-                    speaks && bridge.historyAtCapacity(target) ->
+                    read.speaks && bridge.historyAtCapacity(read.target) ->
                         say(
                             PressFeedback.ofRefusal(
                                 SessionDetailScreen.historyCapacityNotice(
-                                    detailDrawn?.takeIf { it.sessionId == target }?.machineLabel.orEmpty(),
+                                    detailDrawn
+                                        ?.takeIf { it.sessionId == read.target }
+                                        ?.machineLabel
+                                        .orEmpty(),
                                 ),
                                 "",
                             ),
                         )
                 }
-            }
-        }
-        if (detailOp.isNotEmpty()) {
-            val outcome = try {
-                bridge.launchOutcome(detailOp)
-            } catch (unreadable: Exception) {
-                null
-            }
-            if (outcome != null && outcome.operationId == detailOp && outcome.code.isNotBlank()) {
-                val card = detailFor
-                detailOp = ""
-                detailFor = ""
-                if (outcome.code != READ_DETAIL_OK) {
-                    // IS-CAP-3's `unavailable` among them: the machine no longer retains the
-                    // whole of this card. The sentence is the SCREEN's, verb-specific, with the
-                    // machine's own words beside it -- see the history arm above for the routing
-                    // this replaced and why.
-                    val verdict = CommandVerdict.of(outcome, outcome.operationId, READ_DETAIL_OK)
-                    say(
-                        PressFeedback.ofRefusal(
-                            SessionDetailScreen.detailReadNoticeFor(outcome.code, verdict),
-                            SessionDetailScreen.detailReadDetailFor(verdict),
-                        ),
-                    )
-                    // AND THE OFFER GOES WITH IT when the refusal is terminal (round 3, F4). The
-                    // card advertises the fetch from fields journalled at CAPTURE time, so an
-                    // evicted body goes on offering itself: the reader taps, reads that it is
-                    // gone, and is invited to tap again. This is the one place the phone learns
-                    // otherwise, and it is remembered per item because it is true of that item.
-                    if (card.isNotEmpty() && SessionDetailScreen.detailReadIsTerminal(outcome.code)) {
-                        detailRefused.add(card)
+                is PendingInteractionRead.Detail -> {
+                    if (outcome.code != READ_DETAIL_OK) {
+                        // IS-CAP-3's `unavailable` among them: the machine no longer retains the
+                        // whole of this card. The sentence is the SCREEN's, verb-specific, with
+                        // the machine's own words beside it -- see the history arm above for the
+                        // routing this replaced and why.
+                        val verdict = CommandVerdict.of(outcome, outcome.operationId, READ_DETAIL_OK)
+                        say(
+                            PressFeedback.ofRefusal(
+                                SessionDetailScreen.detailReadNoticeFor(outcome.code, verdict),
+                                SessionDetailScreen.detailReadDetailFor(verdict),
+                            ),
+                        )
+                        // AND THE OFFER GOES WITH IT when the refusal is terminal (round 3, F4).
+                        // The card advertises the fetch from fields journalled at CAPTURE time,
+                        // so an evicted body goes on offering itself: the reader taps, reads that
+                        // it is gone, and is invited to tap again. This is the one place the phone
+                        // learns otherwise, and it is remembered per item because it is true of
+                        // that item.
+                        if (
+                            read.itemId.isNotEmpty() &&
+                            SessionDetailScreen.detailReadIsTerminal(outcome.code)
+                        ) {
+                            detailRefused.add(read.itemId)
+                        }
                     }
                 }
+                null -> Unit
             }
         }
     }
@@ -4742,7 +4745,7 @@ class PhoneSurface(
     /** Latch the history read this surface issued, and whether its refusal speaks. */
     private fun rememberHistoryRead(answer: Any?, target: String, aloud: Boolean) {
         val issued = answer as? Op ?: return
-        historyReads[issued.operationID] = PendingHistoryRead(target, aloud)
+        interactionReads.record(issued.operationID, PendingInteractionRead.History(target, aloud))
     }
 
 
