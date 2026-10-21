@@ -25,7 +25,11 @@ package daemon
 //	    return d.idem.Fail(op, nil)
 //	}
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Nathandela/swarm/internal/idempotency"
+)
 
 // TestDaemon_ClaimIdempotentOp_ReplayReturnsCachedOutcome pins the cached-outcome
 // contract against a real daemon + idempotency store: a succeeding kill (op X) replays
@@ -90,5 +94,102 @@ func TestDaemon_ClaimIdempotentOp_ReplayReturnsCachedOutcome(t *testing.T) {
 	}
 	if priorOK {
 		t.Fatalf("replay of a committed-FAILURE op = priorOK=true; want false (cached failure, NOT a false success)")
+	}
+}
+
+func TestDaemon_ClaimIdempotentOp_RejectsBindingConflictsInEveryPhase(t *testing.T) {
+	d := openDaemon(t, daemonConfig(t))
+	phases := []idempotency.Phase{
+		idempotency.PhasePrepared,
+		idempotency.PhaseExecuting,
+		idempotency.PhaseCompleted,
+		idempotency.PhaseFailed,
+	}
+	conflicts := []struct {
+		name    string
+		action  string
+		session string
+	}{
+		{name: "action", action: "delete", session: "session-a"},
+		{name: "session", action: "kill", session: "session-b"},
+	}
+
+	for _, phase := range phases {
+		for _, conflict := range conflicts {
+			t.Run(string(phase)+"/"+conflict.name, func(t *testing.T) {
+				op := "conflict-" + string(phase) + "-" + conflict.name
+				if _, existed, err := d.idem.Prepare(op, "kill", "session-a"); err != nil || existed {
+					t.Fatalf("Prepare: existed=%v err=%v", existed, err)
+				}
+				switch phase {
+				case idempotency.PhaseExecuting:
+					if err := d.idem.Begin(op); err != nil {
+						t.Fatal(err)
+					}
+				case idempotency.PhaseCompleted, idempotency.PhaseFailed:
+					if err := d.idem.Begin(op); err != nil {
+						t.Fatal(err)
+					}
+					switch phase {
+					case idempotency.PhaseCompleted:
+						if err := d.idem.Complete(op, nil); err != nil {
+							t.Fatal(err)
+						}
+					case idempotency.PhaseFailed:
+						if err := d.idem.Fail(op, nil); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+
+				if _, _, err := d.ClaimIdempotentOp(op, conflict.action, conflict.session); err == nil {
+					t.Fatalf("ClaimIdempotentOp reused %q bound to kill/session-a as %s/%s", op, conflict.action, conflict.session)
+				}
+			})
+		}
+	}
+}
+
+func TestDaemon_ClaimIdempotentOp_PreservesExactReplaySemantics(t *testing.T) {
+	d := openDaemon(t, daemonConfig(t))
+	for _, tc := range []struct {
+		phase       idempotency.Phase
+		wantExisted bool
+		wantPriorOK bool
+	}{
+		{phase: idempotency.PhasePrepared},
+		{phase: idempotency.PhaseExecuting},
+		{phase: idempotency.PhaseCompleted, wantExisted: true, wantPriorOK: true},
+		{phase: idempotency.PhaseFailed, wantExisted: true},
+	} {
+		t.Run(string(tc.phase), func(t *testing.T) {
+			op := "exact-" + string(tc.phase)
+			if _, existed, err := d.idem.Prepare(op, "kill", "session-a"); err != nil || existed {
+				t.Fatalf("Prepare: existed=%v err=%v", existed, err)
+			}
+			if tc.phase != idempotency.PhasePrepared {
+				if err := d.idem.Begin(op); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch tc.phase {
+			case idempotency.PhaseCompleted:
+				if err := d.idem.Complete(op, nil); err != nil {
+					t.Fatal(err)
+				}
+			case idempotency.PhaseFailed:
+				if err := d.idem.Fail(op, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			gotExisted, gotPriorOK, err := d.ClaimIdempotentOp(op, "kill", "session-a")
+			if err != nil {
+				t.Fatalf("exact replay: %v", err)
+			}
+			if gotExisted != tc.wantExisted || gotPriorOK != tc.wantPriorOK {
+				t.Fatalf("exact replay = (%v, %v), want (%v, %v)", gotExisted, gotPriorOK, tc.wantExisted, tc.wantPriorOK)
+			}
+		})
 	}
 }

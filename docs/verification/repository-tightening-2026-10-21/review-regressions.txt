@@ -1,0 +1,19 @@
+Toolchain: Go 1.26.9 darwin/arm64 at /Users/Nathan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.9.darwin-arm64/bin/go
+GOCACHE=/private/tmp/swarm-appserver-red/gocache
+GOTMPDIR=/private/tmp/swarm-appserver-red/tmp
+GOTOOLCHAIN=local
+
+GREEN: appserver boundary races
+Command: go test -race ./internal/appserver -run '^TestCallAtWriteBoundary_SkipsBoundary(AfterQueuedClose|ForCancelledContext)$' -count=1
+Result: ok github.com/Nathandela/swarm/internal/appserver 1.249s
+
+GREEN: daemon operation binding and replay semantics
+Command: go test -race ./internal/daemon -run '^TestDaemon_ClaimIdempotentOp_(RejectsBindingConflictsInEveryPhase|PreservesExactReplaySemantics)$' -count=1
+Result: ok github.com/Nathandela/swarm/internal/daemon 5.702s
+
+RED: regression test against the original appserver.go, supplied through a Go overlay from HEAD; shared source was not changed for this check.
+Command: go test -overlay=/private/tmp/swarm-appserver-red/overlay.json ./internal/appserver -run '^TestCallAtWriteBoundary_SkipsBoundaryForCancelledContext$' -count=1
+Result: failed as expected: CallAtWriteBoundary error = beforeWrite ran, want context.Canceled
+This proves cancellation after the request queues on writeMu skips beforeWrite in the current implementation and is detected by the regression test with the old implementation.
+
+Diff hygiene: `git diff --check` passed for the owned files. `git check-ignore -v --no-index e2e2session` resolved to `.gitignore:44:/e2e2session`; the binary is absent. Runtime/build/config/script searches found no references outside the preserved historical verification note.

@@ -329,23 +329,30 @@ func (c *Client) callAtWriteBoundary(ctx context.Context, method string, params,
 		c.mu.Unlock()
 		return err
 	}
-	c.mu.Lock()
-	closed := c.closed
-	c.mu.Unlock()
-	if closed {
-		// Detected before beforeWrite: a caller's durable pre-write record is
-		// never created for a frame that provably cannot be written.
-		c.mu.Lock()
-		delete(c.waiters, key)
-		c.mu.Unlock()
-		return ErrClosed
-	}
 	// beforeWrite and the write are ONE unit under the connection's write lock:
 	// no other frame on this connection (a Respond, a Notify, another call) can
 	// interpose between a caller's durable pre-write record and the bytes it
 	// covers. afterWrite stays outside the lock -- once the frame is on the
-	// wire, later frames are just traffic.
+	// wire, later frames are just traffic. Recheck liveness and cancellation here:
+	// either may change while this call waits behind another writer.
 	c.writeMu.Lock()
+	c.mu.Lock()
+	closed := c.closed
+	if closed {
+		delete(c.waiters, key)
+	}
+	c.mu.Unlock()
+	if closed {
+		c.writeMu.Unlock()
+		return ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		c.writeMu.Unlock()
+		c.mu.Lock()
+		delete(c.waiters, key)
+		c.mu.Unlock()
+		return err
+	}
 	if beforeWrite != nil {
 		if err := beforeWrite(); err != nil {
 			c.writeMu.Unlock()

@@ -1,0 +1,1 @@
+ok  	github.com/Nathandela/swarm/internal/daemon	15.609s

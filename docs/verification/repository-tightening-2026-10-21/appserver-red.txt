@@ -1,0 +1,5 @@
+--- FAIL: TestCallAtWriteBoundary_SkipsBoundaryAfterQueuedClose (0.00s)
+    write_boundary_internal_test.go:55: CallAtWriteBoundary error = beforeWrite ran, want ErrClosed
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/appserver	0.234s
+FAIL

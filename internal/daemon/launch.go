@@ -246,6 +246,10 @@ func (d *Daemon) ClaimIdempotentOp(op, action, session string) (existed, priorOK
 	if err != nil || !existed {
 		return existed, false, err
 	}
+	if rec.Action != action || rec.SessionID != session {
+		return false, false, fmt.Errorf("daemon: operation_id %q is already bound to a different request (action %q session %q)",
+			op, rec.Action, rec.SessionID)
+	}
 	switch rec.Phase {
 	case idempotency.PhaseCompleted:
 		return true, true, nil
