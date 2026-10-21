@@ -72,20 +72,21 @@ func TestS11R_InputNeverWaitsForAConnection(t *testing.T) {
 	})
 }
 
-// TestRefreshRosterDiagnosisWaitsForStartsConnection keeps pull-to-refresh compatible with
-// the command plane's established startup rule. Start publishes its session before the relay
-// client exists; a refresh issued in that ordinary window must wait briefly for the connection
-// Start is bringing up, then hand its diagnosis request to the drain's single mailbox reader.
-// It must not fail immediately merely because the new guarded stale-head diagnosis now precedes
-// the roster command.
-func TestRefreshRosterDiagnosisWaitsForStartsConnection(t *testing.T) {
+// TestRefreshRosterDiagnosisQueuesAcrossReconnectGaps keeps explicit mailbox recovery reachable
+// while the relay loop is between connections. The request is claimed by the next stream's sole
+// reader, so waiting for a transient live stream here would let retained-age backoff outlast the
+// only authorized recovery action.
+func TestRefreshRosterDiagnosisQueuesAcrossReconnectGaps(t *testing.T) {
 	src := loadFacade(t)
 	body := s11FuncSource(t, src, "App", "requestMailboxDiscard")
 	label := s11FuncLabel("App", "requestMailboxDiscard")
+	s11rRefuseCalls(t, label, body, map[string]string{
+		"a.awaitStream()": "the explicit recovery request must be queued before awaiting a live " +
+			"stream, or retained-age backoff can outlast RefreshRoster's wait and leave the stale head stuck.",
+	})
 	s11RequireCalls(t, label, body, map[string]string{
-		"a.awaitStream()": "RefreshRoster is an idempotent command and must preserve the command " +
-			"plane's brief Start-to-connection wait before installing its drain-owned diagnosis; " +
-			"failing on a.client == nil makes an immediate post-Start pull report offline.",
+		"a.mailboxDiscard = req": "the explicit recovery intent must be visible to the sole drain " +
+			"before a reconnect begins receiving the retained head.",
 	})
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -386,11 +387,170 @@ func TestPairingUsesNativeRelayV2Transport(t *testing.T) {
 	app.resyncAt[phonecore.StreamJournal] = nil
 	app.mu.Unlock()
 
+	// A quiet authenticated stale head must keep the connection loop's backoff growing;
+	// only the explicit Inbox Reload may discard it and recover the roster. Pause the
+	// second scheduled retry so the refresh is queued while no stream exists, then let that
+	// user-authorized request wake the dial.
+	delays := make(chan int, 8)
+	secondDelay := make(chan struct{})
+	continueRun := make(chan struct{})
+	released := false
+	releaseRun := func() {
+		if !released {
+			close(continueRun)
+			released = true
+		}
+	}
+	defer releaseRun()
+	observeDelay := func(attempt int, _ time.Duration) {
+		select {
+		case delays <- attempt:
+		default:
+		}
+		if attempt == 2 {
+			close(secondDelay)
+			<-continueRun
+		}
+	}
+	reconnectDelayObserver.Store(&observeDelay)
+	defer reconnectDelayObserver.Store(nil)
+	quietCursor := app.core.State().RelayCursor
+	quietHead, err := remotecrypto.SealMailbox(keys.ContentKey, remotecrypto.EnvelopeHeader{
+		Version: remotecrypto.VersionV1, EpochID: 1, Seq: 3,
+		IssuedAt: time.Now().Add(-phonecore.InboundMaxAge - time.Minute).UnixMilli(),
+	}, []byte(`{"kind":"command_reply","op":"ok"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	quietAppend, err := machineStream.Append(ctx, binding, "quiet-stale-head", quietHead.Marshal())
+	if err != nil {
+		t.Fatalf("append quiet stale head: %v", err)
+	}
+	waitMobileV2(t, ctx, "quiet stale head retained", app.core.Router().InboundAgeRefused)
+	for want := 1; want <= 2; want++ {
+		select {
+		case attempt := <-delays:
+			if attempt != want {
+				t.Fatalf("reconnect attempt after retained stale head = %d, want %d",
+					attempt, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("App.run did not schedule reconnect attempt %d behind quiet stale head", want)
+		case <-ctx.Done():
+			t.Fatalf("waiting for reconnect attempt %d: %v", want, ctx.Err())
+		}
+	}
+	select {
+	case <-secondDelay:
+	case <-ctx.Done():
+		t.Fatalf("second reconnect delay did not pause: %v", ctx.Err())
+	}
+	if got := app.core.State().RelayCursor; got != quietCursor || got >= quietAppend.Cursor {
+		t.Fatalf("quiet stale head advanced durable receive/ACK cursor: before=%d after=%d head=%d",
+			quietCursor, got, quietAppend.Cursor)
+	}
+	refreshDone := make(chan error, 1)
+	go func() { refreshDone <- app.RefreshRoster() }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		app.mu.Lock()
+		queued := app.mailboxDiscard != nil
+		app.mu.Unlock()
+		if queued {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("explicit RefreshRoster did not queue recovery while no stream was available")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	releaseRun()
+	select {
+	case err := <-refreshDone:
+		if err != nil {
+			t.Fatalf("explicit RefreshRoster recovery with no later machine traffic: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("waiting for explicit quiet recovery: %v", ctx.Err())
+	}
+	reconnectDelayObserver.Store(nil)
+	if got := app.core.State().RelayCursor; got != quietAppend.Cursor {
+		t.Fatalf("explicit quiet recovery checkpoint = %d, want discard cursor %d", got, quietAppend.Cursor)
+	}
+	quietRefresh, err := machineSub.Recv(ctx)
+	if err != nil {
+		t.Fatalf("receive explicit quiet-recovery roster command: %v", err)
+	}
+	openedQuietRefresh, err := remotegw.OpenMailboxFrame(commandRecv, keys.ContentKey, quietRefresh.Ciphertext)
+	if err != nil || openedQuietRefresh.Command.Action != "journal_resync" {
+		t.Fatalf("open explicit quiet-recovery roster command = (%+v,%v)", openedQuietRefresh, err)
+	}
+	if openedQuietRefresh.Command.DiscardRecoveryToken == "" {
+		t.Fatal("explicit quiet-recovery command omitted its discard token")
+	}
+	if err := machineSub.Ack(ctx, quietRefresh.Cursor); err != nil {
+		t.Fatalf("ACK explicit quiet-recovery roster command: %v", err)
+	}
+	quietStream, err := app.conn()
+	if err != nil {
+		t.Fatalf("connection after explicit quiet recovery: %v", err)
+	}
+	recoveryDelays := make(chan int, 1)
+	observeRecoveryDelay := func(attempt int, _ time.Duration) {
+		select {
+		case recoveryDelays <- attempt:
+		default:
+		}
+	}
+	reconnectDelayObserver.Store(&observeRecoveryDelay)
+	quietStream.Close()
+	select {
+	case attempt := <-recoveryDelays:
+		if attempt != 1 {
+			t.Fatalf("reconnect attempt after explicit quiet recovery = %d, want 1", attempt)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("App.run did not reconnect after explicit quiet recovery")
+	case <-ctx.Done():
+		t.Fatalf("waiting for reconnect after explicit quiet recovery: %v", ctx.Err())
+	}
+	waitMobileV2(t, ctx, "stream reconnect after explicit quiet recovery", func() bool {
+		stream, err := app.conn()
+		return err == nil && stream != quietStream
+	})
+	reconnectDelayObserver.Store(nil)
+	quietReseed, err := json.Marshal(struct {
+		Kind string `json:"kind"`
+		schema.JournalReseed
+	}{Kind: "journal_reseed", JournalReseed: schema.JournalReseed{
+		Roster: []schema.JournalRecord{}, Events: []schema.JournalRecord{},
+		Cursor:               app.core.Router().Sessions().Cursor(),
+		DiscardRecoveryToken: openedQuietRefresh.Command.DiscardRecoveryToken,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quietReseedEnvelope, err := remotecrypto.SealMailbox(keys.ContentKey, remotecrypto.EnvelopeHeader{
+		Version: remotecrypto.VersionV1, EpochID: 1, Seq: 3, IssuedAt: time.Now().UnixMilli(),
+	}, quietReseed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := machineStream.Append(ctx, binding, "quiet-recovery-reseed", quietReseedEnvelope.Marshal()); err != nil {
+		t.Fatalf("append explicit quiet-recovery reseed: %v", err)
+	}
+	waitMobileV2(t, ctx, "quiet recovery reseed accepted", func() bool {
+		return app.core.DiscardRecoveryToken() == "" && app.core.State().RelayCursor > quietAppend.Cursor
+	})
+	app.mu.Lock()
+	app.resyncAt[phonecore.StreamJournal] = nil
+	app.mu.Unlock()
+
 	// Lose a successful DISCARD response locally. With no pending recovery intent the
 	// reconnect must fence the rejected incarnation, reset durably, and blank-subscribe.
 	oldIncarnation := app.core.State().RelayIncarnation
 	staleEnvelope, err := remotecrypto.SealMailbox(keys.ContentKey, remotecrypto.EnvelopeHeader{
-		Version: remotecrypto.VersionV1, EpochID: 1, Seq: 3,
+		Version: remotecrypto.VersionV1, EpochID: 1, Seq: 5,
 		IssuedAt: time.Now().Add(-phonecore.InboundMaxAge - time.Minute).UnixMilli(),
 	}, []byte(`{"kind":"command_reply","op":"ok"}`))
 	if err != nil {
@@ -400,7 +560,7 @@ func TestPairingUsesNativeRelayV2Transport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append stale authenticated head: %v", err)
 	}
-	freshTail, err := remotegw.SealControlReply(keys.ContentKey, 1, 4,
+	freshTail, err := remotegw.SealControlReply(keys.ContentKey, 1, 6,
 		schema.Control{Op: protocol.OpOK, OperationID: "fresh-tail-after-discard"})
 	if err != nil {
 		t.Fatal(err)
@@ -437,7 +597,7 @@ func TestPairingUsesNativeRelayV2Transport(t *testing.T) {
 	// Repeat with durable discard intent. The reconnect must retry exact old-incarnation
 	// DISCARD, adopt its returned checkpoint, then redial because successful Discard is terminal.
 	secondStale, err := remotecrypto.SealMailbox(keys.ContentKey, remotecrypto.EnvelopeHeader{
-		Version: remotecrypto.VersionV1, EpochID: 1, Seq: 5,
+		Version: remotecrypto.VersionV1, EpochID: 1, Seq: 7,
 		IssuedAt: time.Now().Add(-phonecore.InboundMaxAge - time.Minute).UnixMilli(),
 	}, []byte(`{"kind":"command_reply","op":"ok"}`))
 	if err != nil {
@@ -447,7 +607,7 @@ func TestPairingUsesNativeRelayV2Transport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append second stale head: %v", err)
 	}
-	secondFresh, err := remotegw.SealControlReply(keys.ContentKey, 1, 6,
+	secondFresh, err := remotegw.SealControlReply(keys.ContentKey, 1, 8,
 		schema.Control{Op: protocol.OpOK, OperationID: "fresh-after-crash-retry"})
 	if err != nil {
 		t.Fatal(err)

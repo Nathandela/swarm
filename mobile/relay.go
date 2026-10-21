@@ -65,15 +65,15 @@ func reconnectJittered(base time.Duration, frac float64) time.Duration {
 }
 
 // reconnectBackoff tracks consecutive failed dial attempts across one App.run generation and
-// computes each retry delay. It resets to the initial delay on every successful connection
-// (App.run calls reset after setConn(connOnline)), so a link that has been stable for a while
-// never carries a stale, grown-out backoff into its next outage.
+// computes each retry delay. App.run resets it on a usable connection; an authenticated
+// retained-age refusal is not progress and must keep the schedule growing across redials.
 //
-// THE HANDSET RESETS ON CONNECTION AND THE GATEWAY DOES NOT, and that difference is
+// THE HANDSET RESETS ON A USABLE CONNECTION AND THE GATEWAY DOES NOT, and that difference is
 // deliberate rather than drift. This side has a user watching a connection state, and a
-// phone coming back from a tunnel must not carry a grown-out delay into its next blip. The
-// sidecar has no such observer and faces the relay as the declared adversary, so it resets
-// only on evidence that traffic crossed the link (remotegw.Service.Progressed).
+// phone coming back from a tunnel must not carry a grown-out delay into its next blip. A
+// retained stale mailbox head is the exception: a live socket that cannot receive is not
+// usable. The sidecar has no such observer and faces the relay as the declared adversary,
+// so it resets only on evidence that traffic crossed the link (remotegw.Service.Progressed).
 type reconnectBackoff struct {
 	attempt int
 	frac    func() float64 // returns a value in [-1, 1]; overridden by tests
@@ -182,23 +182,21 @@ func (r *relayAcker) Ack(cursor uint64) error {
 // an empty token and deletes nothing; only authenticated stale age (or a durable pending token)
 // crosses into the destructive, incarnation-fenced self-mailbox discard.
 func (a *App) requestMailboxDiscard() (string, error) {
-	// RefreshRoster is an idempotent command, so it inherits the command plane's brief
-	// post-Start wait. Start publishes sess before run publishes stream; failing immediately
-	// in that ordinary window regresses the roster-only refresh that existed before guarded
-	// stale-head diagnosis. This only waits for the connection -- the facade still performs
-	// no mailbox read, and the request below is still claimed by the drain's single reader.
-	if _, err := a.awaitStream(); err != nil {
-		return "", err
-	}
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
 		return "", errClosed
 	}
 	sess := a.sess
-	if sess == nil || a.stream == nil {
+	if sess == nil {
 		a.mu.Unlock()
-		return "", classed(ErrClassOffline, errors.New("swarmmobile: relay connection not established for mailbox recovery"))
+		return "", errNotRunning
+	}
+	select {
+	case <-sess.done:
+		a.mu.Unlock()
+		return "", errNotRunning
+	default:
 	}
 	if a.mailboxDiscard != nil {
 		a.mu.Unlock()
@@ -215,6 +213,12 @@ func (a *App) requestMailboxDiscard() (string, error) {
 	// keeps the exact bound connection alive for the PROBE/DISCARD transaction.
 	if wake != nil {
 		wake()
+	}
+	if sess.wake != nil {
+		select {
+		case sess.wake <- struct{}{}:
+		default:
+		}
 	}
 
 	select {
@@ -543,7 +547,7 @@ func (a *App) setStream(stream *phoneStream) {
 }
 
 // run is one native relay-v2 Start..Stop generation.
-func (a *App) run(ctx context.Context) {
+func (a *App) run(ctx context.Context, wake <-chan struct{}) {
 	first := true
 	rb := newReconnectBackoff()
 	for ctx.Err() == nil {
@@ -556,10 +560,24 @@ func (a *App) run(ctx context.Context) {
 			if obs := reconnectDelayObserver.Load(); obs != nil {
 				(*obs)(rb.attempt, delay)
 			}
-			select {
-			case <-ctx.Done():
-				break
-			case <-time.After(delay):
+			timer := time.NewTimer(delay)
+			waiting := true
+			for waiting {
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					waiting = false
+				case <-wake:
+					a.mu.Lock()
+					pending := a.mailboxDiscard != nil && !a.mailboxDiscard.claimed && a.mailboxDiscard.ctx.Err() == nil
+					a.mu.Unlock()
+					if pending {
+						timer.Stop()
+						waiting = false
+					}
+				case <-timer.C:
+					waiting = false
+				}
 			}
 			if ctx.Err() != nil {
 				break
@@ -603,8 +621,14 @@ func (a *App) run(ctx context.Context) {
 		}
 
 		a.setStream(stream)
+		select {
+		case <-wake:
+		default:
+		}
 		a.setConn(connOnline)
-		rb.reset()
+		if !a.core.Router().InboundAgeRefused() {
+			rb.reset()
+		}
 		pctx, cancelPump := context.WithCancel(ctx)
 		pumpDone := make(chan struct{})
 		go func() {
@@ -614,9 +638,13 @@ func (a *App) run(ctx context.Context) {
 			})
 		}()
 		a.wakePublicationPump()
-		stream = a.drainPhone(ctx, stream)
+		var progressed bool
+		stream, progressed = a.drainPhone(ctx, stream)
 		cancelPump()
 		<-pumpDone
+		if progressed || !a.core.Router().InboundAgeRefused() {
+			rb.reset()
+		}
 		if stream != nil {
 			stream.Close()
 		}
@@ -950,13 +978,17 @@ func (a *App) dialPhoneStream(ctx context.Context) (*phoneStream, error) {
 }
 
 // drainPhone is the sole Subscription.Recv owner. A refresh cancels only its current
-// receive context, then the next loop iteration performs the serialized PROBE/DISCARD.
-func (a *App) drainPhone(ctx context.Context, stream *phoneStream) *phoneStream {
+// receive context, then the next loop iteration performs the serialized PROBE/DISCARD. The
+// second result is progress that makes a later reconnect a new failure streak.
+func (a *App) drainPhone(ctx context.Context, stream *phoneStream) (*phoneStream, bool) {
+	progressed := false
 	for ctx.Err() == nil {
+		prior := stream
 		if next, handled := a.performMailboxDiscard(stream); handled {
 			stream = next
+			progressed = progressed || (prior != nil && stream != prior)
 			if stream == nil {
-				return nil
+				return nil, progressed
 			}
 			continue
 		}
@@ -982,14 +1014,15 @@ func (a *App) drainPhone(ctx context.Context, stream *phoneStream) *phoneStream 
 			if pendingRecovery {
 				continue
 			}
-			return stream
+			return stream, progressed
 		}
 		receipt, err := a.acceptPhone(ctx, stream, delivery.Ciphertext, delivery.Cursor)
 		if blocksMailboxPage(receipt, err) {
-			return stream
+			return stream, progressed
 		}
+		progressed = progressed || !a.core.Router().InboundAgeRefused()
 	}
-	return stream
+	return stream, progressed
 }
 
 func diagnosePhoneDeliveries(ctx context.Context, deliveries []relayv2.Delivery, accept mailboxAccept) (uint64, error) {

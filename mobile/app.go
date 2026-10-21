@@ -236,6 +236,7 @@ type session struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
+	wake   chan struct{}
 }
 
 // NewApp resumes the phone from its state directory (PB-STATE-1/-2: every durable
@@ -373,14 +374,14 @@ func (a *App) Start() (err error) {
 
 func (a *App) startSessionLocked(pairingGrace bool) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &session{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	s := &session{ctx: ctx, cancel: cancel, done: make(chan struct{}), wake: make(chan struct{}, 1)}
 	a.sess = s
 	if pairingGrace {
 		a.pairingGraceUntil = time.Now().Add(pairingRevokeGrace)
 	}
 	go func() {
 		defer close(s.done)
-		a.run(ctx)
+		a.run(ctx, s.wake)
 	}()
 }
 

@@ -54,8 +54,9 @@ func TestPassiveRosterSyncClaimIsSingleFlightAtFacadeBoundary(t *testing.T) {
 func TestMailboxDiscardRequestIsCanceledWithItsStartStopSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	wake := make(chan struct{}, 1)
 	a := &App{
-		sess:   &session{ctx: ctx, cancel: cancel, done: make(chan struct{})},
+		sess:   &session{ctx: ctx, cancel: cancel, done: make(chan struct{}), wake: wake},
 		stream: &phoneStream{},
 	}
 	result := make(chan error, 1)
@@ -76,6 +77,11 @@ func TestMailboxDiscardRequestIsCanceledWithItsStartStopSession(t *testing.T) {
 			t.Fatal("mailbox discard request was not installed")
 		}
 		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-wake:
+	default:
+		t.Fatal("recovery queued during stream teardown without waking the reconnect loop")
 	}
 
 	// Stop calls this generation's cancel before joining its drain. The request must leave
