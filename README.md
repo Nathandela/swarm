@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/Nathandela/swarm/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Nathandela/swarm?color=8eb4e6"></a>
-  <a href="https://go.dev/"><img alt="Go 1.25 or newer" src="https://img.shields.io/badge/Go-1.25+-6fc3bc?logo=go&amp;logoColor=white"></a>
+  <a href="https://go.dev/"><img alt="Go 1.26 or newer" src="https://img.shields.io/badge/Go-1.26+-6fc3bc?logo=go&amp;logoColor=white"></a>
   <img alt="Platforms: macOS and Linux" src="https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-66718a">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-8eb4e6"></a>
 </p>
@@ -184,7 +184,7 @@ Running sessions survive and reconnect by design. See [docs/install.md](docs/ins
 
 ## Project status
 
-Public and released—latest [`v0.13.8`](https://github.com/Nathandela/swarm/releases/tag/v0.13.8). Building requires Go 1.25 or newer.
+Public and released; see the [releases page](https://github.com/Nathandela/swarm/releases). Building requires Go 1.26 or newer.
 
 The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, production CLI adapters, inter-session handoff, and Android remote-control foundation are implemented and covered by verification evidence under [`docs/verification/`](docs/verification/).
 

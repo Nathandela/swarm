@@ -41,6 +41,7 @@
 /swarm-fake-agent
 /swarm-publish
 /swarm-pushgw
+/e2e2session
 
 # Android (S13)
 android/.gradle/
