@@ -47,6 +47,14 @@ evicts unexpired guards or their exact outcomes. Existing retries keep their
 reserved slots. TTL expiry remains longer than the signed-command validity
 horizon, and repeated transitions compact the existing log.
 
+The audit-only `remote-activity.log` retains at most 1 MiB. On overflow, the
+daemon atomically retains up to 512 KiB of recent complete records plus the new
+record; an individual record larger than 1 MiB is omitted. This best-effort
+owner-only trail sacrifices older forensic history, independently of durable
+operation receipts, replay guards and pending delivery custody. The policy was
+approved in the 2026-10-21 cleanup follow-up; it applies when the updated daemon
+next records activity, without a separate cleanup of live installations.
+
 This supersedes the full raw-transcript/final-screen persistence requirements in
 ADR-003 and Epic 3, and the durable generic interaction-history retention/read
 assumptions in ADR-007 remote access, ADR-009 structured chat, ADR-013 and ADR-014,

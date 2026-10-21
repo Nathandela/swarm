@@ -9,6 +9,7 @@ package skeleton
 // policy surfaces rather than a re-implementation.
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"syscall"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/daemon"
@@ -23,9 +25,12 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
-// remoteActivityFile is the ADR-007 D10 activity log: an owner-readable append-only
-// record, under the state dir, of every remote-originated mutation and refusal.
-const remoteActivityFile = "remote-activity.log"
+// The audit trail is bounded independently of durable operation/replay custody.
+const (
+	remoteActivityFile   = "remote-activity.log"
+	remoteActivityLimit  = 1 << 20
+	remoteActivityRetain = remoteActivityLimit / 2
+)
 
 // LaunchPresetList makes coreAPI a protocol.LaunchPresetSource: EXACTLY the
 // machine-authored presets, as wire views, plus a content-bound policy revision. An
@@ -139,18 +144,68 @@ func (a *coreAPI) RecordRemoteActivity(rec schema.ActivityRecord) {
 	if err != nil {
 		return
 	}
+	line = append(line, '\n')
+	if len(line) > remoteActivityLimit {
+		return
+	}
+	a.activityMu.Lock()
+	defer a.activityMu.Unlock()
 	path := filepath.Join(a.stateDir, remoteActivityFile)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	// O_CREATE's mode applies only on create; harden a pre-existing file too (round-2
-	// fix-pack, MEDIUM 1) -- daemon.SaveLaunchPresets's own stated rule, for the same
-	// reason: a group/world-readable activity log leaks device ids and operation ids
-	// to every local user, which is the ADR-004 defect class.
-	_ = os.Chmod(path, 0o600)
-	_, _ = f.Write(append(line, '\n'))
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Nlink != 1 || st.Uid != uint32(os.Getuid()) || f.Chmod(0o600) != nil {
+		return
+	}
+	complete := info.Size() == 0
+	if !complete {
+		var last [1]byte
+		_, err = f.ReadAt(last[:], info.Size()-1)
+		complete = err == nil && last[0] == '\n'
+	}
+	if complete && info.Size() <= int64(remoteActivityLimit-len(line)) {
+		_, _ = f.Write(line)
+		return
+	}
+	// Leave room for many ordinary appends before another compaction.
+	keep := min(int64(remoteActivityRetain), int64(remoteActivityLimit-len(line)), info.Size())
+	tail := make([]byte, keep)
+	offset := info.Size() - keep
+	if _, err := f.ReadAt(tail, offset); err != nil {
+		return
+	}
+	if offset > 0 {
+		if first := bytes.IndexByte(tail, '\n'); first >= 0 {
+			tail = tail[first+1:]
+		} else {
+			tail = nil
+		}
+	}
+	// An interrupted append is not a complete audit record.
+	tail = tail[:bytes.LastIndexByte(tail, '\n')+1]
+	tmp, err := os.CreateTemp(a.stateDir, ".remote-activity-*")
+	if err != nil {
+		return
+	}
+	defer func() { _ = tmp.Close(); _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(append(tail, line...)); err != nil {
+		return
+	}
+	if tmp.Sync() != nil || tmp.Close() != nil {
+		return
+	}
+	current, err := os.Lstat(path)
+	if err != nil || !os.SameFile(info, current) {
+		return
+	}
+	_ = os.Rename(tmp.Name(), path)
 }
 
 // DeviceCapability makes coreAPI a protocol.DeviceCapabilitySource (round-2

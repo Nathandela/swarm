@@ -152,7 +152,8 @@ type coreAPI struct {
 
 	// stateDir is the daemon's persistent home; the durable remote-control kill-switch
 	// state file (remote-state.json) is mirrored here (R-KS.1). Set at assembly.
-	stateDir string
+	stateDir   string
+	activityMu sync.Mutex
 	// contextGuardSettings is the narrow owner-settings backend. It remains nil in
 	// bare coreAPI tests, where the optional protocol seam honestly answers unavailable.
 	contextGuardSettings *contextGuardSettingsStore
