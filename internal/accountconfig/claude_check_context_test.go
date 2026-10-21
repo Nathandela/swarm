@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -29,11 +31,18 @@ func TestRestrictedClaudeCheckDropsInteractiveConfiguration(t *testing.T) {
 		t.Fatal("interactive auth/configuration copied")
 	}
 	env := []string{"HOME=" + f.home, "CLAUDE_CONFIG_DIR=" + config, "CLAUDE_SECURESTORAGE_CONFIG_DIR=" + credential}
+	wrongEnv := append([]string(nil), env...)
+	wrongEnv[2] = "CLAUDE_SECURESTORAGE_CONFIG_DIR=" + config
+	if err := ValidateRestrictedClaudeCheck(f.root, credential, config, cwd, wrongEnv); err == nil {
+		t.Fatal("wrong securestore selected")
+	}
+	if runtime.GOOS != "linux" {
+		if err := ValidateRestrictedClaudeCheck(f.root, credential, config, cwd, env); err == nil || !strings.Contains(err.Error(), "availability-managed-platform-not-characterized") {
+			t.Fatalf("uncharacterized platform accepted availability check: %v", err)
+		}
+		return
+	}
 	if err := ValidateRestrictedClaudeCheck(f.root, credential, config, cwd, env); err != nil {
 		t.Fatal(err)
-	}
-	env[2] = "CLAUDE_SECURESTORAGE_CONFIG_DIR=" + config
-	if err := ValidateRestrictedClaudeCheck(f.root, credential, config, cwd, env); err == nil {
-		t.Fatal("wrong securestore selected")
 	}
 }

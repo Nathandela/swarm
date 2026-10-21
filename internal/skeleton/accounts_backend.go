@@ -66,13 +66,14 @@ type accountManager struct {
 	nativeMu              sync.Mutex
 	nativeSelected        *persist.CLIIdentity
 	nativeFailed          bool
-	nativePublish         func(*os.Root, string, string) error // publication fault injection only
-	nativeSync            func(*os.Root) error                 // post-publication fault injection only
-	list                  func() []persist.Meta
-	refresh               func(string) error
-	quota                 *accountQuotaFetcher
-	retry                 func(string) error
-	move                  func(string, accounts.Binding) error
+	// Linux-only retention fault injection; the retention implementation is build-tagged.
+	nativePublish func(*os.Root, string, string) error //nolint:unused // consumed by the Linux retention path
+	nativeSync    func(*os.Root) error                 //nolint:unused // consumed by the Linux retention path
+	list          func() []persist.Meta
+	refresh       func(string) error
+	quota         *accountQuotaFetcher
+	retry         func(string) error
+	move          func(string, accounts.Binding) error
 }
 
 func openAccountManager(stateRoot, executable string, list func() []persist.Meta) *accountManager {

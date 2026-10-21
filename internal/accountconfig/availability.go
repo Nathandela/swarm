@@ -24,7 +24,14 @@ func ValidateAvailabilityCheck(stateRoot, profile, cwd string, env []string) err
 	if runtime.GOOS != "linux" {
 		return Conflict("availability-managed-platform-not-characterized")
 	}
-	return validateAvailabilityCheck(stateRoot, profile, cwd, env, "/etc/claude-code")
+	return validateAvailabilityCheck(stateRoot, profile, cwd, env, filepath.Join(systemEtcRoot(), "claude-code"))
+}
+
+func systemEtcRoot() string {
+	if runtime.GOOS == "darwin" {
+		return "/private/etc"
+	}
+	return "/etc"
 }
 
 func validateAvailabilityCheck(stateRoot, profile, cwd string, env []string, policyDirectory string) error {

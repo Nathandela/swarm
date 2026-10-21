@@ -60,7 +60,7 @@ func PrepareClaudeContext(profile, cwd string, env []string, withLease func(stri
 	if err := collectClaudeProfileSources(&inventory, env); err != nil {
 		return c, err
 	}
-	if err := collectClaudePolicies(&inventory, "/etc/claude-code", "managed-policy-not-characterized"); err != nil {
+	if err := collectClaudePolicies(&inventory, filepath.Join(systemEtcRoot(), "claude-code"), "managed-policy-not-characterized"); err != nil {
 		return c, err
 	}
 	if err := collectClaudeProfilePolicies(&inventory, alias.Canonical, "native-managed-policy-not-characterized"); err != nil {
@@ -560,7 +560,7 @@ func validClaudeContext(c ClaudeContext) bool {
 		return false
 	}
 	policyPaths := []string{
-		"/etc/claude-code/managed-settings.json", "/etc/claude-code/managed-settings.d", "/etc/claude-code/managed-mcp.json",
+		filepath.Join(systemEtcRoot(), "claude-code", "managed-settings.json"), filepath.Join(systemEtcRoot(), "claude-code", "managed-settings.d"), filepath.Join(systemEtcRoot(), "claude-code", "managed-mcp.json"),
 		filepath.Join(c.SourceProfile.Canonical, "managed-settings.json"), filepath.Join(c.SourceProfile.Canonical, "managed-settings.d"), filepath.Join(c.SourceProfile.Canonical, "managed-mcp.json"),
 		filepath.Join(c.SourceProfile.Canonical, "remote-settings.json"), filepath.Join(c.SourceProfile.Canonical, "remote-settings-consent.json"), filepath.Join(c.SourceProfile.Canonical, "remote-settings-helper-consent"),
 	}

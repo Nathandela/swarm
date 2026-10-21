@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -236,6 +237,18 @@ func TestCredentialErasureRetainsHistoryAndGeneration(t *testing.T) {
 	r, err := s.SetLifecycle(r.Revision, a.ID, LifecycleRetiring)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" {
+		if _, err := s.BeginCredentialErasure(r.Revision, a.ID, 1, "0.160.0"); !errors.Is(err, ErrIneligible) {
+			t.Fatalf("unsupported native inventory did not refuse erasure: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(c.ProfilePath, "auth.json")); err != nil {
+			t.Fatalf("unsupported native inventory changed credentials: %v", err)
+		}
+		if raw, err := os.ReadFile(history); err != nil || string(raw) != "saved conversation" {
+			t.Fatalf("unsupported native inventory changed history: %v", err)
+		}
+		return
 	}
 	r, err = s.BeginCredentialErasure(r.Revision, a.ID, 1, "0.160.0")
 	if err != nil {

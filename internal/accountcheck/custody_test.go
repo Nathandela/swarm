@@ -2,6 +2,7 @@ package accountcheck
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,7 +35,25 @@ func TestWritersStoppedForBindingRefusesUnknownRetainedCustody(t *testing.T) {
 	defer func() { _ = files.Close() }()
 	binding := cfg.Binding
 	binding.ConfigurationGeneration++
-	ref := Ref{SchemaVersion: SchemaVersion, Generation: generation, Worker: processcontain.Identity{PID: 1<<30 + 3, StartTime: 1}, Binding: binding, Mode: ModeAuthStatus}
+	child := exec.Command("/bin/sleep", "30")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	start, err := procstart.StartTime(child.Process.Pid)
+	if err != nil {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+		t.Fatal(err)
+	}
+	if err := child.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Wait(); err != nil {
+		if _, ok := err.(*exec.ExitError); !ok {
+			t.Fatal(err)
+		}
+	}
+	ref := Ref{SchemaVersion: SchemaVersion, Generation: generation, Worker: processcontain.Identity{PID: child.Process.Pid, StartTime: start}, Binding: binding, Mode: ModeAuthStatus}
 	if err := writeJSON(files, WorkerFile, ref); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +75,7 @@ func TestWritersStoppedForBindingRefusesUnknownRetainedCustody(t *testing.T) {
 	if !WritersStoppedForBinding(cfg.StateRoot, cfg.Binding) {
 		t.Fatal("exact contained dead check refused")
 	}
-	start, err := procstart.StartTime(os.Getpid())
+	start, err = procstart.StartTime(os.Getpid())
 	if err != nil {
 		t.Fatal(err)
 	}

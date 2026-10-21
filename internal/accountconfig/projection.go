@@ -519,17 +519,21 @@ func collectPoliciesAndProject(m *manifest, provider, cwd, profile string) error
 	// projected. Until effective managed precedence is characterized, a present
 	// policy is a refusal, including unreadable/malformed documents.
 	if provider == "claude" {
-		if err := collectClaudePolicies(m, "/etc/claude-code", "managed-policy-not-characterized"); err != nil {
+		if err := collectClaudePolicies(m, filepath.Join(systemEtcRoot(), "claude-code"), "managed-policy-not-characterized"); err != nil {
 			return err
 		}
 	} else {
-		for _, path := range []string{"/etc/codex/config.toml", "/etc/codex/requirements.toml", "/etc/codex/managed_config.toml"} {
+		for _, path := range codexSystemPolicyPaths() {
 			if err := absentSource(m, path, "managed-policy-not-characterized"); err != nil {
 				return err
 			}
 		}
 	}
 	return collectProjectSources(m, provider, cwd, profile)
+}
+
+func codexSystemPolicyPaths() []string {
+	return []string{filepath.Join(systemEtcRoot(), "codex", "config.toml"), filepath.Join(systemEtcRoot(), "codex", "requirements.toml"), filepath.Join(systemEtcRoot(), "codex", "managed_config.toml")}
 }
 
 func collectClaudePolicies(m *manifest, directory, reason string) error {

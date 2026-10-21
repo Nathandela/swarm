@@ -67,6 +67,11 @@ func Running(pid int) bool {
 	return err == nil && p.state != "Z" && p.state != "X"
 }
 
+func processAlive(pid int, start int64) bool {
+	p, err := readProc(pid)
+	return err == nil && p.identity.StartTime == start && p.state != "Z" && p.state != "X"
+}
+
 func Descendants(pid int) ([]Identity, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {

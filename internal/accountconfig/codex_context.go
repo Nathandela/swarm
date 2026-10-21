@@ -375,7 +375,7 @@ func PrepareCodexContext(profile, cwd string, env []string, lease func(string, f
 }
 
 func codexContextPolicyPaths(profile string) []string {
-	return []string{"/etc/codex/config.toml", "/etc/codex/requirements.toml", "/etc/codex/managed_config.toml", filepath.Join(profile, "requirements.toml"), filepath.Join(profile, "managed_config.toml")}
+	return append(codexSystemPolicyPaths(), filepath.Join(profile, "requirements.toml"), filepath.Join(profile, "managed_config.toml"))
 }
 func validateCodexCandidatePolicies(profile string) error {
 	m := manifest{}

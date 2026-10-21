@@ -313,7 +313,7 @@ func TestClaudeProjection_ManagedDropinDirectoryIsInventoried(t *testing.T) {
 	}
 	recorded := false
 	for _, source := range m.Sources {
-		if source.Path == "/etc/claude-code/managed-settings.d" && source.SHA256 == "absent" {
+		if source.Path == filepath.Join(systemEtcRoot(), "claude-code", "managed-settings.d") && source.SHA256 == "absent" {
 			recorded = true
 		}
 	}
