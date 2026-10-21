@@ -1,0 +1,175 @@
+{
+  "initial_commands": [
+    {
+      "gate": "build",
+      "exit": 0,
+      "seconds": 5.8
+    },
+    {
+      "gate": "vet",
+      "exit": 0,
+      "seconds": 8.4
+    },
+    {
+      "gate": "test",
+      "exit": 1,
+      "seconds": 815.6
+    },
+    {
+      "gate": "race",
+      "exit": 1,
+      "seconds": 972.9
+    }
+  ],
+  "initial_normal": {
+    "package_results": {
+      "skip": 7,
+      "pass": 74,
+      "fail": 5
+    },
+    "unfinished_packages": [],
+    "failed_top_level_tests": [
+      {
+        "package": "github.com/Nathandela/swarm/internal/daemon",
+        "test": "TestLaunchManagedClaudeInjectsDiagnosticsAndFallbackAfterPolicyFilter"
+      },
+      {
+        "package": "github.com/Nathandela/swarm/internal/upgrade",
+        "test": "TestAccountInventoryGuardFencesActualErasureMarkers"
+      },
+      {
+        "package": "github.com/Nathandela/swarm/internal/upgrade",
+        "test": "TestAccountProjectBoundaryGuardRetainsOldErasedSourceContract"
+      },
+      {
+        "package": "github.com/Nathandela/swarm/internal/skeleton",
+        "test": "TestAccountRetirementRescansPostFenceReservationAndRetries"
+      },
+      {
+        "package": "github.com/Nathandela/swarm/internal/skeleton",
+        "test": "TestAccountRetirementEndedHistoryRemainsAndVersionUnknownHolds"
+      },
+      {
+        "package": "github.com/Nathandela/swarm/internal/skeleton",
+        "test": "TestAccountOwnerMoveFromErasedSourceUsesCanonicalFinalizer"
+      },
+      {
+        "package": "github.com/Nathandela/swarm/internal/skeleton",
+        "test": "TestAccountRetirementConsumesTerminalEnrollmentAfterErasure"
+      },
+      {
+        "package": "github.com/Nathandela/swarm/internal/verify",
+        "test": "TestB94_EveryExportedSymbolIsReachableFromProduction"
+      },
+      {
+        "package": "github.com/Nathandela/swarm/mobile",
+        "test": "TestPBBIND2_NoExportedSymbolIsBindIllegal"
+      }
+    ],
+    "data_race_reports": 0,
+    "raw_log": "/private/tmp/swarm-next-test.log"
+  },
+  "initial_race": {
+    "package_results": {
+      "skip": 7,
+      "pass": 77,
+      "fail": 2
+    },
+    "unfinished_packages": [],
+    "failed_top_level_tests": [
+      {
+        "package": "github.com/Nathandela/swarm/internal/daemon",
+        "test": "TestLaunchManagedClaudeInjectsDiagnosticsAndFallbackAfterPolicyFilter"
+      },
+      {
+        "package": "github.com/Nathandela/swarm/mobile",
+        "test": "TestPBBIND2_NoExportedSymbolIsBindIllegal"
+      }
+    ],
+    "data_race_reports": 0,
+    "raw_log": "/private/tmp/swarm-next-race.log"
+  },
+  "fresh_normal": {
+    "package_results": {
+      "pass": 78,
+      "skip": 7,
+      "fail": 1
+    },
+    "unfinished_packages": [],
+    "failed_top_level_tests": [
+      {
+        "package": "github.com/Nathandela/swarm/internal/daemon",
+        "test": "TestR7BackendLaunch_ADeclaredBackendReachesTheShimLaunchConfigByWireName"
+      }
+    ],
+    "data_race_reports": 0,
+    "raw_log": "/private/tmp/swarm-next-normal-final.log"
+  },
+  "fresh_normal_command": {
+    "gate": "full-normal-final",
+    "exit": 1,
+    "seconds": 995.5
+  },
+  "final_mobile_build_vet": [
+    {
+      "gate": "mobile-normal",
+      "exit": 0,
+      "seconds": 42.7
+    },
+    {
+      "gate": "mobile-race",
+      "exit": 0,
+      "seconds": 65.8
+    },
+    {
+      "gate": "build-final",
+      "exit": 0,
+      "seconds": 7.8
+    },
+    {
+      "gate": "vet-final",
+      "exit": 0,
+      "seconds": 8.6
+    }
+  ],
+  "final_daemon_race": {
+    "gate": "daemon-race-final",
+    "exit": 0,
+    "seconds": 174.8
+  },
+  "final_daemon_normal": {
+    "gate": "daemon-normal-final",
+    "exit": 0,
+    "seconds": 96.0
+  },
+  "final_backend_fixture_repetitions": [
+    {
+      "gate": "fixture-normal",
+      "exit": 0,
+      "seconds": 26.4
+    },
+    {
+      "gate": "fixture-race",
+      "exit": 0,
+      "seconds": 36.5
+    }
+  ],
+  "linux_account_retention_race": {
+    "exit": 0,
+    "raw_log": "/private/tmp/swarm-next-linux-tests.log"
+  },
+  "linux_moved_cases_and_reachability_race": {
+    "exit": 0,
+    "raw_log": "/private/tmp/swarm-next-linux-moved-tests.log"
+  },
+  "relay_full_suite": {
+    "exit": 0,
+    "budget_seconds": 600,
+    "raw_log": "/private/tmp/swarm-next-relay-full-suite.txt"
+  },
+  "lint": {
+    "darwin_issues": 0,
+    "linux_issues": 0
+  },
+  "resolution": "Full sweeps retain their original nonzero exits. The diagnostic race failures were the Linux-only daemon fixture and Intel gobind; final full daemon and mobile race reruns passed. The fresh normal sweep exposed the unused PID marker cleanup race; final full daemon normal and 90 normal/90 race backend cases passed after correction. No failures are silently reclassified in the sweep counts."
+}

@@ -1,0 +1,22 @@
+{
+  "aar_sha256": "8a9167ad8722c6993b6c83cc40a64dbadf2380ac08acfc4ef349485200794d21",
+  "aar_mtime": 1792611190.451084,
+  "variants": {
+    "testDebugUnitTest": {
+      "suites": 217,
+      "tests": 1728,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "all_results_newer_than_aar": true
+    },
+    "testReleaseUnitTest": {
+      "suites": 217,
+      "tests": 1728,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "all_results_newer_than_aar": true
+    }
+  }
+}
