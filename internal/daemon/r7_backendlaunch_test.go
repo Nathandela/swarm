@@ -141,8 +141,9 @@ func TestR7BackendLaunch_TheSocketIsASiblingOfHookSock(t *testing.T) {
 // fence. The daemon PERSISTS the intent, because shims outlive daemons and a restarted daemon
 // recovers everything about a session from this 0600 file (SessionHookChannel's own rule).
 func TestR7BackendLaunch_ADeclaredBackendReachesTheShimLaunchConfigByWireName(t *testing.T) {
+	// These tests do not inspect the PID; avoid a late marker write during temp cleanup.
+	spec := announceSpec(t, os.DevNull)
 	d := openDaemon(t, daemonConfig(t))
-	spec := announceSpec(t, filepath.Join(t.TempDir(), "agent.pid"))
 	spec.AgentType = "codex"
 
 	m, err := d.Launch(spec)
@@ -184,8 +185,8 @@ func TestR7BackendLaunch_ADeclaredBackendReachesTheShimLaunchConfigByWireName(t 
 // SessionHookChannel and exists for the same reason: shims outlive daemons (ADR-001).
 func TestR7BackendLaunch_SessionBackendRecoversTheChannelAcrossADaemonRestart(t *testing.T) {
 	cfg := daemonConfig(t)
+	spec := announceSpec(t, os.DevNull)
 	d := openDaemon(t, cfg)
-	spec := announceSpec(t, filepath.Join(t.TempDir(), "agent.pid"))
 	spec.AgentType = "codex"
 	m, err := d.Launch(spec)
 	if err != nil {
@@ -275,8 +276,8 @@ func TestR7BackendLiveness_APidWhoseStartTimeDisagreesIsNotLive(t *testing.T) {
 // no agent is attached to it.
 func TestR7BackendReaper_AnOrphanedBackendIsKILLEDAndItsFileRemoved(t *testing.T) {
 	cfg := daemonConfig(t)
+	spec := announceSpec(t, os.DevNull)
 	d := openDaemon(t, cfg)
-	spec := announceSpec(t, filepath.Join(t.TempDir(), "agent.pid"))
 	m, err := d.Launch(spec)
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -315,8 +316,8 @@ func TestR7BackendReaper_AnOrphanedBackendIsKILLEDAndItsFileRemoved(t *testing.T
 // spare it.
 func TestR7BackendReaper_NeverDials(t *testing.T) {
 	cfg := daemonConfig(t)
+	spec := announceSpec(t, os.DevNull)
 	d := openDaemon(t, cfg)
-	spec := announceSpec(t, filepath.Join(t.TempDir(), "agent.pid"))
 	m, err := d.Launch(spec)
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -345,8 +346,8 @@ func TestR7BackendReaper_NeverDials(t *testing.T) {
 // backend it minted at launch, and must NOT reap it.
 func TestR7BackendLifecycle_DaemonRestartUnderALiveShimAdoptsTheBackendRatherThanOrphaningIt(t *testing.T) {
 	cfg := daemonConfig(t)
+	spec := announceSpec(t, os.DevNull)
 	d := openDaemon(t, cfg)
-	spec := announceSpec(t, filepath.Join(t.TempDir(), "agent.pid"))
 	spec.AgentType = "codex"
 	m, err := d.Launch(spec)
 	if err != nil {
@@ -390,8 +391,8 @@ func TestR7BackendLifecycle_DaemonRestartUnderALiveShimAdoptsTheBackendRatherTha
 // session's own launch config is the authority and it is on disk.
 func TestR7BackendLifecycle_ACodexUpgradeUnderALiveSessionChangesNothing(t *testing.T) {
 	cfg := daemonConfig(t)
+	spec := announceSpec(t, os.DevNull)
 	d := openDaemon(t, cfg)
-	spec := announceSpec(t, filepath.Join(t.TempDir(), "agent.pid"))
 	spec.AgentType = "codex"
 	m, err := d.Launch(spec)
 	if err != nil {
