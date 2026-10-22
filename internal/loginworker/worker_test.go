@@ -223,17 +223,25 @@ func fakeCodex() {
 
 func testConfig(t *testing.T, provider, mode string) Config {
 	t.Helper()
-	state, err := os.MkdirTemp("", "enr-")
+	state, err := os.MkdirTemp("/tmp", "enr-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(state) })
+	state, err = filepath.EvalSymlinks(state)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := logins.Open(state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = store.Close()
 	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err = filepath.EvalSymlinks(executable)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +400,11 @@ func TestDetachedCodexNativeSocketAlias(t *testing.T) {
 }
 
 func TestCodexFixtureSocketPrivateAtBind(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("/tmp", "native-sock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	if err := os.WriteFile(filepath.Join(dir, "fixture-mode"), []byte("socket-bind-barrier"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -675,7 +687,11 @@ func TestUnsafeConfigStartsNoWorker(t *testing.T) {
 }
 
 func TestValidateNativePath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "native")
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "native")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -708,7 +724,7 @@ func TestValidateNativePath(t *testing.T) {
 
 func TestGroupWritableNativeStartsNoWorker(t *testing.T) {
 	cfg := testConfig(t, "codex", "pending")
-	cfg.NativePath = filepath.Join(t.TempDir(), "codex.js")
+	cfg.NativePath = filepath.Join(cfg.StateRoot, "codex.js")
 	if err := os.WriteFile(cfg.NativePath, []byte("#!/bin/sh\nexit 0\n"), 0o775); err != nil {
 		t.Fatal(err)
 	}

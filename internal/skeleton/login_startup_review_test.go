@@ -2,14 +2,15 @@ package skeleton
 
 import (
 	"errors"
-	"github.com/Nathandela/swarm/internal/daemon"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Nathandela/swarm/internal/daemon"
 )
 
 func TestFinalSolLoginStoreFailureReleasesCore(t *testing.T) {
-	state, err := os.MkdirTemp("/private/tmp", "slf-")
+	state, err := os.MkdirTemp("/tmp", "slf-")
 	if err != nil {
 		t.Fatal(err)
 	}

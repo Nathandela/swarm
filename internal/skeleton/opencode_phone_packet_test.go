@@ -290,15 +290,21 @@ func TestOpenCodePhonePacketComposerEchoSettlesDurableBubble(t *testing.T) {
 			props, _ := json.Marshal(map[string]json.RawMessage{"info": native.Info})
 			f.nativeEvents <- opencodebridge.Event{Type: "message.updated", Properties: props}
 			until := time.Now().Add(5 * time.Second)
-			for len(phone.PendingPublications()) != 0 && time.Now().Before(until) {
+			// Settlement and its echo commit together; the live item cache mirrors them afterward.
+			settled := phone.State()
+			for len(settled.PendingPublications) != 0 && time.Now().Before(until) {
 				time.Sleep(10 * time.Millisecond)
+				settled = phone.State()
 			}
-			if len(phone.PendingPublications()) != 0 {
+			if len(settled.PendingPublications) != 0 {
 				t.Fatalf("native user journal did not settle phone bubble; sink error=%v", sink.Err())
 			}
 			wanted := sha256.Sum256([]byte(text))
-			found := false
-			for _, item := range phone.Router().Items().Session(body.Session) {
+			found := 0
+			for _, item := range settled.Items {
+				if item.SessionID != body.Session {
+					continue
+				}
 				var wire struct {
 					Role, Source, Provenance string
 					OperationID              string `json:"operation_id"`
@@ -309,11 +315,11 @@ func TestOpenCodePhonePacketComposerEchoSettlesDurableBubble(t *testing.T) {
 					if wire.Role != "user" || wire.Source != "phone" || wire.Provenance != "live" || wire.Hash != hex.EncodeToString(wanted[:]) || wire.Truncated != (len(text) == 4096) {
 						t.Fatalf("native phone echo lost exact source/body authority: %+v", wire)
 					}
-					found = true
+					found++
 				}
 			}
-			if !found || f.calls.Load() != 1 {
-				t.Fatal("native phone settlement had no exact native user row or wrote twice")
+			if found != 1 || f.calls.Load() != 1 {
+				t.Fatalf("native phone settlement: exact rows=%d, native writes=%d; want one each", found, f.calls.Load())
 			}
 		})
 	}
