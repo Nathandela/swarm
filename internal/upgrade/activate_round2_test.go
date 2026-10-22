@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Nathandela/swarm/internal/shimwire"
 )
 
 func noDaemon() func() bool { return func() bool { return false } }
@@ -23,7 +25,7 @@ func noDaemon() func() bool { return func() bool { return false } }
 func TestActivateLeavesThePendingConvergeMarker(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 1, Schema: 1})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version, Schema: 1})
 	captureExec(t)
 	if st, _ := Activate(ActivateOptions{StateDir: state, BinPath: bin, DaemonAlive: noDaemon()}); st.Outcome != "activated" {
 		t.Fatalf("outcome %q", st.Outcome)
@@ -58,7 +60,7 @@ func TestARetryPreservesTheOriginalRollbackSlots(t *testing.T) {
 	if err := os.WriteFile(pendingPath(state), []byte("v9.9.9\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 1, Schema: 1})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version, Schema: 1})
 	captureExec(t)
 	if st, _ := Activate(ActivateOptions{StateDir: state, BinPath: bin, DaemonAlive: noDaemon()}); st.Outcome != "activated" {
 		t.Fatalf("outcome %q", st.Outcome)
@@ -73,7 +75,7 @@ func TestARetryPreservesTheOriginalRollbackSlots(t *testing.T) {
 func TestActivateNoopsWhenTheStagedBuildIsAlreadyInstalled(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 1, Schema: 1})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version, Schema: 1})
 	calls := captureExec(t)
 	st, err := Activate(ActivateOptions{StateDir: state, BinPath: bin, Installed: "9.9.9", DaemonAlive: noDaemon()})
 	if err != nil {
@@ -101,7 +103,7 @@ func TestAnUnreadableSessionMetaDefersActivation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 2, Schema: 1})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version + 1, Schema: 1})
 	captureExec(t)
 	st, err := Activate(ActivateOptions{StateDir: state, BinPath: bin, DaemonAlive: noDaemon()})
 	if err != nil {
@@ -117,7 +119,7 @@ func TestAnUnreadableSessionMetaDefersActivation(t *testing.T) {
 func TestAWireBumpRespectsDaemonLivenessNotJustSessions(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 2, Schema: 1})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version + 1, Schema: 1})
 	captureExec(t)
 
 	alive := func() bool { return true }
@@ -142,7 +144,7 @@ func TestAWireBumpRespectsDaemonLivenessNotJustSessions(t *testing.T) {
 func TestANilDaemonProbeAssumesAlive(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 2, Schema: 1})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version + 1, Schema: 1})
 	captureExec(t)
 	st, _ := Activate(ActivateOptions{StateDir: state, BinPath: bin})
 	if st.Outcome != "deferred-wirebump" {
@@ -157,7 +159,7 @@ func TestAMissingStagedRemoteRefusesTheMixedPair(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "swarm-remote"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 1, Schema: 1}) // stages swarm only
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version, Schema: 1}) // stages swarm only
 	captureExec(t)
 	st, err := Activate(ActivateOptions{StateDir: state, BinPath: bin, DaemonAlive: noDaemon()})
 	if err != nil {
@@ -180,7 +182,7 @@ func TestActivateRefusesAcrossASchemaBump(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(`{"schema_version":2,"id":"newer"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stageBuild(t, state, "v0.0.9", &CompatManifest{Shimwire: 1, Schema: 1})
+	stageBuild(t, state, "v0.0.9", &CompatManifest{Shimwire: shimwire.Version, Schema: 1})
 	captureExec(t)
 	st, err := Activate(ActivateOptions{StateDir: state, BinPath: bin, DaemonAlive: noDaemon()})
 	if err != nil {
@@ -196,7 +198,7 @@ func TestActivateRefusesAcrossASchemaBump(t *testing.T) {
 func TestASecondRollbackRefusesAndTheHoldSurvives(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 1, Schema: 1})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version, Schema: 1})
 	captureExec(t)
 	if st, _ := Activate(ActivateOptions{StateDir: state, BinPath: bin, DaemonAlive: noDaemon()}); st.Outcome != "activated" {
 		t.Fatalf("setup activate: %q", st.Outcome)
@@ -244,7 +246,7 @@ func TestRollbackRefusesSlotsWithoutACard(t *testing.T) {
 func TestSanityCheckRejectsAPrefixVersion(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
-	stageBuild(t, state, "v0.1.1", &CompatManifest{Shimwire: 1, Schema: 1})
+	stageBuild(t, state, "v0.1.1", &CompatManifest{Shimwire: shimwire.Version, Schema: 1})
 	if err := os.WriteFile(filepath.Join(StageDir(state), "swarm"), []byte("#!/bin/sh\necho swarm 0.1.10\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -279,7 +279,7 @@ Cleanup of known generated files can be automated without deleting the session i
 3. **Remaining provider coverage.** OpenCode, AGY and Hermes currently use terminal-derived identity fallback. A small shim-owned tail or authoritative provider identity path must preserve short-lived/daemon-outage cases. A fixed-size tail also needs a generation counter: the existing reader skips unchanged file sizes. [Current cache](../../internal/skeleton/serve.go#L1111)
 4. **Strict control admission.** Budget safety needs bounds on active sessions, accepted operations, unresolved approvals and custody. The existing idempotency count-cap assumption is not proved by TTL arithmetic alone; actual rate limits, expiry and restart behavior need reachability analysis before claiming a failure or a guarantee. Follow-up: `agents-tracker-aivi`.
 5. **Legacy journal migration.** The newest oversized segment can survive the startup target, and recovering dropped high-water state may read a whole old segment. Current host sizes do not demonstrate the pathological case. Follow-up: `agents-tracker-cyhm`.
-6. **Diagnostic evidence.** Managed-Claude model diagnostics support automatic failure-model recovery. Rotation must preserve current turn/request proof or explicitly lose that recovery capability. Reader refusal above 16 MiB is not a writer cap. [Consumer](../../internal/skeleton/account_claude_failure_model.go#L147)
+6. **Native evidence.** Quota/auth failure detection reads a bounded native transcript tail and correlates conversation and prompt identifiers. Read bounds do not cap native writers. [Consumer](../../internal/skeleton/logins_transcript.go)
 7. **Legacy workspace recovery.** Native threads can continue using directories after the original Swarm process exits. The exact space safely reclaimable requires per-workspace writer and preservation checks. Follow-up: `agents-tracker-3bxu`.
 8. **Test cleanup portability.** The shared sweep's process termination is Linux-specific; separate TUI test binaries still lack complete cleanup. Follow-up: `agents-tracker-uh9e`.
 9. **Quota deployment.** Filesystem type, privilege requirements, macOS provisioning, writable escape paths and provider compatibility need host-specific validation before claiming a machine-protection guarantee.
@@ -316,7 +316,7 @@ All external sources were accessed 2026-10-16. Local source findings refer to co
 ### Existing Swarm boundaries
 
 - [Native history resolution](../../internal/skeleton/resume_history.go): reuse its anchored, budgeted trust boundary; it is not a generic history importer.
-- [Native history aliases](../../internal/accountconfig/codex_history_context.go) and [Claude project aliases](../../internal/accountconfig/claude_history_context.go): distinguish shared native history from legacy copied inventories.
+- [Native context import](../../internal/loginmigration/context.go) and [Codex history dependencies](../../internal/loginmigration/codex_history.go): preserve the referenced conversations and child/base history before changing execution context.
 - [Hook spool](../../internal/shim/hookspool.go), [outbox](../../internal/remotegw/outbox.go), [idempotency store](../../internal/idempotency/store.go): custody/retirement semantics a smaller design must preserve.
 - [Test sweep](../../internal/testbin/sweep.go): per-run unique executable ownership; current process cleanup portability remains limited.
 

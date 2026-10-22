@@ -89,7 +89,7 @@
       "provider_requests": 9
     }
   },
-  "independent_review": "Independent architecture read-only review at d86cb92d: no actionable findings; no edits or broad tests. Verified version policy, identity/fingerprint checks, actual versus historical provenance and no account-pool or automatic-refresh enablement.",
+  "independent_review": "Independent architecture read-only review at d86cb92d: no actionable findings; no edits or broad tests. Verified version policy, identity/fingerprint checks, actual versus historical provenance and no automatic-refresh enablement.",
   "qualification_queue": {
     "state_at_recording": "running",
     "source_head": "d86cb92d05085826a1facca2759b0e7e6b3ae183",

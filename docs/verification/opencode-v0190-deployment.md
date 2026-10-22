@@ -96,8 +96,9 @@ The corrected [sustained queue](opencode-implementation-2026-10-18/sustained-qua
 has advanced to its 24-hour stage; 72 hours starts only after an actual 24-hour
 pass. Neither pending duration is counted as passed. Physical-phone/hosted-relay
 qualification, the full real-provider interoperability matrix and the unrelated
-whole-Darwin baseline failures remain open. Strict turn Stop, account rotation,
-automatic relogin, automatic OpenCode replacement and Swarm-driven compaction
+whole-Darwin baseline failures remain open. Strict turn Stop, provider-login
+switching for OpenCode, automatic credential changes, automatic OpenCode replacement
+and Swarm-driven compaction
 remain unavailable as described in the [operations guide](../ops/opencode-native.md).
 
 The Mac's Intel-prefix Homebrew launcher attempted its normal portable Ruby

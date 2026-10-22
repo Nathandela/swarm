@@ -1,0 +1,11 @@
+{
+  "platform": "linux/amd64",
+  "toolchain": "go1.26.10",
+  "native_decoder": "zstd 1.4.8",
+  "suite": "internal/loginmigration",
+  "exit_code": 0,
+  "compressed_history_test": "PASS",
+  "synthetic_fixtures_only": true,
+  "log_sha256": "9a3ce05fe943c3a24a543aeb63f32d7163bc5ceb83d0ec9b845893f0336e0144",
+  "test_binary_sha256": "b9d7d4dbb4c626a6038f9fb339750d3e58d591cc23ffd78b14107c8801335274"
+}

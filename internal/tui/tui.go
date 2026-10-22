@@ -78,7 +78,7 @@ const (
 	screenHandoff
 	screenOptions
 	screenAttach
-	screenAccounts
+	screenLogins
 	screenResume
 )
 
@@ -118,7 +118,6 @@ type launchResultMsg struct {
 	id         string // namespaced id of the new session on success ("" if the producer omits it)
 	agent      string // the new session's agent, for the attach chrome label
 	name       string // the new session's label (P2); carried into the auto-attach chrome hint
-	notice     string // the daemon's note on a successful launch (owner-login fallback, ADR-032 Amendment 4)
 	err        error
 }
 
@@ -181,34 +180,31 @@ func workingAnimationTick() tea.Cmd {
 // rootModel is the screen router: the only tea.Model, holding the screen
 // sub-models and the shared client/size state.
 type rootModel struct {
-	// pendingNotice is a launch notice (owner-login fallback, ADR-032 Amendment 4)
-	// bannered the next time the board is entered.
-	pendingNotice string
-	client        Client
-	connections   *clientLifetime
-	detect        DetectFunc
+	client      Client
+	connections *clientLifetime
+	detect      DetectFunc
 
 	width  int
 	height int
 
-	screen                                       screen
-	general                                      generalModel
-	launch                                       launchModel
-	resume                                       resumeModel
-	handoff                                      handoffModel
-	options                                      optionsModel
-	accounts                                     accountsModel
-	accountsGeneration, accountsClientGeneration uint64
-	accountLoginRunner                           AccountLoginRunner
-	reconnector                                  DaemonReconnector
-	reconnectGeneration                          uint64
-	reconnectAttempts                            int
-	reconnecting                                 bool
-	reconnectDialing                             bool
-	rosterInvalidations                          bool
-	rosterRefreshing, rosterDirty                bool
-	rosterRevision                               uint64
-	initialRoster                                tea.Cmd
+	screen                                   screen
+	general                                  generalModel
+	launch                                   launchModel
+	resume                                   resumeModel
+	handoff                                  handoffModel
+	options                                  optionsModel
+	logins                                   loginsModel
+	loginsGeneration, loginsClientGeneration uint64
+	loginRunner                              LoginRunner
+	reconnector                              DaemonReconnector
+	reconnectGeneration                      uint64
+	reconnectAttempts                        int
+	reconnecting                             bool
+	reconnectDialing                         bool
+	rosterInvalidations                      bool
+	rosterRefreshing, rosterDirty            bool
+	rosterRevision                           uint64
+	initialRoster                            tea.Cmd
 	// optionsGeneration monotonically stamps every context-guard settings RPC. It
 	// survives closing/reopening the form, so an older response cannot land in a new
 	// options incarnation that happens to reuse the same local focus state.
@@ -437,12 +433,11 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.connectionLost = true
 		m.rosterRefreshing, m.rosterDirty = false, false
 		m.invalidateOptionsConnection()
-		m.accountsGeneration++
-		m.accounts.generation = m.accountsGeneration
-		m.accounts.busy = false
-		if m.accounts.wizardOpen {
-			m.accounts.wizard.input = lineEditor{}
-		}
+		m.loginsGeneration++
+		m.logins.generation = m.loginsGeneration
+		m.logins.busy = false
+		m.logins.attached = false
+		m.logins.job.VerificationURL, m.logins.job.UserCode, m.logins.job.LoginSocket = "", "", ""
 		if m.reconnector != nil {
 			m.reconnectGeneration++
 			m.reconnectAttempts = 0
@@ -453,7 +448,11 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resumeResultMsg:
 		if msg.result.err != nil {
-			return m.openResume(msg.source, "launch failed: "+msg.result.err.Error()), nil
+			reason := msg.source.ResumeError
+			if reason == "" {
+				reason = "launch failed: " + msg.result.err.Error()
+			}
+			return m.openResume(msg.source, reason), nil
 		}
 		return m.Update(msg.result)
 
@@ -463,9 +462,6 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.general.setBanner("launch failed: " + msg.err.Error())
 		}
-		// An owner-login fallback (ADR-032 Amendment 4) navigates like any launch;
-		// its notice is bannered when the owner next returns to the board.
-		m.pendingNotice = msg.notice
 		// Success: auto-attach straight into the new session (bd agents-tracker-stc),
 		// reusing the exact attach path Enter uses on a running row (the session is
 		// freshly launched, so read-write). A result with no id (a producer that does
@@ -521,27 +517,23 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case rosterLoadedMsg:
 		return m.applyRoster(msg)
 
-	case accountsReplyMsg:
-		return m.applyAccountsReply(msg)
+	case loginsReplyMsg:
+		return m.applyLoginsReply(msg)
 
-	case accountsPollMsg:
-		if m.screen != screenAccounts || msg.generation != m.accounts.generation || msg.clientGeneration != m.accountsClientGeneration || m.accounts.busy || m.connectionLost {
+	case loginsPollMsg:
+		if m.screen != screenLogins || msg.generation != m.logins.generation || msg.clientGeneration != m.loginsClientGeneration || m.logins.busy || m.connectionLost {
 			return m, nil
 		}
-		if m.accounts.wizardOpen && m.accounts.wizard.job.ID != "" {
-			return m.beginAccountsRequest(protocol.AccountsReq{Action: "status", JobID: m.accounts.wizard.job.ID})
+		if m.logins.attached {
+			return m, loginPoll(m.logins.generation, m.loginsClientGeneration)
 		}
-		return m.beginAccountsRequest(protocol.AccountsReq{Action: "list"})
+		if m.logins.job.ID != "" {
+			return m.beginLoginsRequest(protocol.LoginsReq{Action: "status", JobID: m.logins.job.ID})
+		}
+		return m.beginLoginsRequest(protocol.LoginsReq{Action: "list"})
 
-	case accountLoginDoneMsg:
-		if m.screen != screenAccounts || msg.generation != m.accounts.generation || msg.clientGeneration != m.accountsClientGeneration {
-			return m, nil
-		}
-		m.accounts.busy = false
-		if msg.err != nil {
-			m.accounts.wizard.err = "Native sign-in attachment failed. Press Enter to reconnect, or Ctrl+X to cancel."
-		}
-		return m.beginAccountsRequest(protocol.AccountsReq{Action: "status", JobID: m.accounts.wizard.job.ID})
+	case loginRunnerDoneMsg:
+		return m.applyLoginRunnerDone(msg)
 
 	case detectMsg:
 		// Drop a stale probe: one dispatched before the latest generation that only
@@ -577,8 +569,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch {
-		case m.screen == screenAccounts:
-			m.pasteAccounts(msg.Content)
+		case m.screen == screenLogins && m.logins.mode == "label":
+			m.logins.label.paste(msg.Content)
 		case m.screen == screenLaunch:
 			// Creation requires consecutive Enter presses. Pasting into any launch
 			// field is an edit action and therefore invalidates an armed path.
@@ -733,7 +725,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.updatePairing(msg)
 		}
-		if m.connectionLost && m.screen != screenGeneral && m.screen != screenAccounts && msg.Code != tea.KeyEsc {
+		if m.connectionLost && m.screen != screenGeneral && m.screen != screenLogins && msg.Code != tea.KeyEsc {
 			if m.screen == screenOptions || msg.Code == tea.KeyEnter || m.screen == screenHandoff && m.handoff.confirmPending() {
 				return m, nil
 			}
@@ -749,8 +741,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateHandoff(msg)
 		case screenOptions:
 			return m.updateOptions(msg)
-		case screenAccounts:
-			return m.updateAccounts(msg)
+		case screenLogins:
+			return m.updateLogins(msg)
 		case screenAttach:
 			return m.updateAttach(msg)
 		}
@@ -773,7 +765,7 @@ func (m rootModel) View() tea.View {
 		content = m.composeBoard(m.handoff.view(), m.handoff.hint())
 	case m.screen == screenOptions:
 		content = m.composeBoard(m.options.view(m.width), m.options.hint())
-	case m.screen == screenAccounts:
+	case m.screen == screenLogins:
 		width, height := m.width, m.height
 		if width > 4 {
 			width -= 4
@@ -792,11 +784,11 @@ func (m rootModel) View() tea.View {
 		if m.height > 0 {
 			height = max(1, height)
 		}
-		body := m.accounts.view(width, height, m.connectionLost, m.accountLoginRunner != nil)
+		body := m.logins.view(width, height, m.connectionLost, m.loginRunner != nil)
 		if m.width > 4 {
 			body = "  " + strings.ReplaceAll(body, "\n", "\n  ")
 		}
-		content = m.composeBoard(top+body, m.accounts.hint(m.connectionLost, m.accountLoginRunner != nil, m.width))
+		content = m.composeBoard(top+body, m.logins.hint(m.connectionLost, m.loginRunner != nil, m.width))
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
@@ -1087,10 +1079,6 @@ func (m *rootModel) enterGeneral() tea.Cmd {
 	}
 	if cmd := m.armWorkingAnimation(); cmd != nil {
 		cmds = append(cmds, cmd)
-	}
-	if m.pendingNotice != "" {
-		cmds = append(cmds, m.general.setBanner(m.pendingNotice))
-		m.pendingNotice = ""
 	}
 	return tea.Batch(cmds...)
 }

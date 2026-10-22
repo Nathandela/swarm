@@ -17,7 +17,7 @@ func TestBackendLaunch_AnUnmanagedBackendRunsInTheSessionCwdNotTheStateDir(t *te
 	spec := announceSpec(t, pidFile)
 	spec.AgentType = "codex"
 	spec.Backend = r7BackendSpec(filepath.Join(t.TempDir(), "codex.sock"))
-	if spec.AccountBinding != nil {
+	if spec.LoginRuntime != nil {
 		t.Fatal("fixture must be an unmanaged launch")
 	}
 
@@ -39,12 +39,11 @@ func TestBackendLaunch_AnUnmanagedBackendRunsInTheSessionCwdNotTheStateDir(t *te
 // account-managed sessions too: without -c sandbox_workspace_write.network_access=true the
 // workspace-write sandbox blocks connect() to the daemon socket, so `swarm handoff`, `swarm
 // spawn` and passive supervision fail inside every rotator-managed Codex discussion (A4,
-// measured with codex 0.162.1). This reverses the v0.16.0 policy, recorded in ADR-028 amendment of 2026-10-14.
+// measured with codex 0.162.1).
 func TestBackendLaunch_AManagedCodexBackendKeepsTheSwarmSocketReachable(t *testing.T) {
 	d := openDaemon(t, daemonConfig(t))
 	spec := announceSpec(t, filepath.Join(t.TempDir(), "agent.pid"))
 	spec.AgentType = "codex"
-	spec.AccountNativeContext = true
 	spec.Backend = r7BackendSpec(filepath.Join(t.TempDir(), "codex.sock"))
 	spec.Backend.Args = append(spec.Backend.Args, "-c", "sandbox_workspace_write.network_access=true")
 

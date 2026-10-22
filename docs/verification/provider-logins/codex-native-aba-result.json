@@ -1,0 +1,59 @@
+{
+  "provider": "codex",
+  "native_version": "0.163.0",
+  "binary": "/home/ubuntu/.codex/packages/app-server-daemon/releases/0.163.0-x86_64-unknown-linux-musl/bin/codex",
+  "common_home": "/home/ubuntu/.local/state/swarm-login-qualification/codex-common-ca5c8e13",
+  "project": "/home/ubuntu/.local/state/swarm-login-qualification/codex-project-87856876",
+  "distinct_accounts": true,
+  "credential_authority": "Exclusive rename between original isolated login profile and common native home; no duplicate credential file",
+  "steps": [
+    {
+      "account": "A",
+      "force_native_refresh_due": false,
+      "marker_in_prompt": true,
+      "resume_requested": false,
+      "tool_items": 0,
+      "installed_account_matches": true,
+      "same_conversation_id": true,
+      "same_model": true,
+      "turn_status": "completed",
+      "marker_recalled": true,
+      "native_refresh_token_changed": false,
+      "latest_auth_restored_to_original_profile": true
+    },
+    {
+      "account": "B",
+      "force_native_refresh_due": false,
+      "marker_in_prompt": false,
+      "resume_requested": true,
+      "tool_items": 0,
+      "installed_account_matches": true,
+      "same_conversation_id": true,
+      "same_model": true,
+      "turn_status": "completed",
+      "marker_recalled": true,
+      "native_refresh_token_changed": false,
+      "latest_auth_restored_to_original_profile": true
+    },
+    {
+      "account": "A",
+      "force_native_refresh_due": true,
+      "marker_in_prompt": false,
+      "resume_requested": true,
+      "tool_items": 0,
+      "installed_account_matches": true,
+      "same_conversation_id": true,
+      "same_model": true,
+      "turn_status": "completed",
+      "marker_recalled": true,
+      "native_refresh_token_changed": false,
+      "latest_auth_restored_to_original_profile": true
+    }
+  ],
+  "model": "gpt-6-luna",
+  "a_b_a_passed": true,
+  "credential_copies_created": false,
+  "common_auth_absent_after_test": true,
+  "latest_auth_in_original_profiles": true,
+  "native_history_files_present": true
+}

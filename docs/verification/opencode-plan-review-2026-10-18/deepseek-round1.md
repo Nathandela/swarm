@@ -40,6 +40,6 @@ Compaction during the lifecycle slice (deferred to 6) causing false completion; 
 
 ## 5. Remove/defer
 
-Defer phone composer, structured capture, approvals write path, and the full cross-CLI matrix until liveness and receipts are proven. Delete the supersede-one-slot approval behavior now. Keep typed dispatch; build no provider framework. Do not reintroduce transcript archives (ADR033). Defer Linux account pool/provider-key passthrough, auto CLI refresh, and compaction continuation until evidence exists. Fix the CLI bugs before any handoff milestone.
+Defer phone composer, structured capture, approvals write path, and the full cross-CLI matrix until liveness and receipts are proven. Delete the supersede-one-slot approval behavior now. Keep typed dispatch; build no provider framework. Do not reintroduce transcript archives (ADR033). Defer provider-key passthrough, auto CLI refresh, and compaction continuation until evidence exists. Fix the CLI bugs before any handoff milestone.
 
 REVIEW_COMPLETE

@@ -9,7 +9,6 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	runAccountFixture()
 	code := m.Run()
 	testBins.Sweep()
 	testbin.KillProcessesOf(fakeCodexBin, s19GatewayPath)

@@ -9,6 +9,10 @@ import (
 
 func cloneOpenCodeMeta(m persist.Meta) persist.Meta {
 	m.OpenCodeBinding = persist.CloneOpenCodeBinding(m.OpenCodeBinding)
+	if m.LoginRuntime != nil {
+		runtime := *m.LoginRuntime
+		m.LoginRuntime = &runtime
+	}
 	return m
 }
 

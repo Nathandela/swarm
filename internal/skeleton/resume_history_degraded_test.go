@@ -79,22 +79,22 @@ func TestResumeHistory_CodexMatchesADegradedLaunchStartedAfterTheBackendBudget(t
 }
 
 // TestResumeHistory_ProductionResolversReadTheDegradedMarker pins the wiring: both the
-// unmanaged resolver and the per-account ones look for the marker under the state dir.
+// unmanaged resolver and the provider-native ones look for the marker under the state dir.
 func TestResumeHistory_ProductionResolversReadTheDegradedMarker(t *testing.T) {
 	sk := assemble(t)
 	native, ok := sk.api.historyResolver.(*openCodeHistoryResolver)
 	if !ok || native.core != sk.core {
 		t.Fatalf("historyResolver is %T, want the connected native resolver", sk.api.historyResolver)
 	}
-	account, ok := native.fallback.(*accountResumeHistoryResolver)
+	login, ok := native.fallback.(*loginResumeHistoryResolver)
 	if !ok {
-		t.Fatalf("native fallback is %T, want the account-aware resolver", native.fallback)
+		t.Fatalf("native fallback is %T, want the provider login resolver", native.fallback)
 	}
-	unmanaged, ok := account.unmanaged.(*filesystemResumeHistoryResolver)
+	unmanaged, ok := login.fallback.(*filesystemResumeHistoryResolver)
 	if !ok {
-		t.Fatalf("account fallback is %T, want filesystem resolver", account.unmanaged)
+		t.Fatalf("login fallback is %T, want filesystem resolver", login.fallback)
 	}
-	if unmanaged.stateDir == "" || unmanaged.stateDir != account.stateRoot {
-		t.Fatalf("unmanaged resolver stateDir = %q, want the state dir %q", unmanaged.stateDir, account.stateRoot)
+	if unmanaged.stateDir == "" || unmanaged.stateDir != login.stateDir {
+		t.Fatalf("unmanaged resolver stateDir = %q, want the state dir %q", unmanaged.stateDir, login.stateDir)
 	}
 }

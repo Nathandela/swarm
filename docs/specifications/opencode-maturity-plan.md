@@ -6,7 +6,7 @@ This plan makes OpenCode a dependable Swarm worker for long-running work, cross-
 
 ## Decisions and evidence
 
-The target is parity with the **actual** Claude/Codex implementation, plus the reliability requirements needed for the owner's unattended workflow. Claude currently uses hooks and checked terminal input; Codex uses an app-server. Neither supplies universal exactly-once execution, both have qualified limitations, and the installed Codex 0.163.0 does not support Swarm's old ContextGuard range. OpenCode account rotation and Swarm-driven compaction therefore are separate capabilities, not prerequisites for useful basic parity.
+The target is parity with the **actual** Claude/Codex implementation, plus the reliability requirements needed for the owner's unattended workflow. Claude currently uses hooks and checked terminal input; Codex uses an app-server. Neither supplies universal exactly-once execution, both have qualified limitations, and the installed Codex 0.163.0 does not support Swarm's old ContextGuard range. OpenCode provider-login switching and Swarm-driven compaction therefore are separate capabilities, not prerequisites for useful basic parity.
 
 | Decision | Reason and condition |
 | --- | --- |
@@ -40,7 +40,7 @@ DeepSeek V4.1 Flash and GLM-5.3 Flash reviewed the strategy through actual Swarm
 | M3 Structured interaction | Phone transcript, request controls and supported Stop semantics, with honest degraded states | P7 |
 | M4 Operational qualification | Supported macOS/Linux versions, bounded 24h/72h runs, upgrade/rollback, refresh and native compaction observation | P8–P9 |
 
-M2 is the main gate for the owner's swarm workflow. M3/M4 complete comparable product maturity. Managed provider-account pools, external adoption, and Swarm-initiated compaction remain explicitly qualified follow-ons; core maturity must not imply that they are enabled.
+M2 is the main gate for the owner's swarm workflow. M3/M4 complete comparable product maturity. External adoption and Swarm-initiated compaction remain explicitly qualified follow-ons; core maturity must not imply that they are enabled.
 
 The two confirmed shared bugs are prerequisites for using the advertised manual/handoff flows: `agents-tracker-79si` (watch flags) and `agents-tracker-xl6k` (actual worktree cwd). The existing native OpenCode work is tracked by `agents-tracker-93a`, `agents-tracker-dwwv.6`, and `agents-tracker-rz40`; new scoped work should reference these rather than silently closing them on partial progress.
 
@@ -103,7 +103,7 @@ providers.
 | OC-12 Hierarchy | Native children and Swarm worker lineage remain separate. Aggregate verified relevant descendants, retain active/attention state, bound traversal, and reject cycles/foreign targets. |
 | OC-13 Continuity | Graceful and abrupt resume, handoff TO/FROM OpenCode, model/agent and actual worktree cwd are preserved. Missing/corrupt native history produces a named refusal. |
 | OC-14 Capabilities | Each capability reflects this driver instance, version and current recovery state. A backend descriptor or readable history alone does not enable composer/approval/automation. |
-| OC-15 Operations | Version change, compaction, auth/quota failure, sleep/reconnect and slow consumers have explicit outcomes and bounded resource use. No silent alternate-account retry after an ambiguous write. |
+| OC-15 Operations | Version change, compaction, auth/quota failure, sleep/reconnect and slow consumers have explicit outcomes and bounded resource use. No silent credential retry after an ambiguous write. |
 | OC-16 Monitoring | CLI/pilot/phone monitors checkpoint their own event domain, reconnect explicitly, and report gaps. Swarm cannot start a new model turn in an external host after that host's foreground tool wait/conversation ends. |
 
 ## Cross-component contracts
@@ -182,7 +182,7 @@ Pinned 1.19.3 source has no authoritative server-side current-view read: normal 
 
 **Files:** `internal/adapter/backend.go`, `internal/adapter/opencode/`, `internal/daemon/{backend,launch}.go`, `cmd/swarm/main.go` launch decoding, `internal/shim/{backend,shim,server}.go`, new concrete HTTP client/driver, `internal/skeleton/backendconnect.go` dispatch, identity/persistence/reconcile tests. Requirements OC-02/03/13/14; depends on P1's chosen contract.
 
-**Tasks:** add the closed required runtime kind `opencode-tui` and a bounded private Unix-socket bridge record; reuse process-group/PID-start containment, sole metadata writer and existing PTY ownership. Validate bridge custody, version, exact native root/profile/cwd and generation. Add the pure characterized OpenCode native-ID validator; persist identity before create, then persist and re-read the actual creation time and binding before initial input. Execution-critical metadata uses schema 3 and a required shim flag that older binaries reject before executing anything. Deep-copy new binding pointers at launch/Get/List boundaries. Preserve ordinary schema 1 and account schema 2. P6 extends generic resume/handoff consumers. Keep credentials out of argv, URLs, roster, journal, phone and errors.
+**Tasks:** add the closed required runtime kind `opencode-tui` and a bounded private Unix-socket bridge record; reuse process-group/PID-start containment, sole metadata writer and existing PTY ownership. Validate bridge custody, version, exact native root/profile/cwd and generation. Add the pure characterized OpenCode native-ID validator; persist identity before create, then persist and re-read the actual creation time and binding before initial input. Execution-critical metadata uses schema 3 and a required shim flag that older binaries reject before executing anything. Deep-copy new binding pointers at launch/Get/List boundaries. P6 extends generic resume/handoff consumers. Keep credentials out of argv, URLs, roster, journal, phone and errors.
 
 **Compatibility:** execution-critical managed-HTTP metadata must be rejected by older binaries/shims that cannot interpret it. Do not rely on an old daemon silently ignoring optional fields. Preserve old standalone records and Codex backend semantics; identify exact protocol/schema changes and the upgrade/downgrade refusal path before merging.
 
@@ -265,15 +265,13 @@ Strict turn Stop remains disabled unless native preconditions prevent an old act
 
 **Scope:** integrate safe native configuration, authentication/quota errors, model/agent discovery by actual target cwd, CLI refresh, observed compaction, upgrade/rollback and operational diagnostics.
 
-**Files:** environment policy and selected adapter host probes, native profile resolver, `cli_refresh`, authwatch/account boundaries, context observation, doctor/refresh status and runbooks; existing release/version gates. Requirements OC-01/03/13/14/15; depends on P6/P7.
+**Files:** environment policy and selected adapter host probes, native profile resolver, `cli_refresh`, native auth/quota observation, context observation, doctor/refresh status and runbooks; existing release/version gates. Requirements OC-01/03/13/14/15; depends on P6/P7.
 
-**Tasks:** keep server/TUI/resume on the same native profile; narrowly support required OpenCode/XDG configuration references without passing arbitrary secret environment variables. Provider credentials remain in native custody unless an existing explicit managed-account flow applies. Detect quota/auth/model errors as actionable outcomes; never silently switch model/account after an ambiguous admission. Cache discoveries only where invalidation/context is explicit.
+**Tasks:** keep server/TUI/resume on the same native profile; narrowly support required OpenCode/XDG configuration references without passing arbitrary secret environment variables. Provider credentials remain in the native OpenCode profile; Swarm does not import them or switch them. Detect quota/auth/model errors as actionable outcomes; never silently switch credentials or model after an ambiguous admission. Cache discoveries only where invalidation/context is explicit.
 
 Qualify native automatic compaction and preserve input/turn ownership across it. Historical token totals are not live context occupancy. Swarm-driven compaction requires exact occupancy and limits, safe effect windows, supported versions and continuation ownership; leave it unavailable without those facts. Safe CLI refresh needs durable identity, actual idle, no pending requests/drafts/uncertain operations, no unsafe worktree migration and proven resume. Existing Claude/Codex limits remain unchanged.
 
-Account pools need a separate design for `(harness=opencode, native provider, account/profile)` rather than treating all OpenCode models as one credential type. Linux-managed enrollment, rotation, billing policy, native OAuth and external session adoption are separately gated work. Do not equate Basic auth to the local backend with authorization to access a model-provider account.
-
-**Exit:** an installed CLI change cannot strand or duplicate a discussion; upgrade/restart and rollback understand or explicitly reject managed-HTTP records; quota/relogin/compaction do not create false completion; supported custom config paths work across resume. Doctor reports sanitized endpoint ownership/version/binding/gap diagnostics without secrets. Provider-account and proactive-compaction capabilities stay false unless separately qualified.
+**Exit:** an installed CLI change cannot strand or duplicate a discussion; upgrade/restart and rollback understand or explicitly reject managed-HTTP records; quota/auth/compaction do not create false completion; supported custom config paths work across resume. Doctor reports sanitized endpoint ownership/version/binding/gap diagnostics without secrets. OpenCode login switching and proactive compaction stay unavailable unless separately qualified.
 
 ### P9 Composition and sustained-operation qualification
 

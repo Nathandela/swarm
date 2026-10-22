@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Nathandela/swarm/internal/accountconfig"
-	"github.com/Nathandela/swarm/internal/accounts"
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
 )
 
@@ -25,6 +23,8 @@ import (
 // checksum that covers the archive covers it too -- signed compatibility
 // metadata, not a hidden verb (committee: codex finding 1).
 type CompatManifest struct {
+	LoginSchema int `json:"login_schema"`
+	// These v0.20 card fields describe offline migration input support only.
 	AccountSchema    int    `json:"account_schema"`
 	AccountJobs      int    `json:"account_jobs"`
 	AccountRecovery  int    `json:"account_recovery"`
@@ -46,9 +46,10 @@ func CurrentManifest(tag string) CompatManifest {
 		Version:       tag,
 		Shimwire:      shimwire.Version,
 		Protocol:      protocol.Version,
-		Schema:        persist.OpenCodeSchemaVersion,
-		AccountSchema: accounts.SchemaVersion, AccountJobs: 1, AccountRecovery: accounts.RecoverySchemaVersion, AccountWorker: MinimumClaudeWorkerCapability, AccountShim: shim.ManagedWriterSchemaVersion, AccountConfig: accountconfig.CompatibilityVersion,
-		AccountInventory: accounts.NativeInventorySchemaVersion, AccountAuth: 1,
+		Schema:        persist.LoginSchemaVersion,
+		LoginSchema:   logins.SchemaVersion,
+		AccountSchema: 1, AccountJobs: 1, AccountRecovery: 3, AccountWorker: 6, AccountShim: 2, AccountConfig: 4,
+		AccountInventory: 1, AccountAuth: 1,
 	}
 }
 

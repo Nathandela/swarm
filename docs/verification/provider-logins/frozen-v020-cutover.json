@@ -1,0 +1,109 @@
+{
+  "date": "2026-10-23",
+  "reviewer": "Independent Sol6.1",
+  "frozen_updater": {
+    "tag": "v0.20.0",
+    "commit": "507dfc5c6b8d460ef393d5c17e46723196b49629",
+    "archive": "git archive v0.20.0 extracted to disposable /private/tmp checkout",
+    "production_source_edits": false
+  },
+  "current_manifest": {
+    "login_schema": 1,
+    "account_schema": 1,
+    "account_jobs": 1,
+    "account_recovery": 3,
+    "account_worker": 6,
+    "account_shim": 2,
+    "account_config": 4,
+    "account_inventory": 1,
+    "account_auth": 1,
+    "version": "v0.21.0",
+    "shimwire": 2,
+    "protocol": 1,
+    "schema": 4
+  },
+  "frozen_manifest": {
+    "account_schema": 1,
+    "account_jobs": 1,
+    "account_recovery": 3,
+    "account_worker": 6,
+    "account_shim": 2,
+    "account_config": 4,
+    "account_inventory": 1,
+    "account_auth": 1,
+    "version": "v0.20.0",
+    "shimwire": 1,
+    "protocol": 1,
+    "schema": 3
+  },
+  "source_sha256": {
+    "internal/upgrade/manifest.go": "3547d1e2f4d2f67f283d4fc646c25c04771aeeddfeb37eeca7bffc0a54e047cb",
+    "internal/upgrade/logins.go": "ea9b2376e6cbfbb5a471c5e710978c58011fa992cfeae3aad32033176ce39685",
+    "internal/loginmigration/workers.go": "a8457ef429857e108eeb0b24def93f5555a2455a15a788f87119ba980f0d2ca9",
+    "internal/loginmigration/guard.go": "42fc9bc6e75d285314772af067a37cdb132f15a8ac906acbefa2e8fea2d6c7fc",
+    "internal/loginmigration/migrate.go": "fe19dcc59b0f356b4bf5723c5586257b4e4bf3b7767109540ca3857117ed6034"
+  },
+  "frozen_updater_results": [
+    {
+      "state": "drained, daemon stopped, no live shim",
+      "outcome": "activated"
+    },
+    {
+      "state": "daemon alive, zero sessions",
+      "outcome": "deferred-wirebump, target binary unchanged, no converge handoff"
+    },
+    {
+      "state": "live wire1 shim session metadata",
+      "outcome": "deferred-wirebump, target binary unchanged, no converge handoff"
+    },
+    {
+      "state": "unfinished old enrollment with test-process identity; daemon stopped and no session metadata",
+      "outcome": "activated; frozen updater does not gate detached enrollment"
+    },
+    {
+      "state": "old check reference with live test-process identity; daemon stopped and no session metadata",
+      "outcome": "activated; frozen updater does not gate detached checks"
+    }
+  ],
+  "current_results": [
+    {
+      "case": "old unfinished enrollment",
+      "new_migration": "refused before file-content mutation and before logins creation",
+      "rollback": "actual current Rollback restored fixture binary using generated frozen v0.20 manifest; hold, pending-converge and exec handoff verified"
+    },
+    {
+      "case": "old live check reference",
+      "new_migration": "refused before file-content mutation and before logins creation",
+      "rollback": "actual current Rollback restored fixture binary using generated frozen v0.20 manifest; hold, pending-converge and exec handoff verified"
+    },
+    {
+      "case": "synthetically drained old worker proofs and empty external provider process inventory",
+      "new_migration": "accepted; no native provider process started or authenticated"
+    },
+    {
+      "case": "new login registry exists after drained startup",
+      "rollback_guard": "generated frozen-v0.20 manifest refused"
+    }
+  ],
+  "tests": [
+    {
+      "checkout": "frozen v0.20.0 archive",
+      "test": "TestFrozenV020CurrentCardCutover",
+      "result": "PASS, five subcases, 3.675s",
+      "command": "python3 /private/tmp/swarm-login-go.py test ./internal/upgrade -run '^TestFrozenV020CurrentCardCutover$' -count=1 -v"
+    },
+    {
+      "checkout": "current with temporary Go overlay",
+      "test": "TestFinalSolOfflineCutoverWorkerRefusalAndRollback",
+      "result": "PASS, enrollment/check subcases, 0.576s",
+      "command": "python3 /private/tmp/swarm-login-go.py test -overlay=/private/tmp/swarm-login-cutover-current-sol/overlay.json ./internal/upgrade -run '^TestFinalSolOfflineCutoverWorkerRefusalAndRollback$' -count=1 -v"
+    }
+  ],
+  "limitations": [
+    "Synthetic state and fake executable payloads only; no live owner account, credentials, daemon, enrollment, check or migration touched.",
+    "Frozen updater activation exec seam captured the converge handoff; it did not execute a staged real application binary.",
+    "Drained external process inventory was simulated with a disposable ps fixture because real owner-native processes were deliberately left running.",
+    "Existing converge Rule0 treats a free daemon lock as converged and leaves daemon startup to the next owner invocation.",
+    "This proves safe refusal/compatible rollback and an offline retry path; it does not claim frozen v0.20 automatically drains detached workers."
+  ]
+}

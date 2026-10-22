@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-23",
+  "reviewers": [
+    "Sol 6.1",
+    "Astra"
+  ],
+  "result": "PASS",
+  "scope": [
+    "credential store and crash recovery",
+    "migration custody and history preservation",
+    "provider switching and exact native resume",
+    "native auth and quota observations",
+    "enrollment receipts, cancellation, removal and cleanup",
+    "owner protocol and TUI",
+    "upgrade compatibility and rollback"
+  ],
+  "fixed_counterexamples": [
+    "revoked/missing active credential reauth",
+    "orphan temporary credentials and safe removal",
+    "migration worker custody/journal traversal/executable modes/directory durability",
+    "failed native continuation remains input-gated",
+    "native valid bare-string Codex overrides",
+    "native model restoration across modern history layouts",
+    "enrollment replay after owner cancellation or removal",
+    "partial enrollment startup and failed daemon startup cleanup",
+    "shared canonical Claude Keychain username",
+    "legacy-only rollback",
+    "quota reset timing and durable cross-feed nonrolling limits"
+  ],
+  "reports_sha256": {
+    "swarm-login-final-review-astra.md": "54f91692a293f6babee970f73dd22b7dd4b741dd6080a6e0d57f632cf18d7e35",
+    "swarm-login-final-sol-review.md": "9410bafde84e2a6a251f581d955e8f3a55d79fc772148189a1195d7b15b7b266",
+    "swarm-codex-reset-review-astra.md": "193c3ac492fe13b28e4ebdbc0f3da4eb2b57436bace20a6053bff48714b3f3dd"
+  },
+  "limits": "Independent synthetic/source review; live native qualification is separately recorded."
+}

@@ -62,14 +62,14 @@ The first phase protects operation identity and the serialized backend write bou
 
 Independent Android review caught a generic main-thread wrapper guard being removed with terminal-specific tests. That guard was restored over all production Kotlin, with snippet-based negative controls for inline calls, proper command dispatch, and the wrong dispatch plane. This is why deleting old test files required a subject-by-subject disposition, recorded in [android-disposition.txt](android-disposition.txt).
 
-Remaining work has different evidence requirements. Mailbox recovery needs an explicit retained-frame recovery contract; audit retention needs a policy before deletion. Existing macOS account/process fixture and lint work is tracked in `agents-tracker-nsxw`, `agents-tracker-vyhy.10`, and `agents-tracker-4p4q`. The complete shortcut ledger is in [debt.txt](debt.txt); it records comment claims, including legacy comments, rather than treating each marked limit as a newly proved defect.
+Remaining work has different evidence requirements. Mailbox recovery needs an explicit retained-frame recovery contract; audit retention needs a policy before deletion. Existing macOS process-fixture and platform lint work is tracked in `agents-tracker-nsxw`, `agents-tracker-vyhy.10`, and `agents-tracker-4p4q`. The complete shortcut ledger is in [debt.txt](debt.txt); it records comment claims, including legacy comments, rather than treating each marked limit as a newly proved defect.
 
 ## Coverage
 
 | Audit lane | Paths and flows reviewed | Limits |
 |---|---|---|
 | Runtime core | Daemon launch/reconcile/kill/delete, shim shutdown, persistence, idempotency, journals, transcripts, process identity/containment, worktrees, engine callbacks | Selective high-risk reads; not every test or source file |
-| Native integration | Adapters, app-server boundary, OpenCode bridge, accounts/config/usage, hooks, VT/status, ContextGuard dispatch | Existing adapter/attach issues retained; no live provider qualification |
+| Native integration | Adapters, app-server boundary, OpenCode bridge, provider login/config custody, hooks, VT/status, ContextGuard dispatch | Existing adapter/attach issues retained; no live provider qualification |
 | Remote | Protocol auth/replay, bounded wire frames, gateway inbound checkpoints/outbox, relay-v2 mailbox, phone ingress, push/enrollment boundaries | No cloud deployment, handset acceptance, Firestore emulator, or penetration test |
 | Android | Session routing, composer capability, lifecycle, pairing/push paths, retired watcher reachability, Kotlin tests and source gates | No physical-handset or visual acceptance run |
 | CLI/TUI | Startup, command dispatch, attach, reconnect, errors/status, upgrade/converge, layout storage | No interaction with the owner's installed daemon |

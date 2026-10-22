@@ -33,10 +33,11 @@ type fakeDispatchConn struct {
 	calls []fakeDispatchCall
 	// script[i] shapes call i; a missing entry is the happy path.
 	script map[int]fakeDispatchBehavior
-	// plainCalls records Call (the continuation enqueue path); plainErr, when
+	// plainCalls records continuation requests after their write boundary; plainErr, when
 	// set, fails every Call.
-	plainCalls []fakeDispatchCall
-	plainErr   error
+	plainCalls         []fakeDispatchCall
+	plainErr           error
+	beforeContinuation func()
 }
 
 func (f *fakeDispatchConn) Call(_ context.Context, method string, params, _ any) error {
@@ -68,6 +69,25 @@ type fakeDispatchCall struct {
 var errFakeConnClosed = errors.New("fake conn closed")
 
 func (f *fakeDispatchConn) CallAtWriteBoundary(ctx context.Context, method string, params, _ any, beforeWrite func() error, afterWrite func()) error {
+	if method == "turn/start" {
+		f.mu.Lock()
+		hook := f.beforeContinuation
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		if beforeWrite != nil {
+			if err := beforeWrite(); err != nil {
+				return err
+			}
+		}
+		err := f.Call(ctx, method, params, nil)
+		if afterWrite != nil {
+			afterWrite()
+		}
+		return err
+	}
+
 	f.mu.Lock()
 	n := len(f.calls)
 	behavior := f.script[n]
@@ -973,4 +993,22 @@ func TestContextGuardContinuationForfeitsWhenTheWindowPasses(t *testing.T) {
 	r.setQuiet(true)
 	r.nudge()
 	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
+}
+
+func TestContextGuardContinuationRechecksProviderHoldBeforeNativeBytes(t *testing.T) {
+	r := newDispatchRig(t)
+	boundary := make(chan struct{})
+	r.conn.mu.Lock()
+	r.conn.beforeContinuation = func() { r.setQuiet(false); close(boundary) }
+	r.conn.mu.Unlock()
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.ingestLifecycle(t, 2, "item/started")
+	r.ingestLifecycle(t, 3, "item/completed")
+	select {
+	case <-boundary:
+	case <-time.After(2 * time.Second):
+		t.Fatal("continuation never reached its final dispatch boundary")
+	}
+	r.requireNoPlainCallsFor(t, 100*time.Millisecond)
 }

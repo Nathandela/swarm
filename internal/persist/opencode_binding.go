@@ -146,5 +146,5 @@ func CloneOpenCodeBinding(b *OpenCodeBinding) *OpenCodeBinding {
 
 func validOpenCodeMeta(m Meta) bool {
 	return m.RequiredRuntime == RequiredRuntimeOpenCode && m.AgentType == "opencode" && adapter.IsOpenCodeConversationID(m.ConversationID) &&
-		m.OpenCodeBinding != nil && ValidOpenCodeBinding(*m.OpenCodeBinding) && m.AccountBinding == nil && m.AccountProjectionRef == "" && m.InputEmbargo == "" && m.AccountClaudeFallback == nil
+		m.OpenCodeBinding != nil && ValidOpenCodeBinding(*m.OpenCodeBinding) && m.LoginRuntime == nil && m.InputEmbargo == ""
 }

@@ -22,9 +22,9 @@ const (
 	TypeOpenCodeEmbargoRelease = "opencode_embargo_release"
 	TypeOpenCodeEmbargoResult  = "opencode_embargo_result"
 	RefusedOpenCodeStarting    = "opencode_starting"
-	TypeAccountEmbargoRelease  = "account_embargo_release"
-	TypeAccountEmbargoResult   = "account_embargo_result"
-	RefusedAccountSwitching    = "account_switching"
+	TypeInputEmbargoRelease    = "input_embargo_release"
+	TypeInputEmbargoResult     = "input_embargo_result"
+	RefusedInputEmbargo        = "input_embargo"
 	TypeHello                  = "hello"
 	TypeAttach                 = "attach"
 	TypeResize                 = "resize"
@@ -114,7 +114,7 @@ type Control struct {
 	OpenCodeReceipt      json.RawMessage `json:"opencode_receipt,omitempty"`
 	OpenCodeError        string          `json:"opencode_error,omitempty"`
 	OpenCodeInputEmbargo bool            `json:"opencode_input_embargo,omitempty"`
-	AccountInputEmbargo  bool            `json:"account_input_embargo,omitempty"`
+	InputEmbargo         bool            `json:"input_embargo,omitempty"`
 	IncidentID           string          `json:"incident_id,omitempty"`
 	Token                string          `json:"token,omitempty"`
 	Type                 string          `json:"type"`
@@ -127,7 +127,7 @@ type Control struct {
 	// SnapshotChunking is an OPTIONAL hello capability advertised by BOTH peers:
 	// the daemon sets it in its hello to tell the shim it can reassemble a chunked
 	// snapshot, and the shim sets it in its hello reply to tell the daemon it will
-	// chunk. It is negotiated at hello WITHOUT bumping WireVersion (it stays 1);
+	// chunk. It is negotiated at hello WITHOUT bumping WireVersion;
 	// Decode tolerates it as an unknown field on an old peer, which never sets it,
 	// so an old<->new pair degrades to today's single-frame snapshot path (G-D).
 	SnapshotChunking bool `json:"snapshot_chunking,omitempty"` // hello (both directions)
@@ -176,7 +176,7 @@ type Control struct {
 type Caps struct {
 	OpenCodeDispatch     bool
 	OpenCodeInputEmbargo bool
-	AccountInputEmbargo  bool
+	InputEmbargo         bool
 	SnapshotChunking     bool
 	SnapshotOnly         bool
 	SubmitTransaction    bool
@@ -188,7 +188,7 @@ func (c Control) Caps() Caps {
 	return Caps{
 		OpenCodeDispatch:     c.OpenCodeDispatch,
 		OpenCodeInputEmbargo: c.OpenCodeInputEmbargo,
-		AccountInputEmbargo:  c.AccountInputEmbargo,
+		InputEmbargo:         c.InputEmbargo,
 		SnapshotChunking:     c.SnapshotChunking,
 		SnapshotOnly:         c.SnapshotOnly,
 		SubmitTransaction:    c.SubmitTransaction,

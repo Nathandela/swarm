@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nathandela/swarm/internal/accounts"
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -23,8 +23,8 @@ import (
 // migrated forward on read (see Load); newer versions are rejected loudly.
 const SchemaVersion = 1
 
-// ManagedSchemaVersion is execution critical; ordinary records remain v1.
-const ManagedSchemaVersion = 2
+// LoginSchemaVersion protects provider runtime provenance from older readers.
+const LoginSchemaVersion = 4
 
 // metaFile is the committed per-session state file name within a session dir.
 const metaFile = "meta.json"
@@ -101,15 +101,13 @@ type Meta struct {
 	// AgentCwd above; "" means the provider has no probe, or the credentials were
 	// unreadable at launch -- both gate conservatively (never auto-recycled).
 	AuthIdentity string `json:"auth_identity,omitempty"`
-	// AccountBinding freezes the private credential generation for managed sessions.
-	// It contains no credential values. Managed records use schema v2 so an older
-	// binary cannot silently drop the selector and fall back to ambient credentials.
-	AccountBinding        *accounts.Binding     `json:"account_binding,omitempty"`
-	AccountProjectionRef  string                `json:"account_projection_ref,omitempty"`
-	AccountClaudeFallback *ClaudeFallbackPolicy `json:"account_claude_fallback,omitempty"`
-	InputEmbargo          string                `json:"input_embargo,omitempty"`
-	RequiredRuntime       string                `json:"required_runtime,omitempty"`
-	OpenCodeBinding       *OpenCodeBinding      `json:"opencode_binding,omitempty"`
+	ResumeError  string `json:"resume_error,omitempty"`
+	// LoginRuntime records the provider epoch loaded by the native processes.
+	// Account selection belongs to the provider registry, never to this record.
+	LoginRuntime    *logins.Runtime  `json:"login_runtime,omitempty"`
+	InputEmbargo    string           `json:"input_embargo,omitempty"`
+	RequiredRuntime string           `json:"required_runtime,omitempty"`
+	OpenCodeBinding *OpenCodeBinding `json:"opencode_binding,omitempty"`
 	// CLIIdentity is the selected installation observed at launch; nil is unknown.
 	// It does not attest a running process or a wrapper's dependencies.
 	CLIIdentity *CLIIdentity `json:"cli_identity,omitempty"`
@@ -120,9 +118,7 @@ type Meta struct {
 	SpawnedFrom  string `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
 	SpawnIntent  string `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
 	Supervision  string `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
-	// LaunchNotice is what the launch that returned this meta wants the owner to read
-	// (an owner-login fallback, ADR-032 Amendment 4). Never persisted.
-	LaunchNotice string `json:"-"`
+
 }
 
 // EffectiveGroupEnteredAt returns the durable ordering instant for a session.
@@ -250,14 +246,15 @@ func (s *Store) Save(m Meta) error {
 			return fmt.Errorf("persist: invalid OpenCode runtime binding")
 		}
 		m.SchemaVersion = OpenCodeSchemaVersion
-	} else if m.AccountBinding != nil {
-		if !validManagedMeta(m) {
-			return fmt.Errorf("persist: invalid managed account binding")
+	} else if m.LoginRuntime != nil {
+		if !validLoginMeta(m) {
+			return fmt.Errorf("persist: invalid provider login runtime")
 		}
-		m.SchemaVersion = ManagedSchemaVersion
-	} else if m.AccountProjectionRef != "" || m.InputEmbargo != "" || m.AccountClaudeFallback != nil {
-		return fmt.Errorf("persist: managed state has no account binding")
+		m.SchemaVersion = LoginSchemaVersion
+	} else if m.InputEmbargo != "" {
+		return fmt.Errorf("persist: startup input embargo has no provider runtime")
 	}
+
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
@@ -374,8 +371,8 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	if m.ID != wantID {
 		return Meta{}, fmt.Errorf("meta id %q does not match session directory %q", m.ID, wantID)
 	}
-	if m.SchemaVersion > OpenCodeSchemaVersion {
-		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, OpenCodeSchemaVersion)
+	if m.SchemaVersion > LoginSchemaVersion {
+		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, LoginSchemaVersion)
 	}
 	if m.SchemaVersion == OpenCodeSchemaVersion || m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
 		if m.SchemaVersion != OpenCodeSchemaVersion || !validOpenCodeMeta(m) {
@@ -383,39 +380,35 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 		}
 		return m, nil
 	}
-	if m.SchemaVersion == ManagedSchemaVersion && m.AccountBinding == nil {
-		return Meta{}, fmt.Errorf("managed session record has no account binding")
+	if m.SchemaVersion == 2 {
+		return Meta{}, fmt.Errorf("session requires offline login migration")
 	}
-	if m.AccountBinding != nil && (m.SchemaVersion != ManagedSchemaVersion || !validManagedMeta(m)) {
-		return Meta{}, fmt.Errorf("managed session record has an invalid account binding")
+	if m.SchemaVersion == LoginSchemaVersion || m.LoginRuntime != nil {
+		if m.SchemaVersion != LoginSchemaVersion || !validLoginMeta(m) {
+			return Meta{}, fmt.Errorf("invalid provider login runtime")
+		}
+		return m, nil
 	}
-	if m.AccountBinding == nil && (m.AccountProjectionRef != "" || m.InputEmbargo != "" || m.AccountClaudeFallback != nil) {
-		return Meta{}, fmt.Errorf("managed session state has no account binding")
+	if m.InputEmbargo != "" {
+		return Meta{}, fmt.Errorf("startup input embargo has no provider runtime")
 	}
+
 	if err := applyMigrations(&m, SchemaVersion, migrations); err != nil {
 		return Meta{}, err
 	}
 	return m, nil
 }
 
-func validManagedMeta(m Meta) bool {
-	if m.AccountClaudeFallback != nil && (m.AgentType != accounts.ProviderClaude || m.AccountClaudeFallback.OwnerValue != nil && strings.ContainsAny(*m.AccountClaudeFallback.OwnerValue, "\x00\r\n")) {
+func validLoginMeta(m Meta) bool {
+	r := m.LoginRuntime
+	if r == nil || r.Provider != m.AgentType || (r.Provider != logins.ProviderClaude && r.Provider != logins.ProviderCodex) || r.Epoch == 0 || !filepath.IsAbs(r.Home) || filepath.Clean(r.Home) != r.Home || strings.ContainsAny(r.Home, "\x00\r\n") {
 		return false
 	}
-	b := m.AccountBinding
-	if b == nil || b.SchemaVersion != accounts.SchemaVersion || b.Provider != m.AgentType || (b.Provider != accounts.ProviderCodex && b.Provider != accounts.ProviderClaude) || b.CredentialGeneration == 0 || b.ConfigurationGeneration == 0 {
+	if len(r.Identity) != 64 || strings.ToLower(r.Identity) != r.Identity {
 		return false
 	}
-	for _, value := range []struct {
-		text string
-		size int
-	}{{b.AccountID, 32}, {b.Identity, 64}, {m.AccountProjectionRef, 64}} {
-		if len(value.text) != value.size || strings.ToLower(value.text) != value.text {
-			return false
-		}
-		if _, err := hex.DecodeString(value.text); err != nil {
-			return false
-		}
+	if _, err := hex.DecodeString(r.Identity); err != nil {
+		return false
 	}
 	return len(m.InputEmbargo) <= 128 && !strings.ContainsAny(m.InputEmbargo, "/\\\x00\r\n")
 }

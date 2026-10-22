@@ -86,8 +86,8 @@ func TestOptionsWindowEscDiscardsAndPickersWrap(t *testing.T) {
 
 	m = send(m, keyRune('o'))
 	m = send(m, keyLeft) // group: status -> tag (wraps backward)
-	m = send(m, keyUp)   // focus wraps: group -> Accounts
-	m = send(m, keyUp)   // Accounts -> order
+	m = send(m, keyUp)   // focus wraps: group -> Provider logins
+	m = send(m, keyUp)   // Provider logins -> order
 	m = send(m, keyLeft) // order: arrival -> name (wraps backward)
 	rm := m.(rootModel)
 	if rm.options.grouping != groupByTag || rm.options.ordering != orderByName {

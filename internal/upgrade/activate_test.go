@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -87,7 +88,7 @@ func TestActivateInstallsAndHandsOffToTheNewBinarysConverge(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
 	old, _ := os.ReadFile(bin)
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Version: "v9.9.9", Shimwire: 1, Protocol: 1, Schema: 1})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Version: "v9.9.9", Shimwire: shimwire.Version, Protocol: 1, Schema: 1})
 	calls := captureExec(t)
 
 	st, err := Activate(ActivateOptions{StateDir: state, BinPath: bin})
@@ -123,8 +124,8 @@ func TestActivateDefersOnAWireBumpWithLiveSessions(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
 	old, _ := os.ReadFile(bin)
-	runningSession(t, state, "livesession", 1)
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Version: "v9.9.9", Shimwire: 2, Protocol: 1, Schema: 1})
+	runningSession(t, state, "livesession", shimwire.Version)
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Version: "v9.9.9", Shimwire: shimwire.Version + 1, Protocol: 1, Schema: 1})
 	calls := captureExec(t)
 
 	st, err := Activate(ActivateOptions{StateDir: state, BinPath: bin})
@@ -165,7 +166,7 @@ func TestActivateRefusesABuildThatCannotAnswerForItself(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
 	old, _ := os.ReadFile(bin)
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 1})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version})
 	// Corrupt the staged binary AFTER staging: it now answers with the wrong
 	// version, the wrong-arch/truncated-build stand-in (Gemini finding 2).
 	if err := os.WriteFile(filepath.Join(StageDir(state), "swarm"), []byte("#!/bin/sh\necho swarm 0.0.0-wrong\n"), 0o755); err != nil {
@@ -196,7 +197,7 @@ func TestRollbackRestoresHoldsAndHandsOff(t *testing.T) {
 	state := t.TempDir()
 	bin := installTarget(t)
 	// Activate first, so real slots exist.
-	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: 1, Schema: persist.SchemaVersion})
+	stageBuild(t, state, "v9.9.9", &CompatManifest{Shimwire: shimwire.Version, Schema: persist.SchemaVersion})
 	old, _ := os.ReadFile(bin)
 	calls := captureExec(t)
 	if st, _ := Activate(ActivateOptions{StateDir: state, BinPath: bin}); st.Outcome != "activated" {

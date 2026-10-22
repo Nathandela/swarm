@@ -12,8 +12,8 @@ has the same floor and no upper cap. Prereleases, build metadata, malformed
 versions and older versions are refused. Native binding, capability, composer,
 operation custody and executable fingerprint checks remain independent.
 History provenance records the observed runtime version; native historical
-`info.version` is preserved separately. Account pools and automatic native
-worker replacement remain disabled.
+`info.version` is preserved separately. OpenCode provider-login switching and
+automatic native worker replacement remain disabled.
 
 TDD exposed the old future-version refusals before implementation. Connected
 Go race checks passed in five packages: 396 test/subtest pass events, zero

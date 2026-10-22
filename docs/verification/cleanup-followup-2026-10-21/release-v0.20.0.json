@@ -16,14 +16,6 @@
     "swarm_0.20.0_linux_arm64.tar.gz": "9a37c4dfd50e9e3ca04c2be3e726258e6650f7c5bce0495b9a39c1eaf0d15b72"
   },
   "compatibility": {
-    "account_schema": 1,
-    "account_jobs": 1,
-    "account_recovery": 3,
-    "account_worker": 6,
-    "account_shim": 2,
-    "account_config": 4,
-    "account_inventory": 1,
-    "account_auth": 1,
     "version": "v0.20.0",
     "shimwire": 1,
     "protocol": 1,

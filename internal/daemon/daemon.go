@@ -22,10 +22,10 @@ import (
 	// argv, capture rows and backend plans are composed by the assembly and only
 	// carried here — and that rule is intact: nothing below constructs or consults
 	// an Adapter. internal/adapter depends only on internal/vt, so there is no cycle.
-	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/journal"
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
@@ -87,6 +87,8 @@ type Config struct {
 	MaxSessions int
 	ShimBinary  string
 	LogPath     string
+	// BeforeLoad converts on-disk state while the singleton lock is held.
+	BeforeLoad func() error
 
 	// onMetaSave, when non-nil, fires after every daemon meta write with the
 	// just-saved meta (test seam E5.3). It observes the reconnect-before-lost
@@ -151,25 +153,21 @@ type Config struct {
 
 // LaunchSpec is a request to launch a new session.
 type LaunchSpec struct {
-	RequiredRuntime                 string                   `json:"-"`
-	OpenCodeBinding                 *persist.OpenCodeBinding `json:"-"`
-	OpenCodeEnv                     []string                 `json:"-"`
-	OpenCodeLaunch                  *shim.OpenCodeConfig     `json:"-"`
-	AccountBinding                  *accounts.Binding
-	AccountProjectionRef            string
-	AccountNativeModel              string                        `json:"-"`
-	AccountNativeContext            bool                          `json:"-"`
-	AccountClaudeFallback           *persist.ClaudeFallbackPolicy `json:"-"`
-	AccountOriginalConfigurationEnv []string                      `json:"-"`
-	AccountStateRoot                string
-	AccountBackendArgs              []string
-	InputEmbargo                    string
-	AgentType                       string
-	Argv                            []string
-	Cwd                             string
-	ClientEnv                       []string
-	Cols, Rows                      int
-	Options                         map[string]string
+	RequiredRuntime   string                   `json:"-"`
+	OpenCodeBinding   *persist.OpenCodeBinding `json:"-"`
+	OpenCodeEnv       []string                 `json:"-"`
+	OpenCodeLaunch    *shim.OpenCodeConfig     `json:"-"`
+	LoginRuntime      *logins.Runtime
+	LoginStateRoot    string
+	LoginSwitchID     string
+	LoginSwitchSource string
+	InputEmbargo      string
+	AgentType         string
+	Argv              []string
+	Cwd               string
+	ClientEnv         []string
+	Cols, Rows        int
+	Options           map[string]string
 	// Name is the optional user-provided session label. The daemon only stamps it
 	// into the session meta; an empty name falls back to the agent name at display
 	// time (P2 / bd agents-tracker-4e2).
@@ -304,6 +302,12 @@ func Open(cfg Config) (*Daemon, error) {
 	lockFile, err := acquireLock(cfg.LockPath)
 	if err != nil {
 		return nil, err // ErrAlreadyRunning if held, else a real error
+	}
+	if cfg.BeforeLoad != nil {
+		if err := cfg.BeforeLoad(); err != nil {
+			_ = releaseLock(lockFile)
+			return nil, err
+		}
 	}
 
 	// Bind the socket only AFTER the lock is held; unlink a stale socket under the

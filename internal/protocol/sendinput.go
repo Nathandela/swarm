@@ -264,6 +264,27 @@ func (s *Server) inputGate(local string) error {
 	return nil
 }
 
+// SetNewTurnGateFunc pauses daemon-authored messages while leaving attached
+// terminal controls available to finish an interaction and detach.
+func (s *Server) SetNewTurnGateFunc(fn func(string) error) {
+	if fn == nil {
+		s.newTurnGateFn.Store(nil)
+		return
+	}
+	f := inputGateFunc(fn)
+	s.newTurnGateFn.Store(&f)
+}
+
+func (s *Server) newTurnGate(local string, frames [][]byte) error {
+	if len(frames) == 1 && len(frames[0]) == 1 && (frames[0][0] == 0x03 || frames[0][0] == 0x1b) {
+		return nil
+	}
+	if p := s.newTurnGateFn.Load(); p != nil {
+		return (*p)(local)
+	}
+	return nil
+}
+
 // SetDirectInputObserver installs the fail-closed marker invoked at the last
 // pre-write boundary. nil clears it. The atomic pointer permits assembly wiring
 // before or alongside listener startup without racing serving goroutines.
@@ -328,6 +349,9 @@ func (s *Server) sendMessage(local string, frames [][]byte, submits bool) error 
 	if err := s.inputGate(local); err != nil {
 		return err
 	}
+	if err := s.newTurnGate(local, frames); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -348,6 +372,9 @@ func (s *Server) sendMessage(local string, frames [][]byte, submits bool) error 
 	// above while this send waited for a prior message/attach. Recheck under the
 	// exact write locks, immediately before resolving/opening the stream.
 	if err := s.inputGate(local); err != nil {
+		return err
+	}
+	if err := s.newTurnGate(local, frames); err != nil {
 		return err
 	}
 

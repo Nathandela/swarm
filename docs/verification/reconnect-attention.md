@@ -8,13 +8,13 @@ Implementation follows [the detailed plan](../specifications/reconnect-attention
 
 Astra plan review required authoritative roster refresh instead of queued-event replay, request-ID correlation, shared cancellation/upgrade ownership, stale-action guards, deterministic concurrent waits and explicit failure lifetime. Each requirement is reflected in the plan and regression tests.
 
-A separate Astra implementation reviewer found and verified fixes for original-envelope admission, wait snapshots erasing live request correlation, form stale visibility, discarded banner timers, settings revision reload, Accounts-to-Options return and authoritative restoration of temporarily absent rows and failed initial subscription signaling. Its final verdict: **Approved for merge after required Linux CI passes.** Independent focused race checks passed, including three repeated runs of final recovery regressions; `git diff --check` passed.
+A separate Astra implementation reviewer found and verified fixes for original-envelope admission, wait snapshots erasing live request correlation, form stale visibility, discarded banner timers, settings revision reload and authoritative restoration of temporarily absent rows and failed initial subscription signaling. Its final verdict: **Approved for merge after required Linux CI passes.** Independent focused race checks passed, including three repeated runs of final recovery regressions; `git diff --check` passed.
 
 ## Failing-first evidence
 
 [Captured red transcripts](reconnect-attention-red.md) show absent question/error normalization, failed status derivation, premature/incomplete recovery, retry exhaustion, leaked candidates, stale payload regression, overlapping native request resolution, ambiguous transport envelopes, invisible stale forms, old Lists undoing completed rename, nonexpiring hydrated banners and stale settings. Follow-up tests cover the corresponding corrected behavior.
 
-Sticky-error lifetime and additive compatibility tests were added after implementation and started green; they are regression coverage, not claimed failing-first evidence. Existing exact board/ANSI goldens now pin the requested `approval` label and banner. The Accounts reconnect test expects a new coalesced channel rather than the provider's raw event channel.
+Sticky-error lifetime and additive compatibility tests were added after implementation and started green; they are regression coverage, not claimed failing-first evidence. Existing exact board/ANSI goldens now pin the requested `approval` label and banner.
 
 ## Local checks
 
@@ -32,7 +32,6 @@ Pinned native Go 1.25.0 and golangci-lint 2.12.2 ran on Darwin arm64. Pinned gom
 | Persistence→fresh reload→version-1 owner hello/List/Subscribe | Pass, three race repetitions |
 | Encrypted phone mailbox/status→durable restart | Pass, three race repetitions |
 | Android release identity gate, versionName 0.17.2/code 60 | Pass |
-| Linux arm64 skeleton/accountcheck test cross-compilation | Pass |
 | Existing production autostart/idempotency, real daemon handoff, live-shim/backend adoption and typed-status SIGKILL recovery | Pass, two native race repetitions |
 
 The socket test replaces a real protocol server at the same endpoint and preserves session/selection identity. A delayed old producer snapshot cannot overwrite hydration. Subsequent error status arrives through the replacement List connection. Candidate cleanup and superseded mutation replies are tested separately. Existing daemon singleton-startup, real restart and durable-shim survival tests passed twice natively and remain required CI coverage; recovery never launches/resumes/kills sessions. Initial Subscribe errors/nil streams now enter the same recovery path.

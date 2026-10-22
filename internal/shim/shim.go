@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nathandela/swarm/internal/accounts"
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/transcript"
@@ -43,22 +43,24 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
-	OpenCode             *OpenCodeConfig
-	AccountBinding       *accounts.Binding
-	AccountProjectionRef string
-	AccountStateRoot     string
-	InputEmbargo         string
-	InputEmbargoToken    string
-	CLIIdentity          *persist.CLIIdentity
-	SessionID            string
-	Argv                 []string      // argv[0] = program; exec'd directly, never via a shell
-	Cwd                  string        // agent working directory
-	Env                  []string      // pre-filtered by caller; TERM=dumb is normalized to the PTY type
-	SocketPath           string        // per-session UDS
-	SessionDir           string        // supervision side-files and bounded identity tail
-	Cols, Rows           int           // initial PTY + emulator dimensions
-	GraceTimeout         time.Duration // TERM->KILL grace on the signal op
-	Metrics              *Metrics      // optional, test-observable counters
+	LoginRuntime      *logins.Runtime
+	LoginStateRoot    string
+	LoginSwitchID     string
+	LoginSwitchSource string
+	NativeProvider    string
+	OpenCode          *OpenCodeConfig
+	InputEmbargo      string
+	InputEmbargoToken string
+	CLIIdentity       *persist.CLIIdentity
+	SessionID         string
+	Argv              []string      // argv[0] = program; exec'd directly, never via a shell
+	Cwd               string        // agent working directory
+	Env               []string      // pre-filtered by caller; TERM=dumb is normalized to the PTY type
+	SocketPath        string        // per-session UDS
+	SessionDir        string        // supervision side-files and bounded identity tail
+	Cols, Rows        int           // initial PTY + emulator dimensions
+	GraceTimeout      time.Duration // TERM->KILL grace on the signal op
+	Metrics           *Metrics      // optional, test-observable counters
 
 	// HookSocketPath is the per-session hook UDS (playbook §6.1): a second listener,
 	// independent of SocketPath's PTY/control plane. Empty disables it entirely --
@@ -140,7 +142,7 @@ func Run(cfg Config) (agentExit int, err error) {
 	defer func() { err = errors.Join(err, managed.finish()) }()
 	// Resolve once, before either native process can start. Scope custody is
 	// already installed so a clean selector failure also has positive stop proof.
-	if err := resolveAccountEnvironment(&cfg); err != nil {
+	if err := resolveLoginEnvironment(&cfg); err != nil {
 		return 0, err
 	}
 
@@ -250,11 +252,11 @@ func Run(cfg Config) (agentExit int, err error) {
 	_ = os.Remove(filepath.Join(cfg.SessionDir, CLIObservationFile))
 	// Observe before either process starts; the post-spawn check covers both.
 	cliStable := cliInstallationMatches(cfg)
-	if cfg.AccountBinding != nil && cfg.CLIIdentity != nil && persist.IsCLIContentFingerprint(cfg.CLIIdentity.Fingerprint) && !cliStable {
+	if cfg.LoginRuntime != nil && cfg.CLIIdentity != nil && persist.IsCLIContentFingerprint(cfg.CLIIdentity.Fingerprint) && !cliStable {
 		sigStop()
 		_ = listener.Close()
 		closeTranscript(tr)
-		return 0, errAccountResolution
+		return 0, errLoginResolution
 	}
 	if cfg.Backend == nil {
 		cmd = &exec.Cmd{
@@ -272,7 +274,7 @@ func Run(cfg Config) (agentExit int, err error) {
 			return 0, fmt.Errorf("shim: start agent: %w", startErr)
 		}
 		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, cmd.Process.Pid, cfg.GraceTimeout, cfg.Metrics)
-		srv.managedSignals = managed != nil
+		srv.managedSignals = managed != nil && managed.subreaper
 		srv.ptyIn.embargo = embargo
 		srv.openCode = cfg.OpenCode
 		replies = wireReplies(emu, srv)
@@ -295,7 +297,7 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 		_ = setWinsize(ptmx, ws)
 		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, 0, cfg.GraceTimeout, cfg.Metrics)
-		srv.managedSignals = managed != nil
+		srv.managedSignals = managed != nil && managed.subreaper
 		srv.ptyIn.embargo = embargo
 		srv.openCode = cfg.OpenCode
 		replies = wireReplies(emu, srv)
@@ -321,7 +323,7 @@ func Run(cfg Config) (agentExit int, err error) {
 				// find (containBackendFailure says why). setBackendPgid(0) afterwards:
 				// the group is fully reaped, and re-KILLing that pgid at finalization
 				// -- possibly hours later -- could hit a recycled group.
-				containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout, managed != nil)
+				containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout, managed != nil && managed.subreaper)
 				srv.setBackendPgid(0)
 			}
 		} else if werr := writeBackendInfo(cfg.SessionDir, backend, cfg.Backend.SocketPath); werr != nil {
@@ -336,7 +338,7 @@ func Run(cfg Config) (agentExit int, err error) {
 			log.Printf("shim: record the session backend: %v; killing the unrecorded backend "+
 				"and launching the agent without it (a backend the daemon cannot identify "+
 				"must not survive this shim)", werr)
-			containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout, managed != nil)
+			containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout, managed != nil && managed.subreaper)
 			srv.setBackendPgid(0)
 		} else {
 			// SERVING AND RECORDED, so the session HAS a structured plane and its death

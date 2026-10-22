@@ -1,0 +1,62 @@
+{
+  "binary": "/home/ubuntu/.local/share/claude/versions/2.1.308",
+  "native_version": "2.1.308",
+  "provider": "claude",
+  "common_config_dir": "/tmp/swarm-native-claude-aba-a8pspsda/common",
+  "project": "/tmp/swarm-native-claude-aba-a8pspsda/project",
+  "tools_enabled": false,
+  "distinct_accounts": true,
+  "credential_copies_created": false,
+  "credential_storage": "Original enrolled profile selected through CLAUDE_SECURESTORAGE_CONFIG_DIR",
+  "steps": [
+    {
+      "account": "A",
+      "exit_code": 0,
+      "resume_requested": false,
+      "marker_in_prompt": true,
+      "force_cached_expiry": false,
+      "common_auth_file_exists": false,
+      "native_is_error": false,
+      "same_conversation_id": true,
+      "marker_recalled": true,
+      "native_subtype": "success",
+      "native_refresh_token_changed": false,
+      "source_access_expiry_future": true
+    },
+    {
+      "account": "B",
+      "exit_code": 0,
+      "resume_requested": true,
+      "marker_in_prompt": false,
+      "force_cached_expiry": false,
+      "common_auth_file_exists": false,
+      "native_is_error": false,
+      "same_conversation_id": true,
+      "marker_recalled": true,
+      "native_subtype": "success",
+      "native_refresh_token_changed": false,
+      "source_access_expiry_future": true
+    },
+    {
+      "account": "A",
+      "exit_code": 0,
+      "resume_requested": true,
+      "marker_in_prompt": false,
+      "force_cached_expiry": true,
+      "common_auth_file_exists": false,
+      "native_is_error": false,
+      "same_conversation_id": true,
+      "marker_recalled": true,
+      "native_subtype": "success",
+      "native_refresh_token_changed": true,
+      "source_access_expiry_future": true
+    }
+  ],
+  "a_b_a_passed": true,
+  "latest_auth_remains_in_original_profiles": true,
+  "source_auth_changed": [
+    true,
+    false
+  ],
+  "history_file_in_common_context": true
+}

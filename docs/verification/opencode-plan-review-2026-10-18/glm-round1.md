@@ -47,6 +47,6 @@ One OpenCode worker on pinned 1.19.3 with: shim-owned serve + persisted nativeID
 
 ## 5. Remove/defer
 
-Defer: structured phone composer/control until receipts are trustworthy; native children/subagent links until after the first slice; v2 adoption except for durable queue/idempotency/history paging (and only if qualified); compaction observations until post-soak; Linux account-pool strategy behind an owner flag; "projected paged messages" until history qualification; interrupt fencing beyond disclosed scope. Do not build: any provider framework, duplicate Swarm messaging log, full transcript archive, or universal-parity claims — Codex 0.163.0 outside ContextGuard's characterized range and Claude's missing ContextGuard must remain explicitly version-bounded disclosures.
+Defer: structured phone composer/control until receipts are trustworthy; native children/subagent links until after the first slice; v2 adoption except for durable queue/idempotency/history paging (and only if qualified); compaction observations until post-soak; "projected paged messages" until history qualification; interrupt fencing beyond disclosed scope. Do not build: any provider framework, duplicate Swarm messaging log, full transcript archive, or universal-parity claims — Codex 0.163.0 outside ContextGuard's characterized range and Claude's missing ContextGuard must remain explicitly version-bounded disclosures.
 
 REVIEW_COMPLETE

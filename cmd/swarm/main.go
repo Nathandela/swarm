@@ -23,13 +23,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
 
-	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/detect"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/attach"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/hookclient"
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/shim"
@@ -137,7 +137,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case "shim":
 		return runShim(args[1:], stdout, stderr)
 	case "internal":
-		return runAccountEnrollment(args[1:])
+		return runLoginWorker(args[1:])
 	case "hook":
 		return runHook(args[1:], os.Stdin, stderr)
 	case "remote":
@@ -238,7 +238,7 @@ func runTUI(stdout, stderr io.Writer) int {
 	opts := []tui.Option{tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc))}
 	opts = append(opts, tui.WithDaemonReconnector(func() (tui.Client, error) {
 		return dialClient(tuiCaps())
-	}), tui.WithAccountLoginRunner(accountLoginRunner(tui.TerminalHandoff{
+	}), tui.WithLoginRunner(loginRunner(tui.TerminalHandoff{
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
 	})))
@@ -317,7 +317,7 @@ func clientConfig() (daemon.ClientConfig, error) {
 // attachDialer's per-attach dial deliberately does NOT use this set: it offers
 // {"attach"} and never submits a launch.
 func tuiCaps() []string {
-	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapAccountsManage, protocol.CapOpenCodeObservation}
+	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapLoginsManage, protocol.CapOpenCodeObservation}
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
@@ -637,22 +637,24 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
-	OpenCode             *shim.OpenCodeConfig `json:"opencode,omitempty"`
-	AccountBinding       *accounts.Binding    `json:"account_binding,omitempty"`
-	AccountProjectionRef string               `json:"account_projection_ref,omitempty"`
-	AccountStateRoot     string               `json:"account_state_root,omitempty"`
-	InputEmbargo         string               `json:"input_embargo,omitempty"`
-	InputEmbargoToken    string               `json:"input_embargo_token,omitempty"`
-	CLIIdentity          *persist.CLIIdentity `json:"cli_identity,omitempty"`
-	SessionID            string               `json:"session_id"`
-	Argv                 []string             `json:"argv"`
-	Cwd                  string               `json:"cwd"`
-	Env                  []string             `json:"env"`
-	SocketPath           string               `json:"socket_path"`
-	SessionDir           string               `json:"session_dir"`
-	Cols                 int                  `json:"cols"`
-	Rows                 int                  `json:"rows"`
-	GraceMS              int                  `json:"grace_ms"`
+	LoginRuntime      *logins.Runtime      `json:"login_runtime,omitempty"`
+	LoginStateRoot    string               `json:"login_state_root,omitempty"`
+	LoginSwitchID     string               `json:"login_switch_id,omitempty"`
+	LoginSwitchSource string               `json:"login_switch_source,omitempty"`
+	NativeProvider    string               `json:"native_provider,omitempty"`
+	OpenCode          *shim.OpenCodeConfig `json:"opencode,omitempty"`
+	InputEmbargo      string               `json:"input_embargo,omitempty"`
+	InputEmbargoToken string               `json:"input_embargo_token,omitempty"`
+	CLIIdentity       *persist.CLIIdentity `json:"cli_identity,omitempty"`
+	SessionID         string               `json:"session_id"`
+	Argv              []string             `json:"argv"`
+	Cwd               string               `json:"cwd"`
+	Env               []string             `json:"env"`
+	SocketPath        string               `json:"socket_path"`
+	SessionDir        string               `json:"session_dir"`
+	Cols              int                  `json:"cols"`
+	Rows              int                  `json:"rows"`
+	GraceMS           int                  `json:"grace_ms"`
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1); "" (an
 	// old, pre-R6 launch config with no such key) disables it entirely (requirement
 	// 7's compat), leaving shim.Run's behavior exactly what it is today.
@@ -694,25 +696,23 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
-		OpenCode:             lc.OpenCode,
-		AccountBinding:       lc.AccountBinding,
-		AccountProjectionRef: lc.AccountProjectionRef,
-		AccountStateRoot:     lc.AccountStateRoot,
-		InputEmbargo:         lc.InputEmbargo,
-		InputEmbargoToken:    lc.InputEmbargoToken,
-		CLIIdentity:          lc.CLIIdentity,
-		SessionID:            lc.SessionID,
-		Argv:                 lc.Argv,
-		Cwd:                  lc.Cwd,
-		Env:                  lc.Env,
-		SocketPath:           lc.SocketPath,
-		SessionDir:           lc.SessionDir,
-		Cols:                 lc.Cols,
-		Rows:                 lc.Rows,
-		GraceTimeout:         time.Duration(lc.GraceMS) * time.Millisecond,
-		HookSocketPath:       lc.HookSocketPath,
-		HookToken:            lc.HookDrainToken,
-		Backend:              backendConfigFromLaunch(lc),
+		OpenCode:     lc.OpenCode,
+		LoginRuntime: lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,
+		InputEmbargo:      lc.InputEmbargo,
+		InputEmbargoToken: lc.InputEmbargoToken,
+		CLIIdentity:       lc.CLIIdentity,
+		SessionID:         lc.SessionID,
+		Argv:              lc.Argv,
+		Cwd:               lc.Cwd,
+		Env:               lc.Env,
+		SocketPath:        lc.SocketPath,
+		SessionDir:        lc.SessionDir,
+		Cols:              lc.Cols,
+		Rows:              lc.Rows,
+		GraceTimeout:      time.Duration(lc.GraceMS) * time.Millisecond,
+		HookSocketPath:    lc.HookSocketPath,
+		HookToken:         lc.HookDrainToken,
+		Backend:           backendConfigFromLaunch(lc),
 	}
 }
 

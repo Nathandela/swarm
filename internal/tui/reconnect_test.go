@@ -247,7 +247,7 @@ func TestReconnect_HydratedBannerExpires(t *testing.T) {
 }
 
 func TestReconnect_OptionsReloadPreservesPolicyDraft(t *testing.T) {
-	for _, activeScreen := range []screen{screenOptions, screenAccounts} {
+	for _, activeScreen := range []screen{screenOptions, screenLogins} {
 		t.Run(string(rune('0'+activeScreen)), func(t *testing.T) {
 			old, fresh := newContextGuardOptionsClient(), newContextGuardOptionsClient()
 			m := New(old, nil).(rootModel)

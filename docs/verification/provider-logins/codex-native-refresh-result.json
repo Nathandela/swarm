@@ -1,0 +1,44 @@
+{
+  "refresh_token_changed": true,
+  "access_token_changed": true,
+  "expiry_future": true,
+  "request_success": true,
+  "native_version": "0.163.0",
+  "date": "2026-10-23",
+  "source_proof": {
+    "commit": "83086188ae0614bd882818ff1aa23f3194962012",
+    "native_api": "account/read refreshToken:true",
+    "no_expiry_gate": true,
+    "guarded_reload_before_refresh": true,
+    "force_refresh_when_unchanged": true,
+    "native_persists_and_reloads_latest": true,
+    "test_zero_profile_writers_before_launch": true,
+    "native_process_waited_at_exit": true,
+    "credentials_remained_original_source_path": true,
+    "credential_copy": false,
+    "expiry_tampering": false,
+    "custom_oauth_client": false,
+    "model_or_tool_request": false,
+    "requests": 1,
+    "files": [
+      {
+        "source": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/request_processors/account_processor/workspace_routing.rs",
+        "local_sha256": "fe480f83e80b6b2671f12d1b6067755e9f9df63b2fbdf11c1ecbda2f3799e11e"
+      },
+      {
+        "source": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/request_processors/account_processor.rs",
+        "local_sha256": "e9b97b6c21e98fffabb4ebbe62b50b1d71e53b40d7e636911e893d9729d49864"
+      },
+      {
+        "source": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/login/src/auth/manager.rs",
+        "local_sha256": "d2081e3e4f2f339a7a1aa52ea62d8485e7785c2b0a12dde1a7f470019d56dc2a"
+      }
+    ]
+  },
+  "concurrency_evidence": {
+    "real_concurrent_refresh_test": false,
+    "native_synthetic_overlap_previously_observed": true,
+    "provider_maintainer_reuse_window_reference": "https://github.com/openai/codex/issues/10332",
+    "scope": "Single-owner real forced refresh, synthetic native overlap, and upstream provider behavior; no claim of a real simultaneous refresh experiment."
+  }
+}

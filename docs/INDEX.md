@@ -14,7 +14,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
 ## Operations
-- [Personal account pools](operations/account-pools.md) — add and manage provider accounts, opt in to assignment, and understand guarded recovery
+- [Provider logins](operations/provider-logins.md) — manage native Claude Code and Codex logins and provider-wide safe switches
 - [Pilot a Swarm conversation](operations/pilot.md) — caller-scoped `swarm --pilot` guidance and commands
 - [Remote-control operator runbook](operations/operator-runbook.md) — provision, pair, revoke and diagnose the one Cloudflare relay-v2 Worker
 - [Metadata disclosure](operations/metadata-disclosure.md) — the register of who observes what: the relay operator, the push provider, the gateway, a network observer, and (§5) a second model vendor, the one entry that receives session content rather than metadata (PB-OPS-3)
@@ -38,7 +38,6 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Scale-to-zero verification](verification/remote-scale-to-zero/README.md) — reproducible local runtime/emulator/interop tests and explicit unrun production gates
 - [Private mobile repository decision](research/mobile-private-repository.md) — source-access/IP benefits, APK/history limits, split/CI costs and release-continuity gates
 - [Lightweight storage strategies](research/swarm-lightweight-storage-strategies.md) — native history ownership, bounded caches, workspace growth, quota boundaries, and recovery trade-offs; research, not an implementation decision
-- [Subscription switcher investigation](research/subscription-switcher-2026-10-22.md) — current account-pool failures, native auth-cache experiment, reputable references, and a proposed provider-wide replacement with explicit acceptance gaps
 - [Lightweight storage fixing plan](specifications/lightweight-storage-plan.md) — owner-selected live-only supervisor, workspace boundaries, deletion, legacy cleanup, and two-host acceptance
 
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
@@ -73,6 +72,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [ADR-022](adr/ADR-022-live-session-name-adoption.md) — a session's name follows the name its CLI shows (Claude's `~/.claude/sessions` registry), newest wins
 - [ADR-023](adr/ADR-023-context-guard-auto-compaction.md) — opt-in, exact, provenance-bound ContextGuard with crash-safe at-most-once semantics and provider rollout gates
 - [ADR-025](adr/ADR-025-launch-gate-answered-by-the-daemon.md) — the daemon answers Claude Code's folder-trust launch gate itself, grid-gated and once per session; an unanswered gate reads as needs_input
+- [ADR-034](adr/ADR-034-provider-wide-native-logins.md) — one native login per provider, provider-wide safe switching, and owner-local credential custody
 
 ## Governance
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
@@ -88,14 +88,11 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [v0.18 storage rollout](verification/lightweight-storage-rollout.md) — release gates, both-host deployment, legacy-journal recovery, executed cleanup, runtime storage checks and retained work
 - [Storage cleanup inventory](verification/storage-cleanup-inventory.md) — measured Mac/VM state, live-writer limits, missing recovery destination, and explicit cleanup boundaries
 - [Discussion deletion](verification/discussion-deletion.md) — remove retained attempts and owned worktrees, retry failed cleanup, and preserve lifecycle ordering
-- [Personal account pool evidence](verification/account-pools-v0150.md) — implementation verification boundaries and outstanding authenticated release acceptance
-- [Account-pool v0.16.1 hotfix evidence](verification/account-pools-v0161.md) — owner-provided native configuration ingress regression and pending release verification
-- [Account-pool v0.17.6 evidence](verification/account-pools-v0176.md) — qualified Codex runtime, guarded running-discussion enrollment and release acceptance
+- [Provider login qualification](verification/provider-logins.md) — native feasibility evidence and open integrated release gates
 - [Codex minimum version and migration readiness](verification/codex-minimum-version.md) — forward version admission, installed native sign-in checks and current bulk-migration limits
-- [Phase A rotation unblock](verification/phase-a.md) — native configuration drift accepted, liveness writer holds, per-account retry, resume and handoff fixes, journal retention (v0.17.8)
-- [v0.17.9 credential lock and board freshness](verification/v0179.md) — identity-drift lock release, owner refresh relaunch, board elapsed, SubagentStop ordering, status persist retry
-- [v0.17.10 Claude minimum version and owner fallback](verification/v0180.md) — managed Claude on the installed CLI, owner fallback, account transition logs, Codex out-of-messages prompt
-- [Account onboarding hotfix evidence](verification/account-pools-v0151.md) — readable Accounts and sign-in flow, independent review and patch release verification
+- [Phase A verification](verification/phase-a.md) — Codex model scan, backend/shim resilience, resume history and journal retention (v0.17.8)
+- [v0.17.9 verification](verification/v0179.md) — CLI refresh retry bounds, board elapsed, SubagentStop ordering and status persist retry
+- [v0.17.10 verification](verification/v0180.md) — Codex out-of-messages attention detection
 - [Audit committee report 001](verification/audit-001-system-spec.md) — the adversarial review that shaped spec Draft 2
 - [Audit committee report 002](verification/audit-002-implementation-goals.md) — the review that shaped implementation-goals.md Draft 2
 - [Landscape research](research/agent_view_landscape.md) — Agent View internals, cross-CLI managers, mobile remotes

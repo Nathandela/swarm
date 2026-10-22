@@ -1,8 +1,7 @@
 Ponytail debt ledger
 Scan: git grep --no-index --exclude-standard -nE '(#|//|/[*]) ?(shortcut|ponytail):'
-Result: 34 marker hits inspected with their contiguous comment context; 23 are actual deferrals/ceilings and 11 are contract-only explanations or design rationale.
+Result: 34 marker hits were inspected in the original scan. After removing one retired native-inventory marker, this ledger retains 33 entries: 22 actual deferrals/ceilings and 11 contract-only explanations or design rationale.
 
-internal/accounts/native_inventory.go:26, retain later Codex inventories outside erasure; ceiling: only qualified files are erased; upgrade: qualify their files before extending erasure.
 internal/adapter/claude/claude.go:299, leave a leading-dash InitialPrompt unseparated in argv; ceiling: option-derived tokens are closed, but the positional prompt can still parse as a flag; upgrade: confirm live CLI accepts `--` and add the separator.
 internal/adapter/claude/interaction.go:70, classify Bash path risk with a character heuristic that misses bare relative filenames; ceiling: `touch Makefile`/`rm README` can reach native mode; upgrade: widen ADR-010 §5 or route every Bash PermissionRequest to prompt_card after an owner ruling. (The comment says this is latent until the prompt-card apply path exists.)
 internal/adapter/claude/interaction.go:242, deliver Claude prose only at turn end; ceiling: Stop is the only captured prose event, so no streaming; upgrade: use a producer that can emit increments (stream-json, SDK transport, or an increment-producing hook).
@@ -39,4 +38,4 @@ Skipped marker hits (not deferred work; contract/design rationale only):
 - internal/skeleton/approval.go:339 — no interaction events are emitted for a session with no open items/approval; follows the transcript marker contract.
 - internal/skeleton/interaction.go:60 — constants are unexported because only the producer package shapes fields; visibility rationale.
 
-23 markers, 7 with no trigger.
+22 markers, 7 with no trigger.

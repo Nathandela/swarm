@@ -1,0 +1,41 @@
+{
+  "qualification": "Production Swarm owner-local login A-to-B-to-A with two disposable discussions per provider",
+  "providers": {
+    "claude": {
+      "passed": true,
+      "native_conversations": 2,
+      "exact_id_model_cwd_retained": true,
+      "source_restored": true,
+      "stopped_writer_proofs": {
+        "count": 6,
+        "all_stopped": true
+      },
+      "evidence": "swarm-claude-login-manager-aba-result.json",
+      "vm_run": "/tmp/slq-claude-01"
+    },
+    "codex": {
+      "passed": true,
+      "native_conversations": 2,
+      "exact_id_model_cwd_retained": true,
+      "source_restored": true,
+      "stopped_writer_proofs": {
+        "count": 6,
+        "all_stopped": true
+      },
+      "evidence": "swarm-codex-login-manager-aba-result.json",
+      "vm_run": "/tmp/slq-codex-03"
+    }
+  },
+  "no_prompt_replay": "Native canary prompt counts exactly 1, 2, 3; resumed argv contains no initial marker",
+  "codex_model_restore": "Latest run explicitly asserted no --model argument on resumed frontend; native gpt-6-luna preserved",
+  "tools": "No tool calls requested or observed; busy tool/approval boundary remains synthetic-only qualification",
+  "credential_custody": "VM-local sources parked during each run and latest native grants restored after environment-writer exclusion; no credential exported",
+  "owner_sessions": "No existing owner process signaled",
+  "source_tree": "Shared uncommitted working tree; Codex latest auth-boundary/model fixes included; Claude preceding snapshot passed independently",
+  "codex_qualified_binary_sha256": "9cd9dbf5b056bfb8320bee812db9dda88e34733661cf8b2ca20904851b39cc01",
+  "limitations": [
+    "Linux VM native integration; macOS real Keychain continuation not qualified by this run",
+    "No live native busy-tool/approval interruption or controlled side-effect counter in this canary"
+  ],
+  "automatic_review_rejection": "Export of arbitrary private log/argv excerpts was rejected; completed diagnosis used fixed VM-local boolean classification only"
+}

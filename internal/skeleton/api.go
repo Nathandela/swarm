@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Nathandela/swarm/internal/accountconfig"
 	"log"
 	"net/http"
 	"os"
@@ -15,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Nathandela/swarm/internal/accounts"
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
@@ -158,7 +156,8 @@ type coreAPI struct {
 	// bare coreAPI tests, where the optional protocol seam honestly answers unavailable.
 	contextGuardSettings *contextGuardSettingsStore
 	contextGuards        *contextGuardManager
-	accounts             *accountManager
+	logins               *loginManager
+	loginMu              sync.Mutex
 	// ksMu guards the read-time diff-write of the durable kill-switch state:
 	// RemoteControlEnabled runs on every remote op and concurrently. ksPersisted is the
 	// last enabled value written to remote-state.json this process (nil => never written),
@@ -1029,8 +1028,6 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		}
 		if len(source.Env) > 0 {
 			spec.ClientEnv = append([]string(nil), source.Env...)
-			spec.ClientEnv = restoreClaudeOwnerFallback(source, spec.ClientEnv)
-			spec.AccountOriginalConfigurationEnv = daemon.NativeConfigurationEnvironment(spec.ClientEnv)
 		}
 	}
 	if err := a.captureOpenCodeOrigin(&spec); err != nil {
@@ -1047,9 +1044,6 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// the core then hands the shim, so the binary this resolves is the binary the
 	// agent runs. THIS is the one point every launch entry passes through; resolving
 	// here is what makes the daemon-side seam real (R1 audit H1).
-	if spec.AccountOriginalConfigurationEnv == nil {
-		spec.AccountOriginalConfigurationEnv = a.core.NativeConfigurationEnvironment(spec.ClientEnv)
-	}
 	spec.ClientEnv = a.core.LaunchPolicyEnv(spec.ClientEnv)
 	// PRESENCE, not emptiness -- and this layer is the one that must get it right,
 	// because it is the ONLY point every launch entry passes through. handleLaunch has
@@ -1137,28 +1131,17 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		if existing, ok := runningConversation(a.core.List(), source); ok {
 			return existing, nil
 		}
-		if source.AccountBinding != nil {
-			if a.accounts == nil || a.accounts.store == nil || a.accounts.unavailable != nil || a.accounts.stateRoot == "" {
-				return persist.Meta{}, errAccountLaunch
-			}
-			// Retained attempts can still own profile writers after a later
-			// attempt stopped cleanly. Check the whole bound conversation while
-			// the same fence prevents another owner resume from racing spawn.
+		if managedLoginProvider(source.AgentType) {
 			for _, attempt := range a.core.List() {
-				if attempt.AccountBinding == nil || attempt.AgentType != source.AgentType || (attempt.ID != source.ID && (source.ConversationID == "" || attempt.ConversationID != source.ConversationID)) {
-					continue
-				}
-				if err := verifyAccountWritersStopped(a.accounts.stateRoot, attempt); err != nil {
-					return persist.Meta{}, fmt.Errorf("resume: managed native writer death is unconfirmed for %q: %w", attempt.ID, err)
+				if attempt.AgentType == source.AgentType && (attempt.ID == source.ID || source.ConversationID != "" && attempt.ConversationID == source.ConversationID) {
+					if err := verifyLoginWritersStopped(a.stateDir, attempt); err != nil {
+						return persist.Meta{}, fmt.Errorf("resume: native writer death is unconfirmed for %q: %w", attempt.ID, err)
+					}
 				}
 			}
 		}
 	}
-	var admissionErr error
-	spec, admissionErr = a.prepareLegacyAccountResume(spec)
-	if admissionErr != nil {
-		return persist.Meta{}, admissionErr
-	}
+
 	// ADR-024: stamp the account identity of the credentials this agent will load,
 	// resolved at the same moment as the argv and the env above -- this is the one
 	// point every launch entry passes through, so every session carries the stamp
@@ -1169,45 +1152,11 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	if spec.AuthIdentity == "" {
 		spec.AuthIdentity = launchAuthIdentity(spec.AgentType, spec.ClientEnv)
 	}
-	composed, err := composeLaunchSpec(spec, a.endpointID, a.fakeAgentBin, a.core.Get, a.accountLaunchResolver(spec))
+	composed, err := composeLaunchSpec(spec, a.endpointID, a.fakeAgentBin, a.core.Get, lookPathIn)
 	if err != nil {
 		return persist.Meta{}, err
 	}
-	// A3: an account-specific refusal is logged and the next eligible account is
-	// tried; a launch failure every account would share is returned as is.
-	var tried []accountRefusal
-	var lastErr error
-	for {
-		resolved := composed
-		if err := a.bindAccountLaunch(&resolved, tried...); err != nil {
-			return persist.Meta{}, err
-		}
-		if resolved.AccountBinding != nil && refusedAccount(tried, resolved.AccountBinding.AccountID) {
-			return persist.Meta{}, lastErr // a frozen binding cannot move to another account
-		}
-		m, err := a.launchResolved(resolved)
-		if err == nil || resolved.AccountBinding == nil {
-			return m, err
-		}
-		lastErr = err
-		refusal := a.accountRefusal(*resolved.AccountBinding, err)
-		log.Printf("accounts: %s launch %q refused on account %s (%q): %v", resolved.AgentType, resolved.Name, refusal.id, refusal.label, err)
-		if refusal.code == "" {
-			if !errors.Is(err, errAccountLaunch) || !a.selectorChoseBinding(composed) {
-				return m, err
-			}
-			// ADR-032 Amendment 4: a rotation-machinery failure on a binding the
-			// selector chose falls back to the owner login rather than blocking it.
-			log.Printf("accounts: %s launch %q fell back to the owner login after account %q refused: %v", resolved.AgentType, resolved.Name, refusal.label, err)
-			m, err = a.launchResolved(composed)
-			if err == nil {
-				reason := strings.TrimSuffix(lastErr.Error(), "; review Accounts before resuming") // the remedy stays in the log
-				m.LaunchNotice = fmt.Sprintf("launched on the owner login: account %q refused: %s", refusal.label, reason)
-			}
-			return m, err
-		}
-		tried = append(tried, refusal)
-	}
+	return a.launchResolved(composed)
 }
 
 // errCLIOlderThanSource refuses a bound resume that would downgrade the CLI
@@ -1219,31 +1168,24 @@ var errCLIOlderThanSource = errors.New("launch: cli-older-than-source: the insta
 func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, error) {
 	a.workspaceMu.RLock()
 	defer a.workspaceMu.RUnlock()
-	var err error
-	var managedIdentity *persist.CLIIdentity
-	if resolved.AccountBinding != nil && (resolved.AgentType == accounts.ProviderClaude || resolved.AgentType == accounts.ProviderCodex) {
-		managedIdentity, err = a.accounts.managedNative(resolved.AgentType, resolved.ClientEnv, resolved.Cwd)
-		if err != nil || len(resolved.Argv) == 0 {
-			return persist.Meta{}, errAccountLaunch
-		}
-		resolved.Argv = append([]string(nil), resolved.Argv...)
-		resolved.Argv[0] = managedIdentity.Path
+	if a.logins != nil && managedLoginProvider(resolved.AgentType) {
+		gate := &a.logins.admission[loginProviderIndex(resolved.AgentType)]
+		gate.Lock()
+		defer gate.Unlock()
 	}
+	if err := a.bindLoginLaunch(&resolved); err != nil {
+		return persist.Meta{}, err
+	}
+
 	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex") {
 		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], resolved.ClientEnv, resolved.Cwd)
-		if managedIdentity != nil {
-			if probeErr != nil || observed == nil || observed.Version != managedIdentity.Version || !persist.MatchCLIFingerprint(managedIdentity.Path, managedIdentity.Fingerprint) {
-				return persist.Meta{}, errAccountLaunch
-			}
-			observed = managedIdentity
-		}
 		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || observed == nil || *expected != *observed) {
 			return persist.Meta{}, fmt.Errorf("launch: CLI installation changed before refresh")
 		}
 		resolved.CLIIdentity = observed
-		if resolved.AccountBinding != nil {
-			if probeErr != nil || observed == nil || !accountconfig.SupportedNativeVersion(resolved.AgentType, observed.Version) {
-				return persist.Meta{}, errAccountLaunch
+		if resolved.LoginRuntime != nil {
+			if probeErr != nil || observed == nil {
+				return persist.Meta{}, fmt.Errorf("login: native CLI identity unavailable")
 			}
 			if src := resolved.Options[protocol.OptionResumeFrom]; src != "" {
 				if _, source, err := validateResumeSource(src, resolved.AgentType, a.endpointID, a.core.Get); err == nil && cliIdentityNewer(source.CLIIdentity, observed) {
@@ -1253,6 +1195,7 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 			resolved.ExpectedCLIIdentity = observed
 		}
 	}
+
 	if err := a.qualifyOpenCodeLaunch(&resolved); err != nil {
 		return persist.Meta{}, err
 	}

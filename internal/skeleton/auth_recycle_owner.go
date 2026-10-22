@@ -102,8 +102,8 @@ func (d *Daemon) withAuthResumeFence(local string, attempt func() bool) (attempt
 }
 
 func (d *Daemon) ownerKill(local string) error {
-	if d.accountRotation != nil && d.accountRotation.handles(local) {
-		return d.accountRotation.OwnerEnd(local, "kill")
+	if d.logins != nil && d.logins.owns(local) {
+		return d.logins.OwnerEnd(local, "kill")
 	}
 	if d.core == nil {
 		return errors.New("skeleton: owner kill has no daemon core")
@@ -118,8 +118,8 @@ func (d *Daemon) ownerKill(local string) error {
 }
 
 func (d *Daemon) ownerDelete(local string) error {
-	if d.accountRotation != nil && d.accountRotation.handles(local) {
-		return d.accountRotation.OwnerEnd(local, "delete")
+	if d.logins != nil && d.logins.owns(local) {
+		return d.logins.OwnerEnd(local, "delete")
 	}
 	if d.core == nil {
 		return errors.New("skeleton: owner delete has no daemon core")

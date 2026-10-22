@@ -76,11 +76,10 @@ var remoteForbiddenOptions = map[string]string{
 // entirely (R-POL.5): it is an unauthenticated channel (LaunchContentHash excludes Env),
 // so filtering is not enough — it must not survive at all.
 func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
-	var clientEnv, configurationEnv, openCodeEnv []string
+	var clientEnv, openCodeEnv []string
 	if !remote && req.Env != nil {
 		// Capture owner configuration origins before the launch allowlist removes
 		// them. Nil still requests daemon policy; an explicit empty env stays empty.
-		configurationEnv = daemon.NativeConfigurationEnvironment(req.Env)
 		clientEnv = persist.FilterEnv(req.Env)
 		if req.Agent == "opencode" {
 			openCodeEnv = make([]string, 0)
@@ -97,14 +96,13 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		Name:      SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
 		// The launch-time tag takes the SAME sanitization as set_tag's (handleSetTag):
 		// a client is never trusted to have sanitized it, and a blank tag is no tag.
-		Tag:                             strings.TrimSpace(SanitizeName(req.Tag)),
-		Cwd:                             req.Cwd,
-		ClientEnv:                       clientEnv,
-		OpenCodeEnv:                     openCodeEnv,
-		AccountOriginalConfigurationEnv: configurationEnv,
-		Cols:                            req.Cols,
-		Rows:                            req.Rows,
-		Options:                         launchOptions(req),
+		Tag:         strings.TrimSpace(SanitizeName(req.Tag)),
+		Cwd:         req.Cwd,
+		ClientEnv:   clientEnv,
+		OpenCodeEnv: openCodeEnv,
+		Cols:        req.Cols,
+		Rows:        req.Rows,
+		Options:     launchOptions(req),
 		// OperationID carries the signed launch operation_id to the daemon so its launch
 		// idempotency engages — a replayed signed remote launch reuses the reserved session
 		// instead of double-spawning (C3). Owner-tier launches carry no operation_id (""), so
@@ -266,7 +264,7 @@ var serverCaps = []string{
 	CapRemoteGateway, CapJournal, CapJournalSubscribeFrom, CapActivity, CapPolicy, CapPairing,
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
-	CapAccountsManage,
+	CapLoginsManage,
 	CapSemanticSend, CapOpenCodeObservation, CapNativeRequests,
 }
 
@@ -354,7 +352,8 @@ type Server struct {
 	// notification) before its first byte -- production wires ContextGuard's
 	// effect-window gate (ADR-023 amendment 1). Same atomic-pointer shape as the
 	// seams above.
-	inputGateFn atomic.Pointer[inputGateFunc]
+	inputGateFn   atomic.Pointer[inputGateFunc]
+	newTurnGateFn atomic.Pointer[inputGateFunc]
 	// directInputObserverFn is the assembly-owned, durable pre-write marker. It is
 	// invoked under a session's attachMu -> inMu immediately before the first
 	// SessionStream.Input attempt, on both one-shot and attached raw input paths.
@@ -1356,8 +1355,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleContextGuardGet()
 	case OpContextGuardSet:
 		cc.handleContextGuardSet(c)
-	case OpAccountsManage:
-		cc.handleAccounts(c)
+	case OpLoginsManage:
+		cc.handleLogins(c)
 	case OpTakeControl:
 		cc.handleTakeControl(c)
 	case OpTakeControlEnd:
@@ -1443,10 +1442,10 @@ func (cc *clientConn) handleHello(c Control) {
 	// or body checks, but its hello must not suggest the operation exists for it.
 	if cc.srv.remoteTier {
 		cc.caps = withoutCap(cc.caps, CapContextGuardSettings)
-		cc.caps = withoutCap(cc.caps, CapAccountsManage)
+		cc.caps = withoutCap(cc.caps, CapLoginsManage)
 	}
-	if _, ok := cc.srv.d.(AccountsBackend); !ok {
-		cc.caps = withoutCap(cc.caps, CapAccountsManage)
+	if _, ok := cc.srv.d.(LoginsBackend); !ok {
+		cc.caps = withoutCap(cc.caps, CapLoginsManage)
 	}
 	cc.helloed = true
 	_ = cc.writeControl(Control{
@@ -1694,7 +1693,7 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// phonecore.foldContent drops a command reply naming no op rather than mis-key it -- so
 	// the op stays in flight for the life of the phone process while the session runs.
 	_ = cc.writeControl(Control{Op: OpLaunch, EndpointID: cc.endpointID, OperationID: cc.opID,
-		Session: cc.stampView(m, status.Derive(m.Status)), Notice: m.LaunchNotice})
+		Session: cc.stampView(m, status.Derive(m.Status))})
 }
 
 func (cc *clientConn) handleKill(c Control) {
@@ -3510,6 +3509,7 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		SpawnIntent: m.SpawnIntent,
 		// The degraded-backend reason (persist.Meta.BackendPlanError): "" is healthy.
 		BackendPlanError: m.BackendPlanError,
+		ResumeError: m.ResumeError,
 		// nx44.7: not persisted -- the controller lease is live daemon state, sampled
 		// by the caller at stamp time.
 		RemoteControlled: remoteControlled,

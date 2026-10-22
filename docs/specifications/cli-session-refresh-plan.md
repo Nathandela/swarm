@@ -26,15 +26,17 @@ its newer Codex remote-resume handling, discussion projection, auth readiness an
 archived-source cancellation. That upstream already supplies retained history and
 the durable `Candidates` map; the final implementation reuses them rather than
 introducing a competing replacement map. CLI refresh separately protects unsent
-drafts, which account-change recovery may deliberately discard.
+drafts; provider login switches follow their own provider-wide safe-boundary
+contract.
 
 * A successful Launch means the shim is available, not that provider resume
   succeeded. The source row must remain available for recovery.
 * A durable replacement ID and a search of both running and ended children close
   the launch-before-checkpoint crash window. No second automatic replacement may
   be created merely because the first replacement exited.
-* Auth changes and executable changes need one lifecycle authority, including
-  input fencing and crash restoration. Two autonomous recyclers are unsafe.
+* Provider-wide login switches and CLI refresh can both need to restart a
+  session; their safe-boundary and recovery paths must not race. CLI refresh
+  changes the executable only and never selects provider credentials.
 * The cached daemon-wide provider version is not session-version evidence.
 * Codex's app-server and terminal have separate exec boundaries. Checks must
   cover both, not only the daemon's return from Launch.
@@ -80,8 +82,9 @@ possibly stale status.
 
 Use the auth watcher's single serialized state owner and durable kill authority.
 Add a per-source CLI refresh record for target identity, replacement identity,
-retry timing/attempts, and an operator-visible reason. Coalesce an account change
-and CLI upgrade affecting the same session.
+retry timing/attempts, and an operator-visible reason. Coordinate a provider-wide
+login switch with a CLI upgrade affecting the same session; CLI refresh itself
+does not select or change provider credentials.
 
 The lifecycle is:
 

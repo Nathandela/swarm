@@ -40,7 +40,7 @@ func ValidateOpenCodeConfig(cfg Config) error {
 	if err != nil {
 		return errOpenCodeStarting
 	}
-	if cfg.AccountBinding != nil || cfg.InputEmbargo != "" || cfg.Backend != nil || !adapter.IsOpenCodeConversationID(b.RootID) || !validHex(b.Generation, 16) || !validHex(b.EmbargoToken, 32) || !filepath.IsAbs(cfg.SessionDir) || b.BindingFile != filepath.Join(dir, OpenCodeBindingFile) || len(cfg.Argv) == 0 {
+	if cfg.LoginRuntime != nil || cfg.InputEmbargo != "" || cfg.Backend != nil || !adapter.IsOpenCodeConversationID(b.RootID) || !validHex(b.Generation, 16) || !validHex(b.EmbargoToken, 32) || !filepath.IsAbs(cfg.SessionDir) || b.BindingFile != filepath.Join(dir, OpenCodeBindingFile) || len(cfg.Argv) == 0 {
 		return errOpenCodeStarting
 	}
 	for _, arg := range cfg.Argv[1:] {

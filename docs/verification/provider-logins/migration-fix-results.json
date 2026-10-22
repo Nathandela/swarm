@@ -1,0 +1,16 @@
+{
+  "scope": "internal/loginmigration only; synthetic fixtures; no actual host migration",
+  "six_review_blockers": "fixed; independent rereview requested",
+  "gates": {
+    "normal": "PASS5.035s",
+    "race": "PASS5.625s",
+    "vet": "PASS",
+    "lint": "PASS0issues",
+    "cmd_swarm_remote_devices_and_auto_upgrade": "PASS2.792s"
+  },
+  "codex_format_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+  "history_scope": "referenced thread descendants and required immutable physical prefixes only; no SQLite/cache/whole archive copy",
+  "compression_limit": "compressed header scan requires executable zstd; installed wrongCPU, test explicitly skipped; without decoder preflight refuses before mutation",
+  "no_legacy_startup": "returns before native inventory; ordinary live shims unaffected",
+  "empty_bootstrap": "destination environment writer proof only if no imported files and no conversation IDs"
+}

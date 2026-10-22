@@ -1,0 +1,16 @@
+{
+  "native_version": "0.163.0",
+  "model_turn_requested": false,
+  "existing_scratch_thread": true,
+  "source_owner_history_touched": false,
+  "parked_scratch_index_files": [
+    "state_5.sqlite-wal",
+    "state_5.sqlite-shm",
+    "state_5.sqlite"
+  ],
+  "resume_rpc_ok": true,
+  "same_thread_id": true,
+  "native_history_turns": 3,
+  "error_code": null,
+  "latest_auth_restored": true
+}

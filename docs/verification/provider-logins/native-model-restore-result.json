@@ -1,0 +1,25 @@
+{
+  "native_version": "0.163.0",
+  "format_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+  "source": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tui/src/app_server_session.rs",
+  "source_sha256": "7f82fc2ad93a6f3cd5890bc21202ac0d22d50b5e72cb6b17d5ee405decb405e5",
+  "source_sections": [
+    "ResumeModelSettings::RestoreFromThread",
+    "thread_resume_params_from_config",
+    "thread_resume_params_can_restore_persisted_model_settings"
+  ],
+  "change": "saved native Codex thread resumes with no model override; stale Swarm launch model explicitly cleared; custom transcript model reader removed",
+  "regressions": [
+    "physical-only rollout",
+    "compressed-only rollout",
+    "original and later physical rollouts",
+    "native index authority without guessed rollout path"
+  ],
+  "gates": {
+    "focused_normal": "PASS8.516s",
+    "focused_race": "PASS12.214s",
+    "vet": "PASS",
+    "lint": "own files clean; only concurrent login_startup_review_test.go unchecked cleanup findings"
+  },
+  "real_canary": "C ongoing integrated harness owns accounts and will verify exact native model; no auth probe started by this lane"
+}

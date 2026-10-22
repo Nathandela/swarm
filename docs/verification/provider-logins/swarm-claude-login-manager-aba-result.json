@@ -1,0 +1,93 @@
+{
+  "provider": "claude",
+  "run": "/tmp/slq-claude-01",
+  "production_owner_protocol": true,
+  "discussions": [
+    {
+      "conversation_id": "3fad6aa6-4fe9-4df3-8b7a-90bd129e4a42",
+      "marker_recalled": true,
+      "canary_prompt_count": 1,
+      "tool_count": 0,
+      "native_model": "claude-haiku-5-5"
+    },
+    {
+      "conversation_id": "c350b796-4138-4fed-a459-0e621d5a3648",
+      "marker_recalled": true,
+      "canary_prompt_count": 1,
+      "tool_count": 0,
+      "native_model": "claude-haiku-5-5"
+    }
+  ],
+  "steps": [
+    {
+      "account": "A",
+      "epoch": 1,
+      "discussions": 2
+    },
+    {
+      "account": "B",
+      "epoch": 2,
+      "discussions": [
+        {
+          "conversation_id": "3fad6aa6-4fe9-4df3-8b7a-90bd129e4a42",
+          "marker_recalled": true,
+          "canary_prompt_count": 2,
+          "tool_count": 0,
+          "native_model": "claude-haiku-5-5",
+          "same_cwd": true,
+          "same_model": true
+        },
+        {
+          "conversation_id": "c350b796-4138-4fed-a459-0e621d5a3648",
+          "marker_recalled": true,
+          "canary_prompt_count": 2,
+          "tool_count": 0,
+          "native_model": "claude-haiku-5-5",
+          "same_cwd": true,
+          "same_model": true
+        }
+      ]
+    },
+    {
+      "account": "A",
+      "epoch": 3,
+      "discussions": [
+        {
+          "conversation_id": "3fad6aa6-4fe9-4df3-8b7a-90bd129e4a42",
+          "marker_recalled": true,
+          "canary_prompt_count": 3,
+          "tool_count": 0,
+          "native_model": "claude-haiku-5-5",
+          "same_cwd": true,
+          "same_model": true
+        },
+        {
+          "conversation_id": "c350b796-4138-4fed-a459-0e621d5a3648",
+          "marker_recalled": true,
+          "canary_prompt_count": 3,
+          "tool_count": 0,
+          "native_model": "claude-haiku-5-5",
+          "same_cwd": true,
+          "same_model": true
+        }
+      ]
+    }
+  ],
+  "a_b_a_passed": true,
+  "existing_owner_processes_signaled": false,
+  "credential_exported": false,
+  "source_custody": {
+    "seeded": true,
+    "distinct_logins": 2,
+    "source_credentials_parked": true
+  },
+  "stopped_writer_proofs": {
+    "count": 6,
+    "all_stopped": true
+  },
+  "source_restoration": {
+    "restored": true,
+    "latest_credentials_remain_vm_local": true,
+    "source_writers_stopped": true
+  }
+}

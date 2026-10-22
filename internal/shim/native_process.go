@@ -7,46 +7,50 @@ import (
 	"errors"
 	"log"
 	"os"
+	"syscall"
 	"time"
 
-	"github.com/Nathandela/swarm/internal/accounts"
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/processcontain"
 	"github.com/Nathandela/swarm/internal/procstart"
 )
 
-const ManagedWriterSchemaVersion = 2
+const NativeWriterSchemaVersion = 3
 
 const NativeProcessFile = "native-process.json"
 const NativeStoppedFile = "native-writers-stopped.json"
 
 type NativeProcessInfo struct {
-	SchemaVersion    int              `json:"schema_version"`
-	Generation       string           `json:"generation"`
-	BackendPID       int              `json:"backend_pid,omitempty"`
-	BackendStartTime int64            `json:"backend_start_time,omitempty"`
-	PID              int              `json:"pid"`
-	PGID             int              `json:"pgid"`
-	StartTime        int64            `json:"start_time"`
-	ShimPID          int              `json:"shim_pid"`
-	ShimStartTime    int64            `json:"shim_start_time"`
-	Binding          accounts.Binding `json:"binding"`
-	IncidentID       string           `json:"incident_id,omitempty"`
+	SchemaVersion    int            `json:"schema_version"`
+	Generation       string         `json:"generation"`
+	BackendPID       int            `json:"backend_pid,omitempty"`
+	BackendStartTime int64          `json:"backend_start_time,omitempty"`
+	PID              int            `json:"pid"`
+	PGID             int            `json:"pgid"`
+	StartTime        int64          `json:"start_time"`
+	ShimPID          int            `json:"shim_pid"`
+	ShimStartTime    int64          `json:"shim_start_time"`
+	Provider         string         `json:"provider"`
+	Runtime          logins.Runtime `json:"runtime"`
+	IncidentID       string         `json:"incident_id,omitempty"`
 }
 
-// NativeStoppedInfo is published by a clean managed shim only after all
-// descendants (including setsid/double-fork children) have died and been reaped.
-// Absence after SIGKILL/crash is deliberately not a writer-death proof.
+// NativeStoppedInfo proves the recorded native process groups stopped. Linux
+// additionally proves adopted descendants were reaped; Darwin supplements the
+// group proof with a provider-home process inventory before changing auth.
 type NativeStoppedInfo struct {
-	SchemaVersion  int               `json:"schema_version"`
-	Native         NativeProcessInfo `json:"native"`
-	WritersStopped bool              `json:"writers_stopped"`
+	SchemaVersion        int               `json:"schema_version"`
+	Native               NativeProcessInfo `json:"native"`
+	WritersStopped       bool              `json:"writers_stopped"`
+	DescendantsContained bool              `json:"descendants_contained"`
 }
 
 type managedNativeScope struct {
-	root     *os.Root
-	info     NativeProcessInfo
-	recorded bool
-	stopReap chan struct{}
+	root      *os.Root
+	info      NativeProcessInfo
+	recorded  bool
+	stopReap  chan struct{}
+	subreaper bool
 }
 
 // managedReapInterval paces reaping of adopted orphans while a managed session runs.
@@ -56,7 +60,7 @@ const managedReapInterval = 2 * time.Second
 // for). As a subreaper this shim inherits every double-forked or setsid descendant, and nothing
 // else waits for them before the final ContainAndReap.
 func (s *managedNativeScope) reapWhileRunning(keep ...int) {
-	if s == nil {
+	if s == nil || !s.subreaper {
 		return
 	}
 	s.stopReap = make(chan struct{})
@@ -79,13 +83,17 @@ func (s *managedNativeScope) reapWhileRunning(keep ...int) {
 }
 
 func beginManagedNativeScope(cfg Config) (*managedNativeScope, error) {
-	if cfg.AccountBinding == nil {
+	if cfg.NativeProvider != logins.ProviderClaude && cfg.NativeProvider != logins.ProviderCodex {
 		return nil, nil
 	}
 	// Run is the dedicated per-session shim. Installing this in a shared daemon
 	// or test process would confer custody over unrelated children.
+	subreaper := true
 	if err := processcontain.EnableSubreaper(); err != nil {
-		return nil, errors.New("shim: managed descendant containment unavailable")
+		if !errors.Is(err, processcontain.ErrUnsupported) {
+			return nil, errors.New("shim: native descendant containment unavailable")
+		}
+		subreaper = false
 	}
 	start, err := procstart.StartTime(os.Getpid())
 	if err != nil {
@@ -99,14 +107,17 @@ func beginManagedNativeScope(cfg Config) (*managedNativeScope, error) {
 	if err != nil {
 		return nil, errors.New("shim: native writer record unavailable")
 	}
-	scope := &managedNativeScope{root: root, info: NativeProcessInfo{SchemaVersion: ManagedWriterSchemaVersion, Generation: hex.EncodeToString(generation[:]), ShimPID: os.Getpid(), ShimStartTime: start, Binding: *cfg.AccountBinding, IncidentID: cfg.InputEmbargo}}
+	scope := &managedNativeScope{subreaper: subreaper, root: root, info: NativeProcessInfo{SchemaVersion: NativeWriterSchemaVersion, Generation: hex.EncodeToString(generation[:]), ShimPID: os.Getpid(), ShimStartTime: start, Provider: cfg.NativeProvider, IncidentID: cfg.InputEmbargo}}
+	if cfg.LoginRuntime != nil {
+		scope.info.Runtime = *cfg.LoginRuntime
+	}
 	for _, name := range []string{NativeStoppedFile, NativeProcessFile} {
 		if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			_ = root.Close()
 			return nil, errors.New("shim: old native writer proof could not be removed")
 		}
 	}
-	if err := fsyncAccountRoot(root); err != nil {
+	if err := fsyncNativeRoot(root); err != nil {
 		_ = root.Close()
 		return nil, err
 	}
@@ -128,7 +139,7 @@ func (s *managedNativeScope) record(pid int, backend *backendProc) error {
 		}
 		s.info.BackendPID, s.info.BackendStartTime = backend.pgid, backend.startTime
 	}
-	if err := writeAccountRecord(s.root, NativeProcessFile, s.info); err != nil {
+	if err := writeNativeRecord(s.root, NativeProcessFile, s.info); err != nil {
 		return errors.New("shim: native writer record could not be made durable")
 	}
 	s.recorded = true
@@ -143,26 +154,45 @@ func (s *managedNativeScope) finish() error {
 	if s.stopReap != nil {
 		s.stopReap <- struct{}{} // unbuffered: returns only once the reaper is between passes
 	}
-	if err := processcontain.ContainAndReap(); err != nil {
-		return errors.New("shim: managed descendants could not be contained and reaped")
+	if s.subreaper {
+		if err := processcontain.ContainAndReap(); err != nil {
+			return errors.New("shim: native descendants could not be contained and reaped")
+		}
+	} else {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			stopped := true
+			for _, pgid := range []int{s.info.PGID, s.info.BackendPID} {
+				if pgid > 0 && syscall.Kill(-pgid, 0) != syscall.ESRCH {
+					stopped = false
+				}
+			}
+			if stopped {
+				break
+			}
+			if time.Now().After(deadline) {
+				return errors.New("shim: native process groups are not confirmed stopped")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	if !s.recorded {
 		// Startup can fail before the main CLI identity is captured, even after
 		// a backend has spawned descendants. ECHILD above proves the whole
 		// dedicated shim scope is drained; publish its exact zero/native record
 		// so a clean failure can be retried without inferring safety from absence.
-		if err := writeAccountRecord(s.root, NativeProcessFile, s.info); err != nil {
+		if err := writeNativeRecord(s.root, NativeProcessFile, s.info); err != nil {
 			return errors.New("shim: native writer record could not be made durable")
 		}
 	}
-	proof := NativeStoppedInfo{SchemaVersion: ManagedWriterSchemaVersion, Native: s.info, WritersStopped: true}
-	if err := writeAccountRecord(s.root, NativeStoppedFile, proof); err != nil {
+	proof := NativeStoppedInfo{SchemaVersion: NativeWriterSchemaVersion, Native: s.info, WritersStopped: true, DescendantsContained: s.subreaper}
+	if err := writeNativeRecord(s.root, NativeStoppedFile, proof); err != nil {
 		return errors.New("shim: native writer death proof could not be made durable")
 	}
 	return nil
 }
 
-func fsyncAccountRoot(root *os.Root) error {
+func fsyncNativeRoot(root *os.Root) error {
 	directory, err := root.Open(".")
 	if err != nil {
 		return err
@@ -171,12 +201,12 @@ func fsyncAccountRoot(root *os.Root) error {
 	return directory.Sync()
 }
 
-func writeAccountRecord(root *os.Root, name string, value any) error {
+func writeNativeRecord(root *os.Root, name string, value any) error {
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return err
 	}
-	temp := ".account-state-" + hex.EncodeToString(nonce[:])
+	temp := ".native-state-" + hex.EncodeToString(nonce[:])
 	f, err := root.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -198,5 +228,5 @@ func writeAccountRecord(root *os.Root, name string, value any) error {
 	if err = root.Rename(temp, name); err != nil {
 		return err
 	}
-	return fsyncAccountRoot(root)
+	return fsyncNativeRoot(root)
 }

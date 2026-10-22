@@ -16,7 +16,7 @@ swarm refresh --auto on
 ```
 
 Reporting is read-only and does not start a daemon or probe a provider. The setting
-is independent of `swarm relogin --auto`; disabling CLI refresh prevents new
+is independent of provider login selection and switching; disabling CLI refresh prevents new
 automatic refresh kills, while recovery already owed by a prior kill is retained.
 Settings live in `cli-refresh.json` in the daemon's state directory. The shared
 credential/CLI coordinator persists its work in `auth-watch-state.json`.
@@ -122,9 +122,9 @@ keep their existing refresh policy.
 
 Keep the running worker when this warning appears. Record its Swarm ID and exact
 native root, and preserve the original checkout and native profile. `swarm doctor`
-reports managed binding health; the native TUI retains the provider's actionable
-quota, unavailable-model or sign-in explanation. Do not substitute another model
-or credential profile to clear the warning, and do not delete binding or operation
+reports worker and native-profile health; Options → Logins shows saved Claude Code
+and Codex login status and any provider-wide switch wait. Do not substitute another
+model or credential profile to clear the warning, and do not delete operation
 records. A provider refusal is a failed execution, not successful task completion.
 
 Before an explicit restart, confirm the native worker is idle, has no unresolved
@@ -136,5 +136,7 @@ native history before ending the worker. Resume uses the exact saved root and
 native profile and refuses changed or unqualified executable identity. If that
 identity can no longer be confirmed, keep the retained source and use native
 manual recovery after verifying its directory and root; Swarm does not select a
-latest session by working directory. Automatic native relogin, account rotation,
-and destructive refresh are not enabled by this policy.
+latest session by working directory. CLI refresh never changes provider credentials.
+Provider-wide login switches run only after confirmed subscription exhaustion and
+follow the [provider login policy](../operations/provider-logins.md); OpenCode is
+outside that switch workflow.

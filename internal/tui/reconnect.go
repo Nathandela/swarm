@@ -177,10 +177,11 @@ func (m rootModel) applyDaemonReconnected(msg daemonReconnectedMsg) (tea.Model, 
 	m.rosterRefreshing = false
 	m.rosterDirty = false
 	m.invalidateOptionsConnection()
-	m.accountsClientGeneration++
-	m.accountsGeneration++
-	m.accounts.generation = m.accountsGeneration
-	m.accounts.busy = false
+	m.loginsClientGeneration++
+	m.loginsGeneration++
+	m.logins.generation = m.loginsGeneration
+	m.logins.busy = false
+	m.logins.attached = false
 	if bv, ok := msg.client.(interface{ BuildVersion() string }); ok {
 		m.daemonVersion = bv.BuildVersion()
 	}
@@ -191,7 +192,7 @@ func (m rootModel) applyDaemonReconnected(msg daemonReconnectedMsg) (tea.Model, 
 		cmds = append(cmds, repaintTick())
 	}
 	cmds = append(cmds, m.armWorkingAnimation())
-	if m.screen == screenOptions || m.screen == screenAccounts {
+	if m.screen == screenOptions || m.screen == screenLogins {
 		old := m.options.contextGuard
 		m.optionsGeneration++
 		fresh, load := newOptionsModel(m.options.grouping, m.options.ordering, m.client, m.optionsGeneration)
@@ -206,16 +207,16 @@ func (m rootModel) applyDaemonReconnected(msg daemonReconnectedMsg) (tea.Model, 
 		}
 		cmds = append(cmds, load)
 	}
-	if m.screen == screenAccounts {
-		m.accounts.available = false
-		if c, ok := msg.client.(accountsClient); ok {
+	if m.screen == screenLogins {
+		m.logins.available = false
+		if c, ok := msg.client.(loginsClient); ok {
 			for _, cap := range c.Capabilities() {
-				if cap == protocol.CapAccountsManage {
-					m.accounts.available = true
+				if cap == protocol.CapLoginsManage {
+					m.logins.available = true
 				}
 			}
 		}
-		updated, cmd := m.beginAccountsRequest(protocol.AccountsReq{Action: "list"})
+		updated, cmd := m.beginLoginsRequest(protocol.LoginsReq{Action: "list"})
 		m = updated.(rootModel)
 		cmds = append(cmds, cmd)
 	}

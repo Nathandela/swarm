@@ -72,6 +72,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `launch`           | `*LaunchReq`    | the launch request, carried on `launch`                                   |
 | `sessions`         | `[]SessionView` | the session roster, carried on the `list` reply                           |
 | `session`          | `*SessionView`  | one session view, carried on the `launch` reply and on `event`            |
+| `resume_error`     | string          | persisted reason an exact provider conversation continuation failed; surfaced on the owner roster so the source remains diagnosable |
 | `error`            | string          | human-readable error text, carried on `error`                            |
 | `operation_id`     | string            | idempotency key of a remote mutating op (`<device_id>:<client-ULID>`, R-IDP) |
 | `interaction_id`   | string            | the agent interaction being approved, distinct from `operation_id` (A6)      |
@@ -96,8 +97,8 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `remote_control`   | `*bool`           | `remote_set_control`: the DESIRED remote-control master state (true=on, false=manual off), owner-tier only (A4) |
 | `context_guard_settings` | `*ContextGuardSettings` | daemon-global context-guard settings reply, carried on `context_guard_get` / `context_guard_set` (ADR-023) |
 | `context_guard_set` | `*ContextGuardSettingsSetReq` | owner CAS request body for `context_guard_set`, carrying expected revision and auto-compact policy (ADR-023) |
-| `accounts_request` | `*AccountsReq` | owner-local account operation request, carried on `account_manage`; may contain secret token input which is never persisted or logged |
-| `accounts_result` | `*AccountsReply` | account registry, enrollment jobs, provider methods and enablement state, carried on the `account_manage` reply |
+| `logins_request` | `*LoginsReq` | owner-local native provider-login operation request, carried on `login_manage`; contains no credential input |
+| `logins_result` | `*LoginsReply` | saved native-login summaries, provider switch state and live sign-in jobs, carried on the `login_manage` reply |
 | `terminal`         | `*TerminalSnapshot` | server-rendered terminal snapshot, carried on `terminal_snapshot` (A7 slice B) |
 | `send_input`       | `*SendInputReq`     | `send_input`: one owner-tier steering message for `session_id`, owner-tier only (ADR-010 A2) |
 | `body_version`     | int                 | R1 refusal-ops (`session_launch`/`composer_send`/`operation_status`/`turn_interrupt`/`terminal_control_begin`/`terminal_control_end`): the profile version the phone bound this op to (`RemoteProfileV1.accepted_body_versions`); there is no version `0` (Wave R1 skeleton, playbook §6.3) |
@@ -107,7 +108,6 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `subject_operation_id` | string          | Wave R5 `operation_status`: the operation being ASKED ABOUT — distinct from the query's own `operation_id` exactly as `interaction_id` is (ADR-007 D7) |
 | `operation_outcome` | `*OperationOutcomeView` | Wave R5 `operation_status` reply: `applied` (authoritative, with the session id), `outcome_unknown` (honest undecidability), or `unknown_operation` (no record; never invented) |
 | `device_capability` | string              | Wave R5 `launch_presets` reply (round-2): the SIGNING device's own registry-pinned tier (`full`/`read_only`/`read_approve`) — the phone's only honest wire source for its tier-denied launch state; empty when the backend has no capability seam (absent fact, never invented) |
-| `notice`           | string              | `launch` reply (ADR-032 Amendment 4): a note for the owner on a launch that succeeded differently than asked, e.g. `launched on the owner login: account "<label>" refused: <reason>`; empty on an ordinary launch and from an older daemon |
 | `composer_send`    | `*ComposerSendReq`  | Wave R6 `composer_send` body (Mirror M2.4, IS-LIFE-5), amended for ordered sends: the phone's structured message under the wire name `composer_send`, carrying `session` / required `session_instance` / advisory `expected_turn` / `text`, bound into the device signature via `ComposerSendContentHash` so a gateway cannot re-point a valid signature at different text, context, or a replacement session incarnation (ADR-009 (8)) |
 | `semantic_receipt` | `*SemanticMessageReceipt` | owner-only `semantic_status` result: operation/session/incarnation, submission state, exact native session/message/generation/creation coordinates and observed agent/model/variant/selection basis where qualified; absent native coordinates are not invented |
 | `native_decision` | `*NativeDecisionReq` | Negotiated `native-requests-v1` decision: exact worker/native request identity, content hash, expiry and permission/question answer; the complete body is signed through `NativeDecisionContentHash`. |
@@ -459,9 +459,9 @@ Handshake. The client sends `hello` with `protocol_version`, its own
 `build_version`, and its offered `capabilities`. The daemon replies with `hello`
 carrying the assigned unique `endpoint_id`, its `protocol_version`, its own
 `build_version`, and the negotiated `capabilities` (the intersection of the
-client's offer and the daemon's support). The owner-local `accounts.manage.v1` capability is
-offered only when the daemon has an account backend and is never negotiated for
-the remote tier. On a `protocol_version` mismatch the
+client's offer and the daemon's support). The owner-local `logins.manage.v1`
+capability is offered only when the daemon has a provider-login backend and is
+never negotiated for the remote tier. On a `protocol_version` mismatch the
 daemon replies with `error` naming `swarm daemon restart` (D-8). `build_version`
 is ADDITIVE and never fatal to the handshake: a client whose `build_version`
 differs from the daemon's (e.g. the daemon is still running an older build
@@ -1219,13 +1219,37 @@ The only accepted schema version is 1 and the threshold is an inclusive integer 
 Remote-tier callers are refused before body or backend access. A stale CAS is
 `stale_revision`; a missing or untrustworthy backend/document is `unavailable`.
 
-### Account management (ADR-028)
+### Provider login management (ADR-034)
 
-The owner-tier `account_manage` operation requires the negotiated `accounts.manage.v1` capability. The request body is `accounts_request` (`AccountsReq`); the reply is `accounts_result` (`AccountsReply`). The closed action vocabulary is `list`, `start`, `status`, `cancel`, `admit`, `import`, `update`, `enable`, `refresh`, `retry`, `remove`, and `move`. Mutating operations carry `expected_revision` where applicable; a stale registry compare-and-swap is `stale_revision`. Unsupported operations or invalid bounded fields are `invalid_field`; a daemon without the optional backend/capability reports `unavailable` or `capability_refused`. The server refuses the remote tier as `not_authorized` before inspecting the request body or invoking the backend.
+The owner-tier `login_manage` operation requires the negotiated `logins.manage.v1`
+capability. Its request and reply bodies are `logins_request` (`LoginsReq`) and
+`logins_result` (`LoginsReply`). The closed action vocabulary is `list`, `start`,
+`status`, `cancel_login`, `complete`, `activate`, `relogin`, `remove`, and
+`cancel_switch`. Provider values are `claude` and `codex`. Mutations carry
+`expected_revision` where applicable; a stale registry compare-and-swap is
+`stale_revision`. Invalid fields are `invalid_field`; an unavailable backend or
+unnegotiated operation is `unavailable` or `capability_refused`. The server
+refuses remote-tier calls as `not_authorized` before inspecting the body or
+invoking the backend.
 
-`AccountsReq` carries the action and optional provider, account/job ids, label, authentication method, owner-selected import path, one-year token input (secret), pool enablement/pause state, retirement intent, a selected discussion id for guarded movement, and expected registry revision. A source without a verified account binding is refused as `account_move_unmanaged`; the client maps this to a fixed explanation. Enrollment status includes its canonical `target_account_id` so reauthentication can be resumed after navigation or reconnection. Provider authentication methods are advertised by the daemon in `AccountsReply.methods`; clients must use only methods marked available. The reply carries the nonsecret account view, observed quota windows, enrollment jobs and provider enablement. Authorization URL/user code and a private login socket are live owner-local enrollment status only. Token input, authorization codes and URLs are never written to registry/job state, launch metadata or diagnostics. The protocol version remains 1: these are additive optional `Control` fields behind the negotiated capability, and an older client ignores unknown reply fields.
+`LoginsReq` carries the action and optional provider, login ID, label, job ID, and
+expected registry revision. It carries no credentials, import path, discussion
+assignment, or per-session login selector. `LoginView` reports a saved login's
+provider, label, active flag, and state (`ready`, `needs-login`, or `limited`).
+`ProviderLoginView` reports the provider's selected login and state (`native`,
+`active`, `switching`, or `waiting`), with a short safe-to-display reason while
+waiting. Provider switching fences new work, waits for safe boundaries and
+terminal detachment, then resumes exact native conversations without replaying a
+failed prompt or tool operation. `cancel_switch` cancels the pending provider
+switch.
 
-`AccountView.credentials_erased` is an optional boolean set only when every retained credential generation has completed local erasure. `retiring` continues to identify the account's durable lifecycle; a false or absent `credentials_erased` does not establish deletion. Erasure preserves discussion history and does not revoke a provider login.
+`LoginJobView` is live owner-local sign-in status. Its states include `starting`,
+`authenticating`, `verifying`, `ready`, `failed`, `cancelled`, `complete`, and
+`cancelling`. Device verification URL, user code, and the private native login
+socket are transient status fields only: they are not written to durable requests,
+journals, or diagnostics. Credential values never cross this protocol. The
+protocol remains version 1; these optional `Control` fields are available only
+behind the owner-local capability. Android has no provider-login management route.
 
 Resume roster projection groups explicit resume lineage (including shared missing ancestors), keeps the newest ended attempt or all running attempts, and leaves independent launches and handoffs separate. `list` returns all raw rows with projection annotations, retaining exact-ID lookup compatibility; `event` also retains actual session identity. The TUI and `swarm ls` apply the shared visibility filter. Clients must apply these annotations to avoid duplicate live rows. This projection does not alter the durable journal or phone journal reducer, which continue to expose raw session history.
 

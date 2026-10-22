@@ -331,7 +331,7 @@ func (d *Daemon) contextGuardQuiet(local string) bool {
 		m.Status.Turn != status.TurnIdle || m.Status.Interaction != status.InteractionNone {
 		return false
 	}
-	return !d.anyControlled(local)
+	return !d.anyControlled(local) && d.logins.inputGate(local) == nil
 }
 
 // contextGuardCompactionInFlight reports whether local's guard has a compaction
@@ -897,7 +897,12 @@ func (s *contextGuardSession) sendContinuation() {
 		}
 	}()
 	var res json.RawMessage
-	if err := s.conn.Call(ctx, method, params, &res); err != nil {
+	if err := s.conn.CallAtWriteBoundary(ctx, method, params, &res, func() error {
+		if lane.barrierChanged(admittedBarrier) || lane.recyclingNow() || (s.quiet != nil && !s.quiet()) || (s.current != nil && !s.current()) {
+			return errContextGuardDispatchRefused
+		}
+		return nil
+	}, func() {}); err != nil {
 		log.Printf("skeleton: context guard continuation for session %s not sent: %v (the task may need a manual nudge)", s.id, err)
 		return
 	}
@@ -1153,7 +1158,7 @@ func (s *contextGuardSession) dispatchCompaction() {
 			// dispatch), evidence that arrived since the queue head, or a
 			// backend replaced under the prepared dispatch refuses the write
 			// entirely -- provably no bytes follow (the appserver contract).
-			if s.settingsRevision.Load() != s.configRevision() || s.pendingEvidence() || (s.current != nil && !s.current()) {
+			if s.settingsRevision.Load() != s.configRevision() || s.pendingEvidence() || (s.current != nil && !s.current()) || (s.quiet != nil && !s.quiet()) {
 				return errContextGuardDispatchRefused
 			}
 			state, _, applied := s.applyReturning(contextguard.Event{Kind: contextguard.EventDispatchStarted, At: time.Now(), Key: s.key}, nil)

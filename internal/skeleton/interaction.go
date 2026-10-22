@@ -169,14 +169,14 @@ func (d *Daemon) serveHookInteractions(cb engine.Callback) {
 	managedClaude := false
 	if m, ok := d.core.Get(cb.SessionID); ok {
 		agentType = m.AgentType
-		managedClaude = m.AccountBinding != nil && m.AgentType == "claude"
+		managedClaude = m.LoginRuntime != nil && m.AgentType == "claude"
 	}
 	ad, ok := d.resolveAdapter(agentType)
 	if !ok {
 		return
 	}
 	if managedClaude {
-		ad = claude.ManagedObservations()
+		ad = claude.LoginObservations()
 	}
 	payload := adapter.HookPayload{
 		Event: cb.Event,

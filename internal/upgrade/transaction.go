@@ -169,8 +169,6 @@ func Stage(ctx context.Context, opts Options) (State, error) {
 	return s, recordState(opts.StateDir, &s)
 }
 
-
-
 type stepError struct {
 	step string
 	err  error

@@ -54,7 +54,7 @@ func TestManagedShimReapsAnAdoptedOrphanWhileTheSessionRuns(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	// Let the session end normally so cleanup proves the agent was not reaped out from under Run.
-	if err := os.WriteFile(filepath.Join(cfg.AccountStateRoot, "..", "native", "finish"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.LoginStateRoot, "..", "native", "finish"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	select {

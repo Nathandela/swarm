@@ -7,7 +7,7 @@
 //
 // FROZEN CONTRACT (orchestrator brief, Epic 4):
 //
-//	const Version = 1
+//	const Version = 2
 //	type Control struct {
 //	    Type        string `json:"type"`         // hello, attach, resize, signal, exit_report
 //	    WireVersion int    `json:"wire_version,omitempty"` // hello
@@ -36,9 +36,9 @@ import (
 
 func intPtr(i int) *int { return &i }
 
-func TestVersionIsOne(t *testing.T) {
-	if Version != 1 {
-		t.Fatalf("Version = %d, want 1", Version)
+func TestVersionIsTwo(t *testing.T) {
+	if Version != 2 {
+		t.Fatalf("Version = %d, want 2", Version)
 	}
 }
 
@@ -149,7 +149,7 @@ func TestEncode_OmitsZeroValuedOptionalFields(t *testing.T) {
 			t.Errorf("hello message unexpectedly contains %q: %s", absent, s)
 		}
 	}
-	if !strings.Contains(s, `"type":"hello"`) || !strings.Contains(s, `"wire_version":1`) {
+	if !strings.Contains(s, `"type":"hello"`) || !strings.Contains(s, `"wire_version":2`) {
 		t.Errorf("hello missing required fields: %s", s)
 	}
 }

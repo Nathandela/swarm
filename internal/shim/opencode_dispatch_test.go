@@ -83,7 +83,7 @@ func TestOpenCodeDispatchHoldsExistingPTYInputFence(t *testing.T) {
 	if _, err := p.dispatchOpenCode(cfg, req); err == nil {
 		t.Fatal("foreign native binding admitted")
 	}
-	p.embargo = &accountEmbargo{refusal: errOpenCodeStarting}
+	p.embargo = &inputEmbargo{refusal: errOpenCodeStarting}
 	p.embargo.held.Store(true)
 	req.RootID = b.RootID
 	if _, err := p.dispatchOpenCode(cfg, req); err == nil {

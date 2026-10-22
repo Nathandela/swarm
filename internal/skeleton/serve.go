@@ -40,6 +40,8 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/engine"
+	"github.com/Nathandela/swarm/internal/loginmigration"
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/device"
@@ -114,11 +116,12 @@ type Daemon struct {
 	// head-of-line blocking); sampling dedups per session (at most one in-flight
 	// sample each), and sampleWG lets Close drain in-flight samples. sampleFn is the
 	// per-session sample op — d.sampleGrid in production, overridable in tests.
-	sampleMu sync.Mutex
-	sampling map[string]struct{}
-	sampleWG sync.WaitGroup // in-flight per-session grid samples
-	tapWG    sync.WaitGroup // the tapGrids loop (the sole sampleWG/captureWG Adder)
-	sampleFn func(id string)
+	sampleMu    sync.Mutex
+	sampling    map[string]struct{}
+	sampleWG    sync.WaitGroup // in-flight per-session grid samples
+	loginJobsWG sync.WaitGroup
+	tapWG       sync.WaitGroup // the tapGrids loop (the sole sampleWG/captureWG Adder)
+	sampleFn    func(id string)
 	// gateDone marks the sessions whose launch gate this daemon already answered
 	// (launchgate.go); gateMu guards it. Bounded to running sessions by endSession.
 	gateMu   sync.Mutex
@@ -230,8 +233,7 @@ type Daemon struct {
 	// policy state; it never dispatches while the provider action is observe-only.
 	contextGuardSettings *contextGuardSettingsStore
 	contextGuards        *contextGuardManager
-	accounts             *accountManager
-	accountRotation      *accountRotationManager
+	logins               *loginManager
 
 	// sup is the passive handoff supervisor (ADR-010 Amendment 3 C2; supervision.go):
 	// armed from registerSession, signalled from emitStatus and endSession, closed by
@@ -277,12 +279,32 @@ type Daemon struct {
 // hook posts route to the engine. The caller owns the returned *Daemon and closes
 // it with Close.
 func Serve(cfg Config) (*Daemon, error) {
+	// macOS /tmp and /var are aliases. Resolve the configured state once; private
+	// native storage still rejects symlinks beneath this fixed anchor.
+	originalState := cfg.StateDir
+	if info, err := os.Lstat(originalState); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, logins.ErrUnsafePath
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if err := os.MkdirAll(originalState, 0700); err != nil {
+		return nil, err
+	}
+	canonicalState, err := filepath.EvalSymlinks(originalState)
+	if err != nil {
+		return nil, err
+	}
+	canonicalState, err = filepath.Abs(canonicalState)
+	if err != nil {
+		return nil, err
+	}
+	cfg.StateDir = canonicalState
 	// The daemon is one federation endpoint with a STABLE id derived from its
 	// persistent home, so a session's namespaced id is identical for every client
 	// and unchanged across restarts (a session launched by one client is the same
 	// id a later client — or the same daemon after a kill/restart — lists). The
 	// coreAPI needs it to validate a resume request's source endpoint (R-2).
-	epID := endpointID(cfg.StateDir)
+	epID := endpointID(originalState)
 	d := &Daemon{
 		socketPath: cfg.SocketPath,
 		stateDir:   cfg.StateDir,
@@ -321,6 +343,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// until the assembly below is fully wired.
 	core, err := daemon.Open(daemon.Config{
 		StateDir:       cfg.StateDir,
+		BeforeLoad:     func() error { return loginmigration.RunLocked(cfg.StateDir) },
 		SocketPath:     cfg.SocketPath,
 		LockPath:       cfg.LockPath,
 		LogPath:        cfg.LogPath,
@@ -328,7 +351,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		MaxSessions:    cfg.MaxSessions,
 		ConnHandler:    d.handleConn,
 		PreLaunch:      preLaunchWorktree,
-		FinalizeLaunch: d.prepareAccountLaunch,
+		FinalizeLaunch: d.prepareLoginLaunch,
 		PreDelete:      preDeleteWorktree,
 		OnSessionStart: d.registerSession,
 		OnSessionEnd:   d.endSession,
@@ -348,10 +371,65 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.restoreDirectInputState(locals)
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	// Every later assembly failure must release the core lock and its watchers.
+	var loginStore *logins.Store
+	assembled := false
+	defer func() {
+		if !assembled {
+			close(d.closing)
+			if d.cancel != nil {
+				d.cancel()
+				d.loginJobsWG.Wait()
+			}
+			if d.sup != nil {
+				d.sup.close() // its delivery goroutine, once started, must not outlive a failed assembly
+			}
+			if d.authw != nil {
+				d.authw.close() // same rule: no recycle may outlive a failed assembly
+			}
+			// A remote listener may already be bound with its accept loop waiting on
+			// ready. Close both protocol servers before their backend/core so a
+			// failed in-process Serve neither leaks goroutines nor keeps remote.sock
+			// accepting forever on a barrier that will never close.
+			if d.remoteSrv != nil {
+				_ = d.remoteSrv.Close()
+			}
+			if d.srv != nil {
+				_ = d.srv.Close()
+			}
+			if loginStore != nil {
+				_ = loginStore.Close()
+			}
+			d.api.close()
+			_ = core.Close()
+		}
+	}()
 	nativeObservation := openCodeObservationFunc(d.openCodeObservation)
 	d.api.openCodeObservationFn.Store(&nativeObservation)
-	d.accounts = openAccountManager(cfg.StateDir, cfg.ShimBinary, core.List)
-	d.api.accounts = d.accounts
+	loginStore, err = logins.Open(cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	if err = loginStore.Reconcile(); err != nil {
+		return nil, err
+	}
+	d.logins = &loginManager{d: d, store: loginStore, release: core.ReleaseInputEmbargo, recordResumeError: core.RecordResumeError, preflight: func(provider string, sources []persist.Meta) error {
+		return loginmigration.PreflightProviderContext(cfg.StateDir, provider, sources)
+	}, prepareContext: func(provider string, sources []persist.Meta) error {
+		return loginmigration.PrepareProviderContext(cfg.StateDir, provider, sources)
+	}}
+	d.api.logins = d.logins
+	registry, err := loginStore.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	for _, op := range registry.Switches {
+		for _, row := range op.Sessions {
+			if row.Phase == "claimed" || row.Phase == "stopped" || row.Phase == "launched" {
+				d.restoreAuthRecycle(row.SourceID)
+			}
+		}
+	}
 	d.api.contextGuardSettings = d.contextGuardSettings
 	d.api.contextGuards = d.contextGuards
 	d.api.syncName = func(local, name string) {
@@ -364,7 +442,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.home = historyHome
 	unmanagedHistory := newFilesystemResumeHistoryResolver(historyHome, defaultResumeHistoryLimits)
 	unmanagedHistory.stateDir = cfg.StateDir
-	d.api.historyResolver = &openCodeHistoryResolver{core: core, fallback: newAccountResumeHistoryResolver(cfg.StateDir, unmanagedHistory)}
+	d.api.historyResolver = &openCodeHistoryResolver{core: core, fallback: &loginResumeHistoryResolver{fallback: unmanagedHistory, stateDir: cfg.StateDir}}
 	// ADR-017 T2-a's three assembly hooks: author at launch (api.go), author on the
 	// re-attach of a session dir that has no record (sessiontap.go), and the PURE READ
 	// the remote-tier capability gate consults. Wired here and nowhere else, so there is
@@ -386,37 +464,6 @@ func Serve(cfg Config) (*Daemon, error) {
 	if d.detectProviderVersion == nil {
 		d.detectProviderVersion = detectProviderVersion
 	}
-	// Round-7 re-audit (codex/opus/sonnet consensus): newCoreAPI already started the
-	// coreAPI.watch() roster poller, so EVERY assembly error return past this point must tear it
-	// down (and the core) or that goroutine + its fd leak. Harmless in production (a Serve error is
-	// a fatal startup -> the process exits and the OS reclaims), but wrong for tests / any
-	// in-process Serve retry. A defer'd cleanup-unless-success covers all error paths uniformly and
-	// panic-safely; the explicit per-path core.Close() calls below are now redundant (removed).
-	// coreAPI.close() is idempotent (stopOnce) and never touches core, so the later Daemon.Close()
-	// stays a no-op double-call.
-	assembled := false
-	defer func() {
-		if !assembled {
-			if d.sup != nil {
-				d.sup.close() // its delivery goroutine, once started, must not outlive a failed assembly
-			}
-			if d.authw != nil {
-				d.authw.close() // same rule: no recycle may outlive a failed assembly
-			}
-			// A remote listener may already be bound with its accept loop waiting on
-			// ready. Close both protocol servers before their backend/core so a
-			// failed in-process Serve neither leaks goroutines nor keeps remote.sock
-			// accepting forever on a barrier that will never close.
-			if d.remoteSrv != nil {
-				_ = d.remoteSrv.Close()
-			}
-			if d.srv != nil {
-				_ = d.srv.Close()
-			}
-			d.api.close()
-			_ = core.Close()
-		}
-	}()
 	// Open the pinned-device registry that backs R-POL.9 remote-command authorization.
 	// A corrupt registry fails assembly (fail-closed): the daemon must not start unable
 	// to authorize -- or worse, silently unable to enumerate -- its paired devices.
@@ -591,7 +638,7 @@ func Serve(cfg Config) (*Daemon, error) {
 			d.composerOutcomeUnresolved(local)
 	}
 	supervisorUnsafeSource := func(local string) bool {
-		if baseUnsafeSource(local) || d.composerRecycleInFlight(local) {
+		if baseUnsafeSource(local) || d.composerRecycleInFlight(local) || d.logins.inputGate(local) != nil {
 			return true
 		}
 		m, ok := d.core.Get(local)
@@ -620,8 +667,10 @@ func Serve(cfg Config) (*Daemon, error) {
 		return nil
 	}
 	d.srv.SetInputGateFunc(inputGate)
+	d.srv.SetNewTurnGateFunc(d.logins.inputGate)
 	if d.remoteSrv != nil {
 		d.remoteSrv.SetInputGateFunc(inputGate)
+		d.remoteSrv.SetNewTurnGateFunc(d.logins.inputGate)
 	}
 	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
 		d.supervisionMeta, d.core.Get, supervisorUnsafeSource, d.sendSupervision, d.nativeSupervisionState)
@@ -644,14 +693,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.authw = newAuthWatcher(cfg.StateDir, epID, AuthProbedAgents(), CurrentAuthIdentity,
 		d.api.List, d.core.Get, d.core.Kill, d.api.Launch, d.core.Delete,
 		authRecycleUnsafeSource, authRecycleCoordination{
-			managedInit: func(w *authWatcher) {
-				d.accountRotation = newAccountRotationManager(d, w, d.accounts.store)
-				d.accounts.refresh = d.accountRotation.Refresh
-				d.accounts.retry = d.accountRotation.RetryAvailability
-				d.accounts.move = d.accountRotation.RequestMove
-			},
+			loginInit:   func(w *authWatcher) { w.logins = d.logins },
 			openCodeEnv: d.core.OpenCodeResumeEnvironment,
-			ready:       d.authRecoveryReady,
+			ready:       d.loginRecoveryReady,
 			cliUnsafe:   d.directInputUnresolved,
 			restore:     d.restoreAuthRecycle,
 			clear:       d.clearAuthRecycle,
@@ -660,9 +704,10 @@ func Serve(cfg Config) (*Daemon, error) {
 			resume:      d.withAuthResumeFence,
 		})
 
-	d.accounts.startQuotaFetching()
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
+	d.loginJobsWG.Add(1)
+	go func() { defer d.loginJobsWG.Done(); d.api.watchLoginJobs(ctx) }()
 	go d.eng.Run(ctx) // the ONLY periodic driver (E10.8); idle when PollInterval<=0
 	// tapGrids is the sole caller of sampleGridAsync (the only sampleWG Adder), so
 	// Close waits for it to RETURN before draining sampleWG — an Add must never race
@@ -712,8 +757,8 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	if ad, ok := registry.New(m.AgentType); ok {
 		sources = ad.SignalSources()
 	}
-	if m.AccountBinding != nil && m.AgentType == "claude" {
-		sources = append(sources, managedClaudeObserverSources()...)
+	if m.LoginRuntime != nil && m.AgentType == "claude" {
+		sources = append(sources, loginClaudeObserverSources()...)
 	}
 	// Register WITH the session's persisted status in ONE atomic op (C2/S7): at fresh
 	// launch m.Status is the humble launch baseline; on reconcile after a restart it
@@ -849,7 +894,7 @@ func (d *Daemon) emitStatus(id string, s status.Status) {
 // conversation. The third clause is a message OBSERVED arriving, within a horizon; see
 // phonepresence.go for why that is deliberately weaker than a presence claim.
 func (d *Daemon) anyControlled(local string) bool {
-	if d.srv.IsControlled(local) {
+	if d.srv != nil && d.srv.IsControlled(local) {
 		return true
 	}
 	if d.remoteSrv != nil && d.remoteSrv.IsControlled(local) {
@@ -1268,7 +1313,8 @@ func (d *Daemon) Close() error {
 			// in-flight action, not one sweep.
 			d.authw.close()
 		}
-		d.cancel()                   // stops tapGrids + engine.Run: no NEW grid samples/captures start
+		d.cancel() // stops tapGrids + engine.Run: no NEW grid samples/captures start
+		d.loginJobsWG.Wait()
 		d.tapWG.Wait()               // tapGrids returned: no more sampleWG/captureWG.Add can race the Wait (F7)
 		d.sampleWG.Wait()            // drain in-flight grid samples (bounded by shim timeouts)
 		d.captureWG.Wait()           // drain in-flight conversation-id captures
@@ -1280,9 +1326,9 @@ func (d *Daemon) Close() error {
 		if d.contextGuards != nil {
 			d.contextGuards.close() // workers stop before provider backends/core teardown
 		}
-		if d.accounts != nil {
-			d.accounts.close()
-		} // drain account mutations before releasing singleton ownership
+		if d.logins != nil {
+			_ = d.logins.store.Close()
+		}
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
 		if d.remoteSrv != nil {
@@ -1389,6 +1435,9 @@ func currentMachineEpoch(stateDir string) (uint32, bool) {
 // dir: deterministic (unchanged across restarts of the same daemon) and distinct
 // per daemon (distinct state dirs). The short hash keeps namespaced ids compact.
 func endpointID(stateDir string) string {
+	if resolved, err := filepath.EvalSymlinks(stateDir); err == nil {
+		stateDir = resolved
+	}
 	sum := sha256.Sum256([]byte(stateDir))
 	return "ep-" + hex.EncodeToString(sum[:4])
 }

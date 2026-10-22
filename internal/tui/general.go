@@ -915,13 +915,13 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int, relocate bool) 
 		req.Options[protocol.OptionResumeRelocate] = "true"
 	}
 	return func() tea.Msg {
-		id, name, notice, err := launchWithNotice(c, req)
+		id, name, err := c.Launch(req)
 		if name == "" {
 			name = s.Name // skew fallback: an older daemon's reply carries no canonical name
 		}
 		// Carry the new session id + agent + name so a successful resume auto-attaches into
 		// it (bd agents-tracker-stc) — the user pressed 'r' precisely to interact with it.
-		return resumeResultMsg{source: s, result: launchResultMsg{id: id, agent: s.Agent, name: name, notice: notice, err: err}}
+		return resumeResultMsg{source: s, result: launchResultMsg{id: id, agent: s.Agent, name: name, err: err}}
 	}
 }
 
@@ -1220,6 +1220,9 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 		// siblings: the joined marker is clamped (clampCells requires unstyled
 		// input) and styled ONCE below (R1 audit: codex finding 4).
 		markers = append(markers, "no backend")
+	}
+	if s.ResumeError != "" {
+		markers = append(markers, "resume: "+s.ResumeError)
 	}
 	if len(markers) > 0 {
 		marker := " " + strings.Join(markers, " ")

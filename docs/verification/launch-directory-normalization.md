@@ -7,8 +7,8 @@ with trailing directory separators.
 working directory before history lookup, worktree handling, configuration,
 projection, and persistence. The root path remains `/` when trimming separators
 would otherwise produce an empty string. Interior path components are untouched,
-so the existing `accountconfig.safePath` checks for parent traversal and
-symlinks continue to apply.
+so the existing filesystem safety checks for parent traversal and symlinks
+continue to apply.
 
 The change is exercised by
 `internal/skeleton/launch_directory_test.go`. Its integration path drives the
@@ -32,7 +32,7 @@ lint (54.16), strict documentation manifest (0.04), uncached normal tests
 (676.78), and uncached race tests (818.50). The later Android release identity
 update to 0.15.5/code 52 passed the full Android gate package in 10.071 seconds
 and independent metadata review. These checks use
-synthetic providers and establish no authenticated account rotation or native
+synthetic providers and establish no authenticated provider switch or native
 conversation continuation. Release and installed acceptance require separate
 evidence.
 
@@ -59,9 +59,8 @@ attempt 1 passed all 17 jobs.
 [The release](https://github.com/Nathandela/swarm/releases/tag/v0.15.5) was
 published on 2026-10-05 at 11:22:25 UTC with 10 assets. Signed staging verified
 both binaries' clean-source build metadata and embedded source/version, plus
-the compatibility card. Account axes remain schema/jobs/inventory 1,
-recovery/worker/shim/config 2; protocol and shim wire remain 1, discussion
-schema remains 2. Android identity is 0.15.5/code 52; no Play publication is
+the compatibility card. The protocol and shim wire were 1, and discussion
+schema was 2. Android identity is 0.15.5/code 52; no Play publication is
 claimed.
 
 | Installed artifact | SHA-256 |
@@ -75,14 +74,13 @@ passed, followed by successful convergence. The responding daemon reports
 0.15.5, its executable hash matches the installed binary, every doctor check
 passes, and no pending convergence marker remains. All 158 saved session
 records and the exact PID/start-tick identities of all eight live shims were
-retained. Discussion identity/bindings, selected account identity/lifecycle and
-generation metadata, rotation flags, and saved daemon environment were
-preserved. This is selected metadata continuity, not credential or quota byte
-identity or native conversation acceptance.
+retained. Discussion identity, generation metadata, and the saved daemon
+environment were preserved. This is selected metadata continuity, not native
+conversation acceptance.
 
 An overlay-only acceptance probe drove the actual installed binary's isolated
-owner daemon through public `protocol.Launch`. Synthetic accounts, fake pinned
-provider executables, temporary HOME/state, and network namespaces kept the
+owner daemon through public `protocol.Launch`. Fake pinned provider executables,
+temporary HOME/state, and network namespaces kept the
 probe separate from production. On installed 0.15.4, canonical controls passed
 and trailing separators reproduced `unsafe-project-directory` for both
 providers. The same final probe passed on official installed 0.15.5 in 41.958
@@ -100,7 +98,8 @@ namespace. Final baseline and installed runs report no scan errors or live
 descendants, and their scratch directories are absent.
 
 The fake Codex backend deliberately exits, so this confirms the launch boundary
-and CLI fallback path, not native backend readiness. No real account sign-in,
-model turn, quota exhaustion, rotation, or native conversation continuation was
-performed. Project configuration/hooks, existing-discussion adoption, and
-authenticated two-account acceptance remain separate tracked work.
+and CLI fallback path, not native backend readiness. No real provider sign-in,
+model turn, quota exhaustion, provider switch, or native conversation
+continuation was performed. Project configuration/hooks and existing-discussion
+adoption remain separate tracked work. Current provider-login qualification is
+recorded in [provider login evidence](provider-logins.md).

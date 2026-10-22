@@ -1,0 +1,210 @@
+package tui
+
+import (
+	"strings"
+	"sync"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/Nathandela/swarm/internal/protocol"
+)
+
+type loginsTestClient struct {
+	*fakeClient
+	mu       sync.Mutex
+	requests []protocol.LoginsReq
+	listing  protocol.LoginsReply
+}
+
+func newLoginsTestClient() *loginsTestClient {
+	c := &loginsTestClient{fakeClient: newFakeClient()}
+	c.listing = protocol.LoginsReply{Revision: 3, Providers: []protocol.ProviderLoginView{{Provider: "claude", State: "ready"}, {Provider: "codex", State: "needs_login"}}}
+	return c
+}
+
+func (c *loginsTestClient) Capabilities() []string { return []string{protocol.CapLoginsManage} }
+
+func (c *loginsTestClient) Logins(req protocol.LoginsReq) (protocol.LoginsReply, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.requests = append(c.requests, req)
+	switch req.Action {
+	case "list":
+		return c.listing, nil
+	case "start":
+		return protocol.LoginsReply{Revision: 4, Job: &protocol.LoginJobView{ID: "job-1", Provider: req.Provider, Label: req.Label, State: "authenticating", VerificationURL: "https://auth.example.test/device", UserCode: "DEVICE-CODE", LoginSocket: "/private/login.sock"}}, nil
+	case "cancel_login":
+		return protocol.LoginsReply{Job: &protocol.LoginJobView{ID: req.JobID, State: "cancelled"}}, nil
+	}
+	return protocol.LoginsReply{Revision: 4}, nil
+}
+
+func (c *loginsTestClient) lastRequest() protocol.LoginsReq {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.requests[len(c.requests)-1]
+}
+
+func (c *loginsTestClient) request(action string) protocol.LoginsReq {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := len(c.requests) - 1; i >= 0; i-- {
+		if c.requests[i].Action == action {
+			return c.requests[i]
+		}
+	}
+	return protocol.LoginsReq{}
+}
+
+func TestLogins_AddNativeProviderAndHideSocket(t *testing.T) {
+	c := newLoginsTestClient()
+	m := New(c, nil).(rootModel)
+	next, list := m.enterLogins()
+	m = send(next, list()).(rootModel)
+	m = send(m, keyRune('a')).(rootModel)
+	if !strings.Contains(view(m), "Claude Code") {
+		t.Fatal("provider picker did not render")
+	}
+	m = send(m, keyRight).(rootModel)
+	m = send(m, keyEnter).(rootModel)
+	m = send(m, tea.PasteMsg{Content: "Work Codex"}).(rootModel)
+	started, cmd := m.Update(keyEnter)
+	if cmd == nil {
+		t.Fatal("label did not start provider login")
+	}
+	startedModel, listCmd := started.Update(cmd())
+	if listCmd == nil {
+		t.Fatal("started login did not refresh the list")
+	}
+	m = send(startedModel, listCmd()).(rootModel)
+	if req := c.request("start"); req.Provider != "codex" || req.Label != "Work Codex" {
+		t.Fatalf("start request = %#v", req)
+	}
+	text := view(m)
+	if !strings.Contains(text, "DEVICE-CODE") || !strings.Contains(text, "auth.example.test") || strings.Contains(text, "/private/login.sock") {
+		t.Fatalf("unexpected sign-in view: %s", text)
+	}
+	narrow := m.logins.view(24, 8, false, true)
+	if !strings.Contains(strings.ReplaceAll(narrow, "\n", ""), "https://auth.example.test/device") {
+		t.Fatalf("narrow view clipped the provider URL:\n%s", narrow)
+	}
+	for _, line := range strings.Split(narrow, "\n") {
+		if lipgloss.Width(line) > 24 {
+			t.Fatalf("narrow line overflows 24 cells: %q", line)
+		}
+	}
+	cancelling, cancel := m.Update(keyEsc)
+	if cancel == nil {
+		t.Fatalf("Esc did not cancel pending sign-in: %#v", m.logins)
+	}
+	cancelled := send(cancelling, cancel()).(rootModel)
+	if req := c.lastRequest(); req.Action != "cancel_login" || req.JobID != "job-1" {
+		t.Fatalf("cancel request = %#v", req)
+	}
+	if cancelled.logins.job.ID != "" {
+		t.Fatal("cancelled sign-in remained open")
+	}
+}
+
+func TestLogins_ReadyJobCompletesAutomatically(t *testing.T) {
+	c := newLoginsTestClient()
+	m := rootModel{screen: screenLogins, client: c, loginsClientGeneration: 2, logins: loginsModel{available: true, generation: 8, job: protocol.LoginJobView{ID: "job-ready", State: "verifying"}}}
+	next, cmd := m.applyLoginsReply(loginsReplyMsg{generation: 8, clientGeneration: 2, action: "status", reply: protocol.LoginsReply{Job: &protocol.LoginJobView{ID: "job-ready", State: "ready"}}})
+	if cmd == nil {
+		t.Fatal("ready job did not auto-complete")
+	}
+	_ = next
+	cmd()
+	if req := c.lastRequest(); req.Action != "complete" || req.JobID != "job-ready" {
+		t.Fatalf("completion request = %#v", req)
+	}
+}
+
+func TestLogins_NativeSocketAttachesOnlyOnEnter(t *testing.T) {
+	called := false
+	m := rootModel{
+		screen:      screenLogins,
+		loginRunner: func(job protocol.LoginJobView) error { called = job.LoginSocket == "/private/login.sock"; return nil },
+		logins:      loginsModel{generation: 2, available: true, job: protocol.LoginJobView{ID: "claude-job", State: "authenticating", LoginSocket: "/private/login.sock"}},
+	}
+	if !strings.Contains(m.logins.view(50, 10, false, true), "Enter attaches to native sign-in") {
+		t.Fatal("native sign-in attachment hint missing")
+	}
+	next, attach := m.Update(keyEnter)
+	if attach == nil || called || !next.(rootModel).logins.attached {
+		t.Fatal("native socket was attached before the runner command executed")
+	}
+	attach()
+	if !called {
+		t.Fatal("Enter did not attach to the private native sign-in socket")
+	}
+}
+
+func TestLogins_DropsStaleReplies(t *testing.T) {
+	m := rootModel{screen: screenLogins, loginsClientGeneration: 5, logins: loginsModel{generation: 9}}
+	next, cmd := m.applyLoginsReply(loginsReplyMsg{generation: 8, clientGeneration: 5, action: "list", reply: protocol.LoginsReply{Revision: 99}})
+	if cmd != nil || next.(rootModel).logins.reply.Revision != 0 {
+		t.Fatal("stale login response changed current screen")
+	}
+}
+
+func TestLogins_RejectedCompletionStaysVisible(t *testing.T) {
+	m := rootModel{screen: screenLogins, logins: loginsModel{generation: 3, job: protocol.LoginJobView{ID: "job", State: "ready"}}}
+	next, cmd := m.applyLoginsReply(loginsReplyMsg{generation: 3, action: "complete", reply: protocol.LoginsReply{Job: &protocol.LoginJobView{ID: "job", State: "failed", Message: "This account is already saved."}}})
+	got := next.(rootModel).logins
+	if cmd != nil || got.job.State != "failed" || got.job.Message == "" || got.notice != "" {
+		t.Fatal("rejected native sign-in displayed as complete")
+	}
+}
+
+func TestLogins_ProviderNativeAndActiveStates(t *testing.T) {
+	if loginProviderStatus("native") != "Native sign-in" || loginProviderStatus("active") != "Active" {
+		t.Fatal("provider native/active states were rendered as needs-sign-in")
+	}
+}
+
+func TestLogins_CancelBeforeStartReplyCancelsCreatedJob(t *testing.T) {
+	c := newLoginsTestClient()
+	m := rootModel{screen: screenLogins, client: c, loginsGeneration: 4, logins: loginsModel{generation: 4, available: true, mode: "label", provider: "claude", label: newLineEditor("Work")}}
+	starting, start := m.Update(keyEnter)
+	if start == nil {
+		t.Fatal("start request was not dispatched")
+	}
+	cancelling, cancel := starting.Update(keyEsc)
+	if cancel != nil || !cancelling.(rootModel).logins.cancelAfterStart {
+		t.Fatal("Esc before the start reply did not defer cancellation")
+	}
+	cancellingModel := cancelling.(rootModel)
+	next, cancel := cancellingModel.applyLoginsReply(loginsReplyMsg{generation: cancellingModel.logins.generation, action: "start", reply: protocol.LoginsReply{Job: &protocol.LoginJobView{ID: "late-job", State: "authenticating"}}})
+	if cancel == nil {
+		t.Fatal("late start reply did not dispatch cancellation")
+	}
+	cancel()
+	if req := c.lastRequest(); req.Action != "cancel_login" || req.JobID != "late-job" {
+		t.Fatalf("deferred cancel = %#v", req)
+	}
+	if next.(rootModel).logins.cancelAfterStart {
+		t.Fatal("deferred cancellation flag was not consumed")
+	}
+}
+
+func TestLogins_ReconnectInvalidatesOldClientReplies(t *testing.T) {
+	old, fresh := newLoginsTestClient(), newLoginsTestClient()
+	m := rootModel{
+		client: old, connections: newClientLifetime(old), events: old.events,
+		screen: screenLogins, connectionLost: true, reconnecting: true, reconnectGeneration: 7,
+		logins: loginsModel{available: true, generation: 3},
+	}
+	next, _ := m.applyDaemonReconnected(daemonReconnectedMsg{generation: 7, client: fresh, events: fresh.events, sessions: []protocol.SessionView{}})
+	m = next.(rootModel)
+	if m.client != fresh || m.loginsClientGeneration != 1 || !m.logins.busy {
+		t.Fatal("reconnect did not start a login refresh on the replacement client")
+	}
+	stale := loginsReplyMsg{generation: m.logins.generation, clientGeneration: 0, action: "list", reply: protocol.LoginsReply{Revision: 99}}
+	next, cmd := m.applyLoginsReply(stale)
+	if cmd != nil || next.(rootModel).logins.reply.Revision == 99 {
+		t.Fatal("old-client login reply landed after reconnect")
+	}
+	_ = fresh.events
+}

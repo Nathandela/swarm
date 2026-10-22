@@ -1,0 +1,32 @@
+{
+  "pinned_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+  "notification_source": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/src/protocol/v2/account.rs",
+  "schemas": [
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/schema/typescript/v2/AccountRateLimitsUpdatedNotification.ts",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/schema/typescript/v2/GetAccountRateLimitsResponse.ts",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/schema/typescript/v2/RateLimitSnapshot.ts",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/schema/typescript/v2/RateLimitWindow.ts",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/schema/typescript/v2/RateLimitReachedType.ts",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/schema/typescript/v2/ErrorNotification.ts",
+    "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/schema/typescript/v2/TurnError.ts"
+  ],
+  "wire_contract": {
+    "notification": "account/rateLimits/updated",
+    "payload": "params.rateLimits; sparse camelCase primary/secondary usedPercent/resetsAt",
+    "terminal": "error with usageLimitExceeded and willRetry=false or failed turn/completed with usageLimitExceeded",
+    "terminal_error_has_structured_reset": false
+  },
+  "implementation": "Feed/Runtime/instance-fenced sparse global-codex cache; terminal failure alone declares limit; fresh negative metadata can revoke a finite deadline; expired facts cannot be extended by metadata; one durable LimitNonRolling bit preserves credit/spend denial across feeds and daemon restarts; only explicit availability reset or fresh sign-in clears it",
+  "eligibility": "At reported reset, saved login becomes retryable; native acceptance remains authoritative and may fail again under finite coordinator journal",
+  "checks": {
+    "focused_normal": "PASS 7.214s",
+    "focused_race_with_native_failure_and_retry_regressions": "PASS 14.302s",
+    "vet": "PASS after durable-bit integration",
+    "deterministic_clock": "standard testing/synctest; native/store time advances without production clock seam",
+    "final_quota_race": "PASS 13.219s including review regressions, multi-feed negative metadata, expired/fresh-terminal distinction, durable credit/spend rejection and store reopen",
+    "store_full_race": "PASS 36.505s; vet and lint (0 issues)",
+    "independent_review": "PASS: original reset counterexamples, cross-feed credit rejection, durable reopen and negative controls; skeleton 6.877s, store 2.293s"
+  },
+  "live_auth_used": false,
+  "review_report": "/private/tmp/swarm-codex-reset-review-astra.md"
+}

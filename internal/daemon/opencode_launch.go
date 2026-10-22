@@ -22,7 +22,7 @@ func (d *Daemon) prepareOpenCodeLaunch(spec *LaunchSpec, m *persist.Meta, dir st
 	if spec.RequiredRuntime == "" && spec.OpenCodeBinding == nil {
 		return nil
 	}
-	if spec.RequiredRuntime != persist.RequiredRuntimeOpenCode || spec.AgentType != "opencode" || spec.AccountBinding != nil || spec.Backend != nil {
+	if spec.RequiredRuntime != persist.RequiredRuntimeOpenCode || spec.AgentType != "opencode" || spec.LoginRuntime != nil || spec.Backend != nil {
 		return errors.New("OpenCode runtime: incompatible launch contract")
 	}
 	physicalDir, err := filepath.EvalSymlinks(dir)

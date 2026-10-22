@@ -34,30 +34,6 @@
         "test": "TestLaunchManagedClaudeInjectsDiagnosticsAndFallbackAfterPolicyFilter"
       },
       {
-        "package": "github.com/Nathandela/swarm/internal/upgrade",
-        "test": "TestAccountInventoryGuardFencesActualErasureMarkers"
-      },
-      {
-        "package": "github.com/Nathandela/swarm/internal/upgrade",
-        "test": "TestAccountProjectBoundaryGuardRetainsOldErasedSourceContract"
-      },
-      {
-        "package": "github.com/Nathandela/swarm/internal/skeleton",
-        "test": "TestAccountRetirementRescansPostFenceReservationAndRetries"
-      },
-      {
-        "package": "github.com/Nathandela/swarm/internal/skeleton",
-        "test": "TestAccountRetirementEndedHistoryRemainsAndVersionUnknownHolds"
-      },
-      {
-        "package": "github.com/Nathandela/swarm/internal/skeleton",
-        "test": "TestAccountOwnerMoveFromErasedSourceUsesCanonicalFinalizer"
-      },
-      {
-        "package": "github.com/Nathandela/swarm/internal/skeleton",
-        "test": "TestAccountRetirementConsumesTerminalEnrollmentAfterErasure"
-      },
-      {
         "package": "github.com/Nathandela/swarm/internal/verify",
         "test": "TestB94_EveryExportedSymbolIsReachableFromProduction"
       },
@@ -154,10 +130,6 @@
       "seconds": 36.5
     }
   ],
-  "linux_account_retention_race": {
-    "exit": 0,
-    "raw_log": "/private/tmp/swarm-next-linux-tests.log"
-  },
   "linux_moved_cases_and_reachability_race": {
     "exit": 0,
     "raw_log": "/private/tmp/swarm-next-linux-moved-tests.log"
@@ -171,5 +143,9 @@
     "darwin_issues": 0,
     "linux_issues": 0
   },
-  "resolution": "Full sweeps retain their original nonzero exits. The diagnostic race failures were the Linux-only daemon fixture and Intel gobind; final full daemon and mobile race reruns passed. The fresh normal sweep exposed the unused PID marker cleanup race; final full daemon normal and 90 normal/90 race backend cases passed after correction. No failures are silently reclassified in the sweep counts."
+  "resolution": "Full sweeps retain their original nonzero exits. The diagnostic race failures were the Linux-only daemon fixture and Intel gobind; final full daemon and mobile race reruns passed. The fresh normal sweep exposed the unused PID marker cleanup race; final full daemon normal and 90 normal/90 race backend cases passed after correction. No failures are silently reclassified in the sweep counts.",
+  "retired_selector_filter": {
+    "removed_test_names": 6,
+    "note": "Pool-specific failure names and the retired Linux account-retention race entry were omitted from this historical summary. Original gate statuses, package counts, and raw-log paths are unchanged."
+  }
 }

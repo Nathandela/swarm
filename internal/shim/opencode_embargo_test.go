@@ -55,7 +55,7 @@ func TestOpenCodeEmbargoBlocksInputUntilGenerationRelease(t *testing.T) {
 	if again.held.Load() {
 		t.Fatal("durable release not recovered")
 	}
-	if _, err := os.Stat(filepath.Join(dir, AccountInputEmbargoFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, InputEmbargoFile)); !os.IsNotExist(err) {
 		t.Fatal("OpenCode reused account embargo state")
 	}
 	if err := p.submitMessage([]byte("after"), 0); err != nil {

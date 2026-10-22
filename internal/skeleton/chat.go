@@ -350,8 +350,6 @@ func (d *Daemon) clearAuthRecycle(local string) {
 const (
 	recycleReasonCredentials = "is recycling stale credentials -- retry after its replacement appears"
 	recycleReasonCLI         = "is restarting on a refreshed CLI -- retry after its replacement appears"
-	recycleReasonMove        = "is moving to another account -- retry after its replacement appears"
-	recycleReasonObservation = "is held because an account observation could not be saved; the lock holds until the session ends -- end the session and resume it"
 )
 
 // noteAuthRecycleReason names the job holding local's recycle embargo, so a
@@ -528,6 +526,18 @@ func (d *Daemon) semanticSendTransactional(machine, operationID string, req prot
 }
 
 func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.ComposerSendReq, begin func() error, source string) (protocol.ErrorCode, error) {
+	originalBegin := begin
+	begin = func() error {
+		local, err := d.resolveChatSession(machine, req.Session)
+		if err != nil {
+			return err
+		}
+		if err = d.logins.inputGate(local); err != nil {
+			return err
+		}
+		return beginComposerDelivery(originalBegin)
+	}
+
 	local, err := d.resolveChatSession(machine, req.Session)
 	if err != nil {
 		return protocol.CodeInvalidField, errIsLife5("composer send: %v", err)

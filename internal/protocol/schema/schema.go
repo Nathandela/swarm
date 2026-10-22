@@ -90,8 +90,8 @@ type Control struct {
 	// byte shape of every pre-ADR-023 Control frame.
 	ContextGuardSettings *ContextGuardSettings       `json:"context_guard_settings,omitempty"`
 	ContextGuardSet      *ContextGuardSettingsSetReq `json:"context_guard_set,omitempty"`
-	AccountsRequest      *AccountsReq                `json:"accounts_request,omitempty"`
-	AccountsResult       *AccountsReply              `json:"accounts_result,omitempty"`
+	LoginsRequest        *LoginsReq                  `json:"logins_request,omitempty"`
+	LoginsResult         *LoginsReply                `json:"logins_result,omitempty"`
 
 	Terminal *TerminalSnapshot `json:"terminal,omitempty"` // server-rendered terminal snapshot, carried on terminal_snapshot (A7 slice B)
 
@@ -175,9 +175,6 @@ type Control struct {
 	// the launch screen's tier-denied state had no data source. Empty when the backend
 	// exposes no capability seam: absent fact, never an invented tier.
 	DeviceCapability string `json:"device_capability,omitempty"`
-	// Notice is a launch reply's note for the owner, such as an owner-login fallback
-	// after an account refused (ADR-032 Amendment 4). Empty on an ordinary launch.
-	Notice string `json:"notice,omitempty"`
 }
 
 // SendInputReq is one owner-tier steering message (ADR-010 Amendment 1 A2), carried in
@@ -277,6 +274,7 @@ type SessionView struct {
 	// one daemon.log line. omitempty: a healthy row serializes exactly as it did
 	// before the field existed, and an older daemon simply never populates it.
 	BackendPlanError string `json:"backend_plan_error,omitempty"`
+	ResumeError      string `json:"resume_error,omitempty"`
 	// Supervision is the persisted supervision mode of a handoff child (ADR-010
 	// Amendment 3 C1/C5) and SupervisionPending reports that an attention event of
 	// that child awaits its source: LIVE daemon state, sampled at stamp time exactly

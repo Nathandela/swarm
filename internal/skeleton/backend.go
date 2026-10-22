@@ -123,7 +123,9 @@ type backendFeed struct {
 	// retired closes the producer edge for a removed or displaced connection. It is
 	// checked again behind the replacement fence, so a callback already dispatched by
 	// the app-server read loop cannot inject into a successor that reused the session id.
-	retired atomic.Bool
+	retired      atomic.Bool
+	loginQuotaMu sync.Mutex
+	loginQuota   codexQuotaEvidence
 
 	// guardMu bridges the interval between opening the app-server connection and
 	// publishing the ContextGuard session. Relevant lifecycle evidence cannot be
@@ -888,13 +890,9 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 	if d.contextGuards != nil {
 		d.contextGuards.replaceMu.Lock()
 	}
-	var accountErr error
 	defer func() {
 		if d.contextGuards != nil {
 			d.contextGuards.replaceMu.Unlock()
-		}
-		if accountErr != nil && d.accountRotation != nil {
-			d.accountRotation.nativeInboxFailed(local, expectedInstance)
 		}
 	}()
 	if feed.retired.Load() {
@@ -914,8 +912,8 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 		guardFrame = guardProjection[0]
 	}
 	d.captureContextGuardFrame(local, expectedInstance, feed, method, guardFrame, at)
-	if d.accountRotation != nil {
-		accountErr = d.accountRotation.NoteNativeFrame(local, expectedInstance, feed, method, frame, at)
+	if d.logins != nil {
+		d.logins.observeNativeFailure(local, expectedInstance, feed, method, frame)
 	}
 	d.ingestBackendFrame(local, frame, at.UnixMilli())
 }

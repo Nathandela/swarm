@@ -18,7 +18,7 @@ tests, the final one-hour result and corrected sustained queue.
 | Continuity | Shim-owned normal TUI, daemon crash/rejoin, exact resume, native history export and actual source checkout preservation | Actual OpenCode-to-OpenCode passed; the Claude side of the mixed-harness handoff matrix was a fixture |
 | Structured interaction | Bounded live transcript, request sets, owner permission/question controls, signed phone decisions and native phone composer | Strict turn Stop is unavailable; native APIs cannot protect a newer turn with an expected-turn precondition |
 | Phone history | Live/ended native pages, encrypted cursor custody, live-row precedence and immutable phone state snapshots | Actual native SDK paging and sealed three-page phone reads passed; imported history cannot create journal cursors, input ownership or decision authority |
-| Operations | Pinned runtime/version checks, health-based capability withdrawal, safe unsupported refresh and observed quota/compaction outcomes | Account rotation, relogin and Swarm-driven compaction remain unavailable |
+| Operations | Pinned runtime/version checks, health-based capability withdrawal, safe unsupported refresh and observed quota/compaction outcomes | OpenCode provider-login switching and Swarm-driven compaction remain unavailable |
 
 The model-selection request is implemented: opening the OpenCode launch form uses
 the existing selector, including built-in free models, with editable manual entry
@@ -163,11 +163,9 @@ Later host-only commits do not change the AAR's production code.
 
 ## Qualification limits
 
-The earlier whole-macOS baseline fails existing Linux-managed-account and
-platform-specific process fixtures; this remains tracked by
-`agents-tracker-vyhy.10`. Darwin lint also reports eleven existing unused
-Linux-account symbols. These checks were not weakened, and whole-Darwin green is
-not claimed. The old missing native gobind/NDK verification leg was resolved with
+The earlier whole-macOS baseline fails platform-specific process fixtures; this
+remains tracked by `agents-tracker-vyhy.10`. These checks were not weakened, and
+whole-Darwin green is not claimed. The old missing native gobind/NDK verification leg was resolved with
 the isolated ARM toolchain and complete final Android gate above.
 
 Runtime, bridge, reducer, bounded live transcript, hierarchy, native paging/export,

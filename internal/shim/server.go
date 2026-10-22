@@ -236,7 +236,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, AccountInputEmbargo: true, OpenCodeInputEmbargo: true, OpenCodeDispatch: s.openCode != nil})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, InputEmbargo: true, OpenCodeInputEmbargo: true, OpenCodeDispatch: s.openCode != nil})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -271,10 +271,10 @@ func (s *server) serveConn(conn net.Conn) {
 					result.Refused = shimwire.RefusedOpenCodeStarting
 				}
 				cw.writeControl(result)
-			case shimwire.TypeAccountEmbargoRelease:
-				result := shimwire.Control{Type: shimwire.TypeAccountEmbargoResult}
-				if s.ptyIn.embargo == nil || s.ptyIn.embargo.file != AccountInputEmbargoFile || s.ptyIn.embargo.release(ctrl.IncidentID, ctrl.Token) != nil {
-					result.Refused = shimwire.RefusedAccountSwitching
+			case shimwire.TypeInputEmbargoRelease:
+				result := shimwire.Control{Type: shimwire.TypeInputEmbargoResult}
+				if s.ptyIn.embargo == nil || s.ptyIn.embargo.file != InputEmbargoFile || s.ptyIn.embargo.release(ctrl.IncidentID, ctrl.Token) != nil {
+					result.Refused = shimwire.RefusedInputEmbargo
 				}
 				cw.writeControl(result)
 			case shimwire.TypeAttach:
@@ -891,7 +891,7 @@ type ptyWriter struct {
 	f      *os.File
 	closed bool
 
-	embargo   *accountEmbargo
+	embargo   *inputEmbargo
 	inputLine inputLineTracker
 }
 

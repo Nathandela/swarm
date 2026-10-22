@@ -81,7 +81,7 @@ const (
 	// do not start a context-guard worker; this is settings/protocol foundation only.
 	OpContextGuardGet = "context_guard_get"
 	OpContextGuardSet = "context_guard_set"
-	OpAccountsManage  = "account_manage"
+	OpLoginsManage    = "login_manage"
 
 	// OpTakeControl is the signed remote MUTATING op (slice A5-a) that acquires a
 	// controller lease on a session — the anti-abuse gate that must precede any remote
@@ -211,7 +211,7 @@ const (
 	// CapContextGuardSettings keeps a new owner settings operation from silently
 	// degrading against an older daemon that would otherwise only know version 1.
 	CapContextGuardSettings = "context-guard-settings"
-	CapAccountsManage       = "accounts.manage.v1"
+	CapLoginsManage         = "logins.manage.v1"
 	CapSemanticSend         = "semantic-send"
 )
 
@@ -254,13 +254,11 @@ type (
 	ContextGuardAutoCompact    = schema.ContextGuardAutoCompact
 	ContextGuardSettings       = schema.ContextGuardSettings
 	ContextGuardSettingsSetReq = schema.ContextGuardSettingsSetReq
-	AccountsReq                = schema.AccountsReq
-	AccountsReply              = schema.AccountsReply
-	AccountCoverageView        = schema.AccountCoverageView
-	AccountView                = schema.AccountView
-	AccountQuotaView           = schema.AccountQuotaView
-	AccountMethodView          = schema.AccountMethodView
-	AccountEnrollmentView      = schema.AccountEnrollmentView
+	LoginsReq                  = schema.LoginsReq
+	LoginsReply                = schema.LoginsReply
+	LoginView                  = schema.LoginView
+	ProviderLoginView          = schema.ProviderLoginView
+	LoginJobView               = schema.LoginJobView
 	ContextGuardView           = schema.ContextGuardView
 )
 

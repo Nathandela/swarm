@@ -161,8 +161,8 @@ func Activate(opts ActivateOptions) (State, error) {
 		return s, recordState(opts.StateDir, &s)
 	}
 
-	if err := accountStateGuard(opts.StateDir, card); err != nil {
-		s.Outcome, s.Detail = "refused-account-state", err.Error()
+	if err := loginStateGuard(opts.StateDir, card); err != nil {
+		s.Outcome, s.Detail = "refused-login-state", err.Error()
 		return s, recordState(opts.StateDir, &s)
 	}
 

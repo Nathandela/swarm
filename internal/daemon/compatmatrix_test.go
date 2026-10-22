@@ -1,37 +1,8 @@
 package daemon
 
-// E14.3 (T6, contracts row 7): the old-shim x new-daemon COMPAT MATRIX across an
-// adjacent wire-version pair. The single-version interop smoke lives in
-// version_test.go:TestVersionSkew_SmokeReconnectRealShim; this is the real matrix.
-//
-// MECHANISM. The daemon<->shim wire version is shimwire.Version. It is an EXACT-
-// MATCH gate on BOTH sides of the G2 hello: the daemon's dialShimHello sends its
-// version and rejects a reply whose WireVersion differs (shimclient.go), and the
-// shim's serveConn replies with its own version and closes the connection when the
-// daemon's differs (shim/server.go). To exercise a version PAIR we hold the
-// in-process daemon at the current build (shimwire.Version == 1) and vary only the
-// SHIM binary's wire version across {0, 1, 2}, built via the compat_shim_v0 /
-// compat_shim_v2 build tags (internal/shimwire/version*.go — a test-only seam; the
-// default, shipped build is unchanged at 1). With the daemon fixed at 1 this spans
-// every cell:
-//
-//	shim v0  == new-daemon(1) x OLD-shim(0)   -> INCOMPATIBLE (detect skew, lost)
-//	shim v1  == matched                        -> COMPATIBLE  (reconnect + serve)
-//	shim v2  == OLD-daemon(1) x new-shim(2)    -> INCOMPATIBLE (detect skew, lost)
-//
-// WHY only the diagonal interops. The wire-version NUMBER is a hard equality gate,
-// so ANY skew (+/-1) is detected. That is deliberately separate from the forward-
-// tolerance of the message CONTENT: shimwire.Decode ignores unknown fields/types
-// (shimwire_test.go), so a matched-version daemon and shim that differ in message
-// vocabulary still interoperate. Version = compatibility contract (hard gate);
-// unknown fields = within-version evolution (tolerated). This matrix pins the hard
-// gate; the shimwire forward-tolerance unit tests pin the soft part.
-//
-// A skew cell must be DETECTED and the session marked lost — never a silent corrupt
-// reconnect — and, per S3, marking lost must send ZERO signals: the live shim and
-// its agent are left untouched (the daemon only reclassifies its own record). NO
-// billable agent runs: the "agent" is this test binary re-exec'd as a blocked
-// announce process (main_test.go), exactly like the interop smoke.
+// The compatibility matrix checks adjacent old/new shim contracts against the
+// current daemon. Skew is detected without signalling a foreign-version process;
+// the matched cell reconnects and remains controllable.
 
 import (
 	"os"
@@ -44,7 +15,7 @@ import (
 
 // buildSwarmWithTag builds the swarm binary with an extra build tag and returns
 // its path. Used to produce an adjacent-wire-version `swarm shim` for a compat
-// cell; the default (untagged) swarmBin from TestMain is the matched v1 shim.
+// cell; the default (untagged) swarmBin from TestMain is the matched v2 shim.
 func buildSwarmWithTag(t *testing.T, tag string) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "swarm-"+tag)
@@ -106,9 +77,9 @@ func spawnShimBin(t *testing.T, bin, stateDir, id string) (shimPID, agentPID int
 // and each skew cell is detected and marked lost with the agent left alive.
 func TestCompatMatrix_OldShimNewDaemon(t *testing.T) {
 	// Build the two adjacent-version shim binaries once; the matched cell reuses the
-	// default v1 swarmBin from TestMain.
-	shimV0 := buildSwarmWithTag(t, "compat_shim_v0")
-	shimV2 := buildSwarmWithTag(t, "compat_shim_v2")
+	// default v2 swarmBin from TestMain.
+	oldShim := buildSwarmWithTag(t, "compat_shim_old")
+	newShim := buildSwarmWithTag(t, "compat_shim_new")
 
 	cells := []struct {
 		name        string
@@ -116,9 +87,9 @@ func TestCompatMatrix_OldShimNewDaemon(t *testing.T) {
 		wantServing bool           // confirmShimServing: does the G2 hello gate accept it?
 		wantProcess status.Process // reconcile outcome through a real daemon Open
 	}{
-		{"new-daemon(1)_x_old-shim(0)", shimV0, false, status.ProcessLost},
-		{"matched(1)", swarmBin, true, status.ProcessRunning},
-		{"old-daemon(1)_x_new-shim(2)", shimV2, false, status.ProcessLost},
+		{"new-daemon(2)_x_old-shim(1)", oldShim, false, status.ProcessLost},
+		{"matched(2)", swarmBin, true, status.ProcessRunning},
+		{"old-daemon(2)_x_new-shim(3)", newShim, false, status.ProcessLost},
 	}
 
 	for _, c := range cells {
@@ -162,7 +133,7 @@ func TestCompatMatrix_OldShimNewDaemon(t *testing.T) {
 				if !processAlive(agentPID) {
 					t.Fatalf("matched cell: agent %d not alive after reconnect", agentPID)
 				}
-				// SERVE proof: the reconnected v1 shim is genuinely drivable — the daemon
+				// SERVE proof: the reconnected v2 shim is genuinely drivable — the daemon
 				// kills it over the same matched wire and the agent dies.
 				if err := d.Kill(id); err != nil {
 					t.Fatalf("matched cell: Kill via reconnected shim: %v", err)

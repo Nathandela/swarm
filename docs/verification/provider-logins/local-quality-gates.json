@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-23",
+  "toolchain": "go1.26.10 darwin/arm64",
+  "build": "PASS",
+  "vet": "PASS",
+  "phaseb_manifest_strict": "PASS",
+  "checks": {
+    "full_test": {
+      "result": "PASS",
+      "log_sha256": "3b134b860d84d3b7bb2148a6fc5ac449ad23fda5c897c00558bedccc0a7f59de"
+    },
+    "final_lifecycle_suite": {
+      "result": "PASS",
+      "log_sha256": "2f13a45029a04f31c67e70637925edb17479ca1f8df2c529de3e07f424934cb5"
+    },
+    "race_changed_packages": {
+      "result": "PASS",
+      "log_sha256": "dc85e1f3b56ef6a1f12c40b68fe6bb825842b3419ecc523dd5ecad651650775c"
+    },
+    "frozen_final_regressions_race": {
+      "result": "PASS",
+      "log_sha256": "b905b2866fa92a342727c3424abfce56f632c255be72507cf51cbc1f8c13a91a"
+    },
+    "lint": {
+      "result": "PASS",
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "module_tidy": {
+      "result": "PASS",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "race_scope": [
+    "logins",
+    "loginmigration",
+    "loginworker",
+    "protocol",
+    "processcontain",
+    "shim",
+    "daemon",
+    "tui",
+    "final targeted skeleton lifecycle/quota/enrollment regressions"
+  ],
+  "native_production_qualification": "provider-login-manager-qualification.json",
+  "release_ci": "Exact-tag CI gates run before publication through release.yml."
+}

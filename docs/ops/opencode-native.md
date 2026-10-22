@@ -80,8 +80,9 @@ explicit fresh handoff where appropriate. Follow the
 installed CLI changes.
 
 Strict turn Stop remains unavailable because the pinned native API cannot fence
-the expected turn. Account rotation, automatic relogin and Swarm-initiated native
-compaction are not enabled. Native automatic compaction can create a continuation
+the expected turn. Provider login switching currently covers Claude Code and
+Codex, not OpenCode; automatic CLI refresh does not change provider credentials.
+Swarm-initiated native compaction is not enabled. Native automatic compaction can create a continuation
 without an authoritative link to the original input; its original receipt remains
 unresolved instead of claiming another input's completion.
 

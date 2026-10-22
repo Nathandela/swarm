@@ -74,8 +74,8 @@ func Rollback(opts ActivateOptions) (State, error) {
 		return s, recordState(opts.StateDir, &s)
 	}
 
-	if err := accountStateGuard(opts.StateDir, prevCard); err != nil {
-		s.Outcome, s.Detail = "refused-account-state", err.Error()
+	if err := loginStateGuard(opts.StateDir, prevCard); err != nil {
+		s.Outcome, s.Detail = "refused-login-state", err.Error()
 		return s, recordState(opts.StateDir, &s)
 	}
 

@@ -37,7 +37,7 @@ func TestCLIRefreshInstalledUpgradeRealResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = core.Close() })
-	api := &coreAPI{core: core, endpointID: testEndpoint}
+	api := &coreAPI{core: core, stateDir: dir, endpointID: testEndpoint}
 	project := t.TempDir()
 	env := []string{"PATH=" + dir + ":/usr/bin:/bin", "HOME=" + dir}
 	old, err := api.Launch(daemon.LaunchSpec{AgentType: "claude", Name: "upgrade-me", Tag: "refresh", Cwd: project, ClientEnv: env, ConversationID: migratedConversationID, Cols: 80, Rows: 24, SpawnedFrom: "parent", SpawnIntent: "delegate", Supervision: "manual", Options: map[string]string{"model": "sonnet"}})
