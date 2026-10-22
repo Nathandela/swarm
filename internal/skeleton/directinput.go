@@ -93,9 +93,12 @@ func validDirectInputTurn(turn status.Turn) bool {
 	return turn == status.TurnActive || turn == status.TurnIdle || turn == status.TurnUnknown
 }
 
+// InteractionError is a valid baseline: a failed turn (usage limit, model at capacity) leaves
+// the agent idle and waiting for the next message, so input there must not be refused.
 func validDirectInputInteraction(interaction status.Interaction) bool {
 	return interaction == status.InteractionNone || interaction == status.InteractionPrompt ||
-		interaction == status.InteractionPermission || interaction == status.InteractionUnknown
+		interaction == status.InteractionPermission || interaction == status.InteractionUnknown ||
+		interaction == status.InteractionError
 }
 
 // ObserveDirectInput makes coreAPI the optional protocol.DirectInputObserver.
