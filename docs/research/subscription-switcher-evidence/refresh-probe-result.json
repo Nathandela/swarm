@@ -1,0 +1,141 @@
+{
+  "account_read_refreshToken": true,
+  "app_server_processes": 2,
+  "binary": "/Users/Nathan/.codex/packages/app-server-daemon/releases/0.163.0-aarch64-apple-darwin/bin/codex",
+  "binary_bytes": 249952688,
+  "both_processes_used_original_synthetic_token": true,
+  "configured_oauth_refresh_urls": {
+    "process-1": "http://127.0.0.1:63359/oauth/token/process-1",
+    "process-2": "http://127.0.0.1:63359/oauth/token/process-2"
+  },
+  "configured_provider_base_url": "http://127.0.0.1:63359",
+  "distinct_processes_overlapped_using_original_synthetic_token": true,
+  "elapsed_seconds": 0.04,
+  "max_simultaneous_handlers_using_original_synthetic_token": 2,
+  "max_simultaneous_refresh_handlers": 2,
+  "model_rpc_or_model_request_sent": false,
+  "oauth_refresh_requests": 3,
+  "overlap_assertion_passed": true,
+  "processes_observed_using_original_synthetic_token": [
+    "process-1",
+    "process-2"
+  ],
+  "real_credentials_or_auth_files_touched": false,
+  "refresh_handler_trace": [
+    {
+      "count": 1,
+      "event": "start",
+      "inflight": 1,
+      "process_label": "process-1",
+      "synthetic_original_refresh_token": true,
+      "time": 434264.98979075
+    },
+    {
+      "count": 2,
+      "event": "start",
+      "inflight": 2,
+      "process_label": "process-2",
+      "synthetic_original_refresh_token": true,
+      "time": 434264.989925
+    },
+    {
+      "event": "finish",
+      "inflight": 1,
+      "process_label": "process-2",
+      "synthetic_original_refresh_token": true,
+      "time": 434264.989982708
+    },
+    {
+      "event": "finish",
+      "inflight": 0,
+      "process_label": "process-1",
+      "synthetic_original_refresh_token": true,
+      "time": 434264.990055791
+    },
+    {
+      "count": 3,
+      "event": "start",
+      "inflight": 1,
+      "process_label": "process-1",
+      "synthetic_original_refresh_token": false,
+      "time": 434265.00053875
+    },
+    {
+      "event": "finish",
+      "inflight": 0,
+      "process_label": "process-1",
+      "synthetic_original_refresh_token": false,
+      "time": 434265.000570958
+    }
+  ],
+  "refresh_token_shared": true,
+  "requests_observed_at_loopback_backend": [
+    {
+      "method": "GET",
+      "path": "/ps/plugins/suggested/codex?scope=GLOBAL"
+    },
+    {
+      "method": "GET",
+      "path": "/api/codex/accounts/check"
+    },
+    {
+      "method": "GET",
+      "path": "/plugins/featured?platform=codex"
+    },
+    {
+      "method": "GET",
+      "path": "/ps/plugins/installed?limit=200"
+    },
+    {
+      "method": "GET",
+      "path": "/ps/plugins/installed?limit=200&includeDownloadUrls=true"
+    },
+    {
+      "method": "GET",
+      "path": "/ps/plugins/installed?limit=200"
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token/process-1",
+      "process_label": "process-1",
+      "request_body": "{\"client_id\":\"app_EMoamEEZ73f0CkXaXp7hrann\",\"grant_type\":\"refresh_token\",\"refresh_token\":\"synthetic-refresh-shared\"}",
+      "request_content_type": "application/json",
+      "synthetic_original_refresh_token": true
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token/process-2",
+      "process_label": "process-2",
+      "request_body": "{\"client_id\":\"app_EMoamEEZ73f0CkXaXp7hrann\",\"grant_type\":\"refresh_token\",\"refresh_token\":\"synthetic-refresh-shared\"}",
+      "request_content_type": "application/json",
+      "synthetic_original_refresh_token": true
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token/process-1",
+      "process_label": "process-1",
+      "request_body": "{\"client_id\":\"app_EMoamEEZ73f0CkXaXp7hrann\",\"grant_type\":\"refresh_token\",\"refresh_token\":\"synthetic-refresh-rotated\"}",
+      "request_content_type": "application/json",
+      "synthetic_original_refresh_token": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/codex/accounts/check"
+    },
+    {
+      "method": "GET",
+      "path": "/api/codex/accounts/check"
+    },
+    {
+      "method": "GET",
+      "path": "/api/codex/accounts/check"
+    }
+  ],
+  "rpc_errors": [],
+  "rpc_result_count": 2,
+  "sha256": "8813367285524ac798dd96d1b071aea30d58708c7226fd236cd275cf1cfdee31",
+  "shared_home": true,
+  "sqlite_state_warmed_before_parallel_start": true,
+  "synthetic_account_id": "123e4567-e89b-42d3-a456-426614174013",
+  "warmup_account_read_succeeded": true
+}

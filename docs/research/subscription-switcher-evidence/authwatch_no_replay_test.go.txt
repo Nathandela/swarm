@@ -1,0 +1,26 @@
+package skeleton
+
+import (
+	"testing"
+
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
+)
+
+func TestOverlayAuthRecycleDoesNotReplayPrompt(t *testing.T) {
+	f := newAuthFake(identityB)
+	f.add(runningCodex("s1", identityA, status.TurnIdle, "conversation"))
+	w := testWatcher(t, f)
+	w.state.Identities["codex"] = identityA
+	w.tick()
+	if len(f.launched) != 1 {
+		t.Fatalf("launch count = %d, want 1", len(f.launched))
+	}
+	spec := f.launched[0]
+	if spec.InitialPrompt != "" {
+		t.Fatalf("recovery replayed an initial prompt: %q", spec.InitialPrompt)
+	}
+	if len(spec.Options) != 1 || spec.Options[protocol.OptionResumeFrom] != "ep-test01/s1" {
+		t.Fatalf("recovery options = %#v, want resume_from only", spec.Options)
+	}
+}

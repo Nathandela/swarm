@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/private/tmp/swarm-oc-audit-modcache/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64/bin/go",
+    "test",
+    "-json",
+    "-race",
+    "-count=1",
+    "-overlay=/private/tmp/swarm-rotator-overlay.json",
+    "./internal/skeleton",
+    "-run",
+    "^TestOverlaySourceConfigDriftRefusesSuccessorBeforeKill$"
+  ],
+  "exit_code": 0,
+  "seconds": 9.84,
+  "expected_observation": "accountReserved, successor-preflight-refused, zero kills and launches"
+}

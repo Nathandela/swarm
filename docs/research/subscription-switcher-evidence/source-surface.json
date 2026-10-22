@@ -1,0 +1,22 @@
+[
+  {
+    "group": "accounts",
+    "files": 16,
+    "lines": 3726
+  },
+  {
+    "group": "skeleton_account_files",
+    "files": 19,
+    "lines": 7467
+  },
+  {
+    "group": "accountconfig",
+    "files": 16,
+    "lines": 5074
+  },
+  {
+    "group": "accountcheck",
+    "files": 4,
+    "lines": 1293
+  }
+]

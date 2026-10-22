@@ -1,0 +1,126 @@
+{
+  "snapshot_date": "2026-10-22",
+  "research_only": true,
+  "swarm_repo_modified": false,
+  "real_auth_touched": false,
+  "real_provider_requests": false,
+  "model_requests": false,
+  "real_keychain_touched": false,
+  "live_account_processes_modified": false,
+  "repositories": [
+    {
+      "name": "Loongphy/codex-auth",
+      "stars_at_metadata_snapshot": 2839,
+      "commit": "69fbf31a82c9cd5c0a5ff56a1045b8e3e3b6aa08",
+      "commit_date": "2026-10-22",
+      "scope": "highest-reputation native Codex switcher checked here; not an exhaustive survey of candidate repositories",
+      "source_findings": {
+        "saves_outgoing_live_auth": true,
+        "preserves_full_auth_json_snapshot": true,
+        "sync_path": [
+          "src/workflows/switch.zig",
+          "src/workflows/live_display.zig",
+          "src/registry/account_ops.zig"
+        ],
+        "switch_path": [
+          "src/workflows/switch.zig",
+          "src/registry/account_ops.zig",
+          "src/registry/clean.zig",
+          "src/registry/common.zig"
+        ],
+        "writes_only_auth_and_registry_for_activation": true,
+        "unrelated_settings_tested_explicitly": false,
+        "active_auth_copy_is_atomic": false,
+        "registry_json_write_is_atomic": true,
+        "shared_codex_home_active_account": true,
+        "daemon_reload_or_restart_opt_in": true,
+        "busy_daemon_reload_deferred": true,
+        "automatic_hard_limit_rotation_in_checked_version": false,
+        "cross_process_auth_refresh_lock_found": false,
+        "limitations": [
+          "active auth snapshots can be captured before switching, but no cross-process lock serializes a concurrent refresh against the switch copy",
+          "daemon reload can defer while a turn is active",
+          "fallback daemon restart can interrupt attached sessions",
+          "shared auth does not provide concurrent independent per-session accounts"
+        ]
+      },
+      "relevant_open_issues": [
+        {
+          "number": 141,
+          "topic": "report of stale in-memory refresh token invalidating auth after switching",
+          "status_evidence": "user report; not independently confirmed",
+          "url": "https://github.com/Loongphy/codex-auth/issues/141"
+        },
+        {
+          "number": 147,
+          "topic": "request for one-shot automatic account switching",
+          "url": "https://github.com/Loongphy/codex-auth/issues/147"
+        },
+        {
+          "number": 158,
+          "topic": "request for concurrent CLI processes with different account contexts",
+          "url": "https://github.com/Loongphy/codex-auth/issues/158"
+        },
+        {
+          "number": 161,
+          "topic": "WSL CLI exit leaves app-server daemon using old account",
+          "url": "https://github.com/Loongphy/codex-auth/issues/161"
+        },
+        {
+          "number": 162,
+          "topic": "shared app-server daemon cache means ordinary CLI restart keeps old account; current source adds opt-in daemon coordination",
+          "url": "https://github.com/Loongphy/codex-auth/issues/162"
+        }
+      ],
+      "test_run": {
+        "command": "PATH=/private/tmp/swarm-rotator-investigation/zig-aarch64-macos-0.16.0:$PATH HOME=/private/tmp/swarm-rotator-investigation/codex-test-home CODEX_HOME=/private/tmp/swarm-rotator-investigation/codex-test-home/.codex XDG_CACHE_HOME=/private/tmp/swarm-rotator-investigation/codex-test-home/.cache ZIG_LOCAL_CACHE_DIR=/private/tmp/swarm-rotator-investigation/codex-zig-cache ZIG_GLOBAL_CACHE_DIR=/private/tmp/swarm-rotator-investigation/codex-zig-global-cache CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT=/private/tmp/research-codex-auth CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX=/private/tmp/swarm-rotator-investigation/codex-install zig build --build-file /private/tmp/research-codex-auth/build.zig --cache-dir /private/tmp/swarm-rotator-investigation/codex-zig-cache --global-cache-dir /private/tmp/swarm-rotator-investigation/codex-zig-global-cache test --summary all",
+        "working_directory": "/private/tmp/swarm-rotator-investigation",
+        "result": "passed",
+        "passed": 465,
+        "skipped": 8,
+        "failed": 0,
+        "build_steps_succeeded": 43,
+        "build_steps_total": 43,
+        "fake_boundary": "temporary HOME and CODEX_HOME; synthetic auth fixtures; fake Codex daemon scripts and test curl helpers; no provider request or model RPC"
+      }
+    },
+    {
+      "name": "realiti4/claude-swap",
+      "commit": "2b2d71c7aeb49e6bd25393509ceb05dbca7b0e10",
+      "commit_date": "2026-10-22",
+      "scope": "selected upstream switcher, lock, refresh and auto-rotation tests",
+      "test_runs": [
+        {
+          "command": "PYTHONPATH=/private/tmp/swarm-rotator-test-home/site-packages HOME=/private/tmp/swarm-rotator-test-home USERPROFILE=/private/tmp/swarm-rotator-test-home XDG_CACHE_HOME=/private/tmp/swarm-rotator-test-home/.cache /private/tmp/swarm-rotator-claude-venv/bin/python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_switcher.py tests/test_claude_locks.py tests/test_locking.py",
+          "working_directory": "/private/tmp/research-claude-swap",
+          "result": "passed",
+          "passed": 545,
+          "skipped": 0,
+          "failed": 0,
+          "duration_seconds": 26.26,
+          "fake_boundary": "scratch HOME; conftest blocks real-store writes, uses in-memory Keychain fake, stubs OAuth profile fetch; synthetic fixtures"
+        },
+        {
+          "command": "PYTHONPATH=/private/tmp/swarm-rotator-test-home/site-packages HOME=/private/tmp/swarm-rotator-test-home USERPROFILE=/private/tmp/swarm-rotator-test-home XDG_CACHE_HOME=/private/tmp/swarm-rotator-test-home/.cache /private/tmp/swarm-rotator-claude-venv/bin/python -m pytest -p no:cacheprovider -o addopts='' -q tests/test_autoswitch.py",
+          "working_directory": "/private/tmp/research-claude-swap",
+          "result": "passed",
+          "passed": 311,
+          "skipped": 0,
+          "failed": 0,
+          "duration_seconds": 6.56,
+          "fake_boundary": "synthetic usage/credentials and fake clock; OAuth refresh calls mocked"
+        }
+      ],
+      "combined_passed": 856,
+      "limitations": [
+        "no live account refresh or provider entitlement behavior tested",
+        "tests do not prove current Claude Code or Anthropic runtime semantics"
+      ]
+    }
+  ],
+  "tooling_installed_only_under_scratch": [
+    "Python 3.12.12 and the pinned claude-swap test dependencies",
+    "Zig 0.16.0 official distribution"
+  ],
+  "report": "/private/tmp/swarm-rotator-upstream-tests.md"
+}
