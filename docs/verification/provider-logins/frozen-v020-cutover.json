@@ -3,7 +3,8 @@
   "reviewer": "Independent Sol6.1",
   "frozen_updater": {
     "tag": "v0.20.0",
-    "commit": "507dfc5c6b8d460ef393d5c17e46723196b49629",
+    "commit": "ca7eb34d9707263b4c725d8095956c190cefe08e",
+    "tag_object": "507dfc5c6b8d460ef393d5c17e46723196b49629",
     "archive": "git archive v0.20.0 extracted to disposable /private/tmp checkout",
     "production_source_edits": false
   },

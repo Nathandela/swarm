@@ -28,6 +28,11 @@
     "module_tidy": {
       "result": "PASS",
       "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "linux_target_lint": {
+      "result": "PASS",
+      "target": "linux/amd64, CGO_ENABLED=0",
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
     }
   },
   "race_scope": [

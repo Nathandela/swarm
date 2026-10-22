@@ -1,0 +1,22 @@
+{
+  "cleanup_complete": true,
+  "delete_only": true,
+  "removed_runs": [
+    "/tmp/slq-codex-01",
+    "/tmp/slq-codex-02",
+    "/tmp/slq-codex-03",
+    "/tmp/slq-claude-01"
+  ],
+  "helper_directory_removed": "/tmp/slq-bin-20261023",
+  "restoration_receipts_verified": true,
+  "positive_native_stop_proofs": 16,
+  "source_writer_count": 0,
+  "canary_writer_count": 0,
+  "original_source_writes": 0,
+  "native_auth_calls": 0,
+  "source_auth_revalidated_after_cleanup": true,
+  "newer_original_codex_a_preserved": true,
+  "elevated_inventory_read_only": true,
+  "source_identity_values_exported": false,
+  "private_logs_or_argv_exported": false
+}

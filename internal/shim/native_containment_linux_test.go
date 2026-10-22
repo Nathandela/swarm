@@ -131,7 +131,11 @@ func managedFixtureModify(t *testing.T, withBackend bool, modify func(*Config)) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	raw := []byte(`{"auth_mode":"chatgpt","tokens":{"account_id":"containment-fixture","access_token":"synthetic-bearer","refresh_token":"synthetic-refresh"}}`)
 	registry, _ := store.Snapshot()
 	_, login, err := store.Add(registry.Revision, logins.ProviderCodex, "fixture", logins.Credential{Auth: raw})

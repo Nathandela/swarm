@@ -1,6 +1,6 @@
 # Provider login qualification
 
-Date: 2026-10-22
+Date: 2026-10-23
 
 Integrated native switching and local quality gates have passed. Exact-tag CI
 runs before publication; the table distinguishes native feasibility from complete
@@ -37,6 +37,11 @@ coverage. Independent review and local gates are recorded in
 [independent-reviews.json](provider-logins/independent-reviews.json) and
 [local-quality-gates.json](provider-logins/local-quality-gates.json).
 
+All four disposable Linux canary runs and their helper directory were removed
+after restoration receipts and a current zero-writer inventory were verified.
+Original saved credentials remained intact, including the later-refreshed Codex A
+grant. No source writes or auth requests were made during cleanup; see the
+[cleanup receipt](provider-logins/native-canary-cleanup-result.json).
 
 ## Frozen v0.20 updater cutover
 
