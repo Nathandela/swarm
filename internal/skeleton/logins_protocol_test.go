@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,5 +137,58 @@ func TestDuplicateAndWrongLoginLeaveExistingGrantUntouched(t *testing.T) {
 				t.Fatalf("temporary refused grant retained: %v", err)
 			}
 		})
+	}
+}
+
+func TestCodexEnrollmentUnsafeLauncherIsActionableBeforeAnyJob(t *testing.T) {
+	f := newLoginFixture(t)
+	root, e := filepath.EvalSymlinks(t.TempDir())
+	if e != nil {
+		t.Fatal(e)
+	}
+	path := filepath.Join(root, "codex")
+	script := []byte("#!/bin/sh\nprintf '%s\\n' 'codex-cli 0.163.0'\n")
+	if e = os.WriteFile(path, script, 0775); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Chmod(path, 0775); e != nil {
+		t.Fatal(e)
+	}
+	before, e := os.Stat(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Setenv("PATH", root)
+	r, e := f.m.store.Snapshot()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, action := range []string{"start", "relogin"} {
+		request := protocol.LoginsReq{Action: action, Provider: "codex", Label: "synthetic", ExpectedRevision: r.Revision}
+		if action == "relogin" {
+			request.LoginID = f.first.ID
+		}
+		if _, e = f.m.d.api.Logins(request); !errors.Is(e, protocol.ErrLoginsUnsafeNativeCLI) {
+			t.Fatalf("%s unsafe launcher error=%v", action, e)
+		}
+	}
+	jobs, e := loginworker.Jobs(f.m.store.StateRoot())
+	if e != nil || len(jobs) != 0 {
+		t.Fatal("unsafe executable created an enrollment job")
+	}
+	if e = os.Chmod(path, 0755); e != nil {
+		t.Fatal(e)
+	}
+	cfg, e := newLoginWorkerConfig(f.m.store.StateRoot(), "codex", "synthetic", "")
+	if e != nil || cfg.NativeVersion != "0.163.0" || cfg.NativePath != path {
+		t.Fatalf("same launcher with safe permissions refused: %v", e)
+	}
+	after, e := os.Stat(path)
+	if e != nil || !os.SameFile(before, after) {
+		t.Fatal("fixture repair replaced executable")
+	}
+	raw, e := os.ReadFile(path)
+	if e != nil || string(raw) != string(script) {
+		t.Fatal("fixture repair changed executable bytes")
 	}
 }

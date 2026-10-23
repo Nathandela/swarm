@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -207,4 +209,34 @@ func TestLogins_ReconnectInvalidatesOldClientReplies(t *testing.T) {
 		t.Fatal("old-client login reply landed after reconnect")
 	}
 	_ = fresh.events
+}
+
+func TestLoginsUnsafeNativeCLIShowsPersistentClosedAction(t *testing.T) {
+	for _, action := range []string{"start", "relogin"} {
+		t.Run(action, func(t *testing.T) {
+			m := rootModel{screen: screenLogins, loginsClientGeneration: 2, logins: loginsModel{available: true, loaded: true, busy: true, generation: 7, cancelAfterStart: true}}
+			next, cmd := m.applyLoginsReply(loginsReplyMsg{generation: 7, clientGeneration: 2, action: action, err: fmt.Errorf("private-path/secret-sentinel: %w", protocol.ErrLoginsUnsafeNativeCLI)})
+			result := next.(rootModel)
+			if cmd != nil || result.logins.busy || result.logins.cancelAfterStart {
+				t.Fatal("closed admission refusal polled away or retained pending cancellation")
+			}
+			text := result.logins.view(40, 20, false, false)
+			if !strings.Contains(text, "permissions are unsafe") || !strings.Contains(text, "Reinstall") || strings.Contains(text, "secret-sentinel") || strings.Contains(text, "private-path") {
+				t.Fatalf("actionable private-safe error missing: %s", text)
+			}
+			for _, line := range strings.Split(text, "\n") {
+				if lipgloss.Width(line) > 40 {
+					t.Fatalf("error overflows narrow UI: %q", line)
+				}
+			}
+		})
+	}
+}
+func TestLoginsUnknownRequestErrorsStayGeneric(t *testing.T) {
+	m := rootModel{screen: screenLogins, logins: loginsModel{available: true, generation: 1}}
+	next, _ := m.applyLoginsReply(loginsReplyMsg{generation: 1, action: "start", err: errors.New(protocol.ErrLoginsUnsafeNativeCLI.Error() + " private-secret-path")})
+	text := next.(rootModel).logins.view(80, 20, false, false)
+	if strings.Contains(text, "private-secret") || strings.Contains(text, "Reinstall") || !strings.Contains(text, "Login request failed") {
+		t.Fatal("unknown error text promoted or leaked")
+	}
 }

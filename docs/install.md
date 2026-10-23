@@ -27,10 +27,11 @@ go install github.com/Nathandela/swarm/cmd/swarm@latest
 
 Builds the terminal app from source with the Go toolchain already on your
 machine. This installs only `swarm`, so it supports terminal use but not
-`swarm remote init` or remote control. A source build reports `dev` because it
-does not use the release version stamp; the managed self-upgrader refuses dev
-builds, so `go install` owns updates for this installation. Release archives
-also include a `compat.json` card that source builds do not contain.
+`swarm remote init` or remote control. These `go install` source builds report
+`dev` because they do not use the release version stamp; the managed
+self-upgrader refuses dev builds, so `go install` owns updates for these
+installations. Release archives also include a `compat.json` card that source
+builds do not contain.
 
 For a remote-capable source install, build both commands from the same checkout
 and install them together:
@@ -39,7 +40,12 @@ and install them together:
 go install ./cmd/swarm ./cmd/swarm-remote
 ```
 
-Or install both at the same release tag by replacing `vX.Y.Z` with that tag:
+Deployed Swarm release binaries report numeric `MAJOR.MINOR.PATCH` versions
+(for example, `0.21.2`). Release tags use a `v` prefix (`v0.21.2`) and no
+prerelease suffix such as `-rc.1`; commit hash and build date are separate
+metadata.
+
+Install both at the same release tag by replacing `vX.Y.Z` with that tag:
 
 ```sh
 go install github.com/Nathandela/swarm/cmd/swarm@vX.Y.Z

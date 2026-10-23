@@ -211,7 +211,7 @@ func newLoginWorkerConfig(state, provider, label, loginID string) (loginworker.C
 		return loginworker.Config{}, err
 	}
 	if err = loginworker.ValidateNativePath(path); err != nil {
-		return loginworker.Config{}, err
+		return loginworker.Config{}, protocol.ErrLoginsUnsafeNativeCLI
 	}
 	ad, _ := registry.New(provider)
 	banner, err := (detect.Host{}).Run(path, ad.VersionArgs())

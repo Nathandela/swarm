@@ -4,10 +4,15 @@ import (
 	"errors"
 	"strings"
 	"unicode"
+
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
 
 var ErrLoginsUnavailable = errors.New("protocol: login management unavailable")
 var ErrLoginsStaleRevision = errors.New("protocol: login list changed; refresh and retry")
+var ErrLoginsUnsafeNativeCLI = errors.New("protocol: provider CLI permissions are unsafe")
+
+const CodeLoginsUnsafeNativeCLI = schema.CodeLoginsUnsafeNativeCLI
 
 type LoginsBackend interface {
 	Logins(LoginsReq) (LoginsReply, error)
@@ -19,18 +24,25 @@ func (c *Client) Logins(req LoginsReq) (LoginsReply, error) {
 		return LoginsReply{}, err
 	}
 	if r.Op == OpError {
-		if r.ErrorCode == CodeStaleRevision {
-			return LoginsReply{}, ErrLoginsStaleRevision
-		}
-		if r.ErrorCode == CodeUnavailable || r.ErrorCode == CodeCapabilityRefused {
-			return LoginsReply{}, ErrLoginsUnavailable
-		}
-		return LoginsReply{}, errors.New("protocol: login operation refused")
+		return LoginsReply{}, loginsReplyError(r)
 	}
 	if r.Op != OpLoginsManage || r.LoginsResult == nil {
 		return LoginsReply{}, ErrLoginsUnavailable
 	}
 	return *r.LoginsResult, nil
+}
+
+func loginsReplyError(reply Control) error {
+	switch reply.ErrorCode {
+	case CodeLoginsUnsafeNativeCLI:
+		return ErrLoginsUnsafeNativeCLI
+	case CodeStaleRevision:
+		return ErrLoginsStaleRevision
+	case CodeUnavailable, CodeCapabilityRefused:
+		return ErrLoginsUnavailable
+	default:
+		return errors.New("protocol: login operation refused")
+	}
 }
 
 func validateLoginsReq(r LoginsReq) bool {
@@ -70,6 +82,8 @@ func (cc *clientConn) handleLogins(c Control) {
 	r, err := b.Logins(*c.LoginsRequest)
 	if err != nil {
 		switch {
+		case errors.Is(err, ErrLoginsUnsafeNativeCLI):
+			cc.replyErrorCode("provider CLI permissions are unsafe", CodeLoginsUnsafeNativeCLI)
 		case errors.Is(err, ErrLoginsStaleRevision):
 			cc.replyErrorCode("login list changed; refresh and retry", CodeStaleRevision)
 		case errors.Is(err, ErrLoginsUnavailable):

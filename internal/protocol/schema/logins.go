@@ -2,6 +2,9 @@ package schema
 
 import "time"
 
+// CodeLoginsUnsafeNativeCLI is a closed owner-local enrollment admission refusal.
+const CodeLoginsUnsafeNativeCLI ErrorCode = "login_unsafe_native_cli"
+
 // LoginsReq is owner-local. Credentials never cross this protocol.
 type LoginsReq struct {
 	Action           string `json:"action"`

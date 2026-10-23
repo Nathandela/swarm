@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"time"
 	"unicode"
@@ -92,6 +93,11 @@ func (m rootModel) applyLoginsReply(msg loginsReplyMsg) (tea.Model, tea.Cmd) {
 	l.busy = false
 	if msg.err != nil {
 		l.err = "Login request failed; press r to retry or reconnect."
+		if errors.Is(msg.err, protocol.ErrLoginsUnsafeNativeCLI) {
+			l.err = "Provider CLI permissions are unsafe. Reinstall it or ask its owner to remove group/other write access, then try signing in again."
+			l.cancelAfterStart = false
+			return m, nil
+		}
 		return m, loginPoll(l.generation, m.loginsClientGeneration)
 	}
 	l.err = ""
@@ -298,7 +304,7 @@ func (l loginsModel) view(width, height int, connectionLost, canAttach bool) str
 		return b.String() + styleError.Render("  daemon disconnected; waiting to reload logins")
 	}
 	if l.err != "" {
-		b.WriteString(styleError.Render("  "+l.err) + "\n")
+		b.WriteString(styleError.Render(wrapLoginText("  "+l.err, width)) + "\n")
 	}
 	if l.notice != "" {
 		b.WriteString(styleDim.Render("  "+l.notice) + "\n")

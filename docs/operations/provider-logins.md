@@ -5,6 +5,10 @@ or Codex login and finish the native sign-in. Codex displays its device URL and
 code. Claude opens its native sign-in terminal when you press Enter. Credentials
 are stored on this machine; the phone and remote protocol cannot manage them.
 
+Sign-in requires a provider executable owned by you or root, without group or
+other write permissions. If Swarm reports unsafe CLI permissions, repair the
+installation or reinstall the provider CLI, then retry.
+
 Select a saved login and make it active. Every Swarm discussion for that provider
 uses the same selection. Saving a login alone does not activate it. With no
 selection, new discussions use ordinary native authentication.

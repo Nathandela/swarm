@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -76,4 +77,33 @@ func TestLoginsRefusalOrderingAndOldDaemon(t *testing.T) {
 			t.Fatalf("reply=%#v calls=%d", got, s.calls)
 		}
 	})
+}
+
+func TestLoginsUnsafeNativeCLIClosedErrorAcrossWire(t *testing.T) {
+	s := &loginsStub{stubDaemon: newStubDaemon(), err: fmt.Errorf("private-path/credential-sentinel: %w", ErrLoginsUnsafeNativeCLI)}
+	socket := serveContextGuardAPI(t, s)
+	client := dialClient(t, socket, []string{CapLoginsManage})
+	if _, err := client.Logins(LoginsReq{Action: "start", Provider: "codex", Label: "fixture"}); !errors.Is(err, ErrLoginsUnsafeNativeCLI) || strings.Contains(err.Error(), "sentinel") {
+		t.Fatalf("typed client refusal: %v", err)
+	}
+	raw := rawDial(t, socket)
+	hello := raw.hello(Version, []string{CapLoginsManage})
+	request := LoginsReq{Action: "relogin", LoginID: "fixture"}
+	raw.writeControl(Control{Op: OpLoginsManage, EndpointID: hello.EndpointID, LoginsRequest: &request})
+	reply := raw.readControl()
+	if reply.Op != OpError || reply.ErrorCode != CodeLoginsUnsafeNativeCLI || reply.Error != "provider CLI permissions are unsafe" {
+		t.Fatalf("closed wire refusal=%#v", reply)
+	}
+	s.err = errors.New(ErrLoginsUnsafeNativeCLI.Error() + " login_unsafe_native_cli private-sentinel")
+	if _, err := client.Logins(LoginsReq{Action: "start", Provider: "codex", Label: "fixture"}); err == nil || errors.Is(err, ErrLoginsUnsafeNativeCLI) || strings.Contains(err.Error(), "sentinel") {
+		t.Fatalf("unknown backend text promoted/leaked: %v", err)
+	}
+}
+func TestLoginsUnknownWireErrorCannotInjectActionableMessage(t *testing.T) {
+	for _, code := range []ErrorCode{"unknown", "prefix_login_unsafe_native_cli", CodeInvalidField} {
+		err := loginsReplyError(Control{Op: OpError, ErrorCode: code, Error: ErrLoginsUnsafeNativeCLI.Error() + " raw-secret-path"})
+		if err == nil || errors.Is(err, ErrLoginsUnsafeNativeCLI) || strings.Contains(err.Error(), "raw-secret") {
+			t.Fatal("unknown code exposed or promoted raw wire error")
+		}
+	}
 }
