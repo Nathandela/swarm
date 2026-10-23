@@ -1,6 +1,6 @@
 # ADR-010: Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs
 
-**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6), 2026-09-02 (Amendment 7), 2026-09-02 (Amendment 8), 2026-10-14 (Amendment 5 F1 addendum))
+**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/; amended 2026-08-07, 2026-08-18, 2026-08-26, 2026-09-02, 2026-09-02 (Amendment 6), 2026-09-02 (Amendment 7), 2026-09-02 (Amendment 8), 2026-10-14 (Amendment 5 F1 addendum), 2026-10-23 (Amendment 10))
 **Date**: 2026-07-24
 
 ## Context
@@ -845,3 +845,51 @@ sink may restore authority for future sends through the existing sink-proof tran
 - Large existing conversations establish the live stream without weakening the 8 MiB allocation
   boundary or treating provider history as newly captured Swarm history.
 - Evidence: `docs/verification/adr010/amendment8-red.md`.
+
+## Amendment 10 (2026-10-23): an agent handoff runs in a worktree of its own, never under /tmp
+
+Amendment 9 is reserved by the open bracketed-paste change; this amendment does not depend on it.
+
+D2 left the child's directory to the caller ("handoff: same cwd; delegate: `--worktree`
+recommended") and B1 launches the first-class `swarm handoff` child in the source's checkout. In
+practice agents did not take the recommendation. On 2026-10-20 a source agent improvised a checkout
+under `/tmp/rehan-native-timeout-fix` and delegated two sessions into it with `--dir`; the
+2026-10-23 reboot erased the directory, and both discussions, plus their resumed attempts, were left
+pointing at a checkout that no longer existed. Two agents sharing one checkout is also the case
+D2 recommended a worktree for. These clauses are lettered J.
+
+### J1. A handoff child gets its own git worktree when its checkout is a git work tree
+
+- `swarm handoff`: after resolving the source's checkout (agents-tracker-xl6k), the daemon launches
+  the child with worktree isolation when that checkout is inside a git work tree. The worktree is
+  created as for any `--worktree` launch (`<checkout>/.swarm/worktrees/<slug>`, branch
+  `swarm/<slug>-<id>`) from the checkout's HEAD. A checkout outside git has nothing to isolate and
+  the child continues there, as before. `swarm handoff` has no opt-out.
+- `swarm spawn --handoff` and `--delegate`: the CLI sends `Worktree` by default when the target
+  directory is a git work tree. An explicit `--worktree=false` restores the previous shape.
+  `--prompt` is unchanged.
+- The TUI's hands-off method (Amendment 4) is unchanged. It is a human taking over a session that
+  may have stopped mid-edit, and its successor must see that session's uncommitted work in the same
+  checkout (E7, the `<before_writing>` section of its prompt).
+
+Only committed work reaches the child's worktree. The supervised-handoff instruction (B2) now tells
+the source to commit what the child needs before running `swarm handoff`, and to name in the
+document any changes it leaves uncommitted. The `swarm handoff` usage text says the same.
+
+### J2. An agent handoff's worktree is never created under a temporary directory
+
+Any launch with a lineage parent and `spawn_intent` handoff or delegate, that is not a resume and
+that will create a worktree, is refused by name when the checkout resolves (after symlinks) beneath
+`os.TempDir()` or `/tmp`. The refusal happens before the session id is reserved, so nothing is
+created. A handoff from a checkout outside git under `/tmp` is not refused: there is no worktree to
+lose, and the source's own directory is the only place the work exists.
+
+### Consequences
+
+- Deleting a handoff child now removes its worktree, as for every worktree session; the
+  shared-workspace guard in discussion delete still refuses while another session works there.
+- A handoff from a source that is itself a worktree nests the child's worktree inside the source's
+  checkout. Deleting the source is refused while the child uses it (the same guard).
+- The handoff document copy stays in `<os.TempDir()>/swarm-handoff-*` (F3). A reboot still erases
+  it, which this amendment does not address; the child's worktree and branch survive.
+- Evidence: `docs/verification/adr010/amendment10-red.md`.
