@@ -153,30 +153,36 @@ func readClaudeTerminalEvidence(reader *bufio.Reader, conversation, prompt strin
 			if json.Unmarshal(line, &row) != nil {
 				return time.Time{}, false, errLoginObservationPending
 			}
-			if !row.Sidechain && (row.Type == "user" || row.Type == "assistant") {
+			if !row.Sidechain && (row.Type == "user" || row.Type == "assistant" || row.Type == "attachment") {
 				if row.SessionID != conversation || !adapter.IsCanonicalConversationID(row.UUID) || len(parents) >= 65536 {
+					return time.Time{}, false, errLoginObservationPending
+				}
+				if row.Type == "attachment" && !adapter.IsCanonicalConversationID(row.ParentUUID) {
 					return time.Time{}, false, errLoginObservationPending
 				}
 				if _, duplicate := parents[row.UUID]; duplicate {
 					return time.Time{}, false, errLoginObservationPending
 				}
 				parents[row.UUID] = row.ParentUUID
-				if row.Type == "user" && row.PromptID != "" {
-					latestPrompt = row.PromptID
-					root = row.UUID
-				}
-				terminalID, terminalParent = row.UUID, row.ParentUUID
-				reset = time.Time{}
-				authFailed = false
-				if row.Type == "assistant" && row.APIError && row.Error == "authentication_failed" {
-					authFailed = true
-				}
-				if row.Type == "assistant" && row.APIError && row.Error == "rate_limit" && row.Quota.Status == "rejected" {
-					switch row.Quota.Type {
-					case "five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included":
-						candidate := time.Unix(row.Quota.Reset, 0)
-						if candidate.After(now) && candidate.Before(now.Add(30*24*time.Hour)) {
-							reset = candidate
+				// Native attachments connect the prompt ancestry without ending a turn.
+				if row.Type != "attachment" {
+					if row.Type == "user" && row.PromptID != "" {
+						latestPrompt = row.PromptID
+						root = row.UUID
+					}
+					terminalID, terminalParent = row.UUID, row.ParentUUID
+					reset = time.Time{}
+					authFailed = false
+					if row.Type == "assistant" && row.APIError && row.Error == "authentication_failed" {
+						authFailed = true
+					}
+					if row.Type == "assistant" && row.APIError && row.Error == "rate_limit" && row.Quota.Status == "rejected" {
+						switch row.Quota.Type {
+						case "five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included":
+							candidate := time.Unix(row.Quota.Reset, 0)
+							if candidate.After(now) && candidate.Before(now.Add(30*24*time.Hour)) {
+								reset = candidate
+							}
 						}
 					}
 				}
