@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -238,5 +239,52 @@ func TestLoginsUnknownRequestErrorsStayGeneric(t *testing.T) {
 	text := next.(rootModel).logins.view(80, 20, false, false)
 	if strings.Contains(text, "private-secret") || strings.Contains(text, "Reinstall") || !strings.Contains(text, "Login request failed") {
 		t.Fatal("unknown error text promoted or leaked")
+	}
+}
+
+func TestLogins_UsageRenderingIsActiveAndProviderSpecific(t *testing.T) {
+	now := time.Now()
+	window := func(percent int) *protocol.LoginUsageWindow {
+		return &protocol.LoginUsageWindow{RemainingPercent: percent, ObservedAt: now, ResetsAt: now.Add(time.Hour)}
+	}
+	m := loginsModel{available: true, loaded: true, reply: protocol.LoginsReply{Logins: []protocol.LoginView{
+		{Provider: "claude", Label: "Work Claude", State: "ready", Active: true, FiveHour: window(0), Weekly: window(100)},
+		{Provider: "codex", Label: "Parked Codex", State: "ready", FiveHour: window(12), Weekly: window(34)},
+		{Provider: "codex", Label: "Work Codex", State: "ready", Active: true, FiveHour: window(12), Weekly: window(71)},
+	}}}
+	text := m.view(30, 20, false, false)
+	compact := strings.Join(strings.Fields(text), " ")
+	if !strings.Contains(compact, "Remaining 5h 0% · week 100%") {
+		t.Fatalf("Claude remaining windows missing: %s", text)
+	}
+	if !strings.Contains(compact, "Remaining week 71%") || strings.Contains(compact, "week 34%") {
+		t.Fatalf("Codex usage missing, or inactive login usage shown: %s", text)
+	}
+	if strings.Contains(text, "5h 12%") {
+		t.Fatalf("Codex 5h usage was shown: %s", text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if lipgloss.Width(line) > 30 {
+			t.Fatalf("usage line overflows narrow view: %q", line)
+		}
+	}
+}
+
+func TestLogins_UnknownOrStaleUsageShowsEmDash(t *testing.T) {
+	now := time.Now()
+	window := func(percent int, observed, reset time.Time) *protocol.LoginUsageWindow {
+		return &protocol.LoginUsageWindow{RemainingPercent: percent, ObservedAt: observed, ResetsAt: reset}
+	}
+	m := loginsModel{available: true, loaded: true, reply: protocol.LoginsReply{Logins: []protocol.LoginView{{
+		Provider: "claude", Label: "Work", Active: true,
+		FiveHour: window(50, now.Add(-16*time.Minute), now.Add(time.Hour)),
+		Weekly:   window(50, now.Add(time.Hour), now.Add(time.Hour)),
+	}}}}
+	text := m.view(80, 20, false, false)
+	if !strings.Contains(strings.Join(strings.Fields(text), " "), "Remaining 5h — · week —") {
+		t.Fatalf("stale and future samples were not hidden: %s", text)
+	}
+	if loginUsagePercent(window(50, now, now.Add(-time.Second)), now) != "—" || loginUsagePercent(window(101, now, now.Add(time.Hour)), now) != "—" {
+		t.Fatal("expired reset or out-of-range usage was shown")
 	}
 }

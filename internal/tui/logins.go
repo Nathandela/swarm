@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -365,6 +366,14 @@ func (l loginsModel) view(width, height int, connectionLost, canAttach bool) str
 				state = "Active · " + state
 			}
 			b.WriteString(mark + clampLoginText(login.Label, max(8, width/2)) + "  " + loginDisplayState(state) + "\n")
+			if login.Active {
+				now := time.Now()
+				usage := "week " + loginUsagePercent(login.Weekly, now)
+				if p == "claude" {
+					usage = "5h " + loginUsagePercent(login.FiveHour, now) + " · " + usage
+				}
+				b.WriteString(wrapLoginText("    Remaining  "+usage, max(12, width-2)) + "\n")
+			}
 		}
 		if !found {
 			b.WriteString("  " + styleDim.Render("No saved login") + "\n")
@@ -374,6 +383,13 @@ func (l loginsModel) view(width, height int, connectionLost, canAttach bool) str
 		b.WriteString("\n" + styleDim.Render("  working…"))
 	}
 	return b.String()
+}
+
+func loginUsagePercent(window *protocol.LoginUsageWindow, now time.Time) string {
+	if window == nil || !window.Fresh(now) {
+		return "—"
+	}
+	return strconv.Itoa(window.RemainingPercent) + "%"
 }
 
 func (l loginsModel) hint(connectionLost, canAttach bool, width int) string {

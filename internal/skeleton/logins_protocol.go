@@ -245,6 +245,7 @@ func (a *coreAPI) loginList() (protocol.LoginsReply, error) {
 	reply := protocol.LoginsReply{Revision: r.Revision, Logins: []protocol.LoginView{}}
 	for _, l := range r.Logins {
 		v := protocol.LoginView{ID: l.ID, Provider: l.Provider, Label: l.Label, State: l.AuthState, Active: r.Providers[l.Provider].ActiveID == l.ID}
+		v.FiveHour, v.Weekly = a.logins.loginUsage(r, l, time.Now())
 		if l.LimitKnown && (l.ExhaustedUntil.IsZero() || time.Now().Before(l.ExhaustedUntil)) {
 			v.State = "limited"
 			if !l.ExhaustedUntil.IsZero() {

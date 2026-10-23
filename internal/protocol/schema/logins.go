@@ -24,12 +24,27 @@ type LoginsReply struct {
 }
 
 type LoginView struct {
-	ID             string     `json:"id"`
-	Provider       string     `json:"provider"`
-	Label          string     `json:"label"`
-	State          string     `json:"state"`
-	Active         bool       `json:"active"`
-	ExhaustedUntil *time.Time `json:"exhausted_until,omitempty"`
+	ID             string            `json:"id"`
+	Provider       string            `json:"provider"`
+	Label          string            `json:"label"`
+	State          string            `json:"state"`
+	Active         bool              `json:"active"`
+	ExhaustedUntil *time.Time        `json:"exhausted_until,omitempty"`
+	FiveHour       *LoginUsageWindow `json:"five_hour,omitempty"`
+	Weekly         *LoginUsageWindow `json:"weekly,omitempty"`
+}
+
+// LoginUsageWindow is an indicative native reading, never a rotation decision.
+type LoginUsageWindow struct {
+	RemainingPercent int       `json:"remaining_percent"`
+	ObservedAt       time.Time `json:"observed_at"`
+	ResetsAt         time.Time `json:"resets_at"`
+}
+
+func (w *LoginUsageWindow) Fresh(now time.Time) bool {
+	return w != nil && w.RemainingPercent >= 0 && w.RemainingPercent <= 100 &&
+		!w.ObservedAt.IsZero() && !w.ObservedAt.After(now) && now.Sub(w.ObservedAt) < 15*time.Minute &&
+		now.Before(w.ResetsAt)
 }
 
 type ProviderLoginView struct {

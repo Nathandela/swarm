@@ -913,6 +913,7 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 	}
 	d.captureContextGuardFrame(local, expectedInstance, feed, method, guardFrame, at)
 	if d.logins != nil {
+		d.logins.observeCodexUsage(local, method, frame, at)
 		d.logins.observeNativeFailure(local, expectedInstance, feed, method, frame)
 	}
 	d.ingestBackendFrame(local, frame, at.UnixMilli())

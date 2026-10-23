@@ -175,6 +175,40 @@ process inventory was simulated. This proves refusal and rollback recovery, not
 an automatic worker drain or a package-manager restore. Exact outcomes, source
 hashes and limits: [frozen v0.20 cutover evidence](provider-logins/frozen-v020-cutover.json).
 
+## Indicative remaining usage
+
+The active login shows Claude's 5-hour and weekly remaining percentages and only
+Codex's weekly percentage. Codex windows are identified by their native
+`windowDurationMins: 10080`, including when weekly is the primary window. Claude
+uses the documented `rate_limits` status-line input. Sources:
+[Claude status-line fields](https://code.claude.com/docs/en/statusline#rate-limit-usage),
+[Codex rate-limit notifications](https://developers.openai.com/codex/app-server#6-rate-limits-chatgpt).
+
+The daemon holds two bounded, volatile provider snapshots. Each window retains
+its own report and reset timestamps; absent sparse updates cannot refresh another
+window. Registry identity, epoch and credential revision fence observations and
+projection across A→B→A and reauthentication. Percentages never write the login
+registry or trigger a switch. Missing, expired and 15-minute-old reports show
+unknown; daemon restart also starts unknown.
+
+Managed Claude launches compose a status-line observer with the common native
+command, preserving its stdin, output, exit status and layout settings. Existing
+project/inline or higher-priority managed overrides are preserved and may yield
+unknown usage. No native settings file is modified. Only the conversation ID,
+observation timestamp and numeric quota fields reach the authenticated local
+daemon; raw input, credentials and transcript content are excluded. Delivery is
+best-effort with a 100ms socket deadline, independent of hook sequence locks and
+durable spools. Existing discussions acquire this observer at their next launch
+or resume.
+
+Focused normal/race tests cover both window slots, malformed/absent/zero values,
+freshness, reset expiry, sparse updates, A→B→A, reauthentication, unchanged rotation,
+callback authentication, no status mutation, native command preservation, shell
+quoting, process-group cancellation, held hook locks and unavailable daemons.
+Independent Astra review found no remaining blocking source issue. Installed
+Claude 2.1.296 code inspection confirmed POSIX shell and process-group cancellation
+semantics; this is distinct from live provider capture qualification.
+
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.
 

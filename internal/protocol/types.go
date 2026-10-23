@@ -257,6 +257,7 @@ type (
 	LoginsReq                  = schema.LoginsReq
 	LoginsReply                = schema.LoginsReply
 	LoginView                  = schema.LoginView
+	LoginUsageWindow           = schema.LoginUsageWindow
 	ProviderLoginView          = schema.ProviderLoginView
 	LoginJobView               = schema.LoginJobView
 	ContextGuardView           = schema.ContextGuardView

@@ -92,6 +92,7 @@ func (d *Daemon) prepareLoginLaunch(_ string, spec daemon.LaunchSpec) (daemon.La
 		if err != nil {
 			return spec, err
 		}
+		spec.Argv = loginClaudeUsageArgs(spec.Argv, spec.LoginRuntime.Home, spec.Cwd, spec.ClientEnv)
 		for _, event := range loginClaudeObserverEvents {
 			seen := false
 			for _, present := range spec.CaptureEvents {

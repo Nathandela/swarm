@@ -877,6 +877,9 @@ func runHook(args []string, stdin io.Reader, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "hook: not implemented")
 		return 1
 	}
+	if args[0] == "SwarmUsage" {
+		return runUsageHook(args[1:], stdin, os.Stdout, stderr)
+	}
 	body := readHookBody(stdin)
 	payload := parseHookStdin(bytes.NewReader(body))
 	for k, v := range parseHookPayload(args[1:]) {

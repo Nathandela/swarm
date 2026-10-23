@@ -13,6 +13,17 @@ Select a saved login and make it active. Every Swarm discussion for that provide
 uses the same selection. Saving a login alone does not activate it. With no
 selection, new discussions use ordinary native authentication.
 
+The active login shows indicative remaining quota reported by the native client:
+Claude's 5-hour and weekly windows, and Codex's weekly window only. An em dash
+means a window is absent, reset, or stale; these readings are not predictive and
+do not affect login rotation.
+
+Readings expire after 15 minutes without a native report and start unknown after
+a daemon restart or account switch. Claude starts reporting from discussions
+launched or resumed with this version; its common custom status line is preserved.
+Project-specific or managed status-line overrides can leave Claude usage unknown.
+Additional model-specific limits can still apply.
+
 When a confirmed subscription limit is reached, Swarm selects another usable
 login. It waits for current work to settle and for attached terminals to detach,
 then restarts the provider's discussions in their exact native conversations.
@@ -52,8 +63,8 @@ removing the selected login.
 
 ## Upgrade and recovery
 
-This release changes the shim wire contract. The updater waits for the old
-daemon and native sessions to stop before activating it. **Before activation by
+Upgrading from v0.20 changes the shim wire contract. The updater waits for the old
+daemon and native sessions to stop before activating the replacement. **Before activation by
 any install path, including the updater, finish or cancel every old sign-in or
 account check and wait for its worker to exit.** Then save current work, end the
 old discussions, and stop the old daemon.

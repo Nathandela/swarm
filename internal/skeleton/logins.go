@@ -22,6 +22,8 @@ type loginManager struct {
 	store             *logins.Store
 	stepMu            sync.Mutex
 	admission         [2]sync.Mutex
+	usageMu           sync.Mutex
+	usage             [2]loginUsageSnapshot
 	preflight         func(string, []persist.Meta) error
 	prepareContext    func(string, []persist.Meta) error
 	stopProof         func(persist.Meta) error
