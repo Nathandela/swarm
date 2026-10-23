@@ -36,7 +36,7 @@ func resolveLoginEnvironment(cfg *Config) error {
 	if err != nil {
 		return errLoginResolution
 	}
-	if logins.ValidateProjectAuth(cfg.LoginRuntime.Provider, cfg.Cwd) != nil || logins.ValidateArgsAuth(cfg.LoginRuntime.Provider, cfg.Argv) != nil {
+	if logins.ValidateProjectAuthEnv(cfg.LoginRuntime.Provider, cfg.Cwd, cfg.Env) != nil || logins.ValidateArgsAuth(cfg.LoginRuntime.Provider, cfg.Argv) != nil {
 		return errLoginResolution
 	}
 	if cfg.Backend != nil && logins.ValidateArgsAuth(cfg.LoginRuntime.Provider, cfg.Backend.Args) != nil {

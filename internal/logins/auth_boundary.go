@@ -16,6 +16,35 @@ import (
 // ValidateProjectAuth leaves native project settings in place while refusing
 // selectors that would move authentication outside the chosen native authority.
 func ValidateProjectAuth(provider, cwd string) error {
+	return validateProjectAuth(provider, cwd, "")
+}
+
+// ValidateProjectAuthEnv recognizes only the owner's native home directory alias
+// selected by this launch's HOME. Project and managed configuration remain strict.
+func ValidateProjectAuthEnv(provider, cwd string, env []string) error {
+	home := ""
+	seen := false
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if key != "HOME" {
+			continue
+		}
+		if seen || !ok || value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsRune(value, '\x00') {
+			return ErrIneligible
+		}
+		home, seen = value, true
+	}
+	if home == "" {
+		return ValidateProjectAuth(provider, cwd)
+	}
+	name := ".codex"
+	if provider == ProviderClaude {
+		name = ".claude"
+	}
+	return validateProjectAuth(provider, cwd, filepath.Join(home, name))
+}
+
+func validateProjectAuth(provider, cwd, nativeHome string) error {
 	if !validProvider(provider) || !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cwd {
 		return ErrIneligible
 	}
@@ -25,7 +54,7 @@ func ValidateProjectAuth(provider, cwd string) error {
 			names = []string{filepath.Join(dir, ".claude", "settings.json"), filepath.Join(dir, ".claude", "settings.local.json")}
 		}
 		for _, name := range names {
-			b, e := readAuthConfig(name)
+			b, e := readProjectAuthConfig(name, nativeHome)
 			if e != nil {
 				return e
 			}
@@ -91,21 +120,116 @@ func readAuthConfig(path string) ([]byte, error) {
 		return nil, ErrUnsafePath
 	}
 	defer func() { _ = parent.Close() }()
-	f, e := parent.OpenFile(filepath.Base(path), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	return readAuthConfigFile(parent, filepath.Base(path), before, false)
+}
+
+func nativeOwned(info os.FileInfo, directory bool) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != uint32(os.Getuid()) || info.Mode().Perm()&0022 != 0 {
+		return false
+	}
+	if directory {
+		return info.IsDir() && info.Mode()&os.ModeSymlink == 0
+	}
+	return info.Mode().IsRegular() && st.Nlink == 1
+}
+
+func nativeLinkOwned(info os.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && info.Mode()&os.ModeSymlink != 0 && st.Uid == uint32(os.Getuid()) && st.Nlink == 1
+}
+
+func nativeAliasUnchanged(alias string, aliasInfo os.FileInfo, target string, targetInfo os.FileInfo) bool {
+	current, e := os.Lstat(alias)
+	if e != nil || !nativeLinkOwned(current) || !os.SameFile(current, aliasInfo) {
+		return false
+	}
+	home, e := os.Lstat(filepath.Dir(alias))
+	if e != nil || !nativeOwned(home, true) || checkAbsolute(filepath.Dir(alias), true) != nil {
+		return false
+	}
+	current, e = os.Lstat(target)
+	if e != nil || !nativeOwned(current, true) || !os.SameFile(current, targetInfo) || checkAbsolute(target, true) != nil {
+		return false
+	}
+	resolved, e := filepath.EvalSymlinks(alias)
+	return e == nil && resolved == target
+}
+
+func readProjectAuthConfig(path, nativeHome string) ([]byte, error) {
+	if nativeHome == "" || filepath.Dir(path) != nativeHome {
+		return readAuthConfig(path)
+	}
+	alias, e := os.Lstat(nativeHome)
+	if errors.Is(e, os.ErrNotExist) {
+		return nil, nil
+	}
+	if e != nil {
+		return nil, ErrUnsafePath
+	}
+	if alias.Mode()&os.ModeSymlink == 0 {
+		return readAuthConfig(path)
+	}
+	if !nativeLinkOwned(alias) {
+		return nil, ErrUnsafePath
+	}
+	home, e := os.Lstat(filepath.Dir(nativeHome))
+	if e != nil || !nativeOwned(home, true) || checkAbsolute(filepath.Dir(nativeHome), true) != nil {
+		return nil, ErrUnsafePath
+	}
+	target, e := filepath.EvalSymlinks(nativeHome)
+	if e != nil || checkAbsolute(target, true) != nil {
+		return nil, ErrUnsafePath
+	}
+	before, e := os.Lstat(target)
+	if e != nil || !nativeOwned(before, true) {
+		return nil, ErrUnsafePath
+	}
+	parent, e := os.OpenRoot(target)
+	if e != nil {
+		return nil, ErrUnsafePath
+	}
+	defer func() { _ = parent.Close() }()
+	opened, e := parent.Lstat(".")
+	if e != nil || !nativeOwned(opened, true) || !os.SameFile(before, opened) || !nativeAliasUnchanged(nativeHome, alias, target, before) {
+		return nil, ErrUnsafePath
+	}
+	name := filepath.Base(path)
+	info, e := parent.Lstat(name)
+	var data []byte
+	if e == nil {
+		data, e = readAuthConfigFile(parent, name, info, true)
+	} else if errors.Is(e, os.ErrNotExist) {
+		e = nil
+	}
+	if e != nil {
+		return nil, e
+	}
+	if !nativeAliasUnchanged(nativeHome, alias, target, before) {
+		return nil, ErrUnsafePath
+	}
+	return data, nil
+}
+
+func readAuthConfigFile(parent *os.Root, name string, before os.FileInfo, native bool) ([]byte, error) {
+	if !before.Mode().IsRegular() || native && !nativeOwned(before, false) {
+		return nil, ErrUnsafePath
+	}
+	f, e := parent.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if e != nil {
 		return nil, ErrUnsafePath
 	}
 	defer func() { _ = f.Close() }()
 	opened, e := f.Stat()
-	if e != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) || opened.Size() > maxCredentialBytes {
+	if e != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) || opened.Size() > maxCredentialBytes || native && !nativeOwned(opened, false) {
 		return nil, ErrUnsafePath
 	}
 	b, e := io.ReadAll(io.LimitReader(f, maxCredentialBytes+1))
 	if e != nil || len(b) > maxCredentialBytes {
 		return nil, ErrUnsafePath
 	}
-	after, e := parent.Lstat(filepath.Base(path))
-	if e != nil || !os.SameFile(after, opened) {
+	after, e := parent.Lstat(name)
+	if e != nil || !os.SameFile(after, opened) || native && !nativeOwned(after, false) {
 		return nil, ErrUnsafePath
 	}
 	return b, nil

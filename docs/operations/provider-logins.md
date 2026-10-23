@@ -1,9 +1,9 @@
 # Saved Claude Code and Codex logins
 
-Open **Options → Logins**. Add a Claude or Codex login and finish the native
-sign-in. Codex displays its device URL and code. Claude opens its native sign-in
-terminal when you press Enter. Credentials are stored on this machine; the phone
-and remote protocol cannot manage them.
+Press `o`, select **Provider logins →** in Options, and press Enter. Add a Claude
+or Codex login and finish the native sign-in. Codex displays its device URL and
+code. Claude opens its native sign-in terminal when you press Enter. Credentials
+are stored on this machine; the phone and remote protocol cannot manage them.
 
 Select a saved login and make it active. Every Swarm discussion for that provider
 uses the same selection. Saving a login alone does not activate it. With no
@@ -65,7 +65,8 @@ referenced conversation history, and converts metadata before normal loading.
 Stopped v0.20 account checks can leave empty private lock files; these are retained
 and accepted only when unlocked. Claude's global `CLAUDE.md` and `rules/` are
 preserved with its native settings and history.
-Global preferences are also preserved when Claude's default home is a symlink.
+The importer also preserves global preferences reached through a symlinked
+default Claude home.
 After import, open Logins and activate one saved login for each provider before
 resuming migrated discussions.
 An old login with cleared credentials remains **Needs sign-in** under its recorded

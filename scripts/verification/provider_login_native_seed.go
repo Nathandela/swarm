@@ -108,7 +108,7 @@ func run(action, state, provider string, homes []string) error {
 			}
 			_, envErr := store.PrepareSwitchEnvironment(cfg.Op, cfg.Source, *cfg.Runtime, cfg.Env)
 			_, backendEnvErr := store.PrepareSwitchEnvironment(cfg.Op, cfg.Source, *cfg.Runtime, cfg.BackendEnv)
-			flags := map[string]bool{"runtime_valid": store.ValidateRuntime(*cfg.Runtime) == nil, "switch_valid": store.ValidateSwitchRestart(cfg.Op, cfg.Source, *cfg.Runtime) == nil, "project_valid": logins.ValidateProjectAuth(provider, cfg.Cwd) == nil, "argv_valid": logins.ValidateArgsAuth(provider, cfg.Argv) == nil, "backend_args_valid": logins.ValidateArgsAuth(provider, cfg.BackendArgs) == nil, "switch_environment_valid": envErr == nil, "switch_backend_environment_valid": backendEnvErr == nil, "cli_matches": cfg.CLI != nil && persist.MatchCLIFingerprint(cfg.CLI.Path, cfg.CLI.Fingerprint)}
+			flags := map[string]bool{"runtime_valid": store.ValidateRuntime(*cfg.Runtime) == nil, "switch_valid": store.ValidateSwitchRestart(cfg.Op, cfg.Source, *cfg.Runtime) == nil, "project_valid": logins.ValidateProjectAuthEnv(provider, cfg.Cwd, cfg.Env) == nil, "argv_valid": logins.ValidateArgsAuth(provider, cfg.Argv) == nil, "backend_args_valid": logins.ValidateArgsAuth(provider, cfg.BackendArgs) == nil, "switch_environment_valid": envErr == nil, "switch_backend_environment_valid": backendEnvErr == nil, "cli_matches": cfg.CLI != nil && persist.MatchCLIFingerprint(cfg.CLI.Path, cfg.CLI.Fingerprint)}
 			body, _ := json.Marshal(flags)
 			fmt.Println(string(body))
 		}

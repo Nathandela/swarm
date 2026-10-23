@@ -81,7 +81,7 @@ func (d *Daemon) prepareLoginLaunch(_ string, spec daemon.LaunchSpec) (daemon.La
 	if err != nil {
 		return spec, err
 	}
-	if err = logins.ValidateProjectAuth(spec.AgentType, spec.Cwd); err != nil {
+	if err = logins.ValidateProjectAuthEnv(spec.AgentType, spec.Cwd, spec.ClientEnv); err != nil {
 		return spec, err
 	}
 	if err = logins.ValidateArgsAuth(spec.AgentType, spec.Argv); err != nil {
