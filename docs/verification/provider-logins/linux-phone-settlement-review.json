@@ -1,0 +1,35 @@
+{
+  "source_commit": "b35b10ed5b8b960a02949a3a56c32183f4af7de7",
+  "cause": "The test observed cleared durable PendingPublications before the separately mirrored live ItemStore had received the committed native echo.",
+  "fix": "Assert settlement and exactly one matching native user row from one locked durable State snapshot; preserve exactly one native write and all provenance/hash/truncation checks.",
+  "production_runtime_changed": false,
+  "deterministic_projection_gap": {
+    "repeats": 20,
+    "passed": 20,
+    "race": true,
+    "package_seconds": 1.407
+  },
+  "post_fix_linux": {
+    "exit_code": 0,
+    "elapsed_seconds": 48.201,
+    "go_version": "go version go1.26.10 linux/amd64",
+    "race": true,
+    "all_packet_variants_repeats": 5,
+    "startup_repeats": 5,
+    "native_auth_calls": 0,
+    "production_runtime_changed": false,
+    "source_test_hashes": {
+      "opencode_phone_packet_test.go": "c2d4b95b6dfe4a6dc6c3f95db40fc7e9363df376813c5b87384320fcd1e5d693",
+      "login_startup_review_test.go": "912988f34001dd92ef4e537d1ba7c41df1986bcd7487a8a985f3b6b12750d303"
+    }
+  },
+  "pre_fix_probabilistic_run": {
+    "repeats": 30,
+    "passed": 30,
+    "rare_failure_reproduced": false,
+    "package_seconds": 87.21
+  },
+  "independent_review": "Astra passed the packet assertion change",
+  "native_auth_calls": 0,
+  "original_source_profiles_touched": false
+}

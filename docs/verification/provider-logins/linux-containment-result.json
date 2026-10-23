@@ -1,0 +1,14 @@
+{
+  "source_head": "99d63cbda38b96ddfc0c49210674c7f70f33333d",
+  "dirty_overlay": "internal/shim/native_containment_linux_test.go",
+  "overlay_sha256": "14d1b482e9c57fdb3723103f9200c1cda1087981a8932bbaef4d2f4fd28edf67",
+  "review": "Only deferred logins.Store.Close handling changed; errors now reported via t.Error on fixture cleanup; runtime unchanged.",
+  "go_version": "go version go1.26.10 linux/amd64",
+  "test_exit_code": 0,
+  "elapsed_seconds": 34.498,
+  "race": true,
+  "archive_buildvcs_disabled": true,
+  "synthetic_only": true,
+  "native_auth_calls": 0,
+  "original_auth_source_accesses": 0
+}

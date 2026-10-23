@@ -2,9 +2,34 @@
 
 Date: 2026-10-23
 
-Integrated native switching and local quality gates have passed. Exact-tag CI
-runs before publication; the table distinguishes native feasibility from complete
-Swarm runs.
+Integrated native switching, local quality gates and exact-tag CI have passed.
+The table distinguishes native feasibility from complete Swarm runs.
+
+## Published v0.21.0
+
+[v0.21.0](https://github.com/Nathandela/swarm/releases/tag/v0.21.0) was published
+from `b35b10ed5b8b960a02949a3a56c32183f4af7de7`. All 17 jobs in its
+[release workflow](https://github.com/Nathandela/swarm/actions/runs/39873194146)
+succeeded, including the full Linux race suite, macOS, Android, fuzz, performance
+and container gates.
+
+Downloaded artifacts passed trusted-signature verification, tamper rejection,
+all seven archive checksums and all three compatibility-card comparisons. Ten
+packaged binaries matched the release version, commit and Go 1.26.10 build
+metadata. The container digest and provenance matched the exact tag, commit and
+workflow; the published Homebrew cask matched the signed archive hashes.
+[Release evidence](provider-logins/release-v0.21.0.json) records these checks.
+
+The first unpublished attempt stopped on test defects: an unchecked Linux cleanup
+error, a macOS-only temporary path and an OpenCode assertion mixing durable state
+with a later live-cache projection. The fixes preserve the original contracts;
+the packet assertion now requires exactly one native echo and one send from a
+single durable snapshot. [Repeated Linux race tests and deterministic timing
+proof](provider-logins/linux-phone-settlement-review.json) passed. Test fixtures
+also passed with macOS's default temporary directory after path corrections.
+Production runtime was unchanged by these follow-up fixes.
+
+## Native qualification
 
 | Check | Observed result |
 |---|---|
