@@ -107,6 +107,16 @@ func revalidateMigrationWriters(state string, plan *migration) error {
 			return err
 		}
 	}
+	// Native environment paths may spell either the logical alias or its target.
+	for _, home := range homes {
+		canonical, resolveErr := filepath.EvalSymlinks(home)
+		if resolveErr != nil && !errors.Is(resolveErr, os.ErrNotExist) {
+			return resolveErr
+		}
+		if resolveErr == nil && canonical != home {
+			homes = append(homes, canonical)
+		}
+	}
 	writers, err := environmentWriters(homes, sessions)
 	if err != nil || len(writers) != 0 {
 		return ErrLiveWriter

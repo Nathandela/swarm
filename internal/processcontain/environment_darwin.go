@@ -42,7 +42,7 @@ func EnvironmentWriters(homes, sessionIDs []string) ([]Identity, error) {
 			}
 			continue
 		}
-		if current.Eproc.Ucred.Uid != proc.Eproc.Ucred.Uid || current.Proc.P_starttime != proc.Proc.P_starttime {
+		if !sameLiveDarwinProcess(proc, *current) {
 			continue
 		}
 		if readErr != nil {
@@ -64,6 +64,12 @@ func EnvironmentWriters(homes, sessionIDs []string) ([]Identity, error) {
 	}
 	return writers, nil
 }
+
+func sameLiveDarwinProcess(before, current unix.KinfoProc) bool {
+	// A process can exit after the snapshot but before its arguments are read.
+	return current.Eproc.Ucred.Uid == before.Eproc.Ucred.Uid && current.Proc.P_starttime == before.Proc.P_starttime && current.Proc.P_stat != 5
+}
+
 func possibleNativeWriter(proc unix.KinfoProc) bool {
 	var name []byte
 	for _, c := range proc.Proc.P_comm {

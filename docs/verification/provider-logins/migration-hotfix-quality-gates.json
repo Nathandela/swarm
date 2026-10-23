@@ -1,0 +1,74 @@
+{
+  "command": "go test -timeout=20m -json ./...",
+  "exit_code": 0,
+  "first_event": "2026-10-23T08:57:03.115404+02:00",
+  "last_event": "2026-10-23T09:08:59.577582+02:00",
+  "inherited_umask": "022",
+  "log_mode": "0o600",
+  "log_sha256": "899d2672e2775bc82cb0d555cc4f67e840365e319c4dd0b92388c23f1d0d6fe8",
+  "package_results": {
+    "skip": 7,
+    "pass": 77
+  },
+  "package_count": 84,
+  "test_pass_events": 8923,
+  "test_skip_events": 63,
+  "failed_events": [],
+  "skeleton": {
+    "result": "pass",
+    "elapsed_seconds": 619.436
+  },
+  "regressions": {
+    "TestPruneNeedsTerminalCleanupAndNeverFollowsLinks": {
+      "result": "pass",
+      "elapsed_seconds": 0.45
+    },
+    "TestDarwinProcessRecheckUsesCurrentLiveness": {
+      "result": "pass",
+      "elapsed_seconds": 0
+    },
+    "TestRemoteActivityRefusesSymlinkWithoutTouchingTarget": {
+      "result": "pass",
+      "elapsed_seconds": 0
+    },
+    "TestRemoteActivityRefusesHardlinkWithoutChangingTarget": {
+      "result": "pass",
+      "elapsed_seconds": 0
+    }
+  },
+  "go_source_and_module_tree_sha256": "d85a9a0400d5fb8de77a10dd11c6f9acfe20d0e4f08d85372b293f8a08e11477",
+  "source_head": "8c9677ae9784fa76abcc24fa7da61db8371dff6e",
+  "no_ci_trigger_changes": true,
+  "source_worktree_dirty": true,
+  "source_description": "Reviewed working-tree Go source including pending fixes; source_head is the base HEAD, not a commit containing these Go changes.",
+  "pending_go_paths": [
+    "internal/loginmigration/codex_history.go",
+    "internal/loginmigration/context.go",
+    "internal/loginmigration/guard.go",
+    "internal/loginmigration/journal.go",
+    "internal/loginmigration/migrate.go",
+    "internal/loginmigration/workers.go",
+    "internal/processcontain/environment_darwin.go",
+    "internal/skeleton/remoteactivity_retention_test.go",
+    "internal/loginmigration/check_locks_test.go",
+    "internal/loginmigration/claude_instructions_test.go",
+    "internal/loginmigration/empty_rollout_test.go",
+    "internal/loginmigration/logical_preferences_test.go",
+    "internal/loginmigration/unavailable_test.go",
+    "internal/processcontain/environment_zombie_darwin_test.go"
+  ],
+  "toolchain": "go1.26.10",
+  "platform": "darwin/arm64",
+  "native_linux_migration_package": {
+    "result": "pass",
+    "state_anchor_unset": true,
+    "binary_sha256": "fd7559a48b304cbaf2cc27a00975307ad87db055d4dd26ed4ef76ad5ef54ff88"
+  },
+  "focused_race_suites": {
+    "loginmigration": "pass",
+    "processcontain": "pass",
+    "remote_activity": "pass"
+  },
+  "independent_source_review": "pass",
+  "actual_host_migration": "not_started"
+}

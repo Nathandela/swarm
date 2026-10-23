@@ -20,10 +20,11 @@ import (
 const contextMarker = ".swarm-provider-context.json"
 
 type contextSource struct {
-	Home         string
-	Conversation string
-	Cwd          string
-	HistoryOnly  bool
+	Home              string
+	Conversation      string
+	Cwd               string
+	HistoryOnly       bool
+	ParentPreferences bool
 }
 type contextFile struct {
 	Source, Target, SHA256 string
@@ -66,11 +67,21 @@ func sourceHome(provider string, env []string) (string, error) {
 		}
 		path = filepath.Join(home, dir)
 	}
-	canonical, e := filepath.EvalSymlinks(path)
+	_, e := filepath.EvalSymlinks(path)
 	if errors.Is(e, os.ErrNotExist) {
 		return path, nil
 	}
-	return canonical, e
+	return path, e
+}
+func contextSourceFromEnv(provider string, env []string) (contextSource, error) {
+	home, err := sourceHome(provider, env)
+	source := contextSource{Home: home, ParentPreferences: provider == "claude"}
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "CLAUDE_CONFIG_DIR="); ok && provider == "claude" {
+			source.ParentPreferences = value == ""
+		}
+	}
+	return source, err
 }
 func contextSources(state, provider string, sources []persist.Meta) ([]contextSource, error) {
 	seenIDs := map[string]bool{}
@@ -106,21 +117,22 @@ func contextSources(state, provider string, sources []persist.Meta) ([]contextSo
 		if m.AgentType != provider {
 			continue
 		}
-		home, e := sourceHome(provider, m.Env)
+		source, e := contextSourceFromEnv(provider, m.Env)
 		if e != nil {
 			return nil, e
 		}
 		if m.LoginRuntime != nil {
-			home = m.LoginRuntime.Home
+			source = contextSource{Home: m.LoginRuntime.Home}
 		}
-		out = append(out, contextSource{Home: home, Conversation: m.ConversationID, Cwd: m.ProviderCwd()})
+		source.Conversation, source.Cwd = m.ConversationID, m.ProviderCwd()
+		out = append(out, source)
 	}
 	if len(out) == 0 {
-		home, e := sourceHome(provider, os.Environ())
+		source, e := contextSourceFromEnv(provider, os.Environ())
 		if e != nil {
 			return nil, e
 		}
-		out = append(out, contextSource{Home: home})
+		out = append(out, source)
 	}
 	return out, nil
 }
@@ -176,20 +188,37 @@ func planContext(state, provider string, sources []contextSource) (contextPlan, 
 	seen := map[string]bool{}
 	var total int64
 	for _, source := range sources {
+		if !filepath.IsAbs(source.Home) || filepath.Clean(source.Home) != source.Home || source.ParentPreferences && (provider != "claude" || filepath.Base(source.Home) != ".claude") {
+			return plan, ErrUnsupported
+		}
 		home, e := filepath.EvalSymlinks(source.Home)
-		if errors.Is(e, os.ErrNotExist) {
+		missingHome := errors.Is(e, os.ErrNotExist)
+		if e != nil && !missingHome {
+			return plan, e
+		}
+		if provider == "claude" && !source.HistoryOnly && home != target {
+			preference, found, err := claudePreferences(source, home, missingHome)
+			if err != nil {
+				return plan, err
+			}
+			if found {
+				if old, exists := paths[preference.Target]; exists && (old.SHA256 != preference.SHA256 || old.Mode != preference.Mode) {
+					return plan, ErrHistoryConflict
+				}
+				paths[preference.Target] = preference
+			}
+		}
+		if missingHome {
 			if source.Conversation != "" {
 				return plan, ErrUnsupported
 			}
 			continue
 		}
-		if e != nil {
-			return plan, e
-		}
-		if home == target || seen[home] {
+		fullContext, visited := seen[home]
+		if home == target || visited && (fullContext || source.HistoryOnly) {
 			continue
 		}
-		seen[home] = true
+		seen[home] = !source.HistoryOnly
 		if e = safePath(home); e != nil {
 			return plan, e
 		}
@@ -199,7 +228,7 @@ func planContext(state, provider string, sources []contextSource) (contextPlan, 
 		}
 		names := []string{"config.toml", "AGENTS.md", "rules", "skills", "plugins", ".credentials.json", "sessions", "archived_sessions"}
 		if provider == "claude" {
-			names = []string{"settings.json", ".claude.json", ".mcp.json", ".credentials.json", "projects", "agents", "commands", "skills", "hooks", "plugins", "output-styles"}
+			names = []string{"settings.json", "CLAUDE.md", "rules", ".mcp.json", ".credentials.json", "projects", "agents", "commands", "skills", "hooks", "plugins", "output-styles"}
 		}
 		if source.HistoryOnly {
 			names = []string{"sessions", "archived_sessions"}
@@ -246,9 +275,6 @@ func planContext(state, provider string, sources []contextSource) (contextPlan, 
 					return e
 				}
 				filter := ""
-				if provider == "claude" && rel == ".claude.json" {
-					filter = "identity"
-				}
 				if provider == "claude" && rel == ".credentials.json" {
 					filter = "oauth"
 				}
@@ -299,18 +325,6 @@ func planContext(state, provider string, sources []contextSource) (contextPlan, 
 				return plan, e
 			}
 		}
-		if provider == "claude" && !source.HistoryOnly {
-			if _, ok := paths[".claude.json"]; !ok && filepath.Base(home) == ".claude" {
-				pref := filepath.Join(filepath.Dir(home), ".claude.json")
-				if b, e := readFile(pref, maxJSON, false); e == nil {
-					data, e := filterContext(b, "identity")
-					if e != nil {
-						return plan, e
-					}
-					paths[".claude.json"] = contextFile{pref, ".claude.json", digest(data), int64(len(data)), "identity", 0600}
-				}
-			}
-		}
 	}
 	for _, f := range paths {
 		plan.Files = append(plan.Files, f)
@@ -323,6 +337,45 @@ func planContext(state, provider string, sources []contextSource) (contextPlan, 
 	}
 	return plan, nil
 }
+func claudePreferences(source contextSource, home string, missingHome bool) (contextFile, bool, error) {
+	var file contextFile
+	path := filepath.Join(home, ".claude.json")
+	var raw []byte
+	err := os.ErrNotExist
+	if !missingHome {
+		raw, err = readFile(path, maxJSON, false)
+	}
+	if errors.Is(err, os.ErrNotExist) && source.ParentPreferences {
+		parent, resolveErr := filepath.EvalSymlinks(filepath.Dir(source.Home))
+		if resolveErr != nil && !errors.Is(resolveErr, os.ErrNotExist) {
+			return file, false, resolveErr
+		}
+		if resolveErr == nil {
+			path = filepath.Join(parent, ".claude.json")
+			raw, err = readFile(path, maxJSON, false)
+		}
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return file, false, nil
+	}
+	if err != nil {
+		return file, false, err
+	}
+	data, err := filterContext(raw, "identity")
+	if err != nil {
+		return file, false, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !owned(info, false) || !info.Mode().IsRegular() {
+		return file, false, ErrUnsupported
+	}
+	mode := os.FileMode(0600)
+	if info.Mode().Perm()&0100 != 0 {
+		mode = 0700
+	}
+	return contextFile{path, ".claude.json", digest(data), int64(len(data)), "identity", mode}, true, nil
+}
+
 func filterContext(b []byte, kind string) ([]byte, error) {
 	if kind == "" {
 		return b, nil

@@ -56,6 +56,13 @@ func rolloutHeader(path string) ([]byte, error) {
 	if err != nil || !os.SameFile(before, after) {
 		return nil, ErrUnsupported
 	}
+	// Aborted native creation can leave an empty placeholder, never usable history.
+	if before.Size() == 0 && after.Size() == 0 {
+		if strings.HasSuffix(path, ".jsonl") {
+			return nil, nil
+		}
+		return nil, ErrUnsupported
+	}
 	var reader io.Reader = file
 	if strings.HasSuffix(path, ".zst") {
 		binary, lookErr := exec.LookPath("zstd")
@@ -229,6 +236,9 @@ func codexHistoryClosure(sources []contextSource, wanted map[string]bool) (map[s
 				raw, readErr := rolloutHeader(path)
 				if readErr != nil {
 					return readErr
+				}
+				if len(raw) == 0 {
+					return nil
 				}
 				headerBytes += len(raw)
 				if headerBytes > maxRolloutHeaders || len(nodes) >= 100000 {

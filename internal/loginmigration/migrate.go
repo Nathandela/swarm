@@ -358,38 +358,68 @@ func inventory(state string) (migration, map[string][]byte, error) {
 		if missing {
 			e = nil
 		}
-		unavailable := missing
-		identityPath := ""
-		var identity string
-		if missing && hexID(g.Identity, 64) {
-			identity = g.Identity
-		} else if a.Provider == "codex" {
-			identity, e = logins.CodexIdentity(auth)
-		} else {
-			identityPath = filepath.Join(profile, ".claude.json")
-			b, readErr := readFile(identityPath, maxJSON, true)
-			if readErr != nil {
-				return plan, nil, readErr
-			}
-			identity, e = logins.ClaudeIdentity(b)
-		}
-		if e != nil {
-			return plan, nil, e
-		}
+		unavailable, cleared := missing, missing
 		if !missing {
+			var fields map[string]json.RawMessage
 			var credential struct {
+				Mode   string `json:"auth_mode"`
+				APIKey string `json:"OPENAI_API_KEY"`
 				Tokens struct {
+					Account string `json:"account_id"`
 					Access  string `json:"access_token"`
 					Refresh string `json:"refresh_token"`
 				} `json:"tokens"`
 				OAuth struct {
-					Access string `json:"accessToken"`
+					Access  string `json:"accessToken"`
+					Refresh string `json:"refreshToken"`
 				} `json:"claudeAiOauth"`
 			}
-			if validJSON(auth) != nil || json.Unmarshal(auth, &credential) != nil {
+			if validJSON(auth) != nil || json.Unmarshal(auth, &fields) != nil || fields == nil || json.Unmarshal(auth, &credential) != nil {
 				return plan, nil, ErrUnsupported
 			}
-			unavailable = a.Provider == "codex" && (credential.Tokens.Access == "" || credential.Tokens.Refresh == "") || a.Provider == "claude" && credential.OAuth.Access == ""
+			if a.Provider == "codex" && (credential.APIKey != "" || credential.Mode != "" && credential.Mode != "chatgpt") {
+				return plan, nil, logins.ErrInvalidCredentials
+			}
+			cleared = a.Provider == "codex" && credential.Tokens.Access == "" || a.Provider == "claude" && credential.OAuth.Access == ""
+			unavailable = cleared || a.Provider == "codex" && credential.Tokens.Refresh == ""
+		}
+		identityPath := ""
+		var cachedIdentity []byte
+		if a.Provider == "claude" {
+			identityPath = filepath.Join(profile, ".claude.json")
+			var readErr error
+			cachedIdentity, readErr = readFile(identityPath, maxJSON, true)
+			if readErr != nil && (!cleared || !errors.Is(readErr, os.ErrNotExist)) {
+				return plan, nil, readErr
+			}
+			if readErr == nil {
+				var fields map[string]json.RawMessage
+				var cached struct {
+					Account struct {
+						ID  string `json:"accountUuid"`
+						Org string `json:"organizationUuid"`
+					} `json:"oauthAccount"`
+				}
+				if validJSON(cachedIdentity) != nil || json.Unmarshal(cachedIdentity, &fields) != nil || fields == nil || json.Unmarshal(cachedIdentity, &cached) != nil {
+					return plan, nil, ErrUnsupported
+				}
+			}
+		}
+		var identity string
+		if cleared {
+			// A cleared grant carries no account authority; retain only its known
+			// generation identity, never a stale cached account or source secret.
+			if !hexID(g.Identity, 64) {
+				return plan, nil, ErrUnsupported
+			}
+			identity = g.Identity
+		} else if a.Provider == "codex" {
+			identity, e = logins.CodexIdentity(auth)
+		} else {
+			identity, e = logins.ClaudeIdentity(cachedIdentity)
+		}
+		if e != nil {
+			return plan, nil, e
 		}
 		if g.Identity != "" && g.Identity != identity {
 			return plan, nil, logins.ErrIdentityChanged
@@ -468,15 +498,14 @@ func inventory(state string) (migration, map[string][]byte, error) {
 		if e = inventoryProof(state, m.ID, &plan); e != nil {
 			return plan, nil, e
 		}
-		home, e := sourceHome(m.AgentType, m.Env)
+		source, e := contextSourceFromEnv(m.AgentType, m.Env)
 		if e != nil {
 			return plan, nil, e
 		}
-		historyOnly := false
 		if binding != nil {
 			// The owner context seeds settings; a copied legacy profile supplies
 			// only its referenced conversation when no native alias exists.
-			plan.Contexts[m.AgentType] = append(plan.Contexts[m.AgentType], contextSource{Home: home})
+			plan.Contexts[m.AgentType] = append(plan.Contexts[m.AgentType], source)
 			a, ok := registry.Accounts[binding.AccountID]
 			if !ok || a.Provider != m.AgentType {
 				return plan, nil, ErrUnsupported
@@ -485,8 +514,7 @@ func inventory(state string) (migration, map[string][]byte, error) {
 			if !ok || !hexID(g.Profile, 32) {
 				return plan, nil, ErrUnsupported
 			}
-			home = filepath.Join(state, "accounts", "profiles", g.Profile)
-			historyOnly = true
+			source = contextSource{Home: filepath.Join(state, "accounts", "profiles", g.Profile), HistoryOnly: true}
 			var projection string
 			_ = json.Unmarshal(fields["account_projection_ref"], &projection)
 			if projection != "" {
@@ -494,9 +522,8 @@ func inventory(state string) (migration, map[string][]byte, error) {
 				if e != nil {
 					return plan, nil, e
 				}
-				if origin != "" {
-					home = origin
-					historyOnly = false
+				if origin.Home != "" {
+					source = origin
 				}
 			}
 		}
@@ -504,7 +531,8 @@ func inventory(state string) (migration, map[string][]byte, error) {
 			if !uuidRE.MatchString(m.ConversationID) || uuidRE.FindString(m.ConversationID) != m.ConversationID {
 				return plan, nil, ErrUnsupported
 			}
-			plan.Contexts[m.AgentType] = append(plan.Contexts[m.AgentType], contextSource{Home: home, Conversation: m.ConversationID, Cwd: m.ProviderCwd(), HistoryOnly: historyOnly})
+			source.Conversation, source.Cwd = m.ConversationID, m.ProviderCwd()
+			plan.Contexts[m.AgentType] = append(plan.Contexts[m.AgentType], source)
 		}
 		if binding == nil {
 			continue
@@ -601,19 +629,23 @@ func hexID(s string, n int) bool {
 	}
 	return true
 }
-func projectionHome(state, ref, provider, cwd string) (string, error) {
+func projectionHome(state, ref, provider, cwd string) (contextSource, error) {
+	var source contextSource
 	if !hexID(ref, 64) {
-		return "", ErrUnsupported
+		return source, ErrUnsupported
 	}
 	raw, e := readFile(filepath.Join(state, "accounts", "configurations", ref, "projection.json"), maxJSON, true)
 	if e != nil {
-		return "", e
+		return source, e
 	}
 	if digest(raw) != ref {
-		return "", ErrUnsupported
+		return source, ErrUnsupported
 	}
 	type alias struct{ Path, Canonical string }
-	type context struct{ SourceProfile alias }
+	type context struct {
+		SourceProfile   alias
+		PreferencesPath string
+	}
 	type history struct {
 		SourcePath    string
 		Device, Inode uint64
@@ -625,37 +657,47 @@ func projectionHome(state, ref, provider, cwd string) (string, error) {
 		CodexHistoryAlias, ClaudeHistoryAlias *history
 	}
 	if validJSON(raw) != nil || json.Unmarshal(raw, &p) != nil || p.Provider != provider || p.Cwd != cwd {
-		return "", ErrUnsupported
+		return source, ErrUnsupported
 	}
 	if p.SchemaVersion != 1 && p.SchemaVersion != 2 && p.SchemaVersion != 3 {
-		return "", ErrUnsupported
+		return source, ErrUnsupported
 	}
 	if p.SchemaVersion != 3 {
-		return "", nil
+		return source, nil
 	}
 	ctx, h := p.CodexContext, p.CodexHistoryAlias
 	if provider == "claude" {
 		ctx, h = p.ClaudeContext, p.ClaudeHistoryAlias
 	}
 	if ctx == nil || h == nil {
-		return "", ErrUnsupported
+		return source, ErrUnsupported
 	}
 	if e = safePath(h.SourcePath); e != nil {
-		return "", e
+		return source, e
 	}
 	i, e := os.Lstat(h.SourcePath)
 	if e != nil || !owned(i, false) || !i.IsDir() {
-		return "", ErrUnsupported
+		return source, ErrUnsupported
 	}
 	stat := i.Sys().(*syscall.Stat_t)
 	if uint64(stat.Dev) != h.Device || stat.Ino != h.Inode {
-		return "", ErrHistoryConflict
+		return source, ErrHistoryConflict
 	}
 	canonical, e := filepath.EvalSymlinks(ctx.SourceProfile.Path)
 	if e != nil || canonical != ctx.SourceProfile.Canonical {
-		return "", ErrHistoryConflict
+		return source, ErrHistoryConflict
 	}
-	return canonical, nil
+	source.Home = ctx.SourceProfile.Path
+	if provider == "claude" {
+		if ctx.PreferencesPath == filepath.Join(canonical, ".claude.json") {
+			return source, nil
+		}
+		if filepath.Base(source.Home) != ".claude" || ctx.PreferencesPath != filepath.Join(filepath.Dir(source.Home), ".claude.json") {
+			return source, ErrUnsupported
+		}
+		source.ParentPreferences = true
+	}
+	return source, nil
 }
 func inventoryProof(state, id string, plan *migration) error {
 	file := filepath.Join(id, "native-process.json")

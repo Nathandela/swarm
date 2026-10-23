@@ -71,6 +71,9 @@ func TestRemoteActivityRefusesSymlinkWithoutTouchingTarget(t *testing.T) {
 	if err := os.WriteFile(target, []byte("preserve me"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(target, filepath.Join(dir, remoteActivityFile)); err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +151,9 @@ func TestRemoteActivityRefusesHardlinkWithoutChangingTarget(t *testing.T) {
 	a, dir := presetAPI(t)
 	target := filepath.Join(t.TempDir(), "owner-file")
 	if err := os.WriteFile(target, []byte("preserve me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Link(target, filepath.Join(dir, remoteActivityFile)); err != nil {

@@ -29,6 +29,32 @@ proof](provider-logins/linux-phone-settlement-review.json) passed. Test fixtures
 also passed with macOS's default temporary directory after path corrections.
 Production runtime was unchanged by these follow-up fixes.
 
+## Follow-up migration qualification
+
+The importer now recognizes retained, unlocked v0.20 account-check lock files,
+preserves Claude's global instructions and symlinked default-home preferences,
+and retains cleared logins as unavailable metadata under their recorded identity.
+An unused zero-byte Codex rollout does not block unrelated history import;
+required missing history, conflicting identities and unsafe source files still
+refuse conversion. Frozen-format fixtures cover the complete migration and
+preservation of original source bytes.
+
+A Darwin process that exits during writer inspection no longer causes a false
+live-writer refusal. Rechecking the current zombie state preserves the existing
+owner/incarnation checks and all refusals for unreadable live processes.
+Remote-activity link tests explicitly establish their target permission mode,
+so a private test-runner umask cannot change the fixture's precondition.
+
+The full repository test run passed with Go 1.26.10: 77 packages passed, seven
+had no runnable tests, and 8,923 test results passed. The skeleton package took
+619 seconds, so the integrated run used an explicit 20-minute package timeout.
+Focused race, vet and lint checks passed; the full migration package also passed
+natively on Linux, including compressed Codex history. These checks and the
+reviewed source fingerprint are recorded in the
+[migration hotfix gate receipt](provider-logins/migration-hotfix-quality-gates.json).
+They do not claim that the owner-host conversion or its post-migration native
+account checks have completed.
+
 ## Native qualification
 
 | Check | Observed result |

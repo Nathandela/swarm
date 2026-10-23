@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"syscall"
 )
 
 type oldProcess struct {
@@ -147,6 +149,15 @@ func inventoryCheckWorkers(state string) error {
 		return err
 	}
 	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".lock-") {
+			if !hexID(strings.TrimPrefix(entry.Name(), ".lock-"), 64) {
+				return ErrUnsupported
+			}
+			if err = inventoryCheckLock(base, entry.Name()); err != nil {
+				return err
+			}
+			continue
+		}
 		if !entry.IsDir() || !hexID(entry.Name(), 32) {
 			return ErrUnsupported
 		}
@@ -178,6 +189,45 @@ func inventoryCheckWorkers(state string) error {
 		if json.Unmarshal(raw, &a) != nil || json.Unmarshal(stopped.Ref, &b) != nil || !reflect.DeepEqual(a, b) {
 			return ErrUnsupported
 		}
+	}
+	return nil
+}
+
+// v0.20 retains empty credential/configuration flock files after worker cleanup.
+func inventoryCheckLock(base, name string) error {
+	if err := safePath(filepath.Join(base, name)); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	valid := func(info os.FileInfo) bool {
+		return info != nil && owned(info, true) && info.Mode().IsRegular() && info.Mode().Perm() == 0600 && info.Size() == 0
+	}
+	before, err := root.Lstat(name)
+	if err != nil || !valid(before) {
+		return ErrUnsupported
+	}
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	after, err := file.Stat()
+	if err != nil || !valid(after) || !os.SameFile(before, after) {
+		return ErrUnsupported
+	}
+	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return ErrLiveWriter
+		}
+		return err
+	}
+	current, err := root.Lstat(name)
+	if err != nil || !valid(current) || !os.SameFile(current, after) {
+		return ErrUnsupported
 	}
 	return nil
 }

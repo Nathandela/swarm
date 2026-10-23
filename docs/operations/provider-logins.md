@@ -62,11 +62,20 @@ that compatible return to v0.20. Do not manually delete worker or recovery files
 
 At startup, the one-time importer validates old state, preserves credentials and
 referenced conversation history, and converts metadata before normal loading.
+Stopped v0.20 account checks can leave empty private lock files; these are retained
+and accepted only when unlocked. Claude's global `CLAUDE.md` and `rules/` are
+preserved with its native settings and history.
+Global preferences are also preserved when Claude's default home is a symlink.
 After import, open Logins and activate one saved login for each provider before
 resuming migrated discussions.
+An old login with cleared credentials remains **Needs sign-in** under its recorded
+identity. Stale cached account details cannot reactivate it; use the normal native
+sign-in flow to restore access.
 An unresolved recovery, live writer, conflicting history, or malformed private
 record stops conversion with an actionable error. Resolve it using the previous
 installation; do not delete credentials or journals to bypass the check.
+Native source files and directories must not be group- or world-writable;
+tighten the affected permissions before retrying.
 
 Compressed legacy Codex rollouts require an executable `zstd` on `PATH` during
 this one-time import. Without it, Swarm refuses conversion before changing data.

@@ -85,6 +85,9 @@ func validateMigration(state string, plan migration) error {
 			if !filepath.IsAbs(source.Home) || filepath.Clean(source.Home) != source.Home || len(source.Home) > 4096 {
 				return ErrUnsupported
 			}
+			if source.ParentPreferences && (provider != "claude" || filepath.Base(source.Home) != ".claude") {
+				return ErrUnsupported
+			}
 			if source.Conversation != "" && uuidRE.FindString(source.Conversation) != source.Conversation {
 				return ErrUnsupported
 			}
