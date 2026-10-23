@@ -15,6 +15,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/worktree"
 )
 
 // The grid a spawned session starts on: the mobile default, the one size every
@@ -35,7 +36,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	cli := fs.String("cli", "", "agent CLI to launch (required)")
 	dir := fs.String("dir", "", "working directory (default: the caller's cwd)")
 	model := fs.String("model", "", "model to launch the agent with")
-	worktree := fs.Bool("worktree", false, "run the session in an isolated git worktree")
+	isolate := fs.Bool("worktree", false, "run the session in an isolated git worktree (default for --handoff and --delegate in a git checkout)")
 	name := fs.String("name", "", "session label (default: the daemon's)")
 	prompt := fs.String("prompt", "", "inline instructions for the new session")
 	handoff := fs.String("handoff", "", "handoff document to hand the new session")
@@ -84,6 +85,18 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	if *handoff != "" {
 		doc, intent = *handoff, protocol.SpawnIntentHandoff
 	}
+	// A handoff or delegation document hands work to another agent, which gets a git
+	// worktree of its own unless the caller says otherwise (ADR-010 Amendment 10):
+	// sharing the caller's checkout, or improvising one under /tmp, is how work is lost.
+	explicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "worktree" {
+			explicit = true
+		}
+	})
+	if doc != "" && !explicit && worktree.IsRepo(cwd) {
+		*isolate = true
+	}
 	var dest string
 	if doc != "" {
 		dest, err = copyHandoff(doc)
@@ -103,7 +116,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 		Cols:          spawnCols,
 		Rows:          spawnRows,
 		InitialPrompt: initial,
-		Worktree:      *worktree,
+		Worktree:      *isolate,
 	}
 	if *model != "" {
 		req.Options = map[string]string{"model": *model}

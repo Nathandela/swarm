@@ -1121,6 +1121,14 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			return persist.Meta{}, err
 		}
 		spec.Cwd = providerCwd
+		spec = isolateHandoffChild(spec)
+	}
+	// An agent handoff's worktree never lands where a reboot erases it (ADR-010
+	// Amendment 10); `swarm spawn --handoff/--delegate` asks for one on the wire.
+	if isAgentHandoffLaunch(spec) {
+		if err := refuseTemporaryHandoffWorktree(spec); err != nil {
+			return persist.Meta{}, err
+		}
 	}
 	if conversationID := spec.Options[protocol.OptionResumeConversationID]; conversationID != "" {
 		if spec.Options[protocol.OptionResumeFrom] != "" {
