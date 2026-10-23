@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "release": "v0.21.3",
+  "source_commit": "b95e6ecc9fb58048115b779f2c03789752c98597",
+  "native_cli": "Claude Code 2.1.309",
+  "platform": "linux/amd64",
+  "incident": {
+    "terminal_error": "rate_limit",
+    "quota_status": "rejected",
+    "quota_window": "five_hour",
+    "future_reset_present": true,
+    "intervening_primary_attachments": 6,
+    "cause": "The parser omitted valid attachment ancestry nodes, so it could not bind the terminal quota error to the current prompt."
+  },
+  "fix": {
+    "scope": "Accept validated primary same-conversation attachment ancestry only. Attachments cannot establish a prompt, quota rejection or authentication failure.",
+    "unchanged": "Hook admission, callback delivery, quota classification, writer custody and provider-wide switching boundaries."
+  },
+  "native_comparison": {
+    "fixture": "An unchanged private prefix of the real native transcript, frozen at the byte boundary observed before the owner continued the conversation.",
+    "full_native_file_exceeds_tail_window": true,
+    "production_file_open_and_tail_parser_used": true,
+    "baseline_recognized_quota": false,
+    "candidate_recognized_quota": true,
+    "same_snapshot_across_both_runs": true,
+    "live_history_prefix_preserved": true,
+    "raw_native_content_exported": false,
+    "model_or_auth_calls": false,
+    "production_state_writes": false,
+    "limit": "Prompt identity was read from the native transcript. This comparison does not replay or prove delivery of the historical authenticated hook."
+  },
+  "validation": {
+    "regression_failed_before_fix": true,
+    "focused_race_vet_build_lint": "passed",
+    "independent_review": "passed",
+    "full_repository": {
+      "toolchain": "Go 1.26.10",
+      "elapsed_seconds": 655.068,
+      "packages_passed": 77,
+      "packages_without_runnable_tests": 7,
+      "test_events_passed": 8975,
+      "test_events_skipped": 63,
+      "failures": 0,
+      "source_fingerprint_unchanged": true
+    },
+    "environment_note": "Two unrelated enrollment tests failed under sandboxed process-inventory restrictions on both baseline and candidate. Both passed with the required native process visibility; source guards were not weakened."
+  },
+  "operations": {
+    "owner_requested_switch": "completed through the normal provider-wide coordinator after waiting for active Claude work",
+    "reported_discussion": "resumed on the selected login without a resume error; the owner subsequently continued it",
+    "old_login_availability_correction": "completed through one guarded existing Store.UpdateExhaustion CAS after validating native evidence and no later sign-in; only the inactive target quota fields and registry revision changed",
+    "signed_release_installation": "passed; both installed binaries and the running daemon match the verified signed release; existing discussion process, conversation and runtime identities were preserved",
+    "selected_login_and_runtime_unchanged_by_correction": true,
+    "user_requests_replayed": false,
+    "reported_discussion_final_check": "running, native initialized, exact lineage and provider directory preserved, selected-login runtime current, input released, no resume/backend error or pending switch",
+    "all_running_managed_discussions_after_install": "native initialization and current account runtimes verified; no resume/backend errors, held input fences or pending switches"
+  },
+  "release_workflow": {
+    "run_id": "39952692622",
+    "status": "passed",
+    "validation_gates": "all 15 passed",
+    "jobs_passed": 17,
+    "attempt": 1
+  },
+  "scope_note": "The native comparison proves the confirmed attachment-parser defect and its correction. It does not establish callback-versus-transcript flush ordering or change the no-replay policy for failed user requests.",
+  "upstream_shape_reports": [
+    "https://github.com/anthropics/claude-code/issues/86752",
+    "https://github.com/anthropics/claude-agent-sdk-typescript/issues/431"
+  ],
+  "release_artifacts": {
+    "trusted_checksum_signature": "passed",
+    "tamper_rejection": "passed",
+    "archives_verified": 7,
+    "compatibility_cards_verified": 3,
+    "packaged_binaries_verified": 10,
+    "architecture_slices_verified": 12,
+    "source_and_numeric_version_match": true,
+    "go_toolchain": "1.26.10",
+    "linux_static": true,
+    "oci_attestation_cryptographic_verification": "not performed; archive verification does not establish OCI attestation trust"
+  }
+}

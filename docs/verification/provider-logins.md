@@ -29,6 +29,33 @@ proof](provider-logins/linux-phone-settlement-review.json) passed. Test fixtures
 also passed with macOS's default temporary directory after path corrections.
 Production runtime was unchanged by these follow-up fixes.
 
+## Claude quota detection through attachment records
+
+Claude Code 2.1.309 wrote a valid five-hour quota rejection after six primary
+`attachment` records. The parser followed only user and assistant records, so
+it lost the ancestry linking that rejection to the current prompt and left the
+login available. The fix accepts validated attachment links without letting
+attachments establish a prompt or terminal failure. Upstream reports also
+describe attachments in the native ancestry chain: [Claude Code](https://github.com/anthropics/claude-code/issues/86752)
+and [Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript/issues/431).
+
+The [sanitized quota incident evidence](provider-logins/claude-attachment-quota.json)
+records the regression, independent review and complete repository checks.
+Read-only baseline and candidate binaries inspected identical private native
+history bytes through the production file opener and bounded tail parser. The
+baseline missed the quota; the candidate recognized its future reset. The live
+history prefix stayed intact. This proves parsing of the real record shape;
+the historical hook had already been consumed, so hook delivery and transcript
+flush ordering are not claimed verified by this comparison.
+
+[v0.21.3](https://github.com/Nathandela/swarm/releases/tag/v0.21.3) passed all 17
+release jobs. Signed archive, compatibility and build-provenance checks passed;
+both Linux binaries and the running daemon matched the installed release. Live
+discussion identities survived the update. The reported discussion passed native
+initialization and continuity checks on its selected login. A separately reviewed,
+one-shot availability correction recorded the old inactive account’s proven reset
+without changing credentials, account selection or running discussions.
+
 ## Published v0.21.2 and installation follow-up
 
 [v0.21.2](https://github.com/Nathandela/swarm/releases/tag/v0.21.2) was published
