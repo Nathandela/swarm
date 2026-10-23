@@ -209,6 +209,24 @@ Independent Astra review found no remaining blocking source issue. Installed
 Claude 2.1.296 code inspection confirmed POSIX shell and process-group cancellation
 semantics; this is distinct from live provider capture qualification.
 
+[v0.22.0](https://github.com/Nathandela/swarm/releases/tag/v0.22.0) was published
+from `0c4707f62123425368221c9e465184f91d44f8a3`; all 17 release jobs passed.
+The full serial local run passed 9,010 tests across 77 packages. The initial
+concurrent run exceeded the echo-latency budget and the supervisor's default
+timeout; the serial rerun passed, including 0.111 ms echo latency against 10 ms.
+Signed archives were verified before installation. The Linux daemon update
+preserved all 22 existing native processes, conversations, directories and selected
+logins. A real Claude turn completed, with fresh reports for both windows; an existing Codex discussion
+supplied its weekly reading with no five-hour field.
+
+The separate disposable Codex conversation check encountered `backend_unavailable`
+when its thread join returned RPC `-32601` (not supported). It was cleaned up;
+no completed Codex probe conversation is claimed. That startup path is tracked
+in `agents-tracker-rlot`. Final checks confirmed all 22 existing discussions were
+initialized on their current login runtime, with no resume/backend errors, held
+input fences or pending switches. Sanitized results and qualification limits:
+[remaining-usage.json](provider-logins/remaining-usage.json).
+
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.
 

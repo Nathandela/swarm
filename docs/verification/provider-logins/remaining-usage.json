@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "date": "2026-10-23",
+  "source_commit": "0c4707f62123425368221c9e465184f91d44f8a3",
+  "release": {
+    "version": "0.22.0",
+    "workflow_url": "https://github.com/Nathandela/swarm/actions/runs/39964160043",
+    "attempt": 1,
+    "successful_jobs": 17,
+    "full_linux_race_suite": true
+  },
+  "local_gates": {
+    "build": true,
+    "vet": true,
+    "lint": true,
+    "command": "go test -json -p 1 -timeout 20m ./...",
+    "result": {
+      "exit": 0,
+      "seconds": 977.5,
+      "counts": {
+        "test_pass": 9010,
+        "package_pass": 77,
+        "test_skip": 63,
+        "package_skip": 7
+      },
+      "failed": []
+    },
+    "log_sha256": "95b34e118518e7d1b1f3cec4c40305c9ad7bdccd08e4a4d40ba6a86686e6bbb4",
+    "initial_run_limitations": {
+      "echo_latency_ms": 16.460625,
+      "latency_budget_ms": 10,
+      "supervisor_default_timeout_seconds": 600
+    },
+    "serial_echo_latency_ms": 0.111417
+  },
+  "review": {
+    "implementation": "Sol 6.1",
+    "tui": "Luna",
+    "independent_review": "Astra",
+    "blocking_source_findings_remaining": 0
+  },
+  "artifacts": {
+    "signature_verified": true,
+    "public_key": "d7938ebe67f5cb7ff202724352a7890cd0af8ca422c22e3e7af32b6284e7885a",
+    "tamper_controls_rejected": true,
+    "verified_archives": 7,
+    "verified_compatibility_cards": 3,
+    "packaged_binaries": 10,
+    "architecture_slices": 12,
+    "installed_linux_amd64": {
+      "swarm": "09aee23499d9983f862a9e9ce37bc65dc4e0d12c3f8759b88effbb524be3fd08",
+      "swarm-remote": "3c5827dc54bae0c1e7719a7d07e8a63f91450133ef4c7a912d69070cea0851d9"
+    },
+    "oci_attestation_verified": false
+  },
+  "installation": {
+    "ok": true,
+    "version": "swarm 0.22.0 (go1.26.10)",
+    "live_before": 22,
+    "live_after": 22,
+    "exact_native_processes_preserved": true,
+    "provider_selections_unchanged": true,
+    "daemon_matches_signed_binary": true
+  },
+  "native": {
+    "claude": {
+      "reply_verified": true,
+      "idle_verified": true,
+      "claude_five_hour_present": true,
+      "weekly_present": true,
+      "percent_range_valid": true,
+      "observed_after_intent": true,
+      "provider_selection_stable": true,
+      "cleanup_confirmed": true,
+      "preexisting_sessions_retained": true
+    },
+    "claude_initial_probe": {
+      "result": "startup prompt refused by original test harness",
+      "cleanup_confirmed": true,
+      "test_harness_corrected_to_wait_without_sending_approvals": true
+    },
+    "codex": {
+      "weekly_reading_observed": true,
+      "percent_range_valid": true,
+      "five_hour_absent": true,
+      "reading_source": "existing managed discussion; observed before disposable probe intent",
+      "disposable_probe_completed": false,
+      "probe_failure": "probe_history_gap",
+      "gap_reason": "backend_unavailable",
+      "thread_join_rpc_error": -32601,
+      "cleanup_confirmed": true,
+      "preexisting_sessions_retained": true,
+      "followup": "agents-tracker-rlot"
+    },
+    "final_health": {
+      "running": 22,
+      "initialized": 22,
+      "native_proofs_valid": 22,
+      "active_runtime_matches": 22,
+      "resume_or_backend_errors": 0,
+      "held_input_fences": 0,
+      "pending_switches": 0,
+      "providers": {
+        "claude": 20,
+        "codex": 2
+      },
+      "ok": true
+    },
+    "temporary_test_workspace_removed": true
+  },
+  "limits": [
+    "Indicative native reports; additional model-specific limits can apply.",
+    "Only the selected account is shown; absent, reset or 15-minute-old reports are unknown.",
+    "Claude observation starts on normal launch/resume; existing project/managed status-line overrides may yield unknown.",
+    "No successful complete Codex disposable conversation is claimed; its thread-join rejection is tracked separately."
+  ]
+}
