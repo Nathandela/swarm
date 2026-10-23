@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "release": {
+    "tag": "v0.21.2",
+    "source_commit": "e672e7b650d873c7a4f165d1b2d7961d52ed7cba",
+    "workflow": "39933878038",
+    "attempt_1": {
+      "result": "failed",
+      "stage": "Android SDK/NDK setup",
+      "detail": "NDK archive download failed before build steps."
+    },
+    "attempt_2": {
+      "result": "passed",
+      "detail": "All 17 jobs passed on unchanged source, including Android SDK/NDK setup, Gradle, artifact assertions, and both publish jobs."
+    }
+  },
+  "repository_tests": {
+    "result": "passed",
+    "toolchain": "Go 1.26.10",
+    "platform": "darwin/arm64",
+    "packages_passed": 77,
+    "packages_without_runnable_tests": 7,
+    "test_events_passed": 8959,
+    "test_events_skipped": 63,
+    "failures": 0,
+    "elapsed_seconds": 609.75
+  },
+  "release_artifacts": {
+    "trusted_checksum_signature": "passed",
+    "tamper_rejection": "passed",
+    "archives_verified": 7,
+    "compatibility_cards_verified": 3,
+    "packaged_binaries_verified": 10,
+    "architecture_slices_verified": 12,
+    "homebrew_hashes_match_release_checksums": true,
+    "oci_provenance_claims_match_tag_source_digest_and_attempt_2_workflow": true,
+    "oci_attestation_cryptographic_verification": "not established; Sigstore verifier initialization failed"
+  },
+  "owner_migration": {
+    "import": "completed",
+    "managed_native_context": "available",
+    "claude_activation": "passed",
+    "full_fleet_resumption": "completed; every intended original discussion has a live exact continuation; owner-created discussions were preserved",
+    "native_initialization": "passed for every intended original discussion; Codex capability records came from the live atomic journal snapshot and matched current native instance/process proofs",
+    "idle_state": "not asserted for the entire fleet; owner work was active during the final observation",
+    "continuity_checks": "passed: exact native ID, directory and lineage; current login runtime; live shim/native/backend identities; no duplicate native conversations, resume/backend errors, held input embargoes or pending switches"
+  },
+  "native_checks": {
+    "claude_default_home_alias": {
+      "result": "passed",
+      "cli_version": "2.1.309",
+      "scope": "A-to-B login switch retained the existing native conversation across the supported owner-home alias.",
+      "limits": "Not a full A-to-B-to-A run or broad support for arbitrary project, leaf, or managed-directory aliases."
+    },
+    "codex_launcher_permissions": {
+      "result": "passed after mode correction",
+      "scope": "A permissive launcher mode was refused before a sign-in job started. Changing mode from 0775 to 0755 preserved file bytes; the launcher then passed. Typed server/client/UI error handling was exercised."
+    },
+    "native_enrollment_worker": {
+      "result": "passed",
+      "provider": "codex",
+      "cli_version": "0.163.0",
+      "platform": "linux/amd64",
+      "scope": "Isolated smoke: device-code presentation, normal cancellation, writer shutdown, and absence of captured credentials were confirmed.",
+      "limits": "No authentication completion, browser launch, model request, or native import occurred."
+    },
+    "paid_codex_canary": "not requalified after fresh enrollment; the helper refused to create a canary while an owner discussion was running, and the original account selection was restored",
+    "macos_live_qualification": "unqualified",
+    "codex_enrollment_completion": {
+      "result": "passed",
+      "scope": "Fresh native sign-ins completed and were imported through the production flow; enrollment workers recorded stopped-writer completion."
+    },
+    "codex_native_switch_continuity": {
+      "result": "passed",
+      "scope": "An owner-resumed original discussion retained its native conversation through an account switch and return; the remaining paused original discussion resumed with an empty prompt and no model override.",
+      "limits": "No marker-recall or paid-response test was sent into owner discussions."
+    }
+  },
+  "installation": {
+    "local_source_build_version": "0.21.2",
+    "signed_release_installation": "passed; both binary hashes and the running daemon matched the verified release",
+    "live_claude_processes": "preserved during both source-build and signed-release installations",
+    "maintenance_services": "restored the previously active native Codex daemon and upgrade timer; the previously inactive remote service stayed inactive"
+  },
+  "scope_note": "Release, migration, enrollment and exact native continuation results do not establish fresh paid Codex A-to-B-to-A or macOS qualification. Both sampled original history prefixes were preserved; subsequent owner activity means message counts are not claimed unchanged."
+}

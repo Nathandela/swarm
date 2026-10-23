@@ -29,6 +29,36 @@ proof](provider-logins/linux-phone-settlement-review.json) passed. Test fixtures
 also passed with macOS's default temporary directory after path corrections.
 Production runtime was unchanged by these follow-up fixes.
 
+## Published v0.21.2 and installation follow-up
+
+[v0.21.2](https://github.com/Nathandela/swarm/releases/tag/v0.21.2) was published
+from `e672e7b650d873c7a4f165d1b2d7961d52ed7cba`. Attempt 1 failed during Android
+SDK/NDK archive setup before the build; rerunning the failed job on the unchanged
+source passed. All 17 jobs in [attempt 2](https://github.com/Nathandela/swarm/actions/runs/39933878038/attempts/2)
+succeeded. Release artifact checks passed signed-checksum verification and
+tamper rejection, all seven archives, all three compatibility cards, and all ten
+packaged binaries across twelve architecture slices. The Homebrew cask hashes
+match the release checksums. The OCI provenance statement claims the expected
+tag, source, image digest and workflow, but local Sigstore verifier setup failed;
+cryptographic OCI attestation verification is not established.
+
+The full repository run on this source passed with Go 1.26.10: 77 packages
+passed, seven had no runnable tests, and 8,959 test events passed with 63 skipped.
+Both signed Linux binaries were installed, and the running daemon matched the
+verified release. Existing discussion process identities survived the handoff.
+
+The [sanitized installation follow-up](provider-logins/native-installation-followup.json)
+records the completed migration, fresh Codex enrollment and restoration of all
+intended original discussions with exact native conversation and directory
+continuity. New owner discussions were preserved. Both sampled original history
+prefixes remain intact; subsequent owner activity means message counts are not
+claimed unchanged. Every intended discussion passed native initialization checks;
+Codex capabilities came from the live atomic journal snapshot and matched the
+current native instance proofs. The fleet was not entirely idle because owner
+work was active. The usual maintenance services were restored. These results remain
+distinct from fresh paid Codex A→B→A qualification and the unqualified macOS path;
+the canary helper refused a new test while an owner Codex discussion was running.
+
 ## Follow-up migration qualification
 
 The importer now recognizes retained, unlocked v0.20 account-check lock files,
@@ -52,8 +82,9 @@ Focused race, vet and lint checks passed; the full migration package also passed
 natively on Linux, including compressed Codex history. These checks and the
 reviewed source fingerprint are recorded in the
 [migration hotfix gate receipt](provider-logins/migration-hotfix-quality-gates.json).
-They do not claim that the owner-host conversion or its post-migration native
-account checks have completed.
+These are implementation and synthetic migration checks, not the owner-host
+conversion. The later actual migration and post-migration native checks are
+recorded in the [installation follow-up](provider-logins/native-installation-followup.json).
 
 ## Native qualification
 
