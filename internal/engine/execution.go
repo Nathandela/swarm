@@ -47,6 +47,10 @@ func (e *Engine) RegisterExecutionSession(id, token string, pid int, sources []a
 
 func executionSnapshot(id string, s *session) persist.ExecutionRecord {
 	r := persist.ExecutionRecord{Version: persist.ExecutionVersion, AnonymousActors: s.anonymousChildren, UnknownActors: s.untrackedChildren, SessionID: id, Incarnation: s.executionIdentity.Incarnation, ConversationID: s.executionIdentity.ConversationID, OwnerRevision: s.executionIdentity.OwnerRevision, Incomplete: s.executionIncomplete, TurnSequence: s.turnSeq, InteractionSequence: s.interSeq, ChildSequence: s.childSeq, TypedSequence: s.typedSeq, MainTurn: s.executionTurn, Interaction: s.executionInteraction, InputActor: s.inputActor, Actors: make(map[string]persist.ExecutionActor, len(s.childStates))}
+	r.Codex = cloneCodexExecution(s.codexExecution)
+	if r.Codex != nil {
+		r.TurnID = r.Codex.TurnID
+	}
 	r.PendingCallbacks = make(map[string]string, len(s.pendingCallbacks))
 	for sequence, fingerprint := range s.pendingCallbacks {
 		r.PendingCallbacks[strconv.FormatUint(sequence, 10)] = fingerprint
@@ -86,6 +90,11 @@ func restoreExecution(s *session, id string, r persist.ExecutionRecord) error {
 			s.status.Turn = status.TurnUnknown
 		}
 		return fmt.Errorf("engine: execution identity mismatch")
+	}
+	s.codexExecution = cloneCodexExecution(r.Codex)
+	if s.codexExecution != nil {
+		s.codexExecution.UnknownCustody = true
+		s.codexExecution.Incomplete = "daemon_restart"
 	}
 	s.pendingCallbacks = make(map[uint64]string, len(r.PendingCallbacks))
 	for sequence, fingerprint := range r.PendingCallbacks {
@@ -143,23 +152,30 @@ func (e *Engine) RestoreExecution(id string, r persist.ExecutionRecord) error {
 func (e *Engine) InvalidateExecution(id string) error {
 	e.mu.Lock()
 	s, ok := e.sessions[id]
+	enabled := ok && s.executionEnabled
+	if enabled {
+		// Fence immediately; a slow earlier writer must not delay observed loss.
+		s.executionIncomplete = "observation_gap"
+		s.untrackedChildren = true
+		if s.codexExecution != nil {
+			s.codexExecution.UnknownCustody = true
+			s.codexExecution.Incomplete = "observation_gap"
+		}
+	}
 	e.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("engine: unknown session")
 	}
+	if !enabled {
+		return nil
+	}
 	s.emitMu.Lock()
 	defer s.emitMu.Unlock()
 	e.mu.Lock()
-	if cur, ok := e.sessions[id]; !ok || cur != s || !s.alive {
+	if current, ok := e.sessions[id]; !ok || current != s || !s.alive {
 		e.mu.Unlock()
 		return fmt.Errorf("engine: retired session")
 	}
-	if !s.executionEnabled {
-		e.mu.Unlock()
-		return nil
-	}
-	s.executionIncomplete = "observation_gap"
-	s.untrackedChildren = true
 	err := e.persistExecutionLocked(id, s)
 	e.mu.Unlock()
 	return err
@@ -179,6 +195,9 @@ func (e *Engine) persistExecutionLocked(id string, s *session) error {
 	s.executionPending = false
 	if err != nil {
 		s.executionIncomplete = "persistence_failure"
+		if s.codexExecution != nil {
+			s.codexExecution.Incomplete = "persistence_failure"
+		}
 	}
 	return err
 }

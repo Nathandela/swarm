@@ -372,7 +372,7 @@ func (l *GrantLease) Generation() ([32]byte, error) {
 }
 
 // ValidateRenewal runs after native containment. It establishes changed bytes,
-// exact owner, unexpired access/id tokens, and file+directory durability.
+// exact owner, unexpired access, and file+directory durability.
 func (l *GrantLease) ValidateRenewal(before [32]byte, now time.Time) error {
 	if e := l.ProveStopped(); e != nil {
 		return e

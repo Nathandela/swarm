@@ -1324,5 +1324,11 @@
     "Claude empty SDK input also wakes completed work; it is not a safety discriminator or ordinary TUI continuation API.",
     "Claude 429 retry retained A after the credential file changed to B; 401 retry adopted B. A file replacement is not instantaneous request adoption.",
     "Real-grant canaries, integrated handover and continuation, human decisions, background actors, daemon gaps and ambiguous submission still require qualification."
-  ]
+  ],
+  "native_contract_followup": {
+    "source": "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/login/src/auth/manager.rs#L1498",
+    "observation": "Native persist_tokens preserves the prior ID token when OAuth omits a replacement; request freshness is determined by access-token expiry. Exact user/workspace consistency remains required.",
+    "swarm_regression": "TestCodexAccessAllowsNativeRefreshToKeepExpiredIDToken",
+    "native_partial_refresh_qualification": "pending"
+  }
 }

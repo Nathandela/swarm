@@ -474,3 +474,95 @@ func TestExecutionSaveDeleteAdmissionRace(t *testing.T) {
 		t.Fatalf("completed deletion did not release admission: %v", err)
 	}
 }
+
+func codexExecutionFixture() ExecutionRecord {
+	r := executionFixture("s1")
+	r.ConversationID = "thread-1"
+	r.TurnID = "turn-1"
+	r.OwnerRevision = 1
+	r.Codex = &CodexExecution{NativeIncarnation: "backend-1", FeedEpoch: "dial-1", ThreadID: r.ConversationID, TurnID: r.TurnID, OwnerRevision: 1, Sequence: 1, LastEventHash: strings.Repeat("a", 64), State: "active", Items: map[string]CodexExecutionItem{"tool-1": {NativeIncarnation: "backend-1", FeedEpoch: "dial-1", TurnID: "turn-1", Kind: "commandExecution", StartSequence: 1}}, Children: map[string]CodexExecutionChild{"child-1": {NativeIncarnation: "backend-1", FeedEpoch: "dial-1", TurnID: "turn-1", ChildTurnID: "child-turn-1", Active: true}}, Decisions: map[string]CodexExecutionDecision{"request-1": {NativeIncarnation: "backend-1", FeedEpoch: "dial-1", TurnID: "turn-1", Kind: "question"}}}
+	return r
+}
+
+func TestExecutionCodexSchemaRoundTripAndBounds(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := codexExecutionFixture()
+	if err = s.SaveExecution(r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadExecution(r.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Codex.NativeIncarnation != r.Codex.NativeIncarnation || !got.Codex.Children["child-1"].Active || got.Codex.Decisions["request-1"].Kind != "question" || got.Codex.Items["tool-1"].Complete {
+		t.Fatal("Codex custody did not round-trip")
+	}
+	r.Codex.ThreadID = "foreign"
+	if err = s.SaveExecution(r); err == nil {
+		t.Fatal("contradictory conversation identity persisted")
+	}
+	r = codexExecutionFixture()
+	for i := 0; i < MaxExecutionActors; i++ {
+		r.Codex.Items[fmt.Sprintf("extra%d", i)] = CodexExecutionItem{NativeIncarnation: "backend-1", FeedEpoch: "dial-1", TurnID: "turn-1", Kind: "reasoning", StartSequence: 1}
+	}
+	if err = s.SaveExecution(r); err == nil {
+		t.Fatal("combined actor/tool/request cap exceeded")
+	}
+}
+
+func TestExecutionCodexSchemaRejectsAmbiguousNestedAuthority(t *testing.T) {
+	for _, scenario := range []string{"alias", "duplicate", "unknown"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, err := NewStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = s.SaveExecution(codexExecutionFixture()); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(s.root, "s1", "execution.json")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replacement := `"state":"active","State":"terminal"`
+			if scenario == "duplicate" {
+				replacement = `"state":"active","state":"terminal"`
+			}
+			if scenario == "unknown" {
+				replacement = `"state":"active","future_authority":true`
+			}
+			raw = []byte(strings.Replace(string(raw), `"state":"active"`, replacement, 1))
+			if err = os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.LoadExecution("s1"); err == nil {
+				t.Fatal("ambiguous Codex authority accepted")
+			}
+		})
+	}
+}
+
+func TestExecutionLegacyVersionRetainsHookCustody(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := executionFixture("s1")
+	r.Version = 1
+	if err = s.SaveExecution(r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadExecution("s1")
+	if err != nil || !got.Actors["child"].Active {
+		t.Fatalf("legacy hook custody lost during schema extension: %+v %v", got, err)
+	}
+	r = codexExecutionFixture()
+	r.Version = 1
+	if err = s.SaveExecution(r); err == nil {
+		t.Fatal("Codex authority smuggled into old schema")
+	}
+}

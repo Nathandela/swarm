@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"math"
 	"os"
@@ -16,6 +17,110 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 )
+
+func usageCodexGrant(account string) logins.Credential {
+	payload, _ := json.Marshal(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "https://api.openai.com/auth": map[string]string{"chatgpt_user_id": "user-" + account, "chatgpt_account_id": account}})
+	token := "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+	auth, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]string{"account_id": account, "access_token": token, "id_token": token, "refresh_token": "synthetic"}})
+	return logins.Credential{Auth: auth}
+}
+
+func enableCodexNativeGrantUsage(t *testing.T, f *loginFixture) {
+	t.Helper()
+	r, err := f.m.store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ownedLogin, err := f.m.store.Add(r.Revision, logins.ProviderCodex, "owned", usageCodexGrant("owned"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := f.m.store.BeginSwitch(r.Revision, logins.ProviderCodex, ownedLogin.ID, "fixture", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op.Phase = "stopping"
+	if err = f.m.store.SaveSwitch(op); err != nil {
+		t.Fatal(err)
+	}
+	op.Phase = "stopped"
+	if err = f.m.store.SaveSwitch(op); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.m.store.CaptureOutgoing(op.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.m.store.InstallIncoming(op.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.m.store.CommitSwitch(op.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.m.store.CompleteSwitch(op.ID); err != nil {
+		t.Fatal(err)
+	}
+	r, err = f.m.store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, login := range r.Logins {
+		if login.ID != ownedLogin.ID {
+			if _, err = f.m.store.Remove(r.Revision, login.ID); err != nil {
+				t.Fatal(err)
+			}
+			r, err = f.m.store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	f.first, f.second = ownedLogin, logins.Login{}
+	op, err = f.m.store.BeginCodexOwnershipMigration(r.Revision, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op.Phase = "stopping"
+	if err = f.m.store.SaveSwitch(op); err != nil {
+		t.Fatal(err)
+	}
+	op.Phase = "stopped"
+	if err = f.m.store.SaveSwitch(op); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.m.store.CaptureOutgoing(op.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.m.store.MigrateCodexOwnership(op.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.m.store.CommitSwitch(op.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.m.store.CompleteSwitch(op.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.runtime, err = f.m.store.Runtime(logins.ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = f.m.store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, login := range r.Logins {
+		if login.ID == f.first.ID {
+			f.first = login
+		}
+		if login.ID == f.second.ID {
+			f.second = login
+		}
+	}
+	for id, row := range f.rows {
+		runtime := f.runtime
+		row.LoginRuntime = &runtime
+		f.rows[id] = row
+	}
+}
 
 func usageView(t *testing.T, f *loginFixture) protocol.LoginView {
 	t.Helper()
@@ -91,6 +196,30 @@ func TestCodexUsageWeeklyEitherSlotAndNeverChangesRotation(t *testing.T) {
 		if usageView(t, f).Weekly.RemainingPercent != 0 {
 			t.Fatal("reply aliased mutable cache")
 		}
+	}
+}
+
+func TestCodexUsageAcceptsNativeGrantRuntime(t *testing.T) {
+	f := newLoginFixture(t)
+	enableCodexNativeGrantUsage(t, f)
+	if !f.runtime.ExternalAuth {
+		t.Fatal("fixture did not enable native-grant auth ownership")
+	}
+	now := time.Now()
+	f.m.observeCodexUsage("source-1", codexRateLimitsUpdated, usageFrame(23, 10080, now.Add(time.Hour), true), now)
+	if got := usageView(t, f).Weekly; got == nil || got.RemainingPercent != 77 {
+		t.Fatalf("native-grant usage was not recorded: %+v", got)
+	}
+
+	// Exercise the read-side runtime comparison with a fresh matching cache.
+	f.m.usage[loginProviderIndex(logins.ProviderCodex)] = loginUsageSnapshot{runtime: f.runtime, loginID: f.first.ID, credentialRevision: f.first.CredentialRevision, weekly: &protocol.LoginUsageWindow{RemainingPercent: 77, ObservedAt: now, ResetsAt: now.Add(time.Hour)}}
+	r, err := f.m.store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, weekly := f.m.loginUsage(r, f.first, now)
+	if weekly == nil || weekly.RemainingPercent != 77 {
+		t.Fatalf("native-grant cached usage was not read: %+v", weekly)
 	}
 }
 

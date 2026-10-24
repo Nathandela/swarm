@@ -46,7 +46,7 @@ func (m *loginManager) recordLoginUsage(meta persist.Meta, fiveHour, weekly *pro
 	}
 	p := r.Providers[meta.AgentType]
 	l, ok := loginByID(r, p.ActiveID)
-	want := logins.Runtime{Provider: meta.AgentType, Epoch: p.Epoch, Identity: l.Identity, Home: m.store.Home(meta.AgentType)}
+	want := logins.Runtime{Provider: meta.AgentType, Epoch: p.Epoch, Identity: l.Identity, Home: m.store.Home(meta.AgentType), ExternalAuth: p.AuthOwnerMode == logins.CodexNativeGrantMode}
 	if !ok || l.AuthState != logins.AuthReady || *meta.LoginRuntime != want {
 		return
 	}
@@ -73,7 +73,7 @@ func (m *loginManager) loginUsage(r logins.Registry, l logins.Login, now time.Ti
 	defer m.usageMu.Unlock()
 	s := m.usage[loginProviderIndex(l.Provider)]
 	p := r.Providers[l.Provider]
-	if p.ActiveID != l.ID || s.loginID != l.ID || s.credentialRevision != l.CredentialRevision || s.runtime != (logins.Runtime{Provider: l.Provider, Epoch: p.Epoch, Identity: l.Identity, Home: m.store.Home(l.Provider)}) {
+	if p.ActiveID != l.ID || s.loginID != l.ID || s.credentialRevision != l.CredentialRevision || s.runtime != (logins.Runtime{Provider: l.Provider, Epoch: p.Epoch, Identity: l.Identity, Home: m.store.Home(l.Provider), ExternalAuth: p.AuthOwnerMode == logins.CodexNativeGrantMode}) {
 		return nil, nil
 	}
 	if l.Provider == logins.ProviderClaude && s.fiveHour.Fresh(now) {

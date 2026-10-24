@@ -94,3 +94,24 @@ func TestCodexAccessUsesExactNativeTokenKeys(t *testing.T) {
 		t.Fatal("case alias replaced the native expired access token")
 	}
 }
+
+func TestCodexAccessAllowsNativeRefreshToKeepExpiredIDToken(t *testing.T) {
+	now := time.Unix(2000000000, 0)
+	var doc map[string]any
+	_ = json.Unmarshal(grantAuth("u", "a", now.Add(-time.Hour).Unix()), &doc)
+	// Native persist_tokens keeps the old ID token when OAuth omits a replacement.
+	doc["tokens"].(map[string]any)["access_token"] = grantJWT("u", "a", now.Add(time.Hour).Unix())
+	raw, _ := json.Marshal(doc)
+	owner, err := CodexGrantOwner(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = CodexAccess(raw, owner, now); err != nil {
+		t.Fatalf("native refreshed access rejected: %v", err)
+	}
+	doc["tokens"].(map[string]any)["id_token"] = grantJWT("foreign", "a", now.Add(-time.Hour).Unix())
+	raw, _ = json.Marshal(doc)
+	if _, err = CodexAccess(raw, owner, now); err == nil {
+		t.Fatal("expired ID token lost its owner constraint")
+	}
+}

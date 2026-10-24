@@ -9,13 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-const ExecutionVersion = 1
+const ExecutionVersion = 2
 const MaxExecutionActors = 128
 const MaxExecutionBytes = 64 << 10
 const MaxExecutionRecords = 1024
@@ -23,6 +24,7 @@ const MaxExecutionRecords = 1024
 // ExecutionRecord holds control evidence, never native message bodies or credentials.
 // Empty Incomplete means complete observation, not permission to perform an effect.
 type ExecutionRecord struct {
+	Codex               *CodexExecution           `json:"codex,omitempty"`
 	PendingCallbacks    map[string]string         `json:"pending_callbacks"`
 	AnonymousActors     int                       `json:"anonymous_actors"`
 	UnknownActors       bool                      `json:"unknown_actors"`
@@ -50,6 +52,14 @@ type ExecutionActor struct {
 }
 
 func (r ExecutionRecord) Validate() error {
+	if r.Codex != nil {
+		if err := r.Codex.Validate(); err != nil {
+			return err
+		}
+	}
+	if r.Codex != nil && (r.Codex.ThreadID != r.ConversationID || r.Codex.TurnID != r.TurnID || r.Codex.OwnerRevision > r.OwnerRevision) {
+		return fmt.Errorf("persist: inconsistent Codex execution ownership")
+	}
 	if len(r.PendingCallbacks) > MaxExecutionActors {
 		return fmt.Errorf("persist: callback custody capacity")
 	}
@@ -66,7 +76,7 @@ func (r ExecutionRecord) Validate() error {
 	if r.AnonymousActors < 0 || r.AnonymousActors > MaxExecutionActors {
 		return fmt.Errorf("persist: invalid anonymous actor bound")
 	}
-	if r.Version != ExecutionVersion || !ValidID(r.SessionID) || r.Incarnation == "" || len(r.Incarnation) > 256 || len(r.ConversationID) > 256 || len(r.TurnID) > 256 || len(r.InputActor) > 256 || len(r.Incomplete) > 128 || len(r.Actors) > MaxExecutionActors {
+	if (r.Version != ExecutionVersion && r.Version != 1) || (r.Version == 1 && r.Codex != nil) || !ValidID(r.SessionID) || r.Incarnation == "" || len(r.Incarnation) > 256 || len(r.ConversationID) > 256 || len(r.TurnID) > 256 || len(r.InputActor) > 256 || len(r.Incomplete) > 128 || len(r.Actors) > MaxExecutionActors {
 		return fmt.Errorf("persist: invalid execution identity or bounds")
 	}
 	if r.MainTurn != status.TurnActive && r.MainTurn != status.TurnIdle && r.MainTurn != status.TurnUnknown {
@@ -78,6 +88,112 @@ func (r ExecutionRecord) Validate() error {
 	for id, a := range r.Actors {
 		if id == "" || len(id) > 256 || a.Sequence == 0 || a.StartSequence > a.Sequence || (a.Active && a.StartSequence == 0 && r.Incomplete == "") {
 			return fmt.Errorf("persist: invalid execution actor")
+		}
+	}
+	return nil
+}
+
+// CodexExecution retains one observed native turn and independently live custody.
+// No message, command, result body or credential belongs in these records.
+type CodexExecution struct {
+	NativeIncarnation  string                            `json:"native_incarnation"`
+	FeedEpoch          string                            `json:"feed_epoch"`
+	ThreadID           string                            `json:"thread_id"`
+	Sequence           uint64                            `json:"sequence"`
+	LastEventHash      string                            `json:"last_event_hash"`
+	TurnID             string                            `json:"turn_id"`
+	OwnerRevision      uint64                            `json:"owner_revision"`
+	State              CodexTurnState                    `json:"state"`
+	Cause              CodexTerminalCause                `json:"cause"`
+	TerminalSequence   uint64                            `json:"terminal_sequence"`
+	Incomplete         string                            `json:"incomplete"`
+	UnknownCustody     bool                              `json:"unknown_custody"`
+	Denied             string                            `json:"denied"`
+	UserSequence       uint64                            `json:"user_sequence"`
+	CommentarySequence uint64                            `json:"commentary_sequence"`
+	ToolResultSequence uint64                            `json:"tool_result_sequence"`
+	LastItemSequence   uint64                            `json:"last_item_sequence"`
+	Items              map[string]CodexExecutionItem     `json:"items"`
+	Children           map[string]CodexExecutionChild    `json:"children"`
+	Decisions          map[string]CodexExecutionDecision `json:"decisions"`
+}
+
+type CodexTurnState string
+type CodexItemKind string
+type CodexAssistantPhase string
+type CodexTerminalCause string
+type CodexDecisionKind string
+
+type CodexExecutionItem struct {
+	NativeIncarnation string              `json:"native_incarnation"`
+	FeedEpoch         string              `json:"feed_epoch"`
+	TurnID            string              `json:"turn_id"`
+	Kind              CodexItemKind       `json:"kind"`
+	Phase             CodexAssistantPhase `json:"phase"`
+	StartSequence     uint64              `json:"start_sequence"`
+	Complete          bool                `json:"complete"`
+}
+type CodexExecutionChild struct {
+	NativeIncarnation string `json:"native_incarnation"`
+	FeedEpoch         string `json:"feed_epoch"`
+	TurnID            string `json:"turn_id"`
+	ChildTurnID       string `json:"child_turn_id"`
+	Active            bool   `json:"active"`
+}
+type CodexExecutionDecision struct {
+	NativeIncarnation string            `json:"native_incarnation"`
+	FeedEpoch         string            `json:"feed_epoch"`
+	TurnID            string            `json:"turn_id"`
+	Kind              CodexDecisionKind `json:"kind"`
+}
+
+func executionID(id string) bool { return id != "" && len(id) <= 256 }
+func (c CodexExecution) Validate() error {
+	if !executionID(c.NativeIncarnation) || !executionID(c.FeedEpoch) || !executionID(c.ThreadID) || len(c.TurnID) > 256 || len(c.Incomplete) > 128 || len(c.Denied) > 128 || len(c.Items)+len(c.Children)+len(c.Decisions) > MaxExecutionActors {
+		return fmt.Errorf("persist: invalid Codex execution identity or bounds")
+	}
+	if c.State != "unobserved" && c.State != "active" && c.State != "terminal" {
+		return fmt.Errorf("persist: invalid Codex turn state")
+	}
+	if c.Cause != "" && c.Cause != "quota" && c.Cause != "completed" && c.Cause != "cancelled" && c.Cause != "failed" && c.Cause != "unknown" {
+		return fmt.Errorf("persist: invalid Codex terminal cause")
+	}
+	if c.Sequence == 0 {
+		if c.LastEventHash != "" {
+			return fmt.Errorf("persist: invalid Codex initial receipt")
+		}
+	} else {
+		raw, err := hex.DecodeString(c.LastEventHash)
+		if err != nil || len(raw) != 32 || hex.EncodeToString(raw) != c.LastEventHash {
+			return fmt.Errorf("persist: invalid Codex event receipt")
+		}
+	}
+	if c.TerminalSequence > c.Sequence || c.UserSequence > c.Sequence || c.CommentarySequence > c.Sequence || c.ToolResultSequence > c.Sequence || c.LastItemSequence > c.Sequence {
+		return fmt.Errorf("persist: invalid Codex event position")
+	}
+	for id, item := range c.Items {
+		if !executionID(id) || !executionID(item.TurnID) || !executionID(item.NativeIncarnation) || !executionID(item.FeedEpoch) || item.StartSequence == 0 || (item.FeedEpoch == c.FeedEpoch && item.NativeIncarnation == c.NativeIncarnation && item.StartSequence > c.Sequence) {
+			return fmt.Errorf("persist: invalid Codex item identity")
+		}
+		switch item.Kind {
+		case "userMessage", "agentMessage", "commandExecution", "contextCompaction", "reasoning", "plan", "unknown":
+		default:
+			return fmt.Errorf("persist: invalid Codex item kind")
+		}
+		switch item.Phase {
+		case "", "commentary", "final_answer", "unknown":
+		default:
+			return fmt.Errorf("persist: invalid Codex assistant phase")
+		}
+	}
+	for id, child := range c.Children {
+		if !executionID(id) || !executionID(child.TurnID) || !executionID(child.ChildTurnID) || !executionID(child.NativeIncarnation) || !executionID(child.FeedEpoch) {
+			return fmt.Errorf("persist: invalid Codex child identity")
+		}
+	}
+	for id, decision := range c.Decisions {
+		if !executionID(id) || !executionID(decision.TurnID) || !executionID(decision.NativeIncarnation) || !executionID(decision.FeedEpoch) || (decision.Kind != "approval" && decision.Kind != "question") {
+			return fmt.Errorf("persist: invalid Codex decision identity")
 		}
 	}
 	return nil
@@ -464,8 +580,8 @@ func executionJSON(raw []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	invalid := fmt.Errorf("persist: ambiguous execution JSON")
-	var value func(int) error
-	value = func(depth int) error {
+	var value func(int, string) error
+	value = func(depth int, path string) error {
 		if depth > 8 {
 			return invalid
 		}
@@ -487,20 +603,34 @@ func executionJSON(raw []byte) error {
 					return invalid
 				}
 				seen[name] = true
-				if depth == 0 {
-					switch name {
-					case "version", "session_id", "incarnation", "conversation_id", "turn_id", "owner_revision", "incomplete", "turn_sequence", "interaction_sequence", "child_sequence", "typed_sequence", "main_turn", "interaction", "input_actor", "actors", "anonymous_actors", "unknown_actors", "pending_callbacks":
-					default:
-						return invalid
-					}
-				} else if depth == 2 {
-					switch name {
-					case "sequence", "start_sequence", "active":
-					default:
-						return invalid
-					}
+				allowed := ""
+				switch path {
+				case "":
+					allowed = "version session_id incarnation conversation_id turn_id owner_revision incomplete turn_sequence interaction_sequence child_sequence typed_sequence main_turn interaction input_actor actors anonymous_actors unknown_actors pending_callbacks codex"
+				case "actors/*":
+					allowed = "sequence start_sequence active"
+				case "codex":
+					allowed = "native_incarnation feed_epoch thread_id sequence last_event_hash turn_id owner_revision state cause terminal_sequence incomplete unknown_custody denied user_sequence commentary_sequence tool_result_sequence last_item_sequence items children decisions"
+				case "codex/items/*":
+					allowed = "turn_id kind phase start_sequence complete native_incarnation feed_epoch"
+				case "codex/children/*":
+					allowed = "turn_id child_turn_id active native_incarnation feed_epoch"
+				case "codex/decisions/*":
+					allowed = "turn_id kind native_incarnation feed_epoch"
 				}
-				if err = value(depth + 1); err != nil {
+				if allowed != "" && !strings.Contains(" "+allowed+" ", " "+name+" ") {
+					return invalid
+				}
+				next := name
+				if path != "" {
+					next = path + "/" + name
+				}
+				switch path {
+				case "actors", "codex/items", "codex/children", "codex/decisions":
+					next = path + "/*"
+				}
+
+				if err = value(depth+1, next); err != nil {
 					return err
 				}
 			}
@@ -509,21 +639,13 @@ func executionJSON(raw []byte) error {
 				return invalid
 			}
 		case '[':
-			for decoder.More() {
-				if err = value(depth + 1); err != nil {
-					return err
-				}
-			}
-			end, err := decoder.Token()
-			if err != nil || end != json.Delim(']') {
-				return invalid
-			}
+			return invalid
 		default:
 			return invalid
 		}
 		return nil
 	}
-	if err := value(0); err != nil {
+	if err := value(0, ""); err != nil {
 		return err
 	}
 	if _, err := decoder.Token(); err != io.EOF {
@@ -591,6 +713,21 @@ func (s *Store) RetireExecution(id, incarnation string) error {
 		}
 		if len(record.PendingCallbacks) > 0 || record.UnknownActors || record.AnonymousActors > 0 || record.MainTurn != status.TurnIdle || record.Interaction != status.InteractionNone {
 			return fmt.Errorf("persist: unresolved execution custody")
+		}
+		if c := record.Codex; c != nil {
+			if c.UnknownCustody || c.State == "active" || len(c.Decisions) > 0 {
+				return fmt.Errorf("persist: unresolved Codex execution custody")
+			}
+			for _, item := range c.Items {
+				if !item.Complete {
+					return fmt.Errorf("persist: unresolved Codex tool custody")
+				}
+			}
+			for _, child := range c.Children {
+				if child.Active {
+					return fmt.Errorf("persist: unresolved Codex child custody")
+				}
+			}
 		}
 		for _, actor := range record.Actors {
 			if actor.Active {

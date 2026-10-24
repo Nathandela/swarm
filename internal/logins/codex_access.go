@@ -24,29 +24,30 @@ func (AccessCredential) Format(state fmt.State, verb rune) {
 // CodexGrantOwner preserves the exact native user/workspace pair separately
 // from CodexIdentity, whose legacy workspace digest remains stable.
 func CodexGrantOwner(raw []byte) (string, error) {
-	_, owner, _, err := codexAccessProof(raw)
+	_, owner, err := codexAccessProof(raw)
 	return owner, err
 }
 
 // CodexAccess checks native-produced token claims, not JWT signatures. Native
 // OAuth remains the authority; these checks prevent stale/foreign distribution.
 func CodexAccess(raw []byte, expectedOwner string, now time.Time) (AccessCredential, error) {
-	access, owner, idExpiry, err := codexAccessProof(raw)
+	access, owner, err := codexAccessProof(raw)
 	if err != nil {
 		return AccessCredential{}, err
 	}
 	if !validDigest(expectedOwner) || owner != expectedOwner {
 		return AccessCredential{}, ErrIdentityChanged
 	}
-	if !now.Before(access.ExpiresAt) || !now.Before(idExpiry) {
+	// Native renewal may retain an expired ID token; only access authorizes requests.
+	if !now.Before(access.ExpiresAt) {
 		return AccessCredential{}, ErrInvalidCredentials
 	}
 	return access, nil
 }
 
-func codexAccessProof(raw []byte) (AccessCredential, string, time.Time, error) {
-	bad := func() (AccessCredential, string, time.Time, error) {
-		return AccessCredential{}, "", time.Time{}, ErrInvalidCredentials
+func codexAccessProof(raw []byte) (AccessCredential, string, error) {
+	bad := func() (AccessCredential, string, error) {
+		return AccessCredential{}, "", ErrInvalidCredentials
 	}
 	if _, err := CodexIdentity(raw); err != nil {
 		return bad()
@@ -67,11 +68,11 @@ func codexAccessProof(raw []byte) (AccessCredential, string, time.Time, error) {
 	if err != nil {
 		return bad()
 	}
-	idOwner, idAccount, idExpiry, err := codexTokenClaims(idToken)
+	idOwner, idAccount, _, err := codexTokenClaims(idToken)
 	if err != nil || accessOwner != idOwner || accessAccount != idAccount || accessAccount != account {
 		return bad()
 	}
-	return AccessCredential{Token: accessToken, AccountID: accessAccount, ExpiresAt: accessExpiry}, accessOwner, idExpiry, nil
+	return AccessCredential{Token: accessToken, AccountID: accessAccount, ExpiresAt: accessExpiry}, accessOwner, nil
 }
 func codexTokenClaims(token string) (string, string, time.Time, error) {
 	parts := strings.Split(token, ".")

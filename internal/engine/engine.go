@@ -144,6 +144,7 @@ type Engine struct {
 // session is the engine's per-session state and the one place a session's status
 // lives (G6 single writer).
 type session struct {
+	codexExecution       *persist.CodexExecution
 	executionEnabled     bool
 	executionIdentity    ExecutionIdentity
 	executionIncomplete  string
