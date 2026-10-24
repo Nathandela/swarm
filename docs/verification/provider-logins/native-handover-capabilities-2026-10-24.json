@@ -2798,5 +2798,60 @@
       "Native successful account API admission does not assert that every already-admitted model request uses the newly selected account.",
       "Production refresh-worker, birth, restore, lost-acknowledgement and real user-config integration remain required."
     ]
+  },
+  "codex_0164_refresh_worker": {
+    "scope": "Actual Swarm subprocess refresh worker with synthetic native grants on Linux; exact auth-only version gate qualified",
+    "run": {
+      "unit": "swarm-native-refresh-0164-D12sWBjk",
+      "private_root": "/run/user/1000/swarm-native-codex0164.KRaHZybO/worker-qualification.D12sWBjk",
+      "remote_stage": "/run/user/1000/swarm-native-codex0164.KRaHZybO",
+      "native_version": "0.164.0",
+      "native_sha256": "b93f6811d3f653f0fb83be4050d857fb9abbb111dfa2ce160563327daff7f306",
+      "swarm_sha256": "61a56f832f26a1a8cf751e5a9a601a752c9490637cc8222e09222565cd07ed36",
+      "test_sha256": "24bbe6b963685196af36b708ecf9895d2cc865f7192e53f6ed7559e16ca6b9ab",
+      "source": {
+        "source_commit": "928f0ab8ea59a3ba7946c9e82edf1db99dac1578",
+        "source_directory": "/private/tmp/swarm-refresh0164-build-mfubro8h",
+        "overlay_sha256": {
+          "internal/logins/codex_aux.go": "9bf32c1501f01b7d1eba25893eaf753e79ccc4d07fd62a3e37de5636adf6943e",
+          "internal/logins/codex_aux_version_test.go": "8aee69ed90d90fa5d7952d3a9937fa6d1e6de26b693b9575c08dad282b3bcc6a",
+          "internal/loginworker/refresh_owner.go": "436cc907bbdb88aff5c156ee594fe4c67122392be2afc50aee7568b05be71c7f",
+          "internal/loginworker/refresh_version_test.go": "7b95d6ed9579b77390dbf9a60b2571f53a72f67829805aecbd39cb5e8855230b",
+          "internal/loginworker/refresh_native_linux_test.go": "7209384459d49c11a2a3dfbb6c4732eb4c989dcad395ee41d8c241da49769ffa"
+        },
+        "archived_paths": [
+          "go.mod",
+          "go.sum",
+          "cmd",
+          "internal"
+        ]
+      },
+      "private_tmpfs": false,
+      "disk_isolation": "logical per-worker32MiB/2048entries; no aggregateOSquota claim",
+      "exit_code": 0,
+      "elapsed_seconds": 6.129,
+      "receipt_sha256": "aafda81e8373bec3150df3e3804a2419d6a8e3fc3d6e651b2c2b7e767a3ece48"
+    },
+    "asserted_outcomes": [
+      "scenario=two_cycles cycle=1 phase=ready writers_stopped=true physical_socket_removed=true generation_changed=true",
+      "scenario=two_cycles cycle=2 phase=ready writers_stopped=true physical_socket_removed=true generation_changed=true",
+      "scenario=expired cycle=1 phase=ready writers_stopped=true physical_socket_removed=true generation_changed=true",
+      "scenario=partial_renewal cycle=1 phase=ready writers_stopped=true physical_socket_removed=true generation_changed=true",
+      "scenario=revoked cycle=1 phase=failed writers_stopped=true physical_socket_removed=true generation_changed=false",
+      "scenario=worker_killed native_auto_contained=true custody_retained_until_stop=false recovered_after_observed_stop=true"
+    ],
+    "checks": [
+      "Two successive native grant rotations and same-grant writer exclusion",
+      "Expired grant renewal",
+      "Optional omitted ID token preserves the prior identity token",
+      "Revoked native OAuth preserves auth bytes and fails readiness",
+      "Worker SIGKILL contains native descendants; grant becomes available only after positive stop proof",
+      "Physical native socket alias and marker-owned scratch retire after stop"
+    ],
+    "limitations": [
+      "Snapshot build contains commit928f0ab8 plus the five exact file overlays recorded above; concurrent uncommitted branch work was excluded.",
+      "Direct native binary through a private test transport wrapper; production npm resolution is separately under review.",
+      "This supports 0.164 renewal only; execution and migration version qualification remain separate."
+    ]
   }
 }

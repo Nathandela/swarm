@@ -54,7 +54,7 @@ type RefreshProgress struct {
 }
 
 func validateRefresh(c RefreshConfig) error {
-	if !validID(c.LaunchNonce) || !validID(c.LoginID) || c.Generation == 0 || c.NativeVersion != "0.163.0" {
+	if !validID(c.LaunchNonce) || !validID(c.LoginID) || c.Generation == 0 || !logins.SupportsCodexGrantRefresh(c.NativeVersion) {
 		return ErrUnsupported
 	}
 	if c.Deadline.IsZero() || !c.Deadline.After(time.Now()) || c.Deadline.After(time.Now().Add(maxRefreshDeadline+time.Second)) {

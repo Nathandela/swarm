@@ -36,6 +36,13 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 85*time.Second)
 	defer cancel()
 	codex := nativePinnedBinary(t, "SWARM_TEST_CODEX_BINARY", "SWARM_TEST_CODEX_SHA256")
+	version := os.Getenv("SWARM_TEST_CODEX_VERSION")
+	if version == "" {
+		version = "0.163.0"
+	}
+	if !logins.SupportsCodexGrantRefresh(version) {
+		t.Fatal("exact qualified native version required")
+	}
 	swarm := nativePinnedBinary(t, "SWARM_TEST_SWARM_BINARY", "SWARM_TEST_SWARM_SHA256")
 	group := os.Getenv("SWARM_TEST_NATIVE_CGROUP")
 	cgroup, err := os.ReadFile("/proc/self/cgroup")
@@ -58,7 +65,7 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 	if len(source) != 40 {
 		t.Fatal("exact source commit required for receipt")
 	}
-	t.Logf("native=0.163.0 native_sha256=%s swarm_sha256=%s source_commit=%s cgroup=%s", os.Getenv("SWARM_TEST_CODEX_SHA256"), os.Getenv("SWARM_TEST_SWARM_SHA256"), source, group)
+	t.Logf("native=%s native_sha256=%s swarm_sha256=%s source_commit=%s cgroup=%s", version, os.Getenv("SWARM_TEST_CODEX_SHA256"), os.Getenv("SWARM_TEST_SWARM_SHA256"), source, group)
 	for _, scenario := range []string{"two_cycles", "expired", "partial_renewal", "revoked", "worker_killed"} {
 		t.Run(scenario, func(t *testing.T) {
 			dir, err := os.MkdirTemp(root, "worker-")
@@ -106,7 +113,7 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 			for cycle := 1; cycle <= cycles; cycle++ {
 				oauth.blockNext.Store(true)
 				nativePinnedBinary(t, "SWARM_TEST_CODEX_BINARY", "SWARM_TEST_CODEX_SHA256")
-				config := RefreshConfig{StateRoot: dir, LoginID: id, Generation: uint64(cycle), NativePath: launcher, NativeVersion: "0.163.0", NativeFingerprint: fingerprint, Deadline: time.Now().Add(12 * time.Second)}
+				config := RefreshConfig{StateRoot: dir, LoginID: id, Generation: uint64(cycle), NativePath: launcher, NativeVersion: version, NativeFingerprint: fingerprint, Deadline: time.Now().Add(12 * time.Second)}
 				ref, err := StartCodexRefresh(ctx, swarm, config)
 				if err != nil {
 					t.Fatalf("start actual refresh worker: %v", err)

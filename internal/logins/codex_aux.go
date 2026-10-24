@@ -21,6 +21,12 @@ type codexAuxOwnership struct {
 	NativeVersion string `json:"native_version"`
 }
 
+// SupportsCodexGrantRefresh covers native renewal and its scratch layout, not
+// execution-state or continuation qualification.
+func SupportsCodexGrantRefresh(version string) bool {
+	return version == "0.163.0" || version == "0.164.0"
+}
+
 func grantBaseFile(name string) bool {
 	switch name {
 	case "auth.json", "credential.json", ".grant-lock", ".grant-owner", codexAuxFile, grantReloginFile:
@@ -53,7 +59,7 @@ func (l *GrantLease) PrepareAuxiliary(version string) error {
 	if l.owner == "" {
 		return ErrIneligible
 	}
-	if version != "0.163.0" {
+	if !SupportsCodexGrantRefresh(version) {
 		return ErrIneligible
 	}
 	if e := l.ProveStopped(); e != nil {
@@ -111,7 +117,7 @@ func (l *GrantLease) checkAuxiliary(quota bool) error {
 		return e
 	}
 	var marker codexAuxOwnership
-	if validateJSON(raw) != nil || json.Unmarshal(raw, &marker) != nil || marker.Version != 1 || marker.NativeVersion != "0.163.0" {
+	if validateJSON(raw) != nil || json.Unmarshal(raw, &marker) != nil || marker.Version != 1 || !SupportsCodexGrantRefresh(marker.NativeVersion) {
 		return ErrIneligible
 	}
 	var entries int
