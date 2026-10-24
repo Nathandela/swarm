@@ -716,10 +716,16 @@ func (s *HookSpool) compact(foldSeq uint64, checkPath func() error) (changed boo
 	if err != nil {
 		return changed, fmt.Errorf("shim: create hook spool compact temp: %w", err)
 	}
+	// Keep the replacement inode alive through rename/reopen so inode reuse cannot
+	// make a replaced temporary pathname pass the physical identity checks.
+	defer func() {
+		if closeErr := tmp.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("shim: close hook spool compact temp: %w", closeErr))
+		}
+	}()
 	tmpName := tmp.Name()
 	temporary, err := tmp.Stat()
 	if err != nil {
-		_ = tmp.Close()
 		return false, err
 	}
 	defer func() {
@@ -731,24 +737,17 @@ func (s *HookSpool) compact(foldSeq uint64, checkPath func() error) (changed boo
 		}
 	}()
 	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
 		return changed, fmt.Errorf("shim: chmod hook spool compact temp: %w", err)
 	}
 	if _, err := tmp.Write(tail); err != nil {
-		_ = tmp.Close()
 		return changed, fmt.Errorf("shim: write hook spool compact temp: %w", err)
 	}
 	if err := hookCompactSync(tmp); err != nil {
-		_ = tmp.Close()
 		return changed, fmt.Errorf("shim: fsync hook spool compact temp: %w", err)
 	}
 	replacement, err := tmp.Stat()
 	if err != nil {
-		_ = tmp.Close()
 		return false, err
-	}
-	if err := tmp.Close(); err != nil {
-		return changed, fmt.Errorf("shim: close hook spool compact temp: %w", err)
 	}
 	if testHookBeforeCompactRename != nil {
 		testHookBeforeCompactRename()

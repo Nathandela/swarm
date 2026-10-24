@@ -27,7 +27,11 @@ func testDiskProducerCertificate(t *testing.T, path string) string {
 
 func producerFixture(t *testing.T) (*HookSpool, string, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), HookSpoolFile)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, HookSpoolFile)
 	s, err := OpenHookSpoolProducer(path, 0)
 	if err != nil {
 		t.Fatal(err)
