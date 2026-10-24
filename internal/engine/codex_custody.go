@@ -8,7 +8,7 @@ func codexCustodyTurn(s *session) status.Turn {
 	if c == nil || s.executionIncomplete == "persistence_failure" {
 		return status.TurnUnknown
 	}
-	if c.UnknownCustody || c.Incomplete != "" || c.State == "unobserved" || len(c.Stimuli) > 0 {
+	if c.UnknownCustody || c.Incomplete != "" || c.State == "unobserved" || len(c.Stimuli) > 0 || len(c.HostInputs) > 0 {
 		return status.TurnUnknown
 	}
 	active := c.State == "active" || len(c.Items) > 0

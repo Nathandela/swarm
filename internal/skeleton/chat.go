@@ -789,19 +789,17 @@ func (d *Daemon) resolveMessageSink(local, session string) (messageSink, protoco
 var errComposerStopped = errors.New("composer send superseded by Stop")
 
 func (d *Daemon) deliverComposerText(local string, lane *composerLane, admittedBarrier uint64, sink messageSink, active bool, nativeTurn, text, clientRef string, begin func() error) (string, error) {
-	originalBegin := begin
-	begin = func() error {
-		if err := beginComposerDelivery(originalBegin); err != nil {
-			return err
-		}
-		return d.observeExecutionOwnerWrite(local)
-	}
 	if lane.barrierChanged(admittedBarrier) {
 		return "", errComposerStopped
 	}
 	if sink.backend == nil {
 		return "", d.injectComposerTextTransactional(
-			local, sink.keystrok.ComposerKeys(text), lane, admittedBarrier, begin)
+			local, sink.keystrok.ComposerKeys(text), lane, admittedBarrier, func() error {
+				if err := beginComposerDelivery(begin); err != nil {
+					return err
+				}
+				return d.observeExecutionOwnerWrite(local)
+			})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
 	defer cancel()
@@ -816,29 +814,19 @@ func (d *Daemon) deliverComposerText(local string, lane *composerLane, admittedB
 				"nothing was sent", local)
 	}
 	if !active {
-		var result struct {
-			Turn struct {
-				ID string `json:"id"`
-			} `json:"turn"`
-		}
-		if err := callComposerBackendAtWriteBoundary(ctx, local, lane, admittedBarrier,
-			sink.backend.conn, "turn/start", map[string]any{
-				"threadId":            sink.backend.threadID,
-				"clientUserMessageId": clientRef,
-				// `input` is an ARRAY of UserInput. Passing an object yields
-				// {"code":-32600,"message":"Invalid request: invalid type: map, expected a
-				// sequence"} (RECORDED: errors-observed.json).
-				"input": input,
-			}, &result, begin); err != nil {
+		native, err := d.callComposerHostInput(ctx, local, lane, admittedBarrier, sink.backend, "turn/start", map[string]any{
+			"threadId": sink.backend.threadID, "clientUserMessageId": clientRef, "input": input,
+		}, "", clientRef, begin, nil)
+		if err != nil {
 			return "", classifyComposerBackendError(err)
 		}
-		if result.Turn.ID == "" {
+		if native == "" {
 			return "", fmt.Errorf("%w: session %q turn/start returned no native turn id; a queued follow-up cannot be steered safely", protocol.ErrComposerOutcomeUnknown, local)
 		}
-		return result.Turn.ID, nil
+		return native, nil
 	}
-	err := callComposerBackendAtWriteBoundary(ctx, local, lane, admittedBarrier,
-		sink.backend.conn, "turn/steer", map[string]any{
+	_, err := d.callComposerHostInput(ctx, local, lane, admittedBarrier,
+		sink.backend, "turn/steer", map[string]any{
 			"threadId":            sink.backend.threadID,
 			"clientUserMessageId": clientRef,
 			// THE CLI'S OWN TURN ID, never the daemon's. `expectedTurnId` is the app-server's
@@ -847,7 +835,7 @@ func (d *Daemon) deliverComposerText(local string, lane *composerLane, admittedB
 			// newTurnID). The two are different namespaces, and R7 round 1 sent the wrong one.
 			"expectedTurnId": nativeTurn,
 			"input":          input,
-		}, nil, begin)
+		}, nativeTurn, clientRef, begin, nil)
 	if err == nil {
 		return "", nil
 	}
@@ -877,36 +865,31 @@ func (d *Daemon) deliverComposerText(local string, lane *composerLane, admittedB
 		return "", errComposerStopped
 	}
 	if current != "" && latestNative != "" && latestNative != nativeTurn {
-		err := callComposerBackendAtWriteBoundary(ctx, local, lane, admittedBarrier,
-			sink.backend.conn, "turn/steer", map[string]any{
+		_, err := d.callComposerHostInput(ctx, local, lane, admittedBarrier,
+			sink.backend, "turn/steer", map[string]any{
 				"threadId": sink.backend.threadID, "clientUserMessageId": clientRef,
 				"expectedTurnId": latestNative, "input": input,
-			}, nil, func() error { return d.observeExecutionOwnerWrite(local) })
+			}, latestNative, clientRef, nil, nil)
 		return "", classifyComposerBackendError(err)
 	}
-	var result struct {
-		Turn struct {
-			ID string `json:"id"`
-		} `json:"turn"`
-	}
-	if err := callComposerBackendAtWriteBoundaryPrepared(ctx, local, lane, admittedBarrier,
-		sink.backend.conn, "turn/start", map[string]any{
-			"threadId": sink.backend.threadID, "clientUserMessageId": clientRef, "input": input,
-		}, &result, func() error { return d.observeExecutionOwnerWrite(local) }, func() {
-			// The typed no-active-turn steer already proved this daemon turn is dead. Publish
-			// that fact atomically with the replacement request write so Stop can refuse the
-			// obsolete target without waiting for the reply that carries the new native id.
-			if current != "" {
-				lane.supersededTurn = current
-			}
-		}); err != nil {
+	native, err := d.callComposerHostInput(ctx, local, lane, admittedBarrier, sink.backend, "turn/start", map[string]any{
+		"threadId": sink.backend.threadID, "clientUserMessageId": clientRef, "input": input,
+	}, "", clientRef, nil, func() {
+		// The typed no-active-turn steer already proved this daemon turn is dead. Publish
+		// that fact atomically with the replacement request write so Stop can refuse the
+		// obsolete target without waiting for the reply that carries the new native id.
+		if current != "" {
+			lane.supersededTurn = current
+		}
+	})
+	if err != nil {
 		return "", classifyComposerBackendError(err)
 	}
-	if result.Turn.ID == "" {
+	if native == "" {
 		return "", fmt.Errorf("%w: session %q retry turn/start returned no native turn id", protocol.ErrComposerOutcomeUnknown, local)
 	}
 	d.withComposerInteractionState(lane, func() {
-		lane.reservedNativeTurn = result.Turn.ID
+		lane.reservedNativeTurn = native
 		lane.closedAtReservation = closed
 		lane.supersededTurn = current
 	})
@@ -917,12 +900,7 @@ type backendWriteBoundary interface {
 	CallAtWriteBoundary(ctx context.Context, method string, params, out any, beforeWrite func() error, afterWrite func()) error
 }
 
-func callComposerBackendAtWriteBoundary(ctx context.Context, local string, lane *composerLane, admittedBarrier uint64, conn backendConn, method string, params, out any, begin func() error) error {
-	return callComposerBackendAtWriteBoundaryPrepared(ctx, local, lane, admittedBarrier,
-		conn, method, params, out, begin, nil)
-}
-
-func callComposerBackendAtWriteBoundaryPrepared(ctx context.Context, local string, lane *composerLane, admittedBarrier uint64, conn backendConn, method string, params, out any, begin func() error, prepare func()) error {
+func callComposerBackendAtWriteBoundaryPrepared(ctx context.Context, local string, lane *composerLane, admittedBarrier uint64, conn backendConn, method string, params, out any, begin func() error, prepare func(), release func()) error {
 	beforeWrite := func() error {
 		lane.mu.Lock()
 		if lane.barrier != admittedBarrier {
@@ -930,6 +908,9 @@ func callComposerBackendAtWriteBoundaryPrepared(ctx context.Context, local strin
 			return errComposerStopped
 		}
 		if err := beginComposerDelivery(begin); err != nil {
+			if release != nil {
+				release()
+			}
 			lane.mu.Unlock()
 			return err
 		}
@@ -945,6 +926,9 @@ func callComposerBackendAtWriteBoundaryPrepared(ctx context.Context, local strin
 	}
 	if bounded, ok := conn.(backendWriteBoundary); ok {
 		return bounded.CallAtWriteBoundary(ctx, method, params, out, beforeWrite, func() {
+			if release != nil {
+				release()
+			}
 			lane.mu.Unlock()
 		})
 	}
@@ -953,6 +937,9 @@ func callComposerBackendAtWriteBoundaryPrepared(ctx context.Context, local strin
 	// here rather than holding the lane for an opaque implementation's whole reply wait.
 	if err := beforeWrite(); err != nil {
 		return err
+	}
+	if release != nil {
+		release()
 	}
 	lane.mu.Unlock()
 	return conn.Call(ctx, method, params, out)

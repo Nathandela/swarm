@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	"github.com/Nathandela/swarm/internal/persist"
 )
@@ -59,6 +60,7 @@ type CodexFeedIdentity struct {
 // a standalone error, including willRetry=false, is never that terminal fact.
 // ToolSucceeded requires native completed status and a successful tool result.
 type CodexExecutionEvent struct {
+	ClientID          string
 	ActorThreadID     string
 	CollabTool        string
 	ReceiverThreadIDs []string
@@ -93,6 +95,10 @@ func cloneCodexExecution(c *persist.CodexExecution) *persist.CodexExecution {
 		return nil
 	}
 	clone := *c
+	clone.HostInputs = make(map[string]persist.CodexHostInput, len(c.HostInputs))
+	for id, input := range c.HostInputs {
+		clone.HostInputs[id] = input
+	}
 	clone.Items = make(map[string]persist.CodexExecutionItem, len(c.Items))
 	for id, item := range c.Items {
 		clone.Items[id] = item
@@ -180,7 +186,7 @@ func (e *Engine) ApplyCodexExecutionEvent(id string, event CodexExecutionEvent) 
 			break
 		}
 	}
-	if !receiverBounds || len(event.ActorThreadID) > 256 || len(event.CollabTool) > 64 || len(event.ReceiverThreadIDs) > persist.MaxExecutionActors || len(event.Kind) > 64 || len(event.ItemKind) > 64 || len(event.Phase) > 64 || len(event.Cause) > 64 || len(event.Decision) > 64 || len(event.TurnID) > 256 || len(event.ItemID) > 256 || len(event.RequestID) > 256 {
+	if len(event.ClientID) > 256 || (event.ClientID != "" && event.ItemKind != CodexUserMessage) || !receiverBounds || len(event.ActorThreadID) > 256 || len(event.CollabTool) > 64 || len(event.ReceiverThreadIDs) > persist.MaxExecutionActors || len(event.Kind) > 64 || len(event.ItemKind) > 64 || len(event.Phase) > 64 || len(event.Cause) > 64 || len(event.Decision) > 64 || len(event.TurnID) > 256 || len(event.ItemID) > 256 || len(event.RequestID) > 256 {
 		c.Incomplete = "event_bounds"
 		c.UnknownCustody = true
 		err := e.persistExecutionLocked(id, s)
@@ -209,6 +215,7 @@ func (e *Engine) ApplyCodexExecutionEvent(id string, event CodexExecutionEvent) 
 		return fmt.Errorf("engine: stale or conflicting Codex execution event")
 	}
 
+	previousHostInputs := maps.Clone(c.HostInputs)
 	var eventErr error
 	if event.Sequence != c.Sequence+1 {
 		c.Incomplete = "sequence_gap"
@@ -220,11 +227,22 @@ func (e *Engine) ApplyCodexExecutionEvent(id string, event CodexExecutionEvent) 
 	if eventErr == nil {
 		eventErr = reduceCodexExecution(s, c, event)
 	}
+	if eventErr == nil && event.Kind == CodexItemCompleted && event.ItemKind == CodexUserMessage && (event.ActorThreadID == "" || event.ActorThreadID == c.ThreadID) && event.ClientID != "" {
+		joinCodexHostInput(c, event.ClientID, s.executionIdentity.OwnerRevision)
+	}
 	if eventErr != nil {
 		c.Incomplete = "invalid_event"
 		c.UnknownCustody = true
 	}
 	persistErr := e.persistExecutionLocked(id, s)
+	if persistErr != nil {
+		for client, input := range previousHostInputs {
+			if _, exists := c.HostInputs[client]; !exists {
+				c.HostInputs[client] = input
+				c.UnknownCustody = true
+			}
+		}
+	}
 	e.mu.Unlock()
 	if persistErr != nil {
 		return executionCustodyError(persistErr)
@@ -295,7 +313,9 @@ func reduceCodexExecution(s *session, c *persist.CodexExecution, event CodexExec
 			}
 		}
 		c.TurnID = event.TurnID
-		c.OwnerRevision = s.executionIdentity.OwnerRevision
+		if len(c.HostInputs) == 0 {
+			c.OwnerRevision = s.executionIdentity.OwnerRevision
+		}
 		c.State = "active"
 		c.Cause = ""
 		c.TerminalSequence = 0
@@ -379,7 +399,7 @@ func codexActorHasWork(c *persist.CodexExecution, actor string) bool {
 }
 
 func codexHasCapacity(c *persist.CodexExecution) bool {
-	if len(c.Items)+len(c.Children)+len(c.Decisions)+len(c.Stimuli) < persist.MaxExecutionActors {
+	if len(c.Items)+len(c.Children)+len(c.Decisions)+len(c.Stimuli)+len(c.HostInputs) < persist.MaxExecutionActors {
 		return true
 	}
 	for id, child := range c.Children {
@@ -605,15 +625,20 @@ func reduceCodexItem(c *persist.CodexExecution, event CodexExecutionEvent, actor
 		if !codexHasCapacity(c) {
 			return fmt.Errorf("engine: Codex item capacity")
 		}
-		c.Items[key] = persist.CodexExecutionItem{ActorThreadID: actor, CollabTool: event.CollabTool, TurnID: event.TurnID, Kind: kind, Phase: phase, StartSequence: event.Sequence, NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch}
+		c.Items[key] = persist.CodexExecutionItem{ClientID: event.ClientID, ActorThreadID: actor, CollabTool: event.CollabTool, TurnID: event.TurnID, Kind: kind, Phase: phase, StartSequence: event.Sequence, NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch}
 		if kind == CodexCollabAgentToolCall {
 			return codexCollabStarted(c, actor, event)
 		}
 		return nil
 	}
 	item, known := c.Items[key]
-	if !known || item.Complete || item.TurnID != event.TurnID || item.Kind != kind || item.Phase != phase || item.CollabTool != event.CollabTool || item.NativeIncarnation != event.NativeIncarnation || item.FeedEpoch != event.FeedEpoch {
+	if !known || item.ClientID != event.ClientID || item.Complete || item.TurnID != event.TurnID || item.Kind != kind || item.Phase != phase || item.CollabTool != event.CollabTool || item.NativeIncarnation != event.NativeIncarnation || item.FeedEpoch != event.FeedEpoch {
 		return fmt.Errorf("engine: unmatched Codex item completion")
+	}
+	if parent && kind == CodexUserMessage && event.ClientID != "" {
+		if err := codexHostInputEcho(c, event); err != nil {
+			return err
+		}
 	}
 	// The pinned native live feed does not replay completed item lifecycles.
 	delete(c.Items, key)
@@ -690,9 +715,7 @@ func (e *Engine) observeExecutionOwnerInput(id string, expected *uint64) error {
 	s.executionIdentity.OwnerRevision++
 	if s.codexExecution != nil {
 		s.codexExecution.Denied = "owner_input"
-		if len(s.codexExecution.Children) > 0 || len(s.codexExecution.Stimuli) > 0 || len(s.codexExecution.Items) > 0 {
-			s.codexExecution.UnknownCustody = true
-		}
+		s.codexExecution.UnknownCustody = true
 	}
 	err := e.persistExecutionLocked(id, s)
 	e.mu.Unlock()
@@ -708,7 +731,7 @@ func (e *Engine) CodexQuotaCandidate(id string) (CodexQuotaObligation, bool) {
 		return CodexQuotaObligation{}, false
 	}
 	c := s.codexExecution
-	if c == nil || c.UnknownCustody || c.Incomplete != "" || c.Denied != "" || c.State != "terminal" || c.Cause != CodexTerminalQuota || c.OwnerRevision != s.executionIdentity.OwnerRevision || c.UserSequence == 0 || c.CommentarySequence <= c.UserSequence || c.ToolResultSequence <= c.CommentarySequence || c.LastItemSequence != c.ToolResultSequence || len(c.Decisions) > 0 || len(c.Stimuli) > 0 || codexActiveChildren(c) {
+	if c == nil || c.UnknownCustody || c.Incomplete != "" || c.Denied != "" || c.State != "terminal" || c.Cause != CodexTerminalQuota || c.OwnerRevision != s.executionIdentity.OwnerRevision || c.UserSequence == 0 || c.CommentarySequence <= c.UserSequence || c.ToolResultSequence <= c.CommentarySequence || c.LastItemSequence != c.ToolResultSequence || len(c.Decisions) > 0 || len(c.Stimuli) > 0 || len(c.HostInputs) > 0 || codexActiveChildren(c) {
 		return CodexQuotaObligation{}, false
 	}
 	for _, item := range c.Items {

@@ -5064,5 +5064,52 @@
       "No production observer, launch-policy or global-settings activation follows.",
       "Supported native prepend ordering is a separate hypothesis under investigation; it is not proven by these observations."
     ]
+  },
+  "codex_host_input_checkpoint": {
+    "scope": "Typed semantic main-thread receipt custody only; no child-input clearance, goal wake or automatic continuation dispatch.",
+    "source_sha256": {
+      "internal/persist/execution.go": "7016cbbd9fee7840163721388fa763552f7b86fca28eac41f53a891c18e144ce",
+      "internal/persist/execution_host_input_test.go": "96bd6e69448984e04e9aadceae2cb62480ec1347d214aade9a0b98c20d030656",
+      "internal/engine/codex_host_input.go": "699279776b805027cb98ca4a8d1f208d906e3b5fa41ba30968534bdeb738318a",
+      "internal/engine/codex_host_input_test.go": "9e81c32de9b3fbe7dad49146bb2170bd67ae88c2a892151bcbf31a0477acf087",
+      "internal/engine/codex_execution.go": "a5524250f7c1dfbb041d51e9fd1b52c2c67a3fea0eaa31811701dce12a38d8c1",
+      "internal/engine/codex_execution_test.go": "84cefe5b92ddd236f6dbabf877fee10ea318d68ee07bdb6c44e97271830899d3",
+      "internal/engine/codex_custody.go": "c60b66ae592a142ed95bb064b8d61c80a6ee27069811a14585831ccb2a312e9b",
+      "internal/skeleton/chat.go": "2364a7a75193c2e9e6f852085c502cf8c0934dd6288e473da131635a825634ae",
+      "internal/skeleton/execution_codex_host_input.go": "f89e4d602b74d90aa671c072f50023b1b377485031a3838e531b9330d5976b4a",
+      "internal/skeleton/execution_codex_parser.go": "d137926bee217937506e14573879938be0959559e62a3013ac029c6603997086",
+      "internal/skeleton/execution_codex_parser_test.go": "25a4c7e7139a8ebf7ba6a87a115abb34aed6ab5b080fa84f068059bea5a47403",
+      "internal/skeleton/execution_owner_test.go": "5ff8cb479583b7f7049f5348a689721c25ebb14893ef677c63a2979f1b5ce933"
+    },
+    "reviews": "Sol author, root connected review, independent Astra final GREEN.",
+    "findings_resolved": [
+      "An exact late user-message echo after terminal previously could transfer old quota evidence to the newest owner. Both receipt-order regressions failed before the fix. EchoSequence must now match current native UserSequence and precede terminal before owner transfer; historical matched delivery may retire without qualifying old work.",
+      "Physical connection snapshots run outside engine/global-backend locks and never reacquire feed state beneath the session emission lock. Pending custody fences snapshot windows. Replaced engine sessions cannot be altered by old replies.",
+      "Reserve worst-case receipt IDs and EchoSequence before RPC effects. Capacity-edge Go overlay removing only sequence reservation fails; normal source passes without mutating the live claim."
+    ],
+    "tests": {
+      "full_engine_seconds": 31.786,
+      "full_persist_seconds": 27.012,
+      "connected_skeleton_before_causal_delta_seconds": 61.979,
+      "focused_race_engine_seconds": 5.0,
+      "focused_race_persist_seconds": 1.415,
+      "focused_race_skeleton_seconds": 16.579,
+      "final_host_capacity_race_seconds": 5.418,
+      "root_host_after_maps_clone_seconds": 3.205,
+      "vet": "engine, persist, skeleton PASS",
+      "capacity_overlay_red_seconds": 0.336,
+      "capacity_normal_green_seconds": 0.528
+    },
+    "behavior": [
+      "Execution format3 reads old1/2 records, while new fields are version-fenced.",
+      "Accepted typed RPC and matching main userMessage.clientId join in either order. Old receipts cannot advance newer ownership.",
+      "Independent children, native stimuli, tools, decisions, unknown custody and ambiguous dispatch remain retained.",
+      "Raw PTY input remains conservatively unknown even if a later generic turn starts; semantic receipt handling does not erase that uncertainty.",
+      "Global backend routing and Stop remain responsive during blocked persistence or an unanswered native RPC."
+    ],
+    "limits": [
+      "Full repository suite has not yet been rerun for this checkpoint.",
+      "Child-input and goal continuation remain separately unqualified; no automatic effects are enabled by this slice."
+    ]
   }
 }

@@ -94,6 +94,31 @@ func TestCodexExecutionParserPreservesActorIdentity(t *testing.T) {
 	}
 }
 
+func TestCodexExecutionParserExactUserClientReceipt(t *testing.T) {
+	for _, client := range []string{`"client"`, `null`, `""`, `42`, `"client","clientId":"other"`, `"client","ClientId":"other"`} {
+		raw := []byte(`{"method":"item/completed","params":{"threadId":"thread","turnId":"turn","item":{"id":"item","type":"userMessage","clientId":` + client + `,"content":[{"text":"private input"}]}}}`)
+		event, observed := parseCodexExecutionFrame("item/completed", raw, "thread")
+		if !observed {
+			t.Fatal("user lifecycle disappeared")
+		}
+		if client == `"client"` {
+			if event.Kind != engine.CodexItemCompleted || event.ClientID != "client" {
+				t.Fatalf("native client identity lost: %+v", event)
+			}
+		} else if client == `null` {
+			if event.Kind != engine.CodexItemCompleted || event.ClientID != "" {
+				t.Fatal("null client receipt fabricated")
+			}
+		} else if event.Kind != engine.CodexUnknownEvidence {
+			t.Fatalf("ambiguous client identity accepted: %+v", event)
+		}
+		encoded, _ := json.Marshal(event)
+		if strings.Contains(string(encoded), "private input") {
+			t.Fatal("prompt body entered control evidence")
+		}
+	}
+}
+
 func TestCodexExecutionParserUnknownLifecycleCannotDisappear(t *testing.T) {
 	e, observed := parseCodexExecutionFrame("turn/futureHumanWait", []byte(`{"method":"turn/futureHumanWait","params":{"threadId":"thread","turnId":"turn"}}`), "thread")
 	if !observed || e.Kind != engine.CodexUnknownEvidence {

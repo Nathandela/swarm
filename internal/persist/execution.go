@@ -16,7 +16,7 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-const ExecutionVersion = 2
+const ExecutionVersion = 3
 const MaxExecutionActors = 128
 const MaxExecutionBytes = 64 << 10
 const MaxExecutionRecords = 1024
@@ -53,6 +53,19 @@ type ExecutionActor struct {
 
 func (r ExecutionRecord) Validate() error {
 	if r.Codex != nil {
+		for _, item := range r.Codex.Items {
+			if r.Version < 3 && item.ClientID != "" {
+				return fmt.Errorf("persist: client receipt requires execution version3")
+			}
+		}
+		if r.Version < 3 && len(r.Codex.HostInputs) > 0 {
+			return fmt.Errorf("persist: host input requires execution version3")
+		}
+		for _, input := range r.Codex.HostInputs {
+			if input.Claim.OwnerRevision > r.OwnerRevision {
+				return fmt.Errorf("persist: future host input owner revision")
+			}
+		}
 		if err := r.Codex.Validate(); err != nil {
 			return err
 		}
@@ -76,7 +89,7 @@ func (r ExecutionRecord) Validate() error {
 	if r.AnonymousActors < 0 || r.AnonymousActors > MaxExecutionActors {
 		return fmt.Errorf("persist: invalid anonymous actor bound")
 	}
-	if (r.Version != ExecutionVersion && r.Version != 1) || (r.Version == 1 && r.Codex != nil) || !ValidID(r.SessionID) || r.Incarnation == "" || len(r.Incarnation) > 256 || len(r.ConversationID) > 256 || len(r.TurnID) > 256 || len(r.InputActor) > 256 || len(r.Incomplete) > 128 || len(r.Actors) > MaxExecutionActors {
+	if (r.Version != ExecutionVersion && r.Version != 2 && r.Version != 1) || (r.Version == 1 && r.Codex != nil) || !ValidID(r.SessionID) || r.Incarnation == "" || len(r.Incarnation) > 256 || len(r.ConversationID) > 256 || len(r.TurnID) > 256 || len(r.InputActor) > 256 || len(r.Incomplete) > 128 || len(r.Actors) > MaxExecutionActors {
 		return fmt.Errorf("persist: invalid execution identity or bounds")
 	}
 	if r.MainTurn != status.TurnActive && r.MainTurn != status.TurnIdle && r.MainTurn != status.TurnUnknown {
@@ -96,6 +109,7 @@ func (r ExecutionRecord) Validate() error {
 // CodexExecution retains one observed native turn and independently live custody.
 // No message, command, result body or credential belongs in these records.
 type CodexExecution struct {
+	HostInputs          map[string]CodexHostInput         `json:"host_inputs,omitempty"`
 	NativeIncarnation   string                            `json:"native_incarnation"`
 	FeedEpoch           string                            `json:"feed_epoch"`
 	ThreadID            string                            `json:"thread_id"`
@@ -127,6 +141,7 @@ type CodexTerminalCause string
 type CodexDecisionKind string
 
 type CodexExecutionItem struct {
+	ClientID          string              `json:"client_id,omitempty"`
 	ActorThreadID     string              `json:"actor_thread_id,omitempty"`
 	CollabTool        string              `json:"collab_tool,omitempty"`
 	NativeIncarnation string              `json:"native_incarnation"`
@@ -168,9 +183,26 @@ type CodexExecutionStimulus struct {
 	Phase              string `json:"phase"`
 }
 
+// CodexHostInputClaim binds one semantic main-thread RPC before its write.
+type CodexHostInputClaim struct {
+	NativeIncarnation string `json:"native_incarnation"`
+	FeedEpoch         string `json:"feed_epoch"`
+	ThreadID          string `json:"thread_id"`
+	ClientID          string `json:"client_id"`
+	OwnerRevision     uint64 `json:"owner_revision"`
+	ExpectedTurnID    string `json:"expected_turn_id,omitempty"`
+}
+type CodexHostInput struct {
+	Claim          CodexHostInputClaim `json:"claim"`
+	AcceptedTurnID string              `json:"accepted_turn_id,omitempty"`
+	EchoTurnID     string              `json:"echo_turn_id,omitempty"`
+	EchoItemID     string              `json:"echo_item_id,omitempty"`
+	EchoSequence   uint64              `json:"echo_sequence,omitempty"`
+}
+
 func executionID(id string) bool { return id != "" && len(id) <= 256 }
 func (c CodexExecution) Validate() error {
-	if !executionID(c.NativeIncarnation) || !executionID(c.FeedEpoch) || !executionID(c.ThreadID) || len(c.TurnID) > 256 || len(c.Incomplete) > 128 || len(c.Denied) > 128 || len(c.Items)+len(c.Children)+len(c.Decisions)+len(c.Stimuli) > MaxExecutionActors {
+	if !executionID(c.NativeIncarnation) || !executionID(c.FeedEpoch) || !executionID(c.ThreadID) || len(c.TurnID) > 256 || len(c.Incomplete) > 128 || len(c.Denied) > 128 || len(c.Items)+len(c.Children)+len(c.Decisions)+len(c.Stimuli)+len(c.HostInputs) > MaxExecutionActors {
 		return fmt.Errorf("persist: invalid Codex execution identity or bounds")
 	}
 	if c.State != "unobserved" && c.State != "active" && c.State != "terminal" {
@@ -192,8 +224,20 @@ func (c CodexExecution) Validate() error {
 	if c.TerminalSequence > c.Sequence || c.UserSequence > c.Sequence || c.CommentarySequence > c.Sequence || c.ToolResultSequence > c.Sequence || c.ToolFailureSequence > c.Sequence || c.LastItemSequence > c.Sequence {
 		return fmt.Errorf("persist: invalid Codex event position")
 	}
+	for client, input := range c.HostInputs {
+		claim := input.Claim
+		if claim.ThreadID != c.ThreadID {
+			return fmt.Errorf("persist: foreign Codex host input thread")
+		}
+		if (input.EchoSequence == 0) != (input.EchoTurnID == "") || (claim.NativeIncarnation == c.NativeIncarnation && claim.FeedEpoch == c.FeedEpoch && input.EchoSequence > c.Sequence) {
+			return fmt.Errorf("persist: invalid Codex host input echo position")
+		}
+		if !executionID(client) || client != claim.ClientID || !executionID(claim.NativeIncarnation) || !executionID(claim.FeedEpoch) || !executionID(claim.ThreadID) || claim.OwnerRevision == 0 || len(claim.ExpectedTurnID) > 256 || len(input.AcceptedTurnID) > 256 || len(input.EchoTurnID) > 256 || len(input.EchoItemID) > 256 || (input.EchoTurnID == "") != (input.EchoItemID == "") || (input.AcceptedTurnID != "" && claim.ExpectedTurnID != "" && input.AcceptedTurnID != claim.ExpectedTurnID) || (input.EchoTurnID != "" && claim.ExpectedTurnID != "" && input.EchoTurnID != claim.ExpectedTurnID) || (input.AcceptedTurnID != "" && input.EchoTurnID != "" && input.AcceptedTurnID != input.EchoTurnID) {
+			return fmt.Errorf("persist: invalid Codex host input")
+		}
+	}
 	for id, item := range c.Items {
-		if len(id) == 0 || len(id) > 1024 || (item.Kind == "collabAgentToolCall") != (item.CollabTool != "") || len(item.ActorThreadID) > 256 || !validCodexCollabTool(item.CollabTool) || !executionID(item.TurnID) || !executionID(item.NativeIncarnation) || !executionID(item.FeedEpoch) || item.StartSequence == 0 || (item.FeedEpoch == c.FeedEpoch && item.NativeIncarnation == c.NativeIncarnation && item.StartSequence > c.Sequence) {
+		if len(item.ClientID) > 256 || (item.ClientID != "" && item.Kind != "userMessage") || len(id) == 0 || len(id) > 1024 || (item.Kind == "collabAgentToolCall") != (item.CollabTool != "") || len(item.ActorThreadID) > 256 || !validCodexCollabTool(item.CollabTool) || !executionID(item.TurnID) || !executionID(item.NativeIncarnation) || !executionID(item.FeedEpoch) || item.StartSequence == 0 || (item.FeedEpoch == c.FeedEpoch && item.NativeIncarnation == c.NativeIncarnation && item.StartSequence > c.Sequence) {
 			return fmt.Errorf("persist: invalid Codex item identity")
 		}
 		switch item.Kind {
@@ -662,13 +706,17 @@ func executionJSON(raw []byte) error {
 				case "actors/*":
 					allowed = "sequence start_sequence active"
 				case "codex":
-					allowed = "native_incarnation feed_epoch thread_id sequence last_event_hash turn_id owner_revision state cause terminal_sequence incomplete unknown_custody denied user_sequence commentary_sequence tool_result_sequence tool_failure_sequence last_item_sequence items children decisions stimuli"
+					allowed = "native_incarnation feed_epoch thread_id sequence last_event_hash turn_id owner_revision state cause terminal_sequence incomplete unknown_custody denied user_sequence commentary_sequence tool_result_sequence tool_failure_sequence last_item_sequence items children decisions stimuli host_inputs"
 				case "codex/items/*":
-					allowed = "actor_thread_id collab_tool turn_id kind phase start_sequence complete native_incarnation feed_epoch"
+					allowed = "client_id actor_thread_id collab_tool turn_id kind phase start_sequence complete native_incarnation feed_epoch"
 				case "codex/children/*":
 					allowed = "parent_thread_id awaiting_turn turn_id child_turn_id active native_incarnation feed_epoch"
 				case "codex/decisions/*":
 					allowed = "actor_thread_id request_id turn_id kind native_incarnation feed_epoch"
+				case "codex/host_inputs/*":
+					allowed = "claim accepted_turn_id echo_turn_id echo_item_id echo_sequence"
+				case "codex/host_inputs/*/claim":
+					allowed = "native_incarnation feed_epoch thread_id client_id owner_revision expected_turn_id"
 				case "codex/stimuli/*":
 					allowed = "native_incarnation feed_epoch actor_thread_id turn_id item_id receiver_thread_id previous_turn_id start_sequence completion_sequence phase"
 				}
@@ -680,7 +728,7 @@ func executionJSON(raw []byte) error {
 					next = path + "/" + name
 				}
 				switch path {
-				case "actors", "codex/items", "codex/children", "codex/decisions", "codex/stimuli":
+				case "actors", "codex/items", "codex/children", "codex/decisions", "codex/stimuli", "codex/host_inputs":
 					next = path + "/*"
 				}
 
@@ -769,7 +817,7 @@ func (s *Store) RetireExecution(id, incarnation string) error {
 			return fmt.Errorf("persist: unresolved execution custody")
 		}
 		if c := record.Codex; c != nil {
-			if c.UnknownCustody || c.State == "active" || len(c.Decisions) > 0 {
+			if c.UnknownCustody || c.State == "active" || len(c.Decisions) > 0 || len(c.Stimuli) > 0 || len(c.HostInputs) > 0 {
 				return fmt.Errorf("persist: unresolved Codex execution custody")
 			}
 			for _, item := range c.Items {

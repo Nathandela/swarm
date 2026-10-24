@@ -343,8 +343,8 @@ func TestCodexExecutionNewTurnAndOwnerRevisionFenceOldCandidate(t *testing.T) {
 		}
 	}
 	candidate, ok := e.CodexQuotaCandidate("s1")
-	if !ok || candidate.TurnID != "new-owner-turn" || candidate.OwnerRevision != 2 {
-		t.Fatalf("fresh fully observed owner turn did not bind current revision: %+v %v", candidate, ok)
+	if ok {
+		t.Fatalf("uncorrelated raw input became eligible from a later generic turn: %+v", candidate)
 	}
 	if err := e.ObserveExecutionOwnerRevision("s1", 1, 2); err == nil {
 		t.Fatal("stale owner revision reused")

@@ -90,13 +90,21 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 		if e.TurnID == "" {
 			return unknown, true
 		}
-		item, ok := codexExecutionObject(params["item"], "id", "type", "phase", "status", "exitCode", "source", "questions", "result", "error", "tool", "senderThreadId", "receiverThreadIds", "agentsStates")
+		item, ok := codexExecutionObject(params["item"], "id", "type", "phase", "clientId", "status", "exitCode", "source", "questions", "result", "error", "tool", "senderThreadId", "receiverThreadIds", "agentsStates")
 		if !ok {
 			return unknown, true
 		}
 		e.ItemID, e.ItemKind = executionString(item["id"]), engine.CodexItemKind(executionString(item["type"]))
 		if e.ItemID == "" || e.ItemKind == "" {
 			return unknown, true
+		}
+		if e.ItemKind == engine.CodexUserMessage {
+			if raw, present := item["clientId"]; present && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				e.ClientID = executionString(raw)
+				if e.ClientID == "" {
+					return unknown, true
+				}
+			}
 		}
 		e.Kind = engine.CodexItemStarted
 		if method == "item/completed" {
