@@ -115,7 +115,7 @@ func TestCodexLateSparseQuotaCanFillUnknownTerminalReset(t *testing.T) {
 }
 
 func TestCodexSparseQuotaCannotClearAKnownCreditRejection(t *testing.T) {
-	used, reset, reason := 100, time.Now().Add(time.Hour).Unix(), "workspace_owner_credits_depleted"
+	used, reset, reason := float64(100), time.Now().Add(time.Hour).Unix(), "workspace_owner_credits_depleted"
 	q := codexQuotaEvidence{}
 	q.merge(codexQuotaSnapshot{Primary: &codexQuotaWindow{UsedPercent: &used, ResetsAt: &reset}, ReachedType: &reason})
 	q.merge(codexQuotaSnapshot{Primary: &codexQuotaWindow{UsedPercent: &used, ResetsAt: &reset}})

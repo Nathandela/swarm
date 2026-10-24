@@ -199,7 +199,7 @@ func TestCodexUsageWeeklyEitherSlotAndNeverChangesRotation(t *testing.T) {
 	}
 }
 
-func TestCodexUsageAcceptsNativeGrantRuntime(t *testing.T) {
+func TestCodexUsageExternalNotificationRequiresScopedRead(t *testing.T) {
 	f := newLoginFixture(t)
 	enableCodexNativeGrantUsage(t, f)
 	if !f.runtime.ExternalAuth {
@@ -207,8 +207,8 @@ func TestCodexUsageAcceptsNativeGrantRuntime(t *testing.T) {
 	}
 	now := time.Now()
 	f.m.observeCodexUsage("source-1", codexRateLimitsUpdated, usageFrame(23, 10080, now.Add(time.Hour), true), now)
-	if got := usageView(t, f).Weekly; got == nil || got.RemainingPercent != 77 {
-		t.Fatalf("native-grant usage was not recorded: %+v", got)
+	if got := usageView(t, f).Weekly; got != nil {
+		t.Fatal("unscoped native-grant notification was attributed to selected account")
 	}
 
 	// Exercise the read-side runtime comparison with a fresh matching cache.

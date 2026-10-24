@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/appserver"
@@ -23,6 +24,8 @@ type backendAuthTokens struct {
 	AccountID   string `json:"-"`
 	PlanType    string `json:"-"`
 	current     func() bool
+	selection   codexAuthSelection
+	acquire     func() (func(), bool)
 }
 
 type backendAuthNativeTokens struct {
@@ -47,18 +50,31 @@ type backendAuthRequest struct {
 	valid bool
 }
 type backendAuthCoordinator struct {
-	access   func(context.Context, bool) (backendAuthTokens, error)
-	current  func() bool
-	bound    chan struct{}
-	once     sync.Once
-	conn     *appserver.Client
-	requests chan backendAuthRequest
-	stopOnce sync.Once
+	access         func(context.Context, bool) (backendAuthTokens, error)
+	current        func() bool
+	bound          chan struct{}
+	once           sync.Once
+	conn           *appserver.Client
+	requests       chan backendAuthRequest
+	stopOnce       sync.Once
+	initialized    chan struct{}
+	initOnce       sync.Once
+	onClosed       func()
+	ctx            context.Context
+	cancel         context.CancelFunc
+	done, syncDone chan struct{}
+	syncWake       chan struct{}
+	synchronize    func(context.Context) error
+	onTokenChange  func()
+	revision       atomic.Uint64
+	handover       *codexHandoverFeed
 }
 
 func newBackendAuthCoordinator(access func(context.Context, bool) (backendAuthTokens, error), current func() bool) *backendAuthCoordinator {
-	a := &backendAuthCoordinator{access: access, current: current, bound: make(chan struct{}), requests: make(chan backendAuthRequest, 8)}
+	ctx, cancel := context.WithCancel(context.Background())
+	a := &backendAuthCoordinator{access: access, current: current, bound: make(chan struct{}), requests: make(chan backendAuthRequest, 8), ctx: ctx, cancel: cancel, done: make(chan struct{}), syncDone: make(chan struct{}), syncWake: make(chan struct{}, 1), initialized: make(chan struct{})}
 	go a.run()
+	go a.syncLoop()
 	return a
 }
 func (a *backendAuthCoordinator) bind(conn *appserver.Client) {
@@ -78,6 +94,9 @@ func (a *backendAuthCoordinator) intercept(method string, raw json.RawMessage) b
 		return true
 	}
 	valid := validBackendAuthParams(fr.Params) && len(raw) <= 4096
+	if valid && a.onTokenChange != nil {
+		a.onTokenChange()
+	}
 	select {
 	case a.requests <- backendAuthRequest{id: fr.ID, valid: valid}:
 	default:
@@ -148,11 +167,17 @@ func backendAuthRequestID(id json.RawMessage) bool {
 	return false
 }
 func (a *backendAuthCoordinator) run() {
-	<-a.bound
+	defer close(a.done)
+	defer a.cancel()
+	select {
+	case <-a.bound:
+	case <-a.ctx.Done():
+		return
+	}
 	if a.conn == nil {
 		return
 	}
-	base, stop := context.WithCancel(context.Background())
+	base, stop := context.WithCancel(a.ctx)
 	defer stop()
 	go func() {
 		select {
@@ -184,7 +209,7 @@ func (a *backendAuthCoordinator) run() {
 				}
 			}
 			if code == "" {
-				if err := a.conn.RespondAuthTokens(ctx, req.id, token.native(), func() bool { return ctx.Err() == nil && a.current() && (token.current == nil || token.current()) }); err != nil {
+				if err := a.respondToken(ctx, req.id, token); err != nil {
 					if a.conn.RespondAuthError(ctx, req.id, "backend_auth_unavailable") != nil {
 						_ = a.conn.Close()
 					}
@@ -199,13 +224,20 @@ func (a *backendAuthCoordinator) run() {
 	}
 }
 func (a *backendAuthCoordinator) bootstrap(ctx context.Context) error {
+	if a.handover != nil {
+		return a.handover.synchronize(ctx)
+	}
 	if a.access == nil || !a.current() {
 		return errBackendAuthUnavailable
 	}
+	revision := a.revision.Load()
 	token, err := a.access(ctx, false)
-	if err != nil || token.AccessToken == "" || token.AccountID == "" || !a.current() || (token.current != nil && !token.current()) {
+	if err != nil {
 		return errBackendAuthUnavailable
 	}
+	return a.install(ctx, token, revision)
+}
+func (a *backendAuthCoordinator) install(ctx context.Context, token backendAuthTokens, revision uint64) error {
 	params := struct {
 		Type string `json:"type"`
 		backendAuthNativeTokens
@@ -213,13 +245,129 @@ func (a *backendAuthCoordinator) bootstrap(ctx context.Context) error {
 	var result struct {
 		Type string `json:"type"`
 	}
-	if a.conn.CallAtWriteBoundary(ctx, "account/login/start", params, &result, func() error {
-		if ctx.Err() != nil || !a.current() || (token.current != nil && !token.current()) {
+	var release func()
+	err := a.conn.CallAtWriteBoundary(ctx, "account/login/start", params, &result, func() error {
+		if a.revision.Load() != revision {
+			return errBackendAuthUnavailable
+		}
+		var ok bool
+		release, ok = a.tokenGuard(ctx, token)
+		if !ok {
 			return errBackendAuthUnavailable
 		}
 		return nil
-	}, nil) != nil || result.Type != "chatgptAuthTokens" || !a.current() || (token.current != nil && !token.current()) {
+	}, func() {
+		if release != nil {
+			release()
+			release = nil
+		}
+	})
+	if release != nil {
+		release()
+	}
+	if err != nil || result.Type != "chatgptAuthTokens" || !a.tokenCurrent(ctx, token) || a.revision.Load() != revision {
 		return errBackendAuthUnavailable
 	}
 	return nil
+}
+func (a *backendAuthCoordinator) tokenCurrent(ctx context.Context, token backendAuthTokens) bool {
+	return ctx.Err() == nil && a.ctx.Err() == nil && a.current() && token.AccessToken != "" && token.AccountID != "" && (token.current == nil || token.current())
+}
+func (a *backendAuthCoordinator) tokenGuard(ctx context.Context, token backendAuthTokens) (func(), bool) {
+	var release func()
+	if token.acquire != nil {
+		var ok bool
+		release, ok = token.acquire()
+		if !ok {
+			return nil, false
+		}
+	}
+	if !a.tokenCurrent(ctx, token) {
+		if release != nil {
+			release()
+		}
+		return nil, false
+	}
+	return release, true
+}
+func (a *backendAuthCoordinator) respondToken(ctx context.Context, id json.RawMessage, token backendAuthTokens) error {
+	var release func()
+	err := a.conn.RespondAuthTokens(ctx, id, token.native(), func() bool {
+		var ok bool
+		release, ok = a.tokenGuard(ctx, token)
+		if ok {
+			a.revision.Add(1)
+		}
+		return ok
+	})
+	if release != nil {
+		release()
+	}
+	if err == nil && a.onTokenChange != nil {
+		a.onTokenChange()
+	}
+	return err
+}
+func (a *backendAuthCoordinator) requestSync() {
+	select {
+	case a.syncWake <- struct{}{}:
+	default:
+	}
+}
+func (a *backendAuthCoordinator) syncLoop() {
+	defer close(a.syncDone)
+	defer func() {
+		<-a.done
+		if a.onClosed != nil {
+			a.onClosed()
+		}
+	}()
+	select {
+	case <-a.bound:
+	case <-a.ctx.Done():
+		return
+	}
+	if a.conn == nil {
+		return
+	}
+	select {
+	case <-a.initialized:
+	case <-a.ctx.Done():
+		return
+	case <-a.conn.Done():
+		return
+	}
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-a.conn.Done():
+			return
+		case <-a.syncWake:
+			if a.synchronize != nil {
+				ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+				_ = a.synchronize(ctx)
+				cancel()
+			}
+		}
+	}
+}
+func (a *backendAuthCoordinator) close() {
+	a.cancel()
+	a.bind(nil)
+	if a.conn != nil {
+		_ = a.conn.Close()
+	}
+	<-a.done
+	<-a.syncDone
+}
+
+func (a *backendAuthCoordinator) startSync() { a.initOnce.Do(func() { close(a.initialized) }) }
+func (a *backendAuthCoordinator) connection() *appserver.Client {
+	select {
+	case <-a.bound:
+		return a.conn
+	default:
+		return nil
+	}
 }

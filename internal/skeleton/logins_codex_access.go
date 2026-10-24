@@ -55,6 +55,7 @@ type codexAccessBroker struct {
 	pending  func(string) error
 	read     func(string) (logins.AccessCredential, error)
 	refresh  func(context.Context, string, persist.CLIIdentity) error
+	guard    func(codexAuthSelection) (func(), bool)
 }
 
 func newCodexAccessBroker(ctx context.Context) *codexAccessBroker {
@@ -125,7 +126,12 @@ func (b *codexAccessBroker) tokens(ctx context.Context, cli persist.CLIIdentity,
 		return backendAuthTokens{}, err
 	}
 	expires := access.ExpiresAt
-	return backendAuthTokens{AccessToken: access.Token, AccountID: access.AccountID, current: func() bool {
+	return backendAuthTokens{AccessToken: access.Token, AccountID: access.AccountID, selection: selection, acquire: func() (func(), bool) {
+		if b.guard != nil {
+			return b.guard(selection)
+		}
+		return nil, current()
+	}, current: func() bool {
 		return time.Now().Before(expires) && current()
 	}}, nil
 }
@@ -202,10 +208,26 @@ func (m *loginManager) configureCodexAccess(ctx context.Context) {
 		return access, err
 	}
 	b.refresh = m.refreshCodexAccess
+	b.guard = func(selection codexAuthSelection) (func(), bool) {
+		gate := &m.admission[loginProviderIndex(logins.ProviderCodex)]
+		gate.Lock()
+		selected, err := b.selected()
+		if err != nil || selected != selection {
+			gate.Unlock()
+			return nil, false
+		}
+		return gate.Unlock, true
+	}
+	if m.codexHandover == nil {
+		m.codexHandover = newCodexHandoverCoordinator(m)
+	}
 	m.codexAccess = b
 	m.d.backendAuthAccess = func(ctx context.Context, local string, refresh bool) (backendAuthTokens, error) {
 		meta, ok := m.get(local)
 		if !ok || meta.AgentType != logins.ProviderCodex || meta.LoginRuntime == nil || !meta.LoginRuntime.ExternalAuth || meta.CLIIdentity == nil {
+			return backendAuthTokens{}, errBackendAuthUnavailable
+		}
+		if err := m.prepareCodexSelection(); err != nil {
 			return backendAuthTokens{}, errBackendAuthUnavailable
 		}
 		return b.tokens(ctx, *meta.CLIIdentity, refresh)

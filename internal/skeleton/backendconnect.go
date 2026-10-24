@@ -686,6 +686,12 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 		return ok && current == expectedInstance && !feed.retired.Load()
 	})
 
+	if d.logins != nil && d.backendUsesExternalAuth(id) {
+		if err := d.logins.attachCodexHandover(id, expectedInstance, feed, auth); err != nil {
+			auth.bind(nil)
+			return nil, nil, errBackendAuthUnavailable
+		}
+	}
 	var conn *appserver.Client
 	var err error
 	for {
@@ -741,6 +747,7 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 		_ = conn.Close()
 		return nil, nil, nerr
 	}
+	auth.startSync()
 	// The running app-server reports its own spawn-bound user agent. ContextGuard
 	// parses the semantic version from this value instead of re-probing whatever
 	// `codex` binary happens to be on the daemon's current PATH. Older/object-shaped

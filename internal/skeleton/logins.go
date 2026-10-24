@@ -30,6 +30,7 @@ type loginManager struct {
 	usageMu               sync.Mutex
 	usage                 [2]loginUsageSnapshot
 	codexAccess           *codexAccessBroker
+	codexHandover         *codexHandoverCoordinator
 	qualifyCodexOwnership func([]persist.Meta) (bool, error)
 	preflight             func(string, []persist.Meta) error
 	prepareContext        func(string, []persist.Meta) error
@@ -98,6 +99,9 @@ func (m *loginManager) inputGate(local string) error {
 	if r.MigrationPending || pending {
 		return fmt.Errorf("%w: %s is waiting to change its login; this message was not sent", logins.ErrPending, meta.AgentType)
 	}
+	if meta.AgentType == logins.ProviderCodex && meta.LoginRuntime != nil && meta.LoginRuntime.ExternalAuth {
+		return m.codexAdmission(local, r)
+	}
 	active := r.Providers[meta.AgentType].ActiveID
 	for _, login := range r.Logins {
 		if login.ID != active {
@@ -160,7 +164,7 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 		return next.Switches[provider], nil
 	}
 	if provider == logins.ProviderCodex && r.Providers[provider].AuthOwnerMode == logins.CodexNativeGrantMode {
-		return logins.Switch{}, logins.ErrPending
+		return m.beginCodexHandover(r, toID)
 	}
 	var sources []persist.Meta
 	var rows []logins.Restart
@@ -314,6 +318,11 @@ func (m *loginManager) step() {
 	if err != nil || r.MigrationPending {
 		return
 	}
+	m.stepCodexHandover()
+	r, err = m.store.Snapshot()
+	if err != nil {
+		return
+	}
 	for _, provider := range []string{logins.ProviderClaude, logins.ProviderCodex} {
 		if op, ok := r.Switches[provider]; ok {
 			m.stepSwitch(op)
@@ -326,6 +335,10 @@ func (m *loginManager) step() {
 			}
 			if login.AuthState != logins.AuthNeedsLogin && !login.ExhaustedUntil.IsZero() && !time.Now().Before(login.ExhaustedUntil) {
 				_, _ = m.store.UpdateAvailability(r.Revision, login.ID, login.AuthState, false, time.Time{})
+				continue
+			}
+			if provider == logins.ProviderCodex && r.Providers[provider].AuthOwnerMode == logins.CodexNativeGrantMode {
+				_, _ = m.beginCodexAutomaticHandover(r)
 				continue
 			}
 			next, err := m.store.NextEligible(provider, nil, time.Now())
@@ -802,12 +815,18 @@ func (m *loginManager) beginReloginExpected(loginID string, credential logins.Cr
 }
 
 func (m *loginManager) list() []persist.Meta {
+	if m.d.core != nil {
+		return m.d.core.List()
+	}
 	if m.d.authw != nil && m.d.authw.list != nil {
 		return m.d.authw.list()
 	}
 	return m.d.core.List()
 }
 func (m *loginManager) get(local string) (persist.Meta, bool) {
+	if m.d.core != nil {
+		return m.d.core.Get(local)
+	}
 	if m.d.authw != nil && m.d.authw.get != nil {
 		return m.d.authw.get(local)
 	}

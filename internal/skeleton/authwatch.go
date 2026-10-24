@@ -422,6 +422,9 @@ func (w *authWatcher) authPending(agent, local string) bool {
 }
 
 func (w *authWatcher) sessionIdentityChanged(agent string, m persist.Meta) bool {
+	if m.AgentType == logins.ProviderCodex && m.LoginRuntime != nil && m.LoginRuntime.ExternalAuth {
+		return false
+	}
 	if m.LoginRuntime != nil {
 		return w.logins == nil || w.logins.store.ValidateRuntime(*m.LoginRuntime) != nil
 	}

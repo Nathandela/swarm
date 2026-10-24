@@ -96,6 +96,11 @@ func (m *loginManager) observeCodexUsage(local, method string, raw []byte, obser
 	if !ok || meta.AgentType != logins.ProviderCodex || meta.LoginRuntime == nil {
 		return
 	}
+	if meta.LoginRuntime.ExternalAuth {
+		m.noteCodexHint(local, false)
+		return
+	}
+
 	type window struct {
 		Used    *float64 `json:"usedPercent"`
 		Minutes int      `json:"windowDurationMins"`

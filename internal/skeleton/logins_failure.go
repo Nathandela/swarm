@@ -11,8 +11,8 @@ import (
 const codexRateLimitsUpdated = "account/rateLimits/updated"
 
 type codexQuotaWindow struct {
-	UsedPercent *int   `json:"usedPercent"`
-	ResetsAt    *int64 `json:"resetsAt"`
+	UsedPercent *float64 `json:"usedPercent"`
+	ResetsAt    *int64   `json:"resetsAt"`
 }
 type codexQuotaSnapshot struct {
 	LimitID      *string           `json:"limitId"`
@@ -105,6 +105,15 @@ func (m *loginManager) observeNativeFailure(local, instance string, feed *backen
 	if !ok || meta.LoginRuntime == nil || meta.AgentType != logins.ProviderCodex {
 		return
 	}
+	if meta.LoginRuntime.ExternalAuth {
+		if method == codexRateLimitsUpdated {
+			m.noteCodexHint(local, false)
+		} else if codexTerminalUsageHint(method, raw) {
+			m.noteCodexHint(local, true)
+		}
+		return
+	}
+
 	if method == codexRateLimitsUpdated {
 		var envelope struct {
 			Params struct {
@@ -181,4 +190,32 @@ func (m *loginManager) observeNativeFailure(local, instance string, feed *backen
 	if err := m.recordExhaustionFact(meta, reset, true, nonRolling); err != nil {
 		log.Printf("login: native subscription exhaustion could not be saved; switch deferred: %v", err)
 	}
+}
+
+func codexTerminalUsageHint(method string, raw []byte) bool {
+	var envelope struct {
+		Params struct {
+			WillRetry *bool `json:"willRetry"`
+			Error     *struct {
+				Info string `json:"codexErrorInfo"`
+			} `json:"error"`
+			Turn struct {
+				Status string `json:"status"`
+				Error  *struct {
+					Info string `json:"codexErrorInfo"`
+				} `json:"error"`
+			} `json:"turn"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Params.WillRetry != nil && *envelope.Params.WillRetry {
+		return false
+	}
+	info := ""
+	if method == "error" && envelope.Params.Error != nil {
+		info = envelope.Params.Error.Info
+	}
+	if method == "turn/completed" && envelope.Params.Turn.Status == "failed" && envelope.Params.Turn.Error != nil {
+		info = envelope.Params.Turn.Error.Info
+	}
+	return info == "unauthorized" || info == "usageLimitExceeded"
 }

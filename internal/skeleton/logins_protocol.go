@@ -464,6 +464,9 @@ func (a *coreAPI) completeLoginJob(c loginworker.Config) error {
 }
 
 func (a *coreAPI) consumeCodexRelogin(expected uint64, c loginworker.Config, credential logins.Credential) error {
+	gate := &a.logins.admission[loginProviderIndex(logins.ProviderCodex)]
+	gate.Lock()
+	defer gate.Unlock()
 	lease, err := a.logins.store.AcquireCodexRelogin(c.LoginID, c.JobID)
 	if err != nil {
 		return err

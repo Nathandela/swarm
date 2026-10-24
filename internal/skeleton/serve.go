@@ -703,6 +703,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	// which resolves env and argv for every launch uniformly). Its first tick
 	// baselines the current credentials identity, or resumes the sweep a prior
 	// incarnation persisted.
+	ctx, cancel := context.WithCancel(context.Background())
+	d.cancel = cancel
+	d.logins.configureCodexAccess(ctx)
 	d.authw = newAuthWatcher(cfg.StateDir, epID, AuthProbedAgents(), CurrentAuthIdentity,
 		d.api.List, d.core.Get, d.core.Kill, d.api.Launch, d.core.Delete,
 		authRecycleUnsafeSource, authRecycleCoordination{
@@ -717,9 +720,6 @@ func Serve(cfg Config) (*Daemon, error) {
 			resume:      d.withAuthResumeFence,
 		})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	d.cancel = cancel
-	d.logins.configureCodexAccess(ctx)
 	d.loginJobsWG.Add(1)
 	go func() { defer d.loginJobsWG.Done(); d.api.watchLoginJobs(ctx) }()
 	go d.eng.Run(ctx) // the ONLY periodic driver (E10.8); idle when PollInterval<=0
@@ -1343,6 +1343,9 @@ func (d *Daemon) Close() error {
 			d.contextGuards.close() // workers stop before provider backends/core teardown
 		}
 		if d.logins != nil {
+			if d.logins.codexHandover != nil {
+				d.logins.codexHandover.close()
+			}
 			if d.logins.codexAccess != nil {
 				d.logins.codexAccess.close()
 			}
