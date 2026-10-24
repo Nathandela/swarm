@@ -72,7 +72,9 @@ func detachedBinary(t *testing.T, exe, argv0 string) <-chan struct{} {
 func TestKillProcessesOf_KillsADetachedSurvivorOfATestBinary(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "swarm")
 	exited := detachedBinary(t, exe, exe)
-	KillProcessesOf(exe)
+	if err := KillProcessesOf(exe); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case <-exited:
@@ -92,7 +94,9 @@ func TestKillProcessesOf_MatchesABinaryBuiltUnderASymlinkedDir(t *testing.T) {
 	}
 	exe := filepath.Join(link, "swarm")
 	exited := detachedBinary(t, exe, exe)
-	KillProcessesOf(exe)
+	if err := KillProcessesOf(exe); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case <-exited:
@@ -107,7 +111,9 @@ func TestKillProcessesOf_PreservesAnotherExecutableWithTheSameNameAndArgv0(t *te
 	unrelated := filepath.Join(t.TempDir(), "swarm")
 	unrelatedExited := detachedBinary(t, unrelated, exe)
 
-	KillProcessesOf(exe, "")
+	if err := KillProcessesOf(exe, ""); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case <-exited:
@@ -127,7 +133,9 @@ func TestSweep_EndsOwnedProcessesAndRemovesTheirDirectory(t *testing.T) {
 	shimExited := detachedBinary(t, binaries.Swarm, binaries.Swarm)
 	agentExited := detachedBinary(t, binaries.FakeAgent, binaries.FakeAgent)
 
-	binaries.Sweep()
+	if err := binaries.Sweep(); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, exited := range []<-chan struct{}{shimExited, agentExited} {
 		select {

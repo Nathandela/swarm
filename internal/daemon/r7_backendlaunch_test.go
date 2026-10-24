@@ -153,8 +153,8 @@ func runReaperTestHelper() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		defer ln.Close()
-		fmt.Fprintln(os.Stdout, "ready")
+		defer func() { _ = ln.Close() }()
+		_, _ = fmt.Fprintln(os.Stdout, "ready")
 		for {
 			time.Sleep(time.Hour)
 		}
@@ -165,7 +165,7 @@ func runReaperTestHelper() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stdout, child.Process.Pid)
+		_, _ = fmt.Fprintln(os.Stdout, child.Process.Pid)
 		os.Exit(0)
 	case "child":
 		for {

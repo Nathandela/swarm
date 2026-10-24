@@ -55,7 +55,7 @@ func runSupervised(root string, code *int) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	exe := filepath.Join(root, "test")
 	dst, err := os.OpenFile(exe, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
 	if err != nil {
@@ -130,7 +130,7 @@ func registeredExecutables(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var exes []string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {

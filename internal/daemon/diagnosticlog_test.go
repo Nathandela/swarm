@@ -18,12 +18,12 @@ func TestDiagnosticLogTruncatesSameInodeAndKeepsInheritedWriters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	b, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 	before, _ := a.Stat()
 	if err := a.Truncate(8<<20 + 1); err != nil {
 		t.Fatal(err)
@@ -32,7 +32,9 @@ func TestDiagnosticLogTruncatesSameInodeAndKeepsInheritedWriters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Close()
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
 	after, _ := os.Stat(path)
 	if !os.SameFile(before, after) || after.Size() != 0 {
 		t.Fatalf("log replaced or not trimmed: same=%v size=%d", os.SameFile(before, after), after.Size())
@@ -174,7 +176,7 @@ func TestDiagnosticLogFailedDaemonOpenStopsMaintenance(t *testing.T) {
 	scanStoreFn = func(*persist.Store) ([]persist.Meta, error) { return nil, errors.New("injected scan failure") }
 	t.Cleanup(func() { scanStoreFn = original })
 	if d, err := Open(cfg); err == nil {
-		d.Close()
+		_ = d.Close()
 		t.Fatal("injected scan failure was ignored")
 	}
 	f, err := os.OpenFile(cfg.LogPath, os.O_WRONLY|os.O_APPEND, 0)

@@ -16,7 +16,7 @@ func TestMaintenanceSettlesBusyIntervalsAndJoins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var failures atomic.Int32
 	stop, err := start(path, f, 5*time.Millisecond, func(error) { failures.Add(1) })
 	if err != nil {
@@ -62,7 +62,7 @@ func TestMaintenanceErrorsAreReportedWithoutStoppingOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := f.Truncate(MaxBytes + 1); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestMaintenanceErrorsAreReportedWithoutStoppingOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer readonly.Close()
+	defer func() { _ = readonly.Close() }()
 	errors := make(chan error, 10)
 	stop, err := start(path, readonly, 5*time.Millisecond, func(err error) {
 		select {
@@ -100,12 +100,12 @@ func TestMaintenanceRejectsRedirectedStderrAndUnsafeDescriptors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	other, err := Open(filepath.Join(dir, "unrelated"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer other.Close()
+	defer func() { _ = other.Close() }()
 	if stop, err := Start(path, other); err == nil {
 		stop()
 		t.Fatal("maintainer accepted unrelated stderr")
@@ -126,7 +126,7 @@ func TestMaintenanceRechecksPathBeforeTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := f.Truncate(MaxBytes + 1); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestOpenHardensOwnedFileAndRejectsFIFOAndForeignOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer foreign.Close()
+	defer func() { _ = foreign.Close() }()
 	foreignInfo, err := foreign.Stat()
 	if err != nil {
 		t.Fatal(err)

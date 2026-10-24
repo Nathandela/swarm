@@ -27,11 +27,11 @@ func Open(path string) (*os.File, error) {
 	}
 	f := os.NewFile(uintptr(fd), path)
 	if err := validate(path, f); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	if err := f.Chmod(0600); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	if err := trim(path, f); err != nil {
