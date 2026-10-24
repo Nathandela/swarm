@@ -1,0 +1,1209 @@
+All temporary generator, overlay, and instrumented source contents are copied below, so their scratch paths need not be retained.
+
+Storage lifecycle controlled fixed-workload evidence — 2026-10-24
+Snapshot: 73523a79a7b8c1b5125a993fb874c6c92dd91ced (final source, including shared hookdrain ingestion-error durability guard and short supervised UDS fixtures).
+Native Darwin arm64 Go 1.26.9. The EXACT existing allocation overlay was rerun unchanged against this snapshot. Temporary Go overlay only: no tracked .go source, installed service, user history, credentials, or old scratch changed. Existing shared compiler/module caches were reused without isolated copies or cleanup; normal compilation may add cache entries. These caches are excluded from measured scratch and state allocation. Only this verification artifact was replaced after the run. Existing state fixtures and real daemon/shim/fake-agent process launch paths were reused. The OpenCode provider/bridge and target Claude command are private fixtures, not installed/native provider services. Parent was informed before start and immediately after completion; whole-repository/static/race gates belong to parent. No more workload tests ran after parent resumed those gates.
+
+Command (exit 0):
+PATH=/Users/Nathan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.9.darwin-arm64/bin:$PATH GOTOOLCHAIN=local GOMAXPROCS=2 GOFLAGS=-p=1 TMPDIR=/private/tmp env -u SWARM_HOOK_CAPTURE -u SWARM_SESSION_ID -u SWARM_HOOK_SEQ_FILE -u SWARM_HOOK_TOKEN -u SWARM_DAEMON_SOCK -u SWARM_SHIM_HOOK_SOCK go test -overlay=/private/tmp/swarm-storage-workload/overlay.json -p=1 -parallel=1 -count=1 -timeout=120s -run '^TestWorkload' -v ./internal/skeleton ./internal/diagnosticlog ./internal/testbin
+Combined output provenance: /private/tmp/swarm-storage-workload/results.txt
+Overlay manifest provenance: /private/tmp/swarm-storage-workload/overlay.json
+Exact generator, manifest and instrumented source contents plus SHA256s are copied below. Temporary paths are provenance only. To reproduce from this artifact, extract those files and adjust the generator's source/temp roots or the manifest's absolute Replace paths to the chosen worktree and temporary directory; no retained scratch binaries are required.
+
+Measurement definitions and scope:
+- Allocated bytes = sum of kernel stat.st_blocks * 512 over the declared fixture path, including directory/nonregular inode allocation where reported. Logical bytes sum regular-file sizes. Symlinks are not followed; hard-linked inodes are deduplicated within each walk by device/inode.
+- These are filesystem-reported allocated bytes for task-owned fixtures, not exact device-exclusive physical extents, external provider homes, projects, shared compiler caches, or all host storage. The state-root measurements exclude copied test executables and build outputs; aborted-run scratch measurements include their copied executable.
+- State/log observers request a nominal 10ms ticker and also sample synchronously at explicit phases. Scheduling can delay ticks. Tree walks are non-atomic: individual files can change during a walk. Peak allocated/logical values are independently observed maxima, not guaranteed absolute maxima or a simultaneously atomic whole-tree snapshot.
+- Hook settled means final journal capture succeeded and every accumulated attempt's spool reached logical+allocated zero after core.Kill/final drain. Handoff settled means the successor reported exited and the immutable export inventory was checked. Total-state values are post-exit/retirement snapshots retaining accepted metadata, not globally quiescent totals or storage ceilings.
+- Scratch uses only two declared phase samples: copied child/survivor ready before panic or timeout, and verified absent root after parent cleanup. Its observed readiness allocation is not a continuous 10ms peak measurement.
+- Workload sources are deterministic fixed fixtures except random nonzero log bytes and generated attempt IDs. One state root is reused for three hook launches, another for three identical handoffs, and one inode for three log bursts. Aborted runs deliberately get separate unique roots.
+
+Results — all byte values are exact reported observations from the 73523a79 rerun:
+1. Three real fake-agent session launches/exits with one durably acknowledged hook each:
+   Baseline state: 12288 allocated / 1840 logical bytes.
+   Each current acked spool: 90112 allocated / 86196 logical bytes (actual encoded on-disk payload; not a 64KiB assertion).
+   Cumulative observed state peak after cycles 1/2/3: 159744 / 208896 / 258048 allocated bytes.
+   Post-retirement state snapshots after cycles 1/2/3: 73728 / 118784 / 167936 allocated bytes; 8838 / 15373 / 22091 logical bytes.
+   Across ALL accumulated attempt spools after each cycle: 0 allocated / 0 logical bytes; attempts 1, 2, 3 respectively.
+   Metadata/journal/cursor/control-custody records remain intentionally preserved. State growth here is retained per-attempt metadata, not leaked retired payload. Final sampler count 129; final observed logical peak 110370 bytes.
+
+2. Three identical successful composed handoffs, same source/root/history:
+   Baseline source state: 102400 allocated / 51057 logical bytes.
+   Exactly one immutable export after every launch: 4096 allocated / 995 logical bytes, stable content-identity filename within this workload root.
+   Post-exit total-state snapshots cycles 1/2/3: 155648 / 204800 / 253952 allocated bytes; 62485 / 72808 / 83131 logical bytes.
+   Final observed state peak: 253952 allocated / 83135 logical bytes. Final sampler count 220.
+   Successor launch/configuration and other retained records remain. The test proves stable duplicate-export storage for identical history; it does not expire successful history inputs or promise bounded aggregate state. Export logical size can differ between separate fixture roots because the exported native provenance includes the fixture path; all three exports in THIS run reused one immutable input.
+
+3. Three actual diagnostic log writes on one open append descriptor/inode:
+   Each burst writes and Syncs nine 1MiB nonzero buffers; unlike Truncate-based fixtures, each burst observes 9437184 allocated AND 9437184 logical bytes.
+   After each production 5-second maintainer check: 0 allocated / 0 logical bytes. Original inode identity stays linked and unchanged.
+   Observed peak: 9437184 allocated / 9437184 logical bytes. Final sampler count 1509. Test duration 15.01s.
+   This demonstrates allocated-byte reclamation for those bursts; the production policy remains best effort with possible interval overshoot, not a hard ceiling.
+
+4. Three panic and three timeout supervised test runs:
+   Each readiness sample: 3416064 allocated / 3415842 logical bytes for the private copied-executable run root.
+   Each parent exit: exact owned detached survivor is not alive; exact root is absent, so settled owned scratch allocation/logical bytes = 0.
+   Panic and timeout child exit status 2 remains preserved. Six roots were removed by normal supervisor cleanup. These are two-phase observed samples, not continuous maxima.
+   Parent SIGKILL/host crash, opaque privileged/nondumpable helpers and arbitrary programs outside the registered set retain their documented separate-custody limits.
+
+Package outcomes from the exact raw transcript:
+--- PASS: TestWorkloadHookRetirementAllocated (2.38s)
+--- PASS: TestWorkloadIdenticalHandoffsAllocated (2.82s)
+ok  	github.com/Nathandela/swarm/internal/skeleton	5.842s
+--- PASS: TestWorkloadActualLogAllocation (15.01s)
+ok  	github.com/Nathandela/swarm/internal/diagnosticlog	15.196s
+--- PASS: TestWorkloadAbortedScratchAllocated (2.21s)
+ok  	github.com/Nathandela/swarm/internal/testbin	2.482s
+Existing fixture diagnostics included transient post-exit hook socket failures; all workload assertions passed. These logged races are preserved in the raw transcript and were not relabeled failures or hidden.
+
+Independent Astra methodology review found no blocking flaw. Evidence labels explicitly distinguish actual encoded hook size, two-phase scratch samples, post-exit retained metadata, filesystem scope and non-atomic observed peaks. This artifact contains the fresh 73523a79 rerun; final rerun artifact review pending at time of writing.
+
+RAW OUTPUT
+=== RUN   TestWorkloadHookRetirementAllocated
+    workload_overlay_test.go:121: WORKLOAD name=hook cycle=0 phase=baseline allocated=12288 logical=1840 files=8 peak_allocated=12288 peak_logical=1840 samples=2 cadence_ms=10
+    workload_overlay_test.go:135: WORKLOAD name=hook cycle=1 phase=acked_before_stop allocated=139264 logical=94318 files=19 peak_allocated=139264 peak_logical=94318 samples=39 cadence_ms=10
+    workload_overlay_test.go:140: WORKLOAD name=hook_payload cycle=1 phase=acked allocated=90112 logical=86196
+2026/10/24 13:44:26 skeleton: final hook drain for session 5gkkn6po35ceks7v recovered 1 record(s) from its spool file
+    workload_overlay_test.go:173: WORKLOAD name=hook_payload cycle=1 phase=settled_all_attempts allocated=0 logical=0 attempts=1
+    workload_overlay_test.go:177: WORKLOAD name=hook cycle=1 phase=settled_retained_metadata allocated=73728 logical=8838 files=25 peak_allocated=159744 peak_logical=94853 samples=60 cadence_ms=10
+    workload_overlay_test.go:135: WORKLOAD name=hook cycle=2 phase=acked_before_stop allocated=188416 logical=101032 files=34 peak_allocated=188416 peak_logical=101032 samples=71 cadence_ms=10
+    workload_overlay_test.go:140: WORKLOAD name=hook_payload cycle=2 phase=acked allocated=90112 logical=86196
+2026/10/24 13:44:26 skeleton: final hook drain for session gh2dsuqyxjbg3ssk recovered 1 record(s) from its spool file
+    workload_overlay_test.go:173: WORKLOAD name=hook_payload cycle=2 phase=settled_all_attempts allocated=0 logical=0 attempts=2
+    workload_overlay_test.go:177: WORKLOAD name=hook cycle=2 phase=settled_retained_metadata allocated=118784 logical=15373 files=39 peak_allocated=208896 peak_logical=101569 samples=92 cadence_ms=10
+    workload_overlay_test.go:135: WORKLOAD name=hook cycle=3 phase=acked_before_stop allocated=237568 logical=107749 files=49 peak_allocated=237568 peak_logical=107749 samples=107 cadence_ms=10
+    workload_overlay_test.go:140: WORKLOAD name=hook_payload cycle=3 phase=acked allocated=90112 logical=86196
+2026/10/24 13:44:27 skeleton: final hook drain for session 3l35cdo7th5w6kfp recovered 1 record(s) from its spool file
+    workload_overlay_test.go:173: WORKLOAD name=hook_payload cycle=3 phase=settled_all_attempts allocated=0 logical=0 attempts=3
+    workload_overlay_test.go:177: WORKLOAD name=hook cycle=3 phase=settled_retained_metadata allocated=167936 logical=22091 files=54 peak_allocated=258048 peak_logical=110370 samples=129 cadence_ms=10
+--- PASS: TestWorkloadHookRetirementAllocated (2.38s)
+=== RUN   TestWorkloadIdenticalHandoffsAllocated
+    workload_overlay_test.go:184: WORKLOAD name=handoff cycle=0 phase=baseline_source allocated=102400 logical=51057 files=23 peak_allocated=102400 peak_logical=51057 samples=2 cadence_ms=10
+    workload_overlay_test.go:192: WORKLOAD name=handoff cycle=1 phase=successor_launched allocated=143360 logical=61688 files=35 peak_allocated=143360 peak_logical=61688 samples=35 cadence_ms=10
+2026/10/24 13:44:28 skeleton: hook drain for session ips37btxuupy3azc: skeleton: dial hook socket: dial unix /private/tmp/s3541208985/swsk1652236667/ips37btxuupy3azc/hook.sock: connect: no such file or directory
+    workload_overlay_test.go:209: WORKLOAD name=handoff_exports cycle=1 phase=settled allocated=4096 logical=995 files=1
+    workload_overlay_test.go:210: WORKLOAD name=handoff cycle=1 phase=settled_retained_successors allocated=155648 logical=62485 files=38 peak_allocated=159744 peak_logical=63615 samples=88 cadence_ms=10
+    workload_overlay_test.go:192: WORKLOAD name=handoff cycle=2 phase=successor_launched allocated=192512 logical=72009 files=49 peak_allocated=192512 peak_logical=72009 samples=103 cadence_ms=10
+2026/10/24 13:44:29 skeleton: hook drain for session nq5yx5uby2jdahsi: skeleton: dial hook socket: dial unix /private/tmp/s3541208985/swsk1652236667/nq5yx5uby2jdahsi/hook.sock: connect: no such file or directory
+    workload_overlay_test.go:209: WORKLOAD name=handoff_exports cycle=2 phase=settled allocated=4096 logical=995 files=1
+    workload_overlay_test.go:210: WORKLOAD name=handoff cycle=2 phase=settled_retained_successors allocated=204800 logical=72808 files=52 peak_allocated=208896 peak_logical=73938 samples=155 cadence_ms=10
+    workload_overlay_test.go:192: WORKLOAD name=handoff cycle=3 phase=successor_launched allocated=241664 logical=82332 files=63 peak_allocated=241664 peak_logical=82332 samples=167 cadence_ms=10
+2026/10/24 13:44:29 skeleton: hook drain for session ylwssi6pomy52slq: skeleton: dial hook socket: dial unix /private/tmp/s3541208985/swsk1652236667/ylwssi6pomy52slq/hook.sock: connect: no such file or directory
+    workload_overlay_test.go:209: WORKLOAD name=handoff_exports cycle=3 phase=settled allocated=4096 logical=995 files=1
+    workload_overlay_test.go:210: WORKLOAD name=handoff cycle=3 phase=settled_retained_successors allocated=253952 logical=83131 files=66 peak_allocated=253952 peak_logical=83135 samples=220 cadence_ms=10
+--- PASS: TestWorkloadIdenticalHandoffsAllocated (2.82s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/skeleton	5.842s
+=== RUN   TestWorkloadActualLogAllocation
+    workload_overlay_test.go:122: WORKLOAD name=log cycle=0 phase=baseline allocated=0 logical=0 files=1 peak_allocated=0 peak_logical=0 samples=2 cadence_ms=10
+    workload_overlay_test.go:141: WORKLOAD name=log cycle=1 phase=nine_mib_actual_written allocated=9437184 logical=9437184 files=1 peak_allocated=9437184 peak_logical=9437184 samples=5 cadence_ms=10
+    workload_overlay_test.go:170: WORKLOAD name=log cycle=1 phase=settled_production_5s_maintenance allocated=0 logical=0 files=1 peak_allocated=9437184 peak_logical=9437184 samples=504 cadence_ms=10
+    workload_overlay_test.go:141: WORKLOAD name=log cycle=2 phase=nine_mib_actual_written allocated=9437184 logical=9437184 files=1 peak_allocated=9437184 peak_logical=9437184 samples=506 cadence_ms=10
+    workload_overlay_test.go:170: WORKLOAD name=log cycle=2 phase=settled_production_5s_maintenance allocated=0 logical=0 files=1 peak_allocated=9437184 peak_logical=9437184 samples=1007 cadence_ms=10
+    workload_overlay_test.go:141: WORKLOAD name=log cycle=3 phase=nine_mib_actual_written allocated=9437184 logical=9437184 files=1 peak_allocated=9437184 peak_logical=9437184 samples=1009 cadence_ms=10
+    workload_overlay_test.go:170: WORKLOAD name=log cycle=3 phase=settled_production_5s_maintenance allocated=0 logical=0 files=1 peak_allocated=9437184 peak_logical=9437184 samples=1509 cadence_ms=10
+--- PASS: TestWorkloadActualLogAllocation (15.01s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/diagnosticlog	15.196s
+=== RUN   TestWorkloadAbortedScratchAllocated
+    supervise_test.go:499: WORKLOAD name=aborted_scratch mode=panic cycle=1 peak_allocated=3416064 peak_logical=3415842 settled_allocated=0 settled_logical=0 samples=2 cadence=child_ready_and_parent_exit
+    supervise_test.go:499: WORKLOAD name=aborted_scratch mode=timeout cycle=1 peak_allocated=3416064 peak_logical=3415842 settled_allocated=0 settled_logical=0 samples=2 cadence=child_ready_and_parent_exit
+    supervise_test.go:499: WORKLOAD name=aborted_scratch mode=panic cycle=2 peak_allocated=3416064 peak_logical=3415842 settled_allocated=0 settled_logical=0 samples=2 cadence=child_ready_and_parent_exit
+    supervise_test.go:499: WORKLOAD name=aborted_scratch mode=timeout cycle=2 peak_allocated=3416064 peak_logical=3415842 settled_allocated=0 settled_logical=0 samples=2 cadence=child_ready_and_parent_exit
+    supervise_test.go:499: WORKLOAD name=aborted_scratch mode=panic cycle=3 peak_allocated=3416064 peak_logical=3415842 settled_allocated=0 settled_logical=0 samples=2 cadence=child_ready_and_parent_exit
+    supervise_test.go:499: WORKLOAD name=aborted_scratch mode=timeout cycle=3 peak_allocated=3416064 peak_logical=3415842 settled_allocated=0 settled_logical=0 samples=2 cadence=child_ready_and_parent_exit
+--- PASS: TestWorkloadAbortedScratchAllocated (2.21s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/testbin	2.482s
+
+OVERLAY AND SOURCE
+
+FILE /private/tmp/swarm-storage-workload/overlay.json
+SHA256 2d95755204bb7f47a3eb220097da1eecb2e6cbd4cb57284e0859e53c54c9fc0d
+{
+  "Replace": {
+    "/private/tmp/swarm-storage-implementation-20261024/internal/skeleton/workload_overlay_test.go": "/private/tmp/swarm-storage-workload/skeleton_workload_test.go",
+    "/private/tmp/swarm-storage-implementation-20261024/internal/diagnosticlog/workload_overlay_test.go": "/private/tmp/swarm-storage-workload/log_workload_test.go",
+    "/private/tmp/swarm-storage-implementation-20261024/internal/testbin/supervise_test.go": "/private/tmp/swarm-storage-workload/supervise_workload_test.go"
+  }
+}
+
+FILE /private/tmp/swarm-storage-workload/create_overlay.py
+SHA256 4726428a2ba12fefb0c2757e384d4758ffda1be23b4390b99eaaaaaf4e162acc
+from pathlib import Path
+import json
+root=Path('/private/tmp/swarm-storage-implementation-20261024')
+out=Path('/private/tmp/swarm-storage-workload')
+measure=r'''
+type workloadBytes struct { Allocated, Logical int64; Files int }
+func workloadMeasure(root string) (workloadBytes,error) {
+ var result workloadBytes
+ seen:=map[[2]uint64]bool{}
+ err:=filepath.Walk(root,func(path string,info os.FileInfo,err error)error{
+  if os.IsNotExist(err){return nil};if err!=nil{return err}
+  stat,ok:=info.Sys().(*syscall.Stat_t);if !ok{return fmt.Errorf("missing allocation metadata")}
+  key:=[2]uint64{uint64(stat.Dev),uint64(stat.Ino)}
+  if seen[key]{return nil};seen[key]=true
+  result.Allocated+=stat.Blocks*512
+  if info.Mode().IsRegular(){result.Logical+=info.Size();result.Files++}
+  return nil
+ })
+ return result,err
+}
+type workloadSampler struct { root string; mu sync.Mutex; peak workloadBytes; samples int; err error; stop chan struct{}; done chan struct{}; once sync.Once }
+func workloadStart(t *testing.T,root string)*workloadSampler {
+ s:=&workloadSampler{root:root,stop:make(chan struct{}),done:make(chan struct{})}
+ s.sample()
+ go func(){defer close(s.done);ticker:=time.NewTicker(10*time.Millisecond);defer ticker.Stop();for{select{case <-ticker.C:s.sample();case <-s.stop:return}}}()
+ t.Cleanup(s.finish)
+ return s
+}
+func(s *workloadSampler)sample(){value,err:=workloadMeasure(s.root);s.mu.Lock();defer s.mu.Unlock();s.samples++;if err!=nil{s.err=err};if value.Allocated>s.peak.Allocated{s.peak.Allocated=value.Allocated};if value.Logical>s.peak.Logical{s.peak.Logical=value.Logical}}
+func(s *workloadSampler)finish(){s.once.Do(func(){close(s.stop)});<-s.done}
+func(s *workloadSampler)report(t *testing.T,name string,cycle int,phase string){
+ t.Helper();s.sample();settled,err:=workloadMeasure(s.root);if err!=nil{t.Fatal(err)}
+ s.mu.Lock();defer s.mu.Unlock();if s.err!=nil{t.Fatal(s.err)}
+ t.Logf("WORKLOAD name=%s cycle=%d phase=%s allocated=%d logical=%d files=%d peak_allocated=%d peak_logical=%d samples=%d cadence_ms=10",name,cycle,phase,settled.Allocated,settled.Logical,settled.Files,s.peak.Allocated,s.peak.Logical,s.samples)
+}
+'''
+skel=r'''package skeleton
+import (
+ "fmt"
+ "os"
+ "path/filepath"
+ "strings"
+ "sync"
+ "syscall"
+ "testing"
+ "time"
+ "github.com/Nathandela/swarm/internal/engine"
+ "github.com/Nathandela/swarm/internal/hookclient"
+)
+'''+measure+r'''
+func TestWorkloadHookRetirementAllocated(t *testing.T){
+ root,err:=os.MkdirTemp("","wh");if err!=nil{t.Fatal(err)}
+ t.Cleanup(func(){_ = os.RemoveAll(root)})
+ sk:=assembleAt(t,root);t.Cleanup(func(){_ = sk.Close()})
+ scriptedCapture(sk,"workload-one","workload-two","workload-three")
+ sample:=workloadStart(t,root);sample.report(t,"hook",0,"baseline")
+ var spools []string
+ for cycle:=1;cycle<=3;cycle++{
+  m:=launchFake(t,sk,"idle 600s\n")
+  ch,ok:=sk.Core().SessionHookChannel(m.ID);if !ok{t.Fatal("missing hook channel")}
+  waitForSocket(t,ch.SocketPath)
+  token:=envValue(launchEnv(t,root,m.ID),hookclient.EnvToken)
+  ack,err:=hookclient.PostToShim(ch.SocketPath,engine.Callback{SessionID:m.ID,Token:token,Sequence:1,Event:"PostToolUse",Payload:map[string]string{"fixture":strings.Repeat("nonzero-hook-payload-",4096)}})
+  if err!=nil||!ack{t.Fatalf("hook ack=%v err=%v",ack,err)}
+  sample.report(t,"hook",cycle,"acked_before_stop")
+  before,err:=workloadMeasure(ch.SpoolPath);if err!=nil{t.Fatal(err)}
+  t.Logf("WORKLOAD name=hook_payload cycle=%d phase=acked allocated=%d logical=%d",cycle,before.Allocated,before.Logical)
+  if before.Allocated==0||before.Logical==0{t.Fatal("no allocated hook payload observed")}
+  if err:=sk.Core().Kill(m.ID);err!=nil{t.Fatal(err)}
+  awaitJournalTexts(t,sk,m.ID,1)
+  deadline:=time.Now().Add(5*time.Second)
+  for {info,err:=os.Stat(ch.SpoolPath);if err!=nil{t.Fatal(err)};if info.Size()==0{break};if time.Now().After(deadline){t.Fatal("hook payload did not retire")};sample.sample();time.Sleep(10*time.Millisecond)}
+  spools=append(spools,ch.SpoolPath)
+  var allocated,logical int64
+  for _,path:=range spools{value,err:=workloadMeasure(path);if err!=nil{t.Fatal(err)};allocated+=value.Allocated;logical+=value.Logical}
+  t.Logf("WORKLOAD name=hook_payload cycle=%d phase=settled_all_attempts allocated=%d logical=%d attempts=%d",cycle,allocated,logical,len(spools))
+  if allocated!=0||logical!=0{t.Fatal("retired attempts retain payload allocation")}
+  sample.report(t,"hook",cycle,"settled_retained_metadata")
+ }
+ sample.finish()
+}
+func TestWorkloadIdenticalHandoffsAllocated(t *testing.T){
+ f:=newOpenCodeSendFixture(t)
+ sample:=workloadStart(t,f.d.stateDir);sample.report(t,"handoff",0,"baseline_source")
+ spec:=storageHandoffSpec(t,f)
+ var identity string
+ for cycle:=1;cycle<=3;cycle++{
+  successor,err:=f.d.api.Launch(spec);if err!=nil{t.Fatal(err)}
+  sample.report(t,"handoff",cycle,"successor_launched")
+  if !waitSessionExited(t,f.d,successor.ID,10*time.Second){t.Fatal("successor did not exit")}
+  entries:=storageExports(t,f.d.stateDir)
+  if len(entries)!=1{t.Fatalf("identical handoffs retained %d exports",len(entries))}
+  if cycle==1{identity=entries[0].Name()}else if entries[0].Name()!=identity{t.Fatal("identical history changed export identity")}
+  export,err:=workloadMeasure(filepath.Join(f.d.stateDir,handoffExportDirectory));if err!=nil{t.Fatal(err)}
+  t.Logf("WORKLOAD name=handoff_exports cycle=%d phase=settled allocated=%d logical=%d files=%d",cycle,export.Allocated,export.Logical,export.Files)
+  sample.report(t,"handoff",cycle,"settled_retained_successors")
+ }
+ sample.finish()
+}
+'''
+(out/'skeleton_workload_test.go').write_text(skel)
+log=r'''package diagnosticlog
+import (
+ "crypto/rand"
+ "fmt"
+ "os"
+ "path/filepath"
+ "sync"
+ "syscall"
+ "testing"
+ "time"
+)
+'''+measure+r'''
+func TestWorkloadActualLogAllocation(t *testing.T){
+ root:=privateTestDir(t);path:=filepath.Join(root,"daemon.log")
+ file,err:=Open(path);if err!=nil{t.Fatal(err)};defer file.Close()
+ original,err:=file.Stat();if err!=nil{t.Fatal(err)}
+ sample:=workloadStart(t,root);sample.report(t,"log",0,"baseline")
+ stop,err:=Start(path,file);if err!=nil{t.Fatal(err)};defer stop()
+ data:=make([]byte,1<<20);if _,err:=rand.Read(data);err!=nil{t.Fatal(err)}
+ for cycle:=1;cycle<=3;cycle++{
+  for block:=0;block<9;block++{if _,err:=file.Write(data);err!=nil{t.Fatal(err)}}
+  if err:=file.Sync();err!=nil{t.Fatal(err)}
+  sample.report(t,"log",cycle,"nine_mib_actual_written")
+  allocated,err:=workloadMeasure(path);if err!=nil{t.Fatal(err)}
+  if allocated.Allocated<9<<20||allocated.Logical!=9<<20{t.Fatalf("expected allocated real 9MiB, got %+v",allocated)}
+  deadline:=time.Now().Add(7*time.Second)
+  for {info,err:=file.Stat();if err!=nil{t.Fatal(err)};if info.Size()==0{break};if time.Now().After(deadline){t.Fatal("production 5s maintainer did not settle")};time.Sleep(10*time.Millisecond)}
+  current,err:=file.Stat();if err!=nil{t.Fatal(err)};if !os.SameFile(original,current){t.Fatal("maintainer replaced inode")}
+  sample.report(t,"log",cycle,"settled_production_5s_maintenance")
+  zero,err:=workloadMeasure(path);if err!=nil||zero.Allocated!=0||zero.Logical!=0{t.Fatalf("log allocation not reclaimed: %+v %v",zero,err)}
+ }
+ sample.finish()
+}
+'''
+(out/'log_workload_test.go').write_text(log)
+# Reuse the existing fake survivor and panic/timeout fixtures, adding only boundary sampling.
+p=root/'internal/testbin/supervise_test.go'
+s=p.read_text().replace('"errors"','"errors"\n "fmt"')
+s=s.replace('\tswitch mode {',''' if os.Getenv("WORKLOAD_SAMPLE")=="1" {
+  allocated,logical,err:=workloadScratchMeasure(os.TempDir());if err!=nil{t.Fatal(err)}
+  fmt.Printf("WORKLOAD_SCRATCH_READY allocated=%d logical=%d\\n",allocated,logical)
+ }
+\tswitch mode {''',1)
+s+=r'''
+func workloadScratchMeasure(root string)(int64,int64,error){
+ var allocated,logical int64
+ seen:=map[[2]uint64]bool{}
+ err:=filepath.Walk(root,func(path string,info os.FileInfo,err error)error{if os.IsNotExist(err){return nil};if err!=nil{return err};stat,ok:=info.Sys().(*syscall.Stat_t);if !ok{return fmt.Errorf("missing allocation metadata")};key:=[2]uint64{uint64(stat.Dev),uint64(stat.Ino)};if seen[key]{return nil};seen[key]=true;allocated+=stat.Blocks*512;if info.Mode().IsRegular(){logical+=info.Size()};return nil})
+ return allocated,logical,err
+}
+func TestWorkloadAbortedScratchAllocated(t *testing.T){
+ for cycle:=1;cycle<=3;cycle++{for _,mode:=range []string{"panic","timeout"}{
+  reportPath:=filepath.Join(t.TempDir(),"report")
+  self,err:=os.Executable();if err!=nil{t.Fatal(err)}
+  cmd:=exec.Command(self,"-test.run=^TestSupervisorFixture$","-test.timeout=500ms")
+  for _,env:=range os.Environ(){if !strings.HasPrefix(env,runRootEnv+"=")&&!strings.HasPrefix(env,"TESTBIN_SCENARIO="){cmd.Env=append(cmd.Env,env)}}
+  cmd.Env=append(cmd.Env,"TESTBIN_SCENARIO="+mode,"TESTBIN_REPORT="+reportPath,"WORKLOAD_SAMPLE=1")
+  output,err:=cmd.CombinedOutput();exit,ok:=err.(*exec.ExitError);if !ok||exit.ExitCode()!=2{t.Fatalf("child %s status %v",mode,err)}
+  raw,err:=os.ReadFile(reportPath);if err!=nil{t.Fatalf("report: %v\n%s",err,output)}
+  var report survivorReport;if err:=json.Unmarshal(raw,&report);err!=nil{t.Fatal(err)}
+  identity:=processcontain.Identity{PID:report.PID,StartTime:report.Start}
+  t.Cleanup(func(){if identity.Alive(){_=syscall.Kill(report.PID,syscall.SIGKILL)};_=os.RemoveAll(report.Root)})
+  var peakAllocated,peakLogical int64
+  found:=false
+  for _,line:=range strings.Split(string(output),"\n"){if strings.HasPrefix(line,"WORKLOAD_SCRATCH_READY "){if _,err:=fmt.Sscanf(line,"WORKLOAD_SCRATCH_READY allocated=%d logical=%d",&peakAllocated,&peakLogical);err!=nil{t.Fatal(err)};found=true}}
+  if !found||peakAllocated==0{t.Fatalf("missing real scratch sample: %s",output)}
+  if identity.Alive(){t.Fatal("owned survivor remained alive")}
+  if _,err:=os.Stat(report.Root);!os.IsNotExist(err){t.Fatal("aborted scratch root remained")}
+  t.Logf("WORKLOAD name=aborted_scratch mode=%s cycle=%d peak_allocated=%d peak_logical=%d settled_allocated=0 settled_logical=0 samples=2 cadence=child_ready_and_parent_exit",mode,cycle,peakAllocated,peakLogical)
+ }}
+}
+'''
+(out/'supervise_workload_test.go').write_text(s)
+replace={str(root/'internal/skeleton/workload_overlay_test.go'):str(out/'skeleton_workload_test.go'),str(root/'internal/diagnosticlog/workload_overlay_test.go'):str(out/'log_workload_test.go'),str(p):str(out/'supervise_workload_test.go')}
+(out/'overlay.json').write_text(json.dumps({'Replace':replace},indent=2)+'\n')
+
+FILE /private/tmp/swarm-storage-workload/skeleton_workload_test.go
+SHA256 98a8016f46b759f01a1cc7be5115a02edb85b86510d32be71e6eefb169e44486
+package skeleton
+
+import (
+	"fmt"
+	"github.com/Nathandela/swarm/internal/engine"
+	"github.com/Nathandela/swarm/internal/hookclient"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+type workloadBytes struct {
+	Allocated, Logical int64
+	Files              int
+}
+
+func workloadMeasure(root string) (workloadBytes, error) {
+	var result workloadBytes
+	seen := map[[2]uint64]bool{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("missing allocation metadata")
+		}
+		key := [2]uint64{uint64(stat.Dev), uint64(stat.Ino)}
+		if seen[key] {
+			return nil
+		}
+		seen[key] = true
+		result.Allocated += stat.Blocks * 512
+		if info.Mode().IsRegular() {
+			result.Logical += info.Size()
+			result.Files++
+		}
+		return nil
+	})
+	return result, err
+}
+
+type workloadSampler struct {
+	root    string
+	mu      sync.Mutex
+	peak    workloadBytes
+	samples int
+	err     error
+	stop    chan struct{}
+	done    chan struct{}
+	once    sync.Once
+}
+
+func workloadStart(t *testing.T, root string) *workloadSampler {
+	s := &workloadSampler{root: root, stop: make(chan struct{}), done: make(chan struct{})}
+	s.sample()
+	go func() {
+		defer close(s.done)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.sample()
+			case <-s.stop:
+				return
+			}
+		}
+	}()
+	t.Cleanup(s.finish)
+	return s
+}
+func (s *workloadSampler) sample() {
+	value, err := workloadMeasure(s.root)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.samples++
+	if err != nil {
+		s.err = err
+	}
+	if value.Allocated > s.peak.Allocated {
+		s.peak.Allocated = value.Allocated
+	}
+	if value.Logical > s.peak.Logical {
+		s.peak.Logical = value.Logical
+	}
+}
+func (s *workloadSampler) finish() { s.once.Do(func() { close(s.stop) }); <-s.done }
+func (s *workloadSampler) report(t *testing.T, name string, cycle int, phase string) {
+	t.Helper()
+	s.sample()
+	settled, err := workloadMeasure(s.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		t.Fatal(s.err)
+	}
+	t.Logf("WORKLOAD name=%s cycle=%d phase=%s allocated=%d logical=%d files=%d peak_allocated=%d peak_logical=%d samples=%d cadence_ms=10", name, cycle, phase, settled.Allocated, settled.Logical, settled.Files, s.peak.Allocated, s.peak.Logical, s.samples)
+}
+
+func TestWorkloadHookRetirementAllocated(t *testing.T) {
+	root, err := os.MkdirTemp("", "wh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	sk := assembleAt(t, root)
+	t.Cleanup(func() { _ = sk.Close() })
+	scriptedCapture(sk, "workload-one", "workload-two", "workload-three")
+	sample := workloadStart(t, root)
+	sample.report(t, "hook", 0, "baseline")
+	var spools []string
+	for cycle := 1; cycle <= 3; cycle++ {
+		m := launchFake(t, sk, "idle 600s\n")
+		ch, ok := sk.Core().SessionHookChannel(m.ID)
+		if !ok {
+			t.Fatal("missing hook channel")
+		}
+		waitForSocket(t, ch.SocketPath)
+		token := envValue(launchEnv(t, root, m.ID), hookclient.EnvToken)
+		ack, err := hookclient.PostToShim(ch.SocketPath, engine.Callback{SessionID: m.ID, Token: token, Sequence: 1, Event: "PostToolUse", Payload: map[string]string{"fixture": strings.Repeat("nonzero-hook-payload-", 4096)}})
+		if err != nil || !ack {
+			t.Fatalf("hook ack=%v err=%v", ack, err)
+		}
+		sample.report(t, "hook", cycle, "acked_before_stop")
+		before, err := workloadMeasure(ch.SpoolPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("WORKLOAD name=hook_payload cycle=%d phase=acked allocated=%d logical=%d", cycle, before.Allocated, before.Logical)
+		if before.Allocated == 0 || before.Logical == 0 {
+			t.Fatal("no allocated hook payload observed")
+		}
+		if err := sk.Core().Kill(m.ID); err != nil {
+			t.Fatal(err)
+		}
+		awaitJournalTexts(t, sk, m.ID, 1)
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			info, err := os.Stat(ch.SpoolPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Size() == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("hook payload did not retire")
+			}
+			sample.sample()
+			time.Sleep(10 * time.Millisecond)
+		}
+		spools = append(spools, ch.SpoolPath)
+		var allocated, logical int64
+		for _, path := range spools {
+			value, err := workloadMeasure(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			allocated += value.Allocated
+			logical += value.Logical
+		}
+		t.Logf("WORKLOAD name=hook_payload cycle=%d phase=settled_all_attempts allocated=%d logical=%d attempts=%d", cycle, allocated, logical, len(spools))
+		if allocated != 0 || logical != 0 {
+			t.Fatal("retired attempts retain payload allocation")
+		}
+		sample.report(t, "hook", cycle, "settled_retained_metadata")
+	}
+	sample.finish()
+}
+func TestWorkloadIdenticalHandoffsAllocated(t *testing.T) {
+	f := newOpenCodeSendFixture(t)
+	sample := workloadStart(t, f.d.stateDir)
+	sample.report(t, "handoff", 0, "baseline_source")
+	spec := storageHandoffSpec(t, f)
+	var identity string
+	for cycle := 1; cycle <= 3; cycle++ {
+		successor, err := f.d.api.Launch(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sample.report(t, "handoff", cycle, "successor_launched")
+		if !waitSessionExited(t, f.d, successor.ID, 10*time.Second) {
+			t.Fatal("successor did not exit")
+		}
+		entries := storageExports(t, f.d.stateDir)
+		if len(entries) != 1 {
+			t.Fatalf("identical handoffs retained %d exports", len(entries))
+		}
+		if cycle == 1 {
+			identity = entries[0].Name()
+		} else if entries[0].Name() != identity {
+			t.Fatal("identical history changed export identity")
+		}
+		export, err := workloadMeasure(filepath.Join(f.d.stateDir, handoffExportDirectory))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("WORKLOAD name=handoff_exports cycle=%d phase=settled allocated=%d logical=%d files=%d", cycle, export.Allocated, export.Logical, export.Files)
+		sample.report(t, "handoff", cycle, "settled_retained_successors")
+	}
+	sample.finish()
+}
+
+FILE /private/tmp/swarm-storage-workload/log_workload_test.go
+SHA256 f10780c8d73d40c44514c2d8af6287049bcc64566896237bd49356a59a65be11
+package diagnosticlog
+
+import (
+	"crypto/rand"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+type workloadBytes struct {
+	Allocated, Logical int64
+	Files              int
+}
+
+func workloadMeasure(root string) (workloadBytes, error) {
+	var result workloadBytes
+	seen := map[[2]uint64]bool{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("missing allocation metadata")
+		}
+		key := [2]uint64{uint64(stat.Dev), uint64(stat.Ino)}
+		if seen[key] {
+			return nil
+		}
+		seen[key] = true
+		result.Allocated += stat.Blocks * 512
+		if info.Mode().IsRegular() {
+			result.Logical += info.Size()
+			result.Files++
+		}
+		return nil
+	})
+	return result, err
+}
+
+type workloadSampler struct {
+	root    string
+	mu      sync.Mutex
+	peak    workloadBytes
+	samples int
+	err     error
+	stop    chan struct{}
+	done    chan struct{}
+	once    sync.Once
+}
+
+func workloadStart(t *testing.T, root string) *workloadSampler {
+	s := &workloadSampler{root: root, stop: make(chan struct{}), done: make(chan struct{})}
+	s.sample()
+	go func() {
+		defer close(s.done)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.sample()
+			case <-s.stop:
+				return
+			}
+		}
+	}()
+	t.Cleanup(s.finish)
+	return s
+}
+func (s *workloadSampler) sample() {
+	value, err := workloadMeasure(s.root)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.samples++
+	if err != nil {
+		s.err = err
+	}
+	if value.Allocated > s.peak.Allocated {
+		s.peak.Allocated = value.Allocated
+	}
+	if value.Logical > s.peak.Logical {
+		s.peak.Logical = value.Logical
+	}
+}
+func (s *workloadSampler) finish() { s.once.Do(func() { close(s.stop) }); <-s.done }
+func (s *workloadSampler) report(t *testing.T, name string, cycle int, phase string) {
+	t.Helper()
+	s.sample()
+	settled, err := workloadMeasure(s.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		t.Fatal(s.err)
+	}
+	t.Logf("WORKLOAD name=%s cycle=%d phase=%s allocated=%d logical=%d files=%d peak_allocated=%d peak_logical=%d samples=%d cadence_ms=10", name, cycle, phase, settled.Allocated, settled.Logical, settled.Files, s.peak.Allocated, s.peak.Logical, s.samples)
+}
+
+func TestWorkloadActualLogAllocation(t *testing.T) {
+	root := privateTestDir(t)
+	path := filepath.Join(root, "daemon.log")
+	file, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	original, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sample := workloadStart(t, root)
+	sample.report(t, "log", 0, "baseline")
+	stop, err := Start(path, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	data := make([]byte, 1<<20)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+	for cycle := 1; cycle <= 3; cycle++ {
+		for block := 0; block < 9; block++ {
+			if _, err := file.Write(data); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := file.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		sample.report(t, "log", cycle, "nine_mib_actual_written")
+		allocated, err := workloadMeasure(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if allocated.Allocated < 9<<20 || allocated.Logical != 9<<20 {
+			t.Fatalf("expected allocated real 9MiB, got %+v", allocated)
+		}
+		deadline := time.Now().Add(7 * time.Second)
+		for {
+			info, err := file.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Size() == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("production 5s maintainer did not settle")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		current, err := file.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(original, current) {
+			t.Fatal("maintainer replaced inode")
+		}
+		sample.report(t, "log", cycle, "settled_production_5s_maintenance")
+		zero, err := workloadMeasure(path)
+		if err != nil || zero.Allocated != 0 || zero.Logical != 0 {
+			t.Fatalf("log allocation not reclaimed: %+v %v", zero, err)
+		}
+	}
+	sample.finish()
+}
+
+FILE /private/tmp/swarm-storage-workload/supervise_workload_test.go
+SHA256 251edbb25d767085f4e87bad084b4704695e1034432f6c14aa92963407b91d2e
+package testbin
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/Nathandela/swarm/internal/processcontain"
+	"github.com/Nathandela/swarm/internal/procstart"
+)
+
+func TestMain(m *testing.M) {
+	if code, parent := Supervise(); parent {
+		os.Exit(code)
+	}
+	os.Exit(m.Run())
+}
+
+type survivorReport struct {
+	Root  string
+	PID   int
+	Start int64
+}
+
+func TestSupervisorFixture(t *testing.T) {
+	mode := os.Getenv("TESTBIN_SCENARIO")
+	if mode == "" {
+		return
+	}
+	exe, _ := os.Executable()
+	if mode == "registered" {
+		path := filepath.Join(os.TempDir(), "registered")
+		if err := RegisterExecutable(path); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0700); err != nil {
+			t.Fatal(err)
+		}
+		exe = path
+	}
+	cmd := exec.Command(exe, "-test.run=^TestSweepProcess$", "--", "testbin-survivor")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := bufio.NewReader(pipe).ReadString('\n'); err != nil || line != "ready\n" {
+		t.Fatalf("readiness: %q %v", line, err)
+	}
+	_ = pipe.Close()
+	start, err := procstart.StartTime(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, _ := json.Marshal(survivorReport{os.TempDir(), cmd.Process.Pid, start})
+	if err := os.WriteFile(os.Getenv("TESTBIN_REPORT"), report, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if mode == "cleanupfail" || mode == "paniccleanupfail" {
+		retained := filepath.Join(os.TempDir(), "retained")
+		if err := os.Mkdir(retained, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(retained, "evidence"), []byte("keep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(retained, 0500); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if os.Getenv("WORKLOAD_SAMPLE") == "1" {
+		allocated, logical, err := workloadScratchMeasure(os.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("WORKLOAD_SCRATCH_READY allocated=%d logical=%d\n", allocated, logical)
+	}
+	switch mode {
+	case "panic", "paniccleanupfail":
+		panic("deliberate child panic")
+	case "timeout":
+		time.Sleep(time.Hour)
+	}
+}
+
+func TestSuperviseCleansAfterChildExit(t *testing.T) {
+	for _, mode := range []string{"normal", "registered", "panic", "timeout", "cleanupfail", "paniccleanupfail"} {
+		t.Run(mode, func(t *testing.T) {
+			if os.Geteuid() == 0 && strings.Contains(mode, "cleanupfail") {
+				t.Skip("root bypasses directory permission denial; injected cleanup failures are tested separately")
+			}
+			reportPath := filepath.Join(t.TempDir(), "report")
+			exe, _ := os.Executable()
+			cmd := exec.Command(exe, "-test.run=^TestSupervisorFixture$", "-test.timeout=500ms")
+			for _, env := range os.Environ() {
+				if !strings.HasPrefix(env, runRootEnv+"=") && !strings.HasPrefix(env, "TESTBIN_SCENARIO=") {
+					cmd.Env = append(cmd.Env, env)
+				}
+			}
+			cmd.Env = append(cmd.Env, "TESTBIN_SCENARIO="+mode, "TESTBIN_REPORT="+reportPath)
+			output, err := cmd.CombinedOutput()
+			raw, readErr := os.ReadFile(reportPath)
+			if readErr != nil {
+				t.Fatalf("report: %v, command: %v\n%s", readErr, err, output)
+			}
+			var report survivorReport
+			if err := json.Unmarshal(raw, &report); err != nil {
+				t.Fatal(err)
+			}
+			parent, pathErr := filepath.EvalSymlinks(filepath.Dir(report.Root))
+			if pathErr != nil || report.Root != filepath.Join(parent, filepath.Base(report.Root)) {
+				t.Errorf("scratch root uses an alias rejected by private native storage: %s (%v)", report.Root, pathErr)
+			}
+			identity := processcontain.Identity{PID: report.PID, StartTime: report.Start}
+			t.Cleanup(func() {
+				if identity.Alive() {
+					_ = syscall.Kill(report.PID, syscall.SIGKILL)
+				}
+				_ = os.Chmod(filepath.Join(report.Root, "retained"), 0700)
+				_ = os.RemoveAll(report.Root)
+			})
+			success := mode == "normal" || mode == "registered"
+			if success && err != nil {
+				t.Fatalf("normal status: %v\n%s", err, output)
+			}
+			if !success && err == nil {
+				t.Fatal("lost failing child exit status")
+			}
+			if identity.Alive() {
+				t.Errorf("%s left detached owned process %d alive", mode, report.PID)
+			}
+			if strings.Contains(mode, "cleanupfail") {
+				if _, err := os.Stat(report.Root); err != nil {
+					t.Fatalf("lost failed cleanup evidence: %v", err)
+				}
+				if !strings.Contains(string(output), "retained scratch: "+report.Root) {
+					t.Errorf("cleanup failure hidden: %s", output)
+				}
+			} else if _, err := os.Stat(report.Root); !os.IsNotExist(err) {
+				t.Errorf("%s retained successful cleanup root %s: %v", mode, report.Root, err)
+			}
+			if !success {
+				expected := 2
+				if mode == "cleanupfail" {
+					expected = 1
+				}
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != expected {
+					t.Errorf("child status: %v; wanted %d", err, expected)
+				}
+			}
+		})
+	}
+}
+
+func TestSignalOwnedRejectsChangedIdentity(t *testing.T) {
+	for _, changed := range []string{"start", "executable"} {
+		t.Run(changed, func(t *testing.T) {
+			process := ownedProcess{pid: 123, start: 456, executable: "/owned/test"}
+			start := process.start
+			exe := process.executable
+			if changed == "start" {
+				start++
+			} else {
+				exe = "/unrelated/test"
+			}
+			err := signalOwned(process, func(int) (int64, error) { return start, nil }, func(int) (string, error) { return exe, nil }, func(int, syscall.Signal) error { t.Fatal("signaled changed identity"); return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCleanupFailureRetainsScratch(t *testing.T) {
+	for _, stage := range []string{"enumerate", "kill", "remove"} {
+		t.Run(stage, func(t *testing.T) {
+			root := t.TempDir()
+			marker := filepath.Join(root, "evidence")
+			if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			injected := errors.New(stage + " failed")
+			removed := false
+			err := cleanupRun(root, nil, func(...string) error {
+				if stage != "remove" {
+					return injected
+				}
+				return nil
+			}, func(string) error { removed = true; return injected })
+			if !errors.Is(err, injected) {
+				t.Fatalf("failure hidden: %v", err)
+			}
+			if stage != "remove" && removed {
+				t.Fatal("removed root before process cleanup succeeded")
+			}
+			if _, err := os.Stat(marker); err != nil {
+				t.Fatalf("lost cleanup evidence: %v", err)
+			}
+		})
+	}
+}
+
+func TestRegisterExecutableRejectsOutsideRun(t *testing.T) {
+	if os.Getenv(runRootEnv) == "" {
+		t.Fatal("test not supervised")
+	}
+	if err := RegisterExecutable("/bin/sh"); err == nil {
+		t.Fatal("accepted unrelated executable")
+	}
+	path := filepath.Join(t.TempDir(), "owned")
+	if err := RegisterExecutable(path); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := registeredExecutables(os.Getenv(runRootEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	realParent, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(realParent, filepath.Base(path))
+	found := false
+	for _, got := range paths {
+		if got == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("executable absent from parent manifest: %s", want)
+	}
+}
+
+func TestManifestRejectsSymlinkAndNonregularFiles(t *testing.T) {
+	for _, kind := range []string{"symlink", "hardlink", "fifo", "oversized"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, executableManifest)
+			switch kind {
+			case "symlink", "hardlink":
+				target := filepath.Join(t.TempDir(), "empty")
+				if err := os.WriteFile(target, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				if kind == "symlink" {
+					err = os.Symlink(target, path)
+				} else {
+					err = os.Link(target, path)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "fifo":
+				if err := syscall.Mkfifo(path, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "oversized":
+				f, err := os.Create(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = f.Truncate(1<<20 + 1); err != nil {
+					_ = f.Close()
+					t.Fatal(err)
+				}
+				if err = f.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			done := make(chan error, 1)
+			go func() { _, err := registeredExecutables(root); done <- err }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatalf("accepted unsafe %s manifest", kind)
+				}
+			case <-time.After(time.Second):
+				if kind == "fifo" {
+					fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_NONBLOCK, 0)
+					if err == nil {
+						_ = syscall.Close(fd)
+					}
+				}
+				t.Fatalf("blocked on %s manifest", kind)
+			}
+		})
+	}
+}
+
+func TestRegisterExecutableNeverWritesThroughManifestAlias(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(runRootEnv, root)
+	target := filepath.Join(t.TempDir(), "unrelated")
+	if err := os.WriteFile(target, []byte("preserve"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, executableManifest)); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterExecutable(filepath.Join(root, "test-helper")); err == nil {
+		t.Error("registration accepted aliased manifest")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "preserve" {
+		t.Fatalf("registration modified outside file: %q %v", got, err)
+	}
+}
+
+func TestManifestRejectsExternalExecutable(t *testing.T) {
+	for _, mode := range []string{"absolute", "symlink"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			path := "/bin/sh"
+			if mode == "symlink" {
+				path = filepath.Join(root, "owned")
+				if err := os.Symlink("/bin/sh", path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(root, executableManifest), []byte(path+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := registeredExecutables(root); err == nil {
+				t.Fatal("trusted executable outside run root")
+			}
+		})
+	}
+}
+
+func TestSupervisedChildRequiresOwnedRootAndExecutable(t *testing.T) {
+	if !supervisedChild(os.Getenv(runRootEnv)) {
+		t.Fatal("current copied executable did not retain supervision")
+	}
+	borrowed := t.TempDir()
+	if supervisedChild(borrowed) {
+		t.Fatal("root marker alone disabled supervision")
+	}
+}
+
+func TestSupervisorParentTerminationStillCleans(t *testing.T) {
+	reportPath := filepath.Join(t.TempDir(), "report")
+	exe, _ := os.Executable()
+	cmd := exec.Command(exe, "-test.run=^TestSupervisorFixture$", "-test.timeout=30s")
+	for _, env := range os.Environ() {
+		if !strings.HasPrefix(env, runRootEnv+"=") {
+			cmd.Env = append(cmd.Env, env)
+		}
+	}
+	cmd.Env = append(cmd.Env, "TESTBIN_SCENARIO=timeout", "TESTBIN_REPORT="+reportPath)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	waitDone := make(chan struct{})
+	go func() { defer close(waitDone); exited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		select {
+		case <-waitDone:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	var report survivorReport
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		raw, err := os.ReadFile(reportPath)
+		if err == nil && json.Unmarshal(raw, &report) == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("child did not report readiness")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	identity := processcontain.Identity{PID: report.PID, StartTime: report.Start}
+	t.Cleanup(func() {
+		if identity.Alive() {
+			_ = syscall.Kill(report.PID, syscall.SIGKILL)
+		}
+		_ = os.RemoveAll(report.Root)
+	})
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-exited:
+		if err == nil {
+			t.Fatal("lost terminated child status")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("supervisor did not finish")
+	}
+	if identity.Alive() {
+		t.Error("parent TERM left owned detached survivor")
+	}
+	if _, err := os.Stat(report.Root); !os.IsNotExist(err) {
+		t.Errorf("parent TERM retained root: %v", err)
+	}
+}
+
+func workloadScratchMeasure(root string) (int64, int64, error) {
+	var allocated, logical int64
+	seen := map[[2]uint64]bool{}
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("missing allocation metadata")
+		}
+		key := [2]uint64{uint64(stat.Dev), uint64(stat.Ino)}
+		if seen[key] {
+			return nil
+		}
+		seen[key] = true
+		allocated += stat.Blocks * 512
+		if info.Mode().IsRegular() {
+			logical += info.Size()
+		}
+		return nil
+	})
+	return allocated, logical, err
+}
+func TestWorkloadAbortedScratchAllocated(t *testing.T) {
+	for cycle := 1; cycle <= 3; cycle++ {
+		for _, mode := range []string{"panic", "timeout"} {
+			reportPath := filepath.Join(t.TempDir(), "report")
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(self, "-test.run=^TestSupervisorFixture$", "-test.timeout=500ms")
+			for _, env := range os.Environ() {
+				if !strings.HasPrefix(env, runRootEnv+"=") && !strings.HasPrefix(env, "TESTBIN_SCENARIO=") {
+					cmd.Env = append(cmd.Env, env)
+				}
+			}
+			cmd.Env = append(cmd.Env, "TESTBIN_SCENARIO="+mode, "TESTBIN_REPORT="+reportPath, "WORKLOAD_SAMPLE=1")
+			output, err := cmd.CombinedOutput()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 2 {
+				t.Fatalf("child %s status %v", mode, err)
+			}
+			raw, err := os.ReadFile(reportPath)
+			if err != nil {
+				t.Fatalf("report: %v\n%s", err, output)
+			}
+			var report survivorReport
+			if err := json.Unmarshal(raw, &report); err != nil {
+				t.Fatal(err)
+			}
+			identity := processcontain.Identity{PID: report.PID, StartTime: report.Start}
+			t.Cleanup(func() {
+				if identity.Alive() {
+					_ = syscall.Kill(report.PID, syscall.SIGKILL)
+				}
+				_ = os.RemoveAll(report.Root)
+			})
+			var peakAllocated, peakLogical int64
+			found := false
+			for _, line := range strings.Split(string(output), "\n") {
+				if strings.HasPrefix(line, "WORKLOAD_SCRATCH_READY ") {
+					if _, err := fmt.Sscanf(line, "WORKLOAD_SCRATCH_READY allocated=%d logical=%d", &peakAllocated, &peakLogical); err != nil {
+						t.Fatal(err)
+					}
+					found = true
+				}
+			}
+			if !found || peakAllocated == 0 {
+				t.Fatalf("missing real scratch sample: %s", output)
+			}
+			if identity.Alive() {
+				t.Fatal("owned survivor remained alive")
+			}
+			if _, err := os.Stat(report.Root); !os.IsNotExist(err) {
+				t.Fatal("aborted scratch root remained")
+			}
+			t.Logf("WORKLOAD name=aborted_scratch mode=%s cycle=%d peak_allocated=%d peak_logical=%d settled_allocated=0 settled_logical=0 samples=2 cadence=child_ready_and_parent_exit", mode, cycle, peakAllocated, peakLogical)
+		}
+	}
+}

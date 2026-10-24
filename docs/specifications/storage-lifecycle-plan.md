@@ -1,6 +1,6 @@
 # Storage lifecycle implementation contract
 
-2026-10-24 · `agents-tracker-5jmx` · draft for Sol and Astra review
+2026-10-24 · `agents-tracker-5jmx` · reviewed implementation contract
 
 Work is isolated on `feat/bounded-supervisor-storage`, based on `179073ab`.
 Beads tracks execution; this document defines scope, ownership and acceptance.
@@ -161,6 +161,9 @@ incarnation/certified-sequence association if needed; publish it only after the
 applied cursor is durable. A missing/stale/failed certificate means no retirement.
 Never certify an old numeric cursor merely because it is below the current last
 sequence. Maintain incarnation, floor, high-water and gap/torn-tail evidence.
+Only successful ingestion or a positively terminal rejection may advance the
+numeric fold cursor. An unknown ingestion failure stops the ordered batch before
+that cursor, so a later record cannot certify a prefix crossing the failure.
 Persistence failures retain accepted data. Retry is limited to still-provable
 lineage; a lost physical capability after replacement conservatively retains
 payload instead of manufacturing disposal authority.
