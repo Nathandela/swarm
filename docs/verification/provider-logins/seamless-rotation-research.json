@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-10-24",
+  "kind": "research-not-production-qualification",
+  "issue": "agents-tracker-bwcq",
+  "baseline_commit": "8a50ecda13bb597c7c469264746e221bdd20530b",
+  "scope": {
+    "production_behavior_changed": false,
+    "production_credentials_changed": false,
+    "production_discussions_restarted": false,
+    "vm_access": "Read installed executable versions and bounded Claude program-source excerpts only.",
+    "native_paid_inference": false
+  },
+  "versions": {
+    "vm": {
+      "swarm": "0.22.0",
+      "claude": "2.1.310",
+      "codex": "0.163.0"
+    },
+    "claude_inspected_linux_binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "codex_tested_platform": "macOS arm64",
+    "codex_tested_binary_sha256": "8813367285524ac798dd96d1b071aea30d58708c7226fd236cd275cf1cfdee31",
+    "codex_upstream_commit": "83086188ae0614bd882818ff1aa23f3194962012"
+  },
+  "findings": [
+    {
+      "claim": "Current switching waits for idle/detached sessions, stops native writers, installs credentials, resumes conversations, and does not continue failed tasks.",
+      "evidence": "internal/skeleton/logins.go:beginSwitchExpected,stopClaimedSession,stepSwitch,resumeSwitchSession; docs/adr/ADR-034-provider-wide-native-logins.md"
+    },
+    {
+      "claim": "Claude background-child evidence can be lost across daemon restart.",
+      "evidence": "A named child remains active across parent Stop and an idle composer before restart. Re-registering the persisted status in a fresh engine and feeding that same composer produces idle without any child-stop event.",
+      "followup": "agents-tracker-g6sw"
+    },
+    {
+      "claim": "Board Working includes Unknown, and the Codex status projection omits terminal turn identity.",
+      "limit": "Characterizes the presentation/reducer; does not prove that every other native event consumer lacks identity fencing."
+    },
+    {
+      "claim": "Claude 2.1.310 has native credential change detection and refresh-save compare-and-swap.",
+      "evidence": "Extracted dA/il detect changed file mtime and invalidate two mocked runtime caches; wqr preserves installed B when delayed refresh A finishes. Current client factory calls credential checking before selecting auth and before the unexpired-token early return.",
+      "limit": "Exact helper code with mocked stores, not full native inference or simultaneous real processes. Complete sibling-login adoption is restricted to missing/invalid auth, so valid A-to-B can leave other account-dependent surfaces stale."
+    },
+    {
+      "claim": "A running Codex process can accept external access tokens without restart.",
+      "evidence": "Synthetic A-to-B account/login/start followed by account/read in the same installed 0.163.0 process."
+    },
+    {
+      "claim": "Replacing managed auth.json and calling account/read with refreshToken false or true does not adopt different account B in the tested case.",
+      "limit": "Negative test of this managed path, not proof that every conceivable native reload path is impossible."
+    }
+  ],
+  "tests": {
+    "swarm_activity": {
+      "passed": true,
+      "race": true,
+      "package_count": 2,
+      "pass_events_including_subtests": 27,
+      "research_characterizations": 3,
+      "meaning": "Pass means behavior reproduced; no production bug was fixed.",
+      "overlay_test_sha256": "c1c475db121743cc14340b7e4e3db358abd4d701e0ae947e9ca2ae02fdd1d13b",
+      "jsonl_sha256": "e1532c2918021ad8ff868ff876fdb8497ac18adc59b27f53e48dde5035428600"
+    },
+    "claude_helpers": {
+      "version": "2.1.310",
+      "reload_passed": true,
+      "refresh_cas_passed": true,
+      "network_calls": 0,
+      "keychain_calls": 0,
+      "reload_test_sha256": "6f319dd891c2a22be8b518d00fa008d02b43ae451dd412b6270614288eaa955e",
+      "cas_test_sha256": "f733495ea12341d7200a9132d4f9865b74f660c059e3fdf9629ac9c0f45ffc54"
+    },
+    "codex_native": {
+      "scope": "Installed 0.163.0 with fresh temporary HOME/CODEX_HOME, synthetic tokens and custom requires_openai_auth provider; loopback HTTP/SSE, WebSockets disabled.",
+      "live_switch": {
+        "passed": true,
+        "switch_during_real_local_command": true,
+        "same_original_turn_completed": true,
+        "model_request_accounts": [
+          "A",
+          "B"
+        ],
+        "bearer_and_account_header_match": true,
+        "command_execution_count": 1,
+        "command_exit_code": 0,
+        "additional_user_turn_sent": false,
+        "script_sha256": "a19020c51cd0ea114ac0744da2ecbe53decb30f6772f4ee7155c14c6a7d87963",
+        "summary_sha256": "c58ab0d19d5dd174b58bf294b3bc391407aa108160b4cb26c75296a8729d7c06"
+      },
+      "quota_continuation": {
+        "passed": true,
+        "first_turn_terminal_error": "usageLimitExceeded",
+        "recovery": "account/login/start B then turn/start with input:[] on same loaded thread",
+        "model_request_accounts": [
+          "A",
+          "A",
+          "B"
+        ],
+        "bearer_and_account_header_match": true,
+        "new_turn_completed": true,
+        "prior_tool_result_preserved": true,
+        "additional_user_message": false,
+        "local_tool_marker": "once",
+        "command_execution_count": 1,
+        "script_sha256": "159ef1165dd7ddb2123b75ae13be6b4f86dabff53f208c656eda8a9bf45df63e",
+        "summary_sha256": "14e27f77e93e6073e1c61afdf732d1472d862040a4fe647d141967417c1164da"
+      },
+      "limits": [
+        "Model responses are scripted; this tests native control/history behavior, not whether a real model may independently repeat an action.",
+        "Native RPC helper discards notifications while awaiting its own reply; recorded notifications are not a complete event trace.",
+        "No built-in ChatGPT backend-routing, WebSocket, real subscription or process-death recovery qualification."
+      ]
+    },
+    "reference": {
+      "repository": "realiti4/claude-swap",
+      "commit": "042a36b673d51f4bf990b04f903aee02f1ab07e1",
+      "passed": 34,
+      "duration_seconds": 6.39,
+      "python_version": "3.12.12",
+      "pytest_version": "9.1.1",
+      "warning": "Unknown pytest asyncio_default_fixture_loop_scope option; selected tests passed without pytest-asyncio.",
+      "scope": "Isolated upstream tests for credential-lock contention/order/takeover, cooldown/hysteresis, stale snapshot rechecks and credential selection.",
+      "limit": "Mocks and temporary files; does not prove interoperability with actual native Claude locks or real account rotation."
+    }
+  },
+  "references": [
+    {
+      "url": "https://github.com/realiti4/claude-swap",
+      "stars_at_inspection": 3921,
+      "relevance": "Closest credential-only Claude switching reference; lock and threshold tests inspected and run."
+    },
+    {
+      "url": "https://github.com/farion1231/cc-switch/blob/cae7c375405f509a8c1fe96ab47cfeb55b885945/docs/user-manual/en/4-proxy/4.3-failover.md",
+      "stars_at_inspection": 148169,
+      "relevance": "Large configuration/routing project; docs explicitly exclude official accounts from its failover queue."
+    },
+    {
+      "url": "https://github.com/router-for-me/CLIProxyAPI/blob/8289ec4c71ad914d0612c2776352b76ba3d355a6/test/codex_stream_disconnect_failover_test.go",
+      "stars_at_inspection": 56115,
+      "relevance": "Request-proxy reference. Source tests refuse cross-account replay after visible stream output; these tests were read, not run."
+    },
+    {
+      "url": "https://github.com/steipete/CodexBar",
+      "stars_at_inspection": 22774,
+      "relevance": "Usage-monitoring reference, not proof of native execution continuity."
+    },
+    {
+      "url": "https://github.com/anthropics/claude-code/issues/98437",
+      "relevance": "Upstream macOS report of changed displayed identity with stale quota after sibling login; not proof of the current Linux behavior."
+    },
+    {
+      "url": "https://code.claude.com/docs/en/hooks#stopfailure",
+      "relevance": "Terminal error observation; hook output does not retry a failed turn."
+    },
+    {
+      "url": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/request_processors/account_processor.rs#L837",
+      "relevance": "External-token login and account-dependent runtime invalidation."
+    },
+    {
+      "url": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/session/turn_input.rs#L328",
+      "relevance": "Empty-input start-or-steer path; safe recovery must first establish no active turn."
+    },
+    {
+      "url": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/session/turn.rs#L812",
+      "relevance": "Quota can occur during post-answer maintenance; failure alone does not mean unfinished work."
+    }
+  ],
+  "recommendation": {
+    "status": "candidate architecture, not accepted replacement ADR",
+    "principle": "Switch authentication for new native model requests without restarting healthy loops. Keep exact task recovery separate.",
+    "execution_evidence": "Persist/reconcile actor and turn identity, active tools/children, pending human decisions and terminal cause. Unknown cannot authorize destructive stop or automatic continuation.",
+    "claude": "Qualify a stable native credential authority with native-compatible refresh exclusion and coherent account-state adoption; current per-account secure-storage environment cannot be retargeted in an already-running process by changing daemon selection.",
+    "codex": "Qualify external-token workers backed by one serialized native-managed refresh authority per saved grant. Native owns renewal; host coordinates access-token distribution, generation/identity validation, adoption acknowledgements and expiry. This helper design itself is untested.",
+    "handover": "One desired account for new requests. Existing requests under A may finish after B selection; strict zero overlap requires draining and sacrifices seamless bounded handover.",
+    "proactive": "Fresh scoped usage, a conservative reserve, target validation, cooldown and hysteresis. Percentages cannot guarantee headroom for parallel sessions; missing/model-specific limits remain relevant. Codex UI remains weekly-only.",
+    "recovery": "Only a proven terminal quota interruption of unfinished native work may create a continuation obligation. Do not continue completed, cancelled, pending-input/approval, post-answer-maintenance or ambiguous cases. No additional prompt while native retry/loop is alive.",
+    "fallback": "Retain safe stopped-writer restart for unqualified native paths. A timeout is not permission to kill. Isolate sessions that cannot safely adopt rather than claiming the whole fleet switched.",
+    "followup": "agents-tracker-h6sc"
+  },
+  "remaining_qualification": [
+    "Real Linux A-to-B-to-A requests and long-running tool/subagent workflows.",
+    "Claude full native loop, secure-storage variants and account-bound quota/policy/connector convergence.",
+    "Codex built-in ChatGPT routing, WebSockets and long in-flight streams.",
+    "Native-owned refresh helper expiry outcomes, concurrent refresh and delayed-old-account results.",
+    "Permissions, questions, completed answers and background actors remain unprompted and retain native decisions.",
+    "Crash before send versus after native acceptance; no blind replay without authoritative reconciliation.",
+    "All accounts exhausted, resets, stale measurements and bounded retry/cooldown."
+  ]
+}

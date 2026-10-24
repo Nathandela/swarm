@@ -227,6 +227,24 @@ initialized on their current login runtime, with no resume/backend errors, held
 input fences or pending switches. Sanitized results and qualification limits:
 [remaining-usage.json](provider-logins/remaining-usage.json).
 
+## Seamless rotation research (2026-10-24)
+
+The [research evidence](provider-logins/seamless-rotation-research.json) records
+isolated native Codex 0.163.0 HTTP experiments: an external-token change during a
+local command preserved the current turn; a separate terminal-quota experiment
+started a new turn on the same loaded thread with empty input, retaining its tool result
+without adding a user message. Synthetic bearer identities and account headers
+were checked together. Scripted responses do not prove that a real model cannot
+repeat an action. Built-in ChatGPT routing, WebSockets and real fleet behavior
+remain unqualified.
+
+Extracted Claude 2.1.310 credential-reload and refresh-save functions passed mocked
+tests; no complete live Claude account switch was exercised. Swarm characterization
+tests reproduced loss of child activity evidence after daemon restart, tracked in
+`agents-tracker-g6sw`. Native hot switching and turn-scoped recovery qualification
+are tracked in `agents-tracker-h6sc`. This research changes no production behavior
+and does not supersede ADR-034.
+
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.
 
