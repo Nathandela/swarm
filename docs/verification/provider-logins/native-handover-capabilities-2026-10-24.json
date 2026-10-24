@@ -2130,5 +2130,673 @@
       "Separate actual discussion probes retained prior-account metadata after bearer swap; no personal-account exception is qualified.",
       "Swarm helper ownership/integration, removal/crash recovery and cross-account restart/continuation remain required."
     ]
+  },
+  "claude_shared_native_history": {
+    "scope": "Synthetic native capability; production profile migration and continuation remain unqualified",
+    "platform": "Linux x86_64",
+    "runs": [
+      {
+        "mode": "small",
+        "stage": "/run/user/1000/swarm-native-claude-history.zq8i6Tr1",
+        "unit": "swarm-native-claude-history-zq8i6Tr1-small",
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "exit_code": 0,
+        "elapsed_seconds": 8.9,
+        "output_truncated": false,
+        "scripts": {
+          "history_probe.py": "ec995cc24cdba653deeedb8b8c415ff7198b14a4b261c001629b59d7d5fe6a8f",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b"
+        },
+        "passed": true
+      },
+      {
+        "mode": "large",
+        "stage": "/run/user/1000/swarm-native-claude-history.zq8i6Tr1",
+        "unit": "swarm-native-claude-history-zq8i6Tr1-large",
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "exit_code": 0,
+        "elapsed_seconds": 8.302,
+        "output_truncated": false,
+        "scripts": {
+          "history_probe.py": "ec995cc24cdba653deeedb8b8c415ff7198b14a4b261c001629b59d7d5fe6a8f",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b"
+        },
+        "passed": true
+      },
+      {
+        "mode": "controls",
+        "stage": "/run/user/1000/swarm-native-claude-history.zq8i6Tr1",
+        "unit": "swarm-native-claude-history-zq8i6Tr1-controls",
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "exit_code": 0,
+        "elapsed_seconds": 32.96,
+        "output_truncated": false,
+        "scripts": {
+          "history_probe.py": "ec995cc24cdba653deeedb8b8c415ff7198b14a4b261c001629b59d7d5fe6a8f",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "history_controls.py": "7530cdf6df9be746c07daf7c32c43722228b0629e4f6f1f8ca6abddb72e6c67a",
+          "history_absolute_probe.py": "ed7b17541ff44ee8ad53e561180d665d3a09e409cd7d97bcb7a0832979cb29e1"
+        },
+        "passed": true
+      },
+      {
+        "mode": "absolute",
+        "stage": "/run/user/1000/swarm-native-claude-history.zq8i6Tr1",
+        "unit": "swarm-native-claude-history-zq8i6Tr1-absolute",
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "exit_code": 0,
+        "elapsed_seconds": 8.921,
+        "output_truncated": false,
+        "scripts": {
+          "history_probe.py": "ec995cc24cdba653deeedb8b8c415ff7198b14a4b261c001629b59d7d5fe6a8f",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "history_controls.py": "7530cdf6df9be746c07daf7c32c43722228b0629e4f6f1f8ca6abddb72e6c67a",
+          "history_absolute_probe.py": "ed7b17541ff44ee8ad53e561180d665d3a09e409cd7d97bcb7a0832979cb29e1"
+        },
+        "passed": true
+      }
+    ],
+    "history_cases": [
+      {
+        "receipt_sha256": "8a03bbaff5ac21869a2b1d6eef30a0f854474c68cca052fd29fb134291a03339",
+        "result": {
+          "large_tool": false,
+          "file_backed_tool_artifacts": 0,
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "passed": true,
+          "session_preserved": true,
+          "tool_history_identical": true,
+          "same_physical_transcript_appended": true,
+          "transcript_copies": 1,
+          "old_profile_unchanged": true,
+          "new_bearer_B_and_metadata_B": true
+        }
+      },
+      {
+        "receipt_sha256": "1cc2dc673aeafe4371424aa39eda47d71c011bac89fc877fa0eba5fb4d07e700",
+        "result": {
+          "large_tool": true,
+          "file_backed_tool_artifacts": 1,
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "passed": true,
+          "session_preserved": true,
+          "tool_history_identical": true,
+          "same_physical_transcript_appended": true,
+          "transcript_copies": 1,
+          "old_profile_unchanged": true,
+          "new_bearer_B_and_metadata_B": true
+        }
+      }
+    ],
+    "controls": [
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "case": "question",
+        "passed": true,
+        "negative_decision": "completed_turn",
+        "A_same_process_alive_during_B": true,
+        "A_profile_and_grant_unchanged": true,
+        "A_received_no_successor": true,
+        "active_child_preserved": false,
+        "B_resumed_original_session_and_tool_history": true
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "case": "approval",
+        "passed": true,
+        "negative_decision": "pending_decision",
+        "A_same_process_alive_during_B": true,
+        "A_profile_and_grant_unchanged": true,
+        "A_received_no_successor": true,
+        "active_child_preserved": false,
+        "B_resumed_original_session_and_tool_history": true
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "case": "child",
+        "passed": true,
+        "negative_decision": "active_child",
+        "A_same_process_alive_during_B": true,
+        "A_profile_and_grant_unchanged": true,
+        "A_received_no_successor": true,
+        "active_child_preserved": true,
+        "B_resumed_original_session_and_tool_history": true
+      }
+    ],
+    "absolute_resume": {
+      "version": "2.1.310",
+      "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "capability_observed": true,
+      "session_and_tool_history_preserved": true,
+      "original_physical_transcript_appended": true,
+      "B_private_transcript_copies": 0,
+      "B_projects_symlink": false
+    },
+    "receipts": {
+      "history-controls-linux.jsonl": "0f9713252e3d5915432a3e2982d0c62ccf31b58c92fcc359a7df0077c7b92b01",
+      "history-absolute-linux.jsonl": "2975922ca3b69e7278c60f50aebc9159af7a87a0354c72627dfd10fcc51a3039"
+    },
+    "containment": "Each run in its own transient user cgroup: KillMode=control-group, RuntimeMaxSec=90 (controls210), TimeoutStopSec=5, MemoryMax=1G, TasksMax=128, LimitFSIZE=16MiB, UMask=0077; this is not an aggregate OS disk quota",
+    "findings": [
+      "One physical projects tree shared by stable per-account config-root aliases preserves UUID, tool history and large file-backed results without copying transcripts.",
+      "Absolute transcript-path resume appends the original transcript with no private B copy.",
+      "A waiting question, permission decision and live child retain their original A process while a separate quota-stopped session resumes on B."
+    ],
+    "limitations": [
+      "Keep historical profile/projects aliases: native large tool results may retain their old virtual paths. Account removal must not erase those credential-free paths.",
+      "Normal user/project/managed settings and plugin precedence were suppressed in these probes and remain unqualified.",
+      "Control harness spies hold cleanup long enough to observe native processes; they do not simulate native decisions or replace the classifier.",
+      "Single-writer custody and durable transcript readiness must be integrated before production migration."
+    ]
+  },
+  "claude_cross_profile_refresh": {
+    "run": {
+      "stage": "/run/user/1000/swarm-native-claude-crossprofile.il1MlG9x",
+      "unit": "swarm-native-claude-crossprofile-il1MlG9x",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "harness_sha256": "25c27e1c1cd863a9e3e338f043337f664aed3df7b76f98cfb0dc78d07203e76f",
+      "dependency_sha256": {
+        "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+        "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+        "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3"
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 4.533,
+      "passed": true
+    },
+    "receipt_sha256": "dfacdbf9ec1fcd020dc2ce22b8eb8f5ed81df6e4ea6937c9e43f9b21b786b11e",
+    "result": {
+      "version": "2.1.310",
+      "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "case": "initialize-pair",
+      "separate_config_same_secure_authority": true,
+      "second_profile_has_no_credential_copy": true,
+      "profile_identity_persisted": false,
+      "profile_account": "A",
+      "trust_fixture_ca": true,
+      "revoked_access_fixture": false,
+      "expires_in": 0,
+      "passed": true,
+      "entry": "initialize-pair",
+      "tls_fixture": true,
+      "profile_email_persisted": false,
+      "saved_access_label": "A2",
+      "saved_refresh_label": "A2"
+    },
+    "native_refresh_calls": 1,
+    "inference_requests": 0,
+    "limitations": [
+      "Overlapping initializers shared one refresh in this run; no held-response barrier proved all lock contention or crash cases.",
+      "Initialization success, auth-status exit zero, and profile-file presence do not establish usable account or policy readiness.",
+      "Native auth-status can exit before its refresh finishes; it is not a reliable blocking refresh worker."
+    ]
+  },
+  "codex_installed_npm_launcher": {
+    "run": {
+      "stage": "/run/user/1000/swarm-native-wrapper.858dyWpX",
+      "unit": "swarm-native-wrapper-858dyWpX",
+      "exit_code": 0,
+      "elapsed_seconds": 0.712,
+      "script_sha256": "cd3dcc89047388e1352cee1cd8e43d829704d91cc6a268c7e0a7c2443e9fc1a0",
+      "receipt": {
+        "scenario": "installed-npm-launcher-peer",
+        "launcher_sha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+        "launcher": {
+          "pid": 3908973,
+          "ppid": 3908951,
+          "pgid": 3908973,
+          "exe": "/home/ubuntu/.nvm/versions/node/v22.13.1/bin/node",
+          "start_ticks": "63788150"
+        },
+        "socket_peer": {
+          "pid": 3908984,
+          "ppid": 3908973,
+          "pgid": 3908973,
+          "exe": "/home/ubuntu/.nvm/versions/node/v22.13.1/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+          "start_ticks": "63788154"
+        },
+        "owner_uid": 1000,
+        "peer_uid": 1000,
+        "same_pid": false,
+        "same_group": true,
+        "no_credentials": true
+      }
+    },
+    "harness_source_sha256": "cd3dcc89047388e1352cee1cd8e43d829704d91cc6a268c7e0a7c2443e9fc1a0",
+    "finding": "Installed npm launcher is Node; the Unix socket belongs to its Rust child. Direct-binary capability probes do not qualify this production launcher path.",
+    "production_status": "Strict socket-peer equality fails safely; exact native-target resolution is required before ownership migration can be qualified.",
+    "containment": "Credential-free private HOME/CODEX_HOME, blocked external proxies, transient user cgroup, RuntimeMaxSec25, MemoryMax768M, TasksMax128, LimitFSIZE16MiB, UMask0077; no inference or account read",
+    "harness_caveat": "Earlier 384MiB/64-task startup attempts exited without socket evidence; this positive receipt uses native-canary resource limits and verifies installed version first."
+  },
+  "codex_0164_auth_capabilities": {
+    "version": "0.164.0",
+    "platforms": [
+      {
+        "platform": "macOS arm64",
+        "binary": {
+          "path": "/Users/Nathan/.codex/packages/standalone/releases/0.164.0-aarch64-apple-darwin/bin/codex",
+          "sha256": "d8990e3ee7acfbc26f91265b12a1a83f0fee40d0e0f8f1f40a37d4ec21f499cf",
+          "version": "0.164.0"
+        },
+        "scripts": {
+          "run.py": "04f4abbf7b7522833dba5a28363a92e0ce4c59b4fcc25c33edb65b90f0a9a024",
+          "probe.py": "89424a131cb63c383866de3f3171e1fb93f72a69a4a6e8bdacc88a44dbc07c51",
+          "route_probe.py": "7a9de1d401ac7d260f88c73277ad34abbc7bd569eec998f05ef445d6b22fc30b",
+          "ws.py": "7405b5ac97083b1bbe8619a61d0991ac8fe338b38fc2666ff79b18ce92eec9b0",
+          "tui_proxy.py": "292044a590494e9df8e69647129ea2601f5247e29daa582b0b96c6c29e8edfff",
+          "limits_probe.py": "6c21a1b1d0ec065a1be30fc8191f6b1504ae95a316c6a72fe3dcb90d0e6655a3"
+        },
+        "matrix_receipt_sha256": "728b9cce4d43f7f11a9a018515ea379df709c0c2155ad5bdfd68a9c249cb4fa5",
+        "results": [
+          {
+            "case": "renewal",
+            "exit_code": 0,
+            "elapsed_seconds": 2.817,
+            "receipt_sha256": "06cfdb7d8c9510e026eb532a9722bb310985e472c67b17ae5d8efb91ceff5ef7",
+            "asserted_native_observations": {
+              "native": "0.164.0",
+              "native_managed_refresh": true,
+              "successful_refresh_calls": 2,
+              "inference_requests": 0,
+              "identity_and_new_expiry_verified": true,
+              "rotated_refresh_persisted": true,
+              "revoked_result_account_present": false,
+              "revoked_auth_file_unchanged": true
+            }
+          },
+          {
+            "case": "adoption",
+            "exit_code": 0,
+            "elapsed_seconds": 14.581,
+            "receipt_sha256": "a1b9266421cc59a0056911f8565078b738fd3b94141751fecd1f0c1f6102b796",
+            "asserted_native_observations": {
+              "scenario": "adoption",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed",
+                "completed",
+                "completed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": false
+            }
+          },
+          {
+            "case": "busy",
+            "exit_code": 0,
+            "elapsed_seconds": 9.077,
+            "receipt_sha256": "f9b04da7753c51a448e72e12f332c0aa5a2602941bde34a5e79ad3b79e16a17b",
+            "asserted_native_observations": {
+              "scenario": "busy",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": true
+            }
+          },
+          {
+            "case": "quota",
+            "exit_code": 0,
+            "elapsed_seconds": 12.949,
+            "receipt_sha256": "78325ced1cdbe9e0c420658dfa4cc36876064359b35a1d7a4a85f5c9fac84de8",
+            "asserted_native_observations": {
+              "scenario": "quota",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "failed",
+                "completed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": true
+            }
+          },
+          {
+            "case": "callback",
+            "exit_code": 0,
+            "elapsed_seconds": 8.283,
+            "receipt_sha256": "add2ab977194a5e92922dec76e73a094729b1adc38b806e409439ac554b345df",
+            "asserted_native_observations": {
+              "scenario": "callback",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed"
+              ],
+              "callback_count": 1,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": false
+            }
+          },
+          {
+            "case": "multiclient",
+            "exit_code": 0,
+            "elapsed_seconds": 8.421,
+            "receipt_sha256": "2f7d88fb835ff25885c98a9c31905085d7861a4be26938e43d3c7413121ecded",
+            "asserted_native_observations": {
+              "scenario": "multiclient",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed"
+              ],
+              "callback_count": 1,
+              "callback_broadcast_to_second_client": true,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": false
+            }
+          },
+          {
+            "case": "finalquota",
+            "exit_code": 0,
+            "elapsed_seconds": 7.959,
+            "receipt_sha256": "5a2d3d442194fd67f819ac17062e777ff8a51ba2e170192515629e7df3dd1492",
+            "asserted_native_observations": {
+              "scenario": "finalquota",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "failed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": true
+            }
+          },
+          {
+            "case": "unknownquota",
+            "exit_code": 0,
+            "elapsed_seconds": 8.611,
+            "receipt_sha256": "033c7e3d9f8ccb5d18ab1ef4969ccb166da58c005e4da06d6795ad082087f812",
+            "asserted_native_observations": {
+              "scenario": "unknownquota",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "failed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": true
+            }
+          },
+          {
+            "case": "tui",
+            "exit_code": 0,
+            "elapsed_seconds": 16.353,
+            "receipt_sha256": "dd1d0ccd677338187e8249e67fc589831dd10584cb52127d8dc75c154ef734e5",
+            "asserted_native_observations": {
+              "scenario": "tui",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed"
+              ],
+              "callback_count": 1,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": true,
+              "tool_retained": false
+            }
+          },
+          {
+            "case": "limits",
+            "exit_code": 0,
+            "elapsed_seconds": 1.02,
+            "receipt_sha256": "315593bd3d13a242a834e342ec3ebceb736913c31991c25bd8ad8bf4e0d122b2",
+            "asserted_native_observations": {
+              "native": "0.164.0",
+              "scenario": "account_scoped_usage",
+              "passed": true,
+              "late_a_after_b": "request_cancelled_on_auth_change",
+              "fresh_b_allowed": true,
+              "inference_requests": 0,
+              "external_auth_file_absent": true
+            }
+          }
+        ]
+      },
+      {
+        "platform": "Linux x86_64",
+        "binary": {
+          "sha256": "b93f6811d3f653f0fb83be4050d857fb9abbb111dfa2ce160563327daff7f306"
+        },
+        "scripts": {
+          "run.py": "04f4abbf7b7522833dba5a28363a92e0ce4c59b4fcc25c33edb65b90f0a9a024",
+          "probe.py": "89424a131cb63c383866de3f3171e1fb93f72a69a4a6e8bdacc88a44dbc07c51",
+          "route_probe.py": "7a9de1d401ac7d260f88c73277ad34abbc7bd569eec998f05ef445d6b22fc30b",
+          "ws.py": "7405b5ac97083b1bbe8619a61d0991ac8fe338b38fc2666ff79b18ce92eec9b0",
+          "tui_proxy.py": "292044a590494e9df8e69647129ea2601f5247e29daa582b0b96c6c29e8edfff",
+          "limits_probe.py": "6c21a1b1d0ec065a1be30fc8191f6b1504ae95a316c6a72fe3dcb90d0e6655a3"
+        },
+        "matrix_receipt_sha256": "3af08bc260f73300e3fab96468a0abb4425710b30519cace5dff88ed86546f15",
+        "results": [
+          {
+            "case": "renewal",
+            "exit_code": 0,
+            "elapsed_seconds": 4.528,
+            "receipt_sha256": "386623f60eab2cf8321912da032f7f86e836543be71326e3a5b685e91e204a7e",
+            "asserted_native_observations": {
+              "native": "0.164.0",
+              "native_managed_refresh": true,
+              "successful_refresh_calls": 2,
+              "inference_requests": 0,
+              "identity_and_new_expiry_verified": true,
+              "rotated_refresh_persisted": true,
+              "revoked_result_account_present": false,
+              "revoked_auth_file_unchanged": true
+            }
+          },
+          {
+            "case": "adoption",
+            "exit_code": 0,
+            "elapsed_seconds": 16.122,
+            "receipt_sha256": "6473aa88a9f7f02bf52193d183d5d2c43bde3f3cb7f4235910849d2f5184d873",
+            "asserted_native_observations": {
+              "scenario": "adoption",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed",
+                "completed",
+                "completed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": false
+            }
+          },
+          {
+            "case": "busy",
+            "exit_code": 0,
+            "elapsed_seconds": 9.257,
+            "receipt_sha256": "b2390f5fb0cedeb50cd040fbc54dbe2f9a37ca5a03e1d060f314609ce2868fe1",
+            "asserted_native_observations": {
+              "scenario": "busy",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": true
+            }
+          },
+          {
+            "case": "quota",
+            "exit_code": 0,
+            "elapsed_seconds": 12.455,
+            "receipt_sha256": "e1e4cc4d14146663aa2d42e2f2d11b00db9657cb997912401adcbc0d526b22b9",
+            "asserted_native_observations": {
+              "scenario": "quota",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "failed",
+                "completed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": true
+            }
+          },
+          {
+            "case": "callback",
+            "exit_code": 0,
+            "elapsed_seconds": 9.092,
+            "receipt_sha256": "a45c12e0a32c84591b7fd38edf4bac9a4cbccc75a451edd04f356054d24233c8",
+            "asserted_native_observations": {
+              "scenario": "callback",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed"
+              ],
+              "callback_count": 1,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": false
+            }
+          },
+          {
+            "case": "multiclient",
+            "exit_code": 0,
+            "elapsed_seconds": 8.786,
+            "receipt_sha256": "1dddb6cf1b7ce655eadcf0d02a02e1608dbd2ca24f4bf0101f3078eb20f96aa9",
+            "asserted_native_observations": {
+              "scenario": "multiclient",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed"
+              ],
+              "callback_count": 1,
+              "callback_broadcast_to_second_client": true,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": false
+            }
+          },
+          {
+            "case": "finalquota",
+            "exit_code": 0,
+            "elapsed_seconds": 8.674,
+            "receipt_sha256": "cfc483e785351743826c72654353dcd983b3dd544968391c8d2ae0710555f2c7",
+            "asserted_native_observations": {
+              "scenario": "finalquota",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "failed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": true
+            }
+          },
+          {
+            "case": "unknownquota",
+            "exit_code": 0,
+            "elapsed_seconds": 9.265,
+            "receipt_sha256": "057686270bcde63ae44b25be96357a1f39e3ca33bac5a903cfacc8b12500345f",
+            "asserted_native_observations": {
+              "scenario": "unknownquota",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "failed"
+              ],
+              "callback_count": 0,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": false,
+              "tool_retained": true
+            }
+          },
+          {
+            "case": "tui",
+            "exit_code": 0,
+            "elapsed_seconds": 19.161,
+            "receipt_sha256": "48fd234cc575a65040fab2c586b12c9d287cf4c7aa4662af6490a5e43c6cb7b4",
+            "asserted_native_observations": {
+              "scenario": "tui",
+              "built_in_provider": true,
+              "same_native_and_thread": true,
+              "terminals": [
+                "completed"
+              ],
+              "callback_count": 1,
+              "callback_broadcast_to_second_client": false,
+              "tui_received_and_ignored_refresh": true,
+              "tool_retained": false
+            }
+          },
+          {
+            "case": "limits",
+            "exit_code": 0,
+            "elapsed_seconds": 2.148,
+            "receipt_sha256": "409b9e7a516b29254c94891803c75df6e0164dc142b74d12efb610ff2f117f6c",
+            "asserted_native_observations": {
+              "native": "0.164.0",
+              "scenario": "account_scoped_usage",
+              "passed": true,
+              "late_a_after_b": "request_cancelled_on_auth_change",
+              "fresh_b_allowed": true,
+              "inference_requests": 0,
+              "external_auth_file_absent": true
+            }
+          }
+        ]
+      }
+    ],
+    "linux_download": {
+      "source": "https://github.com/openai/codex/releases/download/rust-v0.164.0/codex-x86_64-unknown-linux-musl.tar.gz",
+      "archive_sha256": "90dd0b03b28afcb7fa733a4f73b413db2916a47347efd43fb669cc1c774ee8e4",
+      "binary_sha256": "b93f6811d3f653f0fb83be4050d857fb9abbb111dfa2ce160563327daff7f306",
+      "binary_bytes": 308139304,
+      "binary_path": "/run/user/1000/swarm-native-codex0164.KRaHZybO/codex",
+      "version": "0.164.0",
+      "no_global_install": true
+    },
+    "scope": "Ten synthetic native auth/handover canaries pass on each platform; no installed Linux CLI was changed and product version gates have not been broadened by this artifact.",
+    "containment": "Linux: one transient user cgroup per scenario, RuntimeMaxSec90, TimeoutStopSec5, KillMode=control-group, MemoryMax1G, TasksMax128, LimitFSIZE32MiB, UMask0077; inner60s and32MiB scratch bound. Mac: exact owned process groups with same inner deadline/output/scratch bounds.",
+    "limitations": [
+      "Direct native binaries only; installed npm-wrapper custody is a separate failing production path.",
+      "Execution grammar, native goal ownership, complete subagent lifecycle and integrated Swarm continuation are not qualified by these auth tests.",
+      "Native successful account API admission does not assert that every already-admitted model request uses the newly selected account.",
+      "Production refresh-worker, birth, restore, lost-acknowledgement and real user-config integration remain required."
+    ]
   }
 }
