@@ -1665,5 +1665,348 @@
       "The supported session identity getter is restricted to managed mods and does not expose request bearer/generation adoption.",
       "Existing native automatic resume must be positively disabled; Swarm did not change a real user setting."
     ]
+  },
+  "claude_direct_helper": {
+    "scope": "Actual Linux native supported hook module to synthetic stdin/ACK helper; no production socket or successor prompt",
+    "version": "2.1.310",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "harness_sha256": {
+      "native_probe.py": "676abaac77cf9a0190be8b267101af107a745c6c8283d1232bbce619584e545a",
+      "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+      "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+      "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+      "direct-module.js": "894d9925ebd8026b5929ab7b64d1ac034a3002db999654848a2f60566d2039c0",
+      "direct_helper.py": "39760795d57775b50d6faf0811d4e39a080e860dc8d80d7c7daa0ba9fe8a4c95"
+    },
+    "elapsed_seconds": 36.961,
+    "exit_code": 0,
+    "containment": "Owned systemd control-group, RuntimeMaxSec=450, TimeoutStopSec=5, MemoryMax=1G, TasksMax=128, LimitFSIZE=16MiB; inner25s case deadlines, native500ms helper timeout; no OS aggregate scratch quota claim",
+    "native_capture_files": false,
+    "synthetic_swarm_marker_inherited": true,
+    "negative_fixtures_always_ineligible": 9,
+    "controls": [
+      {
+        "scenario": "tui_tool_quota_modal",
+        "transport_mode": "ok",
+        "passed": true,
+        "candidate_observed": true,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "native_terminal_report_missing",
+          "native_phase_complete_candidate"
+        ]
+      },
+      {
+        "scenario": "tui_tool_quota_modal",
+        "transport_mode": "fail",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "native_terminal_report_missing"
+        ]
+      },
+      {
+        "scenario": "tui_tool_quota_modal",
+        "transport_mode": "timeout",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "native_terminal_report_missing"
+        ]
+      },
+      {
+        "scenario": "tui_tool_quota_modal",
+        "transport_mode": "badack",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "native_terminal_report_missing"
+        ]
+      },
+      {
+        "scenario": "tui_delayed_split_text_quota",
+        "transport_mode": "ok",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "native_terminal_report_missing",
+          "unclassified_text"
+        ]
+      },
+      {
+        "scenario": "tui_completed",
+        "transport_mode": "ok",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "completed_turn"
+        ]
+      },
+      {
+        "scenario": "tui_question",
+        "transport_mode": "ok",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "completed_turn"
+        ]
+      },
+      {
+        "scenario": "tui_approval",
+        "transport_mode": "ok",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "pending_decision"
+        ]
+      },
+      {
+        "scenario": "tui_background_child",
+        "transport_mode": "ok",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "active_child"
+        ]
+      },
+      {
+        "scenario": "tui_final_agent_maintenance_quota",
+        "transport_mode": "ok",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "helper_failure"
+        ]
+      }
+    ],
+    "timeout_proof": "Native helper TERM marker observed before harness cleanup; bounded2s observation allows separate classic-hook and helper startup ordering. Initial500ms observation raced and failed before this fixture correction.",
+    "limitations": [
+      "The helper is an audit sink, not the authenticated Swarm hook/UDS integration.",
+      "The bad-ACK case deliberately does not commit its audit sink; it does not establish delivery-uncertainty recovery.",
+      "Asynchronous snapshot and old-ACK races pass focused unit regressions; this native rerun includes the fixed module but does not itself simulate live multi-turn races.",
+      "Live multi-turn freshness, native user-abort/restart, owner/VT fencing and automatic continuation remain unqualified.",
+      "Per-grant Claude credential authority and request adoption remain separate unresolved production gates."
+    ]
+  },
+  "codex_native_tool_lifecycle": {
+    "scope": "Actual Linux native file/MCP/child lifecycles on one owned app-server feed; custom loopback model without authentication, no production discussions",
+    "version": "0.163.0",
+    "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "harness_sha256": {
+      "coverage_run.py": "dc46e967b9b40f9ceca8711bf252edd62287de0d034bbd9d033f8c4759c9f98c",
+      "coverage_probe.py": "7da4c8c09a29f7a95d2a5380bc1d3d2dcaaefa36852d89b66c26c996c4dbb1ae",
+      "probe.py": "528a59f151ebba78e957e9cb71b439b0f45b055b54a4120a2f319b20391297aa",
+      "ws.py": "7405b5ac97083b1bbe8619a61d0991ac8fe338b38fc2666ff79b18ce92eec9b0"
+    },
+    "containment": "Separate owned systemd control-group per scenario; RuntimeMaxSec=90, TimeoutStopSec=5, MemoryMax=768M, TasksMax=96, LimitFSIZE=16MiB; inner60s deadlines,32MiB monitored scratch; no OS aggregate scratch quota claim",
+    "controls": [
+      {
+        "scenario": "filechange",
+        "passed": true,
+        "elapsed_seconds": 1.772,
+        "receipt_sha256": "3cef1283971842e3f961635f48e86186c169213158c5349d5e46deada4387dbb",
+        "event_count": 9,
+        "loaded_before": {
+          "data": [],
+          "nextCursor": null
+        },
+        "file_created": true
+      },
+      {
+        "scenario": "mcp",
+        "passed": true,
+        "elapsed_seconds": 1.803,
+        "receipt_sha256": "a956056ebd933cf029aed4be196e6cb1d1f321d3f2609355902281f322e76cb6",
+        "event_count": 9,
+        "loaded_before": {
+          "data": [],
+          "nextCursor": null
+        },
+        "file_created": false
+      },
+      {
+        "scenario": "mcp-recover",
+        "passed": true,
+        "elapsed_seconds": 1.772,
+        "receipt_sha256": "b0e34234ec1181d780ebb9750677aab6e0e773d59c5c987519a5d18e1bf6c016",
+        "event_count": 13,
+        "loaded_before": {
+          "data": [],
+          "nextCursor": null
+        },
+        "file_created": false
+      },
+      {
+        "scenario": "child-wait",
+        "passed": true,
+        "elapsed_seconds": 1.905,
+        "receipt_sha256": "3d19574555abb0feb157d600a096d86a64bda6dac6dec435ce5ffbbaa2051093",
+        "event_count": 17,
+        "loaded_before": {
+          "data": [],
+          "nextCursor": null
+        },
+        "file_created": false
+      },
+      {
+        "scenario": "child-timeout",
+        "passed": true,
+        "elapsed_seconds": 11.963,
+        "receipt_sha256": "0cabf2d56f574ba47300e7cb615e0592173826c0f1e32d95c3f7f9d33185ca12",
+        "event_count": 14,
+        "loaded_before": {
+          "data": [],
+          "nextCursor": null
+        },
+        "file_created": false
+      },
+      {
+        "scenario": "child-close",
+        "passed": true,
+        "elapsed_seconds": 1.856,
+        "receipt_sha256": "4c38b738c0db736052cb5056d213c26ef147f5029dd74bd5d9c4b1404a1e66a1",
+        "event_count": 15,
+        "loaded_before": {
+          "data": [],
+          "nextCursor": null
+        },
+        "file_created": false
+      },
+      {
+        "scenario": "child-grandchild",
+        "passed": true,
+        "elapsed_seconds": 2.052,
+        "receipt_sha256": "a386bb2ec80d9319a76ad27db7ca0aca79e535bb0299b5862fb64e1ea4060df2",
+        "event_count": 20,
+        "loaded_before": {
+          "data": [],
+          "nextCursor": null
+        },
+        "file_created": false
+      }
+    ],
+    "observations": [
+      "Fresh thread/loaded/list returns data=[] and nextCursor=null.",
+      "Native fileChange and MCP lifecycles reach terminal parent usageLimitExceeded after successful tools.",
+      "An unsuccessful MCP call can be followed by new commentary and a successful command before quota.",
+      "Parent wait/close tool completion does not independently establish child or descendant termination.",
+      "Child and grandchild turn events arrive on the same physical app-server feed; a completed child may retain a live grandchild."
+    ],
+    "limitations": [
+      "These native receipts characterize execution events, not live authentication handover or automatic continuation.",
+      "Child graph integration and bounded completed-item retirement remain under implementation."
+    ],
+    "sources": [
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs",
+        "file": "coverage_core_src_tools_handlers_multi_agents_spawn.rs",
+        "sha256": "cbcf674a2c0d5cc0e8b795cfcfdbb75a8f7d72f3b6e023db88bcf3c6ea631fee"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/core/src/tools/handlers/multi_agents/wait.rs",
+        "file": "coverage_core_src_tools_handlers_multi_agents_wait.rs",
+        "sha256": "51f07a8ce45180d5e7efc8b92a924969d9948350c7780326b70ab3f81b191221"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/core/src/tools/handlers/multi_agents/close_agent.rs",
+        "file": "coverage_core_src_tools_handlers_multi_agents_close_agent.rs",
+        "sha256": "6e38e5bb62a228652ecfaea1e79d825e4963bc43e52d8f940e4d7b7541d6b3aa"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/core/src/tools/handlers/multi_agents/send_input.rs",
+        "file": "coverage_core_src_tools_handlers_multi_agents_send_input.rs",
+        "sha256": "552ab27cda985d365a80fcac8a12445d49669f673c8324a5039f9857fca01c6a"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs",
+        "file": "coverage_core_src_tools_handlers_multi_agents_resume_agent.rs",
+        "sha256": "d16a08673f8e8f67f2fd9f417919a410e7e2e2513dd097557837a478b7965b86"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/core/src/tools/handlers/mcp.rs",
+        "file": "coverage_core_src_tools_handlers_mcp.rs",
+        "sha256": "8b14b0c469c5d95f5b051865dda4dd1c4bc28c06b422f52eb0dd70b23c2fa0a1"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/protocol/src/mcp.rs",
+        "file": "coverage_protocol_src_mcp.rs",
+        "sha256": "d0d4efa82f985b53c426c0b1026b3af8b8cd0c4041ce19dee9cf4789000d0f81"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/core/src/tools/handlers/apply_patch.rs",
+        "file": "coverage_core_src_tools_handlers_apply_patch.rs",
+        "sha256": "1256b2219f6acb9c49ae472860ee69d73c75bb427dcca4dae2a30018d30216c0"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/protocol/src/items.rs",
+        "file": "coverage_protocol_src_items.rs",
+        "sha256": "9756af28ceac8e04ff371c55e663f2495da79132087dec65630d359eadcbe248"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/core/src/mcp_tool_call.rs",
+        "file": "coverage_core_src_mcp_tool_call.rs",
+        "sha256": "e434c6380a209c96ff8a34bf1a0b6f375a72e6fdeaa02ac04bcb2657234ec569"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/core/src/agent/control.rs",
+        "file": "coverage_core_src_agent_control.rs",
+        "sha256": "c0bf44ec6398168170e7e3f9455c0941e82d0cba1a3c23ec3909af455ec383e5"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/rust-v0.163.0/codex-rs/app-server-protocol/src/protocol/v2/mcp.rs",
+        "file": "coverage_app-server-protocol_src_protocol_v2_mcp.rs",
+        "sha256": "b11ab3c2d5844ff27061e3be43d3d595731a16c9e29078bec51cc383aa460e69"
+      }
+    ]
+  },
+  "codex_busy_mcp_handover": {
+    "scope": "Actual Linux native built-in ChatGPT TLS/WebSocket route, synthetic access tokens, owned bounded MCP subprocess; no production accounts",
+    "version": "0.163.0",
+    "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "harness_sha256": {
+      "mcp_busy_run.py": "a8f3bc0fc5908b1a72914584e3e1773064e579195ce88c8f1617fe2e0c684a59",
+      "mcp_busy_probe.py": "312f3e351084b381738df01cc62a33696bc898d9abc3e90e279b79e9b1b0eded",
+      "mcp_busy_server.py": "10e5ea40a9fac32542191c7b94ff34c10dc02ac9ee890cc6687c83a0e2cd72e0",
+      "probe.py": "528a59f151ebba78e957e9cb71b439b0f45b055b54a4120a2f319b20391297aa",
+      "ws.py": "7405b5ac97083b1bbe8619a61d0991ac8fe338b38fc2666ff79b18ce92eec9b0"
+    },
+    "passed": true,
+    "elapsed_seconds": 8.991,
+    "receipt_sha256": "a21e8e2400856d151b1303a5bf65e39572d8ca863ced9f8f67ec49a2619487d7",
+    "containment": "Owned systemd control-group; RuntimeMaxSec=90,TimeoutStopSec=5,MemoryMax=768M,TasksMax=96,LimitFSIZE=16MiB; inner60s deadline and10s MCP barrier",
+    "same_native_and_thread": true,
+    "terminals": [
+      "completed"
+    ],
+    "model_accounts": [
+      "synthetic-a",
+      "synthetic-b"
+    ],
+    "tool_result_retained": true,
+    "exact_tool_lifecycle": true,
+    "side_effect_count": 1,
+    "limitations": [
+      "Tests native authentication handover, not the integrated Swarm coordinator.",
+      "Does not qualify arbitrary third-party MCP reconnect behavior, native process death, or ambiguous automatic continuation."
+    ]
   }
 }

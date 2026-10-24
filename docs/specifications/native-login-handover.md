@@ -119,6 +119,15 @@ reading and PTY draining stay independent of disk/refresh latency. Duplicate,
 reordered and previous-incarnation events cannot advance a different turn.
 Dropping a control-relevant event invalidates execution completeness before any
 later automatic effect; a bounded queue must never silently authorize on loss.
+For the pinned Codex single-feed path, retain live items and fold exact matched
+completions into bounded phase/order summaries. Native source has one serialized
+event drain and does not replay item lifecycles on that connection; reconnect or
+unknown custody still invalidates automatic effects. Retaining every completed
+item would make ordinary long turns overflow. Child actors retain exact parent
+and turn edges; an unlinked child remains ineligible until a native spawn receipt
+connects it. A parent terminal or wait/close snapshot never clears descendants.
+Sol and Astra approved this source-qualified reduction on 2026-10-24; it does not
+claim deduplication of arbitrarily forged native lifecycle sequences.
 Existing owner input, native decision, stop/delete and ContextGuard fences
 remain the shared admission points; do not create another general scheduler.
 
