@@ -68,19 +68,20 @@ func TestResumeIdentity_HookPersistenceErrorDoesNotSuppressShapingAndSameIDRetri
 	token := hookTokenFor(t, sk.stateDir, m.ID)
 	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 
-	sessionDir := filepath.Join(sk.stateDir, m.ID)
-	hold := sessionDir + ".hold"
-	if err := os.Rename(sessionDir, hold); err != nil {
-		t.Fatalf("move session dir: %v", err)
+	metadataPath := filepath.Join(sk.stateDir, m.ID, "meta.json")
+	hold := metadataPath + ".hold"
+	if err := os.Rename(metadataPath, hold); err != nil {
+		t.Fatalf("move session metadata: %v", err)
 	}
-	if err := os.WriteFile(sessionDir, []byte("blocks Store.Save"), 0o600); err != nil {
+	// Fail identity metadata replacement without also blocking execution custody.
+	if err := os.Mkdir(metadataPath, 0o700); err != nil {
 		t.Fatalf("install write blocker: %v", err)
 	}
 	restored := false
 	t.Cleanup(func() {
 		if !restored {
-			_ = os.Remove(sessionDir)
-			_ = os.Rename(hold, sessionDir)
+			_ = os.Remove(metadataPath)
+			_ = os.Rename(hold, metadataPath)
 		}
 	})
 
@@ -100,11 +101,11 @@ func TestResumeIdentity_HookPersistenceErrorDoesNotSuppressShapingAndSameIDRetri
 		t.Fatalf("first shaped text = %q", got)
 	}
 
-	if err := os.Remove(sessionDir); err != nil {
+	if err := os.Remove(metadataPath); err != nil {
 		t.Fatalf("remove write blocker: %v", err)
 	}
-	if err := os.Rename(hold, sessionDir); err != nil {
-		t.Fatalf("restore session dir: %v", err)
+	if err := os.Rename(hold, metadataPath); err != nil {
+		t.Fatalf("restore session metadata: %v", err)
 	}
 	restored = true
 

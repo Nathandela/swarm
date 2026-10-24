@@ -25,7 +25,11 @@ func TestCLIRefreshInstalledUpgradeRealResume(t *testing.T) {
 	if installed := os.Getenv("SWARM_REFRESH_TEST_BINARY"); installed != "" {
 		shimBinary = installed
 	}
-	dir, err := os.MkdirTemp("/tmp", "swcli-")
+	shortRoot, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(shortRoot, "swcli-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +95,18 @@ func TestCLIRefreshInstalledUpgradeRealResume(t *testing.T) {
 		t.Fatalf("watcher did not finish installed upgrade: %+v", w.state.CLI[old.ID])
 	}
 	t.Cleanup(func() { _ = syscall.Kill(fresh.ShimPID, syscall.SIGTERM) })
+	ended, ok := core.Get(old.ID)
+	if !ok {
+		t.Fatal("source recovery row disappeared before stop verification")
+	}
+	for _, name := range []string{shim.NativeProcessFile, shim.NativeStoppedFile} {
+		if _, err := os.Lstat(filepath.Join(dir, ended.ID, name)); err != nil {
+			t.Fatalf("original native proof %s is missing: %v", name, err)
+		}
+	}
+	if err := verifyLoginWritersStopped(dir, ended); err != nil {
+		t.Fatalf("replacement lacks positive native stop proof: %v", err)
+	}
 	transcript := refreshAwaitTranscript(t, dir, fresh.ID, "fixture-ready")
 	for _, want := range []string{"fixture-version=2.0.2", "arg=--resume", "arg=" + migratedConversationID, "arg=--model", "arg=sonnet", "fixture-home=" + dir} {
 		if !strings.Contains(transcript, want) {

@@ -3923,5 +3923,49 @@
       "Owned subprocess-only test skips in the parent as designed; it runs in copied child executables.",
       "Full native provider handover, all version qualification and whole-feature gates remain pending."
     ]
+  },
+  "checkpoint_validation_followup": {
+    "scope": "Frozen f23127a7 source validation and two fixture-only corrections; full feature remains incomplete",
+    "frozen_source": "f23127a7",
+    "full_skeleton_run": {
+      "elapsed_seconds": 683.856,
+      "exit_code": 1,
+      "passing_test_events": 1865,
+      "failed_tests": [
+        {
+          "name": "TestCLIRefreshInstalledUpgradeRealResume",
+          "elapsed_seconds": 10.64
+        },
+        {
+          "name": "TestResumeIdentity_HookPersistenceErrorDoesNotSuppressShapingAndSameIDRetries",
+          "elapsed_seconds": 0.35
+        }
+      ],
+      "json_log_sha256": "53d49ea3022bd5626296b1ae7567f4ec072c8a1e85d69de0266891796151efa6"
+    },
+    "diagnosis": [
+      "The earlier600s aggregate timeout did not prove a hung OpenCode test; isolated OpenCode variant/supervision test passed6.44s. A25m aggregate budget let the full suite complete683.856s.",
+      "CLI refresh fixture used noncanonical Darwin /tmp state root, unlike production Serve. It now resolves the short parent first and requires both private native proof files plus actual stopped-writer verification.",
+      "Identity-persistence fixture blocked the entire session directory and therefore correctly hit the newer execution/ingest custody fence. It now makes only meta.json replacement fail; original shaping and same-ID/write-once assertions remain."
+    ],
+    "corrected_focused_checks": [
+      "Actual CLI installed-upgrade shim/PTY test PASS3.773s, plus strict anchor/live identity/containment/failed-proof negative checks PASS0.8s.",
+      "Identity-only fault plus independent execution custody and ack retry regressions PASS under race6.704s.",
+      "Both fixture corrections independently reviewed by Astra; no production path validation or error propagation relaxed."
+    ],
+    "profile_foundation": {
+      "commit": "f09d1f9c",
+      "schema": 7,
+      "full_logins_seconds": 107.8,
+      "focused_race_seconds": 21.7,
+      "schema6_deletion_interaction_seconds": 2.6,
+      "bounded_pending_directory": "RED then GREEN; overflow keeps pending state and every file; no pruning",
+      "activation": false
+    },
+    "limits": [
+      "Full frozen skeleton run failed before these two fixture corrections; targeted corrections passed, but a subsequent full integrated suite remains required.",
+      "Two separate inherited-context diagnostic runs are excluded; only sanitized runner results are listed as validation.",
+      "Claude helper8, observer/continuation integration, native races and final broad/race gates remain open."
+    ]
   }
 }
