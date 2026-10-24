@@ -9,6 +9,9 @@ The [Linux native capability receipts](../verification/provider-logins/native-ha
 record version-pinned scenarios using synthetic credentials. They characterize
 native behavior; they do not certify the integrated feature. Receipt counts and
 coverage evolve with the qualification work.
+The [finite continuation source review](../verification/provider-logins/native-continuation-source-gates-2026-10-25.json)
+records the current native API gaps and distinguishes source hypotheses from
+executed canaries.
 
 ## Intended behavior
 
@@ -80,10 +83,12 @@ headroom; ENOSPC before durable intent causes zero external effects.
 
 ### Native credential ownership
 
-Retain the saved-login registry and revision CAS in `internal/logins`. Introduce
-a versioned handover record alongside the existing stopped-writer migration
-journal. Do not reinterpret an old pending switch as a hot handover. A schema
-change must be rejected by old binaries rather than silently downgraded.
+Retain the saved-login registry and revision CAS in `internal/logins`. Codex's
+versioned handover record remains separate from the stopped-writer migration
+journal. Claude's new-profile birth path uses the existing provider selection
+and epoch, without another handover or per-session adoption ledger. Do not
+reinterpret an old pending switch as a hot handover. A schema change must be
+rejected by old binaries rather than silently downgraded.
 
 For Codex, qualify a short-lived native-managed app-server as the sole refresh
 writer for a saved login. Serialize refresh, relogin, removal and credential
@@ -132,7 +137,7 @@ account state or other profile fields.
 
 Native refresh helpers use a fresh empty private config bound to the existing
 saved native authority. Accept auth only after independently observing a native
-written profile with the exact selected account and organization IDs and a
+written profile with the exact target account and organization IDs and a
 `profileFetchedAt` within the helper attempt, plus a usable resulting grant,
 expiry/scopes and current credential generation/selection. Initialize success,
 file existence, `SessionStart`, or logged-in status alone is not an auth receipt;
@@ -143,6 +148,60 @@ policy enforcement; do not fabricate a policy verdict or run a hidden model
 preflight. A normal native operation supplies operational evidence. Mac and Linux native
 config and fresh-auth suites each pass ten selected cases. Production credential
 CAS/crash integration and end-to-end handover qualification remain open. These receipts do not authorize production activation.
+
+### Claude helper caller integration
+
+The reviewed integration boundary is fresh authentication for new owned-profile
+births. Existing `ProviderState.ActiveID/Epoch` records the desired account;
+it does not assert authentication success. One Make active request persists B
+even while B's authentication is pending. A later C request supersedes it.
+Every birth still requires an exact current receipt, profile and CLI identity.
+A ready warm B receipt is validated against prospective B within the selection
+transaction; the public validator must still refuse B while A is selected.
+
+Reuse the one-second auth watcher to choose selected and at most one warm login.
+The existing two-second login-completion worker owns slow Start/Recover calls,
+outside the login, admission and discussion lifecycle locks. Only the successful
+creator of PREPARED receives start authority. Reopen, a missing PID and a timeout
+never recreate it. No new worker thread, queue, scheduler or index is needed.
+
+Recovery collects exact helper custody and retains its terminal intent. A ready
+receipt stays usable while its canonical generation and expiry remain valid.
+A failed or lost job keeps its consumed budget across ticks and restart. An
+explicit new desired epoch permits one atomic replacement of an exactly settled
+failed intent; that completion worker owns the new start. Warming changes and
+reboot supply no retry authority. A successfully completed ready receipt may
+renew after positive canonical generation/expiry evidence proves it stale,
+including a warm B under A. Replace that exact settled receipt atomically; a
+still-valid receipt, unreadable grant or selection mismatch alone grants no new
+attempt. Failed replacement retains the previous receipt. Explicit removal/
+relogin owns retirement through its existing durable transaction. Bounded enumeration reads the existing
+intent directory, including issuing selection and partial cleanup evidence.
+
+The implementation dependency cuts are:
+
+| Cut | Existing seams | Required evidence |
+|---|---|---|
+| Retained helper lifecycle | `logins/claude_auth*`, `loginworker/claude_auth*` | Retained ready/failed outcomes across reopen; no repeated budget; exact new-epoch replacement; cleanup races and ENOSPC preserve the prior authority. |
+| Birth and mutation custody | Store registry lock, shim native start/record, session replay/delete, saved credential/relogin operations | Selection-first admits zero old births; birth-first publishes exact ownership before selection; lost/unpublished reservations cannot be deleted or replayed; old nonselected accounts retain their grants until exact writer-stop proof. |
+| Desired selection and runtime | Existing login switch entry point, unborn profile provisioning, runtime/environment and both usage readers | One pending selection survives restart, C supersedes B, receipt/config gate every birth, owned-profile usage is accepted and old-account usage rejected. |
+| Daemon caller and projection | Existing auth tick/completion worker and relogin completion | Slow auth leaves PTY/hooks/list responsive; current and one warm job coalesce; selected relogin avoids legacy fleet restart; desired/auth/config/startup/old-account pending remain distinct. |
+| Native integration | Actual daemon and command constructor | Normal trust/policy, native history/config and an ordinary operation work through the real caller. Helper-only evidence cannot enable this path. |
+
+The final shim guard holds the existing interprocess registry lock from exact
+reservation/current receipt/profile validation through PTY start and durable
+native-process publication. Prepare slow work beforehand; do no network or native
+initialization under that lock. Daemon replacement cannot open a gap between
+selection and start. A crash after start but before publication retains the
+existing reservation as unresolved; no extra birth ledger is introduced.
+Destructive Store mutations and relogin recovery use the same fence and exact
+bounded native custody, including hidden/lost and nonselected old-A sessions.
+The display roster's best-effort scan is not a complete negative writer proof.
+
+Old A may finish internal work after B is desired. New host turns on a stale
+incarnation remain pending; approvals and cancellation stay usable. This slice
+does not implement existing-discussion transition or automatic continuation.
+Keep unsupported platforms/pins explicit and enrollment independently usable.
 
 ### Durable execution evidence
 
@@ -229,38 +288,43 @@ provide deduplication. An unresolved outcome stays visible and unsent.
 Reconciliation must identify the successor belonging to this exact obligation
 and owner-input revision; the existence of any newer turn is insufficient.
 
-Claude uses its supported native hook module API to observe `turn.start` and
-the completed `turn.step` generator result. The observer forwards chunks,
-results, cancellation and errors unchanged; only bounded identities, phase,
-tool IDs and text-presence facts cross into Swarm. The complete native result,
-not a transcript prefix or missing Stop hook, supplies response completeness.
-The narrow qualifying case is a text-free completed tool response followed by
-confirmed main-actor subscription quota, with matching prompt/turn identities
-and no live child or human decision. Unclassified text remains ineligible.
+Six synthetic native scenarios pass on both Mac and Linux, including the quota
+successor using B without prompt resend or repeated completed tool. The exact
+ephemeral native title helper is outside the main-thread wake path. These facts
+do not close the reserved `active_turn` task-none window, actual fresh managed
+TUI birth or loaded-thread configuration/refresh gates. Public config reads
+re-read files rather than attest the loaded thread's full configuration. Do not
+build or enable a dispatcher whose eligibility predicate ordinary production
+sessions cannot positively satisfy. Preserve user hooks, MCP, plugins and
+workflows; do not disable them silently to pass a canary.
 
-The terminal failure must bind an independently known latest step ordinal and
-capture generation. The last two available records are insufficient: missing
-capture and failed error reporting must still fence effects. Generic
-`rate_limit` alone cannot establish subscription exhaustion. Effective native
-automatic resume must be positively disabled on this exact instance. New managed
-Claude invocations set `autoContinueAtUsageLimit=false` per invocation so Swarm
-is the single continuation owner. Global preferences and already-running legacy
-invocations remain untouched. Per-invocation mutability and the effective false
-value still require qualification. Plugin ordering, every negative case never
-becoming a candidate, and daemon/native reconciliation remain gates.
+Repeated quota recovery must retain the same original task across A→B→A. Each
+successor requires its own exact native start, unfinished-work and quota evidence;
+an immediate quota with no new qualifying work cannot inherit permission from
+the previous turn. Use at most one unresolved obligation and bounded lineage,
+with durable uncertainty before effects and no resend after a lost ACK.
 
-After that proof, the candidate operation is a targeted semantic continuation
-through the existing composer: dismiss only the current verified quota modal,
-reobserve the actual VT composer, and submit once behind the same owner fence.
-Each Escape/paste/submit stage needs durable uncertainty before effects and
-exact native prompt-UUID reconciliation; ambiguity never permits replay.
-Historical terminal bytes and timed Enter are capability experiments only.
-A generic Enter, original-prompt resend, raw key sequence or draft text is
-ineligible. A complete owner-authored semantic submission is a separate safe
-transition boundary and must be held before any effects; completed work or a
-human-wait state never receives automatic input to satisfy adoption accounting.
-Sol and Astra accepted this narrow amendment and no-effects Linux capability
-probes on 2026-10-24; this is not production continuation qualification.
+Claude's ordinary hook observer has not established a complete actor census or
+final-result barrier across plugin transformations and completion work. A
+completed generator return alone does not prove the final native answer. Thus
+the earlier proposed host-composer continuation remains unqualified and is not
+an implementation prerequisite for the authentication helper or new births.
+Generic rate-limit text, missing Stop hooks and the last available records are
+insufficient to establish unfinished subscription-quota work.
+
+A separate native interrupted-turn resume capability is under finite
+qualification. Bare `--reply-on-resume` fails the source hypothesis: a quota
+assistant row can prevent replay, while cancellation stripping can expose an
+earlier prompt. The distinct native `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1`
+route uses native transcript repair and a vendor-owned recovery message. It is
+an implementation capability, not a stable documented CLI contract. It receives
+no host continuation prompt, transcript surgery or input replay. Qualification
+must prove quota-after-tool recovery and zero automatic inference for completed
+answers, unanswered questions, unapproved tools and explicit cancellation, with
+positive startup evidence for negative cases. Any human-wait/cancel requery
+fails this contract. Process custody, original owner intent and exact successor
+binding remain required even if those native cases pass. No frontend/mode change
+or global preference change is implied.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It

@@ -1,0 +1,88 @@
+{
+  "date": "2026-10-25",
+  "kind": "finite pinned-source review",
+  "productionActivation": false,
+  "codex": {
+    "version": "0.163.0",
+    "sourceCommit": "83086188ae0614bd882818ff1aa23f3194962012",
+    "packetManifestSHA256": "ca3e41aebe674ae0caca50ce651f0930c2a03a9719aa44316807d64d889c9e9c",
+    "reportSHA256": "c1cadfda4bdbba4c360cdafde0065614a1d253d093638526731a162057da365e",
+    "sourceFilesVerified": 28,
+    "review": "Sol source investigation; Astra independently verified decisive handlers and manifest; root verified all source hashes and reviewed report",
+    "findings": [
+      "Plain TUI StartFresh reaches actual native thread/start; argv and an empty loaded-thread list alone do not establish a fresh main. Production-shaped launch remains untested.",
+      "ThreadStartResponse, ThreadStarted and settings notifications do not carry a complete loaded producer configuration or revision.",
+      "config/read and hooks/list reload current CWD files; thread-wide MCP enumeration reloads latest files with retained session layers. A named MCP runtime read refreshes dirty state before returning.",
+      "The traced core refresh publishes new loaded config before internal contributors and hooks; inspected public APIs supply no prepublication admission witness.",
+      "This does not claim arbitrary file edits always cause reload, or that configured features are unsafe. Preserve user settings and normal hot-auth handover."
+    ],
+    "decision": "Hold Engine4/automatic continuation dispatcher until a positive ordinary-session native eligibility contract exists. Do not implement permanently dormant scaffolding.",
+    "sources": [
+      {
+        "path": "codex-rs/app-server/src/request_processors/config_processor.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/request_processors/config_processor.rs",
+        "sha256": "a1f1037ce2e0b3875d22454bb867c58f3936a92020a33f45164012397f2c2b6a"
+      },
+      {
+        "path": "codex-rs/tui/src/app_server_session.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tui/src/app_server_session.rs",
+        "sha256": "7f82fc2ad93a6f3cd5890bc21202ac0d22d50b5e72cb6b17d5ee405decb405e5"
+      },
+      {
+        "path": "codex-rs/tui/src/app/startup.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tui/src/app/startup.rs",
+        "sha256": "9cba34b16ad816db4e815e3f67aaba5c645051b0fa693cdfe52eb4d89b745c9e"
+      },
+      {
+        "path": "codex-rs/app-server/src/request_processors/mcp_processor.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/request_processors/mcp_processor.rs",
+        "sha256": "f13ec7395adf787e46b83677567c0565c430517bf707a29cc8560e66340d747a"
+      },
+      {
+        "path": "codex-rs/app-server/src/request_processors/catalog_processor.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/request_processors/catalog_processor.rs",
+        "sha256": "c6da0f910aeb88616a9aeaf6568bffe50f5cf8ed506eca4a23aa377bd7baa336"
+      },
+      {
+        "path": "codex-rs/core/src/session/config_refresh.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/session/config_refresh.rs",
+        "sha256": "88911bd96ff2761c82919e2953ba6bc58f19918a2add0567f87311101bea7603"
+      },
+      {
+        "path": "codex-rs/app-server-protocol/src/protocol/v2/thread.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/src/protocol/v2/thread.rs",
+        "sha256": "8c10510bb88990aa0f0105e7a85c0bb7859db7232be29f84a6c66693600ef502"
+      },
+      {
+        "path": "codex-rs/app-server-protocol/src/protocol/v2/thread_data.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server-protocol/src/protocol/v2/thread_data.rs",
+        "sha256": "293359f14a1a11da8d54acce7bc69b5756c1d30b5a59e8768f5ce6b4e02edeb1"
+      }
+    ]
+  },
+  "claude": {
+    "version": "2.1.310",
+    "macBinarySHA256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+    "packetManifestSHA256": "3b35bfc238fbfd7cda23879f9eedd7e79d15de7534593917c9480efa47fbf497",
+    "reportSHA256": "69ae04ecb06e5649a7d9cd437c65d83e097a4c4a287a8a35c5a0d3309e428e76",
+    "findings": [
+      "Bare reply-on-resume is not a quota-safe recovery: quota assistant stop_sequence blocks replay, while stripping an interruption may expose the earlier prompt.",
+      "The separate native RESUME_INTERRUPTED_TURN path is source-reachable with ordinary TUI resume, repairs native transcript state and creates a vendor-owned recovery message; no host continuation prompt is needed.",
+      "Pending human controls remain unqualified; unresolved tools can be repaired and requeried. Source reachability is not stable CLI support or product activation."
+    ],
+    "decision": "Only four bounded synthetic experiments approved, subject to harness review: quota after completed tool, completed answer/question, unanswered question/unapproved tool, explicit cancel.",
+    "negativeOracle": "Require positive resume startup past normal trust before zero-query negatives pass. Prove original pending-human state before external termination. Any human-wait or cancellation requery fails the contract.",
+    "nativeRunsInThisPacket": 0
+  },
+  "coordination": {
+    "otherBranch": "feat/storage-clean",
+    "inspectedCommit": "8c93f8a94960fa5d8777120636f9637e1ba2bed7",
+    "swarmDiscussion": "ep-da00228d/otogggczge4x7tvy",
+    "latestSend": "refused: discussion has no current session incarnation",
+    "effect": "No daemon restart or raw-input bypass; use committed findings and preserve documented deletion/custody boundaries."
+  },
+  "limits": [
+    "Source findings do not replace native acceptance or integrated production tests.",
+    "Existing caller integration, exact birth/mutation custody, normal trust/policy and full final gates remain unfinished."
+  ]
+}
