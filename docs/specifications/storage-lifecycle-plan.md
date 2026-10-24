@@ -68,7 +68,9 @@ production binary modification. SIGKILL remains outside an EXIT-trap guarantee.
 ### 2. Read-only accounting and warning semantics
 
 Sol owns `cmd/swarm/doctor.go` and a focused storage helper/test in that package.
-Reuse doctor findings/JSON rather than add a command or UI. Report allocated and
+The original plan reused doctor findings/JSON rather than adding a command or UI.
+The owner-authorized manual cleanup extension is defined in the [storage clean
+plan](storage-clean-plan.md). The doctor continues to report allocated and
 logical bytes beneath the configured state root, with non-overlapping categories
 for supervisor state, managed login/account data and other retained material.
 Include managed native homes in the visible total; do not pretend they disappear

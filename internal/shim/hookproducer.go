@@ -3,10 +3,11 @@ package shim
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/Nathandela/swarm/internal/procstart"
@@ -29,7 +30,17 @@ type hookProducerProof struct {
 }
 
 func openHookOwnedFile(path string, flags int) (*os.File, error) {
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, ErrHookRetirementUnproven
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, flags|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, ErrHookRetirementUnproven
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -207,60 +218,166 @@ func (s *HookSpool) ProducerCertificate() string {
 
 var testHookBeforeStoppedSpoolOpen func()
 
-// CompactStoppedHookSpool holds the producer lock throughout validation and
-// replacement. A closed producer or exact recorded dead process is required.
-func CompactStoppedHookSpool(path, incarnation, certificate string, seq uint64, pid int, start int64) error {
+// HookCleanupResult describes observations of the proof-bound spool, not free space.
+type HookCleanupResult struct {
+	Before, After os.FileInfo
+	EligibleBytes int64
+	Changed       bool
+}
+
+// ErrHookCleanupTooLarge retains spools beyond the bounded manual cleanup workload.
+var ErrHookCleanupTooLarge = errors.New("shim: hook cleanup spool exceeds 64 MiB")
+
+const hookCleanupMaxBytes = 64 << 20
+
+func hookRetirementReadError(err error) error {
+	if errors.Is(err, ErrHookRetirementUnproven) {
+		return err
+	}
+	var syntax *json.SyntaxError
+	var shape *json.UnmarshalTypeError
+	if errors.Is(err, os.ErrNotExist) || errors.As(err, &syntax) || errors.As(err, &shape) {
+		return ErrHookRetirementUnproven
+	}
+	return err
+}
+
+func privateHookParent(path string) (os.FileInfo, error) {
+	info, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || st.Uid != uint32(os.Getuid()) || info.Mode().Perm()&0022 != 0 {
+		return nil, ErrHookRetirementUnproven
+	}
+	return info, nil
+}
+
+// CleanStoppedHookSpool inspects or retires only an already-certified clean prefix.
+// The caller excludes daemon cursor/lifecycle changes; producer custody is held here.
+// checkPath revalidates the caller's directory/lock custody before side-file writes
+// and replacement. A nil check is reserved for existing lifecycle callers.
+func CleanStoppedHookSpool(path, incarnation, certificate string, seq uint64, pid int, start int64, apply bool, checkPath func() error) (result HookCleanupResult, err error) {
+	parent, err := privateHookParent(path)
+	if err != nil {
+		return result, err
+	}
+	check := func() error {
+		current, err := privateHookParent(path)
+		if err != nil {
+			return err
+		}
+		if !os.SameFile(parent, current) {
+			return ErrHookRetirementUnproven
+		}
+		if checkPath != nil {
+			return checkPath()
+		}
+		return nil
+	}
+	if err := check(); err != nil {
+		return result, err
+	}
 	lock, err := hookProducerLock(path, false)
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer func() { _ = lock.Close() }()
 	proof, err := readHookProducerProof(path)
 	if err != nil {
-		return ErrHookRetirementUnproven
+		return result, hookRetirementReadError(err)
 	}
 	if seq == 0 || proof.Incarnation != incarnation || proof.Nonce != certificate {
-		return ErrHookRetirementUnproven
+		return result, ErrHookRetirementUnproven
 	}
 	if !proof.Closed {
 		if pid != proof.PID || start != proof.Start {
-			return ErrHookRetirementUnproven
+			return result, ErrHookRetirementUnproven
 		}
 		observed, err := procstart.StartTime(pid)
 		if err == nil {
 			if observed == start {
-				return ErrHookProducerBusy
+				return result, ErrHookProducerBusy
 			}
 		} else if !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
-			return ErrHookRetirementUnproven
+			return result, ErrHookRetirementUnproven
 		}
-	}
-	f, err := openHookOwnedFile(path, os.O_RDONLY)
-	if err != nil {
-		return err
-	}
-	err = validHookProducerProof(path, f, proof)
-	_ = f.Close()
-	if err != nil {
-		return err
-	}
-	if _, err := readHookOwnedSidecar(hookFloorPath(path), 64); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
 	}
 	if testHookBeforeStoppedSpoolOpen != nil {
 		testHookBeforeStoppedSpoolOpen()
 	}
-	s, err := openHookSpool(path, 0, true)
+	openLock, err := acquireHookSpoolOpenLock(path, true)
 	if err != nil {
-		return err
+		return result, err
 	}
-	defer func() { _ = s.Close() }()
-	if err := validHookProducerProof(path, s.f, proof); err != nil {
-		return err
+	defer releaseHookSpoolOpenLock(openLock)
+	if err := check(); err != nil {
+		return result, err
 	}
-	s.producerProof = &proof
-	if err := s.Compact(seq); err != nil {
-		return fmt.Errorf("shim: compact stopped hook spool: %w", err)
+	flags := os.O_RDONLY
+	if apply {
+		flags = os.O_RDWR
 	}
-	return nil
+	f, err := openHookOwnedFile(path, flags)
+	if err != nil {
+		return result, err
+	}
+	s := &HookSpool{path: path, f: f, readLimit: hookCleanupMaxBytes, producerProof: &proof}
+	defer func() { _ = s.Close() }() // No producerLock on this handle: preview never publishes proof.
+	result.Before, err = f.Stat()
+	if err != nil {
+		return result, err
+	}
+	if err := validHookProducerProof(path, f, proof); err != nil {
+		return result, hookRetirementReadError(err)
+	}
+	floorBytes, err := readHookOwnedSidecar(hookFloorPath(path), 64)
+	var floor uint64
+	if err == nil {
+		floor, err = strconv.ParseUint(strings.TrimSpace(string(floorBytes)), 10, 64)
+		if err != nil {
+			return result, ErrHookRetirementUnproven
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return result, hookRetirementReadError(err)
+	}
+	s.lastSeq = floor
+	data, err := s.readBytes()
+	if err != nil {
+		return result, err
+	}
+	for off := 0; off < len(data); {
+		end, sequence, clean := hookRecordEnd(data, off)
+		if !clean {
+			break
+		}
+		if sequence > s.lastSeq {
+			s.lastSeq = sequence
+		}
+		off = end
+	}
+	cut, err := hookCompactCut(data, seq, s.lastSeq, floor)
+	if err != nil {
+		return result, errors.Join(ErrHookRetirementUnproven, err)
+	}
+	result.EligibleBytes = int64(cut)
+	result.After = result.Before
+	if !apply || cut == 0 {
+		return result, nil
+	}
+	result.Changed, err = s.compact(seq, check)
+	result.After = nil
+	if current, statErr := os.Lstat(path); statErr == nil && check() == nil {
+		if owned, descriptorErr := s.f.Stat(); descriptorErr == nil && current.Mode().IsRegular() && os.SameFile(current, owned) {
+			result.After = owned
+		}
+	}
+	return result, err
+}
+
+// CompactStoppedHookSpool retains the lifecycle caller's existing proof contract.
+func CompactStoppedHookSpool(path, incarnation, certificate string, seq uint64, pid int, start int64) error {
+	_, err := CleanStoppedHookSpool(path, incarnation, certificate, seq, pid, start, true, nil)
+	return err
 }

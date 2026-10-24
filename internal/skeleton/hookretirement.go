@@ -20,7 +20,17 @@ type hookCursorCertificate struct {
 }
 
 func readHookRetirementSidecar(path string) ([]byte, error) {
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, shim.ErrHookRetirementUnproven
+		}
+	} else {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, shim.ErrHookRetirementUnproven
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -87,20 +97,43 @@ func (hd *HookDrainer) canCertifyResponse(resp shim.HookDrainResponse, cursor ui
 	return json.Unmarshal(data, &prior) == nil && prior.Sequence == cursor && prior.Incarnation == resp.SpoolIncarnation && prior.Producer == resp.ProducerCertificate
 }
 
+// ReadHookRetirementCertificate reads existing durable disposal authority without
+// flushing pending state or inferring authority from a decimal cursor alone.
+func ReadHookRetirementCertificate(cursorPath string) (incarnation, producer string, sequence uint64, err error) {
+	raw, err := readHookRetirementSidecar(cursorPath + ".cert")
+	if err != nil {
+		return "", "", 0, err
+	}
+	var p hookCursorCertificate
+	if json.Unmarshal(raw, &p) != nil || p.Sequence == 0 || p.Incarnation == "" || p.Producer == "" {
+		return "", "", 0, shim.ErrHookRetirementUnproven
+	}
+	cursor, err := readHookRetirementCursor(cursorPath)
+	if err != nil {
+		var malformed *strconv.NumError
+		if errors.As(err, &malformed) {
+			return "", "", 0, shim.ErrHookRetirementUnproven
+		}
+		return "", "", 0, err
+	}
+	if cursor != p.Sequence {
+		return "", "", 0, shim.ErrHookRetirementUnproven
+	}
+	return p.Incarnation, p.Producer, p.Sequence, nil
+}
+
 func (hd *HookDrainer) retireCertifiedPrefix() error {
 	hd.drainMu.Lock()
 	defer hd.drainMu.Unlock()
 	if err := hd.flushCursorCertificate(); err != nil {
 		return err
 	}
-	raw, err := readHookRetirementSidecar(hd.cursorPath + ".cert")
-	if err != nil {
+	incarnation, producer, sequence, err := ReadHookRetirementCertificate(hd.cursorPath)
+	if errors.Is(err, os.ErrNotExist) {
 		return shim.ErrHookRetirementUnproven
 	}
-	var p hookCursorCertificate
-	cursor, cerr := readHookRetirementCursor(hd.cursorPath)
-	if json.Unmarshal(raw, &p) != nil || p.Sequence == 0 || cerr != nil || cursor != p.Sequence {
-		return shim.ErrHookRetirementUnproven
+	if err != nil {
+		return err
 	}
 	hd.mu.Lock()
 	path := hd.spoolPath
@@ -115,7 +148,7 @@ func (hd *HookDrainer) retireCertifiedPrefix() error {
 			pid, start = m.ShimPID, m.ShimStartTime
 		}
 	}
-	return shim.CompactStoppedHookSpool(path, p.Incarnation, p.Producer, p.Sequence, pid, start)
+	return shim.CompactStoppedHookSpool(path, incarnation, producer, sequence, pid, start)
 }
 
 type hookRetirementRetry struct {

@@ -571,3 +571,31 @@ func TestHookRetirementExhaustionLogsOnce(t *testing.T) {
 		t.Fatalf("exhaustion diagnostic=%q", text)
 	}
 }
+
+func TestReadHookRetirementCertificateIsBoundedAndReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hook.fold")
+	if err := os.WriteFile(path, []byte("7"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	certificate := []byte(`{"incarnation":"generation","producer":"capability","sequence":7}`)
+	if err := os.WriteFile(path+".cert", certificate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	incarnation, producer, sequence, err := ReadHookRetirementCertificate(path)
+	if err != nil || incarnation != "generation" || producer != "capability" || sequence != 7 {
+		t.Fatalf("certificate=(%q,%q,%d,%v)", incarnation, producer, sequence, err)
+	}
+	actual, _ := os.ReadFile(path + ".cert")
+	if !bytes.Equal(actual, certificate) {
+		t.Fatal("inspection changed certificate")
+	}
+	for _, body := range []string{`{"incarnation":"generation","producer":"capability","sequence":8}`, `{}`, strings.Repeat("x", 2049)} {
+		if err := os.WriteFile(path+".cert", []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, err := ReadHookRetirementCertificate(path); !errors.Is(err, shim.ErrHookRetirementUnproven) {
+			t.Fatalf("accepted invalid certificate: %v", err)
+		}
+	}
+}

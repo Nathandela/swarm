@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -89,6 +89,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reatta
                    --native-session-id id --request-hash hash --reply once|always|reject|answer
                    [--answers JSON], or read its receipt with --status --operation-id id
   swarm peek       print a session's current screen <session> [--lines N]
+  swarm clean      preview safe storage cleanup [--apply] [--json]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)
   swarm relogin    recycle sessions stranded by a provider re-login
@@ -152,6 +153,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchAgentVerb(runReattach, args[1:], []string{protocol.CapExternalResume}, stdout, stderr)
 	case "ls":
 		return dispatchAgentVerb(runLS, args[1:], []string{protocol.CapOpenCodeObservation}, stdout, stderr)
+	case "clean":
+		return runClean(args[1:], stdout, stderr)
 	case "doctor":
 		// NOT dispatchAgentVerb: that seam ensures a daemon (D-1), and doctor's
 		// whole contract is that it never starts one (see doctor.go's header).

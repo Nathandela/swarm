@@ -47,7 +47,7 @@ func privateParent(path string) error {
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || !info.IsDir() || stat.Uid != uint32(os.Geteuid()) || info.Mode().Perm()&0022 != 0 {
-		return fmt.Errorf("diagnostic log: unsafe parent directory %q", filepath.Dir(path))
+		return fmt.Errorf("%w: parent directory %q", ErrUnsafe, filepath.Dir(path))
 	}
 	return nil
 }
@@ -62,14 +62,14 @@ func validate(path string, f *os.File) error {
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || !info.Mode().IsRegular() || stat.Uid != uint32(os.Geteuid()) || stat.Nlink != 1 {
-		return fmt.Errorf("diagnostic log: unsafe descriptor for %q", path)
+		return fmt.Errorf("%w: unsafe descriptor for %q", ErrUnsafe, path)
 	}
 	linked, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
 	if !linked.Mode().IsRegular() || !os.SameFile(info, linked) {
-		return fmt.Errorf("diagnostic log: descriptor does not match %q", path)
+		return fmt.Errorf("%w: descriptor does not match %q", ErrUnsafe, path)
 	}
 	return nil
 }
