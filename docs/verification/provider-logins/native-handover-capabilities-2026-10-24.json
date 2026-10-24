@@ -2008,5 +2008,127 @@
       "Tests native authentication handover, not the integrated Swarm coordinator.",
       "Does not qualify arbitrary third-party MCP reconnect behavior, native process death, or ambiguous automatic continuation."
     ]
+  },
+  "claude_native_grant_authority": {
+    "scope": "Actual Linux native first-party auth-only startup, isolated synthetic grants and exact-host loopback TLS with verification enabled; no external forwarding or model requests",
+    "version": "2.1.310",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "harness_sha256": {
+      "authority_auth.py": "a9f6d3a86119d2bbccb124b9d6180659ca9cceb8ed04f4f34f279ad27616884d",
+      "native_probe.py": "d862f38e1b6372780ce4de4253e7bce9e1562a670c201eb1f733b2c75fe116d8",
+      "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+      "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3"
+    },
+    "elapsed_seconds": 30.628,
+    "exit_code": 0,
+    "receipt_sha256": "2d0e1a9256aa968f846074c8155bb5d1d3941ca582488b4e6052ec3867f8763a",
+    "containment": "Owned systemd control-group;RuntimeMaxSec=450,TimeoutStopSec=5,MemoryMax=1G,TasksMax=128,LimitFSIZE=16MiB; native10s,certificate5s deadlines and bounded streams/queues; no OS aggregate scratch quota claim",
+    "containment_selftest_passed": true,
+    "controls": [
+      {
+        "case": "status-deny",
+        "passed": true,
+        "entry": "status",
+        "native_refresh_count": 0,
+        "saved_access_generation": "A1",
+        "saved_refresh_generation": "A1",
+        "profile_identity_persisted": false
+      },
+      {
+        "case": "status-native-refresh",
+        "passed": true,
+        "entry": "status",
+        "native_refresh_count": 1,
+        "saved_access_generation": "A2",
+        "saved_refresh_generation": "A2",
+        "profile_identity_persisted": false
+      },
+      {
+        "case": "initialize-deny",
+        "passed": true,
+        "entry": "initialize",
+        "native_refresh_count": 0,
+        "saved_access_generation": "A1",
+        "saved_refresh_generation": "A1",
+        "profile_identity_persisted": false
+      },
+      {
+        "case": "expired-native-refresh",
+        "passed": true,
+        "entry": "initialize",
+        "native_refresh_count": 1,
+        "saved_access_generation": "A2",
+        "saved_refresh_generation": "A2",
+        "profile_identity_persisted": true
+      },
+      {
+        "case": "near-expiry-native-refresh",
+        "passed": true,
+        "entry": "initialize",
+        "native_refresh_count": 1,
+        "saved_access_generation": "A2",
+        "saved_refresh_generation": "A2",
+        "profile_identity_persisted": true
+      },
+      {
+        "case": "future-no-refresh",
+        "passed": true,
+        "entry": "initialize",
+        "native_refresh_count": 0,
+        "saved_access_generation": "A1",
+        "saved_refresh_generation": "A1",
+        "profile_identity_persisted": true
+      },
+      {
+        "case": "two-native-initializers",
+        "passed": true,
+        "entry": "initialize-pair",
+        "native_refresh_count": 1,
+        "saved_access_generation": "A2",
+        "saved_refresh_generation": "A2",
+        "profile_identity_persisted": true
+      },
+      {
+        "case": "future-revoked-no-force",
+        "passed": true,
+        "entry": "initialize",
+        "native_refresh_count": 0,
+        "saved_access_generation": "A1",
+        "saved_refresh_generation": "A1",
+        "profile_identity_persisted": false
+      },
+      {
+        "case": "profile-B-native-persist",
+        "passed": true,
+        "entry": "initialize",
+        "native_refresh_count": 0,
+        "saved_access_generation": "A1",
+        "saved_refresh_generation": "A1",
+        "profile_identity_persisted": true
+      },
+      {
+        "case": "untrusted-CA-rejected",
+        "passed": true,
+        "entry": "initialize",
+        "native_refresh_count": 0,
+        "saved_access_generation": "A1",
+        "saved_refresh_generation": "A1",
+        "profile_identity_persisted": false
+      }
+    ],
+    "observations": [
+      "Native auth status bootstrap can renew an expired saved grant and persist both access and refresh tokens without inference. Exit0/loggedIn alone is not renewal evidence.",
+      "SDK initialize-only can also renew and persist native-produced profile identity without a user prompt.",
+      "Two concurrent SDK initializers sharing one saved slot perform one native renewal in this fixture.",
+      "Native near-expiry renewal occurs inside the five-minute reserve; a ten-minute future grant is retained.",
+      "A future-expiry revoked access token does not force renewal in this auth-only path.",
+      "Trusted fixture CA succeeds and untrusted CA preserves the original grant."
+    ],
+    "limitations": [
+      "An earlier base-URL-overridden status probe suppressed first-party startup behavior; this suite removes that override and exercises the native official endpoint selection.",
+      "Helper renewal does not establish in-process cross-account profile or managed-settings rebind.",
+      "Separate actual discussion probes retained prior-account metadata after bearer swap; no personal-account exception is qualified.",
+      "Swarm helper ownership/integration, removal/crash recovery and cross-account restart/continuation remain required."
+    ]
   }
 }
