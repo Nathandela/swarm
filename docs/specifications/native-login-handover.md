@@ -48,6 +48,13 @@ TestMain cleanup are outside this branch. Small typed persistence additions for
 execution/continuation are reserved here; further overlapping edits require
 another bounded coordination exchange.
 
+The storage branch inspected at `8c93f8a9` preserves native histories, saved
+credentials, handoff inputs, session metadata and unresolved recovery records.
+Its discussion-deletion changes add `handoffMu` before the resume/workspace locks
+and check retained handoff dependencies before each deletion. A future merge
+must preserve those checks together with this branch's exact bootstrap
+owner-delete authorization.
+
 Keep the existing common native directory as the history and shared user-asset
 source, and as the location of legacy incarnations. Create no new history, plugin
 or transcript copies. Future owned Claude incarnations use a deterministic native
