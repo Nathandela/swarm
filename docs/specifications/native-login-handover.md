@@ -201,6 +201,20 @@ existing reservation as unresolved; no extra birth ledger is introduced.
 Destructive Store mutations and relogin recovery use the same fence and exact
 bounded native custody, including hidden/lost and nonselected old-A sessions.
 The display roster's best-effort scan is not a complete negative writer proof.
+The [Linux owner Stop regression](../verification/provider-logins/claude-birth-owner-stop-2026-10-25.json)
+records the shared-mutex failure and independent-reader fix; it does not qualify
+the complete birth or migration path.
+
+Operational profile selection requires registry schema 10, so older writers
+cannot ignore this fence. New profile reservations use metadata schema 5 and
+native scope schema 4. Legacy common-home reservations remain schema 4 while
+unresolved; after operational selection they also block destructive cleanup and
+replay. Only exact native schema 3 stop proof or the original before-fork issuer
+may retire them. A terminal legacy row may then use the same schema 5 retirement
+field, preserving deletion authority after partial payload removal. This does
+not classify common homes as profiles or permit live common-home schema 5 births.
+An operation omitted from the roster remains unresolved while its session
+directory exists or cannot be inspected; a skipped metadata row is not absence.
 
 Old A may finish internal work after B is desired. New host turns on a stale
 incarnation remain pending; approvals and cancellation stay usable. This slice
@@ -329,6 +343,15 @@ positive startup evidence for negative cases. Any human-wait/cancel requery
 fails this contract. Process custody, original owner intent and exact successor
 binding remain required even if those native cases pass. No frontend/mode change
 or global preference change is implied.
+
+The owner authorized structured Claude exploration on 2026-10-25. Terminal
+resume experiments are paused while a direct native stream-JSON baseline tests
+trust recording, normal relaunch, request-bound human input and durable native
+history. Preserve the normal CLI prompt, settings, tools and project features;
+do not spoof a cloud session origin or assume cloud-only pending-action recovery
+exists locally. This investigation adds no SDK dependency or live/default mode
+change. Quota recovery, parked decisions and workflow/background parity remain
+separate gates after the baseline.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It

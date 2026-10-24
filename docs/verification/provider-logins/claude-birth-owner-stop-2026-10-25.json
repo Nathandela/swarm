@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-25",
+  "scope": "Installed owner Stop remains responsive while a Claude birth holds the registry fence and an actual account selection queues behind it",
+  "production_activation": false,
+  "test": "TestClaudeBirthHeldSelectionDoesNotBlockInstalledOwnerKill",
+  "fixture": "Public Store profile/selection/admission APIs with one synthetic already-settled auth receipt; real Swarm shim and shell PTY; actual coreAPI.Kill to ownerKill. No installed provider CLI, real account or user session is used.",
+  "preconditions": [
+    "Positive runtime stack witness: actual SelectClaudeProfile waiting in syscall.Flock behind held AdmitClaudeProfileBirth.",
+    "PTY output observed after the held-admission marker, before invoking installed owner Kill.",
+    "Same test and behavioral oracle for failing and passing binaries."
+  ],
+  "change": "Read ownership from an independent read-only Store snapshot, preserving Switch, bootstrap and legacy-child checks plus fail-closed errors. It avoids the shared process-local mutex held by a queued mutation.",
+  "build_evidence": "Frozen complete source inventories matched before/copy/after/build. Root verified archive/member SHA256 and ELF64 little-endian machine62 for all three binaries. A bounded private go shim copied these prebuilt verified outputs for exactly the two existing testbin compilation requests; no runtime API was mocked.",
+  "runs": [
+    {
+      "phase": "red",
+      "stage": "/run/user/1000/swarm-owner-red.CPNJyx03",
+      "unit": "swarm-owner-red-6e2b6dd36ce667adfc56",
+      "archive_sha256": "866d4733eff2a8ed87beaf8262c683af4412c1a4f801c223ea935fd28dffcfa6",
+      "manifest_sha256": "a272185e12eb76fd173718f91acc0f41fa067daf3534b2e44a27baea6e3fbdc4",
+      "go_copy_shim_sha256": "99d3b9ef5e7c0af18a94634a10242f8211019c09a83ab7c0faee47b1d71df20b",
+      "scope": "pre-floor10 frozen snapshot, intended behavioral RED; prebuilt verified compilation outputs only",
+      "exit_code": 1,
+      "elapsed_seconds": 1.83,
+      "log_sha256": "927b62ea2532bfed8fb6b0df6606928121f5e1095155723c04bd4db590dc9cde",
+      "compilation_substitution_receipts": [
+        {
+          "package": "github.com/Nathandela/swarm/cmd/swarm",
+          "binary_sha256": "7dd5a8ece6380603c54d59a9abd2d69f39c252854a05f1e03d403ebffa11aade"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/cmd/swarm-fake-agent",
+          "binary_sha256": "861905385b54540aa4d7d9fa7c19a8e40d99a553038a4fe81e8d4fd5c451f4cb"
+        }
+      ]
+    },
+    {
+      "phase": "green",
+      "stage": "/run/user/1000/swarm-owner-green.0tTeDpOd",
+      "unit": "swarm-owner-green-049402ec951156df074b",
+      "archive_sha256": "3e16bdb008c8162035923cd74fa27d5cc65ee5403132a7fa09f19a94aab22f60",
+      "manifest_sha256": "51b7318e32af735c87819a4874fbf9f195b34f39f6ca479abb93bad790b9379e",
+      "go_copy_shim_sha256": "99d3b9ef5e7c0af18a94634a10242f8211019c09a83ab7c0faee47b1d71df20b",
+      "scope": "registry-floor10 frozen snapshot, independent ownership reader; same native owner Kill behavioral oracle; prebuilt verified compilation outputs only",
+      "exit_code": 0,
+      "elapsed_seconds": 0.752,
+      "log_sha256": "35f87dd2e89db7318167a96ef6788976ef6f0f49bd63c36e6342b32ea83a4201",
+      "compilation_substitution_receipts": [
+        {
+          "package": "github.com/Nathandela/swarm/cmd/swarm",
+          "binary_sha256": "358c35f0bbd7458ef68d7a9a37e2b84114cd8454afdbe72c9059d55ca40afcbd"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/cmd/swarm-fake-agent",
+          "binary_sha256": "06be832d98799bf7be81c98e32d211b4ae4df2f316250aa705f71717eb1e4c66"
+        }
+      ]
+    }
+  ],
+  "review": "Root and independent Astra reviewed the ownership-reader change and actual API test. The larger custody subcut remains under correction for legacy reservations and roster-missing replay.",
+  "limits": [
+    "The 0.38-second passing test is one bounded Linux regression, not a general latency guarantee.",
+    "Registry fencing can still briefly stall metadata writes during native start/publication.",
+    "Once-only native birth wiring, failed-launch cleanup, actual daemon/provider construction and full integrated quality gates remain incomplete.",
+    "No live rollout, automatic continuation qualification or release."
+  ]
+}
