@@ -38,7 +38,7 @@ func r7EdgeDeadLeaderGroup(t *testing.T) (leader, child int) {
 		t.Fatalf("parse surviving child pid from %q: %v", out, err)
 	}
 	leader = cmd.Process.Pid
-	childStarted, err := procStartTimeFn(child)
+	childStarted, err := processStartTime(child)
 	if err != nil {
 		t.Fatalf("read surviving child %d identity: %v", child, err)
 	}
@@ -47,13 +47,21 @@ func r7EdgeDeadLeaderGroup(t *testing.T) (leader, child int) {
 		t.Fatalf("surviving child %d process group = %d, %v; want dead leader group %d", child, pgid, err, leader)
 	}
 	t.Cleanup(func() {
-		if current, err := procStartTimeFn(child); err == nil && current == childStarted {
-			if pgid, err := syscall.Getpgid(child); err == nil && pgid == leader {
-				r7KillOwnedGroup(child, leader, childStarted)
+		current, err := processStartTime(child)
+		if err != nil {
+			if syscall.Kill(child, 0) == nil {
+				t.Errorf("cannot verify owned fixture child %d for cleanup: %v", child, err)
 			}
-			if !r7WaitOwnedProcessGone(child, childStarted, 3*time.Second) {
-				t.Errorf("owned fixture child %d remained after cleanup", child)
-			}
+			return
+		}
+		if current != childStarted {
+			return
+		}
+		if pgid, err := syscall.Getpgid(child); err == nil && pgid == leader {
+			r7KillOwnedGroup(child, leader, childStarted)
+		}
+		if !r7WaitOwnedProcessGone(child, childStarted, 3*time.Second) {
+			t.Errorf("owned fixture child %d remained after cleanup", child)
 		}
 	})
 	if syscall.Kill(leader, 0) == nil {

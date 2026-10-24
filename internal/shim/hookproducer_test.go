@@ -109,9 +109,9 @@ func TestHookProducerRetirementPreservesPartialFoldAndTornTail(t *testing.T) {
 	if !bytes.Equal(after, before[cut:]) {
 		t.Fatal("partial compaction changed retained/torn bytes")
 	}
-	recs, gapAt, gap, err := ReadHookSpoolFile(path, 1)
-	if err != nil || len(recs) != 1 || recs[0].Seq != 2 || !gap || gapAt != 3 {
-		t.Fatalf("records=%v gap=%v/%d err=%v", recs, gap, gapAt, err)
+	resp, err := ReadHookSpoolFileResponse(path, 1)
+	if err != nil || len(resp.Records) != 1 || resp.Records[0].Seq != 2 || !resp.Gap || resp.GapBoundary != 3 {
+		t.Fatalf("records=%v gap=%v/%d err=%v", resp.Records, resp.Gap, resp.GapBoundary, err)
 	}
 }
 
@@ -194,9 +194,9 @@ func TestHookProducerProofFailureRetainsAcceptedPayload(t *testing.T) {
 	if !bytes.Equal(after, before) && len(after) != 0 {
 		t.Fatal("failed proof left unsafe bytes")
 	}
-	recs, _, gap, err := ReadHookSpoolFile(path, 1)
-	if err != nil || gap || len(recs) != 0 {
-		t.Fatalf("safe state records=%v gap=%v err=%v", recs, gap, err)
+	resp, err := ReadHookSpoolFileResponse(path, 1)
+	if err != nil || resp.Gap || len(resp.Records) != 0 {
+		t.Fatalf("safe state records=%v gap=%v err=%v", resp.Records, resp.Gap, err)
 	}
 	if testDiskProducerCertificate(t, path) != "" {
 		t.Fatal("failed proof certified replacement")

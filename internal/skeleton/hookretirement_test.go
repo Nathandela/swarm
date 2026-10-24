@@ -93,9 +93,9 @@ func TestEndedSessionPartialCursorCommitPreservesLaterPayload(t *testing.T) {
 	sk.startHookDrain(id)
 	sk.endSession(id)
 	ch, _ := sk.Core().SessionHookChannel(id)
-	recs, _, gap, err := shim.ReadHookSpoolFile(ch.SpoolPath, 1)
-	if err != nil || gap || len(recs) != 1 || recs[0].Seq != 2 {
-		t.Fatalf("partial final drain records=%v gap=%v err=%v", recs, gap, err)
+	resp, err := shim.ReadHookSpoolFileResponse(ch.SpoolPath, 1)
+	if err != nil || resp.Gap || len(resp.Records) != 1 || resp.Records[0].Seq != 2 {
+		t.Fatalf("partial final drain records=%v gap=%v err=%v", resp.Records, resp.Gap, err)
 	}
 	if got := readHookCursor(ch.CursorPath); got != 1 {
 		t.Fatalf("durable cursor=%d", got)
@@ -217,9 +217,9 @@ func TestHookRetirementBusyRetriesOnlyCertifiedPrefix(t *testing.T) {
 	if len(d.drains.retirement) != 0 {
 		t.Fatal("successful retry remains registered")
 	}
-	recs, _, gap, err := shim.ReadHookSpoolFile(path, 1)
-	if err != nil || gap || len(recs) != 1 || string(recs[0].Body) != "later-unfolded" {
-		t.Fatalf("uncertified records=%v gap=%v err=%v", recs, gap, err)
+	resp, err := shim.ReadHookSpoolFileResponse(path, 1)
+	if err != nil || resp.Gap || len(resp.Records) != 1 || string(resp.Records[0].Body) != "later-unfolded" {
+		t.Fatalf("uncertified records=%v gap=%v err=%v", resp.Records, resp.Gap, err)
 	}
 }
 
@@ -334,9 +334,9 @@ func TestReplacementSpoolCannotExtendPriorIncarnationCertificate(t *testing.T) {
 	if err := hd.retireCertifiedPrefix(); !errors.Is(err, shim.ErrHookRetirementUnproven) {
 		t.Fatalf("replacement inherited old certification: %v", err)
 	}
-	recs, _, _, err := shim.ReadHookSpoolFile(path, 0)
-	if err != nil || len(recs) != 2 {
-		t.Fatalf("replacement accepted bytes removed: %v %v", recs, err)
+	resp, err := shim.ReadHookSpoolFileResponse(path, 0)
+	if err != nil || len(resp.Records) != 2 {
+		t.Fatalf("replacement accepted bytes removed: %v %v", resp.Records, err)
 	}
 }
 

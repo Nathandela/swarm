@@ -115,7 +115,7 @@ func r7Squatter(t *testing.T, sock string) int {
 		_ = cmd.Wait()
 		t.Fatalf("squatter readiness = %q, %v", ready, err)
 	}
-	start, err := procStartTimeFn(cmd.Process.Pid)
+	start, err := processStartTime(cmd.Process.Pid)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -128,7 +128,13 @@ func r7Squatter(t *testing.T, sock string) int {
 	go func() { _, _ = cmd.Process.Wait(); close(reaped) }()
 	t.Cleanup(func() {
 		r7KillOwnedGroup(cmd.Process.Pid, cmd.Process.Pid, start)
-		<-reaped
+		select {
+		case <-reaped:
+		case <-time.After(3 * time.Second):
+			t.Errorf("owned squatter process %d did not exit after cleanup signal", cmd.Process.Pid)
+			_ = os.Remove(sock)
+			return
+		}
 		if !r7WaitOwnedProcessGone(cmd.Process.Pid, start, 3*time.Second) {
 			t.Errorf("owned squatter process %d remained after cleanup", cmd.Process.Pid)
 		}
@@ -177,7 +183,7 @@ func runReaperTestHelper() {
 }
 
 func r7KillOwnedGroup(pid, pgid int, started int64) {
-	current, err := procStartTimeFn(pid)
+	current, err := processStartTime(pid)
 	if err != nil || current != started {
 		return
 	}
@@ -190,13 +196,13 @@ func r7KillOwnedGroup(pid, pgid int, started int64) {
 func r7WaitOwnedProcessGone(pid int, started int64, within time.Duration) bool {
 	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
-		current, err := procStartTimeFn(pid)
+		current, err := processStartTime(pid)
 		if err != nil || current != started {
 			return true
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	current, err := procStartTimeFn(pid)
+	current, err := processStartTime(pid)
 	return err != nil || current != started
 }
 

@@ -12,7 +12,7 @@ func (d *Daemon) startLogMaintenance() error {
 	}
 	stop, err := diagnosticlog.Start(d.cfg.LogPath, f)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	d.wg.Add(1)
@@ -20,7 +20,7 @@ func (d *Daemon) startLogMaintenance() error {
 		defer d.wg.Done()
 		<-d.stopCh
 		stop()
-		f.Close()
+		_ = f.Close()
 	}()
 	return nil
 }

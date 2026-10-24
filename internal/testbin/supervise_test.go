@@ -114,6 +114,10 @@ func TestSuperviseCleansAfterChildExit(t *testing.T) {
 			if err := json.Unmarshal(raw, &report); err != nil {
 				t.Fatal(err)
 			}
+			parent, pathErr := filepath.EvalSymlinks(filepath.Dir(report.Root))
+			if pathErr != nil || report.Root != filepath.Join(parent, filepath.Base(report.Root)) {
+				t.Errorf("scratch root uses an alias rejected by private native storage: %s (%v)", report.Root, pathErr)
+			}
 			identity := processcontain.Identity{PID: report.PID, StartTime: report.Start}
 			t.Cleanup(func() {
 				if identity.Alive() {

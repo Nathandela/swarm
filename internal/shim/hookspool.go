@@ -339,32 +339,6 @@ func ReadHookSpoolIncarnation(path string) (id string, adoptedLegacy bool, err e
 	return identity.ID, identity.AdoptedLegacy, nil
 }
 
-// ReadHookSpoolFile is ReadFrom against a spool FILE, with no live HookSpool and no
-// listener -- the socket-independent reader (R6 review fix-pack round 2, BLOCKER 2).
-//
-// WHY IT EXISTS. The spool's whole promise is that an event is durable the moment it is
-// acked, but until now its ONLY reader was hookServer, which is shut down the instant
-// the agent is reaped (shim.go). Every hook acked inside the daemon's last drain
-// interval was therefore unreachable forever while its bytes sat on disk -- an item the
-// shim durably ACKED, lost at ordinary session end, which is exactly what playbook 6.1
-// ("neither fails a provider hook nor loses an accepted item") and the ack contract
-// forbid. A shim CRASH has the identical shape. The file is in the session's own 0700
-// dir and the format is self-describing, so the durability stops being hostage to a
-// live socket: the daemon reads the retired session's spool itself.
-//
-// This reader never mutates payloads. Stopped retirement is a separate operation
-// requiring producer quiescence and a certified cursor for these exact bytes.
-//
-// Every rule ReadFrom's own doc states holds here verbatim, because this shares
-// readFromLocked: records are always strictly below a reported gapAt, a cursor naming
-// a sequence the file never produced is an honest gap, and so is a cursor sitting
-// behind the retained window. A missing file is an error, never a silent empty read --
-// "the spool is gone" and "the spool is clean and empty" must not look the same.
-func ReadHookSpoolFile(path string, after uint64) (recs []HookRecord, gapAt uint64, hasGap bool, err error) {
-	resp, err := ReadHookSpoolFileResponse(path, after)
-	return resp.Records, resp.GapBoundary, resp.Gap, err
-}
-
 // ReadHookSpoolFileResponse binds any producer certificate to the exact descriptor
 // whose bytes were read. An adjacent stale sidecar cannot certify a replaced file.
 func ReadHookSpoolFileResponse(path string, after uint64) (HookDrainResponse, error) {

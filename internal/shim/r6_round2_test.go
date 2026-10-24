@@ -3,7 +3,7 @@ package shim
 // R6 REVIEW FIX-PACK ROUND 2 (BLOCKER 2): hooks.spool had exactly ONE reader, the live
 // hookServer, which is shut down when the agent is reaped -- so every record acked in
 // the last drain interval of a session was unreachable forever while its bytes sat on
-// disk. ReadHookSpoolFile is the socket-independent reader that closes that: the file
+// disk. ReadHookSpoolFileResponse is the socket-independent reader that closes that: the file
 // is already in the session's own 0700 dir and its format is self-describing, so the
 // spool's durability stops being hostage to a live socket.
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestReadHookSpoolFile_ReadsAckedRecordsWithNoLiveShim(t *testing.T) {
+func TestReadHookSpoolFileResponse_ReadsAckedRecordsWithNoLiveShim(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, HookSpoolFile)
 
@@ -30,22 +30,22 @@ func TestReadHookSpoolFile_ReadsAckedRecordsWithNoLiveShim(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	recs, gapAt, hasGap, err := ReadHookSpoolFile(path, 1)
+	resp, err := ReadHookSpoolFileResponse(path, 1)
 	if err != nil {
-		t.Fatalf("ReadHookSpoolFile: %v", err)
+		t.Fatalf("ReadHookSpoolFileResponse: %v", err)
 	}
-	if hasGap || gapAt != 0 {
-		t.Fatalf("ReadHookSpoolFile reported gap=%v at %d over a clean spool, want no gap", hasGap, gapAt)
+	if resp.Gap || resp.GapBoundary != 0 {
+		t.Fatalf("ReadHookSpoolFileResponse reported gap=%v at %d over a clean spool, want no gap", resp.Gap, resp.GapBoundary)
 	}
-	if len(recs) != 2 || recs[0].Seq != 2 || recs[1].Seq != 3 {
-		t.Fatalf("ReadHookSpoolFile(after=1) = %+v, want the records at seq 2 and 3", recs)
+	if len(resp.Records) != 2 || resp.Records[0].Seq != 2 || resp.Records[1].Seq != 3 {
+		t.Fatalf("ReadHookSpoolFileResponse(after=1) = %+v, want the records at seq 2 and 3", resp.Records)
 	}
-	if string(recs[0].Body) != `{"a":2}` {
-		t.Fatalf("record body = %s, want the verbatim posted body", recs[0].Body)
+	if string(resp.Records[0].Body) != `{"a":2}` {
+		t.Fatalf("record body = %s, want the verbatim posted body", resp.Records[0].Body)
 	}
 }
 
-func TestReadHookSpoolFile_ReportsATornTailAndNeverReturnsPastIt(t *testing.T) {
+func TestReadHookSpoolFileResponse_ReportsATornTailAndNeverReturnsPastIt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, HookSpoolFile)
 
@@ -72,22 +72,22 @@ func TestReadHookSpoolFile_ReportsATornTailAndNeverReturnsPastIt(t *testing.T) {
 		t.Fatalf("truncate to tear the last record: %v", err)
 	}
 
-	recs, gapAt, hasGap, err := ReadHookSpoolFile(path, 0)
+	resp, err := ReadHookSpoolFileResponse(path, 0)
 	if err != nil {
-		t.Fatalf("ReadHookSpoolFile: %v", err)
+		t.Fatalf("ReadHookSpoolFileResponse: %v", err)
 	}
-	if !hasGap || gapAt != 2 {
-		t.Fatalf("ReadHookSpoolFile over a torn tail: gap=%v boundary=%d, want gap at 2", hasGap, gapAt)
+	if !resp.Gap || resp.GapBoundary != 2 {
+		t.Fatalf("ReadHookSpoolFileResponse over a torn tail: gap=%v boundary=%d, want gap at 2", resp.Gap, resp.GapBoundary)
 	}
-	for _, r := range recs {
-		if r.Seq >= gapAt {
-			t.Fatalf("ReadHookSpoolFile returned seq %d at or past the reported boundary %d -- ADR-017 forbids silently bridging the hole", r.Seq, gapAt)
+	for _, r := range resp.Records {
+		if r.Seq >= resp.GapBoundary {
+			t.Fatalf("ReadHookSpoolFileResponse returned seq %d at or past the reported boundary %d -- ADR-017 forbids silently bridging the hole", r.Seq, resp.GapBoundary)
 		}
 	}
 }
 
-func TestReadHookSpoolFile_MissingFileIsAnErrorNotAnEmptyRead(t *testing.T) {
-	if _, _, _, err := ReadHookSpoolFile(filepath.Join(t.TempDir(), HookSpoolFile), 0); err == nil {
-		t.Fatalf("ReadHookSpoolFile over a nonexistent spool returned nil error; a missing file must not read as a clean, empty spool")
+func TestReadHookSpoolFileResponse_MissingFileIsAnErrorNotAnEmptyRead(t *testing.T) {
+	if _, err := ReadHookSpoolFileResponse(filepath.Join(t.TempDir(), HookSpoolFile), 0); err == nil {
+		t.Fatalf("ReadHookSpoolFileResponse over a nonexistent spool returned nil error; a missing file must not read as a clean, empty spool")
 	}
 }

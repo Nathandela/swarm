@@ -157,7 +157,7 @@ func TestOpenHardensOwnedFileAndRejectsFIFOAndForeignOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, _ := f.Stat()
-	f.Close()
+	_ = f.Close()
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("mode=%o", info.Mode().Perm())
 	}
@@ -166,7 +166,7 @@ func TestOpenHardensOwnedFileAndRejectsFIFOAndForeignOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f, err := Open(fifo); err == nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatal("accepted FIFO")
 	}
 	foreign, err := os.Open("/etc/hosts")

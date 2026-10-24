@@ -31,6 +31,12 @@ func Supervise() (int, bool) {
 		fmt.Fprintln(os.Stderr, "test supervisor:", err)
 		return 1, true
 	}
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "test supervisor: resolve scratch: %v; retained scratch: %s\n", err, root)
+		return 1, true
+	}
+	root = canonical
 	code := 1
 	err = runSupervised(root, &code)
 	if err != nil {
