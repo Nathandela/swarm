@@ -4845,5 +4845,224 @@
       "exit_code": 0
     },
     "build": "Sanitized go build ./... passed after final Store and fixture changes."
+  },
+  "codex_child_input_receipts": {
+    "scope": "Actual pinned0.163 Mac and Linux native synthetic observations, no child-custody clearance implementation or automatic continuation authorization.",
+    "mac_manifest_sha256": "689f61e3c11459294bd0a0f3dd8deff784701734c5baad44c33be4bc01bb6fd5",
+    "mac_checked": [
+      {
+        "case": "started",
+        "passed": true,
+        "requests": 7,
+        "rawReceiptAvailable": true,
+        "rawReceiptNamesChildTurn": true,
+        "childTurnStartAfterSendCompleted": false,
+        "publicChildClientIds": null,
+        "publicReadHasSubmissionReceipt": false,
+        "receiptSha256": "5c7bc183cb921c3b5305eec3c44d4a96a27235ba0df4872c4c9453d6933fa1ce"
+      },
+      {
+        "case": "steered",
+        "passed": true,
+        "requests": 6,
+        "rawReceiptAvailable": true,
+        "rawReceiptNamesChildTurn": false,
+        "childTurnStartAfterSendCompleted": false,
+        "publicChildClientIds": null,
+        "publicReadHasSubmissionReceipt": false,
+        "receiptSha256": "b1e08009fc160f3d43b890c657ac5f4bda12135d9f6fa0963fc648d252f7cd0b"
+      },
+      {
+        "case": "rejected",
+        "passed": true,
+        "requests": 6,
+        "rawReceiptAvailable": true,
+        "rawReceiptNamesChildTurn": false,
+        "childTurnStartAfterSendCompleted": false,
+        "publicChildClientIds": null,
+        "publicReadHasSubmissionReceipt": false,
+        "receiptSha256": "6fd640cdde5141cbeac309ad7275a63013ed6a42be90f716db0a88906c999939"
+      }
+    ],
+    "linux_run": {
+      "stage": "/run/user/1000/swarm-child-receipts.UvWfDDSG",
+      "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+      "manifest_sha256": "689f61e3c11459294bd0a0f3dd8deff784701734c5baad44c33be4bc01bb6fd5",
+      "runs": [
+        {
+          "case": "started",
+          "unit": "swarm-child-receipt-afe710bd63aec7b6295e99d6",
+          "exit_code": 0,
+          "elapsed_seconds": 2.113,
+          "log_sha256": "f685216c709f4e35ed4cfd8ee2f0ea7aa2a1caf4ee855ba3383137427097ffe1"
+        },
+        {
+          "case": "steered",
+          "unit": "swarm-child-receipt-1fb667d88d8f160774cb2fef",
+          "exit_code": 0,
+          "elapsed_seconds": 2.189,
+          "log_sha256": "f14b73ad1fd42fb02fa27dd0325024626605fbdf8437d3feaf37e0667afdf50a"
+        },
+        {
+          "case": "rejected",
+          "unit": "swarm-child-receipt-3290824357a9bcd85e9697df",
+          "exit_code": 0,
+          "elapsed_seconds": 2.06,
+          "log_sha256": "b82d4d2493ff46fac98c0f435c0a7ab99585122894dac5556de6481412eb649b"
+        }
+      ]
+    },
+    "linux_checked": [
+      {
+        "case": "started",
+        "passed": true,
+        "requests": 7,
+        "rawReceiptAvailable": true,
+        "rawReceiptNamesChildTurn": true,
+        "childTurnStartAfterSendCompleted": true,
+        "publicChildClientIds": null,
+        "publicReadHasSubmissionReceipt": false,
+        "receiptSha256": "f685216c709f4e35ed4cfd8ee2f0ea7aa2a1caf4ee855ba3383137427097ffe1"
+      },
+      {
+        "case": "steered",
+        "passed": true,
+        "requests": 6,
+        "rawReceiptAvailable": true,
+        "rawReceiptNamesChildTurn": false,
+        "childTurnStartAfterSendCompleted": false,
+        "publicChildClientIds": null,
+        "publicReadHasSubmissionReceipt": false,
+        "receiptSha256": "f14b73ad1fd42fb02fa27dd0325024626605fbdf8437d3feaf37e0667afdf50a"
+      },
+      {
+        "case": "rejected",
+        "passed": true,
+        "requests": 6,
+        "rawReceiptAvailable": true,
+        "rawReceiptNamesChildTurn": false,
+        "childTurnStartAfterSendCompleted": false,
+        "publicChildClientIds": null,
+        "publicReadHasSubmissionReceipt": false,
+        "receiptSha256": "b82d4d2493ff46fac98c0f435c0a7ab99585122894dac5556de6481412eb649b"
+      }
+    ],
+    "findings": [
+      "Opt-in rawResponseItem/completed exposes the exact send_input tool call submission ID; Started names its new child turn, Steered returns an opaque ID that does not name the active turn.",
+      "Rejected input to a closed child has no submission ID. Public thread/read does not expose this delivery receipt and child userMessage.clientId is null.",
+      "Host-authored clientUserMessageId is preserved in the public main-thread userMessage.clientId.",
+      "A later child completion cannot prove consumption of a queued or steered input. Native Stimuli remain conservative."
+    ],
+    "limitations": [
+      "Raw events require thread/start experimentalRawEvents=true; enabling them on an existing TUI thread was not established.",
+      "No goal wake, lost-response recovery, general child queue exhaustion or0.164 execution qualification follows.",
+      "No real credentials or provider model requests; only structural metadata leaves the private harness."
+    ]
+  },
+  "claude_observer_census": {
+    "scope": "Failed complete-census hypothesis, reproduced on pinned2.1.310 Mac and Linux. All five cases remain automatically ineligible.",
+    "manifest_sha256": "76ae03c126e58ca8e71d440bff4dea9ff8a406f0774bcbb23967815c2ece953e",
+    "mac_checked": {
+      "passed": true,
+      "cases": [
+        "plain",
+        "raw-rewrite",
+        "earlier",
+        "later",
+        "reload"
+      ],
+      "automatic_eligibility": {
+        "plain": false,
+        "raw-rewrite": false,
+        "earlier": false,
+        "later": false,
+        "reload": false
+      },
+      "reason": "No supported complete lifetime module census established, including the plain case."
+    },
+    "linux_run": {
+      "stage": "/run/user/1000/swarm-claude-census.19ygIdoH",
+      "manifest_sha256": "76ae03c126e58ca8e71d440bff4dea9ff8a406f0774bcbb23967815c2ece953e",
+      "runs": [
+        {
+          "case": "selftest",
+          "unit": "swarm-claude-census-fb4b0edfb3c1e3ae031b1fb6",
+          "exit_code": 0,
+          "elapsed_seconds": 2.101,
+          "log_sha256": "2ca17ddaf39715777a035cff1a3bd5ced860def9c959db05421d8449c0cfc912"
+        },
+        {
+          "case": "plain",
+          "unit": "swarm-claude-census-e898f429bf3c7fa4199f2ff7",
+          "exit_code": 0,
+          "elapsed_seconds": 6.036,
+          "log_sha256": "2e37785e15c5c0366b552ace7731e7e7a52109759dea00a01a9864ed5bcbb97c"
+        },
+        {
+          "case": "raw-rewrite",
+          "unit": "swarm-claude-census-908547fd08db854f21847286",
+          "exit_code": 0,
+          "elapsed_seconds": 5.942,
+          "log_sha256": "c860bf0fe7bd3bb5d9326d8fdad728d2e4348de9ebbc894c09230f8758ba6856"
+        },
+        {
+          "case": "earlier",
+          "unit": "swarm-claude-census-56bb26e078d75b9896db9767",
+          "exit_code": 0,
+          "elapsed_seconds": 6.145,
+          "log_sha256": "f3e31ea096e3ae756b6ade8b32fb80bf37a635d2073cb7d02143ebf99e2cd9ee"
+        },
+        {
+          "case": "later",
+          "unit": "swarm-claude-census-89559ea8301b02a6e1dbaf19",
+          "exit_code": 0,
+          "elapsed_seconds": 6.102,
+          "log_sha256": "b19d40e7303c08e7b1a29ab4e3e7f5496ee9ee8fe28e8247bf0f745afe41f57b"
+        },
+        {
+          "case": "reload",
+          "unit": "swarm-claude-census-5c0a05aa1d2454319589f35e",
+          "exit_code": 0,
+          "elapsed_seconds": 5.941,
+          "log_sha256": "ceb09eeb75adcdbb746d67ad61456615a302fc8bf9dba48fc293e8d2428bfbc8"
+        },
+        {
+          "case": "validate",
+          "unit": "swarm-claude-census-e6f3ba4323df20d23b1c604b",
+          "exit_code": 0,
+          "elapsed_seconds": 0.389,
+          "log_sha256": "1224bc7995a0e5e217b8322cb0b25a1c5b40c583c442032864bb05ad258bcbd1"
+        }
+      ]
+    },
+    "linux_checked": {
+      "passed": true,
+      "cases": [
+        "plain",
+        "raw-rewrite",
+        "earlier",
+        "later",
+        "reload"
+      ],
+      "automatic_eligibility": {
+        "plain": false,
+        "raw-rewrite": false,
+        "earlier": false,
+        "later": false,
+        "reload": false
+      },
+      "reason": "No supported complete lifetime module census established, including the plain case."
+    },
+    "findings": [
+      "Earlier legitimate turn.step transformers evade downstream traces and cause a phase-only classifier false positive. Initial engine.create names that module, but is not a complete lifetime census.",
+      "Host-restored raw settings.read input layers expose false while merged and source-specific returned answers can be rewritten true.",
+      "Later singleton user-module reload DOES emit plugin.register. Earlier inference of no notification was based on a pre-reload terminal snapshot and is withdrawn.",
+      "The observed builtin implementations are embedded in the pinned executable, but full-fold and managed/earlier-module admission do not guarantee an ordinary user observer receives every registration."
+    ],
+    "limitations": [
+      "No initial default-looking module list authorizes automatic continuation.",
+      "No production observer, launch-policy or global-settings activation follows.",
+      "Supported native prepend ordering is a separate hypothesis under investigation; it is not proven by these observations."
+    ]
   }
 }
