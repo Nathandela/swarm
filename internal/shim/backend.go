@@ -41,6 +41,8 @@ import (
 // real account credentials, and it sits in a state dir.
 const BackendFile = "backend.json"
 
+var errExternalAuthBackend = errors.New("shim: external authentication requires an authenticated backend")
+
 // Default bounds for the two waits a backend introduces. Both are overridable per session and
 // both exist so a backend failure is a failure for the BACKEND only.
 const (

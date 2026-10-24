@@ -413,6 +413,40 @@ func (c *Client) Respond(ctx context.Context, id json.RawMessage, result any) er
 	return c.write(ctx, wireFrame{JSONRPC: "2.0", ID: id, Result: body})
 }
 
+// RespondAuthTokens validates external credential ownership at the actual socket write.
+func (c *Client) RespondAuthTokens(ctx context.Context, id json.RawMessage, result any, current func() bool) error {
+	body, err := json.Marshal(result)
+	if err != nil {
+		return errors.New("backend_auth_unavailable")
+	}
+	data, err := json.Marshal(wireFrame{JSONRPC: "2.0", ID: id, Result: body})
+	if err != nil {
+		return errors.New("backend_auth_unavailable")
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return ErrClosed
+	}
+	if ctx.Err() != nil || current == nil || !current() {
+		return errors.New("backend_auth_unavailable")
+	}
+	return c.ws.Write(ctx, websocket.MessageText, data)
+}
+
+// RespondAuthError rejects external-auth callbacks with a fixed, non-secret diagnostic.
+func (c *Client) RespondAuthError(ctx context.Context, id json.RawMessage, code string) error {
+	switch code {
+	case "backend_auth_invalid_request", "backend_auth_unavailable":
+	default:
+		code = "backend_auth_unavailable"
+	}
+	return c.write(ctx, wireFrame{JSONRPC: "2.0", ID: id, Error: &RPCError{Code: -32001, Message: code}})
+}
+
 // write serializes one frame as a WebSocket TEXT message. One writer at a time.
 func (c *Client) write(ctx context.Context, fr wireFrame) error {
 	data, err := json.Marshal(fr)

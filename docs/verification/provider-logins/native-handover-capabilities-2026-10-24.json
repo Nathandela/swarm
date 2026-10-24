@@ -1,0 +1,1328 @@
+{
+  "date": "2026-10-24",
+  "scope": "Native synthetic capability characterization; production integration is not qualified",
+  "platform": "Linux x86_64, Python 3.10.12, OpenSSL 3.0.2",
+  "real_account_credentials_used": false,
+  "production_discussions_changed": false,
+  "containment": {
+    "codex": "One transient user systemd service per scenario, KillMode=control-group, RuntimeMaxSec=120, TimeoutStopSec=5, MemoryMax=1G, TasksMax=128, LimitFSIZE=32M; inner deadline 60s",
+    "claude": "One transient user systemd service for seven scenarios, KillMode=control-group, RuntimeMaxSec=120, TimeoutStopSec=5; inner scenario deadline 25s"
+  },
+  "codex": {
+    "version": "0.163.0",
+    "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "harness_manifest": {
+      "harness_sha256": {
+        "probe.py": "528a59f151ebba78e957e9cb71b439b0f45b055b54a4120a2f319b20391297aa",
+        "route_probe.py": "7a9de1d401ac7d260f88c73277ad34abbc7bd569eec998f05ef445d6b22fc30b",
+        "run.py": "97ab64cc62f60a6b1043619b2db3c5bd01d25f3e830b2a0ea6508156944ecaf9",
+        "tui_proxy.py": "292044a590494e9df8e69647129ea2601f5247e29daa582b0b96c6c29e8edfff",
+        "ws.py": "7405b5ac97083b1bbe8619a61d0991ac8fe338b38fc2666ff79b18ce92eec9b0"
+      },
+      "scope": "synthetic loopback, real installed native, macOS arm64; no Linux run",
+      "gates_still_open": [
+        "daemon gap/reconnect and native callback timeout",
+        "stale epoch/concurrent callback/coalescing",
+        "pending approvals/human questions/children",
+        "general positive unfinished discriminator and production final/maintenance admission",
+        "ambiguous continuation acceptance/crash reconciliation",
+        "native detached-process cgroup containment",
+        "helper canonical auth custody/migration/ENOSPC"
+      ],
+      "receipt_sha256": {
+        "adoption-receipt.json": "63d8b3f6472f79d995b42c670110af734798cfbb7e99f723a9d241693359218b",
+        "busy-receipt.json": "452ca2750cf271b838f6960339df06086f861a0ae847ca20f3366a2cd0be3b28",
+        "callback-receipt.json": "a6e2167fea23ece6887d4189f6d9400d602dea201b5713799c607a6d612190b6",
+        "finalquota-receipt.json": "93341f8d07bc961f0386562ddb37f2adb8f53108b0ed28f34f13ab0e24ab425e",
+        "multiclient-receipt.json": "b942bb61671704a7ddf9aef27bb50b3c696ea3e546944d6f703b6221afcf0045",
+        "quota-receipt.json": "e85a631f2773da40dcd379c6f4736cb66c7ac7d1e1d8c790bf39168ad8bcd446",
+        "renewal-receipt.json": "631e9e29e5bfcfe6892942c8ac2e1e84b8bde68a450a646483d30f6cbf244a72",
+        "tui-receipt.json": "97dd01a152e2bbb56d8006088cfd6cdc09843d2ef892208fa66475913f3f9d43",
+        "unknownquota-receipt.json": "df2dc7522e48246d4c642d63747f0fc8706a0d479d7d73f1d1ebedf513ccaf98"
+      },
+      "last_change_validation": "Renewal bounds helper: valid1/65536B and request0/7; rejected0/65537/-1/missing/nonnumeric/request8. Missing required --sha256 argparse exit2. Compile all scripts. Native nine scenarios not repeated for these guardrail-only changes.",
+      "python_compatibility_validation": "Python3.10 grammar parse all scripts; bounded1MiB streamingSHA checks empty/abc/1048577-byte fixture; no case behavior changes or nine-native rerun."
+    },
+    "results": [
+      {
+        "native": "0.163.0",
+        "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "native_managed_refresh": true,
+        "successful_refresh_calls": 2,
+        "inference_requests": 0,
+        "identity_and_new_expiry_verified": true,
+        "rotated_refresh_persisted": true,
+        "revoked_result_account_present": false,
+        "revoked_auth_file_unchanged": true,
+        "scenario": "renewal",
+        "exit_code": 0
+      },
+      {
+        "scenario": "adoption",
+        "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "built_in_provider": true,
+        "transport": "websocket",
+        "same_native_and_thread": true,
+        "terminals": [
+          "completed",
+          "completed",
+          "completed"
+        ],
+        "model_connections": [
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-a",
+            "bearer_account": "synthetic-a",
+            "requests": 2,
+            "inference_requests": 1
+          },
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-b",
+            "bearer_account": "synthetic-b",
+            "requests": 1,
+            "inference_requests": 1
+          },
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-a",
+            "bearer_account": "synthetic-a",
+            "requests": 1,
+            "inference_requests": 1
+          }
+        ],
+        "callback_count": 0,
+        "callback_broadcast_to_second_client": false,
+        "tui_received_and_ignored_refresh": false,
+        "tui_rpc_methods": [],
+        "tui_thread_actions": [],
+        "tool_retained": false,
+        "item_summary": [
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d65-b73a-7820-8827-3b6b7cace1af",
+            "phase": null,
+            "turn": "01a16d65-aaa2-73b1-869a-37737ed9f4ad",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d65-b73a-7820-8827-3b6b7cace1af",
+            "phase": null,
+            "turn": "01a16d65-aaa2-73b1-869a-37737ed9f4ad",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d65-aaa2-73b1-869a-37737ed9f4ad",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d65-aaa2-73b1-869a-37737ed9f4ad",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d65-c376-7991-be76-3d39f455bb8f",
+            "phase": null,
+            "turn": "01a16d65-b78d-76d2-99f2-ad8cace8383e",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d65-c376-7991-be76-3d39f455bb8f",
+            "phase": null,
+            "turn": "01a16d65-b78d-76d2-99f2-ad8cace8383e",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d65-b78d-76d2-99f2-ad8cace8383e",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d65-b78d-76d2-99f2-ad8cace8383e",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d65-d0ea-7360-b0bf-7e5704284e84",
+            "phase": null,
+            "turn": "01a16d65-c42f-7782-8d88-961668a970e0",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d65-d0ea-7360-b0bf-7e5704284e84",
+            "phase": null,
+            "turn": "01a16d65-c42f-7782-8d88-961668a970e0",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d65-c42f-7782-8d88-961668a970e0",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d65-c42f-7782-8d88-961668a970e0",
+            "exit": null
+          }
+        ],
+        "exit_code": 0
+      },
+      {
+        "scenario": "busy",
+        "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "built_in_provider": true,
+        "transport": "websocket",
+        "same_native_and_thread": true,
+        "terminals": [
+          "completed"
+        ],
+        "model_connections": [
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-a",
+            "bearer_account": "synthetic-a",
+            "requests": 2,
+            "inference_requests": 1
+          },
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-b",
+            "bearer_account": "synthetic-b",
+            "requests": 1,
+            "inference_requests": 1
+          }
+        ],
+        "callback_count": 0,
+        "callback_broadcast_to_second_client": false,
+        "tui_received_and_ignored_refresh": false,
+        "tui_rpc_methods": [],
+        "tui_thread_actions": [],
+        "tool_retained": true,
+        "item_summary": [
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d65-f3eb-7a10-88a6-c41878d83582",
+            "phase": null,
+            "turn": "01a16d65-e7af-7563-8988-c3890a831cdc",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d65-f3eb-7a10-88a6-c41878d83582",
+            "phase": null,
+            "turn": "01a16d65-e7af-7563-8988-c3890a831cdc",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-commentary",
+            "phase": "commentary",
+            "turn": "01a16d65-e7af-7563-8988-c3890a831cdc",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-commentary",
+            "phase": "commentary",
+            "turn": "01a16d65-e7af-7563-8988-c3890a831cdc",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "commandExecution",
+            "id": "synthetic-command",
+            "phase": null,
+            "turn": "01a16d65-e7af-7563-8988-c3890a831cdc",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "commandExecution",
+            "id": "synthetic-command",
+            "phase": null,
+            "turn": "01a16d65-e7af-7563-8988-c3890a831cdc",
+            "exit": 0
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d65-e7af-7563-8988-c3890a831cdc",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d65-e7af-7563-8988-c3890a831cdc",
+            "exit": null
+          }
+        ],
+        "exit_code": 0
+      },
+      {
+        "scenario": "quota",
+        "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "built_in_provider": true,
+        "transport": "websocket",
+        "same_native_and_thread": true,
+        "terminals": [
+          "failed",
+          "completed"
+        ],
+        "model_connections": [
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-a",
+            "bearer_account": "synthetic-a",
+            "requests": 3,
+            "inference_requests": 2
+          },
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-b",
+            "bearer_account": "synthetic-b",
+            "requests": 1,
+            "inference_requests": 1
+          }
+        ],
+        "callback_count": 0,
+        "callback_broadcast_to_second_client": false,
+        "tui_received_and_ignored_refresh": false,
+        "tui_rpc_methods": [],
+        "tui_thread_actions": [],
+        "tool_retained": true,
+        "item_summary": [
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d66-1974-7b43-986b-5500c7cfceb3",
+            "phase": null,
+            "turn": "01a16d66-0c4e-7cb0-b0a0-5b8ea8d28b1c",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d66-1974-7b43-986b-5500c7cfceb3",
+            "phase": null,
+            "turn": "01a16d66-0c4e-7cb0-b0a0-5b8ea8d28b1c",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-commentary",
+            "phase": "commentary",
+            "turn": "01a16d66-0c4e-7cb0-b0a0-5b8ea8d28b1c",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-commentary",
+            "phase": "commentary",
+            "turn": "01a16d66-0c4e-7cb0-b0a0-5b8ea8d28b1c",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "commandExecution",
+            "id": "synthetic-command",
+            "phase": null,
+            "turn": "01a16d66-0c4e-7cb0-b0a0-5b8ea8d28b1c",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "commandExecution",
+            "id": "synthetic-command",
+            "phase": null,
+            "turn": "01a16d66-0c4e-7cb0-b0a0-5b8ea8d28b1c",
+            "exit": 0
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d66-1a4f-7d92-a4e6-d31aa5b74af9",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d66-1a4f-7d92-a4e6-d31aa5b74af9",
+            "exit": null
+          }
+        ],
+        "exit_code": 0
+      },
+      {
+        "scenario": "callback",
+        "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "built_in_provider": true,
+        "transport": "websocket",
+        "same_native_and_thread": true,
+        "terminals": [
+          "completed"
+        ],
+        "model_connections": [
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-b",
+            "bearer_account": "synthetic-b",
+            "requests": 1,
+            "inference_requests": 1
+          }
+        ],
+        "callback_count": 1,
+        "callback_broadcast_to_second_client": false,
+        "tui_received_and_ignored_refresh": false,
+        "tui_rpc_methods": [],
+        "tui_thread_actions": [],
+        "tool_retained": false,
+        "item_summary": [
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d66-49d9-78d1-af6c-68556243700e",
+            "phase": null,
+            "turn": "01a16d66-3d1a-7300-9e2d-9cd1e9f99a0f",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d66-49d9-78d1-af6c-68556243700e",
+            "phase": null,
+            "turn": "01a16d66-3d1a-7300-9e2d-9cd1e9f99a0f",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d66-3d1a-7300-9e2d-9cd1e9f99a0f",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d66-3d1a-7300-9e2d-9cd1e9f99a0f",
+            "exit": null
+          }
+        ],
+        "exit_code": 0
+      },
+      {
+        "scenario": "multiclient",
+        "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "built_in_provider": true,
+        "transport": "websocket",
+        "same_native_and_thread": true,
+        "terminals": [
+          "completed"
+        ],
+        "model_connections": [
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-b",
+            "bearer_account": "synthetic-b",
+            "requests": 1,
+            "inference_requests": 1
+          }
+        ],
+        "callback_count": 1,
+        "callback_broadcast_to_second_client": true,
+        "tui_received_and_ignored_refresh": false,
+        "tui_rpc_methods": [],
+        "tui_thread_actions": [],
+        "tool_retained": false,
+        "item_summary": [
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d66-6e19-7832-91f7-865bc16d8565",
+            "phase": null,
+            "turn": "01a16d66-61af-7990-9cc9-ba61ae407fd5",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d66-6e19-7832-91f7-865bc16d8565",
+            "phase": null,
+            "turn": "01a16d66-61af-7990-9cc9-ba61ae407fd5",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d66-61af-7990-9cc9-ba61ae407fd5",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d66-61af-7990-9cc9-ba61ae407fd5",
+            "exit": null
+          }
+        ],
+        "exit_code": 0
+      },
+      {
+        "scenario": "finalquota",
+        "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "built_in_provider": true,
+        "transport": "websocket",
+        "same_native_and_thread": true,
+        "terminals": [
+          "failed"
+        ],
+        "model_connections": [
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-a",
+            "bearer_account": "synthetic-a",
+            "requests": 3,
+            "inference_requests": 2
+          }
+        ],
+        "callback_count": 0,
+        "callback_broadcast_to_second_client": false,
+        "tui_received_and_ignored_refresh": false,
+        "tui_rpc_methods": [],
+        "tui_thread_actions": [],
+        "tool_retained": true,
+        "item_summary": [
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d66-917f-72d1-9711-0c0bace0172b",
+            "phase": null,
+            "turn": "01a16d66-849c-7763-9617-1ca73c1551d0",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d66-917f-72d1-9711-0c0bace0172b",
+            "phase": null,
+            "turn": "01a16d66-849c-7763-9617-1ca73c1551d0",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-commentary",
+            "phase": "final_answer",
+            "turn": "01a16d66-849c-7763-9617-1ca73c1551d0",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-commentary",
+            "phase": "final_answer",
+            "turn": "01a16d66-849c-7763-9617-1ca73c1551d0",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "commandExecution",
+            "id": "synthetic-command",
+            "phase": null,
+            "turn": "01a16d66-849c-7763-9617-1ca73c1551d0",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "commandExecution",
+            "id": "synthetic-command",
+            "phase": null,
+            "turn": "01a16d66-849c-7763-9617-1ca73c1551d0",
+            "exit": 0
+          }
+        ],
+        "exit_code": 0
+      },
+      {
+        "scenario": "unknownquota",
+        "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "built_in_provider": true,
+        "transport": "websocket",
+        "same_native_and_thread": true,
+        "terminals": [
+          "failed"
+        ],
+        "model_connections": [
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-a",
+            "bearer_account": "synthetic-a",
+            "requests": 3,
+            "inference_requests": 2
+          }
+        ],
+        "callback_count": 0,
+        "callback_broadcast_to_second_client": false,
+        "tui_received_and_ignored_refresh": false,
+        "tui_rpc_methods": [],
+        "tui_thread_actions": [],
+        "tool_retained": true,
+        "item_summary": [
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d66-b6a8-7ed2-bae3-e8ea8c22de67",
+            "phase": null,
+            "turn": "01a16d66-aa1f-71d2-ac8f-bc55e1249fb9",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d66-b6a8-7ed2-bae3-e8ea8c22de67",
+            "phase": null,
+            "turn": "01a16d66-aa1f-71d2-ac8f-bc55e1249fb9",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-commentary",
+            "phase": null,
+            "turn": "01a16d66-aa1f-71d2-ac8f-bc55e1249fb9",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-commentary",
+            "phase": null,
+            "turn": "01a16d66-aa1f-71d2-ac8f-bc55e1249fb9",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "commandExecution",
+            "id": "synthetic-command",
+            "phase": null,
+            "turn": "01a16d66-aa1f-71d2-ac8f-bc55e1249fb9",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "commandExecution",
+            "id": "synthetic-command",
+            "phase": null,
+            "turn": "01a16d66-aa1f-71d2-ac8f-bc55e1249fb9",
+            "exit": 0
+          }
+        ],
+        "exit_code": 0
+      },
+      {
+        "scenario": "tui",
+        "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "built_in_provider": true,
+        "transport": "websocket",
+        "same_native_and_thread": true,
+        "terminals": [
+          "completed"
+        ],
+        "model_connections": [
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-a",
+            "bearer_account": "synthetic-a",
+            "requests": 1,
+            "inference_requests": 1
+          },
+          {
+            "path": "/backend-api/codex/responses",
+            "transport": "ws",
+            "account": "synthetic-b",
+            "bearer_account": "synthetic-b",
+            "requests": 1,
+            "inference_requests": 1
+          }
+        ],
+        "callback_count": 1,
+        "callback_broadcast_to_second_client": false,
+        "tui_received_and_ignored_refresh": true,
+        "tui_rpc_methods": [
+          "initialize",
+          "initialized",
+          "account/read",
+          "thread/read",
+          "model/list",
+          "configRequirements/read",
+          "collaborationMode/list",
+          "hooks/list",
+          "account/bedrock/checkGovCloudRequirements",
+          "thread/resume",
+          "thread/turns/list",
+          "thread/items/list",
+          "thread/list",
+          "thread/goal/get",
+          "thread/list",
+          "thread/loaded/list",
+          "thread/list",
+          "thread/list",
+          "skills/list",
+          "account/rateLimits/read",
+          "skills/list",
+          "plugin/list",
+          "thread/read",
+          "thread/turns/list",
+          "app/installed",
+          "plugin/list",
+          "account/read",
+          "app/installed",
+          "account/rateLimits/read",
+          "plugin/list",
+          "account/read",
+          "app/installed",
+          "account/rateLimits/read",
+          "config/read",
+          "thread/start"
+        ],
+        "tui_thread_actions": [
+          {
+            "method": "thread/resume",
+            "requested_thread": "01a16d66-c135-7e70-9dd4-a21253aa3437",
+            "ephemeral": null,
+            "model": null
+          },
+          {
+            "method": "thread/start",
+            "requested_thread": null,
+            "ephemeral": true,
+            "model": "gpt-5.6-luna"
+          }
+        ],
+        "tool_retained": false,
+        "item_summary": [
+          {
+            "event": "item/started",
+            "type": "userMessage",
+            "id": "01a16d66-f392-7282-8950-b6153422727a",
+            "phase": null,
+            "turn": "01a16d66-e803-7e53-8e06-dcf54c5129be",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "userMessage",
+            "id": "01a16d66-f392-7282-8950-b6153422727a",
+            "phase": null,
+            "turn": "01a16d66-e803-7e53-8e06-dcf54c5129be",
+            "exit": null
+          },
+          {
+            "event": "item/started",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d66-e803-7e53-8e06-dcf54c5129be",
+            "exit": null
+          },
+          {
+            "event": "item/completed",
+            "type": "agentMessage",
+            "id": "synthetic-message",
+            "phase": "final_answer",
+            "turn": "01a16d66-e803-7e53-8e06-dcf54c5129be",
+            "exit": null
+          }
+        ],
+        "exit_code": 0
+      }
+    ]
+  },
+  "claude": {
+    "version": "2.1.310",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "harness_sha256": "86a38331f93792cc73bf2fd8e2807893ec05fe89663b9f0134441cebd23eb3f5",
+    "mode": "stream-json SDK; ordinary interactive continuation not qualified by these receipts",
+    "results": [
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "scenario": "aba",
+        "passed": true,
+        "results": [
+          false,
+          false,
+          false
+        ],
+        "events": [
+          {
+            "type": "control_response",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          }
+        ],
+        "requests": [
+          {
+            "bearer": "Bearer synthetic-account-A",
+            "messages": 2,
+            "tools": []
+          },
+          {
+            "bearer": "Bearer synthetic-account-B",
+            "messages": 5,
+            "tools": []
+          },
+          {
+            "bearer": "Bearer synthetic-account-A",
+            "messages": 8,
+            "tools": []
+          }
+        ]
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "scenario": "tool",
+        "passed": true,
+        "results": [
+          false
+        ],
+        "events": [
+          {
+            "type": "control_response",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "user",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          }
+        ],
+        "requests": [
+          {
+            "bearer": "Bearer synthetic-account-A",
+            "messages": 2,
+            "tools": []
+          },
+          {
+            "bearer": "Bearer synthetic-account-B",
+            "messages": 5,
+            "tools": [
+              [
+                "tool_use",
+                "tool_probe_1",
+                "525c4f1d8644266c4598564a2faa72fa70eff3b10a6eeb5cc48c601ed3b60ef1"
+              ],
+              [
+                "tool_result",
+                "tool_probe_1",
+                "ae061c6fd79a1f5595f034d1fd3511c81d19fd632e9bc85504f1d91a09f5f3e0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "scenario": "quota_empty",
+        "passed": true,
+        "results": [
+          true,
+          false
+        ],
+        "events": [
+          {
+            "type": "control_response",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": true
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          }
+        ],
+        "requests": [
+          {
+            "bearer": "Bearer synthetic-account-A",
+            "messages": 2,
+            "tools": []
+          },
+          {
+            "bearer": "Bearer synthetic-account-B",
+            "messages": 2,
+            "tools": []
+          }
+        ]
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "scenario": "complete_empty",
+        "passed": true,
+        "results": [
+          false,
+          false
+        ],
+        "events": [
+          {
+            "type": "control_response",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          }
+        ],
+        "requests": [
+          {
+            "bearer": "Bearer synthetic-account-A",
+            "messages": 2,
+            "tools": []
+          },
+          {
+            "bearer": "Bearer synthetic-account-B",
+            "messages": 5,
+            "tools": []
+          }
+        ]
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "scenario": "tool_quota_empty",
+        "passed": true,
+        "results": [
+          true,
+          false
+        ],
+        "events": [
+          {
+            "type": "control_response",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "user",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": true
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          }
+        ],
+        "requests": [
+          {
+            "bearer": "Bearer synthetic-account-A",
+            "messages": 2,
+            "tools": []
+          },
+          {
+            "bearer": "Bearer synthetic-account-B",
+            "messages": 5,
+            "tools": [
+              [
+                "tool_use",
+                "tool_probe_1",
+                "525c4f1d8644266c4598564a2faa72fa70eff3b10a6eeb5cc48c601ed3b60ef1"
+              ],
+              [
+                "tool_result",
+                "tool_probe_1",
+                "ae061c6fd79a1f5595f034d1fd3511c81d19fd632e9bc85504f1d91a09f5f3e0"
+              ]
+            ]
+          },
+          {
+            "bearer": "Bearer synthetic-account-B",
+            "messages": 5,
+            "tools": [
+              [
+                "tool_use",
+                "tool_probe_1",
+                "525c4f1d8644266c4598564a2faa72fa70eff3b10a6eeb5cc48c601ed3b60ef1"
+              ],
+              [
+                "tool_result",
+                "tool_probe_1",
+                "ae061c6fd79a1f5595f034d1fd3511c81d19fd632e9bc85504f1d91a09f5f3e0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "scenario": "observed_429_retry",
+        "passed": true,
+        "results": [
+          false
+        ],
+        "events": [
+          {
+            "type": "control_response",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "system",
+            "subtype": "api_retry",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          }
+        ],
+        "requests": [
+          {
+            "bearer": "Bearer synthetic-account-A",
+            "messages": 2,
+            "tools": []
+          },
+          {
+            "bearer": "Bearer synthetic-account-A",
+            "messages": 2,
+            "tools": []
+          }
+        ]
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "scenario": "observed_401_retry",
+        "passed": true,
+        "results": [
+          false
+        ],
+        "events": [
+          {
+            "type": "control_response",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "system",
+            "subtype": "init",
+            "is_error": null
+          },
+          {
+            "type": "system",
+            "subtype": "api_retry",
+            "is_error": null
+          },
+          {
+            "type": "assistant",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "rate_limit_event",
+            "subtype": null,
+            "is_error": null
+          },
+          {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false
+          }
+        ],
+        "requests": [
+          {
+            "bearer": "Bearer synthetic-account-A",
+            "messages": 2,
+            "tools": []
+          },
+          {
+            "bearer": "Bearer synthetic-account-B",
+            "messages": 2,
+            "tools": []
+          }
+        ]
+      }
+    ]
+  },
+  "limitations": [
+    "The fake loopback endpoint establishes native mechanics, not real subscription validity or provider policy.",
+    "Codex finalquota and unknownquota characterize distinct native phases; these tests do not establish a Swarm eligibility decision.",
+    "Codex auth callback was triggered by an unauthorized WebSocket reconnect handshake; an in-band 401 is not equivalent.",
+    "Codex callbacks are broadcast to initialized clients. The tested native TUI ignored this method during the observed 1.5-second interval; other clients are not proven safe.",
+    "Claude empty SDK input also wakes completed work; it is not a safety discriminator or ordinary TUI continuation API.",
+    "Claude 429 retry retained A after the credential file changed to B; 401 retry adopted B. A file replacement is not instantaneous request adoption.",
+    "Real-grant canaries, integrated handover and continuation, human decisions, background actors, daemon gaps and ambiguous submission still require qualification."
+  ]
+}

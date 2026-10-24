@@ -174,7 +174,8 @@ func (d *Daemon) connectBackendsForRunning() {
 // the pump adopts it, and every turn/* and every approval from then on names THAT thread. One
 // conversation, two surfaces, which is the wave's exit criterion expressed as an assignment.
 //
-// EVERY FAILURE PATH STILL RELEASES THE SHIM. A daemon that could not dial must not leave the
+// Legacy failure paths release the shim. External-auth sessions require the authenticated
+// backend and remain blocked when bootstrap fails. A daemon that could not dial must not leave the
 // owner with a terminal that never starts, so the go-ahead is sent either way -- with the
 // backend's agent arguments when the dial succeeded, and with NONE when it did not, which
 // launches the agent exactly as a pre-R7 Codex session (no --remote, no structured plane) and
@@ -195,6 +196,9 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		// AT LAUNCH because the phone reads gaps off the transcript to decide whether to show
 		// a composer at all -- without it the owner types and the refusal arrives after the tap.
 		d.noteBackendNeverServedForInstance(id, expectedInstance)
+		if d.backendUsesExternalAuth(id) {
+			return
+		}
 		if aerr := d.core.SendBackendAttach(id, nil); aerr != nil {
 			log.Printf("skeleton: release session %s without a backend: %v", id, aerr)
 		}
@@ -662,6 +666,15 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 	ctx, cancel := context.WithTimeout(context.Background(), d.backendDeadline())
 	defer cancel()
 	feed := newBackendFeed()
+	auth := newBackendAuthCoordinator(func(ctx context.Context, refresh bool) (backendAuthTokens, error) {
+		if d.backendAuthAccess == nil || !d.backendUsesExternalAuth(id) {
+			return backendAuthTokens{}, errBackendAuthUnavailable
+		}
+		return d.backendAuthAccess(ctx, id, refresh)
+	}, func() bool {
+		current, ok := d.sessionInstance(id)
+		return ok && current == expectedInstance && !feed.retired.Load()
+	})
 
 	var conn *appserver.Client
 	var err error
@@ -672,6 +685,9 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 			// and a server-request differ only in whether an id rides along, and the pump
 			// reads that off the frame itself, so both arrive here as the same verbatim bytes.
 			OnFrame: func(method string, frame json.RawMessage) {
+				if auth.intercept(method, frame) {
+					return
+				}
 				var envelope struct {
 					Params json.RawMessage `json:"params"`
 					ID     json.RawMessage `json:"id"`
@@ -689,11 +705,13 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 		}
 		select {
 		case <-ctx.Done():
+			auth.bind(nil)
 			return nil, nil, err
 		case <-time.After(backendReadyInterval):
 		}
 	}
 
+	auth.bind(conn)
 	// The recorded boot handshake, in the recorded order (frame-samples.json): initialize with
 	// experimentalApi, then the `initialized` notification.
 	var initRes json.RawMessage
@@ -718,7 +736,21 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 	if json.Unmarshal(initRes, &initialized) == nil {
 		feed.userAgent = parseContextGuardUserAgent(initialized.UserAgent)
 	}
+	if d.backendUsesExternalAuth(id) {
+		if err := auth.bootstrap(ctx); err != nil {
+			_ = conn.Close()
+			return nil, nil, errBackendAuthUnavailable
+		}
+	}
 	return conn, feed, nil
+}
+
+func (d *Daemon) backendUsesExternalAuth(id string) bool {
+	if d.core == nil {
+		return false
+	}
+	m, ok := d.core.Get(id)
+	return ok && m.AgentType == "codex" && m.LoginRuntime != nil && m.LoginRuntime.ExternalAuth
 }
 
 func parseContextGuardUserAgent(raw json.RawMessage) string {

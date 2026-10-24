@@ -1,10 +1,13 @@
 # Native login handover implementation contract
 
-Draft for Sol and Astra review · 2026-10-24 · `agents-tracker-h6sc`
+Implementation contract reviewed by Sol and Astra · 2026-10-24 · `agents-tracker-h6sc`
 
 Work is isolated on `feat/native-login-handover`, based on `179073ab`. Beads owns
 task status; this document defines the implementation and acceptance contract.
 The baseline evidence is [the native rotation research](../verification/provider-logins/seamless-rotation-research.json).
+The [Linux native capability receipts](../verification/provider-logins/native-handover-capabilities-2026-10-24.json)
+record nine Codex and seven Claude SDK scenarios using synthetic credentials.
+They characterize native behavior; they do not certify the integrated feature.
 
 ## Intended behavior
 

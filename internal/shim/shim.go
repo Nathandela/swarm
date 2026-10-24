@@ -130,6 +130,9 @@ func Run(cfg Config) (agentExit int, err error) {
 	if len(cfg.Argv) == 0 {
 		return 0, errors.New("shim: empty Argv (no program to exec)")
 	}
+	if cfg.LoginRuntime != nil && cfg.LoginRuntime.ExternalAuth && (cfg.LoginRuntime.Provider != logins.ProviderCodex || cfg.NativeProvider != logins.ProviderCodex || cfg.Backend == nil) {
+		return 0, errExternalAuthBackend
+	}
 	if err := ValidateOpenCodeConfig(cfg); err != nil {
 		return 0, err
 	}
@@ -314,7 +317,7 @@ func Run(cfg Config) (agentExit int, err error) {
 			srv.setBackendPgid(backend.pgid)
 		}
 		if berr != nil {
-			log.Printf("shim: session backend unavailable, launching the agent without it: %v", berr)
+			log.Printf("shim: session backend unavailable: %v", berr)
 			if backend != nil {
 				// It is ALIVE (a readiness timeout does not kill it) but was never
 				// recorded -- writeBackendInfo runs only after servable -- so it must
@@ -335,9 +338,7 @@ func Run(cfg Config) (agentExit int, err error) {
 			// why, and launch the agent degraded -- exactly the never-servable path.
 			// backendWatch stays nil: a deliberately-killed backend must not fire the
 			// backend-died-first edge and take the agent down with it.
-			log.Printf("shim: record the session backend: %v; killing the unrecorded backend "+
-				"and launching the agent without it (a backend the daemon cannot identify "+
-				"must not survive this shim)", werr)
+			log.Printf("shim: record the session backend: %v; killing the unrecorded backend", werr)
 			containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout, managed != nil && managed.subreaper)
 			srv.setBackendPgid(0)
 		} else {
@@ -355,7 +356,9 @@ func Run(cfg Config) (agentExit int, err error) {
 			// The backend failed and is contained: the daemon sends backend_attach only after
 			// dialling it, so no go-ahead can arrive. Waiting for one only delays the agent.
 			cliStable = false
-			log.Printf("shim: launching the agent DEGRADED (no backend arguments appended)")
+			if cfg.LoginRuntime == nil || !cfg.LoginRuntime.ExternalAuth {
+				log.Printf("shim: launching the agent DEGRADED (no backend arguments appended)")
+			}
 		} else {
 			goAheadTimeout := cfg.Backend.GoAheadTimeout
 			if goAheadTimeout <= 0 {
@@ -365,9 +368,31 @@ func Run(cfg Config) (agentExit int, err error) {
 			attach, ok = srv.waitBackendGoAhead(goAheadTimeout)
 			if !ok {
 				cliStable = false
-				log.Printf("shim: no backend_attach arrived within %s; launching the agent DEGRADED "+
-					"(no backend arguments appended)", goAheadTimeout)
+				if cfg.LoginRuntime == nil || !cfg.LoginRuntime.ExternalAuth {
+					log.Printf("shim: no backend_attach arrived within %s; launching the agent DEGRADED (no backend arguments appended)", goAheadTimeout)
+				}
 			}
+		}
+		if cfg.LoginRuntime != nil && cfg.LoginRuntime.ExternalAuth && (backendWatch == nil || len(attach.AgentArgs) != 2 || attach.AgentArgs[0] != "--remote" || attach.AgentArgs[1] != "unix://"+cfg.Backend.SocketPath) {
+			// External tokens exist only in the backend; standalone launch cannot authenticate.
+			sigStop()
+			close(sigDone)
+			sigWG.Wait()
+			if backendWatch != nil {
+				containBackendFailure(backendWatch, cfg.SessionDir, cfg.GraceTimeout, managed != nil && managed.subreaper)
+				srv.setBackendPgid(0)
+			}
+			srv.finishEscalation()
+			_ = tty.Close()
+			_ = ptmx.Close()
+			srv.ptyIn.close()
+			replies.close()
+			exitCode := 1
+			srv.shutdown(shimwire.Control{Type: shimwire.TypeExitReport, ExitCode: &exitCode})
+			<-acceptDone
+			<-drainDone
+			closeTranscript(tr)
+			return 0, errExternalAuthBackend
 		}
 		argv := backendAgentArgv(cfg.Argv, attach.AgentCommandArgs, attach.AgentArgs)
 		cmd = &exec.Cmd{

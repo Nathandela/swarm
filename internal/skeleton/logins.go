@@ -24,6 +24,7 @@ type loginManager struct {
 	admission         [2]sync.Mutex
 	usageMu           sync.Mutex
 	usage             [2]loginUsageSnapshot
+	codexAccess       *codexAccessBroker
 	preflight         func(string, []persist.Meta) error
 	prepareContext    func(string, []persist.Meta) error
 	stopProof         func(persist.Meta) error
