@@ -410,7 +410,9 @@ func TestHookSeenSet_IsAMembershipTestNotAHighWaterGate_AndSurvivesARestart(t *t
 
 	const sessionID = "s-r2-g"
 	sk := assembleAt(t, dir)
-	sk.markHookSeqIngested(sessionID, 7)
+	if err := sk.markHookSeqIngested(sessionID, 7); err != nil {
+		t.Fatal(err)
+	}
 
 	if !sk.hookSeqDuplicate(sessionID, 7) {
 		t.Fatalf("seq 7 is not reported as already ingested right after it was marked")
@@ -418,7 +420,9 @@ func TestHookSeenSet_IsAMembershipTestNotAHighWaterGate_AndSurvivesARestart(t *t
 	if sk.hookSeqDuplicate(sessionID, 3) {
 		t.Fatalf("seq 3 reported as already ingested merely because 7 was -- the guard must be a MEMBERSHIP test, not a monotone high-water gate: a sequence carries no causal order")
 	}
-	sk.markHookSeqIngested(sessionID, 3)
+	if err := sk.markHookSeqIngested(sessionID, 3); err != nil {
+		t.Fatal(err)
+	}
 	if !sk.hookSeqDuplicate(sessionID, 3) {
 		t.Fatalf("seq 3 is not reported as already ingested after it was marked")
 	}
@@ -458,7 +462,9 @@ func TestHookSeenSet_StaysBounded(t *testing.T) {
 	// through the bound itself.
 	const last = uint64(800)
 	for seq := uint64(2); seq <= last; seq += 2 {
-		sk.markHookSeqIngested(sessionID, seq)
+		if err := sk.markHookSeqIngested(sessionID, seq); err != nil {
+			t.Fatal(err)
+		}
 	}
 	info, err := os.Stat(sk.hookSeqPath(sessionID))
 	if err != nil {

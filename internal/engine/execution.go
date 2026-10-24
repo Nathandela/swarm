@@ -133,6 +133,7 @@ func restoreExecution(s *session, id string, r persist.ExecutionRecord) error {
 	} else if s.untrackedChildren && s.status.Interaction == status.InteractionNone {
 		s.status.Turn = status.TurnUnknown
 	}
+	s.status = projectCodexCustody(s, s.status)
 	return nil
 }
 
@@ -171,6 +172,7 @@ func (e *Engine) InvalidateExecution(id string) error {
 	}
 	s.emitMu.Lock()
 	defer s.emitMu.Unlock()
+	defer e.publishCodexCustody(id, s)
 	e.mu.Lock()
 	if current, ok := e.sessions[id]; !ok || current != s || !s.alive {
 		e.mu.Unlock()

@@ -101,6 +101,10 @@ func CLIFingerprint(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return cliMetadataFingerprint(target, fi)
+}
+
+func cliMetadataFingerprint(target string, fi os.FileInfo) (string, error) {
 	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0111 == 0 {
 		return "", fmt.Errorf("CLI is not executable")
 	}

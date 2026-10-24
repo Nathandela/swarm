@@ -15,6 +15,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter/detect"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
+	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/loginworker"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -28,7 +29,9 @@ func (a *coreAPI) Logins(req protocol.LoginsReq) (reply protocol.LoginsReply, er
 	a.loginMu.Lock()
 	defer a.loginMu.Unlock()
 	defer func() {
-		if errors.Is(err, logins.ErrConflict) {
+		if errors.Is(err, codexnative.ErrUnsafe) {
+			err = protocol.ErrLoginsUnsafeNativeCLI
+		} else if errors.Is(err, logins.ErrConflict) {
 			err = protocol.ErrLoginsStaleRevision
 		}
 	}()
@@ -211,6 +214,14 @@ func newLoginWorkerConfig(state, provider, label, loginID string) (loginworker.C
 	if err != nil {
 		return loginworker.Config{}, err
 	}
+	var manifestVersion string
+	if provider == logins.ProviderCodex {
+		if installation, resolveErr := codexnative.Resolve(path); resolveErr == nil {
+			path, manifestVersion = installation.Path, installation.Version
+		} else if errors.Is(resolveErr, codexnative.ErrUnsafe) {
+			return loginworker.Config{}, resolveErr
+		}
+	}
 	if err = loginworker.ValidateNativePath(path); err != nil {
 		return loginworker.Config{}, protocol.ErrLoginsUnsafeNativeCLI
 	}
@@ -220,7 +231,7 @@ func newLoginWorkerConfig(state, provider, label, loginID string) (loginworker.C
 		return loginworker.Config{}, err
 	}
 	version, ok := ad.ParseVersion(banner)
-	if !ok || version == "" {
+	if !ok || version == "" || manifestVersion != "" && version != manifestVersion {
 		return loginworker.Config{}, loginworker.ErrUnsupported
 	}
 	fingerprint, err := persist.CLIFingerprint(path)

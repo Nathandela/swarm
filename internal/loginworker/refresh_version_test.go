@@ -19,6 +19,10 @@ func TestCodexRefreshVersionQualification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	native, err = filepath.EvalSymlinks(native)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fingerprint, err := persist.CLIFingerprint(native)
 	if err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/loginworker"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -42,6 +43,12 @@ type codexAccessFlight struct {
 	err       error
 }
 
+type codexRefreshSource struct {
+	cli persist.CLIIdentity
+	env []string
+	cwd string
+}
+
 // One caller cancelling must not interrupt renewal needed by another discussion.
 // Completed flights briefly absorb duplicate native callbacks without retaining tokens.
 type codexAccessBroker struct {
@@ -54,6 +61,7 @@ type codexAccessBroker struct {
 	snapshot func() (logins.Registry, error)
 	pending  func(string) error
 	read     func(string) (logins.AccessCredential, error)
+	resolve  func(codexRefreshSource) (persist.CLIIdentity, error)
 	refresh  func(context.Context, string, persist.CLIIdentity) error
 	guard    func(codexAuthSelection) (func(), bool)
 }
@@ -86,7 +94,7 @@ func (b *codexAccessBroker) selected() (codexAuthSelection, error) {
 	return selection, nil
 }
 
-func (b *codexAccessBroker) tokens(ctx context.Context, cli persist.CLIIdentity, force bool) (backendAuthTokens, error) {
+func (b *codexAccessBroker) tokens(ctx context.Context, source codexRefreshSource, force bool) (backendAuthTokens, error) {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -111,7 +119,7 @@ func (b *codexAccessBroker) tokens(ctx context.Context, cli persist.CLIIdentity,
 		}
 	}
 	if force || err != nil || !time.Now().Add(time.Minute).Before(access.ExpiresAt) {
-		if err = b.renew(ctx, selection, cli); err != nil {
+		if err = b.renew(ctx, selection, source); err != nil {
 			return backendAuthTokens{}, err
 		}
 		if !current() {
@@ -136,7 +144,7 @@ func (b *codexAccessBroker) tokens(ctx context.Context, cli persist.CLIIdentity,
 	}}, nil
 }
 
-func (b *codexAccessBroker) renew(ctx context.Context, selection codexAuthSelection, cli persist.CLIIdentity) error {
+func (b *codexAccessBroker) renew(ctx context.Context, selection codexAuthSelection, source codexRefreshSource) error {
 	b.mu.Lock()
 	if b.closed || b.ctx.Err() != nil {
 		b.mu.Unlock()
@@ -168,7 +176,13 @@ func (b *codexAccessBroker) renew(ctx context.Context, selection codexAuthSelect
 			defer cancel()
 			selected, err := b.selected()
 			if err == nil && selected == selection {
-				err = b.refresh(work, selection.id, cli)
+				cli := source.cli
+				if b.resolve != nil {
+					cli, err = b.resolve(source)
+				}
+				if err == nil {
+					err = b.refresh(work, selection.id, cli)
+				}
 			} else {
 				err = errBackendAuthUnavailable
 			}
@@ -208,6 +222,7 @@ func (m *loginManager) configureCodexAccess(ctx context.Context) {
 		return access, err
 	}
 	b.refresh = m.refreshCodexAccess
+	b.resolve = resolveCodexRefreshIdentity
 	b.guard = func(selection codexAuthSelection) (func(), bool) {
 		gate := &m.admission[loginProviderIndex(logins.ProviderCodex)]
 		gate.Lock()
@@ -230,8 +245,23 @@ func (m *loginManager) configureCodexAccess(ctx context.Context) {
 		if err := m.prepareCodexSelection(); err != nil {
 			return backendAuthTokens{}, errBackendAuthUnavailable
 		}
-		return b.tokens(ctx, *meta.CLIIdentity, refresh)
+		return b.tokens(ctx, codexRefreshSource{cli: *meta.CLIIdentity, env: meta.Env, cwd: meta.ProviderCwd()}, refresh)
 	}
+}
+
+func resolveCodexRefreshIdentity(source codexRefreshSource) (persist.CLIIdentity, error) {
+	qualified := func(cli persist.CLIIdentity) bool {
+		installation, err := codexnative.Resolve(cli.Path)
+		return err == nil && installation.Path == cli.Path && (installation.Version == "" || installation.Version == cli.Version) && logins.SupportsCodexGrantRefresh(cli.Version) && loginworker.ValidateNativePath(cli.Path) == nil && persist.MatchCLIFingerprint(cli.Path, cli.Fingerprint)
+	}
+	if qualified(source.cli) {
+		return source.cli, nil
+	}
+	current, err := probeCLIIdentity(logins.ProviderCodex, "", source.env, source.cwd)
+	if err != nil || current == nil || !qualified(*current) {
+		return persist.CLIIdentity{}, errBackendAuthUnavailable
+	}
+	return *current, nil
 }
 
 func (m *loginManager) refreshCodexAccess(ctx context.Context, id string, cli persist.CLIIdentity) error {

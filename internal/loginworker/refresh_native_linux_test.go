@@ -91,17 +91,13 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 			authBefore := nativeAuthDigest(t, home)
 			oauth := newNativeOAuth(t, ctx, scenario)
 			t.Cleanup(oauth.server.Close)
-			launcher := filepath.Join(dir, "codex-test-launcher")
-			quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
-			script := "#!/bin/sh\nexport CODEX_REFRESH_TOKEN_URL_OVERRIDE=" + quote(oauth.server.URL+"/oauth/token") + "\n"
+			transportEnv := []string{"CODEX_REFRESH_TOKEN_URL_OVERRIDE=" + oauth.server.URL + "/oauth/token"}
 			for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
-				script += "export " + key + "=" + quote(oauth.server.URL) + "\n"
+				transportEnv = append(transportEnv, key+"="+oauth.server.URL)
 			}
 			baseURL, _ := json.Marshal(oauth.server.URL)
-			script += "export NO_PROXY=127.0.0.1,localhost\nexport no_proxy=127.0.0.1,localhost\nexec " + quote(codex) + " -c " + quote("chatgpt_base_url="+string(baseURL)) + " \"$@\"\n"
-			if err = os.WriteFile(launcher, []byte(script), 0700); err != nil {
-				t.Fatal(err)
-			}
+			transportEnv = append(transportEnv, "NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost")
+			launcher := newRefreshFixtureTransport(t, dir, refreshFixtureTransport{Target: codex, SHA256: os.Getenv("SWARM_TEST_CODEX_SHA256"), Prefix: []string{"-c", "chatgpt_base_url=" + string(baseURL)}, Environment: transportEnv})
 			fingerprint, err := persist.CLIFingerprint(launcher)
 			if err != nil {
 				t.Fatal(err)

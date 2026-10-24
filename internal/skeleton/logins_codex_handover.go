@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Nathandela/swarm/internal/logins"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/procstart"
 	"github.com/Nathandela/swarm/internal/status"
 	"sync"
@@ -248,17 +249,34 @@ type codexHandoverCoordinator struct {
 	readOrder       atomic.Uint64
 	usageOrder      uint64
 	afterUsageWrite func()
+	bootstrap       *codexBootstrapWorker
+	bootstrapNative func(persist.Meta, string) (logins.NativeMember, error)
 }
 
 func newCodexHandoverCoordinator(m *loginManager) *codexHandoverCoordinator {
 	c := &codexHandoverCoordinator{manager: m, feeds: make(map[*backendFeed]*codexHandoverFeed), slots: make(chan struct{}, 4)}
 	c.members = m.codexNativeMembers
 	c.ended = codexNativeEnded
+	c.bootstrapNative = func(meta persist.Meta, incident string) (logins.NativeMember, error) {
+		return m.d.codexBootstrapNative(meta, incident)
+	}
 	return c
 }
-func (c *codexHandoverCoordinator) close() {
+
+// Stop replacement launches before assembly hook/supervision drains begin.
+func (c *codexHandoverCoordinator) stopBootstrap() {
 	c.mu.Lock()
 	c.closed = true
+	worker := c.bootstrap
+	c.mu.Unlock()
+	if worker != nil {
+		worker.cancel()
+		<-worker.done
+	}
+}
+func (c *codexHandoverCoordinator) close() {
+	c.stopBootstrap()
+	c.mu.Lock()
 	feeds := make([]*codexHandoverFeed, 0, len(c.feeds))
 	for _, s := range c.feeds {
 		feeds = append(feeds, s)
@@ -347,7 +365,7 @@ func (m *loginManager) attachCodexHandover(local, instance string, feed *backend
 func (m *loginManager) codexNativeMembers() ([]logins.NativeMember, error) {
 	var members []logins.NativeMember
 	for _, meta := range m.list() {
-		if meta.AgentType != logins.ProviderCodex || meta.RosterHidden || meta.Status.Process != status.ProcessRunning {
+		if meta.AgentType != logins.ProviderCodex || meta.Status.Process != status.ProcessRunning {
 			continue
 		}
 		if meta.LoginRuntime == nil || !meta.LoginRuntime.ExternalAuth || m.d.core == nil {

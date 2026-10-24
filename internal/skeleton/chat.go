@@ -789,6 +789,13 @@ func (d *Daemon) resolveMessageSink(local, session string) (messageSink, protoco
 var errComposerStopped = errors.New("composer send superseded by Stop")
 
 func (d *Daemon) deliverComposerText(local string, lane *composerLane, admittedBarrier uint64, sink messageSink, active bool, nativeTurn, text, clientRef string, begin func() error) (string, error) {
+	originalBegin := begin
+	begin = func() error {
+		if err := beginComposerDelivery(originalBegin); err != nil {
+			return err
+		}
+		return d.observeExecutionOwnerWrite(local)
+	}
 	if lane.barrierChanged(admittedBarrier) {
 		return "", errComposerStopped
 	}
@@ -874,7 +881,7 @@ func (d *Daemon) deliverComposerText(local string, lane *composerLane, admittedB
 			sink.backend.conn, "turn/steer", map[string]any{
 				"threadId": sink.backend.threadID, "clientUserMessageId": clientRef,
 				"expectedTurnId": latestNative, "input": input,
-			}, nil, nil)
+			}, nil, func() error { return d.observeExecutionOwnerWrite(local) })
 		return "", classifyComposerBackendError(err)
 	}
 	var result struct {
@@ -885,7 +892,7 @@ func (d *Daemon) deliverComposerText(local string, lane *composerLane, admittedB
 	if err := callComposerBackendAtWriteBoundaryPrepared(ctx, local, lane, admittedBarrier,
 		sink.backend.conn, "turn/start", map[string]any{
 			"threadId": sink.backend.threadID, "clientUserMessageId": clientRef, "input": input,
-		}, &result, nil, func() {
+		}, &result, func() error { return d.observeExecutionOwnerWrite(local) }, func() {
 			// The typed no-active-turn steer already proved this daemon turn is dead. Publish
 			// that fact atomically with the replacement request write so Stop can refuse the
 			// obsolete target without waiting for the reply that carries the new native id.
@@ -1314,6 +1321,9 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
 		defer cancel()
+		if err := d.observeExecutionOwnerWrite(local); err != nil {
+			return "", err
+		}
 		err := b.conn.Call(ctx, "turn/interrupt", map[string]any{
 			"threadId": b.threadID,
 			// THE CLI'S OWN TURN ID. req.ExpectedTurn is the daemon's ULID, which is what

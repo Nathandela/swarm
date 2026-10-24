@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "date": "2026-10-24",
+  "platform": "linux-amd64",
+  "scenario": "existing-installed-official-npm-native-resolution",
+  "result": "installed-unqualified",
+  "reason": "Existing main/native package manifests and native payload permit group writes; the qualified installation boundary rejects them.",
+  "observed_files": [
+    {"role": "official-wrapper", "uid": 1000, "mode": "0755"},
+    {"role": "main-package-manifest", "uid": 1000, "mode": "0664"},
+    {"role": "native-package-manifest", "uid": 1000, "mode": "0664"},
+    {"role": "native-payload", "uid": 1000, "mode": "0775"}
+  ],
+  "wrapper_sha256": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+  "canary_test_sha256": "10c3b9032a9c11fb3f04324a48267826da19d46548c5ee89438a6c234dbb120e",
+  "original_receipt": "installed-npm-linux.json",
+  "original_log": "installed-npm-linux.log",
+  "original_exit_code": 1,
+  "original_elapsed_seconds": 4.385,
+  "installed_files_changed": false,
+  "credential_migration_attempted": false,
+  "scope": "The failure records a rejected installed permission boundary. It does not establish a resolver logic failure or qualify a different installation layout."
+}

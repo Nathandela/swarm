@@ -32,7 +32,7 @@ func TestCodexLiveHandoverSeparatesSelectionAcknowledgementAndAdoption(t *testin
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	r, e = reopened.Snapshot()
 	if e != nil {
 		t.Fatal(e)
@@ -236,7 +236,7 @@ func TestCodexSameActiveReauthHandoverBindsNewCredentialRevision(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer relogin.Close()
+	defer func() { _ = relogin.Close() }()
 	r, latest, e := relogin.ReplaceCredential(r.Revision, Credential{Auth: grantAuth("u", "a", time.Now().Add(5*time.Hour).Unix())}, "ffeeddccbbaa00998877665544332211")
 	if e != nil || r.Handovers[ProviderCodex].Epoch != op.Epoch+1 || r.Handovers[ProviderCodex].DestinationCredentialRevision != latest.CredentialRevision {
 		t.Fatalf("explicit inflight destination reauth did not rebind pending cohort: %v", e)

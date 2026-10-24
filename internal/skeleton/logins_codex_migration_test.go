@@ -46,6 +46,11 @@ func codexMigrationFixture(t *testing.T) *loginFixture {
 	f.m.qualifyCodexOwnership = func(sources []persist.Meta) (bool, error) {
 		return true, nil
 	}
+	t.Cleanup(func() {
+		if f.m.codexHandover != nil {
+			f.m.codexHandover.close()
+		}
+	})
 	return f
 }
 func TestCodexMigrationManagerExplicitSwitchFromExhaustedActive(t *testing.T) {
@@ -76,14 +81,10 @@ func TestCodexMigrationManagerExplicitSwitchFromExhaustedActive(t *testing.T) {
 	if r.Providers[logins.ProviderCodex].AuthOwnerMode != logins.CodexNativeGrantMode || r.Providers[logins.ProviderCodex].ActiveID != f.second.ID {
 		t.Fatal("manager failed ownership cutover")
 	}
-	if len(f.launched) != 2 {
-		t.Fatal("migration dropped restart obligations")
+	if len(r.Handovers[logins.ProviderCodex].Bootstrap) != 2 || len(r.Switches) != 0 || len(f.launched) != 0 {
+		t.Fatal("migration failed to transfer restart obligations before any launch")
 	}
-	for _, spec := range f.launched {
-		if spec.LoginRuntime == nil || !spec.LoginRuntime.ExternalAuth {
-			t.Fatal("resumed legacy credential writer")
-		}
-	}
+
 }
 func TestCodexMigrationManagerSameActiveOnlyOnExplicitRequest(t *testing.T) {
 	f := codexMigrationFixture(t)
@@ -97,8 +98,12 @@ func TestCodexMigrationManagerSameActiveOnlyOnExplicitRequest(t *testing.T) {
 		t.Fatalf("same-active explicit cutover skipped: %v", e)
 	}
 	driveLoginSwitch(t, f)
-	if _, e = f.m.BeginSwitch(logins.ProviderCodex, f.second.ID, "explicit"); !errors.Is(e, logins.ErrPending) {
-		t.Fatalf("owned provider fell back to stopped switching: %v", e)
+	if _, e = f.m.BeginSwitch(logins.ProviderCodex, f.second.ID, "explicit"); e != nil {
+		t.Fatal(e)
+	}
+	r, _ = f.m.store.Snapshot()
+	if len(r.Switches) != 0 || r.Handovers[logins.ProviderCodex].ToID != f.second.ID {
+		t.Fatal("owned selection returned to stopped switching")
 	}
 }
 func TestCodexMigrationManagerPreservesExistingLegacyJournal(t *testing.T) {
@@ -171,15 +176,10 @@ func TestCodexMigrationManagerQualificationFailureBeforeJournal(t *testing.T) {
 }
 
 func TestCodexMigrationQualificationUsesEverySourceEnvironment(t *testing.T) {
+	binary := nativeCodexVersionFixture(t)
 	native := func(version string) persist.Meta {
-		dir, e := filepath.EvalSymlinks(t.TempDir())
-		if e != nil {
-			t.Fatal(e)
-		}
-		if e = os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nprintf '%s\\n' 'codex-cli "+version+"'\n"), 0700); e != nil {
-			t.Fatal(e)
-		}
-		return persist.Meta{Env: []string{"PATH=" + dir}, Cwd: dir}
+		dir := filepath.Dir(binary)
+		return persist.Meta{Env: []string{"PATH=" + dir, "SWARM_TEST_CODEX_VERSION=" + version}, Cwd: dir}
 	}
 	qualified, unsupported := native("0.163.0"), native("0.162.0")
 	if ok, e := qualifyCodexOwnershipSources([]persist.Meta{qualified}); e != nil || !ok {
@@ -192,6 +192,7 @@ func TestCodexMigrationQualificationUsesEverySourceEnvironment(t *testing.T) {
 		t.Fatal("unsupported first source masked later probe failure")
 	}
 	t.Setenv("PATH", strings.TrimPrefix(qualified.Env[0], "PATH="))
+	t.Setenv("SWARM_TEST_CODEX_VERSION", "0.163.0")
 	if ok, e := qualifyCodexOwnershipSources(nil); e != nil || !ok {
 		t.Fatalf("empty cohort did not qualify installed native: %v", e)
 	}
@@ -204,6 +205,24 @@ func TestCodexMigrationQualificationUsesEverySourceEnvironment(t *testing.T) {
 	}
 	if ok, e := qualifyCodexOwnershipSources([]persist.Meta{qualified}); e == nil || ok {
 		t.Fatal("unsafe native installation allowed")
+	}
+}
+
+func TestCodexMigrationRejectsUnknownWrapperButEnrollmentCanProbeIt(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "codex")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho 'codex-cli 0.163.0'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := persist.Meta{Env: []string{"PATH=" + dir}, Cwd: dir}
+	if identity, err := probeCLIIdentity("codex", path, source.Env, dir); err != nil || identity == nil || identity.Version != "0.163.0" {
+		t.Fatalf("ordinary wrapper probing was lost: %+v %v", identity, err)
+	}
+	if qualified, err := qualifyCodexOwnershipSources([]persist.Meta{source}); err != nil || qualified {
+		t.Fatalf("version-only wrapper admitted advanced ownership: %v %v", qualified, err)
 	}
 }
 func TestCodexMigrationManagerRechecksBeforeOwnershipEffects(t *testing.T) {
@@ -257,6 +276,11 @@ func TestCodexMigrationManagerFirstActivationStopsUnmanagedWriters(t *testing.T)
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() {
+		if f.m.codexHandover != nil {
+			f.m.codexHandover.close()
+		}
+	})
 	if e = os.CopyFS(filepath.Join(store.Home(logins.ProviderCodex), "sessions"), os.DirFS(filepath.Join(f.runtime.Home, "sessions"))); e != nil {
 		t.Fatal(e)
 	}
@@ -311,7 +335,7 @@ func TestCodexMigrationManagerFirstActivationStopsUnmanagedWriters(t *testing.T)
 	f.m.stopProof = proof
 	driveLoginSwitch(t, f)
 	r, _ = store.Snapshot()
-	if r.Providers[logins.ProviderCodex].ActiveID != b.ID || r.Providers[logins.ProviderCodex].Epoch != 1 || r.Providers[logins.ProviderCodex].AuthOwnerMode != logins.CodexNativeGrantMode {
+	if r.Providers[logins.ProviderCodex].ActiveID != b.ID || r.Providers[logins.ProviderCodex].Epoch != 2 || r.Providers[logins.ProviderCodex].AuthOwnerMode != logins.CodexNativeGrantMode {
 		t.Fatal("first activation needs second account action")
 	}
 	if _, e = os.Stat(common); !errors.Is(e, os.ErrNotExist) {
@@ -321,12 +345,7 @@ func TestCodexMigrationManagerFirstActivationStopsUnmanagedWriters(t *testing.T)
 	if e != nil || !bytes.Contains(raw, []byte("synthetic-first-selection")) {
 		t.Fatal("first canonical grant missing")
 	}
-	if len(f.launched) != 2 {
-		t.Fatal("unmanaged native discussions lost restart obligations")
-	}
-	for _, spec := range f.launched {
-		if spec.LoginRuntime == nil || !spec.LoginRuntime.ExternalAuth || spec.LoginRuntime.Epoch != 1 {
-			t.Fatal("unmanaged discussion resumed without first external runtime")
-		}
+	if len(r.Handovers[logins.ProviderCodex].Bootstrap) != 2 || len(f.launched) != 0 {
+		t.Fatal("unmanaged discussions lost deferred bootstrap obligations")
 	}
 }

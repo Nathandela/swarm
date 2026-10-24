@@ -29,7 +29,7 @@ func TestBackendAuthRefreshUsesRequestConnectionAndDoesNotBlockReader(t *testing
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		_ = ws.Write(r.Context(), websocket.MessageText, []byte(`{"id":"refresh-1","method":"account/chatgptAuthTokens/refresh","params":{"reason":"unauthorized","previousAccountId":"old"}}`))
 		_ = ws.Write(r.Context(), websocket.MessageText, []byte(`{"method":"thread/started","params":{"thread":{"id":"public"}}}`))
 		_, raw, e := ws.Read(r.Context())
@@ -37,8 +37,8 @@ func TestBackendAuthRefreshUsesRequestConnectionAndDoesNotBlockReader(t *testing
 			replies <- raw
 		}
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	release := make(chan struct{})
 	defer close(release)
 	var called atomic.Int32
@@ -60,7 +60,7 @@ func TestBackendAuthRefreshUsesRequestConnectionAndDoesNotBlockReader(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	auth.bind(conn)
 	select {
 	case <-notes:
@@ -108,15 +108,15 @@ func TestBackendAuthRejectsSecretsAndObsoleteResults(t *testing.T) {
 				if e != nil {
 					return
 				}
-				defer ws.CloseNow()
+				defer func() { _ = ws.CloseNow() }()
 				_ = ws.Write(r.Context(), websocket.MessageText, []byte(`{"id":3,"method":"account/chatgptAuthTokens/refresh","params":`+tc.params+`}`))
 				_, raw, e := ws.Read(r.Context())
 				if e == nil {
 					replies <- raw
 				}
 			})}
-			go server.Serve(ln)
-			defer server.Close()
+			go func() { _ = server.Serve(ln) }()
+			defer func() { _ = server.Close() }()
 			var called atomic.Int32
 			auth := newBackendAuthCoordinator(func(context.Context, bool) (backendAuthTokens, error) {
 				called.Add(1)
@@ -137,7 +137,7 @@ func TestBackendAuthRejectsSecretsAndObsoleteResults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			auth.bind(conn)
 			select {
 			case raw := <-replies:
@@ -189,7 +189,7 @@ func TestBackendAuthBootstrapAcknowledgesPrivateNativeLogin(t *testing.T) {
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		_, raw, e := ws.Read(r.Context())
 		if e != nil {
 			return
@@ -202,8 +202,8 @@ func TestBackendAuthBootstrapAcknowledgesPrivateNativeLogin(t *testing.T) {
 		_ = ws.Write(r.Context(), websocket.MessageText, []byte(`{"id":`+string(fr.ID)+`,"result":{"type":"chatgptAuthTokens"}}`))
 		_, _, _ = ws.Read(r.Context())
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	auth := newBackendAuthCoordinator(func(_ context.Context, refresh bool) (backendAuthTokens, error) {
 		if refresh {
 			t.Error("bootstrap forced refresh")
@@ -214,7 +214,7 @@ func TestBackendAuthBootstrapAcknowledgesPrivateNativeLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	auth.bind(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -251,7 +251,7 @@ func TestBackendAuthOverflowClosesFeedAndCancelsRefresh(t *testing.T) {
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		for n := 0; n < 20; n++ {
 			_ = ws.Write(r.Context(), websocket.MessageText, []byte(`{"id":`+strconv.Itoa(n)+`,"method":"account/chatgptAuthTokens/refresh","params":{"reason":"unauthorized"}}`))
 			if n == 0 {
@@ -264,8 +264,8 @@ func TestBackendAuthOverflowClosesFeedAndCancelsRefresh(t *testing.T) {
 		}
 		_, _, _ = ws.Read(r.Context())
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	cancelled := make(chan struct{}, 1)
 	auth := newBackendAuthCoordinator(func(ctx context.Context, _ bool) (backendAuthTokens, error) {
 		started <- struct{}{}
@@ -280,7 +280,7 @@ func TestBackendAuthOverflowClosesFeedAndCancelsRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	auth.bind(conn)
 	select {
 	case <-conn.Done():

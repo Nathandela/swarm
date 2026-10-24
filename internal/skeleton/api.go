@@ -16,6 +16,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
+	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -1006,7 +1007,14 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 // Launch resolves a client launch/resume request into a concrete daemon spec
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
-func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
+func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr error) {
+	spec.BootstrapFirstAttempt = a.bootstrapFirstLaunchEligible(spec)
+	resolvedEntered := false
+	defer func() {
+		if launchErr != nil && spec.BootstrapFirstAttempt && !resolvedEntered {
+			launchErr = daemon.BootstrapLaunchNotStarted(spec.OperationID)
+		}
+	}()
 	if err := validateResumeRelocation(spec); err != nil {
 		return persist.Meta{}, err
 	}
@@ -1156,6 +1164,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	if err != nil {
 		return persist.Meta{}, err
 	}
+	resolvedEntered = true
 	return a.launchResolved(composed)
 }
 
@@ -1165,13 +1174,26 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 var errCLIOlderThanSource = errors.New("launch: cli-older-than-source: the installed CLI is older than the one that last wrote this discussion; update the CLI and resume again")
 
 // launchResolved resolves the managed CLI identity and launches one bound attempt.
-func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, error) {
+func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (result persist.Meta, launchErr error) {
+	resolved.BootstrapFirstAttempt = a.bootstrapFirstLaunchEligible(resolved)
+	coreEntered := false
+	defer func() {
+		if launchErr != nil && resolved.BootstrapFirstAttempt && !coreEntered {
+			launchErr = daemon.BootstrapLaunchNotStarted(resolved.OperationID)
+		}
+	}()
 	a.workspaceMu.RLock()
 	defer a.workspaceMu.RUnlock()
+	var releaseAdmission func()
 	if a.logins != nil && managedLoginProvider(resolved.AgentType) {
 		gate := &a.logins.admission[loginProviderIndex(resolved.AgentType)]
 		gate.Lock()
-		defer gate.Unlock()
+		releaseAdmission = gate.Unlock
+		defer func() {
+			if releaseAdmission != nil {
+				releaseAdmission()
+			}
+		}()
 	}
 	if err := a.bindLoginLaunch(&resolved); err != nil {
 		return persist.Meta{}, err
@@ -1192,6 +1214,12 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 			}
 		}
 		if resolved.LoginRuntime != nil {
+			if resolved.LoginRuntime.ExternalAuth {
+				installation, err := codexnative.Resolve(resolved.Argv[0])
+				if err != nil || observed == nil || installation.Path != observed.Path || installation.Version != "" && installation.Version != observed.Version {
+					return persist.Meta{}, fmt.Errorf("login: qualified native Codex installation required")
+				}
+			}
 			if probeErr != nil || observed == nil {
 				return persist.Meta{}, fmt.Errorf("login: native CLI identity unavailable")
 			}
@@ -1207,6 +1235,11 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 	if err := a.qualifyOpenCodeLaunch(&resolved); err != nil {
 		return persist.Meta{}, err
 	}
+	if releaseAdmission != nil && resolved.LoginRuntime != nil && resolved.LoginRuntime.ExternalAuth {
+		releaseAdmission()
+		releaseAdmission = nil
+	}
+	coreEntered = true
 	m, err := a.core.Launch(resolved)
 	if err != nil {
 		return m, err

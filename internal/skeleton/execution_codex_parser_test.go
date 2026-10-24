@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/engine"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 func TestCodexExecutionParserTerminalQuota(t *testing.T) {
@@ -228,6 +229,12 @@ func TestCodexExecutionNativeChildrenThroughIngress(t *testing.T) {
 					drain()
 					_, candidate := r.d.codexQuotaCandidate(r.local)
 					want := testcase.Scenario != "child-timeout" && testcase.Scenario != "child-grandchild" && testcase.Scenario != "command-background" && testcase.Scenario != "child-sendinput" && testcase.Scenario != "child-sendinput-active"
+					if !want {
+						meta, ok := r.d.core.Get(r.local)
+						if !ok || status.Derive(meta.Status) != status.GroupWorking {
+							t.Fatalf("native live custody projected idle at quota: %+v", meta.Status)
+						}
+					}
 					if candidate != want {
 						snapshot, _ := r.d.eng.ExecutionSnapshot(r.local)
 						t.Fatalf("native quota custody candidate=%v: %+v", candidate, snapshot.Codex)

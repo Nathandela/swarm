@@ -326,7 +326,7 @@ func (s *Store) RecordCodexReceipt(expected uint64, receipt HandoverReceipt) (Re
 			member.AdoptedEpoch = h.Epoch
 			member.AdoptedCredentialRevision = h.DestinationCredentialRevision
 		}
-		if !(member.Phase == "adopted" && receipt.Phase == "acknowledged") {
+		if member.Phase != "adopted" || receipt.Phase != "acknowledged" {
 			member.Phase = receipt.Phase
 		}
 		h.Phase = handoverPhase(h)

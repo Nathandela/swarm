@@ -281,7 +281,7 @@ func (d *Daemon) contextGuardQuiet(local string) bool {
 		m.Status.Turn != status.TurnIdle || m.Status.Interaction != status.InteractionNone {
 		return false
 	}
-	return !d.anyControlled(local) && d.logins.inputGate(local) == nil
+	return !d.executionCustodyUnsafe(local) && !d.anyControlled(local) && d.logins.inputGate(local) == nil
 }
 
 // contextGuardCompactionInFlight reports whether local's guard has a compaction

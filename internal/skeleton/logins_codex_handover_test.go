@@ -36,7 +36,7 @@ func TestCodexHandoverAccountAPIAdoptionABAAndReadiness(t *testing.T) {
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		for {
 			_, raw, e := ws.Read(r.Context())
 			if e != nil {
@@ -75,8 +75,8 @@ func TestCodexHandoverAccountAPIAdoptionABAAndReadiness(t *testing.T) {
 			}
 		}
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	auth := newBackendAuthCoordinator(func(context.Context, bool) (backendAuthTokens, error) {
 		mu.Lock()
 		selection := desired
@@ -87,7 +87,7 @@ func TestCodexHandoverAccountAPIAdoptionABAAndReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	auth.bind(conn)
 	var receipts []string
 	state := newCodexHandoverFeed(auth, func() bool { return true }, func(selection codexAuthSelection, phase string, _ *codexScopedUsage) error {
@@ -223,7 +223,7 @@ func TestCodexHandoverScopedReadCanReceiveRefreshWithoutDeadlock(t *testing.T) {
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		first := true
 		var waiting json.RawMessage
 		send := func(id json.RawMessage, result any) {
@@ -266,8 +266,8 @@ func TestCodexHandoverScopedReadCanReceiveRefreshWithoutDeadlock(t *testing.T) {
 			}
 		}
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	selection := codexAuthSelection{id: "a", epoch: 1, revision: 1}
 	auth := newBackendAuthCoordinator(func(context.Context, bool) (backendAuthTokens, error) {
 		return backendAuthTokens{AccessToken: "synthetic", AccountID: "a", selection: selection, current: func() bool { return true }}, nil
@@ -320,7 +320,7 @@ func TestCodexHandoverLateOldAccountReadCannotAdoptNewSelection(t *testing.T) {
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		var writes sync.Mutex
 		send := func(id json.RawMessage, result any) {
 			writes.Lock()
@@ -366,8 +366,8 @@ func TestCodexHandoverLateOldAccountReadCannotAdoptNewSelection(t *testing.T) {
 			}
 		}
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	auth := newBackendAuthCoordinator(func(context.Context, bool) (backendAuthTokens, error) {
 		mu.Lock()
 		selection := desired
@@ -544,15 +544,15 @@ func TestCodexHandoverRetiredNativeCannotReceiveCallbackCredentials(t *testing.T
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		_ = ws.Write(r.Context(), websocket.MessageText, []byte(`{"id":1,"method":"account/chatgptAuthTokens/refresh","params":{"reason":"unauthorized"}}`))
 		_, raw, e := ws.Read(r.Context())
 		if e == nil {
 			replied <- raw
 		}
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	var access atomic.Int32
 	auth := newBackendAuthCoordinator(func(context.Context, bool) (backendAuthTokens, error) {
 		access.Add(1)
@@ -592,7 +592,7 @@ func TestCodexHandoverCloseCancelsScopedReadAndJoinsBothWorkers(t *testing.T) {
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		for {
 			_, raw, e := ws.Read(r.Context())
 			if e != nil {
@@ -603,19 +603,20 @@ func TestCodexHandoverCloseCancelsScopedReadAndJoinsBothWorkers(t *testing.T) {
 				Method string          `json:"method"`
 			}
 			_ = json.Unmarshal(raw, &fr)
-			if fr.Method == "account/login/start" {
+			switch fr.Method {
+			case "account/login/start":
 				body, _ := json.Marshal(map[string]any{"id": fr.ID, "result": map[string]string{"type": "chatgptAuthTokens"}})
 				_ = ws.Write(r.Context(), websocket.MessageText, body)
-			} else if fr.Method == "account/rateLimits/read" {
+			case "account/rateLimits/read":
 				close(entered)
-			} else {
+			default:
 				t.Errorf("unexpected native request: %s", fr.Method)
 				return
 			}
 		}
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	selection := codexAuthSelection{id: "a", epoch: 1, revision: 1}
 	auth := newBackendAuthCoordinator(func(context.Context, bool) (backendAuthTokens, error) {
 		return backendAuthTokens{AccessToken: "synthetic", AccountID: "a", selection: selection, current: func() bool { return true }}, nil
@@ -669,7 +670,7 @@ func TestCodexHandoverBoundsParallelNativeRPCWithoutFleetIdleBarrier(t *testing.
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		done := make(chan struct{})
 		defer close(done)
 		var writes sync.Mutex
@@ -716,8 +717,8 @@ func TestCodexHandoverBoundsParallelNativeRPCWithoutFleetIdleBarrier(t *testing.
 			}
 		}
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	slots := make(chan struct{}, 4)
@@ -916,7 +917,7 @@ func TestCodexHandoverPublicationReplacementAndAuthWriteCannotDeadlock(t *testin
 		if err != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		for {
 			_, raw, err := ws.Read(r.Context())
 			if err != nil {
@@ -932,13 +933,13 @@ func TestCodexHandoverPublicationReplacementAndAuthWriteCannotDeadlock(t *testin
 			}
 		}
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	conn, err := appserver.Dial(context.Background(), sock, appserver.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	f.m.d.contextGuards = &contextGuardManager{}

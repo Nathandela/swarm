@@ -185,7 +185,7 @@ func TestBackendIngressBlockedProcessorDoesNotBlockPrivateAuthRPC(t *testing.T) 
 		if e != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		_ = ws.Write(r.Context(), websocket.MessageText, []byte(`{"method":"thread/started","params":{}}`))
 		<-entered
 		_ = ws.Write(r.Context(), websocket.MessageText, []byte(`{"id":7,"method":"account/chatgptAuthTokens/refresh","params":{"reason":"unauthorized"}}`))
@@ -194,8 +194,8 @@ func TestBackendIngressBlockedProcessorDoesNotBlockPrivateAuthRPC(t *testing.T) 
 			reply <- raw
 		}
 	})}
-	go server.Serve(ln)
-	defer server.Close()
+	go func() { _ = server.Serve(ln) }()
+	defer func() { _ = server.Close() }()
 	auth := newBackendAuthCoordinator(func(context.Context, bool) (backendAuthTokens, error) {
 		return backendAuthTokens{AccessToken: "PRIVATE", AccountID: "account"}, nil
 	}, func() bool { return true })
@@ -207,7 +207,7 @@ func TestBackendIngressBlockedProcessorDoesNotBlockPrivateAuthRPC(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	auth.bind(conn)
 	select {
 	case raw := <-reply:

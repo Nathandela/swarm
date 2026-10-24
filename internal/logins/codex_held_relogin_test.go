@@ -36,7 +36,7 @@ func TestCodexDesiredHeldReloginAdvancesSelectionOnce(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	r, updated, e := lease.ReplaceCredential(snapshot(t, s).Revision, Credential{Auth: grantAuth("u-b", "b", time.Now().Add(2*time.Hour).Unix())}, job)
 	if e != nil {
 		t.Fatal(e)
@@ -114,7 +114,7 @@ func TestCodexHeldReloginFaultCutsRecoverSelectionAtomically(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			defer reopened.Close()
+			defer func() { _ = reopened.Close() }()
 			reopened.grantWriters = s.grantWriters
 			if e = reopened.Reconcile(); e != nil {
 				t.Fatal(e)
@@ -213,7 +213,7 @@ func TestCodexHeldReloginSchemaFencePrecedesAuthorityAndMismatchRetainsIntent(t 
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	before, _ := os.ReadFile(filepath.Join(lease.Home(), "auth.json"))
 	s.writeOps.rename = func(old, new string) error {
 		if new == "registry.json" {
@@ -287,7 +287,7 @@ func TestCodexHeldReauthRequiresExplicitDesiredJobLease(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	if _, _, e = lease.ReplaceCredential(snapshot(t, s).Revision, Credential{Auth: grantAuth("u", "a", time.Now().Add(2*time.Hour).Unix())}, job); !errors.Is(e, ErrPending) {
 		t.Fatal("historically held grant replaced while other target desired")
 	}
@@ -300,7 +300,7 @@ func TestCodexHeldIntentRetryPreservesUnexpectedCanonicalGeneration(t *testing.T
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	s.writeOps.rename = func(old, new string) error {
 		if new == filepath.Join("saved", b.ID, "auth.json") {
 			return errors.New("pre-auth cut")
@@ -365,7 +365,7 @@ func TestCodexMigrationReloginFaultCutsRemainBlockedUntilTransfer(t *testing.T) 
 			if e != nil {
 				t.Fatal(e)
 			}
-			defer reopened.Close()
+			defer func() { _ = reopened.Close() }()
 			reopened.grantWriters = s.grantWriters
 			if e = reopened.Reconcile(); e != nil {
 				t.Fatal(e)
@@ -404,7 +404,7 @@ func TestCodexHandoverBeginCannotStrandOutgoingReloginIntent(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer reauth.Close()
+	defer func() { _ = reauth.Close() }()
 	s.writeOps.rename = func(old, new string) error {
 		if new == filepath.Join("saved", a.ID, "auth.json") {
 			return errors.New("pre-auth cut")

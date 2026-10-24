@@ -34,11 +34,16 @@ func readNativeProof(stateRoot, local, name string, value any) error {
 	if !persist.ValidID(local) {
 		return logins.ErrUnsafePath
 	}
-	root, err := os.OpenRoot(filepath.Join(stateRoot, local))
+	root, err := openRecoveryRoot(filepath.Join(stateRoot, local))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
+	dir, dirErr := root.Lstat(".")
+	owner, valid := infoSysNative(dir)
+	if dirErr != nil || !valid || !dir.IsDir() || dir.Mode().Perm()&0077 != 0 || owner.Uid != uint32(os.Getuid()) {
+		return logins.ErrUnsafePath
+	}
 	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return err

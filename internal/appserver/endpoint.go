@@ -76,7 +76,7 @@ func (e *UnixEndpoint) pinParents(path string) error {
 		if current == parent && (st.Uid != uint32(os.Getuid()) || info.Mode().Perm()&0077 != 0) {
 			return fmt.Errorf("appserver: endpoint parent not private")
 		}
-		if info.Mode().Perm()&0022 != 0 && !(st.Uid == 0 && info.Mode()&os.ModeSticky != 0) {
+		if info.Mode().Perm()&0022 != 0 && (st.Uid != 0 || info.Mode()&os.ModeSticky == 0) {
 			return fmt.Errorf("appserver: writable endpoint ancestor")
 		}
 		e.pins[current] = info

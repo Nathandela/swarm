@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/processcontain"
 	"github.com/Nathandela/swarm/internal/procstart"
@@ -187,6 +188,9 @@ func NativeEnvironment(cfg Config, inherited []string) []string {
 	profile := NativeHome(cfg.StateRoot, cfg.JobID)
 	if cfg.Provider == "codex" {
 		env = append(env, "CODEX_HOME="+profile)
+		if installation, err := codexnative.Resolve(cfg.NativePath); err == nil && installation.Path == cfg.NativePath && (installation.Version == "" || installation.Version == cfg.NativeVersion) {
+			env = installation.ApplyEnvironment(env)
+		}
 	} else {
 		for i := len(env) - 1; i >= 0; i-- {
 			if strings.HasPrefix(env[i], "USER=") {

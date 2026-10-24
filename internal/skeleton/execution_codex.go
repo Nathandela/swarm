@@ -55,14 +55,14 @@ func (d *Daemon) readCodexExecutionNative(local, instance, socket string) (persi
 	}
 	meta, ok := d.core.Get(local)
 	current, currentOK := d.sessionInstance(local)
-	if !ok || !currentOK || current != instance || meta.AgentType != "codex" || meta.Status.Process != status.ProcessRunning || !validCLIIdentity(meta.CLIIdentity) || meta.CLIIdentity.Version != qualifiedCodexExecutionVersion || !persist.MatchCLIFingerprint(meta.CLIIdentity.Path, meta.CLIIdentity.Fingerprint) || !codexProcessMatches(meta.ShimPID, meta.ShimStartTime) {
+	if !ok || !currentOK || current != instance || meta.AgentType != "codex" || meta.Status.Process != status.ProcessRunning || !validCLIIdentity(meta.CLIIdentity) || meta.CLIIdentity.Version != qualifiedCodexExecutionVersion || !codexProcessMatches(meta.ShimPID, meta.ShimStartTime) {
 		return meta, info, fmt.Errorf("native execution identity unavailable")
 	}
 	root, err := openRecoveryRoot(filepath.Join(d.stateDir, local))
 	if err != nil {
 		return meta, info, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	before, err := root.Lstat(shim.BackendFile)
 	if err != nil {
 		return meta, info, err
@@ -71,7 +71,7 @@ func (d *Daemon) readCodexExecutionNative(local, instance, socket string) (persi
 	if err != nil {
 		return meta, info, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	opened, err := file.Stat()
 	stat, valid := infoSysNative(opened)
 	if err != nil || !valid || !opened.Mode().IsRegular() || opened.Mode().Perm()&0077 != 0 || stat.Uid != uint32(os.Getuid()) || stat.Nlink != 1 || opened.Size() > 64<<10 || !os.SameFile(before, opened) {
@@ -98,6 +98,9 @@ func (d *Daemon) readCodexExecutionNative(local, instance, socket string) (persi
 	}
 	if json.Unmarshal(raw, &info) != nil || info.PID == meta.ShimPID || info.PGID != info.PID || info.SocketPath != socket || !codexProcessMatches(info.PID, info.StartedAtMS) {
 		return meta, info, fmt.Errorf("native execution process unavailable")
+	}
+	if !persist.MatchCLIProcessImage(info.PID, info.StartedAtMS, meta.CLIIdentity.Path, meta.CLIIdentity.Fingerprint) {
+		return meta, info, fmt.Errorf("native execution image unavailable")
 	}
 	return meta, info, nil
 }

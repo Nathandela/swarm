@@ -636,6 +636,9 @@ func (d *Daemon) applyNativeDecision(local, ref, decisionID string) (error, bool
 	}
 	// The id THAT CONNECTION received, consumed so a re-delivered approve cannot write a
 	// second reply the server would apply to whatever replaced this request.
+	if err := d.observeExecutionOwnerWrite(local); err != nil {
+		return err, true
+	}
 	id, ok := d.takeServerRequest(local, ref)
 	if !ok {
 		return fmt.Errorf("no pending server request is outstanding for approval %q", ref), true

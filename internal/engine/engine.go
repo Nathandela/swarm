@@ -358,6 +358,7 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		s.lastTypedAt = now
 	}
 	s.lastSignalAt = now
+	next = projectCodexCustody(s, next)
 	changed := commit(s, next)
 	persistErr := e.persistExecutionLocked(cb.SessionID, s)
 	e.mu.Unlock()
@@ -436,6 +437,7 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	next := s.status
 	next.Turn = turn
 	next.Interaction = interaction
+	next = projectCodexCustody(s, next)
 	changed := commit(s, next)
 	e.mu.Unlock()
 
@@ -528,6 +530,7 @@ func (e *Engine) Tick() {
 				if j.s.mainTurn == status.TurnActive {
 					j.s.mainTurn = status.TurnUnknown
 				}
+				next = projectCodexCustody(j.s, next)
 				changed = commit(j.s, next)
 			}
 			e.mu.Unlock()

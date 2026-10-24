@@ -6,8 +6,9 @@ Work is isolated on `feat/native-login-handover`, based on `179073ab`. Beads own
 task status; this document defines the implementation and acceptance contract.
 The baseline evidence is [the native rotation research](../verification/provider-logins/seamless-rotation-research.json).
 The [Linux native capability receipts](../verification/provider-logins/native-handover-capabilities-2026-10-24.json)
-record nine Codex and seven Claude SDK scenarios using synthetic credentials.
-They characterize native behavior; they do not certify the integrated feature.
+record version-pinned scenarios using synthetic credentials. They characterize
+native behavior; they do not certify the integrated feature. Receipt counts and
+coverage evolve with the qualification work.
 
 ## Intended behavior
 
@@ -47,11 +48,17 @@ TestMain cleanup are outside this branch. Small typed persistence additions for
 execution/continuation are reserved here; further overlapping edits require
 another bounded coordination exchange.
 
-Keep existing common native configuration/history in place. Create no new
-history, plugin or transcript copies. Saved-login refresh homes contain only
-authentication and the minimal native configuration required for renewal.
-Helpers are lazy and exit after use; their outputs and scratch have explicit
-bounds and exact process ownership. Reuse the established Go/module caches.
+Keep the existing common native directory as the history and shared user-asset
+source, and as the location of legacy incarnations. Create no new history, plugin
+or transcript copies. Future owned Claude incarnations use a deterministic native
+profile path derived from account and organization identity. Their saved native
+secure-storage authority remains in its existing saved-login location; do not
+copy grants into profiles. Retain old virtual profile aliases while referenced
+histories need them. Profiles are mutable and may contain secrets, so retire an
+alias only after exact history and live-process references end. Saved-login
+refresh helpers use an empty private config and native auth authority. Helpers
+are lazy and exit after use; their outputs and scratch have explicit bounds and
+exact process ownership. Reuse the established Go/module caches.
 
 Execution records contain identities, event positions, small enums and bounded
 sets of live actors/tools/requests, never message bodies or credentials. Retain
@@ -89,14 +96,46 @@ Test callback ownership with multiple native clients and daemon disconnection.
 The shim/native processes survive daemon loss; an unavailable refresh owner
 must fail visibly and recover when reconnected without a fabricated user turn.
 
-For Claude, qualify a stable native secure-storage authority and cooperation
-with the installed native refresh locks/CAS. Current live processes are pinned
-to their saved-login directory through their environment and need a one-time
-owned migration. Preserve account-independent auth/config fields. File install
-alone is not adoption acknowledgement. The actual native model loop, children,
-quota/account-dependent settings and concurrent refresh must be tested before
-enabling this path. A native capability failure changes the design before
-dependent integration; helper tests do not substitute for this gate.
+For Claude, bind native refresh to the selected saved authority using the
+installed native refresh locks/CAS. Every future owned identity, including the
+currently selected account, gets its own deterministic account-and-organization
+profile. Existing live processes keep their original account and common profile
+until that specific incarnation reaches a separately qualified safe transition;
+there is no hot rebinding. A healthy old-A process may finish under A while new
+work uses B. No fleet-wide idle barrier is allowed. A transition needs durable
+source ownership, proof its native writers stopped, one launch claim and an exact
+successor binding before readiness or continuation. Do not restart a healthy
+process merely to make adoption counts uniform.
+
+The common root remains the physical history and ordinary user-asset source.
+Provision only stable aliases to existing assets; never copy history, plugins,
+transcripts or caches. Preserve normal user/project/local precedence, launch
+flags, model, effort, permissions, cwd and absolute native transcript path. Do
+not use `--settings` or `--mcp-config` to simulate user scope. Before creating an
+owned profile, provision only the explicit user and exact-CWD local MCP
+definitions from `.claude.json`'s `mcpServers` and `projects[exactCwd].mcpServers`.
+Use a supported private native input if available; otherwise atomically edit only
+those documented maps in a private destination after all config writers stop.
+Never put definition JSON or secrets in argv. Verify the resulting scopes against
+native-writer fixtures. Reject conflicting destination definitions unless
+identical or explicitly resolved. Pre-provision known incoming working
+directories. Later conflicts or unavailable writer-stop proof leave that profile
+pending without blocking healthy discussions. Do not migrate MCP OAuth, trust,
+account state or other profile fields.
+
+Native refresh helpers use a fresh empty private config bound to the existing
+saved native authority. Accept auth only after independently observing a native
+written profile with the exact selected account and organization IDs and a
+`profileFetchedAt` within the helper attempt, plus a usable resulting grant,
+expiry/scopes and current credential generation/selection. Initialize success,
+file existence, `SessionStart`, or logged-in status alone is not an auth receipt;
+never seed identity or infer success. This receipt establishes account identity
+only. Keep auth, discussion startup, local config readiness, ordinary native
+trust/policy enforcement and operational adoption distinct. Preserve native
+policy enforcement; do not fabricate a policy verdict or run a hidden model
+preflight. A normal native operation supplies operational evidence. Mac and Linux native
+config and fresh-auth suites each pass ten selected cases. Production credential
+CAS/crash integration and end-to-end handover qualification remain open. These receipts do not authorize production activation.
 
 ### Durable execution evidence
 
@@ -196,9 +235,12 @@ The terminal failure must bind an independently known latest step ordinal and
 capture generation. The last two available records are insufficient: missing
 capture and failed error reporting must still fence effects. Generic
 `rate_limit` alone cannot establish subscription exhaustion. Effective native
-automatic resume must be positively disabled on this exact instance; Swarm
-does not change the owner's setting. Plugin ordering, every negative case
-never becoming a candidate, and daemon/native reconciliation remain gates.
+automatic resume must be positively disabled on this exact instance. New managed
+Claude invocations set `autoContinueAtUsageLimit=false` per invocation so Swarm
+is the single continuation owner. Global preferences and already-running legacy
+invocations remain untouched. Per-invocation mutability and the effective false
+value still require qualification. Plugin ordering, every negative case never
+becoming a candidate, and daemon/native reconciliation remain gates.
 
 After that proof, the candidate operation is a targeted semantic continuation
 through the existing composer: dismiss only the current verified quota modal,
@@ -206,7 +248,10 @@ reobserve the actual VT composer, and submit once behind the same owner fence.
 Each Escape/paste/submit stage needs durable uncertainty before effects and
 exact native prompt-UUID reconciliation; ambiguity never permits replay.
 Historical terminal bytes and timed Enter are capability experiments only.
-A generic Enter, original-prompt resend or blanket "continue" remains excluded.
+A generic Enter, original-prompt resend, raw key sequence or draft text is
+ineligible. A complete owner-authored semantic submission is a separate safe
+transition boundary and must be held before any effects; completed work or a
+human-wait state never receives automatic input to satisfy adoption accounting.
 Sol and Astra accepted this narrow amendment and no-effects Linux capability
 probes on 2026-10-24; this is not production continuation qualification.
 
@@ -223,7 +268,7 @@ OAuth implementation is part of the initial design.
 
 | Phase | Work and principal seams | Evidence required before dependent work |
 |---|---|---|
-| Native capability qualification | Reusable isolated native probes beside existing verification tooling; Codex refresh owner, built-in route/WS and request adoption; Claude stable-store loop and continuation. | Actual installed binaries, synthetic loopback first, then owned Linux native canaries. Preserve tool identities/results, auth identity and human-decision state. Failed hypotheses revise this contract. |
+| Native capability qualification | Reusable isolated native probes beside existing verification tooling; Codex refresh owner, built-in route/WS and request adoption; Claude profile, fresh-auth, stable-store loop and continuation. | Actual installed binaries, synthetic loopback first, then owned Linux native canaries. Preserve tool identities/results, auth identity and human-decision state. Failed hypotheses revise this contract. |
 | Execution evidence | `internal/engine`, `internal/persist`, `internal/daemon` registration/reconcile, authenticated hook/backend ingress. | Red regression for lost child across daemon restart; no false-idle destructive authorization; actor/turn/gap/overflow/disk-full/permission tests and race checks. |
 | Credential ownership and migration | `internal/logins`, narrow native refresh lifecycle, login launch/shim auth boundary and versioned ownership records. | One refresh writer, no secret disclosure or extra history copies, A-B-A/expiry/relogin/removal/crash tests, old-schema and downgrade refusal. |
 | Live handover | `internal/skeleton/logins*`, dedicated backend auth dispatch, per-incarnation adoption and input admission. | Busy/attached healthy loops continue; no fleet idle barrier; partial adoption explicit; stale A results cannot affect B; daemon restart and concurrent owner input checked. |

@@ -2852,6 +2852,1076 @@
       "Snapshot build contains commit928f0ab8 plus the five exact file overlays recorded above; concurrent uncommitted branch work was excluded.",
       "Direct native binary through a private test transport wrapper; production npm resolution is separately under review.",
       "This supports 0.164 renewal only; execution and migration version qualification remain separate."
+    ],
+    "resolver_followup": {
+      "run": {
+        "unit": "swarm-native-refresh-0164-ULgCvMPo",
+        "private_root": "/run/user/1000/swarm-native-codex0164.KRaHZybO/worker-qualification.ULgCvMPo",
+        "remote_stage": "/run/user/1000/swarm-native-codex0164.KRaHZybO",
+        "native_version": "0.164.0",
+        "native_sha256": "b93f6811d3f653f0fb83be4050d857fb9abbb111dfa2ce160563327daff7f306",
+        "swarm_sha256": "8ad42ec7899af7806cc0a0c9cc4660b3cb4e03e4c9180d18bb30b6f01e073a9a",
+        "test_sha256": "4ec51d6770a587b9e11b9fda51c37ec21f55af360180802c8b74cee7af0a5ef8",
+        "source": {
+          "source_commit": "aea24459c2c80325cc2113ef1f366c43bc4c5b24",
+          "component_source_sha256": {
+            "internal/codexnative/resolve.go": "d06665175f075c53b176576b6ecf3a2df50ba7c9c9b5d2ebc73ab84f71808994",
+            "internal/loginworker/refresh_owner.go": "cc4b63d1afe754b04c68519637e62c8beac77630c7bb35a7c4ef82fd38942821",
+            "internal/loginworker/refresh_fixture_test.go": "7066c95f8bd65e5c38ffc3de56f84e32fedd7ae329e29c90117040ad30187de0",
+            "internal/loginworker/refresh_native_linux_test.go": "692bf144bcdb57f671bb0b25be8edd5642fa5ed4142e3a56845922050f95f69f"
+          },
+          "scope": "Author-built current resolver tranche; baseline commit plus uncommitted component hashes, not a clean whole-feature release build."
+        },
+        "private_tmpfs": false,
+        "disk_isolation": "logical per-worker32MiB/2048entries; no aggregateOSquota claim",
+        "exit_code": 0,
+        "elapsed_seconds": 10.063,
+        "receipt_sha256": "c7de0a25670359e2c91e9393442bbd45934832e8ad4c708cecf633e074fe0e73"
+      },
+      "scope": "Actual production refresh worker with strict native resolver and ELF native test transport; five cases/six cycles pass. Public npm installation resolution remains a separate gate.",
+      "limits": "Author build plus recorded component hashes; not a frozen whole-feature release build."
+    }
+  },
+  "linux_native_image_continuity": {
+    "scope": "Actual Linux process-image regression; resolver integration not yet qualified",
+    "runs": [
+      {
+        "case": "red",
+        "stage": "/run/user/1000/swarm-native-image.Dk5hUNkn",
+        "unit": "swarm-native-image-Dk5hUNkn-red",
+        "binary_sha256": "5b303338287faf3cad2d2d8986d1541e44c10c9bfbe932dce42369c6ce53b271",
+        "exit_code": 1,
+        "elapsed_seconds": 0.344,
+        "receipt_sha256": "5b637a4ac0387c1d546dc49f55dffceabf0e249fe628979c0b5577d31e2eaf5e"
+      },
+      {
+        "case": "green",
+        "stage": "/run/user/1000/swarm-native-image.Dk5hUNkn",
+        "unit": "swarm-native-image-Dk5hUNkn-green",
+        "binary_sha256": "e12ca07a0e78dbdfc939848a2f7c7ce02d210355ee55facd7e789504893bfd86",
+        "exit_code": 0,
+        "elapsed_seconds": 0.366,
+        "receipt_sha256": "7baf2908720bdd6347f09429266d48fb71292c05d59ce1a2229bb8b9962bd415"
+      }
+    ],
+    "red_overlay": "Old disk fingerprint plus PID/start rejected a still-live old executable after atomic installer replacement.",
+    "green": "Independent proc executable opens retain the old inode proof after replacement and reject same-PID/start exec into the replacement at the identical path.",
+    "limitations": [
+      "Tests use owned Go executables, not production Codex instances.",
+      "Exact CLI version, native endpoint and kernel-peer fences remain independently required.",
+      "No new binary-retention cache or descendant-acceptance policy is introduced."
+    ]
+  },
+  "claude_profile_configuration_references": {
+    "repository": "https://github.com/kaitranntt/ccs",
+    "commit": "f45fa923f231ecb95b782d3a9edde3cad3476d48",
+    "observed_stars": 2892,
+    "source_files": [
+      {
+        "path": "src/management/instance-manager.ts",
+        "url": "https://raw.githubusercontent.com/kaitranntt/ccs/f45fa923f231ecb95b782d3a9edde3cad3476d48/src/management/instance-manager.ts",
+        "sha256": "171f14a51a425cfc4b4186344d6148b4d99541a335c9661e22eedc036dabdf88",
+        "bytes": 9294
+      },
+      {
+        "path": "src/management/shared-manager/types.ts",
+        "url": "https://raw.githubusercontent.com/kaitranntt/ccs/f45fa923f231ecb95b782d3a9edde3cad3476d48/src/management/shared-manager/types.ts",
+        "sha256": "24089bd01350acd076b68b46e971b10c23bde168564a124bdab6026793cb551c",
+        "bytes": 2778
+      },
+      {
+        "path": "src/management/shared-manager/shared-dir-linker.ts",
+        "url": "https://raw.githubusercontent.com/kaitranntt/ccs/f45fa923f231ecb95b782d3a9edde3cad3476d48/src/management/shared-manager/shared-dir-linker.ts",
+        "sha256": "a9c55bbfaac68188227db6aabf74a696918ea3563bbd530ab596e3cbabebcf66",
+        "bytes": 11514
+      },
+      {
+        "path": "src/management/shared-manager/canonical-first-file-reconciler.ts",
+        "url": "https://raw.githubusercontent.com/kaitranntt/ccs/f45fa923f231ecb95b782d3a9edde3cad3476d48/src/management/shared-manager/canonical-first-file-reconciler.ts",
+        "sha256": "63aedc76a12ab2ecd83ec141d41084d05300b0396d6f9f6e15a60ad8651ca264",
+        "bytes": 4851
+      },
+      {
+        "path": "tests/unit/instance-manager-mcp-sync.test.ts",
+        "url": "https://raw.githubusercontent.com/kaitranntt/ccs/f45fa923f231ecb95b782d3a9edde3cad3476d48/tests/unit/instance-manager-mcp-sync.test.ts",
+        "sha256": "15beb0f306e4bb7d3738ee2f48e0286577e79d143efc05106c9d31a1aca67bad",
+        "bytes": 27404
+      }
+    ],
+    "evidence": [
+      "https://github.com/kaitranntt/ccs/issues/691",
+      "https://github.com/kaitranntt/ccs/issues/1688",
+      "https://github.com/anthropics/claude-code/issues/92645",
+      "https://code.claude.com/docs/en/settings",
+      "https://code.claude.com/docs/en/env-vars"
+    ],
+    "findings": [
+      "Separate CLAUDE_CONFIG_DIR relocates user-scoped settings, instructions, MCP config and plugin metadata as well as account state. Sharing projects alone does not prove behavior parity.",
+      "CCS has explicit shared settings/instruction roots, selective MCP-field synchronization, and a split shared/local plugin layout; its implementation is reference evidence, not adopted code.",
+      "CCS also reconciles divergent shared files; simple symlink creation does not by itself prove later native configuration writes preserve a common source."
+    ],
+    "remaining_native_qualification": [
+      "Concurrent production profile writers and stopped-writer provisioning",
+      "Per-invocation autoContinueAtUsageLimit=false and later runtime mutation visibility",
+      "Discussion-own readiness, attachments/file-history/rewind, background jobs and exact single-writer transcript readiness",
+      "Integrated owner/continuation transitions and final gates"
+    ],
+    "production_plan_approved": true,
+    "plan_approval_scope": "Sol/Astra approved bounded profile/alias/explicit-MCP/fresh-auth design only; production activation remains gated."
+  },
+  "claude_fresh_profile_auth": {
+    "scope": "Synthetic native capability on macOS arm64 and Linux x86_64, Claude2.1.310; production helper/CAS integration remains pending",
+    "harness_sha256": {
+      "fresh_auth.py": "d8420639e2e1ef1181671ab9b32414ef50a8489994625d068bbca5215e24dbf5",
+      "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+      "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+      "check_fresh_receipts.py": "7386b864bd89b63b0aa0d903e46a3c71d1cc076d85489fd43609d7707c0f1f5c"
+    },
+    "mac_manifest_sha256": "d662c9a095965745f17aa737e64ad9c604dc9fb3b780746290bfdc97f2e0fd3d",
+    "mac_results": [
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "future",
+        "passed": true,
+        "accepted": [
+          true
+        ],
+        "native_profile_gets": 1,
+        "native_refreshes": 0,
+        "sdk_initialize_successes": 1,
+        "inference_requests": 0
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "expired",
+        "passed": true,
+        "accepted": [
+          true
+        ],
+        "native_profile_gets": 2,
+        "native_refreshes": 1,
+        "sdk_initialize_successes": 1,
+        "inference_requests": 0
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "401",
+        "passed": true,
+        "accepted": [
+          false
+        ],
+        "native_profile_gets": 1,
+        "native_refreshes": 0,
+        "sdk_initialize_successes": 1,
+        "inference_requests": 0
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "403",
+        "passed": true,
+        "accepted": [
+          false
+        ],
+        "native_profile_gets": 1,
+        "native_refreshes": 0,
+        "sdk_initialize_successes": 1,
+        "inference_requests": 0
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "timeout",
+        "passed": true,
+        "accepted": [
+          false
+        ],
+        "native_profile_gets": 1,
+        "native_refreshes": 0,
+        "sdk_initialize_successes": 1,
+        "inference_requests": 0
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "malformed",
+        "passed": true,
+        "accepted": [
+          false
+        ],
+        "native_profile_gets": 1,
+        "native_refreshes": 0,
+        "sdk_initialize_successes": 1,
+        "inference_requests": 0
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "wrong-account",
+        "passed": true,
+        "accepted": [
+          false
+        ],
+        "native_profile_gets": 1,
+        "native_refreshes": 0,
+        "sdk_initialize_successes": 1,
+        "inference_requests": 0
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "wrong-org",
+        "passed": true,
+        "accepted": [
+          false
+        ],
+        "native_profile_gets": 1,
+        "native_refreshes": 0,
+        "sdk_initialize_successes": 1,
+        "inference_requests": 0
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "pair",
+        "passed": true,
+        "accepted": [
+          true,
+          true,
+          true
+        ],
+        "native_profile_gets": 4,
+        "native_refreshes": 1,
+        "sdk_initialize_successes": 3,
+        "inference_requests": 0
+      },
+      {
+        "version": "2.1.310",
+        "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+        "case": "crash-recovery",
+        "passed": true,
+        "accepted": [
+          true
+        ],
+        "native_profile_gets": 2,
+        "native_refreshes": 0,
+        "sdk_initialize_successes": 2,
+        "inference_requests": 0
+      }
+    ],
+    "linux_results": [
+      {
+        "case": "future",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-future",
+        "exit_code": 0,
+        "elapsed_seconds": 4.167,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "fd69ac049d02973cf152215df1fd588d65fc75e64db045fae9823ce3e1889c26",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "future",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-w_90tnbq",
+          "accepted": [
+            true
+          ],
+          "native_profile_gets": 1,
+          "native_refreshes": 0,
+          "sdk_initialize_successes": 1,
+          "inference_requests": 0
+        }
+      },
+      {
+        "case": "expired",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-expired",
+        "exit_code": 0,
+        "elapsed_seconds": 3.586,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "2170e719a1c98df7a79ad6f16efcf4775700a6ead37f517e37582b8b16443bb6",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "expired",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-zmvrzvid",
+          "accepted": [
+            true
+          ],
+          "native_profile_gets": 2,
+          "native_refreshes": 1,
+          "sdk_initialize_successes": 1,
+          "inference_requests": 0
+        }
+      },
+      {
+        "case": "401",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-401",
+        "exit_code": 0,
+        "elapsed_seconds": 4.127,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "566de71d2eac703c67c1b1f38277737ffdb8d70368b847c53c04abeb671f0bfc",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "401",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-cz5209av",
+          "accepted": [
+            false
+          ],
+          "native_profile_gets": 1,
+          "native_refreshes": 0,
+          "sdk_initialize_successes": 1,
+          "inference_requests": 0
+        }
+      },
+      {
+        "case": "403",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-403",
+        "exit_code": 0,
+        "elapsed_seconds": 4.397,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "b8477c677b3c8302561bc9e72bc58f334437d1df52061f97cbbb207bbab98a98",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "403",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-zzt4518e",
+          "accepted": [
+            false
+          ],
+          "native_profile_gets": 1,
+          "native_refreshes": 0,
+          "sdk_initialize_successes": 1,
+          "inference_requests": 0
+        }
+      },
+      {
+        "case": "timeout",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-timeout",
+        "exit_code": 0,
+        "elapsed_seconds": 3.702,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "c5e37fe19e1252bd99d613404c7697f454bf7647878ab881efc15927f8391099",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "timeout",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-61jbh0j6",
+          "accepted": [
+            false
+          ],
+          "native_profile_gets": 1,
+          "native_refreshes": 0,
+          "sdk_initialize_successes": 1,
+          "inference_requests": 0
+        }
+      },
+      {
+        "case": "malformed",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-malformed",
+        "exit_code": 0,
+        "elapsed_seconds": 4.243,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "5e1d97afac7eded43db06d4986bb0e384a8ccf2ce042a8576e82649631ac5442",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "malformed",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-e1c5w9t7",
+          "accepted": [
+            false
+          ],
+          "native_profile_gets": 1,
+          "native_refreshes": 0,
+          "sdk_initialize_successes": 1,
+          "inference_requests": 0
+        }
+      },
+      {
+        "case": "wrong-account",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-wrong-account",
+        "exit_code": 0,
+        "elapsed_seconds": 3.593,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "20e43bd1b417f92716895d1edfada7c1e46b79efd6ab0a9646d2ea3f1057865e",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "wrong-account",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-tio3o2jo",
+          "accepted": [
+            false
+          ],
+          "native_profile_gets": 1,
+          "native_refreshes": 0,
+          "sdk_initialize_successes": 1,
+          "inference_requests": 0
+        }
+      },
+      {
+        "case": "wrong-org",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-wrong-org",
+        "exit_code": 0,
+        "elapsed_seconds": 2.998,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "4e909dd7ba3d0dd4609f693b2011cb8ef2c8608325b6f9eaa53c51d56bcb7eff",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "wrong-org",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-l7xas8xz",
+          "accepted": [
+            false
+          ],
+          "native_profile_gets": 1,
+          "native_refreshes": 0,
+          "sdk_initialize_successes": 1,
+          "inference_requests": 0
+        }
+      },
+      {
+        "case": "pair",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-pair",
+        "exit_code": 0,
+        "elapsed_seconds": 6.998,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "bca4acdd7eb9a81d47f08ed6338cbd867a1e6f9b30d89c385266611ff9c2c483",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "pair",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-32a7q8ep",
+          "accepted": [
+            true,
+            true,
+            true
+          ],
+          "native_profile_gets": 4,
+          "native_refreshes": 1,
+          "sdk_initialize_successes": 3,
+          "inference_requests": 0
+        }
+      },
+      {
+        "case": "crash-recovery",
+        "stage": "/run/user/1000/swarm-claude-fresh.zl8mrbjN",
+        "unit": "swarm-native-claude-fresh-zl8mrbjN-crash-recovery",
+        "exit_code": 0,
+        "elapsed_seconds": 4.65,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "8dd31e1e4dad492d19b3afa39590fb1e19742a5d647ec946073613fe3c5b5c02",
+        "receipt": {
+          "version": "2.1.310",
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "case": "crash-recovery",
+          "passed": true,
+          "root": "/run/user/1000/swarm-claude-fresh.zl8mrbjN/fresh-q0lvaqg2",
+          "accepted": [
+            true
+          ],
+          "native_profile_gets": 2,
+          "native_refreshes": 0,
+          "sdk_initialize_successes": 1,
+          "inference_requests": 0
+        }
+      }
+    ],
+    "containment": "Per Linux case90s transient user cgroup, KillMode=control-group,1GiB/128tasks/32MiB file limit; fresh private homes, synthetic grants, local fake endpoints, zero model requests.",
+    "findings": [
+      "Independent polling of native-written .claude.json is required; initialize success can precede profile persistence and also occurs for rejected authentication.",
+      "Require exact account and organization, profileFetchedAt inside the attempt, and a usable resulting saved grant; no seeded helper account state.",
+      "Two fresh config profiles using the same expired secure authority plus a later fresh helper produced one native refresh, preserving shared lock ownership.",
+      "Native401/403/timeout/malformed/wrong-account/wrong-org and a killed-before-profile helper never qualified authentication; a fresh later helper recovered."
+    ],
+    "limitations": [
+      "This establishes native account identity only, not an independent server-policy or subscription-entitlement verdict.",
+      "Production selection/generation CAS, helper custody, integration crash tests and end-to-end rotation remain pending."
+    ]
+  },
+  "claude_profile_configuration": {
+    "scope": "Synthetic native configuration continuity, Claude2.1.310, ten selected cases each on macOS arm64 and Linux x86_64; not a production handover receipt",
+    "harness_sha256": {
+      "config_probe.py": "c2876b6e4c22693bc70d3b06d41b4e03b930077b53d385a4c9c9dd27cf39c0f4",
+      "check_receipts.py": "2ce6b53ebc9f8c98b79b86e7246bcc81346efb316cc0bf6c97a9a5275126734a",
+      "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+      "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3"
+    },
+    "mac_manifest_sha256": "6abc4dadc7c046102685e6281b6e336e6236d539af387931bef65574ac7a21d1",
+    "linux_results": [
+      {
+        "case": "aliases",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-aliases",
+        "exit_code": 0,
+        "elapsed_seconds": 3.878,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "0e144a30ecbb6fd81a944ead6ad640de9f960856b72dbe74aeccd13b0e6efe9f",
+        "summary": {
+          "requests": 1,
+          "model": "claude-opus-5-5",
+          "effort": {
+            "effort": "high"
+          },
+          "global_import": false,
+          "global_rule": false,
+          "project_rule": false,
+          "output_style": false,
+          "global_instruction": true,
+          "project_instruction": true,
+          "local_instruction": true,
+          "tools": [
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "mcp__collision__canary_project",
+            "mcp__projectonly__canary_projectonly",
+            "mcp__useronly__canary_useronly"
+          ]
+        }
+      },
+      {
+        "case": "assets",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-assets",
+        "exit_code": 0,
+        "elapsed_seconds": 3.619,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "e34f07770a4b4c573b1eca97950c3c02d7adf0dad40b83cbe61a2903caec3229",
+        "summary": {
+          "requests": 1,
+          "model": "claude-opus-5-5",
+          "effort": {
+            "effort": "high"
+          },
+          "global_import": true,
+          "global_rule": true,
+          "project_rule": true,
+          "output_style": true,
+          "global_instruction": true,
+          "project_instruction": true,
+          "local_instruction": true,
+          "tools": [
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "mcp__collision__canary_project",
+            "mcp__projectonly__canary_projectonly",
+            "mcp__useronly__canary_useronly"
+          ]
+        }
+      },
+      {
+        "case": "explicit",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-explicit",
+        "exit_code": 0,
+        "elapsed_seconds": 3.132,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "28699a5ca720895c7b789cf80fb53d3e455bec4436793d5f79269519116c2d10",
+        "summary": {
+          "requests": 1,
+          "model": "claude-sonnet-5",
+          "effort": {
+            "effort": "low"
+          },
+          "global_import": false,
+          "global_rule": false,
+          "project_rule": false,
+          "output_style": false,
+          "global_instruction": true,
+          "project_instruction": true,
+          "local_instruction": true,
+          "tools": [
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "mcp__collision__canary_project",
+            "mcp__projectonly__canary_projectonly",
+            "mcp__useronly__canary_useronly"
+          ]
+        }
+      },
+      {
+        "case": "missing",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-missing",
+        "exit_code": 0,
+        "elapsed_seconds": 3.135,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "02575499c15bd55b34044f1b2d458ab9b503028be9eecc23c3055f1aa523709f",
+        "summary": {
+          "requests": 1,
+          "model": "claude-opus-5-5",
+          "effort": {
+            "effort": "high"
+          },
+          "global_import": false,
+          "global_rule": false,
+          "project_rule": false,
+          "output_style": false,
+          "global_instruction": false,
+          "project_instruction": true,
+          "local_instruction": true,
+          "tools": [
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write",
+            "mcp__collision__canary_project",
+            "mcp__projectonly__canary_projectonly",
+            "mcp__useronly__canary_useronly"
+          ]
+        }
+      },
+      {
+        "case": "override",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-override",
+        "exit_code": 0,
+        "elapsed_seconds": 3.114,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "d8dadd2793ec974e967da18bd7768d5deeaccc01f55c252816da4fcf9f8e1e65",
+        "summary": {
+          "requests": 1,
+          "model": "claude-haiku-4-5",
+          "effort": null,
+          "global_import": false,
+          "global_rule": false,
+          "project_rule": false,
+          "output_style": false,
+          "global_instruction": true,
+          "project_instruction": true,
+          "local_instruction": true,
+          "tools": [
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskCreate",
+            "TaskGet",
+            "TaskList",
+            "TaskStop",
+            "TaskUpdate",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "mcp__collision__canary_project",
+            "mcp__projectonly__canary_projectonly",
+            "mcp__useronly__canary_useronly"
+          ]
+        }
+      },
+      {
+        "case": "mcp-cli",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-mcp-cli",
+        "exit_code": 0,
+        "elapsed_seconds": 3.137,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "26a9dd0e7928c77858b4061acaada874f17202d5ca1defa31cba1393cad3c0c9",
+        "summary": {
+          "requests": 1,
+          "model": "claude-opus-5-5",
+          "effort": {
+            "effort": "high"
+          },
+          "global_import": false,
+          "global_rule": false,
+          "project_rule": false,
+          "output_style": false,
+          "global_instruction": true,
+          "project_instruction": true,
+          "local_instruction": true,
+          "tools": [
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "mcp__clionly__canary_clionly",
+            "mcp__collision__canary_cli",
+            "mcp__projectonly__canary_projectonly",
+            "mcp__useronly__canary_useronly"
+          ]
+        }
+      },
+      {
+        "case": "write",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-write",
+        "exit_code": 0,
+        "elapsed_seconds": 4.425,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "905dc7a67d3f19a60fa90ac56c3a700853b07e338c8e965befb391c3f83b70a4",
+        "summary": {
+          "requests": 1,
+          "model": "claude-opus-5-5",
+          "effort": {
+            "effort": "high"
+          },
+          "global_import": false,
+          "global_rule": false,
+          "project_rule": false,
+          "output_style": false,
+          "global_instruction": true,
+          "project_instruction": true,
+          "local_instruction": true,
+          "tools": [
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "mcp__collision__canary_project",
+            "mcp__projectonly__canary_projectonly",
+            "mcp__useronly__canary_useronly"
+          ]
+        }
+      },
+      {
+        "case": "dual",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-dual",
+        "exit_code": 0,
+        "elapsed_seconds": 4.756,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "fe9a6dce307fbbc4388fbecce70419ad8f8cfa001a29c5efef1f599b6f119b9f",
+        "summary": {
+          "requests": 1,
+          "model": "claude-opus-5-5",
+          "effort": {
+            "effort": "high"
+          },
+          "global_import": false,
+          "global_rule": false,
+          "project_rule": false,
+          "output_style": false,
+          "global_instruction": true,
+          "project_instruction": true,
+          "local_instruction": true,
+          "tools": [
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "mcp__collision__canary_project",
+            "mcp__projectonly__canary_projectonly",
+            "mcp__useronly__canary_useronly"
+          ]
+        }
+      },
+      {
+        "case": "native-mcp",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-native-mcp",
+        "exit_code": 0,
+        "elapsed_seconds": 8.032,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "c37592cbdda0a7a28e3a038fbec98e505a28a76989e55564dbf60d76034ba257",
+        "summary": {
+          "requests": 1,
+          "model": "claude-opus-5-5",
+          "effort": {
+            "effort": "high"
+          },
+          "global_import": false,
+          "global_rule": false,
+          "project_rule": false,
+          "output_style": false,
+          "global_instruction": true,
+          "project_instruction": true,
+          "local_instruction": true,
+          "tools": [
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "EnterWorktree",
+            "ExitWorktree",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "RemoteTrigger",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "mcp__collision__canary_local",
+            "mcp__localonly__canary_localonly",
+            "mcp__projectonly__canary_projectonly",
+            "mcp__useronly__canary_useronly"
+          ]
+        }
+      },
+      {
+        "case": "readiness",
+        "stage": "/run/user/1000/swarm-claude-config.qURHQu5O",
+        "unit": "swarm-native-claude-config-qURHQu5O-readiness",
+        "exit_code": 0,
+        "elapsed_seconds": 3.102,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "8efa7401667cdebc52c9a2c5f0a84bcd0ce135753d7ddcf1de4bedad4753bd72",
+        "summary": {
+          "requests": 0,
+          "model": null,
+          "effort": null,
+          "global_import": false,
+          "global_rule": false,
+          "project_rule": false,
+          "output_style": false,
+          "global_instruction": false,
+          "project_instruction": false,
+          "local_instruction": false,
+          "tools": []
+        }
+      }
+    ],
+    "containment": "Per Linux case100s transient user cgroup,1GiB/128tasks/32MiB file limit; private synthetic profiles and local MCP/model servers, deny-all outbound proxy.",
+    "findings": [
+      "Exact ordinary-asset aliases preserve user/project/local precedence, instructions, relative imports, rules, output styles, skills/commands/agents, plugin loading, and explicit launch flags.",
+      "Negative missing-alias control loses user instructions/permissions/assets; --settings and --mcp-config counterexamples change precedence.",
+      "Native user-scope plugin disable preserves the settings alias and private account identity.",
+      "One-time native MCP user/local import reproduces local>project>user scopes with B identity and leaves A unchanged. Production definition JSON must use private input, never argv; native add-json here used synthetic canary definitions.",
+      "Initialize-only get_settings sources/effective/applied and MCP status are local readiness evidence; zero inference in that case does not prove authentication or policy."
+    ],
+    "limitations": [
+      "Trust was seeded for fixtures; trust migration and MCP OAuth transfer are not qualified.",
+      "Plugin update/uninstall concurrency, arbitrary attachments/rewind/background continuation and production profile-writer integration remain pending.",
+      "Native model requests in configuration tests were synthetic loopback requests; no real account used."
+    ]
+  },
+  "codex_private_npm_resolution": {
+    "scope": "Production resolver exercised with public0.164.0 Rust binary and public official JS in a private fixture layout; fixture manifests are minimal, not an installed-package release qualification",
+    "run": {
+      "stage": "/run/user/1000/swarm-private-npm.NX4R2OAQ",
+      "unit": "swarm-native-private-npm-NX4R2OAQ",
+      "test_sha256": "9c6b00fa040b54d9a8cb14cbcf9b3ab61dbfa6daec851d76175667b7adf760f9",
+      "exit_code": 0,
+      "elapsed_seconds": 1.211,
+      "receipt_sha256": "aa8ce495aecd4538b4915fae49718d3713ab441de9b15cce1c3b2cc42ddf49c7",
+      "layout": {
+        "wrapper": "/run/user/1000/swarm-private-npm.NX4R2OAQ/lib/node_modules/@openai/codex/bin/codex.js",
+        "native": "/run/user/1000/swarm-private-npm.NX4R2OAQ/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
+        "fixture": "Private layout with minimal fixture manifests, pinned public npm JS and official private Rust binary; installed package unchanged."
+      }
+    },
+    "observed": "Native launcher PID3973438 equals kernel socket peer PID3973438; peer UID1000; verified npm management provenance, poisoned inherited selectors removed, empty home and no authentication/model calls.",
+    "limits": [
+      "Original installed0.163.0 npm package remains unqualified due group-write permissions; no installed file was modified.",
+      "This covers resolution and exact native socket ownership only; execution/migration0.164 qualification remains pending."
+    ]
+  },
+  "linux_execution_connected": {
+    "scope": "Synthetic product ingress, owner fencing and persisted startup projection on Linux, using copied actual test executable as native peer; not a provider end-to-end canary",
+    "runs": [
+      {
+        "case": "red",
+        "stage": "/run/user/1000/swarm-execution.YCcdXKB8",
+        "unit": "swarm-native-execution-YCcdXKB8-red",
+        "test_sha256": "95789206d16ca646a3387aee548835519b7ea797ae13c47245f34b15c32bafa8",
+        "fixture_sha256": "4fb567ecbc97b921dfeb8fce596a85ebcbf2e50d9b3879ae80cfcf07f87e1da5",
+        "exit_code": 1,
+        "elapsed_seconds": 0.379,
+        "receipt_sha256": "5f0704780187f1c098a2fd4eefd8bf907987b6a1dd115095dbbcb153f6ca96a2"
+      },
+      {
+        "case": "green",
+        "stage": "/run/user/1000/swarm-execution.rTFwNhdc",
+        "unit": "swarm-native-execution-rTFwNhdc-green",
+        "test_sha256": "d47d68dd71a672c69bbb48f6a0a85eb1798d47e3a3d74ed51b1d312af02a3ee0",
+        "fixture_sha256": "4fb567ecbc97b921dfeb8fce596a85ebcbf2e50d9b3879ae80cfcf07f87e1da5",
+        "exit_code": 1,
+        "elapsed_seconds": 9.393,
+        "receipt_sha256": "f0fdabc4706343d06bde7a27589810c55f1cd92584cd3bb8c87c48f5734cb839"
+      },
+      {
+        "case": "green",
+        "stage": "/run/user/1000/swarm-execution.y3qjkCt6",
+        "unit": "swarm-native-execution-y3qjkCt6-green",
+        "test_sha256": "d47d68dd71a672c69bbb48f6a0a85eb1798d47e3a3d74ed51b1d312af02a3ee0",
+        "fixture_sha256": "4fb567ecbc97b921dfeb8fce596a85ebcbf2e50d9b3879ae80cfcf07f87e1da5",
+        "testdata_sha256": {
+          "codex_execution_tools_0163.json": "3513b361150e984b40ca446fa20baaba11c3ff7427c4dedaa71fba18657651a8",
+          "codex_execution_children_0163.json": "317a2725310ab15963529310007ef8cc619e95e0458361bee6665c7a8ff2bd76"
+        },
+        "exit_code": 0,
+        "elapsed_seconds": 12.281,
+        "receipt_sha256": "c2763af5a31e5543240ec1fc0eaea404b1a4b9bdad6f2de2540b0da6bdc92b5e"
+      }
+    ],
+    "top_level_tests_passed": 33,
+    "source_note": "Current uncommitted execution/resolver tranche; test-only portable temporary-root correction made after Mac-path RED. Concurrent bootstrap/schema work is independently reviewed.",
+    "source_sha256": {
+      "internal/skeleton/execution_codex_test.go": "99b61f30ae2558b91dfd911b2e11985120c864d893a98d4b573d513fb7174bcc",
+      "internal/skeleton/execution_startup_test.go": "1b46e598234631ec859afca29c5aa9005eacd704dd67c2b9f8fda049c811fee1",
+      "internal/skeleton/execution_owner_test.go": "f32522d3e4f413ba9a44af04c5452a0878146a7ae6ff6b4d1fe3c103de69f9a4",
+      "internal/engine/codex_custody.go": "291f08d8f8b95ffea4addd1762fd9d17378130d1e16e62b8baf38afdce7643df"
+    },
+    "red": "Copied native fixture used /private/tmp, absent on Linux. Corrected short path per platform without changing application behavior.",
+    "harness_correction": "First portable attempt omitted two native-trace fixture files; preserved that failed run, added both fixtures, reran the entire selected suite successfully.",
+    "asserted": [
+      "Native child/grandchild/background/MCP/file tool traces through authenticated product ingress",
+      "Exact endpoint/kernel peer/native process image; atomic installer replacement retains Linux old image proof",
+      "Unknown/foreign/gap/persistence failure never authorizes continuation",
+      "Owner byte/composer fencing occurs before effects",
+      "Restored unknown custody publishes before further frames and preserves pending human question"
+    ],
+    "limits": [
+      "Normal compiled Linux tests, not Linux race build; Mac focused race tests separately passed.",
+      "Owned subprocess-only test skips in the parent as designed; it runs in copied child executables.",
+      "Full native provider handover, all version qualification and whole-feature gates remain pending."
     ]
   }
 }

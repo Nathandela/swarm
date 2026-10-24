@@ -443,6 +443,13 @@ func Serve(cfg Config) (*Daemon, error) {
 			}
 		}
 	}
+	for _, h := range registry.Handovers {
+		for _, b := range h.Bootstrap {
+			if b.Phase != "ready" && b.Phase != "failed" && b.Phase != "cancelled" {
+				d.restoreAuthRecycle(b.SourceID)
+			}
+		}
+	}
 	d.api.contextGuardSettings = d.contextGuardSettings
 	d.api.contextGuards = d.contextGuards
 	d.api.syncName = func(local, name string) {
@@ -474,6 +481,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		capture()
 	}
 	d.api.tap.onSubscribe = d.authorAttachedSessionCapabilities
+	d.api.tap.beforeWrite = d.observeExecutionOwnerWrite
 	if d.detectProviderVersion == nil {
 		d.detectProviderVersion = detectProviderVersion
 	}
@@ -647,7 +655,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// Authwatch uses the committed-only recycle view so a restored
 	// durable claim can redrive without self-refusal.
 	baseUnsafeSource := func(local string) bool {
-		return d.anyControlled(local) || d.contextGuardCompactionInFlight(local) ||
+		return d.executionCustodyUnsafe(local) || d.anyControlled(local) || d.contextGuardCompactionInFlight(local) ||
 			d.composerOutcomeUnresolved(local)
 	}
 	supervisorUnsafeSource := func(local string) bool {
@@ -719,6 +727,8 @@ func Serve(cfg Config) (*Daemon, error) {
 			claimed:     d.withClaimedAuthRecycleFence,
 			resume:      d.withAuthResumeFence,
 		})
+
+	d.publishExecutionStatusesForRunning()
 
 	d.loginJobsWG.Add(1)
 	go func() { defer d.loginJobsWG.Done(); d.api.watchLoginJobs(ctx) }()
@@ -1328,6 +1338,9 @@ func (d *Daemon) Close() error {
 			// still act. Its loops are stop-aware, so this wait is bounded by one
 			// in-flight action, not one sweep.
 			d.authw.close()
+		}
+		if d.logins != nil && d.logins.codexHandover != nil {
+			d.logins.codexHandover.stopBootstrap()
 		}
 		d.cancel() // stops tapGrids + engine.Run: no NEW grid samples/captures start
 		d.loginJobsWG.Wait()

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -57,14 +56,14 @@ func TestCodexRefreshNativeFixture(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	_ = os.Chmod("n", 0600)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, e := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if e != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		for {
 			_, raw, e := conn.Read(context.Background())
 			if e != nil {
@@ -200,11 +199,7 @@ func TestCodexRefreshNativeLifecycle(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			native := filepath.Join(f.path, "native-fixture")
-			script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.163.0'; exit 0; fi\nexec '%s' '-test.run=^TestCodexRefreshNativeFixture$'\n", strings.ReplaceAll(executable, "'", "'\\''"))
-			if e = os.WriteFile(native, []byte(script), 0700); e != nil {
-				t.Fatal(e)
-			}
+			native := newRefreshFixtureTransport(t, f.path, refreshFixtureTransport{Target: executable, Version: "0.163.0", Prefix: []string{"-test.run=^TestCodexRefreshNativeFixture$"}})
 			if e = os.WriteFile(filepath.Join(f.path, "fixture-mode"), []byte(mode), 0600); e != nil {
 				t.Fatal(e)
 			}
@@ -275,6 +270,10 @@ func TestCodexRefreshRejectsUnpublishedOrReboundLaunch(t *testing.T) {
 	}
 	_ = s.Close()
 	executable, e := os.Executable()
+	if e != nil {
+		t.Fatal(e)
+	}
+	executable, e = filepath.EvalSymlinks(executable)
 	if e != nil {
 		t.Fatal(e)
 	}

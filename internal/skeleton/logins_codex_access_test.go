@@ -3,6 +3,8 @@ package skeleton
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,8 +16,13 @@ import (
 
 func TestCodexAccessCoalescesAndKeepsOtherWaiter(t *testing.T) {
 	var calls atomic.Int32
+	var probes atomic.Int32
 	started, release := make(chan struct{}), make(chan struct{})
 	b := testCodexAccessBroker(t)
+	b.resolve = func(source codexRefreshSource) (persist.CLIIdentity, error) {
+		probes.Add(1)
+		return source.cli, nil
+	}
 	b.refresh = func(ctx context.Context, _ string, _ persist.CLIIdentity) error {
 		if calls.Add(1) == 1 {
 			close(started)
@@ -29,10 +36,10 @@ func TestCodexAccessCoalescesAndKeepsOtherWaiter(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	first := make(chan error, 1)
-	go func() { _, err := b.tokens(ctx, persist.CLIIdentity{}, true); first <- err }()
+	go func() { _, err := b.tokens(ctx, codexRefreshSource{}, true); first <- err }()
 	<-started
 	second := make(chan error, 1)
-	go func() { _, err := b.tokens(context.Background(), persist.CLIIdentity{}, true); second <- err }()
+	go func() { _, err := b.tokens(context.Background(), codexRefreshSource{}, true); second <- err }()
 	cancel()
 	if err := <-first; !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled waiter: %v", err)
@@ -44,6 +51,60 @@ func TestCodexAccessCoalescesAndKeepsOtherWaiter(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("native renewals = %d, want one", calls.Load())
 	}
+	if probes.Load() != 1 {
+		t.Fatalf("coalesced native installation probes = %d, want one", probes.Load())
+	}
+}
+
+func TestCodexAccessCachedCredentialDoesNotProbeInstallation(t *testing.T) {
+	b := testCodexAccessBroker(t)
+	var probes atomic.Int32
+	b.resolve = func(codexRefreshSource) (persist.CLIIdentity, error) {
+		probes.Add(1)
+		return persist.CLIIdentity{}, errors.New("missing installation")
+	}
+	if _, err := b.tokens(context.Background(), codexRefreshSource{}, false); err != nil || probes.Load() != 0 {
+		t.Fatalf("cached access probed native installation: %d %v", probes.Load(), err)
+	}
+	if _, err := b.tokens(context.Background(), codexRefreshSource{}, true); err == nil || probes.Load() != 1 {
+		t.Fatalf("forced renewal did not reject unavailable installation: %d %v", probes.Load(), err)
+	}
+}
+
+func TestCodexRefreshUsesOriginalPATHAfterLivePayloadReplacement(t *testing.T) {
+	path := nativeCodexVersionFixture(t)
+	fingerprint, err := persist.CLIFingerprint(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := persist.CLIIdentity{Path: path, Version: "0.163.0", Fingerprint: fingerprint}
+	source := codexRefreshSource{cli: old, env: []string{"PATH=" + filepath.Dir(path), "SWARM_TEST_CODEX_VERSION=0.164.0"}, cwd: filepath.Dir(path)}
+	if current, err := resolveCodexRefreshIdentity(source); err != nil || current != old {
+		t.Fatalf("valid old native installation was not retained: %+v %v", current, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+"-next", data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+"-next", path); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/missing-daemon-installation")
+	current, err := resolveCodexRefreshIdentity(source)
+	if err != nil || current.Path != path || current.Version != "0.164.0" || current.Fingerprint == old.Fingerprint || source.cli != old {
+		t.Fatalf("qualified installed helper did not replace stale disk identity: %+v %v", current, err)
+	}
+	source.env[1] = "SWARM_TEST_CODEX_VERSION=0.165.0"
+	if _, err := resolveCodexRefreshIdentity(source); err == nil {
+		t.Fatal("unsupported installed helper admitted")
+	}
+	source.env[0] = "PATH=/missing-caller-installation"
+	if _, err := resolveCodexRefreshIdentity(source); err == nil {
+		t.Fatal("missing source PATH used a different installation")
+	}
 }
 
 func TestCodexAccessRejectsObsoleteSelection(t *testing.T) {
@@ -53,7 +114,7 @@ func TestCodexAccessRejectsObsoleteSelection(t *testing.T) {
 			var mu sync.Mutex
 			r, _ := b.snapshot()
 			b.snapshot = func() (logins.Registry, error) { mu.Lock(); defer mu.Unlock(); return cloneAccessRegistry(r), nil }
-			token, err := b.tokens(context.Background(), persist.CLIIdentity{}, false)
+			token, err := b.tokens(context.Background(), codexRefreshSource{}, false)
 			if err != nil || !token.current() {
 				t.Fatalf("initial token: %v", err)
 			}
@@ -84,7 +145,7 @@ func TestCodexAccessRevisionChangeDoesNotInvalidateSelection(t *testing.T) {
 	b := testCodexAccessBroker(t)
 	r, _ := b.snapshot()
 	b.snapshot = func() (logins.Registry, error) { return r, nil }
-	token, err := b.tokens(context.Background(), persist.CLIIdentity{}, false)
+	token, err := b.tokens(context.Background(), codexRefreshSource{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +163,7 @@ func TestCodexAccessWaitsForReloginSelectionIntent(t *testing.T) {
 	r.Providers[logins.ProviderCodex] = p
 	r.Logins[0].CredentialRevision = 2
 	b.snapshot = func() (logins.Registry, error) { return r, nil }
-	if _, err := b.tokens(context.Background(), persist.CLIIdentity{}, false); err == nil {
+	if _, err := b.tokens(context.Background(), codexRefreshSource{}, false); err == nil {
 		t.Fatal("new re-login credentials were distributed under the previous desired revision")
 	}
 }
@@ -114,7 +175,7 @@ func TestCodexAccessRejectsZeroDesiredRevision(t *testing.T) {
 	p.DesiredCredentialRevision = 0
 	r.Providers[logins.ProviderCodex] = p
 	b.snapshot = func() (logins.Registry, error) { return r, nil }
-	if _, err := b.tokens(context.Background(), persist.CLIIdentity{}, false); err == nil {
+	if _, err := b.tokens(context.Background(), codexRefreshSource{}, false); err == nil {
 		t.Fatal("unbootstrapped selection returned credentials")
 	}
 }
@@ -128,7 +189,7 @@ func TestCodexAccessPendingReloginRevokesOutstandingToken(t *testing.T) {
 		}
 		return nil
 	}
-	token, err := b.tokens(context.Background(), persist.CLIIdentity{}, false)
+	token, err := b.tokens(context.Background(), codexRefreshSource{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +197,7 @@ func TestCodexAccessPendingReloginRevokesOutstandingToken(t *testing.T) {
 	if token.current() {
 		t.Fatal("credential stayed writable during relogin intent-to-registry gap")
 	}
-	if _, err := b.tokens(context.Background(), persist.CLIIdentity{}, false); err == nil {
+	if _, err := b.tokens(context.Background(), codexRefreshSource{}, false); err == nil {
 		t.Fatal("pending relogin admitted a new read")
 	}
 }
@@ -150,13 +211,13 @@ func TestCodexAccessCloseCancelsRefreshWait(t *testing.T) {
 		return ctx.Err()
 	}
 	result := make(chan error, 1)
-	go func() { _, err := b.tokens(context.Background(), persist.CLIIdentity{}, true); result <- err }()
+	go func() { _, err := b.tokens(context.Background(), codexRefreshSource{}, true); result <- err }()
 	<-started
 	b.close()
 	if err := <-result; err == nil {
 		t.Fatal("closed source returned credentials")
 	}
-	if _, err := b.tokens(context.Background(), persist.CLIIdentity{}, false); err == nil {
+	if _, err := b.tokens(context.Background(), codexRefreshSource{}, false); err == nil {
 		t.Fatal("closed source admitted a new read")
 	}
 }
@@ -171,7 +232,7 @@ func TestCodexAccessExpiredCredentialRequiresSuccessfulRenewal(t *testing.T) {
 		return logins.AccessCredential{Token: "synthetic", AccountID: "synthetic-account", ExpiresAt: time.Now().Add(time.Hour)}, nil
 	}
 	b.refresh = func(context.Context, string, persist.CLIIdentity) error { fresh.Store(true); return nil }
-	if _, err := b.tokens(context.Background(), persist.CLIIdentity{}, false); err != nil {
+	if _, err := b.tokens(context.Background(), codexRefreshSource{}, false); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -182,7 +243,7 @@ func TestCodexAccessExpiresAtNativeWriteBoundary(t *testing.T) {
 	b.read = func(string) (logins.AccessCredential, error) {
 		return logins.AccessCredential{Token: "synthetic", AccountID: "synthetic-account", ExpiresAt: expires}, nil
 	}
-	token, err := b.tokens(context.Background(), persist.CLIIdentity{}, false)
+	token, err := b.tokens(context.Background(), codexRefreshSource{}, false)
 	if err != nil || !token.current() {
 		t.Fatalf("fresh token: %v", err)
 	}

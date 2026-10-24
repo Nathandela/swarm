@@ -139,7 +139,7 @@ func TestCodexSchemaThreeZeroReloginAlsoCapturesPrechangeBaseline(t *testing.T) 
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	r, _, e := lease.ReplaceCredential(snapshot(t, s).Revision, Credential{Auth: grantAuth("u", "a", time.Now().Add(3*time.Hour).Unix())}, job)
 	if e != nil {
 		t.Fatal(e)

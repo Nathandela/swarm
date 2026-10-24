@@ -125,6 +125,7 @@ func (e *Engine) BeginCodexExecutionFeed(id string, feed CodexFeedIdentity) erro
 	}
 	s.emitMu.Lock()
 	defer s.emitMu.Unlock()
+	defer e.publishCodexCustody(id, s)
 	e.mu.Lock()
 	if current, ok := e.sessions[id]; !ok || current != s || !s.executionEnabled || s.token != "" || s.executionIdentity.ConversationID != feed.ThreadID || s.executionIdentity.OwnerRevision != feed.OwnerRevision {
 		e.mu.Unlock()
@@ -165,6 +166,7 @@ func (e *Engine) ApplyCodexExecutionEvent(id string, event CodexExecutionEvent) 
 	}
 	s.emitMu.Lock()
 	defer s.emitMu.Unlock()
+	defer e.publishCodexCustody(id, s)
 	e.mu.Lock()
 	c := s.codexExecution
 	if current, ok := e.sessions[id]; !ok || current != s || c == nil || !s.executionEnabled || event.NativeIncarnation != c.NativeIncarnation || event.FeedEpoch != c.FeedEpoch || event.ThreadID != c.ThreadID {
@@ -662,6 +664,16 @@ func (e *Engine) ObserveExecutionOwnerRevision(id string, expected, next uint64)
 	if next == 0 || expected == ^uint64(0) || next != expected+1 {
 		return fmt.Errorf("engine: invalid owner revision")
 	}
+	return e.observeExecutionOwnerInput(id, &expected)
+}
+
+// ObserveExecutionOwnerInput serializes owner writes across all attached and API
+// writers. Persistence failure refuses the effect but retains its observed fence.
+func (e *Engine) ObserveExecutionOwnerInput(id string) error {
+	return e.observeExecutionOwnerInput(id, nil)
+}
+
+func (e *Engine) observeExecutionOwnerInput(id string, expected *uint64) error {
 	e.mu.Lock()
 	s, ok := e.sessions[id]
 	e.mu.Unlock()
@@ -671,13 +683,16 @@ func (e *Engine) ObserveExecutionOwnerRevision(id string, expected, next uint64)
 	s.emitMu.Lock()
 	defer s.emitMu.Unlock()
 	e.mu.Lock()
-	if current, ok := e.sessions[id]; !ok || current != s || !s.executionEnabled || s.executionIdentity.OwnerRevision != expected {
+	if current, ok := e.sessions[id]; !ok || current != s || !s.executionEnabled || (expected != nil && s.executionIdentity.OwnerRevision != *expected) || s.executionIdentity.OwnerRevision == ^uint64(0) {
 		e.mu.Unlock()
 		return fmt.Errorf("engine: stale owner revision")
 	}
-	s.executionIdentity.OwnerRevision = next
+	s.executionIdentity.OwnerRevision++
 	if s.codexExecution != nil {
 		s.codexExecution.Denied = "owner_input"
+		if len(s.codexExecution.Children) > 0 || len(s.codexExecution.Stimuli) > 0 || len(s.codexExecution.Items) > 0 {
+			s.codexExecution.UnknownCustody = true
+		}
 	}
 	err := e.persistExecutionLocked(id, s)
 	e.mu.Unlock()

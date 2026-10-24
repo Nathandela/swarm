@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/coder/websocket"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,7 +67,11 @@ type codexExecutionRig struct {
 // metadata proof; this fixture does not claim native provider qualification.
 func newCodexExecutionRig(t *testing.T, conversation string, fresh bool) *codexExecutionRig {
 	t.Helper()
-	root, err := os.MkdirTemp("/private/tmp", "swce-")
+	tempRoot := "/tmp"
+	if runtime.GOOS == "darwin" {
+		tempRoot = "/private/tmp"
+	}
+	root, err := os.MkdirTemp(tempRoot, "swce-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +83,25 @@ func newCodexExecutionRig(t *testing.T, conversation string, fresh bool) *codexE
 	const local = "native"
 	instance := "owned-instance"
 	executable := filepath.Join(root, "codex-fixture")
-	if err = os.WriteFile(executable, []byte("synthetic native executable metadata"), 0700); err != nil {
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = input.Close() }()
+	output, err := os.OpenFile(executable, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(output, input)
+	closeErr := output.Close()
+	if copyErr != nil || closeErr != nil {
+		t.Fatalf("copy exact native fixture image: %v %v", copyErr, closeErr)
+	}
+	if err = os.Chmod(executable, 0700); err != nil {
 		t.Fatal(err)
 	}
 	fingerprint, err := persist.CLIFingerprint(executable)
@@ -88,14 +112,27 @@ func newCodexExecutionRig(t *testing.T, conversation string, fresh bool) *codexE
 	if err = os.MkdirAll(filepath.Dir(nativeSocket), 0700); err != nil {
 		t.Fatal(err)
 	}
-	native := exec.Command(os.Args[0], "-test.run=^TestCodexExecutionOwnedEndpointProcess$")
+	native := exec.Command(executable, "-test.run=^TestCodexExecutionOwnedEndpointProcess$")
 	native.Env = append(os.Environ(), "SWARM_EXECUTION_ENDPOINT_FIXTURE="+nativeSocket)
 	native.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var childOutput cappedCLIOutput
+	native.Stdout, native.Stderr = &childOutput, &childOutput
 	if err = native.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = native.Process.Kill(); _ = native.Wait() })
-	waitBackendIngress(t, func() bool { _, e := os.Stat(nativeSocket); return e == nil })
+	stopNative := sync.OnceFunc(func() { _ = native.Process.Kill(); _ = native.Wait() })
+	t.Cleanup(stopNative)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(nativeSocket); err == nil {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			stopNative()
+			t.Fatalf("copied native fixture socket startup exceeded 5s: %s", childOutput.data)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	start, err := procstart.StartTime(os.Getpid())
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +177,11 @@ func newCodexExecutionRig(t *testing.T, conversation string, fresh bool) *codexE
 		t.Fatal(err)
 	}
 	r := &codexExecutionRig{store: store}
-	d := &Daemon{core: core, stateDir: root, executionStore: store, eng: engine.New(engine.Config{StoreExecution: r.saveExecution})}
+	d := &Daemon{core: core, stateDir: root, executionStore: store, eng: engine.New(engine.Config{StoreExecution: r.saveExecution, Emit: func(id string, state status.Status) {
+		if err := core.SetStatus(id, state); err != nil {
+			t.Errorf("native status publication: %v", err)
+		}
+	}})}
 	d.capStore.instances = map[string]string{local: instance}
 	d.setAdapterForTest(func(string) (adapter.Adapter, bool) { return codex.New(), true })
 	if current, ok := core.Get(local); !ok || current.Status.Process != status.ProcessRunning {
@@ -339,7 +380,7 @@ func TestCodexExecutionBirthProofSeparatesResumeAndRejoin(t *testing.T) {
 }
 
 func TestCodexExecutionProductionFencesForeignLossRetirementAndNativeIdentity(t *testing.T) {
-	for _, scenario := range []string{"foreign-terminal", "unknown-collab", "gap", "retired", "metadata-start", "metadata-permissions", "cli-changed", "instance-changed"} {
+	for _, scenario := range []string{"foreign-terminal", "unknown-collab", "gap", "retired", "metadata-start", "metadata-permissions", "instance-changed"} {
 		t.Run(scenario, func(t *testing.T) {
 			r := newCodexExecutionRig(t, resumeIdentityCodexID, true)
 			frames := r.quotaTrace(t, (scenario == "foreign-terminal" || scenario == "unknown-collab"))
@@ -372,10 +413,6 @@ func TestCodexExecutionProductionFencesForeignLossRetirementAndNativeIdentity(t 
 				if err := os.Chmod(filepath.Join(r.d.stateDir, r.local, shim.BackendFile), 0644); err != nil {
 					t.Fatal(err)
 				}
-			case "cli-changed":
-				if err := os.WriteFile(r.meta.CLIIdentity.Path, []byte("changed installation"), 0700); err != nil {
-					t.Fatal(err)
-				}
 			case "instance-changed":
 				r.d.capStore.mu.Lock()
 				r.d.capStore.instances[r.local] = "replacement"
@@ -385,6 +422,26 @@ func TestCodexExecutionProductionFencesForeignLossRetirementAndNativeIdentity(t 
 				t.Fatalf("%s used invalid source proof: %+v", scenario, candidate)
 			}
 		})
+	}
+}
+
+func TestCodexExecutionInstallerReplacementUsesLoadedImageOnLinux(t *testing.T) {
+	r := newCodexExecutionRig(t, resumeIdentityCodexID, true)
+	r.quotaTrace(t, false)
+	before, ok := r.d.codexQuotaCandidate(r.local)
+	if !ok {
+		t.Fatal("initial owned native image did not qualify")
+	}
+	path := r.meta.CLIIdentity.Path
+	if err := os.WriteFile(path+"-next", []byte("changed installation"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+"-next", path); err != nil {
+		t.Fatal(err)
+	}
+	after, ok := r.d.codexQuotaCandidate(r.local)
+	if ok != (runtime.GOOS == "linux") || ok && after != before {
+		t.Fatalf("installer replacement changed qualified loaded-image ownership: eligible=%v candidate=%+v", ok, after)
 	}
 }
 
@@ -537,7 +594,7 @@ func TestCodexExecutionDialCapturesBeforeInitializeAndDistinguishesRejoin(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			r.feed = feed
 			if !r.d.registerBackendFeedForInstance(r.local, r.instance, resumeIdentityCodexID, conn, feed) {
 				t.Fatal("dialed feed not registered")
@@ -593,7 +650,7 @@ func TestCodexExecutionOwnedEndpointProcess(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer ws.CloseNow()
+		defer func() { _ = ws.CloseNow() }()
 		var opening struct{ Scenario string }
 		if cfg, e := os.ReadFile(socket + ".config"); e == nil {
 			_ = json.Unmarshal(cfg, &opening)
@@ -735,7 +792,7 @@ func TestCodexExecutionEndpointAndPeerFences(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer ln.Close()
+				defer func() { _ = ln.Close() }()
 				if err = os.Chmod(r.channel.SocketPath, 0600); err != nil {
 					t.Fatal(err)
 				}

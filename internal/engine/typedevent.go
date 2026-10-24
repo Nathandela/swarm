@@ -84,6 +84,7 @@ func (e *Engine) ApplyTypedEvent(sessionID, event string, payload map[string]str
 		s.lastTypedAt = now
 	}
 	s.lastSignalAt = now
+	next = projectCodexCustody(s, next)
 	changed := commit(s, next)
 	persistErr := e.persistExecutionLocked(sessionID, s)
 	e.mu.Unlock()

@@ -711,7 +711,7 @@ func (l *GrantLease) ReplaceCredential(expected uint64, c Credential, jobID stri
 				return ErrIneligible
 			}
 			schemaForHandovers(&r)
-			if selection != nil {
+			if selection != nil && r.SchemaVersion < 4 {
 				r.SchemaVersion = 4
 			}
 			if missingBaseline {

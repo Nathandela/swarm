@@ -83,7 +83,7 @@ func TestCodexOwnershipMigrationRequiresStoppedCapturedJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	if _, err = s.AcquireCodexGrant(a.ID); !errors.Is(err, ErrInUse) {
 		t.Fatalf("overlapping custody: %v", err)
 	}

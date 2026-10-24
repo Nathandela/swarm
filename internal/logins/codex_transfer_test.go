@@ -87,7 +87,7 @@ func TestCodexTransferPreservesBootstrapAndAllLiveMembers(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	if !reflect.DeepEqual(h, snapshot(t, reopened).Handovers[ProviderCodex]) {
 		t.Fatal("launch claim lost across reopen")
 	}
@@ -132,12 +132,14 @@ func TestCodexTransferPreservesBootstrapAndAllLiveMembers(t *testing.T) {
 		t.Fatal(e)
 	}
 }
-func TestCodexTransferRefusesMissingLineageAndCapacityBeforeSelection(t *testing.T) {
+func TestCodexTransferRefusesWrongLineageAndCapacityBeforeSelection(t *testing.T) {
 	s, _, _, op, child := transferFixture(t)
 	c := add(t, s, ProviderCodex, "C", Credential{Auth: grantAuth("u-c", "c", time.Now().Add(time.Hour).Unix())})
 	before := snapshot(t, s)
-	if _, _, e := s.TransferCodexMigration(before.Revision, op.ID, c.ID, []NativeMember{child}, nil); !errors.Is(e, ErrConflict) {
-		t.Fatalf("missing child lineage admitted: %v", e)
+	wrong := child
+	wrong.SessionID = "wrong-child"
+	if _, _, e := s.TransferCodexMigration(before.Revision, op.ID, c.ID, []NativeMember{child}, []BootstrapChild{{SourceID: "source", Native: wrong, Phase: "pending"}}); !errors.Is(e, ErrConflict) {
+		t.Fatalf("wrong child lineage admitted: %v", e)
 	}
 	members := make([]NativeMember, MaxHandoverMembers)
 	for i := range members {
@@ -199,7 +201,7 @@ func TestCodexTransferSchemaFenceAmbiguityReopenAndWriteFailure(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	saved := snapshot(t, reopened).Handovers[ProviderCodex]
 	if !reflect.DeepEqual(h, saved) {
 		t.Fatal("launch claim lost across reopen")
@@ -317,7 +319,7 @@ func TestCodexResumingMigrationCannotUseUnchangedSameTargetException(t *testing.
 	}
 }
 
-func TestCodexCommittedSameTargetTransferStillRequiresRecordedChildBindings(t *testing.T) {
+func TestCodexCommittedSameTargetTransferRetainsUnprovedRecordedChild(t *testing.T) {
 	s, _, b, op := committedTransferFixture(t)
 	// A persisted child is never erased merely because the outer phase says committed.
 	op.Sessions[0].ChildID = "late"
@@ -325,12 +327,16 @@ func TestCodexCommittedSameTargetTransferStillRequiresRecordedChildBindings(t *t
 	if e := s.SaveSwitch(op); e != nil {
 		t.Fatal(e)
 	}
-	before := snapshot(t, s)
-	if _, _, e := s.TransferCodexMigration(before.Revision, op.ID, b.ID, nil, nil); !errors.Is(e, ErrConflict) {
-		t.Fatalf("committed exception dropped recorded lineage: %v", e)
+	r, h, e := s.TransferCodexMigration(snapshot(t, s).Revision, op.ID, b.ID, nil, nil)
+	if e != nil {
+		t.Fatal(e)
 	}
-	if !reflect.DeepEqual(before, snapshot(t, s)) {
-		t.Fatal("rejected childless transfer changed old journal")
+	row := h.Bootstrap[0]
+	if r.SchemaVersion != 5 || len(r.Switches) != 0 || row.LegacyChildID != "late" || row.ChildID != "" || row.Phase != "ambiguous" || row.Launch != nil {
+		t.Fatal("committed transfer erased or promoted unproved recorded lineage")
+	}
+	if _, _, e = s.ClaimCodexBootstrapLaunch(r.Revision, h.ID, row.SourceID, strings.Repeat("a", 32)); !errors.Is(e, ErrPending) {
+		t.Fatal("unproved recorded child authorized another launch")
 	}
 }
 

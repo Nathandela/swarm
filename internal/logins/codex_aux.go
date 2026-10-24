@@ -70,7 +70,7 @@ func (l *GrantLease) PrepareAuxiliary(version string) error {
 	if e != nil {
 		return e
 	}
-	defer home.Close()
+	defer func() { _ = home.Close() }()
 	if _, e = home.Lstat(codexAuxFile); e == nil {
 		if e = l.CleanupAuxiliary(); e != nil {
 			return e
@@ -111,7 +111,7 @@ func (l *GrantLease) checkAuxiliary(quota bool) error {
 	if e != nil {
 		return e
 	}
-	defer home.Close()
+	defer func() { _ = home.Close() }()
 	raw, e := readPrivate(home, codexAuxFile, 1024)
 	if e != nil {
 		return e
@@ -202,7 +202,7 @@ func (l *GrantLease) CleanupAuxiliary() error {
 	if e != nil {
 		return e
 	}
-	defer home.Close()
+	defer func() { _ = home.Close() }()
 	for _, root := range codexAuxRoots {
 		if e = home.RemoveAll(root); e != nil {
 			return e

@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
+	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
@@ -77,6 +79,15 @@ func probeCLIIdentity(agentType, executable string, env []string, cwd string) (*
 	if err != nil {
 		return nil, err
 	}
+	var nativeVersion string
+	if agentType == "codex" {
+		if installation, resolveErr := codexnative.Resolve(path); resolveErr == nil {
+			path, nativeVersion = installation.Path, installation.Version
+			env = installation.ApplyEnvironment(env)
+		} else if errors.Is(resolveErr, codexnative.ErrUnsafe) {
+			return nil, resolveErr
+		}
+	}
 	before, err := persist.CLIFingerprint(path)
 	if err != nil {
 		return nil, err
@@ -85,6 +96,9 @@ func probeCLIIdentity(agentType, executable string, env []string, cwd string) (*
 	detection := adapter.Detect(ad, cliVersionProber{path: path, cwd: cwd, env: env, output: &output})
 	if !detection.Found || detection.Version == "" || !detection.InRange {
 		return nil, fmt.Errorf("CLI version unavailable")
+	}
+	if nativeVersion != "" && nativeVersion != detection.Version {
+		return nil, fmt.Errorf("codex native version disagrees with npm installation")
 	}
 	// Adapter parsers accept a dotted substring. Automation requires the entire
 	// version token: never mistake a prerelease/build suffix for a stable release.
@@ -101,8 +115,20 @@ func probeCLIIdentity(agentType, executable string, env []string, cwd string) (*
 		return nil, fmt.Errorf("CLI release version unavailable")
 	}
 	// Retain the selected target, but reject a launcher retarget during the probe.
-	after, err := persist.CLIFingerprint(launcher)
-	if err != nil || before != after {
+	after, err := persist.CLIFingerprint(path)
+	selected := launcher
+	if agentType == "codex" {
+		if installation, resolveErr := codexnative.Resolve(launcher); resolveErr == nil {
+			selected = installation.Path
+			if installation.Version != nativeVersion {
+				return nil, fmt.Errorf("codex installation changed during version probe")
+			}
+		} else if nativeVersion != "" {
+			return nil, fmt.Errorf("codex installation changed during version probe")
+		}
+	}
+	selectedFingerprint, selectedErr := persist.CLIFingerprint(selected)
+	if err != nil || before != after || selectedErr != nil || selectedFingerprint != after {
 		return nil, fmt.Errorf("CLI installation changed during version probe")
 	}
 	return &persist.CLIIdentity{Path: path, Version: detection.Version, Fingerprint: after}, nil

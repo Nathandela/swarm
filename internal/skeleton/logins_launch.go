@@ -73,7 +73,12 @@ func (d *Daemon) prepareLoginLaunch(_ string, spec daemon.LaunchSpec) (daemon.La
 		return spec, logins.ErrIneligible
 	}
 	var err error
-	if spec.LoginSwitchID != "" {
+	if spec.LoginRuntime.ExternalAuth && spec.LoginSwitchID == "" {
+		gate := &d.logins.admission[loginProviderIndex(logins.ProviderCodex)]
+		gate.Lock()
+		_, err = d.logins.store.PrepareCodexExternalBirth(*spec.LoginRuntime, nil)
+		gate.Unlock()
+	} else if spec.LoginSwitchID != "" {
 		err = d.logins.store.ValidateSwitchRestart(spec.LoginSwitchID, spec.LoginSwitchSource, *spec.LoginRuntime)
 	} else {
 		err = d.logins.store.ValidateRuntime(*spec.LoginRuntime)

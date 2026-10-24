@@ -24,7 +24,7 @@ func TestRefreshSocketCleanupKeepsReplacement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer root.Close()
+			defer func() { _ = root.Close() }()
 			anchor, _ := os.Stat(dir)
 			files := &jobFiles{root: root, path: dir, anchor: anchor}
 			path := filepath.Join(dir, "n")
@@ -33,7 +33,7 @@ func TestRefreshSocketCleanupKeepsReplacement(t *testing.T) {
 				t.Fatal(err)
 			}
 			listener.SetUnlinkOnClose(false)
-			defer listener.Close()
+			defer func() { _ = listener.Close() }()
 			if err = os.Chmod(path, 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +78,7 @@ func TestRefreshSocketCaptureRejectsChangedAliasOrParent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer root.Close()
+			defer func() { _ = root.Close() }()
 			anchor, _ := os.Stat(dir)
 			files := &jobFiles{root: root, path: dir, anchor: anchor}
 			path := filepath.Join(dir, "n")

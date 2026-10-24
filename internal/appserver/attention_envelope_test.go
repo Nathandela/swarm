@@ -46,7 +46,7 @@ func TestAttentionRejectsAmbiguousEnvelopeBeforeCallbacks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			select {
 			case <-closed:
 			case <-time.After(time.Second):

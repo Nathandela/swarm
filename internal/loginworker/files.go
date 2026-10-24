@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
@@ -91,6 +92,15 @@ func validateStart(c Config) error {
 	}
 	if err := ValidateNativePath(c.NativePath); err != nil {
 		return err
+	}
+	if c.Provider == "codex" {
+		installation, err := codexnative.Resolve(c.NativePath)
+		if errors.Is(err, codexnative.ErrUnsafe) {
+			return err
+		}
+		if err == nil && (installation.Path != c.NativePath || installation.Version != "" && installation.Version != c.NativeVersion) {
+			return ErrUnsafe
+		}
 	}
 	if c.NativeFingerprint == "" || !persist.MatchCLIFingerprint(c.NativePath, c.NativeFingerprint) {
 		return ErrUnsafe

@@ -131,7 +131,7 @@ func externalAuthRuntimeFixture(t *testing.T, bootstrap ...bool) (*logins.Runtim
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	claims, _ := json.Marshal(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "https://api.openai.com/auth": map[string]string{"chatgpt_user_id": "fixture-user", "chatgpt_account_id": "fixture-account"}})
 	jwt := "e30." + base64.RawURLEncoding.EncodeToString(claims) + ".signature"
 	auth, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]string{"account_id": "fixture-account", "access_token": jwt, "id_token": jwt, "refresh_token": "synthetic-refresh"}})
@@ -253,7 +253,7 @@ func TestExternalBirthHistoricalRuntimeResolvesAfterRetarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	claims, _ := json.Marshal(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "https://api.openai.com/auth": map[string]string{"chatgpt_user_id": "next-user", "chatgpt_account_id": "next-account"}})
 	jwt := "e30." + base64.RawURLEncoding.EncodeToString(claims) + ".signature"
 	auth, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]string{"account_id": "next-account", "access_token": jwt, "id_token": jwt, "refresh_token": "synthetic-refresh"}})
@@ -313,7 +313,7 @@ func TestExternalBirthReservationRejectionPreservesCustody(t *testing.T) {
 				h := r.Handovers[logins.ProviderCodex]
 				n := logins.NativeMember{SessionID: cfg.SessionID, NativeIncarnation: "101:201", NativePID: 101, NativeStartTime: 201, ConversationID: meta.ConversationID}
 				_, _, e = s.RecordCodexBootstrapChild(r.Revision, h.ID, meta.ResumedFrom, cfg.InputEmbargo, n)
-				s.Close()
+				_ = s.Close()
 				if e != nil {
 					t.Fatal(e)
 				}

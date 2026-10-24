@@ -292,13 +292,13 @@ func (s *Store) executionCapacity() (*executionCapacity, error) {
 			capacity.err = e
 			return
 		}
-		defer root.Close()
+		defer func() { _ = root.Close() }()
 		dir, e := root.Open(".")
 		if e != nil {
 			capacity.err = e
 			return
 		}
-		defer dir.Close()
+		defer func() { _ = dir.Close() }()
 		for {
 			entries, readErr := dir.ReadDir(128)
 			for _, entry := range entries {
@@ -456,7 +456,7 @@ func executionRoot(path string) (*os.Root, error) {
 	opened, err := root.Stat(".")
 	current, currentErr := os.Lstat(path)
 	if err != nil || currentErr != nil || !os.SameFile(before, opened) || !os.SameFile(current, opened) {
-		root.Close()
+		_ = root.Close()
 		return nil, fmt.Errorf("persist: execution directory replaced")
 	}
 	return root, nil
@@ -477,7 +477,7 @@ func executionSession(root *os.Root, id string) (*os.Root, error) {
 	opened, err := session.Stat(".")
 	current, currentErr := root.Lstat(id)
 	if err != nil || currentErr != nil || !os.SameFile(before, opened) || !os.SameFile(current, opened) {
-		session.Close()
+		_ = session.Close()
 		return nil, fmt.Errorf("persist: execution session replaced")
 	}
 	return session, nil
@@ -488,7 +488,7 @@ func syncExecutionDir(root *os.Root) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return f.Sync()
 }
 
@@ -514,7 +514,7 @@ func (s *Store) replaceExecution(id string, data []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	if err = root.Mkdir(id, 0700); err == nil {
 		if err = executionSyncDir(root); err != nil {
 			return false, err
@@ -526,7 +526,7 @@ func (s *Store) replaceExecution(id string, data []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	if err = checkExecutionFile(session, "execution.json"); err != nil {
 		return false, err
 	}
@@ -541,10 +541,10 @@ func (s *Store) replaceExecution(id string, data []byte) (bool, error) {
 	}
 	info, err := f.Stat()
 	if err != nil || !executionPrivate(info, false) {
-		f.Close()
+		_ = f.Close()
 		return false, fmt.Errorf("persist: unsafe execution scratch")
 	}
-	defer session.Remove(scratch)
+	defer func() { _ = session.Remove(scratch) }()
 	if err = f.Truncate(0); err == nil {
 		var n int
 		n, err = writeTemp(f, data)
@@ -580,12 +580,12 @@ func (s *Store) LoadExecution(id string) (ExecutionRecord, error) {
 	if err != nil {
 		return r, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	session, err := executionSession(root, id)
 	if err != nil {
 		return r, err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	before, err := session.Lstat("execution.json")
 	if err != nil {
 		return r, err
@@ -597,7 +597,7 @@ func (s *Store) LoadExecution(id string) (ExecutionRecord, error) {
 	if err != nil {
 		return r, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil || !executionPrivate(info, false) || !os.SameFile(before, info) {
 		return r, fmt.Errorf("persist: execution file replaced")
@@ -741,12 +741,12 @@ func (s *Store) RetireExecution(id, incarnation string) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	session, err := executionSession(root, id)
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	if _, err = session.Lstat("execution.pending"); !os.IsNotExist(err) {
 		return fmt.Errorf("persist: unresolved execution scratch")
 	}

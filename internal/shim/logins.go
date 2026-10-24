@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 )
@@ -11,6 +12,11 @@ import (
 var errLoginResolution = errors.New("shim: provider login runtime is unavailable or changing")
 
 func resolveLoginEnvironment(cfg *Config) error {
+	if cfg.NativeProvider == logins.ProviderCodex {
+		if err := resolveCodexManagementEnvironment(cfg); err != nil {
+			return err
+		}
+	}
 	if cfg.LoginRuntime == nil {
 		if cfg.LoginStateRoot != "" || cfg.LoginSwitchID != "" || cfg.LoginSwitchSource != "" {
 			return errLoginResolution
@@ -81,4 +87,32 @@ func resolveLoginEnvironment(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+func resolveCodexManagementEnvironment(cfg *Config) error {
+	if len(cfg.Argv) == 0 {
+		return errLoginResolution
+	}
+	apply := func(path string, env []string) ([]string, error) {
+		installation, err := codexnative.Resolve(path)
+		if cfg.LoginRuntime != nil && errors.Is(err, codexnative.ErrUnsafe) {
+			return nil, errLoginResolution
+		}
+		if cfg.LoginRuntime != nil && cfg.LoginRuntime.ExternalAuth && (err != nil || installation.Path != path || cfg.CLIIdentity != nil && installation.Version != "" && installation.Version != cfg.CLIIdentity.Version) {
+			return nil, errLoginResolution
+		}
+		if err != nil {
+			installation = codexnative.Installation{}
+		}
+		return installation.ApplyEnvironment(env), nil
+	}
+	var err error
+	cfg.Env, err = apply(cfg.Argv[0], cfg.Env)
+	if err != nil {
+		return err
+	}
+	if cfg.Backend != nil {
+		cfg.Backend.Env, err = apply(cfg.Backend.Program, cfg.Backend.Env)
+	}
+	return err
 }

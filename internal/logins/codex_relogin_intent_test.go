@@ -27,7 +27,7 @@ func TestCodexUnavailableReloginBindsOnlyExplicitSameWorkspace(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	if _, _, e = lease.ReplaceCredential(snapshot(t, s).Revision, Credential{Auth: grantAuth("u", "foreign", time.Now().Add(time.Hour).Unix())}, job); !errors.Is(e, ErrIdentityChanged) {
 		t.Fatalf("foreign workspace bound first owner: %v", e)
 	}
@@ -127,7 +127,7 @@ func TestCodexReloginDuplicateJobNeverReplaysAfterNativeRenewal(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	stale := Credential{Auth: grantAuth("u", "missing", time.Now().Add(time.Hour).Unix())}
 	if _, _, e = lease.ReplaceCredential(snapshot(t, s).Revision, stale, job); e != nil {
 		t.Fatal(e)
@@ -278,7 +278,7 @@ func TestCodexFirstOwnerIntentFencesSchemaBeforeAuthorityChange(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	s.writeOps.rename = func(old, new string) error {
 		if new == filepath.Join("saved", missing.ID, grantReloginFile) {
 			return errors.New("before intent")

@@ -27,7 +27,7 @@ func validateCodexExternalReservation(cfg Config) error {
 	if err != nil {
 		return errLoginResolution
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	info, err := root.Lstat(cfg.SessionID)
 	stat, ok := infoSys(info)
 	if err != nil || !ok || !info.IsDir() || info.Mode().Perm()&0077 != 0 || stat.Uid != uint32(os.Getuid()) {
@@ -37,7 +37,7 @@ func validateCodexExternalReservation(cfg Config) error {
 	if err != nil {
 		return errLoginResolution
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err = f.Stat()
 	stat, ok = infoSys(info)
 	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || stat.Uid != uint32(os.Getuid()) || stat.Nlink != 1 || info.Size() > 1<<20 {
@@ -75,7 +75,7 @@ func validateCodexExternalReservation(cfg Config) error {
 		if err != nil {
 			return errLoginResolution
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 		if s.ValidateCodexBootstrapBirth(cfg.InputEmbargo, meta.ResumedFrom, meta.ConversationID, meta.ID) != nil {
 			return errLoginResolution
 		}

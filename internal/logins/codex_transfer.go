@@ -20,12 +20,14 @@ type BootstrapLaunch struct {
 	DestinationCredentialRevision uint64 `json:"destination_credential_revision"`
 }
 type BootstrapObligation struct {
-	SourceID         string           `json:"source_id"`
-	ConversationID   string           `json:"conversation_id"`
-	ChildID          string           `json:"child_id,omitempty"`
-	ChildIncarnation string           `json:"child_incarnation,omitempty"`
-	Phase            string           `json:"phase"`
-	Launch           *BootstrapLaunch `json:"launch,omitempty"`
+	OwnerDeleteAuthorized bool             `json:"owner_delete_authorized,omitempty"`
+	SourceID              string           `json:"source_id"`
+	ConversationID        string           `json:"conversation_id"`
+	ChildID               string           `json:"child_id,omitempty"`
+	LegacyChildID         string           `json:"legacy_child_id,omitempty"`
+	ChildIncarnation      string           `json:"child_incarnation,omitempty"`
+	Phase                 string           `json:"phase"`
+	Launch                *BootstrapLaunch `json:"launch,omitempty"`
 }
 
 func bootstrapSettled(rows []BootstrapObligation) bool {
@@ -54,6 +56,7 @@ func bootstrapCapacity(h Handover) error {
 	future.Members = slices.Clone(h.Members)
 	future.Bootstrap = slices.Clone(h.Bootstrap)
 	for i, b := range future.Bootstrap {
+		future.Bootstrap[i].OwnerDeleteAuthorized = true
 		if b.ChildID != "" || b.Phase == "ready" || b.Phase == "failed" || b.Phase == "cancelled" {
 			continue
 		}
@@ -93,11 +96,21 @@ func validBootstrap(r Registry, h Handover) bool {
 	seen := map[string]bool{}
 	children := map[[2]string]bool{}
 	launches := map[string]bool{}
+	hints := map[string]bool{}
 	for _, b := range h.Bootstrap {
 		if !boundedNativeID(b.SourceID, false) || !boundedNativeID(b.ConversationID, false) || seen[b.SourceID] {
 			return false
 		}
 		seen[b.SourceID] = true
+		if b.OwnerDeleteAuthorized && (r.SchemaVersion < 6 || b.ChildID == "" || b.Phase != "ready" && b.Phase != "failed" && b.Phase != "cancelled") {
+			return false
+		}
+		if b.LegacyChildID != "" {
+			if r.SchemaVersion < 5 || !boundedNativeID(b.LegacyChildID, false) || b.LegacyChildID == b.SourceID || hints[b.LegacyChildID] || b.ChildID != "" || b.ChildIncarnation != "" || b.Launch != nil || b.Phase != "ambiguous" {
+				return false
+			}
+			hints[b.LegacyChildID] = true
+		}
 		switch b.Phase {
 		case "pending", "ambiguous", "launching", "bound", "ready", "failed", "cancelled":
 		default:
@@ -127,6 +140,9 @@ func validBootstrap(r Registry, h Handover) bool {
 		found := false
 		for _, m := range h.Members {
 			if m.Native.SessionID == b.ChildID && m.Native.NativeIncarnation == b.ChildIncarnation && m.Native.ConversationID == b.ConversationID {
+				if b.OwnerDeleteAuthorized && m.Phase != "retired" {
+					return false
+				}
 				found = true
 			}
 		}
@@ -197,14 +213,21 @@ func (s *Store) TransferCodexMigration(expected uint64, switchID, toID string, m
 			bindings[c.SourceID] = c
 		}
 		for _, row := range op.Sessions {
-			b := BootstrapObligation{SourceID: row.SourceID, ConversationID: row.ConversationID, ChildID: row.ChildID, Phase: "pending"}
+			b := BootstrapObligation{SourceID: row.SourceID, ConversationID: row.ConversationID, Phase: "pending"}
 			switch row.Phase {
 			case "ready", "failed", "cancelled":
 				b.Phase = row.Phase
 			}
 			c, recovered := bindings[row.SourceID]
-			if row.ChildID != "" || recovered {
-				if !recovered || row.ChildID != "" && c.Native.SessionID != row.ChildID || c.Native.ConversationID != row.ConversationID || !validNativeMember(c.Native) {
+			if row.ChildID != "" && !recovered {
+				// Preserve the journal's name without promoting it to native proof.
+				b.LegacyChildID = row.ChildID
+				b.Phase = "ambiguous"
+				if r.SchemaVersion < 5 {
+					r.SchemaVersion = 5
+				}
+			} else if recovered {
+				if row.ChildID != "" && c.Native.SessionID != row.ChildID || c.Native.ConversationID != row.ConversationID || !validNativeMember(c.Native) {
 					return ErrConflict
 				}
 				b.ChildID = c.Native.SessionID
@@ -218,16 +241,17 @@ func (s *Store) TransferCodexMigration(expected uint64, switchID, toID string, m
 						present = true
 					}
 				}
-				if c.Phase == "pending" {
+				switch c.Phase {
+				case "pending":
 					if !present {
 						return ErrConflict
 					}
-				} else if c.Phase == "retired" {
+				case "retired":
 					if present {
 						return ErrConflict
 					}
 					out.Members = append(out.Members, HandoverMember{Native: c.Native, Phase: "retired"})
-				} else {
+				default:
 					return ErrIneligible
 				}
 				delete(bindings, row.SourceID)
@@ -251,7 +275,9 @@ func (s *Store) TransferCodexMigration(expected uint64, switchID, toID string, m
 		}
 		out.Phase = handoverPhase(out)
 		schemaForHandovers(r)
-		r.SchemaVersion = 4
+		if r.SchemaVersion < 4 {
+			r.SchemaVersion = 4
+		}
 		p.ActiveID = toID
 		p.Epoch = out.Epoch
 		p.DesiredCredentialRevision = destination.CredentialRevision
@@ -287,6 +313,9 @@ func (s *Store) bootstrapMutation(expected uint64, id, source string, change fun
 		}
 		if e := change(&h, &h.Bootstrap[index]); e != nil {
 			return e
+		}
+		if h.Bootstrap[index].OwnerDeleteAuthorized && r.SchemaVersion < 6 {
+			r.SchemaVersion = 6
 		}
 		if e := bootstrapCapacity(h); e != nil {
 			return e
@@ -333,6 +362,9 @@ func (s *Store) ClaimCodexBootstrapLaunch(expected uint64, id, source, launchID 
 // Birth under an old claim never proves adoption of the current desired account.
 func (s *Store) RecordCodexBootstrapChild(expected uint64, id, source, launchID string, n NativeMember) (Registry, Handover, error) {
 	return s.bootstrapMutation(expected, id, source, func(h *Handover, b *BootstrapObligation) error {
+		if b.LegacyChildID != "" && n.SessionID != b.LegacyChildID {
+			return ErrConflict
+		}
 		if !validNativeMember(n) || n.ConversationID != b.ConversationID {
 			return ErrConflict
 		}
@@ -362,6 +394,7 @@ func (s *Store) RecordCodexBootstrapChild(expected uint64, id, source, launchID 
 				present = true
 			}
 		}
+		b.LegacyChildID = ""
 		b.ChildID = n.SessionID
 		b.ChildIncarnation = n.NativeIncarnation
 		b.Phase = "bound"
@@ -432,4 +465,25 @@ func (s *Store) ValidateCodexBootstrapBirth(launchID, source, conversation, chil
 		}
 	}
 	return ErrConflict
+}
+
+// AuthorizeCodexBootstrapDelete records the caller's verified stopped-writer
+// containment proof before any session payload can be removed. Retirement or a
+// settled outcome alone does not grant this authority.
+func (s *Store) AuthorizeCodexBootstrapDelete(expected uint64, id, source, launchID string, n NativeMember) (Registry, Handover, error) {
+	return s.bootstrapMutation(expected, id, source, func(h *Handover, b *BootstrapObligation) error {
+		if b.ChildID == "" || b.ChildID != n.SessionID || b.ChildIncarnation != n.NativeIncarnation || b.ConversationID != n.ConversationID || b.Launch != nil && b.Launch.ID != launchID || b.Launch == nil && launchID != "" {
+			return ErrConflict
+		}
+		if b.Phase != "ready" && b.Phase != "failed" && b.Phase != "cancelled" {
+			return ErrPending
+		}
+		for _, member := range h.Members {
+			if member.Native == n && member.Phase == "retired" {
+				b.OwnerDeleteAuthorized = true
+				return nil
+			}
+		}
+		return ErrPending
+	})
 }

@@ -30,7 +30,7 @@ func TestUnixEndpointPinsPrivateSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	pid, uid, ok := c.PeerProcess()
 	if !ok || pid != os.Getpid() || uid != uint32(os.Getuid()) {
 		t.Fatalf("wrong kernel peer %d/%d/%v", pid, uid, ok)
@@ -54,7 +54,7 @@ func TestUnixEndpointRejectsAncestorAndArbitrarySymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(root)
+	defer func() { _ = os.RemoveAll(root) }()
 	private := filepath.Join(root, "private")
 	if err = os.Mkdir(private, 0700); err != nil {
 		t.Fatal(err)
@@ -64,8 +64,10 @@ func TestUnixEndpointRejectsAncestorAndArbitrarySymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
-	os.Chmod(socket, 0600)
+	defer func() { _ = ln.Close() }()
+	if err = os.Chmod(socket, 0600); err != nil {
+		t.Fatal(err)
+	}
 	alias := filepath.Join(root, "alias")
 	if err = os.Symlink(socket, alias); err != nil {
 		t.Fatal(err)
@@ -92,7 +94,7 @@ func TestUnixEndpointAcceptsOnlyPinnedCodexAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(root)
+	defer func() { _ = os.RemoveAll(root) }()
 	alias := filepath.Join(root, "n")
 	tmp, err := filepath.EvalSymlinks("/tmp")
 	if err != nil {
@@ -110,7 +112,7 @@ func TestUnixEndpointAcceptsOnlyPinnedCodexAlias(t *testing.T) {
 	if unixListener, ok := ln.(*net.UnixListener); ok {
 		unixListener.SetUnlinkOnClose(false)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	owned, err := os.Lstat(target)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +123,9 @@ func TestUnixEndpointAcceptsOnlyPinnedCodexAlias(t *testing.T) {
 			_ = os.Remove(target)
 		}
 	}()
-	os.Chmod(target, 0600)
+	if err = os.Chmod(target, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err = os.Symlink(target, alias); err != nil {
 		t.Fatal(err)
 	}
@@ -129,8 +133,12 @@ func TestUnixEndpointAcceptsOnlyPinnedCodexAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.Remove(alias)
-	os.Symlink(target, alias)
+	if err = os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
 	if pin.Unchanged() {
 		t.Fatal("replaced alias retained authority")
 	}

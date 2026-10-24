@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/appserver"
+	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/processcontain"
@@ -66,6 +67,10 @@ func validateRefresh(c RefreshConfig) error {
 	if e := ValidateNativePath(c.NativePath); e != nil {
 		return e
 	}
+	installation, resolveErr := codexnative.Resolve(c.NativePath)
+	if resolveErr != nil || installation.Path != c.NativePath || installation.Version != "" && installation.Version != c.NativeVersion {
+		return ErrUnsupported
+	}
 	if c.NativeFingerprint == "" || !persist.MatchCLIFingerprint(c.NativePath, c.NativeFingerprint) {
 		return ErrStale
 	}
@@ -83,7 +88,7 @@ func openRefreshJob(stateRoot, id string, create bool) (*jobFiles, error) {
 	if e != nil {
 		return nil, e
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	if create {
 		if e = root.Mkdir("refresh", 0700); e != nil && !errors.Is(e, os.ErrExist) {
 			return nil, e
@@ -96,7 +101,7 @@ func openRefreshJob(stateRoot, id string, create bool) (*jobFiles, error) {
 	if e != nil {
 		return nil, e
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	if create {
 		if e = parent.Mkdir(id, 0700); e != nil && !errors.Is(e, os.ErrExist) {
 			return nil, e
@@ -179,7 +184,7 @@ func StartCodexRefresh(ctx context.Context, executable string, c RefreshConfig) 
 	if e != nil {
 		return RefreshRef{}, e
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if old, e := readRefreshProgress(f); e == nil && old.Worker.Alive() {
 		return RefreshRef{}, ErrUnavailable
 	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
@@ -261,7 +266,7 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 	if e != nil {
 		return e
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	raw, e := readPrivate(f.root, refreshConfigFile, 16<<10)
 	if e != nil {
 		return e
@@ -300,7 +305,7 @@ func RunCodexRefreshConfig(ctx context.Context, path string) error {
 	if e != nil {
 		return e
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	lease, e := s.AcquireCodexGrant(c.LoginID)
 	if e == nil {
 		e = refreshCodexNative(ctx, c, f, lease, processcontain.EnvironmentWriters, func(native ProcessIdentity) error { p.Native = native; return f.write(refreshProgressFile, p) })
@@ -416,6 +421,11 @@ func refreshCodexNative(ctx context.Context, c RefreshConfig, f *jobFiles, grant
 	if e != nil {
 		return e
 	}
+	installation, resolveErr := codexnative.Resolve(c.NativePath)
+	if resolveErr != nil || installation.Path != c.NativePath || installation.Version != "" && installation.Version != c.NativeVersion {
+		return ErrUnsupported
+	}
+	env = installation.ApplyEnvironment(env)
 	// shortcut: 100 ms polling permits temporary overshoot, use a filesystem quota when a hard byte ceiling is required.
 	monitorCtx, monitorCancel := context.WithCancel(ctx)
 	defer monitorCancel()
@@ -447,7 +457,7 @@ func refreshCodexNative(ctx context.Context, c RefreshConfig, f *jobFiles, grant
 			}
 		}
 	}()
-	if e = refreshVersion(monitorCtx, c, f, env, grant, publish); e != nil {
+	if e = refreshVersion(monitorCtx, c, f, env, (*nativeChild).stop, publish); e != nil {
 		return nativeFailure("refresh_version_probe_failed")
 	}
 	socket := filepath.Join(f.path, "n")
@@ -494,7 +504,7 @@ func refreshCodexNative(ctx context.Context, c RefreshConfig, f *jobFiles, grant
 	if e != nil {
 		return nativeFailure("refresh_transport_failed")
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	var initialized json.RawMessage
 	if e = client.Call(monitorCtx, "initialize", map[string]any{"clientInfo": map[string]string{"name": "swarm-refresh", "version": "1"}}, &initialized); e != nil {
 		return nativeFailure("refresh_initialize_failed")
@@ -543,7 +553,7 @@ func drainRefreshWriters(home string, inventory func([]string, []string) ([]proc
 	}
 }
 
-func refreshVersion(ctx context.Context, c RefreshConfig, f *jobFiles, env []string, grant refreshGrant, publish func(ProcessIdentity) error) error {
+func refreshVersion(ctx context.Context, c RefreshConfig, f *jobFiles, env []string, stop func(*nativeChild) error, publish func(ProcessIdentity) error) (err error) {
 	versionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.Command(c.NativePath, "--version")
@@ -564,7 +574,11 @@ func refreshVersion(ctx context.Context, c RefreshConfig, f *jobFiles, env []str
 		}
 		return e
 	}
-	defer child.stop()
+	defer func() {
+		if stop(child) != nil {
+			err = nativeFailure("refresh_version_stop_failed")
+		}
+	}()
 	if e = publish(child.identity); e != nil {
 		return e
 	}

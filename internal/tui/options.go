@@ -315,7 +315,7 @@ func (o optionsModel) view(width int) string {
 	if !o.contextGuard.available {
 		return b.String() + "\n" + logins
 	}
-	b.WriteString("\n" + styleDim.Render("Context guard: Codex only · compacts when quiet and unattended, then continues the task") + "\n")
+	b.WriteString("\n" + styleDim.Render("Context guard: Codex only · compacts when quiet and unattended") + "\n")
 	if o.contextGuard.loading {
 		b.WriteString(styleDim.Render("  loading context guard settings…") + "\n")
 		return b.String() + "\n" + logins

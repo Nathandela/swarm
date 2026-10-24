@@ -78,6 +78,8 @@ type tapManager struct {
 	// for the RE-ATTACH path (see authorAttachedSessionCapabilities below); nil in the
 	// unit tests that build a tapManager directly, and a no-op then.
 	onSubscribe func(id string)
+	// beforeWrite durably fences owner input before the shared upstream sees bytes.
+	beforeWrite func(id string) error
 
 	parserFaults  atomic.Uint64
 	parserLastLog atomic.Int64
@@ -426,6 +428,11 @@ func (s *tapSub) Input(p []byte) error {
 	if s.mode != readWrite {
 		return nil
 	}
+	if len(p) > 0 && s.t.mgr.beforeWrite != nil {
+		if err := s.t.mgr.beforeWrite(s.t.id); err != nil {
+			return err
+		}
+	}
 	return s.t.up.Input(p)
 }
 
@@ -445,6 +452,11 @@ func (s *tapSub) Submit(text string) error {
 	if !ok {
 		return protocol.ErrSubmitUnsupported
 	}
+	if s.t.mgr.beforeWrite != nil {
+		if err := s.t.mgr.beforeWrite(s.t.id); err != nil {
+			return err
+		}
+	}
 	return sm.Submit(text)
 }
 
@@ -460,6 +472,11 @@ func (s *tapSub) SupportsMessageSubmit() bool {
 func (s *tapSub) ControlKeys(p []byte) error {
 	if s.mode != readWrite {
 		return nil
+	}
+	if len(p) > 0 && s.t.mgr.beforeWrite != nil {
+		if err := s.t.mgr.beforeWrite(s.t.id); err != nil {
+			return err
+		}
 	}
 	if cw, ok := s.t.up.(protocol.ControlInputWriter); ok {
 		if err := cw.ControlInput(p); !errors.Is(err, protocol.ErrControlInputUnsupported) {

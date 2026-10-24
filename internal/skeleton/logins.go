@@ -12,6 +12,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
+	"github.com/Nathandela/swarm/internal/codexnative"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/loginworker"
@@ -74,6 +75,13 @@ func (m *loginManager) owns(local string) bool {
 	for _, op := range r.Switches {
 		for _, row := range op.Sessions {
 			if row.SourceID == local || row.ChildID == local {
+				return true
+			}
+		}
+	}
+	if h, ok := r.Handovers[logins.ProviderCodex]; ok {
+		for _, b := range h.Bootstrap {
+			if b.SourceID == local || b.ChildID == local || b.LegacyChildID == local {
 				return true
 			}
 		}
@@ -146,6 +154,9 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 		return logins.Switch{}, logins.ErrConflict
 	}
 	if op, ok := r.Switches[provider]; ok {
+		if provider == logins.ProviderCodex && op.OwnershipMigration && r.Providers[provider].AuthOwnerMode == logins.CodexNativeGrantMode {
+			return m.transferCodexMigration(r, op, toID)
+		}
 		if op.ToID == toID && op.NextID == "" {
 			return op, nil
 		}
@@ -263,13 +274,24 @@ func qualifyCodexOwnershipSources(sources []persist.Meta) (bool, error) {
 			return false, errors.New("login switch: Codex installation unavailable")
 		}
 		if err = loginworker.ValidateNativePath(path); err != nil {
-			return false, errors.New("login switch: unsafe Codex installation")
+			return false, fmt.Errorf("login switch: %w", codexnative.ErrUnsafe)
+		}
+		installation, resolveErr := codexnative.Resolve(path)
+		if resolveErr != nil {
+			if errors.Is(resolveErr, codexnative.ErrUnsafe) {
+				return false, fmt.Errorf("login switch: %w", resolveErr)
+			}
+			qualified = false
+			continue
+		}
+		if err = loginworker.ValidateNativePath(installation.Path); err != nil {
+			return false, fmt.Errorf("login switch: %w", codexnative.ErrUnsafe)
 		}
 		identity, err := probeCLIIdentity(logins.ProviderCodex, path, source.Env, source.Cwd)
 		if err != nil || identity == nil {
 			return false, errors.New("login switch: Codex installation identity unavailable")
 		}
-		if identity.Version != "0.163.0" {
+		if identity.Path != installation.Path || identity.Version != "0.163.0" {
 			qualified = false
 		}
 	}
@@ -312,6 +334,7 @@ func (m *loginManager) step() {
 	if m == nil {
 		return
 	}
+	defer m.wakeCodexBootstrap()
 	m.stepMu.Lock()
 	defer m.stepMu.Unlock()
 	r, err := m.store.Snapshot()
@@ -514,6 +537,16 @@ func (m *loginManager) stepSwitch(op logins.Switch) {
 	case "retry-stopping":
 		m.stepRetryStopping(op)
 	case "committed", "resuming":
+		if op.OwnershipMigration && op.Provider == logins.ProviderCodex {
+			gate := &m.admission[loginProviderIndex(logins.ProviderCodex)]
+			gate.Lock()
+			r, err := m.store.Snapshot()
+			if err == nil {
+				_, _ = m.transferCodexMigration(r, op, op.ToID)
+			}
+			gate.Unlock()
+			return
+		}
 		if m.retryRejectedDestination(op) {
 			return
 		}
@@ -573,7 +606,7 @@ func (m *loginManager) stopClaimedSession(op *logins.Switch, index int, source p
 		if !ok || current.RosterHidden {
 			return errAuthOwnerEnding
 		}
-		if current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || m.d.anyControlled(source.ID) || m.d.contextGuardCompactionInFlight(source.ID) || m.d.composerOutcomeUnresolved(source.ID) || m.d.directInputUnresolved(source.ID) {
+		if current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || m.d.anyControlled(source.ID) || m.d.contextGuardCompactionInFlight(source.ID) || m.d.composerOutcomeUnresolved(source.ID) || m.d.directInputUnresolved(source.ID) || m.d.executionCustodyUnsafe(source.ID) {
 			return fmt.Errorf("login switch: waiting for discussion %q to finish or detach", current.Name)
 		}
 		if current.ConversationID != row.ConversationID {
@@ -694,6 +727,9 @@ func (m *loginManager) ownerEnd(local, action string) error {
 	defer m.stepMu.Unlock()
 	r, err := m.store.Snapshot()
 	if err != nil {
+		return err
+	}
+	if handled, err := m.endCodexBootstrap(r, local, action); handled {
 		return err
 	}
 	target := local
@@ -977,6 +1013,13 @@ func (m *loginManager) restoreClaims() error {
 			}
 			if row.ChildID != "" && row.ChildStopClaimed {
 				m.d.restoreAuthRecycle(row.ChildID)
+			}
+		}
+	}
+	for _, h := range r.Handovers {
+		for _, b := range h.Bootstrap {
+			if b.Phase != "ready" && b.Phase != "failed" && b.Phase != "cancelled" {
+				m.d.restoreAuthRecycle(b.SourceID)
 			}
 		}
 	}

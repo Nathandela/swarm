@@ -292,7 +292,7 @@ func TestExecutionAggregateBytesReserveReplacementHeadroom(t *testing.T) {
 			t.Fatal(e)
 		}
 		e = f.Truncate(MaxExecutionBytes)
-		f.Close()
+		_ = f.Close()
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -466,7 +466,7 @@ func TestExecutionSaveDeleteAdmissionRace(t *testing.T) {
 	if err = <-deleting; err != nil {
 		t.Fatal(err)
 	}
-	_ = <-queued
+	<-queued
 	if _, err = s.LoadExecution("s1"); !os.IsNotExist(err) {
 		t.Fatalf("queued stale save resurrected deleted session: %v", err)
 	}
