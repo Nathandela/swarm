@@ -176,7 +176,7 @@ func TestCaptureConversationID_GrowthTriggersRereadAndCapturesLateID(t *testing.
 }
 
 func TestCaptureConversationID_RejectsExtractorOutputBeforeWriteOncePersistence(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortSocketTestDir(t)
 	const id = "invalidcapture1"
 	store, err := persist.NewStore(dir)
 	if err != nil {

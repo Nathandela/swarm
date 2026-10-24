@@ -52,6 +52,9 @@ import (
 var ErrHookDrainGap = errors.New("skeleton: hook drain observed a spool gap")
 var errHookDrainStopped = errors.New("skeleton: hook drain polling stopped")
 
+// Only proven terminal rejections allow a drain to discard the raw callback.
+var errHookIngestRejected = errors.New("skeleton: hook callback permanently rejected")
+
 // hookDrainTimeout bounds one drain round trip against a session's hook socket.
 const hookDrainTimeout = 5 * time.Second
 
@@ -75,11 +78,11 @@ const hookDrainTimeout = 5 * time.Second
 func (d *Daemon) ingestHookBytes(raw []byte) error {
 	cb, err := hookclient.Decode(bytes.NewReader(raw))
 	if err != nil {
-		return err
+		return errors.Join(errHookIngestRejected, err)
 	}
 	if cb.Event == "SwarmUsage" {
 		if err := d.eng.AuthenticateCallback(cb); err != nil {
-			return err
+			return errors.Join(errHookIngestRejected, err)
 		}
 		if d.logins != nil {
 			d.logins.observeClaudeUsage(cb)
@@ -94,11 +97,11 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 		// mid-batch or PostSmart's ack-less retry), so one line costs nothing and is the
 		// only observable an operator gets when the guard fires.
 		log.Printf("skeleton: hook callback sequence %d for session %s was already ingested; dropped as a redelivery", cb.Sequence, cb.SessionID)
-		return fmt.Errorf("skeleton: hook callback sequence %d already ingested for session %s", cb.Sequence, cb.SessionID)
+		return errors.Join(errHookIngestRejected, fmt.Errorf("skeleton: hook callback sequence %d already ingested for session %s", cb.Sequence, cb.SessionID))
 	}
 	if cb.Event == "SessionStart" {
 		if err := d.eng.AuthenticateCallback(cb); err != nil {
-			return err
+			return errors.Join(errHookIngestRejected, err)
 		}
 		if err := d.admitLoginClaudeIdentity(cb); err != nil {
 			return err
@@ -107,7 +110,7 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 
 	if d.logins != nil && cb.Event == "StopFailure" {
 		if err := d.eng.AuthenticateCallback(cb); err != nil {
-			return err
+			return errors.Join(errHookIngestRejected, err)
 		}
 		if err := d.logins.observeClaudeFailure(cb); err != nil {
 			return err
@@ -129,7 +132,7 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 	}
 	if err := d.eng.HandleCallback(statusCallback); err != nil {
 		log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
-		return err
+		return errors.Join(errHookIngestRejected, err)
 	}
 	d.serveHookInteractions(cb)
 	d.markHookSeqIngested(cb.SessionID, cb.Sequence)
@@ -671,7 +674,7 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor ui
 			break
 		}
 		if ierr := hd.d.ingestHookBytes(rec.Body); ierr != nil {
-			if errors.Is(ierr, errLoginObservationPending) {
+			if !errors.Is(ierr, errHookIngestRejected) {
 				return applied, skipped, ierr
 			}
 			skipped++

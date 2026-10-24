@@ -12,12 +12,215 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/hookclient"
+	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 )
+
+func TestHookIngestPersistenceFailureRetainsPayloadUntilRetry(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		name := "stopped"
+		if live {
+			name = "live"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir, err := os.MkdirTemp("", "swhing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+			const id, token = "managed-claude", "managed-token"
+			const conversation = "4a7a2465-d8f0-4c05-a7a9-c44d8077b22b"
+			store, err := persist.NewStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta := persist.Meta{ID: id, AgentType: "claude", CreatedAt: time.Now(), Status: status.Status{Process: status.ProcessExited}, LoginRuntime: &logins.Runtime{Provider: "claude", Epoch: 1, Identity: strings.Repeat("a", 64), Home: filepath.Join(dir, "home")}}
+			if err := store.Save(meta); err != nil {
+				t.Fatal(err)
+			}
+			core, err := daemon.Open(daemon.Config{StateDir: dir, SocketPath: filepath.Join(dir, "d.sock"), LockPath: filepath.Join(dir, "d.lock"), LogPath: filepath.Join(dir, "d.log"), MaxSessions: 8})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = core.Close() })
+			newDrainer := func() *HookDrainer {
+				d := &Daemon{core: core, stateDir: dir, eng: engine.New(engine.Config{}), adapterFor: func(string) (adapter.Adapter, bool) { return nil, false }}
+				registerTestSession(d, id, token)
+				hd := NewHookDrainer(d, id, filepath.Join(dir, id, "h.sock"), filepath.Join(dir, id, "fold"))
+				hd.SetSpoolPath(filepath.Join(dir, id, shim.HookSpoolFile))
+				return hd
+			}
+			hd := newDrainer()
+			path := filepath.Join(dir, id, shim.HookSpoolFile)
+			var appendCallback func(engine.Callback)
+			var stopProducer func()
+			if live {
+				h := startHookShim(t, filepath.Join(dir, id), id)
+				stopProducer = func() {
+					select {
+					case <-h.done:
+					default:
+						h.kill(t)
+					}
+				}
+				t.Cleanup(stopProducer)
+				appendCallback = func(cb engine.Callback) {
+					if ack, err := hookclient.PostToShim(h.cfg.HookSocketPath, cb); err != nil || !ack {
+						t.Fatalf("accepted hook: ack=%t err=%v", ack, err)
+					}
+				}
+			} else {
+				s, err := shim.OpenHookSpoolProducer(path, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = s.Close() })
+				stopProducer = func() {
+					if err := s.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				appendCallback = func(cb engine.Callback) {
+					raw, err := json.Marshal(cb)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := s.Append(raw); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			drain := func() (int, int, error) {
+				if live {
+					return hd.DrainOnce()
+				}
+				return hd.drainFromSpoolFile()
+			}
+			appendCallback(engine.Callback{SessionID: id, Token: token, Sequence: 1, Event: "PostToolUse"})
+			if a, s, err := drain(); a != 1 || s != 0 || err != nil {
+				t.Fatalf("successful prefix: applied=%d skipped=%d err=%v", a, s, err)
+			}
+			readyPath := filepath.Join(dir, id, "login-native-ready.json")
+			if err := os.Mkdir(readyPath, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			appendCallback(engine.Callback{SessionID: id, Token: token, Sequence: 2, Event: "SessionStart", Payload: map[string]string{"session_id": conversation}, Raw: json.RawMessage(`{"session_id":"` + conversation + `"}`)})
+			appendCallback(engine.Callback{SessionID: id, Token: token, Sequence: 3, Event: "PostToolUse"})
+			if !live {
+				stopProducer()
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				if a, s, err := drain(); a != 0 || s != 0 || err == nil || !strings.Contains(err.Error(), "login-native-ready.json") {
+					t.Errorf("failed admission: applied=%d skipped=%d err=%v", a, s, err)
+				}
+				if got := hd.cursor(); got != 1 {
+					t.Errorf("failed admission advanced cursor to %d", got)
+				}
+				if !live {
+					if err := hd.retireCertifiedPrefix(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				resp, err := shim.ReadHookSpoolFileResponse(path, 1)
+				if err != nil || resp.Gap || len(resp.Records) != 2 || resp.Records[0].Seq != 2 || resp.Records[1].Seq != 3 {
+					t.Errorf("failed admission payloads: records=%v gap=%t err=%v", resp.Records, resp.Gap, err)
+				}
+				data, err := os.ReadFile(hd.cursorPath + ".cert")
+				var cert hookCursorCertificate
+				if err != nil || json.Unmarshal(data, &cert) != nil || cert.Sequence != 1 {
+					t.Errorf("failed admission certificate: %s err=%v", data, err)
+				}
+				hd = newDrainer() // Cursor/certificate and failed raw bytes survive a fresh consumer.
+			}
+			if err := os.Remove(readyPath); err != nil {
+				t.Fatal(err)
+			}
+			if a, s, err := drain(); a != 2 || s != 0 || err != nil {
+				t.Fatalf("restored admission: applied=%d skipped=%d err=%v", a, s, err)
+			}
+			if live {
+				stopProducer()
+			}
+			if err := hd.retireCertifiedPrefix(); err != nil {
+				t.Fatal(err)
+			}
+			if info, err := os.Stat(path); err != nil || info.Size() != 0 {
+				t.Fatalf("successfully retried payload not retired: info=%v err=%v", info, err)
+			}
+		})
+	}
+}
+
+func TestHookTerminalRejectionsRemainDisposable(t *testing.T) {
+	for _, tc := range []struct {
+		name, event, token      string
+		malformed, seen, replay bool
+	}{
+		{name: "malformed", malformed: true},
+		{name: "auth", event: "PostToolUse", token: "foreign"},
+		{name: "session-start-auth", event: "SessionStart", token: "foreign"},
+		{name: "usage-auth", event: "SwarmUsage", token: "foreign"},
+		{name: "stop-failure-auth", event: "StopFailure", token: "foreign"},
+		{name: "duplicate", event: "PostToolUse", token: "token", seen: true},
+		{name: "typed-vocabulary", event: "Stop", token: "token"},
+		{name: "typed-replay", event: "Stop", token: "token", replay: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &Daemon{eng: engine.New(engine.Config{}), logins: &loginManager{}}
+			registerTestSession(d, "rejected", "token")
+			cb := engine.Callback{SessionID: "rejected", Token: tc.token, Sequence: 1, Event: tc.event, Payload: map[string]string{"turn": "invalid"}}
+			if tc.seen {
+				d.hookSeq = map[string]*hookSeen{"rejected": {floor: 1}}
+			}
+			if tc.replay {
+				cb.Payload["turn"] = "idle"
+				if err := d.eng.HandleCallback(cb); err != nil {
+					t.Fatal(err)
+				}
+			}
+			raw, err := json.Marshal(cb)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.malformed {
+				raw = []byte(`not-json`)
+				var syntax *json.SyntaxError
+				if err := d.ingestHookBytes(raw); !errors.As(err, &syntax) {
+					t.Fatalf("decode rejection lost underlying error: %v", err)
+				}
+			}
+			dir := t.TempDir()
+			path := filepath.Join(dir, shim.HookSpoolFile)
+			s, err := shim.OpenHookSpoolProducer(path, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Append(raw); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			hd := NewHookDrainer(d, "rejected", "", filepath.Join(dir, "fold"))
+			hd.SetSpoolPath(path)
+			if a, s, err := hd.drainFromSpoolFile(); a != 0 || s != 1 || err != nil {
+				t.Fatalf("terminal rejection: applied=%d skipped=%d err=%v", a, s, err)
+			}
+			if err := hd.retireCertifiedPrefix(); err != nil {
+				t.Fatal(err)
+			}
+			if info, err := os.Stat(path); err != nil || info.Size() != 0 {
+				t.Fatalf("terminal rejection payload not retired: info=%v err=%v", info, err)
+			}
+		})
+	}
+}
 
 func TestEndedSessionRetiresFinalHookPayload(t *testing.T) {
 	dir, err := os.MkdirTemp("", "swhret")
