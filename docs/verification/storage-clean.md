@@ -109,7 +109,10 @@ operations and accidental aliases, not a malicious same-UID filesystem actor.
 
 The task reuses the existing isolated worktree and shared caches. Task-private
 caches created during an early test attempt were removed and their absence was
-verified. The task-owned Linux checkout, overlays and bulky raw logs are retired
-after gate completion and evidence review; the pushed source worktree is retained
+verified. After evidence review and commit, the task-owned Linux checkout (167,858,176
+allocated bytes) was removed with no observable process references; three
+unrelated process FD lists were opaque and no processes were signaled. The
+reviewed local overlays and 28 task-owned evidence/helper files were also
+removed. Compact evidence remains committed, and the source worktree is retained
 for review. User state, histories, unrelated worktrees and shared caches are not
 part of that cleanup.

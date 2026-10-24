@@ -2542,5 +2542,17 @@
     "No guaranteed physical free-space reduction; no arbitrary history, staging, scratch or cache sweep.",
     "A crash can leave unproven staging; no automatic retirement of those files."
   ],
-  "raw_log_retention": "Raw task logs are removed after compact hashes, counts, skips and failures are committed; original failures are preserved here."
+  "raw_log_retention": "Raw task logs are removed after compact hashes, counts, skips and failures are committed; original failures are preserved here.",
+  "artifact_retirement": {
+    "linux_checkout": "/tmp/sclean.5hKzkd",
+    "linux_removed": true,
+    "linux_allocated_bytes_before": 167858176,
+    "linux_observable_references_before": 0,
+    "linux_opaque_unrelated_process_fd_lists": 3,
+    "local_owned_files_removed": 28,
+    "local_file_bytes_removed": 26587197,
+    "reviewed_overlay_removed": true,
+    "task_private_caches_remaining": 0,
+    "shared_caches_and_source_worktree_retained": true
+  }
 }
