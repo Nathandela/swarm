@@ -38,10 +38,11 @@ const hookDrainInterval = 250 * time.Millisecond
 // each one runs -- kept so stopHookDrain can perform the session's FINAL drain through
 // the same object (and therefore the same drainMu) the loop uses.
 type hookDrainState struct {
-	mu       sync.Mutex
-	stop     map[string]chan struct{}
-	drainers map[string]*HookDrainer
-	wg       sync.WaitGroup
+	mu         sync.Mutex
+	stop       map[string]chan struct{}
+	drainers   map[string]*HookDrainer
+	wg         sync.WaitGroup
+	retirement map[string]hookRetirementRetry
 }
 
 // startHookDrain begins draining sessionID's shim-owned spool, if that session has a
@@ -91,6 +92,10 @@ func (d *Daemon) startHookDrainsForRunning() {
 	for _, m := range d.core.List() {
 		if m.Status.Process == status.ProcessRunning {
 			d.startHookDrain(m.ID)
+		} else if ch, ok := d.core.SessionHookChannel(m.ID); ok {
+			hd := NewHookDrainer(d, m.ID, "", ch.CursorPath)
+			hd.SetSpoolPath(ch.SpoolPath)
+			d.retireHookPayload(hd)
 		}
 	}
 }
@@ -127,6 +132,7 @@ func (d *Daemon) stopHookDrain(sessionID string) {
 
 	if hd != nil {
 		hd.FinalDrain()
+		d.retireHookPayload(hd)
 	}
 }
 

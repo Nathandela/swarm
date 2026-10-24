@@ -85,3 +85,25 @@ parent SIGKILL/host crash remains outside the supervisor's cleanup guarantee.
 The reserved login/identity/auth-related skeleton fixtures and handoff directory
 fixture retain their explicit temporary roots pending owner coordination. No old
 scratch, provider history or shared compiler cache was deleted.
+
+## Hook payload retirement
+
+The baseline real-launch regression retained 170 payload bytes after the session
+ended. New cooperating shims hold a producer lifetime lock and an incarnation,
+nonce and physical-file capability. Hook handlers join and the spool closes before
+terminal publication. Only a durably advanced, lineage-matching cursor receives
+a retirement certificate; legacy or uncertain evidence remains retained.
+
+Focused normal/race tests cover actual full/partial end-session retirement,
+sequence continuity, late accepted POST ordering, live/unknown/replaced producer
+refusals, gaps and torn tails, cursor/certificate/compaction failures, startup and
+busy-lock retries without authentication resurrection, and unsafe/oversized
+sidecar rejection. One diagnostic reports exhausted retry attempts.
+
+Astra's deep review found that a stopped retirement retry could recreate an
+attempt after concurrent deletion. Seven regression fixtures reproduced creation
+of missing directories, locks, spool or incarnation. The stopped path now uses
+strictly existing-only opens throughout; normal producer initialization remains
+unchanged. Astra re-reviewed GREEN. Post-fix targeted race tests passed for shim
+(15.080 seconds) and skeleton (23.725 seconds), including the deletion seams.
+Native Linux and final integrated qualification remain separate gates.

@@ -535,6 +535,12 @@ func Run(cfg Config) (agentExit int, err error) {
 	flushTranscript(tr)
 	closeTranscript(tr)
 
+	// Join accepted hooks and close their spool before either terminal publication.
+	if hookSrv != nil {
+		hookSrv.shutdown()
+		<-hookAcceptDone
+	}
+
 	// Persist exit.json after flushing the identity tail, then fsync the dir.
 	// A persistence failure is surfaced as Run's err while the agent's
 	// exit code is still returned.
@@ -544,10 +550,6 @@ func Run(cfg Config) (agentExit int, err error) {
 	// tear the socket down.
 	srv.shutdown(exitReport(exitCode, exitSignal))
 	<-acceptDone
-	if hookSrv != nil {
-		hookSrv.shutdown()
-		<-hookAcceptDone
-	}
 
 	return exitCode, errors.Join(persistErr, nativeRecordErr)
 }

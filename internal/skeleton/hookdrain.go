@@ -50,6 +50,7 @@ import (
 // recoveringGap distinguishes the first, durably reset observation (the caller should
 // retry from 0) from the same boundary surviving that reset (the unreadable-tail case).
 var ErrHookDrainGap = errors.New("skeleton: hook drain observed a spool gap")
+var errHookDrainStopped = errors.New("skeleton: hook drain polling stopped")
 
 // hookDrainTimeout bounds one drain round trip against a session's hook socket.
 const hookDrainTimeout = 5 * time.Second
@@ -463,6 +464,8 @@ type HookDrainer struct {
 	// same torn tail observed again after reset, without changing ErrHookDrainGap's
 	// long-standing exact identity for callers and tests.
 	gapRecoveryPending bool
+	pollStopped        bool
+	certificatePending *hookCursorCertificate
 
 	mu        sync.Mutex
 	token     string // "" = no drain-auth token configured (see SetToken)
@@ -523,6 +526,9 @@ func (hd *HookDrainer) recoveringGap() bool {
 func (hd *HookDrainer) DrainOnce() (applied, skipped int, err error) {
 	hd.drainMu.Lock()
 	defer hd.drainMu.Unlock()
+	if hd.pollStopped {
+		return 0, 0, errHookDrainStopped
+	}
 	return hd.drainOnceLocked()
 }
 
@@ -564,8 +570,8 @@ func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
 // drain interval of a session became permanently unreachable while its bytes sat on
 // disk. Five real-launch trials lost it 5/5. A shim CRASH has the same shape. Reading
 // the spool from disk removes the live socket from the durability story entirely: the
-// file is in the session's own 0700 dir, its format is self-describing, and this side
-// only ever reads it (never Compacts -- folding is the live, token-gated DRAIN's job).
+// file is in the session's own 0700 dir and its format is self-describing. This read
+// never mutates it; retirement separately requires a locked, certified prefix.
 //
 // It is a no-op when no spool path was configured (SetSpoolPath), and reports the disk
 // error verbatim when the file is gone: "the spool is gone" and "the spool is clean and
@@ -584,18 +590,11 @@ func (hd *HookDrainer) drainFromSpoolFileLocked() (applied, skipped int, err err
 		return 0, 0, errNoHookSpoolPath
 	}
 	cursor := readHookCursor(hd.cursorPath)
-	recs, gapAt, hasGap, rerr := shim.ReadHookSpoolFile(spoolPath, cursor)
-	if rerr != nil {
-		return 0, 0, fmt.Errorf("skeleton: read hook spool file: %w", rerr)
+	resp, err := shim.ReadHookSpoolFileResponse(spoolPath, cursor)
+	if err != nil {
+		return 0, 0, fmt.Errorf("skeleton: read hook spool file: %w", err)
 	}
-	spoolIncarnation, adoptedLegacy, ierr := shim.ReadHookSpoolIncarnation(spoolPath)
-	if ierr != nil {
-		return 0, 0, fmt.Errorf("skeleton: read hook spool incarnation: %w", ierr)
-	}
-	return hd.applyLocked(shim.HookDrainResponse{
-		Records: recs, Gap: hasGap, GapBoundary: gapAt,
-		SpoolIncarnation: spoolIncarnation, SpoolAdoptedLegacy: adoptedLegacy,
-	}, cursor)
+	return hd.applyLocked(resp, cursor)
 }
 
 // errNoHookSpoolPath is drainFromSpoolFile's refusal when no spool file was configured.
@@ -616,6 +615,7 @@ var errNoHookSpoolPath = errors.New("skeleton: no hook spool path configured for
 func (hd *HookDrainer) FinalDrain() {
 	hd.drainMu.Lock()
 	defer hd.drainMu.Unlock()
+	hd.pollStopped = true
 	if _, _, err := hd.drainOnceLocked(); errors.Is(err, ErrHookDrainGap) && !hd.gapRecoveryPending {
 		return // the same gap survived a reset: no retained side can be recovered
 	}
@@ -650,6 +650,10 @@ func (hd *HookDrainer) FinalDrain() {
 // disk path can never diverge in what they apply, what they refuse, or what they
 // persist. Caller holds drainMu.
 func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor uint64) (applied, skipped int, err error) {
+	if err := hd.flushCursorCertificate(); err != nil {
+		return 0, 0, err
+	}
+	canCertify := hd.canCertifyResponse(resp, requestCursor)
 	for _, rec := range resp.Records {
 		// ADR-017 "never silently bridged": a record at or past a reported boundary is
 		// on the FAR side of unrecoverable content. Applying one would splice the
@@ -674,8 +678,14 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor ui
 		} else {
 			applied++
 		}
-		if perr := persistHookCursor(hd.cursorPath, rec.Seq); perr != nil {
+		if perr := persistHookDrainCursor(hd.cursorPath, rec.Seq); perr != nil {
 			return applied, skipped, fmt.Errorf("skeleton: persist hook drain cursor: %w", perr)
+		}
+		if canCertify {
+			hd.certificatePending = &hookCursorCertificate{Incarnation: resp.SpoolIncarnation, Producer: resp.ProducerCertificate, Sequence: rec.Seq}
+			if err := hd.flushCursorCertificate(); err != nil {
+				return applied, skipped, err
+			}
 		}
 	}
 
@@ -857,6 +867,8 @@ func readHookCursor(path string) uint64 {
 	}
 	return v
 }
+
+var persistHookDrainCursor = persistHookCursor
 
 // persistHookCursor durably writes seq to path via temp+fsync+rename+fsyncDir, so a
 // crash mid-write leaves the OLD cursor intact rather than a half-written one.
