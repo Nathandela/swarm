@@ -2,16 +2,18 @@ package daemon
 
 import (
 	"errors"
-	"github.com/Nathandela/swarm/internal/diagnosticlog"
-	"github.com/Nathandela/swarm/internal/persist"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/diagnosticlog"
+	"github.com/Nathandela/swarm/internal/persist"
 )
 
 func TestDiagnosticLogTruncatesSameInodeAndKeepsInheritedWriters(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon.log")
+	makeDiagnosticLogParentPrivate(t, path)
 	a, err := openDaemonLog(path)
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +55,7 @@ func TestDiagnosticLogRefusesUnsafeExistingTargets(t *testing.T) {
 			dir := t.TempDir()
 			target := filepath.Join(dir, "keep")
 			path := filepath.Join(dir, "daemon.log")
+			makeDiagnosticLogParentPrivate(t, path)
 			if err := os.WriteFile(target, []byte("valuable"), 0644); err != nil {
 				t.Fatal(err)
 			}
@@ -102,8 +105,16 @@ func waitDiagnosticLogSettled(t *testing.T, path string) {
 	}
 }
 
+func makeDiagnosticLogParentPrivate(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDiagnosticLogLiveShimMaintainsWithoutDaemonOrPTYOutput(t *testing.T) {
 	cfg := daemonConfig(t)
+	makeDiagnosticLogParentPrivate(t, cfg.LogPath)
 	d := openDaemon(t, cfg)
 	m, pid := launchAnnounce(t, d)
 	if err := d.Close(); err != nil {
@@ -132,6 +143,7 @@ func TestDiagnosticLogLiveShimMaintainsWithoutDaemonOrPTYOutput(t *testing.T) {
 
 func TestDiagnosticLogDaemonMaintenanceStopsOnClose(t *testing.T) {
 	cfg := daemonConfig(t)
+	makeDiagnosticLogParentPrivate(t, cfg.LogPath)
 	d := openDaemon(t, cfg)
 	f, err := os.OpenFile(cfg.LogPath, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
@@ -157,6 +169,7 @@ func TestDiagnosticLogDaemonMaintenanceStopsOnClose(t *testing.T) {
 
 func TestDiagnosticLogFailedDaemonOpenStopsMaintenance(t *testing.T) {
 	cfg := daemonConfig(t)
+	makeDiagnosticLogParentPrivate(t, cfg.LogPath)
 	original := scanStoreFn
 	scanStoreFn = func(*persist.Store) ([]persist.Meta, error) { return nil, errors.New("injected scan failure") }
 	t.Cleanup(func() { scanStoreFn = original })

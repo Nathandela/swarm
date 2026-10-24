@@ -3,16 +3,19 @@ package skeleton
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -161,8 +164,9 @@ func sortNativeHistory(rows []json.RawMessage) {
 }
 
 type openCodeHistoryResolver struct {
-	core     *daemon.Daemon
-	fallback resumeHistoryResolver
+	core         *daemon.Daemon
+	fallback     resumeHistoryResolver
+	afterPublish func() // private deterministic publication/launch interleaving seam
 }
 
 func (r *openCodeHistoryResolver) Resolve(m persist.Meta) resumeHistoryResult {
@@ -177,6 +181,11 @@ func (r *openCodeHistoryResolver) Resolve(m persist.Meta) resumeHistoryResult {
 	}
 	return resumeHistoryResult{Outcome: resumeHistoryFound, ConversationID: m.ConversationID}
 }
+
+// Direct exports retain their result. Production hands-off launches hold this same
+// publication fence through their launch outcome before releasing ownership.
+var openCodeExportMu sync.Mutex
+
 func (r *openCodeHistoryResolver) LocateTranscript(m persist.Meta, id string) (string, resumeHistoryOutcome) {
 	if m.AgentType != "opencode" {
 		if r.fallback == nil {
@@ -184,16 +193,33 @@ func (r *openCodeHistoryResolver) LocateTranscript(m persist.Meta, id string) (s
 		}
 		return r.fallback.LocateTranscript(m, id)
 	}
+	openCodeExportMu.Lock()
+	defer openCodeExportMu.Unlock()
+	path, outcome, owned := r.locateTranscript(m, id)
+	if owned != nil {
+		_ = owned.root.Close()
+	}
+	return path, outcome
+}
+
+func (r *openCodeHistoryResolver) locateTranscript(m persist.Meta, id string) (string, resumeHistoryOutcome, *ownedHandoffExport) {
+	if m.AgentType != "opencode" {
+		if r.fallback == nil {
+			return "", resumeHistoryUnsupported, nil
+		}
+		path, outcome := r.fallback.LocateTranscript(m, id)
+		return path, outcome, nil
+	}
 	if r.core == nil || r.Resolve(m).Outcome != resumeHistoryFound || id != m.ConversationID {
-		return "", resumeHistoryUnsafe
+		return "", resumeHistoryUnsafe, nil
 	}
 	current, ok := r.core.Get(m.ID)
 	if !ok || current.ConversationID != id || current.OpenCodeBinding == nil || current.OpenCodeBinding.Generation != m.OpenCodeBinding.Generation {
-		return "", resumeHistoryUnsafe
+		return "", resumeHistoryUnsafe, nil
 	}
 	b, err := r.core.SessionOpenCodeBridge(m.ID)
 	if err != nil {
-		return "", resumeHistoryUnreadable
+		return "", resumeHistoryUnreadable, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -204,12 +230,12 @@ func (r *openCodeHistoryResolver) LocateTranscript(m persist.Meta, id string) (s
 	if current.Status.Process == status.ProcessRunning {
 		c, clientErr := opencodebridge.NewClient(b.SocketPath, b.Token)
 		if clientErr != nil {
-			return "", resumeHistoryUnreadable
+			return "", resumeHistoryUnreadable, nil
 		}
 		defer c.Close()
 		ready, readyErr := c.Ready(ctx)
 		if readyErr != nil || !ready.Bound || !ready.Acknowledged || !ready.Ready || ready.Identity != identity || !opencodebridge.SupportedNativeVersion(ready.NativeVersion) {
-			return "", resumeHistoryUnreadable
+			return "", resumeHistoryUnreadable, nil
 		}
 		nativeVersion = ready.NativeVersion
 		result, err = collectOpenCodeHistory(ctx, identity, c.Snapshot)
@@ -221,56 +247,310 @@ func (r *openCodeHistoryResolver) LocateTranscript(m persist.Meta, id string) (s
 		}
 	}
 	if err != nil {
-		return "", resumeHistoryUnreadable
+		return "", resumeHistoryUnreadable, nil
 	}
 	if err := validateNativeHistory(&result, identity); err != nil {
-		return "", resumeHistoryUnsafe
+		return "", resumeHistoryUnsafe, nil
 	}
 	result.Provenance = openCodeHistoryProvenance{Identity: identity, Source: source, NativeVersion: nativeVersion, Scope: "exact root; native child references remain in original parts", CapturedAt: time.Now().UTC(), MutableDuringRead: true, Gaps: "native compaction and omitted native data are not reconstructed"}
+	stateDir := filepath.Dir(filepath.Dir(b.SocketPath))
+	path, owned, err := publishHandoffExport(stateDir, result)
+	if err != nil {
+		log.Printf("skeleton: OpenCode handoff export at %q failed; retained staging may require manual inspection: %v", filepath.Join(stateDir, handoffExportDirectory), err)
+		return "", resumeHistoryUnreadable, nil
+	}
+	if r.afterPublish != nil {
+		r.afterPublish()
+	}
+	return path, resumeHistoryFound, owned
+}
+
+const handoffExportDirectory = "handoff-exports"
+
+type ownedHandoffExport struct {
+	root *os.Root
+	name string
+	info os.FileInfo
+}
+
+// Ownership comes only from successful exclusive publication, never a resolver path.
+func (o *ownedHandoffExport) discard() error {
+	info, err := o.root.Lstat(o.name)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(info, o.info) || !safeHandoffFile(info) {
+		return errors.New("handoff: export changed; retained")
+	}
+	return o.root.Remove(o.name)
+}
+
+func safeHandoffFile(info os.FileInfo) bool { return safeHandoffLinks(info, 1) }
+func safeHandoffLinks(info os.FileInfo, maxLinks uint64) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && info.Mode().IsRegular() && info.Mode().Perm() == 0600 && st.Uid == uint32(os.Getuid()) && st.Nlink >= 1 && uint64(st.Nlink) <= maxLinks && info.Size() <= openCodeHistoryMaxBytes
+}
+
+func readHandoffCandidate(root *os.Root, name string, canonical []byte, id opencodebridge.Identity, maxLinks uint64, probe func(string) error) (os.FileInfo, error) {
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !safeHandoffLinks(info, maxLinks) {
+		return nil, errors.New("handoff: unsafe existing export")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, openCodeHistoryMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	var previous openCodeHistoryExport
+	if json.Unmarshal(raw, &previous) != nil || validateNativeHistory(&previous, id) != nil {
+		return nil, errors.New("handoff: invalid existing export")
+	}
+	previousCanonical, err := canonicalHandoffExport(previous)
+	if err != nil || !bytes.Equal(canonical, previousCanonical) {
+		return nil, errors.New("handoff: existing export content mismatch")
+	}
+	if probe != nil {
+		if err := probe("file-sync"); err != nil {
+			return nil, err
+		}
+	}
+	if err := file.Sync(); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func removeHandoffStaging(root *os.Root, name string, expected os.FileInfo, maxLinks uint64) error {
+	current, err := root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(expected, current) || !safeHandoffLinks(current, maxLinks) {
+		return errors.New("handoff: staging entry changed; retained")
+	}
+	return root.Remove(name)
+}
+
+func canonicalHandoffExport(result openCodeHistoryExport) ([]byte, error) {
+	result.Provenance.CapturedAt = time.Time{}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
+}
+
+func publishHandoffExport(stateDir string, result openCodeHistoryExport) (string, *ownedHandoffExport, error) {
+	return publishHandoffExportWithProbe(stateDir, result, nil)
+}
+
+func publishHandoffExportWithProbe(stateDir string, result openCodeHistoryExport, probe func(string) error) (retPath string, retOwned *ownedHandoffExport, retErr error) {
+	canonical, err := canonicalHandoffExport(result)
+	if err != nil {
+		return "", nil, err
+	}
+	digest := sha256.Sum256(canonical)
+	name := "native-history-" + hex.EncodeToString(digest[:]) + ".json"
+	defer func() {
+		if retErr != nil {
+			retErr = fmt.Errorf("handoff: export %q: %w", filepath.Join(stateDir, handoffExportDirectory, name), retErr)
+		}
+	}()
 	raw, err := json.MarshalIndent(result, "", "  ")
-	if err != nil || len(raw) > openCodeHistoryMaxBytes {
-		return "", resumeHistoryUnsafe
+	if err != nil || len(raw)+1 > openCodeHistoryMaxBytes {
+		return "", nil, errors.New("handoff: export exceeds byte bound")
 	}
-	// The public pointer is immutable and separate from the private binding credential.
-	dir := filepath.Dir(b.SocketPath)
-	root, err := os.OpenRoot(dir)
+	state, err := os.OpenRoot(stateDir)
 	if err != nil {
-		return "", resumeHistoryUnreadable
+		return "", nil, err
 	}
-	defer func() { _ = root.Close() }()
-	var nonce [16]byte
-	if _, err = rand.Read(nonce[:]); err != nil {
-		return "", resumeHistoryUnreadable
+	defer func() { _ = state.Close() }()
+	if err := state.Mkdir(handoffExportDirectory, 0700); err != nil {
+		if !os.IsExist(err) {
+			return "", nil, err
+		}
 	}
-	name := "native-history-" + hex.EncodeToString(nonce[:]) + ".json"
-	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+	parent, err := state.Open(".")
 	if err != nil {
-		return "", resumeHistoryUnreadable
-	}
-	_, err = file.Write(append(raw, '\n'))
-	if err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		_ = root.Remove(name)
-		return "", resumeHistoryUnreadable
-	}
-	parent, err := root.Open(".")
-	if err != nil {
-		_ = root.Remove(name)
-		return "", resumeHistoryUnreadable
+		return "", nil, err
 	}
 	err = parent.Sync()
 	_ = parent.Close()
 	if err != nil {
-		_ = root.Remove(name)
-		return "", resumeHistoryUnreadable
+		return "", nil, err
 	}
-	return filepath.Join(dir, name), resumeHistoryFound
+	directory, err := state.OpenFile(handoffExportDirectory, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return "", nil, err
+	}
+	defer func() { _ = directory.Close() }()
+	syncDirectory := func() error {
+		if probe != nil {
+			if err := probe("directory-sync"); err != nil {
+				return err
+			}
+		}
+		return directory.Sync()
+	}
+	info, err := directory.Stat()
+	if err != nil {
+		return "", nil, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || info.Mode().Perm() != 0700 || st.Uid != uint32(os.Getuid()) {
+		return "", nil, errors.New("handoff: unsafe export directory")
+	}
+	root, err := state.OpenRoot(handoffExportDirectory)
+	if err != nil {
+		return "", nil, err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = root.Close()
+		}
+	}()
+	opened, err := root.Open(".")
+	if err != nil {
+		return "", nil, err
+	}
+	actual, err := opened.Stat()
+	_ = opened.Close()
+	if err != nil || !os.SameFile(info, actual) {
+		return "", nil, errors.New("handoff: export directory changed")
+	}
+	path := filepath.Join(stateDir, handoffExportDirectory, name)
+	// One content-bound staging name makes restart recovery local to this export.
+	temporary := ".pending-" + name
+	staged := false
+	var stagingInfo os.FileInfo
+	if pending, err := readHandoffCandidate(root, temporary, canonical, result.Provenance.Identity, 2, probe); err == nil {
+		stagingInfo = pending
+		target, statErr := root.Lstat(name)
+		if statErr == nil {
+			st := pending.Sys().(*syscall.Stat_t)
+			if st.Nlink == 2 && (!os.SameFile(pending, target) || !safeHandoffLinks(target, 2)) {
+				return "", nil, errors.New("handoff: staging has an unrelated link; retained")
+			}
+			if err := removeHandoffStaging(root, temporary, pending, 2); err != nil {
+				return "", nil, err
+			}
+			if err := syncDirectory(); err != nil {
+				return "", nil, err
+			}
+		} else if os.IsNotExist(statErr) && safeHandoffFile(pending) {
+			staged = true
+		} else {
+			return "", nil, errors.New("handoff: staging ownership is ambiguous; retained")
+		}
+	} else if !os.IsNotExist(err) {
+		return "", nil, err
+	}
+	if _, err := readHandoffCandidate(root, name, canonical, result.Provenance.Identity, 1, probe); err == nil {
+		if err := syncDirectory(); err != nil {
+			return "", nil, err
+		}
+		return path, nil, nil
+	} else if !os.IsNotExist(err) {
+		return "", nil, err
+	}
+	linked := false
+	if !staged {
+		file, err := root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+		if err != nil {
+			return "", nil, err
+		}
+		stagingInfo, err = file.Stat()
+		if err != nil {
+			_ = file.Close()
+			return "", nil, err
+		}
+		defer func() {
+			if !linked {
+				if err := removeHandoffStaging(root, temporary, stagingInfo, 1); err != nil {
+					retErr = errors.Join(retErr, errors.New("handoff: staging cleanup failed"), err)
+				}
+			}
+		}()
+		_, err = file.Write(append(raw, '\n'))
+		if err == nil && probe != nil {
+			err = probe("after-write")
+		}
+		if err == nil && probe != nil {
+			err = probe("file-sync")
+		}
+		if err == nil {
+			err = file.Sync()
+		}
+		closeErr := file.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	if probe != nil {
+		if err := probe("before-link"); err != nil {
+			return "", nil, err
+		}
+	}
+	if err := root.Link(temporary, name); err != nil {
+		return "", nil, err
+	}
+	linked = true
+	if probe != nil {
+		if err := probe("after-link"); err != nil {
+			return "", nil, err
+		}
+	}
+	if err := removeHandoffStaging(root, temporary, stagingInfo, 2); err != nil {
+		return "", nil, err
+	}
+	if probe != nil {
+		if err := probe("after-unlink"); err != nil {
+			return "", nil, err
+		}
+	}
+	if err := syncDirectory(); err != nil {
+		return "", nil, err
+	}
+	info, err = root.Lstat(name)
+	if err != nil || !safeHandoffFile(info) {
+		return "", nil, errors.New("handoff: published export changed")
+	}
+	keep = true
+	return path, &ownedHandoffExport{root: root, name: name, info: info}, nil
+}
+
+// This wrapper carries exclusive publication ownership back to the launch owner.
+type handoffHistoryResolver struct {
+	resumeHistoryResolver
+	native       *openCodeHistoryResolver
+	owned        *ownedHandoffExport
+	preflight    func(persist.Meta) error
+	preflightErr error
+}
+
+func (r *handoffHistoryResolver) LocateTranscript(m persist.Meta, id string) (string, resumeHistoryOutcome) {
+	if m.AgentType == "opencode" && r.preflight != nil {
+		if r.preflightErr = r.preflight(m); r.preflightErr != nil {
+			return "", resumeHistoryUnsafe
+		}
+	}
+	path, outcome, owned := r.native.locateTranscript(m, id)
+	r.owned = owned
+	return path, outcome
 }
 
 type boundedNativeExport struct {

@@ -11,7 +11,7 @@ import (
 )
 
 func TestMaintenanceSettlesBusyIntervalsAndJoins(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "daemon.log")
+	path := filepath.Join(privateTestDir(t), "daemon.log")
 	f, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestMaintenanceSettlesBusyIntervalsAndJoins(t *testing.T) {
 }
 
 func TestMaintenanceErrorsAreReportedWithoutStoppingOwner(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "daemon.log")
+	path := filepath.Join(privateTestDir(t), "daemon.log")
 	f, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestMaintenanceErrorsAreReportedWithoutStoppingOwner(t *testing.T) {
 }
 
 func TestMaintenanceRejectsRedirectedStderrAndUnsafeDescriptors(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	path := filepath.Join(dir, "daemon.log")
 	f, err := Open(path)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestMaintenanceRejectsRedirectedStderrAndUnsafeDescriptors(t *testing.T) {
 }
 
 func TestMaintenanceRechecksPathBeforeTruncation(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	path := filepath.Join(dir, "daemon.log")
 	f, err := Open(path)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestMaintenanceRechecksPathBeforeTruncation(t *testing.T) {
 }
 
 func TestOpenHardensOwnedFileAndRejectsFIFOAndForeignOwner(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	path := filepath.Join(dir, "daemon.log")
 	if err := os.WriteFile(path, []byte("keep"), 0644); err != nil {
 		t.Fatal(err)
@@ -184,4 +184,13 @@ func TestOpenHardensOwnedFileAndRejectsFIFOAndForeignOwner(t *testing.T) {
 	if err := validate(path, foreign); err == nil || !strings.Contains(err.Error(), "unsafe descriptor") {
 		t.Fatalf("foreign descriptor=%v", err)
 	}
+}
+
+func privateTestDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

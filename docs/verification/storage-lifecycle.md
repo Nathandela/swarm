@@ -107,3 +107,38 @@ strictly existing-only opens throughout; normal producer initialization remains
 unchanged. Astra re-reviewed GREEN. Post-fix targeted race tests passed for shim
 (15.080 seconds) and skeleton (23.725 seconds), including the deletion seams.
 Native Linux and final integrated qualification remain separate gates.
+
+## Handoff inputs and review iterations
+
+New OpenCode inputs live in a private state-level immutable export directory.
+Identical canonical history/identity reuses an existing input; a definite failed
+launch removes only an input it newly owns. Successful and uncertain inputs are
+retained. Legacy source deletion checks actual retained consumers before each
+destructive member operation, including aliases and partial family failures.
+
+Astra rejected three successive concrete problems before returning final GREEN:
+proposed deletion membership did not prove consumers were gone; a crash between
+canonical link and staging unlink poisoned future reuse; and recovered/reused
+files did not re-run all file/directory durability barriers. Each received a
+failing regression before its fix. Real subprocess exits exercise publication
+boundaries, and injected failures exercise unlink and sync retries. The final
+focused handoff/deletion race suite passed in 28.930 seconds.
+
+Complete validated staging/canonical pairs recover under the publication fence.
+Invalid, partial or foreign-linked staging is preserved and refused, with an
+owned-path/cause diagnostic and no conversation body. Such unproven state may
+need manual inspection; universal automatic crash recovery is not claimed.
+Similarly, lost producer proof after a safe spool replacement can preserve
+payload permanently rather than authorize later disposal. These limits favor
+retaining uncertain data over unsafe cleanup.
+
+## Native Linux qualification in progress
+
+The first reviewed snapshot was copied to one owned temporary VM tree, with
+existing shared Go/module caches. Native Go 1.27.3 passed doctor and Linux updater
+checks but exposed two portability issues: same-user nondumpable sshd metadata
+prevented the test process scan from reaching owned children, and umask 0002 made
+success fixtures group writable where the diagnostic log contract requires a
+private parent. The fixtures now explicitly establish mode 0700, with production
+policy unchanged; those tests pass under umask 0002. Process-scan qualification
+and complete platform gates remain pending, not green by inference.

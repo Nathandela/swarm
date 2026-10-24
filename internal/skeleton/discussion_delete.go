@@ -1,11 +1,14 @@
 package skeleton
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -14,6 +17,8 @@ import (
 
 // The owner lifecycle fence precedes the resume mutex, matching auth resume.
 func (a *coreAPI) deleteDiscussion(id string) error {
+	a.handoffMu.Lock()
+	defer a.handoffMu.Unlock()
 	a.externalResumeMu.Lock()
 	defer a.externalResumeMu.Unlock()
 	a.workspaceMu.Lock()
@@ -110,6 +115,10 @@ func (a *coreAPI) deleteDiscussion(id string) error {
 	})
 	defer a.pokeWatch()
 	for _, m := range attempts {
+		// Planned removals remain consumers until their own deletion succeeds.
+		if err := a.preserveLegacyHandoffInputs([]persist.Meta{m}, a.core.List(), map[string]bool{m.ID: true}); err != nil {
+			return err
+		}
 		if err := a.core.Delete(m.ID); err != nil {
 			return fmt.Errorf("delete: attempt %q: %w", m.ID, err)
 		}
@@ -165,4 +174,95 @@ func canonicalCleanupPath(path string) (string, error) {
 			path = "."
 		}
 	}
+}
+
+// Legacy inputs lived in their source attempt. Uncertain retained dependencies
+// refuse deletion rather than relocating files or rewriting historical prompts.
+func (a *coreAPI) preserveLegacyHandoffInputs(attempts, roster []persist.Meta, members map[string]bool) error {
+	if a.stateDir == "" {
+		return nil
+	}
+	for _, source := range attempts {
+		sourceDir := filepath.Join(a.stateDir, source.ID)
+		entries, err := os.ReadDir(sourceDir)
+		if err != nil {
+			return fmt.Errorf("delete: inspect legacy handoff inputs for %q: %w", source.ID, err)
+		}
+		var legacyNames []string
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "native-history-") {
+				legacyNames = append(legacyNames, entry.Name())
+			}
+		}
+		if len(legacyNames) == 0 {
+			continue
+		}
+		canonical, err := canonicalCleanupPath(sourceDir)
+		if err != nil {
+			return err
+		}
+		for _, other := range roster {
+			if members[other.ID] {
+				continue
+			}
+			if other.SpawnedFrom == source.ID && other.SpawnIntent == protocol.SpawnIntentHandoff {
+				return fmt.Errorf("delete: legacy handoff inputs for %q may still be used by session %q", source.ID, other.ID)
+			}
+			root, err := os.OpenRoot(filepath.Join(a.stateDir, other.ID))
+			if err != nil {
+				return fmt.Errorf("delete: cannot confirm legacy handoff dependencies for session %q: %w", other.ID, err)
+			}
+			file, err := root.OpenFile("shim-launch.json", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+			_ = root.Close()
+			if err != nil {
+				return fmt.Errorf("delete: cannot confirm legacy handoff dependencies for session %q: %w", other.ID, err)
+			}
+			info, statErr := file.Stat()
+			var raw []byte
+			if statErr == nil && safeHandoffFile(info) {
+				raw, err = io.ReadAll(io.LimitReader(file, openCodeHistoryMaxBytes+1))
+			} else {
+				err = fmt.Errorf("unsafe launch configuration")
+			}
+			_ = file.Close()
+			var launch struct {
+				SessionID string   `json:"session_id"`
+				Argv      []string `json:"argv"`
+			}
+			var config any
+			if err != nil || len(raw) > openCodeHistoryMaxBytes || json.Unmarshal(raw, &config) != nil || json.Unmarshal(raw, &launch) != nil || launch.SessionID != other.ID || len(launch.Argv) == 0 {
+				return fmt.Errorf("delete: unreadable legacy handoff dependencies for session %q", other.ID)
+			}
+			var references func(any) bool
+			references = func(value any) bool {
+				switch value := value.(type) {
+				case string:
+					// A legacy filename is immutable evidence even through a directory alias.
+					for _, name := range legacyNames {
+						if strings.Contains(value, name) {
+							return true
+						}
+					}
+					return strings.Contains(value, sourceDir+string(filepath.Separator)) || strings.Contains(value, canonical+string(filepath.Separator))
+				case []any:
+					for _, item := range value {
+						if references(item) {
+							return true
+						}
+					}
+				case map[string]any:
+					for _, item := range value {
+						if references(item) {
+							return true
+						}
+					}
+				}
+				return false
+			}
+			if config == nil || references(config) {
+				return fmt.Errorf("delete: legacy handoff inputs for %q are still referenced or ambiguous in session %q", source.ID, other.ID)
+			}
+		}
+	}
+	return nil
 }

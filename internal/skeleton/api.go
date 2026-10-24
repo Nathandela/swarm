@@ -59,6 +59,8 @@ type coreAPI struct {
 	externalResumeMu sync.Mutex
 	// Launches register their working directories before cleanup can inspect them.
 	workspaceMu sync.RWMutex
+	// handoffMu covers export lookup through launch outcome and source deletion.
+	handoffMu sync.Mutex
 
 	// historyResolver performs the lazy, read-only migration for an ended/lost
 	// source whose native id predates durable capture. recoveryMu protects only
@@ -1006,7 +1008,36 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 // Launch resolves a client launch/resume request into a concrete daemon spec
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
-func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
+func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr error) {
+	var handoff *handoffHistoryResolver
+	coreAttempted := false
+	resolver := a.historyResolver
+	if _, present := spec.Options[protocol.OptionHandoffFrom]; present {
+		a.handoffMu.Lock()
+		defer a.handoffMu.Unlock()
+		if native, ok := resolver.(*openCodeHistoryResolver); ok {
+			openCodeExportMu.Lock()
+			defer openCodeExportMu.Unlock()
+			handoff = &handoffHistoryResolver{resumeHistoryResolver: resolver, native: native, preflight: func(source persist.Meta) error {
+				candidate := spec
+				candidate.Cwd = source.ProviderCwd()
+				_, err := composeLaunchSpec(candidate, a.endpointID, a.fakeAgentBin, a.core.Get, lookPathIn)
+				return err
+			}}
+			resolver = handoff
+			defer func() {
+				if handoff.owned == nil {
+					return
+				}
+				defer func() { _ = handoff.owned.root.Close() }()
+				if launchErr != nil && result.ID == "" && (!coreAttempted || errors.Is(launchErr, daemon.ErrMaxSessions)) {
+					if err := handoff.owned.discard(); err != nil {
+						launchErr = errors.Join(launchErr, fmt.Errorf("handoff: unused export cleanup failed: %w", err))
+					}
+				}
+			}()
+		}
+	}
 	if err := validateResumeRelocation(spec); err != nil {
 		return persist.Meta{}, err
 	}
@@ -1069,8 +1100,11 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 		if handoffFrom == "" {
 			return persist.Meta{}, fmt.Errorf("handoff: %s is empty; it must name the source session", protocol.OptionHandoffFrom)
 		}
-		composed, err := composeHandsOffLaunch(spec, a.endpointID, a.core.Get, a.historyResolver)
+		composed, err := composeHandsOffLaunch(spec, a.endpointID, a.core.Get, resolver)
 		if err != nil {
+			if handoff != nil && handoff.preflightErr != nil {
+				return persist.Meta{}, fmt.Errorf("handoff: target validation: %w", handoff.preflightErr)
+			}
 			return persist.Meta{}, err
 		}
 		spec = composed
@@ -1156,7 +1190,7 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	if err != nil {
 		return persist.Meta{}, err
 	}
-	return a.launchResolved(composed)
+	return a.launchResolvedWithOutcome(composed, &coreAttempted)
 }
 
 // errCLIOlderThanSource refuses a bound resume that would downgrade the CLI
@@ -1166,6 +1200,9 @@ var errCLIOlderThanSource = errors.New("launch: cli-older-than-source: the insta
 
 // launchResolved resolves the managed CLI identity and launches one bound attempt.
 func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, error) {
+	return a.launchResolvedWithOutcome(resolved, nil)
+}
+func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAttempted *bool) (persist.Meta, error) {
 	a.workspaceMu.RLock()
 	defer a.workspaceMu.RUnlock()
 	if a.logins != nil && managedLoginProvider(resolved.AgentType) {
@@ -1198,6 +1235,9 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 
 	if err := a.qualifyOpenCodeLaunch(&resolved); err != nil {
 		return persist.Meta{}, err
+	}
+	if coreAttempted != nil {
+		*coreAttempted = true
 	}
 	m, err := a.core.Launch(resolved)
 	if err != nil {
@@ -1563,6 +1603,13 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 	convID, err := handsOffConversationID(local, source, resolver)
 	if err != nil {
 		return daemon.LaunchSpec{}, err
+	}
+
+	// Native history publication must follow source-directory validation.
+	if managedOpenCode {
+		if _, err := handoffDirectory(source); err != nil {
+			return daemon.LaunchSpec{}, err
+		}
 	}
 
 	// STEP 4/5. HOME is the DAEMON's, not the source's. Meta.Env would have been the
