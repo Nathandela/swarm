@@ -1,6 +1,8 @@
 # Safe manual storage cleanup
 
-Status: revision 1 approved GREEN by Sol and Astra (2026-10-24).
+Status: revision 1 approved GREEN by Sol and Astra; implemented and source-reviewed.
+Native qualification is complete with the disclosed macOS package retry; see
+[implementation evidence](../verification/storage-clean.md).
 Issue: agents-tracker-24z2. Branch: feat/storage-clean, based on c8f9b43e.
 
 ## Intent and scope
@@ -83,6 +85,8 @@ Reuse the clean-record-boundary parser for a prefix estimate. Apply preserves al
 bytes after the certified boundary, including torn tails, with existing floor /
 temp / fsync / rename / directory-sync / producer-proof ordering. Add source inode
 and parent identity revalidation immediately before destructive replacement.
+Keep the temporary descriptor open through replacement/reopen validation and
+cleanup, so inode reuse cannot authorize unrelated recreated bytes.
 Proof-update failure after replacement is a failed/uncertain action; remaining
 payload stays protected and observed bytes are reported honestly. Existing stopped
 retirement callers retain their proof requirements and receive the shared safety

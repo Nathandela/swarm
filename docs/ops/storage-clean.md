@@ -2,6 +2,8 @@
 
 `swarm clean` previews the cleanup candidates owned by Swarm. It does not start
 or stop the daemon, create a state directory, or write a report file.
+See the [implementation evidence](../verification/storage-clean.md) for the
+reviewed source snapshot and current qualification boundary.
 
 ```sh
 swarm clean
@@ -21,7 +23,8 @@ Cleanup is limited to the configured diagnostic log and certified, stopped hook
 prefixes. It preserves native histories, credentials and managed accounts,
 projects and worktrees, handoff inputs and staging, session metadata,
 replay/idempotency state, and unresolved recovery receipts. It does not sweep
-generic temporary directories or compiler caches.
+generic temporary directories or compiler caches. Interrupted compaction can
+leave staging files; cleanup retains files without proven disposal authority.
 
 The report distinguishes eligible, unchanged, cleaned, retained and error
 results, with coverage and observed bytes. An incomplete assessment or failed
