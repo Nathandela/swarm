@@ -193,7 +193,7 @@ func (d *Daemon) serveHookInteractions(cb engine.Callback) {
 	// event carrying the same id retries SetConversationID.
 	if identity, ok := adapter.AsConversationIdentitySource(ad); ok {
 		if id, ok := identity.ConversationIDFromEvent(payload); ok {
-			if err := d.core.SetConversationID(cb.SessionID, id); err != nil {
+			if err := d.persistConversationIdentity(cb.SessionID, id); err != nil {
 				log.Printf("skeleton: could not persist authenticated conversation identity for session %s", cb.SessionID)
 			}
 		}

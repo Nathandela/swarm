@@ -502,7 +502,7 @@ func (d *Daemon) adoptBackendThread(local, threadID string) {
 	// lock is the leaf protecting live routing. Repeated notification of the same
 	// accepted id deliberately retries a transient write failure.
 	if d.core != nil {
-		if err := d.core.SetConversationID(local, threadID); err != nil {
+		if err := d.persistConversationIdentity(local, threadID); err != nil {
 			log.Printf("skeleton: could not persist backend conversation identity for session %s", local)
 		}
 	}

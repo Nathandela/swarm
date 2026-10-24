@@ -68,22 +68,28 @@ func (e *Engine) ApplyTypedEvent(sessionID, event string, payload map[string]str
 	s.typedSeq++
 	next, advanced, typed, err := applySignal(s, event, payload, s.typedSeq, now)
 	if err != nil {
+		persistErr := e.persistExecutionLocked(sessionID, s)
 		e.mu.Unlock()
+		if persistErr != nil {
+			return executionCustodyError(persistErr)
+		}
 		return err
 	}
 	if !advanced {
+		persistErr := e.persistExecutionLocked(sessionID, s)
 		e.mu.Unlock()
-		return nil
+		return executionCustodyError(persistErr)
 	}
 	if typed {
 		s.lastTypedAt = now
 	}
 	s.lastSignalAt = now
 	changed := commit(s, next)
+	persistErr := e.persistExecutionLocked(sessionID, s)
 	e.mu.Unlock()
 
 	if changed {
 		e.emit(sessionID, next)
 	}
-	return nil
+	return executionCustodyError(persistErr)
 }

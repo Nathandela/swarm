@@ -86,6 +86,15 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 		return nil // Advisory readings never touch hook sequences, status or the journal.
 	}
 	if d.hookSeqDuplicate(cb.SessionID, cb.Sequence) {
+		// A crash may leave execution custody after the durable outer fold.
+		if d.eng != nil {
+			if err := d.eng.AcknowledgeExecutionCallback(d.statusHookCallback(cb)); err != nil {
+				var custody *engine.ExecutionCustodyError
+				if errors.As(err, &custody) {
+					return err
+				}
+			}
+		}
 		// LOGGED, not silent (R6 review fix-pack round 2): both callers discard this
 		// error -- conn.go's serveHook by design, and DrainOnce by folding it into its
 		// skipped count, which runHookDrain in turn discards -- so a suppressed event
@@ -112,27 +121,39 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 			return err
 		}
 	}
-	statusCallback := cb
-	if d.logins != nil && cb.Event == "StopFailure" {
-		if meta, ok := d.core.Get(cb.SessionID); ok && meta.LoginRuntime != nil && meta.AgentType == "claude" {
-			var body struct {
-				AgentID   string `json:"agent_id"`
-				SessionID string `json:"session_id"`
-				Error     string `json:"error"`
-			}
-			if rejectDuplicateJSONKeys(cb.Raw) == nil && json.Unmarshal(cb.Raw, &body) == nil && body.SessionID == meta.ConversationID && body.AgentID == "" && (body.Error == "rate_limit" || body.Error == "authentication_failed") {
-				statusCallback.Event = "Stop"
-				statusCallback.Payload = map[string]string{engine.PayloadKeyTurn: "idle"}
-			}
-		}
-	}
+	statusCallback := d.statusHookCallback(cb)
 	if err := d.eng.HandleCallback(statusCallback); err != nil {
 		log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
 		return err
 	}
 	d.serveHookInteractions(cb)
-	d.markHookSeqIngested(cb.SessionID, cb.Sequence)
+	if err := d.markHookSeqIngested(cb.SessionID, cb.Sequence); err != nil {
+		return &engine.ExecutionCustodyError{Err: err}
+	}
+	if err := d.eng.AcknowledgeExecutionCallback(statusCallback); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (d *Daemon) statusHookCallback(cb engine.Callback) engine.Callback {
+	if d.logins == nil || d.core == nil || cb.Event != "StopFailure" {
+		return cb
+	}
+	meta, ok := d.core.Get(cb.SessionID)
+	if !ok || meta.LoginRuntime == nil || meta.AgentType != "claude" {
+		return cb
+	}
+	var body struct {
+		AgentID   string `json:"agent_id"`
+		SessionID string `json:"session_id"`
+		Error     string `json:"error"`
+	}
+	if rejectDuplicateJSONKeys(cb.Raw) == nil && json.Unmarshal(cb.Raw, &body) == nil && body.SessionID == meta.ConversationID && body.AgentID == "" && (body.Error == "rate_limit" || body.Error == "authentication_failed") {
+		cb.Event = "Stop"
+		cb.Payload = map[string]string{engine.PayloadKeyTurn: "idle"}
+	}
+	return cb
 }
 
 // The first authenticated native SessionStart establishes the write-once
@@ -153,7 +174,7 @@ func (d *Daemon) admitLoginClaudeIdentity(cb engine.Callback) error {
 	if meta.ConversationID != "" && meta.ConversationID != body.SessionID {
 		return nil // the existing write-once identity cannot be replaced
 	}
-	if err := d.core.SetConversationID(cb.SessionID, body.SessionID); err != nil {
+	if err := d.persistConversationIdentity(cb.SessionID, body.SessionID); err != nil {
 		return err
 	}
 	current, ok := d.core.Get(cb.SessionID)
@@ -174,6 +195,9 @@ func (d *Daemon) admitLoginClaudeIdentity(cb engine.Callback) error {
 	// its containing directory durable before the hook may be acknowledged.
 	if err := syncRecoveryDir(session); err != nil {
 		return err
+	}
+	if err := d.bindExecutionConversation(current); err != nil {
+		return &engine.ExecutionCustodyError{Err: err}
 	}
 	return d.recordLoginReady(current, cb)
 }
@@ -375,9 +399,9 @@ func safeSessionSegment(id string) bool {
 // -- marked on disk, then a crash before the cursor advances -- costs at most one
 // legitimately skipped redelivery, which DrainOnce already counts and ingestHookBytes
 // logs.
-func (d *Daemon) markHookSeqIngested(sessionID string, seq uint64) {
+func (d *Daemon) markHookSeqIngested(sessionID string, seq uint64) error {
 	if seq == 0 {
-		return
+		return nil
 	}
 	d.itemMu.Lock()
 	defer d.itemMu.Unlock()
@@ -385,24 +409,25 @@ func (d *Daemon) markHookSeqIngested(sessionID string, seq uint64) {
 	if cur == nil {
 		cur = &hookSeen{}
 	} else if cur.has(seq) {
-		return
+		return nil
 	}
 	next := cur.clone()
 	next.add(seq)
 	if path := d.hookSeqPath(sessionID); path != "" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			log.Printf("skeleton: persist hook ingest seen-set for session %s: %v", sessionID, err)
-			return
+			return err
 		}
 		if err := persistHookSeen(path, next.record()); err != nil {
 			log.Printf("skeleton: persist hook ingest seen-set for session %s: %v", sessionID, err)
-			return
+			return err
 		}
 	}
 	if d.hookSeq == nil {
 		d.hookSeq = map[string]*hookSeen{}
 	}
 	d.hookSeq[sessionID] = next
+	return nil
 }
 
 // readHookSeen reads the seen-set persisted at path, or nil when there is none (or it is
@@ -667,7 +692,8 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor ui
 			break
 		}
 		if ierr := hd.d.ingestHookBytes(rec.Body); ierr != nil {
-			if errors.Is(ierr, errLoginObservationPending) {
+			var custody *engine.ExecutionCustodyError
+			if errors.Is(ierr, errLoginObservationPending) || errors.As(ierr, &custody) {
 				return applied, skipped, ierr
 			}
 			skipped++
@@ -680,6 +706,11 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor ui
 	}
 
 	if resp.Gap {
+		if hd.d.eng != nil {
+			if err := hd.d.eng.InvalidateExecution(hd.sessionID); err != nil {
+				return applied, skipped, &engine.ExecutionCustodyError{Err: err}
+			}
+		}
 		// R6 REVIEW FIX-PACK ROUND 1 (BLOCKER 1): the degrade runs UNCONDITIONALLY on
 		// every proven gap, and is never gated by the emit-dedupe below. The two
 		// answer different questions. "Has this exact boundary already been WRITTEN

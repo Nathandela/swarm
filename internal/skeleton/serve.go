@@ -255,6 +255,7 @@ type Daemon struct {
 	// is the producer-edge delta batcher. They ride their OWN mutexes rather than itemMu,
 	// with the lock order stated in backend.go: pumpMu -> itemMu, and backendMu taken alone.
 	backend        backendState
+	executionStore *persist.Store
 	openCode       openCodeObservations
 	nativeReceipts openCodeReceiptIndexes
 	nativeRequests openCodeRequestAuthorities
@@ -331,7 +332,15 @@ func Serve(cfg Config) (*Daemon, error) {
 	// sink (the coreAPI) is not built until after Open returns the core — and no emit
 	// can fire in that window (reconcile's RegisterSession installs sessions at the
 	// humble unknown baseline and emits nothing; hook/tap emits are gated on d.ready).
+	d.executionStore, err = persist.NewStore(cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.executionStore.PrepareExecutionStore(); err != nil {
+		log.Printf("skeleton: execution storage unavailable; automatic execution effects remain fenced")
+	}
 	d.eng = engine.New(engine.Config{
+		StoreExecution:     d.executionStore.SaveExecution,
 		StalenessThreshold: cfg.StalenessThreshold,
 		PollInterval:       cfg.PollInterval,
 		Emit:               d.emitStatus,
@@ -790,7 +799,7 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
 		d.eng.EndSession(m.ID)
 	} else {
-		d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
+		d.registerExecutionSession(m, token, sources, d.core != nil)
 	}
 	// ADR-017 T2-a / D-NIL: THE CORE'S OWN SESSION-START HOOK AUTHORS THE RECORD.
 	// This fires for every session the core starts, whichever client asked -- so it is the
@@ -1232,7 +1241,7 @@ func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
 	if !ok || convID == "" || !adapter.AcceptsConversationID(ad, convID) {
 		return
 	}
-	if err := d.core.SetConversationID(id, convID); err != nil {
+	if err := d.persistConversationIdentity(id, convID); err != nil {
 		d.convScanMu.Lock()
 		d.convScan[id] = convScanState{errOnce: previous.errOnce} // retry a quiet tail
 		d.convScanMu.Unlock()

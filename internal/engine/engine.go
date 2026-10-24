@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
 )
@@ -96,6 +97,8 @@ type Callback struct {
 
 // Config wires the Engine's injected effects and thresholds.
 type Config struct {
+	// StoreExecution persists control evidence before an ingress acknowledgement.
+	StoreExecution func(persist.ExecutionRecord) error
 	// Now reads the current time; every freshness and staleness comparison uses
 	// it, so tests can drive time deterministically. Defaults to time.Now.
 	Now func() time.Time
@@ -127,24 +130,33 @@ type Metrics struct {
 // Engine is the per-daemon status authority. Its zero value is unusable; call
 // New. Every method is goroutine-safe (one mutex serializes all state).
 type Engine struct {
-	mu        sync.Mutex
-	now       func() time.Time
-	sampler   func(pid int) (float64, error)
-	staleness time.Duration
-	poll      time.Duration
-	emit      func(id string, s status.Status)
-	metrics   *Metrics
-	sessions  map[string]*session
+	storeExecution func(persist.ExecutionRecord) error
+	mu             sync.Mutex
+	now            func() time.Time
+	sampler        func(pid int) (float64, error)
+	staleness      time.Duration
+	poll           time.Duration
+	emit           func(id string, s status.Status)
+	metrics        *Metrics
+	sessions       map[string]*session
 }
 
 // session is the engine's per-session state and the one place a session's status
 // lives (G6 single writer).
 type session struct {
-	token   string
-	pid     int
-	sources []adapter.SignalSource // declared observation kinds (Epic 11 uses these)
-	rules   gridRules              // parsed grid rules from sources (R-C1/R-C2), immutable after RegisterSession
-	alive   bool
+	executionEnabled     bool
+	executionIdentity    ExecutionIdentity
+	executionIncomplete  string
+	executionPending     bool
+	pendingCallbacks     map[uint64]string
+	untrackedChildren    bool
+	executionTurn        status.Turn
+	executionInteraction status.Interaction
+	token                string
+	pid                  int
+	sources              []adapter.SignalSource // declared observation kinds (Epic 11 uses these)
+	rules                gridRules              // parsed grid rules from sources (R-C1/R-C2), immutable after RegisterSession
+	alive                bool
 
 	// emitMu serializes this session's commit→emit so its emits stay ordered (G6)
 	// without holding the global e.mu across Emit. It is acquired BEFORE e.mu and
@@ -173,9 +185,7 @@ type session struct {
 	lastStopAt   time.Time // when the last idle-setting Stop applied (the turn boundary, see postStopGrace)
 
 	// children counts the background children currently outstanding (see
-	// subagentStartEvent). It is IN-MEMORY ONLY and never persisted: a daemon
-	// restart forgets it, and the grid path (the workflow row marker in
-	// heuristic.go) re-establishes the truth from the screen, in both directions.
+	// subagentStartEvent). Actor custody is restored from durable execution evidence.
 	children          int
 	anonymousChildren int
 	childSeq          uint64
@@ -210,13 +220,14 @@ func New(cfg Config) *Engine {
 		metrics = &Metrics{}
 	}
 	return &Engine{
-		now:       now,
-		sampler:   sampler,
-		staleness: cfg.StalenessThreshold,
-		poll:      cfg.PollInterval,
-		emit:      emit,
-		metrics:   metrics,
-		sessions:  make(map[string]*session),
+		storeExecution: cfg.StoreExecution,
+		now:            now,
+		sampler:        sampler,
+		staleness:      cfg.StalenessThreshold,
+		poll:           cfg.PollInterval,
+		emit:           emit,
+		metrics:        metrics,
+		sessions:       make(map[string]*session),
 	}
 }
 
@@ -234,23 +245,15 @@ func New(cfg Config) *Engine {
 func (e *Engine) RegisterSession(id, token string, pid int, sources []adapter.SignalSource, initialStatus ...status.Status) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	st := status.Status{
-		Process:     status.ProcessRunning,
-		Turn:        status.TurnUnknown,
-		Interaction: status.InteractionUnknown,
-	}
+	st := status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionUnknown}
 	if len(initialStatus) > 0 {
 		st = initialStatus[0]
 	}
-	e.sessions[id] = &session{
-		token:    token,
-		pid:      pid,
-		sources:  sources,
-		rules:    parseGridRules(sources),
-		alive:    true,
-		status:   st,
-		mainTurn: st.Turn,
-	}
+	e.sessions[id] = registeredSession(token, pid, sources, st)
+}
+
+func registeredSession(token string, pid int, sources []adapter.SignalSource, st status.Status) *session {
+	return &session{token: token, pid: pid, sources: sources, rules: parseGridRules(sources), alive: true, status: st, mainTurn: st.Turn, executionIdentity: ExecutionIdentity{Incarnation: fmt.Sprintf("legacy-%d", pid)}, executionIncomplete: "missing_snapshot", executionTurn: st.Turn, executionInteraction: st.Interaction}
 }
 
 // EndSession retires a session; its token dies with it, so any later callback
@@ -307,6 +310,28 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		e.mu.Unlock()
 		return errors.New("engine: callback token does not match the session's live token")
 	}
+	fingerprint := callbackFingerprint(cb)
+	managed := s.executionEnabled && e.storeExecution != nil
+	if expected, pending := s.pendingCallbacks[cb.Sequence]; pending {
+		if expected != fingerprint {
+			e.mu.Unlock()
+			return errors.New("engine: callback body differs from pending custody")
+		}
+		err := e.persistExecutionLocked(cb.SessionID, s)
+		e.mu.Unlock()
+		return executionCustodyError(err)
+	}
+	if managed && (cb.Sequence == 0 || len(s.pendingCallbacks) >= persist.MaxExecutionActors) {
+		s.executionIncomplete = "callback_custody_overflow"
+		e.mu.Unlock()
+		return executionCustodyError(errors.New("engine: pending callback custody capacity"))
+	}
+	if managed {
+		if s.pendingCallbacks == nil {
+			s.pendingCallbacks = make(map[uint64]string)
+		}
+		s.pendingCallbacks[cb.Sequence] = fingerprint
+	}
 	// Normalize the callback's event + payload into status dimensions via the
 	// session's registered SignalSources (the mapping bridge, seam c): a real hook
 	// posts {event, payload fields} and the engine derives turn/interaction from the
@@ -315,24 +340,31 @@ func (e *Engine) HandleCallback(cb Callback) error {
 	now := e.now()
 	next, advanced, typed, err := applySignal(s, cb.Event, cb.Payload, cb.Sequence, now)
 	if err != nil {
+		delete(s.pendingCallbacks, cb.Sequence)
+		persistErr := e.persistExecutionLocked(cb.SessionID, s)
 		e.mu.Unlock()
+		if persistErr != nil {
+			return executionCustodyError(persistErr)
+		}
 		return err
 	}
 	if !advanced {
+		persistErr := e.persistExecutionLocked(cb.SessionID, s)
 		e.mu.Unlock()
-		return nil
+		return executionCustodyError(persistErr)
 	}
 	if typed {
 		s.lastTypedAt = now
 	}
 	s.lastSignalAt = now
 	changed := commit(s, next)
+	persistErr := e.persistExecutionLocked(cb.SessionID, s)
 	e.mu.Unlock()
 
 	if changed {
 		e.emit(cb.SessionID, next)
 	}
-	return nil
+	return executionCustodyError(persistErr)
 }
 
 // OnOutput re-evaluates a session's status from a fresh screen snapshot (the grid
@@ -397,6 +429,8 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	}
 	if s.children > 0 && turn == status.TurnIdle && interaction == status.InteractionNone {
 		turn = status.TurnActive
+	} else if s.untrackedChildren && turn == status.TurnIdle && interaction == status.InteractionNone {
+		turn = status.TurnUnknown
 	}
 	next := s.status
 	next.Turn = turn
@@ -648,12 +682,18 @@ var trailingEdgeEvents = map[string]bool{
 // cannot discard this child's start/end, and an unknown stop cannot end a sibling.
 func countChild(s *session, event, actor string, seq uint64) (fresh, changed bool) {
 	if actor == "" {
+		s.executionIncomplete = "anonymous_actor"
 		if seq == 0 || seq <= s.childSeq {
 			return false, false
 		}
 		s.childSeq = seq
 		// shortcut: idless legacy hooks use a balanced counter; remove when legacy fixtures retire.
 		if event == subagentStartEvent {
+			if s.anonymousChildren >= persist.MaxExecutionActors {
+				s.untrackedChildren = true
+				s.executionIncomplete = "actor_overflow"
+				return true, false
+			}
 			s.anonymousChildren++
 			s.children++
 			return true, true
@@ -666,6 +706,14 @@ func countChild(s *session, event, actor string, seq uint64) (fresh, changed boo
 		return true, false
 	}
 	old := s.childStates[actor]
+	if len(actor) > 256 || (old.sequence == 0 && len(s.childStates) >= persist.MaxExecutionActors) {
+		s.executionIncomplete = "actor_overflow"
+		s.untrackedChildren = true
+		return false, false
+	}
+	if old.startSeq == 0 && event != subagentStartEvent {
+		s.executionIncomplete = "missing_actor_start"
+	}
 	if seq == 0 {
 		return false, false
 	}
@@ -712,6 +760,11 @@ func applySignal(s *session, event string, payload map[string]string, seq uint64
 		return status.Status{}, false, false, err
 	}
 	actor := payload["agent_id"]
+	if len(actor) > 256 {
+		s.executionIncomplete = "actor_overflow"
+		s.untrackedChildren = true
+		return s.status, false, false, errors.New("engine: actor identity capacity")
+	}
 	waiting := s.status.Interaction == status.InteractionPermission || s.status.Interaction == status.InteractionPrompt || s.status.Interaction == status.InteractionError
 	if event == "Notification" && s.status.Interaction == status.InteractionPermission && dims[PayloadKeyInteraction] == string(status.InteractionPermission) {
 		actor = s.inputActor // a global permission nudge does not replace the requester
@@ -754,11 +807,13 @@ func applySignal(s *session, event string, payload map[string]string, seq uint64
 	}
 	if s.turnSeq > beforeTurn {
 		s.mainTurn = next.Turn
+		s.executionTurn = next.Turn
 		if event == stopEvent && next.Turn == status.TurnIdle {
 			s.lastStopAt = now
 		}
 	}
 	if s.interSeq > beforeInter {
+		s.executionInteraction = next.Interaction
 		if next.Interaction == status.InteractionPermission || next.Interaction == status.InteractionPrompt || next.Interaction == status.InteractionError {
 			s.inputActor = actor
 		} else {
@@ -772,6 +827,8 @@ func applySignal(s *session, event string, payload map[string]string, seq uint64
 			}
 		} else if s.children > 0 {
 			next.Turn = status.TurnActive
+		} else if s.untrackedChildren {
+			next.Turn = status.TurnUnknown
 		} else {
 			next.Turn = s.mainTurn
 		}
