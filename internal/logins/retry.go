@@ -24,6 +24,9 @@ func (s *Store) BeginSwitchRetryAtRevision(expected uint64, id, nextID, reason s
 }
 func (s *Store) beginSwitchRetry(expected *uint64, id, nextID, reason string) error {
 	return s.switchMutationAt(expected, id, func(r *Registry, op *Switch) error {
+		if codexOwned(*r, op.Provider) || op.OwnershipMigration {
+			return ErrPending
+		}
 		if !currentSwitch(r, op) {
 			return ErrConflict
 		}
@@ -71,6 +74,9 @@ func (s *Store) BeginSwitchReloginJobAtRevision(expected uint64, id string, c Cr
 }
 func (s *Store) beginSwitchRelogin(expected *uint64, id string, c Credential, reason, jobID string) error {
 	return s.switchMutationAt(expected, id, func(r *Registry, op *Switch) error {
+		if codexOwned(*r, op.Provider) || op.OwnershipMigration {
+			return ErrPending
+		}
 		if !currentSwitch(r, op) {
 			return ErrConflict
 		}
@@ -142,6 +148,9 @@ func (s *Store) RetargetSwitch(id string) error {
 				op = current
 				break
 			}
+		}
+		if codexOwned(r, op.Provider) || op.OwnershipMigration {
+			return ErrPending
 		}
 		if provider == "" {
 			return ErrConflict

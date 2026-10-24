@@ -75,6 +75,9 @@ func (s *Store) reloginJob(expected uint64, id string, c Credential, jobID strin
 		if l == nil {
 			return ErrIneligible
 		}
+		if codexOwned(r, l.Provider) {
+			return ErrPending
+		}
 		if jobID != "" && l.LastLoginJobID == jobID {
 			out = *l
 			return nil
@@ -139,6 +142,9 @@ func (s *Store) reconcileRelogins(r *Registry) ([]string, error) {
 	var completed []string
 	for i := range r.Logins {
 		l := &r.Logins[i]
+		if codexOwned(*r, l.Provider) {
+			continue
+		}
 		intent, e := s.readRelogin(*l)
 		if errors.Is(e, os.ErrNotExist) {
 			continue

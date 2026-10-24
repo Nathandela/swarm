@@ -70,6 +70,9 @@ func (s *Store) beginReloginJob(expected uint64, loginID string, credential Cred
 func (s *Store) beginSwitch(expected uint64, provider, toID, reason string, sessions []Restart, incoming *Credential, jobID string) (Switch, error) {
 	var out Switch
 	_, e := s.mutate(expected, func(r *Registry) error {
+		if codexOwned(*r, provider) {
+			return ErrPending
+		}
 		if _, ok := r.Switches[provider]; ok {
 			return ErrPending
 		}
@@ -174,7 +177,7 @@ func (s *Store) switchMutationAt(expected *uint64, id string, fn func(*Registry,
 }
 func (s *Store) SaveSwitch(in Switch) error {
 	return s.switchMutation(in.ID, func(_ *Registry, op *Switch) error {
-		if in.Provider != op.Provider || in.FromID != op.FromID || in.ToID != op.ToID || in.FromEpoch != op.FromEpoch || in.ToEpoch != op.ToEpoch || in.Relogin != op.Relogin || in.NextID != op.NextID || in.LoginJobID != op.LoginJobID || !reflect.DeepEqual(in.AttemptedIDs, op.AttemptedIDs) || len(in.Sessions) != len(op.Sessions) {
+		if in.Provider != op.Provider || in.FromID != op.FromID || in.ToID != op.ToID || in.FromEpoch != op.FromEpoch || in.ToEpoch != op.ToEpoch || in.Relogin != op.Relogin || in.OwnershipMigration != op.OwnershipMigration || in.NextID != op.NextID || in.LoginJobID != op.LoginJobID || !reflect.DeepEqual(in.AttemptedIDs, op.AttemptedIDs) || len(in.Sessions) != len(op.Sessions) {
 			return ErrConflict
 		}
 		transition := in.Phase == op.Phase || (op.Phase == "waiting" && in.Phase == "stopping") || (op.Phase == "stopping" && in.Phase == "stopped") || (op.Phase == "committed" && in.Phase == "resuming")
@@ -205,6 +208,9 @@ func (s *Store) SaveSwitch(in Switch) error {
 // read only after lifecycle has durably recorded every writer stopped.
 func (s *Store) CaptureOutgoing(id string) error {
 	return s.switchMutation(id, func(r *Registry, op *Switch) error {
+		if codexOwned(*r, op.Provider) {
+			return ErrPending
+		}
 		if op.Phase == "captured" {
 			return nil
 		}
@@ -224,6 +230,23 @@ func (s *Store) CaptureOutgoing(id string) error {
 				l.AuthState = AuthNeedsLogin
 				op.Phase = "captured"
 				return nil
+			}
+			if op.OwnershipMigration {
+				previous, e := s.readSaved(*l)
+				if e != nil {
+					return e
+				}
+				previousOwner, e := CodexGrantOwner(previous.Auth)
+				if e != nil {
+					return e
+				}
+				capturedOwner, e := CodexGrantOwner(c.Auth)
+				if e != nil {
+					return e
+				}
+				if previousOwner != capturedOwner {
+					return ErrIdentityChanged
+				}
 			}
 			c, _, renewable, expires, e := normalizeCredential(op.Provider, c)
 			if e != nil {
@@ -246,7 +269,10 @@ func (s *Store) CaptureOutgoing(id string) error {
 
 func (s *Store) InstallIncoming(id string) error {
 	// Commit the intent separately before touching either native auth store.
-	if e := s.switchMutation(id, func(_ *Registry, op *Switch) error {
+	if e := s.switchMutation(id, func(r *Registry, op *Switch) error {
+		if codexOwned(*r, op.Provider) || op.OwnershipMigration {
+			return ErrPending
+		}
 		if op.Phase == "installed" || op.Phase == "installing" {
 			return nil
 		}
@@ -299,7 +325,7 @@ func (s *Store) InstallIncoming(id string) error {
 				return e
 			}
 		}
-		if e = s.validateNative(op.Provider, l.Identity, l.ID); e != nil {
+		if e = s.validateSelected(*r, op.Provider, l.Identity, l.ID); e != nil {
 			return e
 		}
 		op.Phase = "installed"
@@ -369,7 +395,7 @@ func (s *Store) VerifyInstalled(id string) error {
 	for _, op := range r.Switches {
 		if op.ID == id && (op.Phase == "installed" || op.Phase == "committed" || op.Phase == "resuming") {
 			l := find(&r, op.ToID)
-			return s.validateNative(op.Provider, l.Identity, l.ID)
+			return s.validateSelected(r, op.Provider, l.Identity, l.ID)
 		}
 	}
 	return ErrPending
@@ -384,21 +410,22 @@ func (s *Store) CommitSwitch(id string) (Runtime, error) {
 		if l == nil {
 			return ErrIneligible
 		}
-		if e := s.validateNative(op.Provider, l.Identity, l.ID); e != nil {
+		if e := s.validateSelected(*r, op.Provider, l.Identity, l.ID); e != nil {
 			return e
 		}
 		p := r.Providers[op.Provider]
 		if p.Epoch != op.FromEpoch && (p.Epoch != op.ToEpoch || p.ActiveID != op.ToID) {
 			return ErrConflict
 		}
-		r.Providers[op.Provider] = ProviderState{Provider: op.Provider, ActiveID: op.ToID, Epoch: op.ToEpoch}
+		p.Provider, p.ActiveID, p.Epoch = op.Provider, op.ToID, op.ToEpoch
+		r.Providers[op.Provider] = p
 		if op.Relogin && op.LoginJobID != "" {
 			l.LastLoginJobID = op.LoginJobID
 		}
 		if op.Phase == "installed" {
 			op.Phase = "committed"
 		}
-		rt = Runtime{Provider: op.Provider, Epoch: op.ToEpoch, Identity: l.Identity, Home: s.Home(op.Provider)}
+		rt = Runtime{Provider: op.Provider, Epoch: op.ToEpoch, Identity: l.Identity, Home: s.Home(op.Provider), ExternalAuth: codexOwned(*r, op.Provider)}
 		return nil
 	})
 	return rt, e
@@ -570,6 +597,22 @@ func (s *Store) Reconcile() error {
 			}
 			if c.Revision != l.CredentialRevision+1 || c.Identity != l.Identity {
 				return ErrConflict
+			}
+			if l.Provider == ProviderCodex && c.AuthOwner != nil {
+				c.Credential.Auth, e = s.readCodexGrant(*l, c)
+				if e != nil {
+					return e
+				}
+				if c.LoginJobID != "" {
+					if !validID(c.LoginJobID) {
+						return ErrIneligible
+					}
+					l.LastLoginJobID = c.LoginJobID
+					l.AuthState = AuthReady
+					l.LimitKnown = false
+					l.LimitNonRolling = false
+					l.ExhaustedUntil = time.Time{}
+				}
 			}
 			if l.Provider == ProviderClaude {
 				c.Credential.Auth, e = s.claudeAuth(l.ID)

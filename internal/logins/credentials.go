@@ -214,6 +214,18 @@ func (s *Store) Remove(expected uint64, id string) (Registry, error) {
 		if owned(r, id) {
 			return ErrInUse
 		}
+		var lease *GrantLease
+		if codexOwned(r, ProviderCodex) {
+			for _, l := range r.Logins {
+				if l.ID == id && l.Provider == ProviderCodex {
+					lease, e = s.acquireCodexGrantLocked(l)
+					if e != nil {
+						return e
+					}
+					defer func() { _ = lease.lock.Close(); lease.lock = nil }()
+				}
+			}
+		}
 		for i, l := range r.Logins {
 			if l.ID == id {
 				parent, _, e := s.openSavedForRemoval(id)
@@ -261,7 +273,7 @@ func (s *Store) openSavedForRemoval(id string) (*os.Root, []os.DirEntry, error) 
 		return nil, nil, e
 	}
 	for _, ent := range entries {
-		if ent.Name() != "credential.json" && ent.Name() != ".credentials.json" && ent.Name() != "relogin.json" && !validStoreTemporary(ent.Name()) {
+		if ent.Name() != ".grant-owner" && ent.Name() != "auth.json" && ent.Name() != ".grant-lock" && ent.Name() != "credential.json" && ent.Name() != ".credentials.json" && ent.Name() != "relogin.json" && !validStoreTemporary(ent.Name()) {
 			return nil, nil, errUnknownSavedData
 		}
 		if _, e = readPrivate(parent, ent.Name(), maxCredentialBytes*2); e != nil {
@@ -390,14 +402,22 @@ func (s *Store) UpdateExhaustion(expected uint64, id string, until time.Time, no
 }
 
 type savedCredential struct {
-	Revision   uint64     `json:"revision"`
-	Identity   string     `json:"identity"`
-	Credential Credential `json:"credential"`
-	LoginJobID string     `json:"login_job_id,omitempty"`
+	AuthOwner  *grantOwnership `json:"auth_owner,omitempty"`
+	Revision   uint64          `json:"revision"`
+	Identity   string          `json:"identity"`
+	Credential Credential      `json:"credential"`
+	LoginJobID string          `json:"login_job_id,omitempty"`
 }
 
 func (s *Store) savedPath(l Login) string { return filepath.Join("saved", l.ID, "credential.json") }
 func (s *Store) writeSaved(l Login, c Credential) error {
+	r, e := s.load()
+	if e != nil {
+		return e
+	}
+	if codexOwned(r, l.Provider) {
+		return s.writeNewCodexGrant(l, c)
+	}
 	dir := filepath.Join("saved", l.ID)
 	if e := mkdirPrivate(s.root, dir, s.writeOps); e != nil {
 		return e
@@ -410,6 +430,15 @@ func (s *Store) writeSaved(l Login, c Credential) error {
 	return s.writeSavedMetadata(l, c)
 }
 func (s *Store) writeSavedMetadata(l Login, c Credential) error {
+	if l.Provider == ProviderCodex {
+		r, e := s.load()
+		if e != nil {
+			return e
+		}
+		if codexOwned(r, l.Provider) {
+			return ErrPending
+		}
+	}
 	if l.Provider == ProviderClaude {
 		c.Auth = nil
 	}
@@ -426,6 +455,12 @@ func (s *Store) readSaved(l Login) (Credential, error) {
 	saved, e := s.readSavedRecord(l)
 	if e != nil {
 		return Credential{}, e
+	}
+	if l.Provider == ProviderCodex && saved.AuthOwner != nil {
+		saved.Credential.Auth, e = s.readCodexGrant(l, saved)
+		if e != nil {
+			return Credential{}, e
+		}
 	}
 	if l.Provider == ProviderClaude {
 		saved.Credential.Auth, e = s.claudeAuth(l.ID)

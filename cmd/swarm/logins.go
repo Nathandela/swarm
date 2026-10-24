@@ -11,10 +11,19 @@ import (
 )
 
 func runLoginWorker(args []string) int {
-	if len(args) != 2 || args[0] != "login-enroll" {
+	if len(args) != 2 {
 		return 2
 	}
-	if err := loginworker.RunConfig(context.Background(), args[1]); err != nil {
+	var err error
+	switch args[0] {
+	case "login-enroll":
+		err = loginworker.RunConfig(context.Background(), args[1])
+	case "login-refresh":
+		err = loginworker.RunCodexRefreshConfig(context.Background(), args[1])
+	default:
+		return 2
+	}
+	if err != nil {
 		return 1
 	}
 	return 0

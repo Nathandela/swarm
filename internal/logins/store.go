@@ -3,6 +3,7 @@ package logins
 import (
 	"encoding/json"
 	"errors"
+	"github.com/Nathandela/swarm/internal/processcontain"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,15 +14,16 @@ import (
 )
 
 type Store struct {
-	mu        sync.Mutex
-	root      *os.Root
-	path      string
-	anchor    os.FileInfo
-	lock      *os.File
-	readOnly  bool
-	uncertain bool
-	keychain  credentialKeychain
-	writeOps  writeOps
+	grantWriters func([]string, []string) ([]processcontain.Identity, error)
+	mu           sync.Mutex
+	root         *os.Root
+	path         string
+	anchor       os.FileInfo
+	lock         *os.File
+	readOnly     bool
+	uncertain    bool
+	keychain     credentialKeychain
+	writeOps     writeOps
 }
 
 func Open(stateRoot string) (*Store, error)         { return open(stateRoot, false) }
@@ -287,7 +289,7 @@ func find(r *Registry, id string) *Login {
 	return nil
 }
 func validateRegistry(r Registry) error {
-	if r.SchemaVersion != SchemaVersion || r.Providers == nil || r.Switches == nil {
+	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2) || r.Providers == nil || r.Switches == nil {
 		return ErrIneligible
 	}
 	seen := map[string]bool{}
@@ -301,7 +303,7 @@ func validateRegistry(r Registry) error {
 		seen[l.ID] = true
 	}
 	for p, st := range r.Providers {
-		if !validProvider(p) || st.Provider != p {
+		if !validProvider(p) || st.Provider != p || (st.AuthOwnerMode != "" && (p != ProviderCodex || st.AuthOwnerMode != CodexNativeGrantMode || r.SchemaVersion != 2)) {
 			return ErrIneligible
 		}
 		if st.ActiveID != "" {
@@ -323,7 +325,7 @@ func validateRegistry(r Registry) error {
 		} else if op.NextID != "" {
 			return ErrIneligible
 		}
-		if p != op.Provider || !validProvider(p) || !validID(op.ID) || find(&r, op.ToID) == nil || find(&r, op.ToID).Provider != p || op.ToEpoch == 0 || op.ToEpoch != op.FromEpoch+1 || op.Relogin != (op.FromID == op.ToID) {
+		if p != op.Provider || !validProvider(p) || !validID(op.ID) || find(&r, op.ToID) == nil || find(&r, op.ToID).Provider != p || op.ToEpoch == 0 || op.ToEpoch != op.FromEpoch+1 || (op.Relogin || op.OwnershipMigration) != (op.FromID == op.ToID) || (op.OwnershipMigration && (p != ProviderCodex || r.SchemaVersion != 2 || op.Relogin)) {
 			return ErrIneligible
 		}
 		if op.FromID != "" && (find(&r, op.FromID) == nil || find(&r, op.FromID).Provider != p) {

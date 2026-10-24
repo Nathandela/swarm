@@ -76,6 +76,11 @@ func (s *Store) readOptional(name string) ([]byte, error) {
 	return b, e
 }
 func (s *Store) nativeCredential(provider, loginID string) (Credential, error) {
+	if r, e := s.load(); e != nil {
+		return Credential{}, e
+	} else if codexOwned(r, provider) {
+		return Credential{}, ErrPending
+	}
 	base := filepath.Join("provider", provider, "native")
 	if provider == ProviderCodex {
 		b, e := readPrivate(s.root, filepath.Join(base, "auth.json"), maxCredentialBytes)
@@ -89,6 +94,11 @@ func (s *Store) nativeCredential(provider, loginID string) (Credential, error) {
 	return Credential{Auth: auth, Identity: identity}, e
 }
 func (s *Store) installCredential(provider string, c Credential) error {
+	if r, e := s.load(); e != nil {
+		return e
+	} else if codexOwned(r, provider) {
+		return ErrPending
+	}
 	base := filepath.Join("provider", provider, "native")
 	if provider == ProviderCodex {
 		if e := s.ensureCodexFileMode(); e != nil {
@@ -300,8 +310,8 @@ func (s *Store) runtime(r Registry, provider string) (Runtime, error) {
 	if l == nil || l.AuthState != AuthReady {
 		return Runtime{}, ErrIneligible
 	}
-	rt := Runtime{Provider: provider, Epoch: p.Epoch, Identity: l.Identity, Home: s.Home(provider)}
-	if e := s.validateNative(provider, l.Identity, l.ID); e != nil {
+	rt := Runtime{Provider: provider, Epoch: p.Epoch, Identity: l.Identity, Home: s.Home(provider), ExternalAuth: codexOwned(r, provider)}
+	if e := s.validateSelected(r, provider, l.Identity, l.ID); e != nil {
 		return Runtime{}, e
 	}
 	return rt, nil

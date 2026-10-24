@@ -46,16 +46,18 @@ type Login struct {
 }
 
 type ProviderState struct {
-	Provider string `json:"provider"`
-	ActiveID string `json:"active_id,omitempty"`
-	Epoch    uint64 `json:"epoch"`
+	AuthOwnerMode string `json:"auth_owner_mode,omitempty"`
+	Provider      string `json:"provider"`
+	ActiveID      string `json:"active_id,omitempty"`
+	Epoch         uint64 `json:"epoch"`
 }
 
 type Runtime struct {
-	Provider string `json:"provider"`
-	Epoch    uint64 `json:"epoch"`
-	Identity string `json:"identity"`
-	Home     string `json:"home"`
+	ExternalAuth bool   `json:"external_auth,omitempty"`
+	Provider     string `json:"provider"`
+	Epoch        uint64 `json:"epoch"`
+	Identity     string `json:"identity"`
+	Home         string `json:"home"`
 }
 
 type Restart struct {
@@ -68,21 +70,22 @@ type Restart struct {
 }
 
 type Switch struct {
-	ID              string    `json:"id"`
-	Provider        string    `json:"provider"`
-	FromID          string    `json:"from_id,omitempty"`
-	ToID            string    `json:"to_id"`
-	NextID          string    `json:"next_id,omitempty"`
-	LoginJobID      string    `json:"login_job_id,omitempty"`
-	FromEpoch       uint64    `json:"from_epoch"`
-	ToEpoch         uint64    `json:"to_epoch"`
-	Phase           string    `json:"phase"`
-	AttemptedIDs    []string  `json:"attempted_ids,omitempty"`
-	Reason          string    `json:"reason,omitempty"`
-	LastError       string    `json:"last_error,omitempty"`
-	CancelRequested bool      `json:"cancel_requested,omitempty"`
-	Relogin         bool      `json:"relogin,omitempty"`
-	Sessions        []Restart `json:"sessions,omitempty"`
+	OwnershipMigration bool      `json:"ownership_migration,omitempty"`
+	ID                 string    `json:"id"`
+	Provider           string    `json:"provider"`
+	FromID             string    `json:"from_id,omitempty"`
+	ToID               string    `json:"to_id"`
+	NextID             string    `json:"next_id,omitempty"`
+	LoginJobID         string    `json:"login_job_id,omitempty"`
+	FromEpoch          uint64    `json:"from_epoch"`
+	ToEpoch            uint64    `json:"to_epoch"`
+	Phase              string    `json:"phase"`
+	AttemptedIDs       []string  `json:"attempted_ids,omitempty"`
+	Reason             string    `json:"reason,omitempty"`
+	LastError          string    `json:"last_error,omitempty"`
+	CancelRequested    bool      `json:"cancel_requested,omitempty"`
+	Relogin            bool      `json:"relogin,omitempty"`
+	Sessions           []Restart `json:"sessions,omitempty"`
 }
 
 type Registry struct {
