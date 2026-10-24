@@ -1,0 +1,403 @@
+{
+  "native_version": "0.163.0",
+  "platform": "darwin-arm64",
+  "binary_sha256": "8813367285524ac798dd96d1b071aea30d58708c7226fd236cd275cf1cfdee31",
+  "scope": "Real native synthetic tools on custom loopback provider; bodies removed, no account-adoption claim.",
+  "cases": [
+    {
+      "scenario": "filechange",
+      "threadId": "01a16dfe-043b-7cb1-ba68-e08021c368c2",
+      "events": [
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16dfe-043b-7cb1-ba68-e08021c368c2",
+            "turn": {
+              "id": "01a16dfe-0461-7031-b39e-42bf07995b6a",
+              "status": "inProgress"
+            }
+          },
+          "emittedAtMs": 1792846726326
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16dfe-043b-7cb1-ba68-e08021c368c2",
+            "turnId": "01a16dfe-0461-7031-b39e-42bf07995b6a",
+            "item": {
+              "id": "01a16dfe-0512-7a10-9d5c-5fae6b06638f",
+              "type": "userMessage"
+            }
+          },
+          "emittedAtMs": 1792846726432
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16dfe-043b-7cb1-ba68-e08021c368c2",
+            "turnId": "01a16dfe-0461-7031-b39e-42bf07995b6a",
+            "item": {
+              "id": "01a16dfe-0512-7a10-9d5c-5fae6b06638f",
+              "type": "userMessage"
+            }
+          },
+          "emittedAtMs": 1792846726447
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16dfe-043b-7cb1-ba68-e08021c368c2",
+            "turnId": "01a16dfe-0461-7031-b39e-42bf07995b6a",
+            "item": {
+              "id": "coverage-commentary",
+              "type": "agentMessage",
+              "phase": "commentary"
+            }
+          },
+          "emittedAtMs": 1792846726450
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16dfe-043b-7cb1-ba68-e08021c368c2",
+            "turnId": "01a16dfe-0461-7031-b39e-42bf07995b6a",
+            "item": {
+              "id": "coverage-commentary",
+              "type": "agentMessage",
+              "phase": "commentary"
+            }
+          },
+          "emittedAtMs": 1792846726461
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16dfe-043b-7cb1-ba68-e08021c368c2",
+            "turnId": "01a16dfe-0461-7031-b39e-42bf07995b6a",
+            "item": {
+              "id": "coverage-patch",
+              "type": "fileChange",
+              "status": "inProgress"
+            }
+          },
+          "emittedAtMs": 1792846726498
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16dfe-043b-7cb1-ba68-e08021c368c2",
+            "turnId": "01a16dfe-0461-7031-b39e-42bf07995b6a",
+            "item": {
+              "id": "coverage-patch",
+              "type": "fileChange",
+              "status": "completed"
+            }
+          },
+          "emittedAtMs": 1792846726514
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16dfe-043b-7cb1-ba68-e08021c368c2",
+            "turn": {
+              "id": "01a16dfe-0461-7031-b39e-42bf07995b6a",
+              "status": "failed",
+              "error": {
+                "codexErrorInfo": "usageLimitExceeded"
+              }
+            }
+          },
+          "emittedAtMs": 1792846726544
+        }
+      ]
+    },
+    {
+      "scenario": "mcp",
+      "threadId": "01a16dfe-0f56-71b3-bf92-4a5e8e0c9534",
+      "events": [
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16dfe-0f56-71b3-bf92-4a5e8e0c9534",
+            "turn": {
+              "id": "01a16dfe-0f88-74e2-a12a-e09dd25934ea",
+              "status": "inProgress"
+            }
+          },
+          "emittedAtMs": 1792846729220
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16dfe-0f56-71b3-bf92-4a5e8e0c9534",
+            "turnId": "01a16dfe-0f88-74e2-a12a-e09dd25934ea",
+            "item": {
+              "id": "01a16dfe-1070-7563-a05c-aad5351369c9",
+              "type": "userMessage"
+            }
+          },
+          "emittedAtMs": 1792846729337
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16dfe-0f56-71b3-bf92-4a5e8e0c9534",
+            "turnId": "01a16dfe-0f88-74e2-a12a-e09dd25934ea",
+            "item": {
+              "id": "01a16dfe-1070-7563-a05c-aad5351369c9",
+              "type": "userMessage"
+            }
+          },
+          "emittedAtMs": 1792846729352
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16dfe-0f56-71b3-bf92-4a5e8e0c9534",
+            "turnId": "01a16dfe-0f88-74e2-a12a-e09dd25934ea",
+            "item": {
+              "id": "coverage-commentary",
+              "type": "agentMessage",
+              "phase": "commentary"
+            }
+          },
+          "emittedAtMs": 1792846729356
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16dfe-0f56-71b3-bf92-4a5e8e0c9534",
+            "turnId": "01a16dfe-0f88-74e2-a12a-e09dd25934ea",
+            "item": {
+              "id": "coverage-commentary",
+              "type": "agentMessage",
+              "phase": "commentary"
+            }
+          },
+          "emittedAtMs": 1792846729369
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16dfe-0f56-71b3-bf92-4a5e8e0c9534",
+            "turnId": "01a16dfe-0f88-74e2-a12a-e09dd25934ea",
+            "item": {
+              "id": "coverage-mcp",
+              "type": "mcpToolCall",
+              "status": "inProgress",
+              "tool": "echo",
+              "result": null,
+              "error": null
+            }
+          },
+          "emittedAtMs": 1792846729394
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16dfe-0f56-71b3-bf92-4a5e8e0c9534",
+            "turnId": "01a16dfe-0f88-74e2-a12a-e09dd25934ea",
+            "item": {
+              "id": "coverage-mcp",
+              "type": "mcpToolCall",
+              "status": "completed",
+              "tool": "echo",
+              "result": {
+                "content": [],
+                "structuredContent": null,
+                "_meta": null
+              },
+              "error": null
+            }
+          },
+          "emittedAtMs": 1792846729408
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16dfe-0f56-71b3-bf92-4a5e8e0c9534",
+            "turn": {
+              "id": "01a16dfe-0f88-74e2-a12a-e09dd25934ea",
+              "status": "failed",
+              "error": {
+                "codexErrorInfo": "usageLimitExceeded"
+              }
+            }
+          },
+          "emittedAtMs": 1792846729461
+        }
+      ]
+    },
+    {
+      "scenario": "mcp-recover",
+      "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+      "events": [
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turn": {
+              "id": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+              "status": "inProgress"
+            }
+          },
+          "emittedAtMs": 1792846995941
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "01a16e02-2266-7a73-9abb-80018c043adb",
+              "type": "userMessage"
+            }
+          },
+          "emittedAtMs": 1792846996072
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "01a16e02-2266-7a73-9abb-80018c043adb",
+              "type": "userMessage"
+            }
+          },
+          "emittedAtMs": 1792846996074
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "coverage-commentary",
+              "type": "agentMessage",
+              "phase": "commentary"
+            }
+          },
+          "emittedAtMs": 1792846996077
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "coverage-commentary",
+              "type": "agentMessage",
+              "phase": "commentary"
+            }
+          },
+          "emittedAtMs": 1792846996078
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "coverage-mcp",
+              "type": "mcpToolCall",
+              "status": "inProgress",
+              "tool": "echo",
+              "result": null,
+              "error": null
+            }
+          },
+          "emittedAtMs": 1792846996082
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "coverage-mcp",
+              "type": "mcpToolCall",
+              "status": "failed",
+              "tool": "echo",
+              "result": {
+                "content": [],
+                "structuredContent": null,
+                "_meta": null
+              },
+              "error": null
+            }
+          },
+          "emittedAtMs": 1792846996083
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "recovery-commentary",
+              "type": "agentMessage",
+              "phase": "commentary"
+            }
+          },
+          "emittedAtMs": 1792846996090
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "recovery-commentary",
+              "type": "agentMessage",
+              "phase": "commentary"
+            }
+          },
+          "emittedAtMs": 1792846996091
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "coverage-recovered-command",
+              "type": "commandExecution",
+              "status": "inProgress",
+              "exitCode": null
+            }
+          },
+          "emittedAtMs": 1792846996134
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turnId": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+            "item": {
+              "id": "coverage-recovered-command",
+              "type": "commandExecution",
+              "status": "completed",
+              "exitCode": 0
+            }
+          },
+          "emittedAtMs": 1792846996134
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e02-21aa-7181-b266-189ec6d0ea81",
+            "turn": {
+              "id": "01a16e02-21ca-7dd0-b78b-356ce12ade1b",
+              "status": "failed",
+              "error": {
+                "codexErrorInfo": "usageLimitExceeded"
+              }
+            }
+          },
+          "emittedAtMs": 1792846996145
+        }
+      ]
+    }
+  ]
+}

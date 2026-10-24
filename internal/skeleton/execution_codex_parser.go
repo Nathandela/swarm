@@ -16,9 +16,9 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 	unknown := engine.CodexExecutionEvent{Kind: engine.CodexUnknownEvidence, ThreadID: thread}
 	unsupported := false
 	switch method {
-	case "thread/started", "thread/name/updated", "thread/tokenUsage/updated", "turn/plan/updated", "turn/diff/updated",
+	case "thread/started", "thread/name/updated", "thread/tokenUsage/updated", "thread/readState/changed", "turn/plan/updated", "turn/diff/updated",
 		"item/agentMessage/delta", "item/reasoning/summaryTextDelta", "item/reasoning/textDelta", "item/reasoning/summaryPartAdded",
-		"item/commandExecution/outputDelta", "item/fileChange/outputDelta", "item/mcpToolCall/progress":
+		"item/commandExecution/outputDelta", "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "item/mcpToolCall/progress":
 		return engine.CodexExecutionEvent{}, false
 	case "turn/started", "turn/completed", "item/started", "item/completed", "error", "serverRequest/resolved",
 		"item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "thread/status/changed":
@@ -90,7 +90,7 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 		if e.TurnID == "" {
 			return unknown, true
 		}
-		item, ok := codexExecutionObject(params["item"], "id", "type", "phase", "status", "exitCode", "source", "questions")
+		item, ok := codexExecutionObject(params["item"], "id", "type", "phase", "status", "exitCode", "source", "questions", "result", "error")
 		if !ok {
 			return unknown, true
 		}
@@ -117,6 +117,44 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 			source, present := item["source"]
 			e.ToolSucceeded = err == nil && exit != nil && *exit == 0 && executionString(item["status"]) == "completed" && (!present || executionString(source) == "agent")
 		}
+		if e.ItemKind == engine.CodexFileChange || e.ItemKind == engine.CodexMcpToolCall {
+			status := executionString(item["status"])
+			if e.Kind == engine.CodexItemStarted {
+				if status != "inProgress" {
+					return unknown, true
+				}
+			} else {
+				switch status {
+				case "completed":
+					e.ToolSucceeded = true
+					if e.ItemKind == engine.CodexMcpToolCall {
+						// Native core maps is_error to failed before v2 drops that field.
+						result, valid := codexExecutionObject(item["result"], "content", "structuredContent", "_meta", "isError")
+						if !valid {
+							return unknown, true
+						}
+						if _, present := result["isError"]; present {
+							return unknown, true
+						}
+						var content []json.RawMessage
+						if json.Unmarshal(result["content"], &content) != nil || content == nil {
+							return unknown, true
+						}
+						if !bytes.Equal(bytes.TrimSpace(item["error"]), []byte("null")) {
+							return unknown, true
+						}
+					}
+				case "failed":
+				case "declined":
+					if e.ItemKind != engine.CodexFileChange {
+						return unknown, true
+					}
+				default:
+					return unknown, true
+				}
+			}
+		}
+
 		return e, true
 	case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 		e.RequestID = executionRequestID(root["id"])

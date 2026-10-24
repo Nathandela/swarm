@@ -148,8 +148,20 @@ func qualifiedEmptyCodexThreads(raw json.RawMessage) bool {
 		return false
 	}
 	object, ok := decodeStrictObject(raw)
-	if !ok || len(object) != 1 {
+	if !ok {
 		return false
+	}
+	for key, raw := range object {
+		switch key {
+		case "data":
+		case "nextCursor":
+			var cursor *string
+			if json.Unmarshal(raw, &cursor) != nil || cursor != nil {
+				return false
+			}
+		default:
+			return false
+		}
 	}
 	data, present := object["data"]
 	if !present {

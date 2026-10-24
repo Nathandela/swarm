@@ -1,8 +1,11 @@
 package skeleton
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/engine"
 )
@@ -91,5 +94,85 @@ func TestCodexExecutionParserUnknownLifecycleCannotDisappear(t *testing.T) {
 	}
 	if _, observed := parseCodexExecutionFrame("item/agentMessage/delta", []byte(`{"delta":"private text"}`), "thread"); observed {
 		t.Fatal("text delta entered control evidence")
+	}
+}
+
+func TestCodexExecutionParserFileAndMcpSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		item    string
+		success bool
+	}{
+		{`{"id":"patch","type":"fileChange","status":"completed","changes":[]}`, true},
+		{`{"id":"patch","type":"fileChange","status":"failed","changes":[]}`, false},
+		{`{"id":"patch","type":"fileChange","status":"declined","changes":[]}`, false},
+		{`{"id":"mcp","type":"mcpToolCall","status":"completed","result":{"content":[],"structuredContent":null,"_meta":null},"error":null}`, true},
+		{`{"id":"mcp","type":"mcpToolCall","status":"completed","result":null,"error":null}`, false},
+		{`{"id":"mcp","type":"mcpToolCall","status":"completed","result":{"content":[]},"error":{"message":"failed"}}`, false},
+		{`{"id":"mcp","type":"mcpToolCall","status":"failed","result":{"content":[]},"error":null}`, false},
+		{`{"id":"mcp","type":"mcpToolCall","status":"completed","result":{"content":[]}}`, false},
+	} {
+		raw := `{"method":"item/completed","params":{"threadId":"thread","turnId":"turn","item":` + tc.item + `}}`
+		e, observed := parseCodexExecutionFrame("item/completed", []byte(raw), "thread")
+		if !observed || e.ToolSucceeded != tc.success {
+			t.Fatalf("wrong native tool success %s: %+v", tc.item, e)
+		}
+	}
+	for _, item := range []string{
+		`{"id":"patch","type":"fileChange","status":"completed","Status":"failed"}`,
+		`{"id":"mcp","type":"mcpToolCall","status":"completed","result":{"content":[]},"error":null,"Error":{"message":"failed"}}`,
+		`{"id":"mcp","type":"mcpToolCall","status":"completed","result":{"content":[],"Content":null},"error":null}`,
+		`{"id":"mcp","type":"mcpToolCall","status":"completed","result":{"content":[],"isError":true},"error":null}`,
+	} {
+		raw := `{"method":"item/completed","params":{"threadId":"thread","turnId":"turn","item":` + item + `}}`
+		e, observed := parseCodexExecutionFrame("item/completed", []byte(raw), "thread")
+		if !observed || e.Kind != engine.CodexUnknownEvidence {
+			t.Fatalf("ambiguous tool result trusted: %+v", e)
+		}
+	}
+}
+
+func TestCodexExecutionNativeCommonToolFixturesThroughIngress(t *testing.T) {
+	raw, err := os.ReadFile("testdata/codex_execution_tools_0163.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Scenario string
+			ThreadID string `json:"threadId"`
+			Events   []struct {
+				Method      string          `json:"method"`
+				Params      json.RawMessage `json:"params"`
+				EmittedAtMS int64           `json:"emittedAtMs"`
+			}
+		}
+	}
+	if err = json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, testcase := range fixture.Cases {
+		t.Run(testcase.Scenario, func(t *testing.T) {
+			r := newCodexExecutionRig(t, testcase.ThreadID, true)
+			for _, event := range testcase.Events {
+				frame, err := json.Marshal(event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !r.feed.ingress.enqueue(event.Method, frame, time.Now()) {
+					t.Fatal("native fixture rejected")
+				}
+			}
+			r.drain(t)
+			if _, ok := r.d.codexQuotaCandidate(r.local); !ok {
+				snapshot, _ := r.d.eng.ExecutionSnapshot(r.local)
+				t.Fatalf("qualified native %s rejected: %+v", testcase.Scenario, snapshot.Codex)
+			}
+		})
+	}
+}
+
+func TestCodexExecutionReadStateIsObservationOnly(t *testing.T) {
+	if _, observed := parseCodexExecutionFrame("thread/readState/changed", []byte(`{"method":"thread/readState/changed","params":{"threadId":"thread","readState":{"firstUnread":null,"revision":"native-revision"}}}`), "thread"); observed {
+		t.Fatal("read/unread marker became execution control")
 	}
 }

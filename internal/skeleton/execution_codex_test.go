@@ -170,7 +170,7 @@ func newCodexExecutionRig(t *testing.T, conversation string, fresh bool) *codexE
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = peer.Close() })
-	r.conn = &codexExecutionTestConn{loaded: `{"data":[]}`, native: peer}
+	r.conn = &codexExecutionTestConn{loaded: `{"data":[],"nextCursor":null}`, native: peer}
 	d.prepareCodexExecutionNative(context.Background(), local, instance, r.channel, feed)
 	d.finishCodexExecutionPreparation(context.Background(), local, instance, r.channel, r.conn, feed, json.RawMessage(`{"userAgent":"codex_cli_rs/0.163.0"}`), fresh)
 	if conversation != "" && !d.registerBackendFeedForInstance(local, instance, conversation, r.conn, feed) {
@@ -552,13 +552,15 @@ func TestCodexExecutionDialCapturesBeforeInitializeAndDistinguishesRejoin(t *tes
 }
 
 func TestCodexExecutionEmptyLoadedProofIsUnambiguous(t *testing.T) {
-	for _, raw := range []string{`{"data":[],"Data":["unobserved-thread"]}`, `{"data":[],"data":["unobserved-thread"]}`, `{"data":null}`, `{}`, `{"data":["thread"]}`} {
+	for _, raw := range []string{`{"data":[],"Data":["unobserved-thread"]}`, `{"data":[],"data":["unobserved-thread"]}`, `{"data":null}`, `{}`, `{"data":["thread"]}`, `{"data":[],"nextCursor":"more"}`, `{"data":[],"nextCursor":""}`, `{"data":[],"NextCursor":null}`, `{"data":[],"other":null}`, `{"data":[],"nextCursor":null,"nextCursor":"more"}`} {
 		if qualifiedEmptyCodexThreads(json.RawMessage(raw)) {
 			t.Fatal("ambiguous or nonempty native thread list qualified")
 		}
 	}
-	if !qualifiedEmptyCodexThreads(json.RawMessage(`{"data":[]}`)) {
-		t.Fatal("explicit empty native list denied")
+	for _, raw := range []string{`{"data":[]}`, `{"data":[],"nextCursor":null}`} {
+		if !qualifiedEmptyCodexThreads(json.RawMessage(raw)) {
+			t.Fatal("explicit empty native list denied")
+		}
 	}
 }
 
@@ -655,7 +657,7 @@ func TestCodexExecutionOwnedEndpointProcess(t *testing.T) {
 				}
 				result = map[string]any{"type": "chatgptAuthTokens"}
 			case "thread/loaded/list":
-				result = map[string]any{"data": []string{}}
+				result = map[string]any{"data": []string{}, "nextCursor": nil}
 			case "fixture/emit":
 				var frames []struct {
 					Binary bool

@@ -500,3 +500,80 @@ func TestCodexExecutionGapInvalidatesBeforeWaitingForDiskCustody(t *testing.T) {
 		t.Fatal("gap returned authority after concurrent write")
 	}
 }
+
+func TestCodexExecutionFileAndMcpToolCycles(t *testing.T) {
+	for _, kind := range []CodexItemKind{"fileChange", "mcpToolCall"} {
+		for _, scenario := range []string{"completed", "active", "failed", "final", "null-phase", "question"} {
+			t.Run(string(kind)+"/"+scenario, func(t *testing.T) {
+				e, feed := codexExecutionEngine(t)
+				trace := codexExecutionTrace(t, "quota")
+				for i := range trace {
+					if trace[i].ItemKind == CodexCommandExecution {
+						trace[i].ItemKind = kind
+					}
+				}
+				switch scenario {
+				case "active":
+					trace = append(trace[:len(trace)-2], trace[len(trace)-1])
+				case "failed":
+					trace[len(trace)-2].ToolSucceeded = false
+				case "final":
+					trace[3].Phase = CodexFinalAnswer
+					trace[4].Phase = CodexFinalAnswer
+				case "null-phase":
+					trace[3].Phase = ""
+					trace[4].Phase = ""
+				case "question":
+					terminal := trace[len(trace)-1]
+					trace = append(trace[:len(trace)-1], CodexExecutionEvent{Kind: CodexDecisionRequested, TurnID: terminal.TurnID, RequestID: `"question"`, Decision: CodexQuestion}, terminal)
+				}
+				applyCodexTrace(t, e, feed, trace)
+				if _, ok := e.CodexQuotaCandidate("s1"); ok != (scenario == "completed") {
+					t.Fatalf("%s %s candidate=%v", kind, scenario, ok)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexExecutionOrdinaryFailureNeedsFreshPositiveCycle(t *testing.T) {
+	for _, failedKind := range []CodexItemKind{CodexCommandExecution, CodexMcpToolCall} {
+		for _, scenario := range []string{"fresh-positive", "old-commentary", "overlap", "still-failed", "human", "final", "unknown"} {
+			t.Run(string(failedKind)+"/"+scenario, func(t *testing.T) {
+				e, feed := codexExecutionEngine(t)
+				trace := codexExecutionTrace(t, "quota")
+				turn := trace[0].TurnID
+				terminal := trace[len(trace)-1]
+				trace = trace[:len(trace)-1]
+				for i := range trace {
+					if trace[i].ItemKind == CodexCommandExecution {
+						trace[i].ItemKind = failedKind
+						trace[i].ToolSucceeded = false
+					}
+				}
+				if scenario == "final" {
+					trace[3].Phase = CodexFinalAnswer
+					trace[4].Phase = CodexFinalAnswer
+				}
+				if scenario == "human" {
+					trace = append(trace[:5], append([]CodexExecutionEvent{{Kind: CodexDecisionRequested, TurnID: turn, RequestID: `"approval"`, Decision: CodexApproval}}, trace[5:]...)...)
+				}
+				if scenario == "unknown" {
+					trace = append(trace[:5], append([]CodexExecutionEvent{{Kind: CodexUnknownEvidence}}, trace[5:]...)...)
+				}
+				if scenario == "overlap" {
+					failed := trace[len(trace)-1]
+					trace = append(trace[:len(trace)-1], CodexExecutionEvent{Kind: CodexItemStarted, TurnID: turn, ItemID: "retry-commentary", ItemKind: CodexAgentMessage, Phase: CodexCommentary}, failed, CodexExecutionEvent{Kind: CodexItemCompleted, TurnID: turn, ItemID: "retry-commentary", ItemKind: CodexAgentMessage, Phase: CodexCommentary})
+				}
+				if scenario != "old-commentary" && scenario != "overlap" {
+					trace = append(trace, CodexExecutionEvent{Kind: CodexItemStarted, TurnID: turn, ItemID: "retry-commentary", ItemKind: CodexAgentMessage, Phase: CodexCommentary}, CodexExecutionEvent{Kind: CodexItemCompleted, TurnID: turn, ItemID: "retry-commentary", ItemKind: CodexAgentMessage, Phase: CodexCommentary})
+				}
+				trace = append(trace, CodexExecutionEvent{Kind: CodexItemStarted, TurnID: turn, ItemID: "retry-tool", ItemKind: CodexFileChange}, CodexExecutionEvent{Kind: CodexItemCompleted, TurnID: turn, ItemID: "retry-tool", ItemKind: CodexFileChange, ToolSucceeded: scenario != "still-failed"}, terminal)
+				applyCodexTrace(t, e, feed, trace)
+				if _, ok := e.CodexQuotaCandidate("s1"); ok != (scenario == "fresh-positive") {
+					t.Fatalf("%s candidate=%v", scenario, ok)
+				}
+			})
+		}
+	}
+}

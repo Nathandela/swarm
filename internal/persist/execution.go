@@ -96,26 +96,27 @@ func (r ExecutionRecord) Validate() error {
 // CodexExecution retains one observed native turn and independently live custody.
 // No message, command, result body or credential belongs in these records.
 type CodexExecution struct {
-	NativeIncarnation  string                            `json:"native_incarnation"`
-	FeedEpoch          string                            `json:"feed_epoch"`
-	ThreadID           string                            `json:"thread_id"`
-	Sequence           uint64                            `json:"sequence"`
-	LastEventHash      string                            `json:"last_event_hash"`
-	TurnID             string                            `json:"turn_id"`
-	OwnerRevision      uint64                            `json:"owner_revision"`
-	State              CodexTurnState                    `json:"state"`
-	Cause              CodexTerminalCause                `json:"cause"`
-	TerminalSequence   uint64                            `json:"terminal_sequence"`
-	Incomplete         string                            `json:"incomplete"`
-	UnknownCustody     bool                              `json:"unknown_custody"`
-	Denied             string                            `json:"denied"`
-	UserSequence       uint64                            `json:"user_sequence"`
-	CommentarySequence uint64                            `json:"commentary_sequence"`
-	ToolResultSequence uint64                            `json:"tool_result_sequence"`
-	LastItemSequence   uint64                            `json:"last_item_sequence"`
-	Items              map[string]CodexExecutionItem     `json:"items"`
-	Children           map[string]CodexExecutionChild    `json:"children"`
-	Decisions          map[string]CodexExecutionDecision `json:"decisions"`
+	NativeIncarnation   string                            `json:"native_incarnation"`
+	FeedEpoch           string                            `json:"feed_epoch"`
+	ThreadID            string                            `json:"thread_id"`
+	Sequence            uint64                            `json:"sequence"`
+	LastEventHash       string                            `json:"last_event_hash"`
+	TurnID              string                            `json:"turn_id"`
+	OwnerRevision       uint64                            `json:"owner_revision"`
+	State               CodexTurnState                    `json:"state"`
+	Cause               CodexTerminalCause                `json:"cause"`
+	TerminalSequence    uint64                            `json:"terminal_sequence"`
+	Incomplete          string                            `json:"incomplete"`
+	UnknownCustody      bool                              `json:"unknown_custody"`
+	Denied              string                            `json:"denied"`
+	UserSequence        uint64                            `json:"user_sequence"`
+	CommentarySequence  uint64                            `json:"commentary_sequence"`
+	ToolFailureSequence uint64                            `json:"tool_failure_sequence"`
+	ToolResultSequence  uint64                            `json:"tool_result_sequence"`
+	LastItemSequence    uint64                            `json:"last_item_sequence"`
+	Items               map[string]CodexExecutionItem     `json:"items"`
+	Children            map[string]CodexExecutionChild    `json:"children"`
+	Decisions           map[string]CodexExecutionDecision `json:"decisions"`
 }
 
 type CodexTurnState string
@@ -168,7 +169,7 @@ func (c CodexExecution) Validate() error {
 			return fmt.Errorf("persist: invalid Codex event receipt")
 		}
 	}
-	if c.TerminalSequence > c.Sequence || c.UserSequence > c.Sequence || c.CommentarySequence > c.Sequence || c.ToolResultSequence > c.Sequence || c.LastItemSequence > c.Sequence {
+	if c.TerminalSequence > c.Sequence || c.UserSequence > c.Sequence || c.CommentarySequence > c.Sequence || c.ToolResultSequence > c.Sequence || c.ToolFailureSequence > c.Sequence || c.LastItemSequence > c.Sequence {
 		return fmt.Errorf("persist: invalid Codex event position")
 	}
 	for id, item := range c.Items {
@@ -176,7 +177,7 @@ func (c CodexExecution) Validate() error {
 			return fmt.Errorf("persist: invalid Codex item identity")
 		}
 		switch item.Kind {
-		case "userMessage", "agentMessage", "commandExecution", "contextCompaction", "reasoning", "plan", "unknown":
+		case "userMessage", "agentMessage", "commandExecution", "fileChange", "mcpToolCall", "contextCompaction", "reasoning", "plan", "unknown":
 		default:
 			return fmt.Errorf("persist: invalid Codex item kind")
 		}
@@ -610,7 +611,7 @@ func executionJSON(raw []byte) error {
 				case "actors/*":
 					allowed = "sequence start_sequence active"
 				case "codex":
-					allowed = "native_incarnation feed_epoch thread_id sequence last_event_hash turn_id owner_revision state cause terminal_sequence incomplete unknown_custody denied user_sequence commentary_sequence tool_result_sequence last_item_sequence items children decisions"
+					allowed = "native_incarnation feed_epoch thread_id sequence last_event_hash turn_id owner_revision state cause terminal_sequence incomplete unknown_custody denied user_sequence commentary_sequence tool_result_sequence tool_failure_sequence last_item_sequence items children decisions"
 				case "codex/items/*":
 					allowed = "turn_id kind phase start_sequence complete native_incarnation feed_epoch"
 				case "codex/children/*":

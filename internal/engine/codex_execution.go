@@ -31,6 +31,8 @@ const (
 	CodexUserMessage       CodexItemKind       = "userMessage"
 	CodexAgentMessage      CodexItemKind       = "agentMessage"
 	CodexCommandExecution  CodexItemKind       = "commandExecution"
+	CodexFileChange        CodexItemKind       = "fileChange"
+	CodexMcpToolCall       CodexItemKind       = "mcpToolCall"
 	CodexContextCompaction CodexItemKind       = "contextCompaction"
 	CodexCommentary        CodexAssistantPhase = "commentary"
 	CodexFinalAnswer       CodexAssistantPhase = "final_answer"
@@ -137,6 +139,7 @@ func (e *Engine) BeginCodexExecutionFeed(id string, feed CodexFeedIdentity) erro
 		c.UserSequence = 0
 		c.CommentarySequence = 0
 		c.ToolResultSequence = 0
+		c.ToolFailureSequence = 0
 		c.LastItemSequence = 0
 		c.State = "unobserved"
 		c.Cause = ""
@@ -263,6 +266,7 @@ func reduceCodexExecution(s *session, c *persist.CodexExecution, event CodexExec
 		c.UserSequence = 0
 		c.CommentarySequence = 0
 		c.ToolResultSequence = 0
+		c.ToolFailureSequence = 0
 		c.LastItemSequence = 0
 		c.Incomplete = ""
 		if c.UnknownCustody {
@@ -348,7 +352,7 @@ func reduceCodexItem(c *persist.CodexExecution, event CodexExecutionEvent) error
 	}
 	kind := event.ItemKind
 	switch kind {
-	case CodexUserMessage, CodexAgentMessage, CodexCommandExecution, CodexContextCompaction, CodexReasoning, CodexPlan:
+	case CodexUserMessage, CodexAgentMessage, CodexCommandExecution, CodexFileChange, CodexMcpToolCall, CodexContextCompaction, CodexReasoning, CodexPlan:
 	default:
 		kind = "unknown"
 		c.Denied = "unknown_item"
@@ -393,14 +397,20 @@ func reduceCodexItem(c *persist.CodexExecution, event CodexExecutionEvent) error
 	case CodexUserMessage:
 		c.UserSequence = event.Sequence
 	case CodexAgentMessage:
-		if phase == CodexCommentary {
+		if phase == CodexCommentary && item.StartSequence > c.ToolFailureSequence {
 			c.CommentarySequence = event.Sequence
 		}
-	case CodexCommandExecution:
+	case CodexCommandExecution, CodexFileChange, CodexMcpToolCall:
 		if !event.ToolSucceeded {
-			c.Denied = "tool_unsuccessful"
+			c.ToolFailureSequence = event.Sequence
+			if c.Denied == "" || c.Denied == "tool_unsuccessful" {
+				c.Denied = "tool_unsuccessful"
+			}
 		} else if c.CommentarySequence > c.UserSequence && c.UserSequence > 0 && item.StartSequence > c.CommentarySequence {
 			c.ToolResultSequence = event.Sequence
+			if c.Denied == "tool_unsuccessful" && c.CommentarySequence > c.ToolFailureSequence {
+				c.Denied = ""
+			}
 		}
 	}
 	return nil

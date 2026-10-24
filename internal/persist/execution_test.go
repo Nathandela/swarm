@@ -566,3 +566,27 @@ func TestExecutionLegacyVersionRetainsHookCustody(t *testing.T) {
 		t.Fatal("Codex authority smuggled into old schema")
 	}
 }
+
+func TestExecutionCodexCommonToolKinds(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []CodexItemKind{"fileChange", "mcpToolCall"} {
+		r := codexExecutionFixture()
+		item := r.Codex.Items["tool-1"]
+		item.Kind = kind
+		item.Complete = true
+		r.Codex.Items["tool-1"] = item
+		if err = store.SaveExecution(r); err != nil {
+			t.Fatal(err)
+		}
+		got, err := store.LoadExecution(r.SessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Codex.Items["tool-1"].Kind != kind || !got.Codex.Items["tool-1"].Complete {
+			t.Fatal("native tool kind lost on restore")
+		}
+	}
+}
