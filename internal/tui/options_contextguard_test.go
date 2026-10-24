@@ -82,10 +82,13 @@ func TestOptionsContextGuard_LoadToggleAndSave(t *testing.T) {
 		t.Fatalf("loaded settings = %#v; want revision 4 and not loading", rm.options.contextGuard)
 	}
 	view := stripANSI(rm.View().Content)
-	for _, want := range []string{"auto compact", "threshold", "Codex only", "compacts when quiet and unattended, then continues the task"} {
+	for _, want := range []string{"auto compact", "threshold", "Codex only", "compacts when quiet and unattended"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("options view missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "continues the task") {
+		t.Fatal("compaction must not promise automatic task continuation")
 	}
 
 	// focus: group -> order -> auto compact, then toggle and save.
