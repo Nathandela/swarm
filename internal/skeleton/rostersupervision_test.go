@@ -25,7 +25,7 @@ import (
 
 func TestRosterPoll_SupervisionPendingFlipAloneFiresAnEvent(t *testing.T) {
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swsksp")
+	dir, err := os.MkdirTemp("", "swsksp")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

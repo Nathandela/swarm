@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/diagnosticlog"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
@@ -43,6 +44,8 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
+	// LogPath authorizes retention only when inherited stderr matches this owned inode.
+	LogPath           string
 	LoginRuntime      *logins.Runtime
 	LoginStateRoot    string
 	LoginSwitchID     string
@@ -124,6 +127,14 @@ var testHookBeforeBackendSpawn func(s *server)
 // agentExit still carries the agent's real exit code. Any agent outcome (clean
 // exit, non-zero, or signal death) on its own returns err == nil.
 func Run(cfg Config) (agentExit int, err error) {
+	if cfg.LogPath != "" {
+		stop, logErr := diagnosticlog.Start(cfg.LogPath, os.Stderr)
+		if logErr != nil {
+			log.Printf("shim: diagnostic log maintenance: %v", logErr)
+		} else {
+			defer stop()
+		}
+	}
 	if cfg.Metrics == nil {
 		cfg.Metrics = &Metrics{}
 	}

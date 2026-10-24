@@ -25,7 +25,10 @@ package daemon
 // would redial, succeed, and report a session live whose agent died hours ago.
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -97,28 +100,104 @@ func r7WriteBackendInfo(t *testing.T, dir string, pid, pgid int, startedAtMS int
 // It is the orphaned app-server: alive, serving, and attached to nothing.
 func r7Squatter(t *testing.T, sock string) int {
 	t.Helper()
-	// `nc -lU` would do, but is not portable; a tiny sh loop holding an open listener is.
-	cmd := exec.Command("/bin/sh", "-c", `exec 3<>/dev/null; while :; do sleep 3600; done`)
+	cmd := exec.Command(os.Args[0], "test-reaper-helper", "squatter", sock)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("squatter stdout: %v", err)
+	}
+	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start squatter: %v", err)
+	}
+	if ready, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || ready != "ready\n" {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("squatter readiness = %q, %v", ready, err)
+	}
+	start, err := procStartTimeFn(cmd.Process.Pid)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("squatter process identity: %v", err)
 	}
 	// REAP IT IN THE BACKGROUND. Without this the killed squatter lingers as a ZOMBIE of the
 	// test process, and kill(pid, 0) on a zombie SUCCEEDS -- so a correctly reaped backend
 	// would still read alive and the reaper fence could never pass.
 	reaped := make(chan struct{})
 	go func() { _, _ = cmd.Process.Wait(); close(reaped) }()
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		t.Fatalf("bind squatter socket: %v", err)
-	}
 	t.Cleanup(func() {
-		_ = ln.Close()
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		r7KillOwnedGroup(cmd.Process.Pid, cmd.Process.Pid, start)
 		<-reaped
+		if !r7WaitOwnedProcessGone(cmd.Process.Pid, start, 3*time.Second) {
+			t.Errorf("owned squatter process %d remained after cleanup", cmd.Process.Pid)
+		}
+		_ = os.Remove(sock)
 	})
 	return cmd.Process.Pid
+}
+
+// runReaperTestHelper is dispatched by TestMain before the suite supervisor/builds. Every
+// surviving fixture process is this copied, run-owned test executable.
+func runReaperTestHelper() {
+	if len(os.Args) < 3 {
+		os.Exit(2)
+	}
+	switch os.Args[2] {
+	case "squatter":
+		if len(os.Args) != 4 {
+			os.Exit(2)
+		}
+		ln, err := net.Listen("unix", os.Args[3])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer ln.Close()
+		fmt.Fprintln(os.Stdout, "ready")
+		for {
+			time.Sleep(time.Hour)
+		}
+	case "leader":
+		child := exec.Command(os.Args[0], "test-reaper-helper", "child")
+		child.Stdout, child.Stderr = io.Discard, io.Discard
+		if err := child.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stdout, child.Process.Pid)
+		os.Exit(0)
+	case "child":
+		for {
+			time.Sleep(time.Hour)
+		}
+	default:
+		os.Exit(2)
+	}
+}
+
+func r7KillOwnedGroup(pid, pgid int, started int64) {
+	current, err := procStartTimeFn(pid)
+	if err != nil || current != started {
+		return
+	}
+	currentPGID, err := syscall.Getpgid(pid)
+	if err == nil && currentPGID == pgid {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	}
+}
+
+func r7WaitOwnedProcessGone(pid int, started int64, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		current, err := procStartTimeFn(pid)
+		if err != nil || current != started {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	current, err := procStartTimeFn(pid)
+	return err != nil || current != started
 }
 
 // ---------------------------------------------------------------------------

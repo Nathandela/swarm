@@ -22,7 +22,7 @@ import (
 // session stays running long enough for the runtime capture.
 func fakeReferenceBinDir(t *testing.T, convID string) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "swfakeref")
+	dir, err := os.MkdirTemp("", "swfakeref")
 	if err != nil {
 		t.Fatalf("bin dir: %v", err)
 	}

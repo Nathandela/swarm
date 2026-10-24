@@ -82,7 +82,7 @@ type r7r4Server struct {
 
 func newR7R4Server(t *testing.T) *r7r4Server {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "swr7r4")
+	dir, err := os.MkdirTemp("", "swr7r4")
 	if err != nil {
 		t.Fatalf("short temp dir: %v", err)
 	}

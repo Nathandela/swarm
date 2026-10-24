@@ -46,11 +46,22 @@ later) before continuing.
 
 ## Installing the timer
 
+The template uses the macOS platform `/usr/bin/perl` and its core `Fcntl` module
+before execing `/bin/sh`; no additional Perl modules are needed. The log directory
+must belong to the owner and have mode `0700`.
+
 ```bash
+mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.local/state/swarm"
+chmod 0700 "$HOME/.local/state/swarm"
 sed -e "s|@HOME@|$HOME|g" -e "s|@PREFIX@|$(brew --prefix)|g" packaging/launchd/com.swarm.upgrade.plist \
   > ~/Library/LaunchAgents/com.swarm.upgrade.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarm.upgrade.plist
 ```
+
+Existing installations must be replaced to adopt the template's log retention:
+run `launchctl bootout gui/$(id -u)/com.swarm.upgrade`, render the current template over the
+installed plist, then bootstrap it again using the commands above. Updating the
+Swarm binary alone does not change an installed timer.
 
 Dry proof, run once right after installing:
 
@@ -66,8 +77,12 @@ trusted to run unattended overnight.
 ## Reading the log
 
 Both brew's output and `--unattended`'s own messages land in the same
-`~/.local/state/swarm/upgrade.log`. What the exit status of
-`swarm daemon restart --unattended` means, most recent run at the bottom of the file:
+`~/.local/state/swarm/upgrade.log`. Each invocation validates and truncates the
+same owned regular-file inode before running the commands, so the file retains
+only the latest run. A single invocation has no strict size bound. Symlinks,
+multiple hard links, foreign-owned files and an unsafe log directory are refused
+before any truncation. The timer preserves the final restart command's exit status:
+
 
 - **0 — converged, or nothing to do.** Either no daemon was running, the daemon already matched
   the installed binary, or the restart (daemon and, if installed, gateway) completed. No action

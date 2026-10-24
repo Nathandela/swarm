@@ -49,7 +49,7 @@ func (rejectingCaptureAdapter) IsValidConversationID(id string) bool {
 func convScanHarness(t *testing.T) (d *Daemon, id string, transcriptPath string, reads func() int32) {
 	t.Helper()
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swskconv")
+	dir, err := os.MkdirTemp("", "swskconv")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestCaptureConversationID_DiskErrorToleratedThenRecovers(t *testing.T) {
 // depending on a monitor goroutine's real-time exit detection (avoids process
 // spawn/signal/poll timing entirely).
 func TestCaptureConversationID_EndSessionRaceDoesNotResurrectConvScan(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskconvrace")
+	dir, err := os.MkdirTemp("", "swskconvrace")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestCaptureConversationID_EndSessionRaceDoesNotResurrectConvScan(t *testing
 // short-lived case) with a valid marker in its transcript must still end up
 // with ConversationID set once endSession runs.
 func TestEndSession_CapturesConversationIDForShortLivedSession(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskconvend")
+	dir, err := os.MkdirTemp("", "swskconvend")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

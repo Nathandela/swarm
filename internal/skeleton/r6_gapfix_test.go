@@ -70,12 +70,12 @@ func countJournalStructuredGaps(t *testing.T, sk *Daemon, sessionID string) int 
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_RedeliveredUnmappedEventNeverDuplicatesTheJournalItem(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskgf1")
+	dir, err := os.MkdirTemp("", "swskgf1")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskgfs1")
+	sessionDir, err := os.MkdirTemp("", "swskgfs1")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}
@@ -162,12 +162,12 @@ func TestHookDrainer_RedeliveredUnmappedEventNeverDuplicatesTheJournalItem(t *te
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_OnAHoleAboveTheCursor_NeverAppliesPastTheBoundary(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskgf2")
+	dir, err := os.MkdirTemp("", "swskgf2")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskgfs2")
+	sessionDir, err := os.MkdirTemp("", "swskgfs2")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}
@@ -240,12 +240,12 @@ func TestHookDrainer_OnAHoleAboveTheCursor_NeverAppliesPastTheBoundary(t *testin
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskgf3")
+	dir, err := os.MkdirTemp("", "swskgf3")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskgfs3")
+	sessionDir, err := os.MkdirTemp("", "swskgfs3")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded(t *
 // ---------------------------------------------------------------------------
 
 func TestServeHook_CallbackStillIngestedWhenThePeerHoldsTheConnectionOpen(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskgf5")
+	dir, err := os.MkdirTemp("", "swskgf5")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

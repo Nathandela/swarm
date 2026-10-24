@@ -68,7 +68,7 @@ import (
 // end-to-end path DHI-1 says cannot serve journal ops.
 func serveRemoteAssembled(t *testing.T, sk *Daemon) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "swsk-rem") // short path keeps sun_path under the 104-byte limit
+	dir, err := os.MkdirTemp("", "swsk-rem") // short path keeps sun_path under the 104-byte limit
 	if err != nil {
 		t.Fatalf("remote sock dir: %v", err)
 	}

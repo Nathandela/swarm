@@ -21,6 +21,11 @@
   unattended flag named in ProgramArguments below, and runs the full stop-and-spawn from
   whatever environment this timer's gui agent carries, which is not the owner's shell.
 
+  The platform /usr/bin/perl validates and truncates one owned log descriptor before
+  execing the shell with both streams inherited. Each run keeps only its own diagnostics;
+  one run may still grow without a size ceiling. Reinstall the unit to adopt this template.
+  Requires the macOS system Perl (no external Perl modules).
+
   A launchd user agent carries HOME, USER, SHELL and TMPDIR but not the owner's PATH or
   credentials, hence @PREFIX@ rather than a bare `brew`/`swarm` on PATH; the daemon
   restart's own unattended environment handling (L2) covers the rest.
@@ -32,9 +37,25 @@
 
 	<key>ProgramArguments</key>
 	<array>
-		<string>/bin/sh</string>
-		<string>-c</string>
-		<string>@PREFIX@/bin/brew update; @PREFIX@/bin/brew upgrade --cask swarm; @PREFIX@/bin/swarm daemon restart --unattended</string>
+		<string>/usr/bin/perl</string>
+		<string>-MFcntl=:DEFAULT,:mode</string>
+		<string>-e</string>
+		<string>my ($path, $prefix) = @ARGV;
+my $dir = $path; $dir =~ s{/[^/]+$}{};
+my @dir = lstat $dir;
+@dir and S_ISDIR($dir[2]) and $dir[4] == $&lt; and ($dir[2] &amp; 0077) == 0 or die "unsafe upgrade log directory\n";
+sysopen(my $log, $path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0600) or die "open upgrade log: $!\n";
+my @fd = stat $log; my @path = lstat $path;
+@fd and @path and S_ISREG($fd[2]) and S_ISREG($path[2]) and $fd[4] == $&lt; and $fd[3] == 1 and $fd[0] == $path[0] and $fd[1] == $path[1] or die "unsafe upgrade log file\n";
+chmod(0600, $log) == 1 or die "chmod upgrade log: $!\n";
+truncate($log, 0) or die "truncate upgrade log: $!\n";
+open(STDOUT, "&gt;&amp;", $log) or die "redirect upgrade stdout: $!\n";
+open(STDERR, "&gt;&amp;", $log) or die "redirect upgrade stderr: $!\n";
+my $command = q{"$1/bin/brew" update; "$1/bin/brew" upgrade --cask swarm; "$1/bin/swarm" daemon restart --unattended};
+exec "/bin/sh", "-c", $command, "swarm-upgrade", $prefix;
+die "exec upgrade shell: $!\n";</string>
+		<string>@HOME@/.local/state/swarm/upgrade.log</string>
+		<string>@PREFIX@</string>
 	</array>
 
 	<key>StartCalendarInterval</key>
@@ -52,10 +73,5 @@
 		<key>HOMEBREW_NO_ENV_HINTS</key>
 		<string>1</string>
 	</dict>
-
-	<key>StandardOutPath</key>
-	<string>@HOME@/.local/state/swarm/upgrade.log</string>
-	<key>StandardErrorPath</key>
-	<string>@HOME@/.local/state/swarm/upgrade.log</string>
 </dict>
 </plist>

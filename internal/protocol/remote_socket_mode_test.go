@@ -25,7 +25,7 @@ func TestServeRemote_SocketIsPrivate(t *testing.T) {
 	old := syscall.Umask(0)
 	defer syscall.Umask(old)
 
-	dir, err := os.MkdirTemp("/tmp", "swrm") // short path keeps sun_path under the 104-byte limit
+	dir, err := os.MkdirTemp("", "swrm") // short path keeps sun_path under the 104-byte limit
 	if err != nil {
 		t.Fatalf("socket dir: %v", err)
 	}

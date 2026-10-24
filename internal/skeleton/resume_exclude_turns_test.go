@@ -38,7 +38,7 @@ type resumeExcludeTurnsRequest struct {
 
 func newResumeExcludeTurnsServer(t *testing.T, threadID string) *resumeExcludeTurnsServer {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "sw-resume-exclude-turns")
+	dir, err := os.MkdirTemp("", "sw-resume-exclude-turns")
 	if err != nil {
 		t.Fatalf("make short app-server socket directory: %v", err)
 	}

@@ -26,7 +26,7 @@ import (
 // is referenced by its absolute build path, so only "claude" needs to be on PATH.
 func fakeClaudeBinDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "swfakecli")
+	dir, err := os.MkdirTemp("", "swfakecli")
 	if err != nil {
 		t.Fatalf("bin dir: %v", err)
 	}

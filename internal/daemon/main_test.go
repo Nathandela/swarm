@@ -210,6 +210,8 @@ var (
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "test-reaper-helper":
+			runReaperTestHelper()
 		case markerAnnounce:
 			runAnnounceAgent() // never returns
 		case markerEnvDump:
@@ -221,6 +223,9 @@ func TestMain(m *testing.M) {
 		}
 	}
 
+	if code, parent := testbin.Supervise(); parent {
+		os.Exit(code)
+	}
 	dir, err := os.MkdirTemp("", "swarm-daemon-bin")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mktemp:", err)
@@ -232,6 +237,10 @@ func TestMain(m *testing.M) {
 		{swarmBin, "github.com/Nathandela/swarm/cmd/swarm"},
 		{fakeAgentBin, "github.com/Nathandela/swarm/cmd/swarm-fake-agent"},
 	} {
+		if err := testbin.RegisterExecutable(b.out); err != nil {
+			fmt.Fprintln(os.Stderr, "register test executable:", err)
+			os.Exit(1)
+		}
 		build := exec.Command("go", "build", "-o", b.out, b.pkg)
 		build.Stderr = os.Stderr
 		if err := build.Run(); err != nil {
@@ -240,13 +249,7 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 	}
-	code := m.Run()
-	// Shims outlive their daemon by design (ADR-001): end every session a test left running.
-	// Agents re-exec this test binary, so it is swept too.
-	self, _ := os.Executable()
-	testbin.KillProcessesOf(swarmBin, fakeAgentBin, self)
-	_ = os.RemoveAll(dir)
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +280,7 @@ func selfExe(t *testing.T) string {
 // long macOS $TMPDIR.
 func shortStateDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "swd")
+	dir, err := os.MkdirTemp("", "swd")
 	if err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}

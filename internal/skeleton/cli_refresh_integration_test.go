@@ -25,7 +25,7 @@ func TestCLIRefreshInstalledUpgradeRealResume(t *testing.T) {
 	if installed := os.Getenv("SWARM_REFRESH_TEST_BINARY"); installed != "" {
 		shimBinary = installed
 	}
-	dir, err := os.MkdirTemp("/tmp", "swcli-")
+	dir, err := os.MkdirTemp("", "swcli-")
 	if err != nil {
 		t.Fatal(err)
 	}

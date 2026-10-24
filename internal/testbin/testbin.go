@@ -39,6 +39,10 @@ func (b *Binaries) Build(t *testing.T, tmpPrefix string, onFail func(t *testing.
 			{b.Swarm, "github.com/Nathandela/swarm/cmd/swarm"},
 			{b.FakeAgent, "github.com/Nathandela/swarm/cmd/swarm-fake-agent"},
 		} {
+			if err := RegisterExecutable(bin.out); err != nil {
+				b.err = err
+				return
+			}
 			cmd := exec.Command("go", "build", "-o", bin.out, bin.pkg)
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {

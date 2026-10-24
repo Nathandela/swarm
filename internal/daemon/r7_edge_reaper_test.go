@@ -23,14 +23,11 @@ import (
 	"time"
 )
 
-// r7EdgeDeadLeaderGroup forges the failure shape: a group whose LEADER exited while a child
-// lives on in it. The sh leader backgrounds a sleep (same group -- no Setpgid on the child),
-// prints its pid, and exits; cmd.Output reaps the leader HERE, so it is fully dead (never a
-// zombie) by the time this returns. The leader's pid cannot be recycled while the child keeps
-// the group alive (POSIX process-group lifetime), so the synthesized state is stable.
+// r7EdgeDeadLeaderGroup forges the failure shape: the owned test-binary leader starts a
+// same-group test-binary child, prints its pid, and exits. cmd.Output reaps the leader here.
 func r7EdgeDeadLeaderGroup(t *testing.T) (leader, child int) {
 	t.Helper()
-	cmd := exec.Command("/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!")
+	cmd := exec.Command(os.Args[0], "test-reaper-helper", "leader")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	out, err := cmd.Output()
 	if err != nil {
@@ -41,9 +38,23 @@ func r7EdgeDeadLeaderGroup(t *testing.T) (leader, child int) {
 		t.Fatalf("parse surviving child pid from %q: %v", out, err)
 	}
 	leader = cmd.Process.Pid
+	childStarted, err := procStartTimeFn(child)
+	if err != nil {
+		t.Fatalf("read surviving child %d identity: %v", child, err)
+	}
+	pgid, err := syscall.Getpgid(child)
+	if err != nil || pgid != leader {
+		t.Fatalf("surviving child %d process group = %d, %v; want dead leader group %d", child, pgid, err, leader)
+	}
 	t.Cleanup(func() {
-		_ = syscall.Kill(child, syscall.SIGKILL)
-		_ = syscall.Kill(-leader, syscall.SIGKILL)
+		if current, err := procStartTimeFn(child); err == nil && current == childStarted {
+			if pgid, err := syscall.Getpgid(child); err == nil && pgid == leader {
+				r7KillOwnedGroup(child, leader, childStarted)
+			}
+			if !r7WaitOwnedProcessGone(child, childStarted, 3*time.Second) {
+				t.Errorf("owned fixture child %d remained after cleanup", child)
+			}
+		}
 	})
 	if syscall.Kill(leader, 0) == nil {
 		t.Fatalf("the leader (pid %d) is still alive; the fixture needs it dead", leader)

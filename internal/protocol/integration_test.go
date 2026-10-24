@@ -42,7 +42,7 @@ func buildBinaries(t *testing.T) {
 func realDaemon(t *testing.T) *daemon.Daemon {
 	t.Helper()
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swi")
+	dir, err := os.MkdirTemp("", "swi")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

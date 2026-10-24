@@ -81,7 +81,7 @@ func gateBuildBinaries(t *testing.T) {
 func gateAssemble(t *testing.T) *skeleton.Daemon {
 	t.Helper()
 	gateBuildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "tuipg")
+	dir, err := os.MkdirTemp("", "tuipg")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

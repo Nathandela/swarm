@@ -74,7 +74,7 @@ func buildBinaries(t *testing.T) {
 func assemble(t *testing.T, opts ...func(*Config)) *Daemon {
 	t.Helper()
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swsk")
+	dir, err := os.MkdirTemp("", "swsk")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

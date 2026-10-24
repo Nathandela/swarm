@@ -12,7 +12,7 @@ import (
 )
 
 func TestCoreAPISetTagReachesTheRealDaemon(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "sktag")
+	dir, err := os.MkdirTemp("", "sktag")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

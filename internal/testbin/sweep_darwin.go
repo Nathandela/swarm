@@ -7,15 +7,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func processIDs() []int {
-	processes, _ := unix.SysctlKinfoProcSlice("kern.proc.all")
+func processIDs() ([]int, error) {
+	processes, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		return nil, err
+	}
 	var pids []int
 	for _, process := range processes {
 		if process.Eproc.Ucred.Uid == uint32(os.Getuid()) {
 			pids = append(pids, int(process.Proc.P_pid))
 		}
 	}
-	return pids
+	return pids, nil
 }
 
 func processExecutable(pid int) (string, error) {

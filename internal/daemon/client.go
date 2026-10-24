@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/diagnosticlog"
 )
 
 // ProtocolVersion is the client<->daemon handshake version. It is a var (not a
@@ -216,15 +218,7 @@ func openDaemonLog(path string) (*os.File, error) {
 	if path == "" {
 		return os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	return f, nil
+	return diagnosticlog.Open(path)
 }
 
 // Restart performs the `swarm daemon restart` half of D-8: stop the running

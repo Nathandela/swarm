@@ -47,7 +47,7 @@ func leaveStaleSocket(t *testing.T, path string) {
 // enough: a Serve that quietly skipped the remote listener would restore the daemon and
 // restore PB-LIFE-7's silence at the same time, so the socket must end up served.
 func TestServe_StaleRemoteSocketDoesNotStopTheDaemon(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swss") // short path keeps sun_path under the 104-byte limit
+	dir, err := os.MkdirTemp("", "swss") // short path keeps sun_path under the 104-byte limit
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestServe_StaleRemoteSocketDoesNotStopTheDaemon(t *testing.T) {
 // Narrowing the unlink to paths that ARE sockets keeps the crash-debris case (which is a
 // socket) and returns everything else to failing loudly, which is what a bind did before.
 func TestServe_DoesNotDeleteANonSocketAtTheRemotePath(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swnf")
+	dir, err := os.MkdirTemp("", "swnf")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 // buildSwarmWithTag builds the swarm binary with an extra build tag and returns
@@ -19,6 +20,9 @@ import (
 func buildSwarmWithTag(t *testing.T, tag string) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "swarm-"+tag)
+	if err := testbin.RegisterExecutable(bin); err != nil {
+		t.Fatal(err)
+	}
 	build := exec.Command("go", "build", "-tags", tag, "-o", bin, "github.com/Nathandela/swarm/cmd/swarm")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {

@@ -348,6 +348,12 @@ func Open(cfg Config) (*Daemon, error) {
 		stopCh:   make(chan struct{}),
 		deleted:  make(map[string]struct{}),
 	}
+	if err := d.startLogMaintenance(); err != nil {
+		_ = jrnl.Close()
+		_ = listener.Close()
+		_ = releaseLock(lockFile)
+		return nil, err
+	}
 	writePIDFile(cfg.StateDir) // best-effort; for `swarm daemon restart`
 	// Record the environment this daemon started with, so an unattended restart can
 	// spawn the replacement from it instead of from a timer's bare environment (L2).
@@ -376,6 +382,8 @@ func Open(cfg Config) (*Daemon, error) {
 	// fatal to Open: serving a blind, possibly-empty registry would silently drop
 	// live sessions (F4). Release everything acquired above before returning.
 	if err := d.reconcile(); err != nil {
+		close(d.stopCh)
+		d.wg.Wait()
 		_ = d.listener.Close()
 		_ = d.journal.Close()
 		removePIDFile(cfg.StateDir)

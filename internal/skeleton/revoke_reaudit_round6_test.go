@@ -101,7 +101,7 @@ func TestRevokeDevice_ConcurrentRepairGrantSurvives(t *testing.T) {
 // defer-covered, but its real trigger set is non-permission Remove failures (EROFS/ENOSPC/dir
 // removed). A Serve-level integration test would need such a fault; not added here.
 func TestReconcilePairedDevices_FailsClosedOnStaleRemoveError(t *testing.T) {
-	stateDir, err := os.MkdirTemp("/tmp", "swrec")
+	stateDir, err := os.MkdirTemp("", "swrec")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

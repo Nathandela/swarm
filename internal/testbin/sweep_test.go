@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -15,6 +16,7 @@ func TestSweepProcess(t *testing.T) {
 	if os.Args[len(os.Args)-1] != "testbin-survivor" {
 		return
 	}
+	signal.Ignore(syscall.SIGTERM)
 	fmt.Println("ready")
 	for {
 		time.Sleep(time.Hour)
@@ -25,6 +27,9 @@ func detachedBinary(t *testing.T, exe, argv0 string) <-chan struct{} {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterExecutable(exe); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(self)

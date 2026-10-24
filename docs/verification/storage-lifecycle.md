@@ -50,3 +50,38 @@ Representative commands: `go test ./cmd/swarm -run 'TestStorage|TestDoctor'
 TestLinuxUpgradeCleansPayloadBeforeRestart -count=1`. Existing shared caches were
 reused. The implementation also passed a Linux cross-build at this checkpoint;
 that is not evidence of native Linux execution.
+
+## Diagnostic logs and test supervision
+
+Astra returned GREEN for the diagnostic log change after connected-code review
+and independent helper/template tests. Failing-first tests showed an oversize log
+remaining above 8 MiB, unsafe aliases being accepted, and previous updater output
+surviving the next run. Focused normal and race tests now pass, including a real
+quiet shim maintaining the shared inode after daemon shutdown. An injected
+daemon startup reconciliation failure also proved and then fenced a maintainer
+leak on failed Open.
+
+The Mac updater was executed through an actual uniquely named temporary launchd
+job with fake brew/Swarm executables. It retained the current invocation, captured
+both streams, preserved final status 17 and unloaded the exact job during cleanup.
+The deployed unit was untouched. The template uses existing macOS `/usr/bin/perl`
+and core Fcntl for safe descriptor setup; installation prerequisites and unit
+reinstallation are documented. Same-inode retention has burst overshoot, and one
+updater invocation remains unbounded. These are explicit retention limits.
+
+The test supervisor's normal, panic, timeout and parent-TERM fixtures passed,
+including registered detached/TERM-ignoring executables, unrelated-process
+preservation, identity mismatch, retained cleanup failures, coverage and race
+runs. Luna migrated short temporary roots and registered custom test binaries in
+the allowed suites. Failing-first adversarial tests also demonstrated manifest
+symlink/hardlink acceptance, a FIFO block, and an outside-file registration write.
+Both manifest reads and writes now validate a bounded regular private descriptor
+opened no-follow/nonblocking. Astra's second review returned GREEN after this
+hardening and the root-user permission-fixture correction.
+
+Coverage is intentionally the copied/registered executable set and migrated
+scratch. Arbitrary detached system executables need fixture-specific custody;
+parent SIGKILL/host crash remains outside the supervisor's cleanup guarantee.
+The reserved login/identity/auth-related skeleton fixtures and handoff directory
+fixture retain their explicit temporary roots pending owner coordination. No old
+scratch, provider history or shared compiler cache was deleted.

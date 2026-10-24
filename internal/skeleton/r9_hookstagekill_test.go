@@ -196,12 +196,12 @@ func TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints(t *testin
 	stages := claudeHookStages(t)
 	n := len(stages)
 
-	dir, err := os.MkdirTemp("/tmp", "swskhk")
+	dir, err := os.MkdirTemp("", "swskhk")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskhks")
+	sessionDir, err := os.MkdirTemp("", "swskhks")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}

@@ -215,7 +215,7 @@ func TestR5Skeleton_DeviceCapabilityReadsThePinnedRegistry(t *testing.T) {
 // actually find it; an id the daemon has no record of answers (_, false).
 func TestR5Skeleton_OperationOutcomeIsNamespacedToTheWireForm(t *testing.T) {
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swskr5op")
+	dir, err := os.MkdirTemp("", "swskr5op")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

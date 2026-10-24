@@ -14,7 +14,7 @@ import (
 )
 
 func TestTap_SnapshotFailureObservable(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskobs") // short path: the daemon binds a UDS here
+	dir, err := os.MkdirTemp("", "swskobs") // short path: the daemon binds a UDS here
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

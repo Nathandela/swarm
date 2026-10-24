@@ -172,7 +172,7 @@ const (
 // near ~104 bytes; the long macOS $TMPDIR overflows).
 func tmpSock(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "swp")
+	dir, err := os.MkdirTemp("", "swp")
 	if err != nil {
 		t.Fatalf("mkdir sock dir: %v", err)
 	}

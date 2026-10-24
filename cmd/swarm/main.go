@@ -637,6 +637,7 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
+	LogPath           string               `json:"log_path,omitempty"`
 	LoginRuntime      *logins.Runtime      `json:"login_runtime,omitempty"`
 	LoginStateRoot    string               `json:"login_state_root,omitempty"`
 	LoginSwitchID     string               `json:"login_switch_id,omitempty"`
@@ -696,6 +697,7 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
+		LogPath:      lc.LogPath,
 		OpenCode:     lc.OpenCode,
 		LoginRuntime: lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,
 		InputEmbargo:      lc.InputEmbargo,

@@ -68,7 +68,7 @@ func TestOpenCodeProjectionMarksClippedSingleInput(t *testing.T) {
 }
 
 func TestOpenCodeObservationOnlyChangePublishesRosterEvent(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "ocview")
+	dir, err := os.MkdirTemp("", "ocview")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,12 +40,12 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_ASecondDifferentBoundaryIsStillReported(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskfp1")
+	dir, err := os.MkdirTemp("", "swskfp1")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskfps1")
+	sessionDir, err := os.MkdirTemp("", "swskfps1")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestPersistHookCursor_IsOwnerOnly0600(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLaunchedSession_HookPostedToTheShimSocketReachesTheDaemon(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskfp2")
+	dir, err := os.MkdirTemp("", "swskfp2")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestLaunchedSession_HookPostedToTheShimSocketReachesTheDaemon(t *testing.T)
 }
 
 func TestLaunchedSession_DrainWithoutTheMintedTokenIsRefused(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskfp3")
+	dir, err := os.MkdirTemp("", "swskfp3")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
