@@ -153,11 +153,32 @@ provide deduplication. An unresolved outcome stays visible and unsent.
 Reconciliation must identify the successor belonging to this exact obligation
 and owner-input revision; the existence of any newer turn is insufficient.
 
-Claude needs a separately proven native continuation primitive and exact
-unfinished-turn binding. A generic Enter, last-prompt resend or blanket
-"continue" is not a qualified replacement. A failed capability experiment is
-an implementation blocker for this part of the requested outcome, not grounds
-to label a disabled placeholder complete.
+Claude uses its supported native hook module API to observe `turn.start` and
+the completed `turn.step` generator result. The observer forwards chunks,
+results, cancellation and errors unchanged; only bounded identities, phase,
+tool IDs and text-presence facts cross into Swarm. The complete native result,
+not a transcript prefix or missing Stop hook, supplies response completeness.
+The narrow qualifying case is a text-free completed tool response followed by
+confirmed main-actor subscription quota, with matching prompt/turn identities
+and no live child or human decision. Unclassified text remains ineligible.
+
+The terminal failure must bind an independently known latest step ordinal and
+capture generation. The last two available records are insufficient: missing
+capture and failed error reporting must still fence effects. Generic
+`rate_limit` alone cannot establish subscription exhaustion. Effective native
+automatic resume must be positively disabled on this exact instance; Swarm
+does not change the owner's setting. Plugin ordering, every negative case
+never becoming a candidate, and daemon/native reconciliation remain gates.
+
+After that proof, the candidate operation is a targeted semantic continuation
+through the existing composer: dismiss only the current verified quota modal,
+reobserve the actual VT composer, and submit once behind the same owner fence.
+Each Escape/paste/submit stage needs durable uncertainty before effects and
+exact native prompt-UUID reconciliation; ambiguity never permits replay.
+Historical terminal bytes and timed Enter are capability experiments only.
+A generic Enter, original-prompt resend or blanket "continue" remains excluded.
+Sol and Astra accepted this narrow amendment and no-effects Linux capability
+probes on 2026-10-24; this is not production continuation qualification.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It

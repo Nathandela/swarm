@@ -370,7 +370,11 @@ func refreshCodexNative(ctx context.Context, c RefreshConfig, f *jobFiles, grant
 		return ErrUnsafe
 	}
 	var child *nativeChild
+	var socketOwner *refreshSocket
 	defer func() {
+		if socketOwner != nil {
+			defer socketOwner.close()
+		}
 		if child != nil {
 			if stopErr := child.stop(); stopErr != nil {
 				err = nativeFailure("refresh_native_stop_failed")
@@ -399,7 +403,11 @@ func refreshCodexNative(ctx context.Context, c RefreshConfig, f *jobFiles, grant
 		if e := cleanupRefreshScratch(f); e != nil {
 			err = ErrUnsafe
 		}
-		_ = f.root.Remove("n")
+		if socketOwner != nil {
+			if e := socketOwner.removeAfterStop(f); e != nil {
+				err = nativeFailure("refresh_socket_cleanup_failed")
+			}
+		}
 	}()
 	if e = prepareRefreshScratch(f, c.LaunchNonce); e != nil {
 		return e
@@ -465,9 +473,10 @@ func refreshCodexNative(ctx context.Context, c RefreshConfig, f *jobFiles, grant
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		physical, e := codexSocketPath(socket)
+		captured, e := captureRefreshSocket(f)
 		if e == nil {
-			socket = physical
+			socketOwner = captured
+			socket = captured.path
 			break
 		}
 		if !os.IsNotExist(e) {

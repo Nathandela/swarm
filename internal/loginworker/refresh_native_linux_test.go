@@ -68,7 +68,9 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 			// Only this test-created directory and exact observed socket targets are owned.
 			var preserve atomic.Bool
 			t.Cleanup(func() {
-				if !preserve.Load() {
+				if t.Failed() {
+					t.Logf("retained_synthetic_case=%s", dir)
+				} else if !preserve.Load() {
 					_ = os.RemoveAll(dir)
 				}
 			})
@@ -88,7 +90,8 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 			for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
 				script += "export " + key + "=" + quote(oauth.server.URL) + "\n"
 			}
-			script += "export NO_PROXY=127.0.0.1,localhost\nexport no_proxy=127.0.0.1,localhost\nexec " + quote(codex) + " \"$@\"\n"
+			baseURL, _ := json.Marshal(oauth.server.URL)
+			script += "export NO_PROXY=127.0.0.1,localhost\nexport no_proxy=127.0.0.1,localhost\nexec " + quote(codex) + " -c " + quote("chatgpt_base_url="+string(baseURL)) + " \"$@\"\n"
 			if err = os.WriteFile(launcher, []byte(script), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -101,6 +104,7 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 				cycles = 2
 			}
 			for cycle := 1; cycle <= cycles; cycle++ {
+				oauth.blockNext.Store(true)
 				nativePinnedBinary(t, "SWARM_TEST_CODEX_BINARY", "SWARM_TEST_CODEX_SHA256")
 				config := RefreshConfig{StateRoot: dir, LoginID: id, Generation: uint64(cycle), NativePath: launcher, NativeVersion: "0.163.0", NativeFingerprint: fingerprint, Deadline: time.Now().Add(12 * time.Second)}
 				ref, err := StartCodexRefresh(ctx, swarm, config)
@@ -109,7 +113,7 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 				}
 				target := ""
 				t.Cleanup(func() {
-					if !nativeCleanupWorker(ref, home, target) {
+					if !nativeCleanupWorker(ref, home) {
 						preserve.Store(true)
 						t.Error("owned worker containment unavailable; retaining private case root for outer cgroup cleanup")
 					}
@@ -129,7 +133,7 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 				}
 				socket := filepath.Join(dir, "logins", "refresh", id, "n")
 				target, err = codexSocketPath(socket)
-				if err != nil {
+				if err != nil && !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("native socket alias not characterized: %v", err)
 				}
 
@@ -192,8 +196,24 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 					t.Logf("scenario=worker_killed native_auto_contained=%t custody_retained_until_stop=%t recovered_after_observed_stop=true", automatic, retained)
 					return
 				}
+				if target == "" {
+					// Expiry renewal precedes bind; gate the later explicit refresh to observe the socket.
+					oauth.blockNext.Store(true)
+					oauth.release <- struct{}{}
+					select {
+					case <-oauth.requests:
+					case <-ctx.Done():
+						t.Fatal("qualification deadline after initialization renewal")
+					case <-time.After(10 * time.Second):
+						t.Fatal("explicit native renewal was not observed")
+					}
+					target, err = codexSocketPath(socket)
+					if err != nil {
+						t.Fatalf("native socket absent after initialization: %v", err)
+					}
+				}
 				oauth.release <- struct{}{}
-				result := nativeWaitRefresh(t, ctx, ref)
+				result := nativeWaitRefresh(t, ctx, ref, socket, &target)
 				after, afterOwner := nativeGrantState(t, store, id, home)
 				if afterOwner != owner {
 					t.Fatal("native refresh changed canonical owner")
@@ -227,6 +247,9 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 						t.Fatal("native partial renewal did not preserve omitted expired ID token")
 					}
 				}
+				if target == "" {
+					t.Fatal("native physical socket was never observed")
+				}
 				if _, e := os.Lstat(target); !errors.Is(e, os.ErrNotExist) {
 					t.Fatalf("native physical socket remains after stop (cycle=%d)", cycle)
 				}
@@ -239,7 +262,8 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 				before = after
 				t.Logf("scenario=%s cycle=%d phase=%s writers_stopped=%t physical_socket_removed=true generation_changed=%t", scenario, cycle, result.Phase, result.WritersStopped, scenario != "revoked")
 			}
-			if oauth.calls.Load() != int32(cycles) {
+			// Native initialization may renew an expired grant before explicit account/read.
+			if oauth.calls.Load() < int32(cycles) || oauth.calls.Load() > 2*int32(cycles) {
 				t.Fatalf("unexpected OAuth request count: %d", oauth.calls.Load())
 			}
 		})
@@ -247,16 +271,22 @@ func TestCodexRefreshInstalledNative(t *testing.T) {
 }
 
 type nativeOAuth struct {
-	server   *httptest.Server
-	requests chan struct{}
-	release  chan struct{}
-	calls    atomic.Int32
+	server    *httptest.Server
+	requests  chan struct{}
+	release   chan struct{}
+	calls     atomic.Int32
+	blockNext atomic.Bool
 }
 
 func newNativeOAuth(t *testing.T, ctx context.Context, scenario string) *nativeOAuth {
 	t.Helper()
 	o := &nativeOAuth{requests: make(chan struct{}, 8), release: make(chan struct{}, 8)}
-	o.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	o.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && !r.URL.IsAbs() && strings.Contains(r.URL.Path, "accounts") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"accounts": []map[string]string{{"id": "synthetic-a", "workspace_backend_origin": strings.Replace(o.server.URL, "http:", "https:", 1), "account_routing_override": "NO_CONSTRAINT"}}})
+			return
+		}
 		if r.Method != "POST" || r.URL.Path != "/oauth/token" {
 			http.Error(w, "denied", http.StatusForbidden)
 			return
@@ -283,15 +313,17 @@ func newNativeOAuth(t *testing.T, ctx context.Context, scenario string) *nativeO
 			http.Error(w, "synthetic refresh generation mismatch", 400)
 			return
 		}
-		o.requests <- struct{}{}
-		select {
-		case <-o.release:
-		case <-r.Context().Done():
-			return
-		case <-ctx.Done():
-			return
-		case <-time.After(14 * time.Second):
-			return
+		if o.blockNext.Swap(false) {
+			o.requests <- struct{}{}
+			select {
+			case <-o.release:
+			case <-r.Context().Done():
+				return
+			case <-ctx.Done():
+				return
+			case <-time.After(14 * time.Second):
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if scenario == "revoked" {
@@ -306,6 +338,10 @@ func newNativeOAuth(t *testing.T, ctx context.Context, scenario string) *nativeO
 		}
 		_ = json.NewEncoder(w).Encode(response)
 	}))
+	o.server.Config.ReadHeaderTimeout = 3 * time.Second
+	o.server.Config.ReadTimeout = 5 * time.Second
+	o.server.Config.WriteTimeout = 16 * time.Second
+	o.server.Start()
 	return o
 }
 func nativeRefreshJWT(expiry time.Time, generation int32) string {
@@ -347,10 +383,13 @@ func nativeWaitDead(t *testing.T, ctx context.Context, p ProcessIdentity) {
 		}
 	}
 }
-func nativeWaitRefresh(t *testing.T, ctx context.Context, ref RefreshRef) RefreshProgress {
+func nativeWaitRefresh(t *testing.T, ctx context.Context, ref RefreshRef, socket string, target *string) RefreshProgress {
 	t.Helper()
 	deadline := time.Now().Add(14 * time.Second)
 	for {
+		if path, e := codexSocketPath(socket); e == nil {
+			*target = path
+		}
 		p, e := ReadCodexRefresh(ref)
 		if e != nil {
 			t.Fatal(e)
@@ -464,7 +503,7 @@ func nativeGrantFixture(t *testing.T, state string, expiry time.Time) (*logins.S
 }
 
 // Cleanup signals only identity-fenced owned workers and writers advertising this private home.
-func nativeCleanupWorker(ref RefreshRef, home, target string) bool {
+func nativeCleanupWorker(ref RefreshRef, home string) bool {
 	p, _ := ReadCodexRefresh(ref)
 	if ref.Worker.Alive() {
 		_ = processcontain.SignalIdentity(ref.Worker, syscall.SIGTERM)
@@ -490,9 +529,7 @@ func nativeCleanupWorker(ref RefreshRef, home, target string) bool {
 	for time.Now().Before(deadline) {
 		writers, e = processcontain.EnvironmentWriters([]string{home}, nil)
 		if e == nil && len(writers) == 0 && !ref.Worker.Alive() && !p.Native.Alive() && nativeCgroupDrained() {
-			if target != "" {
-				_ = os.Remove(target)
-			}
+			// Uncaptured external sockets remain for inspection; a pathname is not ownership proof.
 			return true
 		}
 		time.Sleep(20 * time.Millisecond)

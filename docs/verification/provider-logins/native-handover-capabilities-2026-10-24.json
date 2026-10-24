@@ -1329,6 +1329,85 @@
     "source": "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/login/src/auth/manager.rs#L1498",
     "observation": "Native persist_tokens preserves the prior ID token when OAuth omits a replacement; request freshness is determined by access-token expiry. Exact user/workspace consistency remains required.",
     "swarm_regression": "TestCodexAccessAllowsNativeRefreshToKeepExpiredIDToken",
-    "native_partial_refresh_qualification": "pending"
+    "native_partial_refresh_qualification": "Passed in dedicated_refresh_worker.partial_renewal on Linux with real Codex 0.163.0; synthetic OAuth omitted ID token replacement."
+  },
+  "dedicated_refresh_worker": {
+    "scope": "Compiled Swarm worker with real Codex 0.163.0 and synthetic loopback OAuth; no real account or discussion changed",
+    "platform": "Linux x86_64",
+    "source_commit": "d73aa731235c1027cac6f4f5712b06db86ce7ced",
+    "source_patch": "Observed app-server-control and SQLite siblings; anchored inode-fenced physical socket cleanup after native containment",
+    "fixture_patch": "Loopback discovery, HTTP deadlines, retain failures, distinguish expiry renewal before bind and later explicit refresh",
+    "source_note": "Qualification binary built from an isolated archive plus the stated patches while independent worktree changes continued. This is not an unmodified commit artifact.",
+    "native_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "swarm_sha256": "5fe345044587dbcb03d8c6b7d4bc84d4e536bb107192a6277932483166388002",
+    "test_sha256": "8dd2b7777d8a48b3c5ed2e997f7d3479cdcad966914f523d52fa0e747698d69a",
+    "containment": {
+      "runtime_seconds": 120,
+      "stop_seconds": 5,
+      "kill_mode": "control-group",
+      "memory_bytes": 805306368,
+      "tasks": 96,
+      "per_file_bytes": 16777216,
+      "scratch_logical_bytes": 33554432,
+      "scratch_logical_entries": 2048,
+      "private_tmpfs": false,
+      "private_tmpfs_probe": "Mount namespacing unsupported; logical aggregate checks are not an OS-enforced aggregate quota"
+    },
+    "results": [
+      {
+        "scenario": "two_cycles",
+        "passed": true,
+        "renewals": 2,
+        "writers_stopped": true,
+        "physical_socket_removed": true,
+        "credential_generation_changed": true
+      },
+      {
+        "scenario": "expired",
+        "passed": true,
+        "initial_renewal_before_socket_bind": true,
+        "explicit_refresh_after_bind": true,
+        "writers_stopped": true,
+        "physical_socket_removed": true
+      },
+      {
+        "scenario": "partial_renewal",
+        "passed": true,
+        "expired_id_token_preserved": true,
+        "fresh_access_verified": true,
+        "writers_stopped": true,
+        "physical_socket_removed": true
+      },
+      {
+        "scenario": "revoked",
+        "passed": true,
+        "worker_phase": "failed",
+        "auth_generation_unchanged": true,
+        "writers_stopped": true,
+        "physical_socket_removed": true
+      },
+      {
+        "scenario": "worker_killed",
+        "passed": true,
+        "kill_boundary": "blocked OAuth request",
+        "native_auto_contained": true,
+        "recovery_after_observed_stop": true,
+        "kill_at_spawn_qualified": false
+      }
+    ],
+    "suite_seconds": 10.37,
+    "exit_code": 0,
+    "log_sha256": "dbb6bd116a503cc649adb7e733c676629d58285df62ad779ca04b7a4796af0da",
+    "worktree_source_sha256_at_receipt": {
+      "internal/loginworker/refresh_native_linux_test.go": "dd94f13c96c425d99328398cda6bbb0fc4728a2c4b6647a309c5291a6e4cf0fe",
+      "internal/loginworker/refresh_owner.go": "75c0a3dbb39bd417674ffa0a5a81769bc2d46a44001fe66da090baf8221c6ddb",
+      "internal/loginworker/refresh_socket.go": "d2a9efdcf452db037df375cb365703ced30d90adb73d45111bd620bd16678ccd",
+      "internal/logins/codex_aux.go": "f1a88663358d5b1d95d4dd67ced77a333b130dc94ac7737e3cf800f9cb9e54b7"
+    },
+    "limitations": [
+      "The blocked-OAuth death test does not qualify death between native spawn and recording custody.",
+      "The full live handover coordinator and continuation are not exercised by this test.",
+      "Synthetic responses do not establish current real-subscription validity."
+    ]
   }
 }
