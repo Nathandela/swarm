@@ -43,7 +43,7 @@ func (s *Store) BeginCodexOwnershipMigrationTo(expected uint64, toID string, ses
 			return ErrPending
 		}
 		p := r.Providers[ProviderCodex]
-		if p.ActiveID == "" || p.Epoch == ^uint64(0) {
+		if p.Epoch == ^uint64(0) || p.ActiveID == "" && toID == "" {
 			return ErrIneligible
 		}
 		if toID == "" {
@@ -186,6 +186,7 @@ func (s *Store) MigrateCodexOwnership(id string) error {
 			return e
 		}
 		p := r.Providers[ProviderCodex]
+		p.Provider = ProviderCodex
 		p.AuthOwnerMode = CodexNativeGrantMode
 		r.Providers[ProviderCodex] = p
 		op.Phase = "installed"

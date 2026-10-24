@@ -244,3 +244,89 @@ func TestCodexMigrationManagerRechecksBeforeOwnershipEffects(t *testing.T) {
 	f.m.qualifyCodexOwnership = func([]persist.Meta) (bool, error) { return true, nil }
 	driveLoginSwitch(t, f)
 }
+
+func TestCodexMigrationManagerFirstActivationStopsUnmanagedWriters(t *testing.T) {
+	f := codexMigrationFixture(t)
+	// Fresh registry, with fixture native conversations that predate managed logins.
+	state, e := filepath.EvalSymlinks(t.TempDir())
+	if e != nil {
+		t.Fatal(e)
+	}
+	store, e := logins.Open(state)
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if e = os.CopyFS(filepath.Join(store.Home(logins.ProviderCodex), "sessions"), os.DirFS(filepath.Join(f.runtime.Home, "sessions"))); e != nil {
+		t.Fatal(e)
+	}
+	r, e := store.Snapshot()
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, b, e := store.Add(r.Revision, logins.ProviderCodex, "B", codexEnrollmentCredential("u-b", "b", "synthetic-first-selection"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	identity, _ := logins.CodexIdentity(codexEnrollmentCredential("u-missing", "missing", "unused").Auth)
+	r, _ = store.Snapshot()
+	if _, _, e = store.ImportUnavailable(r.Revision, logins.Login{ID: strings.Repeat("f", 32), Provider: logins.ProviderCodex, Label: "missing", Identity: identity, AuthState: logins.AuthNeedsLogin}); e != nil {
+		t.Fatal(e)
+	}
+	f.m.store = store
+	f.m.d.stateDir = state
+	f.m.d.authw.stateDir = state
+	for id, row := range f.rows {
+		row.LoginRuntime = nil
+		f.rows[id] = row
+	}
+	qualified := false
+	f.m.qualifyCodexOwnership = func(sources []persist.Meta) (bool, error) { qualified = true; return len(sources) > 0, nil }
+	op, e := f.m.BeginSwitch(logins.ProviderCodex, b.ID, "first activation")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !qualified || !op.OwnershipMigration || op.FromID != "" || op.FromEpoch != 0 || op.ToEpoch != 1 || len(op.Sessions) != 2 {
+		t.Fatal("first activation bypassed qualified migration")
+	}
+	common := filepath.Join(store.Home(logins.ProviderCodex), "auth.json")
+	if _, e = os.Stat(common); !errors.Is(e, os.ErrNotExist) {
+		t.Fatal("first activation installed grant before writer stop")
+	}
+	for _, row := range f.rows {
+		if row.Status.Process != status.ProcessRunning {
+			t.Fatal("BeginSwitch stopped unmanaged writer before journal")
+		}
+	}
+	proof := f.m.stopProof
+	f.m.stopProof = func(persist.Meta) error { return logins.ErrInUse }
+	f.m.step()
+	r, _ = store.Snapshot()
+	if r.Providers[logins.ProviderCodex].AuthOwnerMode != "" || len(f.launched) != 0 {
+		t.Fatal("first activation bypassed unmanaged writer stop proof")
+	}
+	if _, e = os.Stat(filepath.Join(state, "logins", "saved", b.ID, "auth.json")); !errors.Is(e, os.ErrNotExist) {
+		t.Fatal("first canonical grant published before unmanaged writers stopped")
+	}
+	f.m.stopProof = proof
+	driveLoginSwitch(t, f)
+	r, _ = store.Snapshot()
+	if r.Providers[logins.ProviderCodex].ActiveID != b.ID || r.Providers[logins.ProviderCodex].Epoch != 1 || r.Providers[logins.ProviderCodex].AuthOwnerMode != logins.CodexNativeGrantMode {
+		t.Fatal("first activation needs second account action")
+	}
+	if _, e = os.Stat(common); !errors.Is(e, os.ErrNotExist) {
+		t.Fatal("first activation installed common refresh authority")
+	}
+	raw, e := os.ReadFile(filepath.Join(state, "logins", "saved", b.ID, "auth.json"))
+	if e != nil || !bytes.Contains(raw, []byte("synthetic-first-selection")) {
+		t.Fatal("first canonical grant missing")
+	}
+	if len(f.launched) != 2 {
+		t.Fatal("unmanaged native discussions lost restart obligations")
+	}
+	for _, spec := range f.launched {
+		if spec.LoginRuntime == nil || !spec.LoginRuntime.ExternalAuth || spec.LoginRuntime.Epoch != 1 {
+			t.Fatal("unmanaged discussion resumed without first external runtime")
+		}
+	}
+}

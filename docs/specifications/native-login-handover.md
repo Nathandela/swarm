@@ -137,6 +137,27 @@ account epoch. Its phases distinguish prepared, submission-uncertain, accepted
 and retired. Revalidate all eligibility at the existing composer/lifecycle
 write boundary. Durable intent must precede the native operation.
 
+For qualified Codex, the adoption receipt is explicitly **account-API adoption**:
+after `account/login/start` acknowledges, a guarded `account/rateLimits/read`
+must return the target account ID and an explicit `ordinaryUsageAllowed` boolean.
+The native API validates the account and user against its current authentication;
+the Linux synthetic probe confirms A→B→A and rejection of stale or mismatched
+identity. Separate model-loop probes establish subsequent model-request behavior.
+This avoids requiring an initial model request before admitting a host turn.
+
+Bind dispatch, receipt publication and admission to the same native connection,
+incarnation, desired epoch and credential revision. A false permission proves
+account-API adoption but prohibits new host turns and continuations; approvals
+and cancellation remain usable. Null, malformed, cancelled, mismatched or stale
+reads invalidate admission readiness and discard all returned quota values.
+Historical adoption may remain recorded separately from current readiness.
+Unscoped native usage/error notifications only trigger bounded, coalesced scoped
+reads; their contents cannot label the newly selected account exhausted. An old
+turn's terminal quota remains bound to its original generation. Ordinary usage
+permission does not establish model-specific capacity or continuation eligibility.
+Sol and Astra approved this refinement on 2026-10-24; integrated qualification
+remains required.
+
 Each provider's capability gate must establish a positive machine-observable
 unfinished-work discriminator. Quota plus absence of an observed final answer
 is insufficient: lossy history, unclassified assistant questions and unknown

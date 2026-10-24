@@ -171,7 +171,7 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 		sources = append(sources, meta)
 	}
 	migrate := false
-	if provider == logins.ProviderCodex && r.Providers[provider].ActiveID != "" {
+	if provider == logins.ProviderCodex {
 		migrate, err = m.codexOwnershipQualified(sources)
 		if err != nil {
 			return logins.Switch{}, err
