@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -66,7 +67,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	if scenario == "" {
 		scenario = "future"
 	}
-	if scenario != "future" && scenario != "expired" && scenario != "401" && scenario != "wrong-account" {
+	if scenario != "future" && scenario != "expired" && scenario != "401" && scenario != "wrong-account" && scenario != "worker-kill" {
 		t.Fatal("unsupported synthetic case")
 	}
 	output := os.Getenv("SWARM_CLAUDE_AUTH_NATIVE_OUTPUT")
@@ -81,7 +82,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxy, network := newClaudeAuthNativeProxy(t, state, scenario)
-	defer proxy.server.Close()
+	defer proxy.drain(t)
 	transport, _ := json.Marshal(network)
 	if err := os.WriteFile(filepath.Join(state, "claude-auth-fixture-network.json"), transport, 0600); err != nil {
 		t.Fatal(err)
@@ -157,7 +158,29 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	var result logins.ClaudeAuthResult
-	for {
+	if scenario == "worker-kill" {
+		select {
+		case <-proxy.profileEntered:
+		case <-ctx.Done():
+			t.Fatal("native profile gate not reached")
+		}
+		result, err = ReadClaudeAuth(config)
+		if err != nil || result.Phase != "running" || result.Scope.Worker != launched.Scope.Worker || !result.Scope.Worker.Alive() {
+			t.Fatal("expected exact running attempt before worker kill")
+		}
+		if err := processcontain.SignalIdentity(result.Scope.Worker, syscall.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+		until := time.Now().Add(3 * time.Second)
+		for result.Scope.Worker.Alive() && time.Now().Before(until) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		result, err = ReadClaudeAuth(config)
+		if err != nil || result.Phase != "running" || result.Scope.Worker.Alive() {
+			t.Fatal("killed worker must leave unresolved running attempt, never ready")
+		}
+	}
+	for scenario != "worker-kill" {
 		result, err = ReadClaudeAuth(config)
 		if err != nil {
 			t.Fatal(err)
@@ -205,12 +228,21 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	// A fresh verifier process receives only immutable config; it has no observer
 	// FDs or parent in-memory scope. The production verifier reloads durable Store.
 	configPath := filepath.Join(state, "logins", "claude-auth", ref.LoginID, ref.Nonce, "worker.json")
-	recovery := exec.CommandContext(ctx, executable, "internal", "claude-auth-fixture-recover", configPath)
-	receipt := &boundedBuffer{limit: 4096}
-	recovery.Stdout = receipt
-	recovery.Stderr = io.Discard
-	if err := recovery.Run(); err != nil {
-		t.Fatal("fresh-process production recovery failed; retain exact Store/unit proof")
+	var receipt *boundedBuffer
+	recoveryCtx, recoveryCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer recoveryCancel()
+	for {
+		recovery := exec.CommandContext(recoveryCtx, executable, "internal", "claude-auth-fixture-recover", configPath)
+		receipt = &boundedBuffer{limit: 4096}
+		recovery.Stdout = receipt
+		recovery.Stderr = io.Discard
+		if err := recovery.Run(); err == nil {
+			break
+		}
+		if scenario != "worker-kill" || recoveryCtx.Err() != nil {
+			t.Fatal("fresh-process production recovery failed; retain exact Store/unit proof")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	recoveredRaw, overflow := receipt.Bytes()
 	var recovered ClaudeAuthRecovery
@@ -225,7 +257,21 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	if err != nil || unit["LoadState"] != "not-found" {
 		t.Fatal("owned unit metadata not collected")
 	}
-	summary := map[string]any{"passed": true, "case": scenario, "native_sha256": expected, "phase": result.Phase, "attempts": result.Attempt, "refreshes": refreshes, "profiles": proxy.profiles.Load(), "inference_requests": proxy.models.Load(), "fresh_verifier": true, "same_authority_witness": "synthetic-sleep-not-native-discussion", "healthy_pid_unchanged": healthy.Alive(), "unit_collected": true, "scope": launched.Scope, "cmd_swarm_constructor_qualified": false}
+	proxy.drain(t)
+	// Descendants may still run before recovery; the final traffic and authority
+	// assertions must follow positively verified unit retirement and collection.
+	if proxy.invalid.Load() || proxy.models.Load() != 0 || proxy.refresh.Load() != expectedRefresh {
+		t.Fatal("unexpected native traffic before verified retirement")
+	}
+	finalCanonical, err := os.ReadFile(filepath.Join(authority, ".credentials.json"))
+	if err != nil || !bytes.Equal(after, finalCanonical) {
+		t.Fatal("canonical authority changed during recovery")
+	}
+	phase := result.Phase
+	if scenario == "worker-kill" {
+		phase = "unready_recovered"
+	}
+	summary := map[string]any{"passed": true, "case": scenario, "native_sha256": expected, "phase": phase, "attempts": result.Attempt, "refreshes": refreshes, "profiles": proxy.profiles.Load(), "inference_requests": proxy.models.Load(), "fresh_verifier": true, "same_authority_witness": "synthetic-sleep-not-native-discussion", "healthy_pid_unchanged": healthy.Alive(), "unit_collected": true, "scope": launched.Scope, "cmd_swarm_constructor_qualified": false}
 	data, _ := json.MarshalIndent(summary, "", "  ")
 	if err := os.WriteFile(filepath.Join(output, "receipt.json"), data, 0600); err != nil {
 		t.Fatal(err)
@@ -236,7 +282,31 @@ type claudeAuthNativeProxy struct {
 	server                              *httptest.Server
 	profiles, refresh, models, requests atomic.Int64
 	invalid                             atomic.Bool
+	profileEntered                      chan struct{}
+	mu                                  sync.Mutex
+	stopped                             bool
+	stop                                chan struct{}
+	handlers                            sync.WaitGroup
 }
+
+func (p *claudeAuthNativeProxy) drain(t *testing.T) {
+	t.Helper()
+	p.mu.Lock()
+	if !p.stopped {
+		p.stopped = true
+		close(p.stop)
+	}
+	p.mu.Unlock()
+	p.server.Close()
+	done := make(chan struct{})
+	go func() { p.handlers.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("synthetic proxy handlers failed to drain")
+	}
+}
+
 type claudeAuthBufferedConn struct {
 	net.Conn
 	reader *bufio.Reader
@@ -259,8 +329,16 @@ func newClaudeAuthNativeProxy(t *testing.T, state, scenario string) (*claudeAuth
 	if err := os.WriteFile(ca, certificate, 0600); err != nil {
 		t.Fatal(err)
 	}
-	proxy := &claudeAuthNativeProxy{}
+	proxy := &claudeAuthNativeProxy{profileEntered: make(chan struct{}, 1), stop: make(chan struct{})}
 	proxy.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxy.mu.Lock()
+		if proxy.stopped {
+			proxy.mu.Unlock()
+			return
+		}
+		proxy.handlers.Add(1)
+		proxy.mu.Unlock()
+		defer proxy.handlers.Done()
 		if proxy.requests.Add(1) > 96 || r.Method != "CONNECT" || (r.Host != "api.anthropic.com:443" && r.Host != "platform.claude.com:443") {
 			proxy.invalid.Store(true)
 			http.Error(w, "synthetic refusal", http.StatusForbidden)
@@ -294,6 +372,21 @@ func newClaudeAuthNativeProxy(t *testing.T, state, scenario string) (*claudeAuth
 			bearer := request.Header.Get("Authorization")
 			if bearer != "Bearer synthetic-access-B1" && bearer != "Bearer synthetic-access-B2" {
 				proxy.invalid.Store(true)
+				return
+			}
+			if scenario == "worker-kill" {
+				select {
+				case proxy.profileEntered <- struct{}{}:
+				default:
+				}
+				// Never release a successful profile: even the timeout closes the
+				// connection, so killing the worker cannot race readiness.
+				select {
+				case <-request.Context().Done():
+				case <-proxy.stop:
+				case <-time.After(4 * time.Second):
+				}
+				return
 			}
 			if scenario == "401" {
 				status = 401

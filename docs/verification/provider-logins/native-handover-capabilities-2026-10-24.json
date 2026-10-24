@@ -5333,5 +5333,36 @@
       ],
       "invalid_prior_architecture_run": "An earlier AARCH64 binary was mistakenly attempted on amd64 and is excluded; both reported regression artifacts had ELF machine62 verified before execution."
     }
+  },
+  "claude_auth_worker_sigkill": {
+    "scope": "Actual production worker library via TestMain, synthetic profile gate, Linux amd64/systemd249. Test-only changes after54682fcf; no production changes.",
+    "run": {
+      "stage": "/run/user/1000/swarm-product-auth.f7p8iVGE",
+      "unit": "swarm-product-auth-9a389169a3e3b3c496660383",
+      "case": "worker-kill",
+      "binary_sha256": "b28b7258be686be232aa9870472f43f0f1fc0b0074ee26d5d94901df128e0224",
+      "verified_elf_machine": 62,
+      "exit_code": 0,
+      "elapsed_seconds": 1.98,
+      "log_sha256": "dd0cd06f0d88f62323f2ca13d6fd7acf2201adfc50a820643a174ec4fdbaaa1f"
+    },
+    "manifest_sha256": "95a5c47ef8a2990c30a88661fc345f17f8c962d769cae113b69b285b347981ce",
+    "receipt_sha256": "f586c0888442c6f7a5fc5b7fa65282e5b116cbe94756039e14f0d27c7d475b41",
+    "verified_source_files": 213,
+    "observed_phase_after_exact_live_worker_sigkill": "running",
+    "final_outcome": "unready_recovered",
+    "attempts": 1,
+    "refreshes": 0,
+    "profiles": 1,
+    "inference_requests": 0,
+    "canonical_synthetic_grant_unchanged": true,
+    "fresh_verifier": true,
+    "unit_collected": true,
+    "handler_counters_checked_after_bounded_drain": true,
+    "review": "Astra source GREEN; root actual Linux execution and source-manifest verification.",
+    "limitations": [
+      "Surviving same-authority witness is still a synthetic sleep, not a healthy native discussion.",
+      "No model/history continuity, actual cmd/swarm native-constructor or production activation qualification."
+    ]
   }
 }
