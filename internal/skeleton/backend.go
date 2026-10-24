@@ -117,10 +117,11 @@ type sessionBackend struct {
 // The callback captures this object before the connection is published, so a late
 // callback from a replaced connection can never borrow the replacement's identity.
 type backendFeed struct {
-	ingress   *backendIngress
-	epoch     string
-	userAgent string
-	seq       atomic.Uint64
+	codexExecution codexExecutionFeed
+	ingress        *backendIngress
+	epoch          string
+	userAgent      string
+	seq            atomic.Uint64
 	// retired closes the producer edge for a removed or displaced connection. It is
 	// checked again behind the replacement fence, so a callback already dispatched by
 	// the app-server read loop cannot inject into a successor that reused the session id.
@@ -937,6 +938,7 @@ func (d *Daemon) ingestBackendFrameForFeed(local, expectedInstance string, feed 
 		d.logins.observeNativeFailure(local, expectedInstance, feed, method, frame)
 	}
 	d.ingestBackendFrame(local, frame, at.UnixMilli())
+	d.captureCodexExecutionFrame(local, expectedInstance, feed, method, frame, at)
 }
 
 func backendStartedThreadID(frame []byte) (string, bool) {

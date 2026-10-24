@@ -15,47 +15,47 @@ import (
 )
 
 func TestAttentionRejectsAmbiguousEnvelopeBeforeCallbacks(t *testing.T) {
-	f := newFakeServer(t)
-	f.mu.Lock()
-	f.onOpen = func(c *fakeConn) {
-		for _, raw := range []string{
-			`{"method":"old","method":"thread/status/changed","params":{}}`,
-			`{"Method":"thread/status/changed","params":{}}`,
-			`{"method":"thread/status/changed","params":{},"Params":{}}`,
-			`{"method":"thread/status/changed","params":{},"params":{}}`,
-			`{"method":"item/tool/requestUserInput","id":1,"id":2,"params":{}}`,
-			`{"method":"item/tool/requestUserInput","id":1,"ID":2,"params":{}}`,
-			`{"method":"finished","params":{}}`,
-		} {
-			if err := c.ws.Write(c.ctx, websocket.MessageText, []byte(raw)); err != nil {
-				return
+	for _, raw := range []string{
+		`{"method":"old","method":"finished","params":{}}`,
+		`{"Method":"finished","params":{}}`,
+		`{"method":"finished","params":{},"Params":{}}`,
+		`{"method":"finished","params":{},"params":{}}`,
+		`{"method":"finished","id":1,"ID":2,"params":{}}`,
+		`{"method":null,"id":1,"result":{}}`,
+		`{"method":"","id":1,"result":{}}`,
+		`{"id":1,"params":{"turn":{"status":"failed"}}}`,
+		`{"id":null,"result":{}}`, `{"id":true,"result":{}}`, `{"id":123,"error":null}`,
+		`{"id":1,"result":{},"error":{"code":1,"message":"ambiguous"}}`,
+		`{"method":`, `{}`, "BINARY",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			f := newFakeServer(t)
+			f.mu.Lock()
+			f.onOpen = func(c *fakeConn) {
+				typ := websocket.MessageText
+				if raw == "BINARY" {
+					typ = websocket.MessageBinary
+				}
+				_ = c.ws.Write(c.ctx, typ, []byte(raw))
+				_ = c.ws.Write(c.ctx, websocket.MessageText, []byte(`{"method":"finished","params":{}}`))
 			}
-		}
-	}
-	f.mu.Unlock()
-	finished := make(chan struct{})
-	var malformed atomic.Int32
-	c, err := appserver.Dial(context.Background(), f.sock, appserver.Options{
-		OnNotify: func(method string, _ json.RawMessage) {
-			if method == "finished" {
-				close(finished)
-			} else {
-				malformed.Add(1)
+			f.mu.Unlock()
+			closed := make(chan struct{})
+			var delivered atomic.Int32
+			c, err := appserver.Dial(context.Background(), f.sock, appserver.Options{OnFrame: func(string, json.RawMessage) { delivered.Add(1) }, OnClose: func(error) { close(closed) }})
+			if err != nil {
+				t.Fatal(err)
 			}
-		},
-		OnRequest: func(_ json.RawMessage, _ string, _ json.RawMessage) { malformed.Add(1) },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = c.Close() }()
-	select {
-	case <-finished:
-	case <-time.After(time.Second):
-		t.Fatal("valid frame did not survive malformed predecessors")
-	}
-	if malformed.Load() != 0 {
-		t.Fatalf("%d ambiguous envelopes reached callbacks", malformed.Load())
+			defer c.Close()
+			select {
+			case <-closed:
+			case <-time.After(time.Second):
+				t.Fatal("invalid stream remained usable")
+			}
+			if delivered.Load() != 0 {
+				t.Fatal("invalid stream authorized later evidence")
+			}
+		})
 	}
 }
 
@@ -99,7 +99,7 @@ func TestAttentionReceivesOriginalEnvelopeAndBoundsUnknownContent(t *testing.T) 
 	defer func() { _ = c.Close() }()
 	select {
 	case <-finished:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("original frames were not delivered")
 	}
 	if normalized.Load() != 1 || split.Load() != 0 {

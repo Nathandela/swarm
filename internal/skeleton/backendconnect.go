@@ -189,7 +189,7 @@ func (d *Daemon) connectBackendsForRunning() {
 // absence of exactly that is why round 3 shipped two blockers in these twenty lines.
 func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	expectedInstance, _ := d.sessionInstance(id)
-	conn, feed, err := d.dialSessionBackend(id, expectedInstance, ch)
+	conn, feed, err := d.dialSessionBackend(id, expectedInstance, ch, true)
 	if err != nil {
 		log.Printf("skeleton: session %s backend unavailable: %v", id, err)
 		// §R7.7 case 1: this session will NEVER have a structured plane. The gap is emitted
@@ -662,13 +662,14 @@ func selectOnlyLoadedThread(loaded []string) (string, error) {
 // JSON-RPC endpoint and completes the boot handshake. IT STARTS NO THREAD: which thread this
 // session is on is the AGENT's to decide, and the two callers above learn it in the two ways
 // their situations allow.
-func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.BackendChannel) (*appserver.Client, *backendFeed, error) {
+func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.BackendChannel, freshCapture ...bool) (*appserver.Client, *backendFeed, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.backendDeadline())
 	defer cancel()
 	feed := newBackendFeed()
 	if !d.startBackendIngress(id, expectedInstance, feed) {
 		return nil, nil, errBackendAuthUnavailable
 	}
+	d.prepareCodexExecutionNative(ctx, id, expectedInstance, ch, feed)
 	joined := false
 	defer func() {
 		if !joined {
@@ -689,6 +690,7 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 	var err error
 	for {
 		conn, err = appserver.Dial(ctx, ch.SocketPath, appserver.Options{
+			Endpoint: feed.codexExecution.endpoint,
 			// Private auth bypasses generic ingress. The bounded FIFO keeps native socket
 			// reading independent of the pump's persistence, preserving untouched envelopes.
 			OnClose: func(error) { feed.ingress.stop() },
@@ -710,8 +712,17 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 		}
 	}
 
+	// Verify the actual connected process before binding any private auth responder.
+	feed.codexExecution.mu.Lock()
+	captured, native, endpoint := feed.codexExecution.captured, feed.codexExecution.native, feed.codexExecution.endpoint
+	feed.codexExecution.mu.Unlock()
+	if (d.backendUsesExternalAuth(id) || captured) && (!captured || !codexExecutionPeerMatches(conn, native.PID, endpoint)) {
+		auth.bind(nil)
+		_ = conn.Close()
+		return nil, nil, errBackendAuthUnavailable
+	}
 	if !feed.ingress.bindConnection(conn.Close) {
-		auth.bind(conn)
+		auth.bind(nil)
 		_ = conn.Close()
 		return nil, nil, errBackendAuthUnavailable
 	}
@@ -746,6 +757,7 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 			return nil, nil, errBackendAuthUnavailable
 		}
 	}
+	d.finishCodexExecutionPreparation(ctx, id, expectedInstance, ch, conn, feed, initRes, len(freshCapture) == 1 && freshCapture[0])
 	joined = true
 	return conn, feed, nil
 }

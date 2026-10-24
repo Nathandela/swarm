@@ -76,6 +76,9 @@ func (e *RPCError) Error() string {
 
 // Options configures a Dial.
 type Options struct {
+	// Endpoint is optional for legacy callers; qualified native evidence requires it.
+	Endpoint *UnixEndpoint
+
 	// DialTimeout bounds the connect and the HTTP upgrade (0 => defaultDialTimeout).
 	DialTimeout time.Duration
 	// OnNotify receives every server->client NOTIFICATION (a frame with a method and no id).
@@ -92,6 +95,10 @@ type Options struct {
 
 // Client is one connection to one app-server.
 type Client struct {
+	peerPID int
+	peerUID uint32
+	peerOK  bool
+
 	ws   *websocket.Conn
 	opt  Options
 	done chan struct{}
@@ -136,11 +143,28 @@ func Dial(ctx context.Context, socketPath string, opt Options) (*Client, error) 
 
 	// The HTTP client dials the UDS; the URL's host is a placeholder the server ignores
 	// (RECORDED: `Host: localhost`).
+	var peerPID int
+	var peerUID uint32
+	var peerOK bool
+	if opt.Endpoint != nil && (opt.Endpoint.path != socketPath || !opt.Endpoint.Unchanged()) {
+		return nil, fmt.Errorf("appserver: endpoint changed before dial")
+	}
 	httpc := &http.Client{
 		Transport: recordedHeaderCase{inner: &http.Transport{
 			DialContext: func(c context.Context, _, _ string) (net.Conn, error) {
 				var d net.Dialer
-				return d.DialContext(c, "unix", socketPath)
+				conn, err := d.DialContext(c, "unix", socketPath)
+				if err != nil {
+					return nil, err
+				}
+				if uc, ok := conn.(*net.UnixConn); ok {
+					peerPID, peerUID, peerOK = unixPeer(uc)
+				}
+				if opt.Endpoint != nil && (!opt.Endpoint.Unchanged() || !peerOK) {
+					_ = conn.Close()
+					return nil, fmt.Errorf("appserver: endpoint or peer proof unavailable")
+				}
+				return conn, nil
 			},
 		}},
 	}
@@ -150,9 +174,14 @@ func Dial(ctx context.Context, socketPath string, opt Options) (*Client, error) 
 	if err != nil {
 		return nil, fmt.Errorf("appserver: upgrade %s%s: %w", socketPath, RPCPath, err)
 	}
+	if opt.Endpoint != nil && !opt.Endpoint.Unchanged() {
+		_ = ws.CloseNow()
+		return nil, fmt.Errorf("appserver: endpoint changed during upgrade")
+	}
 	ws.SetReadLimit(maxFrameBytes)
 
 	c := &Client{
+		peerPID: peerPID, peerUID: peerUID, peerOK: peerOK,
 		ws:      ws,
 		opt:     opt,
 		done:    make(chan struct{}),
@@ -205,11 +234,15 @@ func (c *Client) readLoop() {
 			break
 		}
 		if typ != websocket.MessageText {
-			continue // the protocol is TEXT frames; anything else is not ours
+			reason = fmt.Errorf("appserver: non-text protocol frame")
+			_ = c.ws.CloseNow()
+			break
 		}
 		var fr wireFrame
-		if !validEnvelope(data) || json.Unmarshal(data, &fr) != nil {
-			continue // a frame this revision cannot parse is dropped, never fatal
+		if !validEnvelope(data) || json.Unmarshal(data, &fr) != nil || (fr.Method == "" && len(fr.ID) == 0) {
+			reason = fmt.Errorf("appserver: invalid protocol envelope")
+			_ = c.ws.CloseNow()
+			break
 		}
 		if fr.Method != "" && c.opt.OnFrame != nil {
 			c.opt.OnFrame(fr.Method, append(json.RawMessage(nil), data...))
@@ -482,6 +515,7 @@ func validEnvelope(data []byte) bool {
 		return false
 	}
 	seen := make(map[string]bool)
+	routing := make(map[string]json.RawMessage)
 	for dec.More() {
 		token, err = dec.Token()
 		if err != nil {
@@ -503,10 +537,53 @@ func validEnvelope(data []byte) bool {
 		if dec.Decode(&value) != nil {
 			return false
 		}
+		switch key {
+		case "method", "params", "id", "result", "error":
+			routing[key] = value
+		}
 	}
 	if token, err = dec.Token(); err != nil || token != json.Delim('}') {
 		return false
 	}
 	_, err = dec.Token()
-	return err == io.EOF
+	if err != io.EOF {
+		return false
+	}
+	if raw, present := routing["method"]; present {
+		var method string
+		if json.Unmarshal(raw, &method) != nil || method == "" || seen["result"] || seen["error"] {
+			return false
+		}
+		return !seen["id"] || validRPCID(routing["id"])
+	}
+	if seen["error"] && bytes.Equal(bytes.TrimSpace(routing["error"]), []byte("null")) {
+		return false
+	}
+	return seen["id"] && validRPCID(routing["id"]) && !seen["params"] && seen["result"] != seen["error"]
 }
+
+func validRPCID(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return false
+	}
+	if raw[0] == '"' {
+		var id string
+		return json.Unmarshal(raw, &id) == nil
+	}
+	if raw[0] == '-' {
+		raw = raw[1:]
+	}
+	if len(raw) == 0 {
+		return false
+	}
+	for _, c := range raw {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// PeerProcess returns kernel credentials captured from the connected Unix fd.
+func (c *Client) PeerProcess() (int, uint32, bool) { return c.peerPID, c.peerUID, c.peerOK }
