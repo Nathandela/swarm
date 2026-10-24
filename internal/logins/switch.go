@@ -418,6 +418,10 @@ func (s *Store) CommitSwitch(id string) (Runtime, error) {
 			return ErrConflict
 		}
 		p.Provider, p.ActiveID, p.Epoch = op.Provider, op.ToID, op.ToEpoch
+		if codexOwned(*r, op.Provider) {
+			schemaForHandovers(r)
+			p.DesiredCredentialRevision = l.CredentialRevision
+		}
 		r.Providers[op.Provider] = p
 		if op.Relogin && op.LoginJobID != "" {
 			l.LastLoginJobID = op.LoginJobID
@@ -518,11 +522,15 @@ func (s *Store) Reconcile() error {
 		if e != nil {
 			return e
 		}
+		pendingGrantIntents, retireGrantIntents, baselineChanged, e := s.reconcileGrantIntents(&r)
+		if e != nil {
+			return e
+		}
 		completed, e := s.reconcileRelogins(&r)
 		if e != nil {
 			return e
 		}
-		changed := len(completed) > 0
+		changed := len(completed) > 0 || baselineChanged
 		dir, e := s.root.Open("saved")
 		if e != nil {
 			return e
@@ -581,6 +589,9 @@ func (s *Store) Reconcile() error {
 		}
 		for i := range r.Logins {
 			l := &r.Logins[i]
+			if pendingGrantIntents[l.ID] {
+				continue
+			}
 			raw, e := readPrivate(s.root, s.savedPath(*l), maxCredentialBytes*2)
 			if errors.Is(e, os.ErrNotExist) {
 				return ErrInvalidCredentials
@@ -599,7 +610,7 @@ func (s *Store) Reconcile() error {
 				return ErrConflict
 			}
 			if l.Provider == ProviderCodex && c.AuthOwner != nil {
-				c.Credential.Auth, e = s.readCodexGrant(*l, c)
+				c.Credential.Auth, e = s.readCodexGrantUnchecked(*l, c)
 				if e != nil {
 					return e
 				}
@@ -633,6 +644,11 @@ func (s *Store) Reconcile() error {
 			changed = true
 		}
 		if !changed {
+			for _, id := range retireGrantIntents {
+				if e = s.eraseGrantIntent(id); e != nil {
+					return e
+				}
+			}
 			return nil
 		}
 		if r.Revision == ^uint64(0) {
@@ -641,6 +657,11 @@ func (s *Store) Reconcile() error {
 		r.Revision++
 		if e = s.save(r); e != nil {
 			return e
+		}
+		for _, id := range retireGrantIntents {
+			if e = s.eraseGrantIntent(id); e != nil {
+				return e
+			}
 		}
 		for _, id := range completed {
 			if e = s.eraseRelogin(id); e != nil {

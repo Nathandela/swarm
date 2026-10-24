@@ -18,6 +18,7 @@ const (
 )
 
 var (
+	ErrCapacity            = errors.New("login handover capacity exceeded")
 	ErrUnsafePath          = errors.New("unsafe login storage path")
 	ErrIneligible          = errors.New("login is not eligible")
 	ErrInvalidCredentials  = errors.New("invalid native login credentials")
@@ -46,10 +47,11 @@ type Login struct {
 }
 
 type ProviderState struct {
-	AuthOwnerMode string `json:"auth_owner_mode,omitempty"`
-	Provider      string `json:"provider"`
-	ActiveID      string `json:"active_id,omitempty"`
-	Epoch         uint64 `json:"epoch"`
+	DesiredCredentialRevision uint64 `json:"desired_credential_revision,omitempty"`
+	AuthOwnerMode             string `json:"auth_owner_mode,omitempty"`
+	Provider                  string `json:"provider"`
+	ActiveID                  string `json:"active_id,omitempty"`
+	Epoch                     uint64 `json:"epoch"`
 }
 
 type Runtime struct {
@@ -89,6 +91,7 @@ type Switch struct {
 }
 
 type Registry struct {
+	Handovers        map[string]Handover      `json:"handovers,omitempty"`
 	SchemaVersion    int                      `json:"schema_version"`
 	Revision         uint64                   `json:"revision"`
 	Logins           []Login                  `json:"logins"`

@@ -12,7 +12,9 @@ import (
 const codexAuxFile = ".grant-aux"
 const maxCodexAuxBytes int64 = 32 << 20
 
-var codexAuxRoots = []string{"goals_1.sqlite", "goals_1.sqlite-shm", "goals_1.sqlite-wal", "logs_2.sqlite", "logs_2.sqlite-shm", "logs_2.sqlite-wal", "memories_1.sqlite", "memories_1.sqlite-shm", "memories_1.sqlite-wal", "queue_1.sqlite", "queue_1.sqlite-shm", "queue_1.sqlite-wal", "state_5.sqlite", "state_5.sqlite-shm", "state_5.sqlite-wal", "installation_id", "skills", "tmp"}
+var codexAuxRoots = []string{"app-server-control", "installation_id", "skills", "tmp"}
+var codexAuxDatabases = []string{"goals_1.sqlite", "logs_2.sqlite", "memories_1.sqlite", "queue_1.sqlite", "state_5.sqlite"}
+var codexSQLiteSuffixes = []string{"", "-wal", "-shm", "-journal"}
 
 type codexAuxOwnership struct {
 	Version       int    `json:"version"`
@@ -21,7 +23,7 @@ type codexAuxOwnership struct {
 
 func grantBaseFile(name string) bool {
 	switch name {
-	case "auth.json", "credential.json", ".grant-lock", ".grant-owner", codexAuxFile:
+	case "auth.json", "credential.json", ".grant-lock", ".grant-owner", codexAuxFile, grantReloginFile:
 		return true
 	}
 	return false
@@ -32,12 +34,25 @@ func grantAuxRoot(name string) bool {
 			return true
 		}
 	}
+	for _, database := range codexAuxDatabases {
+		for _, suffix := range codexSQLiteSuffixes {
+			if name == database+suffix {
+				return true
+			}
+		}
+	}
 	return false
 }
 
 // PrepareAuxiliary owns only the qualified helper's generated roots in an
 // otherwise auth-only home. No native history or user configuration is copied.
 func (l *GrantLease) PrepareAuxiliary(version string) error {
+	if e := l.tokensAllowed(); e != nil {
+		return e
+	}
+	if l.owner == "" {
+		return ErrIneligible
+	}
 	if version != "0.163.0" {
 		return ErrIneligible
 	}
@@ -80,7 +95,7 @@ func (l *GrantLease) PrepareAuxiliary(version string) error {
 }
 
 // CheckAuxiliary bounds logical scratch bytes and entries without following
-// native helper symlinks. Activation additionally requires a host filesystem reservation for hard limits.
+// native helper symlinks. Polling allows temporary overshoot between checks; filesystem quotas are optional isolation.
 func (l *GrantLease) CheckAuxiliary() error { return l.checkAuxiliary(true) }
 func (l *GrantLease) checkAuxiliary(quota bool) error {
 	if e := l.validate(); e != nil {
@@ -185,6 +200,13 @@ func (l *GrantLease) CleanupAuxiliary() error {
 	for _, root := range codexAuxRoots {
 		if e = home.RemoveAll(root); e != nil {
 			return e
+		}
+	}
+	for _, database := range codexAuxDatabases {
+		for _, suffix := range codexSQLiteSuffixes {
+			if e = home.RemoveAll(database + suffix); e != nil {
+				return e
+			}
 		}
 	}
 	if e = home.Remove(codexAuxFile); e != nil {

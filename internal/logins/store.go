@@ -231,6 +231,9 @@ func (s *Store) save(r Registry) error {
 	if validateRegistry(r) != nil {
 		return ErrIneligible
 	}
+	if e := reserveHandoverSpace(r); e != nil {
+		return e
+	}
 	b, e := json.Marshal(r)
 	if e != nil {
 		return e
@@ -289,8 +292,25 @@ func find(r *Registry, id string) *Login {
 	return nil
 }
 func validateRegistry(r Registry) error {
-	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2) || r.Providers == nil || r.Switches == nil {
+	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3) || r.Providers == nil || r.Switches == nil {
 		return ErrIneligible
+	}
+	if r.SchemaVersion < 3 && len(r.Handovers) != 0 {
+		return ErrIneligible
+	}
+	if len(r.Handovers) > 1 {
+		return ErrIneligible
+	}
+	if r.MigrationPending && len(r.Handovers) > 0 {
+		return ErrIneligible
+	}
+	for provider, h := range r.Handovers {
+		if provider != ProviderCodex || h.Provider != provider || !validHandover(r, h) {
+			return ErrIneligible
+		}
+		if _, ok := r.Switches[provider]; ok {
+			return ErrIneligible
+		}
 	}
 	seen := map[string]bool{}
 	for _, l := range r.Logins {
@@ -303,7 +323,10 @@ func validateRegistry(r Registry) error {
 		seen[l.ID] = true
 	}
 	for p, st := range r.Providers {
-		if !validProvider(p) || st.Provider != p || (st.AuthOwnerMode != "" && (p != ProviderCodex || st.AuthOwnerMode != CodexNativeGrantMode || r.SchemaVersion != 2)) {
+		if !validProvider(p) || st.Provider != p || (st.AuthOwnerMode != "" && (p != ProviderCodex || st.AuthOwnerMode != CodexNativeGrantMode || r.SchemaVersion < 2)) {
+			return ErrIneligible
+		}
+		if st.DesiredCredentialRevision != 0 && (p != ProviderCodex || r.SchemaVersion < 3 || !codexOwned(r, p)) {
 			return ErrIneligible
 		}
 		if st.ActiveID != "" {
@@ -325,7 +348,7 @@ func validateRegistry(r Registry) error {
 		} else if op.NextID != "" {
 			return ErrIneligible
 		}
-		if p != op.Provider || !validProvider(p) || !validID(op.ID) || find(&r, op.ToID) == nil || find(&r, op.ToID).Provider != p || op.ToEpoch == 0 || op.ToEpoch != op.FromEpoch+1 || (op.Relogin || op.OwnershipMigration) != (op.FromID == op.ToID) || (op.OwnershipMigration && (p != ProviderCodex || r.SchemaVersion != 2 || op.Relogin)) {
+		if p != op.Provider || !validProvider(p) || !validID(op.ID) || find(&r, op.ToID) == nil || find(&r, op.ToID).Provider != p || op.ToEpoch == 0 || op.ToEpoch != op.FromEpoch+1 || (!op.OwnershipMigration && op.Relogin != (op.FromID == op.ToID)) || (op.OwnershipMigration && (p != ProviderCodex || r.SchemaVersion < 2 || op.Relogin)) {
 			return ErrIneligible
 		}
 		if op.FromID != "" && (find(&r, op.FromID) == nil || find(&r, op.FromID).Provider != p) {
@@ -355,5 +378,11 @@ func validateRegistry(r Registry) error {
 
 // SetMigrationPending is used by the offline importer before rewriting state.
 func (s *Store) SetMigrationPending(expected uint64, pending bool) (Registry, error) {
-	return s.mutate(expected, func(r *Registry) error { r.MigrationPending = pending; return nil })
+	return s.mutate(expected, func(r *Registry) error {
+		if pending && len(r.Handovers) > 0 {
+			return ErrPending
+		}
+		r.MigrationPending = pending
+		return nil
+	})
 }

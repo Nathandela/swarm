@@ -32,6 +32,11 @@ func ReadNativeCredential(provider, home string) (Credential, error) {
 	}
 	var c Credential
 	if provider == ProviderCodex {
+		if _, pendingErr := root.Lstat(grantReloginFile); pendingErr == nil {
+			return Credential{}, ErrPending
+		} else if !errors.Is(pendingErr, os.ErrNotExist) {
+			return Credential{}, pendingErr
+		}
 		c.Auth, e = readPrivate(root, "auth.json", maxCredentialBytes)
 	} else {
 		c.Identity, e = readPrivate(root, ".claude.json", maxCredentialBytes)
@@ -309,6 +314,9 @@ func (s *Store) runtime(r Registry, provider string) (Runtime, error) {
 	l := find(&r, p.ActiveID)
 	if l == nil || l.AuthState != AuthReady {
 		return Runtime{}, ErrIneligible
+	}
+	if codexOwned(r, provider) && (p.DesiredCredentialRevision == 0 || p.DesiredCredentialRevision != l.CredentialRevision) {
+		return Runtime{}, ErrPending
 	}
 	rt := Runtime{Provider: provider, Epoch: p.Epoch, Identity: l.Identity, Home: s.Home(provider), ExternalAuth: codexOwned(r, provider)}
 	if e := s.validateSelected(r, provider, l.Identity, l.ID); e != nil {

@@ -121,6 +121,7 @@ func readPrivate(root *os.Root, name string, limit int64) ([]byte, error) {
 }
 
 type writeOps struct {
+	remove  func(string) error
 	rename  func(string, string) error
 	syncDir func(string) error
 }

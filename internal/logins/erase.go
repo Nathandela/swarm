@@ -34,6 +34,11 @@ func eraseNativeCredential(provider, home string, keychain credentialKeychain) e
 		return ErrUnsafePath
 	}
 	if provider == ProviderCodex {
+		if _, pendingErr := root.Lstat(grantReloginFile); pendingErr == nil {
+			return ErrPending
+		} else if !errors.Is(pendingErr, os.ErrNotExist) {
+			return pendingErr
+		}
 		return eraseNativeFields(root, "auth.json", "auth_mode", "tokens", "last_refresh", "OPENAI_API_KEY", "api_key", "access_token", "refresh_token", "id_token")
 	}
 	if keychain != nil {

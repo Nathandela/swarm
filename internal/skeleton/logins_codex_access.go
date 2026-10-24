@@ -29,6 +29,9 @@ func selectedCodexAuth(r logins.Registry) (codexAuthSelection, error) {
 	if !ok || l.Provider != logins.ProviderCodex || l.AuthState != logins.AuthReady || l.CredentialRevision == 0 {
 		return codexAuthSelection{}, errBackendAuthUnavailable
 	}
+	if p.DesiredCredentialRevision == 0 || p.DesiredCredentialRevision != l.CredentialRevision {
+		return codexAuthSelection{}, errBackendAuthUnavailable
+	}
 	return codexAuthSelection{l.ID, p.Epoch, l.CredentialRevision}, nil
 }
 
@@ -49,6 +52,7 @@ type codexAccessBroker struct {
 	wg       sync.WaitGroup
 	flights  map[string]*codexAccessFlight
 	snapshot func() (logins.Registry, error)
+	pending  func(string) error
 	read     func(string) (logins.AccessCredential, error)
 	refresh  func(context.Context, string, persist.CLIIdentity) error
 }
@@ -74,7 +78,11 @@ func (b *codexAccessBroker) selected() (codexAuthSelection, error) {
 	if err != nil {
 		return codexAuthSelection{}, errBackendAuthUnavailable
 	}
-	return selectedCodexAuth(r)
+	selection, err := selectedCodexAuth(r)
+	if err != nil || b.pending == nil || b.pending(selection.id) != nil {
+		return codexAuthSelection{}, errBackendAuthUnavailable
+	}
+	return selection, nil
 }
 
 func (b *codexAccessBroker) tokens(ctx context.Context, cli persist.CLIIdentity, force bool) (backendAuthTokens, error) {
@@ -181,6 +189,7 @@ func (b *codexAccessBroker) renew(ctx context.Context, selection codexAuthSelect
 func (m *loginManager) configureCodexAccess(ctx context.Context) {
 	b := newCodexAccessBroker(ctx)
 	b.snapshot = m.store.Snapshot
+	b.pending = m.store.CheckCodexGrantPending
 	b.read = func(id string) (logins.AccessCredential, error) {
 		lease, err := m.store.AcquireCodexGrant(id)
 		if err != nil {

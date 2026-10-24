@@ -94,6 +94,53 @@ func TestCodexAccessRevisionChangeDoesNotInvalidateSelection(t *testing.T) {
 	}
 }
 
+func TestCodexAccessWaitsForReloginSelectionIntent(t *testing.T) {
+	b := testCodexAccessBroker(t)
+	r, _ := b.snapshot()
+	p := r.Providers[logins.ProviderCodex]
+	p.DesiredCredentialRevision = 1
+	r.Providers[logins.ProviderCodex] = p
+	r.Logins[0].CredentialRevision = 2
+	b.snapshot = func() (logins.Registry, error) { return r, nil }
+	if _, err := b.tokens(context.Background(), persist.CLIIdentity{}, false); err == nil {
+		t.Fatal("new re-login credentials were distributed under the previous desired revision")
+	}
+}
+
+func TestCodexAccessRejectsZeroDesiredRevision(t *testing.T) {
+	b := testCodexAccessBroker(t)
+	r, _ := b.snapshot()
+	p := r.Providers[logins.ProviderCodex]
+	p.DesiredCredentialRevision = 0
+	r.Providers[logins.ProviderCodex] = p
+	b.snapshot = func() (logins.Registry, error) { return r, nil }
+	if _, err := b.tokens(context.Background(), persist.CLIIdentity{}, false); err == nil {
+		t.Fatal("unbootstrapped selection returned credentials")
+	}
+}
+
+func TestCodexAccessPendingReloginRevokesOutstandingToken(t *testing.T) {
+	b := testCodexAccessBroker(t)
+	var pending atomic.Bool
+	b.pending = func(string) error {
+		if pending.Load() {
+			return logins.ErrPending
+		}
+		return nil
+	}
+	token, err := b.tokens(context.Background(), persist.CLIIdentity{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.Store(true)
+	if token.current() {
+		t.Fatal("credential stayed writable during relogin intent-to-registry gap")
+	}
+	if _, err := b.tokens(context.Background(), persist.CLIIdentity{}, false); err == nil {
+		t.Fatal("pending relogin admitted a new read")
+	}
+}
+
 func TestCodexAccessCloseCancelsRefreshWait(t *testing.T) {
 	b := testCodexAccessBroker(t)
 	started := make(chan struct{})
@@ -155,9 +202,10 @@ func cloneAccessRegistry(r logins.Registry) logins.Registry {
 func testCodexAccessBroker(t *testing.T) *codexAccessBroker {
 	t.Helper()
 	b := newCodexAccessBroker(context.Background())
+	b.pending = func(string) error { return nil }
 	b.snapshot = func() (logins.Registry, error) {
 		return logins.Registry{
-			Providers: map[string]logins.ProviderState{logins.ProviderCodex: {Provider: logins.ProviderCodex, ActiveID: "saved", Epoch: 1, AuthOwnerMode: logins.CodexNativeGrantMode}},
+			Providers: map[string]logins.ProviderState{logins.ProviderCodex: {Provider: logins.ProviderCodex, ActiveID: "saved", Epoch: 1, AuthOwnerMode: logins.CodexNativeGrantMode, DesiredCredentialRevision: 1}},
 			Logins:    []logins.Login{{ID: "saved", Provider: logins.ProviderCodex, AuthState: logins.AuthReady, CredentialRevision: 1}},
 		}, nil
 	}

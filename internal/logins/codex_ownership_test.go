@@ -177,6 +177,12 @@ func TestCodexAuxiliaryOwnershipAndRenewalProof(t *testing.T) {
 	if e = os.WriteFile(outside, []byte("keep"), 0600); e != nil {
 		t.Fatal(e)
 	}
+	if e = os.Mkdir(filepath.Join(lease.Home(), "app-server-control"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(lease.Home(), "app-server-control", "owned-control"), nil, 0600); e != nil {
+		t.Fatal(e)
+	}
 	if e = os.Mkdir(filepath.Join(lease.Home(), "tmp"), 0700); e != nil {
 		t.Fatal(e)
 	}
@@ -198,6 +204,9 @@ func TestCodexAuxiliaryOwnershipAndRenewalProof(t *testing.T) {
 	}
 	if e = lease.CleanupAuxiliary(); e != nil {
 		t.Fatal(e)
+	}
+	if _, e = os.Lstat(filepath.Join(lease.Home(), "app-server-control")); !errors.Is(e, os.ErrNotExist) {
+		t.Fatal("qualified app-server-control auxiliary not retired")
 	}
 	if _, e = os.Stat(outside); e != nil {
 		t.Fatal("followed helper symlink")
@@ -402,5 +411,37 @@ func TestCodexOwnershipCaptureRejectsForeignUserInSameWorkspace(t *testing.T) {
 	want, _ := CodexGrantOwner(grantAuth("original-user", "a", time.Now().Add(time.Hour).Unix()))
 	if got != want {
 		t.Fatal("failed ownership migration changed saved owner")
+	}
+}
+func TestCodexQualifiedSQLiteStartupJournalIsOwnedAuxiliary(t *testing.T) {
+	_, _, lease := ownedGrantFixture(t)
+	if e := lease.PrepareAuxiliary("0.163.0"); e != nil {
+		t.Fatal(e)
+	}
+	path := filepath.Join(lease.Home(), "state_5.sqlite-journal")
+	if e := os.WriteFile(path, make([]byte, 512), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e := lease.CheckAuxiliary(); e != nil {
+		t.Fatalf("qualified native startup rollback journal rejected: %v", e)
+	}
+	unknown := filepath.Join(lease.Home(), "other.sqlite-journal")
+	if e := os.WriteFile(unknown, []byte("unknown"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e := lease.CleanupAuxiliary(); !errors.Is(e, errUnknownSavedData) {
+		t.Fatalf("unknown SQLite journal root accepted: %v", e)
+	}
+	if _, e := os.Stat(unknown); e != nil {
+		t.Fatal("unknown journal erased")
+	}
+	if e := os.Remove(unknown); e != nil {
+		t.Fatal(e)
+	}
+	if e := lease.CleanupAuxiliary(); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := os.Stat(path); !errors.Is(e, os.ErrNotExist) {
+		t.Fatal("qualified rollback journal not retired")
 	}
 }

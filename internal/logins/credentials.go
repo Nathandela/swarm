@@ -191,6 +191,13 @@ func owned(r Registry, id string) bool {
 			return true
 		}
 	}
+	for _, h := range r.Handovers {
+		for _, held := range h.HeldLoginIDs {
+			if held == id {
+				return true
+			}
+		}
+	}
 	for _, op := range r.Switches {
 		if op.FromID == id || op.ToID == id || op.NextID == id {
 			return true
@@ -223,6 +230,13 @@ func (s *Store) Remove(expected uint64, id string) (Registry, error) {
 						return e
 					}
 					defer func() { _ = lease.lock.Close(); lease.lock = nil }()
+					if _, e = s.root.Lstat(filepath.Join("saved", id, codexAuxFile)); e == nil {
+						if e = lease.CleanupAuxiliary(); e != nil {
+							return e
+						}
+					} else if !errors.Is(e, os.ErrNotExist) {
+						return e
+					}
 				}
 			}
 		}
@@ -360,6 +374,11 @@ func (s *Store) UpdateAvailability(expected uint64, id, auth string, limited boo
 		if l == nil {
 			return ErrIneligible
 		}
+		if l.Provider == ProviderCodex {
+			if e := s.noGrantRelogin(l.ID); e != nil {
+				return e
+			}
+		}
 		if _, e := s.readRelogin(*l); e == nil {
 			return ErrPending
 		} else if !errors.Is(e, os.ErrNotExist) {
@@ -385,6 +404,11 @@ func (s *Store) UpdateExhaustion(expected uint64, id string, until time.Time, no
 		l := find(r, id)
 		if l == nil {
 			return ErrIneligible
+		}
+		if l.Provider == ProviderCodex {
+			if e := s.noGrantRelogin(l.ID); e != nil {
+				return e
+			}
 		}
 		if _, e := s.readRelogin(*l); e == nil {
 			return ErrPending
@@ -436,7 +460,18 @@ func (s *Store) writeSavedMetadata(l Login, c Credential) error {
 			return e
 		}
 		if codexOwned(r, l.Provider) {
-			return ErrPending
+			empty := savedCredential{Credential: c}
+			if !credentiallessCodex(l, empty) {
+				return ErrPending
+			}
+			if _, e := s.root.Lstat(s.savedPath(l)); e == nil {
+				return ErrPending
+			} else if !errors.Is(e, os.ErrNotExist) {
+				return e
+			}
+			if e = s.verifyNoCodexGrant(l); e != nil {
+				return e
+			}
 		}
 	}
 	if l.Provider == ProviderClaude {
@@ -452,6 +487,11 @@ func (s *Store) writeSavedMetadata(l Login, c Credential) error {
 	return syncRootDir(s.root, "saved")
 }
 func (s *Store) readSaved(l Login) (Credential, error) {
+	if l.Provider == ProviderCodex {
+		if e := s.noGrantRelogin(l.ID); e != nil {
+			return Credential{}, e
+		}
+	}
 	saved, e := s.readSavedRecord(l)
 	if e != nil {
 		return Credential{}, e
@@ -505,6 +545,11 @@ func (s *Store) VerifySaved(id string) error {
 	if l == nil {
 		return ErrIneligible
 	}
+	if l.Provider == ProviderCodex {
+		if e = s.noGrantRelogin(l.ID); e != nil {
+			return e
+		}
+	}
 	if _, e = s.readSaved(*l); e == nil {
 		return nil
 	}
@@ -517,6 +562,9 @@ func (s *Store) VerifySaved(id string) error {
 	}
 	if (len(record.Credential.Auth) != 0 && string(record.Credential.Auth) != "null") || (len(record.Credential.Identity) != 0 && string(record.Credential.Identity) != "null") {
 		return e
+	}
+	if l.Provider == ProviderCodex && codexOwned(r, ProviderCodex) {
+		return s.verifyNoCodexGrant(*l)
 	}
 	if l.Provider == ProviderClaude {
 		if _, authErr := s.claudeAuth(id); !errors.Is(authErr, os.ErrNotExist) {
