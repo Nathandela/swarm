@@ -77,7 +77,7 @@ func TestDiagnosticLogRefusesUnsafeExistingTargets(t *testing.T) {
 			}
 			f, err := openDaemonLog(path)
 			if err == nil {
-				f.Close()
+				_ = f.Close()
 				t.Error("unsafe log accepted")
 			}
 			data, _ := os.ReadFile(target)
@@ -126,7 +126,7 @@ func TestDiagnosticLogLiveShimMaintainsWithoutDaemonOrPTYOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	before, _ := f.Stat()
 	for range 3 {
 		if err := f.Truncate(diagnosticlog.MaxBytes + 1); err != nil {
@@ -151,7 +151,7 @@ func TestDiagnosticLogDaemonMaintenanceStopsOnClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := f.Truncate(diagnosticlog.MaxBytes + 1); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestDiagnosticLogFailedDaemonOpenStopsMaintenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := f.Truncate(diagnosticlog.MaxBytes + 1); err != nil {
 		t.Fatal(err)
 	}

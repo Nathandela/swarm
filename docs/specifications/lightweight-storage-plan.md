@@ -20,9 +20,16 @@ curated Git recovery, then deferred the final workspace cleanup and requested
 only obvious disposal for now. That final batch removed 1.28 GiB of unused
 environments, dependencies, caches, previews and a compiled binary. Bulk
 relocation was never applied; its automation and temporary tooling are removed.
-Completion of retained WIP recovery and native diagnostic bounding remain open;
+Completion of retained WIP recovery and old/native diagnostic writer qualification remain open;
 the whole program is not complete. The operation-guard pressure flaw is also
 corrected and covered by pressure/restart regressions.
+
+The [2026-10-24 storage lifecycle follow-up](storage-lifecycle-plan.md) defines
+the warning-only aggregate policy and remaining source work. Its
+[implementation evidence](../verification/storage-lifecycle.md) records component
+reviews and focused tests; final integrated/platform gates remain pending. This
+follow-up is not deployed and makes no fixed-total-footprint promise. Native
+histories and successful or uncertain handoff inputs remain retained.
 
 ## Stop new accumulation
 
@@ -31,11 +38,11 @@ corrected and covered by pressure/restart regressions.
 | Remove duplicate discussion archives | Generic interaction content lives in a short, bounded RAM window. Phone reconnect/history responses report the actual available boundary. Native CLI history is unchanged. | `agents-tracker-bdp7` |
 | Reduce raw terminal persistence | Keep only a small fixed-size identity-discovery tail for adapters that need it, with explicit generation tracking; remove historical rotations and final-screen persistence from new shims. Live attach continues using the shim's in-memory VT screen. | `agents-tracker-bdp7` |
 | Enforce the workspace boundary | Refuse agent working directories under supervisor state, including aliases and hook-resolved paths. Explicitly align Codex resume to the saved/resolved project so a legacy native cwd cannot silently re-enter state. Worktree creation remains opt-in. | `agents-tracker-sb4m` |
-| Stop test-generated waste | Remove run-owned temporary binaries and reap only processes using those unique executables on macOS and Linux. Preserve unrelated processes and shared compiler caches. | `agents-tracker-uh9e` |
+| Stop test-generated waste | Source implemented and component-reviewed in the 2026-10-24 follow-up: parent supervision cleans copied/registered run-owned executables and migrated scratch after success, panic, timeout and parent TERM. Arbitrary detached system executables need fixture custody; parent SIGKILL/host crash remains outside the guarantee. Reserved login/auth fixtures retain explicit roots. Shared compiler caches are preserved; final gates and rollout remain separate. | `agents-tracker-uh9e` |
 | Close live-orphan launch custody | Still open: the existing W4 crash window can lose shim PID custody before native side effects are known. Add a real crash/orphan harness and prevent blind duplicate re-drive. A skipped test is not proof. | `agents-tracker-69qr` |
-| Bound native Claude diagnostics | Still open: the native diagnostic writer is uncapped, while the reader stops at 16 MiB. FIFO routing was characterized, but serialized/framed writer custody is not established. Preserve exact current prompt/request/model proof; stopping capture instead requires holding affected automatic recovery. This feature/storage tradeoff is pending owner choice. | `agents-tracker-f9vv` |
-| Bound shared debug output | Still open: daemon and surviving shims share append-only log descriptors. Bound the recognized owned inode without leaving unlinked live writers; measure any between-check overshoot explicitly. | `agents-tracker-b3df` |
-| Retire folded stopped-hook payloads | Still open: final disk batches can remain after folding, up to 8 MiB per stopped attempt. Prove writer death and durable fold coverage, then compact payloads while preserving spool incarnation, floor and sequence controls. | `agents-tracker-j6bv` |
+| Bound native Claude diagnostics | Historical prevention complete: Swarm removed automatic `CLAUDE_CODE_DIAGNOSTICS_FILE` injection in `99d63cbd`, confirmed by the [2026-10-24 audit](../research/disk-growth-audit-2026-10-24.md). Existing old writers and upstream diagnostic behavior still need host-specific qualification; source removal neither stops already-running writers nor proves retained files disposable. | `agents-tracker-f9vv` |
+| Bound shared debug output | Source implemented and component-reviewed in the 2026-10-24 follow-up: new daemon/shim owners maintain the validated shared inode, truncating above 8 MiB at open and every five seconds. Bursts can overshoot and old binaries are unchanged. The Mac updater keeps its latest invocation, which can itself grow without a ceiling. Final gates and rollout, including unit reinstallation, remain separate. | `agents-tracker-b3df` |
+| Retire folded stopped-hook payloads | Source implemented and component-reviewed in the 2026-10-24 follow-up: new cooperating shims join writers before exit publication; retirement requires exact producer/incarnation proof and a durable fold certificate under the lifetime lock. Compact only certified prefixes, preserving floor/sequence controls. Legacy or uncertain proof retains payload. Final integrated/platform gates and rollout remain separate. | `agents-tracker-j6bv` |
 | Define audit retention | Implemented in the 2026-10-21 follow-up: audit-only remote launch activity is capped at 1 MiB, retaining up to 512 KiB of recent complete records on overflow. Larger individual records are omitted. Older forensic history is lost; durable operation/replay custody is unchanged. Host rollout remains separate. | `agents-tracker-85yb` |
 | Retire obsolete native execution/profile assets | Still open: distinguish unused executable slots and regenerable cache from native history, credentials, active bindings and plugin work with local-only commits. Directory names alone do not prove disposability. | `agents-tracker-b0o6` |
 
