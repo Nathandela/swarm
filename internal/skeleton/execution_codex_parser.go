@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/engine"
+	"github.com/Nathandela/swarm/internal/persist"
 )
 
 // Normalize only control facts; prompt, answer and tool-output bodies never leave this parser.
@@ -40,21 +41,20 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 	if !ok {
 		return unknown, true
 	}
+	actor := ""
 	if raw, present := params["threadId"]; present {
 		id := executionString(raw)
 		if id == "" {
 			return unknown, true
 		}
-		if id != thread {
-			return engine.CodexExecutionEvent{}, false
-		}
+		actor = id
 	} else if method != "serverRequest/resolved" {
 		return unknown, true
 	}
 	if unsupported {
 		return unknown, true
 	}
-	e := engine.CodexExecutionEvent{ThreadID: thread, TurnID: executionString(params["turnId"])}
+	e := engine.CodexExecutionEvent{ThreadID: thread, ActorThreadID: actor, TurnID: executionString(params["turnId"])}
 	switch method {
 	case "turn/started", "turn/completed":
 		turn, ok := codexExecutionObject(params["turn"], "id", "status", "error")
@@ -90,7 +90,7 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 		if e.TurnID == "" {
 			return unknown, true
 		}
-		item, ok := codexExecutionObject(params["item"], "id", "type", "phase", "status", "exitCode", "source", "questions", "result", "error")
+		item, ok := codexExecutionObject(params["item"], "id", "type", "phase", "status", "exitCode", "source", "questions", "result", "error", "tool", "senderThreadId", "receiverThreadIds", "agentsStates")
 		if !ok {
 			return unknown, true
 		}
@@ -115,7 +115,8 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 			var exit *int
 			err := json.Unmarshal(item["exitCode"], &exit)
 			source, present := item["source"]
-			e.ToolSucceeded = err == nil && exit != nil && *exit == 0 && executionString(item["status"]) == "completed" && (!present || executionString(source) == "agent")
+			producer := executionString(source)
+			e.ToolSucceeded = err == nil && exit != nil && *exit == 0 && executionString(item["status"]) == "completed" && (!present || producer == "agent" || producer == "unifiedExecStartup")
 		}
 		if e.ItemKind == engine.CodexFileChange || e.ItemKind == engine.CodexMcpToolCall {
 			status := executionString(item["status"])
@@ -155,6 +156,11 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 			}
 		}
 
+		if e.ItemKind == engine.CodexCollabAgentToolCall {
+			if !parseCodexCollabItem(item, &e) {
+				return unknown, true
+			}
+		}
 		return e, true
 	case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 		e.RequestID = executionRequestID(root["id"])
@@ -178,7 +184,11 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 		if !valid {
 			return unknown, true
 		}
-		if executionString(state["type"]) == "idle" {
+		switch executionString(state["type"]) {
+		case "idle", "systemError", "notLoaded":
+			if _, present := state["activeFlags"]; present {
+				return unknown, true
+			}
 			return engine.CodexExecutionEvent{}, false
 		}
 		if executionString(state["type"]) == "active" {
@@ -203,6 +213,61 @@ func parseCodexExecutionFrame(method string, raw []byte, thread string) (engine.
 		return e, true
 	}
 	return unknown, true
+}
+
+func parseCodexCollabItem(item map[string]json.RawMessage, e *engine.CodexExecutionEvent) bool {
+	if executionString(item["senderThreadId"]) != e.ActorThreadID {
+		return false
+	}
+	e.CollabTool = executionString(item["tool"])
+	switch e.CollabTool {
+	case "spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent":
+	default:
+		return false
+	}
+	if json.Unmarshal(item["receiverThreadIds"], &e.ReceiverThreadIDs) != nil || e.ReceiverThreadIDs == nil || len(e.ReceiverThreadIDs) > persist.MaxExecutionActors {
+		return false
+	}
+	seen := make(map[string]bool, len(e.ReceiverThreadIDs))
+	for _, receiver := range e.ReceiverThreadIDs {
+		encoded, _ := json.Marshal(receiver)
+		if executionString(encoded) == "" || seen[receiver] || receiver == e.ActorThreadID {
+			return false
+		}
+		seen[receiver] = true
+	}
+	states, valid := codexExecutionObject(item["agentsStates"])
+	if !valid || len(states) > persist.MaxExecutionActors {
+		return false
+	}
+	for id, raw := range states {
+		state, valid := codexExecutionObject(raw, "status")
+		if !valid || !seen[id] {
+			return false
+		}
+		switch executionString(state["status"]) {
+		case "pendingInit", "running", "interrupted", "completed", "errored", "shutdown", "notFound":
+		default:
+			return false
+		}
+	}
+	if e.Kind == engine.CodexItemStarted {
+		return executionString(item["status"]) == "inProgress" && len(states) == 0
+	}
+	if len(states) != len(seen) {
+		return false
+	}
+	switch executionString(item["status"]) {
+	case "completed":
+		if e.CollabTool == "spawnAgent" && len(e.ReceiverThreadIDs) != 1 {
+			return false
+		}
+		e.ToolSucceeded = true
+	case "failed":
+	default:
+		return false
+	}
+	return true
 }
 
 func codexExecutionObject(raw []byte, keys ...string) (map[string]json.RawMessage, bool) {

@@ -590,3 +590,73 @@ func TestExecutionCodexCommonToolKinds(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutionCodexActorGraphRoundTrip(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := codexExecutionFixture()
+	child := r.Codex.Children["child-1"]
+	child.ParentThreadID = r.ConversationID
+	r.Codex.Children["child-1"] = child
+	r.Codex.Children["grandchild"] = CodexExecutionChild{NativeIncarnation: "backend-1", FeedEpoch: "dial-1", ParentThreadID: "child-1", TurnID: child.ChildTurnID, AwaitingTurn: true, Active: true}
+	item := r.Codex.Items["tool-1"]
+	item.ActorThreadID = "child-1"
+	item.TurnID = child.ChildTurnID
+	item.CollabTool = "spawnAgent"
+	item.Kind = "collabAgentToolCall"
+	r.Codex.Items["tool-1"] = item
+	if err := s.SaveExecution(r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadExecution(r.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Codex.Children["grandchild"].ParentThreadID != "child-1" || !got.Codex.Children["grandchild"].AwaitingTurn || got.Codex.Items["tool-1"].ActorThreadID != "child-1" || got.Codex.Items["tool-1"].CollabTool != "spawnAgent" {
+		t.Fatal("lost exact actor graph custody")
+	}
+	child.ParentThreadID = "grandchild"
+	r.Codex.Children["child-1"] = child
+	if err := s.SaveExecution(r); err == nil {
+		t.Fatal("cyclic actor custody persisted")
+	}
+	child.ParentThreadID = "missing-parent"
+	r.Codex.Children["child-1"] = child
+	if err := s.SaveExecution(r); err == nil {
+		t.Fatal("unbound parent edge persisted")
+	}
+}
+
+func TestExecutionCodexStimulusRoundTripAndBounds(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := codexExecutionFixture()
+	stimulus := CodexExecutionStimulus{NativeIncarnation: "backend-1", FeedEpoch: "dial-1", ActorThreadID: r.ConversationID, TurnID: r.TurnID, ItemID: "send", ReceiverThreadID: "child-1", PreviousTurnID: "child-turn-1", StartSequence: 1, Phase: "started"}
+	r.Codex.Stimuli = map[string]CodexExecutionStimulus{"send": stimulus}
+	if err := s.SaveExecution(r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadExecution(r.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Codex.Stimuli["send"] != stimulus {
+		t.Fatal("lost exact pending native input admission")
+	}
+	stimulus.Phase = "accepted"
+	r.Codex.Stimuli["send"] = stimulus
+	if err := s.SaveExecution(r); err == nil {
+		t.Fatal("input acceptance without a completion position persisted")
+	}
+	stimulus.Phase = "started"
+	for i := 0; i < MaxExecutionActors; i++ {
+		r.Codex.Stimuli[fmt.Sprintf("send-%d", i)] = stimulus
+	}
+	if err := s.SaveExecution(r); err == nil {
+		t.Fatal("pending native input exceeded combined custody cap")
+	}
+}

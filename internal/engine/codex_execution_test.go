@@ -208,9 +208,7 @@ func TestCodexExecutionIndependentChildSurvivesParentTerminal(t *testing.T) {
 	trace := codexExecutionTrace(t, "quota")
 	turn := trace[0].TurnID
 	applyCodexTrace(t, e, feed, trace[:len(trace)-1])
-	if err := codexApplyOne(e, feed, CodexExecutionEvent{Kind: CodexChildStarted, TurnID: turn, ChildID: "child-thread", ChildTurnID: "child-turn"}); err != nil {
-		t.Fatal(err)
-	}
+	codexSpawnChild(t, e, feed, "", turn, "child-thread", "child-turn")
 	if err := codexApplyOne(e, feed, trace[len(trace)-1]); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +219,7 @@ func TestCodexExecutionIndependentChildSurvivesParentTerminal(t *testing.T) {
 	if !snapshot.Codex.Children["child-thread"].Active {
 		t.Fatal("parent terminal erased child custody")
 	}
-	if err := codexApplyOne(e, feed, CodexExecutionEvent{Kind: CodexChildCompleted, TurnID: turn, ChildID: "child-thread", ChildTurnID: "child-turn"}); err != nil {
+	if err := codexApplyOne(e, feed, CodexExecutionEvent{ActorThreadID: "child-thread", Kind: CodexTurnCompleted, TurnID: "child-turn", Cause: CodexTerminalCompleted}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := e.CodexQuotaCandidate("s1"); !ok {
@@ -358,7 +356,8 @@ func TestCodexExecutionReconnectKeepsUnresolvedCustody(t *testing.T) {
 	trace := codexExecutionTrace(t, "quota")
 	turn := trace[0].TurnID
 	applyCodexTrace(t, e, feed, trace[:len(trace)-1])
-	for _, event := range []CodexExecutionEvent{{Kind: CodexChildStarted, TurnID: turn, ChildID: "child", ChildTurnID: "child-turn"}, {Kind: CodexDecisionRequested, TurnID: turn, RequestID: `123`, Decision: CodexQuestion}} {
+	codexSpawnChild(t, e, feed, "", turn, "child", "child-turn")
+	for _, event := range []CodexExecutionEvent{{Kind: CodexDecisionRequested, TurnID: turn, RequestID: `123`, Decision: CodexQuestion}} {
 		if err := codexApplyOne(e, feed, event); err != nil {
 			t.Fatal(err)
 		}
@@ -389,6 +388,7 @@ func TestCodexExecutionReconnectKeepsUnresolvedCustody(t *testing.T) {
 
 func TestCodexExecutionSnapshotAndBoundedState(t *testing.T) {
 	e, feed := codexExecutionEngine(t)
+	e.storeExecution = func(r persist.ExecutionRecord) error { return r.Validate() }
 	trace := codexExecutionTrace(t, "quota")
 	applyCodexTrace(t, e, feed, trace)
 	snapshot, _ := e.ExecutionSnapshot("s1")
@@ -401,11 +401,25 @@ func TestCodexExecutionSnapshotAndBoundedState(t *testing.T) {
 	if err := codexApplyOne(e, feed, event); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < persist.MaxExecutionActors+1; i++ {
+	for i := 0; i < persist.MaxExecutionActors*4; i++ {
 		id := fmt.Sprintf("reasoning-%d", i)
 		for _, kind := range []CodexExecutionKind{CodexItemStarted, CodexItemCompleted} {
-			_ = codexApplyOne(e, feed, CodexExecutionEvent{Kind: kind, TurnID: event.TurnID, ItemID: id, ItemKind: CodexReasoning})
+			if err := codexApplyOne(e, feed, CodexExecutionEvent{Kind: kind, TurnID: event.TurnID, ItemID: id, ItemKind: CodexReasoning}); err != nil {
+				t.Fatalf("completed history consumed live capacity at item %d: %v", i, err)
+			}
 		}
+	}
+	snapshot, _ = e.ExecutionSnapshot("s1")
+	if len(snapshot.Codex.Items) != 0 || snapshot.Codex.UnknownCustody {
+		t.Fatal("completed history was not folded into bounded evidence")
+	}
+	for i := 0; i < persist.MaxExecutionActors; i++ {
+		if err := codexApplyOne(e, feed, CodexExecutionEvent{Kind: CodexItemStarted, TurnID: event.TurnID, ItemID: fmt.Sprintf("live-%d", i), ItemKind: CodexReasoning}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := codexApplyOne(e, feed, CodexExecutionEvent{Kind: CodexItemStarted, TurnID: event.TurnID, ItemID: "live-overflow", ItemKind: CodexReasoning}); err == nil {
+		t.Fatal("simultaneous live custody overflow was accepted")
 	}
 	snapshot, _ = e.ExecutionSnapshot("s1")
 	if len(snapshot.Codex.Items) > persist.MaxExecutionActors || !snapshot.Codex.UnknownCustody {
@@ -575,5 +589,389 @@ func TestCodexExecutionOrdinaryFailureNeedsFreshPositiveCycle(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCodexExecutionLongNativeTurnRetiresCompletedItems(t *testing.T) {
+	for _, scenario := range []string{"long-tools", "reused-id", "unmatched-completion", "rejoin"} {
+		t.Run(scenario, func(t *testing.T) {
+			e, feed := codexExecutionEngine(t)
+			e.storeExecution = func(r persist.ExecutionRecord) error { return r.Validate() }
+			trace := codexExecutionTrace(t, "quota")
+			terminal := trace[len(trace)-1]
+			applyCodexTrace(t, e, feed, trace[:len(trace)-1])
+			for i := 0; i < persist.MaxExecutionActors+2; i++ {
+				id := fmt.Sprintf("later-tool-%d", i)
+				if scenario == "reused-id" {
+					id = "native-reused-id"
+				}
+				for _, kind := range []CodexExecutionKind{CodexItemStarted, CodexItemCompleted} {
+					if err := codexApplyOne(e, feed, CodexExecutionEvent{Kind: kind, TurnID: terminal.TurnID, ItemID: id, ItemKind: CodexCommandExecution, ToolSucceeded: true}); err != nil {
+						t.Fatalf("native tool cycle %d: %v", i, err)
+					}
+				}
+			}
+			if scenario == "unmatched-completion" {
+				if err := codexApplyOne(e, feed, CodexExecutionEvent{Kind: CodexItemCompleted, TurnID: terminal.TurnID, ItemID: "later-tool-0", ItemKind: CodexCommandExecution, ToolSucceeded: true}); err == nil {
+					t.Fatal("completion without a live start was accepted")
+				}
+			}
+			if scenario == "rejoin" {
+				feed.FeedEpoch = "new-connection"
+				feed.ObservedFromStart = false
+				if err := e.BeginCodexExecutionFeed("s1", feed); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = codexApplyOne(e, feed, terminal)
+			_, candidate := e.CodexQuotaCandidate("s1")
+			if candidate != (scenario == "long-tools" || scenario == "reused-id") {
+				t.Fatalf("incorrect long-turn qualification: %v", candidate)
+			}
+			snapshot, _ := e.ExecutionSnapshot("s1")
+			if len(snapshot.Codex.Items) != 0 {
+				t.Fatal("retained completed tool history")
+			}
+		})
+	}
+}
+
+func codexActorEvent(t *testing.T, actor string, event CodexExecutionEvent) CodexExecutionEvent {
+	t.Helper()
+	event.ActorThreadID = actor
+	return event
+}
+
+func TestCodexExecutionNativeActorCustody(t *testing.T) {
+	for _, scenario := range []string{"child-terminal", "grandchild-live", "rollover", "reopened-stale-terminal", "same-item-id", "same-request-id"} {
+		t.Run(scenario, func(t *testing.T) {
+			e, feed := codexExecutionEngine(t)
+			trace := codexExecutionTrace(t, "quota")
+			terminal := trace[len(trace)-1]
+			applyCodexTrace(t, e, feed, trace[:len(trace)-1])
+			apply := func(actor string, event CodexExecutionEvent) error {
+				return codexApplyOne(e, feed, codexActorEvent(t, actor, event))
+			}
+			must := func(actor string, event CodexExecutionEvent) {
+				t.Helper()
+				if err := apply(actor, event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			codexSpawnChild(t, e, feed, "", terminal.TurnID, "child", "child-turn")
+			if scenario == "grandchild-live" || scenario == "rollover" {
+				codexSpawnChild(t, e, feed, "child", "child-turn", "grandchild", "grandchild-turn")
+			}
+			if scenario == "same-item-id" {
+				for _, actor := range []string{"", "child"} {
+					turn := terminal.TurnID
+					if actor != "" {
+						turn = "child-turn"
+					}
+					must(actor, CodexExecutionEvent{Kind: CodexItemStarted, TurnID: turn, ItemID: "shared-id", ItemKind: CodexReasoning})
+				}
+				for _, actor := range []string{"child", ""} {
+					turn := terminal.TurnID
+					if actor != "" {
+						turn = "child-turn"
+					}
+					must(actor, CodexExecutionEvent{Kind: CodexItemCompleted, TurnID: turn, ItemID: "shared-id", ItemKind: CodexReasoning})
+				}
+			}
+			if scenario == "same-request-id" {
+				must("", CodexExecutionEvent{Kind: CodexDecisionRequested, TurnID: terminal.TurnID, RequestID: `"shared"`, Decision: CodexQuestion})
+				must("child", CodexExecutionEvent{Kind: CodexDecisionRequested, TurnID: "child-turn", RequestID: `"shared"`, Decision: CodexQuestion})
+				must("child", CodexExecutionEvent{Kind: CodexDecisionResolved, TurnID: "child-turn", RequestID: `"shared"`})
+				snapshot, _ := e.ExecutionSnapshot("s1")
+				if len(snapshot.Codex.Decisions) != 1 {
+					t.Fatal("child resolved parent decision")
+				}
+			}
+			must("child", CodexExecutionEvent{Kind: CodexTurnCompleted, TurnID: "child-turn", Cause: CodexTerminalCompleted})
+			if scenario == "reopened-stale-terminal" {
+				reopen := CodexExecutionEvent{Kind: CodexItemStarted, TurnID: terminal.TurnID, ItemID: "reopen", ItemKind: CodexCollabAgentToolCall, CollabTool: "sendInput", ReceiverThreadIDs: []string{"child"}}
+				must("", reopen)
+				reopen.Kind = CodexItemCompleted
+				reopen.ToolSucceeded = true
+				must("", reopen)
+				must("child", CodexExecutionEvent{Kind: CodexTurnStarted, TurnID: "new-child-turn"})
+				if err := apply("child", CodexExecutionEvent{Kind: CodexTurnCompleted, TurnID: "child-turn", Cause: CodexTerminalCompleted}); err == nil {
+					t.Fatal("stale child terminal closed reopened actor")
+				}
+			}
+			must("", terminal)
+			if scenario == "rollover" {
+				for _, event := range trace {
+					event.TurnID = "next-parent-turn"
+					must("", event)
+				}
+			}
+			_, candidate := e.CodexQuotaCandidate("s1")
+			if candidate != (scenario == "child-terminal" || scenario == "same-item-id") {
+				t.Fatalf("incorrect actor custody qualification: %v", candidate)
+			}
+		})
+	}
+}
+
+func TestCodexExecutionProvisionalActorsAndNativeReopen(t *testing.T) {
+	for _, scenario := range []string{"provisional-complete", "unattached", "sendInput", "resumeAgent", "grandchild-late"} {
+		t.Run(scenario, func(t *testing.T) {
+			e, feed := codexExecutionEngine(t)
+			trace := codexExecutionTrace(t, "quota")
+			terminal := trace[len(trace)-1]
+			applyCodexTrace(t, e, feed, trace[:len(trace)-1])
+			apply := func(actor string, event CodexExecutionEvent) error {
+				return codexApplyOne(e, feed, codexActorEvent(t, actor, event))
+			}
+			must := func(actor string, event CodexExecutionEvent) {
+				t.Helper()
+				if err := apply(actor, event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			spawn := CodexExecutionEvent{Kind: CodexItemStarted, TurnID: terminal.TurnID, ItemID: "spawn", ItemKind: CodexCollabAgentToolCall, CollabTool: "spawnAgent"}
+			must("", spawn)
+			must("child", CodexExecutionEvent{Kind: CodexTurnStarted, TurnID: "child-turn"})
+			if scenario == "grandchild-late" {
+				codexSpawnChild(t, e, feed, "child", "child-turn", "grandchild", "grandchild-turn")
+			}
+			must("child", CodexExecutionEvent{Kind: CodexTurnCompleted, TurnID: "child-turn", Cause: CodexTerminalCompleted})
+			spawn.Kind = CodexItemCompleted
+			spawn.ToolSucceeded = scenario != "unattached"
+			if scenario != "unattached" {
+				spawn.ReceiverThreadIDs = []string{"child"}
+			}
+			must("", spawn)
+			if scenario == "sendInput" || scenario == "resumeAgent" {
+				reopen := CodexExecutionEvent{Kind: CodexItemStarted, TurnID: terminal.TurnID, ItemID: "reopen", ItemKind: CodexCollabAgentToolCall, CollabTool: scenario, ReceiverThreadIDs: []string{"child"}}
+				must("", reopen)
+				reopen.Kind = CodexItemCompleted
+				reopen.ToolSucceeded = true
+				must("", reopen)
+				must("", terminal)
+				if _, ok := e.CodexQuotaCandidate("s1"); ok != (scenario == "resumeAgent") {
+					t.Fatal("native input and runtime resume custody were conflated")
+				}
+				must("child", CodexExecutionEvent{Kind: CodexTurnStarted, TurnID: "next-child-turn"})
+				must("child", CodexExecutionEvent{Kind: CodexTurnCompleted, TurnID: "next-child-turn", Cause: CodexTerminalCompleted})
+			} else {
+				must("", terminal)
+			}
+			if scenario == "grandchild-late" {
+				if _, ok := e.CodexQuotaCandidate("s1"); ok {
+					t.Fatal("parent and child terminal erased live grandchild")
+				}
+				for _, event := range trace {
+					event.TurnID = "next-parent-turn"
+					must("", event)
+				}
+				must("grandchild", CodexExecutionEvent{Kind: CodexTurnCompleted, TurnID: "grandchild-turn", Cause: CodexTerminalCompleted})
+			}
+			_, candidate := e.CodexQuotaCandidate("s1")
+			if candidate != (scenario != "unattached" && scenario != "sendInput") {
+				t.Fatalf("incorrect exact actor qualification: %v", candidate)
+			}
+		})
+	}
+}
+
+func TestCodexExecutionManyCompletedChildrenRetainOnlyBoundedCustody(t *testing.T) {
+	e, feed := codexExecutionEngine(t)
+	e.storeExecution = func(r persist.ExecutionRecord) error { return r.Validate() }
+	trace := codexExecutionTrace(t, "quota")
+	terminal := trace[len(trace)-1]
+	applyCodexTrace(t, e, feed, trace[:len(trace)-1])
+	for i := 0; i < persist.MaxExecutionActors*3; i++ {
+		child := fmt.Sprintf("child-%d", i)
+		spawn := CodexExecutionEvent{Kind: CodexItemStarted, TurnID: terminal.TurnID, ItemID: "native-spawn-call", ItemKind: CodexCollabAgentToolCall, CollabTool: "spawnAgent"}
+		if err := codexApplyOne(e, feed, spawn); err != nil {
+			t.Fatal(err)
+		}
+		spawn.Kind = CodexItemCompleted
+		spawn.ReceiverThreadIDs = []string{child}
+		spawn.ToolSucceeded = true
+		if err := codexApplyOne(e, feed, spawn); err != nil {
+			t.Fatal(err)
+		}
+		for _, kind := range []CodexExecutionKind{CodexTurnStarted, CodexTurnCompleted} {
+			if err := codexApplyOne(e, feed, CodexExecutionEvent{ActorThreadID: child, Kind: kind, TurnID: "child-turn", Cause: CodexTerminalCompleted}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		snapshot, _ := e.ExecutionSnapshot("s1")
+		if len(snapshot.Codex.Children) > persist.MaxExecutionActors || snapshot.Codex.UnknownCustody {
+			t.Fatal("completed child history exhausted live custody")
+		}
+	}
+	if err := codexApplyOne(e, feed, terminal); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.CodexQuotaCandidate("s1"); !ok {
+		t.Fatal("bounded completed child retirement prevented quota qualification")
+	}
+}
+
+func TestCodexExecutionCloseSnapshotCannotReleaseChildCustody(t *testing.T) {
+	for _, openTool := range []bool{false, true} {
+		t.Run(fmt.Sprint(openTool), func(t *testing.T) {
+			e, feed := codexExecutionEngine(t)
+			trace := codexExecutionTrace(t, "quota")
+			terminal := trace[len(trace)-1]
+			applyCodexTrace(t, e, feed, trace[:len(trace)-1])
+			must := func(event CodexExecutionEvent) {
+				t.Helper()
+				if err := codexApplyOne(e, feed, event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			codexSpawnChild(t, e, feed, "", terminal.TurnID, "child", "child-turn")
+			if openTool {
+				must(CodexExecutionEvent{ActorThreadID: "child", Kind: CodexItemStarted, TurnID: "child-turn", ItemID: "tool", ItemKind: CodexCommandExecution})
+			}
+			closeEvent := CodexExecutionEvent{Kind: CodexItemStarted, TurnID: terminal.TurnID, ItemID: "close", ItemKind: CodexCollabAgentToolCall, CollabTool: "closeAgent", ReceiverThreadIDs: []string{"child"}}
+			must(closeEvent)
+			closeEvent.Kind = CodexItemCompleted
+			closeEvent.ToolSucceeded = true
+			must(closeEvent)
+			must(terminal)
+			if _, ok := e.CodexQuotaCandidate("s1"); ok {
+				t.Fatal("close tool result erased independently live child")
+			}
+			must(CodexExecutionEvent{ActorThreadID: "child", Kind: CodexTurnCompleted, TurnID: "child-turn", Cause: CodexTerminalCancelled})
+			_, candidate := e.CodexQuotaCandidate("s1")
+			if candidate == openTool {
+				t.Fatalf("child terminal lost exact live tool custody: %v", candidate)
+			}
+		})
+	}
+}
+
+func codexSpawnChild(t *testing.T, e *Engine, feed CodexFeedIdentity, actor, parentTurn, child, childTurn string) {
+	t.Helper()
+	spawn := CodexExecutionEvent{ActorThreadID: actor, Kind: CodexItemStarted, TurnID: parentTurn, ItemID: "spawn-" + child, ItemKind: CodexCollabAgentToolCall, CollabTool: "spawnAgent"}
+	if err := codexApplyOne(e, feed, spawn); err != nil {
+		t.Fatal(err)
+	}
+	spawn.Kind = CodexItemCompleted
+	spawn.ReceiverThreadIDs = []string{child}
+	spawn.ToolSucceeded = true
+	if err := codexApplyOne(e, feed, spawn); err != nil {
+		t.Fatal(err)
+	}
+	if err := codexApplyOne(e, feed, CodexExecutionEvent{ActorThreadID: child, Kind: CodexTurnStarted, TurnID: childTurn}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCodexExecutionLateToolCompletionRetiresExactCustody(t *testing.T) {
+	for _, scenario := range []string{"root", "child", "root-rollover", "failed", "child-failed", "unmatched", "new-start"} {
+		t.Run(scenario, func(t *testing.T) {
+			e, feed := codexExecutionEngine(t)
+			trace := codexExecutionTrace(t, "quota")
+			terminal := trace[len(trace)-1]
+			applyCodexTrace(t, e, feed, trace[:len(trace)-1])
+			must := func(event CodexExecutionEvent) {
+				t.Helper()
+				if err := codexApplyOne(e, feed, event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			actor, turn := "", terminal.TurnID
+			if scenario == "child" || scenario == "child-failed" {
+				codexSpawnChild(t, e, feed, "", terminal.TurnID, "child", "child-turn")
+				actor, turn = "child", "child-turn"
+			}
+			background := CodexExecutionEvent{ActorThreadID: actor, Kind: CodexItemStarted, TurnID: turn, ItemID: "background", ItemKind: CodexCommandExecution}
+			must(background)
+			for _, event := range []CodexExecutionEvent{
+				{Kind: CodexItemStarted, TurnID: terminal.TurnID, ItemID: "later-commentary", ItemKind: CodexAgentMessage, Phase: CodexCommentary},
+				{Kind: CodexItemCompleted, TurnID: terminal.TurnID, ItemID: "later-commentary", ItemKind: CodexAgentMessage, Phase: CodexCommentary},
+				{Kind: CodexItemStarted, TurnID: terminal.TurnID, ItemID: "later-success", ItemKind: CodexCommandExecution},
+				{Kind: CodexItemCompleted, TurnID: terminal.TurnID, ItemID: "later-success", ItemKind: CodexCommandExecution, ToolSucceeded: true},
+			} {
+				must(event)
+			}
+			if scenario == "child" || scenario == "child-failed" {
+				must(CodexExecutionEvent{ActorThreadID: actor, Kind: CodexTurnCompleted, TurnID: turn, Cause: CodexTerminalCompleted})
+			}
+			must(terminal)
+			if scenario == "root-rollover" {
+				for _, event := range trace {
+					event.TurnID = "next-parent-turn"
+					must(event)
+				}
+			}
+			if _, ok := e.CodexQuotaCandidate("s1"); ok {
+				t.Fatal("live native background custody was ignored")
+			}
+			before, _ := e.ExecutionSnapshot("s1")
+			background.Kind = CodexItemCompleted
+			background.ToolSucceeded = scenario != "failed" && scenario != "child-failed"
+			if scenario == "unmatched" {
+				background.ItemID = "unknown-background"
+			}
+			if scenario == "new-start" {
+				background.Kind = CodexItemStarted
+				background.ItemID = "new-background"
+			}
+			err := codexApplyOne(e, feed, background)
+			invalid := scenario == "unmatched" || scenario == "new-start"
+			if (err != nil) != invalid {
+				t.Fatalf("late custody reduction error=%v", err)
+			}
+			after, _ := e.ExecutionSnapshot("s1")
+			if !invalid && (after.Codex.LastItemSequence != before.Codex.LastItemSequence || after.Codex.ToolResultSequence != before.Codex.ToolResultSequence || after.Codex.TerminalSequence != before.Codex.TerminalSequence) {
+				t.Fatal("late background completion advanced terminal phase")
+			}
+			_, candidate := e.CodexQuotaCandidate("s1")
+			if candidate != (!invalid && scenario != "failed" && scenario != "child-failed") {
+				t.Fatalf("incorrect late native custody candidate: %v", candidate)
+			}
+		})
+	}
+}
+
+func TestCodexExecutionSendInputHoldsCustodyAcrossDelayedChildStart(t *testing.T) {
+	e, feed := codexExecutionEngine(t)
+	trace := codexExecutionTrace(t, "quota")
+	terminal := trace[len(trace)-1]
+	applyCodexTrace(t, e, feed, trace[:len(trace)-1])
+	codexSpawnChild(t, e, feed, "", terminal.TurnID, "child", "old-child-turn")
+	must := func(event CodexExecutionEvent) {
+		t.Helper()
+		if err := codexApplyOne(e, feed, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send := CodexExecutionEvent{Kind: CodexItemStarted, TurnID: terminal.TurnID, ItemID: "send", ItemKind: CodexCollabAgentToolCall, CollabTool: "sendInput", ReceiverThreadIDs: []string{"child"}}
+	must(send)
+	must(CodexExecutionEvent{ActorThreadID: "child", Kind: CodexTurnCompleted, TurnID: "old-child-turn", Cause: CodexTerminalCompleted})
+	send.Kind = CodexItemCompleted
+	send.ToolSucceeded = true
+	must(send)
+	must(terminal)
+	if _, ok := e.CodexQuotaCandidate("s1"); ok {
+		t.Fatal("delayed child turn exposed a false-idle SendInput gap")
+	}
+	must(CodexExecutionEvent{ActorThreadID: "child", Kind: CodexTurnStarted, TurnID: "delayed-new-child-turn"})
+	must(CodexExecutionEvent{ActorThreadID: "child", Kind: CodexTurnCompleted, TurnID: "delayed-new-child-turn", Cause: CodexTerminalCompleted})
+	if _, ok := e.CodexQuotaCandidate("s1"); ok {
+		t.Fatal("uncorrelated turn terminal retired native input admission")
+	}
+}
+
+func TestCodexExecutionSuccessfulSpawnRequiresReceiver(t *testing.T) {
+	e, feed := codexExecutionEngine(t)
+	trace := codexExecutionTrace(t, "quota")
+	applyCodexTrace(t, e, feed, trace[:len(trace)-1])
+	spawn := CodexExecutionEvent{Kind: CodexItemStarted, TurnID: trace[0].TurnID, ItemID: "empty-spawn", ItemKind: CodexCollabAgentToolCall, CollabTool: "spawnAgent"}
+	if err := codexApplyOne(e, feed, spawn); err != nil {
+		t.Fatal(err)
+	}
+	spawn.Kind = CodexItemCompleted
+	spawn.ToolSucceeded = true
+	if err := codexApplyOne(e, feed, spawn); err == nil {
+		t.Fatal("successful spawn without exact native receiver admitted")
 	}
 }

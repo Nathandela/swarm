@@ -117,6 +117,7 @@ type CodexExecution struct {
 	Items               map[string]CodexExecutionItem     `json:"items"`
 	Children            map[string]CodexExecutionChild    `json:"children"`
 	Decisions           map[string]CodexExecutionDecision `json:"decisions"`
+	Stimuli             map[string]CodexExecutionStimulus `json:"stimuli,omitempty"`
 }
 
 type CodexTurnState string
@@ -126,6 +127,8 @@ type CodexTerminalCause string
 type CodexDecisionKind string
 
 type CodexExecutionItem struct {
+	ActorThreadID     string              `json:"actor_thread_id,omitempty"`
+	CollabTool        string              `json:"collab_tool,omitempty"`
 	NativeIncarnation string              `json:"native_incarnation"`
 	FeedEpoch         string              `json:"feed_epoch"`
 	TurnID            string              `json:"turn_id"`
@@ -135,6 +138,8 @@ type CodexExecutionItem struct {
 	Complete          bool                `json:"complete"`
 }
 type CodexExecutionChild struct {
+	ParentThreadID    string `json:"parent_thread_id,omitempty"`
+	AwaitingTurn      bool   `json:"awaiting_turn,omitempty"`
 	NativeIncarnation string `json:"native_incarnation"`
 	FeedEpoch         string `json:"feed_epoch"`
 	TurnID            string `json:"turn_id"`
@@ -142,15 +147,30 @@ type CodexExecutionChild struct {
 	Active            bool   `json:"active"`
 }
 type CodexExecutionDecision struct {
+	ActorThreadID     string            `json:"actor_thread_id,omitempty"`
+	RequestID         string            `json:"request_id,omitempty"`
 	NativeIncarnation string            `json:"native_incarnation"`
 	FeedEpoch         string            `json:"feed_epoch"`
 	TurnID            string            `json:"turn_id"`
 	Kind              CodexDecisionKind `json:"kind"`
 }
 
+type CodexExecutionStimulus struct {
+	NativeIncarnation  string `json:"native_incarnation"`
+	FeedEpoch          string `json:"feed_epoch"`
+	ActorThreadID      string `json:"actor_thread_id"`
+	TurnID             string `json:"turn_id"`
+	ItemID             string `json:"item_id"`
+	ReceiverThreadID   string `json:"receiver_thread_id"`
+	PreviousTurnID     string `json:"previous_turn_id"`
+	StartSequence      uint64 `json:"start_sequence"`
+	CompletionSequence uint64 `json:"completion_sequence"`
+	Phase              string `json:"phase"`
+}
+
 func executionID(id string) bool { return id != "" && len(id) <= 256 }
 func (c CodexExecution) Validate() error {
-	if !executionID(c.NativeIncarnation) || !executionID(c.FeedEpoch) || !executionID(c.ThreadID) || len(c.TurnID) > 256 || len(c.Incomplete) > 128 || len(c.Denied) > 128 || len(c.Items)+len(c.Children)+len(c.Decisions) > MaxExecutionActors {
+	if !executionID(c.NativeIncarnation) || !executionID(c.FeedEpoch) || !executionID(c.ThreadID) || len(c.TurnID) > 256 || len(c.Incomplete) > 128 || len(c.Denied) > 128 || len(c.Items)+len(c.Children)+len(c.Decisions)+len(c.Stimuli) > MaxExecutionActors {
 		return fmt.Errorf("persist: invalid Codex execution identity or bounds")
 	}
 	if c.State != "unobserved" && c.State != "active" && c.State != "terminal" {
@@ -173,11 +193,11 @@ func (c CodexExecution) Validate() error {
 		return fmt.Errorf("persist: invalid Codex event position")
 	}
 	for id, item := range c.Items {
-		if !executionID(id) || !executionID(item.TurnID) || !executionID(item.NativeIncarnation) || !executionID(item.FeedEpoch) || item.StartSequence == 0 || (item.FeedEpoch == c.FeedEpoch && item.NativeIncarnation == c.NativeIncarnation && item.StartSequence > c.Sequence) {
+		if len(id) == 0 || len(id) > 1024 || (item.Kind == "collabAgentToolCall") != (item.CollabTool != "") || len(item.ActorThreadID) > 256 || !validCodexCollabTool(item.CollabTool) || !executionID(item.TurnID) || !executionID(item.NativeIncarnation) || !executionID(item.FeedEpoch) || item.StartSequence == 0 || (item.FeedEpoch == c.FeedEpoch && item.NativeIncarnation == c.NativeIncarnation && item.StartSequence > c.Sequence) {
 			return fmt.Errorf("persist: invalid Codex item identity")
 		}
 		switch item.Kind {
-		case "userMessage", "agentMessage", "commandExecution", "fileChange", "mcpToolCall", "contextCompaction", "reasoning", "plan", "unknown":
+		case "userMessage", "agentMessage", "commandExecution", "fileChange", "mcpToolCall", "collabAgentToolCall", "contextCompaction", "reasoning", "plan", "unknown":
 		default:
 			return fmt.Errorf("persist: invalid Codex item kind")
 		}
@@ -188,16 +208,47 @@ func (c CodexExecution) Validate() error {
 		}
 	}
 	for id, child := range c.Children {
-		if !executionID(id) || !executionID(child.TurnID) || !executionID(child.ChildTurnID) || !executionID(child.NativeIncarnation) || !executionID(child.FeedEpoch) {
+		if !executionID(id) || id == c.ThreadID || (child.AwaitingTurn && !child.Active) || len(child.TurnID) > 256 || len(child.ChildTurnID) > 256 || len(child.ParentThreadID) > 256 || !executionID(child.NativeIncarnation) || !executionID(child.FeedEpoch) || (child.ParentThreadID != "" && !executionID(child.TurnID)) || (child.ChildTurnID == "" && !child.AwaitingTurn) {
 			return fmt.Errorf("persist: invalid Codex child identity")
 		}
 	}
+	for id := range c.Children {
+		seen := make(map[string]bool)
+		for actor := id; actor != "" && actor != c.ThreadID; {
+			if seen[actor] {
+				return fmt.Errorf("persist: cyclic Codex actors")
+			}
+			seen[actor] = true
+			child, known := c.Children[actor]
+			if !known {
+				return fmt.Errorf("persist: missing Codex parent actor")
+			}
+			actor = child.ParentThreadID
+		}
+	}
 	for id, decision := range c.Decisions {
-		if !executionID(id) || !executionID(decision.TurnID) || !executionID(decision.NativeIncarnation) || !executionID(decision.FeedEpoch) || (decision.Kind != "approval" && decision.Kind != "question") {
+		if len(id) == 0 || len(id) > 1024 || len(decision.ActorThreadID) > 256 || len(decision.RequestID) > 256 || !executionID(decision.TurnID) || !executionID(decision.NativeIncarnation) || !executionID(decision.FeedEpoch) || (decision.Kind != "approval" && decision.Kind != "question") {
 			return fmt.Errorf("persist: invalid Codex decision identity")
 		}
 	}
+	for id, stimulus := range c.Stimuli {
+		if len(id) == 0 || len(id) > 1024 || !executionID(stimulus.NativeIncarnation) || !executionID(stimulus.FeedEpoch) || !executionID(stimulus.ActorThreadID) || !executionID(stimulus.TurnID) || !executionID(stimulus.ItemID) || !executionID(stimulus.ReceiverThreadID) || len(stimulus.PreviousTurnID) > 256 || stimulus.StartSequence == 0 || (stimulus.CompletionSequence != 0 && stimulus.CompletionSequence <= stimulus.StartSequence) || (stimulus.FeedEpoch == c.FeedEpoch && stimulus.NativeIncarnation == c.NativeIncarnation && (stimulus.StartSequence > c.Sequence || stimulus.CompletionSequence > c.Sequence)) || (stimulus.Phase != "started" && stimulus.Phase != "accepted" && stimulus.Phase != "failed") || (stimulus.Phase == "started") != (stimulus.CompletionSequence == 0) {
+			return fmt.Errorf("persist: invalid Codex stimulus custody")
+		}
+		if _, known := c.Children[stimulus.ReceiverThreadID]; !known {
+			return fmt.Errorf("persist: missing Codex stimulus receiver")
+		}
+	}
+
 	return nil
+}
+
+func validCodexCollabTool(tool string) bool {
+	switch tool {
+	case "", "spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent":
+		return true
+	}
+	return false
 }
 
 // Capacity reservations are per root, shared across Store handles. Only accounting
@@ -611,13 +662,15 @@ func executionJSON(raw []byte) error {
 				case "actors/*":
 					allowed = "sequence start_sequence active"
 				case "codex":
-					allowed = "native_incarnation feed_epoch thread_id sequence last_event_hash turn_id owner_revision state cause terminal_sequence incomplete unknown_custody denied user_sequence commentary_sequence tool_result_sequence tool_failure_sequence last_item_sequence items children decisions"
+					allowed = "native_incarnation feed_epoch thread_id sequence last_event_hash turn_id owner_revision state cause terminal_sequence incomplete unknown_custody denied user_sequence commentary_sequence tool_result_sequence tool_failure_sequence last_item_sequence items children decisions stimuli"
 				case "codex/items/*":
-					allowed = "turn_id kind phase start_sequence complete native_incarnation feed_epoch"
+					allowed = "actor_thread_id collab_tool turn_id kind phase start_sequence complete native_incarnation feed_epoch"
 				case "codex/children/*":
-					allowed = "turn_id child_turn_id active native_incarnation feed_epoch"
+					allowed = "parent_thread_id awaiting_turn turn_id child_turn_id active native_incarnation feed_epoch"
 				case "codex/decisions/*":
-					allowed = "turn_id kind native_incarnation feed_epoch"
+					allowed = "actor_thread_id request_id turn_id kind native_incarnation feed_epoch"
+				case "codex/stimuli/*":
+					allowed = "native_incarnation feed_epoch actor_thread_id turn_id item_id receiver_thread_id previous_turn_id start_sequence completion_sequence phase"
 				}
 				if allowed != "" && !strings.Contains(" "+allowed+" ", " "+name+" ") {
 					return invalid
@@ -627,7 +680,7 @@ func executionJSON(raw []byte) error {
 					next = path + "/" + name
 				}
 				switch path {
-				case "actors", "codex/items", "codex/children", "codex/decisions":
+				case "actors", "codex/items", "codex/children", "codex/decisions", "codex/stimuli":
 					next = path + "/*"
 				}
 

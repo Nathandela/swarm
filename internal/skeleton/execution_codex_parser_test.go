@@ -46,6 +46,10 @@ func TestCodexExecutionParserToolAndFinalFacts(t *testing.T) {
 		{`{"id":"a","type":"commandExecution","status":"completed","exitCode":0,"aggregatedOutput":"private output"}`, engine.CodexCommandExecution, "", true},
 		{`{"id":"a","type":"commandExecution","status":"completed","exitCode":null}`, engine.CodexCommandExecution, "", false},
 		{`{"id":"a","type":"commandExecution","status":"failed","exitCode":1}`, engine.CodexCommandExecution, "", false},
+		{`{"id":"a","type":"commandExecution","status":"completed","exitCode":0,"source":"unifiedExecStartup"}`, engine.CodexCommandExecution, "", true},
+		{`{"id":"a","type":"commandExecution","status":"completed","exitCode":0,"source":"userShell"}`, engine.CodexCommandExecution, "", false},
+		{`{"id":"a","type":"commandExecution","status":"completed","exitCode":0,"source":"unifiedExecInteraction"}`, engine.CodexCommandExecution, "", false},
+		{`{"id":"a","type":"commandExecution","status":"completed","exitCode":0,"source":"futureSource"}`, engine.CodexCommandExecution, "", false},
 	} {
 		raw := []byte(`{"method":"item/completed","params":{"threadId":"thread","turnId":"turn","item":` + tc.item + `}}`)
 		e, observed := parseCodexExecutionFrame("item/completed", raw, "thread")
@@ -76,14 +80,16 @@ func TestCodexExecutionParserHumanAndUnknownEvidence(t *testing.T) {
 	}
 }
 
-func TestCodexExecutionParserForeignThreadCannotCloseTurn(t *testing.T) {
+func TestCodexExecutionParserPreservesActorIdentity(t *testing.T) {
 	frame := []byte(`{"method":"turn/completed","params":{"threadId":"another-thread","turn":{"id":"turn","status":"completed"}}}`)
-	if _, observed := parseCodexExecutionFrame("turn/completed", frame, "thread"); observed {
-		t.Fatal("foreign thread completion became parent evidence")
+	event, observed := parseCodexExecutionFrame("turn/completed", frame, "thread")
+	if !observed || event.ActorThreadID != "another-thread" || event.ThreadID != "thread" {
+		t.Fatal("actor terminal lost its exact thread identity")
 	}
 	frame = []byte(`{"method":"turn/futureHumanWait","params":{"threadId":"another-thread","turnId":"turn"}}`)
-	if _, observed := parseCodexExecutionFrame("turn/futureHumanWait", frame, "thread"); observed {
-		t.Fatal("unrelated thread's unknown lifecycle became parent evidence")
+	event, observed = parseCodexExecutionFrame("turn/futureHumanWait", frame, "thread")
+	if !observed || event.Kind != engine.CodexUnknownEvidence {
+		t.Fatal("unknown actor lifecycle silently disappeared")
 	}
 }
 
@@ -174,5 +180,89 @@ func TestCodexExecutionNativeCommonToolFixturesThroughIngress(t *testing.T) {
 func TestCodexExecutionReadStateIsObservationOnly(t *testing.T) {
 	if _, observed := parseCodexExecutionFrame("thread/readState/changed", []byte(`{"method":"thread/readState/changed","params":{"threadId":"thread","readState":{"firstUnread":null,"revision":"native-revision"}}}`), "thread"); observed {
 		t.Fatal("read/unread marker became execution control")
+	}
+}
+
+func TestCodexExecutionNativeChildrenThroughIngress(t *testing.T) {
+	raw, err := os.ReadFile("testdata/codex_execution_children_0163.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Scenario string            `json:"scenario"`
+			ThreadID string            `json:"threadId"`
+			Events   []json.RawMessage `json:"events"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, testcase := range fixture.Cases {
+		t.Run(testcase.Scenario, func(t *testing.T) {
+			r := newCodexExecutionRig(t, testcase.ThreadID, true)
+			drain := func() {
+				t.Helper()
+				deadline := time.Now().Add(5 * time.Second)
+				for r.feed.ingress.pending.Load() != 0 {
+					if time.Now().After(deadline) {
+						t.Fatal("native trace ingress did not drain")
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+			for _, frame := range testcase.Events {
+				var event struct {
+					Method string `json:"method"`
+					Params struct {
+						ThreadID string `json:"threadId"`
+					} `json:"params"`
+				}
+				if err := json.Unmarshal(frame, &event); err != nil {
+					t.Fatal(err)
+				}
+				if !r.feed.ingress.enqueue(event.Method, frame, time.Now()) {
+					t.Fatal("native fixture rejected")
+				}
+				if event.Method == "turn/completed" && event.Params.ThreadID == testcase.ThreadID {
+					drain()
+					_, candidate := r.d.codexQuotaCandidate(r.local)
+					want := testcase.Scenario != "child-timeout" && testcase.Scenario != "child-grandchild" && testcase.Scenario != "command-background" && testcase.Scenario != "child-sendinput" && testcase.Scenario != "child-sendinput-active"
+					if candidate != want {
+						snapshot, _ := r.d.eng.ExecutionSnapshot(r.local)
+						t.Fatalf("native quota custody candidate=%v: %+v", candidate, snapshot.Codex)
+					}
+				}
+			}
+			drain()
+			_, candidate := r.d.codexQuotaCandidate(r.local)
+			if candidate != (testcase.Scenario != "child-timeout" && testcase.Scenario != "child-grandchild" && testcase.Scenario != "child-sendinput" && testcase.Scenario != "child-sendinput-active") {
+				snapshot, _ := r.d.eng.ExecutionSnapshot(r.local)
+				t.Fatalf("native final custody candidate=%v: %+v", candidate, snapshot.Codex)
+			}
+		})
+	}
+}
+
+func TestCodexExecutionParserCollaborationTrustBoundary(t *testing.T) {
+	const frame = `{"method":"item/completed","params":{"threadId":"thread","turnId":"turn","item":{"id":"spawn","type":"collabAgentToolCall","tool":"spawnAgent","senderThreadId":"thread","receiverThreadIds":["child"],"agentsStates":{"child":{"status":"pendingInit"}},"status":"completed"}}}`
+	e, observed := parseCodexExecutionFrame("item/completed", []byte(frame), "thread")
+	if !observed || e.CollabTool != "spawnAgent" || len(e.ReceiverThreadIDs) != 1 || e.ReceiverThreadIDs[0] != "child" || !e.ToolSucceeded {
+		t.Fatalf("lost native collaboration identity: %+v", e)
+	}
+	for _, raw := range []string{
+		strings.Replace(strings.Replace(frame, `["child"]`, `[]`, 1), `"agentsStates":{"child":{"status":"pendingInit"}}`, `"agentsStates":{}`, 1),
+		strings.Replace(frame, `"senderThreadId":"thread"`, `"senderThreadId":"other"`, 1),
+		strings.Replace(frame, `"tool":"spawnAgent"`, `"tool":"futureTool"`, 1),
+		strings.Replace(frame, `"status":"pendingInit"`, `"status":"idle"`, 1),
+		strings.Replace(frame, `["child"]`, `["child","child"]`, 1),
+		strings.Replace(frame, `"agentsStates":{"child":{"status":"pendingInit"}}`, `"agentsStates":{}`, 1),
+		strings.Replace(frame, `"senderThreadId":"thread"`, `"SenderThreadId":"thread"`, 1),
+		strings.Replace(frame, `"tool":"spawnAgent"`, `"tool":"spawnAgent","tool":"wait"`, 1),
+	} {
+		e, observed := parseCodexExecutionFrame("item/completed", []byte(raw), "thread")
+		if !observed || e.Kind != engine.CodexUnknownEvidence {
+			t.Fatalf("ambiguous native child evidence admitted: %+v", e)
+		}
 	}
 }

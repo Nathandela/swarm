@@ -16,33 +16,32 @@ type CodexTerminalCause = persist.CodexTerminalCause
 type CodexDecisionKind = persist.CodexDecisionKind
 
 const (
-	CodexReasoning         CodexItemKind       = "reasoning"
-	CodexPlan              CodexItemKind       = "plan"
-	CodexTurnStarted       CodexExecutionKind  = "turn/started"
-	CodexItemStarted       CodexExecutionKind  = "item/started"
-	CodexItemCompleted     CodexExecutionKind  = "item/completed"
-	CodexTurnCompleted     CodexExecutionKind  = "turn/completed"
-	CodexDecisionRequested CodexExecutionKind  = "decision/requested"
-	CodexDecisionResolved  CodexExecutionKind  = "decision/resolved"
-	CodexChildStarted      CodexExecutionKind  = "child/started"
-	CodexChildCompleted    CodexExecutionKind  = "child/completed"
-	CodexRetryActive       CodexExecutionKind  = "retry/active"
-	CodexUnknownEvidence   CodexExecutionKind  = "observation/unknown"
-	CodexUserMessage       CodexItemKind       = "userMessage"
-	CodexAgentMessage      CodexItemKind       = "agentMessage"
-	CodexCommandExecution  CodexItemKind       = "commandExecution"
-	CodexFileChange        CodexItemKind       = "fileChange"
-	CodexMcpToolCall       CodexItemKind       = "mcpToolCall"
-	CodexContextCompaction CodexItemKind       = "contextCompaction"
-	CodexCommentary        CodexAssistantPhase = "commentary"
-	CodexFinalAnswer       CodexAssistantPhase = "final_answer"
-	CodexTerminalQuota     CodexTerminalCause  = "quota"
-	CodexTerminalCompleted CodexTerminalCause  = "completed"
-	CodexTerminalCancelled CodexTerminalCause  = "cancelled"
-	CodexTerminalFailed    CodexTerminalCause  = "failed"
-	CodexTerminalUnknown   CodexTerminalCause  = "unknown"
-	CodexApproval          CodexDecisionKind   = "approval"
-	CodexQuestion          CodexDecisionKind   = "question"
+	CodexReasoning           CodexItemKind       = "reasoning"
+	CodexPlan                CodexItemKind       = "plan"
+	CodexTurnStarted         CodexExecutionKind  = "turn/started"
+	CodexItemStarted         CodexExecutionKind  = "item/started"
+	CodexItemCompleted       CodexExecutionKind  = "item/completed"
+	CodexTurnCompleted       CodexExecutionKind  = "turn/completed"
+	CodexDecisionRequested   CodexExecutionKind  = "decision/requested"
+	CodexDecisionResolved    CodexExecutionKind  = "decision/resolved"
+	CodexRetryActive         CodexExecutionKind  = "retry/active"
+	CodexUnknownEvidence     CodexExecutionKind  = "observation/unknown"
+	CodexUserMessage         CodexItemKind       = "userMessage"
+	CodexAgentMessage        CodexItemKind       = "agentMessage"
+	CodexCommandExecution    CodexItemKind       = "commandExecution"
+	CodexFileChange          CodexItemKind       = "fileChange"
+	CodexMcpToolCall         CodexItemKind       = "mcpToolCall"
+	CodexCollabAgentToolCall CodexItemKind       = "collabAgentToolCall"
+	CodexContextCompaction   CodexItemKind       = "contextCompaction"
+	CodexCommentary          CodexAssistantPhase = "commentary"
+	CodexFinalAnswer         CodexAssistantPhase = "final_answer"
+	CodexTerminalQuota       CodexTerminalCause  = "quota"
+	CodexTerminalCompleted   CodexTerminalCause  = "completed"
+	CodexTerminalCancelled   CodexTerminalCause  = "cancelled"
+	CodexTerminalFailed      CodexTerminalCause  = "failed"
+	CodexTerminalUnknown     CodexTerminalCause  = "unknown"
+	CodexApproval            CodexDecisionKind   = "approval"
+	CodexQuestion            CodexDecisionKind   = "question"
 )
 
 // ObservedFromStart requires independent proof of capture before native work,
@@ -60,6 +59,9 @@ type CodexFeedIdentity struct {
 // a standalone error, including willRetry=false, is never that terminal fact.
 // ToolSucceeded requires native completed status and a successful tool result.
 type CodexExecutionEvent struct {
+	ActorThreadID     string
+	CollabTool        string
+	ReceiverThreadIDs []string
 	NativeIncarnation string
 	FeedEpoch         string
 	ThreadID          string
@@ -73,8 +75,6 @@ type CodexExecutionEvent struct {
 	Cause             CodexTerminalCause
 	RequestID         string
 	Decision          CodexDecisionKind
-	ChildID           string
-	ChildTurnID       string
 }
 
 type CodexQuotaObligation struct {
@@ -105,6 +105,11 @@ func cloneCodexExecution(c *persist.CodexExecution) *persist.CodexExecution {
 	for id, decision := range c.Decisions {
 		clone.Decisions[id] = decision
 	}
+	clone.Stimuli = make(map[string]persist.CodexExecutionStimulus, len(c.Stimuli))
+	for id, stimulus := range c.Stimuli {
+		clone.Stimuli[id] = stimulus
+	}
+
 	return &clone
 }
 
@@ -127,7 +132,7 @@ func (e *Engine) BeginCodexExecutionFeed(id string, feed CodexFeedIdentity) erro
 	}
 	c := s.codexExecution
 	if c == nil {
-		c = &persist.CodexExecution{NativeIncarnation: feed.NativeIncarnation, FeedEpoch: feed.FeedEpoch, ThreadID: feed.ThreadID, OwnerRevision: feed.OwnerRevision, State: "unobserved", Incomplete: "missing_turn_start", UnknownCustody: !feed.ObservedFromStart || s.untrackedChildren || s.children > 0, Items: make(map[string]persist.CodexExecutionItem), Children: make(map[string]persist.CodexExecutionChild), Decisions: make(map[string]persist.CodexExecutionDecision)}
+		c = &persist.CodexExecution{NativeIncarnation: feed.NativeIncarnation, FeedEpoch: feed.FeedEpoch, ThreadID: feed.ThreadID, OwnerRevision: feed.OwnerRevision, State: "unobserved", Incomplete: "missing_turn_start", UnknownCustody: !feed.ObservedFromStart || s.untrackedChildren || s.children > 0, Items: make(map[string]persist.CodexExecutionItem), Children: make(map[string]persist.CodexExecutionChild), Decisions: make(map[string]persist.CodexExecutionDecision), Stimuli: make(map[string]persist.CodexExecutionStimulus)}
 		s.codexExecution = c
 	} else if c.NativeIncarnation != feed.NativeIncarnation || c.FeedEpoch != feed.FeedEpoch || c.ThreadID != feed.ThreadID {
 		c.NativeIncarnation = feed.NativeIncarnation
@@ -166,7 +171,14 @@ func (e *Engine) ApplyCodexExecutionEvent(id string, event CodexExecutionEvent) 
 		e.mu.Unlock()
 		return fmt.Errorf("engine: Codex event ownership mismatch")
 	}
-	if len(event.Kind) > 64 || len(event.ItemKind) > 64 || len(event.Phase) > 64 || len(event.Cause) > 64 || len(event.Decision) > 64 || len(event.TurnID) > 256 || len(event.ItemID) > 256 || len(event.RequestID) > 256 || len(event.ChildID) > 256 || len(event.ChildTurnID) > 256 {
+	receiverBounds := true
+	for _, receiver := range event.ReceiverThreadIDs {
+		if !codexID(receiver) {
+			receiverBounds = false
+			break
+		}
+	}
+	if !receiverBounds || len(event.ActorThreadID) > 256 || len(event.CollabTool) > 64 || len(event.ReceiverThreadIDs) > persist.MaxExecutionActors || len(event.Kind) > 64 || len(event.ItemKind) > 64 || len(event.Phase) > 64 || len(event.Cause) > 64 || len(event.Decision) > 64 || len(event.TurnID) > 256 || len(event.ItemID) > 256 || len(event.RequestID) > 256 {
 		c.Incomplete = "event_bounds"
 		c.UnknownCustody = true
 		err := e.persistExecutionLocked(id, s)
@@ -224,18 +236,51 @@ func reduceCodexExecution(s *session, c *persist.CodexExecution, event CodexExec
 		c.UnknownCustody = true
 		return nil
 	}
+	actor := event.ActorThreadID
+	if actor == "" {
+		actor = c.ThreadID
+	}
 	if event.Kind == CodexDecisionResolved {
-		decision, known := c.Decisions[event.RequestID]
+		key := codexActorKey(actor, event.RequestID)
+		if event.ActorThreadID == "" {
+			matches := 0
+			for id, decision := range c.Decisions {
+				if decision.RequestID == event.RequestID || (decision.RequestID == "" && id == event.RequestID) {
+					key = id
+					matches++
+				}
+			}
+			if matches != 1 {
+				return fmt.Errorf("engine: ambiguous Codex decision resolution")
+			}
+		}
+		decision, known := c.Decisions[key]
 		if !known || decision.NativeIncarnation != event.NativeIncarnation || decision.FeedEpoch != event.FeedEpoch || (event.TurnID != "" && event.TurnID != decision.TurnID) {
 			return fmt.Errorf("engine: unknown Codex decision resolution")
 		}
-		delete(c.Decisions, event.RequestID)
+		delete(c.Decisions, key)
 		return nil
 	}
 	if !codexID(event.TurnID) {
 		return fmt.Errorf("engine: missing Codex turn identity")
 	}
-	if event.Kind == CodexTurnStarted {
+	if event.Kind == CodexItemCompleted {
+		if actor != c.ThreadID {
+			child, known := c.Children[actor]
+			if !known || child.NativeIncarnation != event.NativeIncarnation || child.FeedEpoch != event.FeedEpoch {
+				return fmt.Errorf("engine: unknown Codex item actor")
+			}
+		}
+		return reduceCodexItem(c, event, actor)
+	}
+	if actor != c.ThreadID {
+		if err := codexObserveActor(c, actor, event); err != nil {
+			return err
+		}
+		if event.Kind == CodexTurnStarted || event.Kind == CodexTurnCompleted || event.Kind == CodexRetryActive {
+			return nil
+		}
+	} else if event.Kind == CodexTurnStarted {
 		if c.State == "active" {
 			c.UnknownCustody = true
 		}
@@ -245,17 +290,7 @@ func reduceCodexExecution(s *session, c *persist.CodexExecution, event CodexExec
 		for id, item := range c.Items {
 			if item.Complete {
 				delete(c.Items, id)
-			} else {
-				c.UnknownCustody = true
 			}
-		}
-		for id, child := range c.Children {
-			if !child.Active {
-				delete(c.Children, id)
-			}
-		}
-		if len(c.Decisions) > 0 || codexActiveChildren(c) {
-			c.UnknownCustody = true
 		}
 		c.TurnID = event.TurnID
 		c.OwnerRevision = s.executionIdentity.OwnerRevision
@@ -274,16 +309,8 @@ func reduceCodexExecution(s *session, c *persist.CodexExecution, event CodexExec
 		}
 		return nil
 	}
-	if event.Kind == CodexChildCompleted {
-		child, known := c.Children[event.ChildID]
-		if !known || child.TurnID != event.TurnID || child.ChildTurnID != event.ChildTurnID || child.NativeIncarnation != event.NativeIncarnation || child.FeedEpoch != event.FeedEpoch {
-			return fmt.Errorf("engine: unknown Codex child completion")
-		}
-		child.Active = false
-		c.Children[event.ChildID] = child
-		return nil
-	}
-	if event.TurnID != c.TurnID {
+
+	if actor == c.ThreadID && event.TurnID != c.TurnID {
 		return fmt.Errorf("engine: Codex turn identity mismatch")
 	}
 	switch event.Kind {
@@ -307,92 +334,305 @@ func reduceCodexExecution(s *session, c *persist.CodexExecution, event CodexExec
 		if !codexID(event.RequestID) || (event.Decision != CodexApproval && event.Decision != CodexQuestion) {
 			return fmt.Errorf("engine: invalid Codex decision")
 		}
-		if _, known := c.Decisions[event.RequestID]; !known && !codexHasCapacity(c) {
+		key := codexActorKey(actor, event.RequestID)
+		if _, known := c.Decisions[key]; !known && !codexHasCapacity(c) {
 			return fmt.Errorf("engine: Codex decision capacity")
 		}
-		if old, known := c.Decisions[event.RequestID]; known && (old.TurnID != event.TurnID || old.Kind != event.Decision || old.NativeIncarnation != event.NativeIncarnation || old.FeedEpoch != event.FeedEpoch) {
+		if old, known := c.Decisions[key]; known && (old.TurnID != event.TurnID || old.Kind != event.Decision || old.NativeIncarnation != event.NativeIncarnation || old.FeedEpoch != event.FeedEpoch) {
 			return fmt.Errorf("engine: overlapping Codex decision identity")
 		}
-		c.Decisions[event.RequestID] = persist.CodexExecutionDecision{TurnID: event.TurnID, Kind: event.Decision, NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch}
+		c.Decisions[key] = persist.CodexExecutionDecision{ActorThreadID: actor, RequestID: event.RequestID, TurnID: event.TurnID, Kind: event.Decision, NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch}
 		c.Denied = "human_decision"
-	case CodexChildStarted:
-		if !codexID(event.ChildID) || !codexID(event.ChildTurnID) {
-			return fmt.Errorf("engine: invalid Codex child")
-		}
-		if old, known := c.Children[event.ChildID]; known && old.Active && (old.ChildTurnID != event.ChildTurnID || old.TurnID != event.TurnID) {
-			return fmt.Errorf("engine: overlapping Codex child incarnation")
-		}
-		if _, known := c.Children[event.ChildID]; !known && !codexHasCapacity(c) {
-			return fmt.Errorf("engine: Codex child capacity")
-		}
-		c.Children[event.ChildID] = persist.CodexExecutionChild{TurnID: event.TurnID, ChildTurnID: event.ChildTurnID, Active: true, NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch}
-	case CodexItemStarted, CodexItemCompleted:
-		return reduceCodexItem(c, event)
+
+	case CodexItemStarted:
+		return reduceCodexItem(c, event, actor)
 	default:
 		return fmt.Errorf("engine: unknown Codex control event")
 	}
 	return nil
 }
 
-func codexHasCapacity(c *persist.CodexExecution) bool {
-	return len(c.Items)+len(c.Children)+len(c.Decisions) < persist.MaxExecutionActors
+func codexActorKey(actor, id string) string {
+	key, _ := json.Marshal([2]string{actor, id})
+	return string(key)
 }
-func codexActiveChildren(c *persist.CodexExecution) bool {
-	for _, child := range c.Children {
-		if child.Active {
+
+func codexActorHasWork(c *persist.CodexExecution, actor string) bool {
+	for _, stimulus := range c.Stimuli {
+		if stimulus.ActorThreadID == actor || stimulus.ReceiverThreadID == actor {
+			return true
+		}
+	}
+	for _, item := range c.Items {
+		if item.ActorThreadID == actor && !item.Complete {
+			return true
+		}
+	}
+	for _, decision := range c.Decisions {
+		if decision.ActorThreadID == actor {
 			return true
 		}
 	}
 	return false
 }
 
-func reduceCodexItem(c *persist.CodexExecution, event CodexExecutionEvent) error {
-	if !codexID(event.ItemID) || c.State != "active" {
+func codexHasCapacity(c *persist.CodexExecution) bool {
+	if len(c.Items)+len(c.Children)+len(c.Decisions)+len(c.Stimuli) < persist.MaxExecutionActors {
+		return true
+	}
+	for id, child := range c.Children {
+		if child.Active || child.AwaitingTurn || child.ParentThreadID == "" || codexActorHasWork(c, id) {
+			continue
+		}
+		leaf := true
+		for _, descendant := range c.Children {
+			if descendant.ParentThreadID == id {
+				leaf = false
+				break
+			}
+		}
+		if leaf {
+			// shortcut: retired ancestry is unavailable, reconcile native ancestry before reusing it.
+			delete(c.Children, id)
+			return true
+		}
+	}
+	return false
+}
+
+func codexActiveChildren(c *persist.CodexExecution) bool {
+	for _, child := range c.Children {
+		if child.Active || child.AwaitingTurn || child.ParentThreadID == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func codexActorCycle(c *persist.CodexExecution, parent, child string) bool {
+	if child == c.ThreadID {
+		return true
+	}
+	for steps := 0; parent != ""; steps++ {
+		if parent == child || steps > len(c.Children) {
+			return true
+		}
+		if parent == c.ThreadID {
+			return false
+		}
+		parent = c.Children[parent].ParentThreadID
+	}
+	return false
+}
+
+func codexObserveActor(c *persist.CodexExecution, actor string, event CodexExecutionEvent) error {
+	child, known := c.Children[actor]
+	if !known {
+		pendingSpawn := false
+		for _, item := range c.Items {
+			if item.CollabTool == "spawnAgent" && !item.Complete {
+				pendingSpawn = true
+				break
+			}
+		}
+		if !pendingSpawn || event.Kind != CodexTurnStarted || !codexHasCapacity(c) {
+			return fmt.Errorf("engine: unattached Codex actor")
+		}
+		child = persist.CodexExecutionChild{NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch, AwaitingTurn: true, Active: true}
+	}
+	if child.NativeIncarnation != event.NativeIncarnation || child.FeedEpoch != event.FeedEpoch {
+		return fmt.Errorf("engine: obsolete Codex actor")
+	}
+	if event.Kind == CodexTurnStarted {
+		if child.ChildTurnID == event.TurnID || (child.Active && !child.AwaitingTurn) {
+			return fmt.Errorf("engine: overlapping Codex actor turn")
+		}
+		child.ChildTurnID = event.TurnID
+		child.Active = true
+		child.AwaitingTurn = false
+		c.Children[actor] = child
+		return nil
+	}
+	if !child.Active || child.AwaitingTurn || child.ChildTurnID != event.TurnID {
+		return fmt.Errorf("engine: Codex actor turn mismatch")
+	}
+	if event.Kind == CodexTurnCompleted {
+		switch event.Cause {
+		case CodexTerminalQuota, CodexTerminalCompleted, CodexTerminalCancelled, CodexTerminalFailed, CodexTerminalUnknown:
+		default:
+			return fmt.Errorf("engine: unknown Codex actor terminal cause")
+		}
+		child.Active = false
+		c.Children[actor] = child
+	}
+	return nil
+}
+
+func codexCollabStarted(c *persist.CodexExecution, actor string, event CodexExecutionEvent) error {
+	switch event.CollabTool {
+	case "spawnAgent":
+		if len(event.ReceiverThreadIDs) != 0 {
+			return fmt.Errorf("engine: Codex spawn has premature receivers")
+		}
+	case "sendInput", "resumeAgent", "wait", "closeAgent":
+		if len(event.ReceiverThreadIDs) == 0 || (event.CollabTool != "wait" && len(event.ReceiverThreadIDs) != 1) {
+			return fmt.Errorf("engine: invalid Codex collaboration receivers")
+		}
+		for _, receiver := range event.ReceiverThreadIDs {
+			child, known := c.Children[receiver]
+			if !known || receiver == actor || receiver == c.ThreadID || child.ParentThreadID == "" {
+				return fmt.Errorf("engine: unknown Codex receiver")
+			}
+			if event.CollabTool == "sendInput" {
+				key := codexActorKey(actor, event.ItemID)
+				if _, known := c.Stimuli[key]; known || !codexHasCapacity(c) {
+					return fmt.Errorf("engine: Codex stimulus capacity or overlapping identity")
+				}
+				if c.Stimuli == nil {
+					c.Stimuli = make(map[string]persist.CodexExecutionStimulus)
+				}
+				c.Stimuli[key] = persist.CodexExecutionStimulus{NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch, ActorThreadID: actor, TurnID: event.TurnID, ItemID: event.ItemID, ReceiverThreadID: receiver, PreviousTurnID: child.ChildTurnID, StartSequence: event.Sequence, Phase: "started"}
+			}
+		}
+	default:
+		return fmt.Errorf("engine: unknown Codex collaboration tool")
+	}
+	return nil
+}
+
+func codexCollabCompleted(c *persist.CodexExecution, actor string, event CodexExecutionEvent) error {
+	if event.CollabTool == "sendInput" {
+		key := codexActorKey(actor, event.ItemID)
+		stimulus, known := c.Stimuli[key]
+		if !known || stimulus.NativeIncarnation != event.NativeIncarnation || stimulus.FeedEpoch != event.FeedEpoch || stimulus.TurnID != event.TurnID || stimulus.Phase != "started" || len(event.ReceiverThreadIDs) != 1 || event.ReceiverThreadIDs[0] != stimulus.ReceiverThreadID {
+			return fmt.Errorf("engine: unmatched Codex stimulus receipt")
+		}
+		stimulus.Phase = "failed"
+		if event.ToolSucceeded {
+			stimulus.Phase = "accepted"
+		}
+		stimulus.CompletionSequence = event.Sequence
+		c.Stimuli[key] = stimulus
+	}
+	if event.CollabTool != "spawnAgent" {
+		for _, receiver := range event.ReceiverThreadIDs {
+			if child, known := c.Children[receiver]; !known || child.ParentThreadID == "" {
+				return fmt.Errorf("engine: unknown Codex collaboration result actor")
+			}
+		}
+		return nil
+	}
+	if len(event.ReceiverThreadIDs) > 1 || (event.ToolSucceeded && len(event.ReceiverThreadIDs) != 1) {
+		return fmt.Errorf("engine: invalid Codex spawn receiver")
+	}
+	for _, receiver := range event.ReceiverThreadIDs {
+		if !codexID(receiver) || receiver == c.ThreadID || receiver == actor {
+			return fmt.Errorf("engine: invalid Codex spawn receiver")
+		}
+		if codexActorCycle(c, actor, receiver) {
+			return fmt.Errorf("engine: cyclic Codex actors")
+		}
+		child, known := c.Children[receiver]
+		if known && (child.NativeIncarnation != event.NativeIncarnation || child.FeedEpoch != event.FeedEpoch) {
+			return fmt.Errorf("engine: obsolete Codex spawn actor")
+		}
+		if known && child.ParentThreadID != "" {
+			return fmt.Errorf("engine: reused Codex child identity")
+		}
+		if !known {
+			if !codexHasCapacity(c) {
+				return fmt.Errorf("engine: Codex child capacity")
+			}
+			child = persist.CodexExecutionChild{NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch, Active: true, AwaitingTurn: true}
+		}
+		child.ParentThreadID = actor
+		child.TurnID = event.TurnID
+		c.Children[receiver] = child
+	}
+	return nil
+}
+
+func reduceCodexItem(c *persist.CodexExecution, event CodexExecutionEvent, actor string) error {
+	parent := actor == c.ThreadID
+	late := parent && (c.State == "terminal" || event.TurnID != c.TurnID)
+	if !parent {
+		child := c.Children[actor]
+		late = !child.Active || child.AwaitingTurn || child.ChildTurnID != event.TurnID
+	}
+	if !codexID(event.ItemID) || (parent && c.State != "active" && c.State != "terminal") || (late && event.Kind != CodexItemCompleted) {
 		return fmt.Errorf("engine: Codex item without active turn")
 	}
 	kind := event.ItemKind
 	switch kind {
-	case CodexUserMessage, CodexAgentMessage, CodexCommandExecution, CodexFileChange, CodexMcpToolCall, CodexContextCompaction, CodexReasoning, CodexPlan:
+	case CodexUserMessage, CodexAgentMessage, CodexCommandExecution, CodexFileChange, CodexMcpToolCall, CodexCollabAgentToolCall, CodexContextCompaction, CodexReasoning, CodexPlan:
 	default:
 		kind = "unknown"
 		c.Denied = "unknown_item"
 		c.UnknownCustody = true
 	}
+	key := codexActorKey(actor, event.ItemID)
 	phase := event.Phase
 	if kind == CodexAgentMessage {
 		switch phase {
 		case CodexCommentary:
 		case CodexFinalAnswer:
-			c.Denied = "final_answer"
+			if parent && !late {
+				c.Denied = "final_answer"
+			}
 		default:
 			phase = "unknown"
-			c.Denied = "unknown_phase"
+			if parent && !late {
+				c.Denied = "unknown_phase"
+			} else if !parent {
+				c.UnknownCustody = true
+			}
 		}
 	} else {
 		phase = ""
 	}
-	if kind == CodexContextCompaction {
+	if kind == CodexContextCompaction && parent && !late {
 		c.Denied = "maintenance"
 	}
-	if kind != CodexReasoning && kind != CodexPlan {
+	if parent && !late && kind != CodexReasoning && kind != CodexPlan {
 		c.LastItemSequence = event.Sequence
 	}
 	if event.Kind == CodexItemStarted {
-		if _, known := c.Items[event.ItemID]; known {
+		if _, known := c.Items[key]; known {
 			return fmt.Errorf("engine: reused Codex item identity")
 		}
 		if !codexHasCapacity(c) {
 			return fmt.Errorf("engine: Codex item capacity")
 		}
-		c.Items[event.ItemID] = persist.CodexExecutionItem{TurnID: event.TurnID, Kind: kind, Phase: phase, StartSequence: event.Sequence, NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch}
+		c.Items[key] = persist.CodexExecutionItem{ActorThreadID: actor, CollabTool: event.CollabTool, TurnID: event.TurnID, Kind: kind, Phase: phase, StartSequence: event.Sequence, NativeIncarnation: event.NativeIncarnation, FeedEpoch: event.FeedEpoch}
+		if kind == CodexCollabAgentToolCall {
+			return codexCollabStarted(c, actor, event)
+		}
 		return nil
 	}
-	item, known := c.Items[event.ItemID]
-	if !known || item.Complete || item.TurnID != event.TurnID || item.Kind != kind || item.Phase != phase || item.NativeIncarnation != event.NativeIncarnation || item.FeedEpoch != event.FeedEpoch {
+	item, known := c.Items[key]
+	if !known || item.Complete || item.TurnID != event.TurnID || item.Kind != kind || item.Phase != phase || item.CollabTool != event.CollabTool || item.NativeIncarnation != event.NativeIncarnation || item.FeedEpoch != event.FeedEpoch {
 		return fmt.Errorf("engine: unmatched Codex item completion")
 	}
-	item.Complete = true
-	c.Items[event.ItemID] = item
+	// The pinned native live feed does not replay completed item lifecycles.
+	delete(c.Items, key)
+
+	if kind == CodexCollabAgentToolCall {
+		if err := codexCollabCompleted(c, actor, event); err != nil {
+			return err
+		}
+	}
+	if late {
+		if (kind == CodexCommandExecution || kind == CodexFileChange || kind == CodexMcpToolCall || kind == CodexCollabAgentToolCall) && !event.ToolSucceeded {
+			c.ToolFailureSequence = event.Sequence
+			if c.Denied == "" || c.Denied == "tool_unsuccessful" {
+				c.Denied = "tool_unsuccessful"
+			}
+		}
+		return nil
+	}
+	if !parent {
+		return nil
+	}
 	switch kind {
 	case CodexUserMessage:
 		c.UserSequence = event.Sequence
@@ -400,7 +640,7 @@ func reduceCodexItem(c *persist.CodexExecution, event CodexExecutionEvent) error
 		if phase == CodexCommentary && item.StartSequence > c.ToolFailureSequence {
 			c.CommentarySequence = event.Sequence
 		}
-	case CodexCommandExecution, CodexFileChange, CodexMcpToolCall:
+	case CodexCommandExecution, CodexFileChange, CodexMcpToolCall, CodexCollabAgentToolCall:
 		if !event.ToolSucceeded {
 			c.ToolFailureSequence = event.Sequence
 			if c.Denied == "" || c.Denied == "tool_unsuccessful" {
@@ -453,7 +693,7 @@ func (e *Engine) CodexQuotaCandidate(id string) (CodexQuotaObligation, bool) {
 		return CodexQuotaObligation{}, false
 	}
 	c := s.codexExecution
-	if c == nil || c.UnknownCustody || c.Incomplete != "" || c.Denied != "" || c.State != "terminal" || c.Cause != CodexTerminalQuota || c.OwnerRevision != s.executionIdentity.OwnerRevision || c.UserSequence == 0 || c.CommentarySequence <= c.UserSequence || c.ToolResultSequence <= c.CommentarySequence || c.LastItemSequence != c.ToolResultSequence || len(c.Decisions) > 0 || codexActiveChildren(c) {
+	if c == nil || c.UnknownCustody || c.Incomplete != "" || c.Denied != "" || c.State != "terminal" || c.Cause != CodexTerminalQuota || c.OwnerRevision != s.executionIdentity.OwnerRevision || c.UserSequence == 0 || c.CommentarySequence <= c.UserSequence || c.ToolResultSequence <= c.CommentarySequence || c.LastItemSequence != c.ToolResultSequence || len(c.Decisions) > 0 || len(c.Stimuli) > 0 || codexActiveChildren(c) {
 		return CodexQuotaObligation{}, false
 	}
 	for _, item := range c.Items {

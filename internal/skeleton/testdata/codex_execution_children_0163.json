@@ -1,0 +1,5307 @@
+{
+  "native_version": "0.163.0",
+  "platform": "darwin-arm64",
+  "binary_sha256": "8813367285524ac798dd96d1b071aea30d58708c7226fd236cd275cf1cfdee31",
+  "scope": "Exact synthetic native control envelopes and params, including synthetic bodies and original temporary cwd paths; no real login or external inference. No fields are projected out.",
+  "cases": [
+    {
+      "scenario": "child-wait",
+      "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+      "events": [
+        {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+              "environments": [
+                {
+                  "environmentId": "local",
+                  "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-n25agsqm/coverage-1iwt5crw",
+                  "runtimeWorkspaceRoots": [
+                    "/private/tmp/swarm-handover-native/codex/coverage-run-n25agsqm/coverage-1iwt5crw"
+                  ]
+                }
+              ],
+              "extra": null,
+              "sessionId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+              "forkedFromId": null,
+              "parentThreadId": null,
+              "preview": "",
+              "ephemeral": false,
+              "section": null,
+              "sectionEnteredAt": null,
+              "projectId": null,
+              "historyMode": "paginated",
+              "modelProvider": "coverage",
+              "model": "gpt-5.4",
+              "reasoningEffort": null,
+              "createdAt": 1792853987,
+              "updatedAt": 1792853987,
+              "recencyAt": 1792853987,
+              "status": {
+                "type": "idle"
+              },
+              "path": "/private/tmp/swarm-handover-native/codex/coverage-run-n25agsqm/coverage-1iwt5crw/sessions/2026/10/24/rollout-2026-10-24T16-59-47-01a16e6c-d0ff-7931-afbb-46fd38f6d844.jsonl",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-n25agsqm/coverage-1iwt5crw",
+              "cliVersion": "0.163.0",
+              "originator": "synthetic-qualification",
+              "source": "vscode",
+              "canAcceptDirectInput": true,
+              "threadSource": null,
+              "agentNickname": null,
+              "agentRole": null,
+              "gitInfo": null,
+              "name": null,
+              "daybreakEnabled": null,
+              "turns": []
+            }
+          },
+          "emittedAtMs": 1792853987710
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853987881
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turn": {
+              "id": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+              "rootTurnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853987,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853987881
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d3a2-7f21-9467-995023e768f0",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "startedAtMs": 1792853988260
+          },
+          "emittedAtMs": 1792853988260
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d3a2-7f21-9467-995023e768f0",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "completedAtMs": 1792853988260
+          },
+          "emittedAtMs": 1792853988266
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "startedAtMs": 1792853988270
+          },
+          "emittedAtMs": 1792853988270
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "completedAtMs": 1792853988270
+          },
+          "emittedAtMs": 1792853988271
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+              "receiverThreadIds": [],
+              "prompt": "coverage-child-marker",
+              "model": "",
+              "reasoningEffort": "medium",
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "startedAtMs": 1792853988276
+          },
+          "emittedAtMs": 1792853988277
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988708
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+              "receiverThreadIds": [
+                "01a16e6c-d3b5-7390-aa50-8bd057ec226b"
+              ],
+              "prompt": "coverage-child-marker",
+              "model": "gpt-5.4",
+              "reasoningEffort": "medium",
+              "agentsStates": {
+                "01a16e6c-d3b5-7390-aa50-8bd057ec226b": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "completedAtMs": 1792853988707
+          },
+          "emittedAtMs": 1792853988709
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988714
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "turn": {
+              "id": "01a16e6c-d3d6-7be0-ae4a-da297462a9e6",
+              "rootTurnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988714
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988719
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+              "receiverThreadIds": [
+                "01a16e6c-d3b5-7390-aa50-8bd057ec226b"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "startedAtMs": 1792853988789
+          },
+          "emittedAtMs": 1792853988789
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d5a6-7bf0-8a1d-7c0af5d4675c",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "turnId": "01a16e6c-d3d6-7be0-ae4a-da297462a9e6",
+            "startedAtMs": 1792853988789
+          },
+          "emittedAtMs": 1792853988789
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d5a6-7bf0-8a1d-7c0af5d4675c",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "turnId": "01a16e6c-d3d6-7be0-ae4a-da297462a9e6",
+            "completedAtMs": 1792853988789
+          },
+          "emittedAtMs": 1792853988809
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "turnId": "01a16e6c-d3d6-7be0-ae4a-da297462a9e6",
+            "startedAtMs": 1792853988816
+          },
+          "emittedAtMs": 1792853988816
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "turnId": "01a16e6c-d3d6-7be0-ae4a-da297462a9e6",
+            "completedAtMs": 1792853988816
+          },
+          "emittedAtMs": 1792853988817
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "turnId": "01a16e6c-d3d6-7be0-ae4a-da297462a9e6",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988824
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988827
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d3b5-7390-aa50-8bd057ec226b",
+            "turn": {
+              "id": "01a16e6c-d3d6-7be0-ae4a-da297462a9e6",
+              "rootTurnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+              "items": [
+                {
+                  "type": "agentMessage",
+                  "id": "child-answer",
+                  "text": "synthetic child complete",
+                  "phase": "final_answer",
+                  "memoryCitation": null,
+                  "delivery": null,
+                  "questions": null
+                }
+              ],
+              "itemsView": "summary",
+              "status": "completed",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": 1792853988,
+              "durationMs": 119
+            }
+          },
+          "emittedAtMs": 1792853988827
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+              "receiverThreadIds": [
+                "01a16e6c-d3b5-7390-aa50-8bd057ec226b"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d3b5-7390-aa50-8bd057ec226b": {
+                  "status": "completed",
+                  "message": "synthetic child complete"
+                }
+              }
+            },
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "completedAtMs": 1792853988827
+          },
+          "emittedAtMs": 1792853988829
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988832
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "status": {
+              "type": "systemError"
+            }
+          },
+          "emittedAtMs": 1792853988841
+        },
+        {
+          "method": "error",
+          "params": {
+            "error": {
+              "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "willRetry": false,
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3"
+          },
+          "emittedAtMs": 1792853988841
+        },
+        {
+          "method": "thread/readState/changed",
+          "params": {
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "readState": {
+              "firstUnread": {
+                "type": "turn",
+                "turnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3"
+              },
+              "revision": "7847f612-b5bd-470a-a0a9-b1338dfbadf1"
+            }
+          },
+          "emittedAtMs": 1792853988848
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d0ff-7931-afbb-46fd38f6d844",
+            "turn": {
+              "id": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+              "rootTurnId": "01a16e6c-d191-7033-8b8b-7e0cf75872c3",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "failed",
+              "error": {
+                "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+                "codexErrorInfo": "usageLimitExceeded",
+                "additionalDetails": null,
+                "misalignment": null
+              },
+              "startedAt": 1792853987,
+              "completedAt": 1792853988,
+              "durationMs": 1056
+            }
+          },
+          "emittedAtMs": 1792853988848
+        }
+      ]
+    },
+    {
+      "scenario": "child-timeout",
+      "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+      "events": [
+        {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "01a16e6c-d172-7801-b824-ac9d295a8069",
+              "environments": [
+                {
+                  "environmentId": "local",
+                  "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-80l0xbw1/coverage-gh6bgp86",
+                  "runtimeWorkspaceRoots": [
+                    "/private/tmp/swarm-handover-native/codex/coverage-run-80l0xbw1/coverage-gh6bgp86"
+                  ]
+                }
+              ],
+              "extra": null,
+              "sessionId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+              "forkedFromId": null,
+              "parentThreadId": null,
+              "preview": "",
+              "ephemeral": false,
+              "section": null,
+              "sectionEnteredAt": null,
+              "projectId": null,
+              "historyMode": "paginated",
+              "modelProvider": "coverage",
+              "model": "gpt-5.4",
+              "reasoningEffort": null,
+              "createdAt": 1792853987,
+              "updatedAt": 1792853987,
+              "recencyAt": 1792853987,
+              "status": {
+                "type": "idle"
+              },
+              "path": "/private/tmp/swarm-handover-native/codex/coverage-run-80l0xbw1/coverage-gh6bgp86/sessions/2026/10/24/rollout-2026-10-24T16-59-47-01a16e6c-d172-7801-b824-ac9d295a8069.jsonl",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-80l0xbw1/coverage-gh6bgp86",
+              "cliVersion": "0.163.0",
+              "originator": "synthetic-qualification",
+              "source": "vscode",
+              "canAcceptDirectInput": true,
+              "threadSource": null,
+              "agentNickname": null,
+              "agentRole": null,
+              "gitInfo": null,
+              "name": null,
+              "daybreakEnabled": null,
+              "turns": []
+            }
+          },
+          "emittedAtMs": 1792853987887
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988026
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turn": {
+              "id": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+              "rootTurnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853987,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988026
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d4cc-73f2-a631-98afbc6fc204",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "startedAtMs": 1792853988557
+          },
+          "emittedAtMs": 1792853988557
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d4cc-73f2-a631-98afbc6fc204",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "completedAtMs": 1792853988557
+          },
+          "emittedAtMs": 1792853988560
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "startedAtMs": 1792853988568
+          },
+          "emittedAtMs": 1792853988568
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "completedAtMs": 1792853988568
+          },
+          "emittedAtMs": 1792853988570
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+              "receiverThreadIds": [],
+              "prompt": "coverage-child-marker",
+              "model": "",
+              "reasoningEffort": "medium",
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "startedAtMs": 1792853988627
+          },
+          "emittedAtMs": 1792853988627
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d513-7151-a72a-7492721b97ab",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988687
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+              "receiverThreadIds": [
+                "01a16e6c-d513-7151-a72a-7492721b97ab"
+              ],
+              "prompt": "coverage-child-marker",
+              "model": "gpt-5.4",
+              "reasoningEffort": "medium",
+              "agentsStates": {
+                "01a16e6c-d513-7151-a72a-7492721b97ab": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "completedAtMs": 1792853988687
+          },
+          "emittedAtMs": 1792853988689
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988694
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d513-7151-a72a-7492721b97ab",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988698
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d513-7151-a72a-7492721b97ab",
+            "turn": {
+              "id": "01a16e6c-d53b-7060-871a-ecb550cce336",
+              "rootTurnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988698
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+              "receiverThreadIds": [
+                "01a16e6c-d513-7151-a72a-7492721b97ab"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "startedAtMs": 1792853988705
+          },
+          "emittedAtMs": 1792853988705
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d648-7ba1-bccc-3b2ab2532653",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d513-7151-a72a-7492721b97ab",
+            "turnId": "01a16e6c-d53b-7060-871a-ecb550cce336",
+            "startedAtMs": 1792853988937
+          },
+          "emittedAtMs": 1792853988937
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d648-7ba1-bccc-3b2ab2532653",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d513-7151-a72a-7492721b97ab",
+            "turnId": "01a16e6c-d53b-7060-871a-ecb550cce336",
+            "completedAtMs": 1792853988937
+          },
+          "emittedAtMs": 1792853988939
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+              "receiverThreadIds": [],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "completedAtMs": 1792853998708
+          },
+          "emittedAtMs": 1792853998712
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853998726
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "status": {
+              "type": "systemError"
+            }
+          },
+          "emittedAtMs": 1792853998731
+        },
+        {
+          "method": "error",
+          "params": {
+            "error": {
+              "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "willRetry": false,
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9"
+          },
+          "emittedAtMs": 1792853998731
+        },
+        {
+          "method": "thread/readState/changed",
+          "params": {
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "readState": {
+              "firstUnread": {
+                "type": "turn",
+                "turnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9"
+              },
+              "revision": "55f899cc-bfee-49bc-9c0f-46bf1b7dd807"
+            }
+          },
+          "emittedAtMs": 1792853998758
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d172-7801-b824-ac9d295a8069",
+            "turn": {
+              "id": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+              "rootTurnId": "01a16e6c-d235-7550-81de-5fc5fcd263f9",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "failed",
+              "error": {
+                "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+                "codexErrorInfo": "usageLimitExceeded",
+                "additionalDetails": null,
+                "misalignment": null
+              },
+              "startedAt": 1792853987,
+              "completedAt": 1792853998,
+              "durationMs": 10823
+            }
+          },
+          "emittedAtMs": 1792853998758
+        }
+      ]
+    },
+    {
+      "scenario": "child-close",
+      "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+      "events": [
+        {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+              "environments": [
+                {
+                  "environmentId": "local",
+                  "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-2ym590_l/coverage-88yym3rb",
+                  "runtimeWorkspaceRoots": [
+                    "/private/tmp/swarm-handover-native/codex/coverage-run-2ym590_l/coverage-88yym3rb"
+                  ]
+                }
+              ],
+              "extra": null,
+              "sessionId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+              "forkedFromId": null,
+              "parentThreadId": null,
+              "preview": "",
+              "ephemeral": false,
+              "section": null,
+              "sectionEnteredAt": null,
+              "projectId": null,
+              "historyMode": "paginated",
+              "modelProvider": "coverage",
+              "model": "gpt-5.4",
+              "reasoningEffort": null,
+              "createdAt": 1792853987,
+              "updatedAt": 1792853987,
+              "recencyAt": 1792853987,
+              "status": {
+                "type": "idle"
+              },
+              "path": "/private/tmp/swarm-handover-native/codex/coverage-run-2ym590_l/coverage-88yym3rb/sessions/2026/10/24/rollout-2026-10-24T16-59-47-01a16e6c-d172-71f0-88bf-4e8645cd2f21.jsonl",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-2ym590_l/coverage-88yym3rb",
+              "cliVersion": "0.163.0",
+              "originator": "synthetic-qualification",
+              "source": "vscode",
+              "canAcceptDirectInput": true,
+              "threadSource": null,
+              "agentNickname": null,
+              "agentRole": null,
+              "gitInfo": null,
+              "name": null,
+              "daybreakEnabled": null,
+              "turns": []
+            }
+          },
+          "emittedAtMs": 1792853987909
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988025
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turn": {
+              "id": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+              "rootTurnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853987,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988025
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d517-7d40-abdd-717f07448873",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "startedAtMs": 1792853988634
+          },
+          "emittedAtMs": 1792853988634
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d517-7d40-abdd-717f07448873",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "completedAtMs": 1792853988634
+          },
+          "emittedAtMs": 1792853988636
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "startedAtMs": 1792853988639
+          },
+          "emittedAtMs": 1792853988640
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "completedAtMs": 1792853988640
+          },
+          "emittedAtMs": 1792853988641
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+              "receiverThreadIds": [],
+              "prompt": "coverage-child-marker",
+              "model": "",
+              "reasoningEffort": "medium",
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "startedAtMs": 1792853988646
+          },
+          "emittedAtMs": 1792853988647
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d527-7380-ae69-db16c2560bd2",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988741
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+              "receiverThreadIds": [
+                "01a16e6c-d527-7380-ae69-db16c2560bd2"
+              ],
+              "prompt": "coverage-child-marker",
+              "model": "gpt-5.4",
+              "reasoningEffort": "medium",
+              "agentsStates": {
+                "01a16e6c-d527-7380-ae69-db16c2560bd2": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "completedAtMs": 1792853988741
+          },
+          "emittedAtMs": 1792853988747
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d527-7380-ae69-db16c2560bd2",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988783
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d527-7380-ae69-db16c2560bd2",
+            "turn": {
+              "id": "01a16e6c-d575-7410-ac19-4ccc7c83e52c",
+              "rootTurnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988783
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988804
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "closeAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+              "receiverThreadIds": [
+                "01a16e6c-d527-7380-ae69-db16c2560bd2"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "startedAtMs": 1792853988827
+          },
+          "emittedAtMs": 1792853988827
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d5de-7230-9fe4-17ceac56e5ed",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d527-7380-ae69-db16c2560bd2",
+            "turnId": "01a16e6c-d575-7410-ac19-4ccc7c83e52c",
+            "startedAtMs": 1792853988831
+          },
+          "emittedAtMs": 1792853988831
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d5de-7230-9fe4-17ceac56e5ed",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d527-7380-ae69-db16c2560bd2",
+            "turnId": "01a16e6c-d575-7410-ac19-4ccc7c83e52c",
+            "completedAtMs": 1792853988831
+          },
+          "emittedAtMs": 1792853988832
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d527-7380-ae69-db16c2560bd2",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988836
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d527-7380-ae69-db16c2560bd2",
+            "turn": {
+              "id": "01a16e6c-d575-7410-ac19-4ccc7c83e52c",
+              "rootTurnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "interrupted",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": 1792853988,
+              "durationMs": 94
+            }
+          },
+          "emittedAtMs": 1792853988836
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d527-7380-ae69-db16c2560bd2",
+            "status": {
+              "type": "notLoaded"
+            }
+          },
+          "emittedAtMs": 1792853988839
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "closeAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+              "receiverThreadIds": [
+                "01a16e6c-d527-7380-ae69-db16c2560bd2"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d527-7380-ae69-db16c2560bd2": {
+                  "status": "running",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "completedAtMs": 1792853988839
+          },
+          "emittedAtMs": 1792853988840
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988844
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "status": {
+              "type": "systemError"
+            }
+          },
+          "emittedAtMs": 1792853988853
+        },
+        {
+          "method": "error",
+          "params": {
+            "error": {
+              "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "willRetry": false,
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b"
+          },
+          "emittedAtMs": 1792853988853
+        },
+        {
+          "method": "thread/readState/changed",
+          "params": {
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "readState": {
+              "firstUnread": {
+                "type": "turn",
+                "turnId": "01a16e6c-d247-7d60-b134-e824350bbb7b"
+              },
+              "revision": "86fc7a10-881a-403b-9adc-eb6cd3661de1"
+            }
+          },
+          "emittedAtMs": 1792853988860
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d172-71f0-88bf-4e8645cd2f21",
+            "turn": {
+              "id": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+              "rootTurnId": "01a16e6c-d247-7d60-b134-e824350bbb7b",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "failed",
+              "error": {
+                "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+                "codexErrorInfo": "usageLimitExceeded",
+                "additionalDetails": null,
+                "misalignment": null
+              },
+              "startedAt": 1792853987,
+              "completedAt": 1792853988,
+              "durationMs": 940
+            }
+          },
+          "emittedAtMs": 1792853988860
+        }
+      ]
+    },
+    {
+      "scenario": "child-grandchild",
+      "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+      "events": [
+        {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+              "environments": [
+                {
+                  "environmentId": "local",
+                  "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-blkt1o4x/coverage-f8__9qyo",
+                  "runtimeWorkspaceRoots": [
+                    "/private/tmp/swarm-handover-native/codex/coverage-run-blkt1o4x/coverage-f8__9qyo"
+                  ]
+                }
+              ],
+              "extra": null,
+              "sessionId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+              "forkedFromId": null,
+              "parentThreadId": null,
+              "preview": "",
+              "ephemeral": false,
+              "section": null,
+              "sectionEnteredAt": null,
+              "projectId": null,
+              "historyMode": "paginated",
+              "modelProvider": "coverage",
+              "model": "gpt-5.4",
+              "reasoningEffort": null,
+              "createdAt": 1792853987,
+              "updatedAt": 1792853987,
+              "recencyAt": 1792853987,
+              "status": {
+                "type": "idle"
+              },
+              "path": "/private/tmp/swarm-handover-native/codex/coverage-run-blkt1o4x/coverage-f8__9qyo/sessions/2026/10/24/rollout-2026-10-24T16-59-47-01a16e6c-d16e-7112-a629-06f1744f65e6.jsonl",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-blkt1o4x/coverage-f8__9qyo",
+              "cliVersion": "0.163.0",
+              "originator": "synthetic-qualification",
+              "source": "vscode",
+              "canAcceptDirectInput": true,
+              "threadSource": null,
+              "agentNickname": null,
+              "agentRole": null,
+              "gitInfo": null,
+              "name": null,
+              "daybreakEnabled": null,
+              "turns": []
+            }
+          },
+          "emittedAtMs": 1792853987870
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988027
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turn": {
+              "id": "01a16e6c-d220-7790-abe8-035bf1491f09",
+              "rootTurnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853987,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988027
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d528-7721-9e2f-b7195f4c9148",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "startedAtMs": 1792853988649
+          },
+          "emittedAtMs": 1792853988649
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d528-7721-9e2f-b7195f4c9148",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "completedAtMs": 1792853988649
+          },
+          "emittedAtMs": 1792853988652
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "startedAtMs": 1792853988656
+          },
+          "emittedAtMs": 1792853988656
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "completedAtMs": 1792853988656
+          },
+          "emittedAtMs": 1792853988658
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+              "receiverThreadIds": [],
+              "prompt": "coverage-child-marker",
+              "model": "",
+              "reasoningEffort": "medium",
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "startedAtMs": 1792853988671
+          },
+          "emittedAtMs": 1792853988671
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988740
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+              "receiverThreadIds": [
+                "01a16e6c-d53f-7fd3-bdad-3f260224c109"
+              ],
+              "prompt": "coverage-child-marker",
+              "model": "gpt-5.4",
+              "reasoningEffort": "medium",
+              "agentsStates": {
+                "01a16e6c-d53f-7fd3-bdad-3f260224c109": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "completedAtMs": 1792853988740
+          },
+          "emittedAtMs": 1792853988746
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988768
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988795
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turn": {
+              "id": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+              "rootTurnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988795
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+              "receiverThreadIds": [
+                "01a16e6c-d53f-7fd3-bdad-3f260224c109"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "startedAtMs": 1792853988810
+          },
+          "emittedAtMs": 1792853988810
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d6f0-7612-a906-234a6178b252",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turnId": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+            "startedAtMs": 1792853989106
+          },
+          "emittedAtMs": 1792853989106
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d6f0-7612-a906-234a6178b252",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turnId": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+            "completedAtMs": 1792853989106
+          },
+          "emittedAtMs": 1792853989108
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-grandchild-spawn",
+              "tool": "spawnAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+              "receiverThreadIds": [],
+              "prompt": "coverage-grandchild-marker coverage-child-marker",
+              "model": "",
+              "reasoningEffort": "medium",
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turnId": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+            "startedAtMs": 1792853989117
+          },
+          "emittedAtMs": 1792853989117
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d6fd-7b82-b2ad-9bdb2f3d6ccf",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853989144
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-grandchild-spawn",
+              "tool": "spawnAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+              "receiverThreadIds": [
+                "01a16e6c-d6fd-7b82-b2ad-9bdb2f3d6ccf"
+              ],
+              "prompt": "coverage-grandchild-marker coverage-child-marker",
+              "model": "gpt-5.4",
+              "reasoningEffort": "medium",
+              "agentsStates": {
+                "01a16e6c-d6fd-7b82-b2ad-9bdb2f3d6ccf": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turnId": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+            "completedAtMs": 1792853989144
+          },
+          "emittedAtMs": 1792853989147
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d6fd-7b82-b2ad-9bdb2f3d6ccf",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853989147
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d6fd-7b82-b2ad-9bdb2f3d6ccf",
+            "turn": {
+              "id": "01a16e6c-d70e-7023-85f0-bd89d6712edf",
+              "rootTurnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853989,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853989147
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turnId": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853989152
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turnId": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+            "startedAtMs": 1792853989158
+          },
+          "emittedAtMs": 1792853989158
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turnId": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+            "completedAtMs": 1792853989158
+          },
+          "emittedAtMs": 1792853989160
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turnId": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853989165
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853989168
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d53f-7fd3-bdad-3f260224c109",
+            "turn": {
+              "id": "01a16e6c-d566-7373-8a9a-810cd8c4135b",
+              "rootTurnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+              "items": [
+                {
+                  "type": "agentMessage",
+                  "id": "child-answer",
+                  "text": "synthetic child complete",
+                  "phase": "final_answer",
+                  "memoryCitation": null,
+                  "delivery": null,
+                  "questions": null
+                }
+              ],
+              "itemsView": "summary",
+              "status": "completed",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": 1792853989,
+              "durationMs": 428
+            }
+          },
+          "emittedAtMs": 1792853989168
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+              "receiverThreadIds": [
+                "01a16e6c-d53f-7fd3-bdad-3f260224c109"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d53f-7fd3-bdad-3f260224c109": {
+                  "status": "completed",
+                  "message": "synthetic child complete"
+                }
+              }
+            },
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "completedAtMs": 1792853989168
+          },
+          "emittedAtMs": 1792853989169
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853989173
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "status": {
+              "type": "systemError"
+            }
+          },
+          "emittedAtMs": 1792853989180
+        },
+        {
+          "method": "error",
+          "params": {
+            "error": {
+              "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "willRetry": false,
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09"
+          },
+          "emittedAtMs": 1792853989180
+        },
+        {
+          "method": "thread/readState/changed",
+          "params": {
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "readState": {
+              "firstUnread": {
+                "type": "turn",
+                "turnId": "01a16e6c-d220-7790-abe8-035bf1491f09"
+              },
+              "revision": "0a52cc74-6889-46ea-8f60-121b8b1a2054"
+            }
+          },
+          "emittedAtMs": 1792853989184
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d16e-7112-a629-06f1744f65e6",
+            "turn": {
+              "id": "01a16e6c-d220-7790-abe8-035bf1491f09",
+              "rootTurnId": "01a16e6c-d220-7790-abe8-035bf1491f09",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "failed",
+              "error": {
+                "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+                "codexErrorInfo": "usageLimitExceeded",
+                "additionalDetails": null,
+                "misalignment": null
+              },
+              "startedAt": 1792853987,
+              "completedAt": 1792853989,
+              "durationMs": 1266
+            }
+          },
+          "emittedAtMs": 1792853989184
+        }
+      ]
+    },
+    {
+      "scenario": "child-sendinput",
+      "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+      "events": [
+        {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "environments": [
+                {
+                  "environmentId": "local",
+                  "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-33xxybi_/coverage-dwfygv_l",
+                  "runtimeWorkspaceRoots": [
+                    "/private/tmp/swarm-handover-native/codex/coverage-run-33xxybi_/coverage-dwfygv_l"
+                  ]
+                }
+              ],
+              "extra": null,
+              "sessionId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "forkedFromId": null,
+              "parentThreadId": null,
+              "preview": "",
+              "ephemeral": false,
+              "section": null,
+              "sectionEnteredAt": null,
+              "projectId": null,
+              "historyMode": "paginated",
+              "modelProvider": "coverage",
+              "model": "gpt-5.4",
+              "reasoningEffort": null,
+              "createdAt": 1792853987,
+              "updatedAt": 1792853987,
+              "recencyAt": 1792853987,
+              "status": {
+                "type": "idle"
+              },
+              "path": "/private/tmp/swarm-handover-native/codex/coverage-run-33xxybi_/coverage-dwfygv_l/sessions/2026/10/24/rollout-2026-10-24T16-59-47-01a16e6c-d109-7b51-a683-b98b7acadb5a.jsonl",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-33xxybi_/coverage-dwfygv_l",
+              "cliVersion": "0.163.0",
+              "originator": "synthetic-qualification",
+              "source": "vscode",
+              "canAcceptDirectInput": true,
+              "threadSource": null,
+              "agentNickname": null,
+              "agentRole": null,
+              "gitInfo": null,
+              "name": null,
+              "daybreakEnabled": null,
+              "turns": []
+            }
+          },
+          "emittedAtMs": 1792853987710
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853987903
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turn": {
+              "id": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+              "rootTurnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853987,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853987903
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d3a5-7f21-8df7-b7a17107b41c",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "startedAtMs": 1792853988266
+          },
+          "emittedAtMs": 1792853988266
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d3a5-7f21-8df7-b7a17107b41c",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "completedAtMs": 1792853988266
+          },
+          "emittedAtMs": 1792853988273
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "startedAtMs": 1792853988276
+          },
+          "emittedAtMs": 1792853988276
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "completedAtMs": 1792853988276
+          },
+          "emittedAtMs": 1792853988277
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "receiverThreadIds": [],
+              "prompt": "coverage-child-marker",
+              "model": "",
+              "reasoningEffort": "medium",
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "startedAtMs": 1792853988285
+          },
+          "emittedAtMs": 1792853988286
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988310
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "receiverThreadIds": [
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243"
+              ],
+              "prompt": "coverage-child-marker",
+              "model": "gpt-5.4",
+              "reasoningEffort": "medium",
+              "agentsStates": {
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "completedAtMs": 1792853988310
+          },
+          "emittedAtMs": 1792853988311
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988314
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turn": {
+              "id": "01a16e6c-d3d3-7480-9795-bed3d1399e76",
+              "rootTurnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988314
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988315
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "receiverThreadIds": [
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "startedAtMs": 1792853988327
+          },
+          "emittedAtMs": 1792853988327
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d547-7ff2-ab9d-ba779ef6e93e",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d3d3-7480-9795-bed3d1399e76",
+            "startedAtMs": 1792853988679
+          },
+          "emittedAtMs": 1792853988679
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d547-7ff2-ab9d-ba779ef6e93e",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d3d3-7480-9795-bed3d1399e76",
+            "completedAtMs": 1792853988679
+          },
+          "emittedAtMs": 1792853988682
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d3d3-7480-9795-bed3d1399e76",
+            "startedAtMs": 1792853988687
+          },
+          "emittedAtMs": 1792853988687
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d3d3-7480-9795-bed3d1399e76",
+            "completedAtMs": 1792853988687
+          },
+          "emittedAtMs": 1792853988689
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d3d3-7480-9795-bed3d1399e76",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988693
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988697
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turn": {
+              "id": "01a16e6c-d3d3-7480-9795-bed3d1399e76",
+              "rootTurnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+              "items": [
+                {
+                  "type": "agentMessage",
+                  "id": "child-answer",
+                  "text": "synthetic child complete",
+                  "phase": "final_answer",
+                  "memoryCitation": null,
+                  "delivery": null,
+                  "questions": null
+                }
+              ],
+              "itemsView": "summary",
+              "status": "completed",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": 1792853988,
+              "durationMs": 386
+            }
+          },
+          "emittedAtMs": 1792853988698
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "receiverThreadIds": [
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243": {
+                  "status": "completed",
+                  "message": "synthetic child complete"
+                }
+              }
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "completedAtMs": 1792853988697
+          },
+          "emittedAtMs": 1792853988700
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988714
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-send",
+              "tool": "sendInput",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "receiverThreadIds": [
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243"
+              ],
+              "prompt": "coverage-child-marker followup",
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "startedAtMs": 1792853988734
+          },
+          "emittedAtMs": 1792853988735
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-send",
+              "tool": "sendInput",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "receiverThreadIds": [
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243"
+              ],
+              "prompt": "coverage-child-marker followup",
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243": {
+                  "status": "completed",
+                  "message": "synthetic child complete"
+                }
+              }
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "completedAtMs": 1792853988739
+          },
+          "emittedAtMs": 1792853988745
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988766
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turn": {
+              "id": "01a16e6c-d57e-7630-b733-b17c81a67e68",
+              "rootTurnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988766
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 6,
+                "inputTokens": 3,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 3,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988773
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-second-wait",
+              "tool": "wait",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "receiverThreadIds": [
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "startedAtMs": 1792853988811
+          },
+          "emittedAtMs": 1792853988811
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d5be-7af3-9dc9-2aba93c4c9fe",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker followup",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d57e-7630-b733-b17c81a67e68",
+            "startedAtMs": 1792853988816
+          },
+          "emittedAtMs": 1792853988816
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d5be-7af3-9dc9-2aba93c4c9fe",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker followup",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d57e-7630-b733-b17c81a67e68",
+            "completedAtMs": 1792853988816
+          },
+          "emittedAtMs": 1792853988822
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d57e-7630-b733-b17c81a67e68",
+            "startedAtMs": 1792853988828
+          },
+          "emittedAtMs": 1792853988828
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d57e-7630-b733-b17c81a67e68",
+            "completedAtMs": 1792853988828
+          },
+          "emittedAtMs": 1792853988832
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turnId": "01a16e6c-d57e-7630-b733-b17c81a67e68",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988839
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988843
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d3be-76d0-8c30-38fa5af27243",
+            "turn": {
+              "id": "01a16e6c-d57e-7630-b733-b17c81a67e68",
+              "rootTurnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+              "items": [
+                {
+                  "type": "agentMessage",
+                  "id": "child-answer",
+                  "text": "synthetic child complete",
+                  "phase": "final_answer",
+                  "memoryCitation": null,
+                  "delivery": null,
+                  "questions": null
+                }
+              ],
+              "itemsView": "summary",
+              "status": "completed",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": 1792853988,
+              "durationMs": 104
+            }
+          },
+          "emittedAtMs": 1792853988843
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-second-wait",
+              "tool": "wait",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+              "receiverThreadIds": [
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d3be-76d0-8c30-38fa5af27243": {
+                  "status": "completed",
+                  "message": "synthetic child complete"
+                }
+              }
+            },
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "completedAtMs": 1792853988843
+          },
+          "emittedAtMs": 1792853988845
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 8,
+                "inputTokens": 4,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 4,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988850
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "status": {
+              "type": "systemError"
+            }
+          },
+          "emittedAtMs": 1792853988857
+        },
+        {
+          "method": "error",
+          "params": {
+            "error": {
+              "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "willRetry": false,
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59"
+          },
+          "emittedAtMs": 1792853988857
+        },
+        {
+          "method": "thread/readState/changed",
+          "params": {
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "readState": {
+              "firstUnread": {
+                "type": "turn",
+                "turnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59"
+              },
+              "revision": "bbbccb18-c43d-4350-a729-be9e9ac0b87e"
+            }
+          },
+          "emittedAtMs": 1792853988863
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d109-7b51-a683-b98b7acadb5a",
+            "turn": {
+              "id": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+              "rootTurnId": "01a16e6c-d187-7b53-9b7c-0f0fbc74ff59",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "failed",
+              "error": {
+                "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+                "codexErrorInfo": "usageLimitExceeded",
+                "additionalDetails": null,
+                "misalignment": null
+              },
+              "startedAt": 1792853987,
+              "completedAt": 1792853988,
+              "durationMs": 1072
+            }
+          },
+          "emittedAtMs": 1792853988863
+        }
+      ]
+    },
+    {
+      "scenario": "child-resume",
+      "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+      "events": [
+        {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "environments": [
+                {
+                  "environmentId": "local",
+                  "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-1qfbllmb/coverage-di1wyguo",
+                  "runtimeWorkspaceRoots": [
+                    "/private/tmp/swarm-handover-native/codex/coverage-run-1qfbllmb/coverage-di1wyguo"
+                  ]
+                }
+              ],
+              "extra": null,
+              "sessionId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "forkedFromId": null,
+              "parentThreadId": null,
+              "preview": "",
+              "ephemeral": false,
+              "section": null,
+              "sectionEnteredAt": null,
+              "projectId": null,
+              "historyMode": "paginated",
+              "modelProvider": "coverage",
+              "model": "gpt-5.4",
+              "reasoningEffort": null,
+              "createdAt": 1792853987,
+              "updatedAt": 1792853987,
+              "recencyAt": 1792853987,
+              "status": {
+                "type": "idle"
+              },
+              "path": "/private/tmp/swarm-handover-native/codex/coverage-run-1qfbllmb/coverage-di1wyguo/sessions/2026/10/24/rollout-2026-10-24T16-59-47-01a16e6c-d171-7202-b68c-9967693c08e9.jsonl",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-1qfbllmb/coverage-di1wyguo",
+              "cliVersion": "0.163.0",
+              "originator": "synthetic-qualification",
+              "source": "vscode",
+              "canAcceptDirectInput": true,
+              "threadSource": null,
+              "agentNickname": null,
+              "agentRole": null,
+              "gitInfo": null,
+              "name": null,
+              "daybreakEnabled": null,
+              "turns": []
+            }
+          },
+          "emittedAtMs": 1792853987904
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988027
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turn": {
+              "id": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+              "rootTurnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853987,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988027
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d52e-7881-81e1-78c6d781c80b",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "startedAtMs": 1792853988655
+          },
+          "emittedAtMs": 1792853988655
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d52e-7881-81e1-78c6d781c80b",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "completedAtMs": 1792853988655
+          },
+          "emittedAtMs": 1792853988659
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "startedAtMs": 1792853988666
+          },
+          "emittedAtMs": 1792853988666
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "completedAtMs": 1792853988666
+          },
+          "emittedAtMs": 1792853988670
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "receiverThreadIds": [],
+              "prompt": "coverage-child-marker",
+              "model": "",
+              "reasoningEffort": "medium",
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "startedAtMs": 1792853988675
+          },
+          "emittedAtMs": 1792853988676
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988725
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "receiverThreadIds": [
+                "01a16e6c-d544-74e3-a0b9-494334153e57"
+              ],
+              "prompt": "coverage-child-marker",
+              "model": "gpt-5.4",
+              "reasoningEffort": "medium",
+              "agentsStates": {
+                "01a16e6c-d544-74e3-a0b9-494334153e57": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "completedAtMs": 1792853988725
+          },
+          "emittedAtMs": 1792853988727
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988732
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "turn": {
+              "id": "01a16e6c-d572-7872-92d1-0dded95bc577",
+              "rootTurnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988732
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988744
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "receiverThreadIds": [
+                "01a16e6c-d544-74e3-a0b9-494334153e57"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "startedAtMs": 1792853988769
+          },
+          "emittedAtMs": 1792853988769
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d6f1-7942-8524-4c940ba9e29c",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "turnId": "01a16e6c-d572-7872-92d1-0dded95bc577",
+            "startedAtMs": 1792853989107
+          },
+          "emittedAtMs": 1792853989107
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d6f1-7942-8524-4c940ba9e29c",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "turnId": "01a16e6c-d572-7872-92d1-0dded95bc577",
+            "completedAtMs": 1792853989107
+          },
+          "emittedAtMs": 1792853989110
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "turnId": "01a16e6c-d572-7872-92d1-0dded95bc577",
+            "startedAtMs": 1792853989115
+          },
+          "emittedAtMs": 1792853989115
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "turnId": "01a16e6c-d572-7872-92d1-0dded95bc577",
+            "completedAtMs": 1792853989115
+          },
+          "emittedAtMs": 1792853989118
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "turnId": "01a16e6c-d572-7872-92d1-0dded95bc577",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853989121
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853989124
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "turn": {
+              "id": "01a16e6c-d572-7872-92d1-0dded95bc577",
+              "rootTurnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+              "items": [
+                {
+                  "type": "agentMessage",
+                  "id": "child-answer",
+                  "text": "synthetic child complete",
+                  "phase": "final_answer",
+                  "memoryCitation": null,
+                  "delivery": null,
+                  "questions": null
+                }
+              ],
+              "itemsView": "summary",
+              "status": "completed",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": 1792853989,
+              "durationMs": 399
+            }
+          },
+          "emittedAtMs": 1792853989124
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-control",
+              "tool": "wait",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "receiverThreadIds": [
+                "01a16e6c-d544-74e3-a0b9-494334153e57"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d544-74e3-a0b9-494334153e57": {
+                  "status": "completed",
+                  "message": "synthetic child complete"
+                }
+              }
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "completedAtMs": 1792853989124
+          },
+          "emittedAtMs": 1792853989125
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853989127
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-close",
+              "tool": "closeAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "receiverThreadIds": [
+                "01a16e6c-d544-74e3-a0b9-494334153e57"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "startedAtMs": 1792853989135
+          },
+          "emittedAtMs": 1792853989135
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "status": {
+              "type": "notLoaded"
+            }
+          },
+          "emittedAtMs": 1792853989139
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-close",
+              "tool": "closeAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "receiverThreadIds": [
+                "01a16e6c-d544-74e3-a0b9-494334153e57"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d544-74e3-a0b9-494334153e57": {
+                  "status": "completed",
+                  "message": "synthetic child complete"
+                }
+              }
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "completedAtMs": 1792853989139
+          },
+          "emittedAtMs": 1792853989140
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 6,
+                "inputTokens": 3,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 3,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853989145
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-resume",
+              "tool": "resumeAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "receiverThreadIds": [
+                "01a16e6c-d544-74e3-a0b9-494334153e57"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "startedAtMs": 1792853989155
+          },
+          "emittedAtMs": 1792853989155
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d544-74e3-a0b9-494334153e57",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853989164
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-resume",
+              "tool": "resumeAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+              "receiverThreadIds": [
+                "01a16e6c-d544-74e3-a0b9-494334153e57"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d544-74e3-a0b9-494334153e57": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "completedAtMs": 1792853989164
+          },
+          "emittedAtMs": 1792853989166
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 8,
+                "inputTokens": 4,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 4,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853989170
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "status": {
+              "type": "systemError"
+            }
+          },
+          "emittedAtMs": 1792853989176
+        },
+        {
+          "method": "error",
+          "params": {
+            "error": {
+              "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "willRetry": false,
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb"
+          },
+          "emittedAtMs": 1792853989176
+        },
+        {
+          "method": "thread/readState/changed",
+          "params": {
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "readState": {
+              "firstUnread": {
+                "type": "turn",
+                "turnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb"
+              },
+              "revision": "84f31e17-aac0-46d4-aac1-5c4f7b80a93e"
+            }
+          },
+          "emittedAtMs": 1792853989191
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d171-7202-b68c-9967693c08e9",
+            "turn": {
+              "id": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+              "rootTurnId": "01a16e6c-d243-75b3-b9c2-9a0bfd041ceb",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "failed",
+              "error": {
+                "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+                "codexErrorInfo": "usageLimitExceeded",
+                "additionalDetails": null,
+                "misalignment": null
+              },
+              "startedAt": 1792853987,
+              "completedAt": 1792853989,
+              "durationMs": 1259
+            }
+          },
+          "emittedAtMs": 1792853989191
+        }
+      ]
+    },
+    {
+      "scenario": "command-foreground",
+      "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+      "events": [
+        {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+              "environments": [
+                {
+                  "environmentId": "local",
+                  "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-i_begje_/coverage-vuk_i7n7",
+                  "runtimeWorkspaceRoots": [
+                    "/private/tmp/swarm-handover-native/codex/coverage-run-i_begje_/coverage-vuk_i7n7"
+                  ]
+                }
+              ],
+              "extra": null,
+              "sessionId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+              "forkedFromId": null,
+              "parentThreadId": null,
+              "preview": "",
+              "ephemeral": false,
+              "section": null,
+              "sectionEnteredAt": null,
+              "projectId": null,
+              "historyMode": "paginated",
+              "modelProvider": "coverage",
+              "model": "gpt-5.4",
+              "reasoningEffort": null,
+              "createdAt": 1792853987,
+              "updatedAt": 1792853987,
+              "recencyAt": 1792853987,
+              "status": {
+                "type": "idle"
+              },
+              "path": "/private/tmp/swarm-handover-native/codex/coverage-run-i_begje_/coverage-vuk_i7n7/sessions/2026/10/24/rollout-2026-10-24T16-59-47-01a16e6c-d172-79a3-8402-dce8fa4c2ef0.jsonl",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-i_begje_/coverage-vuk_i7n7",
+              "cliVersion": "0.163.0",
+              "originator": "synthetic-qualification",
+              "source": "vscode",
+              "canAcceptDirectInput": true,
+              "threadSource": null,
+              "agentNickname": null,
+              "agentRole": null,
+              "gitInfo": null,
+              "name": null,
+              "daybreakEnabled": null,
+              "turns": []
+            }
+          },
+          "emittedAtMs": 1792853987850
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988004
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turn": {
+              "id": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+              "rootTurnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853987,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988004
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d4fd-7e82-8b95-b9a3334c5581",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+            "startedAtMs": 1792853988609
+          },
+          "emittedAtMs": 1792853988610
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d4fd-7e82-8b95-b9a3334c5581",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+            "completedAtMs": 1792853988609
+          },
+          "emittedAtMs": 1792853988648
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+            "startedAtMs": 1792853988652
+          },
+          "emittedAtMs": 1792853988653
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+            "completedAtMs": 1792853988652
+          },
+          "emittedAtMs": 1792853988654
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "commandExecution",
+              "id": "coverage-foreground",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/bash -lc 'printf synthetic-foreground-success'",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-i_begje_/coverage-vuk_i7n7",
+              "processId": "92423",
+              "source": "unifiedExecStartup",
+              "status": "inProgress",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf synthetic-foreground-success"
+                }
+              ],
+              "aggregatedOutput": null,
+              "exitCode": null,
+              "durationMs": null
+            },
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+            "startedAtMs": 1792853988709
+          },
+          "emittedAtMs": 1792853988710
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "commandExecution",
+              "id": "coverage-foreground",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/bash -lc 'printf synthetic-foreground-success'",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-i_begje_/coverage-vuk_i7n7",
+              "processId": "92423",
+              "source": "unifiedExecStartup",
+              "status": "completed",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf synthetic-foreground-success"
+                }
+              ],
+              "aggregatedOutput": "synthetic-foreground-success",
+              "exitCode": 0,
+              "durationMs": 0
+            },
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+            "completedAtMs": 1792853988709
+          },
+          "emittedAtMs": 1792853988713
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988718
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "status": {
+              "type": "systemError"
+            }
+          },
+          "emittedAtMs": 1792853988723
+        },
+        {
+          "method": "error",
+          "params": {
+            "error": {
+              "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "willRetry": false,
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673"
+          },
+          "emittedAtMs": 1792853988723
+        },
+        {
+          "method": "thread/readState/changed",
+          "params": {
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "readState": {
+              "firstUnread": {
+                "type": "turn",
+                "turnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673"
+              },
+              "revision": "ca1210ae-69ca-4756-a8e9-ddda1de0fd23"
+            }
+          },
+          "emittedAtMs": 1792853988732
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d172-79a3-8402-dce8fa4c2ef0",
+            "turn": {
+              "id": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+              "rootTurnId": "01a16e6c-d20c-7830-a84a-f2dcd83f1673",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "failed",
+              "error": {
+                "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+                "codexErrorInfo": "usageLimitExceeded",
+                "additionalDetails": null,
+                "misalignment": null
+              },
+              "startedAt": 1792853987,
+              "completedAt": 1792853988,
+              "durationMs": 869
+            }
+          },
+          "emittedAtMs": 1792853988732
+        }
+      ]
+    },
+    {
+      "scenario": "command-background",
+      "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+      "events": [
+        {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+              "environments": [
+                {
+                  "environmentId": "local",
+                  "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-vhk2q6n9/coverage-soimw2yl",
+                  "runtimeWorkspaceRoots": [
+                    "/private/tmp/swarm-handover-native/codex/coverage-run-vhk2q6n9/coverage-soimw2yl"
+                  ]
+                }
+              ],
+              "extra": null,
+              "sessionId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+              "forkedFromId": null,
+              "parentThreadId": null,
+              "preview": "",
+              "ephemeral": false,
+              "section": null,
+              "sectionEnteredAt": null,
+              "projectId": null,
+              "historyMode": "paginated",
+              "modelProvider": "coverage",
+              "model": "gpt-5.4",
+              "reasoningEffort": null,
+              "createdAt": 1792853987,
+              "updatedAt": 1792853987,
+              "recencyAt": 1792853987,
+              "status": {
+                "type": "idle"
+              },
+              "path": "/private/tmp/swarm-handover-native/codex/coverage-run-vhk2q6n9/coverage-soimw2yl/sessions/2026/10/24/rollout-2026-10-24T16-59-47-01a16e6c-d17a-72d3-9339-a897c157d5dc.jsonl",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-vhk2q6n9/coverage-soimw2yl",
+              "cliVersion": "0.163.0",
+              "originator": "synthetic-qualification",
+              "source": "vscode",
+              "canAcceptDirectInput": true,
+              "threadSource": null,
+              "agentNickname": null,
+              "agentRole": null,
+              "gitInfo": null,
+              "name": null,
+              "daybreakEnabled": null,
+              "turns": []
+            }
+          },
+          "emittedAtMs": 1792853987889
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988025
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turn": {
+              "id": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+              "rootTurnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853987,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988025
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d529-7631-b111-2905e5300448",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "startedAtMs": 1792853988649
+          },
+          "emittedAtMs": 1792853988649
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d529-7631-b111-2905e5300448",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "completedAtMs": 1792853988649
+          },
+          "emittedAtMs": 1792853988652
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "startedAtMs": 1792853988656
+          },
+          "emittedAtMs": 1792853988656
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "completedAtMs": 1792853988656
+          },
+          "emittedAtMs": 1792853988658
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "commandExecution",
+              "id": "coverage-background",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/bash -lc 'sleep 12; printf synthetic-background-end > coverage-background-done'",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-vhk2q6n9/coverage-soimw2yl",
+              "processId": "92776",
+              "source": "unifiedExecStartup",
+              "status": "inProgress",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "sleep 12; printf synthetic-background-end > coverage-background-done"
+                }
+              ],
+              "aggregatedOutput": null,
+              "exitCode": null,
+              "durationMs": null
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "startedAtMs": 1792853988835
+          },
+          "emittedAtMs": 1792853988837
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853989846
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "background-recovery-commentary",
+              "text": "synthetic followup work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "startedAtMs": 1792853989850
+          },
+          "emittedAtMs": 1792853989850
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "background-recovery-commentary",
+              "text": "synthetic followup work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "completedAtMs": 1792853989850
+          },
+          "emittedAtMs": 1792853989851
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "commandExecution",
+              "id": "coverage-second-command",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/bash -lc 'printf synthetic-second-success'",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-vhk2q6n9/coverage-soimw2yl",
+              "processId": "47536",
+              "source": "unifiedExecStartup",
+              "status": "inProgress",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf synthetic-second-success"
+                }
+              ],
+              "aggregatedOutput": null,
+              "exitCode": null,
+              "durationMs": null
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "startedAtMs": 1792853989894
+          },
+          "emittedAtMs": 1792853989894
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "commandExecution",
+              "id": "coverage-second-command",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/bash -lc 'printf synthetic-second-success'",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-vhk2q6n9/coverage-soimw2yl",
+              "processId": "47536",
+              "source": "unifiedExecStartup",
+              "status": "completed",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "printf synthetic-second-success"
+                }
+              ],
+              "aggregatedOutput": "synthetic-second-success",
+              "exitCode": 0,
+              "durationMs": 0
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "completedAtMs": 1792853989894
+          },
+          "emittedAtMs": 1792853989897
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853989903
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "status": {
+              "type": "systemError"
+            }
+          },
+          "emittedAtMs": 1792853989907
+        },
+        {
+          "method": "error",
+          "params": {
+            "error": {
+              "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "willRetry": false,
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81"
+          },
+          "emittedAtMs": 1792853989907
+        },
+        {
+          "method": "thread/readState/changed",
+          "params": {
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "readState": {
+              "firstUnread": {
+                "type": "turn",
+                "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81"
+              },
+              "revision": "86bad7f9-4fc6-448f-8368-84a9cdc13ca9"
+            }
+          },
+          "emittedAtMs": 1792853989918
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turn": {
+              "id": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+              "rootTurnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "failed",
+              "error": {
+                "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+                "codexErrorInfo": "usageLimitExceeded",
+                "additionalDetails": null,
+                "misalignment": null
+              },
+              "startedAt": 1792853987,
+              "completedAt": 1792853989,
+              "durationMs": 2001
+            }
+          },
+          "emittedAtMs": 1792853989918
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "commandExecution",
+              "id": "coverage-background",
+              "pluginId": null,
+              "scriptPath": null,
+              "command": "/bin/bash -lc 'sleep 12; printf synthetic-background-end > coverage-background-done'",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-vhk2q6n9/coverage-soimw2yl",
+              "processId": "92776",
+              "source": "unifiedExecStartup",
+              "status": "completed",
+              "commandActions": [
+                {
+                  "type": "unknown",
+                  "command": "sleep 12; printf synthetic-background-end > coverage-background-done"
+                }
+              ],
+              "aggregatedOutput": null,
+              "exitCode": 0,
+              "durationMs": 11864
+            },
+            "threadId": "01a16e6c-d17a-72d3-9339-a897c157d5dc",
+            "turnId": "01a16e6c-d235-7930-86b8-d2c942f62c81",
+            "completedAtMs": 1792854000700
+          },
+          "emittedAtMs": 1792854000702
+        }
+      ]
+    },
+    {
+      "scenario": "child-sendinput-active",
+      "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+      "events": [
+        {
+          "method": "thread/started",
+          "params": {
+            "thread": {
+              "id": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+              "environments": [
+                {
+                  "environmentId": "local",
+                  "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-9h5tafra/coverage-leuccllz",
+                  "runtimeWorkspaceRoots": [
+                    "/private/tmp/swarm-handover-native/codex/coverage-run-9h5tafra/coverage-leuccllz"
+                  ]
+                }
+              ],
+              "extra": null,
+              "sessionId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+              "forkedFromId": null,
+              "parentThreadId": null,
+              "preview": "",
+              "ephemeral": false,
+              "section": null,
+              "sectionEnteredAt": null,
+              "projectId": null,
+              "historyMode": "paginated",
+              "modelProvider": "coverage",
+              "model": "gpt-5.4",
+              "reasoningEffort": null,
+              "createdAt": 1792853987,
+              "updatedAt": 1792853987,
+              "recencyAt": 1792853987,
+              "status": {
+                "type": "idle"
+              },
+              "path": "/private/tmp/swarm-handover-native/codex/coverage-run-9h5tafra/coverage-leuccllz/sessions/2026/10/24/rollout-2026-10-24T16-59-47-01a16e6c-d16e-7ae0-acb5-90616aa8d6c1.jsonl",
+              "cwd": "/private/tmp/swarm-handover-native/codex/coverage-run-9h5tafra/coverage-leuccllz",
+              "cliVersion": "0.163.0",
+              "originator": "synthetic-qualification",
+              "source": "vscode",
+              "canAcceptDirectInput": true,
+              "threadSource": null,
+              "agentNickname": null,
+              "agentRole": null,
+              "gitInfo": null,
+              "name": null,
+              "daybreakEnabled": null,
+              "turns": []
+            }
+          },
+          "emittedAtMs": 1792853987923
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988027
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turn": {
+              "id": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+              "rootTurnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853987,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988027
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d536-7480-864d-495bfca3c1a7",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "startedAtMs": 1792853988668
+          },
+          "emittedAtMs": 1792853988668
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d536-7480-864d-495bfca3c1a7",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "synthetic parent tool coverage",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "completedAtMs": 1792853988668
+          },
+          "emittedAtMs": 1792853988671
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "startedAtMs": 1792853988677
+          },
+          "emittedAtMs": 1792853988677
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "coverage-commentary",
+              "text": "synthetic ongoing work",
+              "phase": "commentary",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "completedAtMs": 1792853988677
+          },
+          "emittedAtMs": 1792853988678
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+              "receiverThreadIds": [],
+              "prompt": "coverage-child-marker",
+              "model": "",
+              "reasoningEffort": "medium",
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "startedAtMs": 1792853988683
+          },
+          "emittedAtMs": 1792853988684
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853988737
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-spawn",
+              "tool": "spawnAgent",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+              "receiverThreadIds": [
+                "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86"
+              ],
+              "prompt": "coverage-child-marker",
+              "model": "gpt-5.4",
+              "reasoningEffort": "medium",
+              "agentsStates": {
+                "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86": {
+                  "status": "pendingInit",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "completedAtMs": 1792853988737
+          },
+          "emittedAtMs": 1792853988743
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "status": {
+              "type": "active",
+              "activeFlags": []
+            }
+          },
+          "emittedAtMs": 1792853988766
+        },
+        {
+          "method": "turn/started",
+          "params": {
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turn": {
+              "id": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+              "rootTurnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "inProgress",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": null,
+              "durationMs": null
+            }
+          },
+          "emittedAtMs": 1792853988766
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988776
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-send-active",
+              "tool": "sendInput",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+              "receiverThreadIds": [
+                "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86"
+              ],
+              "prompt": "coverage-child-marker active followup",
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "startedAtMs": 1792853988813
+          },
+          "emittedAtMs": 1792853988821
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-send-active",
+              "tool": "sendInput",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+              "receiverThreadIds": [
+                "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86"
+              ],
+              "prompt": "coverage-child-marker active followup",
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86": {
+                  "status": "running",
+                  "message": null
+                }
+              }
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "completedAtMs": 1792853988821
+          },
+          "emittedAtMs": 1792853988825
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853988831
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-active-wait",
+              "tool": "wait",
+              "status": "inProgress",
+              "senderThreadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+              "receiverThreadIds": [
+                "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {}
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "startedAtMs": 1792853988841
+          },
+          "emittedAtMs": 1792853988841
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d6fd-7f40-a695-387909bcf74d",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "startedAtMs": 1792853989118
+          },
+          "emittedAtMs": 1792853989118
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-d6fd-7f40-a695-387909bcf74d",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "completedAtMs": 1792853989118
+          },
+          "emittedAtMs": 1792853989120
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "startedAtMs": 1792853990129
+          },
+          "emittedAtMs": 1792853990129
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "completedAtMs": 1792853990129
+          },
+          "emittedAtMs": 1792853990130
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853990132
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-daf5-76b0-8e5d-423c1e0681f1",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker active followup",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "startedAtMs": 1792853990133
+          },
+          "emittedAtMs": 1792853990133
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "userMessage",
+              "id": "01a16e6c-daf5-76b0-8e5d-423c1e0681f1",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "coverage-child-marker active followup",
+                  "text_elements": []
+                }
+              ]
+            },
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "completedAtMs": 1792853990133
+          },
+          "emittedAtMs": 1792853990134
+        },
+        {
+          "method": "item/started",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "startedAtMs": 1792853990138
+          },
+          "emittedAtMs": 1792853990138
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "agentMessage",
+              "id": "child-answer",
+              "text": "synthetic child complete",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            },
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "completedAtMs": 1792853990138
+          },
+          "emittedAtMs": 1792853990138
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turnId": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 4,
+                "inputTokens": 2,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853990140
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "status": {
+              "type": "idle"
+            }
+          },
+          "emittedAtMs": 1792853990142
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86",
+            "turn": {
+              "id": "01a16e6c-d57d-7f03-bd25-553d439c458a",
+              "rootTurnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+              "items": [
+                {
+                  "type": "agentMessage",
+                  "id": "child-answer",
+                  "text": "synthetic child complete",
+                  "phase": "final_answer",
+                  "memoryCitation": null,
+                  "delivery": null,
+                  "questions": null
+                }
+              ],
+              "itemsView": "summary",
+              "status": "completed",
+              "error": null,
+              "startedAt": 1792853988,
+              "completedAt": 1792853990,
+              "durationMs": 1406
+            }
+          },
+          "emittedAtMs": 1792853990142
+        },
+        {
+          "method": "item/completed",
+          "params": {
+            "item": {
+              "type": "collabAgentToolCall",
+              "id": "coverage-active-wait",
+              "tool": "wait",
+              "status": "completed",
+              "senderThreadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+              "receiverThreadIds": [
+                "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86"
+              ],
+              "prompt": null,
+              "model": null,
+              "reasoningEffort": null,
+              "agentsStates": {
+                "01a16e6c-d54c-7bd1-97b6-9e25ef9fbd86": {
+                  "status": "completed",
+                  "message": "synthetic child complete"
+                }
+              }
+            },
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "completedAtMs": 1792853990142
+          },
+          "emittedAtMs": 1792853990142
+        },
+        {
+          "method": "thread/tokenUsage/updated",
+          "params": {
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+            "tokenUsage": {
+              "total": {
+                "totalTokens": 6,
+                "inputTokens": 3,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 3,
+                "reasoningOutputTokens": 0
+              },
+              "last": {
+                "totalTokens": 2,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 1,
+                "reasoningOutputTokens": 0
+              },
+              "modelContextWindow": 258400
+            }
+          },
+          "emittedAtMs": 1792853990145
+        },
+        {
+          "method": "thread/status/changed",
+          "params": {
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "status": {
+              "type": "systemError"
+            }
+          },
+          "emittedAtMs": 1792853990150
+        },
+        {
+          "method": "error",
+          "params": {
+            "error": {
+              "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+              "codexErrorInfo": "usageLimitExceeded",
+              "additionalDetails": null,
+              "misalignment": null
+            },
+            "willRetry": false,
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5"
+          },
+          "emittedAtMs": 1792853990150
+        },
+        {
+          "method": "thread/readState/changed",
+          "params": {
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "readState": {
+              "firstUnread": {
+                "type": "turn",
+                "turnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5"
+              },
+              "revision": "2cac51cd-4430-4b3b-8cb6-5be4d3960891"
+            }
+          },
+          "emittedAtMs": 1792853990152
+        },
+        {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "01a16e6c-d16e-7ae0-acb5-90616aa8d6c1",
+            "turn": {
+              "id": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+              "rootTurnId": "01a16e6c-d254-7813-9d7a-75eb85d12ea5",
+              "items": [],
+              "itemsView": "notLoaded",
+              "status": "failed",
+              "error": {
+                "message": "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:59 PM.",
+                "codexErrorInfo": "usageLimitExceeded",
+                "additionalDetails": null,
+                "misalignment": null
+              },
+              "startedAt": 1792853987,
+              "completedAt": 1792853990,
+              "durationMs": 2222
+            }
+          },
+          "emittedAtMs": 1792853990152
+        }
+      ]
+    }
+  ]
+}
