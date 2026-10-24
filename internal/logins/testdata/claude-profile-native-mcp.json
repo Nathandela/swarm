@@ -1,0 +1,89 @@
+{
+  "native_sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+  "native_version": "2.1.310",
+  "native_writer": {
+    "mcpServers": {
+      "collision": {
+        "args": [
+          "/private/tmp/swarm-claude-config-20261024/config_probe.py",
+          "--mcp",
+          "user"
+        ],
+        "command": "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+      },
+      "useronly": {
+        "args": [
+          "/private/tmp/swarm-claude-config-20261024/config_probe.py",
+          "--mcp",
+          "useronly"
+        ],
+        "command": "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+      }
+    },
+    "projects": {
+      "/work": {
+        "mcpServers": {
+          "collision": {
+            "args": [
+              "/private/tmp/swarm-claude-config-20261024/config_probe.py",
+              "--mcp",
+              "local"
+            ],
+            "command": "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+          },
+          "localonly": {
+            "args": [
+              "/private/tmp/swarm-claude-config-20261024/config_probe.py",
+              "--mcp",
+              "localonly"
+            ],
+            "command": "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+          }
+        }
+      }
+    }
+  },
+  "receipt_sha256": "32d8009e23f422a68f3cfb4ef4f9fba4b9892e4d6b112411c1cd957052e9a248",
+  "source": {
+    "mcpServers": {
+      "collision": {
+        "args": [
+          "/private/tmp/swarm-claude-config-20261024/config_probe.py",
+          "--mcp",
+          "user"
+        ],
+        "command": "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+      },
+      "useronly": {
+        "args": [
+          "/private/tmp/swarm-claude-config-20261024/config_probe.py",
+          "--mcp",
+          "useronly"
+        ],
+        "command": "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+      }
+    },
+    "projects": {
+      "/work": {
+        "mcpServers": {
+          "collision": {
+            "args": [
+              "/private/tmp/swarm-claude-config-20261024/config_probe.py",
+              "--mcp",
+              "local"
+            ],
+            "command": "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+          },
+          "localonly": {
+            "args": [
+              "/private/tmp/swarm-claude-config-20261024/config_probe.py",
+              "--mcp",
+              "localonly"
+            ],
+            "command": "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+          }
+        }
+      }
+    }
+  }
+}

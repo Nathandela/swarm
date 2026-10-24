@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -125,8 +126,8 @@ func (s *Store) Home(provider string) string {
 	return filepath.Join(s.path, "provider", provider, "native")
 }
 
-// ProtectedHomes identifies native writers without exposing credentials. A
-// pending switch retains both outgoing and incoming canonical Claude homes.
+// ProtectedHomes identifies native writers without exposing credentials,
+// including retained Claude profiles and active/pending saved authorities.
 func (s *Store) ProtectedHomes(provider string) ([]string, error) {
 	if !validProvider(provider) {
 		return nil, ErrIneligible
@@ -138,6 +139,15 @@ func (s *Store) ProtectedHomes(provider string) ([]string, error) {
 	homes := []string{s.Home(provider)}
 	if provider == ProviderCodex {
 		return homes, nil
+	}
+	identities := make([]string, 0, len(r.ClaudeProfiles))
+	for identity := range r.ClaudeProfiles {
+		identities = append(identities, identity)
+	}
+	slices.Sort(identities)
+	for _, identity := range identities {
+		home, _ := s.ClaudeProfileHome(identity)
+		homes = append(homes, home)
 	}
 	ids := []string{r.Providers[provider].ActiveID}
 	if op, ok := r.Switches[provider]; ok {
@@ -292,7 +302,10 @@ func find(r *Registry, id string) *Login {
 	return nil
 }
 func validateRegistry(r Registry) error {
-	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6) || r.Providers == nil || r.Switches == nil {
+	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6 && r.SchemaVersion != claudeProfileSchemaVersion) || r.Providers == nil || r.Switches == nil {
+		return ErrIneligible
+	}
+	if !validClaudeProfiles(r) {
 		return ErrIneligible
 	}
 	if r.SchemaVersion < 3 && len(r.Handovers) != 0 {
@@ -323,7 +336,7 @@ func validateRegistry(r Registry) error {
 		seen[l.ID] = true
 	}
 	for p, st := range r.Providers {
-		if !validProvider(p) || st.Provider != p || (st.AuthOwnerMode != "" && (p != ProviderCodex || st.AuthOwnerMode != CodexNativeGrantMode || r.SchemaVersion < 2)) {
+		if !validProvider(p) || st.Provider != p || !validAuthOwnerMode(r, p, st.AuthOwnerMode) {
 			return ErrIneligible
 		}
 		if st.DesiredCredentialRevision != 0 && (p != ProviderCodex || r.SchemaVersion < 3 || !codexOwned(r, p)) {

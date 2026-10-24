@@ -91,6 +91,7 @@ type Switch struct {
 }
 
 type Registry struct {
+	ClaudeProfiles   map[string]ClaudeProfile `json:"claude_profiles,omitempty"`
 	Handovers        map[string]Handover      `json:"handovers,omitempty"`
 	SchemaVersion    int                      `json:"schema_version"`
 	Revision         uint64                   `json:"revision"`

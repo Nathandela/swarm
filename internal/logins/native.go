@@ -83,7 +83,7 @@ func (s *Store) readOptional(name string) ([]byte, error) {
 func (s *Store) nativeCredential(provider, loginID string) (Credential, error) {
 	if r, e := s.load(); e != nil {
 		return Credential{}, e
-	} else if codexOwned(r, provider) {
+	} else if codexOwned(r, provider) || claudeProfilesOwned(r, provider) {
 		return Credential{}, ErrPending
 	}
 	base := filepath.Join("provider", provider, "native")
@@ -101,7 +101,7 @@ func (s *Store) nativeCredential(provider, loginID string) (Credential, error) {
 func (s *Store) installCredential(provider string, c Credential) error {
 	if r, e := s.load(); e != nil {
 		return e
-	} else if codexOwned(r, provider) {
+	} else if codexOwned(r, provider) || claudeProfilesOwned(r, provider) {
 		return ErrPending
 	}
 	base := filepath.Join("provider", provider, "native")
@@ -310,6 +310,9 @@ func (s *Store) Runtime(provider string) (Runtime, error) {
 	return s.runtime(r, provider)
 }
 func (s *Store) runtime(r Registry, provider string) (Runtime, error) {
+	if claudeProfilesOwned(r, provider) {
+		return Runtime{}, ErrPending
+	}
 	p := r.Providers[provider]
 	l := find(&r, p.ActiveID)
 	if l == nil || l.AuthState != AuthReady {
