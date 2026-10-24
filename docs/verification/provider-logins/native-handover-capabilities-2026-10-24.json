@@ -5436,5 +5436,304 @@
       "The original independent sleep witness is also retained and labeled separately.",
       "No real credentials, discussions, global provider configuration or production activation changed."
     ]
+  },
+  "claude_auth_native_faults": {
+    "scope": "Three independent Go overlays on reviewed production helper paths; shared production files unchanged. R2 artifacts only.",
+    "cases": [
+      {
+        "case": "unpublished-pid",
+        "run": {
+          "stage": "/run/user/1000/swarm-product-auth.PyCHE0V1",
+          "unit": "swarm-product-auth-d2440d1b74038d5fbf69096a",
+          "case": "unpublished-pid",
+          "binary_sha256": "cd7223fc3a8f44cb4c1cb3daff9815bd738b3ba2e3d35e6262cd53aa98ca581b",
+          "verified_elf_machine": 62,
+          "exit_code": 0,
+          "elapsed_seconds": 2.061,
+          "log_sha256": "4d7c3646b04b735a4452cc3c918f30dba46b4ef4a2e5909030196f79547009a3"
+        },
+        "overlay_manifest_sha256": "53c2391a6c236e870143055f574ac5c5112a362f0eaf1ea75b802b2a47005a1d",
+        "receipt_sha256": "675362d8e103f5b201562dacb8dd1e46d892c180212ccaf347eba72f849b1835",
+        "phase": "ready",
+        "attempts": 1,
+        "refreshes": 0,
+        "profiles": 1,
+        "pre_recovery_phase": "ready",
+        "native_pid_published": false,
+        "pre_recovery_stop_proof": "scope-tree",
+        "unit_collected": true
+      },
+      {
+        "case": "containment-enospc",
+        "run": {
+          "stage": "/run/user/1000/swarm-product-auth.8Pemz3PB",
+          "unit": "swarm-product-auth-20f2d050f5f94947ad808a18",
+          "case": "containment-enospc",
+          "binary_sha256": "ae673fdf28d5866ea9bc1eec99fb2d6e6c518349615465dd272f5bf21beaca12",
+          "verified_elf_machine": 62,
+          "exit_code": 0,
+          "elapsed_seconds": 2.143,
+          "log_sha256": "dbbf00fc59cd18b1eb7ef855672752e96fa3be82cc025c48a182bcfd88749e19"
+        },
+        "overlay_manifest_sha256": "86d91f94d0358d69dfa63e0eb598f6bbe419f0e4cd43187c72e157a0898eb752",
+        "receipt_sha256": "86187073290aacc34bbb2204c3997dc17073d8fb1513e6c875fe73d80d11e00d",
+        "phase": "unready_recovered",
+        "attempts": 1,
+        "refreshes": 1,
+        "profiles": 2,
+        "pre_recovery_phase": "running",
+        "native_pid_published": true,
+        "pre_recovery_stop_proof": "",
+        "unit_collected": true
+      },
+      {
+        "case": "fast-exit",
+        "run": {
+          "stage": "/run/user/1000/swarm-product-auth.2kUHhZZq",
+          "unit": "swarm-product-auth-fc9ee229f34edff566ff1fab",
+          "case": "fast-exit",
+          "binary_sha256": "6fa2fb16edec127ed3cd35a4659f756312a9b8e7d896b80b62f4e8497865d575",
+          "verified_elf_machine": 62,
+          "exit_code": 0,
+          "elapsed_seconds": 1.671,
+          "log_sha256": "4f846d3cfac3c7e19bc8e8b779b6b1679803933d53943a6f9a1d4e53aa25c4b2"
+        },
+        "overlay_manifest_sha256": "1ddfe68d66e0eeabd61d990c337afebe70a72a485ef6c8768021cb47cc01d58b",
+        "receipt_sha256": "37922ac0a322ca9e3552263d54b73707199c1ba63979e817448ac643206c40ef",
+        "phase": "failed",
+        "attempts": 1,
+        "refreshes": 0,
+        "profiles": 0,
+        "pre_recovery_phase": "failed",
+        "native_pid_published": false,
+        "pre_recovery_stop_proof": "scope-tree",
+        "unit_collected": true
+      }
+    ],
+    "invariants": [
+      "Missing native PID publication authenticates only after fresh profile evidence plus positive whole-scope containment.",
+      "Injected live containment-receipt ENOSPC leaves running uncertainty; exact hook-hit evidence precedes outside recovery and renewed B2 is retained.",
+      "Successful native Start followed by checked immediate Kill produces failed scope-tree proof, never a no-start claim."
+    ],
+    "review": "Astra verified exact R2 source, mapping copies and binary hashes; root ran all three on Linux after verified-byte snapshots and remote hash checks. Host focused race and full Linux lint pass.",
+    "limits": [
+      "ENOSPC is injected at the containment receipt write; no physical full-filesystem claim.",
+      "No model/history continuity or actual cmd/swarm native-constructor qualification follows."
+    ],
+    "artifact_control": "An earlier unpublished-PID attempt was refused locally before effects because a producer had overwritten its frozen artifact. Subsequent runs copy immutable verified bytes and verify the remote copy. Future producer versions require new paths."
+  },
+  "codex_continuation_native_stage1": {
+    "scope": "Six finite scenarios on pinned0.163.0 Mac/Linux, not an integrated dispatcher or activation.",
+    "manifest_sha256": "4f18a146cbe85cba8471d6da28fd37dec0b7d2b3a3c3893b621978061b02c6f5",
+    "archive_sha256": "fdedf24069c41e6c06eb077c4771a7ec0c861422b21953dd5f12a6076ceeaf31",
+    "mac": {
+      "cases": [
+        {
+          "case": "owned-tui-remote-off",
+          "elapsed_seconds": 17.156,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "a31fa8e9945da63fe230ad2055edad58d371070ab628061963db5eb3bac6a3db"
+        },
+        {
+          "case": "empty-active-no-effect",
+          "elapsed_seconds": 10.595,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "dbc4e25b643b6df8ac6b9b7de22a52bca91f46684552224c260af7ac71a39404"
+        },
+        {
+          "case": "no-goal-empty-queue",
+          "elapsed_seconds": 7.453,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "c43174e0c03a7dade0110d084c3f199234f97bffd348db3cbd34197ad21e3097"
+        },
+        {
+          "case": "reserved-trigger",
+          "elapsed_seconds": 7.353,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "2bb1cd4ef5a6fccbcc5ba61fa2a9ec2d168b965d6e9da79ea4c6f8fd822e0425"
+        },
+        {
+          "case": "reserved-sleep",
+          "elapsed_seconds": 7.387,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "685793e5b69f78a9d3d1b958d37ddb94a34f59539ac8494eb570d79a15786cc6"
+        },
+        {
+          "case": "quota-b-successor",
+          "elapsed_seconds": 10.347,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "bcfbbdf3092274f7c0ca8b0b6a10a831646ffc4c470322bf5af7f1b09e0b75a8"
+        }
+      ],
+      "manifest_sha256": "4f18a146cbe85cba8471d6da28fd37dec0b7d2b3a3c3893b621978061b02c6f5",
+      "native_gate_closed": false,
+      "reserved_window": "uncharacterized",
+      "stage2_required_not_run": true,
+      "startup_helper_gate_open": true,
+      "validator_passed": true
+    },
+    "linux": {
+      "cases": [
+        {
+          "case": "owned-tui-remote-off",
+          "elapsed_seconds": 20.119,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "fc138fde045dfdcea8657f749dee04406b6388d0c5fcd8f1b66e988ede13d200"
+        },
+        {
+          "case": "empty-active-no-effect",
+          "elapsed_seconds": 11.555,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "7a98c265faf43f8798bb32a6fafd58fa79cff5d5498e9f01cdfebece09cf1d61"
+        },
+        {
+          "case": "no-goal-empty-queue",
+          "elapsed_seconds": 8.368,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "f1ace6f930cd50e69ff29d410ae15c2efe7af59a0435456357e1a8503210f6a3"
+        },
+        {
+          "case": "reserved-trigger",
+          "elapsed_seconds": 7.957,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "9f0e94303e6318b34ef98f62a3b8bc8060dd32d4a67b1cd2c77fd91d5ce04b3c"
+        },
+        {
+          "case": "reserved-sleep",
+          "elapsed_seconds": 8.352,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "877ea73863c5caefeaf7ecf959dd1a8dc02a20ae109b9e7a2d9d75f4a8c5fe21"
+        },
+        {
+          "case": "quota-b-successor",
+          "elapsed_seconds": 11.007,
+          "narrow_assertions_pass": true,
+          "receipt_sha256": "0a9addb7b50564c5d526194f0cfdc68d089a783e6120783417b4dd0a429ab11a"
+        }
+      ],
+      "manifest_sha256": "4f18a146cbe85cba8471d6da28fd37dec0b7d2b3a3c3893b621978061b02c6f5",
+      "native_gate_closed": false,
+      "reserved_window": "uncharacterized",
+      "stage2_required_not_run": true,
+      "startup_helper_gate_open": true,
+      "validator_passed": true
+    },
+    "linux_runner": {
+      "stage": "/run/user/1000/swarm-continuation.TrEVFvRu",
+      "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+      "manifest_sha256": "4f18a146cbe85cba8471d6da28fd37dec0b7d2b3a3c3893b621978061b02c6f5",
+      "runs": [
+        {
+          "case": "owned-tui-remote-off",
+          "unit": "swarm-continuation-75ad6f40e7fda96d0a030b53",
+          "exit_code": 0,
+          "elapsed_seconds": 20.954,
+          "receipt_sha256": "fc138fde045dfdcea8657f749dee04406b6388d0c5fcd8f1b66e988ede13d200"
+        },
+        {
+          "case": "empty-active-no-effect",
+          "unit": "swarm-continuation-32745b7d0d6a69560a0cf016",
+          "exit_code": 0,
+          "elapsed_seconds": 12.276,
+          "receipt_sha256": "7a98c265faf43f8798bb32a6fafd58fa79cff5d5498e9f01cdfebece09cf1d61"
+        },
+        {
+          "case": "no-goal-empty-queue",
+          "unit": "swarm-continuation-2d0fb13cd208d3e7e8f6f242",
+          "exit_code": 0,
+          "elapsed_seconds": 9.079,
+          "receipt_sha256": "f1ace6f930cd50e69ff29d410ae15c2efe7af59a0435456357e1a8503210f6a3"
+        },
+        {
+          "case": "reserved-trigger",
+          "unit": "swarm-continuation-ff1c0deab71aad8d07a973d3",
+          "exit_code": 0,
+          "elapsed_seconds": 8.683,
+          "receipt_sha256": "9f0e94303e6318b34ef98f62a3b8bc8060dd32d4a67b1cd2c77fd91d5ce04b3c"
+        },
+        {
+          "case": "reserved-sleep",
+          "unit": "swarm-continuation-4b06b7bb2fd2b5e77654e4a4",
+          "exit_code": 0,
+          "elapsed_seconds": 9.142,
+          "receipt_sha256": "877ea73863c5caefeaf7ecf959dd1a8dc02a20ae109b9e7a2d9d75f4a8c5fe21"
+        },
+        {
+          "case": "quota-b-successor",
+          "unit": "swarm-continuation-6b41afc96b05f3ae7f8116d3",
+          "exit_code": 0,
+          "elapsed_seconds": 12.131,
+          "receipt_sha256": "0a9addb7b50564c5d526194f0cfdc68d089a783e6120783417b4dd0a429ab11a"
+        }
+      ]
+    },
+    "quota_checks_linux": {
+      "native_status": "systemError",
+      "native_inactive": true,
+      "goal_null": true,
+      "queue_empty": true,
+      "queue_no_next_cursor": true,
+      "exact_quota_terminal": true,
+      "failed_turn_id": "01a16fba-c50b-7f90-8fdc-ef3d0d4a1601",
+      "adoption_account": "synthetic-b",
+      "ordinary_usage_allowed": true,
+      "distinct_successor": true,
+      "successor_turn_id": "01a16fba-d1ef-7de0-b277-d811da1a09f8",
+      "successor_native_started": true,
+      "successor_user_messages": 0,
+      "original_user_resend": false,
+      "exact_tool_result_hash_equal": true,
+      "tool_execution_count": 1
+    },
+    "exact_title_helper_exclusion": {
+      "source_review": "Astra GREEN for exact Feature(thread_title): temporary-thread controls and naming/UI metadata result only, no MAIN input/queue/goal operation.",
+      "linux_main_thread": "01a16fb9-cec8-7180-b429-81bea4c54c94",
+      "linux_helper": {
+        "method": "thread/start",
+        "requested_thread": null,
+        "ephemeral": true,
+        "model": "gpt-5.6-luna",
+        "returned_thread_id": "01a16fba-0285-7be1-9e4d-7d4ad52d6df4",
+        "returned_ephemeral": true,
+        "returned_thread_source": "thread_title",
+        "returned_model": "gpt-5.6-luna"
+      },
+      "scope": "Exact joined title helper only; inference completion is unnecessary. Other helpers and general startup/config scope remain open."
+    },
+    "retained_harness_corrections": [
+      "Exact quota may leave native inactive systemError rather than idle; it is accepted only with the exact failed-quota terminal.",
+      "WSS incremental frames may omit old user inputs; native user-message counts and absence of resend replace naive full-frame hash equality.",
+      "First Linux runner attempt used the wrong archive prefix and failed before any native invocation. Corrected final six runs and validator passed."
+    ],
+    "remaining": [
+      "Actual fresh TUI main-thread birth provenance: this harness created a fresh main then attached TUI by resume.",
+      "Loaded-per-thread configuration and refresh equivalence cannot be inferred from config/read(CWD).",
+      "Reserved active_turn/task=None remains uncharacterized; positive pre-risk lifetime exclusions are required for any supported production envelope.",
+      "Real dispatcher durability, physical fences, loss/Stop regressions and mandatory repeated same-task A\u2192B\u2192A lineage are not implemented by this packet."
+    ]
+  },
+  "full_repository_checkpoint_54682fcf": {
+    "run": {
+      "commit": "54682fcfb9b28324c7a00bc66bca72753f7c7a91",
+      "source": "/private/tmp/swarm-checkpoint-54682fcf-301bt_03",
+      "scope": "frozen full repository tests; no feature activation",
+      "exit_code": 1,
+      "elapsed_seconds": 1105.827,
+      "log": "/private/tmp/swarm-checkpoint-54682fcf-tests.jsonl"
+    },
+    "log_sha256": "5e1bae06a643f6d4dc6409d327af91f56ab0833a27c142e5d4ea6ca458637a55",
+    "package_results": {
+      "pass": 74,
+      "fail": 4,
+      "skip": 7
+    },
+    "skeleton_pass_seconds": 711.251,
+    "failures_and_followup": [
+      "android/gate tracking tests lacked .git in the frozen archive; actual Git-worktree package rerun passed6.027s.",
+      "loginworker conflicting-completion cleanup refused once;30isolated and two full package repetitions did not reproduce. Bounded census retry c1f87217 is independently tested, not a proven cause/fix.",
+      "tui options test expected removed automatic-continuation copy; corrected59b04f30 and focused suite passed0.315s.",
+      "verify reachability flags StartClaudeAuth/ReadClaudeAuth/RecoverClaudeAuth without production callers; actual consumer integration remains required. No allowlist or fake call added."
+    ],
+    "overall_full_repository_gate_green": false
   }
 }

@@ -67,8 +67,12 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	if scenario == "" {
 		scenario = "future"
 	}
-	if scenario != "future" && scenario != "expired" && scenario != "401" && scenario != "wrong-account" && scenario != "worker-kill" && scenario != "healthy-native" {
+	if scenario != "future" && scenario != "expired" && scenario != "401" && scenario != "wrong-account" && scenario != "worker-kill" && scenario != "healthy-native" && scenario != "unpublished-pid" && scenario != "containment-enospc" && scenario != "fast-exit" {
 		t.Fatal("unsupported synthetic case")
+	}
+	faultCase := scenario == "unpublished-pid" || scenario == "containment-enospc" || scenario == "fast-exit"
+	if faultCase && claudeAuthFaultOverlay != scenario {
+		t.Fatal("exact fault overlay binary required")
 	}
 	output := os.Getenv("SWARM_CLAUDE_AUTH_NATIVE_OUTPUT")
 	if !filepath.IsAbs(output) || filepath.Clean(output) != output {
@@ -97,7 +101,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		t.Fatal(err)
 	}
 	expiry := time.Now().Add(time.Hour)
-	if scenario == "expired" {
+	if scenario == "expired" || scenario == "containment-enospc" {
 		expiry = time.Now().Add(-time.Minute)
 	}
 	auth, _ := json.Marshal(map[string]any{"claudeAiOauth": map[string]any{"accessToken": "synthetic-access-B1", "refreshToken": "synthetic-refresh-B1", "expiresAt": expiry.UnixMilli(), "scopes": []string{"user:inference", "user:profile"}, "subscriptionType": "max", "rateLimitTier": "default_claude_max_5x"}})
@@ -203,7 +207,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Phase == "ready" || result.Phase == "failed" {
+		if result.Phase == "ready" || result.Phase == "failed" || (scenario == "containment-enospc" && result.Phase == "running" && !result.Scope.Worker.Alive()) {
 			break
 		}
 		select {
@@ -212,7 +216,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	expectedReady := scenario == "future" || scenario == "expired" || scenario == "healthy-native"
+	expectedReady := scenario == "future" || scenario == "expired" || scenario == "healthy-native" || scenario == "unpublished-pid"
 	if (result.Phase == "ready") != expectedReady {
 		t.Fatalf("unexpected native result phase %s", result.Phase)
 	}
@@ -225,23 +229,53 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	refreshes := proxy.refresh.Load()
 	expectedRefresh := int64(0)
 	expectedAttempt := 1
-	if scenario == "expired" {
+	if scenario == "expired" || scenario == "containment-enospc" {
 		expectedRefresh = 1
-		expectedAttempt = 2
+		if scenario == "expired" {
+			expectedAttempt = 2
+		}
 	}
-	if refreshes != expectedRefresh || result.Attempt != expectedAttempt || proxy.profiles.Load() < 1 {
+	if refreshes != expectedRefresh || result.Attempt != expectedAttempt || (scenario != "fast-exit" && proxy.profiles.Load() < 1) || (scenario == "fast-exit" && proxy.profiles.Load() != 0) {
 		t.Fatalf("unexpected refresh/profile confirmation: refresh=%d attempt=%d profile=%d", refreshes, result.Attempt, proxy.profiles.Load())
 	}
 	after, err := os.ReadFile(filepath.Join(authority, ".credentials.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scenario == "expired" {
+	if scenario == "expired" || scenario == "containment-enospc" {
 		if !strings.Contains(string(after), "synthetic-access-B2") || !strings.Contains(string(after), "synthetic-refresh-B2") {
 			t.Fatal("native renewal not preserved")
 		}
 	} else if !bytes.Equal(beforeCanonical, after) {
 		t.Fatal("nonrenewal changed canonical synthetic authority")
+	}
+	var faultProof claudeAuthFaultProof
+	if faultCase {
+		faultProof, err = readClaudeAuthFaultProof(config, result)
+		if err != nil {
+			t.Fatal("invalid exact fault intent proof")
+		}
+		switch scenario {
+		case "unpublished-pid":
+			if result.Phase != "ready" || result.Attempt != 1 || faultProof.Native != (processcontain.Identity{}) || faultProof.StopProof != "scope-tree" {
+				t.Fatal("unpublished PID lacked positive scope proof")
+			}
+		case "containment-enospc":
+			if err := readClaudeAuthFaultHit(config, result.Attempt); err != nil {
+				t.Fatal("containment ENOSPC injection point not observed")
+			}
+			if result.Phase != "running" || result.Scope.Worker.Alive() || faultProof.StopProof != "" || result.UnitRetired {
+				t.Fatal("failed containment write must retain unresolved intent")
+			}
+			unit, readErr := claudeAuthUnit(ctx, result.Scope.Unit)
+			if readErr != nil || unit["InvocationID"] != result.Scope.InvocationID || unit["ActiveState"] != "failed" {
+				t.Fatal("failed containment write lost retained invocation")
+			}
+		case "fast-exit":
+			if result.Phase != "failed" || faultProof.StopProof != "scope-tree" || faultProof.Native.Alive() {
+				t.Fatal("fast native exit requires positive scope proof, never no-start")
+			}
+		}
 	}
 	// A fresh verifier process receives only immutable config; it has no observer
 	// FDs or parent in-memory scope. The production verifier reloads durable Store.
@@ -257,7 +291,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		if err := recovery.Run(); err == nil {
 			break
 		}
-		if scenario != "worker-kill" || recoveryCtx.Err() != nil {
+		if (scenario != "worker-kill" && scenario != "containment-enospc") || recoveryCtx.Err() != nil {
 			t.Fatal("fresh-process production recovery failed; retain exact Store/unit proof")
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -305,7 +339,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	proxy.drain(t)
 	// Descendants may still run before recovery; the final traffic and authority
 	// assertions must follow positively verified unit retirement and collection.
-	if proxy.invalid.Load() || proxy.models.Load() != 0 || proxy.refresh.Load() != expectedRefresh {
+	if proxy.invalid.Load() || proxy.models.Load() != 0 || proxy.refresh.Load() != expectedRefresh || (scenario == "fast-exit" && proxy.profiles.Load() != 0) {
 		t.Fatal("unexpected native traffic before verified retirement")
 	}
 	finalCanonical, err := os.ReadFile(filepath.Join(authority, ".credentials.json"))
@@ -313,10 +347,10 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		t.Fatal("canonical authority changed during recovery")
 	}
 	phase := result.Phase
-	if scenario == "worker-kill" {
+	if scenario == "worker-kill" || scenario == "containment-enospc" {
 		phase = "unready_recovered"
 	}
-	summary := map[string]any{"passed": true, "case": scenario, "native_sha256": expected, "phase": phase, "attempts": result.Attempt, "refreshes": refreshes, "profiles": proxy.profiles.Load(), "inference_requests": proxy.models.Load(), "fresh_verifier": true, "same_authority_witness": "synthetic-sleep-not-native-discussion", "healthy_pid_unchanged": healthy.Alive(), "unit_collected": true, "scope": launched.Scope, "cmd_swarm_constructor_qualified": false, "initialized_native_responsive": scenario == "healthy-native", "native_witness": witnessBefore.Native}
+	summary := map[string]any{"passed": true, "case": scenario, "native_sha256": expected, "phase": phase, "attempts": result.Attempt, "refreshes": refreshes, "profiles": proxy.profiles.Load(), "inference_requests": proxy.models.Load(), "fresh_verifier": true, "same_authority_witness": "synthetic-sleep-not-native-discussion", "healthy_pid_unchanged": healthy.Alive(), "unit_collected": true, "scope": launched.Scope, "cmd_swarm_constructor_qualified": false, "initialized_native_responsive": scenario == "healthy-native", "native_witness": witnessBefore.Native, "fault_overlay": claudeAuthFaultOverlay, "fault_proof": faultProof}
 	data, _ := json.MarshalIndent(summary, "", "  ")
 	if err := os.WriteFile(filepath.Join(output, "receipt.json"), data, 0600); err != nil {
 		t.Fatal(err)
