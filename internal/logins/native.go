@@ -103,6 +103,18 @@ func (s *Store) installCredential(provider string, c Credential) error {
 		return e
 	} else if codexOwned(r, provider) || claudeProfilesOwned(r, provider) {
 		return ErrPending
+	} else if provider == ProviderClaude {
+		identity, err := ClaudeIdentity(c.Identity)
+		if err != nil {
+			return err
+		}
+		for _, l := range r.Logins {
+			if l.Provider == ProviderClaude && l.Identity == identity {
+				if err := s.claudeAuthMutationAllowed(l.ID); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	base := filepath.Join("provider", provider, "native")
 	if provider == ProviderCodex {
@@ -149,6 +161,9 @@ func (s *Store) claudeAuth(id string) ([]byte, error) {
 	return readPrivate(s.root, filepath.Join("saved", id, ".credentials.json"), maxCredentialBytes)
 }
 func (s *Store) writeClaudeAuth(id string, auth []byte) error {
+	if err := s.claudeAuthMutationAllowed(id); err != nil {
+		return err
+	}
 	current, e := s.claudeAuth(id)
 	if errors.Is(e, os.ErrNotExist) {
 		current = nil

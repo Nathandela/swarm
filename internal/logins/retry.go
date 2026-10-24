@@ -223,6 +223,11 @@ func (s *Store) RetargetSwitch(id string) error {
 }
 
 func (s *Store) stageCredential(name string, l Login, c Credential, jobID string) error {
+	if l.Provider == ProviderClaude {
+		if err := s.claudeAuthMutationAllowed(l.ID); err != nil {
+			return err
+		}
+	}
 	if jobID != "" && !validID(jobID) {
 		return ErrIneligible
 	}

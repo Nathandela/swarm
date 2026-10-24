@@ -3967,5 +3967,750 @@
       "Two separate inherited-context diagnostic runs are excluded; only sanitized runner results are listed as validation.",
       "Claude helper8, observer/continuation integration, native races and final broad/race gates remain open."
     ]
+  },
+  "claude_continuation_owner_setting": {
+    "scope": "Pinned2.1.310 native synthetic mode-specific qualification on macOSarm64/Linuxx86_64; no automatic continuation implemented or activated",
+    "mac_manifest_sha256": "8458912f6d7ecdc94d48c5c694c0efc99ee530b2435ca7e1371d2b9b6fff33fa",
+    "mac_results": [
+      {
+        "case": "false-quota-mutate",
+        "effective": false,
+        "native_auto_armed_surface": false,
+        "submitted_prompts": 1,
+        "primary_requests": 2,
+        "passed": true
+      },
+      {
+        "case": "true-quota",
+        "effective": true,
+        "native_auto_armed_surface": true,
+        "submitted_prompts": 1,
+        "primary_requests": 2,
+        "passed": true
+      },
+      {
+        "case": "false-question",
+        "effective": false,
+        "native_auto_armed_surface": false,
+        "submitted_prompts": 1,
+        "primary_requests": 1,
+        "passed": true
+      },
+      {
+        "case": "false-approval",
+        "effective": false,
+        "native_auto_armed_surface": false,
+        "submitted_prompts": 1,
+        "primary_requests": 1,
+        "passed": true
+      },
+      {
+        "case": "plugin-rewrite",
+        "effective": false,
+        "native_auto_armed_surface": false,
+        "submitted_prompts": 1,
+        "primary_requests": 2,
+        "passed": true
+      },
+      {
+        "case": "sdk-runtime-mutation",
+        "startup_effective": false,
+        "turn_and_quota_effective": true,
+        "apply_flag_settings": "success",
+        "update_settings": "refused",
+        "primary_requests": 1,
+        "passed": true
+      }
+    ],
+    "linux_initial_runs": [
+      {
+        "case": "selftest",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-selftest",
+        "exit_code": 0,
+        "elapsed_seconds": 2.105,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "script_sha256": {
+          "run_linux.py": "dc69827d79147bb92183e0fdf079b58e4082572a393272cc5c356f3f1baa65f1",
+          "run_cases.py": "7f2551c2e7015df14a1113bb83fee12ab2dd1d57388ad3c24b8b5a13cbe72bdb",
+          "adapted_native_probe.py": "84100e0c49a1d9a69946ea2f7b426f0aa9fb446d67ea77467093f846dce211c1",
+          "sdk_probe.py": "f6648cf8e3d567df05302cf66fe249d0e6bfd0220d2cca447019be7da5117ec5",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "check_receipts.py": "2ce6b53ebc9f8c98b79b86e7246bcc81346efb316cc0bf6c97a9a5275126734a",
+          "check_owner_receipts.py": "384b572eaaca42820fb2807ce94573d5f62c4be904b50acdeff09e5cc2dc73ee"
+        },
+        "log_sha256": "f51814af2c6276c658a087fd467dc875da2ab87152ccb83db5737bd942f486c2"
+      },
+      {
+        "case": "false-quota-mutate",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-false-quota-mutate",
+        "exit_code": 0,
+        "elapsed_seconds": 5.645,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "script_sha256": {
+          "run_linux.py": "dc69827d79147bb92183e0fdf079b58e4082572a393272cc5c356f3f1baa65f1",
+          "run_cases.py": "7f2551c2e7015df14a1113bb83fee12ab2dd1d57388ad3c24b8b5a13cbe72bdb",
+          "adapted_native_probe.py": "84100e0c49a1d9a69946ea2f7b426f0aa9fb446d67ea77467093f846dce211c1",
+          "sdk_probe.py": "f6648cf8e3d567df05302cf66fe249d0e6bfd0220d2cca447019be7da5117ec5",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "check_receipts.py": "2ce6b53ebc9f8c98b79b86e7246bcc81346efb316cc0bf6c97a9a5275126734a",
+          "check_owner_receipts.py": "384b572eaaca42820fb2807ce94573d5f62c4be904b50acdeff09e5cc2dc73ee"
+        },
+        "log_sha256": "213cf3bc182709b3b188714443d5989f6627e768835a1c8635bc14a107f2e20b"
+      },
+      {
+        "case": "true-quota",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-true-quota",
+        "exit_code": 0,
+        "elapsed_seconds": 5.656,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "script_sha256": {
+          "run_linux.py": "dc69827d79147bb92183e0fdf079b58e4082572a393272cc5c356f3f1baa65f1",
+          "run_cases.py": "7f2551c2e7015df14a1113bb83fee12ab2dd1d57388ad3c24b8b5a13cbe72bdb",
+          "adapted_native_probe.py": "84100e0c49a1d9a69946ea2f7b426f0aa9fb446d67ea77467093f846dce211c1",
+          "sdk_probe.py": "f6648cf8e3d567df05302cf66fe249d0e6bfd0220d2cca447019be7da5117ec5",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "check_receipts.py": "2ce6b53ebc9f8c98b79b86e7246bcc81346efb316cc0bf6c97a9a5275126734a",
+          "check_owner_receipts.py": "384b572eaaca42820fb2807ce94573d5f62c4be904b50acdeff09e5cc2dc73ee"
+        },
+        "log_sha256": "7d7e0d9046448cb183aa3798f6f67116f79f9ef84af8755d9415dd8beb7a9684"
+      },
+      {
+        "case": "false-question",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-false-question",
+        "exit_code": 0,
+        "elapsed_seconds": 4.597,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "script_sha256": {
+          "run_linux.py": "dc69827d79147bb92183e0fdf079b58e4082572a393272cc5c356f3f1baa65f1",
+          "run_cases.py": "7f2551c2e7015df14a1113bb83fee12ab2dd1d57388ad3c24b8b5a13cbe72bdb",
+          "adapted_native_probe.py": "84100e0c49a1d9a69946ea2f7b426f0aa9fb446d67ea77467093f846dce211c1",
+          "sdk_probe.py": "f6648cf8e3d567df05302cf66fe249d0e6bfd0220d2cca447019be7da5117ec5",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "check_receipts.py": "2ce6b53ebc9f8c98b79b86e7246bcc81346efb316cc0bf6c97a9a5275126734a",
+          "check_owner_receipts.py": "384b572eaaca42820fb2807ce94573d5f62c4be904b50acdeff09e5cc2dc73ee"
+        },
+        "log_sha256": "9ee81695068694dc7316c40f63be2e0dbf17a3bcd8c93b0761aabc3d03d30e9f"
+      },
+      {
+        "case": "false-approval",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-false-approval",
+        "exit_code": 0,
+        "elapsed_seconds": 4.614,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "script_sha256": {
+          "run_linux.py": "dc69827d79147bb92183e0fdf079b58e4082572a393272cc5c356f3f1baa65f1",
+          "run_cases.py": "7f2551c2e7015df14a1113bb83fee12ab2dd1d57388ad3c24b8b5a13cbe72bdb",
+          "adapted_native_probe.py": "84100e0c49a1d9a69946ea2f7b426f0aa9fb446d67ea77467093f846dce211c1",
+          "sdk_probe.py": "f6648cf8e3d567df05302cf66fe249d0e6bfd0220d2cca447019be7da5117ec5",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "check_receipts.py": "2ce6b53ebc9f8c98b79b86e7246bcc81346efb316cc0bf6c97a9a5275126734a",
+          "check_owner_receipts.py": "384b572eaaca42820fb2807ce94573d5f62c4be904b50acdeff09e5cc2dc73ee"
+        },
+        "log_sha256": "45924626a00ea216e29462926e03d8e24ff23815415913e489d02c0b4292688b"
+      },
+      {
+        "case": "plugin-rewrite",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-plugin-rewrite",
+        "exit_code": 0,
+        "elapsed_seconds": 5.649,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "script_sha256": {
+          "run_linux.py": "dc69827d79147bb92183e0fdf079b58e4082572a393272cc5c356f3f1baa65f1",
+          "run_cases.py": "7f2551c2e7015df14a1113bb83fee12ab2dd1d57388ad3c24b8b5a13cbe72bdb",
+          "adapted_native_probe.py": "84100e0c49a1d9a69946ea2f7b426f0aa9fb446d67ea77467093f846dce211c1",
+          "sdk_probe.py": "f6648cf8e3d567df05302cf66fe249d0e6bfd0220d2cca447019be7da5117ec5",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "check_receipts.py": "2ce6b53ebc9f8c98b79b86e7246bcc81346efb316cc0bf6c97a9a5275126734a",
+          "check_owner_receipts.py": "384b572eaaca42820fb2807ce94573d5f62c4be904b50acdeff09e5cc2dc73ee"
+        },
+        "log_sha256": "b48ae56e63300c40f9c3f7d4278e84740da1404565dff62151ab63b3efab3287"
+      },
+      {
+        "case": "sdk",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-sdk",
+        "exit_code": 0,
+        "elapsed_seconds": 3.646,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "script_sha256": {
+          "run_linux.py": "dc69827d79147bb92183e0fdf079b58e4082572a393272cc5c356f3f1baa65f1",
+          "run_cases.py": "7f2551c2e7015df14a1113bb83fee12ab2dd1d57388ad3c24b8b5a13cbe72bdb",
+          "adapted_native_probe.py": "84100e0c49a1d9a69946ea2f7b426f0aa9fb446d67ea77467093f846dce211c1",
+          "sdk_probe.py": "f6648cf8e3d567df05302cf66fe249d0e6bfd0220d2cca447019be7da5117ec5",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "check_receipts.py": "2ce6b53ebc9f8c98b79b86e7246bcc81346efb316cc0bf6c97a9a5275126734a",
+          "check_owner_receipts.py": "384b572eaaca42820fb2807ce94573d5f62c4be904b50acdeff09e5cc2dc73ee"
+        },
+        "log_sha256": "3ec128326a03b42f5f9ff84d0d1797b7438ee9bf68bfbc99931167b7588a35f3"
+      },
+      {
+        "case": "validate",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-validate",
+        "exit_code": 1,
+        "elapsed_seconds": 0.448,
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "script_sha256": {
+          "run_linux.py": "dc69827d79147bb92183e0fdf079b58e4082572a393272cc5c356f3f1baa65f1",
+          "run_cases.py": "7f2551c2e7015df14a1113bb83fee12ab2dd1d57388ad3c24b8b5a13cbe72bdb",
+          "adapted_native_probe.py": "84100e0c49a1d9a69946ea2f7b426f0aa9fb446d67ea77467093f846dce211c1",
+          "sdk_probe.py": "f6648cf8e3d567df05302cf66fe249d0e6bfd0220d2cca447019be7da5117ec5",
+          "native_probe.py": "c32a79f5803f58fa7024fa06814763f3381db39c58155461e1e016ea0146d135",
+          "eligibility.py": "91816445c6142613c07653b534483366e11633a0297c4cbefd618ca45cd244a3",
+          "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b",
+          "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+          "check_receipts.py": "2ce6b53ebc9f8c98b79b86e7246bcc81346efb316cc0bf6c97a9a5275126734a",
+          "check_owner_receipts.py": "384b572eaaca42820fb2807ce94573d5f62c4be904b50acdeff09e5cc2dc73ee"
+        },
+        "log_sha256": "12d0c73cda3bff645dae0dbe555b3d4b89451d0c6684c430056d5bfa9cd6f4be"
+      }
+    ],
+    "linux_capture_wait_correction": [
+      {
+        "case": "sdk-wait",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-sdk-wait",
+        "exit_code": 0,
+        "elapsed_seconds": 3.111,
+        "sdk_probe_sha256": "46f63a390082a5003885e52cc3c43bae91aa667f0c7aaa9cc0e755feb86b12a9",
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "e40e597535640257eee5e650a8d2d653e93e81dac19e54e241376cfc7318f137"
+      },
+      {
+        "case": "validate-wait",
+        "stage": "/run/user/1000/swarm-claude-owner.5NFFnpI8",
+        "unit": "swarm-native-claude-owner-5NFFnpI8-validate-wait",
+        "exit_code": 0,
+        "elapsed_seconds": 0.4,
+        "sdk_probe_sha256": "46f63a390082a5003885e52cc3c43bae91aa667f0c7aaa9cc0e755feb86b12a9",
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "log_sha256": "403bceb1a60e448e7933dd8df4f5a6475113b0df14e70dbff10f43d018a4ef04"
+      }
+    ],
+    "linux_validated_results": [
+      {
+        "case": "false-quota-mutate",
+        "effective": false,
+        "native_auto_armed_surface": false,
+        "submitted_prompts": 1,
+        "primary_requests": 2,
+        "passed": true
+      },
+      {
+        "case": "true-quota",
+        "effective": true,
+        "native_auto_armed_surface": true,
+        "submitted_prompts": 1,
+        "primary_requests": 2,
+        "passed": true
+      },
+      {
+        "case": "false-question",
+        "effective": false,
+        "native_auto_armed_surface": false,
+        "submitted_prompts": 1,
+        "primary_requests": 1,
+        "passed": true
+      },
+      {
+        "case": "false-approval",
+        "effective": false,
+        "native_auto_armed_surface": false,
+        "submitted_prompts": 1,
+        "primary_requests": 1,
+        "passed": true
+      },
+      {
+        "case": "plugin-rewrite",
+        "effective": false,
+        "native_auto_armed_surface": false,
+        "submitted_prompts": 1,
+        "primary_requests": 2,
+        "passed": true
+      },
+      {
+        "case": "sdk-runtime-mutation",
+        "startup_effective": false,
+        "turn_and_quota_effective": true,
+        "apply_flag_settings": "success",
+        "update_settings": "refused",
+        "primary_requests": 1,
+        "passed": true
+      }
+    ],
+    "capture_race": "Initial Linux SDK command succeeded but finalvalidator failed: failure capture existed later on disk but was absent from savedreceipt. Preserved failed receipt/script; fixed bounded wait within original18sdeadline, reran freshMac/LinuxSDK then revalidated all6Linuxcases.",
+    "findings": [
+      "Interactive TUI invocationfalse wins ordinary user/project/local settings and remainsfalse after observed live user/local rewrites at native start/step/quota callbacks.",
+      "Positive true control auto-arms; question/approval cases retain one original prompt/request and receive no continuation input.",
+      "TUI config/plugin writer cannot toggle the flag-owned key; pinned RemoteControl handler source restricts flag patches to effort/ultracode.",
+      "SDK stream-json differs: supported apply_flag_settings changesfalse\u2192true in the sameprocess; startupargv alone is not universal immutability.",
+      "Source-specific settings.read is still hook-rewritable. Raw event.layers in an actually-running handler is host-stamped; observer execution, freshness and ordering still need qualification.",
+      "No supported per-invocation first-observer placement or complete function-module census was established; unknown relevant producers cannot silently inherit the narrow proof."
+    ],
+    "limitations": [
+      "RemoteControl key filter is source-qualified, not an authenticated live bridge experiment.",
+      "Postterminal observation is bounded; reset is onehouraway, no hourlong realresetcanary.",
+      "Arbitrary third-party relevant hooks, rawlayercapture, pluginreload/producerloss and actual continuation admission remain integration gates.",
+      "No real account, provider inference, installedCLI or live discussion changed."
+    ],
+    "report_sha256": "8bf3228edc5472cdd31402693ec4cae6c86a5556c30a4a41548f4b6dc0a8f227",
+    "producer_census_report_sha256": "45a8196fd7c0e3eee2b91794207426d059ae94441d51ee423d96143c48688f71"
+  },
+  "claude_helper_kernel_boundary_candidate": {
+    "scope": "Synthetic Linux/systemd249 capability probe only; no production worker implementation or activation",
+    "run": {
+      "stage": "/run/user/1000/swarm-claude-kernel.VdArFkMz",
+      "script_sha256": "06269f99cd4f6fd2d6531f3ab8a2036af236239947f7657b8d6ce0438eb772ea",
+      "exit_code": 0,
+      "elapsed_seconds": 0.555,
+      "log_sha256": "f0c544f7cc593b60c39708eb6f019afd33648cfdb36af17c8af006da0995cb56",
+      "receipt": {
+        "containment": "observed-pinned-kernel-group-deleted",
+        "elapsed_seconds": 0.161,
+        "escaped": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-717d511553dc576a64edf5338625ed23.service",
+          "env_keys": [
+            "LC_CTYPE",
+            "PATH"
+          ],
+          "pid": 4010032,
+          "sid": 4010032,
+          "start": 64851064,
+          "state": "R"
+        },
+        "exit_lifecycle": "systemd249-implicit-main",
+        "healthy": {
+          "pid": 4010027,
+          "start": 64851057,
+          "state": "R"
+        },
+        "healthy_cgroup": "/user.slice/user-1000.slice/session-3696.scope",
+        "kernel_group": {
+          "boot_id": "263c7193-9479-4790-a206-b1b539c0611f",
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-717d511553dc576a64edf5338625ed23.service",
+          "device": 30,
+          "inode": 4919968,
+          "invocation": "ce9ca87ec62e4150a25b90ca379def4a",
+          "mount_id": 35
+        },
+        "loaded_unit_reuse_rejected": true,
+        "manager_version": "Version=249.11-0ubuntu3.23",
+        "nonce": "717d511553dc576a64edf5338625ed23",
+        "passed": true,
+        "root": "/run/user/1000/swarm-claude-tree-_1lpoxba",
+        "stale_generation_rejected": true,
+        "systemd": "systemd 249 (249.11-0ubuntu3.23)",
+        "unit": "swarm-claude-tree-717d511553dc576a64edf5338625ed23.service",
+        "unit_after": {
+          "ActiveState": "failed",
+          "ControlGroup": "",
+          "Delegate": "no",
+          "Id": "swarm-claude-tree-717d511553dc576a64edf5338625ed23.service",
+          "InvocationID": "ce9ca87ec62e4150a25b90ca379def4a",
+          "Job": "",
+          "KillMode": "control-group",
+          "LoadState": "loaded",
+          "MainPID": "0",
+          "NRestarts": "0",
+          "Restart": "no",
+          "RestartForceExitStatus": "",
+          "RuntimeMaxUSec": "18s",
+          "SendSIGKILL": "yes",
+          "SubState": "failed",
+          "TimeoutStopUSec": "1s",
+          "Transient": "yes",
+          "Type": "exec"
+        },
+        "unit_before": {
+          "ActiveState": "active",
+          "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-717d511553dc576a64edf5338625ed23.service",
+          "Delegate": "no",
+          "Id": "swarm-claude-tree-717d511553dc576a64edf5338625ed23.service",
+          "InvocationID": "ce9ca87ec62e4150a25b90ca379def4a",
+          "Job": "",
+          "KillMode": "control-group",
+          "LoadState": "loaded",
+          "MainPID": "4010029",
+          "NRestarts": "0",
+          "Restart": "no",
+          "RestartForceExitStatus": "",
+          "RuntimeMaxUSec": "18s",
+          "SendSIGKILL": "yes",
+          "SubState": "running",
+          "TimeoutStopUSec": "1s",
+          "Transient": "yes",
+          "Type": "exec"
+        },
+        "worker": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-717d511553dc576a64edf5338625ed23.service",
+          "invocation": "ce9ca87ec62e4150a25b90ca379def4a",
+          "pid": 4010029,
+          "start": 64851057,
+          "state": "R"
+        }
+      }
+    },
+    "findings": [
+      "Observed exact worker/unit InvocationID and cgroup mount/device/inode under same boot before releasing synthetic effect claim.",
+      "Killing only the worker caused systemd to contain a double-forked descendant that changed session and exec-cleared its environment.",
+      "A separate healthy process outside that cgroup retained its PID/start and remained alive.",
+      "Kernel deletion of the originally held cgroup was positively observed; same failed unit InvocationID and no pending restart/job remained.",
+      "Loaded-unit replacement was refused; mutated scope-generation tuple controls were rejected."
+    ],
+    "limitations": [
+      "This first probe retained original cgroup descriptors across worker death; daemon-restart reconstruction from durable binding remains to qualify.",
+      "No provider CLI or real credential was used; shared-authority refresh/actual native worker canaries remain pending.",
+      "Cgroup migration or external user-manager manipulation is outside this probe; ProtectControlGroups is not assumed effective in user services.",
+      "Missing unobserved paths never count as stop proof. Mac/otherLinux activation remains unsupported until separately qualified.",
+      "Managed ConfigChange hooks and executable policy helpers remain possible under safe-mode plus await-claim. A helper cgroup does not contain separately delegated service-manager work. This is a legitimate operational exception, not merely hostile same-UID behavior.",
+      "The fresh verifier refuses missing units, changed manager peers, unknown group provenance and changed invocations. No user service manager was restarted in qualification. The changed-manager negative alters only the synthetic expected tuple.",
+      "No production helper implementation or platform activation is authorized by these synthetic receipts."
+    ],
+    "sources": [
+      "https://www.freedesktop.org/software/systemd/man/249/systemd.service.html",
+      "https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html",
+      "https://docs.kernel.org/admin-guide/cgroup-v2.html#un-populated-notification"
+    ],
+    "fresh_verifier_followup": {
+      "stage": "/run/user/1000/swarm-claude-kernel.6889q1yL",
+      "script_sha256": "1c304af8e75ffd9dd82125970d6794bdcb92783e753b28ca54fd8b9f644dcf65",
+      "exit_code": 0,
+      "elapsed_seconds": 5.045,
+      "log_sha256": "b251d9886c96a5032fd588b689ba9e14e11a41a2c68cde0c6dc3187414ec7b57",
+      "receipt": {
+        "active_verifier_refused": {
+          "accepted": false,
+          "current_mount_id": 35,
+          "inherited_cgroup_fds": [],
+          "manager_peer": {
+            "bus_id": "fd2588409f7eee70423ee1436ad3109a",
+            "owner": ":1.0",
+            "pid": 879,
+            "start": 2377
+          },
+          "reason": "unit-not-quiescent",
+          "unit_state": {
+            "ActiveState": "active",
+            "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+            "Delegate": "no",
+            "Id": "swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+            "InvocationID": "404ee90d0393468db8c4874b92b8595f",
+            "Job": "",
+            "KillMode": "control-group",
+            "LoadState": "loaded",
+            "MainPID": "4020229",
+            "NRestarts": "0",
+            "Restart": "no",
+            "RestartForceExitStatus": "",
+            "SubState": "running",
+            "Transient": "yes"
+          },
+          "verifier_pid": 4020239
+        },
+        "containment": "observed-pinned-kernel-group-deleted",
+        "elapsed_seconds": 4.653,
+        "escaped": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+          "env_keys": [
+            "LC_CTYPE",
+            "PATH"
+          ],
+          "pid": 4020241,
+          "sid": 4020241,
+          "start": 64998357,
+          "state": "R"
+        },
+        "exit_lifecycle": "systemd249-implicit-main",
+        "fresh_verifier": {
+          "accepted": true,
+          "current_mount_id": 35,
+          "inherited_cgroup_fds": [],
+          "manager_peer": {
+            "bus_id": "fd2588409f7eee70423ee1436ad3109a",
+            "owner": ":1.0",
+            "pid": 879,
+            "start": 2377
+          },
+          "reason": "fresh-exact-invocation-retired-previously-observed-cgroup",
+          "unit_state": {
+            "ActiveState": "failed",
+            "ControlGroup": "",
+            "Delegate": "no",
+            "Id": "swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+            "InvocationID": "404ee90d0393468db8c4874b92b8595f",
+            "Job": "",
+            "KillMode": "control-group",
+            "LoadState": "loaded",
+            "MainPID": "0",
+            "NRestarts": "0",
+            "Restart": "no",
+            "RestartForceExitStatus": "",
+            "SubState": "failed",
+            "Transient": "yes"
+          },
+          "verifier_pid": 4020251
+        },
+        "healthy": {
+          "pid": 4020162,
+          "start": 64998146,
+          "state": "R"
+        },
+        "healthy_cgroup": "/user.slice/user-1000.slice/session-3707.scope",
+        "kernel_group": {
+          "boot_id": "263c7193-9479-4790-a206-b1b539c0611f",
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+          "device": 30,
+          "inode": 4921825,
+          "invocation": "404ee90d0393468db8c4874b92b8595f",
+          "manager_peer": {
+            "bus_id": "fd2588409f7eee70423ee1436ad3109a",
+            "owner": ":1.0",
+            "pid": 879,
+            "start": 2377
+          },
+          "mount_id": 35,
+          "observed_active_invocation": true,
+          "observed_populated_one": true,
+          "unit": "swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+          "worker": {
+            "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+            "invocation": "404ee90d0393468db8c4874b92b8595f",
+            "pid": 4020229,
+            "start": 64998347,
+            "state": "R"
+          }
+        },
+        "loaded_unit_reuse_rejected": true,
+        "manager_peer_change_refused": {
+          "accepted": false,
+          "current_mount_id": 35,
+          "inherited_cgroup_fds": [],
+          "manager_peer": {
+            "bus_id": "fd2588409f7eee70423ee1436ad3109a",
+            "owner": ":1.0",
+            "pid": 879,
+            "start": 2377
+          },
+          "reason": "changed-manager-peer",
+          "verifier_pid": 4020269
+        },
+        "manager_version": "Version=249.11-0ubuntu3.23",
+        "nonce": "eaedb237377e69d6ff41c8a9dec5c8db",
+        "observer_fds_closed_before_verifier": true,
+        "passed": true,
+        "queued_restart_refused": {
+          "accepted": false,
+          "current_mount_id": 35,
+          "inherited_cgroup_fds": [],
+          "manager_peer": {
+            "bus_id": "fd2588409f7eee70423ee1436ad3109a",
+            "owner": ":1.0",
+            "pid": 879,
+            "start": 2377
+          },
+          "reason": "pending-unit-job",
+          "unit_state": {
+            "ActiveState": "activating",
+            "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+            "Delegate": "no",
+            "Id": "swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+            "InvocationID": "d81fadc21a0140caaeaa53a4d2166099",
+            "Job": "515235",
+            "KillMode": "control-group",
+            "LoadState": "loaded",
+            "MainPID": "0",
+            "NRestarts": "0",
+            "Restart": "no",
+            "RestartForceExitStatus": "",
+            "SubState": "start-pre",
+            "Transient": "yes"
+          },
+          "verifier_pid": 4020276
+        },
+        "restarted_invocation_refused": {
+          "accepted": false,
+          "current_mount_id": 35,
+          "inherited_cgroup_fds": [],
+          "manager_peer": {
+            "bus_id": "fd2588409f7eee70423ee1436ad3109a",
+            "owner": ":1.0",
+            "pid": 879,
+            "start": 2377
+          },
+          "reason": "stale-invocation",
+          "unit_state": {
+            "ActiveState": "failed",
+            "ControlGroup": "",
+            "Delegate": "no",
+            "Id": "swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+            "InvocationID": "d81fadc21a0140caaeaa53a4d2166099",
+            "Job": "",
+            "KillMode": "control-group",
+            "LoadState": "loaded",
+            "MainPID": "0",
+            "NRestarts": "0",
+            "Restart": "no",
+            "RestartForceExitStatus": "",
+            "SubState": "failed",
+            "Transient": "yes"
+          },
+          "verifier_pid": 4020327
+        },
+        "root": "/run/user/1000/swarm-claude-tree-xd5ytk5r",
+        "stale_bound_refused": {
+          "accepted": false,
+          "current_mount_id": 35,
+          "inherited_cgroup_fds": [],
+          "manager_peer": {
+            "bus_id": "fd2588409f7eee70423ee1436ad3109a",
+            "owner": ":1.0",
+            "pid": 879,
+            "start": 2377
+          },
+          "reason": "stale-invocation",
+          "unit_state": {
+            "ActiveState": "failed",
+            "ControlGroup": "",
+            "Delegate": "no",
+            "Id": "swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+            "InvocationID": "404ee90d0393468db8c4874b92b8595f",
+            "Job": "",
+            "KillMode": "control-group",
+            "LoadState": "loaded",
+            "MainPID": "0",
+            "NRestarts": "0",
+            "Restart": "no",
+            "RestartForceExitStatus": "",
+            "SubState": "failed",
+            "Transient": "yes"
+          },
+          "verifier_pid": 4020263
+        },
+        "stale_generation_rejected": true,
+        "systemd": "systemd 249 (249.11-0ubuntu3.23)",
+        "unit": "swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+        "unit_after": {
+          "ActiveState": "failed",
+          "ControlGroup": "",
+          "Delegate": "no",
+          "Id": "swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+          "InvocationID": "404ee90d0393468db8c4874b92b8595f",
+          "Job": "",
+          "KillMode": "control-group",
+          "LoadState": "loaded",
+          "MainPID": "0",
+          "NRestarts": "0",
+          "Restart": "no",
+          "RestartForceExitStatus": "",
+          "RuntimeMaxUSec": "18s",
+          "SendSIGKILL": "yes",
+          "SubState": "failed",
+          "TimeoutStopUSec": "1s",
+          "Transient": "yes",
+          "Type": "exec"
+        },
+        "unit_before": {
+          "ActiveState": "active",
+          "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+          "Delegate": "no",
+          "Id": "swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+          "InvocationID": "404ee90d0393468db8c4874b92b8595f",
+          "Job": "",
+          "KillMode": "control-group",
+          "LoadState": "loaded",
+          "MainPID": "4020229",
+          "NRestarts": "0",
+          "Restart": "no",
+          "RestartForceExitStatus": "",
+          "RuntimeMaxUSec": "18s",
+          "SendSIGKILL": "yes",
+          "SubState": "running",
+          "TimeoutStopUSec": "1s",
+          "Transient": "yes",
+          "Type": "exec"
+        },
+        "unobserved_refused": {
+          "accepted": false,
+          "inherited_cgroup_fds": [],
+          "reason": "never-observed-binding",
+          "verifier_pid": 4020262
+        },
+        "worker": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-claude-tree-eaedb237377e69d6ff41c8a9dec5c8db.service",
+          "invocation": "404ee90d0393468db8c4874b92b8595f",
+          "pid": 4020229,
+          "start": 64998347,
+          "state": "R"
+        }
+      },
+      "scope": "Synthetic ordinary descendant custody and fresh-verifier recovery only; no native CLI or credentials. All original observer file descriptors were closed before verification."
+    },
+    "failed_probe_preserved": {
+      "stage": "/run/user/1000/swarm-claude-kernel.db2iIWMb",
+      "script_sha256": "d7cf98ea038a958fe12da111f4da6e834905808654380cf666bbd5232e821bce",
+      "exit_code": 1,
+      "elapsed_seconds": 2.423,
+      "log_sha256": "fc713e597f4c34e4538539bc38ccd6ee919686a95256987c8bbb2d85f2840c0c",
+      "cause": "The 2-second command timeout equaled the intentional 2-second ExecStartPre delay. Only initial startup timeout changed to 4 seconds; overall bounds stayed unchanged. The exact failed unit exited independently and was retired after matching its invocation, command and stopped state."
+    }
+  },
+  "claude_auth_store_checkpoint": {
+    "scope": "Schema-8 Store protocol only; native worker, crash recovery integration and activation excluded.",
+    "review": "Independent Astra rereview GREEN after five production corrections and a UID0 permission-fixture guard; root connected review completed.",
+    "focused_tests": "31 auth tests PASS; focused race PASS 19.971 seconds; package vet and lint PASS.",
+    "full_login_package": {
+      "command": "python3 /private/tmp/swarm-login-go.py test ./internal/logins -count=1 -timeout=8m",
+      "exit_code": 0,
+      "elapsed_seconds": 96.988,
+      "scope": "Compiled before final comment and UID0 fixture-only correction; no production behavior changed afterward."
+    },
+    "source_sha256": {
+      "internal/logins/claude_auth.go": "a2a6a6e6a44739120d448bd768cce558902157ca24d4aaab3346347b52490d02",
+      "internal/logins/claude_auth_test.go": "3b30d2fb9aa45bf9634f88cd7bbac3b4bfdd60ba6336e0605ea37f8f4519fe3d",
+      "internal/logins/store.go": "ca5c1a1acfeab51946a1a4d463651cedb37a9011e6b18f550b9831bc1438977e",
+      "internal/logins/capture.go": "cdc1737ebad24a0f1ff0ac9a5c46ef52b3b5311083f1dbe94e62d75777395320",
+      "internal/logins/credentials.go": "169dd7d647f39d3c90607ce908df472383081529593632258b6e28dfcbe2ac6f",
+      "internal/logins/native.go": "78665e563ae789fd63e23715f316b82062d65cc3064d025df8d7a3a0e556db1a",
+      "internal/logins/relogin.go": "2301830835e29113b9bc37e7dda9e44bf58efd941884d5ba60a7acf4de3c78b2",
+      "internal/logins/retry.go": "684de7f6d84a23a3f8366e5925b8bd8b5c2253cc09d81b1ce39fdcee1f0dfb6c"
+    },
+    "limits": [
+      "No live account or discussion was touched.",
+      "Fast native exit before identity publication and worker loss before durable containment remain integration gates.",
+      "No full repository suite was rerun for this Store-only checkpoint."
+    ],
+    "review_fixture_followup": {
+      "command": "python3 /private/tmp/swarm-login-go.py test ./internal/logins -run ^TestClaudeAuthPartialPayloadCleanupKeepsDurableAuthorityAcrossReopen$ -count=1 -timeout=60s",
+      "elapsed_seconds": 1.028,
+      "exit_code": 0
+    },
+    "build": "Sanitized go build ./... passed after final Store and fixture changes."
   }
 }

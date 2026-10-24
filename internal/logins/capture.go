@@ -10,6 +10,11 @@ import (
 // captureCredential distinguishes native signout from corruption. Absent or
 // explicitly cleared grants cannot overwrite the last good saved snapshot.
 func (s *Store) captureCredential(l Login) (Credential, bool, error) {
+	if l.Provider == ProviderClaude {
+		if err := s.claudeAuthMutationAllowed(l.ID); err != nil {
+			return Credential{}, false, err
+		}
+	}
 	if _, e := checkRelative(s.root, filepath.Join("provider", l.Provider, "native"), true); e != nil {
 		return Credential{}, false, e
 	}

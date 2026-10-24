@@ -27,10 +27,14 @@ type Store struct {
 	writeOps     writeOps
 }
 
-func Open(stateRoot string) (*Store, error)         { return open(stateRoot, false) }
-func OpenReadOnly(stateRoot string) (*Store, error) { return open(stateRoot, true) }
+func Open(stateRoot string) (*Store, error)         { return open(stateRoot, false, false) }
+func OpenReadOnly(stateRoot string) (*Store, error) { return open(stateRoot, true, true) }
 
-func open(stateRoot string, readOnly bool) (_ *Store, err error) {
+// OpenExisting attaches a writable worker without bootstrapping before its claim.
+func OpenExisting(stateRoot string) (*Store, error) { return open(stateRoot, false, true) }
+
+func open(stateRoot string, readOnly, existingOnly bool) (_ *Store, err error) {
+	bootstrap := !readOnly && !existingOnly
 	if checkAbsolute(stateRoot, true) != nil {
 		return nil, ErrUnsafePath
 	}
@@ -47,7 +51,7 @@ func open(stateRoot string, readOnly bool) (_ *Store, err error) {
 		return nil, err
 	}
 	defer func() { _ = state.Close() }()
-	if !readOnly {
+	if bootstrap {
 		if err = state.Mkdir("logins", 0700); err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
@@ -69,7 +73,7 @@ func open(stateRoot string, readOnly bool) (_ *Store, err error) {
 			_ = s.Close()
 		}
 	}()
-	if !readOnly {
+	if bootstrap {
 		for _, dir := range []string{"saved", "pending", "provider", "enrollment", "provider/claude", "provider/codex", "provider/claude/native", "provider/codex/native"} {
 			if err = mkdirPrivate(root, dir, writeOps{}); err != nil {
 				return nil, err
@@ -78,7 +82,10 @@ func open(stateRoot string, readOnly bool) (_ *Store, err error) {
 	}
 	flags := os.O_RDONLY
 	if !readOnly {
-		flags = os.O_CREATE | os.O_RDWR
+		flags = os.O_RDWR
+		if bootstrap {
+			flags |= os.O_CREATE
+		}
 	}
 	s.lock, err = root.OpenFile(".registry-lock", flags|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
 	if err != nil {
@@ -88,7 +95,7 @@ func open(stateRoot string, readOnly bool) (_ *Store, err error) {
 	if err != nil || !privateInfo(info, false) {
 		return nil, ErrUnsafePath
 	}
-	if !readOnly {
+	if bootstrap {
 		err = s.locked(func() error {
 			_, e := s.load()
 			if errors.Is(e, os.ErrNotExist) {
@@ -302,7 +309,7 @@ func find(r *Registry, id string) *Login {
 	return nil
 }
 func validateRegistry(r Registry) error {
-	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6 && r.SchemaVersion != claudeProfileSchemaVersion) || r.Providers == nil || r.Switches == nil {
+	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6 && r.SchemaVersion != claudeProfileSchemaVersion && r.SchemaVersion != claudeAuthSchemaVersion) || r.Providers == nil || r.Switches == nil {
 		return ErrIneligible
 	}
 	if !validClaudeProfiles(r) {

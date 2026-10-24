@@ -78,6 +78,11 @@ func (s *Store) reloginJob(expected uint64, id string, c Credential, jobID strin
 		if codexOwned(r, l.Provider) {
 			return ErrPending
 		}
+		if l.Provider == ProviderClaude {
+			if err := s.claudeAuthMutationAllowed(l.ID); err != nil {
+				return err
+			}
+		}
 		if jobID != "" && l.LastLoginJobID == jobID {
 			out = *l
 			return nil
@@ -151,6 +156,11 @@ func (s *Store) reconcileRelogins(r *Registry) ([]string, error) {
 		}
 		if e != nil {
 			return nil, e
+		}
+		if l.Provider == ProviderClaude {
+			if err := s.claudeAuthMutationAllowed(l.ID); err != nil {
+				return nil, err
+			}
 		}
 		if owned(*r, l.ID) {
 			return nil, ErrInUse

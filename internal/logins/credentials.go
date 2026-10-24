@@ -206,6 +206,9 @@ func owned(r Registry, id string) bool {
 	return false
 }
 func (s *Store) Remove(expected uint64, id string) (Registry, error) {
+	if err := s.retireClaudeAuthForRemoval(expected, id); err != nil {
+		return Registry{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var r Registry
@@ -242,6 +245,11 @@ func (s *Store) Remove(expected uint64, id string) (Registry, error) {
 		}
 		for i, l := range r.Logins {
 			if l.ID == id {
+				if l.Provider == ProviderClaude {
+					if e := s.claudeAuthNamespaceAbsent(id); e != nil {
+						return e
+					}
+				}
 				parent, _, e := s.openSavedForRemoval(id)
 				if e != nil {
 					return e
@@ -304,6 +312,9 @@ func validStoreTemporary(name string) bool {
 }
 
 func (s *Store) eraseSaved(id string) error {
+	if err := s.claudeAuthNamespaceAbsent(id); err != nil {
+		return err
+	}
 	parent, entries, e := s.openSavedForRemoval(id)
 	if e != nil {
 		return e
@@ -435,6 +446,11 @@ type savedCredential struct {
 
 func (s *Store) savedPath(l Login) string { return filepath.Join("saved", l.ID, "credential.json") }
 func (s *Store) writeSaved(l Login, c Credential) error {
+	if l.Provider == ProviderClaude {
+		if err := s.claudeAuthMutationAllowed(l.ID); err != nil {
+			return err
+		}
+	}
 	r, e := s.load()
 	if e != nil {
 		return e
@@ -454,6 +470,11 @@ func (s *Store) writeSaved(l Login, c Credential) error {
 	return s.writeSavedMetadata(l, c)
 }
 func (s *Store) writeSavedMetadata(l Login, c Credential) error {
+	if l.Provider == ProviderClaude {
+		if err := s.claudeAuthMutationAllowed(l.ID); err != nil {
+			return err
+		}
+	}
 	if l.Provider == ProviderCodex {
 		r, e := s.load()
 		if e != nil {
