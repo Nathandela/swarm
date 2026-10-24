@@ -21,6 +21,8 @@ import (
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
+const paintCompleteTitle = "swarm-chunked-grid-complete"
+
 // styledScript builds a fakeagent script that paints every cell of a rows x cols grid
 // with rich attributes (bold/italic/underline/reverse + a truecolor bg, set once per
 // line) plus a truecolor fg DISTINCT from its neighbors, so the emulator snapshot
@@ -30,8 +32,8 @@ import (
 // keeps the snapshot oversized. Only the fg varies per cell (attrs+bg persist), which
 // keeps the script small so the grid paints quickly — the attach loop below reads live
 // frames only implicitly, so a slow paint would flood an oversized styled grid's
-// output and trip the S9 wedged-subscriber eviction before the grid finishes. It then
-// idles so the grid stays populated for the attach.
+// output and trip the S9 wedged-subscriber eviction before the grid finishes. A final
+// ask emits a title marker after the last row's newline, then blocks without further PTY writes.
 func styledScript(rows, cols int) string {
 	var b strings.Builder
 	for y := 0; y < rows; y++ {
@@ -43,7 +45,7 @@ func styledScript(rows, cols int) string {
 		}
 		b.WriteByte('\n')
 	}
-	b.WriteString("idle 60s\n")
+	b.WriteString("ask \x1b]2;" + paintCompleteTitle + "\x07\n")
 	return b.String()
 }
 
@@ -108,8 +110,8 @@ func TestIntegration_ChunkedOversizedSnapshot(t *testing.T) {
 		t.Fatalf("session never appeared within %s", launchTimeout)
 	}
 
-	// Poll until the grid is fully painted (snapshot exceeds one frame), then time a
-	// fresh attach: it must reassemble the chunked snapshot well under 2s (T1.2.b).
+	// Poll until the grid is fully painted (oversized and carrying the final title marker),
+	// then time a fresh attach: it must reassemble the snapshot well under 2s (T1.2.b).
 	var snap []byte
 	var attachDur time.Duration
 	gridDeadline := time.Now().Add(8 * time.Second)
@@ -126,10 +128,16 @@ func TestIntegration_ChunkedOversizedSnapshot(t *testing.T) {
 		attachDur = time.Since(start)
 		snap = a.Snapshot()
 		if len(snap) > wire.MaxFrame-1 {
-			break
+			painted, err := vt.DecodeSnapshot(snap)
+			if err != nil {
+				t.Fatalf("reassembled snapshot does not decode: %v", err)
+			}
+			if painted.Title == paintCompleteTitle {
+				break
+			}
 		}
 		if time.Now().After(gridDeadline) {
-			t.Fatalf("grid never grew past one frame (last snapshot %d bytes)", len(snap))
+			t.Fatalf("grid never completed painting (last snapshot %d bytes)", len(snap))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -143,6 +151,9 @@ func TestIntegration_ChunkedOversizedSnapshot(t *testing.T) {
 	sn, err := vt.DecodeSnapshot(snap)
 	if err != nil {
 		t.Fatalf("reassembled snapshot does not decode: %v", err)
+	}
+	if sn.Title != paintCompleteTitle {
+		t.Fatalf("snapshot missed final paint marker: title=%q, want %q (snapshot=%d bytes)", sn.Title, paintCompleteTitle, len(snap))
 	}
 	if sn.Cols != 200 || sn.Rows != 50 {
 		t.Errorf("reassembled grid is %dx%d, want 200x50", sn.Cols, sn.Rows)

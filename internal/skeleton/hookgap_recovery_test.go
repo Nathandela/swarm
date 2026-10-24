@@ -304,8 +304,8 @@ func TestHookDrainer_DecimalCheckpointMigratesWithAnAdoptedLegacySpool(t *testin
 }
 
 func TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents(t *testing.T) {
-	stateDir := t.TempDir()
-	sessionDir := t.TempDir()
+	stateDir := shortSocketTestDir(t)
+	sessionDir := shortSocketTestDir(t)
 	const sessionID, token = "s-gap-recover", "tok-gap-recover"
 
 	h := startHookShim(t, sessionDir, sessionID)
@@ -402,8 +402,8 @@ func TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents(t *testing.T) {
 }
 
 func TestRunHookDrain_ContinuesAfterRecoverableGap(t *testing.T) {
-	stateDir := t.TempDir()
-	sessionDir := t.TempDir()
+	stateDir := shortSocketTestDir(t)
+	sessionDir := shortSocketTestDir(t)
 	const sessionID, token = "s-gap-loop", "tok-gap-loop"
 
 	h := startHookShim(t, sessionDir, sessionID)
