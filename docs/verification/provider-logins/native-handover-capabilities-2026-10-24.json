@@ -4679,6 +4679,139 @@
       "elapsed_seconds": 2.423,
       "log_sha256": "fc713e597f4c34e4538539bc38ccd6ee919686a95256987c8bbb2d85f2840c0c",
       "cause": "The 2-second command timeout equaled the intentional 2-second ExecStartPre delay. Only initial startup timeout changed to 4 seconds; overall bounds stayed unchanged. The exact failed unit exited independently and was retired after matching its invocation, command and stopped state."
+    },
+    "effective_confinement_followup": {
+      "stage": "/run/user/1000/swarm-claude-kernel.mOnYhJLG",
+      "script_sha256": "b181982469688344514de584692946a3f26c500ffddd7e01d6f4fd1233d68fef",
+      "exit_code": 0,
+      "elapsed_seconds": 5.256,
+      "log_sha256": "99fc3c52c73d6f1124c7e4721d2e7ce44db5b582c0ba169fd4ad7f4b4f2ceb0a",
+      "effective_checks": {
+        "af_unix_errno": 97,
+        "cgroup_readonly_mount": true,
+        "cgroup_write_open_errno": 30,
+        "effective_capabilities": 0,
+        "external_control_socket_fds": [],
+        "loopback_families": [
+          2,
+          10
+        ],
+        "mount_namespace": "mnt:[4026532564]",
+        "namespace_undo_denied": {
+          "remount_cgroup": "SIGSYS",
+          "unshare_mount": 1,
+          "unshare_user": 1
+        },
+        "no_new_privileges": true,
+        "seccomp_active": true,
+        "user_namespace": "user:[4026532563]"
+      },
+      "passed": true,
+      "scope": "Operational local-manager socket and direct cgroup migration boundary. Ordinary fork/setsid/environment clearing and fresh-verifier crash tests repeated. Excludes hostile same-UID interference and remote or TCP service delegation."
+    },
+    "native_compatibility": {
+      "version": "2.1.310",
+      "platform": "Linux x86_64, systemd249.11, cgroupv2",
+      "runs": [
+        {
+          "stage": "/run/user/1000/swarm-claude-confined.s5LdiCZw",
+          "output": "/run/user/1000/swarm-claude-confined.s5LdiCZw/smoke",
+          "exit_code": 0,
+          "elapsed_seconds": 7.346,
+          "log_sha256": "48e1b7c1b3f8644746c40f7a6887c60427675c6019f28e347d746cdf93f5acc7",
+          "manifest_sha256": "c2a87c9b768c4dc9900151efbb5957f067368becb8e3bc1ea76e9cdae2e64789",
+          "passed": true,
+          "cases": [
+            {
+              "passed": true,
+              "case": "future",
+              "version": "2.1.310",
+              "binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+              "root": "/run/user/1000/swarm-claude-confined.s5LdiCZw/smoke/future/fresh-wy53q0je",
+              "accepted": [
+                true
+              ],
+              "native_refreshes": 0,
+              "native_profile_gets": 1,
+              "inference_requests": 0
+            },
+            {
+              "passed": true,
+              "case": "expired",
+              "version": "2.1.310",
+              "binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+              "root": "/run/user/1000/swarm-claude-confined.s5LdiCZw/smoke/expired/fresh-1e3sd0v7",
+              "accepted": [
+                true
+              ],
+              "native_refreshes": 1,
+              "native_profile_gets": 2,
+              "inference_requests": 0
+            }
+          ]
+        },
+        {
+          "stage": "/run/user/1000/swarm-claude-confined.s5LdiCZw",
+          "output": "/run/user/1000/swarm-claude-confined.s5LdiCZw/extended",
+          "exit_code": 0,
+          "elapsed_seconds": 14.535,
+          "log_sha256": "690e3873d33f880503f99bfcfd600f8a0b6daaa14ea59d728cf3f04a52043dcc",
+          "manifest_sha256": "c2a87c9b768c4dc9900151efbb5957f067368becb8e3bc1ea76e9cdae2e64789",
+          "passed": true,
+          "cases": [
+            {
+              "passed": true,
+              "case": "401",
+              "version": "2.1.310",
+              "binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+              "root": "/run/user/1000/swarm-claude-confined.s5LdiCZw/extended/401/fresh-drszyx06",
+              "accepted": [
+                false
+              ],
+              "native_refreshes": 0,
+              "native_profile_gets": 1,
+              "inference_requests": 0
+            },
+            {
+              "passed": true,
+              "case": "wrong-account",
+              "version": "2.1.310",
+              "binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+              "root": "/run/user/1000/swarm-claude-confined.s5LdiCZw/extended/wrong-account/fresh-ajf7ii03",
+              "accepted": [
+                false
+              ],
+              "native_refreshes": 0,
+              "native_profile_gets": 1,
+              "inference_requests": 0
+            },
+            {
+              "passed": true,
+              "case": "pair",
+              "version": "2.1.310",
+              "binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+              "root": "/run/user/1000/swarm-claude-confined.s5LdiCZw/extended/pair/fresh-avwtoobc",
+              "accepted": [
+                true,
+                true,
+                true
+              ],
+              "native_refreshes": 1,
+              "native_profile_gets": 4,
+              "inference_requests": 0
+            }
+          ]
+        }
+      ],
+      "effective_profile": "Every native case rechecked namespaces, no inherited socket FDs, AF_UNIX denial, read-only cgroup, denied namespace/remount changes, zero effective capabilities and working IPv4/IPv6 loopback.",
+      "flags": "--safe-mode --await-claim; initialize only, native secure-storage authority and fresh empty config.",
+      "review": "Astra GREEN to implement and further qualify this bounded Linux helper profile. No runtime activation.",
+      "limitations": [
+        "Synthetic fresh-auth harness runs inside the isolated service; actual product worker is not implemented yet.",
+        "Legitimate managed-policy helper/hook compatibility remains to be tested; no global managed policy was edited.",
+        "No macOS confinement qualification or permissive fallback.",
+        "Native identity receipt does not establish entitlement, policy approval or discussion readiness."
+      ]
     }
   },
   "claude_auth_store_checkpoint": {
