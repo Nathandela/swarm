@@ -77,5 +77,5 @@ fetch() {
 	echo "upgrade: installed $latest over ${installed:-nothing} at $SWARM_BIN"
 }
 
-fetch || true
+( fetch ) || true
 exec "$SWARM_BIN" daemon restart --unattended
