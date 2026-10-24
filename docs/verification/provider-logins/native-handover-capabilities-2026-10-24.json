@@ -5054,7 +5054,7 @@
       "reason": "No supported complete lifetime module census established, including the plain case."
     },
     "findings": [
-      "Earlier legitimate turn.step transformers evade downstream traces and cause a phase-only classifier false positive. Initial engine.create names that module, but is not a complete lifetime census.",
+      "An earlier legitimate return-summary transformer is invisible to downstream observer traces. Source follow-up shows the native host consumes yielded chunks and ignores the final generator summary; the synthetic transcript contains no inserted canary. This is a summary/trace visibility gap, NOT a demonstrated false continuation of an actually completed answer.",
       "Host-restored raw settings.read input layers expose false while merged and source-specific returned answers can be rewritten true.",
       "Later singleton user-module reload DOES emit plugin.register. Earlier inference of no notification was based on a pre-reload terminal snapshot and is withdrawn.",
       "The observed builtin implementations are embedded in the pinned executable, but full-fold and managed/earlier-module admission do not guarantee an ordinary user observer receives every registration."
@@ -5063,7 +5063,8 @@
       "No initial default-looking module list authorizes automatic continuation.",
       "No production observer, launch-policy or global-settings activation follows.",
       "Supported native prepend ordering is a separate hypothesis under investigation; it is not proven by these observations."
-    ]
+    ],
+    "correction": "The earlier claim of an actual final-answer false positive is withdrawn. A yielded-text transformer would be needed to test actual post-chain output. Automatic continuation remains unqualified for the independent lifetime-removal and final-completion-boundary reasons."
   },
   "codex_host_input_checkpoint": {
     "scope": "Typed semantic main-thread receipt custody only; no child-input clearance, goal wake or automatic continuation dispatch.",
@@ -5110,6 +5111,75 @@
     "limits": [
       "Full repository suite has not yet been rerun for this checkpoint.",
       "Child-input and goal continuation remain separately unqualified; no automatic effects are enabled by this slice."
+    ]
+  },
+  "claude_tui_observer_limits": {
+    "scope": "Finite source investigations; no plugin installation or live settings changes.",
+    "prepend_plan_manifest_sha256": "8a8ce2e339bd800143c3af99af09af1ea1b1ff451bd58476ca5794d49cc1801e",
+    "removal_manifest_sha256": "cac61c9b5a9d1e17530c3b9e249178fbdd99f305a30d87e0e71a9b6769dde2d5",
+    "host_boundary_manifest_sha256": "235f9d79920684e752d88d1012878458c7e831a159ecd54336c71d667ca33e95",
+    "findings": [
+      "Supported user prepend ordering can put an eligible observer before ordinary user modules; managed/security restrictions remain authoritative.",
+      "A CLI inline plugin is not mandatory: disablement, policy filtering, replacement omission and crash can remove it without a supported universal pre-removal callback.",
+      "Native TUI transcripts reflect the post-wrapper yielded chunks, but turn_duration precedes completion hooks that can append more text. No supported host-final barrier was established.",
+      "No native token-update boundary was found in the inspected session.authorize/session.identity APIs."
+    ],
+    "production_automatic_continuation_qualified": false
+  },
+  "claude_structured_mode_boundary": {
+    "scope": "One synthetic local-CLI SDK scenario on pinned2.1.310 Mac/Linux; investigation only, no UI/backend mode change.",
+    "manifest_sha256": "d110cccfb5839ef06c3efc9659e07904d9c46c19b7a6c42f2fdff5365d909834",
+    "linux_run": {
+      "stage": "/run/user/1000/swarm-sdk-boundary.3XQh7bfY",
+      "manifest_sha256": "d110cccfb5839ef06c3efc9659e07904d9c46c19b7a6c42f2fdff5365d909834",
+      "runs": [
+        {
+          "case": "selftest",
+          "unit": "swarm-sdk-boundary-dc55fe9c14b1eed7591f86d7",
+          "exit_code": 0,
+          "elapsed_seconds": 2.068,
+          "log_sha256": "2ca17ddaf39715777a035cff1a3bd5ced860def9c959db05421d8449c0cfc912"
+        },
+        {
+          "case": "quota-completion-idle",
+          "unit": "swarm-sdk-boundary-070b9b60e3ac794462ea3a51",
+          "exit_code": 0,
+          "elapsed_seconds": 3.104,
+          "log_sha256": "cc926f9306435e37b635b5920f95fca5d74f5efae520c0f48bdd99d355ce3f6c"
+        },
+        {
+          "case": "validate",
+          "unit": "swarm-sdk-boundary-4d220682ab4501c5af73ac9d",
+          "exit_code": 0,
+          "elapsed_seconds": 0.368,
+          "log_sha256": "a4e6ed266345da5d26feb59a50e70d4f8299306016ab145a97fabd191ca531df"
+        }
+      ]
+    },
+    "linux_checked": {
+      "passed": true,
+      "root": "/run/user/1000/swarm-sdk-boundary.3XQh7bfY/config-032jl50k",
+      "result_index": 31,
+      "completion_note_index": 32,
+      "idle_index": 33,
+      "result_to_idle_ms": 320.17626953125,
+      "full_sdk_continuation_qualified": false
+    },
+    "observed": [
+      "Typed main subscription quota result is followed by a delayed native completion note, then session_state_changed idle on ordered stdout.",
+      "Result subtype is success while is_error=true and terminal_reason=api_error; subtype alone is not success.",
+      "The delayed note appears in supported live export; this experiment did not establish durable history persistence."
+    ],
+    "remaining": [
+      "Settlement timeout/sever/yield and arbitrary async append transformations.",
+      "Exact consumed-input UUIDs, foreground/background/task/approval/queued-work custody.",
+      "Trust, settings validation, native history/resume and workflow/UI parity.",
+      "User preference regarding a structured Claude surface remains pending."
+    ],
+    "full_sdk_continuation_qualified": false,
+    "upstream_references": [
+      "https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/client.py",
+      "https://github.com/anthropics/claude-agent-sdk-python/issues/1019"
     ]
   }
 }
