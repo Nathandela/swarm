@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -81,25 +80,20 @@ func StartClaudeAuth(ctx context.Context, executable string, c ClaudeAuthConfig)
 	return store.ReadClaudeAuth(c.Ref)
 }
 
-func ReadClaudeAuth(c ClaudeAuthConfig) (logins.ClaudeAuthResult, error) {
-	store, err := logins.OpenExisting(c.StateRoot)
-	if err != nil {
-		return logins.ClaudeAuthResult{}, err
-	}
-	defer func() { _ = store.Close() }()
-	return store.ReadClaudeAuth(c.Ref)
-}
-
-// RecoverClaudeAuth only settles failed claimed work after the outside verifier
-// positively proves its exact retained unit retired. Durable settlement precedes
-// collecting/resetting the unit. Manager/boot changes remain explicit refusals.
 // ClaudeAuthRecovery reports cleanup diagnostics, never authentication/adoption.
+// Settled means the exact terminal budget remains retained; it is not a new claim.
 type ClaudeAuthRecovery struct {
-	Retired                bool
+	Settled                bool
 	MetadataCleanupUnknown bool
 }
 
+// RecoverClaudeAuth settles and collects exact custody while retaining ready or
+// failed intent. Manager/boot changes remain explicit refusals. Only an explicit
+// Store.RetireClaudeAuth removes the terminal budget.
 func RecoverClaudeAuth(ctx context.Context, c ClaudeAuthConfig) (ClaudeAuthRecovery, error) {
+	if err := ctx.Err(); err != nil {
+		return ClaudeAuthRecovery{}, err
+	}
 	store, err := logins.OpenExisting(c.StateRoot)
 	if err != nil {
 		return ClaudeAuthRecovery{}, err
@@ -109,22 +103,6 @@ func RecoverClaudeAuth(ctx context.Context, c ClaudeAuthConfig) (ClaudeAuthRecov
 	if err != nil {
 		return ClaudeAuthRecovery{}, err
 	}
-	if result.Phase == "prepared" {
-		result, err = store.RevokeClaudeAuthPrepared(c.Ref)
-		if err != nil {
-			return ClaudeAuthRecovery{}, err
-		}
-	}
-	if result.Scope == (logins.ClaudeAuthScope{}) {
-		// shortcut: exact PREPARED revocation releases native authority, but an
-		// unobserved late birth can leave harmless failed-unit metadata. The inert
-		// worker is capped at45s. Do not add a second birth journal or hold the grant
-		// merely for metadata cleanup; report bounded diagnostic separately.
-		if err := store.RetireClaudeAuth(c.Ref); err != nil {
-			return ClaudeAuthRecovery{}, err
-		}
-		return ClaudeAuthRecovery{Retired: true, MetadataCleanupUnknown: true}, nil
-	}
 	if result.Phase == "running" {
 		if err := verifyClaudeAuthScopeRetired(ctx, result.Scope); err != nil {
 			return ClaudeAuthRecovery{}, err
@@ -132,20 +110,20 @@ func RecoverClaudeAuth(ctx context.Context, c ClaudeAuthConfig) (ClaudeAuthRecov
 		if err := store.RecordClaudeAuthScopeRetired(c.Ref, result.Attempt, result.Scope); err != nil {
 			return ClaudeAuthRecovery{}, err
 		}
-		result, err = store.ReadClaudeAuth(c.Ref)
-		if err != nil {
+	} else if err := store.PrepareClaudeAuthRecovery(c.Ref); err != nil {
+		return ClaudeAuthRecovery{}, err
+	}
+	result, err = store.ReadClaudeAuth(c.Ref)
+	if err != nil {
+		return ClaudeAuthRecovery{}, err
+	}
+	if result.Scope == (logins.ClaudeAuthScope{}) {
+		// shortcut: an unobserved late unit birth can leave harmless metadata after
+		// exact unadmitted revocation; qualify a birth journal only if cleanup needs it.
+		if _, err := store.SettleClaudeAuth(c.Ref); err != nil {
 			return ClaudeAuthRecovery{}, err
 		}
-	} else if result.Phase != "retiring" && !result.UnitRetired {
-		// Close admission to retry before stopping a worker that could otherwise
-		// claim attempt2. A competing native Claim wins atomically or is revoked.
-		if err := store.RetireClaudeAuth(c.Ref); err != nil && !errors.Is(err, logins.ErrPending) {
-			return ClaudeAuthRecovery{}, err
-		}
-		result, err = store.ReadClaudeAuth(c.Ref)
-		if err != nil {
-			return ClaudeAuthRecovery{}, err
-		}
+		return ClaudeAuthRecovery{Settled: true, MetadataCleanupUnknown: true}, nil
 	}
 	if !result.UnitRetired {
 		if result.Phase == "retiring" && result.Scope.Worker.Alive() {
@@ -160,15 +138,15 @@ func RecoverClaudeAuth(ctx context.Context, c ClaudeAuthConfig) (ClaudeAuthRecov
 			return ClaudeAuthRecovery{}, err
 		}
 	}
-	// Durable Store custody receipt precedes Stop/ResetFailed/unload. The sibling
-	// intent stays present if either platform collection or nonce cleanup fails.
+	// The durable receipt precedes collection. Failed is published only after
+	// collection and payload cleanup, so replacement cannot outrun either step.
 	if err := collectClaudeAuthScope(ctx, result.Scope); err != nil {
 		return ClaudeAuthRecovery{}, err
 	}
-	if err := store.RetireClaudeAuth(c.Ref); err != nil {
+	if _, err := store.SettleClaudeAuth(c.Ref); err != nil {
 		return ClaudeAuthRecovery{}, err
 	}
-	return ClaudeAuthRecovery{Retired: true}, nil
+	return ClaudeAuthRecovery{Settled: true}, nil
 }
 
 func RunClaudeAuthConfig(ctx context.Context, path string) error {

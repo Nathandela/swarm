@@ -165,7 +165,7 @@ func (s *Store) recordClaudeAuthScopeStopped(ref ClaudeAuthRef, attempt int, sco
 			if intent.Worker.Alive() {
 				return ErrInUse
 			}
-			intent.Phase = "failed"
+			intent.Phase = "retiring"
 			intent.UnitRetired = true
 		} else if intent.Worker.PID != os.Getpid() || !intent.Worker.Alive() {
 			return ErrInUse

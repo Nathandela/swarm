@@ -147,7 +147,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		if cleaned {
 			return
 		}
-		current, readErr := ReadClaudeAuth(config)
+		current, readErr := store.ReadClaudeAuth(config.Ref)
 		if readErr == nil && current.Scope != (logins.ClaudeAuthScope{}) {
 			_ = processcontain.SignalIdentity(current.Scope.Worker, syscall.SIGKILL)
 		}
@@ -155,7 +155,10 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		defer cleanupCancel()
 		if _, err := RecoverClaudeAuth(cleanupCtx, config); err != nil {
 			t.Log("claude_auth_fixture_cleanup_pending: retain exact Store/unit proof")
+		} else if err := store.RetireClaudeAuth(config.Ref); err != nil {
+			t.Log("claude_auth_fixture_retirement_pending: retain exact Store proof")
 		}
+
 	})
 	var witnessScope logins.ClaudeAuthScope
 	var witnessBefore claudeAuthWitnessReceipt
@@ -186,7 +189,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("native profile gate not reached")
 		}
-		result, err = ReadClaudeAuth(config)
+		result, err = store.ReadClaudeAuth(config.Ref)
 		if err != nil || result.Phase != "running" || result.Scope.Worker != launched.Scope.Worker || !result.Scope.Worker.Alive() {
 			t.Fatal("expected exact running attempt before worker kill")
 		}
@@ -197,13 +200,13 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		for result.Scope.Worker.Alive() && time.Now().Before(until) {
 			time.Sleep(10 * time.Millisecond)
 		}
-		result, err = ReadClaudeAuth(config)
+		result, err = store.ReadClaudeAuth(config.Ref)
 		if err != nil || result.Phase != "running" || result.Scope.Worker.Alive() {
 			t.Fatal("killed worker must leave unresolved running attempt, never ready")
 		}
 	}
 	for scenario != "worker-kill" {
-		result, err = ReadClaudeAuth(config)
+		result, err = store.ReadClaudeAuth(config.Ref)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -298,8 +301,21 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	}
 	recoveredRaw, overflow := receipt.Bytes()
 	var recovered ClaudeAuthRecovery
-	if overflow || json.Unmarshal(recoveredRaw, &recovered) != nil || !recovered.Retired || recovered.MetadataCleanupUnknown {
+	if overflow || json.Unmarshal(recoveredRaw, &recovered) != nil || !recovered.Settled || recovered.MetadataCleanupUnknown {
 		t.Fatal("incomplete bound-unit recovery")
+	}
+	retained, err := store.ReadClaudeAuth(config.Ref)
+	if err != nil || retained.Ref != config.Ref || (retained.Phase != "ready" && retained.Phase != "failed") {
+		t.Fatalf("missing retained terminal budget: %+v %v", retained, err)
+	}
+	next, created, err := store.BeginClaudeAuth(snapshot.Revision, login.ID)
+	if err != nil || created || next != config.Ref {
+		t.Fatal("recovery reset durable attempt budget")
+	}
+	// Historical native receipts used deletion recovery. This fixture now proves
+	// retention first, then performs separately authorized explicit retirement.
+	if err := store.RetireClaudeAuth(config.Ref); err != nil {
+		t.Fatal(err)
 	}
 	cleaned = true
 	if launched.Scope.Worker.Alive() || !healthy.Alive() {
@@ -350,7 +366,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	if scenario == "worker-kill" || scenario == "containment-enospc" {
 		phase = "unready_recovered"
 	}
-	summary := map[string]any{"passed": true, "case": scenario, "native_sha256": expected, "phase": phase, "attempts": result.Attempt, "refreshes": refreshes, "profiles": proxy.profiles.Load(), "inference_requests": proxy.models.Load(), "fresh_verifier": true, "same_authority_witness": "synthetic-sleep-not-native-discussion", "healthy_pid_unchanged": healthy.Alive(), "unit_collected": true, "scope": launched.Scope, "cmd_swarm_constructor_qualified": false, "initialized_native_responsive": scenario == "healthy-native", "native_witness": witnessBefore.Native, "fault_overlay": claudeAuthFaultOverlay, "fault_proof": faultProof}
+	summary := map[string]any{"passed": true, "case": scenario, "native_sha256": expected, "phase": phase, "attempts": result.Attempt, "refreshes": refreshes, "profiles": proxy.profiles.Load(), "inference_requests": proxy.models.Load(), "fresh_verifier": true, "same_authority_witness": "synthetic-sleep-not-native-discussion", "healthy_pid_unchanged": healthy.Alive(), "unit_collected": true, "recovery_disposition": "retain-terminal", "terminal_budget_retained": true, "explicit_retirement": true, "scope": launched.Scope, "cmd_swarm_constructor_qualified": false, "initialized_native_responsive": scenario == "healthy-native", "native_witness": witnessBefore.Native, "fault_overlay": claudeAuthFaultOverlay, "fault_proof": faultProof}
 	data, _ := json.MarshalIndent(summary, "", "  ")
 	if err := os.WriteFile(filepath.Join(output, "receipt.json"), data, 0600); err != nil {
 		t.Fatal(err)

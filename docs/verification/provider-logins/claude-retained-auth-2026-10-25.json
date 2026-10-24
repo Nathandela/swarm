@@ -1,0 +1,186 @@
+{
+  "date": "2026-10-25",
+  "scope": "Claude helper retained outcomes, exact retry and successful-stale receipt renewal; foundation only",
+  "production_activation": false,
+  "review": "Sol implementation, independent Astra V5 source GREEN plus test-fixture delta GREEN, root connected-source review and native/race/lint checks",
+  "source_sha256": {
+    "internal/logins/claude_auth.go": "7a77010970a4948f355d40b00739c33a3239c44b365ddc9535eb3e23e90a0ff4",
+    "internal/logins/claude_auth_scope.go": "acbc6c7535ae68f6e9ce2848d45060ba2846affdecf7939350c8328a1585a57d",
+    "internal/logins/claude_auth_retained_test.go": "7a39547128dcb8068adf8461252e3f4b78b4848685b99c2d492ee6d74e419b71",
+    "internal/loginworker/claude_auth.go": "e0276138418c9111d2fbe3d4a769f95cd4fc2a3cadbbf2bc17f6299a53b20c8c",
+    "internal/loginworker/claude_auth_test.go": "c40edc3fa519b0b120bd09206c77c922b0a8a8cd85e367abab3db8c473849b45",
+    "internal/loginworker/claude_auth_native_linux_test.go": "91821b1bc4d869bcf27545599520c69610dae69a540ef1e2f609b96bf59dea2b"
+  },
+  "review_source_v5_manifest_sha256": "7c269fc8696e12241bf278ab967ca15a6c1b1453525d5cc7e659d4b4c498a52f",
+  "behavior": [
+    "Recovery positively settles/collects exact custody and retains ready or failed intent; only explicit authorized retirement deletes it.",
+    "A settled failure requires an actual newer desired epoch for the same selected login before one exact atomic replacement.",
+    "A settled successful receipt can renew when structurally valid canonical generation/expiry proves it stale; valid or malformed/uninspectable authority does not authorize replacement.",
+    "CAS, unknown payload, cleanup failure and ENOSPC retain prior authority; duplicate creators coalesce. Public warm-B consumption under A remains refused.",
+    "Bounded intent discovery returns exact refs and issuing selection, including orphan/partial cleanup, without a new index. The unused worker Read wrapper is removed."
+  ],
+  "author_checks": [
+    {
+      "name": "focused",
+      "command": "python3 /private/tmp/swarm-login-go.py test ./internal/logins ./internal/loginworker -run TestClaudeAuth -count=1",
+      "cwd": "/private/tmp/swarm-seamless-implementation-20261024",
+      "exit_code": 0,
+      "log": "swarm-cut1-focused-v5-complete-20261025.log",
+      "log_sha256": "672cf98d91df24ac3a1ae874825fa97d56216cc386dfc6182f544bd3770bdcf5"
+    },
+    {
+      "name": "race",
+      "command": "python3 /private/tmp/swarm-login-go.py test -race ./internal/logins ./internal/loginworker -run TestClaudeAuth -count=1",
+      "cwd": "/private/tmp/swarm-seamless-implementation-20261024",
+      "exit_code": 0,
+      "log": "swarm-cut1-race-v5-complete-20261025.log",
+      "log_sha256": "a4a5f71ec1d8c2d2fe6af392afab815d589b64ae39a90d565e349b8524153b27"
+    },
+    {
+      "name": "vet",
+      "command": "python3 /private/tmp/swarm-login-go.py vet ./internal/logins ./internal/loginworker",
+      "cwd": "/private/tmp/swarm-seamless-implementation-20261024",
+      "exit_code": 0,
+      "log": "swarm-cut1-vet-v5-complete-20261025.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "linux_build",
+      "command": "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 python3 /private/tmp/swarm-login-go.py build ./internal/logins ./internal/loginworker",
+      "cwd": "/private/tmp/swarm-seamless-implementation-20261024",
+      "exit_code": 0,
+      "log": "swarm-cut1-linux-build-v5-complete-20261025.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "linux_artifact",
+      "command": "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 python3 /private/tmp/swarm-login-go.py test -c -o /private/tmp/swarm-cut1-producthelper-retain-v5-amd64-20261025.test ./internal/loginworker",
+      "cwd": "/private/tmp/swarm-seamless-implementation-20261024",
+      "exit_code": 0,
+      "log": "swarm-cut1-linux-v5-artifact-build-20261025.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "tdd": {
+    "malformed_grant_red_log_sha256": "da94da40480b2d1dd62788ff5ed6104d7a216186f71a421c93ea9499b30f9cb9",
+    "malformed_grant_green_log_sha256": "8b72a1db832dfd7b1372d2af5e966c68b1f29d2dbadbcf559ff24feed6d4c9c5",
+    "earlier_control_scope": "Four scratch-only V3 negative controls proved deletion recovery, same-epoch retry, public warm-B consumption and valid-ready replacement assertions fail. V5 adds malformed grant-shape negatives."
+  },
+  "root_checks": {
+    "final_renewal_race": {
+      "exit_code": 0,
+      "log_sha256": "1a17d8125afdd6a9140c66226e748f1da7073f3d614f90fba1f18d2decf77753",
+      "seconds": 15.465
+    },
+    "mac_target_lint": "0 issues on V5",
+    "linux_target_lint": "0 issues on V5",
+    "diff_check": "passed"
+  },
+  "native_linux": {
+    "version": "2.1.310",
+    "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "test_artifact_manifest_sha256": "a20bd8a8045c4ef8a4cb44965a8458205897baadd21714c59da6797c6871bf53",
+    "source_inputs_verified": 198,
+    "runner_sha256": "7312cfc44af37e03a4e8bb4f9417c9a0c22009e6ee81b01a0d60cb933986902f",
+    "cases": [
+      {
+        "case": "future",
+        "binary_sha256": "40e45cf0bae74e047dc652789a87f75fe5bff773ec828550090824c56f327b67",
+        "stage": "/run/user/1000/swarm-product-auth.gRO1GwMY",
+        "log_sha256": "a9421e1c4aeff80bf6268f74cb61849696209d10d4888d0364ffbf4552b923d9",
+        "receipt_sha256": "62be44e9977f1972421f5bb0df599dc7942590301ef6ec9c2e9d406fea1c3f0b",
+        "elapsed_seconds": 2.139,
+        "phase": "ready",
+        "attempts": 1,
+        "refreshes": 0,
+        "profiles": 1,
+        "inference_requests": 0,
+        "unit_collected": true,
+        "fresh_verifier": true,
+        "terminal_budget_retained": true,
+        "explicit_retirement": true
+      },
+      {
+        "case": "expired",
+        "binary_sha256": "40e45cf0bae74e047dc652789a87f75fe5bff773ec828550090824c56f327b67",
+        "stage": "/run/user/1000/swarm-product-auth.dqrRmJlk",
+        "log_sha256": "289fa7e54eb5505765540cb3eff985bdc84190f86b97757c938f4ae13222762e",
+        "receipt_sha256": "b954810c495302fa76fefd98f10083417682dcb13e17e4d9f50ed4b293c03f25",
+        "elapsed_seconds": 2.673,
+        "phase": "ready",
+        "attempts": 2,
+        "refreshes": 1,
+        "profiles": 3,
+        "inference_requests": 0,
+        "unit_collected": true,
+        "fresh_verifier": true,
+        "terminal_budget_retained": true,
+        "explicit_retirement": true
+      },
+      {
+        "case": "401",
+        "binary_sha256": "40e45cf0bae74e047dc652789a87f75fe5bff773ec828550090824c56f327b67",
+        "stage": "/run/user/1000/swarm-product-auth.EnLeXSCO",
+        "log_sha256": "68a1d7223451f255734335cd7f520aafab410ccd4756dbb28aa877f42e81a689",
+        "receipt_sha256": "473acf5cc03094d452575a7b7e81f9d00308e8f2fbcc18afc4e2a79e88b3be67",
+        "elapsed_seconds": 45.927,
+        "phase": "failed",
+        "attempts": 1,
+        "refreshes": 0,
+        "profiles": 1,
+        "inference_requests": 0,
+        "unit_collected": true,
+        "fresh_verifier": true,
+        "terminal_budget_retained": true,
+        "explicit_retirement": true
+      },
+      {
+        "case": "worker-kill",
+        "binary_sha256": "40e45cf0bae74e047dc652789a87f75fe5bff773ec828550090824c56f327b67",
+        "stage": "/run/user/1000/swarm-product-auth.LIePv11t",
+        "log_sha256": "d8c2705ed05e6853b631d6a8820db2ef455bc3c4dcb9f60d6aacd3d9bb26b054",
+        "receipt_sha256": "654084659fab45f38f0df06bffbde4201e6751047b4daa62623e5fb998e4181a",
+        "elapsed_seconds": 1.956,
+        "phase": "unready_recovered",
+        "attempts": 1,
+        "refreshes": 0,
+        "profiles": 1,
+        "inference_requests": 0,
+        "unit_collected": true,
+        "fresh_verifier": true,
+        "terminal_budget_retained": true,
+        "explicit_retirement": true
+      }
+    ]
+  },
+  "linux_unbound_recovery": {
+    "failed_attempt": {
+      "stage": "/run/user/1000/swarm-retain-unbound.gr6bu25Z",
+      "unit": "swarm-retain-unbound-d6aa4c67edac9869b907",
+      "binary_sha256": "40e45cf0bae74e047dc652789a87f75fe5bff773ec828550090824c56f327b67",
+      "exit_code": 1,
+      "elapsed_seconds": 0.35,
+      "log_sha256": "ea0fcb90948d9ed753c2a22eb578e881c0caa2e3a3c7baa88cdba8ac52eac6ba"
+    },
+    "failure": "Private state test fixture inherited VM umask002; Store.Open correctly rejected a group-writable t.TempDir leaf before recovery ran.",
+    "fix": "Luna added checked chmod0700 on only that owned temporary state directory; Astra/root reviewed the test-only change.",
+    "passed_attempt": {
+      "stage": "/run/user/1000/swarm-retain-unbound.9FuU5UpY",
+      "unit": "swarm-retain-unbound-1cfb7d30c4826e431cb1",
+      "binary_sha256": "9dcda8bd2a743854f09067f6b3fc27ea6cb16b8c7f8aa795554a092e0e0b6a5d",
+      "exit_code": 0,
+      "elapsed_seconds": 0.417,
+      "log_sha256": "c4ff0047413a04f61220e97432eefd38fce75a89bf6ab2bed3b52c4e6b3d4871"
+    },
+    "inherited_umask": "0o2",
+    "artifact_manifest_sha256": "20ea6bda7bc996ee6d82fb191e245617810db48dea1ca3af834cae22a1102cf0",
+    "production_delta_from_native_case_artifact": "none; only the separately selected unbound test setup changed"
+  },
+  "limits": [
+    "No daemon caller or production activation in this cut. Reachability/global final gates remain unfinished until caller integration.",
+    "Native tests use synthetic credentials and nonforwarding loopback. No real login or discussion was changed.",
+    "Native command constructor, owned-profile trust/policy and ordinary operation remain unqualified.",
+    "The independent native witness here is synthetic sleep, not a model conversation; no adoption/continuation claim.",
+    "Global full-suite/build/lint/race final gates are not represented as passed by these focused checks."
+  ]
+}

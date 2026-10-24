@@ -122,6 +122,7 @@ func ClaudeAuthLaunchNotStarted(ref ClaudeAuthRef, attempt int, cause error) err
 // ClaudeAuthResult reports historical authentication, never policy or adoption.
 type ClaudeAuthResult struct {
 	Ref         ClaudeAuthRef
+	Selection   ProviderState
 	Phase       string
 	Attempt     int
 	Deadline    time.Time
@@ -240,7 +241,7 @@ func (s *Store) readClaudeAuthIntent(id string) (claudeAuthIntent, error) {
 			return intent, ErrIneligible
 		}
 		if intent.StopProof == claudeAuthUnadmitted {
-			if intent.Phase != "retiring" || intent.Native != (processcontain.Identity{}) || !initialNoStart {
+			if intent.Phase != "retiring" && intent.Phase != "failed" || intent.Native != (processcontain.Identity{}) || !initialNoStart {
 				return intent, ErrIneligible
 			}
 		} else if intent.StopProof == claudeAuthNotStarted {
@@ -386,29 +387,35 @@ func claudeAuthTarget(r Registry, ref ClaudeAuthRef) error {
 	return nil
 }
 
-func (s *Store) prepareClaudeAuthDirectory(id string) error {
-	if err := mkdirPrivate(s.root, "claude-auth", s.writeOps); err != nil {
-		return err
+// claudeAuthIDs bounds discovery before reading any intent or payload.
+func (s *Store) claudeAuthIDs() ([]string, error) {
+	if _, err := s.root.Lstat("claude-auth"); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
 	}
 	parent, err := openPrivateDir(s.root, "claude-auth")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = parent.Close() }()
 	dir, err := parent.Open(".")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = dir.Close() }()
 	entries, err := dir.ReadDir(2*MaxHandoverGrantRefs + 1)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return err
+		return nil, err
 	}
 	if len(entries) > 2*MaxHandoverGrantRefs {
-		return ErrCapacity
+		return nil, ErrCapacity
 	}
 	seen := map[string]bool{}
 	for _, entry := range entries {
+		if _, err := checkRelative(parent, entry.Name(), entry.IsDir()); err != nil {
+			return nil, err
+		}
 		name := entry.Name()
 		if !entry.IsDir() {
 			if validStoreTemporary(name) {
@@ -416,15 +423,57 @@ func (s *Store) prepareClaudeAuthDirectory(id string) error {
 			}
 			name = strings.TrimSuffix(name, ".json")
 			if name == entry.Name() {
-				return ErrUnsafePath
+				return nil, ErrUnsafePath
 			}
 		}
 		if !validID(name) {
-			return ErrUnsafePath
+			return nil, ErrUnsafePath
 		}
 		seen[name] = true
 	}
-	if len(seen) > MaxHandoverGrantRefs || !seen[id] && len(seen) == MaxHandoverGrantRefs {
+	if len(seen) > MaxHandoverGrantRefs {
+		return nil, ErrCapacity
+	}
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
+// ListClaudeAuth discovers retained jobs, including jobs whose login was removed.
+// An incomplete or unsafe inventory returns no refs and never reconstructs a nonce.
+func (s *Store) ListClaudeAuth() ([]ClaudeAuthResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.safeAnchor(); err != nil {
+		return nil, err
+	}
+	ids, err := s.claudeAuthIDs()
+	if err != nil {
+		return nil, err
+	}
+	results := make([]ClaudeAuthResult, 0, len(ids))
+	for _, id := range ids {
+		intent, err := s.readClaudeAuthIntent(id)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, claudeAuthResult(intent))
+	}
+	return results, nil
+}
+
+func (s *Store) prepareClaudeAuthDirectory(id string) error {
+	if err := mkdirPrivate(s.root, "claude-auth", s.writeOps); err != nil {
+		return err
+	}
+	ids, err := s.claudeAuthIDs()
+	if err != nil {
+		return err
+	}
+	if len(ids) == MaxHandoverGrantRefs && !slices.Contains(ids, id) {
 		return ErrCapacity
 	}
 	return nil
@@ -450,41 +499,8 @@ func (s *Store) BeginClaudeAuth(expected uint64, loginID string) (ClaudeAuthRef,
 		if r.Revision != expected {
 			return ErrConflict
 		}
-		if r.MigrationPending || r.Revision == ^uint64(0) {
-			return ErrPending
-		}
-		if _, pending := r.Switches[ProviderClaude]; pending {
-			return ErrPending
-		}
-		l := find(&r, loginID)
-		if l == nil || l.Provider != ProviderClaude || l.AuthState != AuthReady {
-			return ErrIneligible
-		}
-		if _, err := s.readRelogin(*l); err == nil {
-			return ErrPending
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if _, err := s.readSaved(*l); err != nil {
-			return err
-		}
-		nonce, err := newID()
+		ref, err = s.createClaudeAuth(r, loginID)
 		if err != nil {
-			return err
-		}
-		ref = ClaudeAuthRef{LoginID: l.ID, Identity: l.Identity, CredentialRevision: l.CredentialRevision, Nonce: nonce}
-		if r.SchemaVersion < claudeAuthSchemaVersion {
-			r.SchemaVersion = claudeAuthSchemaVersion
-			r.Revision++
-			if err := s.save(r); err != nil {
-				return err
-			}
-		}
-		if err := s.prepareClaudeAuthDirectory(loginID); err != nil {
-			return err
-		}
-		intent := claudeAuthIntent{Version: 1, Ref: ref, Selection: r.Providers[ProviderClaude], Deadline: time.Now().UTC().Add(claudeAuthDeadline), Attempt: 1, Phase: "prepared"}
-		if err := s.writeClaudeAuthIntent(intent); err != nil {
 			return err
 		}
 		created = true
@@ -494,6 +510,107 @@ func (s *Store) BeginClaudeAuth(expected uint64, loginID string) (ClaudeAuthRef,
 		s.uncertain = true
 	}
 	return ref, created, err
+}
+
+// ReplaceClaudeAuth atomically renews a positively settled stale success, or
+// retries a settled failure under a newer desired selection of this login.
+// Polling a current success or same-selection failure cannot reset its budget.
+func (s *Store) ReplaceClaudeAuth(expected uint64, previous ClaudeAuthRef) (ClaudeAuthRef, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ref ClaudeAuthRef
+	created := false
+	err := s.locked(func() error {
+		r, err := s.load()
+		if err != nil {
+			return err
+		}
+		if r.Revision != expected {
+			return ErrConflict
+		}
+		intent, err := s.readClaudeAuthIntent(previous.LoginID)
+		if err != nil {
+			return err
+		}
+		if intent.Ref != previous || claudeAuthTarget(r, previous) != nil {
+			return ErrConflict
+		}
+		switch intent.Phase {
+		case "failed":
+			selected := r.Providers[ProviderClaude]
+			if selected.ActiveID != previous.LoginID || selected.Epoch <= intent.Selection.Epoch {
+				return ErrConflict
+			}
+		case "ready":
+			stale, err := s.claudeAuthReceiptStale(intent)
+			if err != nil {
+				return err
+			}
+			if !stale {
+				return ErrConflict
+			}
+		default:
+			return ErrInUse
+		}
+		if intent.Scope != (ClaudeAuthScope{}) && !intent.UnitRetired {
+			return ErrInUse
+		}
+
+		if err := s.proveClaudeAuthStopped(intent); err != nil {
+			return err
+		}
+		if err := s.claudeAuthPayloadEmpty(previous.LoginID); err != nil {
+			return err
+		}
+		// Exact settlement and empty payload precede replacement of either outcome.
+		ref, err = s.createClaudeAuth(r, previous.LoginID)
+		if err == nil {
+			created = true
+		}
+		return err
+	})
+	return ref, created, err
+}
+
+func (s *Store) createClaudeAuth(r Registry, loginID string) (ClaudeAuthRef, error) {
+	if r.MigrationPending || r.Revision == ^uint64(0) {
+		return ClaudeAuthRef{}, ErrPending
+	}
+	if _, pending := r.Switches[ProviderClaude]; pending {
+		return ClaudeAuthRef{}, ErrPending
+	}
+	l := find(&r, loginID)
+	if l == nil || l.Provider != ProviderClaude || l.AuthState != AuthReady {
+		return ClaudeAuthRef{}, ErrIneligible
+	}
+	if _, err := s.readRelogin(*l); err == nil {
+		return ClaudeAuthRef{}, ErrPending
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ClaudeAuthRef{}, err
+	}
+	if _, err := s.readSaved(*l); err != nil {
+		return ClaudeAuthRef{}, err
+	}
+	nonce, err := newID()
+	if err != nil {
+		return ClaudeAuthRef{}, err
+	}
+	ref := ClaudeAuthRef{LoginID: l.ID, Identity: l.Identity, CredentialRevision: l.CredentialRevision, Nonce: nonce}
+	if r.SchemaVersion < claudeAuthSchemaVersion {
+		r.SchemaVersion = claudeAuthSchemaVersion
+		r.Revision++
+		if err := s.save(r); err != nil {
+			return ClaudeAuthRef{}, err
+		}
+	}
+	if err := s.prepareClaudeAuthDirectory(loginID); err != nil {
+		return ClaudeAuthRef{}, err
+	}
+	intent := claudeAuthIntent{Version: 1, Ref: ref, Selection: r.Providers[ProviderClaude], Deadline: time.Now().UTC().Add(claudeAuthDeadline), Attempt: 1, Phase: "prepared"}
+	if err := s.writeClaudeAuthIntent(intent); err != nil {
+		return ClaudeAuthRef{}, err
+	}
+	return ref, nil
 }
 
 func validateClaudeAuthReceipt(profile, grant []byte, identity string, started, ended time.Time) (time.Time, error) {
@@ -522,6 +639,16 @@ func validateClaudeAuthReceipt(profile, grant []byte, identity string, started, 
 }
 
 func usableClaudeAuthGrant(grant []byte, now time.Time) (time.Time, error) {
+	expires, err := claudeAuthGrantExpiry(grant)
+	if err != nil || !expires.After(now.Add(5*time.Minute)) {
+		return time.Time{}, ErrInvalidCredentials
+	}
+	return expires, nil
+}
+
+// claudeAuthGrantExpiry validates the existing native grant fields independently
+// of freshness so a structurally valid expired grant can authorize native renewal.
+func claudeAuthGrantExpiry(grant []byte) (time.Time, error) {
 	bad := func() (time.Time, error) { return time.Time{}, ErrInvalidCredentials }
 	if len(grant) > maxCredentialBytes {
 		return bad()
@@ -536,17 +663,20 @@ func usableClaudeAuthGrant(grant []byte, now time.Time) (time.Time, error) {
 	}
 	var access string
 	var expiry int64
-	var scopes []string
-	if json.Unmarshal(oauth["accessToken"], &access) != nil || json.Unmarshal(oauth["expiresAt"], &expiry) != nil || json.Unmarshal(oauth["scopes"], &scopes) != nil || strings.TrimSpace(access) == "" {
+	var scopes []*string
+	if json.Unmarshal(oauth["accessToken"], &access) != nil || json.Unmarshal(oauth["expiresAt"], &expiry) != nil || expiry <= 0 || json.Unmarshal(oauth["scopes"], &scopes) != nil || strings.TrimSpace(access) == "" {
 		return bad()
 	}
 	inference, profileScope := false, false
 	for _, scope := range scopes {
-		inference = inference || scope == "user:inference"
-		profileScope = profileScope || scope == "user:profile"
+		if scope == nil {
+			return bad()
+		}
+		inference = inference || *scope == "user:inference"
+		profileScope = profileScope || *scope == "user:profile"
 	}
 	expires := time.UnixMilli(expiry).UTC()
-	if !inference || !profileScope || !expires.After(now.Add(5*time.Minute)) {
+	if !inference || !profileScope {
 		return bad()
 	}
 	return expires, nil
@@ -730,7 +860,7 @@ func (s *Store) RecordClaudeAuthContained(ref ClaudeAuthRef, attempt int) error 
 }
 
 func claudeAuthResult(intent claudeAuthIntent) ClaudeAuthResult {
-	return ClaudeAuthResult{Ref: intent.Ref, Phase: intent.Phase, Attempt: intent.Attempt, Deadline: intent.Deadline, ExpiresAt: intent.ExpiresAt, Scope: intent.Scope, UnitRetired: intent.UnitRetired}
+	return ClaudeAuthResult{Ref: intent.Ref, Selection: intent.Selection, Phase: intent.Phase, Attempt: intent.Attempt, Deadline: intent.Deadline, ExpiresAt: intent.ExpiresAt, Scope: intent.Scope, UnitRetired: intent.UnitRetired}
 }
 
 // FinishClaudeAuthAttempt observes native output only after helper-only containment.
@@ -840,33 +970,138 @@ func (s *Store) ValidateClaudeAuthReceipt(ref ClaudeAuthRef, epoch uint64) error
 		if err != nil {
 			return err
 		}
+		return s.validateClaudeAuthReceipt(r, ref, epoch)
+	})
+}
+
+// validateClaudeAuthReceipt also accepts a prospective selection held by the
+// caller's existing Store lock; public validation always loads actual selection.
+func (s *Store) validateClaudeAuthReceipt(r Registry, ref ClaudeAuthRef, epoch uint64) error {
+	intent, err := s.readClaudeAuthIntent(ref.LoginID)
+	if err != nil {
+		return err
+	}
+	selected := r.Providers[ProviderClaude]
+	if r.MigrationPending {
+		return ErrPending
+	}
+	if intent.Ref != ref || intent.Phase != "ready" || claudeAuthTarget(r, ref) != nil || selected.ActiveID != ref.LoginID || selected.Epoch != epoch || epoch == 0 {
+		return ErrConflict
+	}
+	if find(&r, ref.LoginID).AuthState != AuthReady {
+		return ErrIneligible
+	}
+	if _, pending := r.Switches[ProviderClaude]; pending {
+		return ErrPending
+	}
+	stale, err := s.claudeAuthReceiptStale(intent)
+	if err != nil || stale {
+		return ErrInvalidCredentials
+	}
+	return nil
+}
+
+// claudeAuthReceiptStale distinguishes a changed/unusable canonical grant from
+// missing or uninspectable authority, which cannot authorize a new native job.
+func (s *Store) claudeAuthReceiptStale(intent claudeAuthIntent) (bool, error) {
+	generation, grant, err := s.claudeAuthGeneration(intent.Ref.LoginID)
+	if err != nil {
+		return false, err
+	}
+	expires, err := claudeAuthGrantExpiry(grant)
+	if err != nil {
+		return false, err
+	}
+	return generation != intent.Generation || !expires.After(time.Now().Add(5*time.Minute)) || !expires.Equal(intent.ExpiresAt), nil
+}
+
+// PrepareClaudeAuthRecovery closes all remaining admission before collection.
+// Ready identity receipts remain ready and consumable while their grant is valid.
+func (s *Store) PrepareClaudeAuthRecovery(ref ClaudeAuthRef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.locked(func() error {
 		intent, err := s.readClaudeAuthIntent(ref.LoginID)
 		if err != nil {
 			return err
 		}
-		selected := r.Providers[ProviderClaude]
-		if r.MigrationPending {
-			return ErrPending
-		}
-		if intent.Ref != ref || intent.Phase != "ready" || claudeAuthTarget(r, ref) != nil || selected.ActiveID != ref.LoginID || selected.Epoch != epoch || epoch == 0 {
+		if intent.Ref != ref {
 			return ErrConflict
 		}
-		if find(&r, ref.LoginID).AuthState != AuthReady {
-			return ErrIneligible
+		if intent.Phase == "ready" {
+			return s.proveClaudeAuthStopped(intent)
 		}
-		if _, pending := r.Switches[ProviderClaude]; pending {
+		return s.revokeClaudeAuth(&intent)
+	})
+}
+
+func (s *Store) revokeClaudeAuth(intent *claudeAuthIntent) error {
+	if intent.Phase == "prepared" {
+		intent.StopProof = claudeAuthUnadmitted
+	} else if intent.Phase != "ready" && intent.Phase != "failed" && intent.Phase != "retry" && intent.Phase != "retiring" {
+		return ErrInUse
+	}
+	if err := s.proveClaudeAuthStopped(*intent); err != nil {
+		return err
+	}
+	intent.Phase, intent.ExpiresAt = "retiring", time.Time{}
+	return s.writeClaudeAuthIntent(*intent)
+}
+
+// SettleClaudeAuth retains the terminal budget after exact unit collection.
+// The caller must collect a bound unit after its durable UnitRetired receipt.
+func (s *Store) SettleClaudeAuth(ref ClaudeAuthRef) (ClaudeAuthResult, error) {
+	s.mu.Lock()
+	var result ClaudeAuthResult
+	err := s.locked(func() error {
+		intent, err := s.readClaudeAuthIntent(ref.LoginID)
+		if err != nil {
+			return err
+		}
+		if intent.Ref != ref {
+			return ErrConflict
+		}
+		if intent.Phase != "retiring" && intent.Phase != "ready" && intent.Phase != "failed" {
+			return ErrInUse
+		}
+		if intent.Scope != (ClaudeAuthScope{}) && !intent.UnitRetired {
 			return ErrPending
 		}
-		generation, grant, err := s.claudeAuthGeneration(ref.LoginID)
-		if err != nil || generation != intent.Generation {
-			return ErrInvalidCredentials
+		return s.proveClaudeAuthStopped(intent)
+	})
+	s.mu.Unlock()
+	if err != nil {
+		return result, err
+	}
+	if err := s.cleanupClaudeAuthPayload(ref); err != nil {
+		return result, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err = s.locked(func() error {
+		intent, err := s.readClaudeAuthIntent(ref.LoginID)
+		if err != nil {
+			return err
 		}
-		expires, err := usableClaudeAuthGrant(grant, time.Now())
-		if err != nil || !expires.Equal(intent.ExpiresAt) {
-			return ErrInvalidCredentials
+		if intent.Ref != ref {
+			return ErrConflict
 		}
+		if intent.Phase != "ready" && intent.Phase != "failed" && intent.Phase != "retiring" {
+			return ErrInUse
+		}
+		if err := s.claudeAuthPayloadEmpty(ref.LoginID); err != nil {
+			return err
+		}
+		if intent.Phase == "retiring" {
+			intent.Phase = "failed"
+			if err := s.writeClaudeAuthIntent(intent); err != nil {
+				return err
+			}
+		}
+		result = claudeAuthResult(intent)
 		return nil
 	})
+	return result, err
 }
 
 // RetireClaudeAuth revokes an unadmitted job or retires positively resolved work.
@@ -886,16 +1121,7 @@ func (s *Store) RetireClaudeAuth(ref ClaudeAuthRef) error {
 		if intent.Ref != ref {
 			return ErrConflict
 		}
-		if intent.Phase == "prepared" {
-			intent.StopProof = claudeAuthUnadmitted
-		} else if intent.Phase != "ready" && intent.Phase != "failed" && intent.Phase != "retry" && intent.Phase != "retiring" {
-			return ErrInUse
-		}
-		if err := s.proveClaudeAuthStopped(intent); err != nil {
-			return err
-		}
-		intent.Phase, intent.ExpiresAt = "retiring", time.Time{}
-		if err := s.writeClaudeAuthIntent(intent); err != nil {
+		if err := s.revokeClaudeAuth(&intent); err != nil {
 			return err
 		}
 		if intent.Scope != (ClaudeAuthScope{}) && !intent.UnitRetired {
@@ -926,26 +1152,11 @@ func (s *Store) RetireClaudeAuth(ref ClaudeAuthRef) error {
 		if err := s.proveClaudeAuthStopped(intent); err != nil {
 			return err
 		}
+		if err := s.claudeAuthPayloadEmpty(ref.LoginID); err != nil {
+			return err
+		}
 		payload := claudeAuthPayload(ref.LoginID)
 		if _, err := s.root.Lstat(payload); err == nil {
-			root, err := openPrivateDir(s.root, payload)
-			if err != nil {
-				return err
-			}
-			file, err := root.Open(".")
-			if err != nil {
-				_ = root.Close()
-				return err
-			}
-			entries, readErr := file.ReadDir(1)
-			_ = file.Close()
-			_ = root.Close()
-			if readErr != nil && !errors.Is(readErr, io.EOF) {
-				return readErr
-			}
-			if len(entries) != 0 {
-				return ErrPending
-			}
 			if err := s.root.Remove(payload); err != nil {
 				return err
 			}
@@ -969,6 +1180,33 @@ func (s *Store) RetireClaudeAuth(ref ClaudeAuthRef) error {
 		}
 		return nil
 	})
+}
+
+// claudeAuthPayloadEmpty preserves unknown nonce custody instead of discarding it.
+func (s *Store) claudeAuthPayloadEmpty(id string) error {
+	if _, err := s.root.Lstat(claudeAuthPayload(id)); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	root, err := openPrivateDir(s.root, claudeAuthPayload(id))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	file, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	entries, err := file.ReadDir(1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if len(entries) != 0 {
+		return ErrPending
+	}
+	return nil
 }
 
 func (s *Store) cleanupClaudeAuthPayload(ref ClaudeAuthRef) error {

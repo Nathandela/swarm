@@ -151,6 +151,10 @@ CAS/crash integration and end-to-end handover qualification remain open. These r
 
 ### Claude helper caller integration
 
+The [retained-helper verification](../verification/provider-logins/claude-retained-auth-2026-10-25.json)
+covers helper recovery and retry authority with synthetic native Linux cases.
+It does not establish the daemon caller or ordinary profile-launch behavior.
+
 The reviewed integration boundary is fresh authentication for new owned-profile
 births. Existing `ProviderState.ActiveID/Epoch` records the desired account;
 it does not assert authentication success. One Make active request persists B

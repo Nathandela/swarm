@@ -68,12 +68,15 @@ func TestClaudeAuthConfigRejectsBeforeCreatingState(t *testing.T) {
 	}
 }
 
-func TestClaudeAuthUnboundRevocationReleasesGrantWithBoundedMetadataDiagnostic(t *testing.T) {
+func TestClaudeAuthUnboundRecoveryRetainsBudgetWithBoundedMetadataDiagnostic(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("advanced helper profile is Linux-only; do not touch Darwin Keychain")
 	}
 	state, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(state, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	store, err := logins.Open(state)
@@ -95,7 +98,7 @@ func TestClaudeAuthUnboundRevocationReleasesGrantWithBoundedMetadataDiagnostic(t
 		t.Fatalf("prepare: %v %v", created, err)
 	}
 	result, err := RecoverClaudeAuth(t.Context(), ClaudeAuthConfig{StateRoot: state, Ref: ref})
-	if err != nil || !result.Retired || !result.MetadataCleanupUnknown {
+	if err != nil || !result.Settled || !result.MetadataCleanupUnknown {
 		t.Fatalf("unadmitted auth intent held for harmless unknown metadata: %+v %v", result, err)
 	}
 	snapshot, err = store.Snapshot()
@@ -103,8 +106,19 @@ func TestClaudeAuthUnboundRevocationReleasesGrantWithBoundedMetadataDiagnostic(t
 		t.Fatal(err)
 	}
 	next, created, err := store.BeginClaudeAuth(snapshot.Revision, login.ID)
+	if err != nil || created || next != ref {
+		t.Fatalf("maintenance recovery reset budget: %v %v", created, err)
+	}
+	held, err := store.ReadClaudeAuth(ref)
+	if err != nil || held.Phase != "failed" {
+		t.Fatalf("missing retained failure: %+v %v", held, err)
+	}
+	if err := store.RetireClaudeAuth(ref); err != nil {
+		t.Fatal(err)
+	}
+	next, created, err = store.BeginClaudeAuth(snapshot.Revision, login.ID)
 	if err != nil || !created || next.Nonce == ref.Nonce {
-		t.Fatalf("no-admission revocation permanently excluded grant: %v %v", created, err)
+		t.Fatalf("explicit retirement did not release budget: %v %v", created, err)
 	}
 	started, err := procstart.StartTime(os.Getpid())
 	if err != nil {
