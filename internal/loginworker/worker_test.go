@@ -36,6 +36,9 @@ const secureStorageExpectedDir = "SWARM_TEST_CLAUDE_EXPECTED_DIR"
 // A real detached same-binary supervisor/runner uses a fake native CLI and a
 // real WebSocket-over-UDS server. No provider authentication/network occurs.
 func TestMain(m *testing.M) {
+	if handled, code := dispatchClaudeAuthFixture(os.Args); handled {
+		os.Exit(code)
+	}
 	if len(os.Args) == 4 && os.Args[1] == "internal" && os.Args[2] == "login-enroll" {
 		if err := RunConfig(context.Background(), os.Args[3]); err != nil {
 			os.Exit(1)

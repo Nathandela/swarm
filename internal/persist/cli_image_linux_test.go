@@ -51,7 +51,7 @@ func TestCLIImageSurvivesReplacementButRejectsSamePathExec(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer input.Close()
+		defer func() { _ = input.Close() }()
 		output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
 		if err != nil {
 			t.Fatal(err)

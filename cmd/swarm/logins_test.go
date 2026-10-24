@@ -7,7 +7,7 @@ import (
 
 func TestLoginWorkerDispatch(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing-config.json")
-	for _, command := range []string{"login-enroll", "login-refresh"} {
+	for _, command := range []string{"login-enroll", "login-refresh", "login-claude-auth"} {
 		t.Run(command, func(t *testing.T) {
 			if got := runLoginWorker([]string{command, missing}); got != 1 {
 				t.Fatalf("missing worker config exit = %d, want 1", got)

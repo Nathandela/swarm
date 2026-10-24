@@ -18,6 +18,10 @@ func runLoginWorker(args []string) int {
 	switch args[0] {
 	case "login-enroll":
 		err = loginworker.RunConfig(context.Background(), args[1])
+	case "login-claude-auth":
+		err = loginworker.RunClaudeAuthConfig(context.Background(), args[1])
+	case "login-claude-check":
+		err = loginworker.RunClaudeAuthConfinementCheck(args[1])
 	case "login-refresh":
 		err = loginworker.RunCodexRefreshConfig(context.Background(), args[1])
 	default:

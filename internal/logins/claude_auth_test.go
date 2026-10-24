@@ -23,7 +23,7 @@ func claudeAuthGrant(expiry time.Time, scopes []string) []byte {
 	return raw
 }
 
-func newClaudeAuthTest(t *testing.T) (*Store, Login, Login, ClaudeAuthRef) {
+func newClaudeAuthUnboundTest(t *testing.T) (*Store, Login, Login, ClaudeAuthRef) {
 	t.Helper()
 	s := testStore(t)
 	s.keychain = nil
@@ -50,6 +50,14 @@ func newClaudeAuthTest(t *testing.T) (*Store, Login, Login, ClaudeAuthRef) {
 	return s, a, b, ref
 }
 
+func newClaudeAuthTest(t *testing.T) (*Store, Login, Login, ClaudeAuthRef) {
+	s, a, b, ref := newClaudeAuthUnboundTest(t)
+	if err := s.BindClaudeAuthScope(ref, claudeAuthTestScope(t, ref)); err != nil {
+		t.Fatal(err)
+	}
+	return s, a, b, ref
+}
+
 func currentClaudeAuthWorker(t *testing.T) processcontain.Identity {
 	t.Helper()
 	started, err := procstart.StartTime(os.Getpid())
@@ -61,6 +69,11 @@ func currentClaudeAuthWorker(t *testing.T) processcontain.Identity {
 
 func claimClaudeAuthTest(t *testing.T, s *Store, ref ClaudeAuthRef) ClaudeAuthAttempt {
 	t.Helper()
+	if result, err := s.ReadClaudeAuth(ref); err == nil && result.Scope == (ClaudeAuthScope{}) {
+		if err := s.BindClaudeAuthScope(ref, claudeAuthTestScope(t, ref)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	attempt, _, err := s.ClaimClaudeAuthAttempt(ref, currentClaudeAuthWorker(t))
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +209,7 @@ func TestClaudeAuthUnknownLaunchAndExpiredDeadlineNeverReleaseCustody(t *testing
 	if _, err := s.FinishClaudeAuthAttempt(ref, attempt.Number); !errors.Is(err, ErrInUse) {
 		t.Fatalf("missing native PID treated as stopped: %v", err)
 	}
-	if err := s.RetireClaudeAuth(ref); !errors.Is(err, ErrInUse) {
+	if err := retireClaudeAuthTest(t, s, ref); !errors.Is(err, ErrInUse) {
 		t.Fatalf("unknown launch retired: %v", err)
 	}
 	if _, err := s.Remove(snapshot(t, s).Revision, b.ID); !errors.Is(err, ErrInUse) {
@@ -275,6 +288,7 @@ func TestClaudeAuthDeadWorkerCannotInventPositiveContainment(t *testing.T) {
 		t.Fatal(err)
 	}
 	intent.Worker = processcontain.Identity{PID: 999999999, StartTime: 1}
+	intent.Scope.Worker = intent.Worker
 	if err := s.writeClaudeAuthIntent(intent); err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +406,7 @@ func TestClaudeAuthSecondChurnNeedsExplicitResolvedRetirementBeforeNewJob(t *tes
 	if _, created, err := s.BeginClaudeAuth(snapshot(t, s).Revision, b.ID); err != nil || created {
 		t.Fatalf("terminal failure silently reset budget: %v %v", created, err)
 	}
-	if err := s.RetireClaudeAuth(ref); err != nil {
+	if err := retireClaudeAuthTest(t, s, ref); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.root.Lstat(claudeAuthPayload(b.ID)); !errors.Is(err, os.ErrNotExist) {
@@ -414,6 +428,15 @@ func TestClaudeAuthSavedRemovalRetiresOnlyPositivelyStoppedTerminalJob(t *testin
 		t.Fatal(err)
 	}
 	if _, err := s.FinishClaudeAuthAttempt(ref, attempt.Number); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Remove(snapshot(t, s).Revision, b.ID); !errors.Is(err, ErrPending) {
+		t.Fatalf("saved removal bypassed unresolved unit custody: %v", err)
+	}
+	if held, err := s.ReadClaudeAuth(ref); err != nil || held.Phase != "retiring" || held.Scope == (ClaudeAuthScope{}) {
+		t.Fatal("removal lost unit recovery evidence")
+	}
+	if err := retireClaudeAuthTest(t, s, ref); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Remove(snapshot(t, s).Revision, b.ID); err != nil {
@@ -615,7 +638,7 @@ func TestClaudeAuthPartialPayloadCleanupKeepsDurableAuthorityAcrossReopen(t *tes
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(blocked, 0700) })
-	if err := s.RetireClaudeAuth(ref); err == nil {
+	if err := retireClaudeAuthTest(t, s, ref); err == nil {
 		t.Fatal("real partial cleanup unexpectedly succeeded")
 	}
 	if _, err := s.readClaudeAuthIntent(b.ID); err != nil {
@@ -629,7 +652,7 @@ func TestClaudeAuthPartialPayloadCleanupKeepsDurableAuthorityAcrossReopen(t *tes
 	if err := os.Chmod(blocked, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := other.RetireClaudeAuth(ref); err != nil {
+	if err := retireClaudeAuthTest(t, other, ref); err != nil {
 		t.Fatalf("reopened partial cleanup lost retirement authority: %v", err)
 	}
 }
@@ -691,7 +714,7 @@ func TestClaudeAuthNativeNoStartRequiresOriginalUnpersistedIssuer(t *testing.T) 
 		if err := s.AbortClaudeAuthLaunch(launch, refusal); err == nil {
 			t.Fatal("no-start issuer reused")
 		}
-		if err := s.RetireClaudeAuth(ref); err != nil {
+		if err := retireClaudeAuthTest(t, s, ref); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -705,7 +728,7 @@ func TestClaudeAuthPreparedRevocationFencesLateClaimAndNewNonce(t *testing.T) {
 	}
 	defer func() { _ = other.Close() }()
 	other.keychain = nil
-	if err := other.RetireClaudeAuth(ref); err != nil {
+	if err := retireClaudeAuthTest(t, other, ref); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.ClaimClaudeAuthAttempt(ref, currentClaudeAuthWorker(t)); err == nil {
@@ -729,7 +752,7 @@ func TestClaudeAuthClaimAndPreparedRevocationHaveOneWinner(t *testing.T) {
 	defer func() { _ = other.Close() }()
 	other.keychain = nil
 	start, result := make(chan struct{}), make(chan error, 1)
-	go func() { <-start; result <- other.RetireClaudeAuth(ref) }()
+	go func() { <-start; result <- retireClaudeAuthTest(t, other, ref) }()
 	close(start)
 	_, launch, claimErr := s.ClaimClaudeAuthAttempt(ref, currentClaudeAuthWorker(t))
 	retireErr := <-result
@@ -817,10 +840,11 @@ func TestClaudeAuthContainedRetryCanRetireAfterWorkerDeath(t *testing.T) {
 		t.Fatal(err)
 	}
 	intent.Worker = processcontain.Identity{PID: 999999999, StartTime: 1}
+	intent.Scope.Worker = intent.Worker
 	if err := s.writeClaudeAuthIntent(intent); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RetireClaudeAuth(ref); err != nil {
+	if err := retireClaudeAuthTest(t, s, ref); err != nil {
 		t.Fatalf("durable positive containment became unretirable after worker death: %v", err)
 	}
 }
@@ -859,10 +883,10 @@ func TestClaudeAuthLateOldRetirementNeverDeletesNewJob(t *testing.T) {
 		}
 		return s.root.Remove(name)
 	}
-	go func() { result <- s.RetireClaudeAuth(ref) }()
+	go func() { result <- retireClaudeAuthTest(t, s, ref) }()
 	t.Cleanup(finish)
 	<-entered
-	if err := s.RetireClaudeAuth(ref); err != nil {
+	if err := retireClaudeAuthTest(t, s, ref); err != nil {
 		finish()
 		t.Fatal(err)
 	}
@@ -947,7 +971,7 @@ func TestClaudeAuthUncertainRunningWriteNeverRestoresPrepared(t *testing.T) {
 	if result, err := other.ReadClaudeAuth(ref); err != nil || result.Phase != "running" {
 		t.Fatalf("uncertain running claim became prepared: %+v %v", result, err)
 	}
-	if err := other.RetireClaudeAuth(ref); !errors.Is(err, ErrInUse) {
+	if err := retireClaudeAuthTest(t, other, ref); !errors.Is(err, ErrInUse) {
 		t.Fatalf("uncertain running/native-zero was revoked: %v", err)
 	}
 }
@@ -971,4 +995,30 @@ func TestClaudeAuthIntentParserRejectsAliasesAndUnknownFields(t *testing.T) {
 			t.Fatal("ambiguous persisted authority accepted")
 		}
 	}
+}
+
+// Existing Store fixtures have a synthetic unit, not an actual systemd service.
+// Supply its trusted retirement observation explicitly; lifecycle tests exercise
+// the real observer separately. Never mark a running native claim stopped.
+func retireClaudeAuthTest(t *testing.T, s *Store, ref ClaudeAuthRef) error {
+	t.Helper()
+	intent, err := s.readClaudeAuthIntent(ref.LoginID)
+	if err == nil && intent.Ref == ref && intent.Scope != (ClaudeAuthScope{}) && !intent.UnitRetired && intent.Phase != "running" {
+		if intent.Phase == "prepared" {
+			if _, err := s.RevokeClaudeAuthPrepared(ref); err != nil {
+				return err
+			}
+			intent, err = s.readClaudeAuthIntent(ref.LoginID)
+			if err != nil {
+				return err
+			}
+		}
+		if s.proveClaudeAuthStopped(intent) == nil {
+			intent.UnitRetired = true
+			if err := s.writeClaudeAuthIntent(intent); err != nil {
+				return err
+			}
+		}
+	}
+	return s.RetireClaudeAuth(ref)
 }

@@ -362,7 +362,7 @@ func nativePinnedBinary(t *testing.T, pathKey, shaKey string) string {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	hash := sha256.New()
 	if _, e = io.Copy(hash, file); e != nil {
 		t.Fatal(e)

@@ -41,7 +41,7 @@ func TestResolveInstalledOfficialNPM(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		hash := sha256.New()
 		count, err := io.Copy(hash, io.LimitReader(file, 1<<30+1))
 		if err != nil || count > 1<<30 || hex.EncodeToString(hash.Sum(nil)) != expected {
@@ -92,7 +92,7 @@ func TestResolveInstalledOfficialNPM(t *testing.T) {
 	if err != nil || conn == nil {
 		t.Fatalf("exact native backend did not serve: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	raw, err := conn.SyscallConn()
 	if err != nil {
 		t.Fatal(err)

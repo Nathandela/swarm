@@ -5181,5 +5181,157 @@
       "https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/client.py",
       "https://github.com/anthropics/claude-agent-sdk-python/issues/1019"
     ]
+  },
+  "claude_auth_worker_checkpoint": {
+    "scope": "Schema9 Store scope custody and bounded Linux249 helper. No activation, adoption or automatic continuation.",
+    "native_helper_constructor": "Production StartClaudeAuth/RunClaudeAuthConfig/RecoverClaudeAuth through compiled TestMain; test-only strict loopback TLS environment factory. Actual cmd/swarm dispatch separately unit-tested.",
+    "native_binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "helper_test_binary_sha256": "479902aefb17aa3797413986e86d61ebb0655ac65c100cfe0d3bdd65c9083641",
+    "build_manifest_sha256": "f029c9d446ea418d90e934345af230364b6b4e558f4a10b377a105b7696a2750",
+    "source_binding": "125 source/module hashes verified unchanged during build and by root before execution. Subsequent lint cleanup explicitly ignores previously ignored Close errors and names HTTP403; the loaded-image check still opens /proc/PID/exe independently twice. Relevant execution behavior is unchanged.",
+    "cases": [
+      {
+        "case": "future",
+        "run": {
+          "stage": "/run/user/1000/swarm-product-auth.D8ER3Dxt",
+          "unit": "swarm-product-auth-0c81c2c3bb5a490007840262",
+          "case": "future",
+          "binary_sha256": "479902aefb17aa3797413986e86d61ebb0655ac65c100cfe0d3bdd65c9083641",
+          "verified_elf_machine": 62,
+          "exit_code": 0,
+          "elapsed_seconds": 2.2,
+          "log_sha256": "dbdee7a31ff1747b2837f5db4be82198c6d025474a771b4b480def56d1ec732b"
+        },
+        "receipt_sha256": "f0ca2296501046464920c02eead37d0558f2fd891e73da2cae9747097ead5380",
+        "phase": "ready",
+        "attempts": 1,
+        "refreshes": 0,
+        "profiles": 1,
+        "inference_requests": 0,
+        "fresh_verifier": true,
+        "unit_collected": true,
+        "independent_same_authority_process_survived": true
+      },
+      {
+        "case": "expired",
+        "run": {
+          "stage": "/run/user/1000/swarm-product-auth.NydGBwKD",
+          "unit": "swarm-product-auth-501537ffc3069ce1cde16ea0",
+          "case": "expired",
+          "binary_sha256": "479902aefb17aa3797413986e86d61ebb0655ac65c100cfe0d3bdd65c9083641",
+          "verified_elf_machine": 62,
+          "exit_code": 0,
+          "elapsed_seconds": 2.541,
+          "log_sha256": "01e3b4a544086624d62ac39f5b5804a124b38867357be0097ada909211088699"
+        },
+        "receipt_sha256": "a50a3dd3048431a167516f54e265153b3dfa60c77da6ee2a38e7252a8838d113",
+        "phase": "ready",
+        "attempts": 2,
+        "refreshes": 1,
+        "profiles": 3,
+        "inference_requests": 0,
+        "fresh_verifier": true,
+        "unit_collected": true,
+        "independent_same_authority_process_survived": true
+      },
+      {
+        "case": "401",
+        "run": {
+          "stage": "/run/user/1000/swarm-product-auth.LKZQx6A6",
+          "unit": "swarm-product-auth-6b4dc81afccd43a1d9003b50",
+          "case": "401",
+          "binary_sha256": "479902aefb17aa3797413986e86d61ebb0655ac65c100cfe0d3bdd65c9083641",
+          "verified_elf_machine": 62,
+          "exit_code": 0,
+          "elapsed_seconds": 45.943,
+          "log_sha256": "68a1d7223451f255734335cd7f520aafab410ccd4756dbb28aa877f42e81a689"
+        },
+        "receipt_sha256": "caaff31cdd2ec855336577104038d5a7f9773a7f9d6ef635acea0234ccceb679",
+        "phase": "failed",
+        "attempts": 1,
+        "refreshes": 0,
+        "profiles": 1,
+        "inference_requests": 0,
+        "fresh_verifier": true,
+        "unit_collected": true,
+        "independent_same_authority_process_survived": true
+      },
+      {
+        "case": "wrong-account",
+        "run": {
+          "stage": "/run/user/1000/swarm-product-auth.2E0g7vd7",
+          "unit": "swarm-product-auth-38c21c5123c89f4dcdb66ae2",
+          "case": "wrong-account",
+          "binary_sha256": "479902aefb17aa3797413986e86d61ebb0655ac65c100cfe0d3bdd65c9083641",
+          "verified_elf_machine": 62,
+          "exit_code": 0,
+          "elapsed_seconds": 45.915,
+          "log_sha256": "68a1d7223451f255734335cd7f520aafab410ccd4756dbb28aa877f42e81a689"
+        },
+        "receipt_sha256": "63422c53dbad2738eeecb527cbf28d2c360ac0c05efe1d987ab150e3e20ce7ac",
+        "phase": "failed",
+        "attempts": 1,
+        "refreshes": 0,
+        "profiles": 1,
+        "inference_requests": 0,
+        "fresh_verifier": true,
+        "unit_collected": true,
+        "independent_same_authority_process_survived": true
+      }
+    ],
+    "containment_review": [
+      "Pin the running manager version, not merely the systemctl executable version.",
+      "Lock the worker OS thread while PDEATHSIG-protected native children exist.",
+      "Capture native PID/start before asynchronous wait; failed identity observation still enters exact scope containment.",
+      "Preserve exec.Cmd main-child wait ownership while reaping adopted zombies.",
+      "After containing descendants, drain output-copy goroutines before final output and scratch bounds; drain failure cannot authenticate."
+    ],
+    "independent_review": "Sol implementation; Astra source GREEN; root source review and independent native execution.",
+    "checks": {
+      "full_go_build": "pass",
+      "full_logins_tests_seconds": 143.094,
+      "full_loginworker_tests_seconds": 22.72,
+      "focused_race_logins_seconds": 32.948,
+      "focused_race_loginworker_seconds": 1.206,
+      "focused_race_cmd_seconds": 1.305,
+      "focused_pipe_tests_seconds": 0.322,
+      "dispatch_tests_seconds": 0.37,
+      "vet_changed_packages": "pass",
+      "mac_full_lint": "pass",
+      "linux_amd64_full_lint": "pass after mechanical Close handling and named HTTP status cleanup; independent executable-image reopen checks retained"
+    },
+    "limits": [
+      "The surviving process was a synthetic sleep witness, not a healthy native Claude discussion.",
+      "Negative HTTP401 and wrong-account checks exhausted the common45s budget and produced failed receipts on these runs; forced-worker termination and the deadline race still require separate recovery qualification.",
+      "Native crash/unpublished-PID/ENOSPC, real healthy native concurrency, managed-policy hooks and actual cmd/swarm constructor native execution remain open.",
+      "Mac helper custody is unsupported; no fallback or production activation is enabled."
+    ],
+    "manager_version_regression": {
+      "scope": "Mocked command regression on actual Linux amd64, not a manager restart/version change. CLI249 must reject a live manager reporting250.1.",
+      "receipt_sha256": "092a3d9663e255c495eb4a17fa9a9fb581c1f5cdc3017499d4b18fd242f8a384",
+      "runs": [
+        {
+          "case": "red",
+          "unit": "swarm-manager-red-212cde56773a2f995c2851de",
+          "binary_sha256": "8426ec040a55fd747c72ed173e96fa7d96c220206cc6b89a899bdb52899fc82f",
+          "verified_elf_machine": 62,
+          "exit_code": 1,
+          "expected_result_observed": true,
+          "elapsed_seconds": 0.314,
+          "log_sha256": "f3250bd06ce6cabe8ee2788c5f368b429d9fb0b0fa968d7dbfdc984d308af21f"
+        },
+        {
+          "case": "green",
+          "unit": "swarm-manager-green-9412c51f033401c655102bba",
+          "binary_sha256": "65ef736c8e650757751472ed052e05dcf9c0e54d27ece885c793901657ee44e8",
+          "verified_elf_machine": 62,
+          "exit_code": 0,
+          "expected_result_observed": true,
+          "elapsed_seconds": 0.367,
+          "log_sha256": "c26de83abdc9496cd1301470918ec39ecca1cf389ef0ae1c6504da1800d1c431"
+        }
+      ],
+      "invalid_prior_architecture_run": "An earlier AARCH64 binary was mistakenly attempted on amd64 and is excluded; both reported regression artifacts had ELF machine62 verified before execution."
+    }
   }
 }

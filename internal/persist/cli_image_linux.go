@@ -33,7 +33,7 @@ func MatchCLIProcessImage(pid int, start int64, path, expected string) bool {
 		if err != nil {
 			return false
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		info, err := file.Stat()
 		if err != nil {
 			return false
@@ -43,7 +43,8 @@ func MatchCLIProcessImage(pid int, start int64, path, expected string) bool {
 		return err == nil && actual == expected && linkErr == nil && (target == path || target == path+" (deleted)")
 	}
 	// Reopen independently: an earlier fd still describes the old image after exec.
-	if !match() || !match() {
+	firstMatch := match()
+	if !firstMatch || !match() {
 		return false
 	}
 	after, err := procstart.StartTime(pid)

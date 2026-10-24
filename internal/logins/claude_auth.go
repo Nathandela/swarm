@@ -121,26 +121,30 @@ func ClaudeAuthLaunchNotStarted(ref ClaudeAuthRef, attempt int, cause error) err
 
 // ClaudeAuthResult reports historical authentication, never policy or adoption.
 type ClaudeAuthResult struct {
-	Ref       ClaudeAuthRef
-	Phase     string
-	Attempt   int
-	Deadline  time.Time
-	ExpiresAt time.Time
+	Ref         ClaudeAuthRef
+	Phase       string
+	Attempt     int
+	Deadline    time.Time
+	ExpiresAt   time.Time
+	Scope       ClaudeAuthScope
+	UnitRetired bool
 }
 
 type claudeAuthIntent struct {
-	Version    int                     `json:"version"`
-	Ref        ClaudeAuthRef           `json:"ref"`
-	Selection  ProviderState           `json:"selection"`
-	Deadline   time.Time               `json:"deadline"`
-	Attempt    int                     `json:"attempt"`
-	Phase      string                  `json:"phase"`
-	StartedAt  time.Time               `json:"started_at,omitempty"`
-	Generation string                  `json:"generation,omitempty"`
-	Worker     processcontain.Identity `json:"worker"`
-	Native     processcontain.Identity `json:"native"`
-	StopProof  string                  `json:"stop_proof,omitempty"`
-	ExpiresAt  time.Time               `json:"expires_at,omitempty"`
+	Scope       ClaudeAuthScope         `json:"scope,omitempty"`
+	UnitRetired bool                    `json:"unit_retired,omitempty"`
+	Version     int                     `json:"version"`
+	Ref         ClaudeAuthRef           `json:"ref"`
+	Selection   ProviderState           `json:"selection"`
+	Deadline    time.Time               `json:"deadline"`
+	Attempt     int                     `json:"attempt"`
+	Phase       string                  `json:"phase"`
+	StartedAt   time.Time               `json:"started_at,omitempty"`
+	Generation  string                  `json:"generation,omitempty"`
+	Worker      processcontain.Identity `json:"worker"`
+	Native      processcontain.Identity `json:"native"`
+	StopProof   string                  `json:"stop_proof,omitempty"`
+	ExpiresAt   time.Time               `json:"expires_at,omitempty"`
 }
 
 func claudeAuthPath(id string) string    { return filepath.Join("claude-auth", id+".json") }
@@ -166,7 +170,7 @@ func (s *Store) readClaudeAuthIntent(id string) (claudeAuthIntent, error) {
 		}
 		return intent, err
 	}
-	doc, err := claudeAuthObject(raw, "version", "ref", "selection", "deadline", "attempt", "phase", "started_at", "generation", "worker", "native", "stop_proof", "expires_at")
+	doc, err := claudeAuthObject(raw, "version", "ref", "selection", "deadline", "attempt", "phase", "started_at", "generation", "worker", "native", "stop_proof", "expires_at", "scope", "unit_retired")
 	if err != nil {
 		return intent, err
 	}
@@ -179,10 +183,36 @@ func (s *Store) readClaudeAuthIntent(id string) (claudeAuthIntent, error) {
 			return intent, err
 		}
 	}
-	if json.Unmarshal(raw, &intent) != nil || intent.Version != 1 || !validClaudeAuthRef(intent.Ref) || intent.Ref.LoginID != id || intent.Deadline.IsZero() || intent.Attempt < 1 || intent.Attempt > 2 {
+	if scope, ok := doc["scope"]; ok {
+		fields, err := claudeAuthObject(scope, "host_mount_namespace", "host_user_namespace", "profile", "unit", "boot_id", "bus_id", "manager_owner", "manager", "mount_id", "device", "inode", "cgroup", "invocation_id", "worker")
+		if err != nil {
+			return intent, err
+		}
+		for _, name := range []string{"worker", "manager"} {
+			if _, err := claudeAuthObject(fields[name], "pid", "start_time"); err != nil {
+				return intent, err
+			}
+		}
+	}
+	if json.Unmarshal(raw, &intent) != nil || (intent.Version != 1 && intent.Version != 2) || !validClaudeAuthRef(intent.Ref) || intent.Ref.LoginID != id || intent.Deadline.IsZero() || intent.Attempt < 1 || intent.Attempt > 2 {
 		return intent, ErrIneligible
 	}
 	if intent.Selection.Provider != "" && intent.Selection.Provider != ProviderClaude || intent.Selection.Provider == "" && intent.Selection != (ProviderState{}) || !validAuthOwnerMode(Registry{SchemaVersion: claudeAuthSchemaVersion}, ProviderClaude, intent.Selection.AuthOwnerMode) {
+		return intent, ErrIneligible
+	}
+	if intent.Version == 1 && intent.Scope != (ClaudeAuthScope{}) || intent.Version == 2 && !validClaudeAuthScope(intent.Ref, intent.Scope) {
+		return intent, ErrIneligible
+	}
+	if intent.Version == 2 {
+		registry, err := s.load()
+		if err != nil || registry.SchemaVersion < claudeAuthScopeSchemaVersion {
+			return intent, ErrIneligible
+		}
+		if intent.Worker != (processcontain.Identity{}) && intent.Worker != intent.Scope.Worker {
+			return intent, ErrIneligible
+		}
+	}
+	if intent.UnitRetired && (intent.Scope == (ClaudeAuthScope{}) || intent.Phase == "prepared" || intent.Phase == "running" || intent.StopProof == "") {
 		return intent, ErrIneligible
 	}
 	now := time.Now()
@@ -217,6 +247,10 @@ func (s *Store) readClaudeAuthIntent(id string) (claudeAuthIntent, error) {
 			if intent.Phase != "failed" && intent.Phase != "retiring" || intent.Native != (processcontain.Identity{}) {
 				return intent, ErrIneligible
 			}
+		} else if intent.StopProof == claudeAuthScopeStopped {
+			if !validClaudeAuthScope(intent.Ref, intent.Scope) || intent.Worker != intent.Scope.Worker {
+				return intent, ErrIneligible
+			}
 		} else if intent.StopProof == claudeAuthTreeStopped {
 			if intent.Native == (processcontain.Identity{}) {
 				return intent, ErrIneligible
@@ -224,7 +258,7 @@ func (s *Store) readClaudeAuthIntent(id string) (claudeAuthIntent, error) {
 		} else if intent.StopProof != "" || intent.Phase != "running" {
 			return intent, ErrIneligible
 		}
-		if intent.Phase == "retry" && intent.Attempt != 1 || intent.Phase == "ready" && (intent.StopProof != claudeAuthTreeStopped || !intent.ExpiresAt.After(intent.StartedAt.Add(5*time.Minute))) {
+		if intent.Phase == "retry" && intent.Attempt != 1 || intent.Phase == "ready" && ((intent.StopProof != claudeAuthTreeStopped && intent.StopProof != claudeAuthScopeStopped) || !intent.ExpiresAt.After(intent.StartedAt.Add(5*time.Minute))) {
 			return intent, ErrIneligible
 		}
 	default:
@@ -252,6 +286,13 @@ func claudeAuthProcessTuple(p processcontain.Identity) bool {
 
 func (s *Store) writeClaudeAuthIntent(intent claudeAuthIntent) error {
 	raw, err := json.Marshal(intent)
+	if err == nil && intent.Scope == (ClaudeAuthScope{}) {
+		var doc map[string]json.RawMessage
+		if err = json.Unmarshal(raw, &doc); err == nil {
+			delete(doc, "scope")
+			raw, err = json.Marshal(doc)
+		}
+	}
 	if err != nil || len(raw) > 8192 {
 		return ErrCapacity
 	}
@@ -536,6 +577,9 @@ func (s *Store) ClaimClaudeAuthAttempt(ref ClaudeAuthRef, worker processcontain.
 		if r.MigrationPending || find(&r, ref.LoginID).AuthState != AuthReady {
 			return ErrIneligible
 		}
+		if intent.UnitRetired || !validClaudeAuthScope(ref, intent.Scope) || intent.Scope.Worker != worker {
+			return ErrInUse
+		}
 		if worker.PID != os.Getpid() || !worker.Alive() || !time.Now().Before(intent.Deadline) {
 			return ErrInUse
 		}
@@ -617,7 +661,7 @@ func (s *Store) RecordClaudeAuthNative(ref ClaudeAuthRef, attempt int, native pr
 		if err != nil {
 			return err
 		}
-		if intent.Ref != ref || intent.Attempt != attempt || intent.Phase != "running" || intent.Native != (processcontain.Identity{}) || intent.Worker.PID != os.Getpid() || !intent.Worker.Alive() || !native.Alive() || !time.Now().Before(intent.Deadline) {
+		if intent.Ref != ref || intent.Attempt != attempt || intent.Phase != "running" || intent.StopProof != "" || intent.Native != (processcontain.Identity{}) || intent.Worker.PID != os.Getpid() || !intent.Worker.Alive() || !native.Alive() || !time.Now().Before(intent.Deadline) {
 			return ErrConflict
 		}
 		intent.Native = native
@@ -626,6 +670,9 @@ func (s *Store) RecordClaudeAuthNative(ref ClaudeAuthRef, attempt int, native pr
 }
 
 func (s *Store) proveClaudeAuthStopped(intent claudeAuthIntent) error {
+	if intent.StopProof == claudeAuthScopeStopped && validClaudeAuthScope(intent.Ref, intent.Scope) && intent.Worker == intent.Scope.Worker && !intent.Native.Alive() {
+		return nil
+	}
 	if (intent.StopProof == claudeAuthNotStarted || intent.StopProof == claudeAuthUnadmitted) && intent.Native == (processcontain.Identity{}) {
 		return nil
 	}
@@ -683,7 +730,7 @@ func (s *Store) RecordClaudeAuthContained(ref ClaudeAuthRef, attempt int) error 
 }
 
 func claudeAuthResult(intent claudeAuthIntent) ClaudeAuthResult {
-	return ClaudeAuthResult{Ref: intent.Ref, Phase: intent.Phase, Attempt: intent.Attempt, Deadline: intent.Deadline, ExpiresAt: intent.ExpiresAt}
+	return ClaudeAuthResult{Ref: intent.Ref, Phase: intent.Phase, Attempt: intent.Attempt, Deadline: intent.Deadline, ExpiresAt: intent.ExpiresAt, Scope: intent.Scope, UnitRetired: intent.UnitRetired}
 }
 
 // FinishClaudeAuthAttempt observes native output only after helper-only containment.
@@ -722,7 +769,9 @@ func (s *Store) FinishClaudeAuthAttempt(ref ClaudeAuthRef, attempt int) (ClaudeA
 		}
 		intent.Phase = "failed"
 		now := time.Now().UTC()
-		if claudeAuthTarget(r, ref) != nil || intent.Selection != r.Providers[ProviderClaude] {
+		if intent.Scope != (ClaudeAuthScope{}) && s.checkClaudeAuthScratch(intent) != nil {
+			receiptErr = ErrCapacity
+		} else if claudeAuthTarget(r, ref) != nil || intent.Selection != r.Providers[ProviderClaude] {
 			receiptErr = ErrConflict
 		} else if !now.Before(intent.Deadline) {
 			receiptErr = ErrPending
@@ -846,7 +895,13 @@ func (s *Store) RetireClaudeAuth(ref ClaudeAuthRef) error {
 			return err
 		}
 		intent.Phase, intent.ExpiresAt = "retiring", time.Time{}
-		return s.writeClaudeAuthIntent(intent)
+		if err := s.writeClaudeAuthIntent(intent); err != nil {
+			return err
+		}
+		if intent.Scope != (ClaudeAuthScope{}) && !intent.UnitRetired {
+			return ErrPending
+		}
+		return nil
 	})
 	s.mu.Unlock()
 	if err != nil || absent {

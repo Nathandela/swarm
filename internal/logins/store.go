@@ -309,7 +309,7 @@ func find(r *Registry, id string) *Login {
 	return nil
 }
 func validateRegistry(r Registry) error {
-	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6 && r.SchemaVersion != claudeProfileSchemaVersion && r.SchemaVersion != claudeAuthSchemaVersion) || r.Providers == nil || r.Switches == nil {
+	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6 && r.SchemaVersion != claudeProfileSchemaVersion && r.SchemaVersion != claudeAuthSchemaVersion && r.SchemaVersion != claudeAuthScopeSchemaVersion) || r.Providers == nil || r.Switches == nil {
 		return ErrIneligible
 	}
 	if !validClaudeProfiles(r) {
