@@ -13,12 +13,14 @@ import (
 const grantReloginFile = "grant-relogin.json"
 
 type grantReloginIntent struct {
-	Version       int             `json:"version"`
-	LoginID       string          `json:"login_id"`
-	FromRevision  uint64          `json:"from_revision"`
-	PreviousOwner string          `json:"previous_owner,omitempty"`
-	Generation    string          `json:"generation"`
-	Target        savedCredential `json:"target"`
+	PreviousGeneration string                 `json:"previous_generation,omitempty"`
+	Selection          *grantReloginSelection `json:"selection,omitempty"`
+	Version            int                    `json:"version"`
+	LoginID            string                 `json:"login_id"`
+	FromRevision       uint64                 `json:"from_revision"`
+	PreviousOwner      string                 `json:"previous_owner,omitempty"`
+	Generation         string                 `json:"generation"`
+	Target             savedCredential        `json:"target"`
 }
 
 func grantReloginPath(id string) string { return filepath.Join("saved", id, grantReloginFile) }
@@ -61,7 +63,7 @@ func (s *Store) readGrantIntent(l Login) (grantReloginIntent, error) {
 	if e != nil {
 		return intent, e
 	}
-	if validateJSON(raw) != nil || json.Unmarshal(raw, &intent) != nil || intent.Version != 1 || intent.LoginID != l.ID || intent.FromRevision == 0 || intent.FromRevision == ^uint64(0) || intent.Target.Revision != intent.FromRevision+1 || intent.Target.Identity != l.Identity || !validID(intent.Target.LoginJobID) || !validDigest(intent.Generation) || intent.Target.AuthOwner == nil || intent.Target.AuthOwner.Version != 1 || !validDigest(intent.Target.AuthOwner.Owner) || !emptyCredentialPart(intent.Target.Credential.Auth) || !emptyCredentialPart(intent.Target.Credential.Identity) || (intent.PreviousOwner != "" && (!validDigest(intent.PreviousOwner) || intent.PreviousOwner != intent.Target.AuthOwner.Owner)) {
+	if validateJSON(raw) != nil || json.Unmarshal(raw, &intent) != nil || (intent.Version != 1 && intent.Version != 2) || (intent.Version == 1 && (intent.Selection != nil || intent.PreviousGeneration != "")) || (intent.PreviousGeneration != "" && !validDigest(intent.PreviousGeneration)) || (intent.Version == 2 && !validGrantSelection(intent.Selection)) || intent.LoginID != l.ID || intent.FromRevision == 0 || intent.FromRevision == ^uint64(0) || intent.Target.Revision != intent.FromRevision+1 || intent.Target.Identity != l.Identity || !validID(intent.Target.LoginJobID) || !validDigest(intent.Generation) || intent.Target.AuthOwner == nil || intent.Target.AuthOwner.Version != 1 || !validDigest(intent.Target.AuthOwner.Owner) || !emptyCredentialPart(intent.Target.Credential.Auth) || !emptyCredentialPart(intent.Target.Credential.Identity) || (intent.PreviousOwner != "" && (!validDigest(intent.PreviousOwner) || intent.PreviousOwner != intent.Target.AuthOwner.Owner)) {
 		return intent, ErrInvalidCredentials
 	}
 	if l.CredentialRevision != intent.FromRevision && (l.CredentialRevision != intent.Target.Revision || l.LastLoginJobID != intent.Target.LoginJobID) {
@@ -148,6 +150,9 @@ func (s *Store) reconcileGrantIntents(r *Registry) (map[string]bool, []string, b
 		}
 		if r.SchemaVersion < 3 {
 			return nil, nil, false, ErrIneligible
+		}
+		if e = validateGrantSelection(*r, intent); e != nil {
+			return nil, nil, false, e
 		}
 		if _, e = s.intentMetadata(l, intent); e != nil {
 			return nil, nil, false, e

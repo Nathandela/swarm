@@ -8,7 +8,6 @@ import (
 	"github.com/Nathandela/swarm/internal/processcontain"
 	"os"
 	"path/filepath"
-	"slices"
 	"syscall"
 	"time"
 )
@@ -585,6 +584,11 @@ func (l *GrantLease) ReplaceCredential(expected uint64, c Credential, jobID stri
 		if intentErr == nil && intent.Target.LoginJobID != jobID {
 			return ErrPending
 		}
+		if intentErr == nil {
+			if e = validateGrantSelection(r, intent); e != nil {
+				return e
+			}
+		}
 		if current.LastLoginJobID == jobID {
 			if intentErr == nil {
 				selected := r.Providers[ProviderCodex]
@@ -623,10 +627,11 @@ func (l *GrantLease) ReplaceCredential(expected uint64, c Credential, jobID stri
 		if r.Revision != expected || current.CredentialRevision != l.login.CredentialRevision {
 			return ErrConflict
 		}
-		if _, ok := r.Switches[ProviderCodex]; ok {
-			return ErrPending
+		selection, e := reloginSelection(r, *current)
+		if e != nil {
+			return e
 		}
-		if h, ok := r.Handovers[ProviderCodex]; ok && slices.Contains(h.HeldLoginIDs, current.ID) {
+		if selection != nil && l.reloginJobID != jobID {
 			return ErrPending
 		}
 		if r.Revision == ^uint64(0) || current.CredentialRevision == ^uint64(0) {
@@ -679,6 +684,17 @@ func (l *GrantLease) ReplaceCredential(expected uint64, c Credential, jobID stri
 				return ErrIdentityChanged
 			}
 		}
+		previousGeneration := ""
+		if len(raw) > 0 {
+			previous, e := codexCredentialGeneration(raw)
+			if e != nil {
+				return e
+			}
+			previousGeneration = hex.EncodeToString(previous[:])
+		}
+		if intentErr == nil && intent.Version == 2 && previousGeneration != intent.PreviousGeneration && previousGeneration != intent.Generation {
+			return ErrConflict
+		}
 		merged, e := mergeFields(raw, normalized.Auth, "auth_mode", "tokens", "last_refresh", "OPENAI_API_KEY")
 		if e != nil {
 			return e
@@ -690,11 +706,14 @@ func (l *GrantLease) ReplaceCredential(expected uint64, c Credential, jobID stri
 		target := savedCredential{Revision: current.CredentialRevision + 1, Identity: current.Identity, AuthOwner: &grantOwnership{Version: 1, Owner: owner}, LoginJobID: jobID}
 		selected := r.Providers[ProviderCodex]
 		missingBaseline := selected.ActiveID == current.ID && selected.DesiredCredentialRevision == 0
-		if r.SchemaVersion < 3 || missingBaseline {
+		if r.SchemaVersion < 3 || missingBaseline || selection != nil && r.SchemaVersion < 4 {
 			if r.Revision >= ^uint64(0)-1 {
 				return ErrIneligible
 			}
 			schemaForHandovers(&r)
+			if selection != nil {
+				r.SchemaVersion = 4
+			}
 			if missingBaseline {
 				selected.DesiredCredentialRevision = current.CredentialRevision
 				if intentErr == nil {
@@ -719,6 +738,11 @@ func (l *GrantLease) ReplaceCredential(expected uint64, c Credential, jobID stri
 			}
 		} else {
 			intent = grantReloginIntent{Version: 1, LoginID: current.ID, FromRevision: current.CredentialRevision, PreviousOwner: l.owner, Generation: hex.EncodeToString(generation[:]), Target: target}
+			if selection != nil {
+				intent.Version = 2
+				intent.Selection = selection
+				intent.PreviousGeneration = previousGeneration
+			}
 			encoded, e := json.Marshal(intent)
 			if e != nil {
 				return e
@@ -746,6 +770,9 @@ func (l *GrantLease) ReplaceCredential(expected uint64, c Credential, jobID stri
 		current.LimitKnown = false
 		current.LimitNonRolling = false
 		current.ExhaustedUntil = time.Time{}
+		if e = applyGrantSelection(&r, intent); e != nil {
+			return e
+		}
 		r.Revision++
 		if e = s.save(r); e != nil {
 			return e

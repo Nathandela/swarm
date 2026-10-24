@@ -34,16 +34,18 @@ type HandoverMember struct {
 // Handover retains one unresolved membership and authority set. ActiveID/Epoch
 // describe the desired provider selection; only exact receipts prove adoption.
 type Handover struct {
-	Version                       int              `json:"version"`
-	ID                            string           `json:"id"`
-	Provider                      string           `json:"provider"`
-	FromID                        string           `json:"from_id,omitempty"`
-	ToID                          string           `json:"to_id"`
-	Epoch                         uint64           `json:"epoch"`
-	DestinationCredentialRevision uint64           `json:"destination_credential_revision"`
-	Phase                         string           `json:"phase"`
-	Members                       []HandoverMember `json:"members"`
-	HeldLoginIDs                  []string         `json:"held_login_ids"`
+	MigrationSwitchID             string                `json:"migration_switch_id,omitempty"`
+	Bootstrap                     []BootstrapObligation `json:"bootstrap,omitempty"`
+	Version                       int                   `json:"version"`
+	ID                            string                `json:"id"`
+	Provider                      string                `json:"provider"`
+	FromID                        string                `json:"from_id,omitempty"`
+	ToID                          string                `json:"to_id"`
+	Epoch                         uint64                `json:"epoch"`
+	DestinationCredentialRevision uint64                `json:"destination_credential_revision"`
+	Phase                         string                `json:"phase"`
+	Members                       []HandoverMember      `json:"members"`
+	HeldLoginIDs                  []string              `json:"held_login_ids"`
 }
 type HandoverReceipt struct {
 	HandoverID                    string
@@ -80,13 +82,15 @@ func adoptionPhase(members []HandoverMember) string {
 	return "adopted"
 }
 func schemaForHandovers(r *Registry) {
-	r.SchemaVersion = 3
+	if r.SchemaVersion < 3 {
+		r.SchemaVersion = 3
+	}
 	if r.Handovers == nil {
 		r.Handovers = make(map[string]Handover)
 	}
 }
 func validHandover(r Registry, h Handover) bool {
-	if h.Version != 1 || !validID(h.ID) || h.Provider != ProviderCodex || !codexOwned(r, ProviderCodex) || h.Epoch == 0 || h.DestinationCredentialRevision == 0 || len(h.Members) > MaxHandoverMembers || len(h.HeldLoginIDs) == 0 || len(h.HeldLoginIDs) > MaxHandoverGrantRefs {
+	if !validBootstrap(r, h) || !validID(h.ID) || h.Provider != ProviderCodex || !codexOwned(r, ProviderCodex) || h.Epoch == 0 || h.DestinationCredentialRevision == 0 || len(h.Members) > MaxHandoverMembers || len(h.HeldLoginIDs) == 0 || len(h.HeldLoginIDs) > MaxHandoverGrantRefs {
 		return false
 	}
 	p := r.Providers[ProviderCodex]
@@ -134,7 +138,7 @@ func validHandover(r Registry, h Handover) bool {
 			return false
 		}
 	}
-	if h.Phase != adoptionPhase(h.Members) {
+	if h.Phase != handoverPhase(h) {
 		return false
 	}
 	encoded, e := json.Marshal(h)
@@ -174,6 +178,11 @@ func (s *Store) beginCodexHandover(expected uint64, toID string, members []Nativ
 		}
 		if _, ok := r.Handovers[ProviderCodex]; ok {
 			return ErrPending
+		}
+		if active := r.Providers[ProviderCodex].ActiveID; active != "" {
+			if e := s.noGrantRelogin(active); e != nil {
+				return e
+			}
 		}
 		if len(members) > MaxHandoverMembers {
 			return ErrCapacity
@@ -216,6 +225,9 @@ func (s *Store) beginCodexHandover(expected uint64, toID string, members []Nativ
 			out.HeldLoginIDs = append(out.HeldLoginIDs, toID)
 		}
 		out.Phase = adoptionPhase(out.Members)
+		if e = bootstrapCapacity(out); e != nil {
+			return e
+		}
 		schemaForHandovers(r)
 		p.ActiveID = toID
 		p.Epoch = out.Epoch
@@ -233,6 +245,11 @@ func (s *Store) RetargetCodexHandover(expected uint64, id, toID string) (Registr
 	var out Handover
 	r, e := s.mutate(expected, func(r *Registry) error {
 		h, ok := r.Handovers[ProviderCodex]
+		if ok {
+			if e := s.noGrantRelogin(h.ToID); e != nil {
+				return e
+			}
+		}
 		if !ok || h.ID != id {
 			return ErrConflict
 		}
@@ -260,7 +277,10 @@ func (s *Store) RetargetCodexHandover(expected uint64, id, toID string) (Registr
 				h.Members[i].Phase = "pending"
 			}
 		}
-		h.Phase = adoptionPhase(h.Members)
+		h.Phase = handoverPhase(h)
+		if e = bootstrapCapacity(h); e != nil {
+			return e
+		}
 		p := r.Providers[ProviderCodex]
 		p.ActiveID = toID
 		p.Epoch = h.Epoch
@@ -276,6 +296,11 @@ func (s *Store) RecordCodexReceipt(expected uint64, receipt HandoverReceipt) (Re
 	var out Handover
 	r, e := s.mutate(expected, func(r *Registry) error {
 		h, ok := r.Handovers[ProviderCodex]
+		if ok {
+			if e := s.noGrantRelogin(h.ToID); e != nil {
+				return e
+			}
+		}
 		if !ok || receipt.HandoverID != h.ID || receipt.ToID != h.ToID || receipt.Epoch != h.Epoch || receipt.DestinationCredentialRevision != h.DestinationCredentialRevision {
 			return ErrConflict
 		}
@@ -304,7 +329,7 @@ func (s *Store) RecordCodexReceipt(expected uint64, receipt HandoverReceipt) (Re
 		if !(member.Phase == "adopted" && receipt.Phase == "acknowledged") {
 			member.Phase = receipt.Phase
 		}
-		h.Phase = adoptionPhase(h.Members)
+		h.Phase = handoverPhase(h)
 		r.Handovers[ProviderCodex] = h
 		out = h
 		return nil
@@ -314,6 +339,11 @@ func (s *Store) RecordCodexReceipt(expected uint64, receipt HandoverReceipt) (Re
 func (s *Store) CompleteCodexHandover(expected uint64, id string) (Registry, error) {
 	return s.mutate(expected, func(r *Registry) error {
 		h, ok := r.Handovers[ProviderCodex]
+		if ok {
+			if e := s.noGrantRelogin(h.ToID); e != nil {
+				return e
+			}
+		}
 		if !ok || h.ID != id {
 			return ErrConflict
 		}

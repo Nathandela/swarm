@@ -410,6 +410,9 @@ func (s *Store) CommitSwitch(id string) (Runtime, error) {
 		if l == nil {
 			return ErrIneligible
 		}
+		if e := s.migrationGrantPending(*r, *op); e != nil {
+			return e
+		}
 		if e := s.validateSelected(*r, op.Provider, l.Identity, l.ID); e != nil {
 			return e
 		}
@@ -436,6 +439,9 @@ func (s *Store) CommitSwitch(id string) (Runtime, error) {
 }
 func (s *Store) CompleteSwitch(id string) error {
 	return s.switchMutation(id, func(r *Registry, op *Switch) error {
+		if e := s.migrationGrantPending(*r, *op); e != nil {
+			return e
+		}
 		if op.Phase != "committed" && op.Phase != "resuming" {
 			return ErrInUse
 		}
@@ -639,6 +645,16 @@ func (s *Store) Reconcile() error {
 				return ErrIdentityChanged
 			}
 			l.CredentialRevision = c.Revision
+			if l.Provider == ProviderCodex && c.AuthOwner != nil {
+				intent, intentErr := s.readGrantIntent(*l)
+				if intentErr == nil {
+					if e = applyGrantSelection(&r, intent); e != nil {
+						return e
+					}
+				} else if !errors.Is(intentErr, os.ErrNotExist) {
+					return intentErr
+				}
+			}
 			l.Renewable = renewable
 			l.ExpiresAt = expires
 			changed = true

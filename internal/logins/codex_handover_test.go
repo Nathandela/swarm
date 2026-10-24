@@ -237,7 +237,8 @@ func TestCodexSameActiveReauthHandoverBindsNewCredentialRevision(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer relogin.Close()
-	if _, _, e = relogin.ReplaceCredential(r.Revision, Credential{Auth: grantAuth("u", "a", time.Now().Add(5*time.Hour).Unix())}, "ffeeddccbbaa00998877665544332211"); !errors.Is(e, ErrPending) {
-		t.Fatalf("inflight destination credential revision changed: %v", e)
+	r, latest, e := relogin.ReplaceCredential(r.Revision, Credential{Auth: grantAuth("u", "a", time.Now().Add(5*time.Hour).Unix())}, "ffeeddccbbaa00998877665544332211")
+	if e != nil || r.Handovers[ProviderCodex].Epoch != op.Epoch+1 || r.Handovers[ProviderCodex].DestinationCredentialRevision != latest.CredentialRevision {
+		t.Fatalf("explicit inflight destination reauth did not rebind pending cohort: %v", e)
 	}
 }
