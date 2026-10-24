@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -57,9 +58,17 @@ func (d *Daemon) backendDeadline() time.Duration {
 // backendProber is the HostProber the core's backend resolution uses. It is the SAME PATH
 // search Detect uses for an agent binary, bound to the agent's own environment rather than the
 // daemon's, so the program this resolves is the program the agent would itself run.
-type backendProber struct{ env []string }
+type backendProber struct {
+	env           []string
+	program, path string
+}
 
-func (p backendProber) LookPath(name string) (string, error) { return lookPathIn(name, p.env) }
+func (p backendProber) LookPath(name string) (string, error) {
+	if name == p.program && p.path != "" {
+		return lookPathIn(p.path, p.env)
+	}
+	return lookPathIn(name, p.env)
+}
 
 // Run is never called on this path: ResolveBackend LookPaths and nothing else. It is present
 // because HostProber is one interface, and it fails loudly rather than pretending.
@@ -103,7 +112,11 @@ func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath, agentCwd 
 	if env == nil {
 		env = d.launchEnv()
 	}
-	plan, ok, err := adapter.ResolveBackend(src, backendProber{env: env}, spec, sessionDir)
+	prober := backendProber{env: env}
+	if agentType == "codex" && len(agentArgv) > 0 && filepath.IsAbs(agentArgv[0]) {
+		prober.program, prober.path = "codex", agentArgv[0]
+	}
+	plan, ok, err := adapter.ResolveBackend(src, prober, spec, sessionDir)
 	if err != nil || !ok {
 		return nil, err
 	}

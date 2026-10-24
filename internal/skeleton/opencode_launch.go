@@ -75,8 +75,11 @@ func (a *coreAPI) qualifyOpenCodeLaunch(spec *daemon.LaunchSpec) error {
 	if err != nil || identity == nil || !opencodebridge.SupportedNativeVersion(identity.Version) {
 		return errors.New("OpenCode runtime: stable native version " + opencodebridge.MinimumNativeVersion + " or newer is required")
 	}
-	if expected := spec.ExpectedCLIIdentity; expected != nil && *expected != *identity {
+	if expected := spec.ExpectedCLIIdentity; expected != nil && !sameProbedCLIInstallation(expected, identity) {
 		return errors.New("OpenCode runtime: native installation changed")
+	}
+	if err := pinProbedCLIExecutable(spec, identity); err != nil {
+		return err
 	}
 	spec.RequiredRuntime = persist.RequiredRuntimeOpenCode
 	spec.CLIIdentity, spec.ExpectedCLIIdentity = identity, identity

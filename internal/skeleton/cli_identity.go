@@ -55,7 +55,7 @@ func (p cliVersionProber) Run(path string, args []string) (string, error) {
 	return string(out.data), err
 }
 
-// probeCLIIdentity observes a stable installation using the session's environment.
+// probeCLIIdentity observes the resolved installation using the session's environment.
 // An empty executable resolves the provider again on that environment's PATH.
 func probeCLIIdentity(agentType, executable string, env []string, cwd string) (*persist.CLIIdentity, error) {
 	ad, ok := registry.New(agentType)
@@ -71,6 +71,11 @@ func probeCLIIdentity(agentType, executable string, env []string, cwd string) (*
 	}
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("CLI path must be absolute")
+	}
+	launcher := path
+	path, err = filepath.EvalSymlinks(launcher)
+	if err != nil {
+		return nil, err
 	}
 	before, err := persist.CLIFingerprint(path)
 	if err != nil {
@@ -95,7 +100,8 @@ func probeCLIIdentity(agentType, executable string, env []string, cwd string) (*
 	if !foundToken {
 		return nil, fmt.Errorf("CLI release version unavailable")
 	}
-	after, err := persist.CLIFingerprint(path)
+	// Retain the selected target, but reject a launcher retarget during the probe.
+	after, err := persist.CLIFingerprint(launcher)
 	if err != nil || before != after {
 		return nil, fmt.Errorf("CLI installation changed during version probe")
 	}

@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"github.com/Nathandela/swarm/internal/daemon"
@@ -155,9 +156,13 @@ func TestOpenCodeEndedHistoryExportsExactProfileAndRefusesMissingStorage(t *test
 	page.Session = json.RawMessage(strings.Replace(string(page.Session), `"version":"1.19.3"`, `"version":"1.19.3","agent":"plan","model":{"providerID":"opencode","id":"deepseek-v4.1-flash-free","variant":"max"}`, 1))
 	payload, _ := json.Marshal(openCodeHistoryExport{Info: page.Session, Messages: page.Messages})
 	bin := filepath.Join(project, "opencode")
+	target := filepath.Join(project, "opencode-native")
 	marker := filepath.Join(project, "exported")
 	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 2.0.0; exit 0; fi\n[ \"$1\" = export ] && [ \"$2\" = " + source.ConversationID + " ] || exit 91\n[ \"$XDG_DATA_HOME\" = " + strconv.Quote(profile) + " ] || exit 92\nprintf x >> " + strconv.Quote(marker) + "\ncat <<'NATIVE_HISTORY_EOF'\n" + string(payload) + "\nNATIVE_HISTORY_EOF\n"
-	if err = os.WriteFile(bin, []byte(script), 0700); err != nil {
+	if err = os.WriteFile(target, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(target, bin); err != nil {
 		t.Fatal(err)
 	}
 	fingerprint, err := persist.CLIFingerprint(bin)
@@ -183,6 +188,31 @@ func TestOpenCodeEndedHistoryExportsExactProfileAndRefusesMissingStorage(t *test
 		t.Fatal(err)
 	}
 	resolver := &openCodeHistoryResolver{core: api.core}
+	command, err := resolver.nativeExportCommand(context.Background(), source)
+	if err != nil {
+		t.Fatalf("unchanged historical launcher alias refused: %v", err)
+	}
+	next := filepath.Join(project, "opencode-next")
+	if err = os.WriteFile(next, []byte("#!/bin/sh\necho wrong-installation\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(bin); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(next, bin); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	command.Stdout = &output
+	if err = command.Run(); err != nil || !bytes.Contains(output.Bytes(), []byte(source.ConversationID)) {
+		t.Fatal("history export followed updated launcher instead of observed target")
+	}
+	if err = os.Remove(bin); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(target, bin); err != nil {
+		t.Fatal(err)
+	}
 	path, outcome := resolver.LocateTranscript(source, source.ConversationID)
 	if outcome != resumeHistoryFound {
 		t.Fatalf("exact export refused: %v", outcome)
@@ -237,7 +267,7 @@ func TestOpenCodeEndedHistoryExportsExactProfileAndRefusesMissingStorage(t *test
 		t.Fatal("missing native profile accepted")
 	}
 	calls, _ := os.ReadFile(marker)
-	if string(calls) != "xxx" {
+	if string(calls) != "xxxx" {
 		t.Fatal("missing profile executed native export")
 	}
 }

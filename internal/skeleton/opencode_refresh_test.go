@@ -2,6 +2,8 @@ package skeleton
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -116,5 +118,50 @@ func TestOpenCodeRefreshUnconfirmedProfileBlocksBeforeProbe(t *testing.T) {
 	report, err := CLIRefreshStatus(w.stateDir)
 	if err != nil || len(report.Records) != 1 || report.Records[0].State != cliRefreshBlocked || strings.Contains(report.Records[0].LastError, "private details") {
 		t.Fatalf("profile refusal missing or leaked: %+v %v", report, err)
+	}
+}
+
+func TestOpenCodeRefreshHistoricalAliasOnlyBlocksActualRetarget(t *testing.T) {
+	for _, retarget := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unchanged", true: "retargeted"}[retarget], func(t *testing.T) {
+			w, f, _ := nativeRefreshRig(t)
+			dir := t.TempDir()
+			old, next, launcher := filepath.Join(dir, "old"), filepath.Join(dir, "next"), filepath.Join(dir, "opencode")
+			for path, version := range map[string]string{old: "1.19.3", next: "1.20.0"} {
+				if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '"+version+"'\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(old, launcher); err != nil {
+				t.Fatal(err)
+			}
+			fingerprint, err := persist.CLIFingerprint(launcher)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := f.sessions["source"]
+			m.CLIIdentity = &persist.CLIIdentity{Path: launcher, Version: "1.19.3", Fingerprint: fingerprint}
+			m.Env = []string{"PATH=" + dir}
+			m.Cwd = dir
+			m.AgentCwd = dir
+			w.cliObserve = func(string) *persist.CLIIdentity { return m.CLIIdentity }
+			w.cliProbe = probeCLIIdentity
+			if retarget {
+				if err = os.Remove(launcher); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.Symlink(next, launcher); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w.discoverCLIRefreshes()
+			_, blocked := w.state.CLI["source"]
+			if blocked != retarget {
+				t.Fatalf("alias change blocked=%v, actual retarget=%v", blocked, retarget)
+			}
+			if len(f.killed) != 0 || len(f.launched) != 0 {
+				t.Fatal("discovery changed native lifecycle")
+			}
+		})
 	}
 }

@@ -388,7 +388,7 @@ func (w *authWatcher) discoverCLIRefreshes() {
 			probes++
 		}
 		if m.AgentType == "opencode" {
-			if result.err == nil && validCLIIdentity(result.id) && *result.id != *m.CLIIdentity {
+			if result.err == nil && validCLIIdentity(result.id) && !sameProbedCLIInstallation(m.CLIIdentity, result.id) {
 				w.state.CLI[m.ID] = cliRefreshRecord{AgentType: m.AgentType, Target: *result.id, State: cliRefreshBlocked, LastError: openCodeRefreshRefusal, UpdatedAt: w.clock()}
 				delete(w.state.CLICandidates, m.ID)
 				dirty = true

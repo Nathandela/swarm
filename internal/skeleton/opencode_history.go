@@ -315,10 +315,10 @@ func (r *openCodeHistoryResolver) nativeExportCommand(ctx context.Context, m per
 		return nil, errors.New("native history profile unavailable")
 	}
 	observed, err := probeCLIIdentity("opencode", m.CLIIdentity.Path, env, m.ProviderCwd())
-	if err != nil || observed == nil || *observed != *m.CLIIdentity {
+	if err != nil || !sameProbedCLIInstallation(m.CLIIdentity, observed) {
 		return nil, errors.New("native history executable changed")
 	}
-	cmd := exec.CommandContext(ctx, m.CLIIdentity.Path, "export", m.ConversationID)
+	cmd := exec.CommandContext(ctx, observed.Path, "export", m.ConversationID)
 	cmd.Env, cmd.Dir = env, m.ProviderCwd()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
@@ -336,7 +336,7 @@ func (r *openCodeHistoryResolver) exportEnded(ctx context.Context, m persist.Met
 	}
 	output := &boundedNativeExport{cancel: cancel}
 	cmd.Stdout = output
-	if cmd.Run() != nil || !persist.MatchCLIFingerprint(m.CLIIdentity.Path, m.CLIIdentity.Fingerprint) {
+	if cmd.Run() != nil || !persist.MatchCLIFingerprint(cmd.Path, m.CLIIdentity.Fingerprint) {
 		return result, errors.New("native history export unavailable")
 	}
 	if json.Unmarshal(output.data.Bytes(), &result) != nil {

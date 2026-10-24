@@ -1179,10 +1179,18 @@ func (a *coreAPI) launchResolved(resolved daemon.LaunchSpec) (persist.Meta, erro
 
 	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex") {
 		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], resolved.ClientEnv, resolved.Cwd)
-		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || observed == nil || *expected != *observed) {
+		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || !sameProbedCLIInstallation(expected, observed)) {
 			return persist.Meta{}, fmt.Errorf("launch: CLI installation changed before refresh")
 		}
+		if resolved.ExpectedCLIIdentity != nil {
+			resolved.ExpectedCLIIdentity = observed
+		}
 		resolved.CLIIdentity = observed
+		if probeErr == nil && observed != nil {
+			if err := pinProbedCLIExecutable(&resolved, observed); err != nil {
+				return persist.Meta{}, err
+			}
+		}
 		if resolved.LoginRuntime != nil {
 			if probeErr != nil || observed == nil {
 				return persist.Meta{}, fmt.Errorf("login: native CLI identity unavailable")
