@@ -140,5 +140,16 @@ checks but exposed two portability issues: same-user nondumpable sshd metadata
 prevented the test process scan from reaching owned children, and umask 0002 made
 success fixtures group writable where the diagnostic log contract requires a
 private parent. The fixtures now explicitly establish mode 0700, with production
-policy unchanged; those tests pass under umask 0002. Process-scan qualification
-and complete platform gates remain pending, not green by inference.
+policy unchanged; those tests pass under umask 0002.
+
+The test supervisor now excludes only executable metadata assigned to foreign
+kernel custody on Linux; it does not blanket-ignore permission errors. Other
+observation/kill failures remain visible, after positively owned children are
+stopped. A real nonroot Linux PR_SET_DUMPABLE fixture reproduced the failure and
+then passed nested normal/panic/timeout cleanup while the unrelated opaque
+process survived. Injected own-UID inspection and known-child kill errors remain
+failures. Astra reviewed the correction GREEN. The opaque fixture has explicit
+process-handle cleanup and a parent-death signal; generic sweeping makes no
+claim over privileged/nondumpable fixtures. The implementation contract was
+clarified to state this supported boundary and conservative lost-proof retention.
+Final whole-snapshot platform gates remain pending, not green by inference.

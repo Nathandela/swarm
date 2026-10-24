@@ -2,6 +2,7 @@ package testbin
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -137,5 +138,38 @@ func TestSweep_EndsOwnedProcessesAndRemovesTheirDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("test binary directory remains after Sweep: %v", err)
+	}
+}
+
+func TestSweepStopsOwnedChildrenBeforeReturningObservationErrors(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "owned")
+	exited := detachedBinary(t, exe, exe)
+	canonical, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const opaquePID = 1 << 29
+	denied := fmt.Errorf("unclassified own-UID executable metadata: %w", syscall.EACCES)
+	err = sweepProcesses([]string{canonical}, func() ([]int, error) { pids, err := processIDs(); return append([]int{opaquePID}, pids...), err }, func(pid int) (string, error) {
+		if pid == opaquePID {
+			return "", denied
+		}
+		return processExecutable(pid)
+	}, syscall.Kill)
+	if !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("unknown metadata failure hidden: %v", err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unknown metadata error prevented verified child cleanup")
+	}
+}
+
+func TestSignalOwnedPreservesKillFailure(t *testing.T) {
+	failure := syscall.EPERM
+	err := signalOwned(ownedProcess{pid: 123, start: 456, executable: "/owned/test"}, func(int) (int64, error) { return 456, nil }, func(int) (string, error) { return "/owned/test", nil }, func(int, syscall.Signal) error { return failure })
+	if !errors.Is(err, failure) {
+		t.Fatalf("owned kill failure hidden: %v", err)
 	}
 }

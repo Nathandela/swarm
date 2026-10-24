@@ -161,7 +161,9 @@ incarnation/certified-sequence association if needed; publish it only after the
 applied cursor is durable. A missing/stale/failed certificate means no retirement.
 Never certify an old numeric cursor merely because it is below the current last
 sequence. Maintain incarnation, floor, high-water and gap/torn-tail evidence.
-Persistence failures retain accepted data and remain retryable.
+Persistence failures retain accepted data. Retry is limited to still-provable
+lineage; a lost physical capability after replacement conservatively retains
+payload instead of manufacturing disposal authority.
 
 Red/green: real final drain of a stopped new writer retires fully folded payload;
 partial fold preserves later records and torn bytes; reopen continues sequence;
@@ -199,8 +201,8 @@ outcome. Do not hold general lifecycle/auth locks during provider export. Test
 the creator-fails/concurrent-reuser-succeeds interleaving explicitly. Native export
 calls outside launch remain retained and must participate in publication ownership
 if they can race the production path. Keep distinct history versions intact.
-Do not invent a new
-durable reference database or automatic successful-history retirement in this
+Do not invent a new durable reference database or automatic successful-history
+retirement in this
 wave; count/report retained exports and state this limit. Native histories and
 successful handoff inputs remain preserved rather than time-expired.
 
@@ -230,6 +232,10 @@ executables. Arbitrary detached system programs outside that set require their
 fixture to retain exact child custody and cleanup; an executable-path sweep is
 not a universal process sandbox. Audit the covered suites for such fixtures and
 give them explicit stop/wait, without killing unrelated system binaries.
+Privileged or nondumpable fixtures also need explicit PID/start or process-handle
+custody; Linux kernel-owned executable metadata is outside generic user-level
+path inspection. Unknown errors within inspectable ownership still fail cleanup,
+after verified owned children have been stopped.
 
 Stop and wait for verified owned processes before removing their files. Surface
 kill/remove/enumeration failures; retain evidence and fail an otherwise successful

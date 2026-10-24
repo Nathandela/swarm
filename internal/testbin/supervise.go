@@ -20,7 +20,8 @@ const executableManifest = "executables"
 // Supervise runs a private copy outside m.Run so panic and test timeout cannot
 // bypass cleanup. Call after fake-agent dispatch, before builds and m.Run.
 // The copied test executable and registered binaries are covered; arbitrary
-// system executables still require exact child cleanup in their fixtures.
+// system executables and privileged/nondumpable processes still require recorded
+// PID/start custody with stop/wait in their fixtures.
 func Supervise() (int, bool) {
 	if supervisedChild(os.Getenv(runRootEnv)) {
 		return 0, false

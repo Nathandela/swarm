@@ -34,23 +34,29 @@ func KillProcessesOf(exes ...string) error {
 }
 
 func killCanonicalProcesses(exes ...string) error {
+	return sweepProcesses(exes, processIDs, processExecutable, syscall.Kill)
+}
+
+func sweepProcesses(exes []string, enumerate func() ([]int, error), executable func(int) (string, error), kill func(int, syscall.Signal) error) error {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		pids, err := processIDs()
+		pids, err := enumerate()
+		var cleanupErr error
 		if err != nil {
-			return fmt.Errorf("enumerate owned processes: %w", err)
+			cleanupErr = fmt.Errorf("enumerate owned processes: %w", err)
 		}
 		var owned []ownedProcess
 		for _, pid := range pids {
 			if pid == os.Getpid() {
 				continue
 			}
-			exe, err := processExecutable(pid)
+			exe, err := executable(pid)
 			if gone(err) {
 				continue
 			}
 			if err != nil {
-				return fmt.Errorf("executable for pid %d: %w", pid, err)
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("executable for pid %d: %w", pid, err))
+				continue
 			}
 			if exe == "" || !slices.Contains(exes, exe) {
 				continue
@@ -60,27 +66,34 @@ func killCanonicalProcesses(exes ...string) error {
 				continue
 			}
 			if err != nil {
-				return err
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("start time for pid %d: %w", pid, err))
+				continue
+			}
+			if start <= 0 {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("unknown process identity for pid %d", pid))
+				continue
 			}
 			if (processcontain.Identity{PID: pid, StartTime: start}).Alive() {
 				owned = append(owned, ownedProcess{pid, start, exe})
 			}
 		}
 		if len(owned) == 0 {
-			return nil
+			return cleanupErr
 		}
 		for _, process := range owned {
-			if err := signalOwned(process, procstart.StartTime, processExecutable, syscall.Kill); err != nil {
-				return err
-			}
+			cleanupErr = errors.Join(cleanupErr, signalOwned(process, procstart.StartTime, executable, kill))
 		}
 		for _, process := range owned {
 			for (processcontain.Identity{PID: process.pid, StartTime: process.start}).Alive() {
 				if time.Now().After(deadline) {
-					return fmt.Errorf("owned process %d did not stop", process.pid)
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("owned process %d did not stop", process.pid))
+					break
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
+		}
+		if cleanupErr != nil {
+			return cleanupErr
 		}
 		if time.Now().After(deadline) {
 			return errors.New("owned processes kept appearing during cleanup")
