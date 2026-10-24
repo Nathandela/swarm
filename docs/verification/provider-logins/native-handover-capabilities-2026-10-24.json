@@ -5364,5 +5364,29 @@
       "Surviving same-authority witness is still a synthetic sleep, not a healthy native discussion.",
       "No model/history continuity, actual cmd/swarm native-constructor or production activation qualification."
     ]
+  },
+  "enrollment_writer_scan_retry": {
+    "scope": "Only enrollment drainNativeWriters, using the existing3s deadline/20ms cadence; no generic process inventory or test supervision change.",
+    "contract": [
+      "Only processcontain.ErrUnavailable is retried.",
+      "Only a complete successful empty inventory proves stopped; partial/unknown scans never do.",
+      "Nontransient errors return immediately; existing identity/kill checks remain unchanged."
+    ],
+    "diagnostic_result": "Original frozen-suite writers_still_live failure was not reproduced by30isolated cases and two complete worker-package runs; its exact cause remains unknown. This change is a separately tested robustness improvement, not a proven fix for that failure.",
+    "red": "Old-behavior overlay fails transient recovery and sustained-uncertainty budget cases; no shared source mutation.",
+    "focused_pass_seconds": 3.324,
+    "focused_race_seconds": 4.372,
+    "full_worker_package_seconds": 21.128,
+    "vet": "pass",
+    "review": "Root and Astra source GREEN.",
+    "evidence_sha256": {
+      "DIAGNOSIS.md": "946c8081c1ce7ba6b253c3eb9ff05ff747f7abdcc5a9662e1ab8350e3d31d94b",
+      "ROBUSTNESS.md": "364c33c08482208bef3c7f98bd3ec931106129745abff1d21ebaaaf54a28bfda",
+      "red.txt": "4860b20bc9a932d3d3949a24a507557345653a872519074ece92270bde9664d1",
+      "green.txt": "ee184e71f9cd79866f05956140bf144421dd84e6612f87eac47878de5cc68175",
+      "green-race.txt": "7ddb366970889c4f32ba74d127c6c384979695f0b14d8b8e4275e240cfd06221",
+      "fixed-package.jsonl": "5ab751ce1e4b4c32128c6ce0d879c43d53532058c6b587d98fedef5434aee49f"
+    },
+    "root_focused_race_seconds": 4.235
   }
 }
