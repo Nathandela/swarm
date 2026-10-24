@@ -381,6 +381,20 @@ func (a *coreAPI) completeLoginJob(c loginworker.Config) error {
 			accepted = true
 		}
 	}
+	ownedCodex := c.Provider == logins.ProviderCodex && r.Providers[c.Provider].AuthOwnerMode == logins.CodexNativeGrantMode
+	if accepted && ownedCodex && c.LoginID != "" {
+		if l, ok := loginByID(r, c.LoginID); ok && l.LastLoginJobID == c.JobID {
+			if pendingErr := a.logins.store.CheckCodexGrantPending(c.LoginID); pendingErr != nil {
+				if !errors.Is(pendingErr, logins.ErrPending) {
+					return pendingErr
+				}
+				// Finish durable acceptance before destroying the enrollment copy.
+				if err := a.consumeCodexRelogin(r.Revision, c, logins.Credential{}); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if !accepted {
 		credential, err := logins.ReadNativeCredential(c.Provider, loginworker.NativeHome(c.StateRoot, c.JobID))
 		if err != nil {
@@ -403,6 +417,8 @@ func (a *coreAPI) completeLoginJob(c loginworker.Config) error {
 				}
 			}
 			_, _, err = a.logins.store.Import(r.Revision, logins.Login{ID: c.JobID, Provider: c.Provider, Label: c.Label, LastLoginJobID: c.JobID}, credential)
+		} else if ownedCodex {
+			err = a.consumeCodexRelogin(r.Revision, c, credential)
 		} else if r.Providers[c.Provider].ActiveID == c.LoginID {
 			_, err = a.logins.BeginReloginJob(r.Revision, c.JobID, c.LoginID, credential, "owner signed in again")
 		} else {
@@ -422,6 +438,19 @@ func (a *coreAPI) completeLoginJob(c loginworker.Config) error {
 		return err
 	}
 	return cleanupLoginJob(c)
+}
+
+func (a *coreAPI) consumeCodexRelogin(expected uint64, c loginworker.Config, credential logins.Credential) error {
+	lease, err := a.logins.store.AcquireCodexRelogin(c.LoginID, c.JobID)
+	if err != nil {
+		return err
+	}
+	_, _, err = lease.ReplaceCredential(expected, credential, c.JobID)
+	// A failed containment proof must retain the enrollment copy, even on a wrong identity.
+	if closeErr := lease.Close(); closeErr != nil {
+		return closeErr
+	}
+	return err
 }
 
 func cleanupLoginJob(c loginworker.Config) error {
