@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -256,21 +257,7 @@ func (a *coreAPI) loginList() (protocol.LoginsReply, error) {
 		reply.Logins = append(reply.Logins, v)
 	}
 	for _, provider := range []string{"claude", "codex"} {
-		v := protocol.ProviderLoginView{Provider: provider, ActiveID: r.Providers[provider].ActiveID, State: "native"}
-		if v.ActiveID != "" {
-			v.State = "active"
-		}
-		if op, ok := r.Switches[provider]; ok {
-			v.State = "switching"
-			v.Message = loginMessage(op.LastError)
-			if v.Message == "" {
-				v.Message = "Waiting for discussions to finish their current work and detach."
-			}
-		}
-		if r.MigrationPending {
-			v.State, v.Message = "waiting", "Offline login migration is unfinished."
-		}
-		reply.Providers = append(reply.Providers, v)
+		reply.Providers = append(reply.Providers, providerLoginView(r, provider))
 	}
 	jobs, err := loginworker.Jobs(a.logins.store.StateRoot())
 	if err != nil {
@@ -284,6 +271,42 @@ func (a *coreAPI) loginList() (protocol.LoginsReply, error) {
 		reply.Jobs = append(reply.Jobs, view)
 	}
 	return reply, nil
+}
+
+func providerLoginView(r logins.Registry, provider string) protocol.ProviderLoginView {
+	v := protocol.ProviderLoginView{Provider: provider, ActiveID: r.Providers[provider].ActiveID, State: "native"}
+	if v.ActiveID != "" {
+		v.State = "active"
+	}
+	if op, ok := r.Switches[provider]; ok {
+		v.State = "switching"
+		v.Message = loginMessage(op.LastError)
+		if v.Message == "" {
+			v.Message = "Waiting for discussions to finish their current work and detach."
+		}
+	}
+	if handover, ok := r.Handovers[provider]; ok {
+		v.State = "adopting"
+		adopted, included := 0, 0
+		for _, member := range handover.Members {
+			if member.Phase == "retired" {
+				continue
+			}
+			included++
+			if member.Phase == "adopted" {
+				adopted++
+			}
+		}
+		if included == 0 {
+			v.Message = "No running sessions to switch."
+		} else {
+			v.Message = fmt.Sprintf("%d/%d sessions switched", adopted, included)
+		}
+	}
+	if r.MigrationPending {
+		v.State, v.Message = "waiting", "Offline login migration is unfinished."
+	}
+	return v
 }
 
 func loginMessage(s string) string {

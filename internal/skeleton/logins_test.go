@@ -110,7 +110,7 @@ func newLoginFixture(t *testing.T) *loginFixture {
 		return child, nil
 	}
 	d.authw = w
-	f.m = &loginManager{d: d, store: store, stopProof: func(meta persist.Meta) error {
+	f.m = &loginManager{d: d, store: store, qualifyCodexOwnership: func([]persist.Meta) (bool, error) { return false, nil }, stopProof: func(meta persist.Meta) error {
 		if meta.Status.Process == status.ProcessRunning {
 			return logins.ErrInUse
 		}

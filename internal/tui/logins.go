@@ -439,6 +439,8 @@ func loginProviderStatus(s string) string {
 		return "Active"
 	case "ready":
 		return "Ready"
+	case "adopting":
+		return "Switching"
 	case "switching", "waiting":
 		return "Switching / Waiting"
 	case "needs_login":

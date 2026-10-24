@@ -3,13 +3,18 @@ package skeleton
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/logins"
+	"github.com/Nathandela/swarm/internal/loginworker"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
@@ -18,18 +23,19 @@ import (
 // The journal owns provider stops exclusively. Generic auth/CLI recovery never
 // acquires a second claim for these sessions, including after daemon restart.
 type loginManager struct {
-	d                 *Daemon
-	store             *logins.Store
-	stepMu            sync.Mutex
-	admission         [2]sync.Mutex
-	usageMu           sync.Mutex
-	usage             [2]loginUsageSnapshot
-	codexAccess       *codexAccessBroker
-	preflight         func(string, []persist.Meta) error
-	prepareContext    func(string, []persist.Meta) error
-	stopProof         func(persist.Meta) error
-	release           func(string, string) error
-	recordResumeError func(string, string) error
+	d                     *Daemon
+	store                 *logins.Store
+	stepMu                sync.Mutex
+	admission             [2]sync.Mutex
+	usageMu               sync.Mutex
+	usage                 [2]loginUsageSnapshot
+	codexAccess           *codexAccessBroker
+	qualifyCodexOwnership func([]persist.Meta) (bool, error)
+	preflight             func(string, []persist.Meta) error
+	prepareContext        func(string, []persist.Meta) error
+	stopProof             func(persist.Meta) error
+	release               func(string, string) error
+	recordResumeError     func(string, string) error
 }
 
 func loginProviderIndex(provider string) int {
@@ -153,8 +159,8 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 		}
 		return next.Switches[provider], nil
 	}
-	if r.Providers[provider].ActiveID == toID {
-		return logins.Switch{}, nil
+	if provider == logins.ProviderCodex && r.Providers[provider].AuthOwnerMode == logins.CodexNativeGrantMode {
+		return logins.Switch{}, logins.ErrPending
 	}
 	var sources []persist.Meta
 	var rows []logins.Restart
@@ -162,10 +168,22 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 		if meta.AgentType != provider || meta.Status.Process != status.ProcessRunning || meta.RosterHidden {
 			continue
 		}
+		sources = append(sources, meta)
+	}
+	migrate := false
+	if provider == logins.ProviderCodex && r.Providers[provider].ActiveID != "" {
+		migrate, err = m.codexOwnershipQualified(sources)
+		if err != nil {
+			return logins.Switch{}, err
+		}
+	}
+	if !migrate && r.Providers[provider].ActiveID == toID {
+		return logins.Switch{}, nil
+	}
+	for _, meta := range sources {
 		if meta.ConversationID == "" {
 			return logins.Switch{}, fmt.Errorf("login switch: discussion %q has no exact native conversation", meta.Name)
 		}
-		sources = append(sources, meta)
 		rows = append(rows, logins.Restart{SourceID: meta.ID, ConversationID: meta.ConversationID, Phase: "waiting"})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].SourceID < rows[j].SourceID })
@@ -178,10 +196,80 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 			return logins.Switch{}, err
 		}
 	}
-	if _, err = m.store.PrepareActivation(toID); err != nil {
-		return logins.Switch{}, err
+	if !migrate || r.Providers[provider].ActiveID != toID {
+		if _, err = m.store.PrepareActivation(toID); err != nil {
+			return logins.Switch{}, err
+		}
+	}
+	if migrate {
+		return m.store.BeginCodexOwnershipMigrationTo(r.Revision, toID, rows)
 	}
 	return m.store.BeginSwitch(r.Revision, provider, toID, reason, rows)
+}
+
+func (m *loginManager) codexOwnershipQualified(sources []persist.Meta) (bool, error) {
+	if m.qualifyCodexOwnership != nil {
+		return m.qualifyCodexOwnership(sources)
+	}
+	return qualifyInstalledCodexOwnership(sources)
+}
+
+func (m *loginManager) qualifyCodexMigration(sources []persist.Meta) error {
+	qualified, err := m.codexOwnershipQualified(sources)
+	if err != nil {
+		return err
+	}
+	if !qualified {
+		return errors.New("login switch: installed Codex no longer supports native authentication")
+	}
+	return nil
+}
+
+// Only positively identified unsupported releases keep legacy switching. Probe
+// failures cannot establish which credential ownership protocol is safe.
+func qualifyInstalledCodexOwnership(sources []persist.Meta) (bool, error) {
+	// File-backed native refresh custody is currently qualified only on Linux.
+	if runtime.GOOS != "linux" {
+		return false, nil
+	}
+	return qualifyCodexOwnershipSources(sources)
+}
+
+func qualifyCodexOwnershipSources(sources []persist.Meta) (bool, error) {
+	ad, ok := registry.New(logins.ProviderCodex)
+	if !ok {
+		return false, errors.New("login switch: Codex adapter unavailable")
+	}
+	_, backend := adapter.AsBackendSource(ad)
+	_, interaction := adapter.AsInteractionSource(ad)
+	if !backend || !interaction {
+		return false, nil
+	}
+	if len(sources) == 0 {
+		sources = []persist.Meta{{Env: os.Environ()}}
+	}
+	qualified := true
+	for _, source := range sources {
+		path, err := lookPathIn(ad.Binary(), source.Env)
+		if err != nil {
+			return false, errors.New("login switch: Codex installation unavailable")
+		}
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return false, errors.New("login switch: Codex installation unavailable")
+		}
+		if err = loginworker.ValidateNativePath(path); err != nil {
+			return false, errors.New("login switch: unsafe Codex installation")
+		}
+		identity, err := probeCLIIdentity(logins.ProviderCodex, path, source.Env, source.Cwd)
+		if err != nil || identity == nil {
+			return false, errors.New("login switch: Codex installation identity unavailable")
+		}
+		if identity.Version != "0.163.0" {
+			qualified = false
+		}
+	}
+	return qualified, nil
 }
 
 func (m *loginManager) CancelSwitch(provider string) error {
@@ -388,7 +476,22 @@ func (m *loginManager) stepSwitch(op logins.Switch) {
 			m.saveError(op, err)
 			return
 		}
-		if err := m.store.InstallIncoming(op.ID); err != nil {
+		var err error
+		if op.OwnershipMigration {
+			var sources []persist.Meta
+			for _, row := range op.Sessions {
+				if source, ok := m.get(row.SourceID); ok && row.Phase != "cancelled" {
+					sources = append(sources, source)
+				}
+			}
+			err = m.qualifyCodexMigration(sources)
+			if err == nil {
+				err = m.store.MigrateCodexOwnership(op.ID)
+			}
+		} else {
+			err = m.store.InstallIncoming(op.ID)
+		}
+		if err != nil {
 			m.saveError(op, err)
 		}
 	case "installed":
@@ -504,6 +607,12 @@ func (m *loginManager) resumeSwitchSession(op *logins.Switch, index int) {
 		}
 	}
 	if row.ChildID == "" {
+		if op.OwnershipMigration {
+			if err := m.qualifyCodexMigration([]persist.Meta{source}); err != nil {
+				m.saveError(*op, err)
+				return
+			}
+		}
 		runtime, err := m.store.RuntimeForSwitch(op.ID, row.SourceID)
 		if err != nil {
 			m.saveError(*op, err)

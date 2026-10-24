@@ -1409,5 +1409,261 @@
       "The full live handover coordinator and continuation are not exercised by this test.",
       "Synthetic responses do not establish current real-subscription validity."
     ]
+  },
+  "codex_account_scoped_usage": {
+    "scope": "Actual Linux native account usage RPC; synthetic HTTP responses, no model requests or production changes",
+    "native_result": {
+      "native": "0.163.0",
+      "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+      "scenario": "account_scoped_usage",
+      "passed": true,
+      "aba": [
+        {
+          "account": "synthetic-a",
+          "allowed": true
+        },
+        {
+          "account": "synthetic-b",
+          "allowed": true
+        },
+        {
+          "account": "synthetic-a",
+          "allowed": true
+        }
+      ],
+      "negative_controls": [
+        {
+          "case": "missing_identity",
+          "allowed": null,
+          "account_matches": false
+        },
+        {
+          "case": "wrong_identity",
+          "allowed": null,
+          "account_matches": false
+        },
+        {
+          "case": "wrong_user",
+          "allowed": null,
+          "account_matches": true
+        },
+        {
+          "case": "exhausted",
+          "allowed": false,
+          "account_matches": true
+        }
+      ],
+      "late_a_after_b": "request_cancelled_on_auth_change",
+      "fresh_b_allowed": true,
+      "request_accounts": [
+        "synthetic-a",
+        "synthetic-b",
+        "synthetic-a",
+        "synthetic-a",
+        "synthetic-a",
+        "synthetic-a",
+        "synthetic-a",
+        "synthetic-a",
+        "synthetic-b"
+      ],
+      "inference_requests": 0,
+      "external_auth_file_absent": true
+    },
+    "harness_sha256": {
+      "run.py": "aba112b76bacafa746d6241df5207c00a5b343247c81ddc421e9eb5164996438",
+      "probe.py": "528a59f151ebba78e957e9cb71b439b0f45b055b54a4120a2f319b20391297aa",
+      "ws.py": "7405b5ac97083b1bbe8619a61d0991ac8fe338b38fc2666ff79b18ce92eec9b0",
+      "limits_probe.py": "865a31fad822d38020093307dfaec8e8e79e1542d5c07abc8537a54dd3551fa5"
+    },
+    "containment": "Owned systemd control-group, RuntimeMaxSec=90, TimeoutStopSec=5, MemoryMax=768M, TasksMax=96, LimitFSIZE=16MiB; run.py logical32MiB scratch bound and60s deadline",
+    "exit_code": 0,
+    "elapsed_seconds": 2.187,
+    "sources": [
+      "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/app-server/src/request_processors/account_processor.rs",
+      "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/app-server-protocol/src/protocol/v2/account.rs"
+    ],
+    "limits": [
+      "Request adoption is established for this native account API; existing busy/model probes separately characterize subsequent model-request adoption.",
+      "Broadcast account/rateLimits/updated has no account identity and cannot attribute a late old-account observation to the selected account.",
+      "The host must bind direct reads to the exact desired epoch, credential revision and native connection before and after RPC.",
+      "Null ordinaryUsageAllowed is unknown; percentages/reset times do not independently authorize recovery.",
+      "Synthetic responses do not establish real subscription capacity or model-specific eligibility."
+    ]
+  },
+  "claude_tui_observer": {
+    "scope": "Actual Linux Claude interactive TUI and supported native hook module; synthetic loopback, no successor prompt or continuation effects",
+    "version": "2.1.310",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "harness_sha256": {
+      "native_probe.py": "df7a50668d3e8756e0115c77520e0b191d217634e7d5f60c9f7b06b6cc9edbf9",
+      "hook_probe.py": "12f4f70fe38569d3c2256b88e345910ec70e1a8f6fd60de57789c11fc39666ab",
+      "eligibility.py": "d2ea20c7035bb9099ee87533fe5414f542dc824388d82c5e22e52b46998cb810",
+      "snapshot-module.js": "04932387f3a3af7b543382546533ee0512aa35d6e212dbb75e21c7e3f03f704b"
+    },
+    "containment": "Owned systemd control-group, RuntimeMaxSec=600, TimeoutStopSec=5, MemoryMax=1G, TasksMax=128, LimitFSIZE=16MiB; inner25s scenario deadlines and exact process-group cleanup; no OS aggregate scratch quota claim",
+    "elapsed_seconds": 57.751,
+    "exit_code": 0,
+    "harness_containment_selftest_passed": true,
+    "negative_fixtures_always_ineligible": 14,
+    "controls": [
+      {
+        "scenario": "tui_tool_quota_modal",
+        "passed": true,
+        "candidate_observed": true,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "native_phase_complete_candidate"
+        ]
+      },
+      {
+        "scenario": "tui_delayed_split_text_quota",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "unclassified_text"
+        ]
+      },
+      {
+        "scenario": "tui_observer_io_failure",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "observer_capture_incomplete"
+        ]
+      },
+      {
+        "scenario": "tui_observer_double_io_failure",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "expected_ordinal_mismatch"
+        ]
+      },
+      {
+        "scenario": "tui_generic_rate_limit",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "subscription_quota_not_proven"
+        ]
+      },
+      {
+        "scenario": "tui_completed",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "completed_turn"
+        ]
+      },
+      {
+        "scenario": "tui_question",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "completed_turn"
+        ]
+      },
+      {
+        "scenario": "tui_approval",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "pending_decision"
+        ]
+      },
+      {
+        "scenario": "tui_background_child",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "active_child"
+        ]
+      },
+      {
+        "scenario": "tui_final_agent_maintenance_quota",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "helper_failure"
+        ]
+      },
+      {
+        "scenario": "tui_final_maintenance_quota",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "completed_turn"
+        ]
+      },
+      {
+        "scenario": "tui_tool_maintenance_quota",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "completed_turn"
+        ]
+      },
+      {
+        "scenario": "tui_tool_question_maintenance_quota",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "helper_failure"
+        ]
+      },
+      {
+        "scenario": "tui_tool_text_question_quota",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "unclassified_text"
+        ]
+      },
+      {
+        "scenario": "tui_tool_quota_semantic",
+        "passed": true,
+        "candidate_observed": false,
+        "decisions": [
+          "unknown_native_identity",
+          "no_terminal_main_quota",
+          "native_auto_continue_not_disabled"
+        ]
+      }
+    ],
+    "record_sha256": "560abbcec5c0976da055a441221361930f7251ea3c0a5f394867c83c9a2bad81",
+    "limits": [
+      "No production observer/helper transport, VT admission, owner-input fencing or automatic continuation is qualified.",
+      "Only a text-free completed main-actor tool response followed by exact version-specific subscription quota is a candidate; text-bearing/unknown states remain ineligible.",
+      "The research file transport must be replaced by fresh direct bounded metadata; an old same-prompt snapshot cannot authorize after a lost callback.",
+      "The supported session identity getter is restricted to managed mods and does not expose request bearer/generation adoption.",
+      "Existing native automatic resume must be positively disabled; Swarm did not change a real user setting."
+    ]
   }
 }
