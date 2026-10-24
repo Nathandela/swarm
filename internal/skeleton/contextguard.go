@@ -138,7 +138,8 @@ type contextGuardSession struct {
 	// instance) that registration proved; nil means always current. It runs
 	// again at the queue head and inside the write boundary, so a dispatch
 	// prepared against a backend that was replaced while it waited never writes.
-	current func() bool
+	current     func() bool
+	ingressSafe func() bool
 	// confirmTimeout overrides contextGuardConfirmTimeout in tests; zero means
 	// the production value.
 	confirmTimeout time.Duration
@@ -297,6 +298,7 @@ func (d *Daemon) registerContextGuardBackend(local string, backend *sessionBacke
 		s.quiet = func() bool { return d.contextGuardQuiet(local) }
 		s.uncertain = func() bool { return d.composerOutcomeUnresolved(local) }
 		s.current = isCurrent
+		s.ingressSafe = backend.feed.ingressAutomationSafe
 		// The continuation seams (ADR-023 amendment 2) ride the same wiring:
 		// only a live automatic backend ever continues, and only when the
 		// adapter's version-fenced continuer exists for this version.
@@ -374,7 +376,7 @@ func (d *Daemon) ingestContextGuardFrame(local, instance, epoch string, sequence
 	}
 }
 
-// captureContextGuardFrame is the callback/read-loop seam. It never parses,
+// captureContextGuardFrame is the ingress-worker seam. It never parses,
 // persists, or performs provider I/O. Before registration it retains only the
 // latest usage sample and a bounded lifecycle queue; activation flushes while
 // holding guardMu so a later callback cannot overtake the buffered evidence.
@@ -898,7 +900,7 @@ func (s *contextGuardSession) sendContinuation() {
 	}()
 	var res json.RawMessage
 	if err := s.conn.CallAtWriteBoundary(ctx, method, params, &res, func() error {
-		if lane.barrierChanged(admittedBarrier) || lane.recyclingNow() || (s.quiet != nil && !s.quiet()) || (s.current != nil && !s.current()) {
+		if lane.barrierChanged(admittedBarrier) || lane.recyclingNow() || (s.quiet != nil && !s.quiet()) || (s.current != nil && !s.current()) || (s.ingressSafe != nil && !s.ingressSafe()) {
 			return errContextGuardDispatchRefused
 		}
 		return nil
@@ -1158,7 +1160,7 @@ func (s *contextGuardSession) dispatchCompaction() {
 			// dispatch), evidence that arrived since the queue head, or a
 			// backend replaced under the prepared dispatch refuses the write
 			// entirely -- provably no bytes follow (the appserver contract).
-			if s.settingsRevision.Load() != s.configRevision() || s.pendingEvidence() || (s.current != nil && !s.current()) || (s.quiet != nil && !s.quiet()) {
+			if s.settingsRevision.Load() != s.configRevision() || s.pendingEvidence() || (s.current != nil && !s.current()) || (s.quiet != nil && !s.quiet()) || (s.ingressSafe != nil && !s.ingressSafe()) {
 				return errContextGuardDispatchRefused
 			}
 			state, _, applied := s.applyReturning(contextguard.Event{Kind: contextguard.EventDispatchStarted, At: time.Now(), Key: s.key}, nil)

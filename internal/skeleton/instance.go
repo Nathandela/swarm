@@ -102,6 +102,9 @@ func (d *Daemon) recordSessionInstance(sessionID, instance string, shimPID int, 
 		d.contextGuards.replaceMu.Lock()
 		defer d.contextGuards.replaceMu.Unlock()
 	}
+	if prior, ok := d.sessionInstance(sessionID); ok && prior != instance {
+		d.clearBackendIngressLoss(sessionID)
+	}
 	// The instance, capabilities and their ordered journal publication share one authoring
 	// snapshot beneath the replacement fence.
 	d.capStore.authorMu.Lock()

@@ -254,13 +254,16 @@ type Daemon struct {
 	// app-server connection registry plus the outstanding server-request table, and `pump`
 	// is the producer-edge delta batcher. They ride their OWN mutexes rather than itemMu,
 	// with the lock order stated in backend.go: pumpMu -> itemMu, and backendMu taken alone.
-	backend           backendState
-	backendAuthAccess func(context.Context, string, bool) (backendAuthTokens, error)
-	executionStore    *persist.Store
-	openCode          openCodeObservations
-	nativeReceipts    openCodeReceiptIndexes
-	nativeRequests    openCodeRequestAuthorities
-	pump              backendPump
+	backend               backendState
+	backendAuthAccess     func(context.Context, string, bool) (backendAuthTokens, error)
+	backendIngressMu      sync.Mutex
+	backendIngress        map[*backendIngress]struct{}
+	backendIngressClosing bool
+	executionStore        *persist.Store
+	openCode              openCodeObservations
+	nativeReceipts        openCodeReceiptIndexes
+	nativeRequests        openCodeRequestAuthorities
+	pump                  backendPump
 	// backendReady overrides backendReadyDeadline. Test-only, and unset in production: the
 	// degrade paths are only reachable after a dial gives up, and waiting 90 s per case is a
 	// test suite nobody runs.
@@ -939,6 +942,7 @@ func (d *Daemon) endSession(id string) {
 	d.flushBackendFrames(id)
 	d.forgetBackendPump(id)
 	d.forgetBackend(id)
+	d.clearBackendIngressLoss(id)
 	d.captureConversationIDFinal(id)
 	if m, ok := d.core.Get(id); ok && m.ConversationID != "" {
 		if err := os.Remove(filepath.Join(d.stateDir, id, shim.IdentityTailFile)); err != nil && !os.IsNotExist(err) {
@@ -1315,6 +1319,7 @@ func (d *Daemon) Core() *daemon.Daemon { return d.core }
 func (d *Daemon) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closing)
+		d.stopBackendIngress()
 		d.stopOpenCodeObservations()
 		if d.authw != nil {
 			// FIRST (codex finding 7): the watcher's recycle launches sessions

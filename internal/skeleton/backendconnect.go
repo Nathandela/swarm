@@ -666,6 +666,15 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 	ctx, cancel := context.WithTimeout(context.Background(), d.backendDeadline())
 	defer cancel()
 	feed := newBackendFeed()
+	if !d.startBackendIngress(id, expectedInstance, feed) {
+		return nil, nil, errBackendAuthUnavailable
+	}
+	joined := false
+	defer func() {
+		if !joined {
+			feed.retireIngress()
+		}
+	}()
 	auth := newBackendAuthCoordinator(func(ctx context.Context, refresh bool) (backendAuthTokens, error) {
 		if d.backendAuthAccess == nil || !d.backendUsesExternalAuth(id) {
 			return backendAuthTokens{}, errBackendAuthUnavailable
@@ -680,24 +689,14 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 	var err error
 	for {
 		conn, err = appserver.Dial(ctx, ch.SocketPath, appserver.Options{
-			// Every frame goes to the ONE pump, which owns the batching, the typed-status
-			// application, the thread adoption and the item path (backend.go). A notification
-			// and a server-request differ only in whether an id rides along, and the pump
-			// reads that off the frame itself, so both arrive here as the same verbatim bytes.
+			// Private auth bypasses generic ingress. The bounded FIFO keeps native socket
+			// reading independent of the pump's persistence, preserving untouched envelopes.
+			OnClose: func(error) { feed.ingress.stop() },
 			OnFrame: func(method string, frame json.RawMessage) {
 				if auth.intercept(method, frame) {
 					return
 				}
-				var envelope struct {
-					Params json.RawMessage `json:"params"`
-					ID     json.RawMessage `json:"id"`
-				}
-				if json.Unmarshal(frame, &envelope) != nil {
-					return
-				}
-				// ContextGuard keeps its characterized projection; attention validates untouched bytes.
-				guardFrame := rebuildFrame(method, envelope.ID, envelope.Params)
-				d.ingestBackendFrameForFeed(id, expectedInstance, feed, method, frame, time.Now(), guardFrame)
+				feed.ingress.enqueue(method, frame, time.Now())
 			},
 		})
 		if err == nil {
@@ -711,6 +710,11 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 		}
 	}
 
+	if !feed.ingress.bindConnection(conn.Close) {
+		auth.bind(conn)
+		_ = conn.Close()
+		return nil, nil, errBackendAuthUnavailable
+	}
 	auth.bind(conn)
 	// The recorded boot handshake, in the recorded order (frame-samples.json): initialize with
 	// experimentalApi, then the `initialized` notification.
@@ -742,6 +746,7 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 			return nil, nil, errBackendAuthUnavailable
 		}
 	}
+	joined = true
 	return conn, feed, nil
 }
 

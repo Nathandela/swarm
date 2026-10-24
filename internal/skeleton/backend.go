@@ -117,6 +117,7 @@ type sessionBackend struct {
 // The callback captures this object before the connection is published, so a late
 // callback from a replaced connection can never borrow the replacement's identity.
 type backendFeed struct {
+	ingress   *backendIngress
 	epoch     string
 	userAgent string
 	seq       atomic.Uint64
@@ -154,7 +155,8 @@ type backendState struct {
 	// live maps a local session id to its connection. ABSENCE IS THE REFUSAL: a session
 	// with no entry has no message sink and no approval channel, and the ops refuse rather
 	// than falling back to a keystroke.
-	live map[string]*sessionBackend
+	live        map[string]*sessionBackend
+	ingressLoss map[string]string
 	// requests maps a local session id to the OUTSTANDING server-request ids, keyed by the
 	// item ref the request named (params.itemId). The daemon answers an approval by finding
 	// the id THIS connection received for that ref.
@@ -268,9 +270,21 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 	}
 	displaced = d.backend.live[local]
 	if displaced != nil && displaced.feed != nil {
-		displaced.feed.retired.Store(true)
+		displaced.feed.retireIngress()
 	}
 	d.backend.live[local] = entry
+	if lostInstance, ok := d.backend.ingressLoss[local]; ok {
+		delete(d.backend.ingressLoss, local)
+		if lostInstance == expectedInstance && feed.ingress != nil {
+			feed.ingress.markLoss()
+		}
+	}
+	if displaced != nil && displaced.sessionInstance == expectedInstance && displaced.feed != nil && displaced.feed.ingress != nil && displaced.feed.ingress.lost.Load() && feed.ingress != nil {
+		feed.ingress.markLoss()
+	}
+	if feed.ingress != nil {
+		feed.ingress.signal()
+	}
 	// JSON-RPC ids and thread adoption are connection-scoped. None may cross the
 	// compare-install boundary into the newly authoritative app-server connection.
 	delete(d.backend.requests, local)
@@ -292,7 +306,7 @@ func (d *Daemon) registerBackendFeedForInstance(local, expectedInstance, threadI
 	rollback := func() {
 		d.backend.mu.Lock()
 		if d.backend.live[local] == entry {
-			entry.feed.retired.Store(true)
+			entry.feed.retireIngress()
 			delete(d.backend.live, local)
 			delete(d.backend.requests, local)
 			delete(d.backend.byID, local)
@@ -551,10 +565,13 @@ func (d *Daemon) removeBackendForFeed(local, expectedEpoch string) (*sessionBack
 		return nil, false
 	}
 	if b != nil && b.feed != nil {
-		b.feed.retired.Store(true)
-	}
-	if b != nil && b.conn != nil {
-		_ = b.conn.Close()
+		b.feed.retireIngress()
+		if b.feed.ingress != nil && b.feed.ingress.lost.Load() {
+			if d.backend.ingressLoss == nil {
+				d.backend.ingressLoss = make(map[string]string)
+			}
+			d.backend.ingressLoss[local] = b.sessionInstance
+		}
 	}
 	delete(d.backend.live, local)
 	delete(d.backend.requests, local)
@@ -563,6 +580,9 @@ func (d *Daemon) removeBackendForFeed(local, expectedEpoch string) (*sessionBack
 	delete(d.backend.snapshotWait, local)
 	delete(d.backend.adopted, local)
 	d.backend.mu.Unlock()
+	if b != nil && b.conn != nil {
+		_ = b.conn.Close()
+	}
 	d.unregisterContextGuardBackend(local, b)
 	if b != nil {
 		d.discardContextGuardFeed(b.feed)
@@ -879,7 +899,7 @@ func (d *Daemon) backendFrameBelongsToSession(local string, frame []byte, method
 	return !strings.HasPrefix(method, "turn/") && !strings.HasPrefix(method, "item/") && !strings.HasPrefix(method, "thread/") && method != backendResolvedMethod
 }
 
-// ingestBackendFrameForFeed is the app-server callback boundary. Before registration it accepts
+// ingestBackendFrameForFeed is the FIFO worker boundary. Before registration it accepts
 // a frame only for the still-current session instance (needed for fresh thread/started); after
 // registration it additionally requires this exact feed. Holding the replacement fence through
 // capture and pump ingestion makes the decision linearizable with compare-install and loss.
