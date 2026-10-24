@@ -136,6 +136,15 @@ func Run(cfg Config) (agentExit int, err error) {
 	if err := ValidateOpenCodeConfig(cfg); err != nil {
 		return 0, err
 	}
+	externalBirth := cfg.LoginRuntime != nil && cfg.LoginRuntime.ExternalAuth && cfg.LoginSwitchID == ""
+	if externalBirth {
+		if err := validateCodexExternalReservation(cfg); err != nil {
+			return 0, err
+		}
+		if err := resolveLoginEnvironment(&cfg); err != nil {
+			return 0, err
+		}
+	}
 	managed, err := beginManagedNativeScope(cfg)
 	if err != nil {
 		return 0, err
@@ -145,8 +154,10 @@ func Run(cfg Config) (agentExit int, err error) {
 	defer func() { err = errors.Join(err, managed.finish()) }()
 	// Resolve once, before either native process can start. Scope custody is
 	// already installed so a clean selector failure also has positive stop proof.
-	if err := resolveLoginEnvironment(&cfg); err != nil {
-		return 0, err
+	if !externalBirth {
+		if err := resolveLoginEnvironment(&cfg); err != nil {
+			return 0, err
+		}
 	}
 
 	embargo, err := openInputEmbargo(cfg)

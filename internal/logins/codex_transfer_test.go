@@ -351,3 +351,89 @@ func TestCodexCommittedSameTargetNeverInfersLaunchedRowIsUnlaunched(t *testing.T
 		t.Fatal("ambiguous launched row authorized a fresh child")
 	}
 }
+
+func TestCodexBootstrapNoEffectResetRequiresExactUnboundClaim(t *testing.T) {
+	s, a, b, op := committedTransferFixture(t)
+	r, h, e := s.TransferCodexMigration(snapshot(t, s).Revision, op.ID, b.ID, nil, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	old := strings.Repeat("a", 32)
+	r, h, e = s.ClaimCodexBootstrapLaunch(r.Revision, h.ID, "unlaunched", old)
+	if e != nil {
+		t.Fatal(e)
+	}
+	// Selection can change, but resetting never changes the original source obligation.
+	r, h, e = s.RetargetCodexHandover(r.Revision, h.ID, a.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = s.ResetCodexBootstrapLaunch(r.Revision, h.ID, "unlaunched", strings.Repeat("b", 32)); !errors.Is(e, ErrConflict) {
+		t.Fatal("wrong nonce reset claim")
+	}
+	r, h, e = s.ResetCodexBootstrapLaunch(r.Revision, h.ID, "unlaunched", old)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if h.Bootstrap[0].Launch != nil || h.Bootstrap[0].Phase != "pending" {
+		t.Fatal("no-effect reset erased obligation or retained claim")
+	}
+	r, h, e = s.ClaimCodexBootstrapLaunch(r.Revision, h.ID, "unlaunched", strings.Repeat("c", 32))
+	if e != nil {
+		t.Fatal(e)
+	}
+	n := handoverNative("child", "native-child")
+	n.ConversationID = "thread-late"
+	if _, _, e = s.RecordCodexBootstrapChild(r.Revision, h.ID, "unlaunched", old, n); !errors.Is(e, ErrConflict) {
+		t.Fatal("old nonce bound replacement claim")
+	}
+	r, h, e = s.RecordCodexBootstrapChild(r.Revision, h.ID, "unlaunched", strings.Repeat("c", 32), n)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = s.ResetCodexBootstrapLaunch(r.Revision, h.ID, "unlaunched", strings.Repeat("c", 32)); !errors.Is(e, ErrConflict) {
+		t.Fatal("bound child reset as no-effect")
+	}
+}
+
+func TestCodexExternalBirthUsesCanonicalHomeAcrossSelectionChange(t *testing.T) {
+	s, a, b, op := committedTransferFixture(t)
+	r, h, e := s.TransferCodexMigration(snapshot(t, s).Revision, op.ID, b.ID, nil, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	claim := strings.Repeat("d", 32)
+	r, h, e = s.ClaimCodexBootstrapLaunch(r.Revision, h.ID, "unlaunched", claim)
+	if e != nil {
+		t.Fatal(e)
+	}
+	rt, e := s.Runtime(ProviderCodex)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, _, e = s.RetargetCodexHandover(r.Revision, h.ID, a.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = s.ValidateRuntime(rt); e == nil {
+		t.Fatal("legacy exact validation accepted historical runtime")
+	}
+	env, e := s.PrepareCodexExternalBirth(rt, []string{"PATH=/bin", "OPENAI_API_KEY=synthetic"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(strings.Join(env, "\n"), "synthetic") {
+		t.Fatal("birth retained credential selector")
+	}
+	if e = s.ValidateCodexBootstrapBirth(claim, "unlaunched", "thread-late", "child"); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.ValidateCodexBootstrapBirth(claim, "wrong", "thread-late", "child"); e == nil {
+		t.Fatal("wrong source accepted")
+	}
+	for _, bad := range []Runtime{{Provider: ProviderClaude, ExternalAuth: true, Home: rt.Home, Epoch: rt.Epoch, Identity: rt.Identity}, {Provider: ProviderCodex, Home: rt.Home, Epoch: rt.Epoch, Identity: rt.Identity}, {Provider: ProviderCodex, ExternalAuth: true, Home: rt.Home + "/wrong", Epoch: rt.Epoch, Identity: rt.Identity}} {
+		if _, e = s.PrepareCodexExternalBirth(bad, nil); e == nil {
+			t.Fatal("unowned birth routing accepted")
+		}
+	}
+}

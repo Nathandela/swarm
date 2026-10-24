@@ -401,3 +401,35 @@ func (s *Store) RecordCodexBootstrapOutcome(expected uint64, id, source, launchI
 		return nil
 	})
 }
+
+// ResetCodexBootstrapLaunch is reserved for a causally received no-start result
+// from the first direct launch call. Missing/failed/replayed launches are not proof.
+func (s *Store) ResetCodexBootstrapLaunch(expected uint64, id, source, launchID string) (Registry, Handover, error) {
+	return s.bootstrapMutation(expected, id, source, func(_ *Handover, b *BootstrapObligation) error {
+		if b.Phase != "launching" || b.ChildID != "" || b.Launch == nil || b.Launch.ID != launchID {
+			return ErrConflict
+		}
+		b.Launch = nil
+		b.Phase = "pending"
+		return nil
+	})
+}
+
+// ValidateCodexBootstrapBirth binds token-free process birth to its durable claim.
+// The claim's account tuple is historical; live authentication adopts current selection.
+func (s *Store) ValidateCodexBootstrapBirth(launchID, source, conversation, child string) error {
+	r, e := s.Snapshot()
+	if e != nil {
+		return e
+	}
+	h, ok := r.Handovers[ProviderCodex]
+	if !ok || !validID(launchID) || child == "" {
+		return ErrPending
+	}
+	for _, b := range h.Bootstrap {
+		if b.SourceID == source && b.ConversationID == conversation && b.Launch != nil && b.Launch.ID == launchID && b.Phase == "launching" && b.ChildID == "" {
+			return nil
+		}
+	}
+	return ErrConflict
+}

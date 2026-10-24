@@ -28,7 +28,12 @@ func resolveLoginEnvironment(cfg *Config) error {
 		return errLoginResolution
 	}
 	defer func() { _ = store.Close() }()
-	err = store.ValidateRuntime(*cfg.LoginRuntime)
+	externalBirth := cfg.LoginRuntime.ExternalAuth && cfg.LoginSwitchID == ""
+	if externalBirth {
+		_, err = store.PrepareCodexExternalBirth(*cfg.LoginRuntime, nil)
+	} else {
+		err = store.ValidateRuntime(*cfg.LoginRuntime)
+	}
 	if err != nil && cfg.LoginSwitchID != "" {
 		err = store.ValidateSwitchRestart(cfg.LoginSwitchID, cfg.LoginSwitchSource, *cfg.LoginRuntime)
 	}
@@ -42,7 +47,9 @@ func resolveLoginEnvironment(cfg *Config) error {
 	if cfg.Backend != nil && logins.ValidateArgsAuth(cfg.LoginRuntime.Provider, cfg.Backend.Args) != nil {
 		return errLoginResolution
 	}
-	if cfg.LoginSwitchID != "" && store.ValidateRuntime(*cfg.LoginRuntime) != nil {
+	if externalBirth {
+		cfg.Env, err = store.PrepareCodexExternalBirth(*cfg.LoginRuntime, cfg.Env)
+	} else if cfg.LoginSwitchID != "" && store.ValidateRuntime(*cfg.LoginRuntime) != nil {
 		cfg.Env, err = store.PrepareSwitchEnvironment(cfg.LoginSwitchID, cfg.LoginSwitchSource, *cfg.LoginRuntime, cfg.Env)
 	} else {
 		cfg.Env, err = store.PrepareEnvironment(*cfg.LoginRuntime, cfg.Env)
@@ -55,7 +62,9 @@ func resolveLoginEnvironment(cfg *Config) error {
 		if len(base) == 0 {
 			base = cfg.Env
 		}
-		if cfg.LoginSwitchID != "" && store.ValidateRuntime(*cfg.LoginRuntime) != nil {
+		if externalBirth {
+			cfg.Backend.Env, err = store.PrepareCodexExternalBirth(*cfg.LoginRuntime, base)
+		} else if cfg.LoginSwitchID != "" && store.ValidateRuntime(*cfg.LoginRuntime) != nil {
 			cfg.Backend.Env, err = store.PrepareSwitchEnvironment(cfg.LoginSwitchID, cfg.LoginSwitchSource, *cfg.LoginRuntime, base)
 		} else {
 			cfg.Backend.Env, err = store.PrepareEnvironment(*cfg.LoginRuntime, base)

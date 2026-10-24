@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/logins"
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
 )
 
@@ -62,6 +64,11 @@ func TestExternalAuthBackendNeverStartsStandalone(t *testing.T) {
 			cfg.Backend.GoAheadTimeout = 40 * time.Millisecond
 			cfg.LoginRuntime, cfg.LoginStateRoot = externalAuthRuntimeFixture(t)
 			cfg.NativeProvider = logins.ProviderCodex
+			cfg.SessionID = "external"
+			cfg.SessionDir = filepath.Join(cfg.LoginStateRoot, cfg.SessionID)
+			if err := os.Mkdir(cfg.SessionDir, 0700); err != nil {
+				t.Fatal(err)
+			}
 			marker := filepath.Join(cfg.SessionDir, "agent-started")
 			cfg.Argv = []string{selfExe(t), "fixture-external-auth-agent", marker}
 			home := t.TempDir()
@@ -79,6 +86,13 @@ func TestExternalAuthBackendNeverStartsStandalone(t *testing.T) {
 				if err := os.Mkdir(filepath.Join(cfg.SessionDir, BackendFile), 0700); err != nil {
 					t.Fatal(err)
 				}
+			}
+			reservation, err := persist.NewStore(cfg.LoginStateRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = reservation.Save(persist.Meta{ID: cfg.SessionID, AgentType: logins.ProviderCodex, LoginRuntime: cfg.LoginRuntime}); err != nil {
+				t.Fatal(err)
 			}
 			raw, _ := json.Marshal(cfg)
 			config := filepath.Join(cfg.SessionDir, "config.json")
@@ -109,7 +123,8 @@ func TestExternalAuthBackendNeverStartsStandalone(t *testing.T) {
 	}
 }
 
-func externalAuthRuntimeFixture(t *testing.T) (*logins.Runtime, string) {
+func externalAuthRuntimeFixture(t *testing.T, bootstrap ...bool) (*logins.Runtime, string) {
+	withBootstrap := len(bootstrap) > 0 && bootstrap[0]
 	t.Helper()
 	state := t.TempDir()
 	s, err := logins.Open(state)
@@ -134,6 +149,11 @@ func externalAuthRuntimeFixture(t *testing.T) (*logins.Runtime, string) {
 		t.Helper()
 		for _, phase := range []string{"stopping", "stopped"} {
 			op.Phase = phase
+			if phase == "stopped" {
+				for i := range op.Sessions {
+					op.Sessions[i].Phase = "stopped"
+				}
+			}
 			if err = s.SaveSwitch(op); err != nil {
 				t.Fatal(err)
 			}
@@ -152,13 +172,26 @@ func externalAuthRuntimeFixture(t *testing.T) (*logins.Runtime, string) {
 		if _, err = s.CommitSwitch(op.ID); err != nil {
 			t.Fatal(err)
 		}
-		if err = s.CompleteSwitch(op.ID); err != nil {
+		if migrate && withBootstrap {
+			r, _ := s.Snapshot()
+			r, h, e := s.TransferCodexMigration(r.Revision, op.ID, op.ToID, nil, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if _, _, e = s.ClaimCodexBootstrapLaunch(r.Revision, h.ID, "birth-source", strings.Repeat("e", 32)); e != nil {
+				t.Fatal(e)
+			}
+		} else if err = s.CompleteSwitch(op.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
 	finish(false)
 	r, _ = s.Snapshot()
-	op, err = s.BeginCodexOwnershipMigration(r.Revision, nil)
+	var rows []logins.Restart
+	if withBootstrap {
+		rows = []logins.Restart{{SourceID: "birth-source", ConversationID: "birth-thread"}}
+	}
+	op, err = s.BeginCodexOwnershipMigration(r.Revision, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,4 +201,181 @@ func externalAuthRuntimeFixture(t *testing.T) (*logins.Runtime, string) {
 		t.Fatalf("external fixture unavailable: %v", err)
 	}
 	return &rt, state
+}
+
+func TestExternalBirthInvalidReservationPreservesPriorCustodyProof(t *testing.T) {
+	cfg := r7BackendCfg(t, r7BackendBind, nil)
+	cfg.LoginRuntime, cfg.LoginStateRoot = externalAuthRuntimeFixture(t)
+	cfg.NativeProvider = logins.ProviderCodex
+	cfg.Argv = []string{selfExe(t), "fixture-external-auth-agent", filepath.Join(cfg.SessionDir, "unexpected-agent")}
+	cfg.Backend.Program = "/does/not/exist"
+	for _, name := range []string{NativeProcessFile, NativeStoppedFile} {
+		if err := os.WriteFile(filepath.Join(cfg.SessionDir, name), []byte("prior-exact-custody"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := json.Marshal(cfg)
+	config := filepath.Join(cfg.SessionDir, "config.json")
+	if err := os.WriteFile(config, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(ctx, selfExe(t), "fixture-external-auth-shim", config).CombinedOutput(); err == nil {
+		t.Fatalf("invalid reservation started: %s", output)
+	}
+	for _, name := range []string{NativeProcessFile, NativeStoppedFile} {
+		raw, err := os.ReadFile(filepath.Join(cfg.SessionDir, name))
+		if err != nil || string(raw) != "prior-exact-custody" {
+			t.Fatal("invalid birth destroyed prior native custody evidence")
+		}
+	}
+}
+
+func TestExternalBirthHistoricalRuntimeResolvesAfterRetarget(t *testing.T) {
+	rt, state := externalAuthRuntimeFixture(t)
+	cfg := r7BackendCfg(t, r7BackendBind, nil)
+	cfg.LoginRuntime, cfg.LoginStateRoot, cfg.NativeProvider = rt, state, logins.ProviderCodex
+	cfg.SessionID = "external"
+	cfg.SessionDir = filepath.Join(state, cfg.SessionID)
+	if err := os.Mkdir(cfg.SessionDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Argv = []string{selfExe(t), "fixture-external-auth-agent", filepath.Join(cfg.SessionDir, "agent-started")}
+	reservation, err := persist.NewStore(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = reservation.Save(persist.Meta{ID: cfg.SessionID, AgentType: logins.ProviderCodex, LoginRuntime: rt}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := logins.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	claims, _ := json.Marshal(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "https://api.openai.com/auth": map[string]string{"chatgpt_user_id": "next-user", "chatgpt_account_id": "next-account"}})
+	jwt := "e30." + base64.RawURLEncoding.EncodeToString(claims) + ".signature"
+	auth, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]string{"account_id": "next-account", "access_token": jwt, "id_token": jwt, "refresh_token": "synthetic-refresh"}})
+	r, _ := s.Snapshot()
+	r, next, err := s.Add(r.Revision, logins.ProviderCodex, "next", logins.Credential{Auth: auth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = s.BeginCodexHandover(r.Revision, next.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ValidateRuntime(*rt); err == nil {
+		t.Fatal("historical runtime unexpectedly remained current")
+	}
+	if err = validateCodexExternalReservation(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err = resolveLoginEnvironment(&cfg); err != nil {
+		t.Fatalf("token-free birth could not follow current backend auth after retarget: %v", err)
+	}
+	if *cfg.LoginRuntime != *rt {
+		t.Fatal("birth rewrote historical runtime metadata")
+	}
+}
+
+func TestExternalBirthReservationRejectionPreservesCustody(t *testing.T) {
+	for _, scenario := range []string{"bound_replay", "schema_alias", "duplicate", "runtime_alias", "wrong_cli", "wrong_source", "wrong_nonce", "wrong_conversation", "symlink_meta", "public_meta"} {
+		t.Run(scenario, func(t *testing.T) {
+			rt, state := externalAuthRuntimeFixture(t, true)
+			cfg := r7BackendCfg(t, r7BackendBind, nil)
+			cfg.LoginRuntime, cfg.LoginStateRoot, cfg.NativeProvider = rt, state, logins.ProviderCodex
+			cfg.SessionID = "external"
+			cfg.SessionDir = filepath.Join(state, cfg.SessionID)
+			cfg.InputEmbargo = strings.Repeat("e", 32)
+			if err := os.Mkdir(cfg.SessionDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			cfg.Argv = []string{selfExe(t), "fixture-external-auth-agent", filepath.Join(cfg.SessionDir, "unexpected-agent")}
+			cfg.Backend.Program = "/does/not/exist"
+			meta := persist.Meta{ID: cfg.SessionID, AgentType: logins.ProviderCodex, LoginRuntime: rt, InputEmbargo: cfg.InputEmbargo, ResumedFrom: "birth-source", ConversationID: "birth-thread"}
+			switch scenario {
+			case "wrong_cli":
+				meta.CLIIdentity = &persist.CLIIdentity{Path: selfExe(t), Version: "0.163.0", Fingerprint: "fixture"}
+			case "wrong_source":
+				meta.ResumedFrom = "other-source"
+			case "wrong_nonce":
+				meta.InputEmbargo = strings.Repeat("f", 32)
+				cfg.InputEmbargo = meta.InputEmbargo
+			case "wrong_conversation":
+				meta.ConversationID = "other-thread"
+			case "bound_replay":
+				s, e := logins.Open(state)
+				if e != nil {
+					t.Fatal(e)
+				}
+				r, _ := s.Snapshot()
+				h := r.Handovers[logins.ProviderCodex]
+				n := logins.NativeMember{SessionID: cfg.SessionID, NativeIncarnation: "101:201", NativePID: 101, NativeStartTime: 201, ConversationID: meta.ConversationID}
+				_, _, e = s.RecordCodexBootstrapChild(r.Revision, h.ID, meta.ResumedFrom, cfg.InputEmbargo, n)
+				s.Close()
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+			reservation, e := persist.NewStore(state)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = reservation.Save(meta); e != nil {
+				t.Fatal(e)
+			}
+			path := filepath.Join(cfg.SessionDir, "meta.json")
+			raw, e := os.ReadFile(path)
+			if e != nil {
+				t.Fatal(e)
+			}
+			switch scenario {
+			case "schema_alias":
+				raw = []byte(strings.Replace(string(raw), fmt.Sprintf(`"schema_version":%d`, persist.LoginSchemaVersion), fmt.Sprintf(`"schema_version":1,"Schema_Version":%d`, persist.LoginSchemaVersion), 1))
+			case "duplicate":
+				raw = []byte(strings.Replace(string(raw), `"id":"external"`, `"id":"external","id":"external"`, 1))
+			case "runtime_alias":
+				raw = []byte(strings.Replace(string(raw), `"login_runtime":`, `"Login_Runtime":`, 1))
+			}
+			if e = os.WriteFile(path, raw, 0600); e != nil {
+				t.Fatal(e)
+			}
+			if scenario == "symlink_meta" {
+				target := filepath.Join(cfg.SessionDir, "meta-original")
+				if e = os.Rename(path, target); e != nil {
+					t.Fatal(e)
+				}
+				if e = os.Symlink(target, path); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if scenario == "public_meta" {
+				if e = os.Chmod(path, 0644); e != nil {
+					t.Fatal(e)
+				}
+			}
+			for _, name := range []string{NativeProcessFile, NativeStoppedFile} {
+				if e = os.WriteFile(filepath.Join(cfg.SessionDir, name), []byte("prior-exact-custody"), 0600); e != nil {
+					t.Fatal(e)
+				}
+			}
+			raw, _ = json.Marshal(cfg)
+			config := filepath.Join(cfg.SessionDir, "config.json")
+			if e = os.WriteFile(config, raw, 0600); e != nil {
+				t.Fatal(e)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if output, e := exec.CommandContext(ctx, selfExe(t), "fixture-external-auth-shim", config).CombinedOutput(); e == nil {
+				t.Fatalf("rejected birth started: %s", output)
+			}
+			for _, name := range []string{NativeProcessFile, NativeStoppedFile} {
+				raw, e = os.ReadFile(filepath.Join(cfg.SessionDir, name))
+				if e != nil || string(raw) != "prior-exact-custody" {
+					t.Fatal("rejected birth destroyed original custody proof")
+				}
+			}
+		})
+	}
 }
