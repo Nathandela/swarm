@@ -67,7 +67,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	if scenario == "" {
 		scenario = "future"
 	}
-	if scenario != "future" && scenario != "expired" && scenario != "401" && scenario != "wrong-account" && scenario != "worker-kill" {
+	if scenario != "future" && scenario != "expired" && scenario != "401" && scenario != "wrong-account" && scenario != "worker-kill" && scenario != "healthy-native" {
 		t.Fatal("unsupported synthetic case")
 	}
 	output := os.Getenv("SWARM_CLAUDE_AUTH_NATIVE_OUTPUT")
@@ -153,6 +153,24 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 			t.Log("claude_auth_fixture_cleanup_pending: retain exact Store/unit proof")
 		}
 	})
+	var witnessScope logins.ClaudeAuthScope
+	var witnessBefore claudeAuthWitnessReceipt
+	witnessStopped := false
+	if scenario == "healthy-native" {
+		witnessScope, witnessBefore, err = startClaudeAuthWitness(ctx, executable, config, authority)
+		t.Cleanup(func() {
+			if !witnessStopped && witnessScope != (logins.ClaudeAuthScope{}) {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer cancel()
+				if err := stopClaudeAuthWitness(cleanupCtx, witnessScope); err != nil {
+					t.Log("retain exact witness unit proof")
+				}
+			}
+		})
+		if err != nil {
+			t.Fatalf("initialize native witness: %v", err)
+		}
+	}
 	launched, err := StartClaudeAuth(ctx, executable, config)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -194,7 +212,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	expectedReady := scenario == "future" || scenario == "expired"
+	expectedReady := scenario == "future" || scenario == "expired" || scenario == "healthy-native"
 	if (result.Phase == "ready") != expectedReady {
 		t.Fatalf("unexpected native result phase %s", result.Phase)
 	}
@@ -257,6 +275,33 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	if err != nil || unit["LoadState"] != "not-found" {
 		t.Fatal("owned unit metadata not collected")
 	}
+	if scenario == "healthy-native" {
+		root := filepath.Join(state, "native-witness")
+		if err := verifyClaudeAuthWitness(witnessScope, witnessBefore); err != nil {
+			t.Fatal("native witness changed during helper")
+		}
+		if err := witnessWrite(filepath.Join(root, "after-gate.json"), "after"); err != nil {
+			t.Fatal(err)
+		}
+		var afterReceipt claudeAuthWitnessReceipt
+		if err := witnessWait(ctx, filepath.Join(root, "after.json"), &afterReceipt); err != nil {
+			t.Fatal(err)
+		}
+		if afterReceipt.Native != witnessBefore.Native || afterReceipt.RequestID != "witness-after-"+config.Ref.Nonce || afterReceipt.RequestID == witnessBefore.RequestID || verifyClaudeAuthWitness(witnessScope, afterReceipt) != nil {
+			t.Fatal("native witness response/identity changed")
+		}
+		if err := witnessWrite(filepath.Join(root, "stop-gate.json"), "stop"); err != nil {
+			t.Fatal(err)
+		}
+		stopCtx, stopCancel := context.WithTimeout(ctx, 8*time.Second)
+		defer stopCancel()
+		// Exact worker SIGKILL is also safe if its normal exit has not completed;
+		// the same invocation must positively retire before collection.
+		if err := stopClaudeAuthWitness(stopCtx, witnessScope); err != nil {
+			t.Fatal(err)
+		}
+		witnessStopped = true
+	}
 	proxy.drain(t)
 	// Descendants may still run before recovery; the final traffic and authority
 	// assertions must follow positively verified unit retirement and collection.
@@ -271,7 +316,7 @@ func TestClaudeAuthInstalledNative(t *testing.T) {
 	if scenario == "worker-kill" {
 		phase = "unready_recovered"
 	}
-	summary := map[string]any{"passed": true, "case": scenario, "native_sha256": expected, "phase": phase, "attempts": result.Attempt, "refreshes": refreshes, "profiles": proxy.profiles.Load(), "inference_requests": proxy.models.Load(), "fresh_verifier": true, "same_authority_witness": "synthetic-sleep-not-native-discussion", "healthy_pid_unchanged": healthy.Alive(), "unit_collected": true, "scope": launched.Scope, "cmd_swarm_constructor_qualified": false}
+	summary := map[string]any{"passed": true, "case": scenario, "native_sha256": expected, "phase": phase, "attempts": result.Attempt, "refreshes": refreshes, "profiles": proxy.profiles.Load(), "inference_requests": proxy.models.Load(), "fresh_verifier": true, "same_authority_witness": "synthetic-sleep-not-native-discussion", "healthy_pid_unchanged": healthy.Alive(), "unit_collected": true, "scope": launched.Scope, "cmd_swarm_constructor_qualified": false, "initialized_native_responsive": scenario == "healthy-native", "native_witness": witnessBefore.Native}
 	data, _ := json.MarshalIndent(summary, "", "  ")
 	if err := os.WriteFile(filepath.Join(output, "receipt.json"), data, 0600); err != nil {
 		t.Fatal(err)

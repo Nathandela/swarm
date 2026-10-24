@@ -94,6 +94,9 @@ func claudeAuthFixtureTransport(state string) error {
 	}
 	return nil
 }
+
+var claudeAuthWitnessDispatch = func(string) (bool, int) { return false, 0 }
+
 func dispatchClaudeAuthFixture(args []string) (bool, int) {
 	if len(args) != 4 || args[1] != "internal" {
 		return false, 0
@@ -105,6 +108,9 @@ func dispatchClaudeAuthFixture(args []string) (bool, int) {
 		}
 		return true, 0
 	case "login-claude-auth":
+		if matched, code := claudeAuthWitnessDispatch(args[3]); matched {
+			return true, code
+		}
 		c, err := claudeAuthFixtureConfig(args[3])
 		if err != nil {
 			return true, 1

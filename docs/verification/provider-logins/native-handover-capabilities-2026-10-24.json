@@ -5388,5 +5388,53 @@
       "fixed-package.jsonl": "5ab751ce1e4b4c32128c6ce0d879c43d53532058c6b587d98fedef5434aee49f"
     },
     "root_focused_race_seconds": 4.235
+  },
+  "claude_auth_healthy_native_witness": {
+    "scope": "Two exact version-control roundtrips on the same initialized native process before and after the actual auth helper plus fresh recovery, using the same saved synthetic authority. No user/model turn.",
+    "run": {
+      "stage": "/run/user/1000/swarm-product-auth.y7S3gPZm",
+      "unit": "swarm-product-auth-269f5f2bb26e769d22c1e6e8",
+      "case": "healthy-native",
+      "binary_sha256": "e7c18ef05672692945c278aa6bd143ea638b7b55cc3fd59701000f4ba9f13e75",
+      "verified_elf_machine": 62,
+      "exit_code": 0,
+      "elapsed_seconds": 3.418,
+      "log_sha256": "e2d4e96ecb2857c8cb15041c812ee852d2288bbb531cbcd7b8beca536370ac51"
+    },
+    "manifest_sha256": "a63a94d54ade25c5fc5a64f05ef19cb99f5c7d86f508de7113564839d366bedf",
+    "source_files_verified": 215,
+    "parser": {
+      "stage": "/run/user/1000/swarm-witness-parser.zhwC14ZV",
+      "unit": "swarm-witness-parser-24b9c6b07f901b8a19dd6723",
+      "binary_sha256": "e7c18ef05672692945c278aa6bd143ea638b7b55cc3fd59701000f4ba9f13e75",
+      "verified_elf_machine": 62,
+      "source_files_verified": 215,
+      "exit_code": 0,
+      "elapsed_seconds": 0.389,
+      "log_sha256": "ad6728613ebab6ef1baa964f5d4a8f5db85a1c420fe1796666019ec83c4217b2"
+    },
+    "witness_unit": "swarm-claude-auth-ffe10e361a824a118bb196870c8cd4bf.service",
+    "native_identity_unchanged": true,
+    "distinct_control_ids": true,
+    "version": "2.1.310",
+    "phase": "ready",
+    "attempts": 1,
+    "refreshes": 0,
+    "profiles": 2,
+    "inference_requests": 0,
+    "both_units_retired_before_final_proxy_counters": true,
+    "canonical_synthetic_grant_unchanged": true,
+    "receipt_sha256": {
+      "receipt.json": "8d59f72b91355d8240f54207963764c66e0c8b2704adaf1f1ae4d6b8adfa8b45",
+      "witness-before.json": "4a35a049c31e738a5a1db01b0db7e6b4fe5682090912233b1c560f292d20b8a4",
+      "witness-after.json": "b38d2c7c9879e29d4da7d7895c9c8687fa5bd61661603586067ae1b30f5a66f0",
+      "witness-scope.json": "911d7106c1f7c11734abad15f3d47e6cefca92ceafe3b488d84adac85fbd1741"
+    },
+    "review": "Astra source GREEN; root native parser and actual Linux execution. Mac focused race and full Mac/Linux lint pass.",
+    "limitations": [
+      "This proves initialized native responsiveness while a helper checks the same authority; it does not prove refreshed-credential adoption or model/tool/history continuity.",
+      "The original independent sleep witness is also retained and labeled separately.",
+      "No real credentials, discussions, global provider configuration or production activation changed."
+    ]
   }
 }
