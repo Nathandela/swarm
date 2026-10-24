@@ -39,6 +39,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Private mobile repository decision](research/mobile-private-repository.md) — source-access/IP benefits, APK/history limits, split/CI costs and release-continuity gates
 - [Lightweight storage strategies](research/swarm-lightweight-storage-strategies.md) — native history ownership, bounded caches, workspace growth, quota boundaries, and recovery trade-offs; research, not an implementation decision
 - [Disk growth audit 2026-10-24](research/disk-growth-audit-2026-10-24.md) — fresh Mac/VM measurements, tested growth mechanisms, independent Astra challenges and storage architecture tradeoffs; no production cleanup
+- [Storage lifecycle implementation contract](specifications/storage-lifecycle-plan.md) — Sol/Astra-reviewed warning-only accounting, diagnostic retention, safe hook/handoff cleanup and test supervision; [implementation evidence](verification/storage-lifecycle.md)
 - [Lightweight storage fixing plan](specifications/lightweight-storage-plan.md) — owner-selected live-only supervisor, workspace boundaries, deletion, legacy cleanup, and two-host acceptance
 
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
