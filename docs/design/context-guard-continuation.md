@@ -1,6 +1,11 @@
 # ContextGuard continuation: compact, then keep working
 
-Status: implemented 2026-09-01 (ADR-023 amendment 2) -- integral to automatic dispatch, no separate setting in v1. At-most-once is in-memory by design: crash recovery holds the cycle, which can never re-observe the arming edge, so a durable marker adds nothing.
+> **Historical design — superseded.** This describes the former standalone
+> post-compaction continuation. [ADR-023 Amendment 3](../adr/ADR-023-context-guard-auto-compaction.md#amendment-3-2026-10-24-compaction-does-not-authorize-a-new-turn)
+> removes that mandate: host compaction completion does not authorize a new
+> turn. Automatic compaction and its existing safety fences remain current.
+
+Historical status: implemented 2026-09-01 under ADR-023 Amendment 2; superseded by Amendment 3. The at-most-once in-memory design described below is retained as historical implementation rationale.
 Owner ask: an automatic compaction on a working session must not strand the
 task — the compaction should present itself as mid-task context maintenance,
 and the flow should continue afterwards as if nothing happened.
@@ -85,8 +90,8 @@ verifiable and every gate can be re-checked at the last instant:
    was already complete and you were waiting for review, say so briefly and
    do not start new work."
 5. **Product contract.** Integral to automatic dispatch in v1 — no separate
-   setting; observe-only and unsupported guards never send anything. A
-   `continue_after_compact` toggle remains a documented future option.
+   setting; observe-only and unsupported guards never send anything.
+   A `continue_after_compact` toggle was a documented future option under the superseded contract.
 6. **Out of scope for v1, documented options:** launch-time
    `-c compact_prompt=...` for owners who want every compaction (manual and
    automatic) framed as mid-task maintenance; PostCompact managed hooks;
@@ -102,6 +107,6 @@ verifiable and every gate can be re-checked at the last instant:
   manual compactor is attached or phone-active and forfeits via the
   unattended rule in every reachable case; a foreign API client on the same
   socket is outside the product's threat model, as with the dispatch itself.
-- Version fence unchanged: continuation ships only where automatic dispatch
+- Historical version fence: continuation shipped only where automatic dispatch
   ships (exact live-gated allowlist), and this document's provider findings
   are part of what a new version's live-gate rerun must re-verify.

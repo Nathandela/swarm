@@ -216,7 +216,11 @@ Known limitation, accepted for this milestone: a hold (`outcome_unknown_hold`,
 instance. There is no owner-facing acknowledge-and-rearm operation yet; one
 transient unknown outcome retires the guard for that session instance.
 
-## Amendment 2 (2026-09-01): the compaction continues the task
+## Amendment 2 (2026-09-01): the compaction continues the task — superseded
+
+**Status:** Superseded only as to the post-compaction continuation mandate by
+[Amendment 3](#amendment-3-2026-10-24-compaction-does-not-authorize-a-new-turn).
+The automatic opt-in compaction and its dispatch fences remain in force.
 
 An automatic compaction on an unattended working session must not strand the
 flow: the owner's intent is context maintenance mid-task, not a stop. Two
@@ -254,10 +258,29 @@ is attached or phone-active and therefore forfeits via the unattended rule in
 every reachable case; a foreign API client on the same socket is outside the
 product's threat model, as with the dispatch itself.
 
-The continuation is integral to automatic dispatch in this version — no
-separate setting — and rides the same exact-version allowlist. `compact_prompt`
+The continuation was integral to automatic dispatch in this version — no
+separate setting — and rode the same exact-version allowlist. `compact_prompt`
 (codex's own summarizer-prompt config) stays user-owned per C-4; owners who
 want every compaction framed can set it at launch themselves.
+
+## Amendment 3 (2026-10-24): compaction does not authorize a new turn
+
+This amendment supersedes **only** Amendment 2's post-compaction continuation
+requirement. The opt-in automatic compaction behavior, exact version gates,
+daemon-side serialization, effect-window gate, and all other safety fences
+remain unchanged.
+
+Host compaction runs at idle. Its completion proves only that compaction
+completed; it does not establish unfinished work or authorize a new turn. The fixed continuation prompt could therefore start a new turn after a
+completed task, before the user has supplied new intent. ContextGuard
+compaction SHALL NOT arm or dispatch a standalone post-compaction continuation.
+Only an independently established, exact quota-recovery obligation may
+authorize an automatic recovery turn. Native midturn behavior is unchanged.
+
+The former continuation implementation and its characterization remain
+historical evidence only; they do not describe the current contract. The
+current regression is `TestContextGuardCompactionDoesNotInventAnotherTurn`;
+its verification result is recorded in [ContextGuard verification](../verification/context-guard.md).
 
 ## Alternatives Considered
 

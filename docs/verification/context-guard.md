@@ -175,7 +175,16 @@ is the owner-accepted race), Stop during a compaction (human intent; bounded by
 the confirmation deadline), and approval resolution (requires a pending
 approval, which already blocks dispatch at the queue head).
 
-## Continuation (ADR-023 amendment 2)
+## Historical continuation verification (ADR-023 amendment 2; superseded)
+
+> These experiments and test names record the former continuation behavior.
+> They are historical evidence, not current acceptance criteria. ADR-023
+> Amendment 3 removes the standalone continuation mandate. The current
+> regression is `TestContextGuardCompactionDoesNotInventAnotherTurn`. The
+> regression was observed red before the fix (one unexpected `turn/start`).
+> After deletion, the ContextGuard suite passed normally (5.346s) and with
+> `-race` (6.752s); adapter tests and connected `go vet` also passed. This
+> verifies the deletion, not the unfinished quota-recovery implementation.
 
 Two mechanisms were live-verified on codex 0.151.0
 (`docs/design/context-guard-continuation.md`); the adversarial review then
