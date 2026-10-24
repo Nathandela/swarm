@@ -322,7 +322,20 @@ func (d *Daemon) CommitComposerOperation(op string, outcome []byte, success bool
 // spawn the shim with a deterministic socket and filtered env, then confirm it is
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT
 // cleanup, modelling a crash whose orphan/phantom reconcile later resolves.
-func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error) {
+func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta, launchErr error) {
+	noStart := spec.BootstrapFirstAttempt && spec.OperationID != ""
+	if noStart {
+		if _, exists := d.idem.Get(spec.OperationID); exists {
+			noStart = false
+			spec.BootstrapFirstAttempt = false
+		}
+	}
+	forkBoundary := false
+	defer func() {
+		if launchErr != nil && noStart && !forkBoundary {
+			launchErr = BootstrapLaunchNotStarted(spec.OperationID)
+		}
+	}()
 	if spec.RequiredRuntime != "" && spec.OpenCodeEnv == nil {
 		var err error
 		spec.OpenCodeEnv, err = d.OpenCodeEnvironment(spec.ClientEnv)
@@ -388,6 +401,10 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// abort here.
 	if spec.OperationID != "" {
 		_, existed, perr := d.idem.Prepare(spec.OperationID, "launch", id)
+		if existed {
+			noStart = false
+			spec.BootstrapFirstAttempt = false
+		}
 		if perr != nil {
 			d.dropReserved(id)
 			return persist.Meta{}, fmt.Errorf("daemon: idempotency prepare for %s: %w", id, perr)
@@ -520,6 +537,8 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, terr
 	}
+	forkBoundary = true
+	spec.BootstrapFirstAttempt = noStart
 	cmd, backendPlanErr, err := d.spawnShim(id, spec, sock, dir, token)
 	if err != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
@@ -632,6 +651,12 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 // onto the meta so the degradation is visible in ls/TUI/doctor rather than only
 // in the daemon log.
 func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) (cmd *exec.Cmd, backendPlanErr string, err error) {
+	startAttempted := false
+	defer func() {
+		if err != nil && spec.BootstrapFirstAttempt && spec.OperationID != "" && !startAttempted {
+			err = BootstrapLaunchNotStarted(spec.OperationID)
+		}
+	}()
 	// The structured-capture channel (playbook §6.1): the shim binds its own hook
 	// socket beside its control socket, the agent's `swarm hook` is pointed at it, and
 	// the DRAIN verb is gated by a secret minted here and persisted only in this 0600
@@ -731,6 +756,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		return nil, "", err
 	}
 	cmd.Stdout, cmd.Stderr = logf, logf
+	startAttempted = true
 	startErr := cmd.Start()
 	_ = logf.Close() // the shim holds its own dup of the fd
 	if startErr != nil {

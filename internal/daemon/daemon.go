@@ -215,6 +215,9 @@ type LaunchSpec struct {
 	// session — the replay reuses the reserved session and spawns nothing. Local
 	// launches leave it "" (no idempotency reservation).
 	OperationID string
+	// BootstrapFirstAttempt is ephemeral authority from a fresh durable claim.
+	// Loaded/replayed claims must never set it; it is not session metadata.
+	BootstrapFirstAttempt bool `json:"-"`
 	// AuthIdentity is the provider-account identity the agent is being launched
 	// under (ADR-024). The assembly resolves it from the adapter's AuthProbe and
 	// the credentials on disk — exactly as it resolves Argv — and the daemon only
