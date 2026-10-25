@@ -1,0 +1,26 @@
+Root integration TDD and visual review — 2026-10-25
+Baseline for independent frame RED: e93c1fb3 (forms + redraw, before board).
+
+go test ./internal/tui -run '^TestMobileFrames/(board|fold|more)' -count=1
+RED 6.058s: compact boards lacked Login API; folded frame lacked Expand; More absent.
+After reviewed board integration, all six meaningful-context frame assertions passed.
+Six plain-text goldens retained under internal/tui/testdata/TestMobileFrames.
+
+go test ./internal/tui -run '^TestMobileFrames/(prompt|confirm)' -count=1
+RED 3.057s: 40x8 prompt footer hid enter launch; 32x8 confirmation hid esc cancel.
+Root fix prioritizes escape/submit in narrow form hints, preserves fitting wide hints,
+and avoids repeated titles/unrelated board rows in compact decision frames.
+Frame suite GREEN 2.868s before final confirmation whitespace cleanup.
+
+go test ./internal/tui -run '^TestStyleHoistPinnedOutput$' -count=1
+RED 2.836s after integration: five pins differed ONLY by deleted trailing SGR nonce;
+one confirmation pin additionally gained inspected Session/Agent/ID/Directory context.
+Repinned exact expected outputs; did not normalize actual output or relax palette checks.
+
+go test ./internal/tui -run '^Test(MobileFrames|StyleHoistPinnedOutput|ResponsiveForms|MobileBoard|Apply_)' -count=1
+GREEN 3.102s (shared integration; final repository qualification recorded separately).
+
+Merge conflict in updateGeneral kept BOTH captured More routing and safe n cancellation
+while disconnected. Root View keeps composeActiveForm before boardView; input guards,
+nonce removal and visible-working animation policy all retained.
+These are local render/model checks, not SSH or physical handset qualification.

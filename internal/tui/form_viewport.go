@@ -233,7 +233,7 @@ func (m rootModel) composeActiveForm() string {
 		return m.boundForm(m.composeBoard(body+"\nEsc back / n deny", "esc back"))
 	}
 	if m.height <= 0 {
-		return m.composeBoard(f.body, f.hint)
+		return m.composeBoard(f.body, m.formHint(f.hint))
 	}
 	lines, budget, key := m.formReading(f)
 	if len(lines) > budget {
@@ -267,7 +267,7 @@ func (m rootModel) composeActiveForm() string {
 		if f.decision {
 			hint = "↑↓/tab read · end confirm · esc back"
 		}
-		return m.boundForm(m.composeBoard(body, hint))
+		return m.boundForm(m.composeBoard(body, m.formHint(hint)))
 	}
 	// Preserve the established wide form when it already fits. On a short screen,
 	// pin the active field and required context before spending rows on neighbors.
@@ -280,7 +280,7 @@ func (m rootModel) composeActiveForm() string {
 		}
 	}
 	if len(raw) <= m.boardBodyRows() && fitsWidth && m.screen != screenHandoff {
-		return m.boundForm(m.composeBoard(f.body, f.hint))
+		return m.boundForm(m.composeBoard(f.body, m.formHint(f.hint)))
 	}
 	body := []string{ansi.Truncate(f.target, m.width, "")}
 	if f.field != "" {
@@ -288,17 +288,43 @@ func (m rootModel) composeActiveForm() string {
 	}
 	body = append(body, lines...)
 	remaining := m.boardBodyRows() - len(body)
-	for _, line := range raw {
-		if remaining <= 0 {
+	for i, line := range raw {
+		if f.decision || remaining <= 0 {
 			break
 		}
-		if strings.TrimSpace(ansi.Strip(line)) == "" || line == f.field {
+		if i == 0 || strings.TrimSpace(ansi.Strip(line)) == "" || line == f.field {
 			continue
 		}
 		body = append(body, ansi.Truncate(line, m.width, ""))
 		remaining--
 	}
-	return m.boundForm(m.composeBoard(strings.Join(body, "\n"), f.hint))
+	return m.boundForm(m.composeBoard(strings.Join(body, "\n"), m.formHint(f.hint)))
+}
+
+// Keep submit/cancel visible before editing shortcuts consume a narrow footer.
+func (m rootModel) formHint(hint string) string {
+	if m.width <= 0 || ansi.StringWidth(hint) <= m.width-2 {
+		return hint
+	}
+	parts := strings.Split(hint, " · ")
+	back := "esc back"
+	var actions, other []string
+	for _, part := range parts {
+		switch {
+		case strings.Contains(part, "esc"):
+			if strings.Contains(part, "deny") {
+				back = "n/esc deny"
+			} else if strings.Contains(part, "cancel") {
+				back = "esc cancel"
+			}
+		case strings.Contains(part, "enter"), strings.Contains(part, "confirm"):
+			actions = append(actions, part)
+		default:
+			other = append(other, part)
+		}
+	}
+	ordered := append([]string{back}, actions...)
+	return ansi.Truncate(strings.Join(append(ordered, other...), " · "), max(0, m.width-2), "…")
 }
 
 func (m rootModel) boundForm(body string) string {
