@@ -497,6 +497,18 @@ interrupted work and exclude human waits before constructing a successor.
 That host gate, cancellation, queued input, background work and workflow parity
 remain unqualified.
 
+The first [structured background-actor case](../verification/provider-logins/claude-structured-actors-2026-10-25.json)
+on Linux observed parent success while its exact child was still active. After
+the child completed and background membership became empty, native Claude made
+another model request from its task-completion notification, without host input.
+The three-response fixture refused that fourth request, so the case remains
+failed and no final idle was observed. Parent result, command completion, child
+terminal and empty membership therefore cannot establish whole-session completion.
+Keep session activity, known-child settlement and original-task recovery
+eligibility distinct. A native notification is not human input; it grants no
+permission to answer a pending question or resume unfinished work. Global actor
+completeness remains unqualified even when the known child settles.
+
 If structured Claude becomes the selected managed-session interface, use one
 shim-owned primary native process and its typed input/control stream. The
 existing `BackendConfig` describes a separate Codex side process; it is not a

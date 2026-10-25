@@ -254,6 +254,16 @@ tests reproduced loss of child activity evidence after daemon restart, tracked i
 are tracked in `agents-tracker-h6sc`. This research changes no production behavior
 and does not supersede ADR-034.
 
+The [first structured Claude background-actor case](provider-logins/claude-structured-actors-2026-10-25.json)
+observed parent success before its child completed. Native Claude then requested
+another inference for the child's completion notification after background
+membership was empty. The finite fixture refused that extra request; the case
+remains failed, with verified cleanup. These events distinguish known-child
+settlement from whole-session completion and do not authorize automatic recovery.
+The [fresh managed Codex TUI attempts](provider-logins/codex-fresh-tui-2026-10-25.json)
+also remain unqualified; the latest diagnostic identifies its normal protected
+socket alias for a source-bound test-harness correction.
+
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.
 

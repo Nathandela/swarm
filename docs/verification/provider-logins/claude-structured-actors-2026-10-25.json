@@ -1,0 +1,83 @@
+{
+  "date": "2026-10-25",
+  "kind": "single actual Linux structured Claude actor case R2",
+  "review": "Root and Astra reviewed the actual artifact result; this is one case only.",
+  "status": "FAIL: a fourth native model request exceeded the three-response fixture after known-child settlement; no final idle was observed.",
+  "pins": {
+    "native_version": "2.1.310",
+    "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "envelope_path": "/private/tmp/swarm-actor-case1-r2-linux-envelope-20261025/envelope.py",
+    "envelope_sha256": "a072f31d0d8bc0b39caee3e39917221e5b5f9477e199fedc8c55054494c62ec6",
+    "packet_manifest_sha256": "c6ad5395b5d75534d2551e5b80214eb6f2ec39e95861082676778c0296ef0f88",
+    "manifest_path": "/private/tmp/swarm-actor-case1-r2-linux-envelope-20261025/manifest.json",
+    "manifest_sha256": "4d7444c1eef65f34e750cf347b53f7c384e0a46dba9db1e25a506deb26a716bf"
+  },
+  "artifacts": {
+    "run_path": "/private/tmp/swarm-actor-case1-r2-linux-envelope-20261025/attempt/run.json",
+    "run_sha256": "bece8fa890031b2807472592a8f67e99f5e9600da30b811e0729488e089ef38d",
+    "receipt_path": "/private/tmp/swarm-actor-case1-r2-linux-envelope-20261025/attempt/receipt.json",
+    "receipt_sha256": "bb0a335a2cdfa3f325408b4d1351c02099437b5ffa9f80f6b4d4e6d89b422e51",
+    "evidence_archive_path": "/private/tmp/swarm-actor-case1-r2-linux-envelope-20261025/attempt/evidence.tar.gz",
+    "evidence_archive_sha256": "cdad552a0f4c729c9dd092a68408493253605c1e844d7f7d96dbfab7e5188f13",
+    "packet_archive_path": "/private/tmp/swarm-actor-case1-r2-linux-envelope-20261025/attempt/packet.tar.gz",
+    "packet_archive_sha256": "386360224ba23dcc890b782804e446e3d8f11a51155b475877a73c11771daf7f"
+  },
+  "observed_case": {
+    "actor_task_run_tool_join": {
+      "child_actor_task_id": "a2da323a9cd274efb",
+      "child_run_id": "0mvnq14mp-e5f30f8b",
+      "child_link": true,
+      "tool_result_matches_wire": true,
+      "parent_task_id": null,
+      "note": "Synthetic native identities only; content bodies are represented by evidence hashes in the retained receipt/archive.",
+      "original_user_message_uuid": "18ae6b36-f0b0-49bc-9fa2-68ccf5172760",
+      "tool_use_id": "tool_actor_case1"
+    },
+    "raw_native_event_order": [
+      "17: parent success result",
+      "18: command completed",
+      "19: child assistant",
+      "20: task completed",
+      "21: notification",
+      "22: empty background state",
+      "23: acknowledgement",
+      "24: empty background state",
+      "25: initialize",
+      "26: API retry"
+    ],
+    "model_request_04": "The fourth model request followed the native task notification; only three scripted responses existed, so the request was refused. This was a native task notification, not host user input.",
+    "state_interpretation": "Local done=true reflected only known child settlement. Global execution remained incomplete with auto_eligible=false. No final idle followed the fourth-request refusal.",
+    "counts": {
+      "model_requests": 4,
+      "scripted_model_responses": 3,
+      "automatic_stop_count": 0,
+      "successor_count": 0,
+      "trust_model_requests": 0
+    },
+    "preserved_context": [
+      "Normal instructions and settings",
+      "Write-deny policy",
+      "SessionStart hook",
+      "Native history and parent/child task linkage"
+    ],
+    "resume_or_recovery_input": false,
+    "parent_result_before_child_release": true
+  },
+  "cleanup": {
+    "native_process_groups_gone": true,
+    "http_handlers_joined": true,
+    "kernel_admission": {
+      "cgroup_empty": true,
+      "cgroup_directory_gone": true,
+      "native_sha256_unchanged": true,
+      "packet_sha256_unchanged": true
+    },
+    "outer_errors": [],
+    "note": "The receipt reports native groups gone and HTTP handlers joined; the run records admitted-kernel cleanup and unchanged pins. These cleanup facts do not convert the failed parent-idle result into a pass."
+  },
+  "limits": [
+    "One Linux R2 case only. No next case or platform is approved.",
+    "No automatic stop, successor construction, resume, or recovery input occurred.",
+    "Source-bound next plan remains pending review; this case does not authorize production behavior or automatic continuation."
+  ]
+}
