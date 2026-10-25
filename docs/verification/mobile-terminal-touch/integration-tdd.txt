@@ -24,3 +24,12 @@ Merge conflict in updateGeneral kept BOTH captured More routing and safe n cance
 while disconnected. Root View keeps composeActiveForm before boardView; input guards,
 nonce removal and visible-working animation policy all retained.
 These are local render/model checks, not SSH or physical handset qualification.
+
+Fresh whole-feature audit corrections
+Root regressions RUN RED2.435s: vanished status/tag header viewport/focus and hidden
+pairing/confirmation Working timers. Sol46ec2094 resolves moves before mutation;
+root shouldAnimateWorking now excludes active form overlays. The duplicate root
+anchor test was consolidated into TestMobileBoardVanishedHeaderKeepsOldOrderNeighbor.
+Sol475f0a77 fixes wrapped resume results across reconnect generations; command-to-result
+RED/GREEN evidence is in forms-tdd.txt. Luna lint corrections are in lint-tdd.txt.
+Combined corrected targeted suite GREEN5.207s with GOMAXPROCS=2, go test -p2.

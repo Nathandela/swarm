@@ -1048,7 +1048,7 @@ func (m *rootModel) enterGeneral() tea.Cmd {
 // shouldAnimateWorking is the lifecycle policy for the fast timer. A disconnected
 // roster must not imply live work, and an idle/off-board model has no visible glyph.
 func (m rootModel) shouldAnimateWorking() bool {
-	return !m.connectionLost && m.screen == screenGeneral && m.boardUsable() && m.general.visibleWorking()
+	return !m.connectionLost && m.screen == screenGeneral && !m.hasActiveForm() && m.boardUsable() && m.general.visibleWorking()
 }
 
 // armWorkingAnimation schedules the first tick of a chain when needed. It never
