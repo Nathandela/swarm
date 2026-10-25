@@ -325,3 +325,32 @@ func TestMobileBoardRequiredBannerTailReturnsOnResize(t *testing.T) {
 		t.Fatal("ordinary attention banner unnecessarily disabled board")
 	}
 }
+
+func TestMobileBoardRosterKeepsHeaderThroughIntermediateEmptyGroup(t *testing.T) {
+	old := sWorking("old", "codex", "/repo", "old", time.Minute)
+	m := New(newFakeClient(old), detectMixed()).(rootModel)
+	m.general.fold("working", true)
+	old.Group = "needs_input"
+	replacement := sWorking("replacement", "codex", "/repo", "replacement", time.Minute)
+	m.reconcileRoster([]protocol.SessionView{old, replacement})
+	if m.general.focusSection != "working" || m.general.selectedID() != "" {
+		t.Fatal("authoritative roster lost surviving collapsed header during intermediate apply")
+	}
+}
+
+func TestMobileBoardCompactWorkingUsesExistingAnimationAndPalette(t *testing.T) {
+	m := mobileBoard(t, 24, 4).(rootModel)
+	s, _ := m.general.selected()
+	before := m.general.renderRow(s, s.Group, true)
+	if !strings.Contains(before, groupStyle(s.Group).Render(groupIcon(s.Group, 0))) {
+		t.Fatal("compact Working row dropped existing animated glyph/palette")
+	}
+	m.general.spinnerFrame++
+	after := m.general.renderRow(s, s.Group, true)
+	if before == after || !strings.Contains(after, groupIcon(s.Group, 1)) {
+		t.Fatal("compact Working animation tick changed no visible cell")
+	}
+	if lipgloss.Width(before) > 24 || lipgloss.Width(after) > 24 || !strings.Contains(stripANSI(after), "session-0") {
+		t.Fatal("compact glyph displaced useful identity or exceeded row bound")
+	}
+}

@@ -208,9 +208,17 @@ func ellipsis(s string, n int) string { return ansi.Truncate(s, max(0, n), "…"
 func (m generalModel) compactRow(s protocol.SessionView, selected bool) string {
 	prefix := "  "
 	if selected {
-		prefix = "▌ "
+		prefix = styleAccent.Render("▌") + " "
 	}
 	state := attentionToken(s)
+	switch state {
+	case "needs input":
+		state = "input"
+	case "ready for review":
+		state = "review"
+	case "completed":
+		state = "ended"
+	}
 	markers := ""
 	if s.BackendPlanError != "" {
 		markers += " !backend"
@@ -222,26 +230,18 @@ func (m generalModel) compactRow(s protocol.SessionView, selected bool) string {
 		markers += " !supervision"
 	}
 	if markers != "" {
-		switch state {
-		case "needs input":
-			state = "input"
-		case "ready for review":
-			state = "review"
-		case "completed":
-			state = "ended"
-		}
 		// Keep a failure indication even when several diagnostics compete for one row.
 		state += " " + ellipsis(strings.TrimSpace(markers), max(1, m.width-8-ansi.StringWidth(state)))
 	}
 	// State remains readable; diagnostic details live in the existing doctor/ls surfaces.
-	budget := max(0, m.width-2)
+	budget := max(0, m.width-4)
 	state = ellipsis(state, max(0, budget-5))
 	nameWidth := max(0, budget-ansi.StringWidth(state)-1)
 	name := displayName(s)
 	if name == "" {
 		name = s.ID
 	}
-	return prefix + padRight(ellipsis(name, nameWidth), nameWidth) + " " + state
+	return prefix + groupStyle(s.Group).Render(groupIcon(s.Group, m.spinnerFrame)) + " " + styleAgent.Render(padRight(ellipsis(name, nameWidth), nameWidth)) + " " + groupStyle(s.Group).Render(state)
 }
 
 // boardGeometry reserves pinned chrome before traversing the shared grouped content.

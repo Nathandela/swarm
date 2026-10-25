@@ -57,3 +57,15 @@ go test ./internal/tui -run '^(TestMobileBoard|TestMouse|TestBanner|TestLaunchRe
 3.659s. Explicit setBanner messages cannot silently clip their required tail into
 an active board. Resize restores the full error and active controls. Ordinary
 status-attention notifications keep the board usable and counts remain pinned.
+
+Review corrections RED→GREEN:
+1. TestMobileBoardRosterKeepsHeaderThroughIntermediateEmptyGroup failed when
+reconcile temporarily emptied the focused section before adding its replacement
+member. Explicitly snapshot/restore semantic header across the whole roster.
+2. TestMobileBoardCompactWorkingUsesExistingAnimationAndPalette failed because
+compact rows omitted the existing Working glyph. Reuse groupIcon/groupStyle and
+selection/name styles in the compact row, accounting for the two extra cells.
+Generic input/review/ended states shorten deliberately; approval/question/error
+remain meaningful, and ordinary Working identity has a useful name budget.
+GREEN: go test ./internal/tui -run '^(TestMobileBoard|TestResponsive|TestWorking|TestApply_NoFlatAlloc)' -count=1
+11.520s. The focused header regression separately passed in 3.997s.
