@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Eight unqualified isolated fresh managed Codex TUI attempts, two seed-only controls and one failed preparation; synthetic grants only, no user authentication or live installation changes",
-  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V12 reached one CONNECT chatgpt.com:443, then TLS failed with certificate_unknown; no tunneled HTTP/model/native-frame/MCP activity was recorded. The complete native ownership and CA-trust gates remain open.",
+  "scope": "Twelve unqualified full fresh managed Codex constructor attempts, two seed-only controls and one failed preparation; synthetic grants only, no user authentication or live installation changes",
+  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V15 matched the rejected target to pinned public featured-plugin source. V16 then failed the existing three-second driver seed bound before public launch/native functional activity, so no featured-route/native ownership/conversation/auth/model qualification follows.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -327,14 +327,221 @@
         "path": "docs/verification/provider-logins/native-fixture-retirement-2026-10-25.json",
         "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
       }
+    },
+    {
+      "id": "diagnostic-V13",
+      "result": "FAIL at process observation before seed/native functional qualification; no conclusion about corrected native TLS acceptance.",
+      "run_path": "/private/tmp/swarm-codex-outer-czqexr63/run.json",
+      "run_sha256": "4ad67ad8f743d28d01b89edce0fa5dded4f3f3cc6a21bc513f621f68e447a8ab",
+      "prepared_path": "/private/tmp/swarm-codex-outer-czqexr63/prepared.json",
+      "prepared_sha256": "fa19226af3e45cb5d88b408cd86223113d503fc174f95f4269883d8fe503f912",
+      "post_stop_metadata_path": "/private/tmp/swarm-codex-outer-czqexr63/post-stop-metadata.json",
+      "post_stop_metadata_sha256": "3f160195965c264b3eee047098bd88f9bad877bb5f465cefb7c8426321901c83",
+      "finding": {
+        "unreadable_observation": "Exact exe ENOENT for PID1611294/start72950699, repeated R state and same cgroup.",
+        "prior_witness": "That birth was ALREADY among four observed tuples, with prior image [2049,9068]; the later unreadable instant cannot be attributed from the earlier witness.",
+        "phase_artifacts": "CA/leaf/CSR/transport existed; state, seed output, launch/daemon output and inner receipt absent in the later read. No complete birth trace or native-phase conclusion.",
+        "native_behavior": "Unqualified; no inner receipt was produced."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 1.676587200956419,
+        "exact_unit_kill_returncode": 0,
+        "cgroup_empty_and_gone": true,
+        "four_captured_identities_ended": true,
+        "pins_unchanged_at_postcheck": true,
+        "full_fixture_listener_and_native_ownership": "Unqualified; missing inner receipt.",
+        "supplemental_identity_check": "Later same-birth absence and unit/cgroup absence do not repair the failed run."
+      },
+      "amendment_path": "/private/tmp/swarm-codex-unattributed-aux-amendment-20261025-v2/AMENDMENT.md",
+      "amendment_sha256": "402f4198db13ae5301222bb9e63e995658f79b79071b2309ef15a4bc436d760f",
+      "amendment_scope": "Exact live-R exe ENOENT may be unattributed auxiliary metadata; every captured tuple remains tracked for cleanup. Any eventual entry/four-role gap remains disqualifying, including later image recovery. Conservative required-role false negatives are explicit."
+    },
+    {
+      "id": "diagnostic-V14",
+      "result": "FAIL at unexpected provider query; TLS-protected HTTP destination validation was reached, but target/client and required native ownership remain unidentified.",
+      "run_path": "/private/tmp/swarm-codex-outer-h0j2i46o/run.json",
+      "run_sha256": "157256c144b39e32249bdac25efb1fcc9afea3c61139a34a134ffa2caa5dc1c0",
+      "prepared_path": "/private/tmp/swarm-codex-outer-h0j2i46o/prepared.json",
+      "prepared_sha256": "4a1a54a281ccd7deaed7b634159d080f9b2d2c8224841b4555dbd7bc0f0f9caa",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-h0j2i46o/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "458d4f6b2daa5d8089de78977be56edbcf0cd0f4c5bb9dd4b02b3bc7cebfae13",
+      "evidence_index_path": "/private/tmp/swarm-codex-outer-h0j2i46o/inner-evidence/collected-sha256.json",
+      "evidence_index_sha256": "b111f6c80cb8ed89ccc3005276a5b613e65150de852a4a2db934780df128171b",
+      "actual_public_chain_path": "/private/tmp/swarm-codex-outer-h0j2i46o/inner-evidence/loopback.pem",
+      "actual_public_chain_sha256": "4bfde4c0a88e3ed6eab5d7cc0eb5a59058ac05c28fd27d30c7e1b5dddc88439c",
+      "observed": {
+        "CONNECT_authority": "chatgpt.com:443",
+        "CONNECT_count": 1,
+        "recorded_GET": 0,
+        "native_frames": 0,
+        "main_inferences": 0,
+        "MCP_calls": 0,
+        "observed_tuples": 17,
+        "unattributed_image_gaps": 0,
+        "scope": "The handler rejected query validation before writing a GET ledger row. This identifies neither the historical target nor its native client."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 6.348764698021114,
+        "unit_not_found_and_cgroup_gone": true,
+        "all_17_observed_identities_ended": true,
+        "native_endpoint_no_listener_and_leaves_absent": true,
+        "pins_unchanged_at_postcheck": true,
+        "signal": "Skipped after positive already-collected proof.",
+        "inner_listeners_joined": true,
+        "complete_outer_fixture_listener_and_native_ownership": "Not qualified; finalization lacked ownership."
+      },
+      "masked_log_projection_path": "/private/tmp/swarm-codex-outer-h0j2i46o/native-log-projection-r2.json",
+      "masked_log_projection_sha256": "cf84d70244f5711a48553869ba32a72960fa9a922a688b69fe1d939a891e65aa",
+      "log_projection_limit": "Positive/secret selfchecks passed; exact native/session/saved log directories yielded no usable URL. Inconclusive, not evidence of absent native traffic. The earlier truncated projection was not used as authority.",
+      "query_plan_path": "/private/tmp/swarm-codex-query-plan-20261025-v1/PLAN.md",
+      "query_plan_sha256": "259b76f3be96283844ada218f62d6fe8e98b9452f6651fbd71c38c5df89f7acd",
+      "source_result": "Existing models client_version=0.163.0 and query-free accounts/usage match pinned release source. Test literals 0.0.0 are not release evidence; other plugin paths remain candidates only.",
+      "next_step": "Root and Astra approved preparation of one capped masked rejection diagnostic while preserving current rejection behavior. No route allowance or native continuation follows."
+    },
+    {
+      "id": "diagnostic-V15",
+      "result": "EXPECTED DIAGNOSTIC FAIL: exact rejected-target metadata recovered under unchanged rejection rules; no accepted provider GET, model/MCP behavior or complete native ownership.",
+      "run_path": "/private/tmp/swarm-codex-outer-602p0xzt/run.json",
+      "run_sha256": "bdf3a02802a0335a68dd3b429036a787799c0706afe47fed57c3beefaf92f06a",
+      "prepared_path": "/private/tmp/swarm-codex-outer-602p0xzt/prepared.json",
+      "prepared_sha256": "43d0325b149ec26b0ba73ec6ac8834203941db3baf0a079888c65cbbc280953a",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-602p0xzt/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "bf2cde0e3ee0ba4df9fff921352b37710a6be03e7b353e7309157bdf3e9e1a23",
+      "evidence_index_path": "/private/tmp/swarm-codex-outer-602p0xzt/inner-evidence/collected-sha256.json",
+      "evidence_index_sha256": "c476fb52d7adf4fd7669c6502826261cb48c490f1ca81a45f480f23b48058198",
+      "packet_manifest_path": "/private/tmp/swarm-codex-tui-constructor-20261025-v10/review-v10/manifest.json",
+      "packet_manifest_sha256": "ef35021832811238ea5a7597e41d9722ef477297c1b27094e05c4821d755bdb1",
+      "observed": {
+        "CONNECT_authority": "chatgpt.com:443",
+        "CONNECT_count": 1,
+        "rejected_target_count": 1,
+        "recorded_GET": 0,
+        "native_frames": 0,
+        "main_inferences": 0,
+        "MCP_calls": 0,
+        "masked_rejected_target": {
+          "method": "rejected-target",
+          "path": {
+            "sha256": "27787ae02536faaae723a6b785021d941f84c07a1d4cbbe18b71448c5744fdd7",
+            "bytes": 29
+          },
+          "pairs": [
+            [
+              {
+                "sha256": "d294fcce0cc88587843099d85dd805aeef1b09a63b0db1dd3e4dc62a343c1db5",
+                "bytes": 8
+              },
+              {
+                "sha256": "57de4cf40144bdf7d00010f2f5557a7d642c2b9705309bfade167dd313e2ca93",
+                "bytes": 5
+              },
+              true
+            ]
+          ],
+          "pairs_total": 1,
+          "truncated": false
+        },
+        "scope": "TLS-protected HTTP rejection metadata only; no native-client/PID attribution, account/adoption/model effect or complete ownership proof."
+      },
+      "source_match": {
+        "public_relative_target": "/backend-api/plugins/featured?platform=codex",
+        "exact_match": "All three full SHA256 and byte lengths match only pinned public source candidates; one pair, equals=true, truncated=false. No private dictionary search.",
+        "pinned_native_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+        "plan_path": "/private/tmp/swarm-codex-query-contract-plan-20261025-v1/PLAN.md",
+        "plan_sha256": "7b322f9cc73d53cbafe022ffde8bca1fe7ad31e7b7a23cfcd7ac1d90fb61f678",
+        "source_bundle_path": "/private/tmp/swarm-codex-query-contract-plan-20261025-v1/HASHES.json",
+        "source_bundle_sha256": "bdda3f8568f570b861d6ae373b1dd80549598723c047c3002217974ea3795cbf",
+        "exact_matches_path": "/private/tmp/swarm-codex-query-contract-plan-20261025-v1/exact-matches.json",
+        "exact_matches_sha256": "cfdc91e63dfcaed42def1d4e4871ff20038b580c214e0bb16e0eac20f22ef55d",
+        "source_check_path": "/private/tmp/swarm-codex-query-contract-plan-20261025-v1/source-match-checks.log",
+        "source_check_sha256": "3d41cf4c4083a2ae7907d6f19e435811bf713f48e40c5c017ae2864acaef8d1e",
+        "contract": "Pinned default app-server plugin startup warms featured IDs; remote_legacy builds this exact GET with optional native auth headers and parses Vec<String>. Empty[] is valid metadata and does not disable plugins or confer auth/model/owner credit. Source call-chain reachability is not historical sender attribution.",
+        "status": "Root+Astra GREEN preparation plan at the V15 evidence point. V11 packet/V16 envelope preparation had no native qualification; a later actual V16 seed-timeout FAIL is recorded separately."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 7.442034414969385,
+        "observed_tuples": 18,
+        "unattributed_image_gaps": 0,
+        "unit_not_found_and_cgroup_gone": true,
+        "all_18_observed_identities_ended": true,
+        "native_endpoint_no_listener_and_leaves_absent": true,
+        "pins_unchanged_at_historical_postcheck": true,
+        "signal": "Skipped only after positive already-collected unit/cgroup/all-observed-identities proof; no signal delivered.",
+        "inner_listeners_joined": true,
+        "inner_cleanup_elapsed_seconds": 3.0262387699913234,
+        "complete_outer_fixture_listener_and_native_ownership": "Not qualified; known_fixture_listeners_closed=false and finalization lacked ownership.",
+        "retirement_note": "This remote cached native ELF was later retired in batch2; historical pins refer to the recorded run checks, not current complete-stage bytes."
+      },
+      "retirement_reference": {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
+        "sha256": "e6b50ba5ff4f8a71ff129c906f8f8d1febd9e3fe51a92e046a85c0b0baa5d071"
+      },
+      "polling_limit": "Bounded positive tuple witnesses only; no complete ephemeral exec/birth trace or global network confinement.",
+      "next_step": "At this evidence point, review exact-featured-route private artifacts before one fresh case. The later V16 actual seed-timeout FAIL is recorded as its own attempt; no featured-route acceptance was observed."
+    },
+    {
+      "id": "diagnostic-V16",
+      "result": "FAIL during existing three-second synthetic driver seed subprocess bound; stopped before public launch/native functional phase. The featured metadata route was not reached.",
+      "run_path": "/private/tmp/swarm-codex-outer-9xgzw6mq/run.json",
+      "run_sha256": "5d6f579554bcc5dfe5bdb4dbebc553e0cb161e74aed4e0353a4c2e8fd48d25f5",
+      "prepared_path": "/private/tmp/swarm-codex-outer-9xgzw6mq/prepared.json",
+      "prepared_sha256": "b6f840dcf908c02ab183858fe5620092507f9300d4330c579cb6f381aec4b36d",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-9xgzw6mq/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "1086cc9dae5a68bab682d7fc69fea91e2fb1e5fc3bfa84fdb1391b1a66480c60",
+      "evidence_index_path": "/private/tmp/swarm-codex-outer-9xgzw6mq/inner-evidence/collected-sha256.json",
+      "evidence_index_sha256": "4384b975f3b6d71fbfc2073722a97f5dd6338a1de8cf56549d4a57a7e4f0b780",
+      "transport_record_path": "/private/tmp/swarm-codex-outer-9xgzw6mq/inner-evidence/transport.json",
+      "transport_record_sha256": "65998007c5cb006ef529fbdfcc76a844cd31f93522755431d5493286ba1d0098",
+      "packet_manifest_path": "/private/tmp/swarm-codex-tui-constructor-20261025-v11/review-v11/manifest.json",
+      "packet_manifest_sha256": "f2c04bfb41be506c3e006ce20e015108998e7d9191fd58a845e8c886f9aff23e",
+      "finding": {
+        "failure": "TimeoutExpired: driver-linux-amd64 seed subprocess exceeded existing3seconds. Historical blocking step/cause unobserved; no timer increase or retry follows.",
+        "inner_elapsed_seconds": 4.156734278076328,
+        "root_poststop_report": "Root reports no prepared.json, daemon or launch output; collected index contains only inner receipt and fixture transport record. Missing copied files alone are not historical liveness proof.",
+        "route_scope": "Fixture listener/transport record existed, but provider accepted/rejected/TLS handshake counts, ledger/native frames/model/MCP were all zero. This run says nothing about featured-route or corrected native TLS success.",
+        "post_stop_public_metadata": "Exact private root: seed.stdout and seed.stderr both0bytes; s/logins/.registry-lock and373-byte registry.json exist; native/config.toml and prepared.json absent. This corroborates partial store setup only, not a specific stalled call, lock contention or historical resource cause.",
+        "output_source": "Frozen qualify.py helper uses Popen redirecting output to seed.stdout/seed.stderr and wait(timeout=min(3,remaining)); driver emits output only after seed returns. The empty retained files are not a subprocess.run capture omission."
+      },
+      "observed": {
+        "public_actions": 0,
+        "provider_transport": {
+          "accepted": 0,
+          "rejected": 0,
+          "tls_handshake_failures": 0,
+          "drained": true
+        },
+        "provider_ledger_entries": 0,
+        "native_frames": 0,
+        "main_inferences": 0,
+        "MCP_calls": 0,
+        "observed_tuples": 5,
+        "unattributed_image_gaps": 0,
+        "native_endpoint_recorded": false
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 5.180649928981438,
+        "unit_not_found_and_cgroup_gone": true,
+        "all_5_observed_identities_ended": true,
+        "pins_unchanged_at_historical_postcheck": true,
+        "signal": "Skipped after positive already-collected unit/cgroup/all-observed-identities proof; no signal delivered.",
+        "inner_listeners_joined": true,
+        "inner_cleanup_elapsed_seconds": 0.11305033497046679,
+        "complete_outer_fixture_listener_and_native_ownership": "Not qualified: known_fixture_listeners_closed=false; finalize KeyError ownership. No native endpoint was recorded, so do not claim native-endpoint closure."
+      },
+      "next_step": "Read-only source investigation of the connected driver seed path and existing bounds, then review the smallest diagnostic plan. No inferred cause or blind timeout increase follows; no further native case was approved by artifact review at this evidence point.",
+      "polling_limit": "Five positive observed identities only; no complete ephemeral exec/birth trace or native ownership qualification.",
+      "seed_post_stop_metadata_path": "/private/tmp/swarm-codex-outer-9xgzw6mq/seed-post-stop-metadata.json",
+      "seed_post_stop_metadata_sha256": "ec2b1c4f45a4f45fbd61f009b983c027ae2c8933bf20edefc3cec3aa4904b1b9"
     }
   ],
-  "next_step": "Prepare and review the standard certificate-chain correction, then run one bounded fresh diagnostic. The existing dotenv path reached CONNECT but native CA acceptance and required ownership remain open. Frozen fixture product dc90 predates the separately tested production auth guard; real accounts and automatic continuation remain separate gates.",
+  "next_step": "Investigate the connected seed path and exact existing bounds from source and bounded stopped-case evidence. Propose the smallest reviewed diagnostic without inventing a cause, increasing timers, changing production logic, or running another native case. Real accounts, loaded-thread state and automatic continuation remain separate gates.",
   "limits": [
-    "Eight full attempts plus two seed-only controls remain unqualified for fresh managed Codex TUI adoption; V11 failed preparation is separate and all prior failures remain historical evidence.",
+    "Twelve full constructor attempts plus two seed-only controls remain unqualified; V11 failed preparation is separate. Every earlier failure remains historical evidence.",
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
-    "V12 establishes one positive CONNECT only. Native CA trust, complete native ownership, conversation behavior and real-account qualification remain open; no production filtering widening is authorized."
+    "V14 establishes TLS-protected HTTP reach only. The target and native client are unidentified, no GET was recorded, and native ownership/conversation behavior remain unqualified; no production filtering or route allowance is implied.",
+    "V15 recovers exact public target tokens but not the historical caller. Its intentional rejection provides no accepted GET/auth/adoption/model/MCP/complete ownership proof. Later exact-featured-route preparation did not qualify behavior; V16 timed out during seed before route reach. Scoped cached-ELF retirement does not repair failures.",
+    "V16 driver seed timed out at3seconds; the blocking operation is unknown. No inference from five identities or absence of copied files to a specific seed lock, filesystem operation or native request is justified."
   ],
   "validator_source": {
     "auth_boundary_path": "/private/tmp/swarm-setup-root-20261025/source/internal/logins/auth_boundary.go",
@@ -387,5 +594,16 @@
   "retirement_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-2026-10-25.json",
     "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
+  },
+  "attempt_counts": {
+    "full_constructor_attempts": 12,
+    "seed_only_controls": 2,
+    "failed_preparations": 1,
+    "total_recorded_operations": 15,
+    "latest_actual_attempt": "diagnostic-V16"
+  },
+  "retirement_batch2_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
+    "sha256": "e6b50ba5ff4f8a71ff129c906f8f8d1febd9e3fe51a92e046a85c0b0baa5d071"
   }
 }

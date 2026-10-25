@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-25",
+  "scope": "Batch2: retire exactly three inactive duplicate public Linux Codex test images. Installed CLI, user accounts, grants, logs, receipts and all other stage artifacts retained.",
+  "review": "Root and Astra approved exact scoped retirement; Root performed it. This documentation does not execute cleanup.",
+  "batch1_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-2026-10-25.json",
+    "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54",
+    "immutable": true
+  },
+  "retained_image_path": "/private/tmp/swarm-native-binary-retention-20261025/codex-linux-0.163.0",
+  "retained_image_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+  "image_bytes": 296865480,
+  "intent_path": "/private/tmp/swarm-native-binary-retention-20261025/batch2/retirement-intent.json",
+  "intent_sha256": "78dbfab9cd04a53baa1a0d483cc9b2ea4bc0fc7e11ac5145bef7643659154c5c",
+  "script_path": "/private/tmp/swarm-native-binary-retention-20261025/batch2/retire_kernel.py",
+  "script_sha256": "6e8a96b71024b49afdae398cd914d638d980ff86240676cb6eb128785dd1cb06",
+  "dry_run_path": "/private/tmp/swarm-native-binary-retention-20261025/batch2/retirement-dry-run-kernel.json",
+  "dry_run_sha256": "1e803bbaf2fd38505923b4ec064aa3b54e3add265d44de955a3c0a53cf3c01ea",
+  "applied_path": "/private/tmp/swarm-native-binary-retention-20261025/batch2/retirement-applied.json",
+  "applied_sha256": "288ffbc6c66e51d357892a3a2a56e9ace17f6a1000e82dfd0a506fcddd0b954d",
+  "kernel_proof_path": "/private/tmp/swarm-native-binary-retention-20261025/kernel-exec-exclusion-proof.json",
+  "kernel_proof_sha256": "e64e001b034e8c60624e3dffa864b0c7095e7ef9feb5f78687a5f004ffab8a69",
+  "kernel_proof": "Previously recorded disposable copied sleep image: write-open while executing and exec while write-held returned ETXTBSY. No provider CLI was executed for that primitive. Batch2 held an anchored write descriptor through each exact unlink without writing/truncating.",
+  "retired_remote_paths": [
+    "/tmp/scx.07yt0icv/native/codex",
+    "/tmp/scx._8n9i300/native/codex",
+    "/tmp/scx.w4ep2z0i/native/codex"
+  ],
+  "retired_bytes": 890596440,
+  "free_bytes_after": 1552609280,
+  "all_three_kernel_write_exclusion_held": true,
+  "all_three_units_absent_or_never_created": true,
+  "all_three_observed_identities_ended": true,
+  "historical_stages_modified": true,
+  "retained_public_images": 1,
+  "checks": "Exact regular one-link owner/mode/size/SHA and anchored parents checked; identity rechecked with kernel write exclusion held through exact unlink.",
+  "limits": [
+    "These three cached ELF paths were removed AFTER their historical run checks. Old receipts do not claim that complete remote stages remain unchanged today.",
+    "One full public executable byte image remains locally retained; every other artifact remains at its prior location. No credential cleanup, installed CLI modification or user-data deletion.",
+    "No failed run is repaired, no provider/login/TUI qualification changes, and no live-session behavior is inferred."
+  ]
+}
