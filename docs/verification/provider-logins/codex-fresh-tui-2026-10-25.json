@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Sixteen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
-  "overall": "Still NOT QUALIFIED. V20 stopped at an ESRCH process-observation failure before an inner receipt; it supplies no runtime bypass or functional qualification. Its cause/component remain unknown, and endpoint alias/socket leaves remained despite no listener.",
+  "scope": "Seventeen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
+  "overall": "Still NOT QUALIFIED. V22 reached a stage deadline with zero provider connections or native frames; the backend readiness log does not establish why. Process observation completed without a census error, but no functional or native proxy-bypass credit follows.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -840,9 +840,70 @@
         "A no-listener endpoint with retained alias/socket leaves is not complete endpoint cleanup.",
         "A proposed ESRCH reread requires separate review; same-birth or ambiguous results remain failures, with no image or role credit."
       ]
+    },
+    {
+      "id": "diagnostic-V22",
+      "result": "FAIL: case/stage deadline before provider traffic or native frames. No constructor, proxy-bypass or authentication qualification.",
+      "run": {
+        "path": "/private/tmp/swarm-codex-outer-gn_u8kck/run.json",
+        "sha256": "11ff02d09d576bdf87456b7123346cf5167a24e7251df0b693b10603836dd7ff"
+      },
+      "inner_receipt": {
+        "path": "/private/tmp/swarm-codex-outer-gn_u8kck/inner-evidence/receipt.inner.json",
+        "sha256": "59c34aeed94052df45490bde340f08c75e314eba0cac44582d4ba8e858ba93ea"
+      },
+      "six_file_index": {
+        "path": "/private/tmp/swarm-codex-outer-gn_u8kck/inner-evidence/collected-sha256.json",
+        "sha256": "278bf068f4829170c675553442ca3ae6fb2664ec37c1708f8c6f85bc8ff941ca"
+      },
+      "additional_daemon_log": {
+        "path": "/private/tmp/swarm-codex-outer-gn_u8kck/inner-evidence/daemon.log",
+        "sha256": "06751b11b58857c2cf8dfb569f41ad64512e84dc2c213b0fe508ae11b664dcb1"
+      },
+      "envelope": {
+        "path": "/private/tmp/swarm-codex-envelope-20261025-v22/hashes.json",
+        "sha256": "85de078dce0f5ccf83fb098a399ac92958d635f3ee0b073951cfa63458c9999a"
+      },
+      "unchanged_packet": {
+        "path": "/private/tmp/swarm-codex-tui-constructor-20261025-v15/review-v15/manifest.json",
+        "sha256": "fd6fa5759357fe81e3a1bda2563706e75d31a61cf0fa15839fe09a82939f5e8e"
+      },
+      "observed": {
+        "inner_elapsed_seconds": 21.49941917799879,
+        "provider_connections": 0,
+        "provider_ledger_entries": 0,
+        "native_frames": 0,
+        "main_inferences": 0,
+        "MCP_calls": 0,
+        "PTY_bytes": 0,
+        "launch_acknowledgement": "Recorded; does not establish a usable backend/TUI.",
+        "log": "Backend socket not servable within configured1m0; external authentication requires an authenticated backend.",
+        "log_limit": "The configured timeout wording does not prove an elapsed minute, early backend death or a cause. The message may follow fixture Stop."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 25.027963839937,
+        "observed_identities": 11,
+        "image_gaps": 0,
+        "all_observed_identities_ended": true,
+        "exact_cgroup_empty_and_gone": true,
+        "pins_unchanged": true,
+        "inner_listeners_joined": true,
+        "native_endpoint_closure_witness_recorded": false,
+        "complete_fixture_listener_and_native_ownership": false
+      },
+      "next_source_plan": {
+        "path": "/private/tmp/swarm-codex-resource-diagnostic-plan-20261025-v1/PLAN.md",
+        "sha256": "742a1a69bea4a9b67b7ff3d33585628b6cb354229731c70cc7fde5fe93a73efc"
+      },
+      "next_step": "Prepare bounded read-only exact-cgroup thread/memory counters. No resource cause, limit increase, new retry or functional waiver is inferred.",
+      "limits": [
+        "Process witnesses are not thread counts. No existing record proves task or memory exhaustion.",
+        "Pinned Unix-transport source does not support a stdin-EOF fix; actual failure cause remains unknown.",
+        "V21 was held locally and never executed. V22 did not qualify proxy bypass or exercise a known ESRCH runtime branch."
+      ]
     }
   ],
-  "next_step": "Review the envelope-only ESRCH identity reread with exact positive birth-token guards. Preserve all prior cases; no uncertain identity, role or cleanup refusal is waived.",
+  "next_step": "Review the envelope-only exact-cgroup resource diagnostic, keeping limits, timers, identity, functional and cleanup gates unchanged. Resource pressure remains an unproven hypothesis.",
   "limits": [
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
@@ -907,13 +968,13 @@
     "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
   },
   "attempt_counts": {
-    "full_constructor_attempts": 16,
+    "full_constructor_attempts": 17,
     "seed_only_controls": 2,
     "failed_preparations": 1,
     "unused_successful_preparations": 1,
-    "total_recorded_operations": 20,
+    "total_recorded_operations": 21,
     "count_scope": "Recorded constructor/seed/preparation evidence only; cleanup operations are separate.",
-    "latest_actual_attempt": "diagnostic-V20"
+    "latest_actual_attempt": "diagnostic-V22"
   },
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
