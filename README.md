@@ -86,8 +86,12 @@ The daemon starts automatically and opens the session board.
 
 | Key | Action |
 |---|---|
-| <kbd>↑</kbd> <kbd>↓</kbd> | Move through sessions |
-| <kbd>⏎</kbd> | Attach to the selected agent; <kbd>ctrl</kbd>+<kbd>q</kbd> returns to swarm |
+| <kbd>↑</kbd> <kbd>↓</kbd> / <kbd>j</kbd> <kbd>k</kbd> | Move through visible sessions and folded groups |
+| <kbd>⏎</kbd> | Open a visible selected session or expand a folded group; <kbd>ctrl</kbd>+<kbd>q</kbd> returns from an agent |
+| <kbd>←</kbd> <kbd>→</kbd> | Fold or expand the selected group |
+| <kbd>page up</kbd> <kbd>page down</kbd> / <kbd>home</kbd> <kbd>end</kbd> | Navigate the visible board by pages or ends |
+| <kbd>g</kbd> | Reveal the next session needing input or ready for review |
+| <kbd>m</kbd> | More: existing global and selected-session actions |
 | <kbd>n</kbd> | Start a session and choose its CLI, working directory, and optional tag |
 | <kbd>e</kbd> | Rename the selected session |
 | <kbd>t</kbd> | Tag the selected session; an empty tag clears it |
@@ -96,7 +100,11 @@ The daemon starts automatically and opens the session board.
 | <kbd>ctrl</kbd>+<kbd>x</kbd> | Kill a live session or delete a finished one; confirm with <kbd>y</kbd> |
 | <kbd>esc</kbd> | Close the TUI while agents keep running |
 
-The board also takes the mouse: click a session to select it, click the selected session to attach (the same as <kbd>⏎</kbd>; this works as a tap in phone terminals too), and scroll to move the selection. Only the board does. Forms, inline edits and confirms keep your terminal's normal mouse behaviour, and swarm stops asking for mouse input before it hands the terminal to an attached agent. On the board, select text with your terminal's bypass modifier (usually <kbd>shift</kbd>, or <kbd>option</kbd> in iTerm2 and Terminal.app).
+The board also takes the mouse: click an unselected session to select it, click the selected session to open it, tap a group header to fold it, and scroll to move the viewport without changing selection. New, Open/Show/Expand and More expose the same commands at the bottom. More has its own scrollable touch targets. An offscreen selected session is revealed before a session command can act; repeat the command after checking its target.
+
+For phone terminals over SSH, layout follows the available columns and rows, including software-keyboard resizing. Compact rows prioritize names and attention; folded groups retain attention counts. Tap the attention count or press <kbd>g</kbd> to reveal an attention session. Text forms still use your keyboard and preserve terminal-native selection/paste. On the board or More, use your terminal's selection bypass modifier if available (usually <kbd>shift</kbd>, or <kbd>option</kbd> in iTerm2 and Terminal.app). Gesture translation depends on the terminal app; an actual client must emit mouse/wheel reports for those interactions.
+
+The board/menu minimum is 24×4 cells; text and decision screens require 32×8. Smaller screens preserve drafts and allow cancel/back while pausing new actions. Swarm stops requesting mouse input before handing the terminal to an attached agent. See the [mobile terminal interaction contract](docs/specifications/mobile-terminal-touch-plan.md) and [qualification evidence](docs/verification/mobile-terminal-touch/README.md).
 
 Attach mode is raw passthrough: the agent's native full-screen interface remains untouched. swarm adds only a thin session header, which can be hidden. Ended sessions offer <kbd>r</kbd> to resume as a fresh linked session where the adapter supports it. If the saved directory is unavailable, choose an existing directory to relocate and resume the same conversation, or press <kbd>esc</kbd> to cancel.
 

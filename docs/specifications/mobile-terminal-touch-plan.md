@@ -1,6 +1,6 @@
 # Mobile terminal dashboard interaction plan
 
-Date: 2026-10-25. Status: proposed implementation contract, challenged by Sol and Astra; implementation has not started.
+Date: 2026-10-25. Status: accepted for implementation; challenged by Sol and Astra. [ADR-035](../adr/ADR-035-mobile-terminal-navigation.md) records the intentional behavior amendments. Implementation and physical qualification evidence is tracked separately.
 
 Make Swarm's terminal dashboard comfortable to navigate from Termux and an iOS terminal over SSH. The deliverable is a scrollable, responsive board with collapsible groups and touch access to existing commands. Preserve keyboard operation, terminal-native text selection during editing, and the raw attached-agent boundary.
 
@@ -144,4 +144,4 @@ Before a mobile compatibility claim, record on both actual phones: client/versio
 
 Run task trials finding/opening the bottom of a 50-session board, folding and restoring location, revealing attention inside folded groups, editing with the keyboard open, copying/pasting and returning from each used agent. Repeat with controlled RTT/jitter/bandwidth constraints and background/foreground transitions. Record pass/fail per actual client; desktop PTY tests do not establish thumb accuracy or phone rendering performance.
 
-Product changes require `go build ./...`, `go vet ./...`, `go test ./...`, `golangci-lint run` and the applicable GG-4 race gates. Follow the repository test supervisor and shared-cache rules. Do not deploy, publish or close implementation from this planning-only task. Attach input-mode continuity remains a separate hypothesis to characterize; do not add generic mode replay to this feature.
+Product changes require `go build ./...`, `go vet ./...`, `go test ./...`, `golangci-lint run` and the applicable GG-4 race gates. Follow the repository test supervisor and shared-cache rules. Release publication and physical handset qualification remain explicit gates; local implementation does not establish either. Attach input-mode continuity remains a separate hypothesis to characterize; do not add generic mode replay to this feature.
