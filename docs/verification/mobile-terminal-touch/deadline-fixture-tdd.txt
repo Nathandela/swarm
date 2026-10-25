@@ -1,0 +1,34 @@
+Login-worker deadline fixture correction — 2026-10-25
+Untouched loginworker baseline; test-only correction for full-gate startup race.
+
+RED: TestDeadlineContainsWriters armed3s before Start's filesystem synchronization,
+config validation and detached exec. RunConfig rejects an expired config before
+publishing progress. A temporary overlay delaying detached startup3.1s reproduced
+the exact failure: phase= error= stopped=false (8.54s test,9.328s package).
+The unchanged isolated test passed5/5 (18.315s), consistent with startup coupling.
+
+Correction: retain the real Config.Deadline and re-arm the existing20s fixture cap
+after fixture preparation. The test deliberately delays supervisor startup3.1s,
+then separately requires Authenticating and a live escaped writer. It waits through
+the configured deadline plus the existing8s progress allowance, and requires failed
+phase/deadline error, WritersStopped, NativeWritersStopped, dead runner/escaped
+child and secret containment. Existing bounded cancellation cleanup is unchanged.
+Expired absolute configurations are separately rejected by Start and RunConfig,
+with no progress or native work. Final progress polling now reports read errors.
+
+GREEN: GOMAXPROCS=2 TMPDIR=/private/tmp go test -p1 ./internal/loginworker
+-run '^(TestDeadlineContainsWriters|TestExpiredDeadlineStartsNoWriters)$' -count=1 -v
+21.412s package; delayed-start real-deadline case20.34s.
+
+Mutation negative control: temporary Go overlay replaced only production
+context.WithDeadline(ctx,cfg.Deadline) with context.WithCancel(ctx).
+The corrected test FAILED after28.37s (29.107s package): phase=authenticating,
+stopped=false, read_error=<nil>. Existing bounded cancellation cleanup ran.
+This proves parent cancellation or a larger test timeout cannot replace the
+production Config.Deadline enforcement covered by the final test.
+
+RACE GREEN: same focused command with -race, GOMAXPROCS=2 and -p1.
+22.857s package; delayed-start real-deadline case20.36s; no race report.
+
+No production source, deadline policy, dependency, protocol or provider
+authentication changed. Broad integration gates remain the root lane's work.
