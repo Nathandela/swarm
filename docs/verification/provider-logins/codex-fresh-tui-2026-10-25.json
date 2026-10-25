@@ -1396,5 +1396,9 @@
   "retirement_batch5_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch5-2026-10-25.json",
     "sha256": "d15df6b5bc3e0372068d0a8bacb4fe6d5b6ac607c759c3a11fabdb8ad359b462"
+  },
+  "retirement_batch6_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-batch6-2026-10-25.json",
+    "sha256": "ce4862b3f1225a505b9ae248e2b0950a3b765219522882fbb0b6eca16e2b00e3"
   }
 }

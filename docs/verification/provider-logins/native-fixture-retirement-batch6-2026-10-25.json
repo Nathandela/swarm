@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-25",
+  "scope": "Retire only three duplicate public Codex ELF copies from finished V22, V24 and V25 fixtures. Preserve all test classifications and evidence.",
+  "review": "Root and Astra reviewed the exact intent and two-literal script delta from batch6. Root inspected the fresh dry run before apply.",
+  "evidence": {
+    "intent": {
+      "path": "/private/tmp/swarm-native-binary-retention-20261025/batch7/retirement-intent.json",
+      "sha256": "8606885d57300f45044dc9bde083c2c837d9eb54d4bb0dd68f4142a1d11ba50f"
+    },
+    "script": {
+      "path": "/private/tmp/swarm-native-binary-retention-20261025/batch7/retire_kernel.py",
+      "sha256": "36a58ee21760559c0a54f5258cce7142c989012fa5f6e73e446bd0f3a2548ff7"
+    },
+    "local_validation": {
+      "path": "/private/tmp/swarm-native-binary-retention-20261025/batch7/local-validation-proof.json",
+      "sha256": "b52d1e74559f1772aef99f838a09c3383e45cf72a67f88f225b8da9d3c1d4192"
+    },
+    "dry_run": {
+      "path": "/private/tmp/swarm-native-binary-retention-20261025/batch7/retirement-dry-run-kernel.json",
+      "sha256": "334b3af46e9b1792c87cc3c17398ac611f3d31b481517939cf639853dcb15504"
+    },
+    "applied": {
+      "path": "/private/tmp/swarm-native-binary-retention-20261025/batch7/retirement-applied.json",
+      "sha256": "75a17d9bbcd46e212bf1c7e659377b2ec48613298f3e5a09731387493c6f5e33"
+    }
+  },
+  "retained_image": {
+    "path": "/private/tmp/swarm-native-binary-retention-20261025/codex-linux-0.163.0",
+    "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "bytes": 296865480
+  },
+  "retired": [
+    {
+      "case": "V22",
+      "path": "/tmp/scx.f6qbvnsc/native/codex",
+      "bytes": 296865480,
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+      "observed_pid_start_pairs_ended": 11,
+      "fresh_unit_absent_cgroup_gone": true,
+      "kernel_write_exclusion_held_through_unlink": true
+    },
+    {
+      "case": "V24",
+      "path": "/tmp/scx.gpuuqm1y/native/codex",
+      "bytes": 296865480,
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+      "observed_pid_start_pairs_ended": 24,
+      "fresh_unit_absent_cgroup_gone": true,
+      "kernel_write_exclusion_held_through_unlink": true
+    },
+    {
+      "case": "V25",
+      "path": "/tmp/scx.2u2du6sx/native/codex",
+      "bytes": 296865480,
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+      "observed_pid_start_pairs_ended": 30,
+      "fresh_unit_absent_cgroup_gone": true,
+      "kernel_write_exclusion_held_through_unlink": true
+    }
+  ],
+  "totals": {
+    "files": 3,
+    "retired_bytes": 890596440,
+    "free_bytes_at_apply": 978952192
+  },
+  "method": "Exact whitelisted stage paths, fresh absent unit/cgroup, ended observed PID/start identities, anchored private directories and regular one-link owner/mode/size/hash checks. Hold a non-truncating kernel write descriptor on the pinned inode through exact unlink; no writes or signals.",
+  "limits": [
+    "Historical stage bytes changed only after original run pin checks. No PASS/FAIL result is repaired.",
+    "Aliases, sockets, credentials, discussions, histories, installed CLIs, logs, receipts and other artifacts are outside the unlink operation. Their continued presence was not freshly inventoried by this script.",
+    "Free space is a sample at apply time, not reserved capacity. This adds no native functional, account-adoption or complete fixture ownership qualification."
+  ]
+}
