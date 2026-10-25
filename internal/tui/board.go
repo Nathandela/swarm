@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -517,4 +518,63 @@ func (m generalModel) survivingAnchor(keep func(boardLine) bool) boardAnchor {
 		line++
 	})
 	return anchor
+}
+
+// updatePositions resolves old identities before a session changes group or
+// replaces sources. Metadata callers supply no lifecycle removals.
+func (m generalModel) updatePositions(updated protocol.SessionView, removed []string) (anchor, focus boardAnchor) {
+	anchor = m.anchor()
+	changed := len(removed) > 0
+	for _, old := range m.sessions {
+		if old.ID == updated.ID {
+			changed = changed || m.groupKey(old) != m.groupKey(updated)
+			break
+		}
+	}
+	if !changed {
+		return
+	}
+	survives := func(id string) bool { return id == updated.ID || !slices.Contains(removed, id) }
+	keep := func(l boardLine) bool {
+		if l.kind == lineSession {
+			return survives(l.session.ID) && (l.session.ID != updated.ID || !m.isCollapsed(m.groupKey(updated)))
+		}
+		if l.kind == lineSection {
+			if l.section == m.groupKey(updated) {
+				return true
+			}
+			for _, old := range m.sessions {
+				if old.ID != updated.ID && survives(old.ID) && m.groupKey(old) == l.section {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	anchor = m.survivingAnchor(keep)
+	if m.focusSection != "" && !keep(boardLine{kind: lineSection, section: m.focusSection}) {
+		best := -1
+		m.navigation(func(l boardLine, i int) {
+			if keep(l) {
+				distance := i - m.sel
+				if distance < 0 {
+					distance = -distance
+				}
+				if best < 0 || distance < best || distance == best && i >= m.sel {
+					focus = boardAnchor{kind: l.kind, id: l.session.ID, section: l.section}
+					best = distance
+				}
+			}
+		})
+	}
+	return
+}
+func (m *generalModel) restoreUpdateFocus(target boardAnchor) {
+	if target.id != "" {
+		m.focusSection = ""
+		m.restoreSel(target.id)
+	} else if target.section != "" {
+		m.focusSection = target.section
+		m.restoreSel("")
+	}
 }

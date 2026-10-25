@@ -422,26 +422,7 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	}
 	// Early removals above own their anchor in remove; this update owns the
 	// anchor once, including all inline superseded-source deletions below.
-	anchor := m.anchor()
-	if len(s.Supersedes) > 0 {
-		survives := func(id string) bool { return id == s.ID || !slices.Contains(s.Supersedes, id) }
-		anchor = m.survivingAnchor(func(l boardLine) bool {
-			if l.kind == lineSession {
-				return survives(l.session.ID)
-			}
-			if l.kind == lineSection {
-				if l.section == m.groupKey(s) {
-					return true
-				}
-				for _, old := range m.sessions {
-					if survives(old.ID) && m.groupKey(old) == l.section {
-						return true
-					}
-				}
-			}
-			return false
-		})
-	}
+	anchor, focus := m.updatePositions(s, s.Supersedes)
 	defer func() { m.restoreAnchor(anchor) }()
 	for _, id := range s.Supersedes {
 		for i := range m.sessions {
@@ -471,6 +452,7 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 		m.sessions = append(m.sessions, s)
 	}
 	m.refreshLayout(selID)
+	m.restoreUpdateFocus(focus)
 
 	if bannerGroup(s.Group) && (!found || oldGroup != s.Group || oldAttention != attentionToken(s)) {
 		// A transition INTO needs_input/ready_for_review raises a transient banner
@@ -876,13 +858,16 @@ func (m *generalModel) applyName(id, name string) {
 }
 
 func (m *generalModel) applyTag(id, tag string) {
-	anchor := m.anchor()
-	defer func() { m.restoreAnchor(anchor) }()
 	selectedID := m.selectedID()
 	for i := range m.sessions {
 		if m.sessions[i].ID == id {
+			updated := m.sessions[i]
+			updated.Tag = tag
+			anchor, focus := m.updatePositions(updated, nil)
 			m.sessions[i].Tag = tag
 			m.refreshLayout(selectedID)
+			m.restoreUpdateFocus(focus)
+			m.restoreAnchor(anchor)
 			return
 		}
 	}

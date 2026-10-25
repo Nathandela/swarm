@@ -491,3 +491,73 @@ func TestMobileBoardEventRemovalHasSingleAnchorOwner(t *testing.T) {
 		})
 	}
 }
+
+func TestMobileBoardVanishedHeaderKeepsOldOrderNeighbor(t *testing.T) {
+	for _, path := range []string{"status", "tag"} {
+		t.Run(path, func(t *testing.T) {
+			var sessions []protocol.SessionView
+			for i := range 10 {
+				s := sNeedsInput("a/"+itoa(i), "codex", "/repo", "input", time.Hour)
+				s.Tag = "a"
+				sessions = append(sessions, s)
+			}
+			only := sWorking("b/only", "codex", "/repo", "work", time.Hour)
+			only.Tag = "b"
+			sessions = append(sessions, only)
+			for i := range 10 {
+				s := sCompleted("c/"+itoa(i), "codex", "/repo", "done", time.Hour)
+				s.Tag = "c"
+				sessions = append(sessions, s)
+			}
+			m := New(newFakeClient(sessions...), nil).(rootModel)
+			m = send(m, tea.WindowSizeMsg{Width: 40, Height: 8}).(rootModel)
+			section, following := "working", "completed"
+			if path == "tag" {
+				m.general.setLayout(groupByTag, orderByArrival)
+				section, following = "b", "c"
+			}
+			m.general.fold(section, true)
+			i := 0
+			m.general.content(func(l boardLine) {
+				if l.kind == lineSection && l.section == section {
+					m.general.top = i
+				}
+				i++
+			})
+			if path == "status" {
+				only.Group = "needs_input"
+				m.general.apply(only)
+			} else {
+				m.general.applyTag(only.ID, "a")
+			}
+			anchor := m.general.anchor()
+			if anchor.kind != lineSection || anchor.section != following {
+				t.Fatalf("vanished header should reveal following %q header, got %+v", following, anchor)
+			}
+			if got := m.general.selectedID(); got != "c/0" {
+				t.Fatalf("focus should choose next old-order session c/0, got %q", got)
+			}
+		})
+	}
+}
+
+func TestMobileBoardTagUpdateDoesNotApplyLifecycleProjection(t *testing.T) {
+	source := sWorking("source", "codex", "/repo", "source", time.Hour)
+	other := sCompleted("other", "codex", "/repo", "other", time.Hour)
+	m := newGeneralModel([]protocol.SessionView{source, other})
+	for i := range m.sessions {
+		if m.sessions[i].ID == source.ID {
+			m.sessions[i].RosterHidden = true
+			m.sessions[i].SupersededBy = other.ID
+			m.sessions[i].Supersedes = []string{other.ID}
+		}
+	}
+	m.applyTag(source.ID, "new-tag")
+	updated, ok := m.sessionByID(source.ID)
+	if !ok || updated.Tag != "new-tag" || len(m.sessions) != 2 {
+		t.Fatal("tag update applied lifecycle projection instead of metadata")
+	}
+	if _, ok := m.sessionByID(other.ID); !ok {
+		t.Fatal("tag update removed a lifecycle source")
+	}
+}

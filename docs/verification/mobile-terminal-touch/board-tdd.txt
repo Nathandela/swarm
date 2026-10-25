@@ -105,3 +105,23 @@ GREEN: go test ./internal/tui -run '^(TestMobileBoard|TestMouse|TestDiscussions|
 and the preceding reviewed fixes pass. Resume projection/archive filtering and
 all TestApply_ regressions were also run separately before commit. Implementation
 frozen after this targeted correction for final independent whole-feature audit.
+
+Fresh final Astra move regression — status/tag metadata group moves:
+RED: GOMAXPROCS=2 go test -p 2 ./internal/tui -run '^TestMobileBoardVanishedHeaderKeepsOldOrderNeighbor' -count=1
+2.734s; both status Working→Needs input and tag b→a placed the old top at the moved
+b/only member rather than the following Completed/c header. The permanent test
+also requires focus c/0, the next surviving old navigation target.
+
+Targeted correction: shared pre-mutation updatePositions predicts surviving old
+content/navigation identities for both apply and applyTag. A vanished header's
+viewport anchor and focus resolve before the mutation; tie-breaking keeps forward
+reading order. Ordinary same-group/no-removal updates retain the existing fast
+path. apply supplies explicit Supersedes IDs; applyTag supplies none and updates
+metadata directly, so RosterHidden/SupersededBy/Supersedes fields are never replayed
+as lifecycle actions by a tag change.
+
+GREEN: GOMAXPROCS=2 go test -p 2 ./internal/tui -run '^(TestMobileBoard|TestApply_|TestResumeProjection|TestDiscussionRoster|TestSessionLayout|TestSelection)' -count=1
+3.791s. The same-group apply allocation invariant remains zero. A separate focused
+run covers pure tag metadata with lifecycle fields present, all prior removal
+anchor cases, header refreshes, resume projection and archive filtering. No broad
+quality/performance gate was run in this correction lane.
