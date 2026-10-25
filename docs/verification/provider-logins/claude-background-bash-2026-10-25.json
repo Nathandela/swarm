@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Two actual Linux Claude Code 2.1.310 Case3A working-interval attempts (R5 and R6), each with synthetic local authentication and scripted model responses. Both failed before a working interval was qualified. No live installation or account changes.",
-  "status": "R5 and R6 are both FAIL and remain unqualified. R5 invalidated at native requires_action before its fixture permission decision. R6 wrote the exact authorized fixture Allow and observed its matching response plus a same-session running event, but the observation classifier invalidated the stream; no qualified clear, task/run, parent final, working cut, completion, or automatic continuation was established.",
+  "scope": "Four actual Linux Claude Code 2.1.310 Case3A attempts, R5 through R8, with synthetic local authentication and scripted model responses. Top-level pins/observed/cleanup describe R5; named case records describe subsequent attempts. No live account or installation changes.",
+  "status": "All four overall runs remain FAIL. R8 nevertheless established the bounded native observation that parent completion and native idle can coexist with a durably joined, still-live background Bash job. Its outer unit failed during stopping; global completeness and automatic continuation remain unqualified.",
   "pins": {
     "packet": {
       "path": "/private/tmp/swarm-claude-structured-actors-case3a-r5-20261025/manifest.json",
@@ -84,9 +84,10 @@
     "The history-finalization assertion had no pre-cut history witness to validate; its error is not proof that native history changed.",
     "R5 only: no callback was answered.",
     "The permission-state marker grants no action authority. A correction must keep unresolved human waits blocked, admit only the already authorized exact fixture callback through durable intent, and require an observed clear before publication.",
-    "This case does not qualify cancellation, quota recovery, Mac behavior, real-account rotation or UI conversion."
+    "This case does not qualify cancellation, quota recovery, Mac behavior, real-account rotation or UI conversion.",
+    "R5 cached public ELF was also retired after historical verification; R8 cached ELF remains at this evidence point. No live account, installed CLI, native history, receipt or log was removed."
   ],
-  "next_step": "Prepare the minimal R7 callback correlation correction and review its immutable packet before any further native attempt. Keep R5 and R6 as FAIL; R7 preparation alone is not qualification.",
+  "next_step": "Review and test the explicit two-second envelope stop grace without changing the R8 native packet or accepting nonzero exit status.",
   "case_r6": {
     "status": "FAIL; no working interval or background Bash outcome qualified.",
     "pins": {
@@ -164,6 +165,140 @@
       "No qualified clear, task/run identity, parent final, working cut, completion, or automatic continuation was observed.",
       "No job outcome or persisted native waiting state is inferred from the missing witnesses."
     ],
-    "review": "Root and Astra reviewed the actual R6 evidence and affirmed the FAIL classification; the R7 correction remains preparation-only."
+    "review": "Root and Astra reviewed the actual R6 evidence and affirmed the FAIL classification; the R7 correction remains preparation-only.",
+    "retirement_note": "Only this inactive cached public Claude ELF was retired after historical run verification; all other artifacts remain. The recorded run pin check is historical."
+  },
+  "case_r7": {
+    "status": "Overall FAIL; preserve the outer result.",
+    "pins": {
+      "packet": {
+        "path": "/private/tmp/swarm-claude-structured-actors-case3a-r7-20261025/manifest.json",
+        "sha256": "8796bd0f55737c0ebe60b1af06992f3e16182265dd6a7e3b01fd759adbc77401"
+      },
+      "envelope": {
+        "path": "/private/tmp/swarm-actor-case3a-r7-linux-envelope-20261025/manifest.json",
+        "sha256": "a7c0fd3ad9bc74ea1c5878f6d8758c4295f675529be3586a425e0bf75cd68c22"
+      },
+      "run": {
+        "path": "/private/tmp/swarm-actor-case3a-r7-linux-envelope-20261025/attempt/run.json",
+        "sha256": "a44d2d75c86108c1285eea6371614f90b57b75ccef8aced036d26f92f2429a4e"
+      },
+      "receipt": {
+        "path": "/private/tmp/swarm-actor-case3a-r7-linux-envelope-20261025/attempt/receipt.json",
+        "sha256": "e2bc9f19e8142729691aabc02db3fbd815eea338ae0ebea123bb16fe88919905"
+      },
+      "archive": {
+        "path": "/private/tmp/swarm-actor-case3a-r7-linux-envelope-20261025/attempt/evidence.tar.gz",
+        "sha256": "c557583b0b2054a2ec52537c38694d89caffd3f87e82bd5c122b6ca7a0cceb2a"
+      }
+    },
+    "observed": {
+      "model_requests": 2,
+      "responses_sent": [
+        "parent_spawn"
+      ],
+      "permission_decisions": 1,
+      "permission_echo_count": 1,
+      "permission_cleared": true,
+      "task_id": "b2qk9hojj",
+      "run_id": "0mvo9zt3j-c8b96101",
+      "parent_result_observed": false,
+      "working_cut_observed": false,
+      "automatic_stop_count": 0,
+      "successor_count": 0
+    },
+    "cleanup": {
+      "inner_elapsed_seconds": 1.532104385085404,
+      "outer_elapsed_seconds": 8.079,
+      "outer_exit_code": 1,
+      "native_groups_gone": true,
+      "http_handlers_joined": true,
+      "both_cli_eof_and_readers_joined": true,
+      "exact_cgroup_empty_and_gone": true,
+      "native_and_packet_pins_unchanged": true
+    },
+    "finding": "The live Bash task/run/raw result joined after the exact permission decision, echo and native clear. The second model request arrived, but the fixture required durable history before its parent response and rejected a missing Bash result row. No parent response/result/working cut qualified; delayed versus response-dependent persistence was not established.",
+    "retirement_note": "Only this inactive cached public Claude ELF was retired after historical run verification; all other artifacts remain. The recorded run pin check is historical."
+  },
+  "case_r8": {
+    "status": "Overall FAIL; preserve the outer result.",
+    "pins": {
+      "packet": {
+        "path": "/private/tmp/swarm-claude-structured-actors-case3a-r8-20261025/manifest.json",
+        "sha256": "296ff1f58089a9c9ddc00e79cf7072228ebca4d4eb53e66547b51dc33d8aab7d"
+      },
+      "envelope": {
+        "path": "/private/tmp/swarm-actor-case3a-r8-linux-envelope-20261025/manifest.json",
+        "sha256": "1457e2d09686203c7c30c34e6893d65bda21c27f6361e4548eeaddd919affb23"
+      },
+      "run": {
+        "path": "/private/tmp/swarm-actor-case3a-r8-linux-envelope-20261025/attempt/run.json",
+        "sha256": "7cb10ef9e0bee9691616fda494b5880d9c1042b1311cdc468bbc8d9d52140566"
+      },
+      "receipt": {
+        "path": "/private/tmp/swarm-actor-case3a-r8-linux-envelope-20261025/attempt/receipt.json",
+        "sha256": "08c3dae96720aa8b94030cae21f402399d49a67cf1bcc210107d9fcf4efec529"
+      },
+      "archive": {
+        "path": "/private/tmp/swarm-actor-case3a-r8-linux-envelope-20261025/attempt/evidence.tar.gz",
+        "sha256": "1201ce577fe8be6236beeff7bafde1450a490d0fee7ffd474c47577dfa03126c"
+      }
+    },
+    "observed": {
+      "model_requests": 2,
+      "responses_sent": [
+        "parent_spawn",
+        "parent_final"
+      ],
+      "permission_decisions": 1,
+      "permission_echo_count": 1,
+      "permission_cleared": true,
+      "task_id": "b1tnawhzn",
+      "run_id": "0mvoaexmj-c447fbfa",
+      "parent_result_observed": true,
+      "working_cut_observed": true,
+      "automatic_stop_count": 0,
+      "successor_count": 0
+    },
+    "cleanup": {
+      "inner_elapsed_seconds": 2.9103206219151616,
+      "outer_elapsed_seconds": 8.727,
+      "outer_exit_code": 1,
+      "native_groups_gone": true,
+      "http_handlers_joined": true,
+      "both_cli_eof_and_readers_joined": true,
+      "exact_cgroup_empty_and_gone": true,
+      "native_and_packet_pins_unchanged": true
+    },
+    "finding": "Positive narrow native observation: parent result0 and native idle coexisted with fresh matching background Bash membership and two later samples of the same live Python job with exact argv/image and ancestry to the native CLI. The complete 30-row durable history chain matched the model/raw result before the cut. Overall FAIL remains because the systemd transport returned1.",
+    "working_cut": {
+      "native_state": "idle",
+      "history_rows": 30,
+      "history_digest": "3daa2c27d13f22b571dfad8427b251da4b37305d3283398ddb4c75405a7af553",
+      "result_ns": 743411705173143,
+      "cut_ns": 743411762909046,
+      "job_pid": 5590,
+      "job_start_ticks": 74341164,
+      "both_post_result_samples": true,
+      "same_job_identity": true,
+      "cut_file_sha256": "b6f3370fd154218de3d173643a005f42996b48f03e02a348c0ab2b1182db72ca",
+      "cleanup_marker_file_sha256": "56908fb86cc5d76ccce32236627789961ac864545e63b077e10e033d0e7eca23",
+      "global_incomplete": true,
+      "auto_eligible": false
+    },
+    "unit_journal": {
+      "path": "/private/tmp/swarm-actor-case3a-r8-linux-envelope-20261025/attempt/unit-manager-journal.json",
+      "sha256": "1445bb266d2c447edd96d0ff20caa8afdffab596c355a73f1256bc7c73e97eaf"
+    },
+    "unit_result": "The exact USER_UNIT and USER_INVOCATION_ID match admission. Manager journal records stop-sigterm timeout and result timeout. The collected main-process exit status is unavailable; do not infer it from the inner printed validation.",
+    "limits": [
+      "This is a narrow working-interval observation inside an overall failed run, not an integrated PASS.",
+      "Native idle and parent success do not establish whole-workflow completion. No job completion, global completeness, auto-resume, quota recovery, real-account rotation or Mac qualification.",
+      "A reviewed envelope-only two-second stop grace is preparation only; exit-zero/error-free and exact cleanup acceptance remain mandatory. No historical result is repaired."
+    ]
+  },
+  "retirement_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-batch4-2026-10-25.json",
+    "sha256": "d765dc6cdeead62fee4bcbcb522b06e0c8f1ec95c5c94df778f95542a0c574ea"
   }
 }

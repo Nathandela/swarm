@@ -688,9 +688,14 @@
         "known_fixture_listeners_closed": false,
         "native_ownership_and_four_required_roles_qualified": false,
         "pins_unchanged": true,
-        "limit": "Native endpoint absence does not prove complete fixture-listener closure or native ownership."
+        "limit": "Native endpoint absence does not prove complete fixture-listener closure or native ownership.",
+        "retirement_note": "Only this cached public Codex ELF was retired in batch4 after the historical run checks; other stage artifacts remain. Historical pins do not claim unchanged complete stage bytes today."
       },
-      "polling_limit": "Twenty-one observed PID/start identities, including two unattributed executable-image gaps; no complete process birth trace or native ownership qualification."
+      "polling_limit": "Twenty-one observed PID/start identities, including two unattributed executable-image gaps; no complete process birth trace or native ownership qualification.",
+      "retirement_reference": {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-batch4-2026-10-25.json",
+        "sha256": "d765dc6cdeead62fee4bcbcb522b06e0c8f1ec95c5c94df778f95542a0c574ea"
+      }
     }
   ],
   "next_step": "Reject-only masked-authority diagnostic plan review only. No CONNECT allowance, inferred host/producer, or new native run is approved.",
@@ -771,5 +776,9 @@
   "retirement_batch3_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch3-2026-10-25.json",
     "sha256": "bec6ca08b11d1f6ec0850604afe19bc1a19fb9689d6f6b43c84424907dcb9866"
+  },
+  "retirement_batch4_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-batch4-2026-10-25.json",
+    "sha256": "d765dc6cdeead62fee4bcbcb522b06e0c8f1ec95c5c94df778f95542a0c574ea"
   }
 }

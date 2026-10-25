@@ -1,0 +1,120 @@
+{
+  "date": "2026-10-25",
+  "scope": "Two completed cleanup groups: one inactive cached Codex ELF and three inactive flat Claude ELF caches. Only these four exact files were removed; each provider's one retained public image remains available.",
+  "review": "Root and Astra reviewed the intents and methods. Root inspected each fresh dry run and applied the exact listed paths.",
+  "prior_retirement_records": {
+    "batch3_path": "docs/verification/provider-logins/native-fixture-retirement-batch3-2026-10-25.json",
+    "batch3_sha256": "bec6ca08b11d1f6ec0850604afe19bc1a19fb9689d6f6b43c84424907dcb9866",
+    "earlier_records_unchanged": true
+  },
+  "retained_public_images": {
+    "codex": {
+      "path": "/private/tmp/swarm-native-binary-retention-20261025/codex-linux-0.163.0",
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+      "bytes": 296865480
+    },
+    "claude": {
+      "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-linux-2.1.310",
+      "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "bytes": 291638640
+    }
+  },
+  "kernel_execution_exclusion_proof": {
+    "path": "/private/tmp/swarm-native-binary-retention-20261025/kernel-exec-exclusion-proof.json",
+    "sha256": "e64e001b034e8c60624e3dffa864b0c7095e7ef9feb5f78687a5f004ffab8a69",
+    "scope": "Separate disposable copied sleep ELF only; write-open while executing and exec while write-held both returned ETXTBSY with no writes and unchanged bytes."
+  },
+  "cleanup_groups": [
+    {
+      "provider": "Codex",
+      "batch": "batch4",
+      "intent": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch4/retirement-intent.json",
+        "sha256": "f18dc09002525e36ce57614742fb7cd2e559cefbf732481e83a0f0ac7a753f83"
+      },
+      "script": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch4/retire_kernel.py",
+        "sha256": "61edfec5f7542a4f4323ee62f02922fedea3091159ce9b7174a54f13d7f5334d"
+      },
+      "dry_run": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch4/retirement-dry-run-kernel.json",
+        "sha256": "57e2e4c2e2c6607299e34226a385750d5906f9b37e3bf5d6b0cfb4b997faab50"
+      },
+      "applied": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch4/retirement-applied.json",
+        "sha256": "e55b909e86ec5c4d3dd50f9bc3146b4616a882869cb6ef00719bf27a027149ce"
+      },
+      "retired_paths": [
+        {
+          "path": "/tmp/scx.1ofyb2x8/native/codex",
+          "unit": "swarm-codex-89a4bc241d0761e1",
+          "historical_run_path": "/private/tmp/swarm-codex-outer-yyhw205o/run.json",
+          "historical_run_sha256": "e610771e6bf2e49c382e87a22aa09bdcccc8edd5ad3520e6a2dba6344c4f3de1",
+          "observed_pid_start_pairs_ended": 21,
+          "unit_absent_and_cgroup_gone": true,
+          "kernel_write_exclusion_held_through_unlink": true
+        }
+      ],
+      "retired_bytes": 296865480,
+      "free_bytes_after": 772304896
+    },
+    {
+      "provider": "Claude",
+      "batch": "batch1",
+      "intent": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-batch1/retirement-intent.json",
+        "sha256": "2ff4390f95f506dd5fb2d865a707409b673ec2f72a1f1dbf2a795b789d3d165c"
+      },
+      "script": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-batch1/retire_kernel.py",
+        "sha256": "994beaecee8deaedbcf52794d685101adcb422fc1c3a330fde7e78070e5f32b0"
+      },
+      "dry_run": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-batch1/retirement-dry-run-kernel.json",
+        "sha256": "c8291e6a2134f69915d8daff90c676d6d6ff0f26e9e3e821a7a1d64a4fb69b0a"
+      },
+      "applied": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-batch1/retirement-applied.json",
+        "sha256": "38f26c1eb36bb46a3205e90f95c6352ab07dac4ff2dbce4fdbddf80a866cda6e"
+      },
+      "retired_paths": [
+        {
+          "path": "/tmp/sca.857nb38c/claude",
+          "unit": "swarm-actor-case3a-522207b31776029c19ee",
+          "historical_run_path": "/private/tmp/swarm-actor-case3a-r5-linux-envelope-20261025/attempt/run.json",
+          "historical_run_sha256": "d6a01a285fc59f616a63ab89a69375cf0c5d355c4f24626ec5c67ceff1bf4baa",
+          "historical_receipt_path": "/private/tmp/swarm-actor-case3a-r5-linux-envelope-20261025/attempt/receipt.json",
+          "historical_receipt_sha256": "bd70d07dfd9c539c5a444c63645a550ac33f16531a95997237aa1d481f66ae49",
+          "historical_native_groups_ended": true
+        },
+        {
+          "path": "/tmp/sca.gve8t9sc/claude",
+          "unit": "swarm-actor-case3a-1e77dc26d9b192d2bfb8",
+          "historical_run_path": "/private/tmp/swarm-actor-case3a-r6-linux-envelope-20261025/attempt/run.json",
+          "historical_run_sha256": "3a58ed7224bb36905c19bc297443894c94a1ef1120f2f2c70cfbb54ed8fe9424",
+          "historical_receipt_path": "/private/tmp/swarm-actor-case3a-r6-linux-envelope-20261025/attempt/receipt.json",
+          "historical_receipt_sha256": "aad4bc7f21f3247c941c33ae27d4190748d3fd275c15cd47953d555d7c0d902a",
+          "historical_native_groups_ended": true
+        },
+        {
+          "path": "/tmp/sca.nt9a4skf/claude",
+          "unit": "swarm-actor-case3a-faacdeea666c1a5c6094",
+          "historical_run_path": "/private/tmp/swarm-actor-case3a-r7-linux-envelope-20261025/attempt/run.json",
+          "historical_run_sha256": "a44d2d75c86108c1285eea6371614f90b57b75ccef8aced036d26f92f2429a4e",
+          "historical_receipt_path": "/private/tmp/swarm-actor-case3a-r7-linux-envelope-20261025/attempt/receipt.json",
+          "historical_receipt_sha256": "e2bc9f19e8142729691aabc02db3fbd815eea338ae0ebea123bb16fe88919905",
+          "historical_native_groups_ended": true
+        }
+      ],
+      "pid_start_census": "No captured PID/start census is claimed. Each historical run/receipt pair records its two native process groups stopped, cleanup-gone, stdout/stderr EOF, and readers joined; each fresh cleanup checked unit absence, cgroup absence, and the held kernel write guard.",
+      "retired_bytes": 874915920,
+      "free_bytes_after": 1336147968
+    }
+  ],
+  "retired_bytes_total": 1171781400,
+  "retirement_method": "For each exact path, the reviewed script checked the anchored owner-only 0700 parent directories and the regular one-link ELF's owner, mode, size, and exact SHA-256. It held a non-truncating O_WRONLY guard descriptor through exact unlink; no bytes were written.",
+  "limits": [
+    "Each cached binary was removed only after its run pin checks. Historical stage bytes changed afterward; this does not repair or replace any failed run or receipt.",
+    "One full public binary image per provider remains locally retained. No installed CLI, account, authentication, history, user data, receipt, log, or other stage artifact was deleted."
+  ]
+}

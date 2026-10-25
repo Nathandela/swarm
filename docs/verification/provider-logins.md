@@ -4,6 +4,7 @@ Date: 2026-10-23
 
 Integrated native switching, local quality gates and exact-tag CI have passed.
 The table distinguishes native feasibility from complete Swarm runs.
+The unreleased seamless handover work below remains under qualification.
 
 ## Published v0.21.0
 
@@ -271,15 +272,16 @@ The next attempt accepted that notification, then refused an unqualified
 child-scoped interruption with a `user` role. Its producer and ownership need
 source proof before any exception; no tail or idle was qualified.
 The [background Bash case](provider-logins/claude-background-bash-2026-10-25.json)
-stopped before a working interval: native `requires_action` arrived before the
-exact permission callback, and the fixture rejected it too early. Both CLI
-streams reached EOF and the isolated scope ended. Human waits remain ineligible;
-the planned one-shot fixture approval path needs correction and another review.
+observed Linux Claude 2.1.310 reporting parent completion and native `idle` while
+a durably joined background job remained alive. A fresh task snapshot and two
+process samples confirmed it. The overall run still failed during supervisor
+stopping; the invocation-bound journal records a stop timeout. This bounded
+observation qualifies neither whole-workflow completion nor automatic recovery.
 
 The [fresh managed Codex TUI attempts](provider-logins/codex-fresh-tui-2026-10-25.json)
-also remain unqualified. Transport diagnostics reached a built-in plugin lookup;
-the next attempt stopped during synthetic account setup before native launch.
-The setup timeout is uncharacterized. Real-account and continuation gates remain open.
+also remain unqualified. Known plugin metadata and a synthetic usage response
+were observed before a CONNECT rejection. Its target and producer were not
+recorded; a masked diagnostic is prepared. Real-account and continuation gates remain open.
 
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.
