@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "One actual Linux Claude Code 2.1.310 Case3A working-interval attempt with synthetic local authentication and scripted model responses. No live installation or account changes.",
-  "status": "R5 FAIL before the background Bash job could be qualified. The expected optional permission path was rejected at its preceding native requires_action state. No working interval, completion or automatic continuation is qualified.",
+  "scope": "Two actual Linux Claude Code 2.1.310 Case3A working-interval attempts (R5 and R6), each with synthetic local authentication and scripted model responses. Both failed before a working interval was qualified. No live installation or account changes.",
+  "status": "R5 and R6 are both FAIL and remain unqualified. R5 invalidated at native requires_action before its fixture permission decision. R6 wrote the exact authorized fixture Allow and observed its matching response plus a same-session running event, but the observation classifier invalidated the stream; no qualified clear, task/run, parent final, working cut, completion, or automatic continuation was established.",
   "pins": {
     "packet": {
       "path": "/private/tmp/swarm-claude-structured-actors-case3a-r5-20261025/manifest.json",
@@ -35,6 +35,20 @@
     "checks": {
       "path": "/private/tmp/swarm-claude-structured-actors-case3a-r5-20261025/checks.json",
       "sha256": "875e66ec55972458046eb2bd74e31f80854d6435dd6d9ba379441dfd4aa4b39e"
+    },
+    "R7_correction_preparation": {
+      "status": "Preparation only; not a new native qualification.",
+      "required_callback_evidence": "Correlate the exact own send with request intent, nonce, and full payload; accept one matching full-payload echo.",
+      "echo_limit": "The callback echo itself cannot establish effect, owner revision, decision, or clear.",
+      "mandatory_postwrite_check": "An independent same-session clear observed strictly after successful permission control-write return, following durable intent persistence, remains mandatory before response/cut publication.",
+      "refuse": "Unknown, duplicate, or pre-send mismatched events are refused.",
+      "offline_controls": {
+        "audited_tests": 36,
+        "meaningful_guard_omissions": 29,
+        "envelope_controls": 11,
+        "provenance": "Inherited R6 controls only; not R7 validation."
+      },
+      "qualification": "These inherited R6 controls are preparation evidence only; they do not validate R7 and do not qualify a new native run."
     }
   },
   "observed": {
@@ -68,9 +82,88 @@
   "limits": [
     "The missing working-cut files make outer postcheck fail; this remains a failed actual run, not a repaired receipt.",
     "The history-finalization assertion had no pre-cut history witness to validate; its error is not proof that native history changed.",
-    "No callback was answered, no task/run identity or working interval was observed, and global actor completeness remains unqualified.",
+    "R5 only: no callback was answered.",
     "The permission-state marker grants no action authority. A correction must keep unresolved human waits blocked, admit only the already authorized exact fixture callback through durable intent, and require an observed clear before publication.",
     "This case does not qualify cancellation, quota recovery, Mac behavior, real-account rotation or UI conversion."
   ],
-  "next_step": "Review the minimal permission-state correction and negative controls before preparing another immutable packet. Preserve R5 as FAIL."
+  "next_step": "Prepare the minimal R7 callback correlation correction and review its immutable packet before any further native attempt. Keep R5 and R6 as FAIL; R7 preparation alone is not qualification.",
+  "case_r6": {
+    "status": "FAIL; no working interval or background Bash outcome qualified.",
+    "pins": {
+      "packet": {
+        "path": "/private/tmp/swarm-claude-structured-actors-case3a-r6-20261025/manifest.json",
+        "sha256": "050ea92e3dbfee2fc771140267c2a86f176392947225eabe79bcf80919205e73",
+        "files": 66
+      },
+      "envelope_manifest": {
+        "path": "/private/tmp/swarm-actor-case3a-r6-linux-envelope-20261025/manifest.json",
+        "sha256": "2bebbaed318414c2de6e3c1c2ea4472ae65b6ee6bfb9f111b4af689596d428f1"
+      },
+      "packet_archive": {
+        "path": "/private/tmp/swarm-actor-case3a-r6-linux-envelope-20261025/attempt/packet.tar.gz",
+        "sha256": "9607350f127b1a2e9135f7ee82ba73c09404ea6cddd84559c1f171f012e06fec"
+      },
+      "receipt": {
+        "path": "/private/tmp/swarm-actor-case3a-r6-linux-envelope-20261025/attempt/receipt.json",
+        "sha256": "aad4bc7f21f3247c941c33ae27d4190748d3fd275c15cd47953d555d7c0d902a"
+      },
+      "run": {
+        "path": "/private/tmp/swarm-actor-case3a-r6-linux-envelope-20261025/attempt/run.json",
+        "sha256": "3a58ed7224bb36905c19bc297443894c94a1ef1120f2f2c70cfbb54ed8fe9424"
+      },
+      "preflight": {
+        "path": "/private/tmp/swarm-actor-case3a-r6-linux-envelope-20261025/attempt/preflight.json",
+        "sha256": "90bcbf576bdd8f5b12db3c3e4fd4df4b0b9c41601c2a1e61a96343d611769fc6"
+      },
+      "evidence_archive": {
+        "path": "/private/tmp/swarm-actor-case3a-r6-linux-envelope-20261025/attempt/evidence.tar.gz",
+        "sha256": "510c68aaebe5b7e4a59d4bc0ae9148fbb390dea034a368a61386e34e9909e6e2"
+      },
+      "native_linux_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56"
+    },
+    "observed": {
+      "model_requests": 1,
+      "scripted_responses": [
+        "parent_spawn"
+      ],
+      "permission_decisions": 1,
+      "durable_permission_intent": {
+        "action": "allow_one_fixture_Bash",
+        "owner_revision": 2,
+        "request_id": "39884c96-d932-42c1-bf33-db83e43e6085",
+        "input_digest": "6458914b2c18345fd51232b77601a504dd96a73c9fe8fa3af0b4cad7a28e064a",
+        "policy_update": false
+      },
+      "callback_echo": "The response echoed the same request ID and exact Bash input in control_response; a same-session running event followed.",
+      "classifier_failure": "The classifier treated control_response as an initialize response and invalidated the observation.",
+      "owner_revision": 2,
+      "human_blocked": true,
+      "permission_clear_ns": null,
+      "qualified_clear_observed": false,
+      "task": null,
+      "run": null,
+      "parent_final_uuid": null,
+      "working_cut": null,
+      "automatic_stop_count": 0,
+      "successor_count": 0,
+      "job_output_or_completion_witness": false,
+      "observation_limit": "No job output/completion witness was captured. This does not establish whether the job started or what native state persisted after the echoed response.",
+      "postresponse_state_witness": "No qualified native state or permission-clear witness was captured after the echoed response."
+    },
+    "cleanup": {
+      "outer_elapsed_seconds": 8.241,
+      "inner_elapsed_seconds": 1.783091775025241,
+      "exact_cgroup_empty_and_gone": true,
+      "native_groups_ended": true,
+      "both_cli_stdout_stderr_eof_and_readers_joined": true,
+      "http_handlers_joined": true,
+      "native_and_packet_pins_unchanged": true
+    },
+    "limits": [
+      "Missing pre-cut history witness caused history-finalization refusal; this is not proof that native history mutated.",
+      "No qualified clear, task/run identity, parent final, working cut, completion, or automatic continuation was observed.",
+      "No job outcome or persisted native waiting state is inferred from the missing witnesses."
+    ],
+    "review": "Root and Astra reviewed the actual R6 evidence and affirmed the FAIL classification; the R7 correction remains preparation-only."
+  }
 }

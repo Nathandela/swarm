@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Thirteen unqualified full fresh managed Codex constructor attempts, two seed-only controls, and one failed preparation; synthetic grants only, no user authentication or live installation changes.",
-  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V17 completed synthetic setup and recorded the exact featured metadata GET, but its initial usage hold was not live; public Stop timed out and the constructor case failed. The initial usage-hold cause is unknown. The first recorded unexpected query was rejected by the fixture whitelist; the second target was not retained. No authentication, account adoption, readiness, or production defect is established.",
+  "scope": "Fourteen unqualified full fresh managed Codex constructor attempts, two seed-only controls, and one failed preparation; synthetic grants only, no user authentication or live installation changes.",
+  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V18 recorded the featured, installed, and suggested plugin metadata GETs and a synthetic ordinary usage response, but failed on an unexpected CONNECT authority that was not recorded. This does not establish authentication, account adoption, readiness, or a production cause; no host or producer is inferred for the unknown authority.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -623,9 +623,77 @@
         "path": "docs/verification/provider-logins/native-fixture-retirement-batch3-2026-10-25.json",
         "sha256": "bec6ca08b11d1f6ec0850604afe19bc1a19fb9689d6f6b43c84424907dcb9866"
       }
+    },
+    {
+      "id": "diagnostic-V18",
+      "result": "FAIL: fixture recorded an unexpected CONNECT authority; the rejected authority was not logged. Metadata GETs and a synthetic ordinary usage response were observed, but the attempt does not qualify authentication, adoption, readiness, or native ownership.",
+      "run_path": "/private/tmp/swarm-codex-outer-yyhw205o/run.json",
+      "run_sha256": "e610771e6bf2e49c382e87a22aa09bdcccc8edd5ad3520e6a2dba6344c4f3de1",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-yyhw205o/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "b8e75d550957eba60d71c9a4e8cb158455b29e9a6302294460ab83df34094b2c",
+      "six_file_index_path": "/private/tmp/swarm-codex-outer-yyhw205o/inner-evidence/collected-sha256.json",
+      "six_file_index_sha256": "2e5152e39c6ddca7273bff9f933abdf4546eb1fff5e820e3b6f362370025d420",
+      "source_plan": {
+        "path": "/private/tmp/swarm-codex-default-plugin-metadata-plan-20261025-v2/PLAN.md",
+        "sha256": "ab0a462853d340dbbf87f75e40f120fb3e236a6c3d35120e2ed2e6fad6ec5b10",
+        "scope": "Pinned contract for three exact metadata fixture targets; no authentication or product qualification."
+      },
+      "packet_manifest": {
+        "path": "/private/tmp/swarm-codex-tui-constructor-20261025-v13/review-v13/manifest.json",
+        "sha256": "67921b76ab83f8101d480d927413c0fd790b39fafbd60c149a9c748f6dacaa34"
+      },
+      "envelope_hashes": {
+        "path": "/private/tmp/swarm-codex-envelope-20261025-v18/hashes.json",
+        "sha256": "3c2bf8b6e33400f1962373980d0342d9edb49744a19c6d794c0d76461e71725b",
+        "packet_files": 123
+      },
+      "finding": {
+        "failure": "The inner receipt records the CONNECT rejection. The guard rejects either an already tunneled request or a nonmatching target, so the constant error cannot distinguish those causes. The target and producer were not recorded; no host or producer is inferred.",
+        "metadata_gets": [
+          "/backend-api/plugins/featured?platform=codex",
+          "/backend-api/ps/plugins/installed?limit=200",
+          "/backend-api/ps/plugins/suggested/codex?scope=GLOBAL"
+        ],
+        "metadata_scope": "The fixture recorded the three metadata GETs; this is route evidence only.",
+        "synthetic_usage_response": {
+          "account": "synthetic-a",
+          "bearer_account": "synthetic-a",
+          "ordinary_usage_allowed": true,
+          "limit": "A fixture response; not proof of account adoption or readiness."
+        },
+        "activity": {
+          "provider_connections_admitted": 6,
+          "provider_connections_rejected": 0,
+          "TLS_handshake_failures": 0,
+          "provider_connection_limit": "Six admitted transport connections are not six proven TLS successes.",
+          "native_frames": 3,
+          "observer_ledger_entries": 2,
+          "public_rpc_upper_bound": 4,
+          "combined_observer_and_public_rpc_upper_bound": 6,
+          "main_inferences": 0,
+          "MCP_messages": 0,
+          "MCP_calls": 0,
+          "PTY_bytes": 0
+        },
+        "scope_limit": "The failed run is not auth-guard or product proof and establishes no authentication, TUI adoption, or readiness. No inference is made about the unknown CONNECT authority."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 3.186705327942036,
+        "observed_tuples": 21,
+        "unattributed_executable_image_gaps": 2,
+        "those_two_gaps_eligible_for_required_roles": false,
+        "all_21_observed_identities_ended": true,
+        "cgroup_empty_and_directory_gone": true,
+        "native_endpoint_no_listener_and_alias_socket_absent": true,
+        "known_fixture_listeners_closed": false,
+        "native_ownership_and_four_required_roles_qualified": false,
+        "pins_unchanged": true,
+        "limit": "Native endpoint absence does not prove complete fixture-listener closure or native ownership."
+      },
+      "polling_limit": "Twenty-one observed PID/start identities, including two unattributed executable-image gaps; no complete process birth trace or native ownership qualification."
     }
   ],
-  "next_step": "Exact source-contract review (Sol preparing), then artifact review. No next native run is automatically approved. Real-account, loaded-thread, authentication, readiness, and automatic-continuation gates remain separate.",
+  "next_step": "Reject-only masked-authority diagnostic plan review only. No CONNECT allowance, inferred host/producer, or new native run is approved.",
   "limits": [
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
@@ -633,7 +701,9 @@
     "V15 recovers exact public target tokens but not the historical caller. Its intentional rejection provides no accepted GET/auth/adoption/model/MCP/complete ownership proof. Later exact-featured-route preparation did not qualify behavior; V16 timed out during seed before route reach. Scoped cached-ELF retirement does not repair failures.",
     "V16 driver seed timed out at3seconds; the blocking operation is unknown. No inference from five identities or absence of copied files to a specific seed lock, filesystem operation or native request is justified.",
     "Thirteen full constructor attempts plus two seed-only controls remain unqualified; one failed preparation is separate. V17 does not establish auth, adoption, readiness, or a production cause; its two unexpected-query errors have only one diagnostic record.",
-    "V16 post-stop registry projection is a 373-byte synthetic public metadata snapshot (schema 1, revision 1, one visible login); it is not evidence of a stalled call."
+    "V16 post-stop registry projection is a 373-byte synthetic public metadata snapshot (schema 1, revision 1, one visible login); it is not evidence of a stalled call.",
+    "V18 recorded metadata GETs and a synthetic ordinary usage response, then failed at the CONNECT rejection. Its constant error does not distinguish a different target from a nested CONNECT. The target and producer remain unknown.",
+    "Six admitted connections are not six proven TLS handshakes. Both unattributed image-gap identities remain ineligible for required-role claims; complete native ownership and fixture-listener proof remain absent. Source-plan pins do not permit another CONNECT authority or qualify account adoption."
   ],
   "validator_source": {
     "auth_boundary_path": "/private/tmp/swarm-setup-root-20261025/source/internal/logins/auth_boundary.go",
@@ -688,11 +758,11 @@
     "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
   },
   "attempt_counts": {
-    "full_constructor_attempts": 13,
+    "full_constructor_attempts": 14,
     "seed_only_controls": 2,
     "failed_preparations": 1,
-    "total_recorded_operations": 16,
-    "latest_actual_attempt": "diagnostic-V17"
+    "total_recorded_operations": 17,
+    "latest_actual_attempt": "diagnostic-V18"
   },
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
