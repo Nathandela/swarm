@@ -55,7 +55,7 @@
       "log_sha256": "5223b7b5cf765d036a0ad8bc60bc7e25f46f43cbea679a20b0e6cbed14c7d879",
       "source_map_sha256": "b0c87f7aeb421e955003cc70d99cec48af67400a76c40fc9416ea57accda30f6"
     },
-    "remaining_gates": "Original status-persistence full-suite failure remains unresolved. Constructor V1 fingerprint refusal is fixed; V2 uncovered fake connectivity404. V3 with exact fake hello responses reaches native first-run theme selection before folder trust. Untouched-profile startup and integrated trust-gate qualification remain open.",
+    "remaining_gates": "Original status-persistence full-suite failure remains unresolved. Constructor V1 fingerprint refusal is fixed; V2 uncovered fake connectivity404. V3 with exact fake hello responses reaches native first-run theme selection before folder trust. Untouched-profile startup and integrated trust-gate qualification remain open. A later unmodified full skeleton race rerun passed (1955 passed, 28 platform skips, zero failures); the historical TestEmitStatus_FailedPersistIsLoggedAndRetried failure remains unexplained.",
     "build": "go build -p=1 ./... PASS",
     "vet": "go vet -p=1 ./internal/protocol ./internal/skeleton PASS",
     "lint_darwin": "protocol and skeleton:0 issues",
@@ -77,6 +77,21 @@
       "runs": 10,
       "overlay_sha256": "4751bcb51e5b654473883e41c3726a9440d8915e2812042e024e40b821e1ab73",
       "limit": "No diagnostic work executes before the original deadline failure. All ten focused runs passed; no failure was reproduced or causally explained. The original full-suite failure remains open and final gates must use unmodified source."
+    },
+    "skeleton_full_race_latest_unmodified": {
+      "status": "PASS; latest rerun",
+      "passed_tests": 1955,
+      "skipped_tests": 28,
+      "failed_tests": [],
+      "race_detector_findings": false,
+      "log_sha256": "0c9a8e194d95ae8118ba07732c27c38ce575070f22ccf97c3955f6083701a5a5",
+      "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
+      "unmodified_test_source": true,
+      "overlay_used": false,
+      "artifact": "/private/tmp/swarm-setup-root-20261025/skeleton-full-race.json",
+      "historical_failure": "The earlier TestEmitStatus_FailedPersistIsLoggedAndRetried failure remains unexplained; this later pass does not establish its cause or erase that evidence.",
+      "test_seconds": 768.419,
+      "outer_seconds": 788.529
     }
   },
   "review": "Independent Sol and Astra approved plan V4; root, Astra and a separate Sol reviewed final connected skeleton source. Root and Astra reviewed the protocol changes. The broad status-persistence test failure remains unresolved.",

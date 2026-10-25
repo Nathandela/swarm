@@ -125,6 +125,21 @@
       "exit_code": 0,
       "elapsed_seconds": 2.646,
       "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "skeleton_full_race_latest_unmodified": {
+      "artifact": "/private/tmp/swarm-setup-root-20261025/skeleton-full-race.json",
+      "jsonl_log": "/private/tmp/swarm-setup-root-20261025/skeleton-full-race.jsonl",
+      "command": "python3 /private/tmp/swarm-login-go.py test -p=1 -race -json ./internal/skeleton -count=1 -timeout=20m",
+      "exit_code": 0,
+      "elapsed_seconds": 788.529,
+      "passed_tests": 1955,
+      "skipped_tests": 28,
+      "failed_tests": [],
+      "log_sha256": "0c9a8e194d95ae8118ba07732c27c38ce575070f22ccf97c3955f6083701a5a5",
+      "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
+      "unmodified_test_source": true,
+      "overlay_used": false,
+      "interpretation": "Latest post18 full skeleton race rerun passed against the unchanged frozen source. This does not explain or erase the historical TestEmitStatus_FailedPersistIsLoggedAndRetried failure."
     }
   },
   "linux": {
@@ -173,9 +188,118 @@
   "review": "Root and Astra reviewed the bounded plan and connected source; Sol authored the implementation and tests. Frozen source and Linux omission contract were independently reviewed before execution.",
   "limits": [
     "Unit fixtures use synthetic setup fields and fake authority; these do not prove actual native onboarding, authentication or constructor readiness.",
-    "Actual native-written source preparation and first/restarted/second-profile startup, plus live second-CWD and blank-source negative canaries, remain required. Historical constructor V3 stays failed at the native theme screen.",
+    "Actual native-written source preparation passed in post18 V3. Full first/profile-reuse/second-profile startup, live second-CWD and blank-source negative qualification remain open after the failed B and N runs. Historical constructor V3 stays failed at the native theme screen.",
     "Fresh users still require manual native setup. Existing profile files are never backfilled, even if setup is missing. No enrollment UX or default structured-mode conversion is included.",
     "Unsupported custom legacy themes require explicit remediation; no silent default theme is substituted.",
-    "The full-skeleton status-persistence failure remains open. No release, migration or automatic-continuation qualification follows."
-  ]
+    "The latest unmodified full skeleton race passed; the historical status-persistence timeout remains unexplained. No release, migration or automatic-continuation qualification follows."
+  ],
+  "post18_native_canary_v3": {
+    "status": "NOT QUALIFIED: S source preparation passed; B and N failed; C not attempted because B failed",
+    "manifest_sha256": "c69798b1044a206946784b4eaf11a25c1434f5391543f236090ee0b0dc4052fd",
+    "product_sha256": "dc90bbe17797702a49bec9afccfec01954cf4f0bcf4701b9306cd9b45d265f7d",
+    "native_version": "2.1.310",
+    "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
+    "run_artifact": "/private/tmp/swarm-post18-v3-linux-20261025a/run.json",
+    "run_sha256": "87383ca946ba645bfd9d9677010940af1cc7ce7aaf146695d8076eea802fd2a7",
+    "runner_sha256": "a43b7dd19d83dabf3dd05e5211150ab773860ec67d224fe4cd16767512ef1311",
+    "scope": "Actual isolated Linux native CLI and frozen Swarm binary, fake saved grants and nonforwarding loopback proxy. No real account, live installation or discussion changes.",
+    "cases": {
+      "selftest": {
+        "unit": "swarm-post18-selftest-d7d350fdca0079ef",
+        "outer_deadline_seconds": 45,
+        "running": false,
+        "exit_code": 0,
+        "elapsed_seconds": 1.499,
+        "log_sha256": "97ce455199cb286510083eb683fd9bad4d7c63c76c93583da47628dd88fc0586",
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-post18-selftest-d7d350fdca0079ef.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true
+        },
+        "qualified": true
+      },
+      "S": {
+        "unit": "swarm-post18-s-02a27f0e282ae8b1",
+        "outer_deadline_seconds": 90,
+        "running": false,
+        "exit_code": 0,
+        "elapsed_seconds": 30.976,
+        "log_sha256": "19b563480cf4ae5ce466c190280eaa38e740e3cb80b02f1b14b421b462777e12",
+        "runner_failures": [],
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-post18-s-02a27f0e282ae8b1.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true,
+          "original_config_sha256": "ba05888d028921dc4e88e6a06a44e84d08563a11e62bfcc8215eeb1f24ed2309",
+          "original_settings_sha256": "ff9c822e92f00beac0f2c77a970da455b58564a57429120aab44da11fbb9b818"
+        },
+        "receipt_sha256": "c4ed21931cb7b38f663fad764d2dfe8d5bc77ff9f564a7e8b03e860fedd260fb",
+        "outer_sha256": "26c66926a00e2cde381e52d4b1f26d4d0c3f659202195d1a5facc0be7fb3a85d",
+        "errors": [],
+        "model_requests": 0,
+        "qualified": true
+      },
+      "B": {
+        "unit": "swarm-post18-b-3d345fe73154a8c9",
+        "outer_deadline_seconds": 90,
+        "running": false,
+        "exit_code": 1,
+        "elapsed_seconds": 21.172,
+        "log_sha256": "c177f9ac048f3cf621d5d3f47746d6208f7f561c9f416e46828e6313f3d009bd",
+        "runner_failures": [],
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-post18-b-3d345fe73154a8c9.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true
+        },
+        "receipt_sha256": "4c51a209f3c6cf15955e905205480392fb1d8d354e5e7bbf229a1feed63c810c",
+        "outer_sha256": "ca909e58624029419997ac4b9e2e15cc9fa9d3d4c3534126cbb4f96aaf3c9543",
+        "errors": [
+          "AssertionError: per-session observation cap",
+          "cleanup: unexpected scratch symlink",
+          "unexpected model request"
+        ],
+        "model_requests": 1,
+        "qualified": false
+      },
+      "N": {
+        "unit": "swarm-post18-n-e616c8e90df31f2e",
+        "outer_deadline_seconds": 90,
+        "running": false,
+        "exit_code": 1,
+        "elapsed_seconds": 21.287,
+        "log_sha256": "7322d482685d5affd4a1ea18878ded6caf97f7a2b07109966a65d28f76586294",
+        "runner_failures": [],
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-post18-n-e616c8e90df31f2e.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true
+        },
+        "receipt_sha256": "e39ee8f65a66a3adc4d568690ad4b6055ad2c28a18f7b6ec8dd4b283b1ae5492",
+        "outer_sha256": "33c8254685eda35814167fef7155c03d3807b9c90996e6f8240f4170e56fc027",
+        "errors": [
+          "AssertionError: per-session observation cap",
+          "cleanup: unexpected scratch symlink"
+        ],
+        "model_requests": 0,
+        "qualified": false
+      }
+    },
+    "S_interpretation": "Root reviewed each complete frame and sent Down, Enter for Light, and Enter for Security notes. Native wrote completion/version and theme; no folder trust was accepted. After exact inner stop and outer cgroup empty/gone, original native config/settings hashes matched exports. This proves fixture setup provenance, not authentication.",
+    "B_interpretation": "Native inherited actual completion/version and reached a visible named-session composer with a matching SessionStart and login-native-ready record. The strict qualification failed before B2/B3: composer/VT comparison false negatives, a blocked model request, and an expected-profile-alias bookkeeping failure during final scratch census. No successful full constructor or live second-CWD qualification is claimed.",
+    "N_interpretation": "Native remained at the first-use theme picker with zero input and zero model requests, but the strict qualification failed its observation cap and cleanup scratch census. This remains a failed run, not a passing negative oracle.",
+    "diagnosis": [
+      "Offline inspection found protocol PlainText lines padded to 150 columns but the oracle compared them directly with rstripped snapshot rows, making plain_ok false.",
+      "The named-session composer has a label in its upper divider and native account text changes the header. The strict initial composer fixture did not cover that normal layout.",
+      "The final scratch census used receipt aliases published only after product_case success. On failure it received an empty allowlist; retained inventory shows the nine expected profile aliases.",
+      "The startup POST /v1/messages?beta=true was blocked with fake HTTP403. Its body was not retained, so purpose remains unqualified; no benign classification or model allowance is inferred."
+    ],
+    "cleanup": "All executed units have exact outer cgroup empty/gone and unchanged pinned native image proofs; B and N also have positive exact native stop receipts. The scratch-census failures are retained in the failed receipts.",
+    "remaining": "Correct and independently review the harness oracles; capture any unexpected synthetic model body under a fixed bound while still blocking it. Reuse only proven stopped S source. B2/B3, C, and the blank-source negative must pass before closing native qualification."
+  }
 }

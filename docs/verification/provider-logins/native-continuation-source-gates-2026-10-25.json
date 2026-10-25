@@ -84,5 +84,29 @@
   "limits": [
     "Source findings do not replace native acceptance or integrated production tests.",
     "Existing caller integration, exact birth/mutation custody, normal trust/policy and full final gates remain unfinished."
-  ]
+  ],
+  "codex_reservation_refresh_source_review": {
+    "date": "2026-10-25",
+    "kind": "source-only follow-up; native gate not executed",
+    "sourceCommit": "83086188ae0614bd882818ff1aa23f3194962012",
+    "sourceManifestSHA256": "3298ec2894f95a2b0b5452a2be5a8b267233d0d86d7909fe94a69c00bb83ee51",
+    "sourceReport": "/private/tmp/swarm-codex-next-native-gates-20261025/REFRESH-CHAIN.txt",
+    "sourceReportSHA256": "beca132969816a11d9eb0f2646c7e94a8f5f461abb7c146e146ada5a184c2d56",
+    "findings": [
+      "A held generic /models request is not a reservation witness: catalog refresh has cache and ordinary callers, is best-effort with a five-second timeout, and carries no reservation or pending-work origin identity.",
+      "Pending-work reservation installs ActiveTurn/TurnState before awaiting refresh, but later same-pointer checks and cancellation can remove or reject it; an HTTP hold does not prove the exact invocation remains pre-registration when input routes.",
+      "An already-idle child followup is handled inline in the serialized submission loop. A queued public empty start cannot test the reserved window there; dropping the RPC waiter does not retract the queued input.",
+      "The asynchronous task-completion tail is a separate source-reachable candidate route, but still lacks positive catalog attribution and exact reservation-liveness evidence."
+    ],
+    "disposition": "Reservation/empty-turn native test remains HOLD. Do not use /models as the witness or count a regular-task refusal as reservation evidence. Zero native empty-start attempts; no native execution occurred.",
+    "proposedFreshTUIProof": {
+      "plan": "/private/tmp/swarm-codex-next-native-gates-20261025/PLAN-v4.txt",
+      "planSHA256": "4000a9dd1407ae8c11735cdaf21ea21f1e892e48db43467c9495b07ed1681ee9",
+      "status": "source-only proposed next proof, not completed native evidence",
+      "claim": "Fresh Swarm-managed native TUI birth/adoption with exact T1 MCP result under B, followed after T1 is final by one separate benign nonempty T2 under B. T2 is a scoped-readiness observation, not proof of atomic selection through the native write.",
+      "remaining": "No fresh-TUI native run is included in this source packet; loaded producer configuration, refresh admission and production activation remain open."
+    },
+    "historicalEvidence": "Earlier source and native claims in this record are retained; this follow-up only adds the pinned refresh-chain analysis and does not relabel prior results.",
+    "nativeAttempts": 0
+  }
 }
