@@ -253,5 +253,16 @@
       "sha256": "5e777a06fd8a26a3da56147082953eafc5761da08dfb40f743f12d0284f91a2c",
       "bytes": 1437
     }
+  },
+  "task_artifacts": {
+    "local_verification_scratch_removed": true,
+    "local_file_bytes_removed": 123238179,
+    "disposable_module_helper_removed": true,
+    "private_live_identity_reports_retired": true,
+    "shared_caches_and_managed_upgrade_recovery_state_retained": true,
+    "vm_verification_scratch_removed": true,
+    "vm_allocated_bytes_removed": 12652544,
+    "vm_observable_references_before": 0,
+    "vm_opaque_unrelated_fd_lists": 3
   }
 }

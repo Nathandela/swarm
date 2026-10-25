@@ -94,3 +94,13 @@ Sol and Astra independently approved the narrow source and test boundary.
 The candidate tag was recreated before publication. The complete corrected
 release workflow subsequently passed, including the hosted Linux and remote-v2
 gates that exposed the original refusal.
+
+## Task artifact retirement
+
+After evidence was committed, the task-owned local verification directory and
+disposable module helper were removed (123,238,179 file bytes), including private
+live-identity reports and duplicate release archives. The VM verification root
+was removed (12,652,544 allocated bytes) after finding no observable process
+references; three unrelated FD lists were opaque and no processes were signaled.
+Shared caches, installed binaries and managed rollback/pending-convergence state
+remain intact.
