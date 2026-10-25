@@ -304,7 +304,11 @@ func startFixture(t *testing.T, cfg Config) Ref {
 
 func waitProgress(t *testing.T, ref Ref, predicate func(Progress) bool) Progress {
 	t.Helper()
-	return waitProgressUntil(t, ref, predicate, time.Now().Add(8*time.Second))
+	cfg, err := ReadConfig(ref.StateRoot, ref.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return waitProgressUntil(t, ref, predicate, cfg.Deadline.Add(8*time.Second))
 }
 
 func waitProgressUntil(t *testing.T, ref Ref, predicate func(Progress) bool, deadline time.Time) Progress {
@@ -482,8 +486,8 @@ func TestDetachedCodexRejectsConflictingCompletion(t *testing.T) {
 	cfg := testConfig(t, "codex", "mismatch")
 	ref := startFixture(t, cfg)
 	p := waitProgress(t, ref, func(p Progress) bool { return p.WritersStopped })
-	if p.Phase != PhaseFailed {
-		t.Fatal("conflicting completion accepted")
+	if p.Phase != PhaseFailed || p.ErrorCode != "stale_native_attempt" {
+		t.Fatalf("conflicting completion was not rejected as stale: phase=%s code=%s", p.Phase, p.ErrorCode)
 	}
 	assertNoJobSecrets(t, cfg)
 }
@@ -540,8 +544,8 @@ func TestRunnerCrashStopsNativeWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 	p = waitProgress(t, ref, func(p Progress) bool { return p.WritersStopped })
-	if p.Phase != PhaseFailed || child.Alive() {
-		t.Fatal("runner crash retained native writer")
+	if p.Phase != PhaseFailed || p.ErrorCode != "runner_stopped" || child.Alive() {
+		t.Fatalf("runner crash did not contain native writers: phase=%s code=%s", p.Phase, p.ErrorCode)
 	}
 	assertNoJobSecrets(t, cfg)
 }
