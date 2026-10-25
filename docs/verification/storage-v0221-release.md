@@ -72,8 +72,9 @@ That host-tooling issue is tracked separately as `agents-tracker-fi0w`.
 
 The first candidate tag at `fb20750f` was not published. Release workflow
 [40173868486](https://github.com/Nathandela/swarm/actions/runs/40173868486)
-failed after functional tests passed: the test supervisor could not inspect
-persistent same-UID runner processes (`/proc/1093/exe`, `/proc/1251/exe`), so it
+failed during test cleanup: several application suites reported PASS, but
+supervised cleanup and the supervisor's own cleanup tests failed because it
+could not inspect persistent same-UID runner processes (`/proc/1093/exe`, `/proc/1251/exe`), so it
 retained scratch and failed the gate. A fresh attempt reproduced the refusal
 (`/proc/1070/exe`); that blocked attempt was canceled rather than retried blindly.
 No cleanup safeguard or release gate was disabled.

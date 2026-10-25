@@ -212,7 +212,9 @@
     "host_tooling_followup": "agents-tracker-fi0w",
     "manual_clean_apply_executed": false,
     "histories_credentials_and_unresolved_receipts_purged": false,
-    "rotator_feature_merged": false
+    "rotator_feature_merged": false,
+    "oci_attestation_independently_verified": false,
+    "container_service_deployed": false
   },
   "evidence_logs": {
     "remote-v2-attempt1.log": {
