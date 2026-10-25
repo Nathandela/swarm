@@ -366,5 +366,70 @@
       "N now qualifies only its unchanged blank-source expected-negative oracle. It does not qualify positive constructor readiness.",
       "No next-case allowance is authorized. B2, B3 and C remain open; no positive constructor qualification follows from V4."
     ]
+  },
+  "post18_native_canary_v5_r3": {
+    "date": "2026-10-25",
+    "scope": "Linux post18 V5 R3 native constructor canary; S source reused from V3 without rerun; synthetic grants and nonforwarding proxy only",
+    "status": "NOT QUALIFIED: B aggregate FAIL; N current shared-error-boundary expected-negative PASS only; B3/C not run",
+    "pins": {
+      "manifest_sha256": "a1ece021eeee31673b8318b1c21be26234e3e1808105868cd4ea1a3e00f6321e",
+      "product_sha256": "dc90bbe17797702a49bec9afccfec01954cf4f0bcf4701b9306cd9b45d265f7d",
+      "native_version": "2.1.310",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
+      "source_origin_manifest_sha256": "c69798b1044a206946784b4eaf11a25c1434f5391543f236090ee0b0dc4052fd"
+    },
+    "run": {
+      "path": "/private/tmp/swarm-post18-v5r3-linux-20261025a/run.json",
+      "sha256": "8177dd4618dcfb8d3a1e7ccb6c85be40ede2b1802f4920295003b3777a2a560e",
+      "S": "reused stopped V3 source; never rerun",
+      "B": {
+        "result": "aggregate FAIL: per-session observation cap; no overall B1 qualification",
+        "receipt_path": "/private/tmp/swarm-post18-v5r3-linux-20261025a/receipt-B.json",
+        "receipt_sha256": "6e4617031eaab1ca93ff3c7f8c2953490eaf60102d697c2e43fff6e453fbc353",
+        "outer_path": "/private/tmp/swarm-post18-v5r3-linux-20261025a/outer-B.json",
+        "outer_sha256": "4bc604184b180383992412c29fc9765018a665227ebebce498bbc919dc686fe3",
+        "http_census": {
+          "accepted": 32,
+          "rejected": 8,
+          "complete": false,
+          "drained": true
+        },
+        "model_requests": 2,
+        "quota_probe_requests": 2,
+        "forbidden_model_requests": 0,
+        "pending_quota_probes": 0,
+        "interpretation": "Only B1 reached the initial stable oracle. B2 duplicate-name native message/prefilled placeholder remained negative. Incomplete HTTP census invalidates a full model-attempt census; zero forbidden requests and zero pending probes do not qualify B1 overall or establish absence of hidden requests.",
+        "indexed_evidence": {
+          "B1_meta_sha256": "1a7e72fecff3cc9adc86e2a06ea24418b8fec75340dd222257df67e4947fc477",
+          "B1_native_sha256": "fff3afe74d716639b942c6fb08433897ef6400b46e2efaa85b6904350fc7b291",
+          "B1_plain_sha256": "21f9835062c0ee5cdff1aa016abcd0a74713be58bea0041dbc31881b88899546",
+          "B1_snapshot_sha256": "d4eead40caf9f4784318a3db96ad72452374a2f0f78453ff1220ef32de7c99d7",
+          "B2_meta_sha256": "4a972d344b0e29b41b7e913320928947483ab59786cc7518483b05bef1e154d6",
+          "B2_native_sha256": "dac3ab023c677d23f009067b0860bb7e5be320ef96aaeff855d278b2d053a466",
+          "B2_plain_sha256": "24df272445f891d362e0fa330d0fb6453e049554f7ebc935a486e42fb29fcff1",
+          "B2_snapshot_sha256": "7be0c2ca0c74f70b847ab76777f18ee84f67cce45f67f4bf2f361f18d6ab4aad",
+          "model_request_B1_body_sha256": "c6a0a21a48c02bf96f7a64522445060f3fa8ee76ab27d7ed8698ab029fe4ab19",
+          "model_request_B2_body_sha256": "de4e8423dd326539aceda1896581cbf5a61653872f31fb83f3065461cabb8790"
+        },
+        "cleanup": "Exact native stop proofs recorded; receipt reports proxy=false, so do not claim direct proxy-stop proof. Outer cgroup empty and gone; native image unchanged."
+      },
+      "N": {
+        "result": "PASS for current shared-error-boundary expected-negative oracle only; not a positive constructor qualification",
+        "receipt_path": "/private/tmp/swarm-post18-v5r3-linux-20261025a/receipt-N.json",
+        "receipt_sha256": "11683504bbd007e973b2b533f1147cf6044b824ba305e87f35a355daa8dcff12",
+        "outer_path": "/private/tmp/swarm-post18-v5r3-linux-20261025a/outer-N.json",
+        "outer_sha256": "22718d14e53f4d9f7720efe46931d5b0940230f827435b3160b7795104998e67",
+        "constructor_ready": false,
+        "model_requests": 0,
+        "harness_input_writes": 0,
+        "cleanup": "Exact native stop proof; renderer, daemon and proxy stopped; outer cgroup empty and gone; native image unchanged."
+      }
+    },
+    "limits": [
+      "B2 remains a negative observation and is not qualified; B3/C not run.",
+      "B aggregate failure and incomplete HTTP census remain controlling; no hidden-request absence claim.",
+      "No live authentication, production activation, release or automatic-continuation qualification follows."
+    ]
   }
 }

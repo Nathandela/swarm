@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-25",
+  "scope": "Two unqualified isolated fresh managed Codex TUI setup attempts; fake ready grants only, no user authentication or live installation changes",
+  "overall": "FAIL; neither attempt reached a coding-agent backend/TUI adoption case; no production validator bypass is authorized",
+  "pins": {
+    "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
+    "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
+    "product_sha256": "dc90bbe17797702a49bec9afccfec01954cf4f0bcf4701b9306cd9b45d265f7d",
+    "native_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215"
+  },
+  "attempts": [
+    {
+      "id": "V2",
+      "result": "FAIL before complete native ownership evidence",
+      "run_path": "/private/tmp/swarm-codex-outer-zqe_lw9g/run.json",
+      "run_sha256": "69e8b814b8c4f6525e10519257b61aa146475f7ac7ac553d7504bd98dcc47e98",
+      "prepared_path": "/private/tmp/swarm-codex-outer-zqe_lw9g/prepared.json",
+      "prepared_sha256": "d42c318549ba2c2354828ac63efe25efd26e719d97bbf5d7bfbbf40c056b5543",
+      "finding": "Outer proof stopped at /proc/178618/fd EACCES; finalization also lacked ownership. Only two tuples observed; four native-ownership tuples were not established.",
+      "cleanup": "Exact unit kill attempted; cgroup empty and directory gone; observed identities ended and observed listeners closed; pins unchanged. This does not claim a complete birth trace."
+    },
+    {
+      "id": "V3",
+      "result": "FAIL during fixture seed validation; no coding-agent backend or TUI launched",
+      "run_path": "/private/tmp/swarm-codex-outer-oyfsj87p/run.json",
+      "run_sha256": "3e74ba2d7777072af2efa3fb83cca74f71bc89f4f418da840638271e96cbac26",
+      "prepared_path": "/private/tmp/swarm-codex-outer-oyfsj87p/prepared.json",
+      "prepared_sha256": "052995190dfcebb98914da124ade1942933bbf10de186270775c8c9b68b074db",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-oyfsj87p/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "f2f5ec65ff17ea06eb0dea78aa73feb4526024411fa95d10de3828720204d4e6",
+      "seed_stderr_path": "/private/tmp/swarm-codex-outer-oyfsj87p/inner-evidence/seed.stderr",
+      "seed_stderr_sha256": "1f1655e6859a2845909b0e91478ed1b843ae39d5d1569c1f89e898a5ab24cc80",
+      "registry_path": "/private/tmp/swarm-codex-outer-oyfsj87p/inner-evidence/registry.json",
+      "registry_sha256": "2f6fce15d797ccd99562897650a6c6666d2df81d71bcb4d09c60fefe81002d4c",
+      "finding": "Fixture seed rejected protected chatgpt_base_url through ValidateAuthSettings -> codexCompetingLevel (frozen internal/logins/native.go:231). Two synthetic ready grants were present; provider transport accepted/rejected counts and native frames were zero.",
+      "cleanup": "Inner owned listeners closed, children ended, identities ended, pins unchanged. Outer cgroup empty and gone, but known TCP fixture-listener closure was false; overall listener-closure proof remains incomplete. Do not fabricate complete cleanup proof."
+    }
+  ],
+  "next_step": "Pinned native-source research supports ordinary HTTPS_PROXY and shared private CA for default ChatGPT HTTP/WebSockets. A reviewed transport plan, production-validator RED/GREEN control and isolated seed-only preflight are required before another full case. Preserve the production auth boundary; no endpoint-selector bypass.",
+  "limits": [
+    "Both attempts are setup failures, not product adoption failures or positive/negative TUI qualification.",
+    "No user auth, real grant, live account, product activation, or production validator bypass.",
+    "Outer polling observes positive required tuple witnesses only; ephemeral execs may be missed, so no complete birth trace is claimed."
+  ],
+  "validator_source": {
+    "auth_boundary_path": "internal/logins/auth_boundary.go",
+    "auth_boundary_sha256": "243ec8da9c006e883de1d892a9ea501c40e8a767453ee80faa03492dd2c6c4d2",
+    "native_path": "internal/logins/native.go",
+    "native_sha256": "0d9e239ccc194e9aff808f64ffe0b690e80a296b0fc9484a8b0afe5ee7f0239e",
+    "note": "ValidateAuthSettings calls codexCompeting, which includes chatgpt_base_url via codexCompetingLevel."
+  }
+}
