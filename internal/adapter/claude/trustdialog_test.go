@@ -48,6 +48,17 @@ func TestTrustGate_2_1_258_NoPreselected_MovesToYesThenConfirms(t *testing.T) {
 	}
 }
 
+func TestTrustGate_2_1_310_StillRecognizedByBoxTitle(t *testing.T) {
+	snap := trustSnap(t, filepath.Join(trustDialogDir, "trust-dialog-2.1.310.snap.json"))
+	if snap.Cols != 150 || snap.Rows != 44 {
+		t.Fatalf("fixture grid = %dx%d; want captured PTY size 150x44", snap.Cols, snap.Rows)
+	}
+	keys, ok := New().LaunchGateKeys(snap)
+	if !ok || keys != "\x1b[B\r" {
+		t.Fatalf("native 2.1.310 dialog: (%q, %v); want Down then Enter", keys, ok)
+	}
+}
+
 func TestTrustGate_2_1_231_YesPreselected_Confirms(t *testing.T) {
 	snap := trustSnap(t, filepath.Join(permDialogDir, "neg-trust-dialog-2.1.231.snap.json"))
 	keys, ok := New().LaunchGateKeys(snap)
@@ -85,6 +96,60 @@ func TestTrustGate_RefusesADialogWithoutASelectionMarker(t *testing.T) {
 	}
 }
 
+func TestTrustGate_RefusesMalformed2_1_310Dialog(t *testing.T) {
+	load := func() *vt.Snap {
+		return trustSnap(t, filepath.Join(trustDialogDir, "trust-dialog-2.1.310.snap.json"))
+	}
+	refuse := func(name string, snap *vt.Snap) {
+		t.Helper()
+		if keys, ok := New().LaunchGateKeys(snap); ok || keys != "" {
+			t.Errorf("%s: answered (%q, %v); want refusal", name, keys, ok)
+		}
+	}
+	t.Run("missing marker", func(t *testing.T) {
+		snap := load()
+		rewriteRow(t, snap, "❯ No, exit", "No, exit")
+		refuse("missing marker", snap)
+	})
+	t.Run("missing box title", func(t *testing.T) {
+		snap := load()
+		rewriteRow(t, snap, "Accessing workspace:", "Other workspace:")
+		refuse("missing box title", snap)
+	})
+	t.Run("double marker", func(t *testing.T) {
+		snap := load()
+		rewriteRow(t, snap, "Yes, I trust this folder", "❯ Yes, I trust this folder")
+		refuse("double marker", snap)
+	})
+	t.Run("nonadjacent options", func(t *testing.T) {
+		snap := load()
+		rewriteRow(t, snap, "Yes, I trust this folder", "")
+		rewriteRow(t, snap, "Enter to confirm · Esc to cancel", "Yes, I trust this folder")
+		refuse("nonadjacent options", snap)
+	})
+	t.Run("unknown option", func(t *testing.T) {
+		snap := load()
+		rewriteRow(t, snap, "Yes, I trust this folder", "Proceed anyway")
+		refuse("unknown option", snap)
+	})
+	t.Run("unframed title", func(t *testing.T) {
+		snap := load()
+		for i := range snap.Lines {
+			if isBoxRule(rowText(snap.Lines[i])) {
+				snap.Lines[i] = vt.Line{}
+				refuse("unframed title", snap)
+				return
+			}
+		}
+		t.Fatal("native frame rule not found")
+	})
+	t.Run("quoted box title", func(t *testing.T) {
+		snap := load()
+		rewriteRow(t, snap, "Accessing workspace:", "Transcript: Accessing workspace:")
+		refuse("quoted box title", snap)
+	})
+}
+
 func TestTrustGate_RefusesWhenTheYesOptionIsNotOnScreen(t *testing.T) {
 	snap := trustSnap(t, filepath.Join(trustDialogDir, "trust-dialog-2.1.258.snap.json"))
 	rewriteRow(t, snap, "Yes, I trust this folder", "")
@@ -106,8 +171,11 @@ func TestTrustDialogFixtures_AreVersionStamped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading fixture README: %v", err)
 	}
-	m := declaredVersionRE.FindStringSubmatch(string(doc))
-	if m == nil {
+	versions := map[string]bool{}
+	for _, m := range declaredVersionRE.FindAllStringSubmatch(string(doc), -1) {
+		versions[m[1]] = true
+	}
+	if len(versions) == 0 {
 		t.Fatal("README.md declares no \"CLI version: x.y.z\"; the fixtures are undated")
 	}
 	entries, err := os.ReadDir(trustDialogDir)
@@ -120,8 +188,12 @@ func TestTrustDialogFixtures_AreVersionStamped(t *testing.T) {
 			continue
 		}
 		fixtures++
-		if !strings.Contains(e.Name(), m[1]) {
-			t.Errorf("fixture %s does not carry the declared CLI version %s", e.Name(), m[1])
+		stamped := false
+		for version := range versions {
+			stamped = stamped || strings.Contains(e.Name(), version)
+		}
+		if !stamped {
+			t.Errorf("fixture %s does not carry a version declared in README.md (%v)", e.Name(), versions)
 		}
 	}
 	if fixtures == 0 {
