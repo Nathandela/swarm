@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Four unqualified isolated fresh managed Codex TUI attempts plus two seed-only controls; synthetic ready grants only, no user authentication or live installation changes",
-  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. seedV2 passes synthetic seed/public metadata only; the full V6 native attempt failed and diagnostic V7 rejected the observed Python 3.10 identity. Preserve earlier V2/V3 failures.",
+  "scope": "Five unqualified isolated fresh managed Codex TUI attempts plus two seed-only controls; synthetic ready grants only, no user authentication or live installation changes",
+  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. seedV2 passes synthetic seed/public metadata only. Full V6 failed; diagnostic V7 rejected an observed Python 3.10 image; diagnostic V8 identified a native codex.sock symlink alias, without completing native ownership proof.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -126,14 +126,62 @@
         "inode": 29568,
         "basis": "host-source evidence only; does not establish the observed process historical argv or parent"
       }
+    },
+    {
+      "id": "diagnostic-V8",
+      "result": "DIAGNOSTIC FAIL: exact native socket alias was rejected by strict symlink validation; no provider/model/native-frame activity.",
+      "run_path": "/private/tmp/swarm-codex-outer-po8x4uxa/run.json",
+      "run_sha256": "d08bfc09d4aa960f03638c57f45e6155e12849a84bdca40f2e08d42ab3dafbf2",
+      "prepared_path": "/private/tmp/swarm-codex-outer-po8x4uxa/prepared.json",
+      "prepared_sha256": "e3b719fc084bb885a4323aa736672ff327cd0f49d87c193c9de43ddba4c61377",
+      "inner_prepared_path": "/private/tmp/swarm-codex-outer-po8x4uxa/inner-evidence/prepared.json",
+      "inner_prepared_sha256": "958d18828848f10be4b2ea00a4bcfaf90025cdfaca4bb9ce31d323ba39a305a7",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-po8x4uxa/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "5ac5967906845014431d5f30d9a04edc6f2963f99e878b1a60aafe8134510b22",
+      "evidence_index_path": "/private/tmp/swarm-codex-outer-po8x4uxa/inner-evidence/collected-sha256.json",
+      "evidence_index_sha256": "2d18a2c38203111df7ee39e6c7dba8dddad06e98bab7fbc066d15863801666a6",
+      "finding": {
+        "rejected_link": "/tmp/scx.xz5gkrvs/tmp/ctui-vjm70e2g/s/vh4lxzoysm6quwio/codex.sock",
+        "target": "/tmp/codex-daemon-1000/7f7f348957c0c6974fc96604c8d4d89ee98c1c7d98b62c54a7f2c5b7fe34c580",
+        "interpretation": "This identifies a native codex.sock symlink alias, not an arg0 identity. Eight process tuples were observed, but the four required native-ownership tuples were not established."
+      },
+      "activity": {
+        "provider_requests_accepted": 0,
+        "provider_requests_rejected": 0,
+        "model_requests": 0,
+        "native_frames": 0
+      },
+      "timing": "Public Stop timed out after approximately 3 seconds.",
+      "os_query_binding": {
+        "pre_post_binding_unchanged": true,
+        "basis": "outer run records default_os_query_binding_unchanged=true"
+      },
+      "cleanup": {
+        "kernel": {
+          "exact_unit_kill_attempted": true,
+          "cgroup_empty": true,
+          "directory_gone": true,
+          "observed_identities_ended": true,
+          "pins_unchanged": true,
+          "os_query_binding_unchanged": true
+        },
+        "inner_receipt": {
+          "tracked_listeners_closed": true,
+          "children_ended": true,
+          "cgroup_empty": false,
+          "external_cleanup_required": true
+        },
+        "physical_listener_proof": "Outer evidence says known_fixture_listeners_closed=false; physical listener closure and native ownership remain unproved."
+      },
+      "polling_limit": "Positive witnesses only; ephemeral execs may be missed. No complete birth trace claimed."
     }
   ],
-  "next_step": "Root and Astra approved the source/host-bound OS-query interpreter amendment for preparation. Review the frozen new outer envelope before one diagnostic attempt; admit only the pinned physical Python3.10 image after pre/post binding. All symlink rejections stay strict. Preserve the production auth validator and failed attempts.",
+  "next_step": "The exact OS-query interpreter amendment was reviewed and exercised in V8; its pre/post binding passed. Review native source and constructor custody for the observed codex.sock alias before admitting that exact endpoint and checking its physical listener. No symlink exception is approved yet; preserve the production auth validator.",
   "limits": [
     "seedV2 proves synthetic seed/public metadata only; no native login, account admission, TUI adoption, or complete ephemeral process trace.",
-    "The full V6 run failed. Cgroup empty/gone and observed identities ended are kernel cleanup facts; known fixture listener closure and native ownership proof remain incomplete.",
-    "Diagnostic V7 records a rejected Python 3.10 observed image. Host source evidence does not prove that process\u2019s actual argv or parent.",
-    "The OS-query amendment is preparation-approved only; the frozen implementation and next execution still need review. Symlinks remain unqualified. No user auth, real grant, live account, product activation, or production validator bypass."
+    "Full V6 failed. V6/V7/V8 kernel cleanup facts do not prove complete physical-listener closure or native ownership; V8 observed eight process tuples but did not establish the four required native-ownership tuples.",
+    "V7 host source proves the source-required Python image only, not the observed process historical argv or parent. V8 identifies a socket symlink alias, not arg0.",
+    "The observed native socket alias requires source/custody review before a narrow exception. All other symlinks remain unqualified. No user auth, real grant, live account, product activation, or production validator bypass."
   ],
   "validator_source": {
     "auth_boundary_path": "internal/logins/auth_boundary.go",
@@ -165,6 +213,7 @@
         "sha256": "e4022a17595a00d6a369236fdae483f0de7f0a339960a53118b818238e132224",
         "bytes": 27455
       }
-    ]
+    ],
+    "V8_followup": "The OS-query implementation was approved and exercised; exact pre/post binding passed. Source/custody review of the actual native socket alias is next; no alias exception or native-ownership claim follows."
   }
 }
