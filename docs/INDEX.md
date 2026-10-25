@@ -14,7 +14,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
 ## Operations
-- [Provider logins](operations/provider-logins.md) — manage native Claude Code and Codex logins and provider-wide safe switches
+- [Provider logins](operations/provider-logins.md) — saved Claude Code and Codex logins, usage and recovery
 - [Pilot a Swarm conversation](operations/pilot.md) — caller-scoped `swarm --pilot` guidance and commands
 - [Remote-control operator runbook](operations/operator-runbook.md) — provision, pair, revoke and diagnose the one Cloudflare relay-v2 Worker
 - [Metadata disclosure](operations/metadata-disclosure.md) — the register of who observes what: the relay operator, the push provider, the gateway, a network observer, and (§5) a second model vendor, the one entry that receives session content rather than metadata (PB-OPS-3)

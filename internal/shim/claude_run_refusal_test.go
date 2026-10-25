@@ -109,11 +109,37 @@ func runClaudeRefusalChild(t *testing.T, cfg Config) processcontain.Identity {
 }
 
 func TestClaudeRunRefusalsPublishRemovableOwnedProof(t *testing.T) {
-	for _, kind := range []string{"missing-image", "changed-image", "unqualified-image", "auth-env", "stale-epoch"} {
+	for _, kind := range []string{"missing-image", "changed-image", "unqualified-image", "unqualified-image-metadata", "auth-env", "stale-epoch"} {
 		t.Run(kind, func(t *testing.T) {
 			cfg, _, birth, login := claudeBirthFixture(t)
 			cfg.Env = helperEnv(modeInfo, "PATH=/usr/bin:/bin")
 			switch kind {
+			case "unqualified-image-metadata":
+				if err := os.Chmod(cfg.Argv[0], 0755); err != nil {
+					t.Fatal(err)
+				}
+				fingerprint, err := persist.CLIFingerprint(cfg.Argv[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				cfg.CLIIdentity.Fingerprint = fingerprint
+				metaPath := filepath.Join(cfg.SessionDir, "meta.json")
+				raw, err := os.ReadFile(metaPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var meta persist.Meta
+				if err := json.Unmarshal(raw, &meta); err != nil {
+					t.Fatal(err)
+				}
+				meta.CLIIdentity = cfg.CLIIdentity
+				raw, err = json.Marshal(meta)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(metaPath, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
 			case "missing-image":
 				if err := os.Remove(cfg.Argv[0]); err != nil {
 					t.Fatal(err)

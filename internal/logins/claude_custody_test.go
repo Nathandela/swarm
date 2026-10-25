@@ -14,6 +14,21 @@ import (
 	"time"
 )
 
+func TestClaudeCLIFingerprintFormats(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	content := "sha256:" + digest + ":" + strings.Repeat("b", 64)
+	for _, value := range []string{digest, content} {
+		if !IsClaudeCLIFingerprint(value) {
+			t.Fatalf("supported fingerprint format refused: %q", value)
+		}
+	}
+	for _, value := range []string{"", "invalid", digest[:63], digest + "a", strings.ToUpper(digest), "sha256:" + digest, content + ":extra", "sha256:" + strings.ToUpper(digest) + ":" + digest, "sha256:" + digest + ":" + strings.Repeat("z", 64)} {
+		if IsClaudeCLIFingerprint(value) {
+			t.Fatalf("malformed fingerprint accepted: %q", value)
+		}
+	}
+}
+
 func TestNativeProofCanonicalSchemaThreePreservesWireFields(t *testing.T) {
 	native := NativeProcessInfo{SchemaVersion: NativeWriterSchemaVersion, Generation: strings.Repeat("a", 32), PID: 31, PGID: 31, StartTime: 41, ShimPID: 51, ShimStartTime: 61, Provider: ProviderClaude, Runtime: Runtime{Provider: ProviderClaude, Epoch: 1, Identity: strings.Repeat("b", 64), Home: "/private/native"}}
 	raw, err := json.Marshal(native)

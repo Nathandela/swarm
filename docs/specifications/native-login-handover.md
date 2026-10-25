@@ -4,6 +4,9 @@ Implementation contract reviewed by Sol and Astra · 2026-10-24 · `agents-track
 
 Work is isolated on `feat/native-login-handover`, based on `179073ab`. Beads owns
 task status; this document defines the implementation and acceptance contract.
+The end-to-end behavior below is an unreleased target. Retained-account and
+execution-evidence foundations have targeted verification; native construction,
+workflow parity, migration and automatic continuation still have open gates.
 The baseline evidence is [the native rotation research](../verification/provider-logins/seamless-rotation-research.json).
 The [Linux native capability receipts](../verification/provider-logins/native-handover-capabilities-2026-10-24.json)
 record version-pinned scenarios using synthetic credentials. They characterize
@@ -284,9 +287,20 @@ Keep unsupported platforms/pins explicit and enrollment independently usable.
 The [ordinary native startup checks](../verification/provider-logins/claude-normal-startup-2026-10-25.json)
 pass on both pinned platforms with synthetic authority and normal settings
 discovery. The native trust dialog needs a settled selection before confirmation;
-the current product's combined Down/Enter dispatch is a separately tracked fix.
-These checks establish trust, SessionStart and the initial composer only, not
-saved-account authentication, workflow/MCP parity or the real daemon constructor.
+the [staged launch gate](../verification/provider-logins/claude-launch-gate-2026-10-25.json)
+now uses the existing 500 ms sampler to separate selection from confirmation. Each
+step needs an unchanged recognized frame observed at least 250 ms apart, bound
+to the same native incarnation. Foreign input, controller takeover, incomplete
+snapshots and uncertain writes abandon that attempt. The gate takes no queued
+composer ticket and uses a bounded 100 ms control write; normal input keeps its
+existing behavior. Current-frame checks reduce stale input but cannot make a
+terminal read and native key adoption atomic.
+
+The isolated native checks establish trust, SessionStart and the initial composer
+only. The [production-constructor canary](../verification/provider-logins/claude-constructor-2026-10-25.json)
+must also start an untouched provisioned profile; the earlier fixture prefilled onboarding, theme and synthetic account fields.
+Saved-account authentication, workflow/MCP parity and integrated native startup
+remain separate qualification gates.
 
 ### Durable execution evidence
 

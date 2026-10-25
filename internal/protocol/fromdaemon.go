@@ -1,8 +1,10 @@
 package protocol
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -420,6 +422,48 @@ func (st *shimStream) ControlInput(keys []byte) error {
 	st.writeMu.Lock()
 	defer st.writeMu.Unlock()
 	return wire.WriteFrame(st.conn, wire.TControl, body)
+}
+
+// TryControlInput is the launch gate's bounded, non-queued control write. A
+// failed frame or deadline leaves transport custody uncertain, so close it.
+func (st *shimStream) TryControlInput(keys []byte) error {
+	if !st.caps.ControlInput {
+		return ErrControlInputUnsupported
+	}
+	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeControlInput, Keys: string(keys)})
+	if err != nil {
+		return err
+	}
+	var frame bytes.Buffer
+	if err := wire.WriteFrame(&frame, wire.TControl, body); err != nil {
+		return err
+	}
+	if !st.writeMu.TryLock() {
+		return errors.New("protocol: session stream writer busy")
+	}
+	defer st.writeMu.Unlock()
+	select {
+	case <-st.done:
+		return net.ErrClosed
+	default:
+	}
+	if err := st.conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		_ = st.Close()
+		return fmt.Errorf("protocol: set gate write deadline: %w", err)
+	}
+	n, err := st.conn.Write(frame.Bytes())
+	if err == nil && n != frame.Len() {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		_ = st.Close()
+		return fmt.Errorf("protocol: write gate control frame: %w", err)
+	}
+	if err := st.conn.SetWriteDeadline(time.Time{}); err != nil {
+		_ = st.Close()
+		return fmt.Errorf("protocol: clear gate deadline after frame write: %w", err)
+	}
+	return nil
 }
 
 func (st *shimStream) Resize(cols, rows int) error {

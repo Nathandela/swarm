@@ -1,0 +1,129 @@
+{
+  "date": "2026-10-25",
+  "scope": "Metadata and retained-content executable observation compatibility at the Claude reservation boundary",
+  "live_setup_changed": false,
+  "change": "Export the existing Store fingerprint-shape predicate unchanged and reuse it in the shim. Exact metadata/scope equality, fixed native-image hash, held-descriptor execution and final admission remain unchanged.",
+  "plan_sha256": "9e3dc317e6b5aeafa3f91e5f344451d8a148076a89efd4f86b9064d2ad268b89",
+  "review_manifest_sha256": "a256a99481dc811506bef614251ba35a1849270d5be402eadcd99d53051d9b76",
+  "source_delta_sha256": "143fdb927201f9b32565c33018faf129704d72001ca4fe41176d45c044b5c638",
+  "red": "Real CLIFingerprint on a0755 synthetic executable refused custody before the fix; red log SHA07ef22d23c5caba83f56b14521bb807124fd5a1073fc76bc711fd70baced74dc.",
+  "local_race": "Focused logins1.241s and shim2.336s PASS; Linux-only actual-Run cases explicitly skipped locally.",
+  "linux": {
+    "stage": "/tmp/sfp.8oazp3cF",
+    "manifest_sha256": "a256a99481dc811506bef614251ba35a1849270d5be402eadcd99d53051d9b76",
+    "archive_sha256": "5588e15263dd73876804659ec14e880945f6a21e17a5e471a5b13ce24a573435",
+    "scope": "Linux amd64 synthetic unit tests only; no native Claude execution or auth qualification",
+    "units": {
+      "green-claims": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.477,
+        "log_sha256": "28937ffd6751efdbf92f8517d13a9981d118bae01b796c9892e8e6c04960b538",
+        "binary_sha256": "8201735881dc834f7a623faf220f339295bfb4ddb77280e0ad8e3b5dd458c82a",
+        "outer_cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-fingerprint-bb62374071991e3a.service",
+        "umask": "Umask:\t0002",
+        "cleanup": {
+          "cgroup_empty": true,
+          "cgroup_gone": true,
+          "copy": {
+            "destination": "/tmp/sfp.8oazp3cF/green-claims/tmp/swarm-shim-fake192270042/swarm-fake-agent",
+            "sha256": "578e314e01505b09bf0431393d375312837b6b72c7cae777fc52e0bb7dc136b8",
+            "copies": 1
+          }
+        },
+        "contract_met": true
+      },
+      "green-wrong-pin-owned-refusal": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.817,
+        "log_sha256": "70a77d3de438e91c98e67c5588840b01856dc3b1f13d09db2c575f88dd179262",
+        "binary_sha256": "8201735881dc834f7a623faf220f339295bfb4ddb77280e0ad8e3b5dd458c82a",
+        "outer_cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-fingerprint-eeee4a0c39a1c841.service",
+        "umask": "Umask:\t0002",
+        "cleanup": {
+          "cgroup_empty": true,
+          "cgroup_gone": true,
+          "copy": {
+            "destination": "/tmp/sfp.8oazp3cF/green-wrong-pin-owned-refusal/tmp/swarm-shim-fake3821263712/swarm-fake-agent",
+            "sha256": "578e314e01505b09bf0431393d375312837b6b72c7cae777fc52e0bb7dc136b8",
+            "copies": 1
+          }
+        },
+        "contract_met": true
+      },
+      "green-formats": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.363,
+        "log_sha256": "5579fd0f91fb9409c1728dbc0dde77bac2d60fb80584b4c143dcc0616e43b278",
+        "binary_sha256": "13973d28e383046e83dde98a9e7af36e309ef6497a25030e3f719c816544f5b2",
+        "outer_cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-fingerprint-6bb4b92d2bd6c3b8.service",
+        "umask": "Umask:\t0002",
+        "cleanup": {
+          "cgroup_empty": true,
+          "cgroup_gone": true,
+          "copy": null
+        },
+        "contract_met": true
+      },
+      "old-predicate-claim": {
+        "exit_code": 1,
+        "elapsed_seconds": 0.467,
+        "log_sha256": "a79e4e63374823cde99c35df5d253b6003a4b392bb87ce050019b4bb98799a6d",
+        "binary_sha256": "f39a3edc68eae41d991ae88ee3d3a2b367efc8cef0c49750b521204afdc9a118",
+        "outer_cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-fingerprint-203708c8aa4387bf.service",
+        "umask": "Umask:\t0002",
+        "cleanup": {
+          "cgroup_empty": true,
+          "cgroup_gone": true,
+          "copy": {
+            "destination": "/tmp/sfp.8oazp3cF/old-predicate-claim/tmp/swarm-shim-fake1402042352/swarm-fake-agent",
+            "sha256": "578e314e01505b09bf0431393d375312837b6b72c7cae777fc52e0bb7dc136b8",
+            "copies": 1
+          }
+        },
+        "contract_met": true
+      },
+      "old-predicate-wrong-pin-refusal": {
+        "exit_code": 1,
+        "elapsed_seconds": 0.757,
+        "log_sha256": "d47e9e8ef6d742a5e8728dc4b76d395ba3324d2a61fb0be6224adf795d4bafed",
+        "binary_sha256": "f39a3edc68eae41d991ae88ee3d3a2b367efc8cef0c49750b521204afdc9a118",
+        "outer_cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-fingerprint-6f2db47910b3a7b5.service",
+        "umask": "Umask:\t0002",
+        "cleanup": {
+          "cgroup_empty": true,
+          "cgroup_gone": true,
+          "copy": {
+            "destination": "/tmp/sfp.8oazp3cF/old-predicate-wrong-pin-refusal/tmp/swarm-shim-fake1920423654/swarm-fake-agent",
+            "sha256": "578e314e01505b09bf0431393d375312837b6b72c7cae777fc52e0bb7dc136b8",
+            "copies": 1
+          }
+        },
+        "contract_met": true
+      }
+    },
+    "all_contracts_met": true
+  },
+  "review": "Root and independent Sol/Astra approved the narrow plan; root and Astra reviewed source and actual Linux evidence.",
+  "limits": [
+    "The Linux cases use synthetic executables. Wrong-image refusal produces exact zero-PID contained-stop proof, with duplicate preservation and retirement/Delete checked; no actual Claude executes.",
+    "Constructor V1 remains a failed run. V2 establishes native birth after this correction, but fails before trust/composer readiness and does not qualify startup.",
+    "The earlier unrelated full-skeleton status-persistence failure remains open; a diagnostic repeat changed synchronization and does not clear it."
+  ],
+  "root_full_shim_race": {
+    "exit_code": 0,
+    "elapsed_seconds": 151.081,
+    "log_sha256": "d221b3ec550dfe2cdfe1f92b9feb9b6c5e2bcf9b550b2e987a7e435a8398635e",
+    "source_map_sha256": "ab85423964607c9d8bdd2b93d6deda5dfb8b3e432ea5ecd56e1d66f8904bbf8f",
+    "failed_tests": [],
+    "passed_tests": 242,
+    "skipped_tests": 15
+  },
+  "native_birth": "Actual constructor V2 reaches Claude2.1.310 and produces positive contained-stop proof with the metadata64 fingerprint. Startup remains unqualified because the fake connectivity fixture returns404; see claude-constructor-2026-10-25.json.",
+  "root_checks": {
+    "build": "go build -p=1 ./... PASS",
+    "vet": "go vet -p=1 ./internal/logins ./internal/shim PASS",
+    "lint_darwin": "logins and shim:0 issues",
+    "lint_linux_amd64": "logins and shim, CGO_ENABLED=0:0 issues",
+    "source_map_sha256": "ab85423964607c9d8bdd2b93d6deda5dfb8b3e432ea5ecd56e1d66f8904bbf8f"
+  }
+}

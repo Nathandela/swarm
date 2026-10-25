@@ -79,7 +79,10 @@ type tapManager struct {
 	// unit tests that build a tapManager directly, and a no-op then.
 	onSubscribe func(id string)
 	// beforeWrite durably fences owner input before the shared upstream sees bytes.
-	beforeWrite func(id string) error
+	beforeWrite  func(id string) error
+	gateIdentity func(id string) (launchGateIdentity, bool)
+	foreignWrite func(id string, identity launchGateIdentity)
+	gateFault    func(id string, identity launchGateIdentity)
 
 	parserFaults  atomic.Uint64
 	parserLastLog atomic.Int64
@@ -223,6 +226,10 @@ func (m *tapManager) subscribe(id string, mode tapMode) (*tapSub, error) {
 			continue
 		}
 		if t.up == nil {
+			var before launchGateIdentity
+			if m.gateIdentity != nil {
+				before, _ = m.gateIdentity(id)
+			}
 			// First subscriber: open the single upstream and seed the mirror.
 			up, err := m.dial(id)
 			if err != nil {
@@ -232,7 +239,14 @@ func (m *tapManager) subscribe(id string, mode tapMode) (*tapSub, error) {
 				return nil, err
 			}
 			t.up = up
+			if m.gateIdentity != nil {
+				if after, ok := m.gateIdentity(id); ok && before.valid() && before == after {
+					t.gateBinding = after
+				}
+			}
 			seed := up.Snapshot()
+			_, seedErr := vt.DecodeSnapshot(seed)
+			t.gateInvalid = seedErr != nil
 			t.mirror = seedMirror(seed)
 			go t.pump()
 			// The first subscriber's snapshot is the raw upstream snapshot: identical
@@ -283,11 +297,13 @@ type tap struct {
 	mgr *tapManager
 	id  string
 
-	mu     sync.Mutex
-	up     protocol.SessionStream // the single shared upstream (nil until first subscribe)
-	mirror *vt.Emulator           // tracks the current grid to seed late joiners
-	subs   map[*tapSub]struct{}
-	closed bool
+	mu          sync.Mutex
+	up          protocol.SessionStream // the single shared upstream (nil until first subscribe)
+	mirror      *vt.Emulator           // tracks the current grid to seed late joiners
+	subs        map[*tapSub]struct{}
+	closed      bool
+	gateBinding launchGateIdentity // immutable after the initial dial
+	gateInvalid bool               // sticky; ordinary mirroring still recovers as before
 }
 
 // newSubLocked creates a subscriber, snapshots it, and registers it. Caller holds t.mu.
@@ -309,9 +325,12 @@ func (t *tap) newSubLocked(mode tapMode, snap []byte) *tapSub {
 func (t *tap) pump() {
 	frames := t.up.Frames()
 	for frame := range frames {
+		fault := false
 		t.mu.Lock()
 		if t.mirror != nil {
 			if err := t.mirror.FeedChecked(frame); err != nil {
+				t.gateInvalid = true
+				fault = true
 				t.mgr.noteParserFault(t.id, err)
 			}
 		}
@@ -326,6 +345,9 @@ func (t *tap) pump() {
 			}
 		}
 		t.mu.Unlock()
+		if fault && t.mgr.gateFault != nil {
+			t.mgr.gateFault(t.id, t.gateBinding)
+		}
 	}
 	t.teardown()
 }
@@ -428,6 +450,9 @@ func (s *tapSub) Input(p []byte) error {
 	if s.mode != readWrite {
 		return nil
 	}
+	if len(p) > 0 && s.t.mgr.foreignWrite != nil {
+		s.t.mgr.foreignWrite(s.t.id, s.t.gateBinding)
+	}
 	if len(p) > 0 && s.t.mgr.beforeWrite != nil {
 		if err := s.t.mgr.beforeWrite(s.t.id); err != nil {
 			return err
@@ -447,6 +472,9 @@ func (s *tapSub) Input(p []byte) error {
 func (s *tapSub) Submit(text string) error {
 	if s.mode != readWrite {
 		return nil
+	}
+	if s.t.mgr.foreignWrite != nil {
+		s.t.mgr.foreignWrite(s.t.id, s.t.gateBinding)
 	}
 	sm, ok := s.t.up.(protocol.MessageSubmitter)
 	if !ok {
@@ -473,6 +501,9 @@ func (s *tapSub) ControlKeys(p []byte) error {
 	if s.mode != readWrite {
 		return nil
 	}
+	if len(p) > 0 && s.t.mgr.foreignWrite != nil {
+		s.t.mgr.foreignWrite(s.t.id, s.t.gateBinding)
+	}
 	if len(p) > 0 && s.t.mgr.beforeWrite != nil {
 		if err := s.t.mgr.beforeWrite(s.t.id); err != nil {
 			return err
@@ -484,6 +515,41 @@ func (s *tapSub) ControlKeys(p []byte) error {
 		}
 	}
 	return s.t.up.Input(p)
+}
+
+func (s *tapSub) launchGateSnapshot(expected launchGateIdentity) (*vt.Snap, error) {
+	if !s.t.mu.TryLock() {
+		return nil, errors.New("launch gate: mirror busy")
+	}
+	defer s.t.mu.Unlock()
+	if s.t.closed || s.t.gateInvalid || !expected.valid() || s.t.gateBinding != expected || s.t.mirror == nil {
+		return nil, errors.New("launch gate: unbound or incomplete mirror")
+	}
+	raw, err := s.t.mirror.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	return vt.DecodeSnapshot(raw)
+}
+
+// No ordinary ControlKeys/Input fallback: that path has no bounded write guarantee.
+func (s *tapSub) tryLaunchGateControl(keys []byte, current func() bool) error {
+	if s.mode != readWrite {
+		return errors.New("launch gate: read-only tap")
+	}
+	writer, ok := s.t.up.(interface{ TryControlInput([]byte) error })
+	if !ok {
+		return errors.New("launch gate: bounded control unsupported")
+	}
+	if s.t.mgr.beforeWrite != nil {
+		if err := s.t.mgr.beforeWrite(s.t.id); err != nil {
+			return err
+		}
+	}
+	if !current() {
+		return errors.New("launch gate: observation retired before write")
+	}
+	return writer.TryControlInput(keys)
 }
 
 // Resize forwards to the shared upstream for a readWrite subscriber and updates

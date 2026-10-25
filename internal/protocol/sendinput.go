@@ -354,6 +354,40 @@ func (s *Server) WithInputFence(local string, fn func() error) error {
 	return fn()
 }
 
+// TryWithInputFence is the launch gate's non-queued variant of WithInputFence.
+// Busy locks refuse without invoking fn or the foreign-input gate.
+func (s *Server) TryWithInputFence(local string, fn func() error) error {
+	if fn == nil {
+		return errors.New("protocol: nil input-fence callback")
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("protocol: server closed")
+	}
+	ls := s.leases[local]
+	if ls == nil {
+		ls = &sessionLease{}
+		s.leases[local] = ls
+	}
+	s.mu.Unlock()
+	if !ls.attachMu.TryLock() {
+		return fmt.Errorf("protocol: session %q attach fence busy", local)
+	}
+	defer ls.attachMu.Unlock()
+	if !ls.inMu.TryLock() {
+		return fmt.Errorf("protocol: session %q input fence busy", local)
+	}
+	defer ls.inMu.Unlock()
+	s.mu.Lock()
+	current := !s.closed && s.leases[local] == ls
+	s.mu.Unlock()
+	if !current {
+		return fmt.Errorf("protocol: session %q input fence is no longer current", local)
+	}
+	return fn()
+}
+
 func (s *Server) sendMessage(local string, frames [][]byte, submits, manual bool) error {
 	s.mu.Lock()
 	if s.closed {

@@ -53,6 +53,55 @@ func claudeClaimFixture(t *testing.T) (Config, *managedNativeScope, persist.Meta
 	return cfg, scope, meta
 }
 
+func TestClaudeOwnedClaimAcceptsPublishedMetadataFingerprint(t *testing.T) {
+	for _, kind := range []string{"valid", "malformed", "uppercase", "wrong-scope", "wrong-meta"} {
+		t.Run(kind, func(t *testing.T) {
+			cfg, scope, meta := claudeClaimFixture(t)
+			if err := os.Chmod(cfg.Argv[0], 0755); err != nil {
+				t.Fatal(err)
+			}
+			fingerprint, err := persist.CLIFingerprint(cfg.Argv[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.CLIIdentity.Fingerprint = fingerprint
+			scope.info.CLIFingerprint = fingerprint
+			switch kind {
+			case "malformed":
+				cfg.CLIIdentity.Fingerprint = "invalid"
+				scope.info.CLIFingerprint = "invalid"
+			case "uppercase":
+				cfg.CLIIdentity.Fingerprint = strings.ToUpper(fingerprint)
+				scope.info.CLIFingerprint = cfg.CLIIdentity.Fingerprint
+			case "wrong-scope":
+				scope.info.CLIFingerprint = strings.Repeat("a", 64)
+			case "wrong-meta":
+				other := *meta.CLIIdentity
+				other.Fingerprint = strings.Repeat("b", 64)
+				meta.CLIIdentity = &other
+			}
+			raw, err := json.Marshal(meta)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(cfg.SessionDir, "meta.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			err = scope.claimClaudeReservation(cfg)
+			if kind == "valid" {
+				if err != nil || !scope.ownPreclaimDurable {
+					t.Fatalf("published metadata fingerprint refused custody: %v", err)
+				}
+				if err := scope.validateClaudeStart(cfg); err != nil {
+					t.Fatalf("unchanged metadata fingerprint refused final validation: %v", err)
+				}
+			} else if err == nil || scope.ownPreclaimDurable {
+				t.Fatal("malformed or mismatched fingerprint obtained custody")
+			}
+		})
+	}
+}
+
 func TestClaudeOwnedClaimRequiresExactPrivateUnretiredReservation(t *testing.T) {
 	for _, kind := range []string{"valid", "cwd", "runtime", "cli", "terminal", "session", "foreign-shim", "retired", "duplicate", "case-alias", "symlink-meta", "winner-native", "winner-stopped"} {
 		t.Run(kind, func(t *testing.T) {

@@ -122,10 +122,9 @@ type Daemon struct {
 	loginJobsWG sync.WaitGroup
 	tapWG       sync.WaitGroup // the tapGrids loop (the sole sampleWG/captureWG Adder)
 	sampleFn    func(id string)
-	// gateDone marks the sessions whose launch gate this daemon already answered
-	// (launchgate.go); gateMu guards it. Bounded to running sessions by endSession.
+	// gateDone retains one staged attempt/tombstone per running incarnation.
 	gateMu   sync.Mutex
-	gateDone map[string]bool
+	gateDone map[string]*launchGateEntry
 	// controlled reports whether a session has a live controller lease; the tap
 	// skips such a session so its stream is not stolen every poll (R1.3.7). It is
 	// d.srv.IsControlled in production, overridable in tests.
@@ -482,6 +481,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.api.tap.onSubscribe = d.authorAttachedSessionCapabilities
 	d.api.tap.beforeWrite = d.observeExecutionOwnerWrite
+	d.api.tap.gateIdentity = d.cachedLaunchGateIdentity
+	d.api.tap.foreignWrite = d.abandonLaunchGateBinding
+	d.api.tap.gateFault = d.abandonLaunchGateBinding
 	if d.detectProviderVersion == nil {
 		d.detectProviderVersion = detectProviderVersion
 	}
@@ -679,6 +681,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// input, and supervisor delivery refuse before bytes while compaction or auth
 	// recycling owns the session (the supervisor avoids even attempting).
 	inputGate := func(local string) error {
+		d.abandonLaunchGate(local) // Includes a brief attach/detach between grid polls.
 		if reason := d.composerRecycleRefusal(local); reason != "" {
 			return fmt.Errorf("session %q %s; nothing was typed", local, reason)
 		}
@@ -933,6 +936,9 @@ func (d *Daemon) anyControlled(local string) bool {
 // engine registration and token (S6). Ending an unregistered session (e.g. one
 // adopted by reconcile, never registered) is a harmless no-op.
 func (d *Daemon) endSession(id string) {
+	d.gateMu.Lock()
+	gateEntry := d.gateDone[id]
+	d.gateMu.Unlock()
 	d.stopOpenCodeObservation(id)
 	// A final conversation-id capture before the engine retires the session: a
 	// session attached-until-exit (the grid tap never sampled it) or a very
@@ -964,9 +970,7 @@ func (d *Daemon) endSession(id string) {
 	d.convScanMu.Lock()
 	delete(d.convScan, id) // bound convScan to running sessions (R2.1.3 hygiene)
 	d.convScanMu.Unlock()
-	d.gateMu.Lock()
-	delete(d.gateDone, id)
-	d.gateMu.Unlock()
+	d.retireLaunchGate(id, gateEntry)
 	if d.eng != nil {
 		d.eng.EndSession(id)
 	}
@@ -1104,18 +1108,38 @@ func (d *Daemon) asyncOnce(ctx context.Context, mu *sync.Mutex, inFlight map[str
 // longer die silently (R1.2.6). A session not registered with the engine makes
 // OnOutput a no-op.
 func (d *Daemon) sampleGrid(id string) {
-	snapBytes, err := d.api.SampleSnapshot(id)
+	d.sampleGridFrom(id, func() ([]byte, error) { return d.api.SampleSnapshot(id) })
+}
+
+func (d *Daemon) sampleGridFrom(id string, read func() ([]byte, error)) {
+	identity, bound := d.cachedLaunchGateIdentity(id)
+	var entry *launchGateEntry
+	if bound {
+		entry = d.launchGateEntryForIdentity(id, identity)
+	}
+	snapBytes, err := read()
 	if err != nil {
+		d.abandonLaunchGateEntry(id, entry)
 		d.noteTapFailure(id, err)
 		return
 	}
 	snap, err := vt.DecodeSnapshot(snapBytes)
 	if err != nil {
+		d.abandonLaunchGateEntry(id, entry)
 		d.noteTapFailure(id, err)
 		return
 	}
+	if bound {
+		current, ok := d.cachedLaunchGateIdentity(id)
+		if !ok || current != identity {
+			d.abandonLaunchGateEntry(id, entry)
+			return
+		}
+	}
 	d.eng.OnOutput(id, snap)
-	d.answerLaunchGate(id, snap)
+	if bound {
+		d.answerLaunchGate(id, snap, identity)
+	}
 }
 
 // tapLogInterval rate-limits the grid-tap snapshot-failure log so a persistently

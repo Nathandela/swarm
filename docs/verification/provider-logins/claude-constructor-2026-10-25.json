@@ -1,0 +1,186 @@
+{
+  "date": "2026-10-25",
+  "scope": "Actual Linux daemon/owner launch with untouched provisioned Claude profile and synthetic caller-ready auth fixture",
+  "live_setup_changed": false,
+  "runs": [
+    {
+      "name": "constructor-v1",
+      "qualified": false,
+      "artifact_manifest_sha256": "5a3f1053757635eec37396edfacd8a04c0c96a566a5d45549f4c15a9162a3e52",
+      "source_map_sha256": "b0c87f7aeb421e955003cc70d99cec48af67400a76c40fc9416ea57accda30f6",
+      "product_sha256": "16fe51108134ffa08ecb11ddfc3a488a179a2478a2b6514ab82a0f866a45962d",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "selftest": {
+        "unit": "swarm-constructor-selftest-b78d90d55712cf33",
+        "exit_code": 0,
+        "elapsed_seconds": 2.103,
+        "log_sha256": "0fe445e0ca676005675c3a2347a606b26e996e37da82e093d21027e4e3044447",
+        "outer_deadline_seconds": 45,
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-constructor-selftest-b78d90d55712cf33.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true
+        }
+      },
+      "native_case": {
+        "unit": "swarm-constructor-native-088cf61e22c20e44",
+        "exit_code": 1,
+        "elapsed_seconds": 18.102,
+        "log_sha256": "91e06f4bf1f34cc11e8ebae951ea3e9dadb4feac5170ce7e720740526567ac56",
+        "outer_deadline_seconds": 90,
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-constructor-native-088cf61e22c20e44.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true
+        }
+      },
+      "receipt_sha256": "4b0b82c98b0009b2743b2abc840620fdfa7dd8384c68e258728acfcd499113ab",
+      "diagnostic_sha256": "afb1e9779234a687e1ffff1e37df719b6bba1ddb4829f7e1ebb23065eb7f143a",
+      "errors": [
+        "AssertionError: ('launch', 'protocol: request timed out\\n')",
+        "session cleanup: ('stop', 'exact session/native stopped proof unavailable\\n')"
+      ],
+      "model_requests": 0,
+      "http_requests": 0,
+      "inner_session_stop_proof": false,
+      "outer_cgroup_empty": true,
+      "observed_configuration": [
+        {
+          "session_id": "drcwook35l3ri6gx",
+          "schema_version": 5,
+          "process_status": "lost",
+          "native_provider": "claude",
+          "cli_version": "2.1.310",
+          "cli_fingerprint": "c100b3de4c3d6a6e29a747abd14b2b9c2b52107442442ed33e4b214b31012f0a",
+          "fingerprint_is_metadata64": true,
+          "fingerprint_is_content_form": false,
+          "config_meta_cli_equal": true,
+          "argv0_matches_cli_path": true,
+          "runtime_equal": true,
+          "native_process_record_present": false,
+          "native_stop_record_present": false
+        }
+      ]
+    },
+    {
+      "name": "constructor-v2",
+      "qualified": false,
+      "artifact_manifest_sha256": "4882afda81ea28f27f168c9143d7f057d2fe48784dc2411048e386ef4e80aaf7",
+      "source_map_sha256": "ab85423964607c9d8bdd2b93d6deda5dfb8b3e432ea5ecd56e1d66f8904bbf8f",
+      "product_sha256": "49860f8699a5ce9327d2b5d699415b98eb9973955ab73b7cff439310becc4bf9",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "selftest": {
+        "unit": "swarm-constructor-selftest-dc2593731c8dce6e",
+        "exit_code": 0,
+        "elapsed_seconds": 2.412,
+        "log_sha256": "e18ad09b661ce82e9a1529f5fa5c4361d9cbc2692f86c585c162446c51749ca9",
+        "outer_deadline_seconds": 45,
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-constructor-selftest-dc2593731c8dce6e.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true
+        }
+      },
+      "native_case": {
+        "unit": "swarm-constructor-native-35d0df75540fcc64",
+        "exit_code": 1,
+        "elapsed_seconds": 4.036,
+        "log_sha256": "3bfd7a249d369bb27a4b6cb5f2931974f1cc0c2cb36dabdde81c87d4f97e2c7b",
+        "outer_deadline_seconds": 90,
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-constructor-native-35d0df75540fcc64.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true
+        }
+      },
+      "receipt_sha256": "ac4864dbe76305778d514b06212f5a9a674f5a821445981ab1876f991270f774",
+      "diagnostic_sha256": "682eec44e48978f09387fa88b94853246052fb45bcee4a10a2955359f3d5079e",
+      "errors": [
+        "AssertionError: ('observe', 'exact native process is not alive\\n')"
+      ],
+      "model_requests": 0,
+      "requests": [
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/oauth/profile",
+          "model": false
+        },
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "connect",
+          "target": "platform.claude.com:443"
+        },
+        {
+          "kind": "connect",
+          "target": "raw.githubusercontent.com:443"
+        },
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/hello",
+          "model": false
+        },
+        {
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/frame/contract/latest",
+          "model": false
+        },
+        {
+          "kind": "request",
+          "method": "GET",
+          "path": "/v1/oauth/hello",
+          "model": false
+        }
+      ],
+      "http_census": {
+        "accepted": 5,
+        "rejected": 0,
+        "connections": 0,
+        "handler_threads_alive": 0,
+        "drained": true,
+        "complete": true
+      },
+      "inner_session_stop_proof": true,
+      "outer_cgroup_empty": true,
+      "observed_configuration": [
+        {
+          "session_id": "ghs2p7cgi6i3wzl2",
+          "schema_version": 5,
+          "process_status": "exited",
+          "native_provider": "claude",
+          "cli_version": "2.1.310",
+          "cli_fingerprint": "d7c01803257934d86f74059539095c882d5e4732621e5d9bb60aa258eeb98597",
+          "native_process_record_present": true,
+          "native_stop_record_present": true,
+          "native_exit_code": 1
+        }
+      ],
+      "finding": "The format correction reaches the real native process and produces positive contained-stop proof. Startup exits before trust: the nonforwarding fixture returns404 to native connectivity endpoints. The terminal tail reports api.anthropic.com Status404. No model request or harness input occurs. The exact fake connectivity response needs separate source review before a new run."
+    }
+  ],
+  "finding": "V1 identified the metadata64 fingerprint refusal. V2 corrects that boundary and reaches the pinned native executable, but its isolated connectivity fixture returns404 and native startup exits before trust. Neither failed run qualifies startup.",
+  "proposed_correction": "The shared Store fingerprint-shape validator is reused at the shim boundary, preserving exact metadata/intent binding and the later fixed native-image hash, held descriptor and one-Start admission. Synthetic Linux positives and old-predicate omission controls passed; V2 confirms native birth. See claude-fingerprint-compat-2026-10-25.json.",
+  "limits": [
+    "Synthetic ready-auth data bypasses authentication as the subject of this test. It never qualifies a real saved account.",
+    "The launch did not reach the trust/composer observation stage. Neither startup nor rotation/continuation is qualified.",
+    "V1 failed its inner stop-proof check even though the enclosing private cgroup was subsequently proven empty. V2 produced positive inner stop proof as well as outer empty-cgroup proof; neither cleanup result changes the startup failures.",
+    "The earlier full-skeleton status-persistence test failure remains an independent open gate."
+  ]
+}

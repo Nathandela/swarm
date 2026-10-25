@@ -305,6 +305,6 @@
   "limits": [
     "No authentication, cloud account, MCP scope, simultaneous new-CWD, real daemon constructor or rotation/continuation qualification. Fake identity, SessionStart and trust never authenticate a saved account.",
     "Endpoint/proxy containment with fake credentials is not a kernel network sandbox. Filesystem size is monitored rather than a kernel quota.",
-    "Current product launchgate still sends combined selection+confirmation. Its separately tracked staged-input fix and actual production-caller validation remain pending."
+    "These experiments predate the production staged-input fix recorded in claude-launch-gate-2026-10-25.json. They do not qualify that production caller or its untouched provisioned-profile startup."
   ]
 }

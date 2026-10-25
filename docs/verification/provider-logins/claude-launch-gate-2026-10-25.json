@@ -1,0 +1,80 @@
+{
+  "date": "2026-10-25",
+  "scope": "Staged automatic Claude folder-trust input through the existing daemon sampler; synthetic CLI and protocol tests",
+  "production_activation": false,
+  "implementation": [
+    "The existing 500ms sampler observes a recognized unchanged frame for at least250ms before a single selection movement, then separately observes selected Yes for at least250ms before one Enter. Initially selected Yes needs only the second action.",
+    "Each pending attempt binds the exact session instance and shim PID/start tuple. Snapshot capture, current mirror, entry publication and final write revalidate that identity; old callbacks cannot replace or retire a successor attempt.",
+    "Foreign input, controller claims, incomplete or changed evidence, lifecycle contention and uncertain effects leave a terminal abandoned/consumed entry. No automatic replay or legacy unbounded-input fallback.",
+    "Gate-only try-acquisition uses the existing composer lane and input locks. Its wire frame has a100ms write deadline; partial writes and deadline failures close the stream. Existing ordinary input paths retain their behavior."
+  ],
+  "source": {
+    "base_commit": "7fe3a2484bcff1c069253cef0b88388da8094a08",
+    "approved_plan_sha256": "89a2659c1c032afe05106a372f288c6ef4137b13169dc80c7ee342fb0772e992",
+    "review_manifest_sha256": "3e139245852c7da0fa9cbe7ee1855c82a7998922687576f1ae19f710a498bd66",
+    "owned_files_sha256": {
+      "internal/skeleton/launchgate.go": "1ff11cf98774a5fc5a2af774c13e532ca1c1660d2a7b4434f8dc2512617dcec0",
+      "internal/skeleton/launchgate_test.go": "f981a6573a059d3957203b370fb4575922e917d21c7ee36cd9a7bb766ad77545",
+      "internal/skeleton/launchgate_staged_test.go": "5b52d82471f61a889d2744834828f9aef78bc742592806fb30959aa2199bb85b",
+      "internal/skeleton/sessiontap.go": "4059322cab70708b7b64a195eb33fb6bcebc9bf903f1f6a17fa9e9f5722fcd3d",
+      "internal/skeleton/serve.go": "4fd36e834c604c14f365fd2312bfc5ac8269216b6f3127325fc50781409800ab",
+      "internal/protocol/fromdaemon.go": "f77455a106175caf859bb848cbb6a94cbb10fb40ad55b29b2ed37f4ee6f24a09",
+      "internal/protocol/sendinput.go": "1048611fc797459fd847f417fb83a5fd4cf01c52d899b42380c468689a34f680",
+      "internal/protocol/launchgate_fence_test.go": "8ae05ed2c06ec95347c1768c46958295dc7bf0289c87f91c3ee8fe5812aeca49",
+      "internal/protocol/launchgate_transport_test.go": "96519463a52bc6e0427cd4540ab06a06f966d978f5430711cc28632636476161"
+    },
+    "full_frozen_source_map_sha256": "b0c87f7aeb421e955003cc70d99cec48af67400a76c40fc9416ea57accda30f6",
+    "frozen_files": 3529
+  },
+  "regressions": [
+    "Original implementation fails the first-observation regression by writing combined Down+Enter immediately.",
+    "Raw PTY fake CLI rejects combined keys and confirmation before150ms; the staged production tap path passes.",
+    "Enter invalidated during its existing observer produces zero wire writes and never retries.",
+    "Delayed old-process frames/read errors and parked observations preserve the replacement process attempt and its consumed tombstone.",
+    "Busy FIFO, lifecycle, input, direct-input, capability and mirror locks refuse without a queued gate or input effect; the bounded write releases the Stop barrier.",
+    "A missing bounded transport interface never falls back to ordinary ControlInput or Input. Stalled real net.Pipe, short writes and deadline failures exercise transport refusal/closure."
+  ],
+  "evidence": {
+    "red-first-observation.log": "2cf88eff167593aec8caa25fb69d1f11d99302328293cdc5562db879a23976d2",
+    "focused-expanded.log": "8c40eebacfc8db3924c51df897be1b90d74188e2b9f1c407bc562e5ce3c3e8ae",
+    "focused-race-second.log": "4bef735be67258b8673528c5383aa532022b3457671eb7372715771aff3bc08d",
+    "missing-interface.log": "799c87f3d24593bdc9b3db2f6f7908e677a79b59db7aacfa7c2329c5371549ca"
+  },
+  "root_checks": {
+    "protocol_full_race": "PASS33.019s: go test -race ./internal/protocol -count=1 -timeout=8m",
+    "protocol_lint": "0 issues",
+    "skeleton_focused_race": "PASS12.571s; the later missing-interface direct test separately PASS0.376s",
+    "skeleton_full_race": {
+      "status": "FAIL; investigation pending",
+      "test_seconds": 831.648,
+      "outer_seconds": 842.944,
+      "failed_tests": [
+        "TestEmitStatus_FailedPersistIsLoggedAndRetried"
+      ],
+      "race_detector_findings": false,
+      "log_sha256": "5223b7b5cf765d036a0ad8bc60bc7e25f46f43cbea679a20b0e6cbed14c7d879",
+      "source_map_sha256": "b0c87f7aeb421e955003cc70d99cec48af67400a76c40fc9416ea57accda30f6"
+    },
+    "remaining_gates": "Original status-persistence full-suite failure remains unresolved. Actual constructor V1 refused before native birth; V2 with the fingerprint correction reaches Claude but exits on the fake connectivity fixture404 before native trust/composer readiness.",
+    "build": "go build -p=1 ./... PASS",
+    "vet": "go vet -p=1 ./internal/protocol ./internal/skeleton PASS",
+    "lint_darwin": "protocol and skeleton:0 issues",
+    "lint_linux_amd64": "protocol and skeleton, CGO_ENABLED=0:0 issues",
+    "skeleton_diagnostic_repeat": {
+      "exit_code": 0,
+      "elapsed_seconds": 813.137,
+      "passed_tests": 1955,
+      "skipped_tests": 28,
+      "log_sha256": "15ed617f50b8948cf2b0775bcbf1be5aee0aa99f765c456301a7c378120cc007",
+      "test_overlay_sha256": "c123b0e117384e5ee35ed1de65b85c64f8d7f23d8d49f2ba1bdade8527267685",
+      "limit": "Diagnostic logging only; production source, sleep constants and assertions unchanged. The overlay acquires unpersistedMu before restoring metadata and can alter synchronization. This diagnostic PASS does not resolve or relabel the original unmodified full-suite failure."
+    }
+  },
+  "review": "Independent Sol and Astra approved plan V4; root, Astra and a separate Sol reviewed final connected skeleton source. Root and Astra reviewed the protocol changes. The broad status-persistence test failure remains unresolved.",
+  "limits": [
+    "This is synthetic production-path qualification. Actual installed native constructor startup with an untouched provisioned profile remains a separate canary; prior native startup receipts prefilled onboarding/theme/synthetic account fields.",
+    "A successful wire write is not a PTY/native adoption acknowledgment. Matching sampled frames do not make native UI reads and key adoption atomic.",
+    "The attempt limit is per daemon incarnation. No durable cross-daemon exactly-once claim, authentication, handover, workflow/MCP parity or continuation authority follows from trust handling.",
+    "Existing tap subscribe/detach and ordinary writers retain their prior blocking behavior. Only the new gate acquisition and final wire work have the stated nonqueued/bounded behavior."
+  ]
+}

@@ -114,7 +114,9 @@ func validClaudeSessionID(id string) bool {
 	return true
 }
 
-func validClaudeFingerprint(fp string) bool {
+// IsClaudeCLIFingerprint accepts installation observation formats, not native
+// executable qualification, authentication or permission to start a process.
+func IsClaudeCLIFingerprint(fp string) bool {
 	if validDigest(fp) {
 		return true
 	}
@@ -196,7 +198,7 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 		if m.SchemaVersion != ClaudeReservationSchemaVersion || (!owned && !terminalLegacy) || (!validClaudeCWDs([]string{m.Cwd}) || !validClaudeCWDs([]string{m.effectiveCWD()})) {
 			return m, ErrUnsafePath
 		}
-		if owned && (m.CLI == nil || !filepath.IsAbs(m.CLI.Path) || filepath.Clean(m.CLI.Path) != m.CLI.Path || strings.ContainsAny(m.CLI.Path, "\x00\r\n") || m.CLI.Version != "2.1.310" || !validClaudeFingerprint(m.CLI.Fingerprint)) {
+		if owned && (m.CLI == nil || !filepath.IsAbs(m.CLI.Path) || filepath.Clean(m.CLI.Path) != m.CLI.Path || strings.ContainsAny(m.CLI.Path, "\x00\r\n") || m.CLI.Version != "2.1.310" || !IsClaudeCLIFingerprint(m.CLI.Fingerprint)) {
 			return m, ErrUnsafePath
 		}
 		if owned && m.Retirement != nil && m.Retirement.Source == ClaudeRetirementStopped && m.Retirement.Native.SchemaVersion != ClaudeNativeWriterSchemaVersion {
@@ -228,7 +230,7 @@ func parseClaudeNative(raw []byte) (NativeProcessInfo, error) {
 	if n.SchemaVersion == NativeWriterSchemaVersion && (n.SessionID != "" || n.Cwd != "" || n.CLIFingerprint != "") {
 		return n, ErrUnsafePath
 	}
-	if n.SchemaVersion == ClaudeNativeWriterSchemaVersion && (n.Provider != ProviderClaude || !validClaudeSessionID(n.SessionID) || !validClaudeCWDs([]string{n.Cwd}) || !validClaudeFingerprint(n.CLIFingerprint) || n.BackendPID != 0) {
+	if n.SchemaVersion == ClaudeNativeWriterSchemaVersion && (n.Provider != ProviderClaude || !validClaudeSessionID(n.SessionID) || !validClaudeCWDs([]string{n.Cwd}) || !IsClaudeCLIFingerprint(n.CLIFingerprint) || n.BackendPID != 0) {
 		return n, ErrUnsafePath
 	}
 	return n, nil

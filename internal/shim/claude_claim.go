@@ -56,7 +56,7 @@ func (s *managedNativeScope) validateClaudeStart(cfg Config) error {
 }
 
 func (s *managedNativeScope) validateClaudeReservation(cfg Config) error {
-	if s == nil || s.root == nil || cfg.LoginRuntime == nil || !logins.IsClaudeProfileRuntime(cfg.LoginStateRoot, *cfg.LoginRuntime) || cfg.NativeProvider != logins.ProviderClaude || cfg.Backend != nil || cfg.OpenCode != nil || cfg.LoginSwitchID != "" || cfg.LoginSwitchSource != "" || cfg.InputEmbargo != "" || !persist.ValidID(cfg.SessionID) || cfg.SessionDir != filepath.Join(cfg.LoginStateRoot, cfg.SessionID) || cfg.CLIIdentity == nil || !filepath.IsAbs(cfg.CLIIdentity.Path) || filepath.Clean(cfg.CLIIdentity.Path) != cfg.CLIIdentity.Path || strings.ContainsAny(cfg.CLIIdentity.Path, "\x00\r\n") || cfg.CLIIdentity.Version != "2.1.310" || !persist.IsCLIContentFingerprint(cfg.CLIIdentity.Fingerprint) || len(cfg.Argv) == 0 || cfg.Argv[0] != cfg.CLIIdentity.Path {
+	if s == nil || s.root == nil || cfg.LoginRuntime == nil || !logins.IsClaudeProfileRuntime(cfg.LoginStateRoot, *cfg.LoginRuntime) || cfg.NativeProvider != logins.ProviderClaude || cfg.Backend != nil || cfg.OpenCode != nil || cfg.LoginSwitchID != "" || cfg.LoginSwitchSource != "" || cfg.InputEmbargo != "" || !persist.ValidID(cfg.SessionID) || cfg.SessionDir != filepath.Join(cfg.LoginStateRoot, cfg.SessionID) || cfg.CLIIdentity == nil || !filepath.IsAbs(cfg.CLIIdentity.Path) || filepath.Clean(cfg.CLIIdentity.Path) != cfg.CLIIdentity.Path || strings.ContainsAny(cfg.CLIIdentity.Path, "\x00\r\n") || cfg.CLIIdentity.Version != "2.1.310" || !logins.IsClaudeCLIFingerprint(cfg.CLIIdentity.Fingerprint) || len(cfg.Argv) == 0 || cfg.Argv[0] != cfg.CLIIdentity.Path {
 		return errLoginResolution
 	}
 	expected := s.info
