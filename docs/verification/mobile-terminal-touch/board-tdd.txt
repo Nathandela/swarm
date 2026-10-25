@@ -69,3 +69,23 @@ Generic input/review/ended states shorten deliberately; approval/question/error
 remain meaningful, and ordinary Working identity has a useful name budget.
 GREEN: go test ./internal/tui -run '^(TestMobileBoard|TestResponsive|TestWorking|TestApply_NoFlatAlloc)' -count=1
 11.520s. The focused header regression separately passed in 3.997s.
+
+Independent Astra review — three confirmed regressions, all failing-first:
+go test ./internal/tui -run '^TestMobileBoard(KeyboardFold|MoreQuit)' -count=1
+RED: keyboard collapse left its focused header offscreen; disconnected menu blocked
+local Quit (3.172s).
+go test ./internal/tui -run '^TestMobileBoardRemovedAnchor' -count=1
+RED: removed endpoint/27 jumped to endpoint/46 instead of the nearest surviving
+prior-order neighbor endpoint/28 (2.997s).
+
+Fixes: keyboard fold/expand reveals its destination after the shared fold operation;
+pointer folds retain their feasible clicked-header row. Local Quit precedes daemon
+availability checks. Before authoritative replacement or single deletion, choose a
+nearest surviving old content identity (following item wins ties), then restore that
+identity after mutation. Incoming roster membership maps exist only for that bulk
+mutation, with no cache or allocation added to ordinary same-group apply.
+
+GREEN: go test ./internal/tui -run '^(TestMobileBoard|TestMouse|TestReconnect|TestApply_NoFlatAlloc)' -count=1
+9.835s. Explicit pointer-header placement and all three regression tests also passed:
+go test ./internal/tui -run '^TestMobileBoard(PointerFold|KeyboardFold|MoreQuit|RemovedAnchor)' -count=1
+2.390s. No broad full TUI/performance gate rerun during root integration.

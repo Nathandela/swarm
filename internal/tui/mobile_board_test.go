@@ -354,3 +354,100 @@ func TestMobileBoardCompactWorkingUsesExistingAnimationAndPalette(t *testing.T) 
 		t.Fatal("compact glyph displaced useful identity or exceeded row bound")
 	}
 }
+
+func TestMobileBoardKeyboardFoldRevealsHeaderWithoutMovingPointerAnchor(t *testing.T) {
+	var sessions []protocol.SessionView
+	for i := 0; i < 30; i++ {
+		sessions = append(sessions, sWorking("work/"+itoa(i), "codex", "/repo", "work", time.Minute), sCompleted("done/"+itoa(i), "codex", "/repo", "done", time.Hour))
+	}
+	m := New(newFakeClient(sessions...), detectMixed())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+	r := m.(rootModel)
+	r.general.restoreSel("work/20")
+	r.general.revealFocus()
+	m = send(r, tea.KeyPressMsg{Code: tea.KeyLeft})
+	r = m.(rootModel)
+	if r.general.focusSection != "working" || !r.general.focusVisible() {
+		t.Fatal("keyboard collapse left its focused header offscreen")
+	}
+	m = send(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	r = m.(rootModel)
+	if r.general.selectedID() == "" || !r.general.focusVisible() {
+		t.Fatal("keyboard expand left its first member offscreen")
+	}
+}
+func TestMobileBoardMoreQuitRemainsLocalWhenDisconnected(t *testing.T) {
+	m := mobileBoard(t, 24, 4)
+	m = send(m, keyRune('m'))
+	m = send(m, tea.KeyPressMsg{Code: tea.KeyEnd})
+	r := m.(rootModel)
+	m, _ = r.Update(connectionLostMsg{from: r.events})
+	_, cmd := m.Update(keyEnter)
+	if cmd == nil {
+		t.Fatal("disconnected menu blocked local Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("local menu Quit did not quit")
+	}
+}
+
+func TestMobileBoardRemovedAnchorChoosesPreviousOrderNeighbor(t *testing.T) {
+	r := mobileBoard(t, 40, 8).(rootModel)
+	r.general.top = 21
+	anchor := r.general.anchor()
+	var ordered []protocol.SessionView
+	r.general.content(func(l boardLine) {
+		if l.kind == lineSession {
+			ordered = append(ordered, l.session)
+		}
+	})
+	index := -1
+	for i, s := range ordered {
+		if s.ID == anchor.id {
+			index = i
+		}
+	}
+	if index < 0 || index+1 >= len(ordered) {
+		t.Fatal("bad anchor fixture")
+	}
+	want := ordered[index+1].ID
+	r.reconcileRoster(append([]protocol.SessionView(nil), ordered[index+1:]...))
+	if got := r.general.anchor().id; got != want {
+		t.Fatalf("removed anchor %q jumped to %q instead of prior-order neighbor %q", anchor.id, got, want)
+	}
+	r = mobileBoard(t, 40, 8).(rootModel)
+	r.general.top = 21
+	anchor = r.general.anchor()
+	r.general.remove(anchor.id)
+	if got := r.general.anchor().id; got != want {
+		t.Fatalf("single removed anchor jumped to %q instead of %q", got, want)
+	}
+}
+
+func TestMobileBoardPointerFoldKeepsClickedHeaderRow(t *testing.T) {
+	var sessions []protocol.SessionView
+	for i := 0; i < 30; i++ {
+		sessions = append(sessions, sNeedsInput("input/"+itoa(i), "codex", "/repo", "input", time.Hour), sWorking("work/"+itoa(i), "codex", "/repo", "work", time.Hour), sCompleted("done/"+itoa(i), "codex", "/repo", "done", time.Hour))
+	}
+	m := New(newFakeClient(sessions...), detectMixed())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+	r := m.(rootModel)
+	index := 0
+	header := -1
+	r.general.content(func(l boardLine) {
+		if l.kind == lineSection && l.section == "working" {
+			header = index
+		}
+		index++
+	})
+	r.general.top = header - 2
+	m = r
+	for i := 0; i < 2; i++ {
+		y := rowY(t, m, "WORKING")
+		m = send(m, tea.MouseClickMsg{X: 39, Y: y, Button: tea.MouseLeft})
+		m = send(m, tea.MouseReleaseMsg{X: 39, Y: y, Button: tea.MouseLeft})
+		if got := rowY(t, m, "WORKING"); got != y {
+			t.Fatalf("pointer fold moved clicked header row %d to %d", y, got)
+		}
+	}
+}

@@ -174,11 +174,11 @@ func (m rootModel) activateMore(key string) (tea.Model, tea.Cmd) {
 	if !eligible {
 		return m, nil
 	}
-	if m.connectionLost {
-		return m, nil
-	}
 	if key == "q" {
 		return m, tea.Quit
+	}
+	if m.connectionLost {
+		return m, nil
 	}
 	m.general.more = nil
 	if key == "o" {

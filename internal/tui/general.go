@@ -821,7 +821,19 @@ func (m *generalModel) isTombstoned(id string) bool {
 // remove drops the session with id from the board (the optimistic removal on a
 // successful delete), keeping the selection pinned to its session by identity.
 func (m *generalModel) remove(id string) {
-	anchor := m.anchor()
+	anchor := m.survivingAnchor(func(l boardLine) bool {
+		if l.kind == lineSession {
+			return l.session.ID != id
+		}
+		if l.kind == lineSection {
+			for _, s := range m.sessions {
+				if s.ID != id && m.groupKey(s) == l.section {
+					return true
+				}
+			}
+		}
+		return false
+	})
 	defer func() { m.restoreAnchor(anchor) }()
 	selID := m.selectedID()
 	kept := make([]protocol.SessionView, 0, len(m.sessions))

@@ -190,10 +190,12 @@ func (m *rootModel) boardNavigation(k tea.KeyPressMsg) bool {
 	case k.Code == tea.KeyLeft:
 		if s, ok := m.general.selected(); ok {
 			m.general.fold(m.general.groupKey(s), true)
+			m.general.revealFocus()
 		}
 	case k.Code == tea.KeyRight || k.Code == tea.KeyEnter && m.general.focusSection != "":
 		if m.general.focusSection != "" {
 			m.general.fold(m.general.focusSection, false)
+			m.general.revealFocus()
 		}
 	default:
 		return false
@@ -491,4 +493,28 @@ func (m generalModel) visibleWorking() bool {
 		i++
 	})
 	return visible && m.more == nil
+}
+
+// survivingAnchor chooses a nearby identity before a destructive roster change.
+// At equal distance prefer the following item, matching forward reading order.
+func (m generalModel) survivingAnchor(keep func(boardLine) bool) boardAnchor {
+	anchor := m.anchor()
+	best := -1
+	line := 0
+	m.content(func(l boardLine) {
+		if keep(l) {
+			distance := line - m.top
+			if distance < 0 {
+				distance = -distance
+			}
+			if best < 0 || distance < best || distance == best && line >= m.top {
+				anchor.kind = l.kind
+				anchor.id = l.session.ID
+				anchor.section = l.section
+				best = distance
+			}
+		}
+		line++
+	})
+	return anchor
 }
