@@ -89,3 +89,19 @@ GREEN: go test ./internal/tui -run '^(TestMobileBoard|TestMouse|TestReconnect|Te
 9.835s. Explicit pointer-header placement and all three regression tests also passed:
 go test ./internal/tui -run '^TestMobileBoard(PointerFold|KeyboardFold|MoreQuit|RemovedAnchor)' -count=1
 2.390s. No broad full TUI/performance gate rerun during root integration.
+
+Final targeted Astra correction: connected event removal anchor ownership.
+RED: go test ./internal/tui -run '^TestMobileBoardEventRemovalHasSingleAnchorOwner' -count=1
+All three actual eventMsg paths failed (3.159s): RosterHidden, SupersededBy and
+Supersedes restored the old numeric top and skipped the chosen Completed heading.
+
+Root cause fixed once at the mutation boundary: early removals delegate anchor
+ownership to remove(); ordinary/inlined replacement updates own one restoration,
+choosing the surviving old identity before deleting Supersedes sources. The outer
+apply restoration no longer overwrites a nested removal's resolved anchor.
+
+GREEN: go test ./internal/tui -run '^(TestMobileBoard|TestMouse|TestDiscussions|TestSelection|TestApply_NoFlatAlloc)' -count=1
+2.829s. Actual-event-path coverage, ordinary zero-allocation updates, pointer bounds,
+and the preceding reviewed fixes pass. Resume projection/archive filtering and
+all TestApply_ regressions were also run separately before commit. Implementation
+frozen after this targeted correction for final independent whole-feature audit.

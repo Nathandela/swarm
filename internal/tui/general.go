@@ -397,8 +397,6 @@ func (m *generalModel) move(delta int) {
 // It returns a command that prints the notification banner when the session
 // transitions INTO needs_input or ready_for_review (V-5), else nil.
 func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
-	anchor := m.anchor()
-	defer func() { m.restoreAnchor(anchor) }()
 	// A client-deleted session must not reappear from a late buffered event that was
 	// already in flight when the delete landed (item 6). The tombstone is checked here on
 	// the Update path, so no wall-clock read reaches a view.
@@ -422,6 +420,29 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 		}
 		return nil
 	}
+	// Early removals above own their anchor in remove; this update owns the
+	// anchor once, including all inline superseded-source deletions below.
+	anchor := m.anchor()
+	if len(s.Supersedes) > 0 {
+		survives := func(id string) bool { return id == s.ID || !slices.Contains(s.Supersedes, id) }
+		anchor = m.survivingAnchor(func(l boardLine) bool {
+			if l.kind == lineSession {
+				return survives(l.session.ID)
+			}
+			if l.kind == lineSection {
+				if l.section == m.groupKey(s) {
+					return true
+				}
+				for _, old := range m.sessions {
+					if survives(old.ID) && m.groupKey(old) == l.section {
+						return true
+					}
+				}
+			}
+			return false
+		})
+	}
+	defer func() { m.restoreAnchor(anchor) }()
 	for _, id := range s.Supersedes {
 		for i := range m.sessions {
 			if m.sessions[i].ID == id {

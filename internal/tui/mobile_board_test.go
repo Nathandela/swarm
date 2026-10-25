@@ -451,3 +451,43 @@ func TestMobileBoardPointerFoldKeepsClickedHeaderRow(t *testing.T) {
 		}
 	}
 }
+
+func TestMobileBoardEventRemovalHasSingleAnchorOwner(t *testing.T) {
+	for _, path := range []string{"hidden", "superseded-by", "supersedes"} {
+		t.Run(path, func(t *testing.T) {
+			var sessions []protocol.SessionView
+			for i := 0; i < 10; i++ {
+				sessions = append(sessions, sNeedsInput("input/"+itoa(i), "codex", "/repo", "input", time.Hour))
+			}
+			old := sWorking("working/only", "codex", "/repo", "work", time.Hour)
+			sessions = append(sessions, old)
+			for i := 0; i < 10; i++ {
+				sessions = append(sessions, sCompleted("done/"+itoa(i), "codex", "/repo", "done", time.Hour))
+			}
+			m := New(newFakeClient(sessions...), detectMixed())
+			m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+			r := m.(rootModel)
+			index := 0
+			r.general.content(func(l boardLine) {
+				if l.session.ID == old.ID {
+					r.general.top = index
+				}
+				index++
+			})
+			switch path {
+			case "hidden":
+				old.RosterHidden = true
+			case "superseded-by":
+				old.SupersededBy = "done/0"
+			case "supersedes":
+				replacement := sCompleted("replacement", "codex", "/repo", "replacement", time.Hour)
+				replacement.Supersedes = []string{old.ID}
+				old = replacement
+			}
+			r = send(r, eventMsg{ev: protocol.Event{Session: old}}).(rootModel)
+			if got := r.general.anchor(); got.section != "completed" {
+				t.Fatalf("%s event overwrote nearest surviving completed header: %+v", path, got)
+			}
+		})
+	}
+}
