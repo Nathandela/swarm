@@ -1,0 +1,310 @@
+{
+  "date": "2026-10-25",
+  "scope": "Ordinary interactive Claude startup and folder trust with pinned native binaries and synthetic authority; separate from daemon/account activation",
+  "production_activation": false,
+  "native_pins": {
+    "macos_arm64": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+    "linux_amd64": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "version": "2.1.310"
+  },
+  "conditions": [
+    "Native argv contains only the pinned binary and a fresh session UUID. Ordinary prompt, settings-source discovery, tools, model and permission defaults are preserved.",
+    "Private empty HOME/config/CWD with synthetic onboarding/account fields and grant only; no trust preseed, live credential or model prompt. Native trust is accepted only through the recognized native dialog.",
+    "Production VT and trust recognizer at exact 150x44; observed selection, one movement and one Enter at most. API/proxy do not forward traffic; complete drained HTTP census must have zero rejected connections and zero model requests.",
+    "Positive startup requires native-written exact-CWD trust, matching SessionStart UUID, an observed live empty composer, bounded runtime and exact owned-process cleanup."
+  ],
+  "findings": [
+    "The existing trust recognizer correctly recognizes native 2.1.310. Source exposes a 150ms input guard/remount; an immediate confirmation was refused in the original experiment.",
+    "Waiting for matching sampled frames for at least 250ms before movement and confirmation succeeds. Both intervals changed together; this is not a factorial timing study or a continuous native-state proof.",
+    "The pinned native TUI can hide the hardware cursor and draw one reverse-video blank at the parked cursor. The probe qualifies only that exact narrow caret shape with frame/banner/modal checks; production status heuristics are unchanged."
+  ],
+  "qualified_runs": {
+    "macos_v3": {
+      "manifest_sha256": "f197a4331549693f103e1d1835c610e8e4627524884d380a1c83e28292064842",
+      "root_run": {
+        "manifest_sha256": "f197a4331549693f103e1d1835c610e8e4627524884d380a1c83e28292064842",
+        "exit_code": 0,
+        "outer_elapsed_seconds": 5.643,
+        "watchdog_fired": false,
+        "log_sha256": "953883a6daab5783b293633f68e1da4f6c1c60147e6c6a56572e9a56cc2d669d",
+        "scope": "one isolated ordinary native startup/trust primitive; fake authority, no model prompt, no product or live setup change"
+      },
+      "receipt": {
+        "receipt_sha256": "4dffb9cc9dddd5c525f72dc116f8c7c603950cdd60314eb2aae70ac2d08c15a4",
+        "pass": true,
+        "elapsed_seconds": 4.001,
+        "native_trust_exact_cwd": true,
+        "matching_session_start": true,
+        "live_composer": true,
+        "model_requests": 0,
+        "errors": [],
+        "cleanup": {
+          "26845": true,
+          "26844": true,
+          "server-0": true,
+          "server-1": true,
+          "serve_threads": true
+        },
+        "http_servers": [
+          {
+            "accepted": 0,
+            "rejected": 0,
+            "owned_connections": 0,
+            "handler_threads_alive": 0,
+            "drained": true,
+            "complete": true
+          },
+          {
+            "accepted": 2,
+            "rejected": 0,
+            "owned_connections": 0,
+            "handler_threads_alive": 0,
+            "drained": true,
+            "complete": true
+          }
+        ],
+        "trust_actions": [
+          {
+            "action": "move_to_yes",
+            "keys": "\u001b[B",
+            "observed_keys": "\u001b[B\r",
+            "elapsed_ms": 1619.706,
+            "stable_ms": 250.017
+          },
+          {
+            "action": "enter_yes",
+            "keys": "\r",
+            "observed_keys": "\r",
+            "elapsed_ms": 1964.983,
+            "stable_ms": 280.068
+          }
+        ]
+      }
+    },
+    "linux_v4": {
+      "manifest_sha256": "e90e70d5a363e6f6bf6fb17cc19db43d165160005c87c8c31c2217a13e6962ea",
+      "root_run": {
+        "stage": "/tmp/swarm-normal-startup.96Z1HNJj",
+        "unit": "swarm-normal-startup-315f5c65cf1a2ca79938",
+        "archive_sha256": "68980dda008ef531fca5f050516a725c237909e0326a578eada279758b230e36",
+        "manifest_sha256": "e90e70d5a363e6f6bf6fb17cc19db43d165160005c87c8c31c2217a13e6962ea",
+        "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "scope": "unchanged frozen ordinary native startup V4 on Linux; fake credentials/private home, default settings, no model prompt or live sessions",
+        "hard_cgroup_limit_seconds": 60,
+        "stop_grace_seconds": 0,
+        "exit_code": 0,
+        "elapsed_seconds": 3.461,
+        "log_sha256": "94a5f62932d11fd21a3a68576b0210d49718f69dcce3c4635980eafeea4301d0",
+        "receipt_sha256": "4d3d75ff3aa06abcebd2c7e26420f3728b54c0d7e40f1b58e2c7f6815ba80292",
+        "qualified": true,
+        "cleanup": {
+          "45594": true,
+          "45593": true,
+          "server-0": true,
+          "server-1": true,
+          "serve_threads": true
+        }
+      },
+      "receipt": {
+        "receipt_sha256": "4d3d75ff3aa06abcebd2c7e26420f3728b54c0d7e40f1b58e2c7f6815ba80292",
+        "pass": true,
+        "elapsed_seconds": 2.61,
+        "native_trust_exact_cwd": true,
+        "matching_session_start": true,
+        "live_composer": true,
+        "model_requests": 0,
+        "errors": [],
+        "cleanup": {
+          "45594": true,
+          "45593": true,
+          "server-0": true,
+          "server-1": true,
+          "serve_threads": true
+        },
+        "http_servers": [
+          {
+            "accepted": 0,
+            "rejected": 0,
+            "owned_connections": 0,
+            "handler_threads_alive": 0,
+            "drained": true,
+            "complete": true
+          },
+          {
+            "accepted": 2,
+            "rejected": 0,
+            "owned_connections": 0,
+            "handler_threads_alive": 0,
+            "drained": true,
+            "complete": true
+          }
+        ],
+        "trust_actions": [
+          {
+            "action": "move_to_yes",
+            "keys": "\u001b[B",
+            "observed_keys": "\u001b[B\r",
+            "elapsed_ms": 927.743,
+            "stable_ms": 261.982
+          },
+          {
+            "action": "enter_yes",
+            "keys": "\r",
+            "observed_keys": "\r",
+            "elapsed_ms": 1195.218,
+            "stable_ms": 258.833
+          }
+        ]
+      }
+    }
+  },
+  "preserved_unqualified_runs": {
+    "macos_v1": {
+      "receipt_sha256": "4a6342923f7dae7df9a19fe38abe99f8ad3aa0cc706b0f9e10f4a85fe5560c5c",
+      "pass": false,
+      "elapsed_seconds": 38.114,
+      "native_trust_exact_cwd": false,
+      "matching_session_start": false,
+      "live_composer": false,
+      "model_requests": 0,
+      "errors": [
+        "TimeoutError:work deadline reserve"
+      ],
+      "cleanup": {
+        "14445": true,
+        "14444": true,
+        "server-0": true,
+        "server-1": true,
+        "serve_threads": true
+      },
+      "http_servers": [
+        {
+          "accepted": 0,
+          "rejected": 0,
+          "owned_connections": 0,
+          "handler_threads_alive": 0,
+          "drained": true,
+          "complete": true
+        },
+        {
+          "accepted": 1,
+          "rejected": 0,
+          "owned_connections": 0,
+          "handler_threads_alive": 0,
+          "drained": true,
+          "complete": true
+        }
+      ],
+      "trust_actions": [
+        {
+          "action": "move_to_yes",
+          "keys": "\u001b[B",
+          "observed_keys": "\u001b[B\r"
+        },
+        {
+          "action": "enter_yes",
+          "keys": "\r",
+          "observed_keys": "\r"
+        }
+      ]
+    },
+    "macos_v2": {
+      "receipt_sha256": "113c92514eca4f66490c86e660110c323f7e6f9899b1a3ea691fa76037eb3937",
+      "pass": false,
+      "elapsed_seconds": 38.096,
+      "native_trust_exact_cwd": true,
+      "matching_session_start": true,
+      "live_composer": false,
+      "model_requests": 0,
+      "errors": [
+        "AssertionError:live deadline reserve"
+      ],
+      "cleanup": {
+        "21107": true,
+        "21106": true,
+        "server-0": true,
+        "server-1": true,
+        "serve_threads": true
+      },
+      "http_servers": [
+        {
+          "accepted": 0,
+          "rejected": 0,
+          "owned_connections": 0,
+          "handler_threads_alive": 0,
+          "drained": true,
+          "complete": true
+        },
+        {
+          "accepted": 3,
+          "rejected": 0,
+          "owned_connections": 0,
+          "handler_threads_alive": 0,
+          "drained": true,
+          "complete": true
+        }
+      ],
+      "trust_actions": [
+        {
+          "action": "move_to_yes",
+          "keys": "\u001b[B",
+          "observed_keys": "\u001b[B\r",
+          "elapsed_ms": 733.426,
+          "stable_ms": 286.463
+        },
+        {
+          "action": "enter_yes",
+          "keys": "\r",
+          "observed_keys": "\r",
+          "elapsed_ms": 1004.773,
+          "stable_ms": 266.654
+        }
+      ]
+    },
+    "linux_v3": {
+      "receipt_sha256": "5baba43f2db5630b039b62e8db0163d089c2acc33f9cbdea215ddf50a134392e",
+      "pass": false,
+      "elapsed_seconds": 1.033,
+      "native_trust_exact_cwd": false,
+      "matching_session_start": false,
+      "live_composer": false,
+      "model_requests": 0,
+      "errors": [
+        "FileNotFoundError:[Errno 2] No such file or directory: '/tmp/swarm-normal-startup.gpdqtUEH/packet/startup-z44s1rwh/home/.claude/.claude.json.lock'"
+      ],
+      "cleanup": {
+        "42510": true,
+        "42509": true,
+        "server-0": true,
+        "server-1": true,
+        "serve_threads": true
+      },
+      "http_servers": [
+        {
+          "accepted": 0,
+          "rejected": 0,
+          "owned_connections": 0,
+          "handler_threads_alive": 0,
+          "drained": true,
+          "complete": true
+        },
+        {
+          "accepted": 1,
+          "rejected": 0,
+          "owned_connections": 0,
+          "handler_threads_alive": 0,
+          "drained": true,
+          "complete": true
+        }
+      ],
+      "trust_actions": []
+    }
+  },
+  "v4_delta": "Only the scratch filesystem monitor changed after a native lock disappeared during enumeration. A per-entry lstat and explicit os.walk error policy tolerate positively vanished entries, retain all other errors/symlink/capacity refusals, and preserve the other 18 probe functions/classes. Pure regression checks passed. No earlier failed result was relabeled.",
+  "review": "Root reviewed and executed the native experiments. Independent Astra reviewed each changed probe/oracle and its exact artifact binding before execution. Pure state/caret/modal/HTTP/deadline/cleanup/scanner checks also passed.",
+  "limits": [
+    "No authentication, cloud account, MCP scope, simultaneous new-CWD, real daemon constructor or rotation/continuation qualification. Fake identity, SessionStart and trust never authenticate a saved account.",
+    "Endpoint/proxy containment with fake credentials is not a kernel network sandbox. Filesystem size is monitored rather than a kernel quota.",
+    "Current product launchgate still sends combined selection+confirmation. Its separately tracked staged-input fix and actual production-caller validation remain pending."
+  ]
+}

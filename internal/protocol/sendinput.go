@@ -118,7 +118,7 @@ func (cc *clientConn) handleSendInput(c Control) {
 		cc.replyError("send_input: session " + strconv.Quote(local) + " is not running")
 		return
 	}
-	if err := cc.srv.sendMessage(local, frames, sendInputSubmits(c.SendInput)); err != nil {
+	if err := cc.srv.sendMessage(local, frames, sendInputSubmits(c.SendInput), true); err != nil {
 		cc.replyError("send_input: " + err.Error())
 		return
 	}
@@ -142,7 +142,7 @@ func (s *Server) SendInput(local string, req SendInputReq) error {
 	if !s.sessionRunning(local) {
 		return fmt.Errorf("send_input: session %s is not running", strconv.Quote(local))
 	}
-	return s.sendMessage(local, frames, sendInputSubmits(&req))
+	return s.sendMessage(local, frames, sendInputSubmits(&req), false)
 }
 
 func sendInputSubmits(req *SendInputReq) bool {
@@ -275,9 +275,25 @@ func (s *Server) SetNewTurnGateFunc(fn func(string) error) {
 	s.newTurnGateFn.Store(&f)
 }
 
-func (s *Server) newTurnGate(local string, frames [][]byte) error {
+// SetManualInputGateFunc applies only to the authenticated owner send_input entry.
+// Nil preserves the full new-turn gate; no wire field can choose this origin.
+func (s *Server) SetManualInputGateFunc(fn func(string) error) {
+	if fn == nil {
+		s.manualInputGateFn.Store(nil)
+		return
+	}
+	f := inputGateFunc(fn)
+	s.manualInputGateFn.Store(&f)
+}
+
+func (s *Server) newTurnGate(local string, frames [][]byte, manual bool) error {
 	if len(frames) == 1 && len(frames[0]) == 1 && (frames[0][0] == 0x03 || frames[0][0] == 0x1b) {
 		return nil
+	}
+	if manual {
+		if p := s.manualInputGateFn.Load(); p != nil {
+			return (*p)(local)
+		}
 	}
 	if p := s.newTurnGateFn.Load(); p != nil {
 		return (*p)(local)
@@ -338,7 +354,7 @@ func (s *Server) WithInputFence(local string, fn func() error) error {
 	return fn()
 }
 
-func (s *Server) sendMessage(local string, frames [][]byte, submits bool) error {
+func (s *Server) sendMessage(local string, frames [][]byte, submits, manual bool) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -349,7 +365,7 @@ func (s *Server) sendMessage(local string, frames [][]byte, submits bool) error 
 	if err := s.inputGate(local); err != nil {
 		return err
 	}
-	if err := s.newTurnGate(local, frames); err != nil {
+	if err := s.newTurnGate(local, frames, manual); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -374,7 +390,7 @@ func (s *Server) sendMessage(local string, frames [][]byte, submits bool) error 
 	if err := s.inputGate(local); err != nil {
 		return err
 	}
-	if err := s.newTurnGate(local, frames); err != nil {
+	if err := s.newTurnGate(local, frames, manual); err != nil {
 		return err
 	}
 

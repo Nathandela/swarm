@@ -532,7 +532,7 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 		if err != nil {
 			return err
 		}
-		if err = d.logins.inputGate(local); err != nil {
+		if err = d.logins.semanticInputGate(local); err != nil {
 			return err
 		}
 		return beginComposerDelivery(originalBegin)

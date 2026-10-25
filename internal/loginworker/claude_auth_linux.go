@@ -74,7 +74,9 @@ func claudeAuthUnit(ctx context.Context, unit string) (map[string]string, error)
 	}
 	return result, nil
 }
-func qualifiedClaudeAuthManager(ctx context.Context) error {
+
+// ValidateClaudeAuthManager checks the qualified platform manager without creating units or writing authentication.
+func ValidateClaudeAuthManager(ctx context.Context) error {
 	raw, err := claudeAuthCommand(ctx, "systemctl", "--user", "--version")
 	if err != nil {
 		return err
@@ -136,7 +138,7 @@ func claudeAuthManager(ctx context.Context) (string, string, processcontain.Iden
 	if err != nil {
 		return "", "", processcontain.Identity{}, ErrUnavailable
 	}
-	if err := qualifiedClaudeAuthManager(ctx); err != nil {
+	if err := ValidateClaudeAuthManager(ctx); err != nil {
 		return "", "", processcontain.Identity{}, err
 	}
 	raw, err = call("GetNameOwner", "s", "org.freedesktop.systemd1")
@@ -214,7 +216,7 @@ func claudeAuthMountFilter(value string) bool {
 }
 func startClaudeAuthScope(ctx context.Context, executable, path string, ref logins.ClaudeAuthRef, deadline time.Time) (logins.ClaudeAuthScope, error) {
 	var scope logins.ClaudeAuthScope
-	if err := qualifiedClaudeAuthManager(ctx); err != nil {
+	if err := ValidateClaudeAuthManager(ctx); err != nil {
 		return scope, err
 	}
 	scope.Profile = "systemd249-user-v1"
@@ -291,7 +293,7 @@ func startClaudeAuthScope(ctx context.Context, executable, path string, ref logi
 }
 
 func verifyClaudeAuthScopeRetired(ctx context.Context, scope logins.ClaudeAuthScope) error {
-	if err := qualifiedClaudeAuthManager(ctx); err != nil {
+	if err := ValidateClaudeAuthManager(ctx); err != nil {
 		return err
 	}
 	if scope.Worker.Alive() {

@@ -659,7 +659,7 @@ func Serve(cfg Config) (*Daemon, error) {
 			d.composerOutcomeUnresolved(local)
 	}
 	supervisorUnsafeSource := func(local string) bool {
-		if baseUnsafeSource(local) || d.composerRecycleInFlight(local) || d.logins.inputGate(local) != nil {
+		if baseUnsafeSource(local) || d.composerRecycleInFlight(local) || d.logins.semanticInputGate(local) != nil {
 			return true
 		}
 		m, ok := d.core.Get(local)
@@ -688,10 +688,12 @@ func Serve(cfg Config) (*Daemon, error) {
 		return nil
 	}
 	d.srv.SetInputGateFunc(inputGate)
-	d.srv.SetNewTurnGateFunc(d.logins.inputGate)
+	d.srv.SetNewTurnGateFunc(d.logins.semanticInputGate)
+	d.srv.SetManualInputGateFunc(d.logins.manualInputGate)
 	if d.remoteSrv != nil {
 		d.remoteSrv.SetInputGateFunc(inputGate)
-		d.remoteSrv.SetNewTurnGateFunc(d.logins.inputGate)
+		d.remoteSrv.SetNewTurnGateFunc(d.logins.semanticInputGate)
+		d.remoteSrv.SetManualInputGateFunc(d.logins.manualInputGate)
 	}
 	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
 		d.supervisionMeta, d.core.Get, supervisorUnsafeSource, d.sendSupervision, d.nativeSupervisionState)

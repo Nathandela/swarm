@@ -34,9 +34,14 @@ func TestAstraReloginAfterNativeClearsActiveAuth(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			op, e := s.BeginRelogin(r.Revision, a.ID, fresh, "relogin", nil)
-			if e != nil {
-				t.Fatalf("fresh valid reauth blocked at BeginRelogin: %v", e)
+			var op Switch
+			if p == ProviderClaude {
+				op = seedLegacyClaudeSwitch(t, s, a, "historical relogin recovery", &fresh)
+			} else {
+				op, e = s.BeginRelogin(r.Revision, a.ID, fresh, "relogin", nil)
+				if e != nil {
+					t.Fatalf("fresh valid reauth blocked at BeginRelogin: %v", e)
+				}
 			}
 			op.Phase = "stopping"
 			if e = s.SaveSwitch(op); e != nil {

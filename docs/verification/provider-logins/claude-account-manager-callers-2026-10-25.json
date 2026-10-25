@@ -1,0 +1,161 @@
+{
+  "date": "2026-10-25",
+  "scope": "Claude retained-account manager daemon callers, synthetic process and protocol qualification; no installed-provider or live fleet activation",
+  "production_activation": false,
+  "changes": [
+    "Owner selection stores desired profile without creating a new Claude fleet-switch journal. Legacy journals retain recovery coverage.",
+    "First owned selection checks platform, qualified manager and exact native image outside loginMu; the short transaction checks the cached installation identity. Start revalidates.",
+    "The existing two-second completion loop processes enrollment and maintains selected plus at most one warm profile outside application locks. Only a creator starts a retained job; alternating cleanup and candidate priority prevents starvation.",
+    "Launch preparation includes the actual worktree CWD at finalization and exact selected runtime binding, with before-fork rollback on refusal. Both usage readers bind the owned home and credential generation.",
+    "Typed composer and daemon input require current authentication and runtime. Explicit owner terminal input retains common custody checks while allowing approval and cancellation keys; opaque bytes do not prove human origin or grant continuation authority."
+  ],
+  "artifact_binding": {
+    "review_zip_sha256": "0ec23c84c8454cbcc977350c881f39cbfe0419c7e2168e858f93a14e81252130",
+    "owned_source_manifest_sha256": "f54461db83be133f70f357236878fde7d99b7c7cd6e05de260ba1f6ce2003f30",
+    "owned_files": 23,
+    "source_zip_sha256": "8d2028dbafa978f721c82299ea9ee9037bb8e150cf8a27e395714d110d4d97f2",
+    "full_build_input_map_sha256": "2e4e7150ebfc0471345da007cadd0ffff2c8eb39bba6ed8e953e693b38fac3ef",
+    "build_inputs": 1993,
+    "go_files": 1911,
+    "linux_contract_sha256": "c1b4119add70b47e8aadade81ed15e937728d3a71825e72e843167b2960d214a",
+    "live_sources_match_final_frozen_map": true
+  },
+  "linux": {
+    "started": 23,
+    "passed": 22,
+    "expected_skip": "TestClaudeActualUnsupportedPlatformRefusesOwnerSelection (Darwin-only refusal)",
+    "process_umask": "0002, asserted before each unit without changing its default",
+    "results": {
+      "skeleton": {
+        "unit": "swarm-caller-skeleton-18db1951a2bb",
+        "exit_code": 0,
+        "elapsed_seconds": 5.351,
+        "binary_sha256": "8ce1e13fa1c7fcf9f0f841813fa2448206eb9aeffad8d1029fbf4ec15bc16610",
+        "log_sha256": "2116a271b97698a275d3276439bb1879c75fd1e37e6559bfd7a1846be06a1264",
+        "process_umask": "Umask:\t0002"
+      },
+      "protocol": {
+        "unit": "swarm-caller-protocol-993d232855c3",
+        "exit_code": 0,
+        "elapsed_seconds": 0.4,
+        "binary_sha256": "1379b030a4db02d51eba03055f672c6c5a75d0fb62240fc32ba278bbe34e107d",
+        "log_sha256": "c0759aabfc21d01dad31cf81c20b672bfaae77b9bfe0e3d1617ed2e2acf4c8c0",
+        "process_umask": "Umask:\t0002"
+      },
+      "loginworker": {
+        "unit": "swarm-caller-loginworker-203901ad8cb2",
+        "exit_code": 0,
+        "elapsed_seconds": 0.365,
+        "binary_sha256": "eb541b8e72cc8a5ec51437262d28c45a782137ccbcfc44df066b8e081f6b8f00",
+        "log_sha256": "659f9571d563cd85a63821465ed1ca434aa9d53e08a373edf9f43c6e2af56df2",
+        "process_umask": "Umask:\t0002"
+      },
+      "logins": {
+        "unit": "swarm-caller-logins-9fb575a76b1f",
+        "exit_code": 0,
+        "elapsed_seconds": 0.45,
+        "binary_sha256": "46964950625253d83c5745c5a76cde4ded773ea60ab378d462c64e5beb50b8c2",
+        "log_sha256": "be5a91f5e66de11619618cc9cbc321d49d8aa7e60a0a6ecdd437d09cdcefde58",
+        "process_umask": "Umask:\t0002"
+      },
+      "negative-image-qualification": {
+        "unit": "swarm-caller-negative-image-qualification-88fc8c830d45",
+        "exit_code": 1,
+        "elapsed_seconds": 0.497,
+        "binary_sha256": "aa7ec0fd7eec26621df090eee1593f1a3251d22f9b3d85aa85d63f540fa334fb",
+        "log_sha256": "44a190db849ef22538f0414980323ec4de1c569bb089dbdb13300d06cdadbf83",
+        "process_umask": "Umask:\t0002"
+      },
+      "negative-final-cwd": {
+        "unit": "swarm-caller-negative-final-cwd-b20c9b9aca49",
+        "exit_code": 1,
+        "elapsed_seconds": 0.76,
+        "binary_sha256": "5971d91722c853ce07a2a65c119efa4c42782d853009d5026e0a8041f5ac4b09",
+        "log_sha256": "0602d3e1a537cd657a7d9c894e2de963ecabda5b4c5c1a36f337873109372440",
+        "process_umask": "Umask:\t0002"
+      }
+    },
+    "test_entrypoints": {
+      "skeleton": [
+        "TestClaudeOwnerSelectionPersistsPendingAndSupersedesWithoutFleetSwitch",
+        "TestClaudeOwnedUsageUsesExactProfileHomeInBothReaders",
+        "TestClaudeSemanticGateRefusesStaleWhileLegacyRawGateRemainsUsable",
+        "TestClaudeCompletionRecoversPreparedOutsideLoginAndAdmissionLocks",
+        "TestClaudeWorkerCapacityCleanupLetsDesiredCreatorProgressOnce",
+        "TestClaudeLaunchPreparationReachesEstablishedMissingCWDAndResumeCheckout",
+        "TestClaudeSelectedReloginCompletionKeepsPendingCopyAndAvoidsFleetRestart",
+        "TestClaudeTypedComposerRefusesStaleButOwnerProtocolApprovalKeysPass",
+        "TestClaudeExistingJournalTakesPrecedenceOverDesiredSelection",
+        "TestClaudeUnsupportedOwnerSelectionDoesNotCommitMode",
+        "TestClaudeActualUnsupportedPlatformRefusesOwnerSelection",
+        "TestClaudeFirstOwnerCapabilityProbeLeavesLoginListResponsive",
+        "TestClaudeConfirmedExhaustionUsesDesiredSelectionWithoutRetryEpochChurn",
+        "TestClaudeRepeatedSupportTimeoutCannotStarveRetainedRecovery",
+        "TestClaudeFinalizePreLaunchWorktreePreparesActualCWDAndRollsBackBeforeFork",
+        "TestClaudeActualUnqualifiedNativeImageCannotCommitMode",
+        "TestLoginsStaleActivationPreservesProtocolErrorAndDoesNotProbe"
+      ],
+      "protocol": [
+        "TestManualInputGateCannotAuthorizeDaemonSendInput",
+        "TestManualInputGateRechecksUnderWriteLocks",
+        "TestLoginsOwnerCapabilityCASAndRedaction"
+      ],
+      "loginworker": [
+        "TestClaudeAuthQualifiedManagerVersionIsFinite",
+        "TestClaudeAuthRunningManagerMustMatchQualifiedSourceVersion"
+      ],
+      "logins": [
+        "TestClaudeNewFleetJournalIsRejectedBeforeOwnedMode"
+      ]
+    },
+    "negative_controls": {
+      "image_qualification_omission": "Actual assertion failure: unqualified native image committed mode: <nil>",
+      "final_cwd_preparation_omission": [
+        "final CWD membership did not reflect durable provisioning",
+        "unproven writers accepted: <nil>"
+      ]
+    },
+    "process_scope": "Real daemon/shim and fake-agent test binaries from the frozen source; strict build substitution copied exactly swarm and swarm-fake-agent once each into one fresh test build directory. No installed provider executed.",
+    "containment": "Private HOME/TMPDIR and per-case systemd cgroups bounded to 255 seconds with zero stop grace; complete source and binary hashes checked."
+  },
+  "preserved_failures": [
+    {
+      "scope": "Earlier Linux source V2 and V3",
+      "finding": "Go 1.26.10 numbered TempDir children use mode 0777, yielding 0775 under the VM default umask0002. Store.Open correctly rejects group-writable roots. Three shared fresh test-root helpers now chmod0700; production checks and the global umask are unchanged.",
+      "first_log_sha256": "1fb21aace7e888a2857e3123f5422c82448c09f42b567f562f06d0d917cca329",
+      "diagnostic_log_sha256": "09299db9aea6d3b6fa9d79feb132f15f761ae88a4bfac50efda34bf9622fb554",
+      "intermediate_log_sha256": "496543f7de33fd005f2d616097fbe2105c780cdc984496523ce15356caad56c5"
+    },
+    {
+      "scope": "Mac targeted four-package race run",
+      "command": "go test -race ./internal/logins ./internal/loginworker ./internal/protocol ./internal/skeleton -run '(Claude|Login|ManualInputGate|SendInput|Composer)' -count=1 -timeout=12m",
+      "exit_code": 1,
+      "passed_packages_seconds": {
+        "logins": 156.483,
+        "loginworker": 2.353,
+        "protocol": 4.703
+      },
+      "failed_skeleton_seconds": 179.427,
+      "failed_tests": [
+        "TestLoginCompletionCrashDoesNotReplayOldGrant",
+        "TestLoginViewsNeverContainCredentials",
+        "TestDuplicateAndWrongLoginLeaveExistingGrantUntouched"
+      ],
+      "finding": "Tool sandbox denied kern.proc.all with snapshot: operation not permitted. Enrollment stops before credential import when the required process census is unavailable. Exact three tests reran on unchanged source with read-only process census permitted: PASS under race, 2.517s. The original broader command remains recorded as failed."
+    }
+  ],
+  "root_gates": {
+    "build": "go build ./... PASS",
+    "vet": "go vet ./internal/logins ./internal/loginworker ./internal/protocol ./internal/skeleton PASS",
+    "lint_darwin": "Same four packages: 0 issues",
+    "lint_linux_amd64": "Same four packages, CGO_ENABLED=0: 0 issues",
+    "race": "Targeted four-package run plus unchanged-source permission-corrected rerun described above; not a full-repository race claim",
+    "review": "Independent Astra source/artifact review GREEN; root connected-source review and actual Linux execution GREEN"
+  },
+  "limits": [
+    "Synthetic caller tests do not qualify saved-account authentication, installed native construction, live-profile simultaneous CWD/trust behavior, MCP scope, fleet handover or automatic continuation.",
+    "Owned Claude activation remains limited to the explicitly qualified Linux native pin; enrollment and unsupported-platform refusal retain separate tests.",
+    "Native startup timing correction, historical rows without custody provenance, Codex handover and the separately reviewed structured continuation host remain open.",
+    "Full-repository final quality gates and independent release review are still required. Main, installed Swarm and live sessions were not changed."
+  ]
+}

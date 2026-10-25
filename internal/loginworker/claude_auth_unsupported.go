@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// ValidateClaudeAuthManager never creates units or writes authentication.
+func ValidateClaudeAuthManager(context.Context) error { return ErrUnsupported }
+
 func startClaudeAuthScope(context.Context, string, string, logins.ClaudeAuthRef, time.Time) (logins.ClaudeAuthScope, error) {
 	return logins.ClaudeAuthScope{}, ErrUnsupported
 }

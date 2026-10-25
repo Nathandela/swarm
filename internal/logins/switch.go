@@ -70,7 +70,7 @@ func (s *Store) beginReloginJob(expected uint64, loginID string, credential Cred
 func (s *Store) beginSwitch(expected uint64, provider, toID, reason string, sessions []Restart, incoming *Credential, jobID string) (Switch, error) {
 	var out Switch
 	_, e := s.mutate(expected, func(r *Registry) error {
-		if codexOwned(*r, provider) || claudeProfilesOwned(*r, provider) {
+		if provider == ProviderClaude || codexOwned(*r, provider) {
 			return ErrPending
 		}
 		if _, ok := r.Switches[provider]; ok {

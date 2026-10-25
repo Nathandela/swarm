@@ -16,6 +16,9 @@ func testStore(t *testing.T) *Store {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if e = os.Chmod(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
 	s, e := Open(dir)
 	if e != nil {
 		t.Fatal(e)
@@ -50,12 +53,43 @@ func snapshot(t *testing.T, s *Store) Registry {
 	}
 	return r
 }
+
+// Only old persisted Claude journals may enter fleet recovery in current binaries.
+func seedLegacyClaudeSwitch(t *testing.T, s *Store, l Login, reason string, incoming *Credential) Switch {
+	t.Helper()
+	r := snapshot(t, s)
+	id, err := newID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := r.Providers[ProviderClaude]
+	op := Switch{ID: id, Provider: ProviderClaude, FromID: p.ActiveID, ToID: l.ID, FromEpoch: p.Epoch, ToEpoch: p.Epoch + 1, Phase: "waiting", Reason: reason, AttemptedIDs: []string{l.ID}, Relogin: incoming != nil}
+	if _, err = s.mutate(r.Revision, func(r *Registry) error {
+		if incoming != nil {
+			if err := s.stageCredential(id, l, *incoming, ""); err != nil {
+				return err
+			}
+		}
+		r.Switches[ProviderClaude] = op
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return op
+}
+
 func beginStopped(t *testing.T, s *Store, l Login) Switch {
 	t.Helper()
 	r := snapshot(t, s)
-	op, e := s.BeginSwitch(r.Revision, l.Provider, l.ID, "test", nil)
-	if e != nil {
-		t.Fatal(e)
+	var op Switch
+	var e error
+	if l.Provider == ProviderClaude {
+		op = seedLegacyClaudeSwitch(t, s, l, "historical pending journal", nil)
+	} else {
+		op, e = s.BeginSwitch(r.Revision, l.Provider, l.ID, "test", nil)
+		if e != nil {
+			t.Fatal(e)
+		}
 	}
 	op.Phase = "stopping"
 	if e = s.SaveSwitch(op); e != nil {
@@ -553,7 +587,11 @@ func TestCompetingNativeAuthSettingsRefuseBeforeSwitch(t *testing.T) {
 				t.Fatal(e)
 			}
 			r := snapshot(t, s)
-			if _, e := s.BeginSwitch(r.Revision, provider, a.ID, "manual", nil); !errors.Is(e, ErrIneligible) {
+			expected := ErrIneligible
+			if provider == ProviderClaude {
+				expected = ErrPending
+			}
+			if _, e := s.BeginSwitch(r.Revision, provider, a.ID, "manual", nil); !errors.Is(e, expected) {
 				t.Fatalf("competing native authority admitted: %v", e)
 			}
 			if len(snapshot(t, s).Switches) != 0 {

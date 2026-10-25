@@ -195,7 +195,7 @@ func TestClaudeAuthQualifiedManagerVersionIsFinite(t *testing.T) {
 			}
 			return version, nil
 		}
-		err := qualifiedClaudeAuthManager(t.Context())
+		err := ValidateClaudeAuthManager(t.Context())
 		if (version == "systemd 249 (249.11)") != (err == nil) {
 			t.Fatalf("incorrect manager source qualification: %q %v", version, err)
 		}
@@ -213,7 +213,7 @@ func TestClaudeAuthRunningManagerMustMatchQualifiedSourceVersion(t *testing.T) {
 			raw, _ := json.Marshal(manager)
 			return "s " + string(raw), nil
 		}
-		err := qualifiedClaudeAuthManager(t.Context())
+		err := ValidateClaudeAuthManager(t.Context())
 		if (manager == "249.11-0ubuntu3.23") != (err == nil) {
 			t.Fatalf("CLI249 qualified a different running manager: %q %v", manager, err)
 		}

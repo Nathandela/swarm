@@ -352,8 +352,9 @@ type Server struct {
 	// notification) before its first byte -- production wires ContextGuard's
 	// effect-window gate (ADR-023 amendment 1). Same atomic-pointer shape as the
 	// seams above.
-	inputGateFn   atomic.Pointer[inputGateFunc]
-	newTurnGateFn atomic.Pointer[inputGateFunc]
+	inputGateFn       atomic.Pointer[inputGateFunc]
+	newTurnGateFn     atomic.Pointer[inputGateFunc]
+	manualInputGateFn atomic.Pointer[inputGateFunc]
 	// directInputObserverFn is the assembly-owned, durable pre-write marker. It is
 	// invoked under a session's attachMu -> inMu immediately before the first
 	// SessionStream.Input attempt, on both one-shot and attached raw input paths.

@@ -11,7 +11,42 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/protocol"
 )
+
+// Prepare only the selected profile's exact incoming CWD, before launch locks.
+func (a *coreAPI) prepareClaudeProfile(spec daemon.LaunchSpec) error {
+	if a.logins == nil || spec.AgentType != logins.ProviderClaude || spec.LoginSwitchID != "" {
+		return nil
+	}
+	r, err := a.logins.store.Snapshot()
+	if err != nil {
+		return err
+	}
+	if r.MigrationPending {
+		return logins.ErrPending
+	}
+	if _, pending := r.Switches[logins.ProviderClaude]; pending {
+		return nil
+	}
+	selected := r.Providers[logins.ProviderClaude]
+	if selected.AuthOwnerMode != logins.ClaudeNativeProfileMode {
+		return nil
+	}
+	cwd := spec.Cwd
+	if src := spec.Options[protocol.OptionResumeFrom]; src != "" {
+		_, source, err := validateResumeSource(src, spec.AgentType, a.endpointID, a.logins.get)
+		if err != nil {
+			return err
+		}
+		cwd, err = resumeDirectory(spec, source)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = a.logins.store.ProvisionClaudeProfile(r.Revision, selected.ActiveID, []string{cwd})
+	return err
+}
 
 func (a *coreAPI) bindLoginLaunch(spec *daemon.LaunchSpec) error {
 	if !managedLoginProvider(spec.AgentType) {
@@ -85,6 +120,21 @@ func (d *Daemon) prepareLoginLaunch(_ string, spec daemon.LaunchSpec) (daemon.La
 	}
 	if err != nil {
 		return spec, err
+	}
+	if spec.AgentType == logins.ProviderClaude && logins.IsClaudeProfileRuntime(d.stateDir, *spec.LoginRuntime) {
+		r, snapshotErr := d.logins.store.Snapshot()
+		if snapshotErr != nil {
+			return spec, snapshotErr
+		}
+		selected := r.Providers[logins.ProviderClaude]
+		login, ok := loginByID(r, selected.ActiveID)
+		if !ok || selected.Epoch != spec.LoginRuntime.Epoch || login.Identity != spec.LoginRuntime.Identity {
+			return spec, logins.ErrConflict
+		}
+		// PreLaunch may have created a worktree after the early CWD preparation.
+		if _, err = d.logins.store.ProvisionClaudeProfile(r.Revision, login.ID, []string{spec.Cwd}); err != nil {
+			return spec, err
+		}
 	}
 	if err = logins.ValidateProjectAuthEnv(spec.AgentType, spec.Cwd, spec.ClientEnv); err != nil {
 		return spec, err

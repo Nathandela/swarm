@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -20,14 +21,13 @@ import (
 	"github.com/Nathandela/swarm/internal/loginworker"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 func (a *coreAPI) Logins(req protocol.LoginsReq) (reply protocol.LoginsReply, err error) {
 	if a.logins == nil {
 		return reply, protocol.ErrLoginsUnavailable
 	}
-	a.loginMu.Lock()
-	defer a.loginMu.Unlock()
 	defer func() {
 		if errors.Is(err, codexnative.ErrUnsafe) {
 			err = protocol.ErrLoginsUnsafeNativeCLI
@@ -35,6 +35,25 @@ func (a *coreAPI) Logins(req protocol.LoginsReq) (reply protocol.LoginsReply, er
 			err = protocol.ErrLoginsStaleRevision
 		}
 	}()
+	// First-call capability probing must not hold the owner/UI mutex.
+	if req.Action == "activate" {
+		r, probeErr := a.logins.store.Snapshot()
+		if probeErr != nil {
+			return reply, probeErr
+		}
+		if r.Revision != req.ExpectedRevision {
+			return reply, logins.ErrConflict
+		}
+		if l, ok := loginByID(r, req.LoginID); ok && l.Provider == logins.ProviderClaude {
+			if _, legacy := r.Switches[l.Provider]; !legacy {
+				if probeErr := a.logins.prepareClaudeSelection(context.Background()); probeErr != nil {
+					return reply, probeErr
+				}
+			}
+		}
+	}
+	a.loginMu.Lock()
+	defer a.loginMu.Unlock()
 	m := a.logins
 	r, err := m.store.Snapshot()
 	if err != nil {
@@ -268,7 +287,11 @@ func (a *coreAPI) loginList() (protocol.LoginsReply, error) {
 		reply.Logins = append(reply.Logins, v)
 	}
 	for _, provider := range []string{"claude", "codex"} {
-		reply.Providers = append(reply.Providers, providerLoginView(r, provider))
+		view := providerLoginView(r, provider)
+		if provider == logins.ProviderClaude {
+			view = a.logins.claudeProviderView(r, view)
+		}
+		reply.Providers = append(reply.Providers, view)
 	}
 	jobs, err := loginworker.Jobs(a.logins.store.StateRoot())
 	if err != nil {
@@ -429,7 +452,9 @@ func (a *coreAPI) completeLoginJob(c loginworker.Config) error {
 			}
 		}
 	}
-	if !accepted {
+	_, legacySwitch := r.Switches[c.Provider]
+	ownedClaudeRelogin := c.Provider == logins.ProviderClaude && c.LoginID != "" && !legacySwitch && r.Providers[c.Provider].AuthOwnerMode == logins.ClaudeNativeProfileMode
+	if !accepted || ownedClaudeRelogin {
 		credential, err := logins.ReadNativeCredential(c.Provider, loginworker.NativeHome(c.StateRoot, c.JobID))
 		if err != nil {
 			return err
@@ -451,6 +476,8 @@ func (a *coreAPI) completeLoginJob(c loginworker.Config) error {
 				}
 			}
 			_, _, err = a.logins.store.Import(r.Revision, logins.Login{ID: c.JobID, Provider: c.Provider, Label: c.Label, LastLoginJobID: c.JobID}, credential)
+		} else if ownedClaudeRelogin {
+			_, _, err = a.logins.store.ReloginJob(r.Revision, c.LoginID, credential, c.JobID)
 		} else if ownedCodex {
 			err = a.consumeCodexRelogin(r.Revision, c, credential)
 		} else if r.Providers[c.Provider].ActiveID == c.LoginID {
@@ -512,23 +539,324 @@ func (a *coreAPI) watchLoginJobs(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			a.loginMu.Lock()
-			jobs, err := loginworker.Jobs(a.logins.store.StateRoot())
-			if err == nil {
-				for _, c := range jobs {
-					if ctx.Err() != nil {
-						break
-					}
-					p, progressErr := loginworker.ReadProgress(c.StateRoot, c.JobID)
-					if progressErr == nil && (p.Phase == loginworker.PhaseFailed || p.Phase == loginworker.PhaseCanceled) {
-						_ = cleanupLoginJob(c)
-					} else {
-						_ = a.completeLoginJob(c)
-					}
-					_ = loginworker.Prune(c)
-				}
-			}
-			a.loginMu.Unlock()
+			a.runLoginJobs(ctx)
 		}
 	}
+}
+
+func (a *coreAPI) runLoginJobs(ctx context.Context) {
+	a.loginMu.Lock()
+	jobs, err := loginworker.Jobs(a.logins.store.StateRoot())
+	if err == nil {
+		for _, c := range jobs {
+			if ctx.Err() != nil {
+				break
+			}
+			p, progressErr := loginworker.ReadProgress(c.StateRoot, c.JobID)
+			if progressErr == nil && (p.Phase == loginworker.PhaseFailed || p.Phase == loginworker.PhaseCanceled) {
+				_ = cleanupLoginJob(c)
+			} else {
+				_ = a.completeLoginJob(c)
+			}
+			_ = loginworker.Prune(c)
+		}
+	}
+	a.loginMu.Unlock()
+	if ctx.Err() == nil {
+		_ = a.logins.maintainClaudeAuth(ctx)
+	}
+}
+
+// This is the existing completion worker's one bounded external action per pass.
+func (m *loginManager) maintainClaudeAuth(parent context.Context) (err error) {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	defer cancel()
+
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	r, err := m.store.Snapshot()
+	if err != nil {
+		return err
+	}
+	if r.MigrationPending {
+		return nil
+	}
+	if r.Providers[logins.ProviderClaude].AuthOwnerMode != logins.ClaudeNativeProfileMode {
+		if r.Providers[logins.ProviderClaude].ActiveID == "" {
+			return nil
+		}
+		if _, legacy := r.Switches[logins.ProviderClaude]; legacy {
+			return nil
+		}
+		return m.prepareClaudeSelection(ctx)
+	}
+	if _, pending := r.Switches[logins.ProviderClaude]; pending {
+		return nil
+	}
+	jobs, err := m.store.ListClaudeAuth()
+	if err != nil {
+		return err
+	}
+	pass := m.claudeAuthCursor
+	m.claudeAuthCursor = (pass + 1) % (2 * logins.MaxHandoverGrantRefs)
+	recoverOne := func() (bool, error) {
+		for offset := range jobs {
+			result := jobs[(pass/2+offset)%len(jobs)]
+			if (result.Phase == "running" || result.Phase == "retry") && result.Scope.Worker.Alive() && time.Now().Before(result.Deadline) {
+				continue
+			}
+			recoverAuth := m.claudeAuthRecover
+			if recoverAuth == nil {
+				recoverAuth = loginworker.RecoverClaudeAuth
+			}
+			_, recoverErr := recoverAuth(ctx, loginworker.ClaudeAuthConfig{StateRoot: m.store.StateRoot(), Ref: result.Ref})
+			return true, recoverErr
+		}
+		return false, nil
+	}
+	// Reserve alternating passes for cleanup before any potentially slow probe.
+	if pass%2 == 0 {
+		if acted, recoverErr := recoverOne(); acted {
+			return recoverErr
+		}
+	}
+	var candidates []logins.Login
+	if selected, ok := loginByID(r, r.Providers[logins.ProviderClaude].ActiveID); ok && selected.AuthState == logins.AuthReady {
+		candidates = append(candidates, selected)
+	}
+	if warm, nextErr := m.store.NextEligible(logins.ProviderClaude, nil, time.Now()); nextErr == nil {
+		candidates = append(candidates, warm)
+	} else if !errors.Is(nextErr, logins.ErrNoEligible) {
+		return nextErr
+	}
+	var cli *persist.CLIIdentity
+	var cliErr error
+	probed := false
+	for _, candidate := range candidates {
+		var previous *logins.ClaudeAuthResult
+		for i := range jobs {
+			if jobs[i].Ref.LoginID == candidate.ID {
+				previous = &jobs[i]
+				break
+			}
+		}
+		if previous != nil && previous.Phase != "ready" && previous.Phase != "failed" {
+			continue
+		}
+		if !probed {
+			probed = true
+			cli = m.currentClaudePin()
+			if cli == nil {
+				if m.claudeAuthCLI != nil {
+					cli, cliErr = m.claudeAuthCLI(ctx)
+				} else {
+					cli, cliErr = m.claudeAuthInstallation(ctx)
+				}
+			}
+		}
+		if cliErr != nil {
+			err = cliErr
+			continue
+		}
+		if cli == nil || cli.Version != "2.1.310" {
+			err = loginworker.ErrUnsupported
+			continue
+		}
+		if persist.MatchCLIFingerprint(cli.Path, cli.Fingerprint) {
+			pin := *cli
+			m.claudeAuthMu.Lock()
+			m.claudeAuthPin = &pin
+			m.claudeAuthMu.Unlock()
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var ref logins.ClaudeAuthRef
+		var created bool
+		var beginErr error
+		if previous == nil {
+			ref, created, beginErr = m.store.BeginClaudeAuth(r.Revision, candidate.ID)
+		} else {
+			ref, created, beginErr = m.store.ReplaceClaudeAuth(r.Revision, previous.Ref)
+		}
+		if beginErr != nil {
+			if !errors.Is(beginErr, logins.ErrConflict) {
+				err = beginErr
+			}
+			continue // Capacity cannot starve exact cleanup below.
+		}
+		if !created {
+			continue
+		}
+		executable, execErr := os.Executable()
+		if execErr != nil {
+			return execErr
+		}
+		start := m.claudeAuthStart
+		if start == nil {
+			start = loginworker.StartClaudeAuth
+		}
+		_, startErr := start(ctx, executable, loginworker.ClaudeAuthConfig{StateRoot: m.store.StateRoot(), Ref: ref, NativePath: cli.Path, NativeVersion: cli.Version, NativeFingerprint: cli.Fingerprint})
+		return startErr // Only this successful creator owns Start, including uncertain returns.
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if _, recoverErr := recoverOne(); recoverErr != nil {
+		return recoverErr
+	}
+
+	return err
+}
+
+func (m *loginManager) claudeAuthInstallation(ctx context.Context) (*persist.CLIIdentity, error) {
+	if runtime.GOOS != "linux" {
+		return nil, loginworker.ErrUnsupported
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	env := os.Environ()
+	if m.d != nil && m.d.core != nil {
+		env = m.d.core.LaunchPolicyEnv(nil)
+	}
+	cli, err := probeCLIIdentity(logins.ProviderClaude, "", env, "")
+	if err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	if cli.Version != "2.1.310" {
+		return nil, loginworker.ErrUnsupported
+	}
+	if err = loginworker.ValidateNativePath(cli.Path); err != nil {
+		return nil, err
+	}
+	image, imageErr := loginworker.OpenClaudeNativeImage(cli.Path, cli.Version, cli.Fingerprint)
+	if imageErr != nil {
+		return nil, imageErr
+	}
+	if err := image.Close(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err = loginworker.ValidateClaudeAuthManager(ctx); err != nil {
+		return nil, err
+	}
+	return cli, nil
+}
+
+func (m *loginManager) claudeProviderView(r logins.Registry, v protocol.ProviderLoginView) protocol.ProviderLoginView {
+	if r.MigrationPending || r.Providers[logins.ProviderClaude].AuthOwnerMode != logins.ClaudeNativeProfileMode {
+		return v
+	}
+	if _, legacy := r.Switches[logins.ProviderClaude]; legacy {
+		return v
+	}
+	v.State, v.Message = "waiting", "Selected login is waiting for fresh native authentication."
+	if runtime.GOOS != "linux" {
+		v.State, v.Message = "unavailable", "Managed Claude authentication is not qualified on this platform."
+		return v
+	}
+	if !m.claudeSelectionPinCurrent() {
+		v.Message = "Waiting for a supported Claude installation."
+		return v
+	}
+	results, err := m.store.ListClaudeAuth()
+	if err != nil {
+		v.State, v.Message = "unavailable", "Saved authentication evidence could not be read."
+		return v
+	}
+	selected, ok := loginByID(r, v.ActiveID)
+	if !ok {
+		return v
+	}
+	for _, result := range results {
+		if result.Ref.LoginID != v.ActiveID {
+			continue
+		}
+		if result.Phase == "failed" && result.Ref.Identity == selected.Identity && result.Ref.CredentialRevision == selected.CredentialRevision && result.Selection == r.Providers[logins.ProviderClaude] {
+			v.State, v.Message = "unavailable", "Selected login authentication did not finish; sign in again or explicitly select it to retry."
+			return v
+		}
+	}
+	readyAuth := false
+	for _, result := range results {
+		if result.Ref.LoginID == selected.ID && result.Ref.Identity == selected.Identity && result.Ref.CredentialRevision == selected.CredentialRevision && result.Phase == "ready" && m.store.ValidateClaudeAuthReceipt(result.Ref, r.Providers[logins.ProviderClaude].Epoch) == nil {
+			readyAuth = true
+		}
+	}
+	if !readyAuth {
+		return v
+	}
+	profile, known := r.ClaudeProfiles[selected.Identity]
+	if !known || !profile.Provisioned {
+		v.Message = "Selected login is waiting for its discussion configuration."
+		return v
+	}
+	current, err := m.store.Runtime(logins.ProviderClaude)
+	if err != nil {
+		return v
+	}
+	v.State, v.Message = "ready", "Selected login is ready for new discussions."
+	for _, meta := range m.list() {
+		if meta.AgentType != logins.ProviderClaude || meta.Status.Process != status.ProcessRunning {
+			continue
+		}
+		if meta.LoginRuntime == nil || *meta.LoginRuntime != current {
+			v.Message = "Ready for new discussions; existing discussions retain their earlier login."
+			continue
+		}
+		var ready loginNativeReady
+		if readNativeProof(m.store.StateRoot(), meta.ID, "login-native-ready.json", &ready) != nil || ready.Runtime != current || ready.ConversationID != meta.ConversationID || ready.ShimPID != meta.ShimPID || ready.ShimStartTime != meta.ShimStartTime || ready.Sequence == 0 {
+			v.State, v.Message = "waiting", "New Claude discussion is waiting for native startup."
+			return v
+		}
+	}
+	return v
+}
+
+func (m *loginManager) currentClaudePin() *persist.CLIIdentity {
+	m.claudeAuthMu.Lock()
+	pin := m.claudeAuthPin
+	m.claudeAuthMu.Unlock()
+	if pin == nil || pin.Version != "2.1.310" || !persist.MatchCLIFingerprint(pin.Path, pin.Fingerprint) {
+		return nil
+	}
+	return pin
+}
+
+func (m *loginManager) claudeSelectionPinCurrent() bool { return m.currentClaudePin() != nil }
+
+func (m *loginManager) prepareClaudeSelection(parent context.Context) error {
+	if m.claudeSelectionPinCurrent() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	defer cancel()
+	var cli *persist.CLIIdentity
+	var err error
+	if m.claudeAuthCLI != nil {
+		cli, err = m.claudeAuthCLI(ctx)
+	} else {
+		cli, err = m.claudeAuthInstallation(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if cli == nil || cli.Version != "2.1.310" || !persist.MatchCLIFingerprint(cli.Path, cli.Fingerprint) {
+		return loginworker.ErrUnsupported
+	}
+	pin := *cli
+	m.claudeAuthMu.Lock()
+	m.claudeAuthPin = &pin
+	m.claudeAuthMu.Unlock()
+	return nil
 }

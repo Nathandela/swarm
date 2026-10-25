@@ -1096,6 +1096,9 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 		}
 		spec.Cwd = providerCwd
 	}
+	if err := a.prepareClaudeProfile(spec); err != nil {
+		return persist.Meta{}, err
+	}
 	if conversationID := spec.Options[protocol.OptionResumeConversationID]; conversationID != "" {
 		if spec.Options[protocol.OptionResumeFrom] != "" {
 			return persist.Meta{}, fmt.Errorf("resume: external conversation id cannot be combined with resume_from")

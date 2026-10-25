@@ -175,10 +175,14 @@ authority still refuses selection; generic validation errors are never treated a
 staleness. This avoids a second Make active request or slow authentication work
 on the owner operation path. The [Store checks](../verification/provider-logins/claude-desired-selection-store-2026-10-25.json)
 cover this distinction, CWD extension and helper admission; daemon callers remain
-an integration gate.
+subject to the native constructor gate below. The
+[caller checks](../verification/provider-logins/claude-account-manager-callers-2026-10-25.json)
+cover the owner API, completion worker, usage readers, typed-input gates and
+final working-directory preparation with synthetic Linux processes.
 
-Reuse the one-second auth watcher to choose selected and at most one warm login.
-The existing two-second login-completion worker owns slow Start/Recover calls,
+Reuse the one-second auth watcher for confirmed-exhaustion selection. The existing
+two-second login-completion worker chooses the selected and at most one warm
+login and owns slow Start/Recover calls,
 outside the login, admission and discussion lifecycle locks. Only the successful
 creator of PREPARED receives start authority. Reopen, a missing PID and a timeout
 never recreate it. A locked bounded census in the shared Begin/Replace creation
@@ -188,6 +192,13 @@ Native authentication already runs asynchronously. Bound external maintenance
 with its context, outside application locks, and revisit enrollment after each
 return. Context cancellation does not make Store locks or filesystem calls
 interruptible. No new worker thread, queue, scheduler or index is needed.
+Alternate cleanup-first passes with candidate-first passes so repeated capability
+probe timeouts cannot starve retained jobs. Before the first owned-mode selection,
+qualify the platform, manager and exact native image outside the owner mutex;
+the transaction only checks the cached installation identity. Start revalidates
+the installation. The launch finalizer also provisions the actual CWD returned
+by the existing worktree hook, with exact selected-runtime binding and ordinary
+before-fork rollback on refusal.
 
 Recovery collects exact helper custody and retains its terminal intent. A ready
 receipt stays usable while its canonical generation and expiry remain valid.
@@ -259,10 +270,23 @@ cover all registry versions, partial deletion and the actual selection boundary
 with synthetic processes on Linux. Refused-birth cleanup is covered separately;
 historical rows without Runtime provenance and native construction remain gates.
 
-Old A may finish internal work after B is desired. New host turns on a stale
-incarnation remain pending; approvals and cancellation stay usable. This slice
+Old A may finish internal work after B is desired. Typed composer and daemon-authored
+turns on a stale incarnation remain pending. The explicit owner terminal-input
+path keeps approval keys and cancellation usable; opaque terminal bytes cannot
+be classified as approvals versus new turns. This separate input path does not
+grant automated continuation authority or prove human origin. Both paths retain
+the common custody checks and final write fences. A failed selected Claude login
+can be retried with Enter in Accounts; healthy/pending Claude selections and
+active Codex selections retain their existing behavior. This slice
 does not implement existing-discussion transition or automatic continuation.
 Keep unsupported platforms/pins explicit and enrollment independently usable.
+
+The [ordinary native startup checks](../verification/provider-logins/claude-normal-startup-2026-10-25.json)
+pass on both pinned platforms with synthetic authority and normal settings
+discovery. The native trust dialog needs a settled selection before confirmation;
+the current product's combined Down/Enter dispatch is a separately tracked fix.
+These checks establish trust, SessionStart and the initial composer only, not
+saved-account authentication, workflow/MCP parity or the real daemon constructor.
 
 ### Durable execution evidence
 

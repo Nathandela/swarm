@@ -22,6 +22,9 @@ import (
 // Linux avoids the production Darwin credential store entirely.
 func claudeOwnerBirthFixture(t *testing.T, root, cwd string) (*logins.Store, logins.Login, logins.Runtime) {
 	t.Helper()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	s, err := logins.Open(root)
 	if err != nil {
 		t.Fatal(err)

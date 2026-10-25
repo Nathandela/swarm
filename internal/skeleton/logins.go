@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -26,6 +27,12 @@ import (
 type loginManager struct {
 	d                     *Daemon
 	store                 *logins.Store
+	claudeAuthCLI         func(context.Context) (*persist.CLIIdentity, error)
+	claudeAuthStart       func(context.Context, string, loginworker.ClaudeAuthConfig) (logins.ClaudeAuthResult, error)
+	claudeAuthRecover     func(context.Context, loginworker.ClaudeAuthConfig) (loginworker.ClaudeAuthRecovery, error)
+	claudeAuthCursor      int
+	claudeAuthMu          sync.Mutex
+	claudeAuthPin         *persist.CLIIdentity
 	stepMu                sync.Mutex
 	admission             [2]sync.Mutex
 	usageMu               sync.Mutex
@@ -133,9 +140,64 @@ func (m *loginManager) inputGate(local string) error {
 	return nil
 }
 
+// Owner terminal bytes cannot distinguish approval keys from a new turn.
+func (m *loginManager) manualInputGate(local string) error {
+	if m == nil || m.d == nil {
+		return nil
+	}
+	meta, ok := m.get(local)
+	if ok && meta.AgentType == logins.ProviderClaude && meta.ResumeError == "" {
+		r, err := m.store.Snapshot()
+		if err != nil {
+			return err
+		}
+		_, legacy := r.Switches[logins.ProviderClaude]
+		if !r.MigrationPending && !legacy && r.Providers[logins.ProviderClaude].AuthOwnerMode == logins.ClaudeNativeProfileMode {
+			return nil
+		}
+	}
+	return m.inputGate(local)
+}
+
+// Typed composer and daemon-authored sends use the full current-runtime fence.
+func (m *loginManager) semanticInputGate(local string) error {
+	if err := m.inputGate(local); err != nil {
+		return err
+	}
+	if m == nil || m.store == nil || m.d == nil {
+		return nil
+	}
+	meta, ok := m.get(local)
+	if !ok || meta.AgentType != logins.ProviderClaude {
+		return nil
+	}
+	r, err := m.store.Snapshot()
+	if err != nil {
+		return err
+	}
+	if r.Providers[logins.ProviderClaude].AuthOwnerMode != logins.ClaudeNativeProfileMode {
+		return nil
+	}
+	if meta.LoginRuntime == nil || m.store.ValidateRuntime(*meta.LoginRuntime) != nil {
+		return fmt.Errorf("%w: this discussion is still using its earlier Claude login; this message was not sent", logins.ErrPending)
+	}
+	return nil
+}
+
 func (m *loginManager) BeginSwitch(provider, toID, reason string) (out logins.Switch, err error) {
 	if m == nil || !managedLoginProvider(provider) {
 		return out, logins.ErrIneligible
+	}
+	if provider == logins.ProviderClaude {
+		r, e := m.store.Snapshot()
+		if e != nil {
+			return out, e
+		}
+		if _, legacy := r.Switches[provider]; !legacy {
+			if e := m.prepareClaudeSelection(context.Background()); e != nil {
+				return out, e
+			}
+		}
 	}
 	err = m.operation(func() error {
 		m.stepMu.Lock()
@@ -181,6 +243,13 @@ func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expect
 			return logins.Switch{}, e
 		}
 		return next.Switches[provider], nil
+	}
+	if provider == logins.ProviderClaude {
+		if !m.claudeSelectionPinCurrent() {
+			return logins.Switch{}, loginworker.ErrUnsupported
+		}
+		_, err := m.store.SelectClaudeProfile(r.Revision, toID)
+		return logins.Switch{}, err
 	}
 	if provider == logins.ProviderCodex && r.Providers[provider].AuthOwnerMode == logins.CodexNativeGrantMode {
 		return m.beginCodexHandover(r, toID)
@@ -825,6 +894,18 @@ func (m *loginManager) beginReloginExpected(loginID string, credential logins.Cr
 		}
 		return next.Switches[provider], nil
 	}
+	if provider == logins.ProviderClaude {
+		if r.Providers[provider].AuthOwnerMode != logins.ClaudeNativeProfileMode {
+			return logins.Switch{}, logins.ErrPending
+		}
+		if jobID != "" {
+			_, _, err = m.store.ReloginJob(r.Revision, loginID, credential, jobID)
+		} else {
+			_, _, err = m.store.Relogin(r.Revision, loginID, credential)
+		}
+		return logins.Switch{}, err
+	}
+
 	var rows []logins.Restart
 	var sources []persist.Meta
 	for _, meta := range m.list() {
@@ -859,13 +940,16 @@ func (m *loginManager) beginReloginExpected(loginID string, credential logins.Cr
 }
 
 func (m *loginManager) list() []persist.Meta {
+	if m == nil || m.d == nil {
+		return nil
+	}
 	if m.d.core != nil {
 		return m.d.core.List()
 	}
 	if m.d.authw != nil && m.d.authw.list != nil {
 		return m.d.authw.list()
 	}
-	return m.d.core.List()
+	return nil
 }
 func (m *loginManager) get(local string) (persist.Meta, bool) {
 	if m.d.core != nil {

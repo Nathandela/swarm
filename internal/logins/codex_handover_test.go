@@ -170,9 +170,7 @@ func TestCodexHandoverReservesReceiptBytesBeforeSelection(t *testing.T) {
 	_ = lease.Close()
 	b := add(t, s, ProviderCodex, "B", Credential{Auth: grantAuth("u-b", "b", time.Now().Add(time.Hour).Unix())})
 	claude := add(t, s, ProviderClaude, "Claude", claudeCredential("claude", "c"))
-	if _, e := s.BeginSwitch(snapshot(t, s).Revision, ProviderClaude, claude.ID, strings.Repeat("r", maxRegistryBytes-maxHandoverBytes/2), nil); e != nil {
-		t.Fatal(e)
-	}
+	seedLegacyClaudeSwitch(t, s, claude, strings.Repeat("r", maxRegistryBytes-maxHandoverBytes/2), nil)
 	before := snapshot(t, s)
 	if _, _, e := s.BeginCodexHandover(before.Revision, b.ID, nil); !errors.Is(e, ErrCapacity) {
 		t.Fatalf("selection used receipt byte headroom: %v", e)

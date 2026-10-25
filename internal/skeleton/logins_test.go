@@ -35,6 +35,9 @@ func newLoginFixture(t *testing.T) *loginFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(state, 0700); err != nil {
+		t.Fatal(err)
+	}
 	store, err := logins.Open(state)
 	if err != nil {
 		t.Fatal(err)
