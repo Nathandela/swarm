@@ -1,5 +1,7 @@
 # Mobile terminal touch planning verification
 
+**Historical planning evidence.** The implementation, independent reviews, final local gates and remaining handset qualification boundary are recorded in [implementation verification](implementation.md) and [qualification.json](qualification.json). The observations below describe the preimplementation baseline.
+
 Date: 2026-10-25. Baseline: `fb20750f8bc6d30b5f3379618712a58e62b9e2f0` on macOS. Scope: plan validation for the [mobile terminal dashboard interaction plan](../../specifications/mobile-terminal-touch-plan.md). No production behavior changed.
 
 ## Executable probes
@@ -8,7 +10,7 @@ Date: 2026-10-25. Baseline: `fb20750f8bc6d30b5f3379618712a58e62b9e2f0` on macOS.
 
 These tests assert observed baseline gaps. Their passing result confirms reproduction, not feature correctness. Implementation should reverse the applicable cases in real acceptance tests; do not preserve an assertion that a defect must continue to exist.
 
-From the repository root:
+Reproduce these historical gaps from an isolated checkout at `4b275c0a`, which contains both the retained probes and their original model/test helpers. They intentionally do not compile against the implemented board. From that checkout's repository root:
 
 ```bash
 touch_overlay=$(mktemp /tmp/swarm-touch-plan.XXXXXX)

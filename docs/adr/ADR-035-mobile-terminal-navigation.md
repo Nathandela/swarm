@@ -1,6 +1,6 @@
 # ADR-035: Responsive terminal navigation with explicit input ownership
 
-- Status: Accepted design; implementation and handset gates tracked separately
+- Status: Implemented; [local gates verified](../verification/mobile-terminal-touch/implementation.md); actual handset qualification open
 - Date: 2026-10-25
 - Amends: ADR-029 D1/D2/D4/D5, system-spec V-3/V-4 and Epic 7 E7.2/E7.4
 - Preserves: ADR-029 D3 clock-free release activation, ADR-019 detach recognition, raw attach A-1/A-2, keyboard completeness and tag-only release CI
@@ -43,7 +43,7 @@ Capture is allowed only on plain board/menu navigation. Forms, text editors, con
 
 Forms fit the height as well as the width. Keep the active field/cursor, target, errors and mandatory decision context accessible through resize and schema updates. A selected provider cannot be truncated out of its picker. Long decisions have a pinned target/action and an explicit visible confirmation stop after the text; confirmation keys do not operate on an earlier hidden state. Cancel/deny remains available.
 
-The implementation plan proposes a 24×4 board/menu and 32×8 text/decision minimum, to be verified rather than assumed. Smaller sizes preserve drafts and provide bounded nonactivating fallback. Every initiating mutation is guarded, including non-Enter account and pairing operations. An already accepted asynchronous launch/resume result retains its automatic attach if the screen shrinks while it is pending; no operation is duplicated or replayed.
+The locally verified minimum is 24×4 for the board/menu and 32×8 for text/decision screens; these are character-cell contracts, not measured handset dimensions. Smaller sizes preserve drafts and provide bounded nonactivating fallback. Every initiating mutation is guarded, including non-Enter account and pairing operations. An already accepted asynchronous launch/resume result retains its automatic attach if the screen shrinks while it is pending; no operation is duplicated or replayed.
 
 ### Rendering follows actual changes
 
@@ -59,7 +59,7 @@ Every session remains reachable on short screens. Folded groups stay folded duri
 
 Wheel input intentionally changes meaning from selection movement to viewport movement. Offscreen contextual keyboard actions require a reveal step. Compact rows omit secondary fields. Text-entry workflows still need the software or hardware keyboard, and actual touch translation differs between terminal applications.
 
-Physical qualification cannot be inferred from PTY tests, local latency or nominal character-cell sizes. Do not label the feature handset-qualified until both actual clients pass the recorded gate. Implementation verification and remaining gates belong in [the verification record](../verification/mobile-terminal-touch/README.md).
+Physical qualification cannot be inferred from PTY tests, local latency or nominal character-cell sizes. Do not label the feature handset-qualified until both actual clients pass the recorded gate. Implementation verification and remaining gates belong in [the implementation verification record](../verification/mobile-terminal-touch/implementation.md).
 
 ## Alternatives considered
 

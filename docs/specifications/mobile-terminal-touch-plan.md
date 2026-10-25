@@ -1,10 +1,10 @@
 # Mobile terminal dashboard interaction plan
 
-Date: 2026-10-25. Status: accepted for implementation; challenged by Sol and Astra. [ADR-035](../adr/ADR-035-mobile-terminal-navigation.md) records the intentional behavior amendments. Implementation and physical qualification evidence is tracked separately.
+Date: 2026-10-25. Status: implemented and locally verified; challenged by Sol and Astra. Actual handset qualification remains open. [ADR-035](../adr/ADR-035-mobile-terminal-navigation.md) records the intentional behavior amendments. [Implementation evidence](../verification/mobile-terminal-touch/implementation.md) records the completed local gates and remaining physical qualification boundary.
 
 Make Swarm's terminal dashboard comfortable to navigate from Termux and an iOS terminal over SSH. The deliverable is a scrollable, responsive board with collapsible groups and touch access to existing commands. Preserve keyboard operation, terminal-native text selection during editing, and the raw attached-agent boundary.
 
-The implementation feature is tracked in `agents-tracker-nzo8`. The planning and experimental evidence is in [mobile terminal touch verification](../verification/mobile-terminal-touch/README.md); the executable planning probes reproduce current shortcomings rather than asserting future behavior.
+The implementation feature is tracked in `agents-tracker-nzo8`. The planning and experimental evidence is in [mobile terminal touch verification](../verification/mobile-terminal-touch/README.md); the executable planning probes reproduce historical baseline shortcomings. Current acceptance tests and final gates are linked from the implementation record.
 
 ## Scope and release boundary
 
@@ -37,7 +37,7 @@ Use a one-line compact session row as the baseline for narrow or short terminals
 
 Keep the current wide table when its allocated fields meet useful minima: name at least 16 cells, repository at least 12, and summary at least 12. The exact transition follows the existing column allocator, with boundary tests; it is not a phone-brand heuristic. Compact rows use the full remaining width for identity and state. Do not add variable-height cards in the first implementation.
 
-The initial supported geometry contract is a board and More menu at 24 columns × 4 rows and text/decision screens at 32 × 8. The latter includes Launch, Resume, Handoff, Options, Accounts, Pairing and inline rename/tag/kill/delete states. These are proposed minima to verify in the implementation's render tests, not measured handset dimensions. Below a screen's supported minimum, preserve drafts and show a bounded size notice, retain Escape/back/deny behavior, and refuse new session actions or approvals. Even 1×1, 1×2 and 2×3 output must remain bounded. If a mandatory target/decision cannot be represented above the nominal minimum, use a readable scrollable decision state before enabling its confirm action.
+The initial supported geometry contract is a board and More menu at 24 columns × 4 rows and text/decision screens at 32 × 8. The latter includes Launch, Resume, Handoff, Options, Accounts, Pairing and inline rename/tag/kill/delete states. These minima are verified by the implementation's render tests, not measured handset dimensions. Below a screen's supported minimum, preserve drafts and show a bounded size notice, retain Escape/back/deny behavior, and refuse new session actions or approvals. Even 1×1, 1×2 and 2×3 output must remain bounded. If a mandatory target/decision cannot be represented above the nominal minimum, use a readable scrollable decision state before enabling its confirm action.
 
 Truncated rows use an ellipsis, not an implicit claim of unique identity. Test duplicate names, unnamed sessions and long shared prefixes. Before a consequential action, make the full name, agent/repository and session ID inspectable in the menu/confirmation's scrollable target context. Do not add permanent identity columns merely for this case; target identity in code always remains the full session ID.
 
