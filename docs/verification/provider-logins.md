@@ -129,6 +129,15 @@ recorded in the [installation follow-up](provider-logins/native-installation-fol
 | Complete Swarm manager, Codex, Linux | Passed A→B→A across two discussions: exact IDs/model/cwd, marker recall, prompt counts 1→2→3, six stopped-writer proofs, source grants restored; native model restored without a stale launch override |
 | Compressed Codex history import | Full synthetic migration suite passed on Linux with zstd 1.4.8, including compressed-header decoding and preference for an existing plain rollout; no actual host migration performed |
 
+The [post18 V7 Claude constructor/setup canary](provider-logins/claude-profile-setup-2026-10-25.json)
+passed its bounded Linux 2.1.310 cases with synthetic grants: same-profile
+second-CWD fresh Launch while the first native/shim identity remained unchanged,
+a distinct second profile, and an expected-negative blank-source case. This is
+not real authentication/account-admission, fresh-user onboarding, Mac native
+constructor, workflow/MCP parity, task continuation or activation qualification.
+Fresh users still complete native setup manually; existing profiles are not
+backfilled.
+
 The separate [Codex native refresh result](provider-logins/codex-native-refresh-result.json)
 records a genuine native-owned refresh after checking the isolated profile had no
 writers. The earlier A→B→A timestamp-aging observation remains unchanged. Pinned

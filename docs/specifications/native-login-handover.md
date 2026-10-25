@@ -5,8 +5,10 @@ Implementation contract reviewed by Sol and Astra · 2026-10-24 · `agents-track
 Work is isolated on `feat/native-login-handover`, based on `179073ab`. Beads owns
 task status; this document defines the implementation and acceptance contract.
 The end-to-end behavior below is an unreleased target. Retained-account and
-execution-evidence foundations have targeted verification; native construction,
-workflow parity, migration and automatic continuation still have open gates.
+execution-evidence foundations have targeted verification. Bounded actual Linux
+Claude profile-birth and CWD-launch evidence now exists; integrated authentication
+and admission, workflow parity, migration and automatic continuation still have
+open gates.
 The baseline evidence is [the native rotation research](../verification/provider-logins/seamless-rotation-research.json).
 The [Linux native capability receipts](../verification/provider-logins/native-handover-capabilities-2026-10-24.json)
 record version-pinned scenarios using synthetic credentials. They characterize
@@ -274,7 +276,8 @@ cover mutation/admission fencing and the first-creation race. The
 [custody transition checks](../verification/provider-logins/claude-custody-transitions-2026-10-25.json)
 cover all registry versions, partial deletion and the actual selection boundary
 with synthetic processes on Linux. Refused-birth cleanup is covered separately;
-historical rows without Runtime provenance and native construction remain gates.
+historical rows without Runtime provenance, live-session daemon restart/rejoin and integrated
+native authentication/admission remain gates.
 
 Old A may finish internal work after B is desired. Typed composer and daemon-authored
 turns on a stale incarnation remain pending. The explicit owner terminal-input
@@ -300,13 +303,25 @@ existing behavior. Current-frame checks reduce stale input but cannot make a
 terminal read and native key adoption atomic.
 
 The isolated native checks establish trust, SessionStart and the initial composer
-only. The [production-constructor canary](../verification/provider-logins/claude-constructor-2026-10-25.json)
-must also start an untouched provisioned profile; the earlier fixture prefilled onboarding, theme and synthetic account fields.
-The unseeded constructor reaches Claude's first-run theme screen and waits:
-credential readiness does not complete native setup. Its failed receipt is
-retained; the changed provisioner still needs its own blank-source qualification.
-Saved-account authentication, workflow/MCP parity and integrated native startup
-remain separate qualification gates.
+only. The [post18 V7 constructor canary](../verification/provider-logins/claude-profile-setup-2026-10-25.json)
+adds bounded actual Linux Claude 2.1.310 evidence with synthetic saved grants:
+B1 starts on one CWD, registry-only membership adds a second CWD while B1's exact
+native/shim identity remains unchanged, and B2 is a fresh Launch reusing that
+profile rather than a conversation resume. B3 is another fresh Launch on the
+same profile after B1/B2 stop. After B3 stops, C starts a distinct profile; its stopped-B profile hash remains unchanged. The expected
+negative N case stays not-ready with zero model requests. All cases have exact
+inner native-stop and outer empty/gone cleanup evidence; Astra independently
+reviewed 39 positive artifacts. V6's extra-art-glyph observation-cap failure
+remains recorded as historical evidence; V7 uses the retained CLI identity
+instead of decorative banner text.
+
+V7 does not establish real saved-account authentication or account admission,
+fresh-user onboarding, Mac native constructor behavior, full workflow/plugin/MCP
+parity, task execution, automatic continuation or production activation. Fresh
+users still complete native setup manually, and existing profile files are
+never backfilled. The [staged launch gate](../verification/provider-logins/claude-launch-gate-2026-10-25.json)
+and [CWD extension record](../verification/provider-logins/claude-cwd-extension-2026-10-25.json)
+retain those boundaries and the older failed attempts.
 
 For an existing configured user, the first write of an unborn profile can inherit
 the common native configuration's actual `hasCompletedOnboarding: true`, its
@@ -322,10 +337,10 @@ setup. Missing or false completion leaves manual native setup necessary;
 malformed selected fields and unsupported legacy themes produce an actionable
 refusal without exposing their values. Modern settings keep their existing
 shared alias. The [setup inheritance checks](../verification/provider-logins/claude-profile-setup-2026-10-25.json)
-record source/test coverage; an actual native-completed source and fresh,
-restarted and second-profile constructor runs are still required. Fresh-user
-enrollment setup remains outside this slice while the managed interface is
-being evaluated.
+record source/test coverage and the bounded V7 Linux fresh and second-profile
+constructor runs from an actual configured setup source. Live-session daemon
+restart/rejoin and fresh-user enrollment setup remain outside this qualification; fresh users
+still complete native setup manually while the managed interface is evaluated.
 
 ### Durable execution evidence
 

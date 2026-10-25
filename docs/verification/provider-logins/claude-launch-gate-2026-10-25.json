@@ -96,9 +96,35 @@
   },
   "review": "Independent Sol and Astra approved plan V4; root, Astra and a separate Sol reviewed final connected skeleton source. Root and Astra reviewed the protocol changes. The broad status-persistence test failure remains unresolved.",
   "limits": [
-    "This is synthetic production-path qualification. Actual installed native constructor startup with an untouched provisioned profile remains a separate canary; prior native startup receipts prefilled onboarding/theme/synthetic account fields.",
+    "V7 is bounded actual Linux CLI evidence with synthetic grants, not real authentication or account admission.",
+    "N is only an expected-negative blank-source oracle; it does not qualify a fresh user or first-run onboarding flow.",
+    "No Mac actual constructor, workflow/MCP parity, automatic continuation, migration or release qualification follows.",
     "A successful wire write is not a PTY/native adoption acknowledgment. Matching sampled frames do not make native UI reads and key adoption atomic.",
     "The attempt limit is per daemon incarnation. No durable cross-daemon exactly-once claim, authentication, handover, workflow/MCP parity or continuation authority follows from trust handling.",
     "Existing tap subscribe/detach and ordinary writers retain their prior blocking behavior. Only the new gate acquisition and final wire work have the stated nonqueued/bounded behavior."
-  ]
+  ],
+  "post18_v7_native_constructor_followup": {
+    "status": "PASS for bounded actual Linux native constructor/profile-start cases B1/B2/C1; N passed as expected-negative only.",
+    "run_path": "/private/tmp/swarm-post18-v7-linux-20261025a/run.json",
+    "run_sha256": "953d69bb43d093193005a9400e730f16c5b4dbddd329a504788ad82116a509ba",
+    "receipts": {
+      "B": {
+        "path": "/private/tmp/swarm-post18-v7-linux-20261025a/receipt-B.json",
+        "sha256": "44b1c3113005ac739ad193d60ccfef72341686eeba261ddb572fdf7d5f3df5c0",
+        "outer_sha256": "c4ec1a9a774acbd4cd68fcc4fd4832c55775d718ff8e7e8cb08b5489438ef550"
+      },
+      "C": {
+        "path": "/private/tmp/swarm-post18-v7-linux-20261025a/receipt-C.json",
+        "sha256": "89ce8147d93afd2fb472c55fc1c096392fe8da9a3a253b058d2151dce3361f40",
+        "outer_sha256": "3579a408b66a6ffdc043ec10671860a0e1d20c5195fdfb34e23d1603b216d5a7"
+      },
+      "N": {
+        "path": "/private/tmp/swarm-post18-v7-linux-20261025a/receipt-N.json",
+        "sha256": "da730510193f8a679713711630804c6e67a45bfeec7057a3db3ac9f04a538163",
+        "outer_sha256": "d306b8604903ceeb466d7e3af0a6e99451e31febf19d10f40856e8a58110f5a5"
+      }
+    },
+    "scope": "Synthetic saved grants; exact Linux/native-version scope only. Auth/admission and automatic continuation remain unqualified. Fresh users still need manual native setup."
+  },
+  "remaining_gates": "V7 supersedes the earlier first-run theme-block observation for the enumerated configured-source Linux births only. Actual auth/admission, fresh-user onboarding, Mac native constructor, workflow/plugin/MCP parity, broader native startup qualification and automatic continuation remain open; preserve prior failed experiment records."
 }

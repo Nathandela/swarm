@@ -187,12 +187,11 @@
   },
   "review": "Root and Astra reviewed the bounded plan and connected source; Sol authored the implementation and tests. Frozen source and Linux omission contract were independently reviewed before execution.",
   "limits": [
-    "Unit fixtures use synthetic setup fields and fake authority; these do not prove actual native onboarding, authentication or constructor readiness.",
-    "Actual native-written source preparation passed in post18 V3, and the blank-source expected-negative oracle passed in V4. Full first/profile-reuse/second-profile startup and live second-CWD qualification remain open. Historical constructor V3 and post18 V3 B/N failures remain unchanged.",
-    "Fresh users still require manual native setup. Existing profile files are never backfilled, even if setup is missing. No enrollment UX or default structured-mode conversion is included.",
-    "Unsupported custom legacy themes require explicit remediation; no silent default theme is substituted.",
-    "The latest unmodified full skeleton race passed; the historical status-persistence timeout remains unexplained. No release, migration or automatic-continuation qualification follows.",
-    "V4 qualifies N only for the unchanged blank-source expected-negative oracle; B remains diagnostic-only failed. Strict source/identity classification and cases B2, B3 and C remain open. No next-case allowance or positive constructor qualification follows."
+    "Unit fixtures use synthetic setup fields and fake authority; they do not prove real authentication or account admission.",
+    "V7 qualifies bounded Linux 2.1.310 profile birth, same-profile fresh launch at a second CWD, and a distinct second profile from a configured setup source. It does not qualify Mac constructor behavior, fresh-user onboarding, workflows/plugins/MCP parity, account admission, task continuation, or activation.",
+    "V3/V4/V5/V6 failed and diagnostic attempts remain historical evidence; V7 supersedes only the enumerated Linux constructor/setup outcomes. V6 failed at the observation cap despite a complete HTTP census.",
+    "Fresh users still require manual native setup. Existing profile files are never backfilled, even when setup is missing; unsupported custom legacy themes require explicit remediation.",
+    "The latest unmodified full skeleton race passed; the historical status-persistence timeout remains unexplained. No release, migration or automatic-continuation qualification follows."
   ],
   "post18_native_canary_v3": {
     "status": "NOT QUALIFIED: S source preparation passed; B and N failed; C not attempted because B failed",
@@ -431,5 +430,93 @@
       "B aggregate failure and incomplete HTTP census remain controlling; no hidden-request absence claim.",
       "No live authentication, production activation, release or automatic-continuation qualification follows."
     ]
+  },
+  "post18_native_canary_v6": {
+    "date": "2026-10-25",
+    "status": "FAIL: B stopped at the per-session observation cap; do not erase this historical failed attempt.",
+    "manifest_sha256": "962c61a7e622139edb57546dbf81009b35e42a227358b6213f375bf28f1f1742",
+    "run": {
+      "path": "/private/tmp/swarm-post18-v6-linux-20261025a/run.json",
+      "sha256": "b6c45d274f76026ef4cb0844a7daca6d99bd755493064269c3ef905bc22e5115"
+    },
+    "B": {
+      "receipt_path": "/private/tmp/swarm-post18-v6-linux-20261025a/receipt-B.json",
+      "receipt_sha256": "d9b6eb5cdc36a2951fd6df516007663e91ac9f30f635610b645aa2db78af6dad",
+      "outer_path": "/private/tmp/swarm-post18-v6-linux-20261025a/outer-B.json",
+      "outer_sha256": "222204526474069d1019e517cab5261f4eec671262c55c56d3ebb7e25b9f6bc2",
+      "finding": "Only an extra art glyph in the header; HTTP census complete. Failure retained; V7 uses unique fixture names and the corrected startup scale."
+    }
+  },
+  "post18_native_canary_v7": {
+    "date": "2026-10-25",
+    "scope": "Bounded actual Linux native constructor/setup canary for Claude Code 2.1.310; synthetic saved grants and isolated nonforwarding proxy; S source reused from the genuine stopped V3 run without rerun.",
+    "status": "PASS for the enumerated native profile-birth and CWD-launch cases; not authentication, admission, task-execution, or automatic-continuation qualification.",
+    "pins": {
+      "manifest_sha256": "2b6b2938e2f7fcac14f80ac4ad9af15ed0d26c7db0a54c7e7325a8a6040f997a",
+      "product_sha256": "dc90bbe17797702a49bec9afccfec01954cf4f0bcf4701b9306cd9b45d265f7d",
+      "native_version": "2.1.310",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
+      "source_origin_manifest_sha256": "c69798b1044a206946784b4eaf11a25c1434f5391543f236090ee0b0dc4052fd"
+    },
+    "run": {
+      "path": "/private/tmp/swarm-post18-v7-linux-20261025a/run.json",
+      "sha256": "953d69bb43d093193005a9400e730f16c5b4dbddd329a504788ad82116a509ba"
+    },
+    "independent_review": "Astra GREEN: 39 positive artifact checks, including exact names/prompts and joined native, shim, login-ready, account/device evidence.",
+    "S": "Original genuine stopped source reused; never rerun.",
+    "cases": {
+      "B": {
+        "elapsed_seconds": 15.281,
+        "receipt_path": "/private/tmp/swarm-post18-v7-linux-20261025a/receipt-B.json",
+        "receipt_sha256": "44b1c3113005ac739ad193d60ccfef72341686eeba261ddb572fdf7d5f3df5c0",
+        "outer_path": "/private/tmp/swarm-post18-v7-linux-20261025a/outer-B.json",
+        "outer_sha256": "c4ec1a9a774acbd4cd68fcc4fd4832c55775d718ff8e7e8cb08b5489438ef550",
+        "result": "B1 native birth, then registry-only w2 membership while B1 exact native/shim identity remains unchanged, then B2 fresh Launch reusing the same profile (not conversation resume). Three strict joined HTTP 403 quota responses; 0 forbidden requests, 0 pending probes, 0 harness input writes. HTTP census 40 accepted, 0 rejected, complete.",
+        "profile_reuse_relaunch": true
+      },
+      "C": {
+        "elapsed_seconds": 8.497,
+        "receipt_path": "/private/tmp/swarm-post18-v7-linux-20261025a/receipt-C.json",
+        "receipt_sha256": "89ce8147d93afd2fb472c55fc1c096392fe8da9a3a253b058d2151dce3361f40",
+        "outer_path": "/private/tmp/swarm-post18-v7-linux-20261025a/outer-C.json",
+        "outer_sha256": "3579a408b66a6ffdc043ec10671860a0e1d20c5195fdfb34e23d1603b216d5a7",
+        "result": "After B was stopped, C created a distinct account/profile; one strict joined HTTP 403 quota response; 0 forbidden requests, 0 pending probes, 0 harness input writes. HTTP census 15 accepted, 0 rejected, complete.",
+        "stopped_B_profile_sha256": "12f999662e3d1e187e8a9a2ea0eb378f38062b1ed64feb6791d870411461e13f",
+        "stopped_B_profile_unchanged_before_after_seed_and_cleanup": true
+      },
+      "N": {
+        "elapsed_seconds": 6.072,
+        "receipt_path": "/private/tmp/swarm-post18-v7-linux-20261025a/receipt-N.json",
+        "receipt_sha256": "da730510193f8a679713711630804c6e67a45bfeec7057a3db3ac9f04a538163",
+        "outer_path": "/private/tmp/swarm-post18-v7-linux-20261025a/outer-N.json",
+        "outer_sha256": "d306b8604903ceeb466d7e3af0a6e99451e31febf19d10f40856e8a58110f5a5",
+        "result": "Expected-negative only: constructor_ready=false, 0 model requests, 0 harness input writes; HTTP census 6 accepted, 0 rejected, complete."
+      }
+    },
+    "cleanup": "Each case recorded positive inner native stop receipts; each outer cgroup was empty and gone; pinned native image unchanged.",
+    "limits": [
+      "Synthetic grants only; auth_qualified is false and no account/admission or task-execution authority follows.",
+      "No automatic continuation qualification; no Mac actual-constructor qualification. Fresh users still perform native setup manually, and existing profile config is not backfilled.",
+      "Workflow/plugin/MCP parity and broader native qualification remain separate."
+    ],
+    "artifact_index": {
+      "path": "/private/tmp/swarm-post18-v7-linux-20261025a/positive-evidence/collected-sha256.json",
+      "sha256": "8a600fa39227a27a4cfc0572aa5357dd6a6f9efed4e395277053d2ef7b87e210",
+      "indexed_artifacts": 39,
+      "quota_request_bodies": {
+        "B1": "0208160847b5053d03704d88f317f88cad42fe749698327b0002f8f7e8b2e5d0",
+        "B2": "80b59eb9ea9ad6e07b192bc9dfa65c02e0170f27b6ca0bd08b619cd46efd6105",
+        "B3": "166584c0ef83aad4ffa7071f9695aeafa24b8f82460ccf3a487a54d844c92d12",
+        "C1": "81c97c502d0cb00c0d5b46903e4cb030f33181c073ea6978c27d5767e1dc093f"
+      },
+      "joined_readiness_artifacts": {
+        "B1_login_ready": "aeb0ebbf5d1360a7838f853387632187fc4c311bc8c6f7ac68f25c768594ac51",
+        "B2_login_ready": "29f90765508a2ca48781beaddba75b2643c58b0e7ff0cf95e3a4110b9775b6d5",
+        "B3_login_ready": "c529b9f5478ae98e530466ae8392b6c2bf2b04c5f47efbf584d393af1cbd8602",
+        "C1_login_ready": "156fbdc95ae09f44c463befd531e0db4e8d56a27a7162567b3921471ea4535e4"
+      },
+      "session_start_sha256": "9c2070d375e4f61f4dd0002df0f24c1566a6a7159e9ac9cb7b7632931a7bbe3d"
+    }
   }
 }

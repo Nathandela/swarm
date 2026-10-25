@@ -2,7 +2,7 @@
   "date": "2026-10-25",
   "scope": "Write-free new-CWD membership for an established Claude account profile; source, synthetic and connected Linux caller tests",
   "live_setup_changed": false,
-  "native_second_cwd_qualified": false,
+  "native_second_cwd_qualified": true,
   "change": "Reuse the existing validated complete MCP merge to detect a native-config no-op. Only that branch skips writer exclusion and publishes CWD membership. Actual config changes retain exclusion and reread both source and destination afterward. Both paths retain directory settlement and registry CAS/durable save. Final native birth admission remains independent.",
   "source": {
     "base_commit": "16aea01f",
@@ -164,9 +164,20 @@
   "vet": "PASS logins, skeleton and shim; vet-complete.log is empty. The earlier scratch vet failed because unchanged mobile sources were missing from that build corpus; the failed log remains in the review packet.",
   "review": "Approved plan and connected final source reviewed by Root and Astra, authored/tested by independent Sol. Frozen four-file hashes match the feature checkout before and after root gates.",
   "limits": [
-    "All Linux cases use synthetic native processes. They prove membership/admission/caller behavior, not two real native discussions remaining usable.",
-    "Constructor V3 found a separate native first-run theme/setup gap. Native two-CWD startup, authentication and workflow/MCP parity remain unqualified.",
+    "V7 adds actual Linux native evidence for the same-profile fresh Launch at w2 while B1\u2019s exact native/shim identity remains unchanged; it is not a general two-live-discussion or workflow/MCP parity qualification.",
+    "Actual config changes still require writer exclusion and fresh source/destination reads; the V7 case exercised registry-only CWD membership.",
+    "Synthetic authority only. No release, migration, authentication, automatic continuation or Mac native qualification follows.",
     "The unchanged branch preserves concurrent native writes; its equality observation is not a continuous MCP configuration guarantee.",
-    "The unrelated original full-skeleton status-persistence failure remains unresolved. No release or migration qualification follows."
-  ]
+    "The latest unmodified full skeleton race passed; the cause of the earlier status-persistence timeout remains unexplained and tracked separately."
+  ],
+  "post18_v7_native_cwd_followup": {
+    "status": "PASS for the bounded Linux case: B2 was a fresh Launch on w2 reusing B\u2019s profile after registry-only CWD membership; B1 exact native/shim identity remained unchanged.",
+    "run_path": "/private/tmp/swarm-post18-v7-linux-20261025a/run.json",
+    "run_sha256": "953d69bb43d093193005a9400e730f16c5b4dbddd329a504788ad82116a509ba",
+    "receipt_path": "/private/tmp/swarm-post18-v7-linux-20261025a/receipt-B.json",
+    "receipt_sha256": "44b1c3113005ac739ad193d60ccfef72341686eeba261ddb572fdf7d5f3df5c0",
+    "outer_path": "/private/tmp/swarm-post18-v7-linux-20261025a/outer-B.json",
+    "outer_sha256": "c4ec1a9a774acbd4cd68fcc4fd4832c55775d718ff8e7e8cb08b5489438ef550",
+    "limits": "One synthetic saved grant and pinned Linux native version; no real auth/account admission, workflow/MCP parity, Mac constructor, or automatic continuation claim."
+  }
 }
