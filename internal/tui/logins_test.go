@@ -167,6 +167,50 @@ func TestLogins_ProviderNativeAndActiveStates(t *testing.T) {
 	}
 }
 
+func TestLogins_EnterRetriesOnlyUnavailableActiveClaude(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, providerState string
+		active, wantActivate          bool
+	}{
+		{"unavailable active Claude", "claude", "unavailable", true, true},
+		{"waiting active Claude", "claude", "waiting", true, false},
+		{"ready active Claude", "claude", "ready", true, false},
+		{"unavailable active Codex", "codex", "unavailable", true, false},
+		{"ready active Codex", "codex", "ready", true, false},
+		{"nonactive Claude", "claude", "unavailable", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newLoginsTestClient()
+			focus := 1
+			if tc.provider == "codex" {
+				focus = 2
+			}
+			m := rootModel{
+				screen: screenLogins, client: c,
+				logins: loginsModel{available: true, loaded: true, focus: focus, reply: protocol.LoginsReply{
+					Revision: 9,
+					Providers: []protocol.ProviderLoginView{{Provider: tc.provider, State: tc.providerState}},
+					Logins:    []protocol.LoginView{{ID: "login-1", Provider: tc.provider, Active: tc.active}},
+				}},
+			}
+			_, cmd := m.updateLogins(keyEnter)
+			if !tc.wantActivate {
+				if cmd != nil || len(c.requests) != 0 {
+					t.Fatalf("Enter started a request for active %s in provider state %q", tc.provider, tc.providerState)
+				}
+				return
+			}
+			if cmd == nil {
+				t.Fatal("Enter did not dispatch activation")
+			}
+			cmd()
+			if len(c.requests) != 1 || c.requests[0].Action != "activate" || c.requests[0].LoginID != "login-1" || c.requests[0].ExpectedRevision != 9 {
+				t.Fatalf("requests = %#v; want one revision-checked activation", c.requests)
+			}
+		})
+	}
+}
+
 func TestLogins_CancelBeforeStartReplyCancelsCreatedJob(t *testing.T) {
 	c := newLoginsTestClient()
 	m := rootModel{screen: screenLogins, client: c, loginsGeneration: 4, logins: loginsModel{generation: 4, available: true, mode: "label", provider: "claude", label: newLineEditor("Work")}}

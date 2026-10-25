@@ -269,7 +269,7 @@ func (m rootModel) updateLogins(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	login := l.reply.Logins[loginIndex]
 	switch k.Code {
 	case tea.KeyEnter:
-		if !login.Active {
+		if !login.Active || login.Provider == "claude" && providerLogin(l.reply.Providers, login.Provider).State == "unavailable" {
 			return m.beginLoginsRequest(protocol.LoginsReq{Action: "activate", LoginID: login.ID})
 		}
 	}
