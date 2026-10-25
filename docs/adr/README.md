@@ -39,6 +39,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [030](ADR-030-reconnection-and-attention.md) | Automatic terminal recovery and structured approval/question/error attention | Accepted | 2026-10-10 |
 | [033](ADR-033-live-only-supervisor-storage.md) | Live-only supervisor storage: native CLI history, bounded live capture, workspace boundaries, and explicit cleanup | Accepted; implementation gates open | 2026-10-16 |
 | [034](ADR-034-provider-wide-native-logins.md) | One native login per provider with safe provider-wide switching | Accepted; integrated release qualification open | 2026-10-22 |
+| [035](ADR-035-mobile-terminal-navigation.md) | Responsive SSH-terminal viewport, folding and explicit touch input ownership | Accepted design; implementation/handset gates tracked separately | 2026-10-25 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the
@@ -52,7 +53,7 @@ ADR-009-structured-chat-interaction.md and drawn in the language of ADR-009-obsi
 
 ## Adding a new ADR
 
-1. Next sequential number: ADR-035 (034 records provider-wide native logins).
+1. Next sequential number: ADR-036 (035 records mobile terminal navigation).
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.
