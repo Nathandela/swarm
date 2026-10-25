@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Twelve unqualified full fresh managed Codex constructor attempts, two seed-only controls and one failed preparation; synthetic grants only, no user authentication or live installation changes",
-  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V15 matched the rejected target to pinned public featured-plugin source. V16 then failed the existing three-second driver seed bound before public launch/native functional activity, so no featured-route/native ownership/conversation/auth/model qualification follows.",
+  "scope": "Thirteen unqualified full fresh managed Codex constructor attempts, two seed-only controls, and one failed preparation; synthetic grants only, no user authentication or live installation changes.",
+  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V17 completed synthetic setup and recorded the exact featured metadata GET, but its initial usage hold was not live; public Stop timed out and the constructor case failed. The initial usage-hold cause is unknown. The first recorded unexpected query was rejected by the fixture whitelist; the second target was not retained. No authentication, account adoption, readiness, or production defect is established.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -531,17 +531,99 @@
       "next_step": "Read-only source investigation of the connected driver seed path and existing bounds, then review the smallest diagnostic plan. No inferred cause or blind timeout increase follows; no further native case was approved by artifact review at this evidence point.",
       "polling_limit": "Five positive observed identities only; no complete ephemeral exec/birth trace or native ownership qualification.",
       "seed_post_stop_metadata_path": "/private/tmp/swarm-codex-outer-9xgzw6mq/seed-post-stop-metadata.json",
-      "seed_post_stop_metadata_sha256": "ec2b1c4f45a4f45fbd61f009b983c027ae2c8933bf20edefc3cec3aa4904b1b9"
+      "seed_post_stop_metadata_sha256": "ec2b1c4f45a4f45fbd61f009b983c027ae2c8933bf20edefc3cec3aa4904b1b9",
+      "post_stop_registry_projection": {
+        "path": "/private/tmp/swarm-codex-outer-9xgzw6mq/seed-post-stop-registry-projection.json",
+        "sha256": "eece424223ad55a02d38be73ed70e978230427dec0e65a2ba6b425e8eeaa68c2",
+        "bytes": 373,
+        "schema_version": 1,
+        "revision": 1,
+        "login_count": 1,
+        "scope": "Post-stop synthetic public registry projection only; no credentials read. One login is visible. This is not a stalled-call record."
+      }
+    },
+    {
+      "id": "diagnostic-V17",
+      "result": "FAIL: setup seed completed, but the initial usage hold was not live; the public Stop call timed out at about 3 seconds. The native case remains unqualified.",
+      "run_path": "/private/tmp/swarm-codex-outer-3b7ph289/run.json",
+      "run_sha256": "88c615568ff81c6e479968e2c7056cc19a8fd271a2cdd764233c6d3f8f7732bb",
+      "prepared_path": "/private/tmp/swarm-codex-outer-3b7ph289/prepared.json",
+      "prepared_sha256": "286c7b0c2f6b8f56b0c02d10d51ccfdc3b01fbf781e86160347d8d4ad5326dcb",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-3b7ph289/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "7d2af27f34ca4b41803d29f16739253889ac4ffac4686f21a7f94bc452a481c4",
+      "collected_sha256_path": "/private/tmp/swarm-codex-outer-3b7ph289/inner-evidence/collected-sha256.json",
+      "collected_sha256": "462ef2a5038b8756a9b8bcf70695f3dcacc54185ca8fb6adfd22f781a111f6ef",
+      "preparation_pins": {
+        "seed_budget_plan_path": "/private/tmp/swarm-codex-seed-budget-amendment-20261025-v1/PLAN.md",
+        "seed_budget_plan_sha256": "5bca3e6effa8d221712cfd0fa3c16a80c01b10758f23e10f38e414ec51cb5b33",
+        "packet_v12_manifest_path": "/private/tmp/swarm-codex-tui-constructor-20261025-v12/review-v12/manifest.json",
+        "packet_v12_manifest_sha256": "75acff7fce61cb9b297ea54a64a6da94613879a93bc6a13dd9be19459b856c80",
+        "envelope_v17_hashes_path": "/private/tmp/swarm-codex-envelope-20261025-v17/hashes.json",
+        "envelope_v17_hashes_sha256": "719fb0ade2eb5be9da8ded36a7792abd96dab3d8767c974bcaa31aecb9ec1e25",
+        "seed_bound_amendment": "V17 changes the synthetic seed wait from min(3 seconds, remaining) to the remaining portion of the original T0+8-second setup budget. Other helpers retain their 3-second bound; overall setup remains 8 seconds, constructor 18 seconds, case 60 seconds, cleanup 10 seconds, and outer unit 90 seconds. V16 remains FAIL and uncharacterized."
+      },
+      "finding": {
+        "setup": "Synthetic setup seed completed under the V17 envelope. This does not qualify auth or adoption.",
+        "initial_usage_hold": "The receipt records \"initial usage hold not live\". This is not evidence of a live usage response.",
+        "featured_metadata_route": "The exact GET /backend-api/plugins/featured?platform=codex was accepted as metadata-only.",
+        "usage_route": "A GET /backend-api/wham/usage handler entry is recorded; no successful usage response, account adoption, or readiness is established.",
+        "rejected_public_target": {
+          "label": "plugins-suggested",
+          "scope": "GLOBAL",
+          "interpretation": "Fixture rejected this exact query under its whitelist; no provider availability conclusion."
+        },
+        "query_errors": "Two unexpected-provider-query errors are recorded. The first known query was rejected by the fixture whitelist; the second target was not retained, and only the first diagnostic record is available. The cause of the initial usage hold not being live is unknown.",
+        "observation_counts": {
+          "public_ledger": {
+            "launch": 1,
+            "stop": 1,
+            "rpc_upper_bound_per_action": 2
+          },
+          "observer_ledger_entries": 2,
+          "observer_requests_combined_count": 6,
+          "observer_requests_interpretation": "Combines the four-unit public RPC upper bound with two observer ledger entries; not six actual observer RPCs.",
+          "native_frames": 1,
+          "native_frame_bytes": 239,
+          "four_native_ownership_roles_established": false,
+          "main_inferences": 0,
+          "MCP_messages": 0,
+          "MCP_calls": 0,
+          "PTY_bytes": 0,
+          "TLS_handshake_failures": 0,
+          "provider_connections_accepted": 5,
+          "provider_connections_rejected": 0,
+          "provider_connections_interpretation": "Transport-admitted connections; not five proven TLS handshakes."
+        },
+        "scope_limit": "The initial usage-hold cause is unknown. No authentication, account adoption, readiness, provider-availability conclusion, or production defect is established."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 6.63488799193874,
+        "observed_tuples": 15,
+        "observed_identities_ended": true,
+        "cgroup_empty_and_directory_gone": true,
+        "unit_signal_needed": false,
+        "native_endpoint_no_listener_and_alias_socket_leaves_absent": true,
+        "known_fixture_listeners_closed": false,
+        "inner_listeners_closed": true,
+        "inner_children_ended": true,
+        "inner_cgroup_empty": false,
+        "external_cleanup_required": true,
+        "pins_unchanged": true,
+        "ownership": "Native ownership and complete fixture-listener closure remain unqualified."
+      },
+      "next_step": "Exact source-contract review (Sol preparing). No next native run is automatically approved.",
+      "polling_limit": "Fifteen positive observed tuples only; no complete process birth trace or native ownership qualification."
     }
   ],
-  "next_step": "Investigate the connected seed path and exact existing bounds from source and bounded stopped-case evidence. Propose the smallest reviewed diagnostic without inventing a cause, increasing timers, changing production logic, or running another native case. Real accounts, loaded-thread state and automatic continuation remain separate gates.",
+  "next_step": "Exact source-contract review (Sol preparing), then artifact review. No next native run is automatically approved. Real-account, loaded-thread, authentication, readiness, and automatic-continuation gates remain separate.",
   "limits": [
-    "Twelve full constructor attempts plus two seed-only controls remain unqualified; V11 failed preparation is separate. Every earlier failure remains historical evidence.",
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
     "V14 establishes TLS-protected HTTP reach only. The target and native client are unidentified, no GET was recorded, and native ownership/conversation behavior remain unqualified; no production filtering or route allowance is implied.",
     "V15 recovers exact public target tokens but not the historical caller. Its intentional rejection provides no accepted GET/auth/adoption/model/MCP/complete ownership proof. Later exact-featured-route preparation did not qualify behavior; V16 timed out during seed before route reach. Scoped cached-ELF retirement does not repair failures.",
-    "V16 driver seed timed out at3seconds; the blocking operation is unknown. No inference from five identities or absence of copied files to a specific seed lock, filesystem operation or native request is justified."
+    "V16 driver seed timed out at3seconds; the blocking operation is unknown. No inference from five identities or absence of copied files to a specific seed lock, filesystem operation or native request is justified.",
+    "Thirteen full constructor attempts plus two seed-only controls remain unqualified; one failed preparation is separate. V17 does not establish auth, adoption, readiness, or a production cause; its two unexpected-query errors have only one diagnostic record.",
+    "V16 post-stop registry projection is a 373-byte synthetic public metadata snapshot (schema 1, revision 1, one visible login); it is not evidence of a stalled call."
   ],
   "validator_source": {
     "auth_boundary_path": "/private/tmp/swarm-setup-root-20261025/source/internal/logins/auth_boundary.go",
@@ -596,11 +678,11 @@
     "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
   },
   "attempt_counts": {
-    "full_constructor_attempts": 12,
+    "full_constructor_attempts": 13,
     "seed_only_controls": 2,
     "failed_preparations": 1,
-    "total_recorded_operations": 15,
-    "latest_actual_attempt": "diagnostic-V16"
+    "total_recorded_operations": 16,
+    "latest_actual_attempt": "diagnostic-V17"
   },
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
