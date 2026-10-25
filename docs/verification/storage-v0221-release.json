@@ -1,0 +1,255 @@
+{
+  "schema": 1,
+  "date": "2026-10-25",
+  "version": "v0.22.1",
+  "release_url": "https://github.com/Nathandela/swarm/releases/tag/v0.22.1",
+  "release_commit": "4b275c0a59b9ea4ba2db734991109dbb0a140dea",
+  "workflow": {
+    "id": 40176513876,
+    "url": "https://github.com/Nathandela/swarm/actions/runs/40176513876",
+    "attempt": 1,
+    "conclusion": "success",
+    "successful_jobs": 17,
+    "jobs": [
+      {
+        "name": "container (pushgw-container.yml, reused) / build, scan, non-root, hardening",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / docs (required files)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / lint (golangci-lint)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / release dry-run (goreleaser snapshot, E13.1)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test-darwin (macos)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / fuzz (active, bounded fuzztime)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test (go test ./...)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / remote v2 (workerd + Firestore emulator)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / android (aar + gradle gate)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "publish immutable pushgw image",
+        "conclusion": "success"
+      },
+      {
+        "name": "publish (goreleaser release)",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "artifacts": {
+    "signature": {
+      "expected_compat": {
+        "login_schema": 1,
+        "account_schema": 1,
+        "account_jobs": 1,
+        "account_recovery": 3,
+        "account_worker": 6,
+        "account_shim": 2,
+        "account_config": 4,
+        "account_inventory": 1,
+        "account_auth": 1,
+        "version": "v0.22.1",
+        "shimwire": 2,
+        "protocol": 1,
+        "schema": 4
+      },
+      "signature_verified": true,
+      "tamper_rejected": true
+    },
+    "platforms": {
+      "mac": {
+        "archive_sha256": "f7d1d004d27b6464d65ced917f32f433601680bfaf752ea3d2295e354a52ce04",
+        "binaries": {
+          "swarm": "0755d23cf342078e2c530602fadc995567aa47b1a83948aa3a75a694cb45347b",
+          "swarm-remote": "f1a681ed7ad91247751d30166a5f84d02375e7aa67f277f2e609b469ed7bb175"
+        },
+        "compat_verified": true
+      },
+      "linux": {
+        "archive_sha256": "4f704e10a76d85792810ab1497183315a027e49221115a82c9477c3e6f140350",
+        "binaries": {
+          "swarm": "690c9132e22da759fc5d43473fa19079b66f04a3d65f3a85eac4609a63c5ba57",
+          "swarm-remote": "f5f67af0a1fdf683a7a9ac49c1b1f8b7d30f765989f78be69ee0d5b265211e87"
+        },
+        "compat_verified": true
+      }
+    },
+    "container_manifest": {
+      "schema": 1,
+      "release": "v0.22.1",
+      "commit": "4b275c0a59b9ea4ba2db734991109dbb0a140dea",
+      "images": {
+        "pushgw": "ghcr.io/nathandela/swarm-pushgw@sha256:3dc39a5845f997358837614430d4d1524323dd09f9acfe86334bd50288bca7a8"
+      }
+    }
+  },
+  "installation": {
+    "mac": {
+      "installed_version": "0.22.1",
+      "installed_binary_hashes_verified": true,
+      "binary_sha256": {
+        "swarm": "0755d23cf342078e2c530602fadc995567aa47b1a83948aa3a75a694cb45347b",
+        "swarm-remote": "f1a681ed7ad91247751d30166a5f84d02375e7aa67f277f2e609b469ed7bb175"
+      },
+      "daemon_version": "0.22.0",
+      "convergence_exit": 2,
+      "convergence_reason": "working sessions; no forced restart",
+      "recorded_live_identities_before": 17,
+      "recorded_live_identities_preserved": 17,
+      "clean_mode": "preview",
+      "clean_complete": true,
+      "clean_status_counts": {
+        "unchanged": 1,
+        "retained": 24
+      },
+      "doctor_status_counts": {
+        "warn": 2,
+        "ok": 8
+      }
+    },
+    "linux": {
+      "installed_version": "0.22.1",
+      "installed_binary_hashes_verified": true,
+      "binary_sha256": {
+        "swarm": "690c9132e22da759fc5d43473fa19079b66f04a3d65f3a85eac4609a63c5ba57",
+        "swarm-remote": "f5f67af0a1fdf683a7a9ac49c1b1f8b7d30f765989f78be69ee0d5b265211e87"
+      },
+      "daemon_version": "0.22.0",
+      "convergence_exit": 2,
+      "convergence_reason": "working sessions; no forced restart",
+      "recorded_live_identities_before": 52,
+      "recorded_live_identities_preserved": 52,
+      "clean_mode": "preview",
+      "clean_complete": true,
+      "clean_status_counts": {
+        "unchanged": 1,
+        "retained": 223
+      },
+      "doctor_status_counts": {
+        "warn": 7,
+        "ok": 3
+      }
+    }
+  },
+  "test_custody_correction": {
+    "commit": "767afa4312dba8c8061fd6cb68b92410421b4506",
+    "review": [
+      "Sol GREEN",
+      "Astra GREEN"
+    ],
+    "native_linux_red_reproduced": true,
+    "native_linux_normal_pass": true,
+    "native_linux_race_seconds": 16.625,
+    "native_macos_race_seconds": 10.081,
+    "vet_pass": true,
+    "lint_issues": 0,
+    "failed_candidate_commit": "fb20750f8bc6d30b5f3379618712a58e62b9e2f0",
+    "failed_workflow": 40173868486,
+    "attempts": 2,
+    "second_attempt_cancelled_after_reproducing_failure": true,
+    "candidate_tag_recreated_before_publication": true,
+    "scope": "Only Linux permission denials with proven positive process birth strictly before the harness are excluded. Unknown/equal/newer/error identities retain scratch. Darwin ordering exemption disabled."
+  },
+  "updater_units": {
+    "mac_previous_template_matched": true,
+    "mac_new_program": "/usr/bin/perl",
+    "mac_loaded_state_preserved": true,
+    "linux_previous_template_matched": true,
+    "linux_script_sha256": "e17397bbac6662cad8cc9aff430575e8993800df0c582135a367d694d0719ccd",
+    "linux_timer_active": true
+  },
+  "limitations": {
+    "daemon_convergence_pending": "agents-tracker-pnaq",
+    "mac_homebrew_exit": 1,
+    "mac_homebrew_swarm_upgrade_succeeded": true,
+    "mac_homebrew_later_error": "unrelated pkgconf reinstall: installed CLT does not support macOS27",
+    "pkgconf_still_executable_version": "2.5.1",
+    "host_tooling_followup": "agents-tracker-fi0w",
+    "manual_clean_apply_executed": false,
+    "histories_credentials_and_unresolved_receipts_purged": false,
+    "rotator_feature_merged": false
+  },
+  "evidence_logs": {
+    "remote-v2-attempt1.log": {
+      "sha256": "7600a7c881b03cca21acbeea9ae1f1fea1bd8f95567e7463f5357f8c8708ce9b",
+      "bytes": 30616
+    },
+    "remote-v2-attempt2.log": {
+      "sha256": "e123366348c74269524e9caf0abe1b8abc2a62af2eebaa1344183a541edb23d8",
+      "bytes": 30620
+    },
+    "go-test-attempt1.log": {
+      "sha256": "80f1bec4d6e0ef575eb6f97993d3e8a72372a7c3bdd3f786589beb315b85496c",
+      "bytes": 99017
+    },
+    "testbin-linux-red.log": {
+      "sha256": "e9afb2858b19ce6bfe84e60dbdf980d1f6268dd324a17c315da9bac08cb20c9b",
+      "bytes": 668
+    },
+    "testbin-linux-normal.log": {
+      "sha256": "c26de83abdc9496cd1301470918ec39ecca1cf389ef0ae1c6504da1800d1c431",
+      "bytes": 5
+    },
+    "testbin-linux-race.log": {
+      "sha256": "a90df48c04e0dfe8412c36bee6e0dae3b6f7ed2145146f766018c5e3cfdb0598",
+      "bytes": 58
+    },
+    "testbin-mac-race.log": {
+      "sha256": "b4e3271b01fb5aa970203e728cb245ebd26a8ec2031fa93b72bb411c5ddf64af",
+      "bytes": 58
+    },
+    "testbin-lint.log": {
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+      "bytes": 10
+    },
+    "brew-upgrade.log": {
+      "sha256": "5e777a06fd8a26a3da56147082953eafc5761da08dfb40f743f12d0284f91a2c",
+      "bytes": 1437
+    }
+  }
+}

@@ -84,6 +84,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
 
 ## Process traces
+- [Storage patch v0.22.1 rollout](verification/storage-v0221-release.md) — signed publication and verified two-host installation; active-session daemon convergence deferred
 - [Cleanup follow-up](verification/cleanup-followup-2026-10-21/README.md) — documentation reconciliation, platform custody/contracts, Android read ownership, audit retention and explicit phone recovery
 - [Repository tightening audit and verification](verification/repository-tightening-2026-10-21/audit.md) — ten Luna audit/implementation/review lanes, confirmed fixes, retired Android code, complete shortcut ledger, and remaining platform/policy debt
 - [OpenCode strategy model reviews](verification/opencode-plan-review-2026-10-18.md) — actual DeepSeek V4.1 Flash and GLM-5.3 Flash critiques, two-round observations, selected evidence, native API runtime qualification and model selector verification
