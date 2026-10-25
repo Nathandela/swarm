@@ -49,6 +49,8 @@ func TestCLIRefreshInstalledUpgradeRealResume(t *testing.T) {
 	if old.CLIIdentity == nil || old.CLIIdentity.Version != "2.0.1" {
 		t.Fatalf("initial CLI identity = %+v", old.CLIIdentity)
 	}
+	// PTY output can precede the shim's post-spawn installation observation.
+	refreshAwaitCLIObservation(t, dir, old)
 	installRefreshMock(t, bin, "2.0.2")
 	candidate, err := probeCLIIdentity("claude", "", env, project)
 	if err != nil {
@@ -164,6 +166,20 @@ func refreshAwaitTranscript(t *testing.T, dir, id, want string) string {
 	}
 	t.Fatalf("session %s never printed %q: %s", id, want, b)
 	return ""
+}
+
+func refreshAwaitCLIObservation(t *testing.T, dir string, meta persist.Meta) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var observed *persist.CLIIdentity
+	for time.Now().Before(deadline) {
+		observed = readCLIObservation(dir, meta.ID)
+		if observed != nil && meta.CLIIdentity != nil && *observed == *meta.CLIIdentity {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("session %s did not establish initial CLI observation: got %+v want %+v", meta.ID, observed, meta.CLIIdentity)
 }
 
 func refreshAwaitExited(t *testing.T, core *daemon.Daemon, id string) persist.Meta {
