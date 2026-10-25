@@ -121,7 +121,9 @@ func TestTerminalRestoreRedrawsUnchangedBoard(t *testing.T) {
 	if err := p.ReleaseTerminal(); err != nil {
 		t.Fatalf("ReleaseTerminal: %v", err)
 	}
-	output.Write([]byte("external-terminal-damage"))
+	if _, err := output.Write([]byte("external-terminal-damage")); err != nil {
+		t.Fatalf("write external terminal damage: %v", err)
+	}
 	offset := output.Len()
 	if err := p.RestoreTerminal(); err != nil {
 		t.Fatalf("RestoreTerminal: %v", err)

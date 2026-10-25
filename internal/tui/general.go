@@ -534,7 +534,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.general.more != nil {
 		return m.updateMore(k)
 	}
-	if m.connectionLost && k.Code != tea.KeyEsc && !(m.general.confirm && k.Text == "n") {
+	if m.connectionLost && k.Code != tea.KeyEsc && (!m.general.confirm || k.Text != "n") {
 		if m.general.editing {
 			if k.Code == tea.KeyEnter {
 				return m, nil
@@ -686,13 +686,6 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 // own selection and paste, and drop any report already in flight.
 func (m rootModel) boardTakesMouse() bool {
 	return !m.connectionLost && m.screen == screenGeneral && m.pairing == nil && !m.general.editing && !m.general.confirm
-}
-
-// boardRowAt maps screen row y to the session drawn there. Rows composeBoard clipped
-// off the bottom (where the status bar and skew notice sit) are not on screen.
-func (m rootModel) boardRowAt(y int) (protocol.SessionView, int, bool) {
-	l, ok := m.boardLineAt(y)
-	return l.session, l.idx, ok && l.kind == lineSession
 }
 
 // updateConfirm handles the pending kill/delete confirm (R-3): `y` or a second
@@ -1043,24 +1036,6 @@ func (m generalModel) sectionHeader(section string) string {
 		header = clampCells(header, m.width-2)
 	}
 	return style.Render(header)
-}
-
-// rowAt returns the session drawn on board line y and its flat display index, or
-// ok=false when that line is chrome (header, banner, section header, spacer) or
-// past the last section. y counts from the board's first line, which composeBoard
-// puts on the screen's first row.
-func (m generalModel) rowAt(y int) (s protocol.SessionView, idx int, ok bool) {
-	if y < 0 {
-		return protocol.SessionView{}, 0, false
-	}
-	line := 0
-	m.layout(len(m.bannerLines()), func(l boardLine) {
-		if line == y && l.kind == lineSession {
-			s, idx, ok = l.session, l.idx, true
-		}
-		line++
-	})
-	return s, idx, ok
 }
 
 // scroll moves the selection by delta WITHOUT wrapping: the mouse wheel's motion

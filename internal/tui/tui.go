@@ -725,7 +725,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.updatePairing(msg)
 		}
-		if m.connectionLost && m.screen != screenGeneral && m.screen != screenLogins && msg.Code != tea.KeyEsc && !(m.screen == screenHandoff && m.handoff.confirmPending() && msg.Text == "n") {
+		if m.connectionLost && m.screen != screenGeneral && m.screen != screenLogins && msg.Code != tea.KeyEsc && (m.screen != screenHandoff || !m.handoff.confirmPending() || msg.Text != "n") {
 			if m.screen == screenOptions || msg.Code == tea.KeyEnter || m.screen == screenHandoff && m.handoff.confirmPending() {
 				return m, nil
 			}
