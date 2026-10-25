@@ -239,7 +239,11 @@ func TestReconnect_HydratedBannerExpires(t *testing.T) {
 	defer func() { _ = model.(interface{ Close() error }).Close() }()
 	tm := startTM(t, model)
 	terminal := vt.NewEmulator(testCols, testRows)
-	defer terminal.Close()
+	t.Cleanup(func() {
+		if err := terminal.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	waitScreen := func(text string) {
 		consumed := 0
 		teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
