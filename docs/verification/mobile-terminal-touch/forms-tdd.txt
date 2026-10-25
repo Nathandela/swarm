@@ -1,0 +1,36 @@
+Forms slice TDD — 2026-10-25
+Baseline: 4b275c0a; branch feat/mobile-touch-forms.
+
+RED (before implementation)
+go test ./internal/tui -run '^TestResponsiveForms' -count=1
+FAIL TestResponsiveFormsFocusAndError: 40x8 clipped prompt, cursor draft and error.
+FAIL TestResponsiveFormsSelectedProvider: selected OpenCode absent from compact picker.
+FAIL TestResponsiveFormsSchemaKeepsOptionFocus: async schema insertion reset focus to 0.
+FAIL TestResponsiveFormsTooSmallBlocksMutationButAllowsCancel: 1x1/1x2/2x3/31x8/32x7 initiated launch; tiny frames overflowed.
+FAIL TestResponsiveFormsLongPairingRequiresVisibleStop: y approved hidden long SAS context.
+Package runtime: 2.449s (supervisor included).
+
+Additional RED (before busy-resume fix)
+go test ./internal/tui -run '^TestResponsiveFormsBusyResume' -count=1
+FAIL TestResponsiveFormsBusyResumeEscapeAndAcceptedResult: busy resume trapped Escape.
+Package runtime: 2.149s (supervisor included).
+
+GREEN
+go test ./internal/tui -run 'Test(ResponsiveForms|Launch|Resume|Handoff|Options|Logins|Rename|Tag|Confirm|TUI_Pairing|Golden|LineEditor|Paste|MouseCapture|BoardMouseCapture)' -count=1
+PASS; package runtime 7.793s (supervisor included).
+go test ./internal/tui -run '^TestResponsiveForms' -count=1
+PASS; package runtime 2.479s (supervisor included), including final production-provider schemas and long handoff warning/disclosure tests.
+
+Contract/evidence
+- Existing wide form and inline-row assertions retained; no frozen tests weakened.
+- Every production provider's last launch option is visible at32x8.
+- Geometry matrix includes24x4,32x8,36x12,40x18,48x24,72x12,90x16,80x24,120x40 and below-minimum1x1,1x2,2x3; threshold31/32/33 columns and7/8/9 rows.
+- Drafts/rune cursors survive resize, semantic option focus survives schema insertion.
+- Pairing, launch/resume/handoff, options, account c/d/s/activation and inline save/secondCtrlX/y obey size guards.
+- Long context pins target/action and field; explicit confirmation stop follows scrollable text. Ordinary editor Home/End and field Up/Down remain native; PageUp/PageDown read long context. Modal decisions additionally allowUp/Down/Tab/Home/End.
+- Cancellation/deny works below minimum; disconnected pairing deny is retained. Reopening a decision cannot inherit old confirmation focus.
+- Accepted asynchronous resume success still autoattaches after shrinking and leaving its busy form.
+- Capture policy and raw attach implementation unchanged.
+
+Limits
+Focused package suites only here; root integration owns repository-wide build/vet/lint/test/race gates and independent review. No actual phones, SSH clients, native selection/paste trials or deployment were exercised. Desktop model tests do not establish handset compatibility.

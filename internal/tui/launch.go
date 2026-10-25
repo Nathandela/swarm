@@ -81,6 +81,10 @@ func (m *launchModel) refreshAgents(agents []AgentInfo) {
 	wasAgent := m.isAgent()
 	wasPrompt := m.isPrompt()
 	wasWorktree := m.isWorktree()
+	optionKey := ""
+	if i, ok := m.optionFocus(); ok {
+		optionKey = m.optSpecs[i].Key
+	}
 
 	m.agents = agents
 	m.detected = true
@@ -99,9 +103,8 @@ func (m *launchModel) refreshAgents(agents []AgentInfo) {
 	}
 
 	// Re-anchor focus onto the same semantic field after the re-index. Directory,
-	// name, tag, agent, prompt and worktree map to their new indices; an option focus
-	// (the field most likely to have moved or vanished as the list changed beneath
-	// it) clamps to the directory field.
+	// name, tag, agent, prompt and worktree map to their new indices; options follow
+	// their stable schema key, falling back to directory only when that key vanishes.
 	switch {
 	case wasDir:
 		m.focus = 0
@@ -117,6 +120,12 @@ func (m *launchModel) refreshAgents(agents []AgentInfo) {
 		m.focus = m.worktreeIndex()
 	default:
 		m.focus = 0
+		for i, spec := range m.optSpecs {
+			if spec.Key == optionKey {
+				m.focus = m.optionsIndex() + i
+				break
+			}
+		}
 	}
 }
 
@@ -978,7 +987,7 @@ func (m launchModel) agentValue() string {
 	noReason := m.buildAgentRow(false, 0)
 	selBudget := budget - lipgloss.Width(noReason) - reasonWrapCells
 	if selBudget < 1 {
-		return clampCells(noReason, budget) // no room for any reason: fit the dots+names alone
+		return styleDim.Render("◂ ") + styleAccent.Render(m.currentAgentName()) + styleDim.Render(" ▸") // keep the selected provider visible
 	}
 	return m.buildAgentRow(false, selBudget)
 }

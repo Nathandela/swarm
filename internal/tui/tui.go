@@ -171,8 +171,9 @@ type rootModel struct {
 	connections *clientLifetime
 	detect      DetectFunc
 
-	width  int
-	height int
+	width          int
+	height         int
+	formNavigation formNavigation
 
 	screen                                   screen
 	general                                  generalModel
@@ -683,6 +684,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The daemon pushed a pair_pending (SAS gate): open the pairing-confirm
 		// modal over whatever screen is showing. It stays up until answered (A4).
 		m.pairing = &pairingModal{sas: msg.SAS, deviceName: msg.DeviceName}
+		m.formNavigation = formNavigation{}
 		m.general.openID = ""
 		return m, nil
 
@@ -693,10 +695,13 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		m.general.openID = ""
+		if m.guardFormInput(msg) {
+			return m, nil
+		}
 		// The SAS gate is modal: while it is open it owns every keypress so a
 		// y/n/enter/esc can never leak through to the board beneath it.
 		if m.pairing != nil {
-			if m.connectionLost {
+			if m.connectionLost && msg.Code != tea.KeyEsc && msg.Text != "n" {
 				return m, nil
 			}
 			return m.updatePairing(msg)
@@ -729,42 +734,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m rootModel) View() tea.View {
 	var content string
 	switch {
-	case m.pairing != nil:
-		// The SAS gate overlays every screen: render it with its own allow/deny
-		// key hint on the bottom bar (A4). It stays until the operator answers.
-		content = m.composeBoard(m.pairing.view(), "y allow   n deny")
-	case m.screen == screenLaunch:
-		content = m.composeBoard(m.launch.view(), m.launch.hint())
-	case m.screen == screenResume:
-		content = m.composeBoard(m.resume.view(), m.resume.hint())
-	case m.screen == screenHandoff:
-		content = m.composeBoard(m.handoff.view(), m.handoff.hint())
-	case m.screen == screenOptions:
-		content = m.composeBoard(m.options.view(m.width), m.options.hint())
-	case m.screen == screenLogins:
-		width, height := m.width, m.height
-		if width > 4 {
-			width -= 4
-		}
-		if height > 0 {
-			height-- // The persistent status bar owns the last row.
-			if skewNotice(m.daemonVersion, m.clientVersion) != "" && m.height >= 3 {
-				height--
-			}
-		}
-		top := ""
-		if m.height >= 12 {
-			top = "\n"
-			height--
-		}
-		if m.height > 0 {
-			height = max(1, height)
-		}
-		body := m.logins.view(width, height, m.connectionLost, m.loginRunner != nil)
-		if m.width > 4 {
-			body = "  " + strings.ReplaceAll(body, "\n", "\n  ")
-		}
-		content = m.composeBoard(top+body, m.logins.hint(m.connectionLost, m.loginRunner != nil, m.width))
+	case m.hasActiveForm():
+		content = m.composeActiveForm()
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
