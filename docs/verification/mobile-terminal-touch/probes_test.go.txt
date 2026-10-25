@@ -1,0 +1,197 @@
+package tui
+
+// Planning probes characterize the current implementation, including known gaps.
+// Run through a Go overlay; these are not acceptance tests for the future feature.
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+
+	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
+)
+
+func TestTouchPlanProbe_OffscreenSelectionStillAttaches(t *testing.T) {
+	var sessions []protocol.SessionView
+	for i := range 16 {
+		s := sWorking(fmt.Sprintf("endpoint/%02d", i), "codex", "~/probe", fmt.Sprintf("probe-session-%02d", i), time.Duration(i+1)*time.Minute)
+		s.Name = fmt.Sprintf("session-%02d", i)
+		sessions = append(sessions, s)
+	}
+	m, runner := mouseBoard(t, sessions...)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 8})
+	for range 15 {
+		m = quiet(t, m, tea.MouseWheelMsg{X: 6, Y: 4, Button: tea.MouseWheelDown})
+	}
+	selected, ok := m.(rootModel).general.selected()
+	if !ok || strings.Contains(view(m), selected.Summary) {
+		t.Fatal("expected a selected session clipped below the board")
+	}
+	m, cmd := m.Update(keyEnter)
+	_ = settle(m, cmd)
+	calls := runner.recorded()
+	if len(calls) != 1 || calls[0].session.ID != selected.ID {
+		t.Fatalf("expected invisible selection to attach, got %+v", calls)
+	}
+	t.Logf("120x8: 15 wheel events selected %s; its row is invisible; Enter attached it", selected.ID)
+}
+
+func TestTouchPlanProbe_NarrowFitLosesIdentity(t *testing.T) {
+	s := sWorking("endpoint/probe", "codex", "~/unique-repository", "unique-summary", time.Minute)
+	s.Name = "unique-session-name"
+	for _, width := range []int{24, 32, 36, 40, 48, 72, 120} {
+		gm := generalModel{sessions: []protocol.SessionView{s}, width: width}
+		cols := rowColumnsFor(width, 2)
+		row := gm.renderRow(s, status.GroupWorking, true)
+		t.Logf("columns=%d rendered=%d name=%d cwd=%d summary=%d", width, lipgloss.Width(row), cols.name, cols.cwd, cols.summary)
+		if width == 32 && lipgloss.Width(row) <= width {
+			t.Fatal("expected fixed fields to exceed 32 columns")
+		}
+		if width == 36 && (cols.name != 0 || cols.cwd != 0 || cols.summary != 0) {
+			t.Fatal("expected all identity/summary budgets to vanish at 36 columns")
+		}
+	}
+}
+
+func TestTouchPlanProbe_ResizeDoesNotCancelArmedOpen(t *testing.T) {
+	m, runner := mouseBoard(t)
+	y := rowY(t, m, "needs-row-summary")
+	m = quiet(t, m, press(y))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 72, Height: 12})
+	if m.(rootModel).general.openID == "" {
+		t.Fatal("expected current implementation to retain the armed identity")
+	}
+	m, cmd := m.Update(release(y))
+	_ = settle(m, cmd)
+	if len(runner.recorded()) != 1 {
+		t.Fatal("expected release at unchanged Y to open after resize")
+	}
+	t.Log("press -> 120x40 to 72x12 resize -> release still opens the selected session")
+}
+
+func TestTouchPlanProbe_DragAwayAndBackStillOpens(t *testing.T) {
+	m, runner := mouseBoard(t)
+	y := rowY(t, m, "needs-row-summary")
+	m = quiet(t, m, press(y))
+	m = quiet(t, m, tea.MouseMotionMsg{X: 6, Y: y + 3, Button: tea.MouseLeft})
+	m = openRelease(m, y)
+	if len(runner.recorded()) != 1 {
+		t.Fatal("expected ignored motion to leave the open armed")
+	}
+	t.Log("press -> left-button motion away -> release back on origin still opens")
+}
+
+func openRelease(m tea.Model, y int) tea.Model {
+	m, cmd := m.Update(release(y))
+	return settle(m, cmd)
+}
+
+func TestTouchPlanProbe_PrePressOldFrameAmbiguity(t *testing.T) {
+	a := sWorking("endpoint/a", "codex", "~/probe", "probe-alpha", time.Minute)
+	b := sWorking("endpoint/b", "codex", "~/probe", "probe-beta", 2*time.Minute)
+	a.Name, b.Name = "Alpha", "Beta"
+	m, runner := mouseBoard(t, a, b)
+	rm := m.(rootModel)
+	rm.general.setLayout(groupByStatus, orderByName)
+	rm.general.restoreSel(b.ID)
+	m = rm
+	oldY := rowY(t, m, a.Summary)
+	a.Name = "Zulu"
+	m, _ = m.Update(eventMsg{ev: protocol.Event{Session: a}})
+	if now, _, ok := m.(rootModel).boardRowAt(oldY); !ok || now.ID != b.ID {
+		t.Fatal("expected B to move under A's old coordinate before the delayed press")
+	}
+	m = openClick(t, m, oldY)
+	if calls := runner.recorded(); len(calls) != 1 || calls[0].session.ID != b.ID {
+		t.Fatalf("expected old-coordinate tap to resolve against current model B, got %+v", calls)
+	}
+	t.Log("old frame showed A at Y; model update moved selected B there; delayed tap opened B")
+}
+
+func TestTouchPlanProbe_LaunchFocusAndErrorAreClipped(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	m := openLaunch(t, newFakeClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+	rm := m.(rootModel)
+	rm.launch.focus = rm.launch.promptIndex()
+	rm.launch.prompt.set("probe-focused-prompt")
+	rm.launch.errMsg = "probe-validation-error"
+	full := stripANSI(rm.launch.view())
+	visible := stripANSI(rm.View().Content)
+	for _, marker := range []string{"probe-focused-prompt", "probe-validation-error"} {
+		if !strings.Contains(full, marker) || strings.Contains(visible, marker) {
+			t.Fatalf("expected %q to exist in the form but be clipped from the screen", marker)
+		}
+	}
+	t.Log("40x8: focused prompt and validation error exist in form, but neither is on screen")
+}
+
+func TestTouchPlanProbe_SelectedAgentCanBeTruncated(t *testing.T) {
+	agents := []AgentInfo{
+		{Name: "claude", Installed: true, InRange: true},
+		{Name: "codex", Installed: true, InRange: true},
+		{Name: "agy", Installed: true, InRange: true},
+		{Name: "hermes", Installed: true, InRange: true},
+		{Name: "opencode", Installed: true, InRange: true},
+	}
+	m := newLaunchModel(agents, true, 40)
+	m.agentIdx = 4
+	shown := stripANSI(m.agentValue())
+	if strings.Contains(shown, "opencode") {
+		t.Fatalf("expected selected agent at end of picker to be clipped, got %q", shown)
+	}
+	t.Logf("40 columns, selected agent=opencode, picker=%q", shown)
+}
+
+func TestTouchPlanProbe_CoalescePaintNotWheelDeltas(t *testing.T) {
+	clamp := func(v int) int { return max(0, min(v, 10)) }
+	sequential := clamp(clamp(0+100) - 1)
+	summed := clamp(0 + 100 - 1)
+	if sequential != 9 || summed != 10 {
+		t.Fatalf("unexpected bounds example: sequential=%d summed=%d", sequential, summed)
+	}
+	t.Logf("at scroll bounds, down100 then up1 ends at %d; summing first ends at %d", sequential, summed)
+}
+
+// Skip Init's subscriptions/probes so the only post-paint event is the explicit tick.
+type touchPlanQuietModel struct{ inner tea.Model }
+
+func (m touchPlanQuietModel) Init() tea.Cmd  { return nil }
+func (m touchPlanQuietModel) View() tea.View { return m.inner.View() }
+func (m touchPlanQuietModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.inner.Update(msg)
+	return touchPlanQuietModel{inner: next}, cmd
+}
+
+func TestTouchPlanProbe_UnchangedTickRetransmitsContent(t *testing.T) {
+	const marker = "probe-idle-board-marker"
+	m := newModel(t, newFakeClient(sReview("endpoint/idle", "codex", "~/probe", marker, 2*time.Hour)), detectMixed())
+	before := stripANSI(m.View().Content)
+	next, _ := m.Update(repaintMsg{})
+	if after := stripANSI(next.View().Content); after != before {
+		t.Fatal("fixture must have identical visible content across the tick")
+	}
+	tm := startTM(t, touchPlanQuietModel{inner: m})
+	defer quitTM(t, tm)
+	waitContains(t, tm, marker) // Drain the initial frame deliberately, once.
+	tm.Send(repaintMsg{})
+	observed := 0
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+		if bytes.Contains(stripANSIB(b), []byte(marker)) {
+			observed = len(b)
+			return true
+		}
+		return false
+	}, teatest.WithDuration(2*time.Second), teatest.WithCheckInterval(10*time.Millisecond))
+	if observed == 0 {
+		t.Fatal("expected an unchanged tick to retransmit the session marker")
+	}
+	t.Logf("manual unchanged repaint tick retransmitted marker in %d captured renderer bytes", observed)
+}
