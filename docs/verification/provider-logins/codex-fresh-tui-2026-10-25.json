@@ -1388,7 +1388,29 @@
         "endpoint_identity": null,
         "complete_fixture_listener_and_native_ownership": false
       },
-      "next_step": "Source-only seed/bootstrap diagnosis before considering any further native attempt. No timeout increase, retry or functional waiver follows."
+      "next_step": "Source-only seed/bootstrap diagnosis before considering any further native attempt. No timeout increase, retry or functional waiver follows.",
+      "stopped_structural_projection": {
+        "path": "/private/tmp/swarm-codex-outer-m297przm/seed-post-stop-structural-projection.json",
+        "sha256": "96106578f0a9244fea7acbd4e5cd0e9f682ce0d60d84c12ca0eb65beec9b8578",
+        "registry": {
+          "status": "stable",
+          "schema_version": 1,
+          "revision": 2,
+          "login_count": 2,
+          "provider_count": 0,
+          "switch_count": 0,
+          "bytes": 673,
+          "sha256": "647cc72a209c6d979c69c4bf2513ce0016ff80ab77adbc71064c7add8afbf0a0"
+        },
+        "native_config_visible_bytes": 305,
+        "prepared_record_present": false,
+        "collector": {
+          "path": "/private/tmp/swarm-codex-seed-store-collector-20261025-v2/collector.py",
+          "sha256": "47f99f7b3641808203eeb44ebd07d7a316486908cd9a86eebf0732c88100d068"
+        },
+        "scope": "One read-only stopped-root observation; no native process, Store.Open, lock or remote write.",
+        "interpretation": "Later visible bootstrap progress than V16: two registry entries and ordinary native config exist. No config-write return, entered/blocked migration call, durability or contention/I/O cause is established."
+      }
     }
   ],
   "next_step": "Source-only seed/bootstrap diagnosis; preserve the unexercised rejection-only POST diagnostic. Further native execution and any endpoint response require separate review.",
