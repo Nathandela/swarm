@@ -49,3 +49,18 @@ Additional cases cover Ctrl/Alt+y and Ctrl/Alt+Enter at31x8,32x8,120x40 before/a
 GREEN after correction:
 go test ./internal/tui -run 'Test(ResponsiveForms|Launch|Resume|Handoff|Options|Logins|Rename|Tag|Confirm|TUI_Pairing|Golden|LineEditor|Paste|MouseCapture|BoardMouseCapture)' -count=1
 PASS; package runtime7.931s (supervisor included). No frozen tests changed.
+
+Whole-feature Astra resume-generation correction — 2026-10-25
+RED before correction:
+GOMAXPROCS=2 go test -p 2 ./internal/tui -run '^TestResumeGeneration' -count=1
+FAIL CurrentSuccessAutoattaches: normal and relocation commands at connection generation2 returned nested generation0; valid completions did not attach, including shrink-to1x1 and leaving an accepted busy relocation.
+FAIL StaleResultCannotReplaceCurrentScreen: an old failure replaced current Options with relocation.
+FAIL CurrentFailureStillOffersRelocation: nested generation0 instead of current2.
+Package runtime2.257s (test supervisor included).
+
+Correction: clientResultGeneration recognizes resumeResultMsg's nested launch generation, stampClientResults stamps it, and accepted success dispatches through the already-checked update path so the one completion increments roster revision once. No protocol or wire changes.
+Tests execute the actual returned command before delivering its result. They cover current generation2 normal/relocation success, accepted shrink/leave completion without duplicate launch, stale old success/failure preserving current Options draft, and current failure retaining relocation recovery.
+
+GREEN after correction:
+GOMAXPROCS=2 go test -p 2 ./internal/tui -run 'Test(Resume|ResponsiveForms|Reconnect_OldMutationRepliesCannotChangeTheRecoveredView)' -count=1
+PASS; package runtime2.779s (test supervisor included). Shared default caches retained; no broad performance or repository gates started in this correction lane.

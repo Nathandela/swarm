@@ -459,7 +459,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.openResume(msg.source, reason), nil
 		}
-		return m.Update(msg.result)
+		// The wrapper already passed the connection-generation gate.
+		return m.update(msg.result)
 
 	case launchResultMsg:
 		// A launch/resume failed: surface the reason on the general board's banner
