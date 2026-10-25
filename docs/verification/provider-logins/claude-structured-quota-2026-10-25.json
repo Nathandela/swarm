@@ -62,7 +62,7 @@
     "No product activation is authorized or implied."
   ],
   "remaining_gates": [
-    "Unanswered-question durable-state characterization and its recovery negative remain pending.",
+    "Unconditional pending-question recovery is disproven on both pins; see claude-structured-pending-question-2026-10-25.json. A host-owned eligibility gate remains unimplemented/unqualified.",
     "Permission, cancellation, queued input, background work, MCP/workflow parity and live account handover remain unqualified."
   ],
   "subsequent_negatives": {

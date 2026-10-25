@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-25",
+  "scope": "Store foundation for desired Claude selection, stopped-profile CWD extension and two admitted authentication helpers",
+  "production_activation": false,
+  "review_packet_sha256": "8eaae041de874367e47d6c45ff0e6e8cbc98d2e83225360e49f8939077bf27fc",
+  "full_test_receipt_sha256": "62f6003bfff88938da6096f03e12cf78070e885e4ec18c25be0dc3a77a303cd2",
+  "behavior": [
+    "A structurally valid exact-target ready receipt with positively stale canonical generation/expiry permits one desired-selection commit pending renewal. The receipt is retained, and Runtime/admission continue to refuse consumption. Malformed, unreadable or conflicting authority still refuses selection.",
+    "Established profiles can gain bounded exact CWD membership only after positive writer exclusion. Existing native account/trust fields survive MCP-map merging; config and its directory settle before registry publication, including retry after uncertain rename. A semantically unchanged complete merge avoids rewriting config.",
+    "Begin and Replace share a locked bounded existing-intent census. At most two unresolved helper admissions coexist across handles. Terminal labels or absent PIDs do not free a slot; exact positive settlement and empty payload do."
+  ],
+  "review": "Independent Astra source GREEN; Root inspected the connected production change and reran the cross-package Claude/login race suite.",
+  "full_store_test": {
+    "command": "python3 /private/tmp/swarm-login-go.py test ./internal/logins -count=1 -timeout=600s",
+    "exit_code": 0,
+    "elapsed_seconds": 170.179,
+    "production_source_sha256": {
+      "internal/logins/claude_selection.go": "364869d760c9391ac230a14834b5b93b9c705ebf610decd8948f2edb4ae3a8d5",
+      "internal/logins/claude_profiles.go": "35446af770fd640980e9f7d6c0d2242a6595bee3e795e3b51423651ae2291fa6",
+      "internal/logins/claude_auth.go": "e68655d43eb7eb1cb9ba0427d0626cc6957ca04f50eeb9a377e1595e872fc0d8"
+    }
+  },
+  "connected_race": {
+    "exit_code": 0,
+    "elapsed_seconds": 142.762,
+    "source_unchanged": true,
+    "source_count": 649,
+    "log_sha256": "a5f440117dbc4bb577b54bbfe8e81d71f17ddb8a9c97b899e16f5b794064fd88"
+  },
+  "limits": [
+    "This adds no daemon caller or automatic recovery and changes no installed setup.",
+    "Even no-op CWD extensions still require stopped writers in this implementation. Live-profile new-CWD behavior and normal native workflow parity remain unqualified.",
+    "Source integration, historical no-Runtime migration and actual native constructor remain required before release."
+  ],
+  "final_checks": {
+    "build": "go build ./... passed",
+    "vet": "connected six packages passed",
+    "mac_lint": "0 issues",
+    "linux_lint": "0 issues",
+    "mechanical_test_cleanup_delta": "Five deferred Close calls now explicitly ignore the same previously ignored return. Production code is unchanged; patch SHA25604605ee357c9929bd080aa3e1186dd7d1bc9f2e060765e6e57d504444f9b66a1."
+  }
+}

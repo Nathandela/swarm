@@ -152,6 +152,11 @@ func Run(cfg Config) (agentExit int, err error) {
 	// Every direct child's Wait is joined on each return path before this runs.
 	// The durable proof is emitted after all remaining adopted children are reaped.
 	defer func() { err = errors.Join(err, managed.finish()) }()
+	claude, err := prepareClaudeBirth(cfg, managed)
+	if err != nil {
+		return 0, err
+	}
+	defer claude.close()
 	// Resolve once, before either native process can start. Scope custody is
 	// already installed so a clean selector failure also has positive stop proof.
 	if !externalBirth {
@@ -160,11 +165,9 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 	}
 
-	claude, err := prepareClaudeBirth(cfg)
-	if err != nil {
+	if err := claude.prepareImage(cfg); err != nil {
 		return 0, err
 	}
-	defer claude.close()
 
 	embargo, err := openInputEmbargo(cfg)
 	if err != nil {

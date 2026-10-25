@@ -248,7 +248,7 @@ func TestClaudeOwnedProfileAuthSettingCannotOverrideSavedAuthority(t *testing.T)
 func TestClaudeProfileSelectionCanFollowExistingStaleReadyRenewal(t *testing.T) {
 	for _, kind := range []string{"generation", "expiry"} {
 		t.Run(kind, func(t *testing.T) {
-			s, a, b, ref := newSettledReadyClaudeAuthTest(t)
+			s, _, b, ref := newSettledReadyClaudeAuthTest(t)
 			before := snapshot(t, s)
 			expires := time.Now().Add(2 * time.Hour)
 			if kind == "expiry" {
@@ -257,18 +257,18 @@ func TestClaudeProfileSelectionCanFollowExistingStaleReadyRenewal(t *testing.T) 
 			if err := os.WriteFile(filepath.Join(s.savedNativeHome(b.ID), ".credentials.json"), claudeAuthGrant(expires, []string{"user:profile", "user:inference"}), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.SelectClaudeProfile(before.Revision, b.ID); err == nil {
-				t.Fatal("stale ready selected as consumable")
-			}
-			if got := snapshot(t, s); got.Revision != before.Revision || got.Providers[ProviderClaude].ActiveID != a.ID {
-				t.Fatal("refused selection changed desired account")
-			}
-			if _, created, err := s.ReplaceClaudeAuth(before.Revision, ref); err != nil || !created {
-				t.Fatalf("existing warm renewal path refused: %v %v", created, err)
-			}
 			next, err := s.SelectClaudeProfile(before.Revision, b.ID)
 			if err != nil || next.Providers[ProviderClaude].ActiveID != b.ID {
-				t.Fatalf("renewed prepared helper stranded selection: %+v %v", next, err)
+				t.Fatalf("stale ready stranded desired selection: %v", err)
+			}
+			if err := s.ValidateClaudeAuthReceipt(ref, next.Providers[ProviderClaude].Epoch); err == nil {
+				t.Fatal("pending desired selection consumed stale receipt")
+			}
+			if _, created, err := s.ReplaceClaudeAuth(next.Revision, ref); err != nil || !created {
+				t.Fatalf("existing renewal path refused pending desired: %v %v", created, err)
+			}
+			if got := snapshot(t, s); got.Revision != next.Revision || got.Providers[ProviderClaude] != next.Providers[ProviderClaude] {
+				t.Fatal("renewal changed desired selection or required another click")
 			}
 		})
 	}

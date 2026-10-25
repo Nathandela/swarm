@@ -240,3 +240,98 @@ func TestClaudeOwnedRecordPreservesPublicationErrno(t *testing.T) {
 		t.Fatal("failed native publication became durable")
 	}
 }
+
+func TestClaudeOwnedStartRequiresOriginalUnusedPreclaim(t *testing.T) {
+	for _, kind := range []string{"valid", "unclaimed", "uncertain", "native-changed", "stopped", "meta-changed", "retired", "attempted", "recorded", "claim-changed"} {
+		t.Run(kind, func(t *testing.T) {
+			cfg, scope, meta := claudeClaimFixture(t)
+			save := func() {
+				raw, err := json.Marshal(meta)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(cfg.SessionDir, "meta.json"), raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			save()
+			if kind != "unclaimed" {
+				if err := scope.claimClaudeReservation(cfg); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch kind {
+			case "uncertain":
+				scope.ownPreclaimDurable = false
+			case "native-changed":
+				raw, err := os.ReadFile(filepath.Join(cfg.SessionDir, NativeProcessFile))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(cfg.SessionDir, NativeProcessFile), append(raw, '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "stopped":
+				if err := os.WriteFile(filepath.Join(cfg.SessionDir, NativeStoppedFile), []byte("retained stopped bytes"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "meta-changed":
+				meta.Cwd = "/changed"
+				save()
+			case "retired":
+				meta.ClaudeRetirement = &logins.ClaudeReservationRetirement{Version: 1}
+				save()
+			case "attempted":
+				scope.startAttempted = true
+			case "recorded":
+				scope.recorded = true
+			case "claim-changed":
+				scope.info.Cwd = "/changed"
+			}
+			err := scope.validateClaudeStart(cfg)
+			if kind == "valid" {
+				if err != nil {
+					t.Fatalf("exact early claim rejected at final local check: %v", err)
+				}
+			} else if err == nil {
+				t.Fatal("invalid or consumed local claim permitted Start validation")
+			}
+		})
+	}
+}
+
+func TestClaudeOwnedClaimRejectsMatchedUnsafeCLIPath(t *testing.T) {
+	for name, path := range map[string]string{
+		"relative": "bin/claude",
+		"unclean":  "/tmp/bin/../claude",
+		"nul":      "/tmp/claude\x00bad",
+		"cr":       "/tmp/claude\rbad",
+		"lf":       "/tmp/claude\nbad",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, scope, meta := claudeClaimFixture(t)
+			cli := *cfg.CLIIdentity
+			cli.Path = path
+			cfg.CLIIdentity, meta.CLIIdentity = &cli, &cli
+			cfg.Argv[0] = path
+			raw, err := json.Marshal(meta)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(cfg.SessionDir, "meta.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := scope.claimClaudeReservation(cfg); err == nil || scope.ownPreclaimDurable {
+				t.Error("matching malformed CLI paths granted custody")
+			}
+			if err := scope.finish(); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{NativeProcessFile, NativeStoppedFile} {
+				if _, err := os.Lstat(filepath.Join(cfg.SessionDir, name)); !os.IsNotExist(err) {
+					t.Errorf("malformed CLI path published %s", name)
+				}
+			}
+		})
+	}
+}

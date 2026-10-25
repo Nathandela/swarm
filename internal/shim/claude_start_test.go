@@ -27,7 +27,7 @@ import (
 // Synthetic ELF mechanics only. The production constructor always uses the
 // fixed-pin OpenClaudeNativeImage; this private fixture never qualifies a native
 // release and is never reachable from Config or an optional admission callback.
-func claudeStartFixture(t *testing.T) (Config, *managedNativeScope, *claudeBirth, logins.Login) {
+func claudeBirthFixture(t *testing.T) (Config, *managedNativeScope, *claudeBirth, logins.Login) {
 	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("private synthetic Claude file authority and fd exec are Linux-only")
@@ -147,6 +147,15 @@ func claudeStartFixture(t *testing.T) (Config, *managedNativeScope, *claudeBirth
 	return cfg, scope, birth, login
 }
 
+func claudeStartFixture(t *testing.T) (Config, *managedNativeScope, *claudeBirth, logins.Login) {
+	t.Helper()
+	cfg, scope, birth, login := claudeBirthFixture(t)
+	if err := birth.store.ClaimClaudeProfileCustody(*cfg.LoginRuntime, cfg.Cwd, func() error { return scope.claimClaudeReservation(cfg) }); err != nil {
+		t.Fatal(err)
+	}
+	return cfg, scope, birth, login
+}
+
 func claudeSyntheticCmd(cfg Config) *exec.Cmd {
 	return &exec.Cmd{Path: cfg.Argv[0], Args: append([]string(nil), cfg.Argv...), Dir: cfg.Cwd, Env: []string{helperEnvVar + "=" + modeIdle, "PATH=/usr/bin:/bin"}}
 }
@@ -206,7 +215,7 @@ func TestClaudeOwnedStartSyntheticHeldImageAndExclusiveClaim(t *testing.T) {
 	}
 }
 
-func TestClaudeOwnedStartSyntheticNewSelectionRefusesBeforeClaim(t *testing.T) {
+func TestClaudeOwnedStartSyntheticNewEpochRefusesAfterCustody(t *testing.T) {
 	cfg, scope, birth, login := claudeStartFixture(t)
 	r, err := birth.store.Snapshot()
 	if err != nil {
@@ -222,11 +231,16 @@ func TestClaudeOwnedStartSyntheticNewSelectionRefusesBeforeClaim(t *testing.T) {
 			_ = cmd.Wait()
 		}
 	}()
-	if _, err := birth.start(scope, cfg, cmd, &pty.Winsize{}); err == nil || cmd.Process != nil || scope.ownPreclaimDurable {
-		t.Fatal("stale selected epoch crossed claim/start")
+	if _, err := birth.start(scope, cfg, cmd, &pty.Winsize{}); err == nil || cmd.Process != nil || !scope.ownPreclaimDurable {
+		t.Fatal("stale selected epoch crossed Start or lost cleanup custody")
 	}
-	if _, err := os.Lstat(filepath.Join(cfg.SessionDir, NativeProcessFile)); !os.IsNotExist(err) {
-		t.Fatal("refused selection published native scope")
+	if err := scope.finish(); err != nil {
+		t.Fatal(err)
+	}
+	var stopped NativeStoppedInfo
+	raw, err := os.ReadFile(filepath.Join(cfg.SessionDir, NativeStoppedFile))
+	if err != nil || json.Unmarshal(raw, &stopped) != nil || !stopped.WritersStopped || stopped.Native != scope.preclaim {
+		t.Fatal("refused final selection lost exact zero-PID stop proof")
 	}
 }
 
@@ -237,7 +251,7 @@ func TestClaudeOwnedStartSyntheticPublicationFailureReturnsUnwaitedChild(t *test
 	writes := 0
 	nativeRecordSync = func(root *os.Root) error {
 		writes++
-		if writes == 2 {
+		if writes == 1 {
 			return syscall.ENOSPC
 		}
 		return original(root)
@@ -260,10 +274,56 @@ func TestClaudeOwnedStartSyntheticPublicationFailureReturnsUnwaitedChild(t *test
 	if !errors.Is(err, syscall.ENOSPC) || ptmx == nil || cmd.ProcessState != nil || !scope.ownPreclaimDurable || scope.recorded {
 		t.Fatalf("post-start publication lost child custody: %v", err)
 	}
+	again := claudeSyntheticCmd(cfg)
+	if next, err := birth.start(scope, cfg, again, &pty.Winsize{}); err == nil || again.Process != nil {
+		if next != nil {
+			_ = next.Close()
+		}
+		if again.Process != nil {
+			_ = syscall.Kill(-again.Process.Pid, syscall.SIGKILL)
+			_ = again.Wait()
+		}
+		t.Fatal("publication failure allowed a second Start")
+	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	_ = cmd.Wait()
 	waited = true
 	nativeRecordSync = original
+	if err := scope.finish(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaudeOwnedStartSyntheticStartErrorConsumesAttempt(t *testing.T) {
+	cfg, scope, birth, _ := claudeStartFixture(t)
+	if err := os.Remove(cfg.Cwd); err != nil {
+		t.Fatal(err)
+	}
+	cmd := claudeSyntheticCmd(cfg)
+	if ptmx, err := birth.start(scope, cfg, cmd, &pty.Winsize{}); !errors.Is(err, syscall.ENOENT) || cmd.Process != nil {
+		if ptmx != nil {
+			_ = ptmx.Close()
+		}
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Wait()
+		}
+		t.Fatalf("fixture missed OS Start error after admission: %v", err)
+	}
+	if err := os.Mkdir(cfg.Cwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	again := claudeSyntheticCmd(cfg)
+	if ptmx, err := birth.start(scope, cfg, again, &pty.Winsize{}); err == nil || again.Process != nil {
+		if ptmx != nil {
+			_ = ptmx.Close()
+		}
+		if again.Process != nil {
+			_ = syscall.Kill(-again.Process.Pid, syscall.SIGKILL)
+			_ = again.Wait()
+		}
+		t.Fatal("failed Start was retried with a fresh command")
+	}
 	if err := scope.finish(); err != nil {
 		t.Fatal(err)
 	}

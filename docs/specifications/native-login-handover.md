@@ -131,9 +131,15 @@ those documented maps in a private destination after all config writers stop.
 Never put definition JSON or secrets in argv. Verify the resulting scopes against
 native-writer fixtures. Reject conflicting destination definitions unless
 identical or explicitly resolved. Pre-provision known incoming working
-directories. Later conflicts or unavailable writer-stop proof leave that profile
-pending without blocking healthy discussions. Do not migrate MCP OAuth, trust,
-account state or other profile fields.
+directories. Established profiles can add a bounded exact CWD after positive
+writer exclusion under the existing registry fence. Settle the complete validated
+MCP merge before publishing membership; preserve unrelated native fields and
+avoid a rewrite when the merged document is unchanged. Both initial launch and
+resume callers must reach this path. Conflicts or unavailable writer-stop proof
+leave that profile pending without blocking healthy discussions. Live-profile
+new-CWD behavior still requires native qualification; a stopped-profile extension
+does not establish it. Do not migrate MCP OAuth, trust, account state or other
+profile fields.
 
 Native refresh helpers use a fresh empty private config bound to the existing
 saved native authority. Accept auth only after independently observing a native
@@ -160,14 +166,28 @@ births. Existing `ProviderState.ActiveID/Epoch` records the desired account;
 it does not assert authentication success. One Make active request persists B
 even while B's authentication is pending. A later C request supersedes it.
 Every birth still requires an exact current receipt, profile and CLI identity.
-A ready warm B receipt is validated against prospective B within the selection
-transaction; the public validator must still refuse B while A is selected.
+A fresh ready warm B receipt is validated against prospective B within the
+selection transaction; the public validator must still refuse B while A is
+selected. A structurally valid exact-target receipt with positively stale
+canonical generation or expiry permits desired B pending renewal. It is retained
+and cannot authorize a birth until renewed. Malformed, unreadable or conflicting
+authority still refuses selection; generic validation errors are never treated as
+staleness. This avoids a second Make active request or slow authentication work
+on the owner operation path. The [Store checks](../verification/provider-logins/claude-desired-selection-store-2026-10-25.json)
+cover this distinction, CWD extension and helper admission; daemon callers remain
+an integration gate.
 
 Reuse the one-second auth watcher to choose selected and at most one warm login.
 The existing two-second login-completion worker owns slow Start/Recover calls,
 outside the login, admission and discussion lifecycle locks. Only the successful
 creator of PREPARED receives start authority. Reopen, a missing PID and a timeout
-never recreate it. No new worker thread, queue, scheduler or index is needed.
+never recreate it. A locked bounded census in the shared Begin/Replace creation
+path admits at most two unresolved helpers across daemon replacements. Terminal
+labels or absent PIDs do not release a slot; exact positive settlement does.
+Native authentication already runs asynchronously. Bound external maintenance
+with its context, outside application locks, and revisit enrollment after each
+return. Context cancellation does not make Store locks or filesystem calls
+interruptible. No new worker thread, queue, scheduler or index is needed.
 
 Recovery collects exact helper custody and retains its terminal intent. A ready
 receipt stays usable while its canonical generation and expiry remain valid.
@@ -188,14 +208,20 @@ The implementation dependency cuts are:
 |---|---|---|
 | Retained helper lifecycle | `logins/claude_auth*`, `loginworker/claude_auth*` | Retained ready/failed outcomes across reopen; no repeated budget; exact new-epoch replacement; cleanup races and ENOSPC preserve the prior authority. |
 | Birth and mutation custody | Store registry lock, shim native start/record, session replay/delete, saved credential/relogin operations | Selection-first admits zero old births; birth-first publishes exact ownership before selection; lost/unpublished reservations cannot be deleted or replayed; old nonselected accounts retain their grants until exact writer-stop proof. |
-| Desired selection and runtime | Existing login switch entry point, unborn profile provisioning, runtime/environment and both usage readers | One pending selection survives restart, C supersedes B, receipt/config gate every birth, owned-profile usage is accepted and old-account usage rejected. |
+| Desired selection and runtime | Existing login switch entry point, exact-CWD profile provisioning, runtime/environment and both usage readers | One pending selection survives restart, C supersedes B, receipt/config gate every birth, owned-profile usage is accepted and old-account usage rejected. |
 | Daemon caller and projection | Existing auth tick/completion worker and relogin completion | Slow auth leaves PTY/hooks/list responsive; current and one warm job coalesce; selected relogin avoids legacy fleet restart; desired/auth/config/startup/old-account pending remain distinct. |
 | Native integration | Actual daemon and command constructor | Normal trust/policy, native history/config and an ordinary operation work through the real caller. Helper-only evidence cannot enable this path. |
 
-The final shim guard holds the existing interprocess registry lock from exact
+The shim first claims the existing exclusive zero-PID native record under a
+short custody guard. Slow environment and image preparation follows outside the
+registry lock; an ordinary refusal can then publish its own contained stop proof.
+The final guard holds the existing interprocess registry lock from exact
 reservation/current receipt/profile validation through PTY start and durable
-native-process publication. Prepare slow work beforehand; do no network or native
-initialization under that lock. Daemon replacement cannot open a gap between
+native-process publication. Revalidate the original unused claim and consume one
+scope-local Start attempt immediately before PTY Start, including error outcomes.
+The [refused-birth checks](../verification/provider-logins/claude-no-start-custody-2026-10-25.json)
+include meaningful negative controls, duplicate/crash retention and Linux tests.
+Do no network or native initialization under the final lock. Daemon replacement cannot open a gap between
 selection and start. A crash after start but before publication retains the
 existing reservation as unresolved; no extra birth ledger is introduced.
 Destructive Store mutations and relogin recovery use the same fence and exact
@@ -223,8 +249,8 @@ The [Store foundation checks](../verification/provider-logins/claude-store-custo
 cover mutation/admission fencing and the first-creation race. The
 [custody transition checks](../verification/provider-logins/claude-custody-transitions-2026-10-25.json)
 cover all registry versions, partial deletion and the actual selection boundary
-with synthetic processes on Linux. Ordinary launch-refusal cleanup, historical
-rows without Runtime provenance and native construction remain separate gates.
+with synthetic processes on Linux. Refused-birth cleanup is covered separately;
+historical rows without Runtime provenance and native construction remain gates.
 
 Old A may finish internal work after B is desired. New host turns on a stale
 incarnation remain pending; approvals and cancellation stay usable. This slice
@@ -369,9 +395,13 @@ one question callback with normal settings; it does not enable recovery. The
 also passes on both pins: a completed Read survives a typed quota failure and
 native initialize-only continuation finishes the original task without another
 host user message. A completed final-answer case also stays inactive on both
-pins. The unanswered-question case has not reached recovery: no native history
-was durable at the first stop. Pending decisions, cancellation, queued input,
-background work and workflow parity remain unqualified.
+pins. The [pending-question counterexample](../verification/provider-logins/claude-structured-pending-question-2026-10-25.json)
+fails on both pins: after a durably unanswered native question, initialize-only
+recovery attempts another model request and appends a native continuation row.
+The resume flag therefore cannot determine eligibility. Swarm must prove exact
+interrupted work and exclude human waits before constructing a successor.
+That host gate, cancellation, queued input, background work and workflow parity
+remain unqualified.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It

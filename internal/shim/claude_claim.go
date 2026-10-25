@@ -14,14 +14,10 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-// claimClaudeReservation is called only inside AdmitClaudeProfileBirth's final
-// registry fence. Preparation alone never grants publication or Start authority.
+// claimClaudeReservation is called only inside ClaimClaudeProfileCustody's
+// registry fence. A durable claim grants cleanup custody, never Start authority.
 func (s *managedNativeScope) claimClaudeReservation(cfg Config) error {
-	if s == nil || s.root == nil || s.ownPreclaimDurable || s.recorded || cfg.LoginRuntime == nil || !logins.IsClaudeProfileRuntime(cfg.LoginStateRoot, *cfg.LoginRuntime) || cfg.NativeProvider != logins.ProviderClaude || cfg.Backend != nil || cfg.OpenCode != nil || cfg.LoginSwitchID != "" || cfg.LoginSwitchSource != "" || cfg.InputEmbargo != "" || !persist.ValidID(cfg.SessionID) || cfg.SessionDir != filepath.Join(cfg.LoginStateRoot, cfg.SessionID) || cfg.CLIIdentity == nil || cfg.CLIIdentity.Version != "2.1.310" || !persist.IsCLIContentFingerprint(cfg.CLIIdentity.Fingerprint) || len(cfg.Argv) == 0 || cfg.Argv[0] != cfg.CLIIdentity.Path {
-		return errLoginResolution
-	}
-	expected := s.info
-	if expected.SchemaVersion != ClaudeNativeWriterSchemaVersion || expected.Provider != logins.ProviderClaude || expected.Runtime != *cfg.LoginRuntime || expected.SessionID != cfg.SessionID || expected.Cwd != cfg.Cwd || expected.CLIFingerprint != cfg.CLIIdentity.Fingerprint || expected.ShimPID != os.Getpid() || expected.ShimStartTime <= 0 || expected.PID != 0 || expected.PGID != 0 || expected.StartTime != 0 || expected.BackendPID != 0 || expected.BackendStartTime != 0 {
+	if s == nil || s.ownPreclaimDurable || s.recorded || s.startAttempted {
 		return errLoginResolution
 	}
 	if err := s.validateClaudeReservation(cfg); err != nil {
@@ -32,6 +28,7 @@ func (s *managedNativeScope) claimClaudeReservation(cfg Config) error {
 			return errLoginResolution
 		}
 	}
+	expected := s.info
 	if err := writeNativeRecord(s.root, NativeProcessFile, expected); err != nil {
 		return err
 	}
@@ -42,7 +39,30 @@ func (s *managedNativeScope) claimClaudeReservation(cfg Config) error {
 	return nil
 }
 
+func (s *managedNativeScope) validateClaudeStart(cfg Config) error {
+	if s == nil || !s.ownPreclaimDurable || s.recorded || s.startAttempted || s.info != s.preclaim {
+		return errLoginResolution
+	}
+	if err := s.validateClaudeReservation(cfg); err != nil {
+		return err
+	}
+	if err := s.verifyOwnedRecord(); err != nil {
+		return err
+	}
+	if _, err := s.root.Lstat(NativeStoppedFile); !os.IsNotExist(err) {
+		return errLoginResolution
+	}
+	return nil
+}
+
 func (s *managedNativeScope) validateClaudeReservation(cfg Config) error {
+	if s == nil || s.root == nil || cfg.LoginRuntime == nil || !logins.IsClaudeProfileRuntime(cfg.LoginStateRoot, *cfg.LoginRuntime) || cfg.NativeProvider != logins.ProviderClaude || cfg.Backend != nil || cfg.OpenCode != nil || cfg.LoginSwitchID != "" || cfg.LoginSwitchSource != "" || cfg.InputEmbargo != "" || !persist.ValidID(cfg.SessionID) || cfg.SessionDir != filepath.Join(cfg.LoginStateRoot, cfg.SessionID) || cfg.CLIIdentity == nil || !filepath.IsAbs(cfg.CLIIdentity.Path) || filepath.Clean(cfg.CLIIdentity.Path) != cfg.CLIIdentity.Path || strings.ContainsAny(cfg.CLIIdentity.Path, "\x00\r\n") || cfg.CLIIdentity.Version != "2.1.310" || !persist.IsCLIContentFingerprint(cfg.CLIIdentity.Fingerprint) || len(cfg.Argv) == 0 || cfg.Argv[0] != cfg.CLIIdentity.Path {
+		return errLoginResolution
+	}
+	expected := s.info
+	if expected.SchemaVersion != ClaudeNativeWriterSchemaVersion || expected.Provider != logins.ProviderClaude || expected.Runtime != *cfg.LoginRuntime || expected.SessionID != cfg.SessionID || expected.Cwd != cfg.Cwd || expected.CLIFingerprint != cfg.CLIIdentity.Fingerprint || expected.ShimPID != os.Getpid() || expected.ShimStartTime <= 0 || expected.PID != 0 || expected.PGID != 0 || expected.StartTime != 0 || expected.BackendPID != 0 || expected.BackendStartTime != 0 {
+		return errLoginResolution
+	}
 	state, err := os.OpenRoot(cfg.LoginStateRoot)
 	if err != nil {
 		return errLoginResolution

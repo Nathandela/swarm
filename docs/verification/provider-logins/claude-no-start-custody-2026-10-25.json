@@ -1,0 +1,84 @@
+{
+  "date": "2026-10-25",
+  "scope": "Ordinary refused Claude births retain exact cleanup custody without admitting native work; one original scope may attempt Start once",
+  "production_activation": false,
+  "behavior": [
+    "Before environment, authentication or image preparation, a short Store guard claims the existing exclusive durable zero-PID record for the exact retained reservation. This grants cleanup custody only.",
+    "Full final admission still checks current selection, receipt, profile, CWD, held image and exact unchanged original claim. A scope-local attempt is consumed immediately before PTY Start, even if Start or publication fails.",
+    "The original shim can contain descendants and publish stopped proof after an ordinary refusal. A duplicate, crashed or uncertain claimant cannot adopt custody or publish another owner\u2019s proof.",
+    "The early validator preserves the recorded version and absolute/clean/no-control-character path shape. Image existence and hashing remain outside the short custody guard."
+  ],
+  "review": "Root and Astra reviewed the plan and implementation. Astra found the missing path-shape check after moving validation earlier; matched config/metadata regressions reproduced it before the shared check was corrected. Independent rereview approved the correction.",
+  "linux": {
+    "original_red": {
+      "archive_sha256": "262cc1180dffa7f0d2aee2573fe623c45a839009e9c7e9fe293ce2d4c5915bae",
+      "manifest_sha256": "85f6835258e64661be0ac81067da9ffec09617138e178515fb571c699c23db86",
+      "log_sha256": "54cc915f84c62306a3f6ae0b11730a404c981196e1921365dd57e15872da4f86",
+      "exit_code": 1,
+      "elapsed_seconds": 1.806
+    },
+    "original_red_failure": "Five actual Run refusals reached expected login errors, then lacked owned native proof.",
+    "a1_main_before_path_fix": {
+      "unit": "swarm-no-start-green-main-31de87574b2f267d",
+      "binary_sha256": "bb2663a4037d67ce97a8ca4a1c4ad513dcb30cf848e629b1692f8c9bc6c6a576",
+      "exit_code": 0,
+      "elapsed_seconds": 3.094,
+      "log_sha256": "a718ec93412ef379a8bbc63d3bb0d893045497b017e4594fb39766b4e1559bb6"
+    },
+    "a1_selective_omission": {
+      "unit": "swarm-no-start-green-negative-e515d27686e533b3",
+      "binary_sha256": "db6bfb5674bbf40e77c256b7a6165eb9b77252ab83bed0c596d6cc604bf7bb52",
+      "exit_code": 1,
+      "elapsed_seconds": 0.653,
+      "log_sha256": "520855506bd9b71059649c5c21849b6c457309aae784f9079e5a2d1f18f3563c"
+    },
+    "omission_scope": "Removing only the attempt assignment reaches actual first OS Start ENOENT, then wrongly starts a second child from a fresh command; exact expected failure observed.",
+    "a1_barriers": {
+      "unit": "swarm-no-start-green-barrier-fd6cc567d0ab3658",
+      "binary_sha256": "e510eff6c55fe584b2d4cb26909e1f917243568397ede928361645aa92022be5",
+      "exit_code": 0,
+      "elapsed_seconds": 2.002,
+      "log_sha256": "fd9cbf9a33277578e6e8b78e2c10bfa26a31ba7de42b0e266a012ffb218d376e"
+    },
+    "barrier_scope": "Actual selection during paused preparation, live duplicate refusal, and crash retention all passed. These unaffected overlays were not rerun after the path-only correction.",
+    "path_fixed_current_main": {
+      "archive_sha256": "aab93216693915b6c4e11415af70a8ce54c646e490d592eee1ce2add6b54f94d",
+      "manifest_sha256": "abc0c1e36ce5aa2dacce9aaea08bc8b33098991e73162d0239aa66b4684efb47",
+      "log_sha256": "fbe0b8615cd51f94080612c34d9d5cfaffa93a2278999a2ac3b8cb79cafa4238",
+      "exit_code": 0,
+      "elapsed_seconds": 4.046
+    },
+    "current_top_level_tests": 7,
+    "current_leaf_tests": 24,
+    "current_pass_events": 27,
+    "skips": 0
+  },
+  "path_review_manifest_sha256": "0d74bdc3dc3d0d1f6f0536b1c8e8f24ddb47cb3dca2b1483167e278b500b6eba",
+  "connected_race": {
+    "command": [
+      "python3",
+      "/private/tmp/swarm-login-go.py",
+      "test",
+      "-race",
+      "./internal/logins",
+      "./internal/persist",
+      "./internal/shim",
+      "./internal/daemon",
+      "./internal/skeleton",
+      "-run",
+      "(Claude|Login)",
+      "-count=1",
+      "-timeout=12m"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 142.762,
+    "source_unchanged": true,
+    "source_count": 649,
+    "log_sha256": "a5f440117dbc4bb577b54bbfe8e81d71f17ddb8a9c97b899e16f5b794064fd88"
+  },
+  "limits": [
+    "Linux used synthetic grants and private ELF test agents with verified prebuilt compilation substitution. No installed provider CLI, live grant or native model call ran.",
+    "Actual native constructor, config/trust/policy/new-CWD, historical no-Runtime migration, account adoption and automatic continuation remain separate gates.",
+    "Final connected review identified a separate normal Delete/startup-abort SIGTERM window between early claim and signal-handler installation. Signal capture through proof publication and pre-Start cancellation are pending; this checkpoint does not qualify that case."
+  ]
+}

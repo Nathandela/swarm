@@ -333,6 +333,10 @@ func replaceEnv(env []string, key, val string) []string {
 var fakeAgentBin string
 
 func TestMain(m *testing.M) {
+	if path := os.Getenv(claudeRunTestConfigEnv); path != "" {
+		runClaudeRefusalHelper(path)
+		os.Exit(0)
+	}
 	if mode := os.Getenv(helperEnvVar); mode != "" {
 		runHelperAgent(mode) // never returns
 	}

@@ -51,8 +51,18 @@ func (s *Store) SelectClaudeProfile(expected uint64, loginID string) (Registry, 
 		prospective.Providers[ProviderClaude] = selected
 		if intent, err := s.readClaudeAuthIntent(loginID); err == nil {
 			if intent.Phase == "ready" {
-				if err := s.validateClaudeAuthReceipt(prospective, intent.Ref, selected.Epoch); err != nil {
+				if err := claudeAuthTarget(prospective, intent.Ref); err != nil {
 					return err
+				}
+				stale, err := s.claudeAuthReceiptStale(intent)
+				if err != nil {
+					return err
+				}
+				// Desired selection can await renewal; births still require a fresh receipt.
+				if !stale {
+					if err := s.validateClaudeAuthReceipt(prospective, intent.Ref, selected.Epoch); err != nil {
+						return err
+					}
 				}
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {

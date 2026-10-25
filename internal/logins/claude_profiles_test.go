@@ -88,8 +88,8 @@ func TestClaudeProfileIdentityPathAndNativeAliases(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(r.ClaudeProfiles, r2.ClaudeProfiles) {
 		t.Fatalf("repeat: %v", err)
 	}
-	if _, err = s.ProvisionClaudeProfile(r2.Revision, l.ID, []string{"/new-work"}); !errors.Is(err, ErrPending) {
-		t.Fatalf("new live scope accepted: %v", err)
+	if _, err = s.ProvisionClaudeProfile(r2.Revision, l.ID, []string{"/new-work"}); err != nil {
+		t.Fatalf("stopped profile extension: %v", err)
 	}
 }
 

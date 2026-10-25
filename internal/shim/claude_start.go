@@ -18,30 +18,44 @@ type claudeBirth struct {
 	anchor os.FileInfo
 }
 
-// Preparation hashes/opens the qualified native image outside the registry
-// lock. No Config callback can substitute or skip the final Store admission.
-func prepareClaudeBirth(cfg Config) (*claudeBirth, error) {
+// Custody precedes slow preparation so ordinary refusals can finish their own
+// exact zero-PID scope. It grants no authentication or Start authority.
+func prepareClaudeBirth(cfg Config, scope *managedNativeScope) (*claudeBirth, error) {
 	if cfg.LoginRuntime == nil || !logins.IsClaudeProfileRuntime(cfg.LoginStateRoot, *cfg.LoginRuntime) {
 		return nil, nil
 	}
 	if cfg.CLIIdentity == nil || len(cfg.Argv) == 0 || cfg.Argv[0] != cfg.CLIIdentity.Path || cfg.Backend != nil || runtime.GOOS != "linux" {
 		return nil, errLoginResolution
 	}
-	image, err := loginworker.OpenClaudeNativeImage(cfg.CLIIdentity.Path, cfg.CLIIdentity.Version, cfg.CLIIdentity.Fingerprint)
+	store, err := logins.OpenExisting(cfg.LoginStateRoot)
 	if err != nil {
 		return nil, errLoginResolution
+	}
+	birth := &claudeBirth{store: store}
+	if err := store.ClaimClaudeProfileCustody(*cfg.LoginRuntime, cfg.Cwd, func() error { return scope.claimClaudeReservation(cfg) }); err != nil {
+		birth.close()
+		return nil, errors.Join(errLoginResolution, err)
+	}
+	return birth, nil
+}
+
+// Hash/open the fixed qualified image outside the registry fence. No Config
+// callback can substitute or skip this constructor or final Store admission.
+func (b *claudeBirth) prepareImage(cfg Config) error {
+	if b == nil {
+		return nil
+	}
+	image, err := loginworker.OpenClaudeNativeImage(cfg.CLIIdentity.Path, cfg.CLIIdentity.Version, cfg.CLIIdentity.Fingerprint)
+	if err != nil {
+		return errLoginResolution
 	}
 	anchor, err := image.Stat()
 	if err != nil {
 		_ = image.Close()
-		return nil, errLoginResolution
+		return errLoginResolution
 	}
-	store, err := logins.OpenExisting(cfg.LoginStateRoot)
-	if err != nil {
-		_ = image.Close()
-		return nil, errLoginResolution
-	}
-	return &claudeBirth{store: store, image: image, anchor: anchor}, nil
+	b.image, b.anchor = image, anchor
+	return nil
 }
 
 func (b *claudeBirth) close() {
@@ -68,13 +82,14 @@ func (b *claudeBirth) start(scope *managedNativeScope, cfg Config, cmd *exec.Cmd
 		if err != nil || !os.SameFile(b.anchor, current) || current.Size() != b.anchor.Size() || current.Mode() != b.anchor.Mode() || !current.ModTime().Equal(b.anchor.ModTime()) {
 			return errLoginResolution
 		}
-		if err := scope.claimClaudeReservation(cfg); err != nil {
+		if err := scope.validateClaudeStart(cfg); err != nil {
 			return err
 		}
 		// ExtraFiles remaps this exact held image to child fd3 before execve. The
 		// original argv[0] and all flags remain unchanged; pathname is never reopened.
 		cmd.Path = "/proc/self/fd/3"
 		cmd.ExtraFiles = []*os.File{b.image}
+		scope.startAttempted = true
 		ptmx, err = pty.StartWithSize(cmd, ws)
 		if err != nil {
 			return err

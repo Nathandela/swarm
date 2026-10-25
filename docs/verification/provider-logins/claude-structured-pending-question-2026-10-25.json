@@ -1,0 +1,77 @@
+{
+  "date": "2026-10-25",
+  "production_activation": false,
+  "scope": "Unconditional native interrupted-turn resume fails the pending-human negative on both pinned platforms",
+  "native_version": "2.1.310",
+  "harness_manifest_sha256": "d01b5fea1a8163cb0b9c1f45f483c4a0e79d6c759fd7941d695555ed952d0e3e",
+  "review": "Root and Astra reviewed the frozen harness; Root executed both platforms and independently validated receipts; Astra audited actual Mac events, wire replay and original history prefix before unchanged Linux reproduction.",
+  "sequence": [
+    "An original UUID-bearing task produces one exact native AskUserQuestion callback and requires_action. No answer is sent.",
+    "Keep the original alive for five seconds, observing native JSONL without rewriting it. The exact pending tool remains durable and unchanged through owned stop and reader drain.",
+    "Launch the same native session with the interrupted-turn environment flag and initialize-only stdin. No host user message, answer, transcript edit or cloud-origin override is supplied.",
+    "The successor attempts a model request while the question remains unanswered. The nonforwarding fixture returns HTTP403; native history appends a continuation user row and error response."
+  ],
+  "runs": [
+    {
+      "platform": "darwin-arm64",
+      "native_sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+      "receipt_sha256": "89af2ae5430c500810549b1ec13af0ff83519b11974c1b71c6c4db0ba29b26cd",
+      "elapsed_seconds": 6.429,
+      "original_hold_seconds": 5.023,
+      "first_observed_durable_pending_ms": 140.278,
+      "history_observations": 39,
+      "original_pending_census_after_join": true,
+      "original_no_decision_response": true,
+      "original_durable_pending": true,
+      "resume_initialize_only": true,
+      "resume_model_requests": 1,
+      "semantic_rows_before": 2,
+      "semantic_rows_after": 4,
+      "original_byte_prefix_unchanged": true,
+      "native_history_sha256": "a85f465adc3c6ec274d5b5b41577ffcd2afde0a72af968b3316490d67ab3af44",
+      "owned_processes": 3,
+      "cleanup": {
+        "native_groups_gone": true,
+        "http_handlers_joined": true
+      },
+      "classification": "unsafe"
+    },
+    {
+      "platform": "linux-amd64",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "receipt_sha256": "1ca88c4bdfcc505ea64cf639dd312df137103837852d17b50467f32dfb53df76",
+      "elapsed_seconds": 7.033,
+      "original_hold_seconds": 5.006,
+      "first_observed_durable_pending_ms": 129.128,
+      "history_observations": 41,
+      "original_pending_census_after_join": true,
+      "original_no_decision_response": true,
+      "original_durable_pending": true,
+      "resume_initialize_only": true,
+      "resume_model_requests": 1,
+      "semantic_rows_before": 2,
+      "semantic_rows_after": 3,
+      "original_byte_prefix_unchanged": true,
+      "native_history_sha256": "c39d22385c0490fb8eeeb94c559eeeb2ce35fba7b5277d27c5dd60a4c3ac0246",
+      "owned_processes": 3,
+      "cleanup": {
+        "native_groups_gone": true,
+        "http_handlers_joined": true
+      },
+      "classification": "unsafe"
+    }
+  ],
+  "prior_outcomes": {
+    "v1": "Not run: review found late unread callbacks and loose original fixture qualification.",
+    "v2": "Completed case passed on both platforms. Mac question stopped before successor because immediate kill preceded a native history file; uncharacterized, retained unchanged.",
+    "v3": "Not run: complete observed assistant variants were not all rejected.",
+    "v4": "Mac question stopped before successor on normal allowed rate metadata; uncharacterized, retained unchanged.",
+    "v5": "Exact session-bound allowed/non-overage metadata exception; durable pending predicate and successor behavior unchanged. Actual pending-human counterexample on both platforms."
+  },
+  "consequence": "The flag cannot supply human-wait eligibility. Automatic continuation stays unqualified until Swarm proves exact interrupted work and excludes pending human requests, superseding input/cancellation and unknown actors before any successor construction.",
+  "limits": [
+    "These were isolated native experiments with fake credentials, generated private homes and a denying loopback model endpoint. No live accounts, real inference or production discussions were used.",
+    "Linux used an exact private binary copy and a hard60-second owned cgroup with zero stop grace; all native process groups and HTTP readers were collected.",
+    "A future host eligibility gate, background/workflow completeness, permission and cancellation handling, actual account handover and frontend parity remain unimplemented or unqualified."
+  ]
+}

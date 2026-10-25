@@ -96,7 +96,7 @@ func (s *Store) ClaudeProfileHome(identity string) (string, error) {
 
 // ProvisionClaudeProfile prepares an unborn native profile. Runtime selection is
 // deliberately separate: this foundation does not enable managed profile births.
-// Completed profiles are read-only here; new local scopes require writer custody.
+// New local scopes on established profiles require positive writer exclusion.
 func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []string) (Registry, error) {
 	if len(cwds) > MaxHandoverMembers {
 		return Registry{}, ErrCapacity
@@ -119,7 +119,7 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 		if r.Revision != expected {
 			return ErrConflict
 		}
-		if r.MigrationPending || r.Providers[ProviderClaude].AuthOwnerMode != "" {
+		if mode := r.Providers[ProviderClaude].AuthOwnerMode; r.MigrationPending || mode != "" && (mode != ClaudeNativeProfileMode || r.SchemaVersion < ClaudeProfileCustodySchemaVersion) {
 			return ErrPending
 		}
 		if _, ok := r.Switches[ProviderClaude]; ok {
@@ -134,12 +134,53 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 		dir := filepath.Join("provider", "claude", "profiles", identity)
 		record, known := r.ClaudeProfiles[identity]
 		if known && record.Provisioned {
-			for _, cwd := range cwds {
-				if !slices.Contains(record.CWDs, cwd) {
-					return ErrPending
-				}
+			if err := s.verifyClaudeAliases(dir); err != nil {
+				return err
 			}
-			return s.verifyClaudeAliases(dir)
+			all := slices.Concat(record.CWDs, cwds)
+			slices.Sort(all)
+			all = slices.Compact(all)
+			if slices.Equal(all, record.CWDs) {
+				return nil
+			}
+			if !validClaudeCWDs(all) {
+				return ErrCapacity
+			}
+			if r.Revision >= ^uint64(0)-1 {
+				return ErrIneligible
+			}
+			if err := reserveClaudeProfileSpace(r, identity, all); err != nil {
+				return err
+			}
+			if err := s.claudeAuthorityMutationAllowed(r, *l); err != nil {
+				return err
+			}
+			scan := s.grantWriters
+			if scan == nil {
+				scan = processcontain.EnvironmentWriters
+			}
+			writers, err := scan([]string{home}, nil)
+			if err != nil || len(writers) != 0 {
+				return ErrInUse
+			}
+			definitions, err := s.claudeMCPDefinitions(all)
+			if err != nil {
+				return err
+			}
+			if err := s.writeClaudeMCPDefinitions(dir, definitions); err != nil {
+				return err
+			}
+			// Also settle a visible prior config rename before publishing its CWD.
+			syncDir := s.writeOps.syncDir
+			if syncDir == nil {
+				syncDir = func(dir string) error { return syncRootDir(s.root, dir) }
+			}
+			if err := syncDir(dir); err != nil {
+				return ErrDurabilityUncertain
+			}
+			r.ClaudeProfiles[identity] = ClaudeProfile{Provisioned: true, CWDs: all}
+			r.Revision++
+			return s.save(r)
 		}
 		if known && !slices.Equal(record.CWDs, cwds) {
 			return ErrPending
@@ -505,6 +546,10 @@ func (s *Store) writeClaudeMCPDefinitions(dir string, definitions map[string]jso
 	}
 	if len(encoded) > maxCredentialBytes {
 		return ErrCapacity
+	}
+	var before, after any
+	if len(raw) > 0 && json.Unmarshal(raw, &before) == nil && json.Unmarshal(encoded, &after) == nil && reflect.DeepEqual(before, after) {
+		return nil
 	}
 	_, err = durableReplace(s.root, name, encoded, s.writeOps)
 	return err

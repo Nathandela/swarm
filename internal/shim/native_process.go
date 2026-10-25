@@ -34,6 +34,7 @@ type managedNativeScope struct {
 	preclaim           NativeProcessInfo
 	recorded           bool
 	ownPreclaimDurable bool
+	startAttempted     bool
 	stopReap           chan struct{}
 	subreaper          bool
 }
@@ -98,7 +99,7 @@ func beginManagedNativeScope(cfg Config) (*managedNativeScope, error) {
 	}
 	if cfg.LoginRuntime != nil && logins.IsClaudeProfileRuntime(cfg.LoginStateRoot, *cfg.LoginRuntime) {
 		// Scope preparation carries no publication authority. Preserve any winner
-		// until the final registry guard admits our exact reservation and preclaim.
+		// until the early custody guard validates and claims our exact reservation.
 		scope.info.SchemaVersion = ClaudeNativeWriterSchemaVersion
 		scope.info.SessionID, scope.info.Cwd = cfg.SessionID, cfg.Cwd
 		if cfg.CLIIdentity != nil {

@@ -534,6 +534,37 @@ func (s *Store) ReplaceClaudeAuth(expected uint64, previous ClaudeAuthRef) (Clau
 	return ref, created, err
 }
 
+// The caller holds the registry flock; unresolved custody still occupies a slot.
+func (s *Store) claudeAuthAdmissionAllowed() error {
+	ids, err := s.claudeAuthIDs()
+	if err != nil {
+		return err
+	}
+	admitted := 0
+	for _, id := range ids {
+		intent, err := s.readClaudeAuthIntent(id)
+		if err != nil {
+			return err
+		}
+		settled := false
+		if (intent.Phase == "ready" || intent.Phase == "failed") &&
+			(intent.Scope == (ClaudeAuthScope{}) || intent.UnitRetired) && s.proveClaudeAuthStopped(intent) == nil {
+			if err := s.claudeAuthPayloadEmpty(id); err == nil {
+				settled = true
+			} else if !errors.Is(err, ErrPending) {
+				return err
+			}
+		}
+		if !settled {
+			admitted++
+		}
+	}
+	if admitted >= 2 {
+		return ErrCapacity
+	}
+	return nil
+}
+
 func (s *Store) createClaudeAuth(r Registry, loginID string) (ClaudeAuthRef, error) {
 	if r.MigrationPending || r.Revision == ^uint64(0) {
 		return ClaudeAuthRef{}, ErrPending
@@ -551,6 +582,9 @@ func (s *Store) createClaudeAuth(r Registry, loginID string) (ClaudeAuthRef, err
 		return ClaudeAuthRef{}, err
 	}
 	if _, err := s.readSaved(*l); err != nil {
+		return ClaudeAuthRef{}, err
+	}
+	if err := s.claudeAuthAdmissionAllowed(); err != nil {
 		return ClaudeAuthRef{}, err
 	}
 	nonce, err := newID()
