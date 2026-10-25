@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-25",
+  "scope": "Unused duplicate V19 preparation only; no native constructor attempt or provider session was launched.",
+  "cause": "Root started a second preparation before collecting the first preparation result.",
+  "unused_prepared": {
+    "path": "/private/tmp/swarm-codex-outer-tlapych0/prepared.json",
+    "sha256": "66b4b4785505b8a880b5717f1ed8c0e9ae04261957f3932517968024eaddcfde"
+  },
+  "intended_prepared": {
+    "path": "/private/tmp/swarm-codex-outer-mbmjm5qd/prepared.json",
+    "sha256": "e8bdcf620f957b3db253d35e36fa21fc3ddacb2bb697a0d7bf4cd11e31f43189"
+  },
+  "retired_remote_path": "/tmp/scx.hh4ld5xw/native/codex",
+  "retired_bytes": 296865480,
+  "intent": {
+    "path": "/private/tmp/swarm-native-binary-retention-20261025/unused-v19/retirement-intent.json",
+    "sha256": "fb5ddfa030cb8981e409beef4ef8a66f086ae3cd0ba2c87b3b5c829ddbd44083"
+  },
+  "script": {
+    "path": "/private/tmp/swarm-native-binary-retention-20261025/unused-v19/retire_kernel.py",
+    "sha256": "e6fb91920667f3f6b51525f6cba802b6974ac4f8ab8881ac97f629806038ca8b"
+  },
+  "dry_run": {
+    "path": "/private/tmp/swarm-native-binary-retention-20261025/unused-v19/retirement-dry-run-kernel.json",
+    "sha256": "712d475807c161ca8efb439e50b3e72c414fdf4b517ba5b56d45e095d311175c"
+  },
+  "applied": {
+    "path": "/private/tmp/swarm-native-binary-retention-20261025/unused-v19/retirement-applied.json",
+    "sha256": "3909baa5507b2a6056ba3a2be643e496a9a85be27c574c6d5dc9c3361bf79313"
+  },
+  "free_bytes_after": 636039168,
+  "guards": "No local attempt; exact remote prepared manifest, empty case temp directory and no run/final/unit evidence; private anchored owner-only regular one-link public ELF matched retained backup. Nontruncating kernel write exclusion was held through exact unlink.",
+  "limits": [
+    "No observed PID census or native execution is claimed. The intended stage ran once afterward and remained untouched by this cleanup.",
+    "Only the unused cached public ELF was retired. Metadata, source, logs, accounts, credentials and installed CLI were preserved. The matching public binary backup remains retained."
+  ]
+}

@@ -280,8 +280,9 @@ observation qualifies neither whole-workflow completion nor automatic recovery.
 
 The [fresh managed Codex TUI attempts](provider-logins/codex-fresh-tui-2026-10-25.json)
 also remain unqualified. Known plugin metadata and a synthetic usage response
-were observed before a CONNECT rejection. Its target and producer were not
-recorded; a masked diagnostic is prepared. Real-account and continuation gates remain open.
+were observed before a CONNECT rejection. A masked diagnostic identified the
+raw GitHub authority; source review found a default public announcement fetch.
+The historical sender and path remain unknown. Real-account and continuation gates remain open.
 
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.

@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Fourteen unqualified full fresh managed Codex constructor attempts, two seed-only controls, and one failed preparation; synthetic grants only, no user authentication or live installation changes.",
-  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V18 recorded the featured, installed, and suggested plugin metadata GETs and a synthetic ordinary usage response, but failed on an unexpected CONNECT authority that was not recorded. This does not establish authentication, account adoption, readiness, or a production cause; no host or producer is inferred for the unknown authority.",
+  "scope": "Fifteen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
+  "overall": "Still NOT QUALIFIED. V19 identified raw.githubusercontent.com:443 as the rejected non-nested CONNECT target using its complete hash and length. Its historical sender and path remain unknown. Metadata/usage/three native frames remain partial evidence; no model/MCP/TUI ownership or adoption qualified.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -696,9 +696,77 @@
         "path": "docs/verification/provider-logins/native-fixture-retirement-batch4-2026-10-25.json",
         "sha256": "d765dc6cdeead62fee4bcbcb522b06e0c8f1ec95c5c94df778f95542a0c574ea"
       }
+    },
+    {
+      "id": "diagnostic-V19",
+      "result": "EXPECTED DIAGNOSTIC FAIL. The unchanged CONNECT rejection captured a masked target; no destination was allowed and no native ownership or account adoption qualified.",
+      "run": {
+        "path": "/private/tmp/swarm-codex-outer-mbmjm5qd/run.json",
+        "sha256": "5c60f99c9b159b348d801be3c309eee66f6e9d7619ba4995e77da8cc6d02a32d"
+      },
+      "inner_receipt": {
+        "path": "/private/tmp/swarm-codex-outer-mbmjm5qd/inner-evidence/receipt.inner.json",
+        "sha256": "48545d12643cd7787ad9bb982bc6c564d483222cefd9cf4ad0b48a106b2dd81e"
+      },
+      "evidence_index": {
+        "path": "/private/tmp/swarm-codex-outer-mbmjm5qd/inner-evidence/collected-sha256.json",
+        "sha256": "bd4b28969bbf0b8ab41274c5a2b4e0a79c327eebca41888b1bce8a386c0e17c4"
+      },
+      "prepared": {
+        "path": "/private/tmp/swarm-codex-outer-mbmjm5qd/prepared.json",
+        "sha256": "e8bdcf620f957b3db253d35e36fa21fc3ddacb2bb697a0d7bf4cd11e31f43189"
+      },
+      "packet": {
+        "path": "/private/tmp/swarm-codex-tui-constructor-20261025-v14/review-v14/manifest.json",
+        "sha256": "834d7d08af2bc2ce21a0191daf92da5bc13a7324fccce5239ce3247d57676672"
+      },
+      "envelope": {
+        "path": "/private/tmp/swarm-codex-envelope-20261025-v19/hashes.json",
+        "sha256": "b73d2a5b3eafad952192b944848ca672706ce749f360836a9f51e4ed7b8c0ff9"
+      },
+      "observed": {
+        "masked_rejection": {
+          "method": "rejected-CONNECT",
+          "already_tunneled": false,
+          "target_bytes": 29,
+          "truncated": false,
+          "authority": {
+            "sha256": "0a350be6544b08091b3d27ea2b3800d176ebf78a3ade9bf5af870268b09236e1"
+          }
+        },
+        "public_candidate": "raw.githubusercontent.com:443",
+        "exact_full_hash_and_length_match": true,
+        "limits": "This identifies the authority and excludes nested CONNECT; historical client, HTTP path, headers and purpose remain unproven.",
+        "native_frames": 3,
+        "main_inferences": 0,
+        "MCP_calls": 0,
+        "PTY_bytes": 0,
+        "connections_admitted": 6,
+        "TLS_handshake_failures": 0,
+        "usage_response": "One synthetic-A/A ordinary-allowed response; not adoption/readiness proof.",
+        "combined_count_6": "Four public RPC upper-bound units plus two observer ledger entries; not six observed observer RPCs."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 3.624141008942388,
+        "observed_identities": 25,
+        "unattributed_image_gaps": 1,
+        "all_observed_identities_ended": true,
+        "exact_cgroup_empty_and_gone": true,
+        "native_endpoint_absent": true,
+        "pins_unchanged": true,
+        "complete_fixture_listener_and_four_roles": "Unqualified; the image-gap tuple remains ineligible for any required role."
+      },
+      "next_step": "Review the pinned source contract for a narrow raw GitHub proxy-bypass amendment. No authority allowance or native case approved by this record.",
+      "source_plan": {
+        "path": "/private/tmp/swarm-codex-raw-github-plan-20261025-v1/PLAN.md",
+        "sha256": "147897de2ad10677603d66709a1f63a97d2097b0e2f07e547b32854e1fe1581c",
+        "pinned_native_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+        "producer_source_url": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tui/src/tooltips.rs",
+        "scope": "A default public announcement producer is source-reachable without provider auth. This does not identify the historical sender or HTTP path; only preparation of a proxy-bypass amendment was approved."
+      }
     }
   ],
-  "next_step": "Reject-only masked-authority diagnostic plan review only. No CONNECT allowance, inferred host/producer, or new native run is approved.",
+  "next_step": "Review and prepare the source-backed addition of raw.githubusercontent.com to existing canonical NO_PROXY. Keep provider CONNECT acceptance, native defaults and functional/cleanup gates unchanged; final artifact review is required before another case.",
   "limits": [
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
@@ -763,11 +831,13 @@
     "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
   },
   "attempt_counts": {
-    "full_constructor_attempts": 14,
+    "full_constructor_attempts": 15,
     "seed_only_controls": 2,
     "failed_preparations": 1,
-    "total_recorded_operations": 17,
-    "latest_actual_attempt": "diagnostic-V18"
+    "unused_successful_preparations": 1,
+    "total_recorded_operations": 19,
+    "count_scope": "Recorded constructor/seed/preparation evidence only; cleanup operations are separate.",
+    "latest_actual_attempt": "diagnostic-V19"
   },
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
@@ -780,5 +850,9 @@
   "retirement_batch4_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch4-2026-10-25.json",
     "sha256": "d765dc6cdeead62fee4bcbcb522b06e0c8f1ec95c5c94df778f95542a0c574ea"
+  },
+  "unused_preparation_reference": {
+    "path": "docs/verification/provider-logins/codex-unused-preparation-2026-10-25.json",
+    "sha256": "c4399581592d1b957c5238c05c9dedf87d2940e212a986d43be7a5e7f4ee548e"
   }
 }
