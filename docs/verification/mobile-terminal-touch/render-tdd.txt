@@ -7,14 +7,24 @@ the idle board marker was retransmitted in 406 captured renderer bytes.
 After removing the forced clear and SGR nonce, the focused suite passed:
 
 ```text
-go test ./internal/tui -run '^(TestRepaint_.*|TestBannerExpiryChangesReachRenderer|TestResizeAndAttachRestoreReachRenderer|TestLiveness_EventMovesRowGroup|TestWorkingIndicatorAdvancesOnlyOnAnimationTick|TestConnectionLost_PersistsInStatusBarAndHaltsRepaintTick)$' -count=1 -v
+go test ./internal/tui -run '^(TestRepaint_.*|TestWorkingAnimationWritesOnlyChangedGlyph|TestTerminalRestoreRedrawsUnchangedBoard|TestResizeReachesRenderer|TestBannerExpiryChangesReachRenderer|TestLiveness_EventMovesRowGroup|TestWorkingIndicatorAdvancesOnlyOnAnimationTick|TestConnectionLost_PersistsInStatusBarAndHaltsRepaintTick)$' -count=1 -v
 unchanged repaint renderer output: 0 bytes
 PASS
-ok github.com/Nathandela/swarm/internal/tui 5.275s
+ok github.com/Nathandela/swarm/internal/tui 4.638s
 ```
 
 The actual renderer tests also observed a `59s` → `1m` elapsed bucket update,
-banner expiry, a resize update, and the board redraw after returning from attach.
-The liveness event still moves the row and renders its new status/summary.
-These are local Bubble Tea renderer checks; no phone or SSH performance claim is
-made.
+banner expiry, resize, and the board redraw after `tea.Program.ReleaseTerminal`,
+injected external terminal output, and `RestoreTerminal` with unchanged content.
+The spinner test sees the changed glyph without the unchanged board marker. As a
+negative control, an overlay that adds `tea.ClearScreen` to
+`workingAnimationMsg` fails that test because it retransmits the full board,
+including `working-output-marker`. The liveness event still moves the row and
+renders its new status/summary. These are local Bubble Tea renderer checks; no
+phone or SSH performance claim is made.
+
+Negative-control command (intentional failure): `go test -overlay
+/private/tmp/swarm-working-clear-overlay.json ./internal/tui -run
+^TestWorkingAnimationWritesOnlyChangedGlyph$ -count=1 -v`. The overlay changes
+the animation command to include `tea.ClearScreen`; the test fails and captures
+the unchanged `working-output-marker` in the spinner update.
