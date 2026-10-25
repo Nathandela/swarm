@@ -160,6 +160,12 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 	}
 
+	claude, err := prepareClaudeBirth(cfg)
+	if err != nil {
+		return 0, err
+	}
+	defer claude.close()
+
 	embargo, err := openInputEmbargo(cfg)
 	if err != nil {
 		return 0, err
@@ -216,11 +222,12 @@ func Run(cfg Config) (agentExit int, err error) {
 	// no file written, no timeout waited, no handshake expected (HookSocketPath's own
 	// unset-means-disabled convention).
 	var (
-		cmd     *exec.Cmd
-		ptmx    *os.File
-		srv     *server
-		replies *replyPump
-		backend *backendProc
+		cmd             *exec.Cmd
+		ptmx            *os.File
+		srv             *server
+		replies         *replyPump
+		backend         *backendProc
+		nativeRecordErr error
 		// backendWatch is `backend` ONLY once its socket became servable. See §R7.6 below.
 		backendWatch *backendProc
 		// preAgent holds the goroutines the backend path starts BEFORE the agent exists, so
@@ -280,7 +287,17 @@ func Run(cfg Config) (agentExit int, err error) {
 			Dir:  cfg.Cwd,
 		}
 		var startErr error
-		ptmx, startErr = pty.StartWithSize(cmd, ws)
+		if claude != nil {
+			ptmx, startErr = claude.start(managed, cfg, cmd, ws)
+			if startErr != nil && cmd.Process != nil {
+				// The child exists: retain the error and join the ordinary draining,
+				// containment and Wait path rather than returning a live orphan.
+				nativeRecordErr = startErr
+				startErr = nil
+			}
+		} else {
+			ptmx, startErr = pty.StartWithSize(cmd, ws)
+		}
 		if startErr != nil {
 			sigStop()
 			_ = listener.Close()
@@ -443,7 +460,9 @@ func Run(cfg Config) (agentExit int, err error) {
 		srv.setAgentPgid(cmd.Process.Pid)
 	}
 
-	nativeRecordErr := managed.record(cmd.Process.Pid, backend)
+	if claude == nil {
+		nativeRecordErr = managed.record(cmd.Process.Pid, backend)
+	}
 	if backendWatch != nil { // a contained backend is already reaped; its pid may be reused
 		managed.reapWhileRunning(cmd.Process.Pid, backendWatch.cmd.Process.Pid)
 	} else {

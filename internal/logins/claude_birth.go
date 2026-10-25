@@ -13,6 +13,44 @@ func IsClaudeProfileRuntime(stateRoot string, rt Runtime) bool {
 	return rt.Provider == ProviderClaude && !rt.ExternalAuth && rt.Epoch != 0 && validDigest(rt.Identity) && filepath.IsAbs(stateRoot) && filepath.Clean(stateRoot) == stateRoot && rt.Home == filepath.Join(stateRoot, "logins", "provider", "claude", "profiles", rt.Identity)
 }
 
+// ClaimClaudeProfileCustody fences an exclusive zero-PID cleanup claim only.
+// The callback must validate the exact live reservation, recorded CLI and shim,
+// durably claim once, and neither start a child nor reenter Store.
+func (s *Store) ClaimClaudeProfileCustody(rt Runtime, cwd string, claim func() error) error {
+	if claim == nil || !IsClaudeProfileRuntime(s.StateRoot(), rt) || !validClaudeCWDs([]string{cwd}) {
+		return ErrIneligible
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.locked(func() error {
+		r, err := s.load()
+		if err != nil {
+			return err
+		}
+		if r.SchemaVersion < ClaudeProfileCustodySchemaVersion {
+			return ErrPending
+		}
+		if rt.Epoch > r.Providers[ProviderClaude].Epoch {
+			return ErrConflict
+		}
+		if _, known := r.ClaudeProfiles[rt.Identity]; !known {
+			return ErrPending
+		}
+		for _, login := range r.Logins {
+			if login.Provider == ProviderClaude && login.Identity == rt.Identity {
+				if _, err := s.readSavedRecord(login); err != nil {
+					return err
+				}
+				if err := s.settleClaudeRegistry(); err != nil {
+					return err
+				}
+				return claim()
+			}
+		}
+		return ErrConflict
+	})
+}
+
 // AdmitClaudeProfileBirth holds the interprocess registry fence through the
 // caller's one exact reservation check, native start and durable publication.
 // The callback must not reacquire Store locks or perform slow preparation.
@@ -58,6 +96,9 @@ func (s *Store) AdmitClaudeProfileBirth(rt Runtime, cwd string, startAndPublish 
 			return err
 		}
 		if err := s.validateClaudeAuthReceipt(r, intent.Ref, rt.Epoch); err != nil {
+			return err
+		}
+		if err := s.settleClaudeRegistry(); err != nil {
 			return err
 		}
 		return startAndPublish()

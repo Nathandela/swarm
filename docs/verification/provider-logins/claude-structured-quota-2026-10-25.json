@@ -1,0 +1,120 @@
+{
+  "date": "2026-10-25",
+  "scope": "One isolated Claude quota-after-completed-Read no-input native continuation, reviewed and run on macOS and Linux",
+  "production_activation": false,
+  "reviewed_manifest_sha256": "d8a78f59c48855f78f66917cc72ab856712d3db1b198da20b3d5154f1bcb9c49",
+  "review": "V2 actual execution is unqualified because its diagnostic-history duplicate oracle was defective. Astra review found V3 paired-role blocks accepted; V3 was not run. V4 corrected the oracle and was reviewed; this remains a narrow positive, not a readiness gate.",
+  "behavior": [
+    "A completed Read and typed subscription-quota error were observed in the original native session. A fresh native process continued with initialize only under the narrow continuation environment flag; no host input or replayed task was supplied.",
+    "The continuation retained the original session UUID and tool-result context, reached a final answer, and preserved normal settings, instructions, project hook and deny rule.",
+    "The original history rows remained unchanged across continuation. Both runs used generated private homes, fake credentials, a nonforwarding loopback server, and exact owned-process cleanup."
+  ],
+  "runs": [
+    {
+      "platform": "darwin-arm64",
+      "manifest_sha256": "d8a78f59c48855f78f66917cc72ab856712d3db1b198da20b3d5154f1bcb9c49",
+      "native_sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+      "outer_log_sha256": "23c6608f3827c26855888fd5233c44afc7a2490c7e786a718bd6e7937607da65",
+      "receipt_sha256": "efbcb1699095172092b7faa8faf101a5f0dbcbe84a282bf5a344a379bc991e05",
+      "native_elapsed_seconds": 1.8137853750959039,
+      "outer_elapsed_seconds": 2.196,
+      "qualified": true,
+      "classification": "narrow-positive",
+      "history_rows_sha256": "062ed2fbf05d99cab0563b61f6f8c286913ecb344d4146c784c29ae00eac758d",
+      "original_rows_digest": "cb71c71572b1bfcf1e96889c4c661da17a2b8a96beb8cd86256f6fa72297f811",
+      "read_result_digest": "b8fef292d47e3366837a78f89e40f10c874c53e9d7dbdc87ff6e96d3b20cbdfa",
+      "resume_initialize_only": true,
+      "resume_result_original_uuid_matches": true,
+      "resume_main_requests": 1,
+      "native_groups_gone": true,
+      "http_handlers_joined": true
+    },
+    {
+      "platform": "linux-amd64",
+      "manifest_sha256": "d8a78f59c48855f78f66917cc72ab856712d3db1b198da20b3d5154f1bcb9c49",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "outer_log_sha256": "4abd5785eb87daa7404afa00da8026fcc1852cf9c97b113b85f30cdaa56b34ae",
+      "receipt_sha256": "32e71ff000fae78a55ddadc1a16f0b23ef85ddb032110e989fe29dd5e1bad9c0",
+      "native_elapsed_seconds": 2.4298139138845727,
+      "outer_elapsed_seconds": 3.265,
+      "qualified": true,
+      "classification": "narrow-positive",
+      "history_rows_sha256": "911189c3ed546c99d3cd71a83655b3ec311b0b6e28fca299478a2b6cc72978b2",
+      "original_rows_digest": "ea4f5095a0e63ba16da617dd2bfd09299bbebb8e99b85545bc65f09edab9aa6a",
+      "read_result_digest": "b8fef292d47e3366837a78f89e40f10c874c53e9d7dbdc87ff6e96d3b20cbdfa",
+      "resume_initialize_only": true,
+      "resume_result_original_uuid_matches": true,
+      "resume_main_requests": 1,
+      "native_groups_gone": true,
+      "http_handlers_joined": true,
+      "hard_cgroup_limit_seconds": 60,
+      "stop_grace_seconds": 0
+    }
+  ],
+  "prior_outcomes": {
+    "v2": "Actual run remains unqualified because the diagnostic-history duplicate oracle invalidated the result.",
+    "v3": "Not run: Astra review found paired-role blocks accepted; V4 corrected the role oracle.",
+    "v4": "Corrected and reviewed history oracle; both platform receipts qualify only for the narrow case above."
+  },
+  "limits": [
+    "This does not establish readiness, general quota recovery, terminal UI equivalence or complete workflow parity.",
+    "The test used explicit synthetic trust and fixture choices. No live accounts, discussions or production setup were used.",
+    "No product activation is authorized or implied."
+  ],
+  "remaining_gates": [
+    "Unanswered-question durable-state characterization and its recovery negative remain pending.",
+    "Permission, cancellation, queued input, background work, MCP/workflow parity and live account handover remain unqualified."
+  ],
+  "subsequent_negatives": {
+    "manifest_sha256": "5f2052fa1b3c2326ea2009270edcd903093eca2cef78882d5a6642ac4a7ac9db",
+    "review": "V1 was not run: review found unread late callbacks and loose original-state qualification. Root and Astra reviewed V2 joined callback census, exact fixture predicates and startup/quiet liveness before native execution.",
+    "runs": [
+      {
+        "case": "completed",
+        "receipt_sha256": "87d2fdddd460374ce7c426bbc657e651da0ab35b3ea5aebfed4c83e91f4e5698",
+        "elapsed_seconds": 6.222384667024016,
+        "classification": "narrow-safe-negative",
+        "resume_model_requests": 0,
+        "owned_processes": 3,
+        "cleanup": {
+          "native_groups_gone": true,
+          "http_handlers_joined": true
+        },
+        "quiet_seconds": 5.019474874949083,
+        "history_unchanged": true,
+        "callback_census_after_join": true,
+        "platform": "darwin-arm64"
+      },
+      {
+        "case": "question",
+        "receipt_sha256": "621540ae7c58ea81fd8d4922295ead2cf0d996f34a5dedbe0062931e1d7dfb6a",
+        "elapsed_seconds": 1.2810615829657763,
+        "classification": "uncharacterized",
+        "resume_model_requests": 0,
+        "owned_processes": 2,
+        "cleanup": {
+          "native_groups_gone": true,
+          "http_handlers_joined": true
+        },
+        "limit": "Actual unanswered native callback and requires_action occurred, but no native history file existed after immediate stop. No successor was constructed; this does not test recovery.",
+        "platform": "darwin-arm64"
+      },
+      {
+        "case": "completed",
+        "platform": "linux-amd64",
+        "receipt_sha256": "e57d10907df257e44a4bfabee1d9cd6b951d9c65101098335090bf3f6e8d3a5a",
+        "elapsed_seconds": 7.181126781972125,
+        "classification": "narrow-safe-negative",
+        "resume_model_requests": 0,
+        "owned_processes": 3,
+        "cleanup": {
+          "native_groups_gone": true,
+          "http_handlers_joined": true
+        },
+        "quiet_seconds": 5.0360568929463625,
+        "history_unchanged": true,
+        "callback_census_after_join": true
+      }
+    ]
+  }
+}

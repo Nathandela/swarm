@@ -87,6 +87,16 @@ func (d *Daemon) Delete(id string) error {
 	}
 	d.mu.Unlock()
 
+	// Stored custody, not the display process state or a stale caller snapshot,
+	// decides whether workspace/session cleanup may begin.
+	retired, err := d.retireClaudeReservation(id, nil)
+	if err != nil {
+		return err
+	}
+	if retired.ID != "" {
+		meta = retired
+	}
+
 	if present {
 		if meta.Status.Process == status.ProcessRunning {
 			d.reapOrphanBackend(id)

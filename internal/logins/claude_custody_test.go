@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -546,31 +548,6 @@ func TestClaudeRetirementRejectsNullAndUnrecognizedNoForkProof(t *testing.T) {
 	}
 }
 
-func TestClaudeOperationalCustodyReadsWithoutRegistryFlockAndRetainsErrors(t *testing.T) {
-	s, _, _, _ := claudeCustodyFixture(t)
-	s.mu.Lock()
-	err := s.locked(func() error {
-		yes, err := ClaudeOperationalCustody(s.StateRoot())
-		if err != nil || !yes {
-			t.Fatalf("readonly fence failed: %v %v", yes, err)
-		}
-		return nil
-	})
-	s.mu.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(s.StateRoot(), "logins", "registry.json"), []byte("corrupt"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if yes, err := ClaudeOperationalCustody(s.StateRoot()); yes || err == nil {
-		t.Fatalf("corrupt fence became absence: %v %v", yes, err)
-	}
-	if yes, err := ClaudeOperationalCustody(t.TempDir()); yes || err != nil {
-		t.Fatalf("absent login registry changed: %v %v", yes, err)
-	}
-}
-
 func TestClaudeLegacyUnknownRuntimeCannotBecomeUnrelatedAtOperationalFloor(t *testing.T) {
 	for _, kind := range []string{"missing", "external", "foreign"} {
 		t.Run(kind, func(t *testing.T) {
@@ -778,5 +755,623 @@ func TestClaudeAbsentFenceRechecksPublishedAndPartialBootstrap(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+func claudeLegacyCleanupFixture(t *testing.T, floor int, stopped bool) (*Store, Login, map[string]any, NativeProcessInfo) {
+	t.Helper()
+	s := testStore(t)
+	a := add(t, s, ProviderClaude, "A", claudeCredential("a", "a"))
+	s.mu.Lock()
+	err := s.locked(func() error {
+		r, err := s.load()
+		if err != nil {
+			return err
+		}
+		r.SchemaVersion = floor
+		r.Providers[ProviderClaude] = ProviderState{Provider: ProviderClaude, ActiveID: a.ID, Epoch: 7}
+		return s.save(r)
+	})
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := Runtime{Provider: ProviderClaude, Identity: a.Identity, Epoch: 7, Home: s.Home(ProviderClaude)}
+	meta := map[string]any{"schema_version": 4, "id": "source", "agent_type": "claude", "cwd": "/work", "login_runtime": rt, "shim_pid": 0, "shim_start_time": 0}
+	native := NativeProcessInfo{SchemaVersion: 3, Generation: strings.Repeat("f", 32), ShimPID: 536870912, ShimStartTime: 1, Provider: ProviderClaude, Runtime: rt}
+	if stopped {
+		meta["shim_pid"], meta["shim_start_time"] = native.ShimPID, native.ShimStartTime
+		writeClaudeCustodyJSON(t, s.StateRoot(), "source", NativeProcessFile, native)
+		writeClaudeCustodyJSON(t, s.StateRoot(), "source", NativeStoppedFile, NativeStoppedInfo{SchemaVersion: 3, Native: native, WritersStopped: true, DescendantsContained: true})
+	}
+	writeClaudeCustodyJSON(t, s.StateRoot(), "source", "meta.json", meta)
+	return s, a, meta, native
+}
+
+func TestClaudeLegacyCleanupPromotesAllFloorsOnlyAfterPositiveProof(t *testing.T) {
+	for _, floor := range []int{1, 9} {
+		for _, kind := range []string{"unresolved", "stopped", "no_fork"} {
+			t.Run(fmt.Sprintf("%d_%s", floor, kind), func(t *testing.T) {
+				s, _, meta, _ := claudeLegacyCleanupFixture(t, floor, kind == "stopped")
+				before := snapshot(t, s)
+				var noFork func() error
+				if kind == "no_fork" {
+					noFork = func() error { return nil }
+				}
+				called := false
+				err := WithClaudeReservationRetirement(s.StateRoot(), "source", noFork, func(marker ClaudeReservationRetirement) error {
+					called = true
+					r := snapshot(t, s)
+					want := before
+					want.SchemaVersion = 10
+					want.Revision++
+					if !reflect.DeepEqual(r, want) || marker == (ClaudeReservationRetirement{}) {
+						t.Fatalf("cleanup precedes exact durable promotion: %+v marker=%+v", r, marker)
+					}
+					meta["schema_version"], meta["claude_retirement"] = 5, marker
+					writeClaudeCustodyJSON(t, s.StateRoot(), "source", "meta.json", meta)
+					return nil
+				})
+				if kind == "unresolved" {
+					if err == nil || called || !reflect.DeepEqual(snapshot(t, s), before) {
+						t.Fatalf("unproved cleanup changed floor: %v %v", called, err)
+					}
+					return
+				}
+				if err != nil || !called {
+					t.Fatalf("positive cleanup failed: %v %v", called, err)
+				}
+				promoted := snapshot(t, s)
+				if err := WithClaudeReservationRetirement(s.StateRoot(), "source", nil, func(marker ClaudeReservationRetirement) error {
+					if marker == (ClaudeReservationRetirement{}) {
+						t.Fatal("retry lost marker")
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(snapshot(t, s), promoted) {
+					t.Fatal("retry promoted revision twice")
+				}
+			})
+		}
+	}
+}
+
+func TestClaudeLegacyImmutableSaveAndMissingStorageRefuseBeforeOperationalFloor(t *testing.T) {
+	for _, kind := range []string{"floor1", "floor9", "missing", "missing_external", "partial"} {
+		t.Run(kind, func(t *testing.T) {
+			s, _, _, _ := claudeLegacyCleanupFixture(t, 1, false)
+			if kind == "floor9" {
+				s.mu.Lock()
+				err := s.locked(func() error {
+					r, err := s.load()
+					if err != nil {
+						return err
+					}
+					r.SchemaVersion = 9
+					return s.save(r)
+				})
+				s.mu.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "missing_external" {
+				path := filepath.Join(s.StateRoot(), "source", "meta.json")
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var m map[string]any
+				if json.Unmarshal(raw, &m) != nil {
+					t.Fatal("invalid fixture")
+				}
+				m["login_runtime"].(map[string]any)["external_auth"] = true
+				writeClaudeCustodyJSON(t, s.StateRoot(), "source", "meta.json", m)
+			}
+			if kind == "missing" || kind == "missing_external" || kind == "partial" {
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.RemoveAll(filepath.Join(s.StateRoot(), "logins")); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "partial" {
+					if err := os.Mkdir(filepath.Join(s.StateRoot(), "logins"), 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			called := false
+			if err := WithClaudeMetadataSave(s.StateRoot(), "source", []byte(`{"schema_version":1,"id":"source","agent_type":"fake"}`), func() error { called = true; return nil }); err == nil || called {
+				t.Fatalf("legacy routing erased before custody floor: %v %v", called, err)
+			}
+			if err := WithClaudeReservationRetirement(s.StateRoot(), "source", nil, func(ClaudeReservationRetirement) error { called = true; return nil }); err == nil || called {
+				t.Fatalf("legacy missing/unproved custody became unrelated: %v %v", called, err)
+			}
+			if kind == "missing" || kind == "missing_external" || kind == "partial" {
+				if err := WithClaudeReservationRetirement(s.StateRoot(), "source", nil, func(ClaudeReservationRetirement) error { return nil }); !errors.Is(err, ErrPending) {
+					t.Fatalf("incomplete storage lost pending classification: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeLegacyPromotionFailureRetainsAuthorityAndRetries(t *testing.T) {
+	for _, kind := range []string{"enospc", "uncertain", "overflow", "marker"} {
+		t.Run(kind, func(t *testing.T) {
+			s, _, meta, _ := claudeLegacyCleanupFixture(t, 9, true)
+			before := snapshot(t, s)
+			if kind == "overflow" {
+				s.mu.Lock()
+				err := s.locked(func() error {
+					r, err := s.load()
+					if err != nil {
+						return err
+					}
+					r.Revision = ^uint64(0)
+					return s.save(r)
+				})
+				s.mu.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
+				before = snapshot(t, s)
+			}
+			state, err := openClaudeCustodyState(s.StateRoot())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = state.Close() }()
+			calls := 0
+			markerFailure := errors.New("marker rename failed")
+			s.mu.Lock()
+			err = s.locked(func() error {
+				r, err := s.load()
+				if err != nil {
+					return err
+				}
+				bytes := int64(0)
+				m, err := readClaudeMeta(state, s.StateRoot(), "source", &bytes)
+				if err != nil {
+					return err
+				}
+				switch kind {
+				case "enospc":
+					s.writeOps.rename = func(string, string) error { return syscall.ENOSPC }
+				case "uncertain":
+					s.writeOps.syncDir = func(string) error { return syscall.EIO }
+				}
+				return s.retireClaudeReservation(state, &r, m, nil, func(ClaudeReservationRetirement) error { calls++; return markerFailure })
+			})
+			s.mu.Unlock()
+			s.writeOps = writeOps{}
+			if err == nil {
+				t.Fatal("failed promotion/marker authorized cleanup")
+			}
+			if kind == "enospc" && !errors.Is(err, syscall.ENOSPC) || kind == "uncertain" && !errors.Is(err, ErrDurabilityUncertain) || kind == "marker" && err != markerFailure {
+				t.Fatalf("wrong failure: %v", err)
+			}
+			if kind != "marker" && calls != 0 {
+				t.Fatal("callback ran before successful registry durability")
+			}
+			got := snapshot(t, s)
+			if kind == "enospc" || kind == "overflow" {
+				if !reflect.DeepEqual(got, before) {
+					t.Fatal("refused floor change mutated registry")
+				}
+			} else {
+				want := before
+				want.SchemaVersion = 10
+				want.Revision++
+				if !reflect.DeepEqual(got, want) {
+					t.Fatal("promotion changed unrelated state")
+				}
+			}
+			raw, err := os.ReadFile(filepath.Join(s.StateRoot(), "source", "meta.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(raw, []byte("claude_retirement")) {
+				t.Fatal("failed marker appeared durable")
+			}
+			if kind == "overflow" {
+				return
+			}
+			if err := WithClaudeReservationRetirement(s.StateRoot(), "source", nil, func(marker ClaudeReservationRetirement) error {
+				meta["schema_version"], meta["claude_retirement"] = 5, marker
+				writeClaudeCustodyJSON(t, s.StateRoot(), "source", "meta.json", meta)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			final := snapshot(t, s)
+			want := before
+			want.SchemaVersion = 10
+			want.Revision++
+			if !reflect.DeepEqual(final, want) {
+				t.Fatal("retry changed selection or advanced promotion twice")
+			}
+		})
+	}
+}
+
+func TestClaudeLegacyPromotionOrdersCleanupAgainstSelectAndStaleSave(t *testing.T) {
+	for _, floor := range []int{1, 9} {
+		t.Run(fmt.Sprint(floor), func(t *testing.T) {
+			s, a, meta, _ := claudeLegacyCleanupFixture(t, floor, true)
+			before := snapshot(t, s)
+			oldRaw, _ := json.Marshal(meta)
+			other, err := OpenExisting(s.StateRoot())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = other.Close() }()
+			entered, release := make(chan struct{}), make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				done <- WithClaudeReservationRetirement(s.StateRoot(), "source", nil, func(marker ClaudeReservationRetirement) error {
+					if marker == (ClaudeReservationRetirement{}) {
+						return errors.New("zero marker bypassed promotion")
+					}
+					close(entered)
+					<-release
+					meta["schema_version"], meta["claude_retirement"] = 5, marker
+					writeClaudeCustodyJSON(t, s.StateRoot(), "source", "meta.json", meta)
+					return nil
+				})
+			}()
+			<-entered
+			promoted := snapshot(t, s)
+			if promoted.SchemaVersion != 10 || promoted.Revision != before.Revision+1 || promoted.Providers[ProviderClaude] != before.Providers[ProviderClaude] {
+				t.Fatal("cleanup callback lacks durable unchanged selection")
+			}
+			if err := syscall.Flock(int(other.lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); !errors.Is(err, syscall.EWOULDBLOCK) {
+				if err == nil {
+					_ = syscall.Flock(int(other.lock.Fd()), syscall.LOCK_UN)
+				}
+				t.Fatal("cleanup callback escaped registry fence")
+			}
+			selected, saved := make(chan error, 1), make(chan error, 1)
+			go func() { _, err := other.SelectClaudeProfile(before.Revision, a.ID); selected <- err }()
+			go func() {
+				saved <- WithClaudeMetadataSave(s.StateRoot(), "source", oldRaw, func() error { return errors.New("stale metadata callback ran") })
+			}()
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if err := <-selected; !errors.Is(err, ErrConflict) {
+				t.Fatalf("promotion did not invalidate stale Select CAS: %v", err)
+			}
+			if err := <-saved; !errors.Is(err, ErrConflict) {
+				t.Fatalf("stale Save crossed terminal promotion: %v", err)
+			}
+		})
+	}
+}
+
+func TestClaudeLegacyPromotionLeavesOtherProviderAndUnmanagedRowsUnchanged(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		t.Run(fmt.Sprint(managed), func(t *testing.T) {
+			state := t.TempDir()
+			var s *Store
+			if managed {
+				s = testStore(t)
+				state = s.StateRoot()
+			}
+			meta := map[string]any{"schema_version": 4, "id": "other", "agent_type": "codex", "cwd": "/work", "login_runtime": Runtime{Provider: ProviderCodex, Epoch: 1, Identity: strings.Repeat("a", 64), Home: "/unrelated/native"}}
+			raw := writeClaudeCustodyJSON(t, state, "other", "meta.json", meta)
+			var before Registry
+			if s != nil {
+				before = snapshot(t, s)
+			}
+			if err := WithClaudeReservationRetirement(state, "other", nil, func(marker ClaudeReservationRetirement) error {
+				if marker != (ClaudeReservationRetirement{}) {
+					t.Fatal("other provider promoted to Claude")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := WithClaudeMetadataSave(state, "other", raw, func() error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if s != nil && !reflect.DeepEqual(snapshot(t, s), before) {
+				t.Fatal("other provider rewrote registry")
+			}
+		})
+	}
+}
+
+func TestClaudeLegacyMissingStorageAliasRetainsExactCommonHome(t *testing.T) {
+	s, _, _, _ := claudeLegacyCleanupFixture(t, 1, false)
+	state := s.StateRoot()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(state, "logins")); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(state, alias); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err := WithClaudeReservationRetirement(alias, "source", nil, func(ClaudeReservationRetirement) error { called = true; return nil }); !errors.Is(err, ErrPending) || called {
+		t.Fatalf("alias lost managed common-home routing: %v %v", called, err)
+	}
+	if _, err := os.Lstat(filepath.Join(state, "logins")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retirement bootstrapped absent login storage: %v", err)
+	}
+}
+
+// Leave the exact post-rename registry state visible to a fresh Store handle.
+func claudeUnsettledRegistryTest(t *testing.T, s *Store) Registry {
+	t.Helper()
+	s.mu.Lock()
+	err := s.locked(func() error {
+		r, err := s.load()
+		if err != nil {
+			return err
+		}
+		r.SchemaVersion = 9
+		if err := s.save(r); err != nil {
+			return err
+		}
+		r.SchemaVersion = 10
+		r.Revision++
+		s.writeOps.syncDir = func(string) error { return syscall.EIO }
+		return s.save(r)
+	})
+	s.mu.Unlock()
+	s.writeOps = writeOps{}
+	if !errors.Is(err, ErrDurabilityUncertain) {
+		t.Fatalf("fixture did not expose renamed/unsettled registry: %v", err)
+	}
+	visible := snapshot(t, s)
+	if visible.SchemaVersion != 10 {
+		t.Fatal("promotion rename not visible")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return visible
+}
+
+func claudeFreshStoreTest(t *testing.T, state string) *Store {
+	t.Helper()
+	s, err := OpenExisting(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.keychain = nil
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+func TestClaudeFreshHandleRetirementMustSettleVisibleRegistryBeforeMarker(t *testing.T) {
+	s, _, meta, _ := claudeLegacyCleanupFixture(t, 9, true)
+	stateRoot := s.StateRoot()
+	visible := claudeUnsettledRegistryTest(t, s)
+	fresh := claudeFreshStoreTest(t, stateRoot)
+	fresh.writeOps.syncDir = func(string) error { return syscall.EIO }
+	calls := 0
+	state, err := openClaudeCustodyState(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = state.Close() }()
+	fresh.mu.Lock()
+	err = fresh.locked(func() error {
+		r, err := fresh.load()
+		if err != nil {
+			return err
+		}
+		bytes := int64(0)
+		m, err := readClaudeMeta(state, stateRoot, "source", &bytes)
+		if err != nil {
+			return err
+		}
+		return fresh.retireClaudeReservation(state, &r, m, nil, func(ClaudeReservationRetirement) error { calls++; return nil })
+	})
+	fresh.mu.Unlock()
+	if !errors.Is(err, ErrDurabilityUncertain) || calls != 0 {
+		t.Fatalf("fresh handle consumed unsettled registry: %d %v", calls, err)
+	}
+	if !reflect.DeepEqual(snapshot(t, fresh), visible) {
+		t.Fatal("failed settlement changed registry")
+	}
+	fresh = claudeFreshStoreTest(t, stateRoot)
+	if err := WithClaudeReservationRetirement(stateRoot, "source", nil, func(marker ClaudeReservationRetirement) error {
+		calls++
+		meta["schema_version"], meta["claude_retirement"] = 5, marker
+		writeClaudeCustodyJSON(t, stateRoot, "source", "meta.json", meta)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || !reflect.DeepEqual(snapshot(t, fresh), visible) {
+		t.Fatal("successful settlement rewrote revision or repeated marker")
+	}
+}
+
+func TestClaudeFreshHandleReloginMustSettleBeforeIntentAndRecoveryApply(t *testing.T) {
+	for _, kind := range []string{"intent", "recovery"} {
+		t.Run(kind, func(t *testing.T) {
+			s, a, _, native := claudeCustodyFixture(t)
+			auth, err := s.claudeAuth(a.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.keychain = nil
+			if err := os.WriteFile(filepath.Join(s.savedNativeHome(a.ID), ".credentials.json"), auth, 0600); err != nil {
+				t.Fatal(err)
+			}
+			job := strings.Repeat("a", 32)
+			replacement := claudeCredential("a", "replacement")
+			if kind == "recovery" {
+				if _, _, err := s.ReloginJob(snapshot(t, s).Revision, a.ID, replacement, job); !errors.Is(err, ErrPending) {
+					t.Fatal(err)
+				}
+				writeClaudeCustodyJSON(t, s.StateRoot(), "source", NativeProcessFile, native)
+				writeClaudeCustodyJSON(t, s.StateRoot(), "source", NativeStoppedFile, NativeStoppedInfo{SchemaVersion: 4, Native: native, WritersStopped: true, DescendantsContained: true})
+			}
+			stateRoot := s.StateRoot()
+			visible := claudeUnsettledRegistryTest(t, s)
+			authPath := filepath.Join(s.savedNativeHome(a.ID), ".credentials.json")
+			beforeAuth, err := os.ReadFile(authPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			credentialPath := filepath.Join(s.savedNativeHome(a.ID), "credential.json")
+			beforeMeta, err := os.ReadFile(credentialPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fresh := claudeFreshStoreTest(t, stateRoot)
+			fresh.writeOps.syncDir = func(dir string) error {
+				if dir == "." {
+					return syscall.EIO
+				}
+				return nil
+			}
+			if kind == "intent" {
+				_, _, err = fresh.ReloginJob(visible.Revision, a.ID, replacement, job)
+			} else {
+				err = fresh.Reconcile()
+			}
+			if !errors.Is(err, ErrDurabilityUncertain) {
+				t.Fatalf("fresh relogin consumed unsettled registry: %v", err)
+			}
+			afterAuth, _ := os.ReadFile(authPath)
+			afterMeta, _ := os.ReadFile(credentialPath)
+			if !bytes.Equal(beforeAuth, afterAuth) || !bytes.Equal(beforeMeta, afterMeta) || !reflect.DeepEqual(snapshot(t, fresh), visible) {
+				t.Fatal("failed settlement mutated authority")
+			}
+			_, intentErr := os.Stat(filepath.Join(stateRoot, "logins", reloginPath(a.ID)))
+			if kind == "intent" && !errors.Is(intentErr, os.ErrNotExist) {
+				t.Fatal("intent published before registry settlement")
+			}
+			if kind == "recovery" && intentErr != nil {
+				t.Fatal("failed settlement erased pending recovery")
+			}
+			fresh = claudeFreshStoreTest(t, stateRoot)
+			if kind == "intent" {
+				if _, _, err := fresh.ReloginJob(visible.Revision, a.ID, replacement, job); !errors.Is(err, ErrPending) {
+					t.Fatal(err)
+				}
+				if _, err := fresh.readRelogin(a); err != nil {
+					t.Fatal("settled intent not retained")
+				}
+				if !reflect.DeepEqual(snapshot(t, fresh), visible) {
+					t.Fatal("settlement alone advanced revision")
+				}
+			} else {
+				if err := fresh.Reconcile(); err != nil {
+					t.Fatal(err)
+				}
+				r := snapshot(t, fresh)
+				if r.Revision != visible.Revision+1 || find(&r, a.ID).CredentialRevision != a.CredentialRevision+1 {
+					t.Fatal("recovery failed to apply exactly once")
+				}
+				if err := fresh.Reconcile(); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(snapshot(t, fresh), r) {
+					t.Fatal("recovery repeated effect")
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeFreshHandleMetadataSaveSettlesOnlyManagedClaude(t *testing.T) {
+	s, _, meta, _ := claudeCustodyFixture(t)
+	stateRoot := s.StateRoot()
+	visible := claudeUnsettledRegistryTest(t, s)
+	meta["name"] = "one update"
+	raw, _ := json.Marshal(meta)
+	state, err := openClaudeCustodyState(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = state.Close() }()
+	fresh := claudeFreshStoreTest(t, stateRoot)
+	fresh.writeOps.syncDir = func(string) error { return syscall.EIO }
+	calls := 0
+	fresh.mu.Lock()
+	err = fresh.locked(func() error {
+		r, err := fresh.load()
+		if err != nil {
+			return err
+		}
+		return fresh.saveClaudeMetadata(state, &r, stateRoot, "source", raw, func() error { calls++; return nil })
+	})
+	fresh.mu.Unlock()
+	if !errors.Is(err, ErrDurabilityUncertain) || calls != 0 {
+		t.Fatalf("managed metadata consumed unsettled registry: %d %v", calls, err)
+	}
+	fresh = claudeFreshStoreTest(t, stateRoot)
+	if err := WithClaudeMetadataSave(stateRoot, "source", raw, func() error { calls++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || !reflect.DeepEqual(snapshot(t, fresh), visible) {
+		t.Fatal("metadata settlement rewrote revision or repeated callback")
+	}
+	fresh.writeOps.syncDir = func(string) error { return syscall.EIO }
+	plain := []byte(`{"schema_version":1,"id":"plain","agent_type":"codex"}`)
+	fresh.mu.Lock()
+	err = fresh.locked(func() error {
+		r, err := fresh.load()
+		if err != nil {
+			return err
+		}
+		return fresh.saveClaudeMetadata(state, &r, stateRoot, "plain", plain, func() error { calls++; return nil })
+	})
+	fresh.mu.Unlock()
+	if err != nil || calls != 2 {
+		t.Fatalf("unrelated metadata acquired Claude sync requirement: %d %v", calls, err)
+	}
+}
+
+func TestClaudeSuccessfulPromotionSettlesRegistryOnceBeforeMarker(t *testing.T) {
+	s, _, _, _ := claudeLegacyCleanupFixture(t, 9, true)
+	state, err := openClaudeCustodyState(s.StateRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = state.Close() }()
+	syncs, calls := 0, 0
+	s.writeOps.syncDir = func(dir string) error {
+		if dir == "." {
+			syncs++
+		}
+		return syncRootDir(s.root, dir)
+	}
+	s.mu.Lock()
+	err = s.locked(func() error {
+		r, err := s.load()
+		if err != nil {
+			return err
+		}
+		bytes := int64(0)
+		m, err := readClaudeMeta(state, s.StateRoot(), "source", &bytes)
+		if err != nil {
+			return err
+		}
+		return s.retireClaudeReservation(state, &r, m, nil, func(ClaudeReservationRetirement) error {
+			calls++
+			if syncs != 1 {
+				t.Fatalf("same-call successful promotion synced registry %d times", syncs)
+			}
+			return nil
+		})
+	})
+	s.mu.Unlock()
+	if err != nil || calls != 1 || syncs != 1 {
+		t.Fatalf("promotion settlement: callbacks=%d syncs=%d err=%v", calls, syncs, err)
 	}
 }

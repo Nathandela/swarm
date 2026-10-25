@@ -26,6 +26,9 @@ const SchemaVersion = 1
 // LoginSchemaVersion protects provider runtime provenance from older readers.
 const LoginSchemaVersion = 4
 
+// ClaudeSchemaVersion preserves owned native reservations and their retirement.
+const ClaudeSchemaVersion = logins.ClaudeReservationSchemaVersion
+
 // metaFile is the committed per-session state file name within a session dir.
 const metaFile = "meta.json"
 
@@ -35,6 +38,16 @@ const metaFile = "meta.json"
 // atomic temp+rename never tears the committed meta.json (S8). Production always
 // uses the default; behavior is identical.
 var writeTemp = func(f *os.File, data []byte) (int, error) { return f.Write(data) }
+
+// Fresh stamps and retained-marker retries share this durability boundary.
+var syncMetadataDirectory = func(dir string) error {
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	return directory.Sync()
+}
 
 // Meta is the persisted state of a single session (S-2). Every field carries an
 // explicit snake_case JSON tag: the on-disk key set is the durable data
@@ -104,10 +117,11 @@ type Meta struct {
 	ResumeError  string `json:"resume_error,omitempty"`
 	// LoginRuntime records the provider epoch loaded by the native processes.
 	// Account selection belongs to the provider registry, never to this record.
-	LoginRuntime    *logins.Runtime  `json:"login_runtime,omitempty"`
-	InputEmbargo    string           `json:"input_embargo,omitempty"`
-	RequiredRuntime string           `json:"required_runtime,omitempty"`
-	OpenCodeBinding *OpenCodeBinding `json:"opencode_binding,omitempty"`
+	LoginRuntime     *logins.Runtime                     `json:"login_runtime,omitempty"`
+	ClaudeRetirement *logins.ClaudeReservationRetirement `json:"claude_retirement,omitempty"`
+	InputEmbargo     string                              `json:"input_embargo,omitempty"`
+	RequiredRuntime  string                              `json:"required_runtime,omitempty"`
+	OpenCodeBinding  *OpenCodeBinding                    `json:"opencode_binding,omitempty"`
 	// CLIIdentity is the selected installation observed at launch; nil is unknown.
 	// It does not attest a running process or a wrapper's dependencies.
 	CLIIdentity *CLIIdentity `json:"cli_identity,omitempty"`
@@ -223,40 +237,64 @@ func (s *Store) sessionPath(id string) (string, error) {
 // current build's, so a caller can persist neither an unfiltered secret nor an
 // arbitrary schema version.
 //
-// Durability model is process-crash (ADR-003); no parent-directory fsync
-// (power-loss out of scope).
+// Ordinary metadata uses process-crash durability (ADR-003). Claude custody
+// metadata also syncs its directory before it can authorize cleanup.
 func (s *Store) Save(m Meta) error {
 	if err := validateID(m.ID); err != nil {
 		return err
 	}
-	dir, err := s.sessionPath(m.ID)
+	m, data, err := s.metadataBytes(m)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
+	return logins.WithClaudeMetadataSave(s.root, m.ID, data, func() error {
+		return s.writeMetadata(m.ID, data, m.SchemaVersion == ClaudeSchemaVersion)
+	})
+}
+
+// metadataBytes is pure serialization; it never classifies stored ownership.
+// The public Save guard compares stored custody before its raw rename callback.
+func (s *Store) metadataBytes(m Meta) (Meta, []byte, error) {
 	m.Env = FilterEnv(m.Env)
+	owned := m.SchemaVersion == ClaudeSchemaVersion || m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(s.root, *m.LoginRuntime)
 	m.SchemaVersion = SchemaVersion
-	if m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
+	if owned {
+		if !validClaudeMeta(m) || (!logins.IsClaudeProfileRuntime(s.root, *m.LoginRuntime) && (m.ClaudeRetirement == nil || m.LoginRuntime.Home != filepath.Join(s.root, "logins", "provider", "claude", "native"))) {
+			return m, nil, fmt.Errorf("persist: invalid owned Claude runtime")
+		}
+		m.SchemaVersion = ClaudeSchemaVersion
+	} else if m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
 		if !validOpenCodeMeta(m) {
-			return fmt.Errorf("persist: invalid OpenCode runtime binding")
+			return m, nil, fmt.Errorf("persist: invalid OpenCode runtime binding")
 		}
 		m.SchemaVersion = OpenCodeSchemaVersion
 	} else if m.LoginRuntime != nil {
 		if !validLoginMeta(m) {
-			return fmt.Errorf("persist: invalid provider login runtime")
+			return m, nil, fmt.Errorf("persist: invalid provider login runtime")
 		}
 		m.SchemaVersion = LoginSchemaVersion
 	} else if m.InputEmbargo != "" {
-		return fmt.Errorf("persist: startup input embargo has no provider runtime")
+		return m, nil, fmt.Errorf("persist: startup input embargo has no provider runtime")
 	}
 
 	data, err := json.Marshal(m)
 	if err != nil {
+		return m, nil, err
+	}
+	return m, data, nil
+}
+
+// writeMetadata is raw and non-reentrant. Owned callers retain the registry
+// fence through rename and directory sync; retirement uses the same writer.
+func (s *Store) writeMetadata(id string, data []byte, durable bool) error {
+	dir, err := s.sessionPath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(dir, metaFile+".tmp*") // os.CreateTemp creates the file 0600
@@ -276,7 +314,13 @@ func (s *Store) Save(m Meta) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, filepath.Join(dir, metaFile))
+	if err := os.Rename(tmpName, filepath.Join(dir, metaFile)); err != nil {
+		return err
+	}
+	if durable {
+		return syncMetadataDirectory(dir)
+	}
+	return nil
 }
 
 // Load reads and decodes <root>/<id>/meta.json. Older schema versions are
@@ -333,6 +377,9 @@ func (s *Store) Delete(id string) error {
 		return err
 	}
 	return s.withExecutionDeletion(id, func() error {
+		if _, err := s.RetireClaudeReservation(id, nil); err != nil {
+			return err
+		}
 		dir, err := s.sessionPath(id)
 		if err != nil {
 			return err
@@ -373,8 +420,17 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	if m.ID != wantID {
 		return Meta{}, fmt.Errorf("meta id %q does not match session directory %q", m.ID, wantID)
 	}
-	if m.SchemaVersion > LoginSchemaVersion {
-		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, LoginSchemaVersion)
+	if m.SchemaVersion > ClaudeSchemaVersion {
+		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, ClaudeSchemaVersion)
+	}
+	if m.SchemaVersion == ClaudeSchemaVersion {
+		if !validClaudeMeta(m) {
+			return Meta{}, fmt.Errorf("invalid owned Claude runtime")
+		}
+		return m, nil
+	}
+	if m.ClaudeRetirement != nil {
+		return Meta{}, fmt.Errorf("claude retirement has no owned reservation")
 	}
 	if m.SchemaVersion == OpenCodeSchemaVersion || m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
 		if m.SchemaVersion != OpenCodeSchemaVersion || !validOpenCodeMeta(m) {
@@ -399,6 +455,57 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 		return Meta{}, err
 	}
 	return m, nil
+}
+
+// This is decoding, not writer-stop authorization. The shared logins guard
+// validates retained private proofs again before any custody mutation.
+func validClaudeMeta(m Meta) bool {
+	if !validLoginMeta(m) || m.LoginRuntime.Provider != logins.ProviderClaude || m.LoginRuntime.ExternalAuth || m.InputEmbargo != "" || m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
+		return false
+	}
+	// These are wire shapes, not root membership or stop proof. The shared Store
+	// guard binds the exact state root and retained authority before mutation.
+	profile := strings.HasSuffix(m.LoginRuntime.Home, "/logins/provider/claude/profiles/"+m.LoginRuntime.Identity)
+	common := strings.HasSuffix(m.LoginRuntime.Home, "/logins/provider/claude/native")
+	if !profile && (!common || m.ClaudeRetirement == nil) {
+		return false
+	}
+	fingerprint := ""
+	if m.CLIIdentity != nil {
+		fingerprint = m.CLIIdentity.Fingerprint
+	}
+	if profile {
+		cli := m.CLIIdentity
+		if cli == nil || !filepath.IsAbs(cli.Path) || filepath.Clean(cli.Path) != cli.Path || cli.Version == "" || cli.Fingerprint == "" || len(cli.Fingerprint) > 256 || strings.ContainsAny(cli.Path+cli.Version+cli.Fingerprint, "\x00\r\n") {
+			return false
+		}
+	}
+	if q := m.ClaudeRetirement; q != nil {
+		if q.Version != logins.ClaudeRetirementVersion || q.SessionID != m.ID || q.Runtime != *m.LoginRuntime || q.Cwd != m.ProviderCwd() || q.CLIFingerprint != fingerprint {
+			return false
+		}
+		switch q.Source {
+		case logins.ClaudeRetirementNoFork:
+			if q.Native != (logins.NativeProcessInfo{}) || q.Issuer.PID <= 0 || q.Issuer.StartTime <= 0 || m.ShimPID != 0 || m.ShimStartTime != 0 {
+				return false
+			}
+		case logins.ClaudeRetirementStopped:
+			n := q.Native
+			if n.Provider != logins.ProviderClaude || n.Runtime != *m.LoginRuntime || q.Issuer.PID != 0 || q.Issuer.StartTime != 0 {
+				return false
+			}
+			if common {
+				if n.SchemaVersion != logins.NativeWriterSchemaVersion || m.ShimPID <= 0 || m.ShimStartTime <= 0 || n.ShimPID != m.ShimPID || n.ShimStartTime != m.ShimStartTime || n.SessionID != "" || n.Cwd != "" || n.CLIFingerprint != "" {
+					return false
+				}
+			} else if n.SchemaVersion != logins.ClaudeNativeWriterSchemaVersion || n.SessionID != m.ID || n.Cwd != m.ProviderCwd() || n.CLIFingerprint != fingerprint || m.ShimPID != 0 && (n.ShimPID != m.ShimPID || n.ShimStartTime != m.ShimStartTime) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validLoginMeta(m Meta) bool {

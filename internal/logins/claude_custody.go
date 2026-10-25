@@ -557,18 +557,38 @@ func verifyClaudeRetiredPayload(state *os.Root, m claudeSessionMeta, bytes *int6
 	return err
 }
 
-func withClaudeMetadataRegistry(stateRoot string, fn func(*os.Root, *Registry) error) error {
+// A fresh handle must settle visible registry authority before consuming it.
+// Call only under the registry flock after routing identifies managed Claude.
+func (s *Store) settleClaudeRegistry() error {
+	if s == nil {
+		return ErrPending
+	}
+	syncDir := s.writeOps.syncDir
+	if syncDir == nil {
+		syncDir = func(string) error { return syncRootDir(s.root, ".") }
+	}
+	if err := syncDir("."); err != nil {
+		s.uncertain = true
+		return ErrDurabilityUncertain
+	}
+	return nil
+}
+
+func withClaudeMetadataRegistry(stateRoot string, fn func(*os.Root, *Store, *Registry) error) error {
 	state, err := openClaudeCustodyState(stateRoot)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = state.Close() }()
 	if _, err := state.Lstat("logins"); errors.Is(err, os.ErrNotExist) {
-		return fn(state, nil)
+		return fn(state, nil, nil)
 	} else if err != nil {
 		return err
 	}
 	store, err := OpenExisting(stateRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrPending
+	}
 	if err != nil {
 		return err
 	}
@@ -584,32 +604,12 @@ func withClaudeMetadataRegistry(stateRoot string, fn func(*os.Root, *Registry) e
 		if err != nil {
 			return err
 		}
-		return fn(state, &r)
+		return fn(state, store, &r)
 	})
 }
 
 func claudeSameRuntimeMeta(a, b claudeSessionMeta) bool {
 	return a.ID == b.ID && a.AgentType == b.AgentType && a.Cwd == b.Cwd && a.AgentCwd == b.AgentCwd && a.Runtime != nil && b.Runtime != nil && *a.Runtime == *b.Runtime && ((a.CLI == nil && b.CLI == nil) || (a.CLI != nil && b.CLI != nil && *a.CLI == *b.CLI))
-}
-
-// ClaudeOperationalCustody reads the downgrade fence without waiting for a
-// birth's registry flock or acquiring the daemon's shared Store mutex.
-func ClaudeOperationalCustody(stateRoot string) (bool, error) {
-	if _, err := os.Lstat(filepath.Join(stateRoot, "logins")); errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	} else if err != nil {
-		return false, err
-	}
-	store, err := OpenReadOnly(stateRoot)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = store.Close() }()
-	r, err := store.Snapshot()
-	if err != nil {
-		return false, err
-	}
-	return r.SchemaVersion >= ClaudeProfileCustodySchemaVersion, nil
 }
 
 func claudeSameImmutableMeta(a, b claudeSessionMeta) bool {
@@ -664,12 +664,12 @@ func WithClaudeMetadataSave(stateRoot, sessionID string, incoming []byte, save f
 		return ErrIneligible
 	}
 	return withClaudeMetadataFence(stateRoot, func() error {
-		if err := claudeUnmanagedRow(incoming); err != nil {
+		if err := claudeUnmanagedRow(incoming, stateRoot); err != nil {
 			return err
 		}
 		old, err := readClaudeUnmanagedMeta(stateRoot, sessionID)
 		if err == nil {
-			if err := claudeUnmanagedRow(old); err != nil {
+			if err := claudeUnmanagedRow(old, stateRoot); err != nil {
 				return err
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -678,65 +678,77 @@ func WithClaudeMetadataSave(stateRoot, sessionID string, incoming []byte, save f
 		return save()
 
 	}, func() error {
-		return withClaudeMetadataRegistry(stateRoot, func(state *os.Root, registry *Registry) error {
-			next, err := parseClaudeSessionMeta(incoming, stateRoot, sessionID)
-			if err != nil {
-				return err
-			}
-			bytes := int64(0)
-			old, err := readClaudeMeta(state, stateRoot, sessionID, &bytes)
-			if errors.Is(err, os.ErrNotExist) {
-				for _, name := range []string{NativeProcessFile, NativeStoppedFile} {
-					if _, err := state.Lstat(filepath.Join(sessionID, name)); err == nil {
-						return ErrPending
-					} else if !errors.Is(err, os.ErrNotExist) {
-						return err
-					}
-				}
-				if next.Retirement != nil {
-					return ErrConflict
-				}
-				if next.SchemaVersion == ClaudeReservationSchemaVersion && (registry == nil || registry.SchemaVersion < ClaudeProfileCustodySchemaVersion) {
-					return ErrPending
-				}
-				return save()
-			}
-			if err != nil {
-				return err
-			}
-			if registry != nil && registry.SchemaVersion >= ClaudeProfileCustodySchemaVersion && old.SchemaVersion == 4 && old.AgentType == ProviderClaude {
-				if !claudeLegacyRuntime(stateRoot, old) {
-					return ErrPending
-				}
-				if next.SchemaVersion != 4 || !claudeSameRuntimeMeta(old, next) || next.Retirement != nil || old.ShimPID > 0 && (next.ShimPID != old.ShimPID || next.ShimStartTime != old.ShimStartTime) {
-					return ErrConflict
-				}
-			}
-			if old.SchemaVersion == ClaudeReservationSchemaVersion {
-				if registry == nil || registry.SchemaVersion < ClaudeProfileCustodySchemaVersion || !claudeSameImmutableMeta(old, next) {
-					return ErrConflict
-				}
-				if old.Retirement == nil && next.Retirement != nil || old.Retirement != nil && (next.Retirement == nil || *old.Retirement != *next.Retirement) {
-					return ErrConflict
-				}
-				if old.ShimPID > 0 && (next.ShimPID != old.ShimPID || next.ShimStartTime != old.ShimStartTime) {
-					return ErrConflict
-				}
-				raw, err := readClaudeCustody(state, filepath.Join(sessionID, NativeProcessFile), 64<<10, &bytes)
-				if err == nil {
-					native, err := parseClaudeNative(raw)
-					if err != nil || !claudeNativeMatchesMeta(native, old) || !claudeNativeMatchesMeta(native, next) {
-						return ErrConflict
-					}
-				} else if !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
-			} else if next.SchemaVersion == ClaudeReservationSchemaVersion {
-				return ErrConflict
-			}
-			return save()
+		return withClaudeMetadataRegistry(stateRoot, func(state *os.Root, store *Store, registry *Registry) error {
+			return store.saveClaudeMetadata(state, registry, stateRoot, sessionID, incoming, save)
 		})
 	})
+}
+
+func (s *Store) saveClaudeMetadata(state *os.Root, registry *Registry, stateRoot, sessionID string, incoming []byte, save func() error) error {
+	next, err := parseClaudeSessionMeta(incoming, stateRoot, sessionID)
+	if err != nil {
+		return err
+	}
+	commit := func() error {
+		if next.Runtime != nil && (IsClaudeProfileRuntime(stateRoot, *next.Runtime) || claudeLegacyRuntime(stateRoot, next)) {
+			if err := s.settleClaudeRegistry(); err != nil {
+				return err
+			}
+		}
+		return save()
+	}
+	bytes := int64(0)
+	old, err := readClaudeMeta(state, stateRoot, sessionID, &bytes)
+	if errors.Is(err, os.ErrNotExist) {
+		for _, name := range []string{NativeProcessFile, NativeStoppedFile} {
+			if _, err := state.Lstat(filepath.Join(sessionID, name)); err == nil {
+				return ErrPending
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		if next.Retirement != nil {
+			return ErrConflict
+		}
+		if next.SchemaVersion == ClaudeReservationSchemaVersion && (registry == nil || registry.SchemaVersion < ClaudeProfileCustodySchemaVersion) {
+			return ErrPending
+		}
+		return commit()
+	}
+	if err != nil {
+		return err
+	}
+	if registry != nil && old.SchemaVersion == 4 && old.AgentType == ProviderClaude {
+		if !claudeLegacyRuntime(stateRoot, old) {
+			return ErrPending
+		}
+		if next.SchemaVersion != 4 || !claudeSameRuntimeMeta(old, next) || next.Retirement != nil || old.ShimPID > 0 && (next.ShimPID != old.ShimPID || next.ShimStartTime != old.ShimStartTime) {
+			return ErrConflict
+		}
+	}
+	if old.SchemaVersion == ClaudeReservationSchemaVersion {
+		if registry == nil || registry.SchemaVersion < ClaudeProfileCustodySchemaVersion || !claudeSameImmutableMeta(old, next) {
+			return ErrConflict
+		}
+		if old.Retirement == nil && next.Retirement != nil || old.Retirement != nil && (next.Retirement == nil || *old.Retirement != *next.Retirement) {
+			return ErrConflict
+		}
+		if old.ShimPID > 0 && (next.ShimPID != old.ShimPID || next.ShimStartTime != old.ShimStartTime) {
+			return ErrConflict
+		}
+		raw, err := readClaudeCustody(state, filepath.Join(sessionID, NativeProcessFile), 64<<10, &bytes)
+		if err == nil {
+			native, err := parseClaudeNative(raw)
+			if err != nil || !claudeNativeMatchesMeta(native, old) || !claudeNativeMatchesMeta(native, next) {
+				return ErrConflict
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	} else if next.SchemaVersion == ClaudeReservationSchemaVersion {
+		return ErrConflict
+	}
+	return commit()
 }
 
 // WithClaudeReservationRetirement authorizes one exact owned reservation's
@@ -761,13 +773,13 @@ func WithClaudeReservationRetirement(stateRoot, sessionID string, originalNoFork
 		if err != nil {
 			return err
 		}
-		if err := claudeUnmanagedRow(old); err != nil {
+		if err := claudeUnmanagedRow(old, stateRoot); err != nil {
 			return err
 		}
 		return retire(ClaudeReservationRetirement{})
 
 	}, func() error {
-		return withClaudeMetadataRegistry(stateRoot, func(state *os.Root, registry *Registry) error {
+		return withClaudeMetadataRegistry(stateRoot, func(state *os.Root, store *Store, registry *Registry) error {
 			bytes := int64(0)
 			m, err := readClaudeMeta(state, stateRoot, sessionID, &bytes)
 			if errors.Is(err, os.ErrNotExist) {
@@ -779,60 +791,86 @@ func WithClaudeReservationRetirement(stateRoot, sessionID string, originalNoFork
 			if err != nil {
 				return err
 			}
-			legacy := m.SchemaVersion == 4 && m.AgentType == ProviderClaude && registry != nil && registry.SchemaVersion >= ClaudeProfileCustodySchemaVersion
-			if legacy && !claudeLegacyRuntime(stateRoot, m) {
-				return ErrPending
-			}
-			if m.SchemaVersion != ClaudeReservationSchemaVersion && !legacy {
-				return retire(ClaudeReservationRetirement{})
-			}
-			if registry == nil || registry.SchemaVersion < ClaudeProfileCustodySchemaVersion {
-				return ErrPending
-			}
-			if m.Retirement != nil {
-				if err := verifyClaudeRetiredPayload(state, m, &bytes); err != nil {
-					return err
-				}
-				return retire(*m.Retirement)
-			}
-			marker := ClaudeReservationRetirement{Version: ClaudeRetirementVersion, SessionID: m.ID, Runtime: *m.Runtime, Cwd: m.effectiveCWD(), CLIFingerprint: m.fingerprint()}
-			native, stopErr := claudeStoppedScope(state, m, &bytes)
-			if stopErr == nil {
-				marker.Source, marker.Native = ClaudeRetirementStopped, native
-				return retire(marker)
-			}
-			if originalNoFork == nil {
-				if errors.Is(stopErr, os.ErrNotExist) {
-					return ErrPending
-				}
-				return stopErr
-			}
-			if m.ShimPID != 0 {
-				return ErrPending
-			}
-			for _, name := range []string{NativeProcessFile, NativeStoppedFile} {
-				if _, err := state.Lstat(filepath.Join(sessionID, name)); err == nil {
-					return ErrPending
-				} else if !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
-			}
-			if err := originalNoFork(); err != nil {
-				return err
-			}
-			started, err := procstart.StartTime(os.Getpid())
-			if err != nil || started <= 0 {
-				return ErrPending
-			}
-			marker.Source, marker.Issuer = ClaudeRetirementNoFork, processcontain.Identity{PID: os.Getpid(), StartTime: started}
-			return retire(marker)
+			return store.retireClaudeReservation(state, registry, m, originalNoFork, retire)
 		})
 	})
 }
 
+func (s *Store) retireClaudeReservation(state *os.Root, registry *Registry, m claudeSessionMeta, originalNoFork func() error, retire func(ClaudeReservationRetirement) error) error {
+	if s == nil {
+		return ErrPending
+	}
+	bytes := int64(0)
+	legacy := m.SchemaVersion == 4 && m.AgentType == ProviderClaude
+	if legacy && !claudeLegacyRuntime(s.StateRoot(), m) {
+		return ErrPending
+	}
+	if m.SchemaVersion != ClaudeReservationSchemaVersion && !legacy {
+		return retire(ClaudeReservationRetirement{})
+	}
+	if registry == nil || (!legacy && registry.SchemaVersion < ClaudeProfileCustodySchemaVersion) {
+		return ErrPending
+	}
+	publish := func(marker ClaudeReservationRetirement) error {
+		if legacy && registry.SchemaVersion < ClaudeProfileCustodySchemaVersion {
+			if registry.Revision == ^uint64(0) {
+				return ErrIneligible
+			}
+			promoted := *registry
+			promoted.SchemaVersion = ClaudeProfileCustodySchemaVersion
+			promoted.Revision++
+			if err := s.save(promoted); err != nil {
+				return err
+			}
+			*registry = promoted
+		} else if err := s.settleClaudeRegistry(); err != nil {
+			return err
+		}
+		return retire(marker)
+	}
+
+	if m.Retirement != nil {
+		if err := verifyClaudeRetiredPayload(state, m, &bytes); err != nil {
+			return err
+		}
+		return publish(*m.Retirement)
+	}
+	marker := ClaudeReservationRetirement{Version: ClaudeRetirementVersion, SessionID: m.ID, Runtime: *m.Runtime, Cwd: m.effectiveCWD(), CLIFingerprint: m.fingerprint()}
+	native, stopErr := claudeStoppedScope(state, m, &bytes)
+	if stopErr == nil {
+		marker.Source, marker.Native = ClaudeRetirementStopped, native
+		return publish(marker)
+	}
+	if originalNoFork == nil {
+		if errors.Is(stopErr, os.ErrNotExist) {
+			return ErrPending
+		}
+		return stopErr
+	}
+	if m.ShimPID != 0 {
+		return ErrPending
+	}
+	for _, name := range []string{NativeProcessFile, NativeStoppedFile} {
+		if _, err := state.Lstat(filepath.Join(m.ID, name)); err == nil {
+			return ErrPending
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := originalNoFork(); err != nil {
+		return err
+	}
+	started, err := procstart.StartTime(os.Getpid())
+	if err != nil || started <= 0 {
+		return ErrPending
+	}
+	marker.Source, marker.Issuer = ClaudeRetirementNoFork, processcontain.Identity{PID: os.Getpid(), StartTime: started}
+	return publish(marker)
+}
+
 // Unmanaged persistence retains its historical path/schema semantics only after
 // bounded routing inspection positively excludes an owned-profile reservation.
-func claudeUnmanagedRow(raw []byte) error {
+func claudeUnmanagedRow(raw []byte, stateRoot string) error {
 	doc, err := jsonObject(raw)
 	if err != nil {
 		return ErrUnsafePath
@@ -858,6 +896,19 @@ func claudeUnmanagedRow(raw []byte) error {
 	if rawRT, exists := doc["login_runtime"]; exists {
 		if json.Unmarshal(rawRT, &rt) != nil {
 			return ErrUnsafePath
+		}
+	}
+	if rt != nil {
+		canonical, err := filepath.EvalSymlinks(stateRoot)
+		if err != nil {
+			return err
+		}
+		canonical, err = filepath.Abs(canonical)
+		if err != nil {
+			return err
+		}
+		if rt.Home == filepath.Join(canonical, "logins", "provider", "claude", "native") {
+			return ErrPending
 		}
 	}
 	if rt != nil && rt.Provider == ProviderClaude && strings.Contains(filepath.ToSlash(rt.Home), "/provider/claude/profiles/") {

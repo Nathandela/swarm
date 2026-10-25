@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"syscall"
@@ -15,42 +16,26 @@ import (
 	"github.com/Nathandela/swarm/internal/procstart"
 )
 
-const NativeWriterSchemaVersion = 3
+const NativeWriterSchemaVersion = logins.NativeWriterSchemaVersion
+const ClaudeNativeWriterSchemaVersion = logins.ClaudeNativeWriterSchemaVersion
+const NativeProcessFile = logins.NativeProcessFile
+const NativeStoppedFile = logins.NativeStoppedFile
 
-const NativeProcessFile = "native-process.json"
-const NativeStoppedFile = "native-writers-stopped.json"
-
-type NativeProcessInfo struct {
-	SchemaVersion    int            `json:"schema_version"`
-	Generation       string         `json:"generation"`
-	BackendPID       int            `json:"backend_pid,omitempty"`
-	BackendStartTime int64          `json:"backend_start_time,omitempty"`
-	PID              int            `json:"pid"`
-	PGID             int            `json:"pgid"`
-	StartTime        int64          `json:"start_time"`
-	ShimPID          int            `json:"shim_pid"`
-	ShimStartTime    int64          `json:"shim_start_time"`
-	Provider         string         `json:"provider"`
-	Runtime          logins.Runtime `json:"runtime"`
-	IncidentID       string         `json:"incident_id,omitempty"`
-}
+type NativeProcessInfo = logins.NativeProcessInfo
 
 // NativeStoppedInfo proves the recorded native process groups stopped. Linux
 // additionally proves adopted descendants were reaped; Darwin supplements the
 // group proof with a provider-home process inventory before changing auth.
-type NativeStoppedInfo struct {
-	SchemaVersion        int               `json:"schema_version"`
-	Native               NativeProcessInfo `json:"native"`
-	WritersStopped       bool              `json:"writers_stopped"`
-	DescendantsContained bool              `json:"descendants_contained"`
-}
+type NativeStoppedInfo = logins.NativeStoppedInfo
 
 type managedNativeScope struct {
-	root      *os.Root
-	info      NativeProcessInfo
-	recorded  bool
-	stopReap  chan struct{}
-	subreaper bool
+	root               *os.Root
+	info               NativeProcessInfo
+	preclaim           NativeProcessInfo
+	recorded           bool
+	ownPreclaimDurable bool
+	stopReap           chan struct{}
+	subreaper          bool
 }
 
 // managedReapInterval paces reaping of adopted orphans while a managed session runs.
@@ -111,6 +96,16 @@ func beginManagedNativeScope(cfg Config) (*managedNativeScope, error) {
 	if cfg.LoginRuntime != nil {
 		scope.info.Runtime = *cfg.LoginRuntime
 	}
+	if cfg.LoginRuntime != nil && logins.IsClaudeProfileRuntime(cfg.LoginStateRoot, *cfg.LoginRuntime) {
+		// Scope preparation carries no publication authority. Preserve any winner
+		// until the final registry guard admits our exact reservation and preclaim.
+		scope.info.SchemaVersion = ClaudeNativeWriterSchemaVersion
+		scope.info.SessionID, scope.info.Cwd = cfg.SessionID, cfg.Cwd
+		if cfg.CLIIdentity != nil {
+			scope.info.CLIFingerprint = cfg.CLIIdentity.Fingerprint
+		}
+		return scope, nil
+	}
 	for _, name := range []string{NativeStoppedFile, NativeProcessFile} {
 		if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			_ = root.Close()
@@ -128,6 +123,14 @@ func (s *managedNativeScope) record(pid int, backend *backendProc) error {
 	if s == nil {
 		return nil
 	}
+	if s.info.SchemaVersion == ClaudeNativeWriterSchemaVersion {
+		if !s.ownPreclaimDurable || s.recorded {
+			return errors.New("shim: native identity has no unused owned preclaim")
+		}
+		if err := s.verifyOwnedRecord(); err != nil {
+			return err
+		}
+	}
 	start, err := procstart.StartTime(pid)
 	if err != nil {
 		return errors.New("shim: native writer identity unavailable")
@@ -140,7 +143,7 @@ func (s *managedNativeScope) record(pid int, backend *backendProc) error {
 		s.info.BackendPID, s.info.BackendStartTime = backend.pgid, backend.startTime
 	}
 	if err := writeNativeRecord(s.root, NativeProcessFile, s.info); err != nil {
-		return errors.New("shim: native writer record could not be made durable")
+		return fmt.Errorf("shim: native writer record could not be made durable: %w", err)
 	}
 	s.recorded = true
 	return nil
@@ -149,6 +152,11 @@ func (s *managedNativeScope) record(pid int, backend *backendProc) error {
 func (s *managedNativeScope) finish() error {
 	if s == nil {
 		return nil
+	}
+	// Preparation and a failed/refused/uncertain preclaim confer no publication
+	// authority. In particular, a duplicate shim must not overwrite its winner.
+	if s.info.SchemaVersion == ClaudeNativeWriterSchemaVersion && !s.ownPreclaimDurable {
+		return s.root.Close()
 	}
 	defer func() { _ = s.root.Close() }()
 	if s.stopReap != nil {
@@ -176,6 +184,11 @@ func (s *managedNativeScope) finish() error {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
+	if s.info.SchemaVersion == ClaudeNativeWriterSchemaVersion {
+		if err := s.verifyOwnedRecord(); err != nil {
+			return err
+		}
+	}
 	if !s.recorded {
 		// Startup can fail before the main CLI identity is captured, even after
 		// a backend has spawned descendants. ECHILD above proves the whole
@@ -185,7 +198,7 @@ func (s *managedNativeScope) finish() error {
 			return errors.New("shim: native writer record could not be made durable")
 		}
 	}
-	proof := NativeStoppedInfo{SchemaVersion: NativeWriterSchemaVersion, Native: s.info, WritersStopped: true, DescendantsContained: s.subreaper}
+	proof := NativeStoppedInfo{SchemaVersion: s.info.SchemaVersion, Native: s.info, WritersStopped: true, DescendantsContained: s.subreaper}
 	if err := writeNativeRecord(s.root, NativeStoppedFile, proof); err != nil {
 		return errors.New("shim: native writer death proof could not be made durable")
 	}
@@ -200,6 +213,10 @@ func fsyncNativeRoot(root *os.Root) error {
 	defer func() { _ = directory.Close() }()
 	return directory.Sync()
 }
+
+// nativeRecordSync is the owned publication durability fault seam; production
+// always uses the real directory sync.
+var nativeRecordSync = fsyncNativeRoot
 
 func writeNativeRecord(root *os.Root, name string, value any) error {
 	var nonce [16]byte
@@ -228,5 +245,5 @@ func writeNativeRecord(root *os.Root, name string, value any) error {
 	if err = root.Rename(temp, name); err != nil {
 		return err
 	}
-	return fsyncNativeRoot(root)
+	return nativeRecordSync(root)
 }

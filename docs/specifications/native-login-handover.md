@@ -208,16 +208,23 @@ the complete birth or migration path.
 Operational profile selection requires registry schema 10, so older writers
 cannot ignore this fence. New profile reservations use metadata schema 5 and
 native scope schema 4. Legacy common-home reservations remain schema 4 while
-unresolved; after operational selection they also block destructive cleanup and
-replay. Only exact native schema 3 stop proof or the original before-fork issuer
-may retire them. A terminal legacy row may then use the same schema 5 retirement
-field, preserving deletion authority after partial payload removal. This does
-not classify common homes as profiles or permit live common-home schema 5 births.
+unresolved and block destructive cleanup and ambiguous replay at every registry
+version. Only exact native schema 3 stop proof or the original before-fork issuer
+may retire them. Under the same registry lock, retirement first durably raises
+the registry to schema 10, then writes the terminal schema 5 marker, before any
+workspace hook or payload removal. The marker preserves deletion authority after
+partial cleanup. This does not classify common homes as profiles or permit live
+common-home schema 5 births. A visible registry promotion or identical marker
+may follow a failed directory sync; retries settle both directories before
+allowing effects, without rewriting the marker or advancing the revision.
 An operation omitted from the roster remains unresolved while its session
 directory exists or cannot be inspected; a skipped metadata row is not absence.
 The [Store foundation checks](../verification/provider-logins/claude-store-custody-2026-10-25.json)
-cover mutation/admission fencing and the first-creation race. Daemon integration
-and native construction remain separate qualification gates.
+cover mutation/admission fencing and the first-creation race. The
+[custody transition checks](../verification/provider-logins/claude-custody-transitions-2026-10-25.json)
+cover all registry versions, partial deletion and the actual selection boundary
+with synthetic processes on Linux. Ordinary launch-refusal cleanup, historical
+rows without Runtime provenance and native construction remain separate gates.
 
 Old A may finish internal work after B is desired. New host turns on a stale
 incarnation remain pending; approvals and cancellation stay usable. This slice
@@ -357,7 +364,14 @@ change. Quota recovery, parked decisions and workflow/background parity remain
 separate gates after the baseline.
 The [structured baseline](../verification/provider-logins/claude-structured-baseline-2026-10-25.json)
 passes on the pinned macOS and Linux binaries. It verifies native history and
-one question callback with normal settings; it does not enable recovery.
+one question callback with normal settings; it does not enable recovery. The
+[quota continuation canary](../verification/provider-logins/claude-structured-quota-2026-10-25.json)
+also passes on both pins: a completed Read survives a typed quota failure and
+native initialize-only continuation finishes the original task without another
+host user message. A completed final-answer case also stays inactive on both
+pins. The unanswered-question case has not reached recovery: no native history
+was durable at the first stop. Pending decisions, cancellation, queued input,
+background work and workflow parity remain unqualified.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It

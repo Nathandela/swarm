@@ -281,6 +281,9 @@ func (s *Store) reloginClaudeProfile(expected uint64, id string, c Credential, j
 			if len(raw) > maxCredentialBytes*2 {
 				return ErrInvalidCredentials
 			}
+			if err := s.settleClaudeRegistry(); err != nil {
+				return err
+			}
 			if _, err := durableReplace(s.root, reloginPath(id), raw, s.writeOps); err != nil {
 				if errors.Is(err, ErrDurabilityUncertain) {
 					s.uncertain = true
@@ -296,6 +299,11 @@ func (s *Store) reloginClaudeProfile(expected uint64, id string, c Credential, j
 		helper, err = s.claudeSettledRemovalRef(r, *l)
 		if errors.Is(err, ErrInUse) {
 			return ErrPending
+		}
+		if err == nil && intentErr == nil {
+			if settleErr := s.settleClaudeRegistry(); settleErr != nil {
+				return settleErr
+			}
 		}
 		return err
 	})
@@ -359,6 +367,9 @@ func (s *Store) applyClaudeProfileRelogin(r *Registry, l *Login, intent reloginI
 	if err := s.claudeAuthNamespaceAbsent(l.ID); errors.Is(err, ErrInUse) {
 		return false, ErrPending
 	} else if err != nil {
+		return false, err
+	}
+	if err := s.settleClaudeRegistry(); err != nil {
 		return false, err
 	}
 	if l.CredentialRevision == intent.Login.CredentialRevision {

@@ -68,7 +68,15 @@ func (m *loginManager) owns(local string) bool {
 	if m == nil {
 		return false
 	}
-	r, err := m.store.Snapshot()
+	// Ownership is an atomic registry read, not a mutating transaction. Use a
+	// separate reader so a queued selection holding Store.mu while waiting on a
+	// shim birth flock cannot prevent an unrelated owner's Kill from reaching it.
+	reader, err := logins.OpenReadOnly(m.store.StateRoot())
+	if err != nil {
+		return true
+	}
+	defer func() { _ = reader.Close() }()
+	r, err := reader.Snapshot()
 	if err != nil {
 		return true
 	}

@@ -1,0 +1,70 @@
+{
+  "date": "2026-10-25",
+  "scope": "Claude custody transition settlement: all-floor store proof, marker/cleanup proof, and seven synthetic Linux transition tests",
+  "production_activation": false,
+  "review": "StoreV2 and persistV5 each received independent Astra source GREEN review. Linux exercised real synthetic daemon/lifecycle tests with a verified prebuilt compilation substitution; no native provider constructor ran.",
+  "source_manifests": {
+    "store_v2": {
+      "manifest_sha256": "070c8b3bc0a8df0230bc7f4d44629b3dd77004a91bd1e6b3cc413669c4cbcbee",
+      "scope": "all-floor store and registry-directory settlement proof"
+    },
+    "persist_v5": {
+      "manifest_sha256": "c3cdac60018f44dd0f00b6efd965fc676e0c3dcaa414c864a90f84104fe317fc",
+      "scope": "custody transition, marker and cleanup proof"
+    }
+  },
+  "behavior": [
+    "The positive native3/no-fork proof runs before durable registry10 promotion, followed by terminalmeta5 and then destructive cleanup.",
+    "Registry and marker-directory settlement is retried visibly before effects. Failed persistence retains state for retry, and unknown writer proof does not authorize deletion.",
+    "Linux ran seven synthetic daemon/lifecycle tests using a verified prebuilt compilation substitution; no native provider constructor ran."
+  ],
+  "linux_transition_run": {
+    "manifest_sha256": "09fed7f5b79342549bb3c065f521aebe436024ffa41ec2e94578a5599dcbd838",
+    "archive_sha256": "cc2c532f87b5ccd5d5da299d2aaa6fd1e09afb660b15ff2a2a229b2d48dbc629",
+    "log_sha256": "af8c86933f2a9d1bf8cbd1d4bb459290e20815681dc5205037e5f807221ea79b",
+    "exit_code": 0,
+    "elapsed_seconds": 3.342,
+    "test_count": 7,
+    "top_level_tests": 7,
+    "leaf_tests": 28,
+    "passing_test_events": 36,
+    "runtime_limit_seconds": 60,
+    "provider_constructor_run": false,
+    "execution": "real synthetic daemon/lifecycle tests with verified prebuilt compilation substitution"
+  },
+  "limits": [
+    "The earlyclaim h6sc.7 case and historical noRuntime evidence remain incomplete.",
+    "The native provider constructor gate remains pending.",
+    "No real account handover, human interaction, production activation or complete workflow parity is established."
+  ],
+  "connected_checks": {
+    "race": {
+      "command": [
+        "python3",
+        "/private/tmp/swarm-login-go.py",
+        "test",
+        "-race",
+        "./internal/logins",
+        "./internal/persist",
+        "./internal/shim",
+        "./internal/daemon",
+        "./internal/skeleton",
+        "-run",
+        "(Claude|Login)",
+        "-count=1",
+        "-timeout=12m"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 133.552,
+      "source_unchanged": true,
+      "source_count": 647,
+      "log_sha256": "3582dc9eb114865e641b5444a094414e2f7307362876b5d539036f3be819bd6f"
+    },
+    "mac_lint": "0 issues",
+    "linux_lint": "0 issues",
+    "mechanical_lint_delta": {
+      "sha256": "2a97868136c0e75b4c934d6120f69c43162a4438fd1d22130b2dee7c3a524ed2",
+      "scope": "After the frozen race/native runs: equivalent De Morgan predicate, lowercase error string and two tagged-switch test rewrites; affected tests rerun passed. Both platform linters then passed."
+    }
+  }
+}

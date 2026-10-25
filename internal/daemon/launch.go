@@ -471,6 +471,30 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 	// compensate via PreDelete when it did (F2), since dropReserved erases the
 	// meta and no future Delete() could otherwise ever reach this id again.
 	preLaunchOK := false
+	// This closure belongs only to the original launch invocation. Neither
+	// replay nor restart can reconstruct its positive pre-fork fact.
+	rollback := func() {
+		if !claudeCustodyCandidate(m) {
+			d.rollbackReserved(id, m, preLaunchOK)
+			return
+		}
+		if !forkBoundary {
+			// A pre-reservation failure can still own workspace effects. Publish the
+			// exact reservation before permanently revoking it; never bypass lower Delete
+			// because metadata or a native PID is absent.
+			if err := d.saveMeta(m); err != nil {
+				d.logf("launch %s: before-fork custody retained: %v", id, err)
+				return
+			}
+		}
+		originalNoFork := func() error {
+			if forkBoundary {
+				return logins.ErrPending
+			}
+			return nil
+		}
+		d.rollbackReservedWithIssuer(id, m, preLaunchOK, originalNoFork)
+	}
 	if d.cfg.PreLaunch != nil {
 		cwd, err := d.cfg.PreLaunch(id, spec)
 		if err != nil {
@@ -494,33 +518,33 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 		var finalErr error
 		spec, finalErr = d.cfg.FinalizeLaunch(id, spec)
 		if finalErr != nil {
-			d.rollbackReserved(id, m, preLaunchOK)
+			rollback()
 			return persist.Meta{}, finalErr
 		}
 		m.LoginRuntime = spec.LoginRuntime
 		m.Env = PolicyEnv(spec.ClientEnv)
 	}
 	if err := d.validateWorkspace(spec.Cwd); err != nil {
-		d.rollbackReserved(id, m, preLaunchOK)
+		rollback()
 		return persist.Meta{}, err
 	}
 	dir := d.sessionDir(id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		d.rollbackReserved(id, m, preLaunchOK)
+		rollback()
 		return persist.Meta{}, err
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
-		d.rollbackReserved(id, m, preLaunchOK)
+		rollback()
 		return persist.Meta{}, err
 	}
 
 	if err := d.prepareOpenCodeLaunch(&spec, &m, dir); err != nil {
-		d.rollbackReserved(id, m, preLaunchOK)
+		rollback()
 		return persist.Meta{}, err
 	}
 	// Phase 1 — reserve: persist the running meta before any shim exists.
 	if err := d.saveMeta(m); err != nil {
-		d.rollbackReserved(id, m, preLaunchOK)
+		rollback()
 		return persist.Meta{}, err
 	}
 	if probe != nil {
@@ -534,14 +558,14 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 	sock := shimSocketPath(d.cfg.StateDir, id)
 	token, terr := newHookToken()
 	if terr != nil {
-		d.rollbackReserved(id, m, preLaunchOK)
+		rollback()
 		return persist.Meta{}, terr
 	}
 	forkBoundary = true
 	spec.BootstrapFirstAttempt = noStart
 	cmd, backendPlanErr, err := d.spawnShim(id, spec, sock, dir, token)
 	if err != nil {
-		d.rollbackReserved(id, m, preLaunchOK)
+		rollback()
 		return persist.Meta{}, err
 	}
 	m.ShimPID = cmd.Process.Pid
@@ -571,7 +595,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 		if kerr := d.killSpawnedShim(cmd); kerr != nil {
 			d.logf("launch %s: abort cleanup: %v", id, kerr)
 		}
-		d.rollbackReserved(id, m, preLaunchOK)
+		rollback()
 		return persist.Meta{}, fmt.Errorf("daemon: record shim identity for %s: %w", id, sterr)
 	}
 	m.ShimStartTime = st
@@ -579,7 +603,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 		if kerr := d.killSpawnedShim(cmd); kerr != nil {
 			d.logf("launch %s: abort cleanup: %v", id, kerr)
 		}
-		d.rollbackReserved(id, m, preLaunchOK)
+		rollback()
 		return persist.Meta{}, fmt.Errorf("daemon: persist shim identity for %s: %w", id, err)
 	}
 	d.wg.Add(1)
@@ -867,9 +891,21 @@ func (d *Daemon) freshIDLocked() string {
 // on a probe-injected crash (those leave everything for reconcile).
 func (d *Daemon) dropReserved(id string) {
 	d.mu.Lock()
+	current, exists := d.sessions[id]
+	candidate := exists && claudeCustodyCandidate(current.meta)
+	d.mu.Unlock()
+	if candidate {
+		if err := d.store.Delete(id); err != nil {
+			d.logf("launch %s: reserved Claude custody retained: %v", id, err)
+			return
+		}
+	}
+	d.mu.Lock()
 	delete(d.sessions, id)
 	d.mu.Unlock()
-	_ = d.store.Delete(id)
+	if !candidate {
+		_ = d.store.Delete(id)
+	}
 }
 
 // rollbackReserved is dropReserved plus a compensating PreDelete when a
@@ -880,9 +916,27 @@ func (d *Daemon) dropReserved(id string) {
 // itself failed, in which case it created nothing and there is nothing to
 // compensate — this degrades to a plain dropReserved.
 func (d *Daemon) rollbackReserved(id string, m persist.Meta, preLaunchOK bool) {
+	d.rollbackReservedWithIssuer(id, m, preLaunchOK, nil)
+}
+
+func (d *Daemon) rollbackReservedWithIssuer(id string, m persist.Meta, preLaunchOK bool, originalNoFork func() error) {
+	candidate := claudeCustodyCandidate(m)
+	if candidate {
+		retired, err := d.retireClaudeReservation(id, originalNoFork)
+		if err != nil {
+			d.logf("launch %s: rollback retains unresolved Claude custody: %v", id, err)
+			return
+		}
+		if retired.ID != "" {
+			m = retired
+		}
+	}
 	if preLaunchOK && d.cfg.PreDelete != nil {
 		if err := d.cfg.PreDelete(m); err != nil {
 			d.logf("launch %s: rollback pre-delete hook: %v", id, err)
+			if m.ClaudeRetirement != nil {
+				return
+			} // retain durable custody for normal Delete retry
 		}
 	}
 	d.dropReserved(id)
@@ -919,6 +973,11 @@ func (d *Daemon) resolveReplay(opID, freshID string) (redrive bool, stale string
 	defer d.mu.Unlock()
 	rec, _ := d.idem.Get(opID)
 	if s, ok := d.sessions[rec.SessionID]; ok {
+		// Selection may enable operational custody in another process. Automatic
+		// replay cannot authorize an unresolved Claude scope from an older floor.
+		if claudeCustodyCandidate(s.meta) && (s.meta.ShimPID == 0 || s.meta.Status.Process == status.ProcessLost) {
+			return false, "", persist.Meta{}, persist.Meta{}, fmt.Errorf("%w: owned Claude reservation retained for session %s", ErrLaunchOutcomeUnknown, rec.SessionID)
+		}
 		if s.meta.RequiredRuntime == persist.RequiredRuntimeOpenCode && (s.meta.Status.Process == status.ProcessLost || !openCodeLaunchComplete(s.meta)) {
 			return false, "", persist.Meta{}, persist.Meta{}, fmt.Errorf("%w: native binding retained for session %s", ErrLaunchOutcomeUnknown, rec.SessionID)
 		}
@@ -968,6 +1027,8 @@ func (d *Daemon) resolveReplay(opID, freshID string) (redrive bool, stale string
 			stale = rec.SessionID // phantom reservation: retire once the re-drive is committed
 			staleMeta = s.meta
 		}
+	} else if d.sessionStateRetained(rec.SessionID) {
+		return false, "", persist.Meta{}, persist.Meta{}, fmt.Errorf("%w: session state retained for %s", ErrLaunchOutcomeUnknown, rec.SessionID)
 	} else if rec.Phase == idempotency.PhaseCompleted {
 		// The launch APPLIED (terminal record) and its session row is gone: the only
 		// path that removes a row without a crash is Delete, a deliberate user verb.
@@ -997,9 +1058,14 @@ func (d *Daemon) resolveStaleLaunches() {
 		if rec.Phase != idempotency.PhasePrepared && rec.Phase != idempotency.PhaseExecuting {
 			continue
 		}
-		if m, ok := d.Get(rec.SessionID); ok && (m.RequiredRuntime == persist.RequiredRuntimeOpenCode || m.Status.Process != status.ProcessLost) {
-			continue // a usable session survived: leave the record alone
+		if m, ok := d.Get(rec.SessionID); ok {
+			if claudeCustodyCandidate(m) && (m.ShimPID == 0 || m.Status.Process == status.ProcessLost) || m.RequiredRuntime == persist.RequiredRuntimeOpenCode || m.Status.Process != status.ProcessLost {
+				continue
+			}
+		} else if d.sessionStateRetained(rec.SessionID) {
+			continue
 		}
+
 		if err := d.idem.Fail(rec.OperationID, nil); err != nil {
 			d.logf("resolve stale launch %s: %v", rec.OperationID, err)
 		}
