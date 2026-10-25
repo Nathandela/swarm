@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Seventeen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
-  "overall": "Still NOT QUALIFIED. V22 reached a stage deadline with zero provider connections or native frames; the backend readiness log does not establish why. Process observation completed without a census error, but no functional or native proxy-bypass credit follows.",
+  "scope": "Eighteen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
+  "overall": "Still NOT QUALIFIED. V25 passed the prior96-task fixture ceiling under a reviewed192-task budget and completed inner cleanup reporting, then rejected an unidentified provider POST. Partial native traffic supplies no account adoption or complete ownership proof.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -901,9 +901,410 @@
         "Pinned Unix-transport source does not support a stdin-EOF fix; actual failure cause remains unknown.",
         "V21 was held locally and never executed. V22 did not qualify proxy bypass or exercise a known ESRCH runtime branch."
       ]
+    },
+    {
+      "id": "diagnostic-V24",
+      "result": "FAIL; bounded resource diagnostic observed task-creation denials. No functional or account-adoption qualification.",
+      "run": {
+        "path": "/private/tmp/swarm-codex-outer-hqxsadsj/run.json",
+        "sha256": "f0aff92e30196488dff9d5c7e9ea3b8e7e78ac0eae8c4a86f8976a6b8969adfd"
+      },
+      "inner_receipt": {
+        "path": "/private/tmp/swarm-codex-outer-hqxsadsj/inner-evidence/receipt.inner.json",
+        "sha256": "99115f41eea742b5506959da14bc8b04487a6c750baf797a0917ce04b2d8404b"
+      },
+      "seven_file_index": {
+        "path": "/private/tmp/swarm-codex-outer-hqxsadsj/inner-evidence/collected-sha256.json",
+        "sha256": "89dfc566d15cd953962943e4dbb38d799bd83ece4cc92707e4ed7c57063ee15d"
+      },
+      "envelope": {
+        "path": "/private/tmp/swarm-codex-envelope-20261025-v24/hashes.json",
+        "sha256": "9c9b1f046c055c4f616c4a3bdfa043aceb969737f12573e5db7d15d3a43826bf"
+      },
+      "resource_witness": {
+        "admitted_cgroup_identity": {
+          "pin": [
+            30,
+            5084792
+          ]
+        },
+        "initial": {
+          "at": 0.11190815106965601,
+          "files": {
+            "pids.current": {
+              "status": "ok",
+              "value": 1
+            },
+            "pids.max": {
+              "status": "ok",
+              "value": 96
+            },
+            "pids.events": {
+              "status": "ok",
+              "value": {
+                "values": {
+                  "max": 0
+                },
+                "missing_keys": []
+              }
+            },
+            "memory.current": {
+              "status": "ok",
+              "value": 5275648
+            },
+            "memory.max": {
+              "status": "ok",
+              "value": 805306368
+            },
+            "memory.events": {
+              "status": "ok",
+              "value": {
+                "values": {
+                  "low": 0,
+                  "high": 0,
+                  "max": 0,
+                  "oom": 0,
+                  "oom_kill": 0
+                },
+                "missing_keys": []
+              }
+            }
+          }
+        },
+        "last_success": {
+          "pids.current": {
+            "at": 12.845865770010278,
+            "status": "ok",
+            "value": 96
+          },
+          "pids.max": {
+            "at": 12.845865770010278,
+            "status": "ok",
+            "value": 96
+          },
+          "pids.events": {
+            "at": 12.845865770010278,
+            "status": "ok",
+            "value": {
+              "values": {
+                "max": 5
+              },
+              "missing_keys": []
+            }
+          },
+          "memory.current": {
+            "at": 12.845865770010278,
+            "status": "ok",
+            "value": 89354240
+          },
+          "memory.max": {
+            "at": 12.845865770010278,
+            "status": "ok",
+            "value": 805306368
+          },
+          "memory.events": {
+            "at": 12.845865770010278,
+            "status": "ok",
+            "value": {
+              "values": {
+                "low": 0,
+                "high": 0,
+                "max": 0,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "missing_keys": []
+            }
+          }
+        },
+        "latest_availability": {
+          "at": 13.067717072088271,
+          "files": {
+            "pids.current": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "pids.max": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "pids.events": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "memory.current": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "memory.max": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "memory.events": {
+              "status": "unavailable",
+              "errno": 2
+            }
+          }
+        },
+        "sampled_maxima": {
+          "pids.current": 96,
+          "memory.current": 89354240
+        },
+        "interpretation": "pids.events.max rose from0 to5 and sampled tasks reached96 with pids.max96. These are task-creation denials; they identify neither a victim nor the sole startup failure cause. Process witnesses are not thread counts.",
+        "memory_limit": "Zero sampled memory events do not exclude other pressure; sampled current/max are not a complete memory-lifetime trace."
+      },
+      "failure": {
+        "inner_errors": [
+          "ValueError:provider failure: owned HTTP boundary RuntimeError",
+          "cleanup:RuntimeError:cannot join thread before it is started",
+          "owned HTTP boundary RuntimeError",
+          "owned HTTP boundary OSError"
+        ],
+        "cleanup_report": "Join of an unstarted HTTP thread interrupted inner cleanup reporting. No completed inner transport/cleanup proof follows.",
+        "partial_activity": "Three native frames and one synthetic-A ordinary usage response; no main inference, MCP call, PTY or full native ownership.",
+        "local_V23_status": "Held before remote preparation/execution to preserve initial values and explicit incomplete-counter status; no actual V23 case."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 13.993739222059958,
+        "observed_identities": 24,
+        "all_observed_identities_ended": true,
+        "exact_cgroup_empty_and_gone": true,
+        "pins_unchanged": true,
+        "native_endpoint": {
+          "logical": "/tmp/scx.gpuuqm1y/tmp/ctui-ius655mi/s/2pjo5nvim7fff6rn/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/a8b6067a0d357398d5b2d2fc7e66f5f4bcc8407db7d6c571c6ea2c7dd88f8a4b",
+          "no_listener": true,
+          "alias_present": true,
+          "socket_present": true
+        },
+        "complete_fixture_listener_and_native_ownership": false
+      },
+      "next_source_plan": {
+        "path": "/private/tmp/swarm-codex-thread-budget-plan-20261025-v1/PLAN.md",
+        "sha256": "48d76662d36e3ece258278cce9c222df38281351576e3f169a1e4a9bf692da35"
+      },
+      "next_step": "Review the separate finite192-thread fixture budget and conservative per-thread join-failure isolation. Keep96-process census, memory/time/identity/functional gates unchanged. No automatic further limit increase or failure waiver."
+    },
+    {
+      "id": "diagnostic-V25",
+      "result": "FAIL; first provider POST target remains unknown. No functional or account-adoption qualification.",
+      "run": {
+        "path": "/private/tmp/swarm-codex-outer-etvyl23r/run.json",
+        "sha256": "8c0205241fe0f05443934352cdd613f9dd3c7fc206f2bc610a1f7abc243de562"
+      },
+      "inner_receipt": {
+        "path": "/private/tmp/swarm-codex-outer-etvyl23r/inner-evidence/receipt.inner.json",
+        "sha256": "7922e6f9c094dd5e699aaa4f115bebd46a1ee92113693a1f952944964172a58d"
+      },
+      "seven_file_index": {
+        "path": "/private/tmp/swarm-codex-outer-etvyl23r/inner-evidence/collected-sha256.json",
+        "sha256": "710eae373a9104e9af0895175df4eca312e0721d2ee996beaff98785074e8418"
+      },
+      "packet": {
+        "path": "/private/tmp/swarm-codex-tui-constructor-20261025-v16/review-v16/manifest.json",
+        "sha256": "c638bb90981a1fb7c67c5741b2bd529ea25c59435642c9b33c363b6bd494aaff"
+      },
+      "envelope": {
+        "path": "/private/tmp/swarm-codex-envelope-20261025-v25/hashes.json",
+        "sha256": "c9834ff2a223b5e4e8f7be33d231b06c163499d1f60e362c6d8bc5f57eccfc22"
+      },
+      "resource_witness": {
+        "initial": {
+          "at": 0.045884160907007754,
+          "files": {
+            "pids.current": {
+              "status": "ok",
+              "value": 1
+            },
+            "pids.max": {
+              "status": "ok",
+              "value": 192
+            },
+            "pids.events": {
+              "status": "ok",
+              "value": {
+                "values": {
+                  "max": 0
+                },
+                "missing_keys": []
+              }
+            },
+            "memory.current": {
+              "status": "ok",
+              "value": 5361664
+            },
+            "memory.max": {
+              "status": "ok",
+              "value": 805306368
+            },
+            "memory.events": {
+              "status": "ok",
+              "value": {
+                "values": {
+                  "low": 0,
+                  "high": 0,
+                  "max": 0,
+                  "oom": 0,
+                  "oom_kill": 0
+                },
+                "missing_keys": []
+              }
+            }
+          }
+        },
+        "last_success": {
+          "pids.current": {
+            "at": 3.662680177949369,
+            "status": "ok",
+            "value": 97
+          },
+          "pids.max": {
+            "at": 3.662680177949369,
+            "status": "ok",
+            "value": 192
+          },
+          "pids.events": {
+            "at": 3.662680177949369,
+            "status": "ok",
+            "value": {
+              "values": {
+                "max": 0
+              },
+              "missing_keys": []
+            }
+          },
+          "memory.current": {
+            "at": 3.662680177949369,
+            "status": "ok",
+            "value": 142221312
+          },
+          "memory.max": {
+            "at": 3.662680177949369,
+            "status": "ok",
+            "value": 805306368
+          },
+          "memory.events": {
+            "at": 3.662680177949369,
+            "status": "ok",
+            "value": {
+              "values": {
+                "low": 0,
+                "high": 0,
+                "max": 0,
+                "oom": 0,
+                "oom_kill": 0
+              },
+              "missing_keys": []
+            }
+          }
+        },
+        "latest_availability": {
+          "at": 3.897949819918722,
+          "files": {
+            "pids.current": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "pids.max": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "pids.events": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "memory.current": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "memory.max": {
+              "status": "unavailable",
+              "errno": 2
+            },
+            "memory.events": {
+              "status": "unavailable",
+              "errno": 2
+            }
+          }
+        },
+        "sampled_maxima": {
+          "pids.current": 101,
+          "memory.current": 142221312
+        },
+        "interpretation": "Sampled task maximum101 exceeds the prior96 cap and stays below the reviewed192 cap. Sampled pids.events.max remained0. This does not prove absence of all pressure or identify the sole failure cause."
+      },
+      "failure": {
+        "first_inner_failure": "ValueError:provider failure: unexpected provider POST",
+        "first_POST_target": "Not recorded; remains unknown.",
+        "later_GET_rejection": {
+          "method": "rejected-target",
+          "path": {
+            "sha256": "415e78be38233752c4ba453d77e50d3f3681a1e84911d95cff9e979bae86ca31",
+            "bytes": 42
+          },
+          "pairs": [],
+          "pairs_total": 0,
+          "truncated": false
+        },
+        "later_GET_source_match": "Exact public builder path /backend-api/wham/rate-limit-reset-credits; this identifies neither the first POST nor its caller.",
+        "outer_failure": [
+          "proof/finalize:KeyError:'ownership'"
+        ],
+        "partial_activity": {
+          "counts": {
+            "observer_requests": 6,
+            "native_frames": 4,
+            "frame_bytes": 1081,
+            "native_frame_bytes": 1641,
+            "route_requests": 34,
+            "main_inferences": 0,
+            "title_inferences": 0,
+            "prewarms": 1,
+            "mcp_messages": 3,
+            "mcp_message_bytes": 258,
+            "mcp_calls": 0,
+            "pty_bytes": 0,
+            "summary_bytes": 7850,
+            "scratch_bytes": 18945866,
+            "cgroup_directories": 0
+          },
+          "provider_transport": {
+            "accepted": 22,
+            "rejected": 0,
+            "tls_handshake_failures": 2,
+            "drained": true
+          },
+          "qualification": "One synthetic-A generate:false prewarm, ordinary usage response and MCP initialization traffic. No main inference, tools/call, PTY output or full ownership/adoption proof."
+        },
+        "tls_limit": "Two TLS failures are retained without attributing them to abort or another cause."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 4.678518851986155,
+        "observed_identities": 30,
+        "sticky_auxiliary_image_gaps": 2,
+        "all_observed_identities_ended": true,
+        "exact_cgroup_empty_and_gone": true,
+        "pins_unchanged": true,
+        "native_endpoint": {
+          "logical": "/tmp/scx.2u2du6sx/tmp/ctui-kzxtf74z/s/n3usgfnl3wvoq2mw/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/fccff0877b3b2f32016d3cdddb3e185d3437c260483608580dd926ba61333558",
+          "no_listener": true,
+          "alias_present": false,
+          "socket_present": false
+        },
+        "inner_listeners_closed": true,
+        "inner_children_ended": true,
+        "inner_owned_only": true,
+        "complete_fixture_listener_and_native_ownership": false
+      },
+      "next_source_plan": {
+        "path": "/private/tmp/swarm-codex-post-target-plan-20261025-v1/PLAN.md",
+        "sha256": "2e040eadf4810b52aec3109157ff480a00b7ad90d22029e51ad17933dfc8e2ff"
+      },
+      "next_step": "Review reject-only masked POST target diagnostics with the existing shared bounded first-record latch. No body/header capture, route acceptance or account-adoption credit."
     }
   ],
-  "next_step": "Review the envelope-only exact-cgroup resource diagnostic, keeping limits, timers, identity, functional and cleanup gates unchanged. Resource pressure remains an unproven hypothesis.",
+  "next_step": "Review and test rejection-only masked POST target diagnostics, then identify the exact public request contract before considering any additional fixture response. No production enablement or release.",
   "limits": [
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
@@ -968,13 +1369,13 @@
     "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
   },
   "attempt_counts": {
-    "full_constructor_attempts": 17,
+    "full_constructor_attempts": 19,
     "seed_only_controls": 2,
     "failed_preparations": 1,
     "unused_successful_preparations": 1,
-    "total_recorded_operations": 21,
+    "total_recorded_operations": 23,
     "count_scope": "Recorded constructor/seed/preparation evidence only; cleanup operations are separate.",
-    "latest_actual_attempt": "diagnostic-V22"
+    "latest_actual_attempt": "diagnostic-V25"
   },
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
