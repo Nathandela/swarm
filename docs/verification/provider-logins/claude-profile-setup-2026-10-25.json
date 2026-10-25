@@ -1,0 +1,181 @@
+{
+  "date": "2026-10-25",
+  "scope": "Initial inheritance of existing same-user Claude native setup state; no fresh-user enrollment or native startup qualification",
+  "live_setup_changed": false,
+  "native_startup_qualified": false,
+  "policy": "On the first write of a missing unborn profile config, preserve only actual true completion with its original canonical stable version and a supported built-in theme. Native completion is readiness state, not independent proof of a human security acknowledgment. File ownership establishes same-user configuration provenance, not native-only authorship.",
+  "preservation": "Any existing destination, including empty content or {}, suppresses inheritance. Established profiles and CWD extensions never backfill setup; native auth, account identity, trust, approvals and unrelated fields are not copied. Existing single durable replacement and custody/CAS checks remain.",
+  "source": {
+    "base_commit": "7e0db4ab0dbd5c72165d30e6b8e95e3dcd16a32e",
+    "approved_plan_sha256": "9adb5463a00ac60d5cb3ede2a42024cc019f31951864bdc3d109fc9ef50e089d",
+    "implementation_manifest_sha256": "510a0b99bda168b3972ddeb97e4c702e41f3eed4d836f2e38c6b2d2d5e5748b7",
+    "source_delta_sha256": "e639b4d59e7f935c4b90121d225700aa0e8e320610213db72a4b4ebce8bf404e",
+    "owned_files_sha256": {
+      "internal/logins/claude_profiles.go": "cb1f2ffa109636a1719da9d291c568dcb44e55cb909eb6cbb3d70b1ba5029774",
+      "internal/logins/claude_profile_setup_test.go": "e6a158583b4404674a79216ca84a01b06ab1efde900877a3573be6e19a6cb8af"
+    },
+    "frozen_files": 3534,
+    "frozen_source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305"
+  },
+  "red": {
+    "log_sha256": "5442154b3c4ac0400e111be3bdbaeb2b96593e180893e7a72333f28165a2d164",
+    "finding": "Original provisioner omitted setup despite an actual-shaped configured source; the public Store positive test fails."
+  },
+  "completion_pair_omission": {
+    "log_sha256": "49d117af58db483356d92ccd5fe2a3174362ec7f0b946e8eb3fba0ecb2920147",
+    "finding": "Deleting only completion/version assignments in a scratch overlay fails the same public Store positive assertion; real source remains unchanged."
+  },
+  "local_checks": {
+    "red": {
+      "command": "python3 /private/tmp/swarm-login-go.py test ./internal/logins -run '^TestClaudeProfileSetupInitialInheritance$' -count=1",
+      "result": "FAIL as expected: missing completion",
+      "log": "red.log",
+      "production_sha256": "f127870d1ac8c4b46205d904bbccd61068edff012886f0fba0f25edaccb1b561"
+    },
+    "focused_green": {
+      "command": "python3 /private/tmp/swarm-login-go.py test ./internal/logins -run '^TestClaudeProfileSetup' -count=1",
+      "result": "PASS 14.733s (before final test-strengthening only)",
+      "log": "focused-green.log"
+    },
+    "focused_race": {
+      "command": "python3 /private/tmp/swarm-login-go.py test -race ./internal/logins -run '^TestClaudeProfileSetup' -count=1",
+      "result": "PASS 14.336s, final owned source/test hashes",
+      "log": "focused-race.log"
+    },
+    "completion_pair_omission": {
+      "command": "python3 /private/tmp/swarm-login-go.py test -overlay=/private/tmp/swarm-claude-profile-setup-implementation-20261025/omit-completion-pair-overlay.json ./internal/logins -run '^TestClaudeProfileSetupInitialInheritance$' -count=1",
+      "result": "FAIL as expected: missing completion",
+      "log": "omission.log",
+      "mutation": "Only remove the completion+version assignments in private scratch overlay; production unchanged."
+    },
+    "full_logins_race": {
+      "command": "python3 /private/tmp/swarm-login-go.py test -race ./internal/logins -count=1",
+      "result": "PASS 217.961s; final frozen source/test hashes",
+      "log": "full-logins-race.log"
+    },
+    "platform_limits": [
+      "Darwin arm64 local tests; Linux-only caller/native/containment qualification is not executed by this packet.",
+      "No product build/lint/native run: root owns these gates."
+    ],
+    "selected_callers_race": {
+      "command": "GOMAXPROCS=2 python3 /private/tmp/swarm-login-go.py test -p=1 -race ./internal/skeleton -run '^(TestComposeLaunchSpec_FreshClaudeLaunchComposesArgv|TestLoginClaudeUsageLaunch.*|TestClaudeOwnedUsageUsesExactProfileHomeInBothReaders|TestClaudeLaunchPreparationReachesEstablishedMissingCWDAndResumeCheckout|TestClaudeFinalizePreLaunchWorktreePreparesActualCWDAndRollsBackBeforeFork|TestClaudeActualUnsupportedPlatformRefusesOwnerSelection|TestClaudeBirthHeldSelectionDoesNotBlockInstalledOwnerKill)$' -v -count=1",
+      "result": "PASS 2.164s",
+      "log": "selected-callers-race.log",
+      "passed_top_level_tests": [
+        "TestComposeLaunchSpec_FreshClaudeLaunchComposesArgv",
+        "TestLoginClaudeUsageLaunchPreservesCommonSettings",
+        "TestLoginClaudeUsageLaunchSkipsUnsupportedOverrides",
+        "TestLoginClaudeUsageLaunchAddsQuietObserver",
+        "TestLoginClaudeUsageLaunchRecognizesNativeHomeAlias",
+        "TestLoginClaudeUsageLaunchSkipsOrdinaryOwnerHomeSettings",
+        "TestClaudeOwnedUsageUsesExactProfileHomeInBothReaders",
+        "TestClaudeActualUnsupportedPlatformRefusesOwnerSelection"
+      ],
+      "skipped_top_level_tests": [
+        "TestClaudeBirthHeldSelectionDoesNotBlockInstalledOwnerKill",
+        "TestClaudeLaunchPreparationReachesEstablishedMissingCWDAndResumeCheckout",
+        "TestClaudeFinalizePreLaunchWorktreePreparesActualCWDAndRollsBackBeforeFork"
+      ]
+    },
+    "overlap": {
+      "occurred": true,
+      "jobs": [
+        "full_logins_race",
+        "selected_callers_race"
+      ],
+      "full_logins_gomaxprocs": "default",
+      "selected_callers_gomaxprocs": 2,
+      "selected_build_parallelism": 1,
+      "result": "Both passed; no observed race/timing failure. Root instructed no repeat absent a concrete concern and sequential GOMAXPROCS=1 for subsequent jobs."
+    },
+    "root_astra_source_review": "GREEN reported by root against unchanged frozen source"
+  },
+  "root_checks": {
+    "build": {
+      "exit_code": 0,
+      "elapsed_seconds": 18.443,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "vet": {
+      "exit_code": 0,
+      "elapsed_seconds": 0.76,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lint-darwin": {
+      "exit_code": 0,
+      "elapsed_seconds": 4.165,
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "lint-linux": {
+      "exit_code": 0,
+      "elapsed_seconds": 4.767,
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "build-linux-product": {
+      "exit_code": 0,
+      "elapsed_seconds": 9.823,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "build-linux-logins": {
+      "exit_code": 0,
+      "elapsed_seconds": 0.808,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "build-linux-omission": {
+      "exit_code": 0,
+      "elapsed_seconds": 2.646,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "linux": {
+    "manifest_sha256": "1dd6ffa7095f81fb1c6f406fd9b5e6432bad52f4783cea5336317299bc829cf9",
+    "run_record_sha256": "882d709d41d444acb87f90f456c6e6275df9726106a4eaa289ec55c69a18a081",
+    "all_contracts_met": true,
+    "units": {
+      "logins-setup-positive": {
+        "exit_code": 0,
+        "elapsed_seconds": 6.343,
+        "log_sha256": "34c9647a02bf4ba09c44ef17844993bdbc4cd235a0db361a6821da285930b341",
+        "binary_sha256": "9f9739d87aa03a9fd1d318a2d9add8d73ffe00d829bc534e003119b160fe0a86",
+        "expected_tests": [
+          "TestClaudeProfileSetupEstablishedAndSecondProfile",
+          "TestClaudeProfileSetupFieldPolicy",
+          "TestClaudeProfileSetupInitialInheritance",
+          "TestClaudeProfileSetupRejectsInvalidSelectedFields",
+          "TestClaudeProfileSetupRetryNeverBackfillsExistingConfig",
+          "TestClaudeProfileSetupSourceSafety"
+        ],
+        "contract_met": true,
+        "cgroup_empty": true,
+        "cgroup_gone": true,
+        "test_umask": "0o077"
+      },
+      "logins-setup-omission": {
+        "exit_code": 1,
+        "elapsed_seconds": 0.444,
+        "log_sha256": "59a2d7b27530a75e00741c67db52d6a3c32a0a7ad6e1b2a427ee1117e53d4b86",
+        "binary_sha256": "d49b18819ea248db9d0bc8df206d6970e4d727dae8f008ffecfc3b0faa0e12a3",
+        "expected_tests": [
+          "TestClaudeProfileSetupInitialInheritance"
+        ],
+        "contract_met": true,
+        "cgroup_empty": true,
+        "cgroup_gone": true,
+        "test_umask": "0o077"
+      }
+    },
+    "review_correction": "V1 execution packet was not run. V2 accepts either exact missing completion/version assertion because the test iterates an unordered Go map; exit1, exact failed test and no skips remain required."
+  },
+  "linux_product": {
+    "sha256": "dc90bbe17797702a49bec9afccfec01954cf4f0bcf4701b9306cd9b45d265f7d",
+    "size": 25758072
+  },
+  "review": "Root and Astra reviewed the bounded plan and connected source; Sol authored the implementation and tests. Frozen source and Linux omission contract were independently reviewed before execution.",
+  "limits": [
+    "Unit fixtures use synthetic setup fields and fake authority; these do not prove actual native onboarding, authentication or constructor readiness.",
+    "Actual native-written source preparation and first/restarted/second-profile startup, plus live second-CWD and blank-source negative canaries, remain required. Historical constructor V3 stays failed at the native theme screen.",
+    "Fresh users still require manual native setup. Existing profile files are never backfilled, even if setup is missing. No enrollment UX or default structured-mode conversion is included.",
+    "Unsupported custom legacy themes require explicit remediation; no silent default theme is substituted.",
+    "The full-skeleton status-persistence failure remains open. No release, migration or automatic-continuation qualification follows."
+  ]
+}

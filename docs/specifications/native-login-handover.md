@@ -127,7 +127,7 @@ Provision only stable aliases to existing assets; never copy history, plugins,
 transcripts or caches. Preserve normal user/project/local precedence, launch
 flags, model, effort, permissions, cwd and absolute native transcript path. Do
 not use `--settings` or `--mcp-config` to simulate user scope. Before creating an
-owned profile, provision only the explicit user and exact-CWD local MCP
+owned profile, provision the explicit user and exact-CWD local MCP
 definitions from `.claude.json`'s `mcpServers` and `projects[exactCwd].mcpServers`.
 Use a supported private native input if available; otherwise atomically edit only
 those documented maps in a private destination after all config writers stop.
@@ -144,8 +144,8 @@ resume callers must reach this path. Conflicts or unavailable writer-stop proof
 for a required config change leave that profile pending without blocking healthy
 discussions. The [write-free extension checks](../verification/provider-logins/claude-cwd-extension-2026-10-25.json)
 cover source and connected Linux callers; native two-discussion qualification
-remains separate. Do not migrate MCP OAuth, trust, account state or other profile
-fields.
+remains separate. Do not migrate MCP OAuth, trust, account state or approvals.
+The only other initial config fields are the limited setup state described below.
 
 Native refresh helpers use a fresh empty private config bound to the existing
 saved native authority. Accept auth only after independently observing a native
@@ -304,9 +304,28 @@ only. The [production-constructor canary](../verification/provider-logins/claude
 must also start an untouched provisioned profile; the earlier fixture prefilled onboarding, theme and synthetic account fields.
 The unseeded constructor reaches Claude's first-run theme screen and waits:
 credential readiness does not complete native setup. Its failed receipt is
-retained while the one-time setup path is investigated.
+retained; the changed provisioner still needs its own blank-source qualification.
 Saved-account authentication, workflow/MCP parity and integrated native startup
 remain separate qualification gates.
+
+For an existing configured user, the first write of an unborn profile can inherit
+the common native configuration's actual `hasCompletedOnboarding: true`, its
+original canonical stable `lastOnboardingVersion`, and a supported built-in
+`theme`. This is Swarm's policy for preserving existing native setup state, not
+proof of a human security acknowledgment or a native cross-directory guarantee.
+Only these fields and the explicit MCP maps transfer. Credentials, account
+identity, trust and approvals remain separate.
+
+Any existing destination file suppresses setup inheritance, including an empty
+file or `{}` on a pending retry. Established profiles never backfill or reset
+setup. Missing or false completion leaves manual native setup necessary;
+malformed selected fields and unsupported legacy themes produce an actionable
+refusal without exposing their values. Modern settings keep their existing
+shared alias. The [setup inheritance checks](../verification/provider-logins/claude-profile-setup-2026-10-25.json)
+record source/test coverage; an actual native-completed source and fresh,
+restarted and second-profile constructor runs are still required. Fresh-user
+enrollment setup remains outside this slice while the managed interface is
+being evaluated.
 
 ### Durable execution evidence
 

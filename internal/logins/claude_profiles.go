@@ -3,6 +3,7 @@ package logins
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/processcontain"
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -156,7 +158,7 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 			if err != nil {
 				return err
 			}
-			_, unchanged, err := s.claudeMCPConfiguration(dir, definitions)
+			_, unchanged, err := s.claudeMCPConfiguration(dir, definitions, false)
 			if err != nil {
 				return err
 			}
@@ -177,7 +179,7 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 				if err != nil {
 					return err
 				}
-				if err := s.writeClaudeMCPDefinitions(dir, definitions); err != nil {
+				if err := s.writeClaudeMCPDefinitions(dir, definitions, false); err != nil {
 					return err
 				}
 			}
@@ -211,7 +213,7 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 		if err = s.validateClaudeAliasSources(); err != nil {
 			return err
 		}
-		// Read only explicit definition maps; native account/trust/OAuth fields stay put.
+		// Native account/trust/OAuth fields stay put; setup is inherited only at first write.
 		definitions, err := s.claudeMCPDefinitions(cwds)
 		if err != nil {
 			return err
@@ -284,7 +286,7 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 		if err = s.provisionClaudeAliases(dir); err != nil {
 			return err
 		}
-		if err = s.writeClaudeMCPDefinitions(dir, definitions); err != nil {
+		if err = s.writeClaudeMCPDefinitions(dir, definitions, true); err != nil {
 			return err
 		}
 		record = ClaudeProfile{Provisioned: true, CWDs: cwds}
@@ -504,8 +506,8 @@ func mergeClaudeMCPMap(destination map[string]json.RawMessage, key string, sourc
 	return nil
 }
 
-func (s *Store) writeClaudeMCPDefinitions(dir string, definitions map[string]json.RawMessage) error {
-	encoded, unchanged, err := s.claudeMCPConfiguration(dir, definitions)
+func (s *Store) writeClaudeMCPDefinitions(dir string, definitions map[string]json.RawMessage, initial bool) error {
+	encoded, unchanged, err := s.claudeMCPConfiguration(dir, definitions, initial)
 	if err != nil || unchanged {
 		return err
 	}
@@ -513,7 +515,7 @@ func (s *Store) writeClaudeMCPDefinitions(dir string, definitions map[string]jso
 	return err
 }
 
-func (s *Store) claudeMCPConfiguration(dir string, definitions map[string]json.RawMessage) ([]byte, bool, error) {
+func (s *Store) claudeMCPConfiguration(dir string, definitions map[string]json.RawMessage, initial bool) ([]byte, bool, error) {
 	name := filepath.Join(dir, ".claude.json")
 	raw, err := s.readOptional(name)
 	if err != nil {
@@ -524,6 +526,20 @@ func (s *Store) claudeMCPConfiguration(dir string, definitions map[string]json.R
 		destination, err = jsonObject(raw)
 		if err != nil {
 			return nil, false, err
+		}
+	}
+	if initial {
+		_, statErr := s.root.Lstat(name)
+		if errors.Is(statErr, os.ErrNotExist) {
+			setup, err := s.claudeProfileSetup()
+			if err != nil {
+				return nil, false, err
+			}
+			for key, value := range setup {
+				destination[key] = value
+			}
+		} else if statErr != nil {
+			return nil, false, statErr
 		}
 	}
 	if err = mergeClaudeMCPMap(destination, "mcpServers", definitions["mcpServers"]); err != nil {
@@ -572,6 +588,47 @@ func (s *Store) claudeMCPConfiguration(dir string, definitions map[string]json.R
 		return encoded, true, nil
 	}
 	return encoded, false, nil
+}
+
+func (s *Store) claudeProfileSetup() (map[string]json.RawMessage, error) {
+	raw, err := s.readOptional("provider/claude/native/.claude.json")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]json.RawMessage{}
+	if len(raw) == 0 {
+		return out, nil
+	}
+	source, err := jsonObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if value, ok := source["hasCompletedOnboarding"]; ok {
+		var completed *bool
+		if json.Unmarshal(value, &completed) != nil || completed == nil {
+			return nil, fmt.Errorf("%w: cannot inherit hasCompletedOnboarding; complete native setup in the shared user configuration", ErrIneligible)
+		}
+		if *completed {
+			var version string
+			if json.Unmarshal(source["lastOnboardingVersion"], &version) != nil || len(version) > 32 || !semver.IsValid("v"+version) || semver.Canonical("v"+version) != "v"+version || semver.Prerelease("v"+version) != "" {
+				return nil, fmt.Errorf("%w: cannot inherit missing or unsupported lastOnboardingVersion; complete native setup in the shared user configuration", ErrIneligible)
+			}
+			out["hasCompletedOnboarding"], out["lastOnboardingVersion"] = value, source["lastOnboardingVersion"]
+		}
+	}
+	if value, ok := source["theme"]; ok {
+		var theme string
+		if json.Unmarshal(value, &theme) == nil {
+			switch theme {
+			case "auto", "dark", "light", "dark-daltonized", "light-daltonized", "dark-ansi", "light-ansi":
+				out["theme"] = value
+			}
+		}
+		if out["theme"] == nil {
+			return nil, fmt.Errorf("%w: cannot inherit unsupported theme; choose a supported built-in theme and remove or replace the legacy theme field in the shared native .claude.json", ErrIneligible)
+		}
+	}
+	return out, nil
 }
 
 func claudeProfilesOwned(r Registry, provider string) bool {
