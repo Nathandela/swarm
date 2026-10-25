@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
   "scope": "Eighteen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
-  "overall": "Still NOT QUALIFIED. V25 passed the prior96-task fixture ceiling under a reviewed192-task budget and completed inner cleanup reporting, then rejected an unidentified provider POST. Partial native traffic supplies no account adoption or complete ownership proof.",
+  "overall": "Still NOT QUALIFIED. V25 rejected an unidentified provider POST after partial native traffic; V26 stopped earlier during seed setup and did not exercise the diagnostic. Neither result supplies complete ownership or account-adoption proof.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -1302,9 +1302,96 @@
         "sha256": "2e040eadf4810b52aec3109157ff480a00b7ad90d22029e51ad17933dfc8e2ff"
       },
       "next_step": "Review reject-only masked POST target diagnostics with the existing shared bounded first-record latch. No body/header capture, route acceptance or account-adoption credit."
+    },
+    {
+      "id": "diagnostic-V26-seed",
+      "result": "FAIL at seed setup; no provider CLI or POST diagnostic exercised.",
+      "run": {
+        "path": "/private/tmp/swarm-codex-outer-m297przm/run.json",
+        "sha256": "9bd14bccad272b377058592e20125a2d3503ee743aa563d8b3b292703be78128"
+      },
+      "inner_receipt": {
+        "path": "/private/tmp/swarm-codex-outer-m297przm/inner-evidence/receipt.inner.json",
+        "sha256": "4b1d62800c407f813269810c36a0d3dcf33470330f8ff97d6015ad0ed697cb86"
+      },
+      "five_file_index": {
+        "path": "/private/tmp/swarm-codex-outer-m297przm/inner-evidence/collected-sha256.json",
+        "sha256": "68bec2cf0b16bae70260d6d727e072f267f7e305ba6ec6471b766c1b280e3d4f"
+      },
+      "packet": {
+        "path": "/private/tmp/swarm-codex-tui-constructor-20261025-v17/review-v17/manifest.json",
+        "sha256": "6084e2903ab4961e96e4bbfd57e13cbc8bc773b3e508ef36e6df955cd3a4b092"
+      },
+      "envelope": {
+        "path": "/private/tmp/swarm-codex-envelope-20261025-v26/hashes.json",
+        "sha256": "fa4b901e0d45e06006788d4b19b3a958d25560b34a18f92b56809146b24bbb18"
+      },
+      "failure": {
+        "inner": [
+          "TimeoutExpired:Command '['/tmp/scx.w3x6y9pc/packet/driver-linux-amd64', 'seed', '/tmp/scx.w3x6y9pc/tmp/ctui-y_aaqwsa']' timed out after 4.74905268708244 seconds"
+        ],
+        "setup_elapsed_seconds": 8.000192412990145,
+        "remaining_seed_timeout_seconds": 4.74905268708244,
+        "seed_stdout_bytes": 0,
+        "seed_stderr_bytes": 0,
+        "cause": "Uncharacterized. No pressure, specific blocked call or retry diagnosis is established.",
+        "target_diagnostic": "No provider requests occurred; rejection-only POST diagnostic remains unexercised."
+      },
+      "activity": {
+        "public_rpc_upper_bound": 0,
+        "counts": {
+          "observer_requests": 0,
+          "native_frames": 0,
+          "frame_bytes": 0,
+          "native_frame_bytes": 0,
+          "route_requests": 0,
+          "main_inferences": 0,
+          "title_inferences": 0,
+          "prewarms": 0,
+          "mcp_messages": 0,
+          "mcp_message_bytes": 0,
+          "mcp_calls": 0,
+          "pty_bytes": 0,
+          "summary_bytes": 2043,
+          "scratch_bytes": 18689,
+          "cgroup_directories": 0
+        },
+        "provider_transport": {
+          "accepted": 0,
+          "rejected": 0,
+          "tls_handshake_failures": 0,
+          "drained": true
+        }
+      },
+      "resources": {
+        "sampled_maxima": {
+          "pids.current": 7,
+          "memory.current": 17379328
+        },
+        "pids_limit": 192,
+        "observed_denial_counter": {
+          "values": {
+            "max": 0
+          },
+          "missing_keys": []
+        },
+        "limit": "Sampled values do not establish the stall cause or exclude all resource pressure."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 10.035395734012127,
+        "observed_identities": 5,
+        "all_observed_identities_ended": true,
+        "exact_cgroup_empty_and_gone": true,
+        "pins_unchanged": true,
+        "inner_listeners_closed": true,
+        "inner_children_ended": true,
+        "endpoint_identity": null,
+        "complete_fixture_listener_and_native_ownership": false
+      },
+      "next_step": "Source-only seed/bootstrap diagnosis before considering any further native attempt. No timeout increase, retry or functional waiver follows."
     }
   ],
-  "next_step": "Review and test rejection-only masked POST target diagnostics, then identify the exact public request contract before considering any additional fixture response. No production enablement or release.",
+  "next_step": "Source-only seed/bootstrap diagnosis; preserve the unexercised rejection-only POST diagnostic. Further native execution and any endpoint response require separate review.",
   "limits": [
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
@@ -1370,12 +1457,12 @@
   },
   "attempt_counts": {
     "full_constructor_attempts": 19,
-    "seed_only_controls": 2,
+    "seed_only_controls": 3,
     "failed_preparations": 1,
     "unused_successful_preparations": 1,
-    "total_recorded_operations": 23,
+    "total_recorded_operations": 24,
     "count_scope": "Recorded constructor/seed/preparation evidence only; cleanup operations are separate.",
-    "latest_actual_attempt": "diagnostic-V25"
+    "latest_actual_attempt": "diagnostic-V26-seed"
   },
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",

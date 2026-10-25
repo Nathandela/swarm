@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-25",
+  "scope": "Bounded source study only; no Cron fixture or production implementation.",
+  "review": "Root and Astra checked the retained excerpts and conservative conclusions.",
+  "status": "Quota retention, print-mode scheduler custody and automatic recovery remain unqualified.",
+  "sources": {
+    "path": "/private/tmp/swarm-claude-cron-retention-study-20261025/sources.json",
+    "sha256": "2ec9483e064f9517ee0ad5531c8d9b843e52bc49364938c3d40746015e6255fa"
+  },
+  "findings": {
+    "path": "/private/tmp/swarm-claude-cron-retention-study-20261025/FINDINGS.txt",
+    "sha256": "3b1ebc45b00dea3c100a19525809beb9015281c1dd94969432754059c560019f"
+  },
+  "native": {
+    "version": "2.1.310",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "bytes": 291638640,
+    "hash_before_after_equal": true,
+    "executed": false
+  },
+  "excerpt_scope": {
+    "contexts": 3,
+    "bytes": 29500,
+    "same_spelled_AskUserQuestion_function": "Explicitly excluded; it does not establish the imported Cron binding."
+  },
+  "source_findings": [
+    "The Cron library delegates session-only storage/list/delete to imported Fxe/Om/TX. Their exact ownership and quota/reset mutators remain unresolved.",
+    "Tool descriptions describe recurring:false as one-shot and durable:false as session-only. Genuine discovery schemas were not exercised.",
+    "One-shot times at selected minute boundaries may shift up to90seconds early, clamped at creation. Nominal cron expressions cannot establish a future-through-observation obligation.",
+    "REPL-idle scheduling is described, but print-mode scheduler lifetime and quota retention are not established."
+  ],
+  "consequence": "A pre-quota CronList and an empty post-quota background snapshot cannot prove survival or completion. Unproven scheduled work remains unknown/incomplete and cannot authorize automatic recovery, stop or successor creation.",
+  "decision": "Do not build the larger proposed native Cron fixture while its decisive survival witness remains unavailable. Preserve the proof gap.",
+  "limits": [
+    "No CronCreate/List/Delete, due wakeup, post-quota schedule witness or complete workflow census was observed.",
+    "This source-only result does not invalidate the separate R9 bounded working-interval PASS or promote it into global completeness.",
+    "No UI/default conversion, native packet, runtime code or automatic dispatcher was introduced."
+  ]
+}

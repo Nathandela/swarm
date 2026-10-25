@@ -277,6 +277,9 @@ a durably joined background job remained alive. A fresh task snapshot and two
 process samples confirmed it. The later R9 run passed this bounded case and
 cleanup after an envelope-only stop-grace correction. Earlier failures remain
 preserved. This qualifies neither whole-workflow completion nor automatic recovery.
+The [bounded Cron source study](provider-logins/claude-cron-source-boundary-2026-10-25.json)
+leaves scheduled-work retention across quota and structured scheduler custody
+unknown. An empty background-job snapshot cannot settle those obligations.
 
 The [fresh managed Codex TUI attempts](provider-logins/codex-fresh-tui-2026-10-25.json)
 also remain unqualified. Known plugin metadata and a synthetic usage response
