@@ -108,5 +108,28 @@
     },
     "historicalEvidence": "Earlier source and native claims in this record are retained; this follow-up only adds the pinned refresh-chain analysis and does not relabel prior results.",
     "nativeAttempts": 0
+  },
+  "codex_explicit_owner_admission_contract": {
+    "status": "Characterized and reviewed; no production change",
+    "issue": "agents-tracker-h6sc.20",
+    "contract": "Readiness, desired epoch and credential revision are checked at admission for an explicit owner submission. On the same physical feed/incarnation, later readiness invalidation does not revoke completed Begin. A fresh submission must pass readiness again. Physical identity and existing Stop/Begin write fences remain mandatory; no operation may rebind to a replacement feed.",
+    "test": "internal/skeleton/logins_codex_admission_test.go",
+    "test_sha256": "33de6cfe84f097a7f4f5fc75414a8a794a4005d9a98c9498999fd8a3d1a1d94c",
+    "source_unchanged_sha256": "b945ef99d5cd40e1b5e8d4f8f1b538970f8aa8cd55c77554070cfdeae2046dc5",
+    "evidence": [
+      "Uses real semanticInputGate and callComposerBackendAtWriteBoundaryPrepared with existing test hook and backend recorder; does not claim full RPC routing.",
+      "Blocks after completed Begin, invalidates readiness on the same feed, then observes exactly one first write; a second fresh operation refuses before Begin and writes no bytes.",
+      "Focused normal test passed. Final focused race rerun passed in 2.292 seconds after cleanup was corrected to release and join the sender before fixture cleanup.",
+      "Scratch overlay removing only && s.readyFor(selection) from codexAdmission failed the intended zero-extra-write assertion, observing [turn/start turn/start]. Production source stayed unchanged.",
+      "Root go vet ./internal/skeleton and package golangci-lint passed; git diff whitespace validation passed."
+    ],
+    "omission_overlay_sha256": "8035e30bd67074f56a351a4794ecd7ba134c5097d5cfa453670b9d7398cc13db",
+    "omission_source_sha256": "f628f98ed90f76ec53fe814f92cba319310be96a57708a38a34e404b62de0dca",
+    "review": "Root reviewed connected caller/gate/boundary source and test. Astra independently approved the contract and final test/spec changes. Sol authored the deterministic characterization and ran focused tests.",
+    "limits": [
+      "No native runtime, full RPC routing or physical-feed replacement is qualified by this test.",
+      "Automatic continuation requires independent exact task/turn, unfinished-work and human-wait exclusion claims at final admission. Account readiness alone never authorizes it.",
+      "No stronger readiness lease through write or new lock hierarchy is introduced."
+    ]
   }
 }

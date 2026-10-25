@@ -365,7 +365,7 @@ remain the shared admission points; do not create another general scheduler.
 A handover records desired account/epoch and included native incarnations.
 Install or distribute fresh auth, then record each native acknowledgement and
 qualified adoption outcome. Newly admitted host turns require their process's
-current adoption; laggards do not embargo healthy processes. Old-generation
+current adoption at admission; laggards do not embargo healthy processes. Old-generation
 usage/errors cannot exhaust or relabel the new account. Display pending/partial
 adoption honestly. Retry bounded native auth operations; preserve live tools.
 
@@ -383,12 +383,21 @@ the Linux synthetic probe confirms A→B→A and rejection of stale or mismatche
 identity. Separate model-loop probes establish subsequent model-request behavior.
 This avoids requiring an initial model request before admitting a host turn.
 
-Bind dispatch, receipt publication and admission to the same native connection,
-incarnation, desired epoch and credential revision. A false permission proves
+Bind native authentication/read dispatch and receipt publication to the same
+native connection, incarnation, desired epoch and credential revision; owner
+input admission checks that same tuple at its admission point. A false permission proves
 account-API adoption but prohibits new host turns and continuations; approvals
 and cancellation remain usable. Null, malformed, cancelled, mismatched or stale
 reads invalidate admission readiness and discard all returned quota values.
 Historical adoption may remain recorded separately from current readiness.
+For explicit owner submissions, epoch, credential revision and readiness are
+checked at admission, not leased through the request write. A later readiness
+invalidation does not revoke an already admitted submission on that same physical
+feed/incarnation; a fresh submission must pass the gate again. Existing physical
+connection identity and Stop/Begin write fences still apply: replacement or
+disconnect never rebinds an admitted operation to a successor. Automatic
+continuation independently requires its exact task/turn and unfinished-work
+claim, including exclusion of human waits, at its final admission boundary.
 Unscoped native usage/error notifications only trigger bounded, coalesced scoped
 reads; their contents cannot label the newly selected account exhausted. An old
 turn's terminal quota remains bound to its original generation. Ordinary usage
