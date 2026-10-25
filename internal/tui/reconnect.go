@@ -223,25 +223,26 @@ func (m rootModel) applyDaemonReconnected(msg daemonReconnectedMsg) (tea.Model, 
 	return m, tea.Batch(cmds...)
 }
 func (m *rootModel) reconcileRoster(sessions []protocol.SessionView) tea.Cmd {
-	selected := m.general.selectedID()
-	header := m.general.focusSection
 	visible := protocol.VisibleDiscussions(sessions)
 	ids, sections := make(map[string]bool, len(visible)), make(map[string]bool)
 	for _, s := range visible {
 		ids[s.ID] = true
 		sections[m.general.groupKey(s)] = true
 	}
-	anchor := m.general.survivingAnchor(func(l boardLine) bool {
+	keep := func(l boardLine) bool {
 		return l.kind == lineSession && ids[l.session.ID] || l.kind == lineSection && sections[l.section]
-	})
+	}
+	anchor := m.general.survivingAnchor(keep)
+	focus := m.general.survivingFocus(keep)
 	defer func() { m.general.restoreAnchor(anchor) }()
 	var banners []tea.Cmd
 	for _, session := range visible {
 		banners = append(banners, m.general.apply(session))
 	}
 	m.general.sessions = visible
-	m.general.focusSection = header
-	m.general.refreshLayout(selected)
+	m.general.focusSection = focus.section
+	m.general.sel = 0
+	m.general.refreshLayout(focus.id)
 	return tea.Batch(banners...)
 }
 func (m rootModel) refreshRoster() (tea.Model, tea.Cmd) {

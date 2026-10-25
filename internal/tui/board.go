@@ -553,22 +553,29 @@ func (m generalModel) updatePositions(updated protocol.SessionView, removed []st
 	}
 	anchor = m.survivingAnchor(keep)
 	if m.focusSection != "" && !keep(boardLine{kind: lineSection, section: m.focusSection}) {
-		best := -1
-		m.navigation(func(l boardLine, i int) {
-			if keep(l) {
-				distance := i - m.sel
-				if distance < 0 {
-					distance = -distance
-				}
-				if best < 0 || distance < best || distance == best && i >= m.sel {
-					focus = boardAnchor{kind: l.kind, id: l.session.ID, section: l.section}
-					best = distance
-				}
-			}
-		})
+		focus = m.survivingFocus(keep)
 	}
 	return
 }
+
+func (m generalModel) survivingFocus(keep func(boardLine) bool) (focus boardAnchor) {
+	best := -1
+	m.navigation(func(l boardLine, i int) {
+		if !keep(l) {
+			return
+		}
+		distance := i - m.sel
+		if distance < 0 {
+			distance = -distance
+		}
+		if best < 0 || distance < best || distance == best && i >= m.sel {
+			focus = boardAnchor{kind: l.kind, id: l.session.ID, section: l.section}
+			best = distance
+		}
+	})
+	return
+}
+
 func (m *generalModel) restoreUpdateFocus(target boardAnchor) {
 	if target.id != "" {
 		m.focusSection = ""

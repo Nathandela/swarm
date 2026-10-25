@@ -2,6 +2,7 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/vt"
+	teatest "github.com/charmbracelet/x/exp/teatest/v2"
 )
 
 type reconnectTestClient struct {
@@ -235,9 +238,28 @@ func TestReconnect_HydratedBannerExpires(t *testing.T) {
 	model := New(old, nil, WithDaemonReconnector(func() (Client, error) { return fresh, nil }))
 	defer func() { _ = model.(interface{ Close() error }).Close() }()
 	tm := startTM(t, model)
-	waitContains(t, tm, "before reconnect")
+	terminal := vt.NewEmulator(testCols, testRows)
+	defer terminal.Close()
+	waitScreen := func(text string) {
+		consumed := 0
+		teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+			terminal.Feed(b[consumed:])
+			consumed = len(b)
+			raw, err := terminal.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var snap vt.Snap
+			if err := json.Unmarshal(raw, &snap); err != nil {
+				t.Fatal(err)
+			}
+			return strings.Contains(strings.Join(vt.SnapText(&snap), "\n"), text)
+		}, teatest.WithDuration(3*time.Second), teatest.WithCheckInterval(10*time.Millisecond))
+	}
+	// Cell diffs may reuse a prefix from the previous banner; inspect the screen.
+	waitScreen("before reconnect")
 	close(old.events)
-	waitContains(t, tm, "codex needs input (question)")
+	waitScreen("codex needs input (question)")
 	time.Sleep(bannerDuration + 100*time.Millisecond)
 	quitTM(t, tm)
 	if strings.Contains(finalView(t, tm), "codex needs input (question)") {

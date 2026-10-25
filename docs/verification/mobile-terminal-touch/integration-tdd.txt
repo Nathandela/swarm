@@ -33,3 +33,19 @@ anchor test was consolidated into TestMobileBoardVanishedHeaderKeepsOldOrderNeig
 Sol475f0a77 fixes wrapped resume results across reconnect generations; command-to-result
 RED/GREEN evidence is in forms-tdd.txt. Luna lint corrections are in lint-tdd.txt.
 Combined corrected targeted suite GREEN5.207s with GOMAXPROCS=2, go test -p2.
+
+Final authoritative focus correction
+Fresh Astra found removed focused header/session plus preceding rows selected c/18
+instead of next surviving old-order c/0. Root regression RED2.523s (session path);
+Astra separately reproduced header path. Shared survivingFocus now resolves navigation
+identity before reconcile/apply loops, alongside viewport identity. No-survivor
+rosters start at first new target. Focus/reconnect/board/allocation suite GREEN9.624s.
+The same run exposed hydrated-banner raw-output polling assuming full repaint;
+reconnect_test now reconstructs the terminal with the existing VT emulator and
+asserts exact visible banner plus expiry, preserving the acceptance requirement.
+
+An initial whole-repo run was intentionally interrupted for this final correction.
+Its CLI fixture failures were due to the host default /tmp symlink; all7 affected
+CLI-refresh/native-statusline tests pass unchanged with canonical TMPDIR=/private/tmp
+(1.784s). Final broad gates use a canonical task-private temporary root and normal
+per-package supervision. Production path validation was not changed.
