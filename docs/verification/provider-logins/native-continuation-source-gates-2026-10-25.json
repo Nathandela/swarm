@@ -131,5 +131,44 @@
       "Automatic continuation requires independent exact task/turn, unfinished-work and human-wait exclusion claims at final admission. Account readiness alone never authorizes it.",
       "No stronger readiness lease through write or new lock hierarchy is introduced."
     ]
+  },
+  "codex_replacement_source_hypothesis": {
+    "status": "Source-only viable hypothesis; no replacement experiment or dispatcher approved",
+    "sourceCommit": "83086188ae0614bd882818ff1aa23f3194962012",
+    "review": "Astra investigated primary source; Root reviewed report and architecture limits",
+    "report": "/private/tmp/swarm-codex-replacement-source-review-20261025.txt",
+    "reportSHA256": "73e51094d3ff4aae1c3998c231fa04dbacc38deb06f7ac34883bbc694dcecb34",
+    "currentFreshTUIEvidence": "codex-fresh-tui-2026-10-25.json",
+    "managedRecoveryDisposition": "Do not enable hidden --managed-daemon. Native managed recovery defaults off and requires Unix transport plus that flag; ordinary Swarm app-server and remote TUI do not enable it. Its candidate is an installed uncancelled Regular task, not the terminal quota obligation.",
+    "ordinaryReplacement": "Positive stop destroys the old backend reservation. Fresh Session constructs active_turn=None, but that initial value does not establish final admission against new activity. Ordinary native resume restores settings/history and starts MCP/prewarm/resume contributors; an existing TUI is not proved to reconnect transparently.",
+    "requiredBeforeAnyExperiment": "Pass fresh managed TUI gate; retain exact unfinished quota task, durable one-successor ownership and positive old stop; exclude live tools/children/human waits/unknown and newer queued owner intent; preserve effective settings/history; qualify new peer/account/TUI ownership and competing startup activity; ambiguous acceptance remains unresolved and unsent.",
+    "nativeAttemptsInThisReview": 0,
+    "sources": [
+      {
+        "path": "codex-rs/app-server/src/lib.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/lib.rs",
+        "sha256": "e00b242cde1234ae62cbc420ceefe86a23b93d34115ead6cc02bad454970aa9b"
+      },
+      {
+        "path": "codex-rs/core/src/session/daemon_recovery.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/session/daemon_recovery.rs",
+        "sha256": "b80a999886b22c410aa406b3b5926489545e760299bc4bd319d2c478f75b1895"
+      },
+      {
+        "path": "codex-rs/app-server/src/request_processors/daemon_continuation.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/request_processors/daemon_continuation.rs",
+        "sha256": "6a252a49a349be22fe022dedf6ffd2b6517c4b69caeae042c1b8fed9fc791148"
+      },
+      {
+        "path": "codex-rs/core/src/session/session.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/session/session.rs",
+        "sha256": "e6f4b9f069343031a87bd2a862701f461d1aa9728272196f8a7376b610234806"
+      },
+      {
+        "path": "codex-rs/app-server/src/request_processors/thread_processor.rs",
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/request_processors/thread_processor.rs",
+        "sha256": "f98fdad7df37ad720e63b75488ffab99ae88f7de4578b280ab957a09f0a98153"
+      }
+    ]
   }
 }
