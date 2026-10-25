@@ -39,8 +39,11 @@ func TestBottomBar_KeepsTheVersionThroughAConfirmPrompt(t *testing.T) {
 	m := newModel(t, pinBoard(), detectMixed())
 	m = send(m, keyCtrlX)
 	row := bottomRow(t, m)
-	if !strings.HasPrefix(row, "  y confirm") || !strings.HasSuffix(row, version.Version) {
+	if !strings.HasPrefix(row, "  y / ctrl+x confirm") || !strings.Contains(row, "n / esc cancel") || !strings.HasSuffix(row, version.Version) {
 		t.Fatalf("confirm row %q, want the confirm keys left and the version right", row)
+	}
+	if lipgloss.Width(row) != testCols {
+		t.Fatal("confirmation version is not flush with the right edge")
 	}
 }
 

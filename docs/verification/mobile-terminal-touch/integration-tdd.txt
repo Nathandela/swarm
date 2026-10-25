@@ -49,3 +49,13 @@ Its CLI fixture failures were due to the host default /tmp symlink; all7 affecte
 CLI-refresh/native-statusline tests pass unchanged with canonical TMPDIR=/private/tmp
 (1.784s). Final broad gates use a canonical task-private temporary root and normal
 per-package supervision. Production path validation was not changed.
+
+Broad TUI compatibility assertions
+The full normal suite found two obsolete UI expectations after the approved contract
+changes. TestRefreshAgents_OptionFocusClampsToDirectory used an unchanged schema; it
+now removes the focused option key, retains a different option at that index, and
+asserts fallback directory typing. Retained keys remain covered by semantic-focus tests.
+The confirmation footer version test now asserts the explicit y/ctrl+x and n/esc
+keys plus right-edge version alignment, matching the inspected frame.
+Entire TUI suite GREEN60.473s after these test-only corrections; targeted schema
+refresh/fallback suite GREEN2.653s. Production Go code is unchanged from08dbb10f.

@@ -66,9 +66,9 @@ func TestRefreshAgents_PreservesPromptFocusAcrossReindex(t *testing.T) {
 	}
 }
 
-// item 7 — when focus was on an option field whose list changes beneath it, focus
-// clamps to the directory field (index 0) rather than pointing at a stale index.
-func TestRefreshAgents_OptionFocusClampsToDirectory(t *testing.T) {
+// A vanished option key falls back to directory; retained keys keep semantic
+// focus under ADR-035 instead of resetting on an unchanged detection result.
+func TestRefreshAgents_RemovedOptionFocusClampsToDirectory(t *testing.T) {
 	m := newModel(t, newFakeClient(), detectEditable())
 	m = send(m, detectMsg{agents: detectEditable()()}) // land options first (gen 0, before any form-open)
 	m = send(m, keyRune('n'))
@@ -81,9 +81,16 @@ func TestRefreshAgents_OptionFocusClampsToDirectory(t *testing.T) {
 	}
 
 	gen := m.(rootModel).detectGen
-	m = send(m, detectMsg{gen: gen, agents: detectEditable()()})
+	agents := detectEditable()()
+	agents[0].Options = agents[0].Options[1:] // remove model, retain the other option
+	m = send(m, detectMsg{gen: gen, agents: agents})
 	if !launchOf(m).isDir() {
 		t.Fatalf("option focus must clamp to the directory field after a re-index; focus=%d", launchOf(m).focus)
+	}
+	before := launchOf(m).cwd.text
+	m = send(m, keyRune('Z'))
+	if launchOf(m).cwd.text != before+"Z" {
+		t.Fatal("typing after option removal did not reach the fallback directory editor")
 	}
 }
 
