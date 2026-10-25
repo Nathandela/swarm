@@ -1,0 +1,29 @@
+Supplemental board boundary/Unicode qualification — 2026-10-25
+No production Go change after the broad qualified snapshot b1484712.
+
+Final evidence review found that sampled widths did not fulfill the plan's
+boundary-width coverage. TestMobileBoardWidthBoundariesAndUnicode now checks
+all widths1..200 at heights3,4,5,7,8,9,11,12,13 for status/repo/tag grouping:
+5400 geometries. Fixtures contain CJK, combining accents and emoji in long
+names/tags/paths. Raw session rows must fit before the final frame clamp; the
+focused visible session row must retain its useful Unicode identity. Checking
+the complete frame alone could pass from a matching group header, so independent
+Astra review required the focused-row assertion.
+
+Normal: go test -p2 ./internal/tui -run '^TestMobileBoardWidthBoundariesAndUnicode$' -count=1 -v
+GREEN12.076s, including compilation and supervised test startup.
+Race: same command with -race; GREEN21.440s.
+
+Negative controls use external Go overlays, never mutate the checkout:
+- Compact name budget increases one cell: RED6.874s, unclipped row overflows24.
+- Session name becomes ASCII while the Unicode group header remains: RED6.480s,
+  focused row loses readable identity. This proves the header cannot mask it.
+
+An initial helper-call compile typo was corrected before these runs; compile
+failure is not counted as a behavioral RED. The real negative controls above
+both reach and fail the named test. These checks qualify character-cell geometry,
+not physical font metrics or actual touch/SSH behavior. Broad normal/race and
+performance gate source/results remain separately recorded in qualification.json.
+
+Independent Astra source review found no remaining issue; its focused normal
+run passed3.895s (test1.48s). The broad qualified production snapshot is unchanged.

@@ -561,3 +561,48 @@ func TestMobileBoardTagUpdateDoesNotApplyLifecycleProjection(t *testing.T) {
 		t.Fatal("tag update removed a lifecycle source")
 	}
 }
+
+func TestMobileBoardWidthBoundariesAndUnicode(t *testing.T) {
+	const identity = "界é🐙"
+	sessions := []protocol.SessionView{
+		sNeedsInput("endpoint/input", "claude", "/界/é/🐙/input", "question", time.Minute),
+		sWorking("endpoint/working", "codex", "/界/é/🐙/working", "working", time.Minute),
+		sReview("endpoint/review", "opencode", "/界/é/🐙/review", "review", time.Minute),
+	}
+	for i := range sessions {
+		sessions[i].Name = identity + strings.Repeat("long name ", 12)
+		sessions[i].Tag = identity + strings.Repeat("long tag ", 12)
+	}
+	for _, mode := range []groupingMode{groupByStatus, groupByRepo, groupByTag} {
+		m := New(newFakeClient(sessions...), detectMixed()).(rootModel)
+		m.general.setLayout(mode, m.general.ordering)
+		for _, height := range []int{3, 4, 5, 7, 8, 9, 11, 12, 13} {
+			for width := 1; width <= 200; width++ {
+				next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+				m = next.(rootModel)
+				m.general.revealFocus()
+				if width >= 24 {
+					for _, session := range sessions {
+						row := m.general.renderRow(session, session.Group, false)
+						if lipgloss.Width(row) > width {
+							t.Fatalf("group=%v %dx%d: unclipped row overflow %q", mode, width, height, row)
+						}
+					}
+				}
+				frame := view(m)
+				lines := strings.Split(frame, "\n")
+				if len(lines) > height {
+					t.Fatalf("group=%v %dx%d: height=%d", mode, width, height, len(lines))
+				}
+				for _, line := range lines {
+					if lipgloss.Width(line) > width {
+						t.Fatalf("group=%v %dx%d: row overflow %q", mode, width, height, line)
+					}
+				}
+				if width >= 24 && height >= 4 && !strings.Contains(lineContaining(frame, "▌"), identity) {
+					t.Fatalf("group=%v %dx%d: lost readable identity:\n%s", mode, width, height, frame)
+				}
+			}
+		}
+	}
+}
