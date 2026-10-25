@@ -2,6 +2,8 @@
 
 Date: 2026-10-25. Scope: Swarm's terminal dashboard over SSH, under [ADR-035](../../adr/ADR-035-mobile-terminal-navigation.md) and the [accepted plan](../../specifications/mobile-terminal-touch-plan.md). Implementation and local qualification are complete. Actual Termux and iOS-client qualification remains open in `agents-tracker-nzo8.5`; the parent feature `agents-tracker-nzo8` remains open for that gate. No release, installation or hosted/native-phone deployment was performed.
 
+Subsequent owner-authorized [v0.23.0 publication and two-host installation](../mobile-terminal-v0230-release.md) are recorded separately. The no-release statement above describes this implementation qualification task.
+
 ## Result
 
 The board now has a bounded viewport independent of selection, useful compact rows, semantic collapsible groups, pinned input/review counts with explicit attention reveal, and New/Open-or-Show-or-Expand/More controls. More owns a scrollable menu and a captured session identity. Pointer actions require matching release with stable target and geometry. Existing keyboard commands remain reachable; offscreen session actions reveal their target and consume the first action.

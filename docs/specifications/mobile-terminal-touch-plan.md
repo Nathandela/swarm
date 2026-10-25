@@ -1,6 +1,6 @@
 # Mobile terminal dashboard interaction plan
 
-Date: 2026-10-25. Status: implemented and locally verified; challenged by Sol and Astra. Actual handset qualification remains open. [ADR-035](../adr/ADR-035-mobile-terminal-navigation.md) records the intentional behavior amendments. [Implementation evidence](../verification/mobile-terminal-touch/implementation.md) records the completed local gates and remaining physical qualification boundary.
+Date: 2026-10-25. Status: implemented, locally verified and [published in v0.23.0](../verification/mobile-terminal-v0230-release.md); challenged by Sol and Astra. Actual handset qualification remains open. [ADR-035](../adr/ADR-035-mobile-terminal-navigation.md) records the intentional behavior amendments. [Implementation evidence](../verification/mobile-terminal-touch/implementation.md) records the completed local gates and remaining physical qualification boundary.
 
 Make Swarm's terminal dashboard comfortable to navigate from Termux and an iOS terminal over SSH. The deliverable is a scrollable, responsive board with collapsible groups and touch access to existing commands. Preserve keyboard operation, terminal-native text selection during editing, and the raw attached-agent boundary.
 
