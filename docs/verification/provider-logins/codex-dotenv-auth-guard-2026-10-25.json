@@ -1,0 +1,71 @@
+{
+  "date": "2026-10-25",
+  "scope": "Managed Codex launch exclusion for three workload-identity inputs; no native authentication or automatic continuation qualification.",
+  "review": "Root and Astra reviewed grouping/header semantics, shared callers, boundedness and secret-free diagnostics; Luna applied three final lint-only equivalent rewrites.",
+  "behavior": {
+    "inherited_scrub": [
+      "OPENAI_FEDERATION_RULE_ID",
+      "OPENAI_IDENTITY_TOKEN_FILE",
+      "OPENAI_WORKLOAD_IDENTITY_CONTEXT"
+    ],
+    "canonical_native_dotenv": "Reject exact assignment keys, including empty values, before external birth and normal/switch environment preparation; final shim repeats those paths.",
+    "reader": "Existing private bounded readOptional/readPrivate, maximum 1 MiB; no writes or value evaluation.",
+    "grammar": "Pinned dotenvy 0.15.7 logical record grouping and static assignment headers; values remain native inputs.",
+    "errors": "Fixed selector names or line numbers only; final-shim refusal retains its existing generic diagnostic."
+  },
+  "primary_source": {
+    "codex_0163_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+    "codex_0164_commit": "6aaac694803004a63c6f393d153c96d22521a6b9",
+    "dotenvy_archive_sha256": "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b",
+    "audit_path": "/private/tmp/swarm-codex-dotenv-auth-audit-20261025/report.md",
+    "audit_sha256": "e79ae03a509cc5fb37a21f94bbe1cd85ef76f9a184f55582611a9fc280b10be8",
+    "compatibility_report_path": "/private/tmp/swarm-codex-dotenv-164-source-20261025/report.md",
+    "compatibility_report_sha256": "e4aa6cd029de21be1d1a9ba9db4c731a1343f334e2da47d7608e1816f98c35df"
+  },
+  "red": {
+    "log_path": "/private/tmp/swarm-codex-dotenv-red-20261025.log",
+    "log_sha256": "31acaae708509a17a9660c613c9ab2977cf339d41caf211fadd19894e0f02b91",
+    "result": "Behavioral failures through actual Store and final shim paths before implementation; no compile-error substitute."
+  },
+  "full_race_before_lint_cleanup": {
+    "checks_path": "/private/tmp/swarm-codex-dotenv-gates-20261025/checks.json",
+    "checks_sha256": "a1e9b449a16c1560deb35a7aab00b5fa69134249e609a7de16d3c416ac34162e",
+    "packages": [
+      "internal/logins",
+      "internal/shim"
+    ],
+    "passed_tests": 844,
+    "skipped_tests": 16,
+    "failed_tests": 0,
+    "elapsed_seconds": 401.08,
+    "scope": "Full package race suites; build/vet passed. Global lint found three style diagnostics, subsequently fixed without changing behavior."
+  },
+  "final_source_checks": {
+    "checks_path": "/private/tmp/swarm-codex-dotenv-final-gates-20261025/checks.json",
+    "checks_sha256": "582100f0162620575b1ff8c8902ebd493c68d838e1ae4da5a9cf120805e0aff0",
+    "source_map_path": "/private/tmp/swarm-codex-dotenv-final-gates-20261025/source.json",
+    "source_map_sha256": "eb335569a57b20482dc8030c942f89d409e520d7c75d33da0ece31ddc0c6f33b",
+    "focused_race_passed_tests": 45,
+    "failed_tests": 0,
+    "build_all": "PASS",
+    "vet_all": "PASS",
+    "lint_all": "PASS",
+    "source_unchanged_during_checks": true
+  },
+  "regressions": [
+    "Fresh external birth, normal restart, switch restart and late final-shim mutation",
+    "Each forbidden selector, including empty export with CRLF",
+    "Inherited selector scrub while retaining ordinary tool variables",
+    "Ordinary and quoted/multiline tool values; assignment-looking value text",
+    "Malformed ordinary RHS followed by a real forbidden assignment",
+    "Long leading-whitespace multiline records and a following forbidden assignment",
+    "Five transport settings preserved; native dotenv never rewritten",
+    "Private-file symlink and size guards; secret-free error text"
+  ],
+  "limits": [
+    "The file can be edited by its owner after final validation; no lock or race-free native-open claim.",
+    "Source compatibility was checked for both accepted Codex versions; no native workload-auth exchange or successful wrong-account inference was tested.",
+    "Realtime/Guardian API-key readers and organization/project header policy remain separately open in agents-tracker-h6sc.23.",
+    "Fresh managed TUI, real-account adoption and automatic continuation remain separate gates; the frozen native fixture product predates this guard."
+  ]
+}

@@ -113,6 +113,16 @@ Test callback ownership with multiple native clients and daemon disconnection.
 The shim/native processes survive daemon loss; an unavailable refresh owner
 must fail visibly and recover when reconnected without a fabricated user turn.
 
+Managed Codex launches scrub inherited workload-identity selectors and reject
+`OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE` or
+`OPENAI_WORKLOAD_IDENTITY_CONTEXT` assignments in the common native home’s
+`.env`, including empty assignments. These inputs can select workload auth before
+external-token installation. Check fresh birth and normal/switch restart paths
+again at final shim preparation. Reuse the private bounded file reader and native
+record/header grammar; never evaluate or report values. Ordinary tool and
+transport preferences remain native inputs. Validation does not lock the file
+against a later owner edit or qualify separate realtime/Guardian auth paths.
+
 For Claude, bind native refresh to the selected saved authority using the
 installed native refresh locks/CAS. Every future owned identity, including the
 currently selected account, gets its own deterministic account-and-organization

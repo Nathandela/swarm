@@ -295,11 +295,11 @@
     "No private overlay was implemented. The approved native-dotenv transport plan is preparation only, with a separate arbitrary-dotenv auth-input audit open; no production allowlist widening or qualification follows."
   ],
   "validator_source": {
-    "auth_boundary_path": "internal/logins/auth_boundary.go",
+    "auth_boundary_path": "/private/tmp/swarm-setup-root-20261025/source/internal/logins/auth_boundary.go",
     "auth_boundary_sha256": "243ec8da9c006e883de1d892a9ea501c40e8a767453ee80faa03492dd2c6c4d2",
-    "native_path": "internal/logins/native.go",
+    "native_path": "/private/tmp/swarm-setup-root-20261025/source/internal/logins/native.go",
     "native_sha256": "0d9e239ccc194e9aff808f64ffe0b690e80a296b0fc9484a8b0afe5ee7f0239e",
-    "note": "ValidateAuthSettings calls codexCompeting, which includes chatgpt_base_url via codexCompetingLevel."
+    "note": "Frozen product source used by these historical native attempts. ValidateAuthSettings calls codexCompeting, which includes chatgpt_base_url via codexCompetingLevel; newer guard changes are separately recorded."
   },
   "source_amendment": {
     "path": "/private/tmp/swarm-codex-python-producer-research-20261025-v1/AMENDMENT.md",
@@ -332,5 +332,14 @@
     "sha256": "817d9dbfd7753a63a512b9714ec5453cc1e5cc6c6ed8283d44d0d95211e7b30e",
     "scope": "Requires four native process tuples and entry-image checks; allows auxiliary bounded diagnostics only. It is not exhaustive process census or network confinement.",
     "interpretation": "V9 did not resolve the observed same-start process; no causal classification follows."
+  },
+  "preparation_v11": {
+    "result": "FAIL before service or provider CLI execution; not an additional full native attempt.",
+    "log_path": "/private/tmp/swarm-codex-outer-byi4q0hb/prepare.log",
+    "log_sha256": "9f2267930b985030ae4b810a83c4311acc5e53917f4ecbb3f97d6d6fceee6346",
+    "stage": "/tmp/scx.6y3pl89u",
+    "finding": "ModuleNotFoundError importing native_transport after extraction. A read-only follow-up found the module present with exact reviewed SHA1adc570e2db4f0d130838f149a5d80e50afa4236ec199a306a130b2b293b309c.",
+    "mechanism_limit": "A cached-missing-path mechanism was reproduced offline against actual prepare; historical importer cache contents were not captured.",
+    "next_step": "Review an immutable envelope-only cache-invalidation correction, then use a fresh stage. Preserve this partial stage and failure."
   }
 }

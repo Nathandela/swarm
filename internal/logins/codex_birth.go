@@ -18,5 +18,8 @@ func (s *Store) PrepareCodexExternalBirth(rt Runtime, inherited []string) ([]str
 	if _, pending := r.Switches[ProviderCodex]; pending {
 		return nil, ErrPending
 	}
+	if e := s.validateCodexDotenv(); e != nil {
+		return nil, e
+	}
 	return prepareEnvironment(rt, "", inherited)
 }

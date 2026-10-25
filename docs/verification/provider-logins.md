@@ -263,6 +263,13 @@ settlement from whole-session completion and do not authorize automatic recovery
 The later R4 case passes the finite notification follow-up through a distinct
 native result and actual native `idle`, with exact lineage and cleanup proofs.
 It does not qualify automatic resume, cancellation or broader workflows.
+The separate cancellation case observed an exact child stop and native request
+abort, then failed its predicted notification vocabulary: native task state was
+`killed` but the typed notification was `stopped`. No notification follow-up or
+final idle was qualified; the failed evidence remains preserved.
+The next attempt accepted that notification, then refused an unqualified
+child-scoped interruption with a `user` role. Its producer and ownership need
+source proof before any exception; no tail or idle was qualified.
 The [fresh managed Codex TUI attempts](provider-logins/codex-fresh-tui-2026-10-25.json)
 also remain unqualified. The latest diagnostic exposed absent fixture transport
 settings; an approved preparation plan uses native transport preferences with
@@ -272,3 +279,10 @@ Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.
 
 References and design: [ADR-034](../adr/ADR-034-provider-wide-native-logins.md).
+
+The [managed Codex dotenv guard](provider-logins/codex-dotenv-auth-guard-2026-10-25.json)
+now rejects the three workload-identity inputs that can preempt managed bootstrap.
+Actual launch-path regressions pass, including final shim revalidation and
+multiline settings. The full account-store/shim race suites passed, followed by
+focused race and repository-wide build/vet/lint checks on the final source.
+This does not qualify native account adoption or separate realtime/Guardian auth.

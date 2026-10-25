@@ -232,6 +232,22 @@ func TestExternalBirthInvalidReservationPreservesPriorCustodyProof(t *testing.T)
 	}
 }
 
+func TestExternalBirthRechecksCodexDotenvBeforeLaunch(t *testing.T) {
+	rt, state := externalAuthRuntimeFixture(t)
+	cfg := r7BackendCfg(t, r7BackendBind, nil)
+	cfg.LoginRuntime, cfg.LoginStateRoot, cfg.NativeProvider = rt, state, logins.ProviderCodex
+	cfg.Argv = []string{selfExe(t), "fixture-external-auth-agent", filepath.Join(t.TempDir(), "not-started")}
+	if err := resolveLoginEnvironment(&cfg); err != nil {
+		t.Fatalf("clean birth refused: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rt.Home, ".env"), []byte("OPENAI_FEDERATION_RULE_ID=synthetic-rule\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveLoginEnvironment(&cfg); err == nil {
+		t.Fatal("final shim resolution accepted a late dotenv auth selector")
+	}
+}
+
 func TestExternalBirthHistoricalRuntimeResolvesAfterRetarget(t *testing.T) {
 	rt, state := externalAuthRuntimeFixture(t)
 	cfg := r7BackendCfg(t, r7BackendBind, nil)

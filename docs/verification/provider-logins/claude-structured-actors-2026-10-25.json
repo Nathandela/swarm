@@ -1,8 +1,8 @@
 {
   "date": "2026-10-25",
-  "kind": "Pinned Linux structured Claude actor qualification: initial R2 and R3/R4 follow-ups",
+  "kind": "Pinned Linux structured Claude actor qualification: completion and cancellation cases",
   "review": "Root and Astra separately reviewed each actual result; R4 qualifies only its finite Linux notification-followup cycle.",
-  "status": "R2 and R3 FAIL; R4 PASS for a narrow notification-followup/tail/idle cycle only. Global actor completeness remains unqualified; automatic eligibility is false.",
+  "status": "Case 1 R2/R3 FAIL; Case 1 R4 PASS for a narrow notification-tail-idle cycle. Case 2 R3/R4 FAIL before notification-tail/idle qualification. Global completeness and automatic continuation remain unqualified.",
   "pins": {
     "native_version": "2.1.310",
     "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
@@ -79,7 +79,7 @@
   "limits": [
     "The retained initial R2 fields describe a failed single Linux case, not a retrospectively qualified result. R3 and R4 retain their separate outcomes below.",
     "No automatic stop, successor construction, resume or recovery input occurred in these cases.",
-    "Production automatic continuation, global workflow completeness and Mac actor behavior remain unqualified. Case 2 cancellation is a separate prepared gate, not a result."
+    "Production automatic continuation, global workflow completeness and Mac actor behavior remain unqualified. Case 2 has two failed actual Linux attempts; cancellation-tail qualification remains open."
   ],
   "r3": {
     "kind": "single actual Linux structured Claude actor case R3",
@@ -184,9 +184,101 @@
     ],
     "inner_elapsed_seconds": 2.814513279008679
   },
-  "case2_next_step": "Case 2 plan and packet are prepared; final Root/Astra artifact review precedes one bounded Linux cancellation attempt. No Case 2 native execution or Mac qualification is recorded here.",
+  "case2_next_step": "Review the child interruption constructor and structured wrapper against pinned primary source before preparing another fixture. No text-only user-frame exception, XML/tail/idle qualification, automatic continuation or other platform is authorized by these failures.",
   "cleanup_reference": {
     "path": "docs/verification/provider-logins/native-test-cleanup-2026-10-25.json",
     "sha256": "9253b89b138182369608a5da115d7e5ad54efc0b97271614f1a0491fb28b419d"
+  },
+  "case2_r3": {
+    "status": "FAIL; exact child cancellation observed, notification-tail/idle qualification not reached.",
+    "review": "Root and Astra independently verified actual receipt, archive and all member hashes.",
+    "run_path": "/private/tmp/swarm-actor-case2-r3-linux-envelope-20261025/attempt/run.json",
+    "run_sha256": "9794631d3be074fc5865920898d9db0cf8bfea2f4050e797852e738412b4675e",
+    "receipt_path": "/private/tmp/swarm-actor-case2-r3-linux-envelope-20261025/attempt/receipt.json",
+    "receipt_sha256": "e0655f202040420dd2b37639b2688666270ec3d7959899e99fe3f027ab85611b",
+    "evidence_archive_path": "/private/tmp/swarm-actor-case2-r3-linux-envelope-20261025/attempt/evidence.tar.gz",
+    "evidence_archive_sha256": "27cfc8c7f07b364c963500ba090033343fd900e9aabe97c94b61db7a4685c34e",
+    "packet_manifest_path": "/private/tmp/swarm-claude-structured-actors-case2-r3-20261025/manifest.json",
+    "packet_manifest_sha256": "31a619072544a559e73d70f8736c85a3b06e254e1edc935d242c2a7229ded3c8",
+    "envelope_manifest_path": "/private/tmp/swarm-actor-case2-r3-linux-envelope-20261025/manifest.json",
+    "envelope_manifest_sha256": "3be49ffae027d3ae83db283248ae2eebd3212bf535f439e9ba06e9bfb373c928",
+    "observed": {
+      "owner_user_submissions": 1,
+      "explicit_child_stop_controls": 1,
+      "automatic_stops": 0,
+      "successors": 0,
+      "owner_revision": 2,
+      "same_run_task_terminal": "killed",
+      "same_task_run_tool_notification": {
+        "status": "stopped",
+        "summary": "Synthetic child fixture"
+      },
+      "stop_ack": "success",
+      "native_request_abort": "EOF before fixture cleanup",
+      "successful_stop_write_return_ns": 724891840762175,
+      "abort_observation_ns": 724891842893007,
+      "model_requests": 3,
+      "fixture_responses": 2,
+      "child_responses": 0,
+      "fourth_response": false,
+      "tail_result": false,
+      "idle": false,
+      "auto_eligible": false
+    },
+    "failure": "The strict fixture predicted typed notification killed with empty summary. Native emitted stopped with the Agent description; observation invalidated and no fourth request/tail was qualified. Do not infer that the stop itself failed.",
+    "primary_source_path": "/private/tmp/swarm-claude-linux-stop-source-20261025/source-excerpts.json",
+    "primary_source_sha256": "17064f1aed294ec46d17e2bfa1ff07665f3a67acb705fe9eb5c21859c8d32b94",
+    "source_interpretation": "Pinned typed producers map killed to stopped and use the Agent description. The separate XML notification producer has its own vocabulary. XML shape and tail behavior were not observed in this failed run.",
+    "cleanup": {
+      "native_groups_gone": true,
+      "HTTP_handlers_joined": true,
+      "admitted_cgroup_empty_and_gone": true,
+      "native_and_packet_pins_unchanged": true
+    },
+    "outer_elapsed_seconds": 7.799,
+    "inner_elapsed_seconds": 1.9373588169692084,
+    "limit": "This remains a failed bounded Linux cancellation case, not automatic-resume, workflow, Mac or full-session-completion qualification."
+  },
+  "case2_r4": {
+    "status": "FAIL; the observed typed notification passed, then an unqualified child-scoped user-role interruption frame invalidated observation.",
+    "review": "Root and Astra independently verified actual receipt/archive and every collected member hash.",
+    "run_path": "/private/tmp/swarm-actor-case2-r4-linux-envelope-20261025/attempt/run.json",
+    "run_sha256": "9f0abfd4e0e1484cfc7480e43a737c002ae3b7550927d4fb803a676b022643bc",
+    "receipt_path": "/private/tmp/swarm-actor-case2-r4-linux-envelope-20261025/attempt/receipt.json",
+    "receipt_sha256": "eecb9adc6a98d85ba525e3d8d8efd29d43586a252aa13404298743421e628265",
+    "evidence_archive_path": "/private/tmp/swarm-actor-case2-r4-linux-envelope-20261025/attempt/evidence.tar.gz",
+    "evidence_archive_sha256": "f4fd79562267d48f23cdb5cd38c40bb0678d6bc21f8229cd14b72e3209c8e846",
+    "packet_manifest_path": "/private/tmp/swarm-claude-structured-actors-case2-r4-20261025/manifest.json",
+    "packet_manifest_sha256": "495d610b4fa5ceeb49e65b80e68ea7cbea567c4b1946b4ae31f6605f7fe05be6",
+    "envelope_manifest_path": "/private/tmp/swarm-actor-case2-r4-linux-envelope-20261025/manifest.json",
+    "envelope_manifest_sha256": "58026818362fb7a2850e2e67b08a9dc3e2b7d6773020a1d5c17b97dd4085a7b9",
+    "observed": {
+      "explicit_child_stop_controls": 1,
+      "same_run_task_terminal": "killed",
+      "same_task_run_tool_notification": "stopped with exact Agent description",
+      "stop_ack": "success",
+      "successful_stop_write_return_ns": 725848965292233,
+      "abort_observation_ns": 725848967497235,
+      "abort_before_cleanup": true,
+      "child_user_frame_sequence": 23,
+      "child_user_frame_scope": "Exact existing session, agent_id, parent_tool_use_id, subagent type and description; no run_id or durable origin marker.",
+      "child_user_frame_payload": "[Request interrupted by user]",
+      "interruption_durable_row_observed": false,
+      "model_requests": 3,
+      "fixture_responses": 2,
+      "child_responses": 0,
+      "fourth_response": false,
+      "tail_result": false,
+      "idle": false,
+      "auto_eligible": false
+    },
+    "limit": "Text alone proves neither a new human request nor a safe synthetic-frame exception. Current-incarnation producer and stop custody must be established before changing the guard.",
+    "cleanup": {
+      "native_groups_gone": true,
+      "HTTP_handlers_joined": true,
+      "admitted_cgroup_empty_and_gone": true,
+      "native_and_packet_pins_unchanged": true
+    },
+    "outer_elapsed_seconds": 9.627
   }
 }
