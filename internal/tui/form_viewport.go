@@ -30,8 +30,8 @@ func formFocusedLine(body string) string {
 	return ""
 }
 
-func sessionFormContext(sID, name, cwd string) string {
-	return fmt.Sprintf("Session: %s\nID: %s\nDirectory: %s", name, sID, cwd)
+func sessionFormContext(sID, name, agent, cwd string) string {
+	return fmt.Sprintf("Session: %s\nAgent: %s\nID: %s\nDirectory: %s", name, agent, sID, cwd)
 }
 
 func (m rootModel) activeForm() (f formContent, ok bool) {
@@ -46,14 +46,14 @@ func (m rootModel) activeForm() (f formContent, ok bool) {
 		}
 	case m.screen == screenResume:
 		r := m.resume
-		f = formContent{body: r.view(), target: "Relocate: " + displayName(r.source), context: sessionFormContext(r.source.ID, displayName(r.source), r.source.Cwd) + "\n" + r.reason + "\n" + r.directory.errMsg, hint: r.hint()}
+		f = formContent{body: r.view(), target: "Relocate: " + displayName(r.source), context: sessionFormContext(r.source.ID, displayName(r.source), r.source.Agent, r.source.Cwd) + "\n" + r.reason + "\n" + r.directory.errMsg, hint: r.hint()}
 	case m.screen == screenHandoff:
 		h := m.handoff
 		name := h.sourceID
 		if s, exists := m.general.sessionByID(h.sourceID); exists {
 			name = displayName(s)
 		}
-		f = formContent{body: h.view(), target: "Handoff: " + name + " → " + h.targetName(), context: sessionFormContext(h.sourceID, name, h.sourceCwd), hint: h.hint(), decision: h.confirmPending()}
+		f = formContent{body: h.view(), target: "Handoff: " + name + " → " + h.targetName(), context: sessionFormContext(h.sourceID, name, h.sourceAgent, h.sourceCwd), hint: h.hint(), decision: h.confirmPending()}
 		if h.method == handoffMethodHandsOff && h.sourceRunning {
 			f.context += "\n" + handoffRunningWarning
 		}
@@ -103,7 +103,7 @@ func (m rootModel) activeForm() (f formContent, ok bool) {
 		if !exists {
 			name = "session no longer available"
 		}
-		f = formContent{target: action + ": " + name, context: sessionFormContext(id, name, s.Cwd), hint: "enter save · esc cancel", decision: m.general.confirm}
+		f = formContent{target: action + ": " + name, context: sessionFormContext(id, name, s.Agent, s.Cwd), hint: "enter save · esc cancel", decision: m.general.confirm}
 		if m.general.confirm {
 			f.context += "\n" + action + " this session?"
 			f.hint = "y / ctrl+x confirm · n / esc cancel"
@@ -164,6 +164,9 @@ func (m *rootModel) guardFormInput(k tea.KeyPressMsg) bool {
 		return false
 	}
 	mutation := k.Code == tea.KeyEnter || f.decision && (k.Text == "y" || isCtrlX(k))
+	if m.pairing != nil {
+		mutation = pairingApprovalKey(k)
+	}
 	if m.screen == screenLogins && m.logins.mode == "" {
 		mutation = mutation || k.Text == "c" || k.Text == "d" || k.Text == "s"
 	}

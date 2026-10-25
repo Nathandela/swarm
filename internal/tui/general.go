@@ -500,7 +500,7 @@ func bannerGroup(g status.Group) bool {
 // ---------------------------------------------------------------------------
 
 func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.connectionLost && k.Code != tea.KeyEsc {
+	if m.connectionLost && k.Code != tea.KeyEsc && !(m.general.confirm && k.Text == "n") {
 		if m.general.editing {
 			if k.Code == tea.KeyEnter {
 				return m, nil

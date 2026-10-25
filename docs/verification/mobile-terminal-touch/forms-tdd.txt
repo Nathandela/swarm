@@ -34,3 +34,18 @@ Contract/evidence
 
 Limits
 Focused package suites only here; root integration owns repository-wide build/vet/lint/test/race gates and independent review. No actual phones, SSH clients, native selection/paste trials or deployment were exercised. Desktop model tests do not establish handset compatibility.
+
+Astra review correction — 2026-10-25
+RED before correction:
+go test ./internal/tui -run '^TestResponsiveForms(PairingRejectsModifiedApprovalKeys|DisconnectPreservesDeny|CapturedAgentInspectable)$' -count=1
+FAIL PairingRejectsModifiedApprovalKeys: [31 8] ctrl+y approved with Code:y/ModCtrl/Textempty.
+FAIL DisconnectPreservesDeny: pending inline confirmation swallowed n after disconnect.
+FAIL CapturedAgentInspectable: Agent absent from compact inline/resume/handoff context.
+Package runtime2.880s (supervisor included).
+
+Correction: one strict unmodified printable-y/Enter predicate shared by pairing guard and approval handler; pending n allowed through only the disconnected confirmation routes; full session context now includes Agent at every caller.
+Additional cases cover Ctrl/Alt+y and Ctrl/Alt+Enter at31x8,32x8,120x40 before/after the confirmation stop; n/Escape after disconnect at31x8/32x8; agent/name/ID/directory inspectability in inline/resume/handoff.
+
+GREEN after correction:
+go test ./internal/tui -run 'Test(ResponsiveForms|Launch|Resume|Handoff|Options|Logins|Rename|Tag|Confirm|TUI_Pairing|Golden|LineEditor|Paste|MouseCapture|BoardMouseCapture)' -count=1
+PASS; package runtime7.931s (supervisor included). No frozen tests changed.

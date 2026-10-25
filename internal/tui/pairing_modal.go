@@ -41,15 +41,19 @@ func confirmPairing(allow bool) tea.Cmd {
 	return func() tea.Msg { return pairConfirmMsg{Allow: allow} }
 }
 
+func pairingApprovalKey(k tea.KeyPressMsg) bool {
+	return k.Mod == 0 && (k.Text == "y" || k.Code == tea.KeyEnter)
+}
+
 // updatePairing handles a keypress while the SAS gate is open. y/Enter approve,
 // n/Esc decline; both answers close the modal and emit the decision. Any other
 // key is swallowed (the gate is modal — keys never fall through to the board).
 func (m rootModel) updatePairing(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.Code {
-	case 'y', tea.KeyEnter:
+	switch {
+	case pairingApprovalKey(msg):
 		m.pairing = nil
 		return m, confirmPairing(true)
-	case 'n', tea.KeyEsc:
+	case msg.Text == "n" || msg.Code == tea.KeyEsc:
 		m.pairing = nil
 		return m, confirmPairing(false)
 	}

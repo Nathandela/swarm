@@ -300,3 +300,82 @@ func TestResponsiveFormsLongHandoffExposesWarningAndDisclosure(t *testing.T) {
 		t.Fatal("confirmation stop unreachable")
 	}
 }
+
+func TestResponsiveFormsPairingRejectsModifiedApprovalKeys(t *testing.T) {
+	for _, size := range [][2]int{{31, 8}, {32, 8}, {120, 40}} {
+		for _, k := range []tea.KeyPressMsg{{Code: 'y', Mod: tea.ModCtrl}, {Code: 'y', Text: "y", Mod: tea.ModAlt}, {Code: tea.KeyEnter, Mod: tea.ModCtrl}, {Code: tea.KeyEnter, Mod: tea.ModAlt}} {
+			m := newModel(t, newFakeClient(), nil)
+			m = send(m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			m = send(m, pairPendingMsg{DeviceName: "phone", SAS: []string{strings.Repeat("verify ", 40)}})
+			for _, atStop := range []bool{false, true} {
+				if atStop {
+					m = send(m, tea.KeyPressMsg{Code: tea.KeyEnd})
+				}
+				next, cmd := m.Update(k)
+				if cmd != nil || next.(rootModel).pairing == nil {
+					t.Fatalf("%v key=%s stop=%v approved", size, k.Keystroke(), atStop)
+				}
+			}
+		}
+	}
+}
+
+func TestResponsiveFormsDisconnectPreservesDeny(t *testing.T) {
+	s := sWorking("endpoint/original", "claude", "~/Code/original", "working", 0)
+	for _, screen := range []screen{screenGeneral, screenHandoff} {
+		for _, k := range []tea.KeyPressMsg{keyRune('n'), keyEsc} {
+			for _, size := range [][2]int{{31, 8}, {32, 8}} {
+				m := newModel(t, newFakeClient(s), nil).(rootModel)
+				m.screen = screen
+				m.width, m.height = size[0], size[1]
+				if screen == screenGeneral {
+					m.general.confirm = true
+					m.general.confirmID = s.ID
+					m.general.confirmKill = true
+				} else {
+					m.handoff = handoffModel{sourceID: s.ID, sourceAgent: s.Agent, confirmTarget: "codex", sourceCwd: s.Cwd}
+				}
+				m.connectionLost = true
+				next, cmd := m.Update(k)
+				if cmd != nil {
+					t.Fatal("deny initiated daemon operation")
+				}
+				rm := next.(rootModel)
+				if rm.general.confirm || rm.handoff.confirmPending() {
+					t.Fatalf("screen=%v size=%v key=%s cannot deny after disconnect", screen, size, k.Keystroke())
+				}
+			}
+		}
+	}
+}
+
+func TestResponsiveFormsCapturedAgentInspectable(t *testing.T) {
+	s := sWorking("endpoint/original", "claude", "~/Code/original", "working", 0)
+	s.Name = "named-session"
+	for _, screen := range []screen{screenGeneral, screenResume, screenHandoff} {
+		m := newModel(t, newFakeClient(s), nil).(rootModel)
+		m.width, m.height = 32, 8
+		m.screen = screen
+		switch screen {
+		case screenGeneral:
+			m.general.confirm = true
+			m.general.confirmID = s.ID
+			m.general.confirmKill = true
+		case screenResume:
+			m.resume.source = s
+			m.resume.directory.width = 32
+		case screenHandoff:
+			m.handoff = handoffModel{sourceID: s.ID, sourceAgent: s.Agent, sourceCwd: s.Cwd, width: 32}
+		}
+		seen := ""
+		for i := 0; i < 30; i++ {
+			seen += view(m)
+			m = send(m, tea.KeyPressMsg{Code: tea.KeyPgDown}).(rootModel)
+		}
+		for _, want := range []string{"named-session", "Agent: claude", s.ID, s.Cwd} {
+			if !strings.Contains(seen, want) {
+				t.Errorf("screen=%v missing inspectable context %q", screen, want)
+			}
+		}
+	}
+}
