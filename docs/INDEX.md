@@ -26,6 +26,8 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 
 ## The plan
 
+- [Mobile terminal dashboard interaction plan](specifications/mobile-terminal-touch-plan.md) — proposed SSH-terminal viewport, compact layout, folding and touch actions; Sol/Astra challenge and [executable planning probes](verification/mobile-terminal-touch/README.md), with handset qualification still open
+
 - [OpenCode maturity implementation plan](specifications/opencode-maturity-plan.md) — dependency-ordered native lifecycle, observation, semantic messaging, controls, continuity, model selection and release qualification, reviewed through Swarm by DeepSeek and GLM
 - [OpenCode minimum version and deployment status](verification/opencode-minimum-version-2026-10-19.md) — stable >=1.19.3 admission, connected checks, actual native recovery and sustained qualification boundaries
 - [Swarm v0.19.0 OpenCode deployment](verification/opencode-v0190-deployment.md) — published release gates, Mac/VM installed artifact and daemon verification, native-worker continuity and remaining qualification
