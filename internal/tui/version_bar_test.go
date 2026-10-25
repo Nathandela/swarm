@@ -11,7 +11,7 @@ import (
 )
 
 // The build version rides the right end of the bottom bar, on the same row as the
-// keyboard shortcuts (bead agents-tracker-2c50): what is installed is visible without
+// action strip (mobile board contract; version yields before actions): what is installed is visible without
 // leaving the board, bare ("0.13.3"). Under `go test` it is version.Version's default.
 
 func bottomRow(t *testing.T, m tea.Model) string {
@@ -27,7 +27,7 @@ func TestBottomBar_ShowsTheBuildVersionAtTheRightEdge(t *testing.T) {
 	if !strings.HasSuffix(row, want) {
 		t.Fatalf("bottom row %q does not end with %q", row, want)
 	}
-	if !strings.HasPrefix(row, "  ↑↓ move") {
+	if !strings.HasPrefix(row, "[New] [Open] [More]") {
 		t.Fatalf("bottom row %q lost the shortcuts", row)
 	}
 	if got := lipgloss.Width(row); got != testCols {
@@ -51,7 +51,7 @@ func TestBottomBar_DropsTheVersionWhenTheRowCannotHoldBoth(t *testing.T) {
 	if strings.Contains(row, version.Version) {
 		t.Fatalf("a 40-column row still carries the version: %q", row)
 	}
-	if !strings.HasPrefix(row, "  ↑↓ move") {
+	if !strings.HasPrefix(row, "[New] [Open] [More]") {
 		t.Fatalf("narrow row %q lost the shortcuts", row)
 	}
 	if got := lipgloss.Width(row); got > 40 {

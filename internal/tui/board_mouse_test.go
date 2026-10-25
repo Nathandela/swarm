@@ -2,7 +2,7 @@ package tui
 
 // ADR-029: the session board takes mouse clicks. A left click selects the row under
 // the pointer, a click on the row that is ALREADY selected opens it exactly as Enter
-// does (acted on the release; no timing, so a phone tap works too), the wheel moves the selection one row without wrapping, and the board asks the
+// does (acted on the release; no timing, so a phone tap works too), the wheel scrolls only the bounded content viewport without moving focus, and the board asks the
 // terminal for mouse reports only while it is in its plain navigation state -- never
 // in a form, the pairing modal, an inline edit, a kill/delete confirm, or an attach.
 //
@@ -167,9 +167,7 @@ func TestMouse_ClicksOnChromeChangeNothing(t *testing.T) {
 	chrome := []int{
 		0,           // the "swarm" header
 		1,           // the spacer under it
-		reviewY - 1, // the READY FOR REVIEW section header
 		reviewY + 1, // the spacer after that section
-		rows - 1,    // the status bar
 		rows + 5,    // below the screen
 		-1,          // above it
 	}
@@ -298,27 +296,34 @@ func TestMouse_OtherButtonsAreIgnored(t *testing.T) {
 	}
 }
 
-func TestMouse_WheelMovesTheSelectionWithoutWrapping(t *testing.T) {
-	m, _ := mouseBoard(t)
-	wheel := func(b tea.MouseButton) { m = quiet(t, m, tea.MouseWheelMsg{X: 6, Y: 10, Button: b}) }
-
+// Mobile board contract amends ADR-029 D4: wheel changes reading position,
+// while keyboard focus remains semantic and independent of the viewport.
+func TestMouse_WheelScrollsViewportWithoutMovingFocus(t *testing.T) {
+	m := mobileBoard(t, 40, 8)
+	id := selectedOf(m)
+	wheel := func(button tea.MouseButton) { m = quiet(t, m, tea.MouseWheelMsg{X: 6, Y: 3, Button: button}) }
 	wheel(tea.MouseWheelUp)
-	if got := selectedOf(m); got != "endpoint/n1" {
-		t.Fatalf("wheel up on the first row must stay there (no wrap), got %q", got)
+	if m.(rootModel).general.top != 0 {
+		t.Fatal("wheel wrapped above start")
 	}
 	wheel(tea.MouseWheelDown)
-	if got := selectedOf(m); got != "endpoint/w1" {
-		t.Fatalf("wheel down moved to %q, want endpoint/w1", got)
+	if m.(rootModel).general.top != 1 {
+		t.Fatal("wheel did not scroll content")
 	}
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 100; i++ {
 		wheel(tea.MouseWheelDown)
 	}
-	if got := selectedOf(m); got != "endpoint/c1" {
-		t.Fatalf("wheel down past the last row must stay on it (no wrap), got %q", got)
+	r := m.(rootModel)
+	if r.general.top != r.general.contentLength()-r.general.contentRows {
+		t.Fatal("wheel did not clamp at end")
 	}
+	if selectedOf(m) != id {
+		t.Fatal("wheel moved semantic focus")
+	}
+	top := r.general.top
 	wheel(tea.MouseWheelUp)
-	if got := selectedOf(m); got != "endpoint/r1" {
-		t.Fatalf("wheel up moved to %q, want endpoint/r1", got)
+	if m.(rootModel).general.top != top-1 {
+		t.Fatal("wheel up did not move viewport")
 	}
 }
 
@@ -377,7 +382,8 @@ func TestMouse_ClippedRowsAreNotClickable(t *testing.T) {
 		t.Fatalf("precondition: an 8-row board, got %d rows", len(lines))
 	}
 	before := selectedOf(m)
-	m = click(t, m, 7)
+	m = quiet(t, m, tea.MouseClickMsg{X: testCols - 1, Y: 7, Button: tea.MouseLeft})
+	m = quiet(t, m, tea.MouseReleaseMsg{X: testCols - 1, Y: 7, Button: tea.MouseLeft})
 	if got := selectedOf(m); got != before {
 		t.Fatalf("a click on the status bar selected a clipped row (%q -> %q)", before, got)
 	}

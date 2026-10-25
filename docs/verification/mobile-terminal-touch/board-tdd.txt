@@ -1,0 +1,47 @@
+Board slices 1–3 TDD — 2026-10-25 — baseline 4b275c0a
+Isolated branch feat/mobile-touch-board; standard shared Go caches; testbin owns TMPDIR.
+
+RED: go test ./internal/tui -run '^TestMobileBoard' -count=1
+Baseline failed: wheel changed focus; 24×4 lost session identity; Left did not focus
+collapsed header; resize/drag acceptance setup exposed missing narrow identity.
+
+GREEN: same command passed after viewport, compact rows, semantic header focus,
+folds, persistent input/review counts and release-bound geometry implementation.
+
+Menu/geometry RED: go test ./internal/tui -run '^TestMobileBoard(More|Focused|Attention)' -count=1
+Caught Kill silently becoming Delete in an already-open captured menu, and 24×4
+banner leaving an expanded heading as the sole content row (no navigation stop).
+GREEN: disabled changed kill/delete eligibility with explicit menu explanation;
+one-line content budgets advance past an expanded heading to a navigation stop.
+Captured menu ID remains independent of current board focus, offscreen movement,
+and authoritative roster changes. Vanished menu targets cannot issue commands.
+
+Focused GREEN: TestMobileBoard*, TestMouse*, TestRouter*, TestStatusBar*,
+TestBottomBar*, TestStyleHoistPinnedOutput, TestWorkingAnimation*,
+TestResponsive*, TestApply_NoFlatAllocOnSameGroupUpdate, TestGoldenOptionsForm.
+The same-group apply allocation invariant remains zero.
+
+Intentional old-contract reversals: ADR-029 wheel now scrolls the independent
+viewport without moving focus; whole section headers fold and pinned header
+reveals attention; bottom chrome contains separate New/Open/More release targets.
+The old clipped-row test now clicks inert far-right footer padding. Version yields
+before controls. General golden and board/banner ANSI pins retain session-field
+colors and now pin fold headers, persistent attention totals and wide key hints.
+Confirm/form output remains owned by the forms lane; renderer nonce changes are
+owned by the render lane and require final integration repinning.
+
+Full TUI regression run after those fixes: 72.646s; only GoldenOptionsForm failed
+because its first-paint wait expected the old footer's 'options' substring.
+Restored a fitting wide 'o options' hint; focused GoldenOptionsForm then passed.
+Final full TUI run and root integration quality gates recorded by root.
+
+Render benchmark: go test ./internal/tui -run '^$' -bench '^BenchmarkMobileBoardRender$' -benchtime=100ms -count=1
+Darwin/amd64 VirtualApple @2.50GHz; 40×18 board, 20 repo/tag keys:
+50/status   71,465 ns/op; 50/repo 294,674; 50/tag 282,215
+500/status 251,154 ns/op; 500/repo 2,020,817; 500/tag 1,563,231
+No cache or indexing added: measured 500-session render stays about 2ms locally.
+These are local render timings, not phone-visible latency or network evidence.
+
+Limit: SSH reports have no displayed-frame identity. Generation binds an armed
+model gesture to unchanged model geometry; an old-frame press arriving after an
+update can still hit newer geometry. No handset qualification is claimed.

@@ -368,8 +368,26 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rosterRevision++
 	}
+	shape := m.boardShape()
+	menu, menuKey := m.general.more, m.moreSelectionKey()
+	anchor := m.general.anchor()
 	next, cmd := m.update(msg)
-	return next, stampClientResults(cmd, next.(rootModel).reconnectGeneration)
+	updated := next.(rootModel)
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
+	default:
+		if menu != nil && updated.general.more == menu {
+			updated.restoreMoreSelection(menuKey)
+		}
+	}
+	if _, resize := msg.(tea.WindowSizeMsg); resize {
+		updated.general.restoreAnchor(anchor)
+		if updated.general.more != nil {
+			updated.revealMore()
+		}
+	}
+	updated.syncBoardGeometry(shape)
+	return updated, stampClientResults(tea.Batch(cmd, updated.armWorkingAnimation()), updated.reconnectGeneration)
 }
 
 func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -688,12 +706,13 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.general.openID = ""
 		return m, nil
 
-	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg:
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
 		// ADR-029: only the board in plain navigation takes the mouse. A report that
 		// reaches any other state (already in flight when it opened) is dropped there.
 		return m.updateBoardMouse(msg.(tea.MouseMsg))
 
 	case tea.KeyPressMsg:
+		m.general.gesture = boardGesture{}
 		m.general.openID = ""
 		if m.guardFormInput(msg) {
 			return m, nil
@@ -741,7 +760,7 @@ func (m rootModel) View() tea.View {
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
 		content = m.attach.view()
 	default:
-		content = m.composeBoard(m.general.view(), m.generalStatus())
+		content = m.boardView()
 	}
 	// The board is a full-screen alternate-screen app (ADR-006): it stays off the
 	// terminal scrollback and gives the status bar a fixed bottom row. In
@@ -1028,7 +1047,7 @@ func (m *rootModel) enterGeneral() tea.Cmd {
 // shouldAnimateWorking is the lifecycle policy for the fast timer. A disconnected
 // roster must not imply live work, and an idle/off-board model has no visible glyph.
 func (m rootModel) shouldAnimateWorking() bool {
-	return !m.connectionLost && m.screen == screenGeneral && m.general.hasWorking()
+	return !m.connectionLost && m.screen == screenGeneral && m.general.visibleWorking()
 }
 
 // armWorkingAnimation schedules the first tick of a chain when needed. It never

@@ -224,6 +224,8 @@ func (m rootModel) applyDaemonReconnected(msg daemonReconnectedMsg) (tea.Model, 
 }
 func (m *rootModel) reconcileRoster(sessions []protocol.SessionView) tea.Cmd {
 	selected := m.general.selectedID()
+	anchor := m.general.anchor()
+	defer func() { m.general.restoreAnchor(anchor) }()
 	visible := protocol.VisibleDiscussions(sessions)
 	var banners []tea.Cmd
 	for _, session := range visible {

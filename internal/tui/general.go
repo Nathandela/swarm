@@ -87,11 +87,20 @@ type rowColumns struct {
 
 // generalModel is the grouped session board: the general view.
 type generalModel struct {
-	sessions []protocol.SessionView // newest category entry first; grouped at render time
-	sel      int                    // flat selection index across visible rows
-	grouping groupingMode
-	ordering orderingMode
-	sections []string // cached display-order group keys for the active grouping
+	sessions     []protocol.SessionView // newest category entry first; grouped at render time
+	sel          int                    // flat selection index across visible rows
+	grouping     groupingMode
+	ordering     orderingMode
+	sections     []string // cached display-order group keys for the active grouping
+	focusSection string   // collapsed header focus has no session target
+	collapsed    map[foldKey]bool
+	top          int // independent grouped-content viewport
+	contentRows  int
+	contentStart int
+	geometry     uint64
+	gesture      boardGesture
+	more         *boardMenu
+	commandID    string // More commands resolve the captured target, never live focus
 
 	confirm     bool   // a kill/delete confirm is pending
 	confirmID   string // session the confirm targets, captured by identity when it opened
@@ -278,6 +287,8 @@ func (m *generalModel) refreshLayout(selectedID string) {
 // setLayout applies a grouping and ordering pair, regrouping the board around
 // the same selected session.
 func (m *generalModel) setLayout(g groupingMode, o orderingMode) {
+	anchor := m.anchor()
+	defer func() { m.restoreAnchor(anchor) }()
 	id := m.selectedID()
 	m.grouping, m.ordering = g, o
 	m.refreshLayout(id)
@@ -304,19 +315,16 @@ func (m generalModel) hasWorking() bool {
 // without building a full copy of the board (R4.1.2): m.sel is a position in
 // that order, and finding one element at a position needs no allocation.
 func (m generalModel) selected() (protocol.SessionView, bool) {
-	i := 0
-	for _, section := range m.sectionOrder() {
-		for _, s := range m.sessions {
-			if m.groupKey(s) != section {
-				continue
-			}
-			if i == m.sel {
-				return s, true
-			}
-			i++
-		}
+	if m.focusSection != "" {
+		return protocol.SessionView{}, false
 	}
-	return protocol.SessionView{}, false
+	var found protocol.SessionView
+	m.navigation(func(l boardLine, i int) {
+		if i == m.sel && l.kind == lineSession {
+			found = l.session
+		}
+	})
+	return found, found.ID != ""
 }
 
 // selectedID is the id of the selected session, or "" when the board is empty.
@@ -346,45 +354,40 @@ func (m generalModel) sessionByID(id string) (protocol.SessionView, bool) {
 // full-board copy, and it stops as soon as id is found.
 func (m *generalModel) restoreSel(id string) {
 	if id != "" {
-		i := 0
-		for _, section := range m.sectionOrder() {
-			for _, s := range m.sessions {
-				if m.groupKey(s) != section {
-					continue
-				}
-				if s.ID == id {
-					m.sel = i
-					return
-				}
-				i++
-			}
+		if session, ok := m.sessionByID(id); ok && m.isCollapsed(m.groupKey(session)) {
+			m.focusSection = m.groupKey(session)
 		}
 	}
-	m.clampSel()
+	found := false
+	m.navigation(func(l boardLine, i int) {
+		if id != "" && l.kind == lineSession && l.session.ID == id || m.focusSection != "" && l.kind == lineSection && l.section == m.focusSection {
+			m.sel = i
+			if l.kind == lineSession {
+				m.focusSection = ""
+			}
+			found = true
+		}
+	})
+	if !found {
+		m.focusSection = ""
+		m.clampSel()
+	}
 }
 
-// clampSel keeps the selection within the visible rows.
 func (m *generalModel) clampSel() {
-	n := len(m.sessions)
-	if n == 0 {
-		m.sel = 0
-		return
-	}
-	if m.sel < 0 {
-		m.sel = 0
-	}
-	if m.sel >= n {
-		m.sel = n - 1
-	}
+	n := m.navigationCount()
+	m.sel = max(0, min(m.sel, n-1))
+	m.syncHeaderFocus()
 }
 
-// move shifts the selection by delta with wrapping across all groups (V-3).
 func (m *generalModel) move(delta int) {
-	n := len(m.sessions)
+	n := m.navigationCount()
 	if n == 0 {
 		return
 	}
 	m.sel = ((m.sel+delta)%n + n) % n
+	m.syncHeaderFocus()
+	m.revealFocus()
 }
 
 // apply folds one status-change event into the board: it updates the matching
@@ -393,6 +396,8 @@ func (m *generalModel) move(delta int) {
 // It returns a command that prints the notification banner when the session
 // transitions INTO needs_input or ready_for_review (V-5), else nil.
 func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
+	anchor := m.anchor()
+	defer func() { m.restoreAnchor(anchor) }()
 	// A client-deleted session must not reappear from a late buffered event that was
 	// already in flight when the delete landed (item 6). The tombstone is checked here on
 	// the Update path, so no wall-clock read reaches a view.
@@ -500,6 +505,9 @@ func bannerGroup(g status.Group) bool {
 // ---------------------------------------------------------------------------
 
 func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.general.more != nil {
+		return m.updateMore(k)
+	}
 	if m.connectionLost && k.Code != tea.KeyEsc && !(m.general.confirm && k.Text == "n") {
 		if m.general.editing {
 			if k.Code == tea.KeyEnter {
@@ -507,11 +515,12 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.updateRename(k)
 		}
-		if k.Code == tea.KeyDown || k.Text == "j" {
-			m.general.move(1)
+		if m.boardNavigation(k) {
+			return m, nil
 		}
-		if k.Code == tea.KeyUp || k.Text == "k" {
-			m.general.move(-1)
+		if k.Text == "g" {
+			m.general.revealAttention()
+			return m, nil
 		}
 		if k.Text == "r" && !m.general.confirm {
 			return m.retryDaemonConnection()
@@ -524,12 +533,25 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.general.confirm {
 		return m.updateConfirm(k)
 	}
+	if m.boardNavigation(k) {
+		return m, nil
+	}
+	if m.width > 0 && (m.width < 24 || m.height > 0 && m.height < 4) && k.Code != tea.KeyEsc {
+		return m, nil
+	}
+	if k.Text == "m" {
+		m.openMore()
+		return m, nil
+	}
+	if k.Text == "g" {
+		m.general.revealAttention()
+		return m, nil
+	}
+	if boardSessionKey(k) && m.general.commandID == "" && !m.general.actionVisible() {
+		return m, nil
+	}
 
 	switch {
-	case k.Code == tea.KeyDown || (k.Text == "j"):
-		m.general.move(1)
-	case k.Code == tea.KeyUp || (k.Text == "k"):
-		m.general.move(-1)
 	case k.Code == tea.KeyEnter:
 		return m.openSelected()
 	case k.Text == "n":
@@ -546,7 +568,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// a non-running row (a running session has nothing to resume). The daemon
 		// validates the source and composes the adapter's resume argv from the source's
 		// captured conversation id.
-		if s, ok := m.general.selected(); ok && s.Status.Process != status.ProcessRunning {
+		if s, ok := m.boardCommandSession(); ok && s.Status.Process != status.ProcessRunning {
 			return m.beginResume(s)
 		}
 	case k.Text == "e":
@@ -554,13 +576,13 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// identity so a concurrent regroup cannot move the edit onto a neighbor, and
 		// seed the buffer with the current name (editing an existing label, not
 		// starting blank).
-		if s, ok := m.general.selected(); ok {
+		if s, ok := m.boardCommandSession(); ok {
 			m.general.editing = true
 			m.general.editID = s.ID
 			m.general.edit = newLineEditor(s.Name)
 		}
 	case k.Text == "t":
-		if s, ok := m.general.selected(); ok {
+		if s, ok := m.boardCommandSession(); ok {
 			m.general.editing = true
 			m.general.editTag = true
 			m.general.editID = s.ID
@@ -581,7 +603,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the moment a source cannot cooperate, the only moment a hands-off handoff is
 		// needed. Status now suggests the form's default method and never decides;
 		// the supervised method still revalidates the row at submit.
-		if s, ok := m.general.selected(); ok {
+		if s, ok := m.boardCommandSession(); ok {
 			m.handoff = newHandoffModel(s, m.agents, m.detected, m.width)
 			m.screen = screenHandoff
 			m.detectGen++
@@ -590,7 +612,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case isCtrlX(k):
 		// Capture the confirm target by identity (and its kill-vs-delete state)
 		// so a concurrent status event cannot shift a different row under it.
-		if s, ok := m.general.selected(); ok {
+		if s, ok := m.boardCommandSession(); ok {
 			m.general.confirm = true
 			m.general.confirmID = s.ID
 			m.general.confirmKill = s.Status.Process == status.ProcessRunning
@@ -604,6 +626,9 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // openSelected is ⏎ on the board, and a click on the selected row (ADR-029 D3): attach the
 // selection captured now.
 func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
+	if !m.general.actionVisible() || m.connectionLost {
+		return m, nil
+	}
 	s, ok := m.general.selected()
 	if !ok {
 		return m, nil
@@ -640,62 +665,8 @@ func (m rootModel) boardTakesMouse() bool {
 // boardRowAt maps screen row y to the session drawn there. Rows composeBoard clipped
 // off the bottom (where the status bar and skew notice sit) are not on screen.
 func (m rootModel) boardRowAt(y int) (protocol.SessionView, int, bool) {
-	if m.height > 0 && y >= m.boardBodyRows() {
-		return protocol.SessionView{}, 0, false
-	}
-	return m.general.rowAt(y)
-}
-
-func (m rootModel) updateBoardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if !m.boardTakesMouse() {
-		m.general.openID = ""
-		return m, nil
-	}
-	mouse := msg.Mouse()
-	switch msg.(type) {
-	case tea.MouseWheelMsg:
-		m.general.openID = ""
-		switch mouse.Button {
-		case tea.MouseWheelUp:
-			m.general.scroll(-1)
-		case tea.MouseWheelDown:
-			m.general.scroll(1)
-		}
-	case tea.MouseClickMsg:
-		if mouse.Button != tea.MouseLeft {
-			return m, nil
-		}
-		m.general.openID = ""
-		s, idx, ok := m.boardRowAt(mouse.Y)
-		if !ok {
-			return m, nil
-		}
-		if m.general.selectedID() == s.ID {
-			// A press on the row already selected arms the open; the release
-			// performs it (D3). No timing: a phone tap and a desktop click alike.
-			m.general.openID = s.ID
-			return m, nil
-		}
-		m.general.sel = idx
-	case tea.MouseReleaseMsg:
-		// Legacy reports omit the released button; SGR reports must match the left press.
-		if mouse.Button != tea.MouseLeft && mouse.Button != tea.MouseNone {
-			return m, nil
-		}
-		// Acting here rather than on the press keeps the release report out of the
-		// agent: by the time the attach releases the terminal there is none left to
-		// arrive. A release off the armed row cancels, as in any desktop UI.
-		id := m.general.openID
-		m.general.openID = ""
-		if id == "" {
-			return m, nil
-		}
-		if s, _, ok := m.boardRowAt(mouse.Y); !ok || s.ID != id || m.general.selectedID() != id {
-			return m, nil
-		}
-		return m.openSelected()
-	}
-	return m, nil
+	l, ok := m.boardLineAt(y)
+	return l.session, l.idx, ok && l.kind == lineSession
 }
 
 // updateConfirm handles the pending kill/delete confirm (R-3): `y` or a second
@@ -845,6 +816,8 @@ func (m *generalModel) isTombstoned(id string) bool {
 // remove drops the session with id from the board (the optimistic removal on a
 // successful delete), keeping the selection pinned to its session by identity.
 func (m *generalModel) remove(id string) {
+	anchor := m.anchor()
+	defer func() { m.restoreAnchor(anchor) }()
 	selID := m.selectedID()
 	kept := make([]protocol.SessionView, 0, len(m.sessions))
 	for _, s := range m.sessions {
@@ -872,6 +845,8 @@ func (m *generalModel) applyName(id, name string) {
 }
 
 func (m *generalModel) applyTag(id, tag string) {
+	anchor := m.anchor()
+	defer func() { m.restoreAnchor(anchor) }()
 	selectedID := m.selectedID()
 	for i := range m.sessions {
 		if m.sessions[i].ID == id {
@@ -981,6 +956,10 @@ func (m generalModel) layout(banner int, visit func(boardLine)) {
 	idx := 0
 	for _, section := range m.sectionOrder() {
 		visit(boardLine{kind: lineSection, section: section})
+		if m.isCollapsed(section) {
+			idx++
+			continue
+		}
 		for _, s := range m.sessions {
 			if m.groupKey(s) != section {
 				continue
@@ -1048,8 +1027,8 @@ func (m generalModel) rowAt(y int) (s protocol.SessionView, idx int, ok bool) {
 // scroll moves the selection by delta WITHOUT wrapping: the mouse wheel's motion
 // (ADR-029 D4). The arrow keys keep move's wrap (V-3).
 func (m *generalModel) scroll(delta int) {
-	m.sel += delta
-	m.clampSel()
+	m.top += delta
+	m.clampTop()
 }
 
 func (m generalModel) header() string {
@@ -1159,6 +1138,9 @@ func minInt(a, b int) int {
 // renderRow renders one session row: a 2-cell selection prefix (or the confirm
 // prompt), the group icon, then the five V-4 fields on one line.
 func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected bool) string {
+	if m.compactRows() && !m.editing && !m.confirm {
+		return m.compactRow(s, selected)
+	}
 	gs := groupStyle(g)
 	icon := gs.Render(groupIcon(g, m.spinnerFrame))
 
@@ -1256,7 +1238,7 @@ func (m generalModel) nameCell(s protocol.SessionView, width int) string {
 	if m.editing && s.ID == m.editID {
 		return editViewport(m.edit.text, m.edit.cursor, contentWidth)
 	}
-	return clampCells(s.Name, contentWidth)
+	return ellipsis(s.Name, contentWidth)
 }
 
 // editViewport renders text plus its insertion cursor within width display cells.
