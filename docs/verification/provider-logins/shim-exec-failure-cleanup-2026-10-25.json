@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-25",
+  "scope": "Join the existing PTY reply worker when a backend-mode agent executable fails to start",
+  "production_activation": false,
+  "change": "Reuse ptyIn.close and replies.close after closing the PTY master in the existing cmd.Start error path. The backend and signal worker already have separate containment and joins.",
+  "source": {
+    "base": "5b361623a7f7e5e9ca271b5a6f34994c2df52bb3",
+    "changed_files": {
+      "internal/shim/shim.go": "178818bbeaa333c76453e2115989849672d50298f3e47aa46024fd0533f8fffd",
+      "internal/shim/r7_backend_test.go": "f8d142780f5e85a1a52ad8031aca896c6cdd06cc3dd9e944098c50c1042b969b"
+    },
+    "no_other_uncommitted_source_included": true
+  },
+  "review": "Luna implementation, root connected-source review and independent Astra GREEN; exact two-close omission reproduces the leaked pump.",
+  "root_full_shim_race": {
+    "command": [
+      "python3",
+      "/private/tmp/swarm-login-go.py",
+      "test",
+      "-race",
+      "./internal/shim",
+      "-count=1",
+      "-timeout=6m"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 151.669,
+    "log_sha256": "018e9371ecdf2ec11ed4f59ec1a8c44f759821395d44fdeae8a41c346d0a9b72",
+    "source_unchanged": true
+  },
+  "negative_control": {
+    "scope": "Only omit the two new close calls from a scratch overlay; the unchanged exec-failure test must observe one replyPump.run stack above baseline.",
+    "exit_code": 1,
+    "log_sha256": "e4c92e134c6d6ffe5132d9a6dea1d40aecd2a7f7fae11c003f25d5e826704149",
+    "overlay_sha256": "3ba929189dcbd864657e3542ac42fb52321d572e315e7fa7c7cfcfcc48ed08d5"
+  },
+  "limits": [
+    "In-process Run goroutine cleanup only. A standalone shim exits afterward; this is not evidence of an additional native process or live account leak.",
+    "The regression uses a bounded stack-name census in the nonparallel test and refuses a truncated census. Native provider behavior is outside this change."
+  ]
+}

@@ -434,6 +434,8 @@ func Run(cfg Config) (agentExit int, err error) {
 			close(sigDone)
 			sigWG.Wait()
 			_ = ptmx.Close()
+			srv.ptyIn.close()
+			replies.close()
 			_ = listener.Close()
 			closeTranscript(tr)
 			<-acceptDone

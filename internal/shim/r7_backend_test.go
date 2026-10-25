@@ -37,6 +37,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -570,6 +571,7 @@ func r7ShortSessionDir(t *testing.T) string {
 // reconcile's LOST path, and this session's shim exited cleanly enough to leave the meta
 // reconcilable only later.
 func TestR7ShimBackend_AnAgentThatCannotEXECStillTakesItsBackendDownWithIt(t *testing.T) {
+	replyPumps := r7ReplyPumpGoroutines(t)
 	cfg := r7BackendCfg(t, r7BackendIgnoreTerm, nil)
 	cfg.Backend.GoAheadTimeout = 300 * time.Millisecond
 	cfg.GraceTimeout = 1 * time.Second
@@ -587,6 +589,9 @@ func TestR7ShimBackend_AnAgentThatCannotEXECStillTakesItsBackendDownWithIt(t *te
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if !r7Alive(info.PID) {
+			if got := r7ReplyPumpGoroutines(t); got != replyPumps {
+				t.Errorf("replyPump.run goroutines after Run = %d, baseline %d", got, replyPumps)
+			}
 			return
 		}
 		time.Sleep(25 * time.Millisecond)
@@ -595,4 +600,21 @@ func TestR7ShimBackend_AnAgentThatCannotEXECStillTakesItsBackendDownWithIt(t *te
 	t.Fatalf("the backend (pid %d, pgid %d) SURVIVED an agent exec failure. Run returned and left "+
 		"a live app-server holding %s forever -- the exact leak §R7.2a was written to close",
 		info.PID, info.PGID, cfg.Backend.SocketPath)
+}
+
+// r7ReplyPumpGoroutines counts this worker type rather than unrelated goroutines.
+func r7ReplyPumpGoroutines(t *testing.T) int {
+	t.Helper()
+	stack := make([]byte, 1<<20)
+	n := runtime.Stack(stack, true)
+	if n == len(stack) {
+		t.Fatal("goroutine stack snapshot may be truncated")
+	}
+	count := 0
+	for _, goroutine := range strings.Split(string(stack[:n]), "\n\n") {
+		if strings.Contains(goroutine, "(*replyPump).run") {
+			count++
+		}
+	}
+	return count
 }
