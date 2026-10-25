@@ -1,8 +1,8 @@
 {
   "date": "2026-10-25",
-  "kind": "single actual Linux structured Claude actor case R2",
-  "review": "Root and Astra reviewed the actual artifact result; this is one case only.",
-  "status": "FAIL: a fourth native model request exceeded the three-response fixture after known-child settlement; no final idle was observed.",
+  "kind": "Pinned Linux structured Claude actor qualification: initial R2 and R3/R4 follow-ups",
+  "review": "Root and Astra separately reviewed each actual result; R4 qualifies only its finite Linux notification-followup cycle.",
+  "status": "R2 and R3 FAIL; R4 PASS for a narrow notification-followup/tail/idle cycle only. Global actor completeness remains unqualified; automatic eligibility is false.",
   "pins": {
     "native_version": "2.1.310",
     "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
@@ -31,7 +31,8 @@
       "parent_task_id": null,
       "note": "Synthetic native identities only; content bodies are represented by evidence hashes in the retained receipt/archive.",
       "original_user_message_uuid": "18ae6b36-f0b0-49bc-9fa2-68ccf5172760",
-      "tool_use_id": "tool_actor_case1"
+      "tool_use_id": "tool_actor_case1",
+      "turn_identity_note": "The receipt reuses the original user-message UUID in its turn_id field; it is not claimed as an independently established native turn identity."
     },
     "raw_native_event_order": [
       "17: parent success result",
@@ -76,8 +77,116 @@
     "note": "The receipt reports native groups gone and HTTP handlers joined; the run records admitted-kernel cleanup and unchanged pins. These cleanup facts do not convert the failed parent-idle result into a pass."
   },
   "limits": [
-    "One Linux R2 case only. No next case or platform is approved.",
-    "No automatic stop, successor construction, resume, or recovery input occurred.",
-    "Source-bound next plan remains pending review; this case does not authorize production behavior or automatic continuation."
-  ]
+    "The retained initial R2 fields describe a failed single Linux case, not a retrospectively qualified result. R3 and R4 retain their separate outcomes below.",
+    "No automatic stop, successor construction, resume or recovery input occurred in these cases.",
+    "Production automatic continuation, global workflow completeness and Mac actor behavior remain unqualified. Case 2 cancellation is a separate prepared gate, not a result."
+  ],
+  "r3": {
+    "kind": "single actual Linux structured Claude actor case R3",
+    "review": "Root and Astra reviewed the actual result.",
+    "status": "FAIL after two model requests, before parent final/tail; no tail conclusion.",
+    "run_path": "/private/tmp/swarm-actor-case1-r3-linux-envelope-r2-20261025/attempt/run.json",
+    "run_sha256": "ecdcf9c7a13652f9062c52c4b268eac9bc307ab323ddda0888b6d11d3adb4c84",
+    "receipt_path": "/private/tmp/swarm-actor-case1-r3-linux-envelope-r2-20261025/attempt/receipt.json",
+    "receipt_sha256": "fea47a168ee941b9c77de2ef5d29b924505913ee0e339ab6ca6433bc0a71036d",
+    "evidence_archive_path": "/private/tmp/swarm-actor-case1-r3-linux-envelope-r2-20261025/attempt/evidence.tar.gz",
+    "evidence_archive_sha256": "4f8d9a60b57a6f287ebef5cb41a16f53166836489501a3bbdd1ead5b62c7cc75",
+    "manifest_path": "/private/tmp/swarm-actor-case1-r3-linux-envelope-r2-20261025/manifest.json",
+    "manifest_sha256": "016a0203aff79bbdebe604a35d2971b75f8328101c43c7bced3a0dc1aae45957",
+    "finding": {
+      "failed_lock_operation": "FileNotFoundError for home/.claude/.claude.json.lock size-race after two model requests.",
+      "other_failures": [
+        "TLS accept connection reset",
+        "history finalization: missing/ambiguous durable Agent chain"
+      ],
+      "tail": "Parent final and tail phase were not reached; make no conclusion about tail behavior.",
+      "state": "child_active; auto_eligible=false; known_child_settled=false; idle_after_result=false.",
+      "counts": {
+        "model_requests": 2,
+        "automatic_stop_count": 0,
+        "successor_count": 0,
+        "native_groups_gone": true,
+        "http_handlers_joined": true
+      },
+      "preservation": "Normal instructions/settings, SessionStart and deny-write remained present; fresh process relaunch, no resume/recovery input.",
+      "turn_identity_note": "Do not label the receipt original-user UUID as a distinct native turn ID."
+    },
+    "cleanup_reference": {
+      "path": "docs/verification/provider-logins/native-test-cleanup-2026-10-25.json",
+      "sha256": "9253b89b138182369608a5da115d7e5ad54efc0b97271614f1a0491fb28b419d"
+    },
+    "limits": [
+      "Single Linux case only. No tail conclusion, next case, or platform is approved.",
+      "No automatic stop/successor, resume, or recovery input occurred.",
+      "The result does not qualify a complete actor census or automatic continuation."
+    ]
+  },
+  "preexecution_envelope_hold": {
+    "envelope_sha256": "70de75944421d1505b721a7443c8f2bf2c960e34147ea64244d599a3ac5e69a0",
+    "status": "HOLD before native execution; package member-count check disagreed (47 versus 31). This was a pre-execution envelope hold, not a native-run failure.",
+    "manifest_path": "/private/tmp/swarm-actor-case1-r3-linux-envelope-20261025/manifest.json"
+  },
+  "r4": {
+    "kind": "single actual Linux structured Claude actor case R4",
+    "review": "Root and Astra reviewed the actual result.",
+    "status": "PASS for this narrow native notification-followup, tail-result and same-session idle sequence; not global actor-completeness or automatic-continuation qualification.",
+    "run_path": "/private/tmp/swarm-actor-case1-r4-linux-envelope-20261025/attempt/run.json",
+    "run_sha256": "ff086d08409d8d09bf55a58aec78a357c9d33c2d793351c0720875ad36356d13",
+    "receipt_path": "/private/tmp/swarm-actor-case1-r4-linux-envelope-20261025/attempt/receipt.json",
+    "receipt_sha256": "ca15fa51b9889ebf03e3bfeb87cacbbd3a2ef618238d5959047294ab845ab0a8",
+    "evidence_archive_path": "/private/tmp/swarm-actor-case1-r4-linux-envelope-20261025/attempt/evidence.tar.gz",
+    "evidence_archive_sha256": "8f50b672feeb5f94088e68e07fb44ee14e0712245c5240e2ee3aa75dc89cde83",
+    "packet_archive_path": "/private/tmp/swarm-actor-case1-r4-linux-envelope-20261025/attempt/packet.tar.gz",
+    "packet_archive_sha256": "31760d9732b7b41d425b99d3a4cadd9654a7c2bc6676e871908a36dd25c3223e",
+    "manifest_path": "/private/tmp/swarm-actor-case1-r4-linux-envelope-20261025/manifest.json",
+    "manifest_sha256": "9754f2afb9a1a1fc772fd494d37222bc3ec6dce0d6880d6031d776e062cb5fe1",
+    "envelope_path": "/private/tmp/swarm-actor-case1-r4-linux-envelope-20261025/envelope.py",
+    "envelope_sha256": "7b3f6b9e08c1f555a6e737670d22fb9e022b2e43388a4f61701546b48327c3e5",
+    "outer_elapsed_seconds": 8.974,
+    "sequence_observations": {
+      "parent_result": {
+        "sequence": 17,
+        "child_active": true,
+        "result_index": 0
+      },
+      "task_completed_sequence": 20,
+      "notification_sequence": 21,
+      "fourth_request": "Strict durable-origin and request-continuity checks qualified the fourth response. This is a bounded native notification-followup, not host input.",
+      "tail_result_sequence": 27,
+      "same_session_idle_sequence": 28,
+      "tail_identity_limit": "Tail result had no clientUUID; it is not, by itself, proof of cause.",
+      "tail_result_index": 1
+    },
+    "scope_and_state": {
+      "model_calls": 4,
+      "automatic_stop_count": 0,
+      "successor_count": 0,
+      "known_child_settled": true,
+      "tail_cycle_settled": true,
+      "global_incomplete": "unqualified_global_actor_census",
+      "auto_eligible": false,
+      "no_resume_or_recovery_input": true,
+      "turn_identity_provenance_note": "Do not treat an original-user UUID repeated in a receipt turn_id field as a distinct native turn identity.",
+      "owner_user_submissions": 1
+    },
+    "preservation_and_cleanup": {
+      "normal_instructions_settings_and_sessionstart_preserved": true,
+      "deny_write_preserved": true,
+      "native_groups_gone": true,
+      "http_handlers_joined": true,
+      "exact_outer_cgroup_empty_and_gone": true,
+      "native_and_packet_pins_unchanged": true
+    },
+    "limits": [
+      "This passes only the bounded child/task-notification/fourth-response/tail/idle fixture.",
+      "Global actor completeness, workflows/background parity and automatic continuation remain unqualified.",
+      "Case 2 plan and packet are prepared separately; this R4 result does not qualify cancellation or a new platform."
+    ],
+    "inner_elapsed_seconds": 2.814513279008679
+  },
+  "case2_next_step": "Case 2 plan and packet are prepared; final Root/Astra artifact review precedes one bounded Linux cancellation attempt. No Case 2 native execution or Mac qualification is recorded here.",
+  "cleanup_reference": {
+    "path": "docs/verification/provider-logins/native-test-cleanup-2026-10-25.json",
+    "sha256": "9253b89b138182369608a5da115d7e5ad54efc0b97271614f1a0491fb28b419d"
+  }
 }

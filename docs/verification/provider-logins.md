@@ -260,9 +260,13 @@ another inference for the child's completion notification after background
 membership was empty. The finite fixture refused that extra request; the case
 remains failed, with verified cleanup. These events distinguish known-child
 settlement from whole-session completion and do not authorize automatic recovery.
+The later R4 case passes the finite notification follow-up through a distinct
+native result and actual native `idle`, with exact lineage and cleanup proofs.
+It does not qualify automatic resume, cancellation or broader workflows.
 The [fresh managed Codex TUI attempts](provider-logins/codex-fresh-tui-2026-10-25.json)
-also remain unqualified; the latest diagnostic identifies its normal protected
-socket alias for a source-bound test-harness correction.
+also remain unqualified. The latest diagnostic exposed absent fixture transport
+settings; an approved preparation plan uses native transport preferences with
+unmodified binaries. The separate real-account and continuation gates remain open.
 
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.

@@ -1,0 +1,34 @@
+{
+  "date": "2026-10-25",
+  "kind": "bounded isolated systemd unit-kill cleanup primitive evidence",
+  "review": "Root and Astra reviewed the option and execution evidence.",
+  "systemd_option_compatibility": {
+    "version": "systemd 249 (249.11-0ubuntu3.23)",
+    "scope": "Read-only --help option parsing; no kill or unit mutation.",
+    "evidence_path": "/private/tmp/swarm-codex-outer-dlhf9mpc/systemctl-option-evidence.json",
+    "evidence_sha256": "5c91a23e2cd04bc5430b9c34a1288636eb32f35213866aa8bb96bd9a1bbf9e1a",
+    "results": [
+      {"option": "--kill-whom=all", "result": "rejected as unrecognized"},
+      {"option": "--kill-who=all", "result": "accepted by --help parser"}
+    ]
+  },
+  "actual_disposable_process_proof": {
+    "result": "PASS for this exact isolated parent-and-child unit scope; no native CLI or provider process was involved.",
+    "receipt_path": "/private/tmp/swarm-systemd-kill-proof-20261025/receipt.json",
+    "receipt_sha256": "ac24ba217597590e33574694a507ebd35953ca55f410a821723edc55a24577f9",
+    "manifest_path": "/private/tmp/swarm-systemd-kill-proof-20261025/manifest.json",
+    "manifest_sha256": "37e00697f604d9eb8833fa9fb7898b6fdccd1e94ca2cabda5ee7a0a70889969b",
+    "runner_path": "/private/tmp/swarm-systemd-kill-proof-20261025/run.py",
+    "runner_sha256": "8453bb7cebdd1ee7a8944239cb8e5c8a58cd498b4530f7a56d6b01c85e4a8847",
+    "positive_parent_child_image_scope_witness": true,
+    "kill_returncode": 0,
+    "kill_to_empty_gone_seconds": 0.02916252799332142,
+    "elapsed_before_watchdog_seconds": 0.09222231805324554,
+    "cgroup_empty_and_gone": true,
+    "parent_and_child_identities_ended": true
+  },
+  "limits": [
+    "This proves only the exact disposable Python-parent/sleep-child unit-kill primitive with its scoped image witness.",
+    "It does not prove integrated Codex or Claude cleanup, physical native-listener attribution, complete native ownership, or repair any earlier deadline failure."
+  ]
+}

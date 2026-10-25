@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Five unqualified isolated fresh managed Codex TUI attempts plus two seed-only controls; synthetic ready grants only, no user authentication or live installation changes",
-  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. seedV2 passes synthetic seed/public metadata only. Full V6 failed; diagnostic V7 rejected an observed Python 3.10 image; diagnostic V8 identified a native codex.sock symlink alias, without completing native ownership proof.",
+  "scope": "Seven unqualified isolated fresh managed Codex TUI attempts plus two seed-only controls; synthetic ready grants only, no user authentication or live installation changes",
+  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V10 timed out during constructor startup with zero observed provider requests and native protocol frames and incomplete final ownership proof. Post-stop selected metadata shows the controlled fixture proxy/CA variables absent from both saved environments, invalidating the fixture transport assumption without identifying a specific auth failure, product defect, or outgoing request.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -174,14 +174,125 @@
         "physical_listener_proof": "Outer evidence says known_fixture_listeners_closed=false; physical listener closure and native ownership remain unproved."
       },
       "polling_limit": "Positive witnesses only; ephemeral execs may be missed. No complete birth trace claimed."
+    },
+    {
+      "id": "diagnostic-V9",
+      "result": "FAIL: process-census ambiguity and original unit-subtree empty/gone proof timeout; not outer runtime-deadline exhaustion.",
+      "run_path": "/private/tmp/swarm-codex-outer-dlhf9mpc/run.json",
+      "run_sha256": "69e2fc531604dc69c4ba43b1d92a5dcb34532eff58b397bf88a6b63ad911682a",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-dlhf9mpc/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "d5f5202964b8bda66d5d25fb0677de3672c19a8ffa028af49e0ba28c68215afc",
+      "finding": {
+        "observed_process_tuples": 13,
+        "unresolved_entry": "A same-start process remained unresolved for executable/cgroup association. No PID/subfile state was captured for that unresolved entry; the actual cause is unknown. Do not infer R-to-Z ownership or classify the process as an escape.",
+        "native_unix_endpoint": {
+          "logical": "/tmp/scx.e0gpqgh5/tmp/ctui-jscb7lbf/s/lqwoegmyw4of7c43/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/2d4de6807b10385387c5fb1b04d4f203e4c6c329dbf76302d3f5fbc50dcfb92a",
+          "observation": "Endpoint pins, UNIX path witnesses and backend process metadata were recorded; native peer/four-tuple ownership was not proved."
+        },
+        "separate_proxy_tcp_listener": "The run recorded a TCP LISTEN witness for the local HTTPS proxy. This is separate from the native UNIX codex.sock endpoint and does not establish native peer/four-tuple ownership.",
+        "inner_case": "A plugin-clone FileNotFoundError occurred; provider requests, model requests and native frames were zero. Public Stop timed out at about three seconds."
+      },
+      "supplemental_post_cleanup": {
+        "path": "/private/tmp/swarm-codex-outer-dlhf9mpc/post-cleanup-read.json",
+        "sha256": "3fe569d46d7c5b23eea7465b7bfcfbd1936c82d09ec455d6e3bcb62d37b8df87",
+        "result": "Later read-only check found all 13 observed identities gone, unit not found, cgroup directory gone, and alias/socket leaves absent; inputs remained unchanged. original_run_repaired=false; this is not a pass or proof the original deadline was met."
+      },
+      "cleanup_primitive_reference": {
+        "path": "docs/verification/provider-logins/native-test-cleanup-2026-10-25.json",
+        "sha256": "9253b89b138182369608a5da115d7e5ad54efc0b97271614f1a0491fb28b419d"
+      },
+      "polling_limit": "Positive process witnesses only; no complete process census or historical argv/parent attribution claimed.",
+      "cleanup": {
+        "original_run": {
+          "kernel_cleanup": null,
+          "unit_subtree_empty_gone_proof": "Timed out at about four seconds; not outer runtime-deadline exhaustion."
+        },
+        "supplemental_post_cleanup": {
+          "path": "/private/tmp/swarm-codex-outer-dlhf9mpc/post-cleanup-read.json",
+          "sha256": "3fe569d46d7c5b23eea7465b7bfcfbd1936c82d09ec455d6e3bcb62d37b8df87",
+          "result": "Later read-only check found all 13 observed identities ended, unit/cgroup directory gone, endpoint alias/socket leaves absent, and inputs unchanged. original_run_repaired=false; this does not make the original cleanup deadline pass."
+        },
+        "shared_cleanup_primitive": {
+          "path": "docs/verification/provider-logins/native-test-cleanup-2026-10-25.json",
+          "sha256": "9253b89b138182369608a5da115d7e5ad54efc0b97271614f1a0491fb28b419d",
+          "scope": "Separate disposable parent/child systemd-kill primitive only; not integrated Codex cleanup proof."
+        }
+      }
+    },
+    {
+      "id": "diagnostic-V10",
+      "result": "FAIL: inner constructor stage timed out at 18.958s; outer finalization also lacked ownership after 22.715s. Zero provider/model requests, native protocol frames, MCP messages/calls and TLS handshakes were observed.",
+      "run_path": "/private/tmp/swarm-codex-outer-5_f67f1c/run.json",
+      "run_sha256": "8dbfaeaf8099a8d05a3071c56b92e948e1485d340757b4080b7ef93d9f6458fa",
+      "prepared_path": "/private/tmp/swarm-codex-outer-5_f67f1c/prepared.json",
+      "prepared_sha256": "011f27a3fd3f2d6955524ce3b72d6257f4809546b47d864c79900a7e2ef06bd4",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-5_f67f1c/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "2e7d58d380ae901e46f9755f2ea67ed11a397e160eac2527a0bc66cb5f36c6ce",
+      "selected_metadata_path": "/private/tmp/swarm-codex-outer-5_f67f1c/selected-native-metadata.json",
+      "selected_metadata_sha256": "a8547992d9b954742780230de1ad13655e47c800babbd875d744ed24c07e103f",
+      "post_stop_capabilities_path": "/private/tmp/swarm-codex-outer-5_f67f1c/post-stop-capabilities.json",
+      "post_stop_capabilities_sha256": "dd9badb68fbe59a7ef585636bf2727565f2219a9a87d47aed5cb02cf14777090",
+      "daemon_stderr_path": "/private/tmp/swarm-codex-outer-5_f67f1c/inner-evidence/daemon.stderr",
+      "daemon_stderr_sha256": "3828d5567cd007e9231c42e1b1d8d41232d2cd4b7d61d25f4ffc83e240f712d9",
+      "evidence_index_path": "/private/tmp/swarm-codex-outer-5_f67f1c/inner-evidence/collected-sha256.json",
+      "evidence_index_sha256": "bc55d0edf21481c75ac2b6336343029a7f8b4844914e83a99bc448888ebe88a1",
+      "finding": {
+        "startup": "backend_auth_unavailable was logged. This generic startup error does not identify which guard or native step caused the timeout.",
+        "transport": "Selected post-stop metadata shows HTTPS_PROXY, HTTP_PROXY, ALL_PROXY, NO_PROXY, CODEX_CA_CERTIFICATE, SSL_CERT_FILE and REQUESTS_CA_BUNDLE absent in both saved lc.env and lc.backend_env. This corroborates that the controlled fixture proxy/CA assumption was not met; it is not evidence of a specific auth branch or product defect, nor evidence an outgoing request occurred.",
+        "activity": {
+          "public_ledger": {
+            "launch": 1,
+            "stop": 1
+          },
+          "observer_ledger_entries": 0,
+          "native_frames": 0,
+          "provider_requests_accepted": 0,
+          "provider_requests_rejected": 0,
+          "TLS_handshakes": 0,
+          "model_requests": 0,
+          "MCP_messages": 0,
+          "MCP_calls": 0
+        },
+        "post_stop_markers": "structured-degraded says generic_backend_never_served. Post-stop status Process=running is a presentation marker, not live-process proof. backend.json absent after stop does not establish historical absence.",
+        "scope": "One diagnostic actual Linux startup with synthetic grants; no real-account or unmodified-CLI qualification."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 22.715,
+        "observed_process_tuples": 22,
+        "cgroup_empty_and_directory_gone": true,
+        "observed_identities_ended": true,
+        "native_physical_endpoint_no_listener_and_alias_removed": true,
+        "pins_unchanged": true,
+        "unit_kill": "The precheck found the unit already not found and no signal was needed. Do not describe this as a successful kill.",
+        "physical_listener_proof": "The run does not establish complete fixture physical-listener or peer/four-tuple ownership proof."
+      },
+      "source_review": {
+        "findings_path": "/private/tmp/swarm-codex-bootstrap-investigation-20261025-v1/FINDINGS.md",
+        "findings_sha256": "93b692b01407f87f21d80d332df2b2dfbd8d0199b7560b4035054174496c0b59",
+        "trusted_seams_path": "/private/tmp/swarm-codex-bootstrap-investigation-20261025-v1/TRUSTED-SEAMS.md",
+        "trusted_seams_sha256": "ca4e87367d6433cc4d0cf739dc069c89c63bc4c825f7db5ab2d20c8bc718fbd4",
+        "conclusion": "Production PolicyEnv/FilterEnv intentionally drops proxy/CA keys. That invalidates this fixture transport assumption, but does not prove a specific auth failure branch, a product defect, or outgoing network activity. No production allowlist widening is authorized."
+      },
+      "next_plan": "The private trustedBackendEnv overlay plan was superseded before implementation. Root and Astra approved preparation of five transport-only native CODEX_HOME/.env inputs and a separately pinned combined CA bundle, preserving unmodified binaries and the public constructor. Final packet/envelope review and actual native evidence remain required; no production environment-policy widening is authorized.",
+      "cleanup_reference": {
+        "path": "docs/verification/provider-logins/native-test-cleanup-2026-10-25.json",
+        "sha256": "9253b89b138182369608a5da115d7e5ad54efc0b97271614f1a0491fb28b419d"
+      },
+      "polling_limit": "Outer process sampling is bounded evidence, not exhaustive process census or network confinement.",
+      "dotenv_plan": {
+        "path": "/private/tmp/swarm-codex-dotenv-plan-20261025-v1/PLAN.md",
+        "sha256": "25158e79eaa542653519644fbffeb60533526e58b5644c580503840c8e57d493",
+        "scope": "Preparation only; transport settings, no auth selectors or changed binaries. Arbitrary dotenv auth-input guard is a separate open issue."
+      }
     }
   ],
-  "next_step": "The exact OS-query interpreter amendment was reviewed and exercised in V8; its pre/post binding passed. Review native source and constructor custody for the observed codex.sock alias before admitting that exact endpoint and checking its physical listener. No symlink exception is approved yet; preserve the production auth validator.",
+  "next_step": "Prepare and independently review the native transport-only dotenv packet/envelope, then run one bounded diagnostic with unmodified binaries. The overlay is abandoned. Real-account and automatic continuation gates remain open; do not infer a specific auth branch from backend_auth_unavailable.",
   "limits": [
-    "seedV2 proves synthetic seed/public metadata only; no native login, account admission, TUI adoption, or complete ephemeral process trace.",
-    "Full V6 failed. V6/V7/V8 kernel cleanup facts do not prove complete physical-listener closure or native ownership; V8 observed eight process tuples but did not establish the four required native-ownership tuples.",
-    "V7 host source proves the source-required Python image only, not the observed process historical argv or parent. V8 identifies a socket symlink alias, not arg0.",
-    "The observed native socket alias requires source/custody review before a narrow exception. All other symlinks remain unqualified. No user auth, real grant, live account, product activation, or production validator bypass."
+    "Seven full attempts plus two seed-only controls remain unqualified for fresh managed Codex TUI adoption; prior failures remain historical evidence.",
+    "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
+    "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
+    "No private overlay was implemented. The approved native-dotenv transport plan is preparation only, with a separate arbitrary-dotenv auth-input audit open; no production allowlist widening or qualification follows."
   ],
   "validator_source": {
     "auth_boundary_path": "internal/logins/auth_boundary.go",
@@ -215,5 +326,11 @@
       }
     ],
     "V8_followup": "The OS-query implementation was approved and exercised; exact pre/post binding passed. Source/custody review of the actual native socket alias is next; no alias exception or native-ownership claim follows."
+  },
+  "source_census_amendment": {
+    "path": "/private/tmp/swarm-codex-census-scope-amendment-20261025/AMENDMENT.md",
+    "sha256": "817d9dbfd7753a63a512b9714ec5453cc1e5cc6c6ed8283d44d0d95211e7b30e",
+    "scope": "Requires four native process tuples and entry-image checks; allows auxiliary bounded diagnostics only. It is not exhaustive process census or network confinement.",
+    "interpretation": "V9 did not resolve the observed same-start process; no causal classification follows."
   }
 }

@@ -509,6 +509,14 @@ eligibility distinct. A native notification is not human input; it grants no
 permission to answer a pending question or resume unfinished work. Global actor
 completeness remains unqualified even when the known child settles.
 
+The later R4 case passes that finite Linux 2.1.310 cycle: exact notification
+provenance and request continuity authorize one scripted follow-up response,
+followed by a distinct native result and then native `idle`. Normal instructions,
+settings, the project hook and native history remain intact. This establishes a
+tested boundary for this one child-and-notification cycle; cancellation, pending
+human decisions, background shell tools and workflow completeness remain separate
+gates. No automatic successor was constructed or authorized.
+
 If structured Claude becomes the selected managed-session interface, use one
 shim-owned primary native process and its typed input/control stream. The
 existing `BackendConfig` describes a separate Codex side process; it is not a
