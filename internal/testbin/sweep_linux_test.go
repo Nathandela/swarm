@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/procstart"
 	"golang.org/x/sys/unix"
 )
 
@@ -93,5 +94,39 @@ func TestLinuxOpaqueUnrelatedDoesNotBlockOwnedCleanup(t *testing.T) {
 	case <-exited:
 		t.Fatal("supervisor killed unrelated opaque process")
 	default:
+	}
+}
+
+func TestLinuxOlderDeniedProcessDoesNotPreventOwnedChildCleanup(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "owned")
+	exited := detachedBinary(t, exe, exe)
+	canonical, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const opaquePID = 1 << 29
+	err = sweepProcesses([]string{canonical}, func() ([]int, error) { pids, e := processIDs(); return append(pids, opaquePID), e }, func(pid int) (string, error) {
+		if pid == opaquePID {
+			return "", syscall.EACCES
+		}
+		return processExecutable(pid)
+	}, func(pid int) (int64, error) {
+		if pid == opaquePID {
+			return 1, nil
+		}
+		return procstart.StartTime(pid)
+	}, func(pid int, sig syscall.Signal) error {
+		if pid == opaquePID {
+			t.Fatal("older unrelated process signaled")
+		}
+		return syscall.Kill(pid, sig)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("verified owned child survived")
 	}
 }

@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"github.com/Nathandela/swarm/internal/procstart"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -163,7 +165,7 @@ func TestSweepStopsOwnedChildrenBeforeReturningObservationErrors(t *testing.T) {
 			return "", denied
 		}
 		return processExecutable(pid)
-	}, syscall.Kill)
+	}, procstart.StartTime, syscall.Kill)
 	if !errors.Is(err, syscall.EACCES) {
 		t.Fatalf("unknown metadata failure hidden: %v", err)
 	}
@@ -179,5 +181,64 @@ func TestSignalOwnedPreservesKillFailure(t *testing.T) {
 	err := signalOwned(ownedProcess{pid: 123, start: 456, executable: "/owned/test"}, func(int) (int64, error) { return 456, nil }, func(int) (string, error) { return "/owned/test", nil }, func(int, syscall.Signal) error { return failure })
 	if !errors.Is(err, failure) {
 		t.Fatalf("owned kill failure hidden: %v", err)
+	}
+}
+
+func TestSweepPermissionDenialRequiresProvenPreHarnessIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		self, target                  int64
+		selfErr, targetErr, errorRead error
+		exempt                        bool
+	}{
+		{"older_permission", 10, 9, nil, nil, syscall.EACCES, true},
+		{"older_eperm", 10, 9, nil, nil, syscall.EPERM, true},
+		{"equal", 10, 10, nil, nil, syscall.EACCES, false},
+		{"newer", 10, 11, nil, nil, syscall.EACCES, false},
+		{"unknown_target", 10, 0, nil, nil, syscall.EACCES, false},
+		{"target_lookup_failed", 10, 9, nil, syscall.EIO, syscall.EACCES, false},
+		{"unknown_self", 0, 9, nil, nil, syscall.EACCES, false},
+		{"self_lookup_failed", 10, 9, syscall.EIO, nil, syscall.EACCES, false},
+		{"non_permission_error", 10, 9, nil, nil, syscall.EIO, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const opaquePID = 1 << 29
+			err := sweepProcesses([]string{"/owned/private/test"}, func() ([]int, error) { return []int{opaquePID}, nil }, func(int) (string, error) { return "", tc.errorRead }, func(pid int) (int64, error) {
+				if pid == os.Getpid() {
+					return tc.self, tc.selfErr
+				}
+				return tc.target, tc.targetErr
+			}, func(int, syscall.Signal) error { t.Fatal("unclassified process was signaled"); return nil })
+			if tc.exempt && runtime.GOOS == "linux" {
+				if err != nil {
+					t.Fatalf("proven pre-harness process blocked cleanup: %v", err)
+				}
+			} else if !errors.Is(err, tc.errorRead) {
+				t.Fatalf("unproven failure hidden: %v", err)
+			}
+		})
+	}
+}
+
+func TestSweepReadableMatchStillStopsRegardlessOfAge(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "owned")
+	exited := detachedBinary(t, exe, exe)
+	canonical, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sweepProcesses([]string{canonical}, processIDs, processExecutable, func(pid int) (int64, error) {
+		if pid == os.Getpid() {
+			return 1 << 62, nil
+		}
+		return procstart.StartTime(pid)
+	}, syscall.Kill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readable matching process survived solely because it was older")
 	}
 }

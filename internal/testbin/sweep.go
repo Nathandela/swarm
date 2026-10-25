@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"syscall"
 	"time"
@@ -20,7 +21,8 @@ type ownedProcess struct {
 }
 
 // KillProcessesOf stops and waits for processes running these exact executables.
-// Paths must belong to this run. It never matches argv, names or old prefixes.
+// Executables must be created by this harness run; preexisting external executors
+// require fixture-owned custody. It never matches argv, names or old prefixes.
 func KillProcessesOf(exes ...string) error {
 	exes = slices.Clone(exes)
 	for i, exe := range exes {
@@ -34,10 +36,17 @@ func KillProcessesOf(exes ...string) error {
 }
 
 func killCanonicalProcesses(exes ...string) error {
-	return sweepProcesses(exes, processIDs, processExecutable, syscall.Kill)
+	return sweepProcesses(exes, processIDs, processExecutable, procstart.StartTime, syscall.Kill)
 }
 
-func sweepProcesses(exes []string, enumerate func() ([]int, error), executable func(int) (string, error), kill func(int, syscall.Signal) error) error {
+func sweepProcesses(exes []string, enumerate func() ([]int, error), executable func(int) (string, error), startTime func(int) (int64, error), kill func(int, syscall.Signal) error) error {
+	var harnessStart int64
+	// Linux birth ticks are ordered; Darwin wall-clock identity tokens are not.
+	if runtime.GOOS == "linux" {
+		if start, err := startTime(os.Getpid()); err == nil && start > 0 {
+			harnessStart = start
+		}
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		pids, err := enumerate()
@@ -55,13 +64,18 @@ func sweepProcesses(exes []string, enumerate func() ([]int, error), executable f
 				continue
 			}
 			if err != nil {
+				if errors.Is(err, os.ErrPermission) && harnessStart > 0 {
+					if start, startErr := startTime(pid); startErr == nil && start > 0 && start < harnessStart {
+						continue // This process cannot be a descendant of this harness.
+					}
+				}
 				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("executable for pid %d: %w", pid, err))
 				continue
 			}
 			if exe == "" || !slices.Contains(exes, exe) {
 				continue
 			}
-			start, err := procstart.StartTime(pid)
+			start, err := startTime(pid)
 			if gone(err) {
 				continue
 			}
@@ -81,7 +95,7 @@ func sweepProcesses(exes []string, enumerate func() ([]int, error), executable f
 			return cleanupErr
 		}
 		for _, process := range owned {
-			cleanupErr = errors.Join(cleanupErr, signalOwned(process, procstart.StartTime, executable, kill))
+			cleanupErr = errors.Join(cleanupErr, signalOwned(process, startTime, executable, kill))
 		}
 		for _, process := range owned {
 			for (processcontain.Identity{PID: process.pid, StartTime: process.start}).Alive() {
