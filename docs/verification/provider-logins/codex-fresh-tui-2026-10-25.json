@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Fifteen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
-  "overall": "Still NOT QUALIFIED. V19 identified raw.githubusercontent.com:443 as the rejected non-nested CONNECT target using its complete hash and length. Its historical sender and path remain unknown. Metadata/usage/three native frames remain partial evidence; no model/MCP/TUI ownership or adoption qualified.",
+  "scope": "Sixteen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
+  "overall": "Still NOT QUALIFIED. V20 stopped at an ESRCH process-observation failure before an inner receipt; it supplies no runtime bypass or functional qualification. Its cause/component remain unknown, and endpoint alias/socket leaves remained despite no listener.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -754,7 +754,8 @@
         "exact_cgroup_empty_and_gone": true,
         "native_endpoint_absent": true,
         "pins_unchanged": true,
-        "complete_fixture_listener_and_four_roles": "Unqualified; the image-gap tuple remains ineligible for any required role."
+        "complete_fixture_listener_and_four_roles": "Unqualified; the image-gap tuple remains ineligible for any required role.",
+        "retirement_note": "Only this inactive cached public ELF was retired after historical verification; metadata and all other artifacts remain."
       },
       "next_step": "Review the pinned source contract for a narrow raw GitHub proxy-bypass amendment. No authority allowance or native case approved by this record.",
       "source_plan": {
@@ -763,10 +764,85 @@
         "pinned_native_commit": "83086188ae0614bd882818ff1aa23f3194962012",
         "producer_source_url": "https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/tui/src/tooltips.rs",
         "scope": "A default public announcement producer is source-reachable without provider auth. This does not identify the historical sender or HTTP path; only preparation of a proxy-bypass amendment was approved."
+      },
+      "retirement_reference": {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-batch5-2026-10-25.json",
+        "sha256": "d15df6b5bc3e0372068d0a8bacb4fe6d5b6ac607c759c3a11fabdb8ad359b462"
       }
+    },
+    {
+      "id": "diagnostic-V20",
+      "result": "FAIL in process observation before an inner receipt. No runtime proxy-bypass or functional qualification follows.",
+      "run": {
+        "path": "/private/tmp/swarm-codex-outer-0abkh2p4/run.json",
+        "sha256": "13ac5f7e190530c6d8ed114ec75edd979bb81a29474a44edb50f9eeb102dde3c"
+      },
+      "prepared": {
+        "path": "/private/tmp/swarm-codex-outer-0abkh2p4/prepared.json",
+        "sha256": "36b1c30d34c6c01df815f00b3345b5a8e1749111b2053a612db22ae107cd21f5"
+      },
+      "partial_file_metadata": {
+        "path": "/private/tmp/swarm-codex-outer-0abkh2p4/partial-evidence/metadata.json",
+        "sha256": "37e29a3c80a1ce192ec80522621942ad0421386759d93adc111c89eecc907883"
+      },
+      "partial_file_index": {
+        "path": "/private/tmp/swarm-codex-outer-0abkh2p4/partial-evidence/collected-sha256.json",
+        "sha256": "600e95be409419955964fc04e7173089fb3a1a908ce8bdaada8101a8cf060207"
+      },
+      "packet": {
+        "path": "/private/tmp/swarm-codex-tui-constructor-20261025-v15/review-v15/manifest.json",
+        "sha256": "fd6fa5759357fe81e3a1bda2563706e75d31a61cf0fa15839fe09a82939f5e8e"
+      },
+      "envelope": {
+        "path": "/private/tmp/swarm-codex-envelope-20261025-v20/hashes.json",
+        "sha256": "7811a71c32307e3394cfd38af38dc0d9c8a2072819cc704e75768ed4a0c71ef2"
+      },
+      "finding": {
+        "error": "ESRCH/errno3 while observing PID451937/start74623424; original component and cause unobserved.",
+        "already_recorded_birth": true,
+        "prior_image": [
+          2049,
+          1300596
+        ],
+        "prior_image_limit": "The earlier image does not attribute the failing observation instant. No eighteenth identity or missing-tuple claim.",
+        "inner_receipt_exists": false,
+        "partial_evidence": "Five bounded existing files copied; remote metadata confirms inner receipt absent. Launch acknowledgement does not prove TUI readiness, model traffic or adoption.",
+        "next_source_plan": {
+          "path": "/private/tmp/swarm-codex-proc-esrch-plan-20261025-v1/PLAN.md",
+          "sha256": "e9356f7d39b246c0002bbe1f7cb8dc4a8defbb6e0d2359e4e9dcd291f2a964ad"
+        },
+        "local_V21_status": "Held before any remote prepare or run: Root review required exact positive initial and retaken birth tokens. No actual V21 attempt occurred."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 2.67282272700686,
+        "observed_identities": 17,
+        "recorded_image_gaps": 0,
+        "unit_kill_attempted": true,
+        "all_observed_identities_ended": true,
+        "exact_cgroup_empty_and_gone": true,
+        "native_endpoint": {
+          "logical": "/tmp/scx.qlcnlra1/tmp/ctui-ui9geszq/s/oszqgkmi6ltjtcpm/codex.sock",
+          "physical": "/tmp/codex-daemon-1000/2e2ae455183d3c67f025dbbb2ee1c5f154f156b1271c6d587f0c410b2db53a60",
+          "no_listener": true,
+          "alias_present": true,
+          "socket_present": true
+        },
+        "pins_unchanged_at_historical_postcheck": true,
+        "complete_fixture_listener_and_native_ownership": false,
+        "retirement_note": "Only the cached public ELF was retired after the run. Endpoint alias/socket leaves were retained and were still present at the run cleanup check."
+      },
+      "retirement_reference": {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-batch5-2026-10-25.json",
+        "sha256": "d15df6b5bc3e0372068d0a8bacb4fe6d5b6ac607c759c3a11fabdb8ad359b462"
+      },
+      "limits": [
+        "No inner receipt means no native NO_PROXY, provider, conversation, owner, MCP, TUI or account-adoption credit.",
+        "A no-listener endpoint with retained alias/socket leaves is not complete endpoint cleanup.",
+        "A proposed ESRCH reread requires separate review; same-birth or ambiguous results remain failures, with no image or role credit."
+      ]
     }
   ],
-  "next_step": "Review and prepare the source-backed addition of raw.githubusercontent.com to existing canonical NO_PROXY. Keep provider CONNECT acceptance, native defaults and functional/cleanup gates unchanged; final artifact review is required before another case.",
+  "next_step": "Review the envelope-only ESRCH identity reread with exact positive birth-token guards. Preserve all prior cases; no uncertain identity, role or cleanup refusal is waived.",
   "limits": [
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
@@ -831,13 +907,13 @@
     "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
   },
   "attempt_counts": {
-    "full_constructor_attempts": 15,
+    "full_constructor_attempts": 16,
     "seed_only_controls": 2,
     "failed_preparations": 1,
     "unused_successful_preparations": 1,
-    "total_recorded_operations": 19,
+    "total_recorded_operations": 20,
     "count_scope": "Recorded constructor/seed/preparation evidence only; cleanup operations are separate.",
-    "latest_actual_attempt": "diagnostic-V19"
+    "latest_actual_attempt": "diagnostic-V20"
   },
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
@@ -854,5 +930,9 @@
   "unused_preparation_reference": {
     "path": "docs/verification/provider-logins/codex-unused-preparation-2026-10-25.json",
     "sha256": "c4399581592d1b957c5238c05c9dedf87d2940e212a986d43be7a5e7f4ee548e"
+  },
+  "retirement_batch5_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-batch5-2026-10-25.json",
+    "sha256": "d15df6b5bc3e0372068d0a8bacb4fe6d5b6ac607c759c3a11fabdb8ad359b462"
   }
 }

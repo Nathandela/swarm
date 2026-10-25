@@ -274,9 +274,9 @@ source proof before any exception; no tail or idle was qualified.
 The [background Bash case](provider-logins/claude-background-bash-2026-10-25.json)
 observed Linux Claude 2.1.310 reporting parent completion and native `idle` while
 a durably joined background job remained alive. A fresh task snapshot and two
-process samples confirmed it. The overall run still failed during supervisor
-stopping; the invocation-bound journal records a stop timeout. This bounded
-observation qualifies neither whole-workflow completion nor automatic recovery.
+process samples confirmed it. The later R9 run passed this bounded case and
+cleanup after an envelope-only stop-grace correction. Earlier failures remain
+preserved. This qualifies neither whole-workflow completion nor automatic recovery.
 
 The [fresh managed Codex TUI attempts](provider-logins/codex-fresh-tui-2026-10-25.json)
 also remain unqualified. Known plugin metadata and a synthetic usage response

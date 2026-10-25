@@ -1,0 +1,169 @@
+{
+  "date": "2026-10-25",
+  "scope": "Three completed cleanup groups removed four exact inactive cached public ELF copies: two Codex and two Claude. One full public backup per provider remains locally retained.",
+  "review": "Root and Astra reviewed the intents and method; Root inspected each fresh dry run before applying the exact listed paths.",
+  "prior_records": {
+    "immutable": true,
+    "references": [
+      {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-2026-10-25.json",
+        "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
+      },
+      {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
+        "sha256": "e6b50ba5ff4f8a71ff129c906f8f8d1febd9e3fe51a92e046a85c0b0baa5d071"
+      },
+      {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-batch3-2026-10-25.json",
+        "sha256": "bec6ca08b11d1f6ec0850604afe19bc1a19fb9689d6f6b43c84424907dcb9866"
+      },
+      {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-batch4-2026-10-25.json",
+        "sha256": "d765dc6cdeead62fee4bcbcb522b06e0c8f1ec95c5c94df778f95542a0c574ea"
+      }
+    ]
+  },
+  "retained_public_images": {
+    "codex": {
+      "path": "/private/tmp/swarm-native-binary-retention-20261025/codex-linux-0.163.0",
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+      "bytes": 296865480
+    },
+    "claude": {
+      "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-linux-2.1.310",
+      "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "bytes": 291638640
+    }
+  },
+  "kernel_execution_exclusion_proof": {
+    "path": "/private/tmp/swarm-native-binary-retention-20261025/kernel-exec-exclusion-proof.json",
+    "sha256": "e64e001b034e8c60624e3dffa864b0c7095e7ef9feb5f78687a5f004ffab8a69",
+    "scope": "Separate disposable copied sleep ELF only; write-open while executing and exec while write-held returned ETXTBSY with no writes and unchanged bytes."
+  },
+  "cleanup_groups": [
+    {
+      "provider": "Codex",
+      "batch": "batch5 (V19)",
+      "intent": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch5/retirement-intent.json",
+        "sha256": "d95d0693b5c0857cd9bfd478978e375524c236c3296a394c52e8b8b146260261"
+      },
+      "script": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch5/retire_kernel.py",
+        "sha256": "ba932396679e38820dc9f00bf43c67a3fe3c68ed4f3b76afe46f0fbc22e6352d"
+      },
+      "dry_run": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch5/retirement-dry-run-kernel.json",
+        "sha256": "61452f8027e8526312ab7e3a49ec9c4251537ee022f267446d3f76103db72897"
+      },
+      "applied": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch5/retirement-applied.json",
+        "sha256": "b39dbd174b050d52f73cb7ad1f751f0fab5763dd2235eb3c3799076464e2bd5c"
+      },
+      "retired": [
+        {
+          "path": "/tmp/scx.68rpe6pk/native/codex",
+          "bytes": 296865480,
+          "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+          "observed_pid_start_pairs_ended": 25,
+          "fresh_unit_absent_cgroup_gone": true,
+          "kernel_write_exclusion_held_through_unlink": true
+        }
+      ],
+      "retired_bytes": 296865480,
+      "free_bytes_after": 945541120
+    },
+    {
+      "provider": "Codex",
+      "batch": "batch6 (V20)",
+      "intent": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch6/retirement-intent.json",
+        "sha256": "b6bb2032c3a72019507db3a8ee00c70a6cfb25116407eff06da183348cd7ca56"
+      },
+      "script": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch6/retire_kernel.py",
+        "sha256": "580e52b1736cf47e1b1a40d6e1ded2b992ed778e51225fc03456170353d32bbb"
+      },
+      "dry_run": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch6/retirement-dry-run-kernel.json",
+        "sha256": "76e931f6f877021ac9b5038393acf8c6f3ccab30f36e10cc33e8a9d70db05523"
+      },
+      "applied": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/batch6/retirement-applied.json",
+        "sha256": "2286fe54e9c5d12bfd1b830c28af7fa1dc81de11faa50ec5213af5b0477408f1"
+      },
+      "retired": [
+        {
+          "path": "/tmp/scx.qlcnlra1/native/codex",
+          "bytes": 296865480,
+          "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+          "observed_pid_start_pairs_ended": 17,
+          "fresh_unit_absent_cgroup_gone": true,
+          "kernel_write_exclusion_held_through_unlink": true
+        }
+      ],
+      "retired_bytes": 296865480,
+      "free_bytes_after": 590979072,
+      "endpoint_leaves": {
+        "listener_present": false,
+        "alias_remains": true,
+        "socket_remains": true,
+        "removed_by_this_retirement": false,
+        "observation_scope": "Alias/socket presence is the historical V20 cleanup observation; this retirement did not remove or reprobe those leaves."
+      }
+    },
+    {
+      "provider": "Claude",
+      "batch": "claude-batch2 (R8/R9)",
+      "intent": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-batch2/retirement-intent.json",
+        "sha256": "90af2bdb2d31ffe5d284a14c956111d1f0d7b776467a55498f223e2bb0f1cd52"
+      },
+      "script": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-batch2/retire_kernel.py",
+        "sha256": "236d3ac513f4c7d1991f9b9bb30a54ec8ad2072a786ba37503635619dbcf36a3"
+      },
+      "dry_run": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-batch2/retirement-dry-run-kernel.json",
+        "sha256": "71ef6f82ca2427b1af751b782d1bbe1311a8ec93916db6b2aa6846cebcab049b"
+      },
+      "applied": {
+        "path": "/private/tmp/swarm-native-binary-retention-20261025/claude-batch2/retirement-applied.json",
+        "sha256": "185b86c0892ef40f5fcae8e04655660045b3b73fb0df8d5048d9308f6e5d2bd3"
+      },
+      "retired": [
+        {
+          "path": "/tmp/sca.n5jkdcmm/claude",
+          "case": "R8 (historical FAIL with stop timeout; this does not invalidate the inactive-cache check)",
+          "bytes": 291638640,
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "historical_native_groups_ended": true,
+          "fresh_unit_absent_cgroup_gone": true,
+          "kernel_write_exclusion_held_through_unlink": true
+        },
+        {
+          "path": "/tmp/sca.o5jhhwpt/claude",
+          "case": "R9 (historical PASS)",
+          "bytes": 291638640,
+          "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+          "historical_native_groups_ended": true,
+          "fresh_unit_absent_cgroup_gone": true,
+          "kernel_write_exclusion_held_through_unlink": true
+        }
+      ],
+      "pid_start_census": "No Claude PID/start census is claimed; the retained run/receipt evidence records native groups stopped and gone, stdout/stderr EOF, readers joined, and HTTP handlers joined.",
+      "retired_bytes": 583277280,
+      "free_bytes_after": 1174020096
+    }
+  ],
+  "totals": {
+    "retired_files": 4,
+    "retired_bytes": 1177008240
+  },
+  "retirement_method": "The reviewed scripts constrained exact stage paths and checked a fresh absent unit/cgroup, anchored private directories, regular one-link file ownership/mode/size/SHA, and held a non-truncating kernel write descriptor through each exact unlink without writing.",
+  "limits": [
+    "Historical stage ELF bytes changed only after run pin checks. No failed result is repaired or any prior PASS/FAIL classification changed.",
+    "One full public image per provider remains locally retained. No installed CLI, account, authentication, history, logs, receipts, or other artifacts were deleted.",
+    "This retirement adds no native parity or complete endpoint/fixture-cleanup claim. V20 alias/socket leaves were present at its recorded cleanup; the cache retirement does not remove them."
+  ]
+}

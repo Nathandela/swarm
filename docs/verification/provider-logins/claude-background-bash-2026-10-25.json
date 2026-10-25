@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Four actual Linux Claude Code 2.1.310 Case3A attempts, R5 through R8, with synthetic local authentication and scripted model responses. Top-level pins/observed/cleanup describe R5; named case records describe subsequent attempts. No live account or installation changes.",
-  "status": "All four overall runs remain FAIL. R8 nevertheless established the bounded native observation that parent completion and native idle can coexist with a durably joined, still-live background Bash job. Its outer unit failed during stopping; global completeness and automatic continuation remain unqualified.",
+  "scope": "Five actual Linux Claude Code2.1.310 Case3A attempts, R5\u2013R9, using synthetic local authentication and scripted model responses. Top-level pins/observed/cleanup describe R5; named case records describe subsequent attempts. No live account or installation changes.",
+  "status": "R9 PASS establishes one bounded working interval: parent result0/native idle coexist with a durably joined live background Bash job. R5\u2013R8 overall failures remain preserved. Job completion, global completeness and automatic continuation remain unqualified.",
   "pins": {
     "packet": {
       "path": "/private/tmp/swarm-claude-structured-actors-case3a-r5-20261025/manifest.json",
@@ -87,7 +87,7 @@
     "This case does not qualify cancellation, quota recovery, Mac behavior, real-account rotation or UI conversion.",
     "R5 cached public ELF was also retired after historical verification; R8 cached ELF remains at this evidence point. No live account, installed CLI, native history, receipt or log was removed."
   ],
-  "next_step": "Review and test the explicit two-second envelope stop grace without changing the R8 native packet or accepting nonzero exit status.",
+  "next_step": "Review the smallest connected structured-Claude observation and UI integration. Do not ship an unconnected parser, change the default/live interface or infer automatic-resume authority from this one case.",
   "case_r6": {
     "status": "FAIL; no working interval or background Bash outcome qualified.",
     "pins": {
@@ -295,10 +295,98 @@
       "This is a narrow working-interval observation inside an overall failed run, not an integrated PASS.",
       "Native idle and parent success do not establish whole-workflow completion. No job completion, global completeness, auto-resume, quota recovery, real-account rotation or Mac qualification.",
       "A reviewed envelope-only two-second stop grace is preparation only; exit-zero/error-free and exact cleanup acceptance remain mandatory. No historical result is repaired."
-    ]
+    ],
+    "retirement_reference": {
+      "path": "docs/verification/provider-logins/native-fixture-retirement-batch5-2026-10-25.json",
+      "sha256": "d15df6b5bc3e0372068d0a8bacb4fe6d5b6ac607c759c3a11fabdb8ad359b462"
+    },
+    "retirement_note": "Only the cached public Claude ELF was retired after historical run verification; outcomes, history, logs, receipts and installed CLI remain unchanged."
   },
   "retirement_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch4-2026-10-25.json",
     "sha256": "d765dc6cdeead62fee4bcbcb522b06e0c8f1ec95c5c94df778f95542a0c574ea"
+  },
+  "case_r9": {
+    "status": "PASS for the bounded Linux working-interval case only.",
+    "pins": {
+      "unchanged_R8_packet": {
+        "path": "/private/tmp/swarm-claude-structured-actors-case3a-r8-20261025/manifest.json",
+        "sha256": "296ff1f58089a9c9ddc00e79cf7072228ebca4d4eb53e66547b51dc33d8aab7d"
+      },
+      "envelope": {
+        "path": "/private/tmp/swarm-actor-case3a-r9-linux-envelope-20261025/manifest.json",
+        "sha256": "7b8f723205e7657422e444099a886dec769c910eeb47edfc9db9fa498266f075"
+      },
+      "run": {
+        "path": "/private/tmp/swarm-actor-case3a-r9-linux-envelope-20261025/attempt/run.json",
+        "sha256": "21550d0d04722146920632cea57a7c266f4a95f94cb5479055d1aa211f248843"
+      },
+      "receipt": {
+        "path": "/private/tmp/swarm-actor-case3a-r9-linux-envelope-20261025/attempt/receipt.json",
+        "sha256": "940dcc9dc96a70f41d794f2a84108e4001c110b044c3a44991e74cd5f010ce27"
+      },
+      "archive": {
+        "path": "/private/tmp/swarm-actor-case3a-r9-linux-envelope-20261025/attempt/evidence.tar.gz",
+        "sha256": "61cf2096fa11101fedcb22d35f2b5117aecf3eaf925de61bfa79ca67d28cb47e"
+      }
+    },
+    "change": "Envelope-only TimeoutStopSec changed from0 to2s. Native packet, acceptance and cleanup code remain unchanged; stopping can extend past RuntimeMaxSec. Earlier failed runs remain failed.",
+    "observed": {
+      "model_requests": 2,
+      "responses_sent": [
+        "parent_spawn",
+        "parent_final"
+      ],
+      "native_state_at_cut": "idle",
+      "parent_result0_observed": true,
+      "fresh_background_membership": [
+        {
+          "task_id": "b7rqbmwcf",
+          "run_id": "0mvobw1ou-0c9a2b0b",
+          "task_type": "local_bash",
+          "description": "Finish one short fixture background job"
+        }
+      ],
+      "job_pid": 419952,
+      "job_start_ticks": 74588967,
+      "two_post_result_same_live_job_samples": true,
+      "exact_argv_image_and_ancestry_join": true,
+      "history_rows": 30,
+      "history_digest": "aaff295d19a23e994096f85fa8b4928c8c9fab29296cb2315515f1ca0ed0ddb4",
+      "permission_decisions": 1,
+      "permission_echo_count": 1,
+      "positive_native_clear_after_control_write": true,
+      "automatic_stop_count": 0,
+      "successor_count": 0,
+      "global_incomplete": true,
+      "auto_eligible": false
+    },
+    "cleanup": {
+      "exit_code": 0,
+      "errors": [],
+      "inner_elapsed_seconds": 1.8059312499826774,
+      "outer_elapsed_seconds": 7.719,
+      "stop_grace_seconds": 2,
+      "cli_groups_ended": true,
+      "both_cli_stdout_stderr_eof_and_readers_joined": true,
+      "http_handlers_joined": true,
+      "exact_cgroup_empty_and_gone": true,
+      "packet_and_native_pins_unchanged": true,
+      "cut_and_cleanup_marker_bound": true
+    },
+    "limits": [
+      "Parent completion/native idle can coexist with known live background work; neither means whole-workflow completion.",
+      "This case qualifies no job completion/output tail, cancellation, quota recovery, global actor completeness, automatic continuation, Mac behavior, live accounts or default-interface conversion."
+    ],
+    "review": "Root, Sol and Astra independently verified the bounded actual PASS and artifact/member pins.",
+    "retirement_reference": {
+      "path": "docs/verification/provider-logins/native-fixture-retirement-batch5-2026-10-25.json",
+      "sha256": "d15df6b5bc3e0372068d0a8bacb4fe6d5b6ac607c759c3a11fabdb8ad359b462"
+    },
+    "retirement_note": "Only the cached public Claude ELF was retired after historical run verification; outcomes, history, logs, receipts and installed CLI remain unchanged."
+  },
+  "retirement_batch5_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-batch5-2026-10-25.json",
+    "sha256": "d15df6b5bc3e0372068d0a8bacb4fe6d5b6ac607c759c3a11fabdb8ad359b462"
   }
 }
