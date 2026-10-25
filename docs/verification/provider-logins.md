@@ -270,10 +270,16 @@ final idle was qualified; the failed evidence remains preserved.
 The next attempt accepted that notification, then refused an unqualified
 child-scoped interruption with a `user` role. Its producer and ownership need
 source proof before any exception; no tail or idle was qualified.
+The [background Bash case](provider-logins/claude-background-bash-2026-10-25.json)
+stopped before a working interval: native `requires_action` arrived before the
+exact permission callback, and the fixture rejected it too early. Both CLI
+streams reached EOF and the isolated scope ended. Human waits remain ineligible;
+the planned one-shot fixture approval path needs correction and another review.
+
 The [fresh managed Codex TUI attempts](provider-logins/codex-fresh-tui-2026-10-25.json)
-also remain unqualified. The latest diagnostic exposed absent fixture transport
-settings; an approved preparation plan uses native transport preferences with
-unmodified binaries. The separate real-account and continuation gates remain open.
+also remain unqualified. Transport diagnostics reached a built-in plugin lookup;
+the next attempt stopped during synthetic account setup before native launch.
+The setup timeout is uncharacterized. Real-account and continuation gates remain open.
 
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.

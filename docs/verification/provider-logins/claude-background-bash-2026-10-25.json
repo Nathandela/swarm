@@ -1,0 +1,76 @@
+{
+  "date": "2026-10-25",
+  "scope": "One actual Linux Claude Code 2.1.310 Case3A working-interval attempt with synthetic local authentication and scripted model responses. No live installation or account changes.",
+  "status": "R5 FAIL before the background Bash job could be qualified. The expected optional permission path was rejected at its preceding native requires_action state. No working interval, completion or automatic continuation is qualified.",
+  "pins": {
+    "packet": {
+      "path": "/private/tmp/swarm-claude-structured-actors-case3a-r5-20261025/manifest.json",
+      "sha256": "7246ac55756d2d09dbd11db6032b21b9ebc394c50992ada53430dbd0823881f6"
+    },
+    "envelope": {
+      "path": "/private/tmp/swarm-actor-case3a-r5-linux-envelope-20261025/manifest.json",
+      "sha256": "7d7b1bc3e6e22ea1096bf1c7b978319ef91e33ffdfb30413f9a8e1a973218112"
+    },
+    "receipt": {
+      "path": "/private/tmp/swarm-actor-case3a-r5-linux-envelope-20261025/attempt/receipt.json",
+      "sha256": "bd70d07dfd9c539c5a444c63645a550ac33f16531a95997237aa1d481f66ae49"
+    },
+    "run": {
+      "path": "/private/tmp/swarm-actor-case3a-r5-linux-envelope-20261025/attempt/run.json",
+      "sha256": "d6a01a285fc59f616a63ab89a69375cf0c5d355c4f24626ec5c67ceff1bf4baa"
+    },
+    "evidence_archive": {
+      "path": "/private/tmp/swarm-actor-case3a-r5-linux-envelope-20261025/attempt/evidence.tar.gz",
+      "sha256": "792edb4096a1d9c86165fd3590664dcc529000d7fb692d48d5684257b764ecb5"
+    },
+    "native_linux_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56"
+  },
+  "preparation": {
+    "R4_not_executed": "Final review held stale background membership and missing original history session scope. R5 corrected both before native execution.",
+    "R5_offline_controls": {
+      "audited_tests": 33,
+      "meaningful_guard_omissions": 25,
+      "envelope_controls": 10
+    },
+    "checks": {
+      "path": "/private/tmp/swarm-claude-structured-actors-case3a-r5-20261025/checks.json",
+      "sha256": "875e66ec55972458046eb2bd74e31f80854d6435dd6d9ba379441dfd4aa4b39e"
+    }
+  },
+  "observed": {
+    "model_requests": 1,
+    "scripted_responses": [
+      "parent_spawn"
+    ],
+    "sequence": "Main assistant Bash tool_use, then native session_state_changed requires_action, then the exact can_use_tool Bash callback. The current harness invalidated on requires_action before dispatching its planned one-shot permission decision.",
+    "permission_decisions": 0,
+    "owner_revision": 1,
+    "native_task_observed": null,
+    "working_cut": null,
+    "automatic_stop_count": 0,
+    "successor_count": 0,
+    "inner_elapsed_seconds": 2.4789430510718375,
+    "unknown_activity": true
+  },
+  "cleanup": {
+    "outer_elapsed_seconds": 8.254,
+    "unit": "swarm-actor-case3a-522207b31776029c19ee",
+    "stage": "/tmp/sca.857nb38c",
+    "invocation": "1ccd3ed47a5b4b5ba9564072dd8c15de",
+    "exact_cgroup_empty_and_gone": true,
+    "outer_errors": [],
+    "outer_cleanup_actions": [],
+    "native_and_packet_pins_unchanged": true,
+    "both_native_groups_ended": true,
+    "both_stdout_stderr_EOF_and_readers_joined": true,
+    "HTTP_handlers_joined": true
+  },
+  "limits": [
+    "The missing working-cut files make outer postcheck fail; this remains a failed actual run, not a repaired receipt.",
+    "The history-finalization assertion had no pre-cut history witness to validate; its error is not proof that native history changed.",
+    "No callback was answered, no task/run identity or working interval was observed, and global actor completeness remains unqualified.",
+    "The permission-state marker grants no action authority. A correction must keep unresolved human waits blocked, admit only the already authorized exact fixture callback through durable intent, and require an observed clear before publication.",
+    "This case does not qualify cancellation, quota recovery, Mac behavior, real-account rotation or UI conversion."
+  ],
+  "next_step": "Review the minimal permission-state correction and negative controls before preparing another immutable packet. Preserve R5 as FAIL."
+}
