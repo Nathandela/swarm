@@ -526,7 +526,8 @@
         "signal": "Skipped after positive already-collected unit/cgroup/all-observed-identities proof; no signal delivered.",
         "inner_listeners_joined": true,
         "inner_cleanup_elapsed_seconds": 0.11305033497046679,
-        "complete_outer_fixture_listener_and_native_ownership": "Not qualified: known_fixture_listeners_closed=false; finalize KeyError ownership. No native endpoint was recorded, so do not claim native-endpoint closure."
+        "complete_outer_fixture_listener_and_native_ownership": "Not qualified: known_fixture_listeners_closed=false; finalize KeyError ownership. No native endpoint was recorded, so do not claim native-endpoint closure.",
+        "retirement_note": "Only this remote cached native ELF was retired in batch3 after historical run verification. The recorded pin check describes the run, not unchanged complete stage bytes today; all other artifacts remain."
       },
       "next_step": "Read-only source investigation of the connected driver seed path and existing bounds, then review the smallest diagnostic plan. No inferred cause or blind timeout increase follows; no further native case was approved by artifact review at this evidence point.",
       "polling_limit": "Five positive observed identities only; no complete ephemeral exec/birth trace or native ownership qualification.",
@@ -540,6 +541,10 @@
         "revision": 1,
         "login_count": 1,
         "scope": "Post-stop synthetic public registry projection only; no credentials read. One login is visible. This is not a stalled-call record."
+      },
+      "retirement_reference": {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-batch3-2026-10-25.json",
+        "sha256": "bec6ca08b11d1f6ec0850604afe19bc1a19fb9689d6f6b43c84424907dcb9866"
       }
     },
     {
@@ -609,10 +614,15 @@
         "inner_cgroup_empty": false,
         "external_cleanup_required": true,
         "pins_unchanged": true,
-        "ownership": "Native ownership and complete fixture-listener closure remain unqualified."
+        "ownership": "Native ownership and complete fixture-listener closure remain unqualified.",
+        "retirement_note": "Only this remote cached native ELF was retired in batch3 after historical run verification. The recorded pin check describes the run, not unchanged complete stage bytes today; all other artifacts remain."
       },
       "next_step": "Exact source-contract review (Sol preparing). No next native run is automatically approved.",
-      "polling_limit": "Fifteen positive observed tuples only; no complete process birth trace or native ownership qualification."
+      "polling_limit": "Fifteen positive observed tuples only; no complete process birth trace or native ownership qualification.",
+      "retirement_reference": {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-batch3-2026-10-25.json",
+        "sha256": "bec6ca08b11d1f6ec0850604afe19bc1a19fb9689d6f6b43c84424907dcb9866"
+      }
     }
   ],
   "next_step": "Exact source-contract review (Sol preparing), then artifact review. No next native run is automatically approved. Real-account, loaded-thread, authentication, readiness, and automatic-continuation gates remain separate.",
@@ -687,5 +697,9 @@
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
     "sha256": "e6b50ba5ff4f8a71ff129c906f8f8d1febd9e3fe51a92e046a85c0b0baa5d071"
+  },
+  "retirement_batch3_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-batch3-2026-10-25.json",
+    "sha256": "bec6ca08b11d1f6ec0850604afe19bc1a19fb9689d6f6b43c84424907dcb9866"
   }
 }

@@ -1,0 +1,69 @@
+{
+  "date": "2026-10-25",
+  "scope": "Batch3: retire exactly two inactive duplicate public Linux Codex cached ELF files. The installed CLI, accounts, authentication, user data, receipts, logs, and all other stage artifacts remain untouched.",
+  "review": "Root and Astra reviewed the exact intent and guarded method. Root inspected the fresh dry-run proof, then applied the two-file retirement. This record documents completed work and does not execute cleanup.",
+  "batch1_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-2026-10-25.json",
+    "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54",
+    "immutable": true
+  },
+  "batch2_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
+    "sha256": "e6b50ba5ff4f8a71ff129c906f8f8d1febd9e3fe51a92e046a85c0b0baa5d071",
+    "immutable": true,
+    "retired_paths_count": 3,
+    "retired_bytes": 890596440
+  },
+  "retained_image_path": "/private/tmp/swarm-native-binary-retention-20261025/codex-linux-0.163.0",
+  "retained_image_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+  "image_bytes": 296865480,
+  "intent_path": "/private/tmp/swarm-native-binary-retention-20261025/batch3/retirement-intent.json",
+  "intent_sha256": "05021a2d2116289a8af8de02d5e11986e9564c2fd086459e68e78ab494b23328",
+  "script_path": "/private/tmp/swarm-native-binary-retention-20261025/batch3/retire_kernel.py",
+  "script_sha256": "ec4e9fedf13ff27f574b239d541e9e7e8289ac907963f9d9a8c4ef901a3d2aac",
+  "dry_run_path": "/private/tmp/swarm-native-binary-retention-20261025/batch3/retirement-dry-run-kernel.json",
+  "dry_run_sha256": "73696e5e95af8ba3137c8b8076861dc4f2d1c77fa28f223bedbc84167f52ac3e",
+  "applied_path": "/private/tmp/swarm-native-binary-retention-20261025/batch3/retirement-applied.json",
+  "applied_sha256": "94ae55279036ef4c15e5fa341823000965c33099abe22323f5eec23d15e5da92",
+  "kernel_proof_path": "/private/tmp/swarm-native-binary-retention-20261025/kernel-exec-exclusion-proof.json",
+  "kernel_proof_sha256": "e64e001b034e8c60624e3dffa864b0c7095e7ef9feb5f78687a5f004ffab8a69",
+  "kernel_proof": "A separate disposable copied sleep image returned ETXTBSY for write-open while executing and exec while write-held, with zero write calls and unchanged bytes. No provider CLI was executed for that primitive.",
+  "retired_paths_count": 2,
+  "retired_remote_paths": [
+    "/tmp/scx.m8y3wkrd/native/codex",
+    "/tmp/scx.hkxz8ogx/native/codex"
+  ],
+  "retired_bytes": 593730960,
+  "free_bytes_after": 1126944768,
+  "batch2_and_batch3_retired_paths_count": 5,
+  "batch2_and_batch3_retired_bytes": 1484327400,
+  "operations": [
+    {
+      "path": "/tmp/scx.m8y3wkrd/native/codex",
+      "unit": "swarm-codex-31013d344a5a3b55",
+      "historical_run_path": "/private/tmp/swarm-codex-outer-9xgzw6mq/run.json",
+      "historical_run_sha256": "5d6f579554bcc5dfe5bdb4dbebc553e0cb161e74aed4e0353a4c2e8fd48d25f5",
+      "observed_pid_start_pairs_ended": 5,
+      "unit_absent_and_cgroup_gone": true,
+      "kernel_write_exclusion_held_through_unlink": true,
+      "historical_stage_modified_after_run_proof": true
+    },
+    {
+      "path": "/tmp/scx.hkxz8ogx/native/codex",
+      "unit": "swarm-codex-9c9e2bc65961eb8f",
+      "historical_run_path": "/private/tmp/swarm-codex-outer-3b7ph289/run.json",
+      "historical_run_sha256": "88c615568ff81c6e479968e2c7056cc19a8fd271a2cdd764233c6d3f8f7732bb",
+      "observed_pid_start_pairs_ended": 15,
+      "unit_absent_and_cgroup_gone": true,
+      "kernel_write_exclusion_held_through_unlink": true,
+      "historical_stage_modified_after_run_proof": true
+    }
+  ],
+  "checks": "Both exact paths were constrained by the reviewed intent. The script checked fresh unit-not-found and cgroup-gone state, observed PID/start identities ended, anchored owner-only 0700 stage/native directories, and exact regular-file owner/mode/one-link/size/SHA identity. It held an O_WRONLY|O_NOFOLLOW|O_NONBLOCK descriptor without truncation or writes through each exact unlink.",
+  "limits": [
+    "The two cached ELF files were removed only after historical run proof. This changes the historical stage bytes after the run; it does not repair or replace either failed run receipt.",
+    "No installed CLI, account, authentication material, user data, receipt, log, or other artifact was deleted. The matching full public image remains locally retained at the pinned path.",
+    "Batch1 and batch2 retirement records remain immutable. No provider, login, TUI, authentication, or adoption qualification changes, and no live-session behavior is inferred."
+  ],
+  "retained_codex_backup_images": 1
+}
