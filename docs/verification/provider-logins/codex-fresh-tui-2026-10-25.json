@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Seven unqualified isolated fresh managed Codex TUI attempts plus two seed-only controls; synthetic ready grants only, no user authentication or live installation changes",
-  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V10 timed out during constructor startup with zero observed provider requests and native protocol frames and incomplete final ownership proof. Post-stop selected metadata shows the controlled fixture proxy/CA variables absent from both saved environments, invalidating the fixture transport assumption without identifying a specific auth failure, product defect, or outgoing request.",
+  "scope": "Eight unqualified isolated fresh managed Codex TUI attempts, two seed-only controls and one failed preparation; synthetic grants only, no user authentication or live installation changes",
+  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. V12 reached one CONNECT chatgpt.com:443, then TLS failed with certificate_unknown; no tunneled HTTP/model/native-frame/MCP activity was recorded. The complete native ownership and CA-trust gates remain open.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -285,14 +285,56 @@
         "sha256": "25158e79eaa542653519644fbffeb60533526e58b5644c580503840c8e57d493",
         "scope": "Preparation only; transport settings, no auth selectors or changed binaries. Arbitrary dotenv auth-input guard is a separate open issue."
       }
+    },
+    {
+      "id": "diagnostic-V12",
+      "result": "FAIL after positive CONNECT transport reach; TLS certificate_unknown, no tunneled HTTP or native conversation behavior.",
+      "run_path": "/private/tmp/swarm-codex-outer-xmpendrn/run.json",
+      "run_sha256": "64524c2f5dfb2d995159e4a92770bd421dd1cb1fbe52f368aa520f068162b091",
+      "prepared_path": "/private/tmp/swarm-codex-outer-xmpendrn/prepared.json",
+      "prepared_sha256": "44b765cbdfd3bf671de9c83ffc214ca698d3d330c989c35554b9791aac71570e",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-xmpendrn/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "6692adbdd26cbab7f5b5000a969529d74d639a6f5c1bc2c58cb7e9f0af17b659",
+      "evidence_index_path": "/private/tmp/swarm-codex-outer-xmpendrn/inner-evidence/collected-sha256.json",
+      "evidence_index_sha256": "96688587405edb2ebe1dcc4dea62e13f11c374a88fd6b37dfb8e86ae1f01b2ca",
+      "actual_public_certificate_path": "/private/tmp/swarm-codex-outer-xmpendrn/inner-evidence/loopback.pem",
+      "actual_public_certificate_sha256": "2b1a122e65ec2a3b3cb183fbf4b783b00f35e4a76fe014497e40b843fc4026f4",
+      "observed": {
+        "CONNECT_authority": "chatgpt.com:443",
+        "CONNECT_count": 1,
+        "TLS_error": "certificate_unknown",
+        "tunneled_HTTP_requests": 0,
+        "native_frames": 0,
+        "main_inferences": 0,
+        "MCP_calls": 0,
+        "native_preferences": "Exact five-key dotenv and 181872-byte baseline/fixture bundle remained pinned; effective native CA trust not qualified."
+      },
+      "cleanup": {
+        "outer_elapsed_seconds": 6.407084516016766,
+        "observed_identities_ended": 13,
+        "unit_not_found_and_cgroup_gone": true,
+        "native_endpoint_no_listener_and_leaves_absent": true,
+        "pins_unchanged_at_historical_postcheck": true,
+        "signal": "Skipped after positive already-collected proof; no signal delivered.",
+        "inner_listeners_joined": true,
+        "complete_outer_fixture_listener_and_native_ownership": "Not qualified; finalization lacked ownership."
+      },
+      "offline_tls_result_path": "/private/tmp/swarm-codex-ca-failure-source-plan-20261025-v1/offline-validation.json",
+      "offline_tls_result_sha256": "65a706bc4c2c977405c532ce3cc434e71eb060b59a316dff5abb43ba3b774a60",
+      "source_limit": "The fixture served a CA:TRUE certificate as end entity, incompatible with the pinned WebPKI constraint and rejected by an installed Rust-backed verifier. The historical native client verifier branch was not captured. First-certificate-only parsing was disproved by source.",
+      "next_step": "Root and Astra approved preparation of a standard leaf-first server/issuer chain using the existing PEM interface. Final artifacts and one fresh native case still require review; no certificate-verification disable.",
+      "retirement_reference": {
+        "path": "docs/verification/provider-logins/native-fixture-retirement-2026-10-25.json",
+        "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
+      }
     }
   ],
-  "next_step": "Prepare and independently review the native transport-only dotenv packet/envelope, then run one bounded diagnostic with unmodified binaries. The overlay is abandoned. Real-account and automatic continuation gates remain open; do not infer a specific auth branch from backend_auth_unavailable.",
+  "next_step": "Prepare and review the standard certificate-chain correction, then run one bounded fresh diagnostic. The existing dotenv path reached CONNECT but native CA acceptance and required ownership remain open. Frozen fixture product dc90 predates the separately tested production auth guard; real accounts and automatic continuation remain separate gates.",
   "limits": [
-    "Seven full attempts plus two seed-only controls remain unqualified for fresh managed Codex TUI adoption; prior failures remain historical evidence.",
+    "Eight full attempts plus two seed-only controls remain unqualified for fresh managed Codex TUI adoption; V11 failed preparation is separate and all prior failures remain historical evidence.",
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
-    "No private overlay was implemented. The approved native-dotenv transport plan is preparation only, with a separate arbitrary-dotenv auth-input audit open; no production allowlist widening or qualification follows."
+    "V12 establishes one positive CONNECT only. Native CA trust, complete native ownership, conversation behavior and real-account qualification remain open; no production filtering widening is authorized."
   ],
   "validator_source": {
     "auth_boundary_path": "/private/tmp/swarm-setup-root-20261025/source/internal/logins/auth_boundary.go",
@@ -341,5 +383,9 @@
     "finding": "ModuleNotFoundError importing native_transport after extraction. A read-only follow-up found the module present with exact reviewed SHA1adc570e2db4f0d130838f149a5d80e50afa4236ec199a306a130b2b293b309c.",
     "mechanism_limit": "A cached-missing-path mechanism was reproduced offline against actual prepare; historical importer cache contents were not captured.",
     "next_step": "Review an immutable envelope-only cache-invalidation correction, then use a fresh stage. Preserve this partial stage and failure."
+  },
+  "retirement_reference": {
+    "path": "docs/verification/provider-logins/native-fixture-retirement-2026-10-25.json",
+    "sha256": "6d557e61136d2a9db5c7294d583b838fc562a3e5ad60a0280eb9a5fc786a1f54"
   }
 }

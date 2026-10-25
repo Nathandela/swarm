@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-25",
+  "scope": "Retire exactly four inactive duplicate Linux Codex test images; user data, installed CLI, accounts, logs, receipts and other stage files retained.",
+  "review": "Root and Astra reviewed exact scope and Linux kernel execution exclusion; Root performed the operation.",
+  "retained_image_path": "/private/tmp/swarm-native-binary-retention-20261025/codex-linux-0.163.0",
+  "retained_image_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+  "image_bytes": 296865480,
+  "intent_path": "/private/tmp/swarm-native-binary-retention-20261025/retirement-intent.json",
+  "intent_sha256": "48458ab144b67b4d17829f1957c85f2a9646576df5b048accac3fa338891752d",
+  "initial_refusal_path": "/private/tmp/swarm-native-binary-retention-20261025/retirement-dry-run.json",
+  "initial_refusal_sha256": "d02fc817e57bc2b5b84898f5ef815cecdc5f248f1711c1bb869b8e905406739d",
+  "initial_refusal": "No files removed: protected /proc/exe access was ambiguous. No privilege escalation or ignored permission error.",
+  "kernel_proof_path": "/private/tmp/swarm-native-binary-retention-20261025/kernel-exec-exclusion-proof.json",
+  "kernel_proof_sha256": "e64e001b034e8c60624e3dffa864b0c7095e7ef9feb5f78687a5f004ffab8a69",
+  "kernel_proof": "Own disposable copied sleep image: write-open while executing and exec while write-held both returned ETXTBSY; bytes unchanged, normal exit, no provider CLI.",
+  "kernel_sources": [
+    "https://man7.org/linux/man-pages/man2/open.2.html",
+    "https://man7.org/linux/man-pages/man2/execve.2.html"
+  ],
+  "dry_run_path": "/private/tmp/swarm-native-binary-retention-20261025/retirement-dry-run-kernel.json",
+  "dry_run_sha256": "a1952c510d9f7e2aaba384df810a017cad2cc3d34f8d4c1984323edf5dcf94de",
+  "applied_path": "/private/tmp/swarm-native-binary-retention-20261025/retirement-applied.json",
+  "applied_sha256": "fceb284043a11bde799bef5d5817d60576df0072a3a88839a3541209f5df9d3c",
+  "retired_remote_paths": [
+    "/tmp/scx.6y3pl89u/native/codex",
+    "/tmp/scx.h0xen9lk/native/codex",
+    "/tmp/scx.5zac_cvo/native/codex",
+    "/tmp/scx.e0gpqgh5/native/codex"
+  ],
+  "retired_bytes": 1187461920,
+  "free_bytes_after": 1766907904,
+  "checks": "Fresh recorded PID/start ended and unit/cgroup absent, or never-executed preparation; private anchored parents; exact regular one-link owner/mode/size/hash; identity rechecked and kernel write descriptor held through exact unlink without writing/truncating.",
+  "limits": [
+    "These remote stages are modified AFTER their historical verification: copied native executables were retired. Historical receipts are not claims that the complete stages remain unchanged today.",
+    "Full executable bytes are retained once locally and can be restored; every other test artifact remains in its original location.",
+    "This changes no failed test result, provider qualification, production code or live session."
+  ]
+}

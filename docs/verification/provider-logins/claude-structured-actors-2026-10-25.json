@@ -184,7 +184,7 @@
     ],
     "inner_elapsed_seconds": 2.814513279008679
   },
-  "case2_next_step": "Review the child interruption constructor and structured wrapper against pinned primary source before preparing another fixture. No text-only user-frame exception, XML/tail/idle qualification, automatic continuation or other platform is authorized by these failures.",
+  "case2_next_step": "Leave canceled child user-role frames ineligible: pinned excerpts establish constructor and child wrapper but not the cancellation trigger-to-dispatch chain. Do not add a text/role exception. An independent background-shell qualification plan may proceed through review; no new native case or global completeness claim follows.",
   "cleanup_reference": {
     "path": "docs/verification/provider-logins/native-test-cleanup-2026-10-25.json",
     "sha256": "9253b89b138182369608a5da115d7e5ad54efc0b97271614f1a0491fb28b419d"
@@ -279,6 +279,8 @@
       "admitted_cgroup_empty_and_gone": true,
       "native_and_packet_pins_unchanged": true
     },
-    "outer_elapsed_seconds": 9.627
+    "outer_elapsed_seconds": 9.627,
+    "final_source_path": "/private/tmp/swarm-claude-linux-interruption-final-source-20261025/source-excerpts.json",
+    "final_source_sha256": "be29a06224461b6940620ca4d6475fa79a07a1d394d0c5c708c7303a1eb31669"
   }
 }
