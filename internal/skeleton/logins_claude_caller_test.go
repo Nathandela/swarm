@@ -679,7 +679,7 @@ func TestClaudeFinalizePreLaunchWorktreePreparesActualCWDAndRollsBackBeforeFork(
 	if runtime.GOOS != "linux" {
 		t.Skip("synthetic saved file authority and before-fork process identity are Linux-only")
 	}
-	for _, kind := range []string{"prepared", "unknown-writer"} {
+	for _, kind := range []string{"prepared", "unknown-writer", "write-free"} {
 		t.Run(kind, func(t *testing.T) {
 			root, err := os.MkdirTemp("", "swarm-cwd-")
 			if err != nil {
@@ -693,8 +693,17 @@ func TestClaudeFinalizePreLaunchWorktreePreparesActualCWDAndRollsBackBeforeFork(
 			original := t.TempDir()
 			worktree := filepath.Join(t.TempDir(), "actual-worktree")
 			store, login, rt := claudeOwnerBirthFixture(t, root, original)
-			if kind == "unknown-writer" {
+			if kind == "unknown-writer" || kind == "write-free" {
 				if err = os.Mkdir(filepath.Join(root, "unknown-legacy"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "unknown-writer" {
+				source, err := json.Marshal(map[string]any{"projects": map[string]any{worktree: map[string]any{"mcpServers": map[string]any{"new": map[string]string{"command": "new-server"}}}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(filepath.Join(store.Home(logins.ProviderClaude), ".claude.json"), source, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -762,7 +771,7 @@ func TestClaudeFinalizePreLaunchWorktreePreparesActualCWDAndRollsBackBeforeFork(
 				t.Fatal("failed finalization retained a running phantom")
 			}
 			r := mustLoginSnapshot(t, store)
-			if slices.Contains(r.ClaudeProfiles[login.Identity].CWDs, worktree) != (kind == "prepared") {
+			if slices.Contains(r.ClaudeProfiles[login.Identity].CWDs, worktree) != (kind != "unknown-writer") {
 				t.Fatal("final CWD membership did not reflect durable provisioning")
 			}
 		})

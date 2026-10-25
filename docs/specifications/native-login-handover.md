@@ -134,15 +134,18 @@ those documented maps in a private destination after all config writers stop.
 Never put definition JSON or secrets in argv. Verify the resulting scopes against
 native-writer fixtures. Reject conflicting destination definitions unless
 identical or explicitly resolved. Pre-provision known incoming working
-directories. Established profiles can add a bounded exact CWD after positive
-writer exclusion under the existing registry fence. Settle the complete validated
-MCP merge before publishing membership; preserve unrelated native fields and
-avoid a rewrite when the merged document is unchanged. Both initial launch and
+directories. Established profiles can add a bounded exact CWD under the existing
+registry fence while discussions remain live when the complete validated MCP
+merge changes no native config. That path publishes registry membership only;
+it still settles the profile directory before the registry save. Actual config
+changes require positive writer exclusion followed by fresh source and
+destination reads. Preserve unrelated native fields. Both initial launch and
 resume callers must reach this path. Conflicts or unavailable writer-stop proof
-leave that profile pending without blocking healthy discussions. Live-profile
-new-CWD behavior still requires native qualification; a stopped-profile extension
-does not establish it. Do not migrate MCP OAuth, trust, account state or other
-profile fields.
+for a required config change leave that profile pending without blocking healthy
+discussions. The [write-free extension checks](../verification/provider-logins/claude-cwd-extension-2026-10-25.json)
+cover source and connected Linux callers; native two-discussion qualification
+remains separate. Do not migrate MCP OAuth, trust, account state or other profile
+fields.
 
 Native refresh helpers use a fresh empty private config bound to the existing
 saved native authority. Accept auth only after independently observing a native
@@ -299,6 +302,9 @@ terminal read and native key adoption atomic.
 The isolated native checks establish trust, SessionStart and the initial composer
 only. The [production-constructor canary](../verification/provider-logins/claude-constructor-2026-10-25.json)
 must also start an untouched provisioned profile; the earlier fixture prefilled onboarding, theme and synthetic account fields.
+The unseeded constructor reaches Claude's first-run theme screen and waits:
+credential readiness does not complete native setup. Its failed receipt is
+retained while the one-time setup path is investigated.
 Saved-account authentication, workflow/MCP parity and integrated native startup
 remain separate qualification gates.
 

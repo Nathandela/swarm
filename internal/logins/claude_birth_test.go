@@ -69,6 +69,47 @@ func TestClaudeProfileBirthRequiresActualCurrentReceiptProfileAndCWD(t *testing.
 	}
 }
 
+func TestClaudeWriteFreeCWDStillRequiresCurrentBirthAuthority(t *testing.T) {
+	for _, kind := range []string{"valid", "selection", "receipt", "alias", "auth-config"} {
+		t.Run(kind, func(t *testing.T) {
+			s, a, b, rt := claudeBirthFixture(t)
+			if err := os.Mkdir(filepath.Join(s.StateRoot(), "live-discussion"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, b.ID, []string{"/new"}); err != nil {
+				t.Fatalf("write-free CWD preparation: %v", err)
+			}
+			switch kind {
+			case "selection":
+				if _, err := s.SelectClaudeProfile(snapshot(t, s).Revision, a.ID); err != nil {
+					t.Fatal(err)
+				}
+			case "receipt":
+				if err := os.WriteFile(filepath.Join(s.savedNativeHome(b.ID), ".credentials.json"), []byte(`{}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "alias":
+				if err := os.Remove(filepath.Join(rt.Home, "commands")); err != nil {
+					t.Fatal(err)
+				}
+			case "auth-config":
+				if err := os.WriteFile(filepath.Join(rt.Home, "settings.local.json"), []byte(`{"apiKeyHelper":"foreign-auth"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := 0
+			err := s.AdmitClaudeProfileBirth(rt, "/new", func() error { calls++; return nil })
+			if kind == "valid" {
+				if err != nil || calls != 1 {
+					t.Fatalf("current authority refused: calls=%d err=%v", calls, err)
+				}
+			} else if err == nil || calls != 0 {
+				t.Fatalf("membership bypassed current birth authority: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
 func TestClaudeProfileBirthAndRealSelectionShareRegistryFlock(t *testing.T) {
 	s, a, _, rt := claudeBirthFixture(t)
 	other, err := OpenExisting(s.StateRoot())

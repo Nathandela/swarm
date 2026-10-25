@@ -55,7 +55,7 @@
       "log_sha256": "5223b7b5cf765d036a0ad8bc60bc7e25f46f43cbea679a20b0e6cbed14c7d879",
       "source_map_sha256": "b0c87f7aeb421e955003cc70d99cec48af67400a76c40fc9416ea57accda30f6"
     },
-    "remaining_gates": "Original status-persistence full-suite failure remains unresolved. Actual constructor V1 refused before native birth; V2 with the fingerprint correction reaches Claude but exits on the fake connectivity fixture404 before native trust/composer readiness.",
+    "remaining_gates": "Original status-persistence full-suite failure remains unresolved. Constructor V1 fingerprint refusal is fixed; V2 uncovered fake connectivity404. V3 with exact fake hello responses reaches native first-run theme selection before folder trust. Untouched-profile startup and integrated trust-gate qualification remain open.",
     "build": "go build -p=1 ./... PASS",
     "vet": "go vet -p=1 ./internal/protocol ./internal/skeleton PASS",
     "lint_darwin": "protocol and skeleton:0 issues",
@@ -68,6 +68,15 @@
       "log_sha256": "15ed617f50b8948cf2b0775bcbf1be5aee0aa99f765c456301a7c378120cc007",
       "test_overlay_sha256": "c123b0e117384e5ee35ed1de65b85c64f8d7f23d8d49f2ba1bdade8527267685",
       "limit": "Diagnostic logging only; production source, sleep constants and assertions unchanged. The overlay acquires unpersistedMu before restoring metadata and can alter synchronization. This diagnostic PASS does not resolve or relabel the original unmodified full-suite failure."
+    },
+    "status_retry_failure_only_diagnostic": {
+      "exit_code": 0,
+      "elapsed_seconds": 38.861,
+      "log_sha256": "92a553317a6edd9bf817a51912ed810b7a29e6d54eeba95e15a34d476259c8d9",
+      "original_sha256_after": "541cb2fdf57480ff8d09e7f49b862cf589070a85566bfd3b8cf39a544c4f0d47",
+      "runs": 10,
+      "overlay_sha256": "4751bcb51e5b654473883e41c3726a9440d8915e2812042e024e40b821e1ab73",
+      "limit": "No diagnostic work executes before the original deadline failure. All ten focused runs passed; no failure was reproduced or causally explained. The original full-suite failure remains open and final gates must use unmodified source."
     }
   },
   "review": "Independent Sol and Astra approved plan V4; root, Astra and a separate Sol reviewed final connected skeleton source. Root and Astra reviewed the protocol changes. The broad status-persistence test failure remains unresolved.",

@@ -173,14 +173,170 @@
         }
       ],
       "finding": "The format correction reaches the real native process and produces positive contained-stop proof. Startup exits before trust: the nonforwarding fixture returns404 to native connectivity endpoints. The terminal tail reports api.anthropic.com Status404. No model request or harness input occurs. The exact fake connectivity response needs separate source review before a new run."
+    },
+    {
+      "name": "constructor-v3",
+      "qualified": false,
+      "artifact_manifest_sha256": "0f663158e11ff304f72e30543d7df8454a103ad02097cb0f6560aa663234abd4",
+      "source_map_sha256": "ab85423964607c9d8bdd2b93d6deda5dfb8b3e432ea5ecd56e1d66f8904bbf8f",
+      "product_sha256": "49860f8699a5ce9327d2b5d699415b98eb9973955ab73b7cff439310becc4bf9",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "fixture_change": "Only exact GET /api/hello and GET /v1/oauth/hello receive200; bodies are ignored by the pinned source. Profile bearer validation, model refusal and other network denials remain. No profile/theme/onboarding/trust seed.",
+      "selftest": {
+        "unit": "swarm-constructor-selftest-f3754f0faf580ce5",
+        "exit_code": 0,
+        "elapsed_seconds": 2.524,
+        "log_sha256": "cf94c9174192a725fa910953104a3ed2a49daafddb1214d4836ddd78605ea1ee",
+        "outer_deadline_seconds": 45,
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-constructor-selftest-f3754f0faf580ce5.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true
+        }
+      },
+      "native_case": {
+        "unit": "swarm-constructor-native-9921e8fe0980bc2f",
+        "exit_code": 1,
+        "elapsed_seconds": 18.95,
+        "log_sha256": "b0c84230255747e57f246c948ac9ad6490a1172b12644d360dce267f93e4f4d8",
+        "outer_deadline_seconds": 90,
+        "outer_cleanup": {
+          "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-constructor-native-9921e8fe0980bc2f.service",
+          "empty": true,
+          "directory_gone": true,
+          "native_sha256_unchanged": true
+        }
+      },
+      "receipt_sha256": "a49d5a7f9a229b08dfe2fd925e2cee6107bac4923f81ea76e67626591f587d1d",
+      "final_full_snapshot_sha256": "8a1e7ec2669625fa9e82bc9f6b2741c350d10cdf29740b807aaeb8a7342c33e7",
+      "final_plain_snapshot_sha256": "449208e87b5efbc894a8427bfed8f84a0be2628a907aecac82a525115a614cd4",
+      "native_profile_after_sha256": "cc738f39d99d634b2bc750f51bd523ce9638866a2bd107c7f292e98a7bb9c3ad",
+      "errors": [
+        "AssertionError: observation cap"
+      ],
+      "observations": 128,
+      "model_requests": 0,
+      "harness_input_writes": 0,
+      "requests": [
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/oauth/profile",
+          "model": false
+        },
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "connect",
+          "target": "platform.claude.com:443"
+        },
+        {
+          "kind": "connect",
+          "target": "raw.githubusercontent.com:443"
+        },
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/hello",
+          "model": false
+        },
+        {
+          "kind": "request",
+          "method": "GET",
+          "path": "/v1/oauth/hello",
+          "model": false
+        },
+        {
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/frame/contract/latest",
+          "model": false
+        },
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "request",
+          "method": "POST",
+          "path": "/api/event_logging/v2/batch",
+          "model": false
+        },
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "request",
+          "method": "POST",
+          "path": "/api/event_logging/v2/batch",
+          "model": false
+        },
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "request",
+          "method": "POST",
+          "path": "/api/event_logging/v2/batch",
+          "model": false
+        },
+        {
+          "kind": "connect",
+          "target": "api.anthropic.com:443"
+        },
+        {
+          "kind": "request",
+          "method": "POST",
+          "path": "/api/event_logging/v2/batch",
+          "model": false
+        }
+      ],
+      "http_census": {
+        "accepted": 9,
+        "rejected": 0,
+        "connections": 0,
+        "handler_threads_alive": 0,
+        "drained": true,
+        "complete": true
+      },
+      "inner_session_stop_proof": true,
+      "outer_cgroup_empty": true,
+      "profile_before": {},
+      "native_written_profile_keys": [
+        "firstStartTime",
+        "firstStartVersion",
+        "hasResetAutoModeOptInForDefaultOffer",
+        "machineID",
+        "migrationVersion",
+        "oauthAccount",
+        "opusProMigrationComplete",
+        "seenNotifications",
+        "sonnet1m45MigrationComplete",
+        "userID"
+      ],
+      "native_trust_exact_cwd": false,
+      "finding": "The production-created empty account profile reaches the native first-run theme selector and remains there through the observation cap. Native code fetches the synthetic account and writes its profile, but trust/composer readiness is never reached. This is a concrete first-run setup gap, not a successful startup."
     }
   ],
-  "finding": "V1 identified the metadata64 fingerprint refusal. V2 corrects that boundary and reaches the pinned native executable, but its isolated connectivity fixture returns404 and native startup exits before trust. Neither failed run qualifies startup.",
-  "proposed_correction": "The shared Store fingerprint-shape validator is reused at the shim boundary, preserving exact metadata/intent binding and the later fixed native-image hash, held descriptor and one-Start admission. Synthetic Linux positives and old-predicate omission controls passed; V2 confirms native birth. See claude-fingerprint-compat-2026-10-25.json.",
+  "finding": "V1 identified a metadata64 reservation refusal; V2 corrects it and reaches native startup but the fixture connectivity404 exits early. V3 adds only the two source-required fake hello responses and reaches the native first-run theme selector. Swarm-created account profiles still need a product-correct one-time setup path before unattended native startup is qualified.",
+  "proposed_correction": "The fingerprint correction is source/native-birth qualified. The first-run setup path now needs separate source-backed design and qualification; neither prefilled fixture flags nor automatic arbitrary welcome-screen input count as a fix.",
   "limits": [
     "Synthetic ready-auth data bypasses authentication as the subject of this test. It never qualifies a real saved account.",
-    "The launch did not reach the trust/composer observation stage. Neither startup nor rotation/continuation is qualified.",
-    "V1 failed its inner stop-proof check even though the enclosing private cgroup was subsequently proven empty. V2 produced positive inner stop proof as well as outer empty-cgroup proof; neither cleanup result changes the startup failures.",
+    "None of these runs reaches trust/composer readiness. V3 positively identifies the native theme screen; startup and rotation/continuation remain unqualified.",
+    "V1 failed its inner stop-proof check even though the enclosing private cgroup was subsequently proven empty. V2 and V3 produced positive inner stop proof as well as outer empty-cgroup proof; cleanup does not change startup failures.",
     "The earlier full-skeleton status-persistence test failure remains an independent open gate."
   ]
 }

@@ -94,9 +94,9 @@ func (s *Store) ClaudeProfileHome(identity string) (string, error) {
 	return filepath.Join(s.path, "provider", "claude", "profiles", identity), nil
 }
 
-// ProvisionClaudeProfile prepares an unborn native profile. Runtime selection is
-// deliberately separate: this foundation does not enable managed profile births.
-// New local scopes on established profiles require positive writer exclusion.
+// ProvisionClaudeProfile prepares a native profile and records its CWDs.
+// Runtime selection and birth admission are separate.
+// Established profiles need writer exclusion only when their config must change.
 func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []string) (Registry, error) {
 	if len(cwds) > MaxHandoverMembers {
 		return Registry{}, ErrCapacity
@@ -152,23 +152,34 @@ func (s *Store) ProvisionClaudeProfile(expected uint64, loginID string, cwds []s
 			if err := reserveClaudeProfileSpace(r, identity, all); err != nil {
 				return err
 			}
-			if err := s.claudeAuthorityMutationAllowed(r, *l); err != nil {
-				return err
-			}
-			scan := s.grantWriters
-			if scan == nil {
-				scan = processcontain.EnvironmentWriters
-			}
-			writers, err := scan([]string{home}, nil)
-			if err != nil || len(writers) != 0 {
-				return ErrInUse
-			}
 			definitions, err := s.claudeMCPDefinitions(all)
 			if err != nil {
 				return err
 			}
-			if err := s.writeClaudeMCPDefinitions(dir, definitions); err != nil {
+			_, unchanged, err := s.claudeMCPConfiguration(dir, definitions)
+			if err != nil {
 				return err
+			}
+			if !unchanged {
+				if err := s.claudeAuthorityMutationAllowed(r, *l); err != nil {
+					return err
+				}
+				scan := s.grantWriters
+				if scan == nil {
+					scan = processcontain.EnvironmentWriters
+				}
+				writers, err := scan([]string{home}, nil)
+				if err != nil || len(writers) != 0 {
+					return ErrInUse
+				}
+				// Both native documents may have changed before exclusion succeeded.
+				definitions, err = s.claudeMCPDefinitions(all)
+				if err != nil {
+					return err
+				}
+				if err := s.writeClaudeMCPDefinitions(dir, definitions); err != nil {
+					return err
+				}
 			}
 			// Also settle a visible prior config rename before publishing its CWD.
 			syncDir := s.writeOps.syncDir
@@ -494,20 +505,29 @@ func mergeClaudeMCPMap(destination map[string]json.RawMessage, key string, sourc
 }
 
 func (s *Store) writeClaudeMCPDefinitions(dir string, definitions map[string]json.RawMessage) error {
+	encoded, unchanged, err := s.claudeMCPConfiguration(dir, definitions)
+	if err != nil || unchanged {
+		return err
+	}
+	_, err = durableReplace(s.root, filepath.Join(dir, ".claude.json"), encoded, s.writeOps)
+	return err
+}
+
+func (s *Store) claudeMCPConfiguration(dir string, definitions map[string]json.RawMessage) ([]byte, bool, error) {
 	name := filepath.Join(dir, ".claude.json")
 	raw, err := s.readOptional(name)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	destination := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		destination, err = jsonObject(raw)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 	}
 	if err = mergeClaudeMCPMap(destination, "mcpServers", definitions["mcpServers"]); err != nil {
-		return err
+		return nil, false, err
 	}
 	if source := definitions["projects"]; len(source) > 0 {
 		incoming, _ := jsonObject(source)
@@ -515,7 +535,7 @@ func (s *Store) writeClaudeMCPDefinitions(dir string, definitions map[string]jso
 		if old := destination["projects"]; len(old) > 0 {
 			projects, err = jsonObject(old)
 			if err != nil {
-				return err
+				return nil, false, err
 			}
 		}
 		for cwd, raw := range incoming {
@@ -523,36 +543,35 @@ func (s *Store) writeClaudeMCPDefinitions(dir string, definitions map[string]jso
 			if old := projects[cwd]; len(old) > 0 {
 				scope, err = jsonObject(old)
 				if err != nil {
-					return err
+					return nil, false, err
 				}
 			}
 			fields, _ := jsonObject(raw)
 			if err = mergeClaudeMCPMap(scope, "mcpServers", fields["mcpServers"]); err != nil {
-				return err
+				return nil, false, err
 			}
 			projects[cwd], err = json.Marshal(scope)
 			if err != nil {
-				return err
+				return nil, false, err
 			}
 		}
 		destination["projects"], err = json.Marshal(projects)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 	}
 	encoded, err := json.Marshal(destination)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	if len(encoded) > maxCredentialBytes {
-		return ErrCapacity
+		return nil, false, ErrCapacity
 	}
 	var before, after any
 	if len(raw) > 0 && json.Unmarshal(raw, &before) == nil && json.Unmarshal(encoded, &after) == nil && reflect.DeepEqual(before, after) {
-		return nil
+		return encoded, true, nil
 	}
-	_, err = durableReplace(s.root, name, encoded, s.writeOps)
-	return err
+	return encoded, false, nil
 }
 
 func claudeProfilesOwned(r Registry, provider string) bool {

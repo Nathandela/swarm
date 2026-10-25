@@ -192,8 +192,180 @@ func TestClaudeProfileExtendsStoppedCWDAndPreservesNativeFields(t *testing.T) {
 	}
 }
 
+func TestClaudeProfileWriteFreeExtensionRetainsLiveCustody(t *testing.T) {
+	for _, kind := range []string{"live", "registry-full", "native-update"} {
+		t.Run(kind, func(t *testing.T) {
+			s, l, _, native := claudeCustodyFixture(t)
+			writeClaudeCustodyJSON(t, s.StateRoot(), "source", NativeProcessFile, native)
+			r := snapshot(t, s)
+			if err := s.claudeAuthorityMutationAllowed(r, l); err == nil {
+				t.Fatal("fixture does not retain live native custody")
+			}
+			home, _ := s.ClaudeProfileHome(l.Identity)
+			path := filepath.Join(home, ".claude.json")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := strings.TrimSuffix(string(raw), "}") + `,"oauthAccount":{"accountUuid":"keep"},"unknown":{"preserve":true}}`
+			if err = os.WriteFile(path, []byte(body), 0600); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.grantWriters = func([]string, []string) ([]processcontain.Identity, error) {
+				t.Fatal("write-free extension scanned native writers")
+				return nil, nil
+			}
+			fail := kind == "registry-full"
+			want := body
+			s.writeOps.rename = func(old, new string) error {
+				if strings.HasSuffix(new, ".claude.json") {
+					t.Fatal("write-free extension replaced native config")
+				}
+				if new == "registry.json" {
+					if fail {
+						return syscall.ENOSPC
+					}
+					if kind == "native-update" {
+						want = strings.TrimSuffix(body, "}") + `,"nativeUpdate":true}`
+						if err := os.WriteFile(path+".native", []byte(want), 0600); err != nil {
+							return err
+						}
+						if err := os.Rename(path+".native", path); err != nil {
+							return err
+						}
+					}
+				}
+				return s.root.Rename(old, new)
+			}
+			next, err := s.ProvisionClaudeProfile(r.Revision, l.ID, []string{"/new"})
+			if fail {
+				if !errors.Is(err, syscall.ENOSPC) || !reflect.DeepEqual(snapshot(t, s), r) {
+					t.Fatalf("registry failure changed membership: %v", err)
+				}
+				fail = false
+				next, err = s.ProvisionClaudeProfile(r.Revision, l.ID, []string{"/new"})
+			}
+			if err != nil || next.Revision != r.Revision+1 || !reflect.DeepEqual(next.ClaudeProfiles[l.Identity].CWDs, []string{"/new", "/work"}) {
+				t.Fatalf("write-free extension: revision=%d cwds=%v err=%v", next.Revision, next.ClaudeProfiles[l.Identity].CWDs, err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != want {
+				t.Fatalf("native config changed/lost concurrent update: %v", err)
+			}
+			after, err := os.Stat(path)
+			if err != nil || kind != "native-update" && !os.SameFile(before, after) {
+				t.Fatalf("write-free extension replaced native inode: %v", err)
+			}
+			if err := s.claudeAuthorityMutationAllowed(snapshot(t, s), l); err == nil {
+				t.Fatal("CWD membership released live native custody")
+			}
+			if _, err = s.ProvisionClaudeProfile(r.Revision, l.ID, []string{"/other"}); !errors.Is(err, ErrConflict) {
+				t.Fatalf("stale registry revision admitted membership: %v", err)
+			}
+		})
+	}
+}
+
+func TestClaudeProfileExtensionRereadsAfterWriterExclusion(t *testing.T) {
+	for _, kind := range []string{"fresh", "conflict"} {
+		t.Run(kind, func(t *testing.T) {
+			s, l, common := profileFixture(t)
+			r, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, l.ID, []string{"/work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := `{"mcpServers":{"user":{"command":"server","env":{"SECRET":"mcp-secret"}}},"projects":{"/new":{"mcpServers":{"new":{"command":"old-server"}}}}}`
+			if err = os.WriteFile(filepath.Join(common, ".claude.json"), []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			home, _ := s.ClaudeProfileHome(l.Identity)
+			path := filepath.Join(home, ".claude.json")
+			var changed string
+			scans := 0
+			s.grantWriters = func([]string, []string) ([]processcontain.Identity, error) {
+				scans++
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					return nil, err
+				}
+				changed = strings.TrimSuffix(string(raw), "}") + `,"unknown":"after-exclusion"}`
+				if err = os.WriteFile(path, []byte(changed), 0600); err != nil {
+					return nil, err
+				}
+				source = strings.Replace(source, "old-server", "fresh-server", 1)
+				if kind == "conflict" {
+					source = strings.Replace(source, `"command":"server"`, `"command":"conflicting-user"`, 1)
+				}
+				return nil, os.WriteFile(filepath.Join(common, ".claude.json"), []byte(source), 0600)
+			}
+			next, err := s.ProvisionClaudeProfile(r.Revision, l.ID, []string{"/new"})
+			if scans != 1 {
+				t.Fatalf("writer scans = %d", scans)
+			}
+			got, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if kind == "conflict" {
+				if !errors.Is(err, ErrConflict) || !reflect.DeepEqual(snapshot(t, s), r) || string(got) != changed {
+					t.Fatalf("post-exclusion conflict wrote stale config/membership: %v", err)
+				}
+			} else if err != nil || next.Revision != r.Revision+1 || !strings.Contains(string(got), "fresh-server") || strings.Contains(string(got), "old-server") || !strings.Contains(string(got), "after-exclusion") {
+				t.Fatalf("post-exclusion source/destination not refreshed: %v %s", err, got)
+			}
+		})
+	}
+}
+
+func TestClaudeProfileWriteFreeProbeRefusesIncompleteConfig(t *testing.T) {
+	for _, kind := range []string{"source-invalid", "destination-invalid", "duplicate", "oversized", "missing", "empty", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			s, l, _, _ := claudeCustodyFixture(t)
+			r := snapshot(t, s)
+			home, _ := s.ClaudeProfileHome(l.Identity)
+			path := filepath.Join(home, ".claude.json")
+			body := "{"
+			switch kind {
+			case "source-invalid":
+				path = filepath.Join(s.Home(ProviderClaude), ".claude.json")
+			case "duplicate":
+				body = `{"mcpServers":{},"mcpServers":{}}`
+			case "oversized":
+				body = strings.Repeat(" ", maxCredentialBytes+1)
+			case "empty":
+				body = ""
+			case "missing", "symlink":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "symlink" {
+					if err := os.Symlink(filepath.Join(s.Home(ProviderClaude), ".claude.json"), path); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if kind != "missing" && kind != "symlink" {
+				if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.grantWriters = func([]string, []string) ([]processcontain.Identity, error) {
+				t.Fatal("invalid/missing config escaped probe or retained custody")
+				return nil, nil
+			}
+			if _, err := s.ProvisionClaudeProfile(r.Revision, l.ID, []string{"/new"}); err == nil || !reflect.DeepEqual(snapshot(t, s), r) {
+				t.Fatalf("incomplete config published new CWD: %v", err)
+			}
+		})
+	}
+}
+
 func TestClaudeProfileExtensionRequiresWriterExclusionAndDurableConfig(t *testing.T) {
-	for _, kind := range []string{"writer", "unknown", "config-full", "registry-full", "identical", "empty-cwd-conflict"} {
+	for _, kind := range []string{"writer", "scan-error", "unknown", "config-full", "registry-full", "identical", "empty-cwd-conflict"} {
 		t.Run(kind, func(t *testing.T) {
 			s, l, common := profileFixture(t)
 			r, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, l.ID, []string{"/work"})
@@ -210,6 +382,8 @@ func TestClaudeProfileExtensionRequiresWriterExclusionAndDurableConfig(t *testin
 				s.grantWriters = func([]string, []string) ([]processcontain.Identity, error) {
 					return []processcontain.Identity{{PID: 1, StartTime: 1}}, nil
 				}
+			case "scan-error":
+				s.grantWriters = func([]string, []string) ([]processcontain.Identity, error) { return nil, syscall.EIO }
 			case "unknown":
 				if err = os.Mkdir(filepath.Join(s.StateRoot(), "lost-session"), 0700); err != nil {
 					t.Fatal(err)
@@ -362,9 +536,12 @@ func TestClaudeProfileExtensionRegistryFailureRetriesWithoutNativeRewrite(t *tes
 }
 
 func TestClaudeProfileExtensionAndFreshStoreSelectionShareFence(t *testing.T) {
-	s, l, _ := profileFixture(t)
+	s, l, common := profileFixture(t)
 	r, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, l.ID, []string{"/work"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(common, ".claude.json"), []byte(`{"projects":{"/new":{"mcpServers":{"new":{"command":"new-server"}}}}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	other, err := OpenExisting(s.StateRoot())

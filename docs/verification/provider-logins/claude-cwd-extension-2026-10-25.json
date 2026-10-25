@@ -1,0 +1,172 @@
+{
+  "date": "2026-10-25",
+  "scope": "Write-free new-CWD membership for an established Claude account profile; source, synthetic and connected Linux caller tests",
+  "live_setup_changed": false,
+  "native_second_cwd_qualified": false,
+  "change": "Reuse the existing validated complete MCP merge to detect a native-config no-op. Only that branch skips writer exclusion and publishes CWD membership. Actual config changes retain exclusion and reread both source and destination afterward. Both paths retain directory settlement and registry CAS/durable save. Final native birth admission remains independent.",
+  "source": {
+    "base_commit": "16aea01f",
+    "approved_plan_sha256": "81fcbd7d6871ffeb14e44f30d09183c7c9a839daa97abfad4f668966dcf9188e",
+    "review_manifest_sha256": "97d2c893dc3cce6a771282235b46d9a468471dc7081e3ee894220d0c0b6b4c2a",
+    "source_delta_sha256": "9eb8760dd9339ded0c76849a77a0cb96bdc68119a1653294b080bb8b93975699",
+    "owned_files_sha256": {
+      "internal/logins/claude_profiles.go": "f127870d1ac8c4b46205d904bbccd61068edff012886f0fba0f25edaccb1b561",
+      "internal/logins/claude_cut3_store_test.go": "5095d406258bbc9059295b762aa5067515c3347c589d882c3814a29fb3842602",
+      "internal/logins/claude_birth_test.go": "47e95263545495da867a939eab7ed60f0b9e9075befe80d742f3efab9323efa0",
+      "internal/skeleton/logins_claude_caller_test.go": "c4f41aa45c2d2cc6c6f179f040da7a5945e63c0cd987e1e04c7f34bc0661dd78"
+    },
+    "frozen_build_inputs": 1996,
+    "frozen_build_input_hashes_sha256": "df13badd2e7c06bd5a8249e8eae9a6ff16d9854ca79dd55e5e3208067a8d9413"
+  },
+  "red": {
+    "scope": "Pre-edit live/no-write extension and final-birth preparation fail with the old exclusion-before-equality implementation.",
+    "log_sha256": "0e1869697752955e157d6340b53c5bb6a240368125537e7c7ad5563bc51839e2"
+  },
+  "focused_race": {
+    "status": "PASS",
+    "seconds": 37.126,
+    "log_sha256": "264ab003400c8bf5fac1b4fd4f451eddfbbb0bc085833791a27cc84283576924"
+  },
+  "omission_controls": {
+    "old-predicate": {
+      "exit_code": 1,
+      "elapsed_seconds": 1.953,
+      "log_sha256": "e1b70aa6fc23208674044d41df58e265a7c4bda8d93e31c635805f87399fa616",
+      "expected_test_failure": true
+    },
+    "without-exclusion": {
+      "exit_code": 1,
+      "elapsed_seconds": 4.538,
+      "log_sha256": "745c0dcfb8914d869b52b3153414c0059e663e11eb5f02cd04e54f6072d6156f",
+      "expected_test_failure": true
+    },
+    "without-source-reread": {
+      "exit_code": 1,
+      "elapsed_seconds": 3.399,
+      "log_sha256": "876aee1bd7d2c1d9f67cede4e2b41b246c70c96c38dbd5c03ccd6d25283a297a",
+      "expected_test_failure": true
+    },
+    "without-settlement": {
+      "exit_code": 1,
+      "elapsed_seconds": 3.022,
+      "log_sha256": "00ce52cbcdf5e9d32e4a8b080c8306ad6bc75663384797a6bfcbdb0e81d2c5de",
+      "expected_test_failure": true
+    },
+    "stale-precomputed-document": {
+      "exit_code": 1,
+      "log_sha256": "7ee5b5eba6822a95980f7c390b52f6012873c5d01fb3d5cfe96682ddb0546f4c",
+      "expected_test_failure": true
+    }
+  },
+  "linux": {
+    "stage": "/tmp/scw.93hYl2Kk",
+    "manifest_sha256": "97d2c893dc3cce6a771282235b46d9a468471dc7081e3ee894220d0c0b6b4c2a",
+    "run_record_sha256": "61748794f015ea9270439b998909359cb35f923f0a86e195b3d5cf12e0e417fb",
+    "all_contracts_met": true,
+    "positive_top_tests": 39,
+    "units": {
+      "logins-positive": {
+        "exit_code": 0,
+        "elapsed_seconds": 16.311,
+        "log_sha256": "056ce10d30fdc3862340bbebd6bf773987b6ed0d250dcbb78f6506f58f81fa3a",
+        "binary_sha256": "c49e2f882cfeaea202a40a1f8ffb5c39728cd5a92e43d627dc6e774537bae327",
+        "contract_met": true,
+        "run": "^TestClaude(Profile|WriteFreeCWD)",
+        "expected_top_tests": 31,
+        "cgroup_empty": true,
+        "cgroup_gone": true,
+        "test_umask": "0o077",
+        "verified_prebuilt_copies": 0
+      },
+      "logins-old-predicate": {
+        "exit_code": 1,
+        "elapsed_seconds": 0.796,
+        "log_sha256": "e89a8a8d968541c3f7af2c4c9d6379a28c918415a3ba4c7e0dbc49c587047a50",
+        "binary_sha256": "32fee57d83a6d4e10fb9a6f3d65302059b2f829b83aee43de7142052b223c56f",
+        "contract_met": true,
+        "run": "^TestClaudeProfileWriteFreeExtensionRetainsLiveCustody$",
+        "expected_top_tests": 1,
+        "cgroup_empty": true,
+        "cgroup_gone": true,
+        "test_umask": "0o077",
+        "verified_prebuilt_copies": 0
+      },
+      "skeleton-cwd": {
+        "exit_code": 0,
+        "elapsed_seconds": 1.226,
+        "log_sha256": "a01268954f2229b8258e86daab96cacadf1af4a5717cf743ea1971269de7e426",
+        "binary_sha256": "a5b3650f28675124b721c4b9c2617aa04a05fe2c5357c62bc0e97a4db36bfdcb",
+        "contract_met": true,
+        "run": "^TestClaude(LaunchPreparationReachesEstablishedMissingCWDAndResumeCheckout|FinalizePreLaunchWorktreePreparesActualCWDAndRollsBackBeforeFork)$",
+        "expected_top_tests": 2,
+        "cgroup_empty": true,
+        "cgroup_gone": true,
+        "test_umask": "0o077",
+        "verified_prebuilt_copies": 0
+      },
+      "skeleton-held-owner": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.835,
+        "log_sha256": "f6d615197604fd3b6f9fb66b52c9bb44d20e5d1f94652e7c0369fc0774e6bb4e",
+        "binary_sha256": "a5b3650f28675124b721c4b9c2617aa04a05fe2c5357c62bc0e97a4db36bfdcb",
+        "contract_met": true,
+        "run": "^TestClaudeBirthHeldSelectionDoesNotBlockInstalledOwnerKill$",
+        "expected_top_tests": 1,
+        "cgroup_empty": true,
+        "cgroup_gone": true,
+        "test_umask": "0o077",
+        "verified_prebuilt_copies": 2
+      },
+      "shim-start": {
+        "exit_code": 0,
+        "elapsed_seconds": 2.318,
+        "log_sha256": "ef86c88190fd0ee0c236e5867c8df0d0d749cb5526575808b04d2de1cab4b961",
+        "binary_sha256": "69c10e188fa13b121a7290bb8e91823de366207c08107c1fea927789ba502ece",
+        "contract_met": true,
+        "run": "^TestClaudeOwnedStartSynthetic",
+        "expected_top_tests": 5,
+        "cgroup_empty": true,
+        "cgroup_gone": true,
+        "test_umask": "0o077",
+        "verified_prebuilt_copies": 1
+      }
+    }
+  },
+  "root_checks": {
+    "build": {
+      "exit_code": 0,
+      "elapsed_seconds": 14.106,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cwd": "/private/tmp/swarm-seamless-implementation-20261024"
+    },
+    "lint-darwin": {
+      "exit_code": 0,
+      "elapsed_seconds": 21.173,
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+      "cwd": "/private/tmp/swarm-claude-cwd-extension-20261025/build-source"
+    },
+    "lint-linux": {
+      "exit_code": 0,
+      "elapsed_seconds": 8.081,
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+      "cwd": "/private/tmp/swarm-claude-cwd-extension-20261025/build-source"
+    },
+    "logins-full-race": {
+      "exit_code": 0,
+      "elapsed_seconds": 192.995,
+      "log_sha256": "0232112a2a18d769f8258d0d1a75a93e8d5b2e931adf24fdac4e76d0c2082c3f",
+      "cwd": "/private/tmp/swarm-claude-cwd-extension-20261025/build-source",
+      "failed_tests": [],
+      "passed_tests": 501,
+      "skipped_tests": 0
+    }
+  },
+  "vet": "PASS logins, skeleton and shim; vet-complete.log is empty. The earlier scratch vet failed because unchanged mobile sources were missing from that build corpus; the failed log remains in the review packet.",
+  "review": "Approved plan and connected final source reviewed by Root and Astra, authored/tested by independent Sol. Frozen four-file hashes match the feature checkout before and after root gates.",
+  "limits": [
+    "All Linux cases use synthetic native processes. They prove membership/admission/caller behavior, not two real native discussions remaining usable.",
+    "Constructor V3 found a separate native first-run theme/setup gap. Native two-CWD startup, authentication and workflow/MCP parity remain unqualified.",
+    "The unchanged branch preserves concurrent native writes; its equality observation is not a continuous MCP configuration guarantee.",
+    "The unrelated original full-skeleton status-persistence failure remains unresolved. No release or migration qualification follows."
+  ]
+}

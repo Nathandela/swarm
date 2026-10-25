@@ -1,5 +1,9 @@
 # Saved Claude Code and Codex logins
 
+This page documents released rotation behavior. The [native handover
+redesign](../specifications/native-login-handover.md) is being qualified on a
+feature branch and has no supported upgrade procedure yet.
+
 Press `o`, select **Provider logins →** in Options, and press Enter. Add a Claude
 or Codex login and finish the native sign-in. Codex displays its device URL and
 code. Claude opens its native sign-in terminal when you press Enter. Credentials
