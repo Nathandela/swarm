@@ -221,6 +221,13 @@ native-process publication. Revalidate the original unused claim and consume one
 scope-local Start attempt immediately before PTY Start, including error outcomes.
 The [refused-birth checks](../verification/provider-logins/claude-no-start-custody-2026-10-25.json)
 include meaningful negative controls, duplicate/crash retention and Linux tests.
+Catchable cancellation is buffered before custody and remains captured through
+deferred containment and proof publication. Pending cancellation is checked
+before preparation and again inside final admission before Start. The
+[startup cancellation checks](../verification/provider-logins/claude-startup-cancellation-2026-10-25.json)
+cover actual Linux TERM/INT/HUP, proof-sync timing and a final-check omission
+control. SIGKILL remains unresolved; a signal arriving after the final check may
+start a child and then uses the existing containment and Wait path.
 Do no network or native initialization under the final lock. Daemon replacement cannot open a gap between
 selection and start. A crash after start but before publication retains the
 existing reservation as unresolved; no extra birth ledger is introduced.
@@ -402,6 +409,27 @@ The resume flag therefore cannot determine eligibility. Swarm must prove exact
 interrupted work and exclude human waits before constructing a successor.
 That host gate, cancellation, queued input, background work and workflow parity
 remain unqualified.
+
+If structured Claude becomes the selected managed-session interface, use one
+shim-owned primary native process and its typed input/control stream. The
+existing `BackendConfig` describes a separate Codex side process; it is not a
+second Claude execution loop. Reuse the execution record, operation journal and
+native decision protocol. Ordinary launch and manual resume never inherit the
+interrupted-turn flag. Automatic eligibility must be durably claimed and checked
+before constructing the successor, because initialization itself can trigger
+native recovery.
+
+The host proof must include newer queued owner input, not merely input already
+written to the native process. The current `UnobservedOperation` excludes
+`prepared` operations, and the Codex owner revision advances at its native write
+boundary. Neither alone establishes that no newer input is waiting in the
+composer lane. A Claude recovery design therefore needs a durable owner-intent
+fence at admission and a final check under the existing lifecycle/input locks.
+Begin qualification with the recorded pending-question counterexample requiring
+zero stop and zero successor construction. Native background actor completeness,
+normal workflow/command/MCP behavior, and the managed chat interface remain
+separate acceptance gates; the owner authorized exploration, not conversion of
+existing sessions or replacement of the default terminal interface.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It

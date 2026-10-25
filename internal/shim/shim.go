@@ -145,6 +145,11 @@ func Run(cfg Config) (agentExit int, err error) {
 			return 0, err
 		}
 	}
+	// Keep catchable termination buffered from before custody until its deferred
+	// containment/proof finishes. The live worker starts once process groups exist.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
 	managed, err := beginManagedNativeScope(cfg)
 	if err != nil {
 		return 0, err
@@ -157,15 +162,18 @@ func Run(cfg Config) (agentExit int, err error) {
 		return 0, err
 	}
 	defer claude.close()
+	if err := claude.preStartError(sigCh, nil); err != nil {
+		return 0, err
+	}
 	// Resolve once, before either native process can start. Scope custody is
 	// already installed so a clean selector failure also has positive stop proof.
 	if !externalBirth {
-		if err := resolveLoginEnvironment(&cfg); err != nil {
+		if err := claude.preStartError(sigCh, resolveLoginEnvironment(&cfg)); err != nil {
 			return 0, err
 		}
 	}
 
-	if err := claude.prepareImage(cfg); err != nil {
+	if err := claude.preStartError(sigCh, claude.prepareImage(cfg)); err != nil {
 		return 0, err
 	}
 
@@ -196,18 +204,6 @@ func Run(cfg Config) (agentExit int, err error) {
 		closeTranscript(tr)
 		return 0, err
 	}
-
-	// Arm the self-containment signal handler BEFORE spawning the agent, so that from
-	// the instant the agent exists, ANY catchable termination of the shim
-	// (SIGTERM/SIGINT/SIGHUP) first runs the agent's process-group TERM->grace->KILL.
-	// This makes shim-exited ⇒ agent-group-killed with no socket round-trip and no
-	// startup/acceptLoop-window race: the daemon can SIGTERM the shim at any moment to
-	// reliably contain the agent (audit-004 N2 containment primitive). Signals are
-	// buffered here and acted on once the agent's pgid is known (below). A SIGKILL of
-	// the shim itself remains uncatchable — the documented last-resort residual.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-	sigStop := func() { signal.Stop(sigCh) } // signal.Stop is idempotent
 
 	// Test-only seam (nil in production): runs inside the arm->spawn window —
 	// after the handler is armed, before the agent is spawned — so a test can
@@ -277,10 +273,9 @@ func Run(cfg Config) (agentExit int, err error) {
 	// Observe before either process starts; the post-spawn check covers both.
 	cliStable := cliInstallationMatches(cfg)
 	if cfg.LoginRuntime != nil && cfg.CLIIdentity != nil && persist.IsCLIContentFingerprint(cfg.CLIIdentity.Fingerprint) && !cliStable {
-		sigStop()
 		_ = listener.Close()
 		closeTranscript(tr)
-		return 0, errLoginResolution
+		return 0, claude.preStartError(sigCh, errLoginResolution)
 	}
 	if cfg.Backend == nil {
 		cmd = &exec.Cmd{
@@ -291,7 +286,7 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 		var startErr error
 		if claude != nil {
-			ptmx, startErr = claude.start(managed, cfg, cmd, ws)
+			ptmx, startErr = claude.start(managed, cfg, cmd, ws, sigCh)
 			if startErr != nil && cmd.Process != nil {
 				// The child exists: retain the error and join the ordinary draining,
 				// containment and Wait path rather than returning a live orphan.
@@ -302,7 +297,6 @@ func Run(cfg Config) (agentExit int, err error) {
 			ptmx, startErr = pty.StartWithSize(cmd, ws)
 		}
 		if startErr != nil {
-			sigStop()
 			_ = listener.Close()
 			closeTranscript(tr)
 			return 0, fmt.Errorf("shim: start agent: %w", startErr)
@@ -324,7 +318,6 @@ func Run(cfg Config) (agentExit int, err error) {
 		var openErr error
 		ptmx, tty, openErr = pty.Open()
 		if openErr != nil {
-			sigStop()
 			_ = listener.Close()
 			closeTranscript(tr)
 			return 0, fmt.Errorf("shim: open pty: %w", openErr)
@@ -406,7 +399,6 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 		if cfg.LoginRuntime != nil && cfg.LoginRuntime.ExternalAuth && (backendWatch == nil || len(attach.AgentArgs) != 2 || attach.AgentArgs[0] != "--remote" || attach.AgentArgs[1] != "unix://"+cfg.Backend.SocketPath) {
 			// External tokens exist only in the backend; standalone launch cannot authenticate.
-			sigStop()
 			close(sigDone)
 			sigWG.Wait()
 			if backendWatch != nil {
@@ -439,7 +431,8 @@ func Run(cfg Config) (agentExit int, err error) {
 		startErr := cmd.Start()
 		_ = tty.Close() // the child holds its own dup; the master is ours
 		if startErr != nil {
-			sigStop()
+			close(sigDone)
+			sigWG.Wait()
 			_ = ptmx.Close()
 			_ = listener.Close()
 			closeTranscript(tr)
@@ -527,16 +520,15 @@ func Run(cfg Config) (agentExit int, err error) {
 	var backendExit *int
 	waitErr := waitAgentOrBackend(cmd, backendWatch, srv, &backendExit)
 
-	// Agent reaped: stop catching signals, release the handler, drain any signal that
-	// was buffered before the stop, and JOIN the handler goroutine. After this it is
+	// Agent reaped: release and JOIN the handler goroutine. Notify remains active
+	// through deferred proof publication, but no worker acts on later signals. It is
 	// provably quiescent — no onSignal can run during or after finalization to signal
 	// a possibly-reused pgid (finishEscalation, below, issues the single final group
 	// KILL). This mirrors the escalation worker's cancel-and-join discipline.
-	sigStop()
 	close(sigDone)
 	sigWG.Wait()
 	select {
-	case <-sigCh: // discard a signal buffered before sigStop; nothing acts on it now
+	case <-sigCh: // discard a buffered signal; no worker acts on it now
 	default:
 	}
 

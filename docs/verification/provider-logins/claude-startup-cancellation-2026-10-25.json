@@ -1,0 +1,101 @@
+{
+  "date": "2026-10-25",
+  "scope": "Catchable cancellation after owned Claude custody and before native Start; capture remains active through stop-proof publication",
+  "production_activation": false,
+  "behavior": [
+    "Buffer TERM, INT and HUP before acquiring managed scope custody, and retain signal notification until deferred containment and proof publication finish.",
+    "Observe pending cancellation after the original claim and inside final birth admission before consuming the Start attempt. Cancellation is not an authentication failure; independent durability errors remain visible.",
+    "After the final check a native child may start; the existing signal worker, containment and single Wait own that case. This is not an atomic signal-versus-exec guarantee.",
+    "The backend agent-exec failure branch also closes and joins its existing signal worker. The separately tracked reply-pump cleanup defect is outside this change."
+  ],
+  "review": "Root connected-code review and independent Astra source review passed. Astra separately verified the complete archive, all manifest entries, exact owned source binding and the final-check-only omission overlay.",
+  "owned_source_sha256": {
+    "internal/shim/claude_run_refusal_test.go": "322514fb126a04c0a29a764df8336b1ab745ebfca5299680cb3e83154ef10399",
+    "internal/shim/claude_start.go": "fbd2dff55959bbb3312f7b895602cd90e18a69acc6d8cca7bda27b11e1955d8e",
+    "internal/shim/claude_start_test.go": "eac08e93c4b886a2bb8bce2caae9f2eabced69ebcddf56f952abb0d4822375fd",
+    "internal/shim/shim.go": "ac54a3914429941f0ea33644954b71dadf322ff0eeebae2701470f851b26d1d9"
+  },
+  "linux": {
+    "original_red": {
+      "stage": "/tmp/swarm-signal-cancel-red.8mz1R6ud",
+      "unit": "swarm-signal-cancel-red-a3db4ee4e90f19cdb0d1",
+      "archive_sha256": "cc8db354cb8ebc01a8d4d78159472d7fb9184274b9726267c6a0a8bd90d6bd23",
+      "manifest_sha256": "607356a8e8d280c112a61d94e6f57ef69d73e9320ba94c8082c6a0fc71efbe5f",
+      "archive_members": 3817,
+      "go_copy_shim_sha256": "b73a95238c0fd36034db9affaedb32857f0f9f4c6baf5312341cc8985759ec51",
+      "scope": "expected causal RED: caught-late startup cancellation loses stopped proof and leaves retirement pending; synthetic only",
+      "runtime_limit_seconds": 60,
+      "exit_code": 1,
+      "elapsed_seconds": 1.228,
+      "log_sha256": "f91e5e4656279f8cda180934c46a24efd88ecde867e50d876ca0a1afd4ee892a"
+    },
+    "green": {
+      "stage": "/tmp/swarm-signal-cancel-green.nJC3JsOh",
+      "archive_sha256": "ea527dc219b9ac266473192d114aebe8dca404cfa480ddf3eeb5a4fd83f7f581",
+      "manifest_sha256": "2ddcca88d2722c9f65cf5aad87774b6220bededbf17b228360eb3139bfe5f3b7",
+      "archive_members": 3834,
+      "go_copy_shim_sha256": "cb2b5fdb85ce658847f5b07f95b8888a3abeabcf5d86ff52d7fc11f1e478ce36",
+      "scope": "synthetic early catchable cancellation cleanup with actual signals and final-check-only omission; not native provider constructor",
+      "runtime_limit_seconds_per_case": 60,
+      "cases": {
+        "main": {
+          "unit": "swarm-signal-cancel-green-main-d9cbf2b1d4c9e773",
+          "binary_sha256": "1b6286d76592c9108fa43b3d1154a8f3b3821e4333a71c77136a441228f59c7a",
+          "exit_code": 0,
+          "elapsed_seconds": 5.05,
+          "log_sha256": "57ed04d35581b1c8b757269b623ba2306065ee626860fb6d88e250d7c4f1299f"
+        },
+        "barrier": {
+          "unit": "swarm-signal-cancel-green-barrier-b601531df4f14e19",
+          "binary_sha256": "40506d461cee3bc80f84deaf13aff797f323d9d85d9aa92b3246b2b8493d9902",
+          "exit_code": 0,
+          "elapsed_seconds": 2.179,
+          "log_sha256": "866a2627aa55bd2712c2fc6178e42bec5fbf58d5aee4137195e7a142206c33da"
+        },
+        "omission": {
+          "unit": "swarm-signal-cancel-green-omission-9d485d4e255fdecc",
+          "binary_sha256": "e58999ba09cb80c22889e25dbba07f95b288cfb65035f8ac423f1594602d67d5",
+          "exit_code": 1,
+          "elapsed_seconds": 3.484,
+          "log_sha256": "2e30cad04de332ecda1689f66cf48637a59aebe78edb626372ad2e075a6be0d4"
+        }
+      }
+    },
+    "main": {
+      "top_level_tests": 10,
+      "leaf_tests": 17,
+      "pass_events": 19,
+      "skips": 0
+    },
+    "barrier": {
+      "top_level_tests": 1,
+      "leaf_tests": 5,
+      "pass_events": 6,
+      "skips": 0,
+      "cases": [
+        "TERM after durable claim",
+        "INT after durable claim",
+        "HUP after durable claim",
+        "SIGKILL retains unknown custody",
+        "HUP while stop-proof directory sync is pending"
+      ]
+    },
+    "omission": "Removing only the final pending-signal check starts the otherwise valid synthetic image in all three pending-signal cases. Those three assertions fail, while the clear-signal control passes.",
+    "original_red_failure": "Before the fix, each actual TERM/INT/HUP killed the owner before its handler existed, leaving no stopped proof and public retirement pending.",
+    "compilation_substitution": "Exactly three verified copies of the pinned swarm-fake-agent replaced compilation only, one per test parent. All native lifecycle code under test remained real."
+  },
+  "limits": [
+    "Private synthetic grants and fake native executables only; no installed Claude invocation, live account, model call or product activation.",
+    "The barrier uses actual process-group signals and public retirement/Delete validation, not an end-to-end installed daemon.Delete call. SIGKILL cannot run deferred cleanup and remains unresolved.",
+    "Native constructor/config/policy behavior, historical no-Runtime migration, account adoption and automatic continuation remain separate gates."
+  ],
+  "root_focused_race": {
+    "platform": "darwin/arm64",
+    "package": "./internal/shim",
+    "selection": "Cancellation error classification, buffered signal window, handler join, query-flood drain, backend exec failure and backend join",
+    "exit_code": 0,
+    "package_seconds": 6.925,
+    "owned_source_sha256_unchanged": true,
+    "linux_only_authority_cases_included": false
+  }
+}

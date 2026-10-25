@@ -39,8 +39,39 @@ func runClaudeRefusalHelper(path string) {
 	if err := os.WriteFile(path+".identity", identity, 0600); err != nil {
 		fail(err)
 	}
-	if _, err := Run(cfg); !errors.Is(err, errLoginResolution) {
-		fail(fmt.Errorf("expected pre-start login refusal, got %v", err))
+	if _, err := os.Lstat(path + ".finish-pause"); err == nil {
+		originalSync := nativeRecordSync
+		nativeRecordSync = func(root *os.Root) error {
+			if _, err := root.Lstat(NativeStoppedFile); err == nil {
+				if err := os.WriteFile(path+".finishing", []byte("proof sync pending"), 0600); err != nil {
+					return err
+				}
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					if _, err := os.Lstat(path + ".finish-release"); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						return context.DeadlineExceeded
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+			return originalSync(root)
+		}
+		defer func() { nativeRecordSync = originalSync }()
+	}
+	_, runErr := Run(cfg)
+	if _, err := os.Lstat(path + ".cancel"); err == nil {
+		result, _ := json.Marshal(map[string]bool{"canceled": errors.Is(runErr, context.Canceled), "auth_failure": errors.Is(runErr, errLoginResolution), "only_cancellation": runErr != nil && runErr.Error() == context.Canceled.Error()})
+		if err := os.WriteFile(path+".cancel-result", result, 0600); err != nil {
+			fail(err)
+		}
+		if !errors.Is(runErr, context.Canceled) || errors.Is(runErr, errLoginResolution) || runErr.Error() != context.Canceled.Error() {
+			fail(fmt.Errorf("expected user cancellation, got %v", runErr))
+		}
+	} else if !errors.Is(runErr, errLoginResolution) {
+		fail(fmt.Errorf("expected pre-start login refusal, got %v", runErr))
 	}
 }
 

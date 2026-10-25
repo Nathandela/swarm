@@ -1,6 +1,7 @@
 package shim
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -170,7 +171,7 @@ func TestClaudeOwnedStartSyntheticHeldImageAndExclusiveClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := claudeSyntheticCmd(cfg)
-	ptmx, err := birth.start(scope, cfg, cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	ptmx, err := birth.start(scope, cfg, cmd, &pty.Winsize{Rows: 24, Cols: 80}, nil)
 	if cmd.Process != nil {
 		defer func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _ = cmd.Wait() }()
 	}
@@ -210,7 +211,7 @@ func TestClaudeOwnedStartSyntheticHeldImageAndExclusiveClaim(t *testing.T) {
 		}
 	}
 	again := claudeSyntheticCmd(cfg)
-	if _, err := birth.start(scope, cfg, again, &pty.Winsize{}); err == nil || again.Process != nil {
+	if _, err := birth.start(scope, cfg, again, &pty.Winsize{}, nil); err == nil || again.Process != nil {
 		t.Fatal("same birth claim started a second process")
 	}
 }
@@ -231,7 +232,7 @@ func TestClaudeOwnedStartSyntheticNewEpochRefusesAfterCustody(t *testing.T) {
 			_ = cmd.Wait()
 		}
 	}()
-	if _, err := birth.start(scope, cfg, cmd, &pty.Winsize{}); err == nil || cmd.Process != nil || !scope.ownPreclaimDurable {
+	if _, err := birth.start(scope, cfg, cmd, &pty.Winsize{}, nil); err == nil || cmd.Process != nil || !scope.ownPreclaimDurable {
 		t.Fatal("stale selected epoch crossed Start or lost cleanup custody")
 	}
 	if err := scope.finish(); err != nil {
@@ -257,7 +258,7 @@ func TestClaudeOwnedStartSyntheticPublicationFailureReturnsUnwaitedChild(t *test
 		return original(root)
 	}
 	cmd := claudeSyntheticCmd(cfg)
-	ptmx, err := birth.start(scope, cfg, cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	ptmx, err := birth.start(scope, cfg, cmd, &pty.Winsize{Rows: 24, Cols: 80}, nil)
 	if cmd.Process == nil {
 		t.Fatalf("post-start fixture did not start: %v", err)
 	}
@@ -275,7 +276,7 @@ func TestClaudeOwnedStartSyntheticPublicationFailureReturnsUnwaitedChild(t *test
 		t.Fatalf("post-start publication lost child custody: %v", err)
 	}
 	again := claudeSyntheticCmd(cfg)
-	if next, err := birth.start(scope, cfg, again, &pty.Winsize{}); err == nil || again.Process != nil {
+	if next, err := birth.start(scope, cfg, again, &pty.Winsize{}, nil); err == nil || again.Process != nil {
 		if next != nil {
 			_ = next.Close()
 		}
@@ -300,7 +301,7 @@ func TestClaudeOwnedStartSyntheticStartErrorConsumesAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := claudeSyntheticCmd(cfg)
-	if ptmx, err := birth.start(scope, cfg, cmd, &pty.Winsize{}); !errors.Is(err, syscall.ENOENT) || cmd.Process != nil {
+	if ptmx, err := birth.start(scope, cfg, cmd, &pty.Winsize{}, nil); !errors.Is(err, syscall.ENOENT) || cmd.Process != nil {
 		if ptmx != nil {
 			_ = ptmx.Close()
 		}
@@ -314,7 +315,7 @@ func TestClaudeOwnedStartSyntheticStartErrorConsumesAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	again := claudeSyntheticCmd(cfg)
-	if ptmx, err := birth.start(scope, cfg, again, &pty.Winsize{}); err == nil || again.Process != nil {
+	if ptmx, err := birth.start(scope, cfg, again, &pty.Winsize{}, nil); err == nil || again.Process != nil {
 		if ptmx != nil {
 			_ = ptmx.Close()
 		}
@@ -326,5 +327,58 @@ func TestClaudeOwnedStartSyntheticStartErrorConsumesAttempt(t *testing.T) {
 	}
 	if err := scope.finish(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClaudePreStartCancellationPreservesIndependentErrors(t *testing.T) {
+	birth := &claudeBirth{}
+	for _, cause := range []error{nil, errLoginResolution, syscall.ENOSPC} {
+		signals := make(chan os.Signal, 1)
+		signals <- syscall.SIGTERM
+		err := birth.preStartError(signals, cause)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("pending stop was not cancellation")
+		}
+		if cause == errLoginResolution && errors.Is(err, errLoginResolution) {
+			t.Fatal("user cancellation became auth failure")
+		}
+		if cause == syscall.ENOSPC && !errors.Is(err, syscall.ENOSPC) {
+			t.Fatal("cancellation swallowed independent proof error")
+		}
+	}
+	signals := make(chan os.Signal, 1)
+	signals <- syscall.SIGTERM
+	if err := (*claudeBirth)(nil).preStartError(signals, errLoginResolution); err != errLoginResolution || len(signals) != 1 {
+		t.Fatal("non-Claude path consumed another provider's signal")
+	}
+}
+
+func TestClaudeOwnedStartSyntheticPendingCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		signal os.Signal
+	}{{"term", syscall.SIGTERM}, {"int", syscall.SIGINT}, {"hup", syscall.SIGHUP}, {"clear", nil}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, scope, birth, _ := claudeStartFixture(t)
+			signals := make(chan os.Signal, 1)
+			if tc.signal != nil {
+				signals <- tc.signal
+			}
+			cmd := claudeSyntheticCmd(cfg)
+			ptmx, err := birth.start(scope, cfg, cmd, &pty.Winsize{Rows: 24, Cols: 80}, signals)
+			if ptmx != nil {
+				defer func() { _ = ptmx.Close() }()
+			}
+			if cmd.Process != nil {
+				defer func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _ = cmd.Wait() }()
+			}
+			if tc.signal != nil {
+				if !errors.Is(err, context.Canceled) || errors.Is(err, errLoginResolution) || cmd.Process != nil || scope.startAttempted {
+					t.Fatal("pending cancellation crossed final native Start or became auth failure")
+				}
+			} else if err != nil || ptmx == nil || cmd.Process == nil || !scope.startAttempted {
+				t.Fatalf("otherwise-valid held image did not Start: %v", err)
+			}
+		})
 	}
 }

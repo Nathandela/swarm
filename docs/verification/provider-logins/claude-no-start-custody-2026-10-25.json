@@ -79,6 +79,6 @@
   "limits": [
     "Linux used synthetic grants and private ELF test agents with verified prebuilt compilation substitution. No installed provider CLI, live grant or native model call ran.",
     "Actual native constructor, config/trust/policy/new-CWD, historical no-Runtime migration, account adoption and automatic continuation remain separate gates.",
-    "Final connected review identified a separate normal Delete/startup-abort SIGTERM window between early claim and signal-handler installation. Signal capture through proof publication and pre-Start cancellation are pending; this checkpoint does not qualify that case."
+    "This original checkpoint left the catchable Delete/startup-abort signal window unqualified. The subsequent correction and actual Linux RED/GREEN evidence are recorded separately in claude-startup-cancellation-2026-10-25.json."
   ]
 }

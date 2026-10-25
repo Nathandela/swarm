@@ -1,6 +1,7 @@
 package shim
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -70,9 +71,26 @@ func (b *claudeBirth) close() {
 	}
 }
 
+// Cancellation is distinct from an ordinary auth/preparation refusal. Retain
+// independent durability/containment errors when a stop is observed as well.
+func (b *claudeBirth) preStartError(signals <-chan os.Signal, err error) error {
+	if b == nil {
+		return err
+	}
+	select {
+	case <-signals:
+		if err == nil || err == errLoginResolution {
+			return context.Canceled
+		}
+		return errors.Join(context.Canceled, err)
+	default:
+		return err
+	}
+}
+
 // start never waits for the child. If publication fails after Start, return its
 // live PTY/process to Run's existing drain/contain/one-Wait path. Never retry.
-func (b *claudeBirth) start(scope *managedNativeScope, cfg Config, cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
+func (b *claudeBirth) start(scope *managedNativeScope, cfg Config, cmd *exec.Cmd, ws *pty.Winsize, signals <-chan os.Signal) (*os.File, error) {
 	if b == nil || b.store == nil || b.image == nil || b.anchor == nil || runtime.GOOS != "linux" || cfg.LoginRuntime == nil || cfg.CLIIdentity == nil || cmd == nil || cmd.Path != cfg.CLIIdentity.Path || !reflect.DeepEqual(cmd.Args, cfg.Argv) || cmd.Dir != cfg.Cwd || len(cmd.ExtraFiles) != 0 {
 		return nil, errLoginResolution
 	}
@@ -83,6 +101,9 @@ func (b *claudeBirth) start(scope *managedNativeScope, cfg Config, cmd *exec.Cmd
 			return errLoginResolution
 		}
 		if err := scope.validateClaudeStart(cfg); err != nil {
+			return err
+		}
+		if err := b.preStartError(signals, nil); err != nil {
 			return err
 		}
 		// ExtraFiles remaps this exact held image to child fd3 before execve. The
@@ -99,5 +120,8 @@ func (b *claudeBirth) start(scope *managedNativeScope, cfg Config, cmd *exec.Cmd
 		}
 		return scope.record(cmd.Process.Pid, nil)
 	})
+	if cmd.Process == nil {
+		err = b.preStartError(signals, err)
+	}
 	return ptmx, err
 }
