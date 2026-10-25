@@ -1,12 +1,13 @@
 {
   "date": "2026-10-25",
-  "scope": "Two unqualified isolated fresh managed Codex TUI setup attempts; fake ready grants only, no user authentication or live installation changes",
-  "overall": "FAIL; neither attempt reached a coding-agent backend/TUI adoption case; no production validator bypass is authorized",
+  "scope": "Four unqualified isolated fresh managed Codex TUI attempts plus two seed-only controls; synthetic ready grants only, no user authentication or live installation changes",
+  "overall": "Still NOT QUALIFIED for fresh managed Codex TUI adoption. seedV2 passes synthetic seed/public metadata only; the full V6 native attempt failed and diagnostic V7 rejected the observed Python 3.10 identity. Preserve earlier V2/V3 failures.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
     "product_sha256": "dc90bbe17797702a49bec9afccfec01954cf4f0bcf4701b9306cd9b45d265f7d",
-    "native_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215"
+    "native_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "note": "Initial packet pin belongs to preserved V2/V3 attempts; later attempts bind their own exact pins in prepared/run/seed receipts."
   },
   "attempts": [
     {
@@ -34,13 +35,105 @@
       "registry_sha256": "2f6fce15d797ccd99562897650a6c6666d2df81d71bcb4d09c60fefe81002d4c",
       "finding": "Fixture seed rejected protected chatgpt_base_url through ValidateAuthSettings -> codexCompetingLevel (frozen internal/logins/native.go:231). Two synthetic ready grants were present; provider transport accepted/rejected counts and native frames were zero.",
       "cleanup": "Inner owned listeners closed, children ended, identities ended, pins unchanged. Outer cgroup empty and gone, but known TCP fixture-listener closure was false; overall listener-closure proof remains incomplete. Do not fabricate complete cleanup proof."
+    },
+    {
+      "id": "seedV1",
+      "result": "FAIL: isolated synthetic seed failed while staging saved-login replacement; no adoption case.",
+      "attempt_path": "/private/tmp/swarm-codex-seed-run-5r8zqogq/attempt.json",
+      "attempt_sha256": "1f2eeca4b10081dabfdb9e36c8c0647e4ef432af17c28dd1b523713893e42089",
+      "receipt_path": "/private/tmp/swarm-codex-seed-run-5r8zqogq/receipt.json",
+      "receipt_sha256": "e30d144ad26af71060f3db6c66193bb92e3a4c84c3577c70740b6586da739942",
+      "finding": "FileNotFoundError for the staged .login-tmp-* path; metadata proof then failed because seed/unit failed.",
+      "scope": "Synthetic seed/public metadata only; no auth qualification or complete ephemeral exec trace.",
+      "kernel_cleanup": {
+        "exact_unit_kill_attempted": true,
+        "cgroup_empty": true,
+        "directory_gone": true,
+        "observed_identity_ended": true
+      }
+    },
+    {
+      "id": "seedV2",
+      "result": "PASS for isolated synthetic seed/public metadata only; not native login or TUI adoption.",
+      "attempt_path": "/private/tmp/swarm-codex-seed-run-zs7j07qg/attempt.json",
+      "attempt_sha256": "5fd84949e4727cd05c91d17e81aa69518128262dc597cab1fe4bac9b3015860d",
+      "receipt_path": "/private/tmp/swarm-codex-seed-run-zs7j07qg/receipt.json",
+      "receipt_sha256": "026ae84316ea330f468573f24bd70776a411cb42590824c1db53f48ac4072b47",
+      "finding": "Synthetic ready A/B grants and schema-3 native-grant registry were seeded; stdout matched the prepared fixture.",
+      "scope": "No auth qualification, native ownership, or complete ephemeral exec trace.",
+      "kernel_cleanup": {
+        "exact_unit_kill_attempted": true,
+        "cgroup_empty": true,
+        "directory_gone": true,
+        "observed_identity_ended": true
+      }
+    },
+    {
+      "id": "full-V6",
+      "result": "FAIL: full native run stopped on scratch-symlink validation, wrapper timeout, and missing ownership proof.",
+      "run_path": "/private/tmp/swarm-codex-outer-sb8xnd2o/run.json",
+      "run_sha256": "1b683505b6c2d8b53e7c206f1be89ba6bfe01926b0048c092121d08ed6e23b84",
+      "prepared_path": "/private/tmp/swarm-codex-outer-sb8xnd2o/prepared.json",
+      "prepared_sha256": "c35a177a7c682c91f3846d7d9fa7b311dfb8a726fa318de5c17600f2cd205c1b",
+      "inner_prepared_path": "/private/tmp/swarm-codex-outer-sb8xnd2o/inner-evidence/prepared.json",
+      "inner_prepared_sha256": "2941ed639b94e66b2f240475171d43ecafc0c48c59dd31af12ac7fef7217ba31",
+      "inner_receipt_path": "/private/tmp/swarm-codex-outer-sb8xnd2o/inner-evidence/receipt.inner.json",
+      "inner_receipt_sha256": "8b9d58882cde19f2dbb3d147f855e13b261bc9e59400fc72f9282f40d2f9519b",
+      "inventory_path": "/private/tmp/swarm-codex-outer-sb8xnd2o/inner-evidence/inventory.json",
+      "inventory_sha256": "b4f75aadcb66a94d7f6069bc60629632c876663296ca76341d84a82c6d41588a",
+      "finding": "Ten process tuples observed; required native ownership remained unproved. Outer failures: ValueError scratch symlink, wrapper wait timeout, proof/finalize KeyError ownership. No native frames; no provider requests accepted.",
+      "cleanup": {
+        "kernel": {
+          "exact_unit_kill_attempted": true,
+          "cgroup_empty": true,
+          "directory_gone": true,
+          "observed_identities_ended": true,
+          "pins_unchanged": true
+        },
+        "inner_receipt": {
+          "owned_listeners_closed": true,
+          "children_ended": true,
+          "cgroup_empty": false,
+          "external_cleanup_required": true
+        },
+        "qualification": "Outer evidence says known fixture listeners closed=false and ownership proof missing. Kernel empty/gone and observed identity termination do not prove complete listener closure or native ownership."
+      },
+      "polling_limit": "Positive witnesses only; ephemeral execs may be missed. No complete birth trace claimed."
+    },
+    {
+      "id": "diagnostic-V7",
+      "result": "DIAGNOSTIC FAIL before a coding-agent adoption case; host-side Python 3.10 image mismatch was rejected.",
+      "run_path": "/private/tmp/swarm-codex-outer-h97w4gzi/run.json",
+      "run_sha256": "11dd8390972f36ca816bba5dfd29900ff20a2c5b6ed24652adebf967663dd22d",
+      "prepared_path": "/private/tmp/swarm-codex-outer-h97w4gzi/prepared.json",
+      "prepared_sha256": "01236a665d1f796f69d1574f1254208eb2f154d0a773ed8f8782a4fd2e108e4a",
+      "host_source_path": "/private/tmp/swarm-codex-outer-h97w4gzi/producer-evidence/host-source.json",
+      "host_source_sha256": "aa90a19af4f57e541d10140805821beb2668c4cf790299324d376dfca4a6775f",
+      "finding": "Outer ownership scan rejected an unknown live executable identity whose observed image was /usr/bin/python3.10. Host evidence records the source-required path/image, but does not establish historical argv or parent for that process.",
+      "kernel_cleanup": {
+        "exact_unit_kill_attempted": true,
+        "cgroup_empty": true,
+        "directory_gone": true,
+        "observed_identities_ended": true,
+        "pins_unchanged": true
+      },
+      "listener_and_ownership_proof": "Known fixture listener closure was false; ownership finalization failed with KeyError ownership. Kernel cleanup alone does not establish complete listener/native ownership proof.",
+      "polling_limit": "Seven positive tuples observed; ephemeral execs may be missed. No complete birth trace claimed.",
+      "source_required_python_image": {
+        "path": "/usr/bin/python3.10",
+        "sha256": "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae",
+        "device": 2049,
+        "inode": 29568,
+        "basis": "host-source evidence only; does not establish the observed process historical argv or parent"
+      }
     }
   ],
-  "next_step": "Pinned native-source research supports ordinary HTTPS_PROXY and shared private CA for default ChatGPT HTTP/WebSockets. A reviewed transport plan, production-validator RED/GREEN control and isolated seed-only preflight are required before another full case. Preserve the production auth boundary; no endpoint-selector bypass.",
+  "next_step": "Root and Astra approved the source/host-bound OS-query interpreter amendment for preparation. Review the frozen new outer envelope before one diagnostic attempt; admit only the pinned physical Python3.10 image after pre/post binding. All symlink rejections stay strict. Preserve the production auth validator and failed attempts.",
   "limits": [
-    "Both attempts are setup failures, not product adoption failures or positive/negative TUI qualification.",
-    "No user auth, real grant, live account, product activation, or production validator bypass.",
-    "Outer polling observes positive required tuple witnesses only; ephemeral execs may be missed, so no complete birth trace is claimed."
+    "seedV2 proves synthetic seed/public metadata only; no native login, account admission, TUI adoption, or complete ephemeral process trace.",
+    "The full V6 run failed. Cgroup empty/gone and observed identities ended are kernel cleanup facts; known fixture listener closure and native ownership proof remain incomplete.",
+    "Diagnostic V7 records a rejected Python 3.10 observed image. Host source evidence does not prove that process\u2019s actual argv or parent.",
+    "The OS-query amendment is preparation-approved only; the frozen implementation and next execution still need review. Symlinks remain unqualified. No user auth, real grant, live account, product activation, or production validator bypass."
   ],
   "validator_source": {
     "auth_boundary_path": "internal/logins/auth_boundary.go",
@@ -48,5 +141,30 @@
     "native_path": "internal/logins/native.go",
     "native_sha256": "0d9e239ccc194e9aff808f64ffe0b690e80a296b0fc9484a8b0afe5ee7f0239e",
     "note": "ValidateAuthSettings calls codexCompeting, which includes chatgpt_base_url via codexCompetingLevel."
+  },
+  "source_amendment": {
+    "path": "/private/tmp/swarm-codex-python-producer-research-20261025-v1/AMENDMENT.md",
+    "sha256": "7e14caad1c5490e08f4a179e09424d77b10d593faf7edc3f63070d673629a025",
+    "review": "Root and Astra GREEN for preparation only; exact default source/host interpreter binding, no historical process argv/parent attribution.",
+    "primary_sources": [
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/login/src/auth/default_client.rs",
+        "file": "default_client.rs",
+        "sha256": "174e02e439013bf75cccdcfd36b9c23e31d9ee84835a0cc0b1f9d7a33391a064",
+        "bytes": 17919
+      },
+      {
+        "url": "https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/Cargo.lock",
+        "file": "Cargo.lock",
+        "sha256": "17cdd862471774ba7aef836aaf0a0a3ed76bd23e503b1fc7278c89d1f2719d03",
+        "bytes": 408369
+      },
+      {
+        "url": "https://crates.io/api/v1/crates/os_info/3.14.0/download",
+        "file": "os_info-3.14.0.crate",
+        "sha256": "e4022a17595a00d6a369236fdae483f0de7f0a339960a53118b818238e132224",
+        "bytes": 27455
+      }
+    ]
   }
 }
