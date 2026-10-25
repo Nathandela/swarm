@@ -52,6 +52,13 @@ func open(stateRoot string, readOnly, existingOnly bool) (_ *Store, err error) {
 	}
 	defer func() { _ = state.Close() }()
 	if bootstrap {
+		fence, lockErr := lockStateDirectory(state)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		defer func() { _ = fence.Close() }()
+	}
+	if bootstrap {
 		if err = state.Mkdir("logins", 0700); err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
@@ -123,6 +130,20 @@ func open(stateRoot string, readOnly, existingOnly bool) (_ *Store, err error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// Bootstrap and absent-login metadata writers share the existing directory inode.
+// Closing this independent descriptor releases its lock; lock order is root then registry.
+func lockStateDirectory(state *os.Root) (*os.File, error) {
+	file, err := state.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
 }
 
 func (s *Store) StateRoot() string { return filepath.Dir(s.path) }
@@ -309,7 +330,7 @@ func find(r *Registry, id string) *Login {
 	return nil
 }
 func validateRegistry(r Registry) error {
-	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6 && r.SchemaVersion != claudeProfileSchemaVersion && r.SchemaVersion != claudeAuthSchemaVersion && r.SchemaVersion != claudeAuthScopeSchemaVersion) || r.Providers == nil || r.Switches == nil {
+	if (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 2 && r.SchemaVersion != 3 && r.SchemaVersion != 4 && r.SchemaVersion != 5 && r.SchemaVersion != 6 && r.SchemaVersion != claudeProfileSchemaVersion && r.SchemaVersion != claudeAuthSchemaVersion && r.SchemaVersion != claudeAuthScopeSchemaVersion && r.SchemaVersion != ClaudeProfileCustodySchemaVersion) || r.Providers == nil || r.Switches == nil {
 		return ErrIneligible
 	}
 	if !validClaudeProfiles(r) {

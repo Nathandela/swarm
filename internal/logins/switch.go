@@ -70,7 +70,7 @@ func (s *Store) beginReloginJob(expected uint64, loginID string, credential Cred
 func (s *Store) beginSwitch(expected uint64, provider, toID, reason string, sessions []Restart, incoming *Credential, jobID string) (Switch, error) {
 	var out Switch
 	_, e := s.mutate(expected, func(r *Registry) error {
-		if codexOwned(*r, provider) {
+		if codexOwned(*r, provider) || claudeProfilesOwned(*r, provider) {
 			return ErrPending
 		}
 		if _, ok := r.Switches[provider]; ok {
@@ -546,11 +546,33 @@ func (s *Store) Reconcile() error {
 		if e != nil {
 			return e
 		}
+
 		for _, entry := range entries {
 			if validID(entry.Name()) && find(&r, entry.Name()) == nil {
-				if e = s.eraseSaved(entry.Name()); e != nil {
-					// Unreferenced unknown bytes are preserved for the owner; they
-					// cannot prevent unrelated canonical logins from recovering.
+				login, err := s.orphanSavedLogin(entry.Name())
+				if errors.Is(err, errUnknownSavedData) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if login.Provider == ProviderClaude {
+					if err := s.claudeAuthorityMutationAllowed(r, login); errors.Is(err, ErrPending) || errors.Is(err, ErrInUse) {
+						continue
+					} else if err != nil {
+						return err
+					}
+					if intent, err := s.readClaudeAuthIntent(login.ID); err == nil {
+						if intent.Ref.Identity != login.Identity || intent.Ref.CredentialRevision != login.CredentialRevision {
+							return ErrConflict
+						}
+						// The retained exact helper remains discoverable for outside maintenance.
+						continue
+					} else if !errors.Is(err, os.ErrNotExist) {
+						return err
+					}
+				}
+				if e = s.eraseSaved(login); e != nil {
 					if errors.Is(e, errUnknownSavedData) || errors.Is(e, ErrUnsafePath) {
 						continue
 					}
@@ -558,6 +580,7 @@ func (s *Store) Reconcile() error {
 				}
 			}
 		}
+
 		pending, e := s.root.Open("pending")
 		if e != nil {
 			return e
@@ -629,6 +652,13 @@ func (s *Store) Reconcile() error {
 					l.LimitKnown = false
 					l.LimitNonRolling = false
 					l.ExhaustedUntil = time.Time{}
+				}
+			}
+			if l.Provider == ProviderClaude {
+				if err := s.claudeAuthorityMutationAllowed(r, *l); errors.Is(err, ErrPending) || errors.Is(err, ErrInUse) {
+					continue
+				} else if err != nil {
+					return err
 				}
 			}
 			if l.Provider == ProviderClaude {

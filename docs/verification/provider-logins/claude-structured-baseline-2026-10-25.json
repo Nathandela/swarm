@@ -1,0 +1,122 @@
+{
+  "date": "2026-10-25",
+  "scope": "One native trust-recording, ordinary relaunch, human-question callback and durable-history baseline on each platform",
+  "production_activation": false,
+  "native_version": "2.1.310",
+  "harness_manifest_sha256": "6d64345b1251b6e1f943e2e3f0ca4e13868a296d8aed50d29b64c6cad5e8e0fc",
+  "review": "Sol prepared; Root and independent Astra rejected V1 cleanup/history gaps, reviewed V2 and source-derived V3 prompt oracle; Root ran and checked both platform receipts; Astra independently audited Mac native history and approved unchanged Linux scope.",
+  "behavior": [
+    "Fresh private home and synthetic workspace start without a copied trust entry. Native initialize records the authorized fixture trust choice; a new ordinary process then loads project features.",
+    "Direct native stream-JSON retains normal settings, native default prompt and tools. User/project/local instruction canaries, model/effort precedence, a deny rule and a project SessionStart hook remain effective.",
+    "One original UUID-bearing user task produces one real native AskUserQuestion request. The host returns its authorized fixture answer against the actual request ID.",
+    "Native history after exit has explicitly session-bound, ordered original user, exact tool call, successful result and final answer; the stored tool-result digest equals the subsequent native request."
+  ],
+  "containment": "Only fake credentials and a nonforwarding loopback server; generated private homes; bounded streams, requests and artifacts; exact owned process groups and joined HTTP readers. Linux additionally used a private verified executable copy, Python 3.11.11, an inner 55-second SIGTERM deadline and a hard 60-second whole-cgroup limit with zero stop grace. No live accounts or discussions.",
+  "prior_outcomes": {
+    "v1": "Not executed: review found TLS cleanup import, post-spawn ownership, failure-receipt and unordered history-oracle defects.",
+    "v2": {
+      "outcome": "uncharacterized; retained unchanged",
+      "receipt_sha256": "e339dc927d3507e0eea97da119fcd31f95a2796a5830d837bf8343355badec83",
+      "reason": "The test expected the interactive CLI identity line. Pinned source and private native request shapes establish a distinct noninteractive identity with the default native prompt builder."
+    },
+    "v3": "Fresh runs use a source-derived conjunction of identity, native role, harness, permission and action-authorization sections. Minimal/custom/missing-section controls reject. Other behavioral and history checks are unchanged."
+  },
+  "runs": [
+    {
+      "platform": "darwin-arm64",
+      "native_sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+      "receipt_sha256": "54e69e334ef786077e2485f9cbc1bd7a0b414756f446c82a60ef02f771eb0d52",
+      "elapsed_seconds": 0.921,
+      "main_requests": 2,
+      "trust_model_requests": 0,
+      "native_jsonl": {
+        "present_after_native_exit": true,
+        "session_id_matches": true,
+        "original_user_uuid_present": true,
+        "tool_use_id_present": true,
+        "matching_success_tool_result": true,
+        "answer_present_in_tool_result": true,
+        "ordered_native_sequence": true,
+        "decisive_row_indices": [
+          2,
+          19,
+          20,
+          25
+        ],
+        "tool_result_matches_wire": true,
+        "final_end_turn_present": true,
+        "rows_hash": "caaf4076dc38e8ee7651a501716207d2e39485fdd591a79825153c81145d589c",
+        "bytes": 151405
+      },
+      "cleanup": {
+        "native_groups_gone": true,
+        "http_handlers_joined": true
+      },
+      "settings_and_callback": {
+        "native_default_prompt_seen": true,
+        "all_instruction_sources_seen": true,
+        "effective_model": "claude-opus-5-5",
+        "effective_effort": "medium",
+        "deny_write_preserved": true,
+        "chat_project_hook_loaded": true,
+        "permission_request_matches_tool": true,
+        "permission_response_matches_request_id": true,
+        "actual_question_matches_fixture": true,
+        "one_original_user_message": true,
+        "result_original_uuid_matches": true,
+        "result_is_error": false
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "receipt_sha256": "09562b9e14415b9c88d699bde92a9052b308987b7d2ddc5784e6bdb37d3cb341",
+      "elapsed_seconds": 1.871,
+      "main_requests": 2,
+      "trust_model_requests": 0,
+      "native_jsonl": {
+        "present_after_native_exit": true,
+        "session_id_matches": true,
+        "original_user_uuid_present": true,
+        "tool_use_id_present": true,
+        "matching_success_tool_result": true,
+        "answer_present_in_tool_result": true,
+        "ordered_native_sequence": true,
+        "decisive_row_indices": [
+          2,
+          19,
+          20,
+          27
+        ],
+        "tool_result_matches_wire": true,
+        "final_end_turn_present": true,
+        "rows_hash": "68bba9ad9ba9f1156a9eb85c1b70ce7dcd4c9b1d0e12394e2534069d741df0cb",
+        "bytes": 151050
+      },
+      "cleanup": {
+        "native_groups_gone": true,
+        "http_handlers_joined": true
+      },
+      "settings_and_callback": {
+        "native_default_prompt_seen": true,
+        "all_instruction_sources_seen": true,
+        "effective_model": "claude-opus-5-5",
+        "effective_effort": "medium",
+        "deny_write_preserved": true,
+        "chat_project_hook_loaded": true,
+        "permission_request_matches_tool": true,
+        "permission_response_matches_request_id": true,
+        "actual_question_matches_fixture": true,
+        "one_original_user_message": true,
+        "result_original_uuid_matches": true,
+        "result_is_error": false
+      }
+    }
+  ],
+  "limits": [
+    "This proves basic local structured operation, not terminal UI equivalence or complete workflow parity.",
+    "Quota continuation, completed answers, pending approvals/questions across restart, cancellation, queued user input, background tasks, hooks, MCP and workflows remain separate gates.",
+    "The fixture supplied explicit synthetic trust and question choices; no production automatic approval policy is implied.",
+    "No SDK dependency, product frontend, default mode or live deployment changed."
+  ]
+}

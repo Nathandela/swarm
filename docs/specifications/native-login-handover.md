@@ -215,6 +215,9 @@ field, preserving deletion authority after partial payload removal. This does
 not classify common homes as profiles or permit live common-home schema 5 births.
 An operation omitted from the roster remains unresolved while its session
 directory exists or cannot be inspected; a skipped metadata row is not absence.
+The [Store foundation checks](../verification/provider-logins/claude-store-custody-2026-10-25.json)
+cover mutation/admission fencing and the first-creation race. Daemon integration
+and native construction remain separate qualification gates.
 
 Old A may finish internal work after B is desired. New host turns on a stale
 incarnation remain pending; approvals and cancellation stay usable. This slice
@@ -352,6 +355,9 @@ do not spoof a cloud session origin or assume cloud-only pending-action recovery
 exists locally. This investigation adds no SDK dependency or live/default mode
 change. Quota recovery, parked decisions and workflow/background parity remain
 separate gates after the baseline.
+The [structured baseline](../verification/provider-logins/claude-structured-baseline-2026-10-25.json)
+passes on the pinned macOS and Linux binaries. It verifies native history and
+one question callback with normal settings; it does not enable recovery.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It

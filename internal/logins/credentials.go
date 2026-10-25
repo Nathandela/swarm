@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,20 +207,21 @@ func owned(r Registry, id string) bool {
 	return false
 }
 func (s *Store) Remove(expected uint64, id string) (Registry, error) {
-	if err := s.retireClaudeAuthForRemoval(expected, id); err != nil {
-		return Registry{}, err
-	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	var r Registry
-	e := s.locked(func() error {
-		var e error
-		r, e = s.load()
-		if e != nil {
-			return e
+	var removed Login
+	var helper ClaudeAuthRef
+	err := s.locked(func() error {
+		var err error
+		r, err = s.load()
+		if err != nil {
+			return err
 		}
 		if r.Revision != expected {
 			return ErrConflict
+		}
+		if r.Revision == ^uint64(0) {
+			return ErrIneligible
 		}
 		if owned(r, id) {
 			return ErrInUse
@@ -228,46 +230,77 @@ func (s *Store) Remove(expected uint64, id string) (Registry, error) {
 		if codexOwned(r, ProviderCodex) {
 			for _, l := range r.Logins {
 				if l.ID == id && l.Provider == ProviderCodex {
-					lease, e = s.acquireCodexGrantLocked(l)
-					if e != nil {
-						return e
+					lease, err = s.acquireCodexGrantLocked(l)
+					if err != nil {
+						return err
 					}
 					defer func() { _ = lease.lock.Close(); lease.lock = nil }()
-					if _, e = s.root.Lstat(filepath.Join("saved", id, codexAuxFile)); e == nil {
-						if e = lease.CleanupAuxiliary(); e != nil {
-							return e
+					if _, err = s.root.Lstat(filepath.Join("saved", id, codexAuxFile)); err == nil {
+						if err = lease.CleanupAuxiliary(); err != nil {
+							return err
 						}
-					} else if !errors.Is(e, os.ErrNotExist) {
-						return e
+					} else if !errors.Is(err, os.ErrNotExist) {
+						return err
 					}
 				}
 			}
 		}
-		for i, l := range r.Logins {
-			if l.ID == id {
-				if l.Provider == ProviderClaude {
-					if e := s.claudeAuthNamespaceAbsent(id); e != nil {
-						return e
+
+		for i, login := range r.Logins {
+			if login.ID == id {
+				if login.Provider == ProviderClaude {
+					if err := s.claudeAuthorityMutationAllowed(r, login); err != nil {
+						return err
+					}
+					helper, err = s.claudeSettledRemovalRef(r, login)
+					if err != nil {
+						return err
 					}
 				}
-				parent, _, e := s.openSavedForRemoval(id)
-				if e != nil {
-					return e
+				parent, _, err := s.openSavedForRemoval(id)
+				if err != nil {
+					return err
 				}
-				if e = parent.Close(); e != nil {
-					return e
+				if err := parent.Close(); err != nil {
+					return err
 				}
 				r.Logins = append(r.Logins[:i], r.Logins[i+1:]...)
 				r.Revision++
-				if e = s.save(r); e != nil {
-					return e
+				if err := s.save(r); err != nil {
+					return err
 				}
-				return s.eraseSaved(id)
+				removed = login
+				if login.Provider != ProviderClaude {
+					return s.eraseSaved(login)
+				}
+				return nil
 			}
 		}
 		return ErrIneligible
 	})
-	return r, e
+	s.mu.Unlock()
+	if err != nil || removed.Provider != ProviderClaude {
+		return r, err
+	}
+	// Registry removal is the durable authorization; cleanup never precedes its CAS.
+	if helper.Nonce != "" {
+		if err := s.RetireClaudeAuth(helper); err != nil {
+			return r, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err = s.locked(func() error {
+		current, err := s.load()
+		if err != nil {
+			return err
+		}
+		if find(&current, id) != nil {
+			return ErrConflict
+		}
+		return s.eraseSaved(removed)
+	})
+	return r, err
 }
 
 func (s *Store) openSavedForRemoval(id string) (*os.Root, []os.DirEntry, error) {
@@ -289,10 +322,13 @@ func (s *Store) openSavedForRemoval(id string) (*os.Root, []os.DirEntry, error) 
 	if e != nil {
 		return nil, nil, e
 	}
-	entries, e := f.ReadDir(-1)
+	entries, e := f.ReadDir(33)
 	_ = f.Close()
-	if e != nil {
+	if e != nil && !errors.Is(e, io.EOF) {
 		return nil, nil, e
+	}
+	if len(entries) > 32 {
+		return nil, nil, ErrCapacity
 	}
 	for _, ent := range entries {
 		if ent.Name() != ".grant-owner" && ent.Name() != "auth.json" && ent.Name() != ".grant-lock" && ent.Name() != "credential.json" && ent.Name() != ".credentials.json" && ent.Name() != "relogin.json" && !validStoreTemporary(ent.Name()) {
@@ -311,7 +347,18 @@ func validStoreTemporary(name string) bool {
 	return ok && validID(id)
 }
 
-func (s *Store) eraseSaved(id string) error {
+func (s *Store) eraseSaved(login Login) error {
+	id := login.ID
+	r, err := s.load()
+	if err != nil {
+		return err
+	}
+	if err := s.claudeAuthorityMutationAllowed(r, login); err != nil {
+		return err
+	}
+	if _, err := s.readSavedRecord(login); err != nil {
+		return err
+	}
 	if err := s.claudeAuthNamespaceAbsent(id); err != nil {
 		return err
 	}
@@ -321,6 +368,9 @@ func (s *Store) eraseSaved(id string) error {
 	}
 	defer func() { _ = parent.Close() }()
 	for _, ent := range entries {
+		if ent.Name() == "credential.json" {
+			continue
+		}
 		if e = parent.Remove(ent.Name()); e != nil {
 			return e
 		}
@@ -334,6 +384,12 @@ func (s *Store) eraseSaved(id string) error {
 		if e = syncRootDir(parent, "."); e != nil {
 			return ErrDurabilityUncertain
 		}
+	}
+	if e = parent.Remove("credential.json"); e != nil {
+		return e
+	}
+	if e = syncRootDir(parent, "."); e != nil {
+		return ErrDurabilityUncertain
 	}
 	if e = s.root.Remove(filepath.Join("saved", id)); e != nil {
 		return e
@@ -455,6 +511,9 @@ func (s *Store) writeSaved(l Login, c Credential) error {
 	if e != nil {
 		return e
 	}
+	if err := s.claudeSavedWriteAllowed(r, l); err != nil {
+		return err
+	}
 	if codexOwned(r, l.Provider) {
 		return s.writeNewCodexGrant(l, c)
 	}
@@ -463,11 +522,11 @@ func (s *Store) writeSaved(l Login, c Credential) error {
 		return e
 	}
 	if l.Provider == ProviderClaude {
-		if e := s.writeClaudeAuth(l.ID, c.Auth); e != nil {
+		if e := s.writeClaudeAuthPayload(l.ID, c.Auth); e != nil {
 			return e
 		}
 	}
-	return s.writeSavedMetadata(l, c)
+	return s.writeSavedMetadataPayload(l, c)
 }
 func (s *Store) writeSavedMetadata(l Login, c Credential) error {
 	if l.Provider == ProviderClaude {
@@ -475,6 +534,20 @@ func (s *Store) writeSavedMetadata(l Login, c Credential) error {
 			return err
 		}
 	}
+	if l.Provider == ProviderClaude {
+		r, err := s.load()
+		if err != nil {
+			return err
+		}
+		if err := s.claudeSavedWriteAllowed(r, l); err != nil {
+			return err
+		}
+	}
+	return s.writeSavedMetadataPayload(l, c)
+}
+
+// The caller holds the registry fence and has checked the Claude predicates.
+func (s *Store) writeSavedMetadataPayload(l Login, c Credential) error {
 	if l.Provider == ProviderCodex {
 		r, e := s.load()
 		if e != nil {

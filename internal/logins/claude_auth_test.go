@@ -433,8 +433,8 @@ func TestClaudeAuthSavedRemovalRetiresOnlyPositivelyStoppedTerminalJob(t *testin
 	if _, err := s.Remove(snapshot(t, s).Revision, b.ID); !errors.Is(err, ErrPending) {
 		t.Fatalf("saved removal bypassed unresolved unit custody: %v", err)
 	}
-	if held, err := s.ReadClaudeAuth(ref); err != nil || held.Phase != "retiring" || held.Scope == (ClaudeAuthScope{}) {
-		t.Fatal("removal lost unit recovery evidence")
+	if held, err := s.ReadClaudeAuth(ref); err != nil || held.Phase != "ready" || held.Scope == (ClaudeAuthScope{}) {
+		t.Fatal("failed removal changed retained budget or lost exact unit recovery evidence")
 	}
 	if err := retireClaudeAuthTest(t, s, ref); err != nil {
 		t.Fatal(err)

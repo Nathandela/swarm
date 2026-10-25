@@ -329,44 +329,6 @@ func (s *Store) claudeAuthNamespaceAbsent(id string) error {
 	return ErrInUse
 }
 
-func (s *Store) retireClaudeAuthForRemoval(expected uint64, id string) error {
-	s.mu.Lock()
-	var ref ClaudeAuthRef
-	err := s.locked(func() error {
-		r, err := s.load()
-		if err != nil {
-			return err
-		}
-		if r.Revision != expected {
-			return ErrConflict
-		}
-		if owned(r, id) {
-			return ErrInUse
-		}
-		l := find(&r, id)
-		if l == nil {
-			return ErrIneligible
-		}
-		if l.Provider != ProviderClaude {
-			return nil
-		}
-		intent, err := s.readClaudeAuthIntent(id)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		ref = intent.Ref
-		return nil
-	})
-	s.mu.Unlock()
-	if err != nil || ref.Nonce == "" {
-		return err
-	}
-	return s.RetireClaudeAuth(ref)
-}
-
 func (s *Store) claudeAuthGeneration(id string) (string, []byte, error) {
 	raw, err := s.claudeAuth(id)
 	if err != nil {

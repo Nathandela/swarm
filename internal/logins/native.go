@@ -104,6 +104,9 @@ func (s *Store) installCredential(provider string, c Credential) error {
 	} else if codexOwned(r, provider) || claudeProfilesOwned(r, provider) {
 		return ErrPending
 	} else if provider == ProviderClaude {
+		if err := s.claudeCommonMutationAllowed(r); err != nil {
+			return err
+		}
 		identity, err := ClaudeIdentity(c.Identity)
 		if err != nil {
 			return err
@@ -161,9 +164,17 @@ func (s *Store) claudeAuth(id string) ([]byte, error) {
 	return readPrivate(s.root, filepath.Join("saved", id, ".credentials.json"), maxCredentialBytes)
 }
 func (s *Store) writeClaudeAuth(id string, auth []byte) error {
+	if err := s.claudeAuthWriteAllowed(id); err != nil {
+		return err
+	}
 	if err := s.claudeAuthMutationAllowed(id); err != nil {
 		return err
 	}
+	return s.writeClaudeAuthPayload(id, auth)
+}
+
+// The caller holds the registry fence and has checked both writer predicates.
+func (s *Store) writeClaudeAuthPayload(id string, auth []byte) error {
 	current, e := s.claudeAuth(id)
 	if errors.Is(e, os.ErrNotExist) {
 		current = nil
@@ -326,7 +337,40 @@ func (s *Store) Runtime(provider string) (Runtime, error) {
 }
 func (s *Store) runtime(r Registry, provider string) (Runtime, error) {
 	if claudeProfilesOwned(r, provider) {
-		return Runtime{}, ErrPending
+		if r.SchemaVersion < ClaudeProfileCustodySchemaVersion {
+			return Runtime{}, ErrPending
+		}
+		if _, pending := r.Switches[provider]; pending {
+			return Runtime{}, ErrPending
+		}
+		selected := r.Providers[provider]
+		l := find(&r, selected.ActiveID)
+		if l == nil || l.Provider != provider || l.AuthState != AuthReady {
+			return Runtime{}, ErrIneligible
+		}
+		if _, err := s.readRelogin(*l); err == nil {
+			return Runtime{}, ErrPending
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return Runtime{}, err
+		}
+		home, err := s.claudeProfileReady(r, l.Identity)
+		if err != nil {
+			return Runtime{}, err
+		}
+		intent, err := s.readClaudeAuthIntent(l.ID)
+		if errors.Is(err, os.ErrNotExist) {
+			return Runtime{}, ErrPending
+		}
+		if err != nil {
+			return Runtime{}, err
+		}
+		if intent.Phase != "ready" {
+			return Runtime{}, ErrPending
+		}
+		if err := s.validateClaudeAuthReceipt(r, intent.Ref, selected.Epoch); err != nil {
+			return Runtime{}, err
+		}
+		return Runtime{Provider: provider, Epoch: selected.Epoch, Identity: l.Identity, Home: home}, nil
 	}
 	p := r.Providers[provider]
 	l := find(&r, p.ActiveID)

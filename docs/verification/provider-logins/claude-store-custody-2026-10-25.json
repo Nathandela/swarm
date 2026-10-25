@@ -1,0 +1,87 @@
+{
+  "date": "2026-10-25",
+  "scope": "Store foundation for selected Claude profile births and saved-authority custody; daemon consumer not activated",
+  "production_activation": false,
+  "review": "Sol implementation; independent Astra source review found the bootstrap race, approved the finite inode-lock fix and returned V2 source GREEN; Root reviewed connected code, full package and platform lint.",
+  "source_sha256": {
+    "internal/logins/claude_custody.go": "f83cc2105fd58b50f50db56a092c9c819ac97fce333ff5da0f4ec3d523444e49",
+    "internal/logins/claude_custody_test.go": "91c0a273379bd9e726155ae14fd9c244e3b7c69467f69ab2cff4d6687dfd0f0b",
+    "internal/logins/claude_birth.go": "92d4762dfe10a8708ddfb4705d91443a8b761c1f4597ccdc98815f812482cf5a",
+    "internal/logins/claude_birth_test.go": "dbe562a0e55d17c492905bb701b778e12ca5f0865287a88e9be658432f45761e",
+    "internal/logins/claude_selection.go": "3a40885de446bdcaff946685c1a679d05073c59c4832ce2e6b5193161c7f1bb9",
+    "internal/logins/credentials.go": "822ae2d5497ebeb889e71cfdf4f179e6ca9caccc554f7a9ffae8b34b78a8a9f6",
+    "internal/logins/native.go": "0d9e239ccc194e9aff808f64ffe0b690e80a296b0fc9484a8b0afe5ee7f0239e",
+    "internal/logins/relogin.go": "4cfc2b9401bd01e44d6804ed8d3b6330df1414b903cf0cf26ab935f595eea580",
+    "internal/logins/switch.go": "196a9104626f1a31986936c1f34e186863e243005543822a95026c68db8d574d",
+    "internal/logins/store.go": "af6e22ea3c37c4248dce01e20450ac841765a2a26daf9a3de14b5928b71ffd60",
+    "internal/logins/claude_auth.go": "5b464e920258c9d1b06e135add976c5bb364fbd71a0ebe0e03d1307db62ed444",
+    "internal/logins/claude_auth_test.go": "eda70826b957a91ff62b4d4e6b619770c45df8a95bedfde193b2ad018501be14"
+  },
+  "review_manifest_sha256": "80bd83b90e77c1794eddc33775afaab7cc3469a7903c11c3a59bd9b98e72ca15",
+  "behavior": [
+    "Registry schema 10 protects operational profile selection from older writers; existing inactive profile/helper schemas remain readable.",
+    "Final admission checks selected epoch, saved authority, current receipt, exact profile and CWD while holding the registry fence through the caller start/publication.",
+    "Saved grant removal commits registry CAS before helper retirement; failed CAS retains the previous terminal budget. Relogin preserves its existing intent until exact writer custody allows mutation.",
+    "Stored session routing cannot be stripped by metadata Save. New profile reservations and explicitly retired common-home legacy rows retain exact deletion authorization; unknown and missing writer proof remain pending.",
+    "Absent login storage uses the existing state-directory inode lock through unmanaged mutation. Constructor Open shares it for initialization; initialized metadata, OpenExisting and read-only handles retain the registry-only path. No extra durable file or journal."
+  ],
+  "tdd": {
+    "bootstrap_red": {
+      "log": "swarm-cut2-bootstrap-fence-red-v1-20261025.log",
+      "sha256": "235d3299aed3aa6b85b141e2ab5c55bfa1f00ed32333132ec5d5641ca843d525"
+    },
+    "bootstrap_green": {
+      "log": "swarm-cut2-bootstrap-fence-green-v1-20261025.log",
+      "sha256": "8ae60e0b246bf001d9195094a7d27a00ae384482b8c83c42cc7ae89660a42bb9"
+    },
+    "bootstrap_race": {
+      "log": "swarm-cut2-bootstrap-fence-race-green-v1-20261025.log",
+      "sha256": "ba04d4eea3f8861a998cab07c4bbc163c0515a61d23d78f486d11ba1807b9bba"
+    },
+    "vet": {
+      "log": "swarm-cut2-bootstrap-fence-vet-v1-20261025.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "linux_compile": {
+      "log": "swarm-cut2-store-linux-build-v3-20261025.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "root_full_package": {
+    "command": [
+      "python3",
+      "/private/tmp/swarm-login-go.py",
+      "test",
+      "./internal/logins",
+      "-count=1",
+      "-timeout=12m"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 133.402,
+    "source_unchanged": true,
+    "source_count": 57,
+    "log_sha256": "35ed78ff51c6dfa34f7fbb3a9818161ddd886235bb0fbb7e94baa13e964aeccb"
+  },
+  "root_platform_lint": {
+    "mac": {
+      "result": "0 issues",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "linux": {
+      "result": "0 issues",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    }
+  },
+  "linux_artifact": {
+    "path": "/private/tmp/swarm-cut2-store-linux-amd64-v3-20261025.test",
+    "sha256": "3c95ddeff48c5e2fbe220ebaf753b06bc5dc24d11596098303a1bd687f7a19d5",
+    "target": "linux/amd64 CGO_ENABLED=0",
+    "execution": "not run here"
+  },
+  "limits": [
+    "Birth/persistence/daemon frontend integration is a separate uncommitted lane at this checkpoint.",
+    "Routine pre-start refusal cleanup, actual native constructor, caller warming/usage/selection and production activation remain open.",
+    "Earlier interrupted broad author runs are diagnostic only; the Root full-package run is the passing result.",
+    "Unknown orphan data is retained. This checkpoint does not qualify migration of existing live discussions or automatic continuation."
+  ]
+}
