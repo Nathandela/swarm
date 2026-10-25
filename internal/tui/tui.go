@@ -147,22 +147,9 @@ type detectMsg struct {
 	agents []AgentInfo
 }
 
-// repaintInterval is how often the general view re-emits its frame to refresh the
-// live elapsed-time column. Elapsed granularity is seconds and coarser, so a
-// one-second cadence suffices (down from the former 200 ms, cutting the idle
-// redraw rate 5x per N-3), and the tick only runs on the general view — never on
-// the launch/attach screens.
-//
-// F2 note: a repaint MUST re-emit the whole frame so a static board refreshes its
-// elapsed column (and so the frozen TestLiveness_EventMovesRowGroup, which drains
-// the teatest output between its two pre-event waits, sees the board on the second
-// wait). In charm.land/bubbletea v2's renderer this needs BOTH: the SGR nonce
-// (bumped each tick, consumed in View) to make the frame content differ so the
-// renderer does not early-return on an unchanged View, AND tea.ClearScreen to
-// force a full redraw rather than an empty cell diff. They are complementary, not
-// redundant — dropping either yields zero re-emission and regresses that frozen
-// test. The achievable N-3 wins here are the slower cadence and general-view-only
-// scope, not removing the periodic clear.
+// repaintInterval is how often the general view recomputes its elapsed-time
+// column. The renderer emits only when that displayed value or other content
+// changes. The timer runs only on the general view — never on launch/attach.
 const repaintInterval = time.Second
 
 func repaintTick() tea.Cmd {
@@ -217,9 +204,8 @@ type rootModel struct {
 	detected  bool        // whether a detectMsg has landed (else the form shows "checking...")
 	detectGen uint64      // latest dispatched detection generation; a detectMsg with an older gen is stale
 
-	events   <-chan protocol.Event
-	repaintN int  // repaint nonce: bumped each elapsed tick to force a full re-emit (see View)
-	ticking  bool // whether an elapsed repaint tick is in flight (only on the general view)
+	events  <-chan protocol.Event
+	ticking bool // whether an elapsed repaint tick is in flight (only on the general view)
 	// animatingWorking guards the faster glyph-only timer. At most one tick is in
 	// flight, and it lapses off-board, after connection loss, or with no Working row.
 	animatingWorking bool
@@ -660,13 +646,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !time.Now().Before(m.general.bannerExpiry) {
 			m.general.bannerText = ""
 		}
-		// Re-emit the general frame. Mirrors repaintMsg's full
-		// re-emit (SGR nonce + ClearScreen); a no-op off the general view.
-		if m.screen != screenGeneral {
-			return m, nil
-		}
-		m.repaintN++
-		return m, tea.ClearScreen
+		return m, nil
 
 	case repaintMsg:
 		if m.connectionLost {
@@ -683,13 +663,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ticking = false
 			return m, nil
 		}
-		// The elapsed-time column is relative to now, so the board is redrawn on
-		// the timer. Bumping the nonce (consumed in View) makes the frame differ
-		// so the renderer does not skip it, and tea.ClearScreen forces a full
-		// re-emit rather than an empty cell diff — both are needed (see the F2 note
-		// on repaintInterval). Runs at repaintInterval and only on the general view.
-		m.repaintN++
-		return m, tea.Batch(repaintTick(), tea.ClearScreen)
+		// Recompute elapsed values; Bubble Tea's renderer emits only if a displayed
+		// bucket changed. Runs at repaintInterval and only on the general view.
+		return m, repaintTick()
 
 	case workingAnimationMsg:
 		if !m.shouldAnimateWorking() {
@@ -796,11 +772,6 @@ func (m rootModel) View() tea.View {
 	default:
 		content = m.composeBoard(m.general.view(), m.generalStatus())
 	}
-	// A trailing nonce of reset-SGR sequences makes each repaint's content distinct
-	// so the renderer re-emits the frame (see repaintMsg). It is a no-op for the
-	// terminal and is stripped by every ANSI-stripping reader, so it never reaches
-	// the visible screen or the golden files.
-	content += strings.Repeat("\x1b[m", m.repaintN%8+1)
 	// The board is a full-screen alternate-screen app (ADR-006): it stays off the
 	// terminal scrollback and gives the status bar a fixed bottom row. In
 	// charm.land/bubbletea/v2 the alternate screen is requested through the View

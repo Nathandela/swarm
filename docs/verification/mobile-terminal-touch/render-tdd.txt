@@ -1,0 +1,20 @@
+Slice 5 redraw evidence — 2026-10-25
+
+Test-first sequence: `TestRepaint_UnchangedFrameWritesNoRendererBytes` failed
+against the original renderer behavior after a manual unchanged repaint tick:
+the idle board marker was retransmitted in 406 captured renderer bytes.
+
+After removing the forced clear and SGR nonce, the focused suite passed:
+
+```text
+go test ./internal/tui -run '^(TestRepaint_.*|TestBannerExpiryChangesReachRenderer|TestResizeAndAttachRestoreReachRenderer|TestLiveness_EventMovesRowGroup|TestWorkingIndicatorAdvancesOnlyOnAnimationTick|TestConnectionLost_PersistsInStatusBarAndHaltsRepaintTick)$' -count=1 -v
+unchanged repaint renderer output: 0 bytes
+PASS
+ok github.com/Nathandela/swarm/internal/tui 5.275s
+```
+
+The actual renderer tests also observed a `59s` → `1m` elapsed bucket update,
+banner expiry, a resize update, and the board redraw after returning from attach.
+The liveness event still moves the row and renders its new status/summary.
+These are local Bubble Tea renderer checks; no phone or SSH performance claim is
+made.
