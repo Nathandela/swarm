@@ -188,10 +188,11 @@
   "review": "Root and Astra reviewed the bounded plan and connected source; Sol authored the implementation and tests. Frozen source and Linux omission contract were independently reviewed before execution.",
   "limits": [
     "Unit fixtures use synthetic setup fields and fake authority; these do not prove actual native onboarding, authentication or constructor readiness.",
-    "Actual native-written source preparation passed in post18 V3. Full first/profile-reuse/second-profile startup, live second-CWD and blank-source negative qualification remain open after the failed B and N runs. Historical constructor V3 stays failed at the native theme screen.",
+    "Actual native-written source preparation passed in post18 V3, and the blank-source expected-negative oracle passed in V4. Full first/profile-reuse/second-profile startup and live second-CWD qualification remain open. Historical constructor V3 and post18 V3 B/N failures remain unchanged.",
     "Fresh users still require manual native setup. Existing profile files are never backfilled, even if setup is missing. No enrollment UX or default structured-mode conversion is included.",
     "Unsupported custom legacy themes require explicit remediation; no silent default theme is substituted.",
-    "The latest unmodified full skeleton race passed; the historical status-persistence timeout remains unexplained. No release, migration or automatic-continuation qualification follows."
+    "The latest unmodified full skeleton race passed; the historical status-persistence timeout remains unexplained. No release, migration or automatic-continuation qualification follows.",
+    "V4 qualifies N only for the unchanged blank-source expected-negative oracle; B remains diagnostic-only failed. Strict source/identity classification and cases B2, B3 and C remain open. No next-case allowance or positive constructor qualification follows."
   ],
   "post18_native_canary_v3": {
     "status": "NOT QUALIFIED: S source preparation passed; B and N failed; C not attempted because B failed",
@@ -301,5 +302,69 @@
     ],
     "cleanup": "All executed units have exact outer cgroup empty/gone and unchanged pinned native image proofs; B and N also have positive exact native stop receipts. The scratch-census failures are retained in the failed receipts.",
     "remaining": "Correct and independently review the harness oracles; capture any unexpected synthetic model body under a fixed bound while still blocking it. Reuse only proven stopped S source. B2/B3, C, and the blank-source negative must pass before closing native qualification."
+  },
+  "post18_native_canary_v4": {
+    "date": "2026-10-25",
+    "scope": "Linux post18 V4 source-backed quota-check diagnostic plus unchanged blank-source expected-negative canary",
+    "manifest": {
+      "path": "/private/tmp/swarm-claude-post18-canary-20261025-v4/manifest.json",
+      "sha256": "6b3fd0281979df2e404103760461e7097faf1698a9d4c71319311e17016d479d"
+    },
+    "run": {
+      "path": "/private/tmp/swarm-post18-v4-linux-20261025a/run.json",
+      "sha256": "f38596242cf77937056f514347a1d29fcbad2fc2489427a6a568291fce50ab8f",
+      "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+      "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
+      "reused_stopped_v3_S_without_rerun": true,
+      "source_origin_manifest_sha256": "c69798b1044a206946784b4eaf11a25c1434f5391543f236090ee0b0dc4052fd"
+    },
+    "B": {
+      "result": "expected diagnostic FAIL; no positive constructor qualification",
+      "runner_exit_code": 1,
+      "qualified": false,
+      "constructor_ready": false,
+      "model_requests": 1,
+      "harness_input_writes": 0,
+      "model_response": "403; no model reply",
+      "captured_request": {
+        "path": "/private/tmp/swarm-post18-v4-linux-20261025a/B-evidence/model-request.body",
+        "complete": true,
+        "bytes": 298,
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 1,
+        "user_content": "quota",
+        "sha256": "4487de6857073aab5e2f3d8d780418ec3c777c83ca9081e510da5928b7b16824"
+      },
+      "source_evidence": {
+        "path": "/private/tmp/swarm-post18-v4-linux-20261025a/B-evidence/linux-quota-source.json",
+        "sha256": "4efce3df42ce78646f2e26e7b872a36e59f068f19bdbbe67d8b3acd7b2934ae5",
+        "binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+        "finding": "Pinned Linux quota_check builder has one user message containing quota and a maximum of one output token; this is a source-backed diagnostic signature, not completed strict caller/identity classification or positive constructor qualification."
+      },
+      "identity_corroboration": "The captured body session UUID and device ID match the late post-stop native-ready/meta and native-config evidence. Early final-B1.meta had no conversation ID.",
+      "receipt_sha256": "877a49f3cd8bc68f7790bc0f5ad4350262cd090a01caca39d0a8bd56721e3b45",
+      "outer_sha256": "f54a6e8f34a92b614fffebace13bb951ed0cd16d75729c1867d420d5ff4c6ee7",
+      "inner_cleanup": "positive native stop proof; renderer, daemon and proxy stopped",
+      "outer_cleanup": "cgroup empty and directory gone"
+    },
+    "N": {
+      "result": "PASS for expected_negative_oracle only",
+      "runner_exit_code": 0,
+      "qualified": true,
+      "expected_negative_oracle": true,
+      "constructor_ready": false,
+      "model_requests": 0,
+      "harness_input_writes": 0,
+      "setup_bypass": false,
+      "receipt_sha256": "c3c04f2a8dfa562ac1c4caa86bb59d5627f68d437283c28387da5a7fc9d9dcbe",
+      "outer_sha256": "8e866ee2179877eaa675cb342fcb88501e23496c5dd31b00333f48944d38b2d6",
+      "inner_cleanup": "positive native stop proof; renderer, daemon and proxy stopped",
+      "outer_cleanup": "cgroup empty and directory gone"
+    },
+    "limits": [
+      "Preserve all V3 failures and prior records. B remains a diagnostic failure despite the source-matching body; the strict source/identity classifier is still pending.",
+      "N now qualifies only its unchanged blank-source expected-negative oracle. It does not qualify positive constructor readiness.",
+      "No next-case allowance is authorized. B2, B3 and C remain open; no positive constructor qualification follows from V4."
+    ]
   }
 }
