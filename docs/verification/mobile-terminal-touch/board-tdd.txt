@@ -45,3 +45,15 @@ These are local render timings, not phone-visible latency or network evidence.
 Limit: SSH reports have no displayed-frame identity. Generation binds an armed
 model gesture to unchanged model geometry; an old-frame press arriving after an
 update can still hit newer geometry. No handset qualification is claimed.
+
+Final standalone board full suite: go test ./internal/tui -count=1
+GREEN at 8df42e19: 42.483s, including existing real N-1/N-2 gates.
+
+Mandatory-banner follow-up RED:
+go test ./internal/tui -run '^TestMobileBoardOversizedError' -count=1
+Failed: oversized mandatory banner allowed action.
+GREEN after full required context wrapping + bounded resize-to-read fallback:
+go test ./internal/tui -run '^(TestMobileBoard|TestMouse|TestBanner|TestLaunchRefusal|TestApply_NoFlatAlloc|TestWorkingAnimation)' -count=1
+3.659s. Explicit setBanner messages cannot silently clip their required tail into
+an active board. Resize restores the full error and active controls. Ordinary
+status-attention notifications keep the board usable and counts remain pinned.

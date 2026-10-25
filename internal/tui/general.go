@@ -123,8 +123,9 @@ type generalModel struct {
 	// router runs that tick only while this board is visible and has a Working row.
 	spinnerFrame uint64
 
-	bannerText   string    // transient V-5 notification ("<agent> needs input"), "" when none
-	bannerExpiry time.Time // when the banner stops rendering (auto-expiry)
+	bannerMandatory bool      // setBanner messages retain their full required context
+	bannerText      string    // transient V-5 notification ("<agent> needs input"), "" when none
+	bannerExpiry    time.Time // when the banner stops rendering (auto-expiry)
 
 	// tombstones records ids removed by a client-side delete, each with an expiry, so a
 	// late buffered status event (one already queued on the subscribe stream before the
@@ -456,6 +457,7 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 		// where the former tea.Printf (which writes to scrollback above the program)
 		// was a no-op. It auto-expires after bannerDuration; the tick re-emits the
 		// frame at expiry so the banner disappears on time.
+		m.bannerMandatory = false
 		m.bannerText = displayName(s) + " " + statusToken(s.Group)
 		if label := attentionToken(s); label != statusToken(s.Group) {
 			m.bannerText += " (" + label + ")"
@@ -480,14 +482,17 @@ func bannerTick(d time.Duration) tea.Cmd {
 const bannerMaxLines = 3
 
 // bannerLines renders the banner until Update handles its expiry.
-func (m generalModel) bannerLines() []string {
+func (m generalModel) bannerLines() []string { return m.renderBanner(bannerMaxLines) }
+func (m generalModel) renderBanner(limit int) []string {
 	if m.bannerText == "" {
 		return nil
 	}
 	lines := []string{"● " + m.bannerText}
 	if m.width > 2 {
 		lines = strings.Split(ansi.Wrap(lines[0], m.width-2, ""), "\n")
-		lines = lines[:min(len(lines), bannerMaxLines)]
+		if limit > 0 {
+			lines = lines[:min(len(lines), limit)]
+		}
 	}
 	for i := range lines {
 		lines[i] = "  " + styleTitle.Render(lines[i])
@@ -536,7 +541,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.boardNavigation(k) {
 		return m, nil
 	}
-	if m.width > 0 && (m.width < 24 || m.height > 0 && m.height < 4) && k.Code != tea.KeyEsc {
+	if !m.boardUsable() && k.Code != tea.KeyEsc {
 		return m, nil
 	}
 	if k.Text == "m" {
@@ -626,7 +631,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // openSelected is ⏎ on the board, and a click on the selected row (ADR-029 D3): attach the
 // selection captured now.
 func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
-	if !m.general.actionVisible() || m.connectionLost {
+	if !m.boardUsable() || !m.general.actionVisible() || m.connectionLost {
 		return m, nil
 	}
 	s, ok := m.general.selected()
@@ -903,6 +908,7 @@ func resumeCmd(c Client, s protocol.SessionView, cols, rows int, relocate bool) 
 // setBanner shows a transient banner (reusing the V-5 notification surface) — used
 // to surface a launch/resume failure to the user rather than discarding it.
 func (m *generalModel) setBanner(text string) tea.Cmd {
+	m.bannerMandatory = true
 	m.bannerText = text
 	// One period per wrapped row, so a multi-row refusal stays readable.
 	d := bannerDuration * time.Duration(max(1, len(m.bannerLines())))

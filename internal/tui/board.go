@@ -254,7 +254,7 @@ func (m rootModel) boardGeometry() (start, rows int, banner []string, notice boo
 	if height >= 12 {
 		start++
 	}
-	banner = m.general.bannerLines()
+	banner = m.boardBannerLines()
 	available := max(0, height-start-2) // footer and at least one content line
 	if len(banner) > available {
 		banner = banner[:available]
@@ -267,6 +267,22 @@ func (m rootModel) boardGeometry() (start, rows int, banner []string, notice boo
 	}
 	return
 }
+func (m rootModel) boardBannerLines() []string {
+	if m.general.bannerMandatory {
+		return m.general.renderBanner(0)
+	}
+	return m.general.bannerLines()
+}
+func (m rootModel) boardUsable() bool {
+	if m.width > 0 && (m.width < 24 || m.height > 0 && m.height < 4) {
+		return false
+	}
+	if m.general.more != nil || m.height <= 0 {
+		return true
+	}
+	_, _, banner, _ := m.boardGeometry()
+	return !m.general.bannerMandatory || len(banner) == len(m.boardBannerLines())
+}
 func (m rootModel) boardView() string {
 	if m.general.editing || m.general.confirm {
 		return m.composeBoard(m.general.view(), m.generalStatus())
@@ -276,6 +292,18 @@ func (m rootModel) boardView() string {
 	}
 	if m.width > 0 && (m.width < 24 || m.height > 0 && m.height < 4) {
 		return boundedBoard("Need 24×4 · esc quit", m.width, m.height)
+	}
+	if !m.boardUsable() {
+		lines := []string{m.boardHeader()}
+		banner := m.boardBannerLines()
+		for i := 0; i < len(banner) && len(lines) < m.height-1; i++ {
+			lines = append(lines, banner[i])
+		}
+		footer := "Resize to read · esc quit"
+		if m.connectionLost {
+			footer = m.generalStatus()
+		}
+		return boundedBoard(strings.Join(append(lines, footer), "\n"), m.width, m.height)
 	}
 	start, rows, banner, notice := m.boardGeometry()
 	lines := []string{m.boardHeader()}

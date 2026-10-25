@@ -70,7 +70,7 @@ func (m rootModel) boardTarget(x, y int) boardGesture {
 	return g
 }
 func (m rootModel) updateBoardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if !m.boardTakesMouse() || m.width < 24 || m.height > 0 && m.height < 4 {
+	if !m.boardTakesMouse() || !m.boardUsable() {
 		m.general.gesture = boardGesture{}
 		m.general.openID = ""
 		return m, nil

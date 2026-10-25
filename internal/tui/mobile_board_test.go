@@ -290,3 +290,38 @@ func BenchmarkMobileBoardRender(b *testing.B) {
 		}
 	}
 }
+
+func TestMobileBoardOversizedErrorIsNonactivating(t *testing.T) {
+	m := mobileBoard(t, 24, 4).(rootModel)
+	m.general.setBanner("error: the launch was refused; inspect provider credentials and retry only after correcting the named account")
+	for _, key := range []tea.KeyPressMsg{keyEnter, keyRune('e'), keyRune('n'), keyCtrlX} {
+		next, cmd := m.Update(key)
+		r := next.(rootModel)
+		if cmd != nil || r.screen != screenGeneral || r.general.confirm || r.general.editing {
+			t.Fatal("oversized mandatory banner allowed action")
+		}
+	}
+	if !strings.Contains(view(m), "Resize to read") {
+		t.Fatal("clipped mandatory error lacked nonactivating notice")
+	}
+}
+
+func TestMobileBoardRequiredBannerTailReturnsOnResize(t *testing.T) {
+	m := mobileBoard(t, 24, 4).(rootModel)
+	m.general.setBanner("error: provider refused this launch; correct the credential source before retrying; required final remedy is SIGN IN")
+	if m.boardUsable() {
+		t.Fatal("long mandatory context was clipped into an active board")
+	}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = next.(rootModel)
+	if !m.boardUsable() || !strings.Contains(view(m), "SIGN IN") {
+		t.Fatal("resize did not restore full mandatory error tail")
+	}
+	m.width = 24
+	m.height = 4
+	m.general.width = 24
+	m.general.bannerMandatory = false
+	if !m.boardUsable() {
+		t.Fatal("ordinary attention banner unnecessarily disabled board")
+	}
+}
