@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/agyinput"
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/idempotency"
@@ -115,6 +116,7 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
+	AgyInput              *agyinput.Config     `json:"agy_input,omitempty"`
 	ClaudeInput           bool                 `json:"claude_input,omitempty"`
 	LogPath               string               `json:"log_path,omitempty"`
 	LoginRuntime          *logins.Runtime      `json:"login_runtime,omitempty"`
@@ -668,6 +670,12 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		GraceMS:        int(shimGrace / time.Millisecond),
 		HookSocketPath: hookSock,
 		HookDrainToken: drainToken,
+	}
+
+	if d.NativeInputEnabled() && spec.AgentType == "agy" && spec.CLIIdentity != nil && agyinput.SupportedVersion(spec.CLIIdentity.Version) {
+		command := agyinput.BootstrapCommand(d.cfg.ShimBinary, filepath.Join(dir, agyinput.DescriptorFile))
+		lc.AgyInput = &agyinput.Config{SessionID: id, Executable: spec.CLIIdentity.Path, Version: spec.CLIIdentity.Version, Fingerprint: spec.CLIIdentity.Fingerprint, Cwd: spec.Cwd, BootstrapCommand: command}
+		lc.Argv = agyinput.LaunchArgs(lc.Argv, command)
 	}
 	if d.cfg.NativeInputEnabled != nil && d.cfg.NativeInputEnabled() && spec.AgentType == "claude" && spec.CLIIdentity != nil && claudeinput.SupportedVersion(spec.CLIIdentity.Version) {
 		plugin, err := claudeinput.Install(dir)

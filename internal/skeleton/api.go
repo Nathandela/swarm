@@ -1222,7 +1222,7 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 		return persist.Meta{}, err
 	}
 
-	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex") {
+	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || resolved.AgentType == "agy" && a.core.NativeInputEnabled()) {
 		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], resolved.ClientEnv, resolved.Cwd)
 		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || observed == nil || *expected != *observed) {
 			return persist.Meta{}, fmt.Errorf("launch: CLI installation changed before refresh")
