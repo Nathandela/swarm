@@ -13,8 +13,13 @@ import (
 // SwarmClient opens short-lived owner connections; it never starts a daemon.
 type SwarmClient struct{ Socket string }
 
-func (s SwarmClient) dial() (*protocol.Client, error) {
-	return protocol.Dial(s.Socket, []string{protocol.CapSemanticSend, protocol.CapMessageOrigin, protocol.CapNativeRequests, protocol.CapJournal, protocol.CapOpenCodeObservation})
+func (s SwarmClient) dial(ctx context.Context) (*protocol.Client, error) {
+	c, err := protocol.DialContext(ctx, s.Socket, []string{protocol.CapSemanticSend, protocol.CapMessageOrigin, protocol.CapNativeRequests, protocol.CapJournal, protocol.CapOpenCodeObservation})
+	if err == nil && ctx.Err() != nil {
+		_ = c.Close()
+		return nil, ctx.Err()
+	}
+	return c, err
 }
 func projectWorkers(rows []protocol.SessionView) []Worker {
 	out := make([]Worker, 0, len(rows))
@@ -39,7 +44,7 @@ func (s SwarmClient) Roster(ctx context.Context) ([]Worker, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	c, err := s.dial()
+	c, err := s.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +59,7 @@ func (s SwarmClient) Submit(ctx context.Context, operation string, req protocol.
 	if err := ctx.Err(); err != nil {
 		return protocol.SemanticMessageReceipt{}, err
 	}
-	c, err := s.dial()
+	c, err := s.dial(ctx)
 	if err != nil {
 		return protocol.SemanticMessageReceipt{}, fmt.Errorf("%w: daemon unavailable: %v", protocol.ErrSemanticSendRejected, err)
 	}
@@ -72,7 +77,7 @@ func (s SwarmClient) Launch(ctx context.Context, req protocol.LaunchReq) (string
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	c, err := s.dial()
+	c, err := s.dial(ctx)
 	if err != nil {
 		return "", "", err
 	}
@@ -83,7 +88,7 @@ func (s SwarmClient) Resume(ctx context.Context, id string) (string, string, err
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	c, err := s.dial()
+	c, err := s.dial(ctx)
 	if err != nil {
 		return "", "", err
 	}
@@ -106,7 +111,7 @@ func (s SwarmClient) Kill(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c, err := s.dial()
+	c, err := s.dial(ctx)
 	if err != nil {
 		return err
 	}
@@ -117,7 +122,7 @@ func (s SwarmClient) Requests(ctx context.Context, req protocol.NativeRequestsRe
 	if err := ctx.Err(); err != nil {
 		return protocol.NativeRequestsReply{}, err
 	}
-	c, err := s.dial()
+	c, err := s.dial(ctx)
 	if err != nil {
 		return protocol.NativeRequestsReply{}, err
 	}
@@ -128,7 +133,7 @@ func (s SwarmClient) Decide(ctx context.Context, operation string, req protocol.
 	if err := ctx.Err(); err != nil {
 		return protocol.NativeDecisionReceipt{}, err
 	}
-	c, err := s.dial()
+	c, err := s.dial(ctx)
 	if err != nil {
 		return protocol.NativeDecisionReceipt{}, err
 	}

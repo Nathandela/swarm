@@ -166,7 +166,7 @@ func eventKey(r Request) []byte {
 	raw, _ := json.Marshal(r.EventID)
 	return raw
 }
-func targetKey(t Target) []byte { raw, _ := json.Marshal([]string{t.ID, t.Instance}); return raw }
+func targetKey(t Target) []byte { raw, _ := json.Marshal(t.ID); return raw }
 func publicationKey(ref, id string) []byte {
 	if id == "" {
 		id = "final"
@@ -181,6 +181,7 @@ func requestHash(r Request) string {
 	r.ExpiresAt = time.Time{}
 	r.DeliveryState = ""
 	r.NativeEvidence = ""
+	r.EventAt = time.Time{} // Admission timing does not change an already accepted instruction.
 	return digest(r)
 }
 func optedOut(tx *bolt.Tx, t Target) bool {
@@ -339,6 +340,27 @@ func (s *Store) Request(ref string, now time.Time) (out Request, err error) {
 			return e
 		}
 		out = r.Request
+		return nil
+	})
+	return
+}
+
+// ExistingEvent returns only an active, immutable snapshot; callers may reuse its context on replay.
+func (s *Store) ExistingEvent(eventID string, now time.Time) (out Request, err error) {
+	err = s.db.View(func(tx *bolt.Tx) error {
+		raw := tx.Bucket([]byte("events")).Get(eventKey(Request{EventID: eventID}))
+		if raw == nil {
+			return ErrNotFound
+		}
+		var ref string
+		if e := json.Unmarshal(raw, &ref); e != nil {
+			return e
+		}
+		record, e := activeRequest(tx, ref, now)
+		if e != nil {
+			return e
+		}
+		out = record.Request
 		return nil
 	})
 	return
@@ -584,7 +606,11 @@ func (s *Store) Prune(now time.Time) error {
 			if e := json.Unmarshal(v, &r); e != nil {
 				return e
 			}
-			if terminal(r.Request.DeliveryState) && !now.Before(r.Request.ExpiresAt) {
+			if (terminal(r.Request.DeliveryState) || r.Request.DeliveryState == StatePrepared) && !now.Before(r.Request.ExpiresAt) {
+				if r.Request.DeliveryState == StatePrepared {
+					r.Request.DeliveryState = StateFailed
+					r.Request.NativeEvidence = "expired before dispatch"
+				}
 				expired = append(expired, r)
 			}
 			return nil
@@ -596,12 +622,17 @@ func (s *Store) Prune(now time.Time) error {
 			pubs := tx.Bucket([]byte("publications"))
 			var deleteKeys [][]byte
 			var clearBodies []Publication
+			var sealed []Publication
 			if e := pubs.ForEach(func(k, v []byte) error {
 				var p Publication
 				if e := json.Unmarshal(v, &p); e != nil {
 					return e
 				}
 				if p.RequestRef == r.Request.Ref {
+					if p.State == StatePrepared {
+						p.State = StateFailed
+						sealed = append(sealed, p)
+					}
 					if !terminal(p.State) {
 						unresolved = true
 					} else if !now.Before(r.GuardUntil) {
@@ -615,6 +646,11 @@ func (s *Store) Prune(now time.Time) error {
 				return nil
 			}); e != nil {
 				return e
+			}
+			for _, p := range sealed {
+				if e := putJSON(tx, "publications", publicationKey(p.RequestRef, p.ID), p); e != nil {
+					return e
+				}
 			}
 			if unresolved {
 				continue

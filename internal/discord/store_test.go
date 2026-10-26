@@ -142,7 +142,7 @@ func TestConcurrentClaimAndRevocation(t *testing.T) {
 	if _, _, e := s.Admit(other, testNow); !errors.Is(e, ErrOptedOut) {
 		t.Fatal(e)
 	}
-	other.Target.Instance = "independent"
+	other.Target.ID = "independent"
 	mustAdmit(t, s, other)
 }
 
@@ -490,6 +490,9 @@ func TestSettledPublicationPrunesBodyAndUnresolvedPublicationProtectsSource(t *t
 	if e != nil {
 		t.Fatal(e)
 	}
+	if _, _, e = s.BeginPublication(r.Ref, "", testNow); e != nil {
+		t.Fatal(e)
+	}
 	if e = s.Prune(testNow.Add(GuardTTL)); e != nil {
 		t.Fatal(e)
 	}
@@ -557,7 +560,7 @@ func TestResumeCannotBypassOptOutBound(t *testing.T) {
 		t.Fatal(e)
 	}
 	next := previous
-	next.Instance = "next"
+	next.ID = "next"
 	if e := s.FollowTarget(previous, next); !errors.Is(e, ErrCapacity) {
 		t.Fatal("resume bypassed optout cap", e)
 	}
