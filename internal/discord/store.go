@@ -250,7 +250,7 @@ func validateRequest(r Request) error {
 	if (r.Authority == AuthorityOwnerEndorsed) != (r.EndorserID != "") {
 		return ErrInvalid
 	}
-	for _, v := range []string{r.Ref, r.OperationID, r.EventID, r.MessageRevision, r.Author.ID, r.Author.Name, r.RequesterID, r.EndorserID, r.Route.GuildID, r.Route.ChannelID, r.Route.MessageID, r.Target.ID, r.Target.Instance, r.Target.Name, r.Target.Agent} {
+	for _, v := range []string{r.Ref, r.RoutingRef, r.OperationID, r.EventID, r.MessageRevision, r.Author.ID, r.Author.Name, r.RequesterID, r.EndorserID, r.Route.GuildID, r.Route.ChannelID, r.Route.MessageID, r.Target.ID, r.Target.Instance, r.Target.Name, r.Target.Agent} {
 		if len(v) > 512 || !utf8.ValidString(v) {
 			return ErrInvalid
 		}
