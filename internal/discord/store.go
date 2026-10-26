@@ -159,7 +159,8 @@ func loadRequest(tx *bolt.Tx, ref string) (requestRecord, error) {
 	if raw == nil {
 		return r, ErrNotFound
 	}
-	return r, json.Unmarshal(raw, &r)
+	err := json.Unmarshal(raw, &r)
+	return r, err
 }
 func activeRequest(tx *bolt.Tx, ref string, now time.Time) (requestRecord, error) {
 	r, e := loadRequest(tx, ref)
@@ -211,7 +212,7 @@ func validateRequest(r Request) error {
 		}
 	}
 	for _, m := range r.Context {
-		if len(m.ID) > 512 || len(m.Author.ID) > 512 || len(m.Author.Name) > 512 || !utf8.ValidString(m.Text) {
+		if len(m.ID) > 512 || len(m.Author.ID) > 512 || len(m.Author.Name) > 512 || !utf8.ValidString(m.Text) || !utf8.ValidString(m.ID) || !utf8.ValidString(m.Author.ID) || !utf8.ValidString(m.Author.Name) {
 			return ErrInvalid
 		}
 	}
@@ -310,19 +311,26 @@ func (s *Store) IsOptedOut(target Target) (out bool, err error) {
 	return
 }
 func (s *Store) SetOptOut(target Target, optOut bool) error {
-	if target.ID == "" || target.Instance == "" {
+	if !validTargetIdentity(target) {
 		return ErrInvalid
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("optouts"))
 		if optOut {
-			if b.Get(targetKey(target)) == nil && b.Stats().KeyN >= MaxRequests {
-				return ErrCapacity
-			}
-			return putJSON(tx, "optouts", targetKey(target), true)
+			return putOptOut(tx, target)
 		}
 		return b.Delete(targetKey(target))
 	})
+}
+func validTargetIdentity(target Target) bool {
+	return strings.TrimSpace(target.ID) != "" && target.Instance != "" && len(target.ID) <= 512 && len(target.Instance) <= 512 && utf8.ValidString(target.ID) && utf8.ValidString(target.Instance)
+}
+func putOptOut(tx *bolt.Tx, target Target) error {
+	b := tx.Bucket([]byte("optouts"))
+	if b.Get(targetKey(target)) == nil && b.Stats().KeyN >= MaxRequests {
+		return ErrCapacity
+	}
+	return putJSON(tx, "optouts", targetKey(target), true)
 }
 func (s *Store) BeginDelivery(ref string, now time.Time) (out Request, fresh bool, err error) {
 	err = s.db.Update(func(tx *bolt.Tx) error {
@@ -612,13 +620,13 @@ func (s *Store) Prune(now time.Time) error {
 
 // FollowTarget carries an explicit resume's opt-out to its replacement identity.
 func (s *Store) FollowTarget(previous, next Target) error {
-	if strings.TrimSpace(next.ID) == "" || next.Instance == "" {
+	if !validTargetIdentity(previous) || !validTargetIdentity(next) {
 		return ErrInvalid
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		if !optedOut(tx, previous) {
 			return nil
 		}
-		return putJSON(tx, "optouts", targetKey(next), true)
+		return putOptOut(tx, next)
 	})
 }
