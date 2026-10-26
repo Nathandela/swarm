@@ -225,8 +225,8 @@ type HookCleanupResult struct {
 	Changed       bool
 }
 
-// ErrHookCleanupTooLarge retains spools beyond the bounded manual cleanup workload.
-var ErrHookCleanupTooLarge = errors.New("shim: hook cleanup spool exceeds 64 MiB")
+// ErrHookCleanupTooLarge retains spools beyond the configured read limit.
+var ErrHookCleanupTooLarge = errors.New("shim: hook spool exceeds read limit")
 
 const hookCleanupMaxBytes = 64 << 20
 

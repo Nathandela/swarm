@@ -580,8 +580,8 @@ func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
 	if _, err := conn.Write(append([]byte{shim.HookDrainTag}, req...)); err != nil {
 		return 0, 0, fmt.Errorf("skeleton: write hook drain request: %w", err)
 	}
-	var resp shim.HookDrainResponse
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+	resp, err := shim.DecodeHookDrainResponse(conn)
+	if err != nil {
 		return 0, 0, fmt.Errorf("skeleton: decode hook drain response: %w", err)
 	}
 

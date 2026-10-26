@@ -579,7 +579,7 @@ OAuth implementation is part of the initial design.
 
 ## Opt-in Claude chat implementation
 
-**Accepted plan; implementation not started and runtime not active.** New Claude
+**Implementation in progress; the chat runtime is not active.** New Claude
 sessions will be able to choose **Swarm chat (experimental)** through the launch
 form or `swarm spawn --interface swarm-chat`. Ordinary launches remain native
 terminal sessions; existing sessions are unchanged. Initially refuse resume,
@@ -592,6 +592,16 @@ journal, hook spool, execution record, native request/decision handlers and
 anchored transcript history. Do not create a Codex-style backend or a second
 transcript store. Native request decisions require their own positive replay and
 correlation gates; unsupported requests stay visible and unanswered.
+
+The hook transport now bounds complete DRAIN replies before application. DRAIN
+is unframed JSON, with a 64 MiB encoded-response cap independent of
+`wire.MaxFrame`; default JSON escaping can expand the 8 MiB production spool
+sixfold. Reads are bounded before parsing and compaction. Incarnation and
+producer-certificate metadata are limited to 1,024 and 2,048 bytes. An invalid or
+truncated response cannot advance cursor, certificate or gap state. DRAIN refuses
+custom spools above 8 MiB while retaining their bytes; general custom spool APIs
+and the existing 64 MiB stopped-cleanup inspection bound remain unchanged.
+This prerequisite does not activate the chat primary or qualify native behavior.
 
 Deliver the connected exits test-first. **A** proves fresh launch through shim,
 owner protocol, one message/echo/result, history, and authenticated Stop/cleanup;

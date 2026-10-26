@@ -1,0 +1,161 @@
+{
+  "bounds_and_compatibility": {
+    "custom_spool_above_default": "DRAIN explicitly refuses; retained bytes are preserved.",
+    "default_spool_limit_applied": "Before parse, for both fold and read operations.",
+    "error_sentinel": "Generic error text is accurate; errors.Is identity is unchanged.",
+    "metadata_field_max_bytes": {
+      "spool_incarnation": 1024,
+      "producer_certificate": 2048
+    },
+    "stopped_cleanup_existing_value": "64 MiB; unchanged. The new finite-growth-guard test anchors the existing stopped-reader limit; this does not fix or claim a newly discovered legacy limit bug.",
+    "supported_default_spool_read_max_bytes": 8388608,
+    "unchanged": [
+      "wire.MaxFrame",
+      "hook POST remains 4 MiB",
+      "Append",
+      "ReadFrom",
+      "custom/general API behavior",
+      "disk invalid-body policy"
+    ],
+    "unframed_whole_response_max_bytes": 67108864
+  },
+  "date": "2026-10-26",
+  "kind": "A1 bounded hook-drain implementation evidence",
+  "qualification_limits": [
+    "No chat primary/origin/FIFO/UI or capability activation is included.",
+    "No native qualification, automatic recovery, or continuation activation is claimed.",
+    "Earlier native receipts do not qualify this transport change.",
+    "A1 is independently approved by Root/Astra; this record does not authorize main merge, release, or UI activation.",
+    "The separate 2026-10-26 terminal-restore release blocker remains open."
+  ],
+  "scope": {
+    "production_files": [
+      "internal/shim/hookdrain_response.go",
+      "internal/shim/hooksocket.go",
+      "internal/shim/hookspool.go",
+      "internal/skeleton/hookdrain.go",
+      "internal/shim/hookproducer.go"
+    ],
+    "source_plan_manifest": {
+      "path": "/private/tmp/swarm-drain-a1-r2-20261026/manifest.json",
+      "revision": 2,
+      "scope": "private wrapper deletions, finite growth guard test/extraction, metadata bound tests, accurate sentinel; bounded DRAIN only",
+      "sha256": "a902c5cb0c3d1e58156346d172c6e4ed68bdd4e1d7aae3074b80640cdf115d0e"
+    },
+    "test_files": [
+      "internal/shim/hookdrain_response_test.go",
+      "internal/skeleton/hookdrain_bounds_test.go"
+    ]
+  },
+  "status": "Implemented; Root, Sol and Astra source reviews GREEN. Sixteen focused checks and201 hook-family race tests passed (one skip); build, vet and lint passed.",
+  "test_evidence": {
+    "green": {
+      "bytes": 14588,
+      "description": "Exit 0: 16 test run actions, all passed.",
+      "expected_result": "PASS",
+      "packages": {
+        "github.com/Nathandela/swarm/internal/shim": {
+          "package_elapsed_seconds": [
+            1.478
+          ],
+          "test_failures": 0,
+          "test_passes": 12,
+          "test_runs": 12,
+          "test_skips": 0
+        },
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "package_elapsed_seconds": [
+            1.137
+          ],
+          "test_failures": 0,
+          "test_passes": 4,
+          "test_runs": 4,
+          "test_skips": 0
+        }
+      },
+      "path": "/private/tmp/swarm-claude-chat-a1-gates-20261026/green.jsonl",
+      "record_count": 72,
+      "sha256": "9725cef0ae35c7fbc6461da8c3d80dd682345c14f801d226761a1407e0f4805a"
+    },
+    "hook_family_race": {
+      "bytes": 202201,
+      "description": "Exit 0: shim and skeleton hook-family race coverage.",
+      "expected_result": "PASS: 201 test passes, 1 skip",
+      "packages": {
+        "github.com/Nathandela/swarm/internal/shim": {
+          "package_elapsed_seconds": [
+            15.41
+          ],
+          "test_failures": 0,
+          "test_passes": 118,
+          "test_runs": 118,
+          "test_skips": 0
+        },
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "package_elapsed_seconds": [
+            58.78
+          ],
+          "test_failures": 0,
+          "test_passes": 83,
+          "test_runs": 84,
+          "test_skips": 1
+        }
+      },
+      "path": "/private/tmp/swarm-claude-chat-a1-gates-20261026/hook-family-race.jsonl",
+      "record_count": 850,
+      "sha256": "066018bec7271cb85394bad297feafd5411e1c55fc5e80ff81b4fabc1a7ba921"
+    },
+    "red": {
+      "bytes": 17137,
+      "description": "Exit 1: semantic RED; 16 test run actions, 12 failed and 4 passed controls.",
+      "expected_result": "EXPECTED RED",
+      "packages": {
+        "github.com/Nathandela/swarm/internal/shim": {
+          "package_elapsed_seconds": [
+            0.817
+          ],
+          "test_failures": 10,
+          "test_passes": 2,
+          "test_runs": 12,
+          "test_skips": 0
+        },
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "package_elapsed_seconds": [
+            1.331
+          ],
+          "test_failures": 2,
+          "test_passes": 2,
+          "test_runs": 4,
+          "test_skips": 0
+        }
+      },
+      "path": "/private/tmp/swarm-claude-chat-a1-gates-20261026/red.jsonl",
+      "record_count": 81,
+      "sha256": "837cede4d977ddf24adde938e1e6915a92cd05a8f3b101657d04c7b91faa8f5e"
+    }
+  },
+  "quality_gates": {
+    "build": {
+      "exit_code": 0,
+      "elapsed_seconds": 7.368,
+      "log": "/private/tmp/swarm-claude-chat-a1-gates-20261026/build.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "vet": {
+      "exit_code": 0,
+      "elapsed_seconds": 9.363,
+      "log": "/private/tmp/swarm-claude-chat-a1-gates-20261026/vet.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lint": {
+      "exit_code": 0,
+      "elapsed_seconds": 85.124,
+      "log": "/private/tmp/swarm-claude-chat-a1-gates-20261026/lint.log",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "record": {
+      "path": "/private/tmp/swarm-claude-chat-a1-gates-20261026/checks.json",
+      "sha256": "7fbe6c833293b75a285ecbbce1c83e511f47b99bcf16b7b71dca66e57df82dc1"
+    }
+  }
+}

@@ -220,19 +220,11 @@ func (h *hookServer) serveDrain(conn net.Conn) {
 	if h.token != "" && subtle.ConstantTimeCompare([]byte(req.Token), []byte(h.token)) != 1 {
 		return // wrong or missing token: refuse silently, exactly like an unaccepted POST
 	}
-	if req.FoldSeq > 0 {
-		_ = h.spool.Compact(req.FoldSeq) // best-effort: a refused compact leaves the spool untouched
-	}
-	recs, gapAt, hasGap, err := h.spool.ReadFrom(req.FromSeq)
+	response, err := h.spool.readDrainResponse(req.FromSeq, req.FoldSeq)
 	if err != nil {
 		return
 	}
-	resp, err := json.Marshal(HookDrainResponse{
-		Records: recs, Gap: hasGap, GapBoundary: gapAt,
-		SpoolIncarnation:    h.spool.IncarnationID(),
-		ProducerCertificate: h.spool.ProducerCertificate(),
-		SpoolAdoptedLegacy:  h.spool.AdoptedLegacySequence(),
-	})
+	resp, err := encodeHookDrainResponseLimit(response, HookDrainResponseMaxBytes)
 	if err != nil {
 		return
 	}

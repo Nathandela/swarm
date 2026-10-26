@@ -313,3 +313,7 @@ rerun (2,047 passes and 28 skips), and 36 changed-fixture race passes. Build and
 vet and lint pass. The repository gate remains blocked by the
 [pinned-main terminal-restore regression](terminal-restore-2026-10-26.json).
 This is a feature-branch checkpoint, not release qualification.
+
+The [bounded Claude-chat transport prerequisite](provider-logins/claude-chat-drain-bounds-2026-10-26.json)
+passed its 16 new checks, 201 hook-family race checks (one skip), build, vet and
+lint. It adds no chat runtime or automatic-continuation capability.

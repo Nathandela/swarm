@@ -154,7 +154,7 @@ var testHookBeforeCompactRename func()
 // HookSpool is one session's durable hook-event log: unexported fields, opened over
 // one file. Every method is safe for concurrent use.
 type HookSpool struct {
-	readLimit int64 // Nonzero only for bounded stopped cleanup.
+	readLimit int64 // Nonzero for bounded DRAIN or stopped cleanup.
 	mu        sync.Mutex
 	path      string
 	f         *os.File
@@ -353,7 +353,7 @@ func ReadHookSpoolFileResponse(path string, after uint64) (HookDrainResponse, er
 	// first (so a cursor from before a full compaction is still recognized as stale
 	// rather than read as a fresh sequence space), raised by whatever the file's own
 	// content proves.
-	s := &HookSpool{path: path, f: f, maxBytes: hookSpoolDefaultMaxBytes, lastSeq: readHookFloor(path)}
+	s := &HookSpool{path: path, f: f, maxBytes: hookSpoolDefaultMaxBytes, readLimit: hookSpoolDefaultMaxBytes, lastSeq: readHookFloor(path)}
 	all, cleanEnd, _, _, err := s.parseLocked()
 	if err != nil {
 		return HookDrainResponse{}, err
@@ -373,6 +373,9 @@ func ReadHookSpoolFileResponse(path string, after uint64) (HookDrainResponse, er
 	resp := HookDrainResponse{Records: recs, Gap: gap, GapBoundary: gapAt, SpoolIncarnation: incarnation, SpoolAdoptedLegacy: legacy}
 	if proof, err := readHookProducerProof(path); err == nil && validHookProducerProof(path, f, proof) == nil {
 		resp.ProducerCertificate = proof.Nonce
+	}
+	if err := checkHookDrainResponseMetadata(resp); err != nil {
+		return HookDrainResponse{}, err
 	}
 	return resp, nil
 }
@@ -456,6 +459,40 @@ func (s *HookSpool) ReadFrom(after uint64) (recs []HookRecord, gapAt uint64, has
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.readFromLocked(after)
+}
+
+// readDrainResponse supports the default production spool, not larger custom spools.
+func (s *HookSpool) readDrainResponse(after, fold uint64) (HookDrainResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previousLimit := s.readLimit
+	if s.readLimit == 0 || s.readLimit > hookSpoolDefaultMaxBytes {
+		s.readLimit = hookSpoolDefaultMaxBytes
+	}
+	defer func() { s.readLimit = previousLimit }()
+	info, err := s.f.Stat()
+	if err != nil {
+		return HookDrainResponse{}, err
+	}
+	if info.Size() > s.readLimit {
+		return HookDrainResponse{}, ErrHookCleanupTooLarge
+	}
+	if fold > 0 {
+		_, _ = s.compactLocked(fold, nil) // Existing DRAIN compaction is best-effort.
+	}
+	records, boundary, gap, err := s.readFromLocked(after)
+	if err != nil {
+		return HookDrainResponse{}, err
+	}
+	response := HookDrainResponse{Records: records, Gap: gap, GapBoundary: boundary, SpoolIncarnation: s.incarnation, SpoolAdoptedLegacy: s.adoptedLegacy}
+	// ProducerCertificate takes this mutex; check the same descriptor proof here instead.
+	if s.producerProof != nil && validHookProducerProof(s.path, s.f, *s.producerProof) == nil {
+		response.ProducerCertificate = s.producerProof.Nonce
+	}
+	if err := checkHookDrainResponseMetadata(response); err != nil {
+		return HookDrainResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *HookSpool) readFromLocked(after uint64) ([]HookRecord, uint64, bool, error) {
@@ -556,8 +593,13 @@ func (s *HookSpool) readBytes() ([]byte, error) {
 	if info.Size() > s.readLimit {
 		return nil, ErrHookCleanupTooLarge
 	}
-	data, err := io.ReadAll(io.LimitReader(s.f, s.readLimit+1))
-	if int64(len(data)) > s.readLimit {
+	return readHookSpoolBounded(s.f, s.readLimit)
+}
+
+// A file may grow after Stat; cap consumption as well as the accepted length.
+func readHookSpoolBounded(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if int64(len(data)) > limit {
 		return nil, ErrHookCleanupTooLarge
 	}
 	return data, err
@@ -647,7 +689,10 @@ func (s *HookSpool) Compact(foldSeq uint64) error {
 func (s *HookSpool) compact(foldSeq uint64, checkPath func() error) (changed bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.compactLocked(foldSeq, checkPath)
+}
 
+func (s *HookSpool) compactLocked(foldSeq uint64, checkPath func() error) (changed bool, err error) {
 	if foldSeq > s.lastSeq {
 		return false, fmt.Errorf("shim: hook spool compact fold cursor %d exceeds the highest appended sequence %d", foldSeq, s.lastSeq)
 	}
