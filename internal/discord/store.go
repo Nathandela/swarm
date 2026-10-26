@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -45,21 +46,22 @@ func OpenStore(dir string) (*Store, error) {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, ErrInvalid
 	}
-	if err = os.Chmod(dir, 0700); err != nil {
+	dirFile, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := dirFile.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		_ = dirFile.Close()
+		return nil, ErrInvalid
+	}
+	err = dirFile.Chmod(0700)
+	_ = dirFile.Close()
+	if err != nil {
 		return nil, err
 	}
 	path := filepath.Join(dir, "discord.db")
-	if info, err = os.Lstat(path); err == nil {
-		if !info.Mode().IsRegular() {
-			return nil, ErrInvalid
-		}
-		if err = os.Chmod(path, 0600); err != nil {
-			return nil, err
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	}
-	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: 100 * time.Millisecond})
+	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: 100 * time.Millisecond, OpenFile: openStoreFile})
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +125,37 @@ func OpenStore(dir string) (*Store, error) {
 	}
 	return s, nil
 }
+func openStoreFile(path string, flag int, mode os.FileMode) (*os.File, error) {
+	entry, err := os.Lstat(path)
+	if err == nil {
+		if !singleStoreFile(entry) {
+			return nil, ErrInvalid
+		}
+		flag &^= os.O_CREATE
+	} else if os.IsNotExist(err) {
+		flag |= os.O_EXCL
+	} else {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, flag|syscall.O_NOFOLLOW, mode)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := f.Stat()
+	if err != nil || !singleStoreFile(opened) || (entry != nil && !os.SameFile(entry, opened)) {
+		_ = f.Close()
+		return nil, ErrInvalid
+	}
+	if err = f.Chmod(0600); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+func singleStoreFile(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && info.Mode().IsRegular() && stat.Nlink == 1
+}
 func (s *Store) Close() error { return s.db.Close() }
 func digest(v any) string {
 	raw, _ := json.Marshal(v)
@@ -130,7 +163,7 @@ func digest(v any) string {
 	return hex.EncodeToString(sum[:])
 }
 func eventKey(r Request) []byte {
-	raw, _ := json.Marshal([]string{r.EventID, r.MessageRevision})
+	raw, _ := json.Marshal(r.EventID)
 	return raw
 }
 func targetKey(t Target) []byte { raw, _ := json.Marshal([]string{t.ID, t.Instance}); return raw }
@@ -151,7 +184,8 @@ func requestHash(r Request) string {
 	return digest(r)
 }
 func optedOut(tx *bolt.Tx, t Target) bool {
-	return tx.Bucket([]byte("optouts")).Get(targetKey(t)) != nil
+	raw := tx.Bucket([]byte("optouts")).Get(targetKey(t))
+	return raw != nil && string(raw) != "false"
 }
 func loadRequest(tx *bolt.Tx, ref string) (requestRecord, error) {
 	var r requestRecord
@@ -252,6 +286,9 @@ func (s *Store) Admit(input Request, now time.Time) (out Request, fresh bool, er
 			if old.Hash != hash || (input.OperationID != "" && input.OperationID != old.Request.OperationID) || (input.Ref != "" && input.Ref != old.Request.Ref) {
 				return ErrConflict
 			}
+			if _, e = activeRequest(tx, storedRef, now); e != nil {
+				return e
+			}
 			out = old.Request
 			return nil
 		}
@@ -315,22 +352,18 @@ func (s *Store) SetOptOut(target Target, optOut bool) error {
 		return ErrInvalid
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("optouts"))
-		if optOut {
-			return putOptOut(tx, target)
-		}
-		return b.Delete(targetKey(target))
+		return putOptOut(tx, target, optOut)
 	})
 }
 func validTargetIdentity(target Target) bool {
 	return strings.TrimSpace(target.ID) != "" && target.Instance != "" && len(target.ID) <= 512 && len(target.Instance) <= 512 && utf8.ValidString(target.ID) && utf8.ValidString(target.Instance)
 }
-func putOptOut(tx *bolt.Tx, target Target) error {
+func putOptOut(tx *bolt.Tx, target Target, optOut bool) error {
 	b := tx.Bucket([]byte("optouts"))
 	if b.Get(targetKey(target)) == nil && b.Stats().KeyN >= MaxRequests {
 		return ErrCapacity
 	}
-	return putJSON(tx, "optouts", targetKey(target), true)
+	return putJSON(tx, "optouts", targetKey(target), optOut)
 }
 func (s *Store) BeginDelivery(ref string, now time.Time) (out Request, fresh bool, err error) {
 	err = s.db.Update(func(tx *bolt.Tx) error {
@@ -624,9 +657,12 @@ func (s *Store) FollowTarget(previous, next Target) error {
 		return ErrInvalid
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
+		if tx.Bucket([]byte("optouts")).Get(targetKey(next)) != nil {
+			return nil
+		}
 		if !optedOut(tx, previous) {
 			return nil
 		}
-		return putOptOut(tx, next)
+		return putOptOut(tx, next, true)
 	})
 }
