@@ -151,6 +151,14 @@ func (hermesAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 // This extension validates captured and saved-session identities; it does not
 // widen core's UUID-only external resume/handoff API.
 func (hermesAdapter) IsValidConversationID(id string) bool {
+	if len(id) == 70 && strings.HasPrefix(id, "local-") {
+		for _, c := range id[6:] {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return false
+			}
+		}
+		return true
+	}
 	return validClassicSessionID(id)
 }
 

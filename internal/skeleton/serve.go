@@ -790,7 +790,7 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 			token = ""
 		}
 	}
-	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode || m.HermesNative {
 		d.eng.EndSession(m.ID)
 	} else {
 		d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
@@ -997,6 +997,10 @@ func (d *Daemon) tapOnce(ctx context.Context) {
 	d.retryHookRetirements()
 	for _, m := range d.core.List() {
 		if m.Status.Process != status.ProcessRunning {
+			continue
+		}
+		if m.HermesNative {
+			d.asyncOnce(ctx, &d.sampleMu, d.sampling, &d.sampleWG, m.ID, d.sampleHermesNative)
 			continue
 		}
 		if m.RequiredRuntime != persist.RequiredRuntimeOpenCode && (d.controlled == nil || !d.controlled(m.ID)) {
@@ -1472,6 +1476,9 @@ func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 // worktree path chosen at launch. Older metadata without AgentCwd used the id as
 // its path component and takes the compatibility fallback.
 func preDeleteWorktree(m persist.Meta) error {
+	if m.HermesNative && m.ShimPID > 0 {
+		return errors.New("Hermes native job completion is unproven; workspace retained")
+	}
 	if m.LaunchOptions[protocol.OptionWorktree] != "true" {
 		return nil
 	}
