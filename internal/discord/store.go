@@ -26,7 +26,7 @@ var (
 	ErrNotFound = errors.New("discord: reference not found")
 	ErrInvalid  = errors.New("discord: invalid request or transition")
 )
-var bucketNames = []string{"requests", "events", "operations", "publications", "optouts", "aliases"}
+var bucketNames = []string{"requests", "events", "operations", "publications", "optouts", "aliases", "publication_index"}
 
 type Store struct{ db *bolt.DB }
 type requestRecord struct {
@@ -96,7 +96,12 @@ func OpenStore(dir string) (*Store, error) {
 					if p.State != StateSending {
 						continue
 					}
-					p.State = StateUncertain
+					for i := range p.Chunks {
+						if p.Chunks[i].State == StateSending {
+							p.Chunks[i].State = StateUncertain
+						}
+					}
+					aggregatePublication(&p)
 					if err := putJSON(tx, name, k, p); err != nil {
 						return err
 					}
@@ -459,6 +464,9 @@ func loadPublication(tx *bolt.Tx, ref, id string) (p Publication, err error) {
 	return
 }
 func (s *Store) PreparePublication(ref, id, body string, now time.Time) (out Publication, fresh bool, err error) {
+	return s.preparePublication(ref, id, body, now, nil)
+}
+func (s *Store) preparePublication(ref, id, body string, now time.Time, control *Outbound) (out Publication, fresh bool, err error) {
 	if id == "" {
 		id = "final"
 	}
@@ -486,9 +494,28 @@ func (s *Store) PreparePublication(ref, id, body string, now time.Time) (out Pub
 		if tx.Bucket([]byte("publications")).Stats().KeyN >= MaxPublications {
 			return ErrCapacity
 		}
-		p := Publication{RequestRef: ref, ID: id, Body: body, BodyHash: digest(body), Version: 1, State: StatePrepared, CreatedAt: now}
-		for _, part := range splitUTF16(body, 1900) {
-			p.Chunks = append(p.Chunks, Chunk{ID: digest([]string{ref, id, p.BodyHash, fmt.Sprint(len(p.Chunks)), "1"})[:24], Body: part})
+		p := Publication{RequestRef: ref, ID: id, Body: body, BodyHash: digest(body), Version: 1, State: StatePrepared, CreatedAt: now, Kind: "reply"}
+		parts := splitUTF16(body, 1900)
+		if control != nil {
+			p.Kind = "control"
+			parts = []string{control.Text}
+		}
+		for _, part := range parts {
+			p.Chunks = append(p.Chunks, Chunk{ID: digest([]string{ref, id, p.BodyHash, fmt.Sprint(len(p.Chunks)), "1"})[:24], Body: part, State: StatePrepared})
+		}
+		total := len(p.Chunks)
+		if e := tx.Bucket([]byte("publications")).ForEach(func(_, raw []byte) error {
+			var existing Publication
+			if e := json.Unmarshal(raw, &existing); e != nil {
+				return e
+			}
+			total += len(existing.Chunks)
+			return nil
+		}); e != nil {
+			return e
+		}
+		if total > MaxPublicationIndex {
+			return ErrCapacity
 		}
 		if e := putJSON(tx, "publications", publicationKey(ref, id), p); e != nil {
 			return e
@@ -548,13 +575,7 @@ func (s *Store) FinishPublication(ref, id, state string, messageIDs []string, ev
 		if e != nil {
 			return e
 		}
-		if terminal(p.State) {
-			if p.State == state && digest(p.DiscordMessageIDs) == digest(messageIDs) && p.DiscordEvidence == evidence {
-				return nil
-			}
-			return ErrConflict
-		}
-		if p.State != StateSending && p.State != StateUncertain {
+		if p.State != StateSending && p.State != StateUncertain && p.State != StateSent && p.State != StatePrepared {
 			return ErrInvalid
 		}
 		if len(messageIDs) > len(p.Chunks) {
@@ -565,9 +586,24 @@ func (s *Store) FinishPublication(ref, id, state string, messageIDs []string, ev
 				return ErrInvalid
 			}
 		}
-		p.State = state
-		p.DiscordMessageIDs = messageIDs
+		for i, messageID := range messageIDs {
+			if e := mergePublicationChunk(tx, &p, i, StateSent, messageID); e != nil {
+				return e
+			}
+			p.Chunks[i].RESTAcknowledged = true
+		}
+		if state != StateSent {
+			for i := range p.Chunks {
+				if p.Chunks[i].State != StateSent {
+					if e := mergePublicationChunk(tx, &p, i, state, ""); e != nil {
+						return e
+					}
+					break
+				}
+			}
+		}
 		p.DiscordEvidence = evidence
+		aggregatePublication(&p)
 		return putJSON(tx, "publications", publicationKey(ref, id), p)
 	})
 }
@@ -707,7 +743,7 @@ func (s *Store) Prune(now time.Time) error {
 				return e
 			}
 		}
-		return nil
+		return prunePublicationIndex(tx, now)
 	})
 }
 

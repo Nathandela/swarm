@@ -214,6 +214,9 @@ func TestPublicationRetryAndCrashAreNotResent(t *testing.T) {
 	if _, fresh, e = s.BeginPublication(r.Ref, "", testNow); e != nil || !fresh {
 		t.Fatal(fresh, e)
 	}
+	if _, fresh, e = s.beginPublicationChunk(r.Ref, "", pub.Chunks[0].ID, testNow); e != nil || !fresh {
+		t.Fatal(fresh, e)
+	}
 	if e = s.Close(); e != nil {
 		t.Fatal(e)
 	}
@@ -223,8 +226,13 @@ func TestPublicationRetryAndCrashAreNotResent(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 	again, fresh, e := s.PreparePublication(r.Ref, "", body, testNow)
-	if e != nil || fresh || again.State != StateUncertain || !reflect.DeepEqual(again.Chunks, pub.Chunks) {
-		t.Fatal(again, fresh, e)
+	if e != nil || fresh || again.State != StateUncertain {
+		t.Fatal(again.State, fresh, e)
+	}
+	for i, chunk := range again.Chunks {
+		if chunk.ID != pub.Chunks[i].ID || chunk.Body != pub.Chunks[i].Body {
+			t.Fatal("chunk identity changed after restart")
+		}
 	}
 	if _, fresh, e = s.BeginPublication(r.Ref, "", testNow); e != nil || fresh {
 		t.Fatal("ambiguous send retried", fresh, e)

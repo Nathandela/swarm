@@ -61,8 +61,12 @@ type ContextPage struct {
 	NextOffset int              `json:"next_offset"`
 }
 type Chunk struct {
-	ID   string `json:"id"`
-	Body string `json:"body"`
+	ID               string `json:"id"`
+	Body             string `json:"body"`
+	State            string `json:"state"`
+	MessageID        string `json:"message_id,omitempty"`
+	GatewaySeen      bool   `json:"gateway_seen,omitempty"`
+	RESTAcknowledged bool   `json:"rest_acknowledged,omitempty"`
 }
 type Publication struct {
 	RequestRef        string    `json:"request_ref"`
@@ -75,6 +79,7 @@ type Publication struct {
 	DiscordMessageIDs []string  `json:"discord_message_ids,omitempty"`
 	DiscordEvidence   string    `json:"discord_evidence,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
+	Kind              string    `json:"kind,omitempty"`
 }
 
 const (

@@ -23,7 +23,7 @@ func (s *Service) Control(ctx context.Context, ref, id string, out Outbound) (Pu
 	if err != nil {
 		return Publication{}, err
 	}
-	publication, _, err := s.Store.PreparePublication(ref, "control:"+id, string(canonical), s.Now())
+	publication, _, err := s.Store.preparePublication(ref, "control:"+id, string(canonical), s.Now(), &out)
 	if err != nil {
 		return Publication{}, err
 	}
@@ -37,21 +37,29 @@ func (s *Service) Control(ctx context.Context, ref, id string, out Outbound) (Pu
 		}
 		return publication, ErrDeliveryUncertain
 	}
-	out.Nonce = publication.Chunks[0].ID
-	messageID, postErr := s.Messenger.Post(ctx, out)
-	state, evidence := StateSent, "connector control receipt"
-	var ids []string
-	if postErr != nil {
-		state = StateUncertain
-		evidence = postErr.Error()
-	} else {
-		ids = []string{messageID}
-	}
-	if err = s.Store.FinishPublication(ref, publication.ID, state, ids, evidence); err != nil {
+	chunk, claimed, err := s.Store.beginPublicationChunk(ref, publication.ID, publication.Chunks[0].ID, s.Now())
+	if err != nil {
 		return publication, err
 	}
-	publication.State = state
-	publication.DiscordMessageIDs = ids
-	publication.DiscordEvidence = evidence
+	if !claimed {
+		if chunk.State == StateSent {
+			return s.Store.publication(ref, publication.ID)
+		}
+		return publication, ErrDeliveryUncertain
+	}
+	out.Nonce = chunk.ID
+	messageID, postErr := s.Messenger.Post(ctx, out)
+	state, evidence := StateSent, "connector control receipt"
+	if postErr != nil {
+		state = StateUncertain
+		evidence = "REST control outcome unconfirmed"
+	}
+	publication, err = s.Store.finishPublicationChunk(ref, publication.ID, chunk.ID, state, messageID, evidence)
+	if err != nil {
+		return publication, err
+	}
+	if publication.State == StateSent {
+		return publication, nil
+	}
 	return publication, postErr
 }
