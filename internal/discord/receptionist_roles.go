@@ -9,7 +9,6 @@ import (
 )
 
 const MaxReceptionistRoles = 8
-const MaxReceptionistGenerations = 8
 
 var ErrReceptionistUnavailable = errors.New("discord: receptionist is stopped, unavailable, or changed; use the directory or explicitly reset its stopped role")
 
@@ -141,9 +140,6 @@ func (b *Bridge) resetReceptionist(ctx context.Context, row Worker) error {
 		}
 		if !found {
 			return ErrNotFound
-		}
-		if role.Generation >= MaxReceptionistGenerations {
-			return ErrCapacity
 		}
 		role.Generation++
 		role.State = StatePrepared
