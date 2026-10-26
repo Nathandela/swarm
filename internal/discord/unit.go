@@ -54,17 +54,16 @@ func RenderUnit(goos, binary, stateDir, logPath string) (string, error) {
 </dict></plist>
 `, escape(binary), escape(stateDir), escape(logPath), escape(logPath)), nil
 	case "linux":
-		if strings.TrimRightFunc(logPath, unicode.IsSpace) != logPath {
+		if strings.TrimRightFunc(logPath, unicode.IsSpace) != logPath || strings.HasSuffix(logPath, `\`) {
 			return "", errors.New("discord: invalid log path")
 		}
 		quote := func(s string) string {
 			s = strings.ReplaceAll(s, "%", "%%")
-			s = strings.ReplaceAll(s, "$", "$$")
 			s = strings.ReplaceAll(s, "\\", "\\\\")
 			s = strings.ReplaceAll(s, `"`, `\"`)
 			return `"` + s + `"`
 		}
-		return fmt.Sprintf("[Unit]\nDescription=Swarm Discord\nStartLimitIntervalSec=60\nStartLimitBurst=5\n[Service]\nExecStart=%s discord run --state-dir %s\nRestart=always\nRestartSec=10\nStandardOutput=append:%s\nStandardError=append:%s\n[Install]\nWantedBy=default.target\n", quote(binary), quote(stateDir), strings.ReplaceAll(logPath, "%", "%%"), strings.ReplaceAll(logPath, "%", "%%")), nil
+		return fmt.Sprintf("[Unit]\nDescription=Swarm Discord\nStartLimitIntervalSec=60\nStartLimitBurst=5\n[Service]\nExecStart=:%s discord run --state-dir %s\nRestart=always\nRestartSec=10\nStandardOutput=append:%s\nStandardError=append:%s\n[Install]\nWantedBy=default.target\n", quote(binary), quote(stateDir), strings.ReplaceAll(logPath, "%", "%%"), strings.ReplaceAll(logPath, "%", "%%")), nil
 	default:
 		return "", errors.New("discord: unsupported service platform")
 	}
