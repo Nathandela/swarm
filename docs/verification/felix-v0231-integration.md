@@ -68,8 +68,7 @@ and publication dependencies are unchanged.
 
 Publication must run through `.github/workflows/release.yml`: its full Linux
 race suite, macOS, runtime-service, Android artifact, container and packaging
-gates precede signed publication. The final workflow and downloaded-artifact
-verification will be recorded after completion.
+gates precede signed publication. The completed workflow and downloaded-artifact verification are recorded below.
 
 ## Runtime boundaries
 
@@ -84,6 +83,37 @@ The copied context document still lives under temporary storage.
 
 No ambiguous journal record is automatically reconstructed. Legacy corruption
 that strict migration rejects still needs an explicit, evidence-preserving
-repair. This patch publishes binaries; no busy daemon restart, native-history
-cleanup, Android app rollout or hosted-service deployment is authorized by
-this qualification record.
+repair. This patch publishes binaries. No busy daemon restart, native-history cleanup,
+Android app rollout or hosted-service deployment was performed.
+
+## Published result
+
+[v0.23.1](https://github.com/Nathandela/swarm/releases/tag/v0.23.1) was published
+on 2026-10-26 from `b878e58b4dfc7541d265ae7f53154a4c56ababc4`.
+[Release workflow 40358762093](https://github.com/Nathandela/swarm/actions/runs/40358762093)
+passed all 17 jobs, including its full Linux race suite without exclusions,
+macOS, performance, fuzz, runtime-service, Android artifact, container and
+publication jobs. The published tag was not moved.
+
+The supplementary local race run completed with 77 passing package outcomes,
+eight skipped/no-test outcomes and zero failures (Go 1.26.10, corrected local
+environment). It recorded 9,424 passing test/subtest events and 63 skip events.
+Its one excluded local redraw test also passed in the separately completed
+full TUI race suite; the full login race suite passed too. The normal local
+redraw failure on unchanged main remains tracked as `swarm-xmx`.
+
+Downloaded Linux amd64, Linux arm64 and universal Darwin client archives matched
+their signed SHA-256 checksums. Verification used the repository's compiled
+Ed25519 trust slots and rejected a tampered-checksum negative control. Each
+archive contains both binaries and the exact source compatibility card. Static
+build metadata was checked for all eight architecture/binary pairs, including
+both Darwin slices: version 0.23.1, source commit, Go 1.26.10, clean VCS stamp
+and CGO disabled. The verified Linux CLI reports `swarm 0.23.1 (go1.26.10)`.
+The container manifest's tag/commit matched; its OCI attestation was not
+independently verified. No release asset was installed on a live host.
+
+The four original PR heads were rechecked before closing them as superseded by
+this integration. Fork branches were retained. The individual issue fixes and
+main ruleset follow-up are closed; publication is tracked by `swarm-ssq`.
+[Sanitized publication evidence](felix-v0231-release.json) records exact workflow
+outcomes, archive/binary hashes, PR heads, policy change and acceptance limits.
