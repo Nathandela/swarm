@@ -54,3 +54,18 @@ func TestUnitRejectsInjectionAndUnsupported(t *testing.T) {
 		t.Fatalf("%s %v", p, err)
 	}
 }
+
+func TestSystemdLiteralPaths(t *testing.T) {
+	unit, err := RenderUnit("linux", `/bin/${HOME}% "\\swarm`, `/state/${HOME}% "\\data`, `/logs/a % "\b`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`ExecStart="/bin/$${HOME}%% \"\\\\swarm" discord run --state-dir "/state/$${HOME}%% \"\\\\data"`, `StandardOutput=append:/logs/a %% "\b`, `StandardError=append:/logs/a %% "\b`} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("missing %q in %s", want, unit)
+		}
+	}
+	if _, err := RenderUnit("linux", "/bin/swarm", "/state", "/log/trailing "); err == nil {
+		t.Fatal("accepted trailing space in log path")
+	}
+}
