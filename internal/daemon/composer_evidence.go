@@ -79,3 +79,14 @@ func (d *Daemon) lockComposerCustody() (func(), error) {
 	}
 	return d.writeMu.Unlock, nil
 }
+
+// SettleNativeInput preserves the writer barrier while comparing the exact retained
+// disposition, so a concurrent native rejection cannot be overwritten by stale success.
+func (d *Daemon) SettleNativeInput(operationID string, expected, outcome []byte, failed bool) error {
+	unlock, err := d.lockComposerCustody()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return d.idem.SettleNativeInput(operationID, expected, outcome, failed)
+}

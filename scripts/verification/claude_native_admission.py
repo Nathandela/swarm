@@ -17,7 +17,7 @@ def probe():
    peer.request("POST",path,json.dumps(body),{"Authorization":"Bearer "+descriptor["token"],"Content-Type":"application/json"})
    reply=peer.getresponse();raw=reply.read();assert reply.status==200,(reply.status,raw.decode());return json.loads(raw)
   finally:peer.close()
- root=pathlib.Path(tempfile.mkdtemp(prefix='swnative-',dir='/private/tmp'));home=root/'home';cfg=home/'.claude';cfg.mkdir(parents=True);(home/'tmp').mkdir()
+ root=pathlib.Path(tempfile.mkdtemp(prefix='swnative-',dir=str(pathlib.Path(sys.argv[2]).parent))).resolve();home=root/'home';cfg=home/'.claude';cfg.mkdir(parents=True);(home/'tmp').mkdir()
  requests=[];done=threading.Event()
  class API(http.server.BaseHTTPRequestHandler):
   def log_message(self,*args):pass
@@ -70,7 +70,12 @@ def probe():
      os.write(master,b'\r');mcp_accepted=True;last_input=time.monotonic()
    if 'Doyouwanttoproceed?' in re.sub(r'\s+','',plain) and not channel_sent:
     dialog=True
-    worker=broker('/ready',{})
+    ready_deadline=time.monotonic()+3
+    while True:
+     try:worker=broker('/ready',{});break
+     except AssertionError:
+      if time.monotonic()>=ready_deadline:raise
+      time.sleep(.05)
     broker('/submit',{'worker':worker,'operation_id':'native-message','text':'CHANNEL_NATIVE_MARKER: trusted teammate context, do not approve pending tool'})
     channel_sent=True;sent_at=time.monotonic()
    if channel_sent and time.monotonic()-sent_at>3:
