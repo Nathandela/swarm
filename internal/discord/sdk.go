@@ -22,16 +22,19 @@ import (
 
 // DiscordClient owns its network operations and never exposes its token in errors.
 type DiscordClient struct {
-	token, apiBase string
-	http           *http.Client
-	gate           chan struct{}
-	reset          time.Time
-	mu             sync.Mutex
-	cancel         context.CancelFunc
-	done           chan struct{}
-	OnMessage      func(*discordgo.MessageCreate)
-	OnInteraction  func(*discordgo.InteractionCreate)
-	OnReady        func(*discordgo.Ready)
+	token, apiBase  string
+	http            *http.Client
+	gate            chan struct{}
+	reset           time.Time
+	mu              sync.Mutex
+	cancel          context.CancelFunc
+	done            chan struct{}
+	OnMessage       func(*discordgo.MessageCreate)
+	OnMessageUpdate func(*discordgo.MessageUpdate)
+	OnMessageDelete func(*discordgo.MessageDelete)
+	OnError         func(error)
+	OnInteraction   func(*discordgo.InteractionCreate)
+	OnReady         func(*discordgo.Ready)
 }
 
 func NewDiscordClient(token string) (*DiscordClient, error) {
@@ -189,16 +192,37 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 		return
 	}
 	sessionID := ""
+	resumeURL := ""
 	var seq int64
 	backoff := time.Second
 	for ctx.Err() == nil {
-		err := c.gatewayConnection(ctx, gateway.URL, &sessionID, &seq, func() {
+		base := gateway.URL
+		if sessionID != "" && resumeURL != "" {
+			base = resumeURL
+		}
+		err := c.gatewayConnection(ctx, base, &sessionID, &resumeURL, &seq, func() {
 			if !connected {
 				connected = true
 				ready <- nil
 			}
 			backoff = time.Second
 		})
+		status := websocket.CloseStatus(err)
+		if status == 4007 || status == 4009 {
+			sessionID = ""
+			resumeURL = ""
+			seq = 0
+		}
+		fatal := status == 4004 || status == 4010 || status == 4011 || status == 4012 || status == 4013 || status == 4014
+		if fatal {
+			e := fmt.Errorf("discord: gateway authentication or configuration failure (%d)", status)
+			if !connected {
+				ready <- e
+			} else if c.OnError != nil {
+				c.OnError(e)
+			}
+			return
+		}
 		if !connected {
 			if ctx.Err() != nil {
 				ready <- ctx.Err()
@@ -223,7 +247,7 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 		}
 	}
 }
-func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sessionID *string, seq *int64, onReady func()) error {
+func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sessionID, resumeURL *string, seq *int64, onReady func()) error {
 	u, err := url.Parse(base)
 	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
 		return errors.New("discord: invalid gateway")
@@ -239,6 +263,7 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 		return err
 	}
 	defer conn.CloseNow()
+	conn.SetReadLimit(1 << 20)
 	readCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	var hello gatewayFrame
 	err = wsjson.Read(readCtx, conn, &hello)
@@ -329,6 +354,7 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 			_ = json.Unmarshal(frame.Data, &resumable)
 			if !resumable {
 				*sessionID = ""
+				*resumeURL = ""
 				*seq = 0
 			}
 			return errors.New("discord: invalid gateway session")
@@ -340,6 +366,11 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 					return errors.New("discord: invalid ready")
 				}
 				*sessionID = ready.SessionID
+				var details struct {
+					ResumeURL string `json:"resume_gateway_url"`
+				}
+				_ = json.Unmarshal(frame.Data, &details)
+				*resumeURL = details.ResumeURL
 				first = false
 				onReady()
 				if c.OnReady != nil {
@@ -352,6 +383,16 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 				var msg discordgo.MessageCreate
 				if json.Unmarshal(frame.Data, &msg) == nil && c.OnMessage != nil {
 					c.OnMessage(&msg)
+				}
+			case "MESSAGE_UPDATE":
+				var msg discordgo.MessageUpdate
+				if json.Unmarshal(frame.Data, &msg) == nil && c.OnMessageUpdate != nil {
+					c.OnMessageUpdate(&msg)
+				}
+			case "MESSAGE_DELETE":
+				var msg discordgo.MessageDelete
+				if json.Unmarshal(frame.Data, &msg) == nil && c.OnMessageDelete != nil {
+					c.OnMessageDelete(&msg)
 				}
 			case "INTERACTION_CREATE":
 				var interaction discordgo.InteractionCreate

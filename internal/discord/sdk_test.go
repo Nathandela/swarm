@@ -315,3 +315,151 @@ func TestRateLimitHeadersAndCloseDuringHello(t *testing.T) {
 		t.Fatalf("rate wait: calls %d error %v", calls, err)
 	}
 }
+
+func TestReviewGatewayRecovery(t *testing.T) {
+	for _, mode := range []string{"expired-session", "resume-url", "large-event"} {
+		t.Run(mode, func(t *testing.T) {
+			var server *httptest.Server
+			up := websocket.Upgrader{}
+			var attempts atomic.Int32
+			observed := make(chan struct {
+				op   int
+				path string
+			}, 3)
+			messages := make(chan struct{}, 3)
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/gateway" {
+					json.NewEncoder(w).Encode(map[string]string{"url": "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"})
+					return
+				}
+				conn, e := up.Upgrade(w, r, nil)
+				if e != nil {
+					return
+				}
+				defer conn.Close()
+				n := attempts.Add(1)
+				conn.WriteJSON(map[string]any{"op": 10, "d": map[string]any{"heartbeat_interval": 10000}})
+				var identify struct {
+					Op int `json:"op"`
+				}
+				if conn.ReadJSON(&identify) != nil {
+					return
+				}
+				if n > 1 {
+					observed <- struct {
+						op   int
+						path string
+					}{identify.Op, r.URL.Path}
+				}
+				conn.WriteJSON(map[string]any{"op": 0, "s": 1, "t": "READY", "d": map[string]any{"session_id": "session", "resume_gateway_url": "ws" + strings.TrimPrefix(server.URL, "http") + "/resume", "user": map[string]any{"id": "1"}}})
+				if n == 1 {
+					switch mode {
+					case "expired-session":
+						conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(4009, "expired"), time.Now().Add(time.Second))
+						return
+					case "resume-url":
+						conn.WriteJSON(map[string]any{"op": 7, "d": nil})
+					case "large-event":
+						conn.WriteJSON(map[string]any{"op": 0, "s": 2, "t": "GUILD_CREATE", "d": map[string]any{"id": "1", "name": strings.Repeat("a", 40000)}})
+						conn.WriteJSON(map[string]any{"op": 0, "s": 3, "t": "MESSAGE_CREATE", "d": map[string]any{"id": "2", "channel_id": "3", "content": "hello", "author": map[string]any{"id": "4"}}})
+					}
+				}
+				var frame any
+				for {
+					if conn.ReadJSON(&frame) != nil {
+						return
+					}
+				}
+			}))
+			defer server.Close()
+			c, _ := NewDiscordClient("test-secret")
+			c.apiBase = server.URL
+			c.OnMessage = func(*discordgo.MessageCreate) { messages <- struct{}{} }
+			if e := c.Open(context.Background()); e != nil {
+				t.Fatal(e)
+			}
+			defer c.Close()
+			if mode == "large-event" {
+				select {
+				case <-messages:
+				case <-time.After(300 * time.Millisecond):
+					t.Error("large ignored guild event disconnects before following message")
+				}
+				return
+			}
+			select {
+			case got := <-observed:
+				if mode == "expired-session" && got.op != 2 {
+					t.Errorf("expired session resumed with opcode %d", got.op)
+				}
+				if mode == "resume-url" && got.path != "/resume" {
+					t.Errorf("resume used wrong gateway %s", got.path)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("no recovery attempt")
+			}
+		})
+	}
+}
+
+func TestGatewayFatalAndMessageChanges(t *testing.T) {
+	var server *httptest.Server
+	up := websocket.Upgrader{}
+	var attempts atomic.Int32
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/gateway" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"url": "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"})
+			return
+		}
+		attempts.Add(1)
+		conn, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.WriteJSON(map[string]any{"op": 10, "d": map[string]any{"heartbeat_interval": 10000}})
+		var input any
+		if conn.ReadJSON(&input) != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{"op": 0, "s": 1, "t": "READY", "d": map[string]any{"session_id": "session"}})
+		for i, typ := range []string{"MESSAGE_UPDATE", "MESSAGE_DELETE"} {
+			_ = conn.WriteJSON(map[string]any{"op": 0, "s": i + 2, "t": typ, "d": map[string]any{"id": "5", "channel_id": "6"}})
+		}
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(4004, "bad token"), time.Now().Add(time.Second))
+	}))
+	defer server.Close()
+	c, _ := NewDiscordClient("secret")
+	c.apiBase = server.URL
+	changed := make(chan string, 2)
+	fatal := make(chan error, 1)
+	c.OnMessageUpdate = func(m *discordgo.MessageUpdate) { changed <- m.ID }
+	c.OnMessageDelete = func(m *discordgo.MessageDelete) { changed <- m.ID }
+	c.OnError = func(err error) { fatal <- err }
+	if err := c.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	for i := 0; i < 2; i++ {
+		select {
+		case id := <-changed:
+			if id != "5" {
+				t.Fatal(id)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing message change")
+		}
+	}
+	select {
+	case err := <-fatal:
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing fatal error")
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if attempts.Load() != 1 {
+		t.Fatal("retried fatal close")
+	}
+}
