@@ -68,6 +68,7 @@ type Broker struct {
 	mu         sync.Mutex
 	worker     Worker
 	seen       time.Time
+	revoked    bool
 	operations map[string]Message
 	order      []string
 }
@@ -122,9 +123,9 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(value)
 	}
 	refuse := func(reason string) { http.Error(w, reason, http.StatusConflict) }
-	live := b.worker.Generation != "" && time.Since(b.seen) < 3*time.Second
+	live := !b.revoked && b.worker.Generation != "" && time.Since(b.seen) < 3*time.Second
 	switch r.URL.Path {
-	case "/exchange":
+	case "/exchange", "/revoke":
 		worker := req.Worker
 		if worker.NativeSessionID == "" || len(worker.NativeSessionID) > 128 || worker.Generation == "" || len(worker.Generation) > 128 || worker.Version != b.descriptor.ProviderVersion || !SupportedVersion(worker.Version) {
 			refuse("unqualified native worker")
@@ -132,6 +133,29 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if b.worker.Generation != "" && b.worker != worker {
 			refuse("native worker changed; refresh the session")
+			return
+		}
+		if r.URL.Path == "/revoke" {
+			b.worker = worker
+			b.revoked = true
+			for id, msg := range b.operations {
+				switch msg.State {
+				case "prepared":
+					msg.State = "rejected"
+				case "executing", "submitted":
+					msg.State = "uncertain"
+				default:
+					continue
+				}
+				msg.Text = ""
+				msg.Reason = "native session ended; explicitly refresh this session"
+				b.operations[id] = msg
+			}
+			respond(nil)
+			return
+		}
+		if b.revoked && req.OperationID == "" {
+			refuse("native session ended; explicitly refresh this session")
 			return
 		}
 		b.worker = worker
@@ -258,6 +282,9 @@ func (c *Client) call(ctx context.Context, path string, req request, out any) er
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("claude native input refused (%d)", response.StatusCode)
 	}
+	if out == nil {
+		return nil
+	}
 	return json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(out)
 }
 func (c *Client) Ready(ctx context.Context) (Worker, error) {
@@ -279,4 +306,9 @@ func (c *Client) Operation(ctx context.Context, worker Worker, id string) (Messa
 	var out Message
 	err := c.call(ctx, "/operation", request{Worker: worker, OperationID: id}, &out)
 	return out, err
+}
+
+// Revoke permanently retires the shim's native binding after a native session ends.
+func (c *Client) Revoke(ctx context.Context, worker Worker) error {
+	return c.call(ctx, "/revoke", request{Worker: worker}, nil)
 }

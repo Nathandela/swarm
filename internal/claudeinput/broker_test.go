@@ -188,3 +188,51 @@ func TestQualifiedVMVersionsUseExactNativeWorker(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionRevocationIsPermanentAndRetainsExactPendingEvidence(t *testing.T) {
+	b, err := Start(shortDir(t), "session", "2.1.296", 123, 456)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	ctx := context.Background()
+	client := NewClient(b.Descriptor())
+	worker := Worker{NativeSessionID: "original", Generation: "worker", Version: "2.1.296"}
+	_, _ = client.Exchange(ctx, worker, "", "", "")
+	_, _ = client.Submit(ctx, worker, "claimed", "message one")
+	_, _ = client.Exchange(ctx, worker, "", "", "")
+	_, _ = client.Submit(ctx, worker, "prepared", "message two")
+	if err := client.Revoke(ctx, worker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Ready(ctx); err == nil {
+		t.Fatal("revoked native session remained ready")
+	}
+	if _, err := client.Exchange(ctx, worker, "", "", ""); err == nil {
+		t.Fatal("old interval rearmed revoked worker")
+	}
+	replacement := worker
+	replacement.NativeSessionID = "replacement"
+	replacement.Generation = "replacement-worker"
+	if _, err := client.Exchange(ctx, replacement, "", "", ""); err == nil {
+		t.Fatal("replacement native session reused shim proof")
+	}
+	if _, err := client.Submit(ctx, worker, "later", "must not send"); err == nil {
+		t.Fatal("revoked proof admitted later input")
+	}
+	prepared, err := client.Operation(ctx, worker, "prepared")
+	if err != nil || prepared.State != "rejected" {
+		t.Fatalf("unclaimed evidence: %+v %v", prepared, err)
+	}
+	claimed, err := client.Operation(ctx, worker, "claimed")
+	if err != nil || claimed.State != "uncertain" {
+		t.Fatalf("claimed evidence fabricated rejection: %+v %v", claimed, err)
+	}
+	if _, err := client.Exchange(ctx, worker, "claimed", "rejected", "native queue discarded the old session"); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = client.Operation(ctx, worker, "claimed")
+	if err != nil || claimed.State != "rejected" {
+		t.Fatalf("exact post-revoke native rejection lost: %+v %v", claimed, err)
+	}
+}
