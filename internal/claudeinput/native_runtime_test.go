@@ -59,6 +59,7 @@ func TestNativeClaudeModalAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := exec.CommandContext(ctx, "python3", harness, binary, filepath.Join(dir, DescriptorFile), plugin)
+	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("native modal admission: %v\n%s", err, output)
