@@ -155,3 +155,38 @@ func TestAgyNewSourceSchemaRequiresKernelWorkingDirectory(t *testing.T) {
 		t.Fatal("different helper workspace claimed the native owner")
 	}
 }
+
+func TestQualifiedVM145UsesMeasuredSourceSchema(t *testing.T) {
+	b, _, source := fixture(t)
+	b.desc.Version = "1.4.5"
+	if !SupportedVersion(b.desc.Version) {
+		t.Fatal("qualified VM runtime was refused")
+	}
+	source.WorkingDirectory = b.desc.Cwd
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(source.SourceMetadata), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadata["tool"].(map[string]any)["toolCall"].(map[string]any)["argumentsJson"] = `{"CommandLine":"` + b.desc.BootstrapCommand + `"}`
+	raw, _ := json.Marshal(metadata)
+	source.SourceMetadata = string(raw)
+	previous := b.run
+	b.run = func(ctx context.Context, source Source, args ...string) ([]byte, error) {
+		if args[0] == "--version" {
+			return []byte("1.4.5\n"), nil
+		}
+		return previous(ctx, source, args...)
+	}
+	if err := b.validate(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	source.WorkingDirectory = t.TempDir()
+	if b.validate(context.Background(), source) == nil {
+		t.Fatal("wrong kernel workspace claimed VM session")
+	}
+	for _, version := range []string{"1.4.4", "1.4.6", "1.4.8", "1.4.5-beta.1"} {
+		if SupportedVersion(version) {
+			t.Fatalf("unqualified runtime %q enabled", version)
+		}
+	}
+}

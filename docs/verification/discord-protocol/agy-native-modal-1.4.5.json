@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-27",
+  "host": "authorized tf_nathan Ubuntu x86_64",
+  "version": "1.4.5",
+  "elapsed_seconds": 15.53,
+  "source": "installed native binary, copied physically into owned scratch; test-only candidate overlay used before production gate changed",
+  "isolation": {
+    "writes": "owned /dev/shm/swarm-native-qual-20261027-sol only, host root/data/dev-shm read-only, private /dev",
+    "network": "fresh network namespace with lo only, no host loopback/external connectivity",
+    "configuration": "synthetic HOME, fake local Gemini, no global CLI/config mutation",
+    "guard_controls": [
+      "scratch write allowed",
+      "private PTY allowed",
+      "fake-provider TCP allowed",
+      "outside-scratch write denied",
+      "external TCP denied"
+    ]
+  },
+  "observed": {
+    "message_submitted": true,
+    "native_receipt_state": "submitted",
+    "tool_ran": false,
+    "marker_in_model_context": true,
+    "bootstrap_approved_once": true,
+    "native_permission_pending_seconds": 3,
+    "tool_refused_locally_after_observation": true,
+    "source_schema": "run_command omits Cwd; actual helper kernel working directory retained",
+    "exact_root_conversation_check": "retained unchanged"
+  },
+  "command": "SWARM_NATIVE_ADMISSION_FIXTURE=1 SWARM_NATIVE_INPUT_HELPER=<owned linux-amd64 swarm> <owned agyinput.test> -test.run ^TestNativeAgyModalAdmission$ -test.v -test.timeout 90s; entire process tree inside native_fixture_sandbox.py Linux contract via bwrap",
+  "crossbuild": "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -overlay=<owned exact1.4.5 candidate overlay> -c -o agyinput.test ./internal/agyinput; same environment go build -overlay=<same overlay> -o swarm ./cmd/swarm",
+  "limits": [
+    "native admission only; no fabricated transcript/status parity",
+    "not task/model completion",
+    "separately resumed native-child-as-root remains unqualified",
+    "unknown versions remain refused"
+  ]
+}
