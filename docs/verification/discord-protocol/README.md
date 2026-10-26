@@ -4,7 +4,7 @@ Date: 2026-10-26. This records source-level protocol work and isolated fixtures.
 
 ## Additive protocol contract
 
-Clients request `semantic-send` and `message-origin` in hello. `ComposerSendReq.Origin` is an optional `MessageOrigin` containing `kind`, `installation_id`, `request_id`, `actor_id`, `actor_name`, `guild_id`, `channel_id`, `message_id`, and `endorser_id`.
+Clients request `semantic-send` and `message-origin` in hello. `ComposerSendReq.Origin` is an optional `MessageOrigin` containing `kind`, `installation_id`, `request_id`, `actor_id`, `actor_name`, `guild_id`, `channel_id`, `message_id`, `endorser_id`, and `requester_id`. The original quoted author and actual invoker remain distinct.
 
 Kinds are `external`, `owner_direct`, and `owner_endorsed`. Installation, request, and actor IDs are required; endorsement requires an endorser, and other kinds prohibit that field. Each field is at most 512 UTF-8 bytes and rejects control characters. This is an authenticated caller's provenance declaration; Discord actor/owner verification belongs to the bot. Transport `source=owner` is not proof of human owner authority.
 
@@ -31,9 +31,11 @@ Full repository, independent review, actual installed-provider matrix, and relea
 
 ## Five-provider admission boundary
 
-The existing `TypeSubmit` transaction serializes input writers and refuses a known/unknown owner draft. It does not coordinate with the provider's own event loop and cannot prove that a native modal will not open between typing and Enter. A grid/status check followed by Enter cannot close that race. The existing Claude path is preserved; this work does not upgrade that evidence to native modal admission proof.
+Current native input evidence is recorded separately for [Claude](claude-native-input.md) and [agy](agy-native-input.md). It includes exact guarded Mac and VM versions and permission-dialog separation. Their input-only native paths do not imply structured-history or attention parity. The current [whole-feature evidence](../discord-integration.md) records remaining integration/release gates. The observations below describe the initial protocol checkpoint and are retained as history, not current support claims.
 
-agy and Hermes currently expose neither `KeystrokeComposer` nor a live structured message backend in Swarm. Neither is enabled by pretending that grid status is admission authority, and degraded Codex/Claude are not routed through a new input fallback.
+The existing `TypeSubmit` transaction serializes input writers and refuses a known/unknown owner draft. It does not coordinate with the provider's own event loop and cannot prove that a native modal will not open between typing and Enter. A grid/status check followed by Enter cannot close that race. The initial protocol-only checkpoint preserved the existing Claude path and did not establish native modal admission proof; the later session-owned mod and its fixture provide that separate evidence.
+
+At that initial checkpoint, agy and Hermes exposed neither `KeystrokeComposer` nor a live structured message backend in Swarm. Neither could be enabled by pretending that grid status was admission authority, and degraded Codex/Claude were not routed through a new input fallback.
 
 Read-only host evidence:
 
@@ -42,4 +44,4 @@ Read-only host evidence:
 - `agy --help`: `--remote-control` creates a remote connection for the CLI session on startup. `agy help remote-control` lists daemon `start`, `status`, `stop`; `agy remote-control start --help` exposes only machine `--name` and login-scoped `--session`. No same-session message admission API is documented by these local help surfaces. No daemon start/stop was run.
 - `command -v hermes`: no installed binary. The repository's [Hermes transport decision](../../design/hermes-adapter.md#typed-transport-decision) identifies Gateway and ACP as distinct structured transports requiring ownership, readiness, authentication, cancellation, and capability mapping.
 
-The remaining implementation route needs a provider-coordinated, same-session admission API: investigate agy's Remote Control transport and Hermes Gateway/ACP with isolated native fixtures. A new headless conversation or a second process resumed against history does not establish safe control of the existing native session. All-five admission and runtime qualification remain open.
+That investigation required a provider-coordinated, same-session admission API. The implemented agy agentapi route and modern Hermes shared-owner work follow that boundary. A new headless conversation or a second process resumed against history does not establish safe control of an existing native session. All-five integrated release qualification remains open until the whole-feature gates are recorded.

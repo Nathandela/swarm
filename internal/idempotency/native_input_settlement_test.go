@@ -86,3 +86,35 @@ func TestNativeInputSettlementRejectsStaleSuccessAfterRetainedRejection(t *testi
 		t.Fatalf("original sender could not repeat the identical rejected outcome: %v", err)
 	}
 }
+
+func TestNativeInputLateCommitCannotReplaceRetainedRejection(t *testing.T) {
+	for _, settled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "retained", true: "settled"}[settled], func(t *testing.T) {
+			store, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.f.Close() })
+			_, _, _ = store.PrepareBound("op", "semantic_send", "worker", "instance", "hash")
+			_ = store.Begin("op")
+			submitted := []byte(`{"operation_id":"op","state":"submitted"}`)
+			rejected := []byte(`{"operation_id":"op","state":"rejected"}`)
+			_ = store.SetEvidence("op", submitted)
+			if err = store.CompareEvidence("op", submitted, rejected); err != nil {
+				t.Fatal(err)
+			}
+			if settled {
+				if err = store.SettleNativeInput("op", rejected, []byte(`{"ok":false,"code":"input_busy"}`), true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if store.Complete("op", []byte(`{"ok":true}`)) == nil {
+				t.Fatal("late success overwrote retained native rejection")
+			}
+			record, _ := store.Get("op")
+			if string(record.Evidence) != string(rejected) || record.Phase == PhaseCompleted {
+				t.Fatalf("lost exact rejection: %+v", record)
+			}
+		})
+	}
+}

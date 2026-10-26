@@ -294,6 +294,18 @@ func (s *Store) transition(operationID string, phase Phase, outcome []byte, setO
 	if !ok {
 		return fmt.Errorf("idempotency: unknown operation_id %q", operationID)
 	}
+	if (rec.Action == "semantic_send" || rec.Action == "composer_send" && len(rec.Request) > 0) && len(rec.Evidence) > 0 {
+		if (rec.Phase == PhaseFailed || rec.Phase == PhaseCompleted) && (phase != rec.Phase || !setOutcome || !bytes.Equal(rec.Outcome, outcome)) {
+			return errors.New("idempotency: retained native outcome cannot be replaced")
+		}
+		var proof struct {
+			OperationID string `json:"operation_id"`
+			State       string `json:"state"`
+		}
+		if phase == PhaseCompleted && json.Unmarshal(rec.Evidence, &proof) == nil && proof.OperationID == operationID && proof.State == "rejected" {
+			return errors.New("idempotency: native rejection cannot become successful delivery")
+		}
+	}
 	if phase == PhaseFailed && (rec.Action == "semantic_send" || rec.Action == "native_decide" || rec.Action == "composer_send" && len(rec.Request) > 0) && len(rec.Evidence) > 0 {
 		if rec.Phase != PhaseFailed || !setOutcome || !bytes.Equal(rec.Outcome, outcome) {
 			return errors.New("idempotency: native evidence cannot become a failed delivery")

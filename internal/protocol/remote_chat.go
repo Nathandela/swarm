@@ -248,7 +248,7 @@ func (cc *clientConn) handleComposerSend(c Control) {
 				if reader, ok := cc.srv.d.(SemanticOperationReader); ok {
 					_, _ = reader.SemanticOperation(local, c.OperationID)
 					phase, raw, readErr := exec.ClaimComposerOperation(c.OperationID, action, local, body.SessionInstance, requestHash)
-					if readErr == nil && phase == composerPhaseCompleted {
+					if readErr == nil && (phase == composerPhaseCompleted || phase == composerPhaseFailed) {
 						cc.replyComposerCached(c.SessionID, raw)
 						return
 					}
