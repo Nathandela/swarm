@@ -112,6 +112,9 @@ func qualifyObservedOpenCodeAdmission(operationID string, intent openCodeSendInt
 }
 
 func validOpenCodeIntent(operationID, local string, intent openCodeSendIntent) bool {
+	if intent.Origin != nil && intent.Origin.Validate() != nil {
+		return false
+	}
 	if intent.Source != "" && intent.Source != adapter.SourceOwner && intent.Source != adapter.SourcePhone && intent.Source != "supervisor" {
 		return false
 	}
@@ -205,12 +208,20 @@ func (d *Daemon) semanticOperation(local, operationID string) (protocol.Semantic
 	if len(rec.Request) == 0 {
 		return result, nil
 	}
+	var originIntent composerOriginIntent
+	if json.Unmarshal(rec.Request, &originIntent) == nil && originIntent.Version == 1 && originIntent.Origin != nil {
+		if originIntent.Origin.Validate() == nil {
+			result.Origin = originIntent.Origin
+		}
+		return result, nil
+	}
 	var intent openCodeSendIntent
 	if json.Unmarshal(rec.Request, &intent) != nil || !validOpenCodeIntent(operationID, local, intent) {
 		result.State = "uncertain"
 		result.Reason = "durable native request identity is unconfirmed"
 		return result, nil
 	}
+	result.Origin = intent.Origin
 	result.NativeSessionID, result.NativeMessageID, result.NativeGeneration, result.NativeCreatedAtMS = intent.Identity.RootID, intent.MessageID, intent.Identity.BackendGeneration, intent.Identity.NativeCreatedAtMS
 	if len(rec.Evidence) == 0 && (rec.Phase == idempotency.PhaseExecuting || rec.Phase == idempotency.PhaseOutcomeUnknown) {
 		receipt, err := d.reconcileOpenCodeAdmission(local, operationID, intent)

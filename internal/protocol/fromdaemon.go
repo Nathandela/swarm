@@ -177,10 +177,8 @@ type shimStream struct {
 	submitRes chan shimwire.Control
 }
 
-// ErrSubmitUnsupported is the honest degrade: this shim predates the submit transaction
-// (Slice 0) and cannot deliver a message atomically. The caller falls back to the two
-// unlocked writes that shipped before it, which is where the merge is still possible --
-// a DISCLOSED degrade across an upgrade, not a silent one.
+// ErrSubmitUnsupported means the current shim hello proves no atomic message transaction.
+// A daemon restart preserves that shim; a composer must refuse rather than split writes.
 var ErrSubmitUnsupported = errors.New("protocol: this shim advertises no submit transaction")
 
 // ErrInputBusy reports the shim's refusal: somebody has written to the session's PTY

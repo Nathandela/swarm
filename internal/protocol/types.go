@@ -337,8 +337,7 @@ type SessionStream interface {
 // reasoning as the daemon adapter's stopEvents: a stream that cannot do it is not broken,
 // it is OLD -- a shim from before the transaction existed -- and every test double in the
 // tree would otherwise have to grow a method it has no PTY to implement. A caller that
-// gets ErrSubmitUnsupported degrades to two unlocked writes, which is where the merge is
-// still possible; that degrade is disclosed, never silent.
+// gets ErrSubmitUnsupported must refuse rather than split a message into unsafe raw writes.
 type MessageSubmitter interface {
 	Submit(text string) error
 }
