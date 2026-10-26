@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -108,6 +109,33 @@ func TestOwnerInvalidLaunchHasNoEffects(t *testing.T) {
 	}
 	if len(w.launches) != 0 {
 		t.Fatal(w.launches)
+	}
+}
+
+func TestConcurrentOwnerCreateHasOneEffect(t *testing.T) {
+	b, w := controlsRig(t)
+	i := ownerInteraction("concurrent", "1")
+	option := controlOption("new", map[string]string{"cli": "codex"})
+	route := Route{ChannelID: "20", MessageID: i.ID}
+	var group sync.WaitGroup
+	for range 16 {
+		group.Go(func() {
+			_, e := b.controlCommand(context.Background(), i, Actor{ID: "1"}, route, option)
+			if e != nil && !errors.Is(e, ErrDeliveryUncertain) {
+				t.Error(e)
+			}
+		})
+	}
+	group.Wait()
+	if len(w.launches) != 1 {
+		t.Fatal("concurrent create duplicated", len(w.launches))
+	}
+}
+func TestUnsupportedNativeRequestsNeverUseRawInput(t *testing.T) {
+	b, w := controlsRig(t)
+	w.native = protocol.NativeRequestsReply{Reason: "adapter has no structured native requests"}
+	if _, e := b.ownerInbox(context.Background(), w.rows[0]); !errors.Is(e, ErrControlUnsupported) || len(w.sends) != 0 || len(w.decisions) != 0 {
+		t.Fatal(e, w.sends, w.decisions)
 	}
 }
 func TestContextMenusPreserveOriginalAuthorAndInvoker(t *testing.T) {
