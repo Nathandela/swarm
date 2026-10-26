@@ -351,7 +351,7 @@ func installDiscordUnit(goos, home, binary, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	defer func() { _ = os.Remove(file.Name()) }()
 	if _, err = file.WriteString(body); err != nil {
 		_ = file.Close()
 		return err

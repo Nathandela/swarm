@@ -120,7 +120,7 @@ func CallLocal(ctx context.Context, stateDir, operation string, request, respons
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(res.Body, 4<<20+1))
 	if err != nil {
 		return err
@@ -285,7 +285,7 @@ func (s *Service) ServeLocal(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return errors.New("discord: local service already running")
 	}
@@ -318,7 +318,7 @@ func (s *Service) ServeLocal(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	listener.SetUnlinkOnClose(false)
 	identity, err := os.Lstat(path)
 	if err != nil {
