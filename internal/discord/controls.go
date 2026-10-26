@@ -43,7 +43,7 @@ func ControlOptions() []*discordgo.ApplicationCommandOption {
 	}
 	var options []*discordgo.ApplicationCommandOption
 	options = append(options, &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "new", Description: "Create an agent (owner only)", Options: []*discordgo.ApplicationCommandOption{stringOption("cli", "claude, codex, agy, hermes or opencode", true), stringOption("name", "Agent name", false), stringOption("model", "Model ID", false), stringOption("dir", "Absolute working directory", false), stringOption("prompt", "Initial message", false)}})
-	for _, name := range []string{"resume", "stop", "exclude", "include", "requests"} {
+	for _, name := range []string{"resume", "stop", "exclude", "include", "requests", "receptionist-reset"} {
 		options = append(options, &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: name, Description: name + " an exact agent ID (owner only)", Options: []*discordgo.ApplicationCommandOption{stringOption("agent", "Exact agent ID", true)}})
 	}
 	return options
@@ -220,6 +220,11 @@ func (b *Bridge) controlCommand(ctx context.Context, i *discordgo.InteractionCre
 		return "", e
 	}
 	switch option.Name {
+	case "receptionist-reset":
+		if e = b.resetReceptionist(ctx, row); e != nil {
+			return "", e
+		}
+		return "Stopped receptionist may be recreated for the next ambiguous request.", nil
 	case "exclude", "include":
 		if e = b.Service.Store.SetOptOut(row.Target, option.Name == "exclude"); e != nil {
 			return "", e
@@ -291,11 +296,6 @@ func (b *Bridge) contextCommand(ctx context.Context, i *discordgo.InteractionCre
 	if e != nil {
 		return "", e
 	}
-	if len(rows) > 1 {
-		if handled, e := b.receptionist(ctx, r); handled || e != nil {
-			return "Swarm is finding suitable agents.", e
-		}
-	}
 	var ids []string
 	for _, row := range rows {
 		if len(ids) == 25 {
@@ -306,7 +306,17 @@ func (b *Bridge) contextCommand(ctx context.Context, i *discordgo.InteractionCre
 	if len(ids) == 0 {
 		return "There are no available agents.", nil
 	}
-	return "Choose an agent in the source discussion.", b.Service.Propose(ctx, r.Ref, ids)
+	if e = b.Service.Directory(ctx, r.Ref, ids); e != nil {
+		return "", e
+	}
+	if len(rows) > 1 {
+		b.start(ctx, func() {
+			if _, e := b.receptionist(ctx, r); e != nil && b.Client.OnError != nil {
+				b.Client.OnError(e)
+			}
+		})
+	}
+	return "Choose an agent in the source discussion; recommendations may follow.", nil
 }
 func (b *Bridge) selectRequest(ctx context.Context, actor Actor, r Request, targetID, eventID string) (Request, error) {
 	if actor.ID != r.Author.ID && actor.ID != r.RequesterID && actor.ID != b.Service.Config.OwnerID {

@@ -18,14 +18,18 @@ import (
 
 type controlWorkers struct {
 	*fakeWorkers
-	launches  []protocol.LaunchReq
-	killed    []string
-	decisions []protocol.NativeDecisionReq
-	launchErr error
-	native    protocol.NativeRequestsReply
+	launches   []protocol.LaunchReq
+	killed     []string
+	decisions  []protocol.NativeDecisionReq
+	launchErr  error
+	native     protocol.NativeRequestsReply
+	launchGate <-chan struct{}
 }
 
 func (w *controlWorkers) Launch(_ context.Context, r protocol.LaunchReq) (string, string, error) {
+	if w.launchGate != nil {
+		<-w.launchGate
+	}
 	w.launches = append(w.launches, r)
 	return "local/new", r.Name, w.launchErr
 }
