@@ -63,6 +63,19 @@ and check retained handoff dependencies before each deletion. A future merge
 must preserve those checks together with this branch's exact bootstrap
 owner-delete authorization.
 
+The source coordination review of main `98e74010` (`v0.23.1`) adds an explicit
+integration gate, tracked in `agents-tracker-h6sc.24`. Both branches added a fourth
+`sendMessage` boolean, but it means `manual` here and `pasteText` on main. Preserve
+both meanings and their admission checks independently. Main’s new `PasteInput`
+path must cross this branch’s `foreignWrite` and `beforeWrite` ownership fences,
+including fallback, while retaining paste framing, sanitization and input embargoes.
+Keep manual input available after `InteractionError`; newer owner input still
+invalidates stale automatic recovery. Retain main’s latched journal storage-failure
+refusal and physical handoff-worktree validation. Agent handoff creates delegated
+work; account rotation preserves the existing conversation and CWD.
+Frozen constructor source3534/productdc90 predates these changes. Its receipts
+remain historical; they cannot qualify the eventual merged source.
+
 Keep the existing common native directory as the history and shared user-asset
 source, and as the location of legacy incarnations. Create no new history, plugin
 or transcript copies. Future owned Claude incarnations use a deterministic native
