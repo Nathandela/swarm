@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
   "scope": "Eighteen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
-  "overall": "Still NOT QUALIFIED. V25 rejected an unidentified provider POST after partial native traffic; V26 stopped earlier during seed setup and did not exercise the diagnostic. Neither result supplies complete ownership or account-adoption proof.",
+  "overall": "Still NOT QUALIFIED. V25 rejected an unidentified provider POST; V26 stopped at seed setup. V27 preparation refused a changed installed image before any unit ran. No result supplies current merged-source native ownership or account-adoption proof.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -1413,7 +1413,7 @@
       }
     }
   ],
-  "next_step": "Source-only seed/bootstrap diagnosis; preserve the unexercised rejection-only POST diagnostic. Further native execution and any endpoint response require separate review.",
+  "next_step": "Review separate seed-only input preparation with no provider executable dependency. Native0.164 and merged-main qualification remain separate open gates.",
   "limits": [
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
@@ -1480,11 +1480,12 @@
   "attempt_counts": {
     "full_constructor_attempts": 19,
     "seed_only_controls": 3,
-    "failed_preparations": 1,
+    "failed_preparations": 2,
     "unused_successful_preparations": 1,
-    "total_recorded_operations": 24,
+    "total_recorded_operations": 25,
     "count_scope": "Recorded constructor/seed/preparation evidence only; cleanup operations are separate.",
-    "latest_actual_attempt": "diagnostic-V26-seed"
+    "latest_actual_attempt": "diagnostic-V26-seed",
+    "latest_recorded_operation": "preparation-V27"
   },
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",
@@ -1509,5 +1510,26 @@
   "retirement_batch6_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch6-2026-10-25.json",
     "sha256": "ce4862b3f1225a505b9ae248e2b0950a3b765219522882fbb0b6eca16e2b00e3"
+  },
+  "preparation_v27": {
+    "result": "FAIL before any seed unit or provider execution; installed source image no longer matches the pinned0.163 binary.",
+    "log": {
+      "path": "/private/tmp/swarm-codex-outer-ss21f3dn/prepare.log",
+      "sha256": "e487f7662f58592ed375666d9a1a79fc22b1593d536e99ae737b4ab151f49882"
+    },
+    "installed_source_metadata": {
+      "path": "/private/tmp/swarm-codex-outer-ss21f3dn/installed-source-metadata.json",
+      "sha256": "40d1f217ced804dabcc0ae424f7a8273a42ef957044ea5404b424045fce27150"
+    },
+    "partial_stage": "/tmp/scx.ddqkfh_p",
+    "full_prepared_record_present": false,
+    "native_directory_present": false,
+    "interpretation": "Npm metadata reports0.164.0; no native version command was run. Installed SHA/size differs from the399ff... pinned image. The remote staged V26 image is absent. No account, CLI permission or live session was changed.",
+    "next_step": "Review fresh seed-only input preparation because the pure Go seed prerequisite requires no provider CLI. Preserve the failed stage/result, use a distinct input receipt and fresh assets/run roots; no silent repin or partial-stage reuse.",
+    "limits": [
+      "Not a constructor or seed attempt. No model/provider/MCP/PTY traffic occurred.",
+      "Current installed binary has group-write mode775; qualify its provenance/permissions separately before any later native runtime acceptance.",
+      "Old0.163 constructor evidence remains historical; no0.164 compatibility/adoption claim follows."
+    ]
   }
 }
