@@ -397,7 +397,8 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 				}
 			case "MESSAGE_UPDATE":
 				var msg discordgo.MessageUpdate
-				if json.Unmarshal(frame.Data, &msg) == nil && c.OnMessageUpdate != nil {
+				var fields map[string]json.RawMessage
+				if json.Unmarshal(frame.Data, &fields) == nil && fields["content"] != nil && json.Unmarshal(frame.Data, &msg) == nil && c.OnMessageUpdate != nil {
 					c.OnMessageUpdate(&msg)
 				}
 			case "MESSAGE_DELETE":

@@ -55,6 +55,8 @@ func runConnected(parent context.Context, s *Service, client *DiscordClient) err
 	bridge := NewBridge(s, client)
 	defer bridge.Wait()
 	client.OnMessage = func(m *discordgo.MessageCreate) { bridge.start(ctx, func() { bridge.Message(ctx, m) }) }
+	client.OnMessageUpdate = func(m *discordgo.MessageUpdate) { bridge.start(ctx, func() { bridge.MessageUpdate(ctx, m) }) }
+	client.OnMessageDelete = bridge.MessageDelete
 	client.OnInteraction = func(i *discordgo.InteractionCreate) { bridge.start(ctx, func() { bridge.Interaction(ctx, i) }) }
 	networkErr := make(chan error, 1)
 	client.OnError = func(err error) {
@@ -89,6 +91,23 @@ func runConnected(parent context.Context, s *Service, client *DiscordClient) err
 	if err := bridge.Register(ctx); err != nil {
 		return err
 	}
+	bridge.start(ctx, func() {
+		refresh := time.NewTicker(5 * time.Second)
+		defer refresh.Stop()
+		for {
+			bounded, stop := context.WithTimeout(ctx, 2*time.Second)
+			_ = s.ReconcilePending(bounded)
+			stop()
+			bounded, stop = context.WithTimeout(ctx, 2*time.Second)
+			_ = bridge.Attention(bounded)
+			stop()
+			select {
+			case <-ctx.Done():
+				return
+			case <-refresh.C:
+			}
+		}
+	})
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {

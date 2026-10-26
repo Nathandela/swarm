@@ -424,7 +424,7 @@ func TestGatewayFatalAndMessageChanges(t *testing.T) {
 		}
 		_ = conn.WriteJSON(map[string]any{"op": 0, "s": 1, "t": "READY", "d": map[string]any{"session_id": "session"}})
 		for i, typ := range []string{"MESSAGE_UPDATE", "MESSAGE_DELETE"} {
-			_ = conn.WriteJSON(map[string]any{"op": 0, "s": i + 2, "t": typ, "d": map[string]any{"id": "5", "channel_id": "6"}})
+			_ = conn.WriteJSON(map[string]any{"op": 0, "s": i + 2, "t": typ, "d": map[string]any{"id": "5", "channel_id": "6", "content": ""}})
 		}
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(4004, "bad token"), time.Now().Add(time.Second))
 	}))

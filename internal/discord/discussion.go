@@ -1,11 +1,13 @@
 package discord
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -119,6 +121,9 @@ func (s *Service) observe(in Input) {
 	if !updated {
 		rows = append(rows, message)
 	}
+	s.recent[in.Route.ChannelID] = boundedContext(rows)
+}
+func boundedContext(rows []ContextMessage) []ContextMessage {
 	size := 0
 	for _, row := range rows {
 		size += len(row.Text) + len(row.Author.Name) + len(row.ID)
@@ -127,7 +132,7 @@ func (s *Service) observe(in Input) {
 		size -= len(rows[0].Text) + len(rows[0].Author.Name) + len(rows[0].ID)
 		rows = rows[1:]
 	}
-	s.recent[in.Route.ChannelID] = rows
+	return rows
 }
 func (s *Service) ForgetMessage(channel, id string) {
 	s.discussionMu.Lock()
@@ -138,6 +143,36 @@ func (s *Service) ForgetMessage(channel, id string) {
 			s.recent[channel] = append(rows[:i], rows[i+1:]...)
 			return
 		}
+	}
+}
+
+func (b *Bridge) MessageUpdate(ctx context.Context, msg *discordgo.MessageUpdate) {
+	if msg == nil || msg.Message == nil {
+		return
+	}
+	discussion, err := b.Service.Discussion(msg.ChannelID)
+	if err != nil {
+		return
+	}
+	if _, err = b.resolveRoute(ctx, discussion.Route); err != nil {
+		return
+	}
+	s := b.Service
+	s.discussionMu.Lock()
+	defer s.discussionMu.Unlock()
+	for i, row := range s.recent[msg.ChannelID] {
+		if row.ID != msg.ID {
+			continue
+		}
+		s.recent[msg.ChannelID][i].Text = msg.Content
+		s.recent[msg.ChannelID] = boundedContext(s.recent[msg.ChannelID])
+		return
+	}
+}
+
+func (b *Bridge) MessageDelete(msg *discordgo.MessageDelete) {
+	if msg != nil && msg.Message != nil {
+		b.Service.ForgetMessage(msg.ChannelID, msg.ID)
 	}
 }
 func (s *Service) threadContext(channel string) []ContextMessage {
