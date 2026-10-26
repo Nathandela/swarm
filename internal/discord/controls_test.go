@@ -198,6 +198,37 @@ func TestNativeQuestionSelectionUsesOnlyObservedChoices(t *testing.T) {
 	}
 }
 
+func TestContextEndorsementDuplicateInteractionsShareOneInstruction(t *testing.T) {
+	b, w := controlsRig(t)
+	b.Service.Config.ReceptionistCLI = ""
+	route := Route{GuildID: "10", ChannelID: "20"}
+	source := &discordgo.Message{ID: "source", ChannelID: "20", Content: "external task", Author: &discordgo.User{ID: "2", Username: "Original"}}
+	for _, id := range []string{"endorse-one", "endorse-two"} {
+		i := ownerInteraction(id, "1")
+		i.Data = discordgo.ApplicationCommandInteractionData{Name: "Treat as my instruction", CommandType: discordgo.MessageApplicationCommand, TargetID: source.ID, Resolved: &discordgo.ApplicationCommandInteractionDataResolved{Messages: map[string]*discordgo.Message{source.ID: source}}}
+		if _, e := b.contextCommand(context.Background(), i, Actor{ID: "1"}, route); e != nil {
+			t.Fatal(e)
+		}
+	}
+	messenger := b.Service.Messenger.(*fakeMessenger)
+	if len(messenger.posts) != 1 {
+		t.Fatal("duplicate context endorsement made multiple routing claims", len(messenger.posts))
+	}
+	ref := strings.TrimPrefix(messenger.posts[0].Actions[0].ID, "choose:")
+	r, e := b.Service.Store.Request(ref, b.Service.Now())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, id := range []string{"choose-one", "choose-two"} {
+		if _, e = b.selectRequest(context.Background(), Actor{ID: "1"}, r, "local/one", id); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if len(w.sends) != 1 || w.sends[0].Origin.Kind != "owner_endorsed" || w.sends[0].Origin.ActorID != "2" || w.sends[0].Origin.EndorserID != "1" {
+		t.Fatal(w.sends)
+	}
+}
+
 func nativeView(now time.Time) protocol.NativeRequestView {
 	expiry := now.Add(time.Minute)
 	return protocol.NativeRequestView{Session: "local/one", SessionInstance: "instance", RootID: "root", Generation: "generation", NativeSessionID: "native", RequestID: "permission", RequestHash: strings.Repeat("a", 64), ExpiresAt: &expiry, Kind: "permission_reply", Permission: "private command", Decisions: []protocol.NativeDecisionOption{{ID: "once", Label: "Allow once"}, {ID: "reject", Label: "Reject"}}}
