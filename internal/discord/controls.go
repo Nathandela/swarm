@@ -244,7 +244,7 @@ func (b *Bridge) controlCommand(ctx context.Context, i *discordgo.InteractionCre
 }
 
 func (b *Bridge) contextCommand(ctx context.Context, i *discordgo.InteractionCreate, actor Actor, route Route) (string, error) {
-	if i == nil || i.Interaction == nil || actor.ID == "" || actor.ID != interactionActor(i).ID || !b.Service.Allowed(actor, route) {
+	if i == nil || i.Interaction == nil || i.AppID != b.Service.Config.ApplicationID || i.Type != discordgo.InteractionApplicationCommand || actor.ID == "" || actor.ID != interactionActor(i).ID || !b.Service.Allowed(actor, route) {
 		return "", ErrNotAuthorized
 	}
 	data := i.ApplicationCommandData()
@@ -495,7 +495,7 @@ func (b *Bridge) ownerInbox(ctx context.Context, row Worker) (string, error) {
 			if decision.ID != "" && len(actions) < 5 {
 				action := Action{ID: "native:" + card.Ref + ":" + decision.ID, Label: nativeLabel(decision.Label)}
 				if decision.ID == "question_reply" {
-					// shortcut: multi-question/custom answers stay local; add modal capture when needed.
+					// shortcut: multi-question/free-form answers stay local; add modal capture when needed.
 					if len(view.Questions) != 1 || view.Questions[0].Multiple || len(view.Questions[0].Options) == 0 || len(view.Questions[0].Options) > 25 {
 						continue
 					}
