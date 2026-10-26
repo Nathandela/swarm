@@ -47,7 +47,7 @@ func TestSemanticClientRefusesOriginWithoutCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	id, _ := NewSemanticOperationID()
 	err = c.SemanticSend(id, ComposerSendReq{Session: c.EndpointID() + "/sess1", SessionInstance: "test-instance", Text: "context", Origin: &MessageOrigin{Kind: "external", InstallationID: "install", RequestID: "request", ActorID: "actor"}})
 	if err == nil {
