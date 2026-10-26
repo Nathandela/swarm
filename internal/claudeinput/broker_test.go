@@ -2,6 +2,7 @@ package claudeinput
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ func TestNativeInputRequiresExactLiveWorkerAndNeverReissuesClaim(t *testing.T) {
 		t.Fatal("no native worker was accepted as input capable")
 	}
 	worker := Worker{NativeSessionID: "native-session", Generation: "worker-generation", Version: "2.1.296"}
+	registerTestGuard(t, client, worker)
 	if _, err := client.Exchange(ctx, worker, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +79,7 @@ func TestNativeInputRefusesWrongTokenVersionAndReplacedWorker(t *testing.T) {
 		t.Fatal("unqualified runtime registered")
 	}
 	first := Worker{NativeSessionID: "native", Generation: "one", Version: "2.1.296"}
+	registerTestGuard(t, client, first)
 	_, _ = client.Exchange(ctx, first, "", "", "")
 	proof, _ := client.Ready(ctx)
 	_, _ = client.Submit(ctx, proof, "operation", "exact")
@@ -138,6 +141,7 @@ func TestNativeInputPreservesEscapedBodyAndAckCannotConsumeLaterMessage(t *testi
 	client := NewClient(b.Descriptor())
 	ctx := context.Background()
 	worker := Worker{NativeSessionID: "native", Generation: "worker", Version: "2.1.296"}
+	registerTestGuard(t, client, worker)
 	_, _ = client.Exchange(ctx, worker, "", "", "")
 	text := strings.Repeat("<", 4096)
 	if _, err := client.Submit(ctx, worker, "one", text); err != nil {
@@ -170,6 +174,7 @@ func TestQualifiedVMVersionsUseExactNativeWorker(t *testing.T) {
 			defer func() { _ = b.Close() }()
 			client := NewClient(b.Descriptor())
 			worker := Worker{NativeSessionID: "own-vm-session", Generation: "own-worker", Version: version}
+			registerTestGuard(t, client, worker)
 			if _, err := client.Exchange(context.Background(), worker, "", "", ""); err != nil {
 				t.Fatal(err)
 			}
@@ -198,6 +203,7 @@ func TestSessionRevocationIsPermanentAndRetainsExactPendingEvidence(t *testing.T
 	ctx := context.Background()
 	client := NewClient(b.Descriptor())
 	worker := Worker{NativeSessionID: "original", Generation: "worker", Version: "2.1.296"}
+	registerTestGuard(t, client, worker)
 	_, _ = client.Exchange(ctx, worker, "", "", "")
 	_, _ = client.Submit(ctx, worker, "claimed", "message one")
 	_, _ = client.Exchange(ctx, worker, "", "", "")
@@ -234,5 +240,80 @@ func TestSessionRevocationIsPermanentAndRetainsExactPendingEvidence(t *testing.T
 	claimed, err = client.Operation(ctx, worker, "claimed")
 	if err != nil || claimed.State != "rejected" {
 		t.Fatalf("exact post-revoke native rejection lost: %+v %v", claimed, err)
+	}
+}
+
+func TestNativeBindingRequiresIndependentLifecycleGuard(t *testing.T) {
+	b, err := Start(shortDir(t), "session", "2.1.296", 123, 456)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	c := NewClient(b.Descriptor())
+	ctx := context.Background()
+	worker := Worker{NativeSessionID: "native", Generation: "sender", Version: "2.1.296"}
+	_, _ = c.Exchange(ctx, worker, "", "", "")
+	if _, err := c.Ready(ctx); err == nil {
+		t.Fatal("sender alone advertised guarded native input")
+	}
+	guard := worker
+	guard.Generation = "guard"
+	invalid := guard
+	invalid.NativeSessionID = "other-session"
+	if err := c.Guard(ctx, invalid, false); err == nil {
+		t.Fatal("guard bound another native conversation")
+	}
+	if err := c.Guard(ctx, guard, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Ready(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	b.guardSeen = time.Now().Add(-4 * time.Second)
+	b.mu.Unlock()
+	if _, err := c.Ready(ctx); err == nil {
+		t.Fatal("expired guard advertised input")
+	}
+	if _, err := c.Submit(ctx, worker, "no-guard", "not delivered"); err == nil {
+		t.Fatal("expired guard admitted input")
+	}
+	if err := c.Guard(ctx, guard, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Guard(ctx, guard, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Ready(ctx); err == nil {
+		t.Fatal("retired guard kept sender ready")
+	}
+	if err := c.Guard(ctx, guard, false); err == nil {
+		t.Fatal("guard heartbeat rearmed retired session")
+	}
+}
+
+func registerTestGuard(t *testing.T, client *Client, worker Worker) {
+	t.Helper()
+	worker.Generation = "guard-" + worker.Generation
+	if err := client.Guard(context.Background(), worker, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDescriptorWithoutLifecycleFenceRequiresExplicitRefresh(t *testing.T) {
+	dir := shortDir(t)
+	b, err := Start(dir, "session", "2.1.296", 123, 456)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	desc := b.Descriptor()
+	desc.LifecycleFence = false
+	raw, _ := json.Marshal(desc)
+	if err := os.WriteFile(filepath.Join(dir, DescriptorFile), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadDescriptor(dir); err == nil {
+		t.Fatal("surviving old shim silently acquired lifecycle support")
 	}
 }

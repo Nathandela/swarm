@@ -702,7 +702,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 			return nil, "", err
 		}
 		lc.ClaudeInput = true
-		lc.Argv = append([]string{lc.Argv[0], "--plugin-dir", plugin}, lc.Argv[1:]...)
+		lc.Argv = append([]string{lc.Argv[0], "--plugin-dir", plugin, "--plugin-dir", claudeinput.GuardPath(dir)}, lc.Argv[1:]...)
 	}
 	if spec.AgentType == "claude" || spec.AgentType == "codex" {
 		lc.NativeProvider = spec.AgentType

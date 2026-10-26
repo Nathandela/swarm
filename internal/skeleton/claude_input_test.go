@@ -59,7 +59,7 @@ type claudeReceiptRig struct {
 	worker                   claudeinput.Worker
 }
 
-func newClaudeReceiptRig(t *testing.T) *claudeReceiptRig {
+func newClaudeReceiptRig(t *testing.T, withGuard ...bool) *claudeReceiptRig {
 	t.Helper()
 	sk := assemble(t)
 	script := filepath.Join(t.TempDir(), "agent.txt")
@@ -82,6 +82,13 @@ func newClaudeReceiptRig(t *testing.T) *claudeReceiptRig {
 	t.Cleanup(func() { _ = b.Close() })
 	client := claudeinput.NewClient(b.Descriptor())
 	worker := claudeinput.Worker{NativeSessionID: "native-fixture", Generation: "worker-generation", Version: "2.1.296"}
+	guard := worker
+	guard.Generation = "guard-" + worker.Generation
+	if len(withGuard) == 0 || withGuard[0] {
+		if err := client.Guard(context.Background(), guard, false); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := client.Exchange(context.Background(), worker, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -249,5 +256,21 @@ func TestClaudeNativeSenderUsesStrongerConcurrentRejectedReceipt(t *testing.T) {
 	<-done
 	if err := client.SemanticSend(id, req); !errors.Is(err, protocol.ErrSemanticSendRejected) {
 		t.Fatalf("replay forgot native rejection: %v", err)
+	}
+}
+
+func TestClaudeMissingNativeGuardRefusesBeforeBegin(t *testing.T) {
+	r := newClaudeReceiptRig(t, false)
+	lane := r.sk.composerLaneFor(r.local)
+	barrier := lane.enter()
+	defer lane.leave()
+	began := false
+	code, err := r.sk.sendClaudeNative(r.local, "missing-guard", protocol.ComposerSendReq{Session: r.session, SessionInstance: r.instance, Text: "must not enqueue", Origin: &protocol.MessageOrigin{Kind: "external", InstallationID: "install", RequestID: "missing-guard", ActorID: "actor"}}, func() error { began = true; return nil }, lane, barrier)
+	if err == nil || code != protocol.CodeStructuredUnsupported || began {
+		t.Fatalf("missing guard: code=%s began=%t err=%v", code, began, err)
+	}
+	message, err := r.client.Exchange(context.Background(), r.worker, "", "", "")
+	if err != nil || message != nil {
+		t.Fatalf("missing guard admitted message: %+v %v", message, err)
 	}
 }
