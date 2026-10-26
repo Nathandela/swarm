@@ -13,6 +13,7 @@ type MessageOrigin struct {
 	InstallationID string `json:"installation_id"`
 	RequestID      string `json:"request_id"`
 	ActorID        string `json:"actor_id"`
+	RequesterID    string `json:"requester_id,omitempty"`
 	ActorName      string `json:"actor_name,omitempty"`
 	GuildID        string `json:"guild_id,omitempty"`
 	ChannelID      string `json:"channel_id,omitempty"`
@@ -21,7 +22,7 @@ type MessageOrigin struct {
 }
 
 func (o MessageOrigin) fields() []string {
-	return []string{o.Kind, o.InstallationID, o.RequestID, o.ActorID, o.ActorName, o.GuildID, o.ChannelID, o.MessageID, o.EndorserID}
+	return []string{o.Kind, o.InstallationID, o.RequestID, o.ActorID, o.ActorName, o.GuildID, o.ChannelID, o.MessageID, o.EndorserID, o.RequesterID}
 }
 
 func (o MessageOrigin) Validate() error {

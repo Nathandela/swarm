@@ -36,7 +36,7 @@ func projectWorkers(rows []protocol.SessionView) []Worker {
 		if row.Status.Process == status.ProcessRunning && row.Status.Turn == status.TurnActive {
 			state = "working"
 		}
-		out = append(out, Worker{Target: Target{ID: row.ID, Instance: instance, Name: name, Agent: row.Agent}, Project: filepath.Base(row.Cwd), State: state, Supersedes: row.Supersedes})
+		out = append(out, Worker{Target: Target{ID: row.ID, Instance: instance, Name: name, Agent: row.Agent}, Project: filepath.Base(row.Cwd), State: state, Supersedes: row.Supersedes, Attention: row.Status.Interaction == status.InteractionPermission || row.Status.Interaction == status.InteractionPrompt})
 	}
 	return out
 }

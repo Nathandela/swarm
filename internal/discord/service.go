@@ -20,6 +20,7 @@ type Worker struct {
 	Target
 	Project    string   `json:"project,omitempty"`
 	State      string   `json:"state"`
+	Attention  bool     `json:"attention,omitempty"`
 	Supersedes []string `json:"supersedes,omitempty"`
 }
 type Workers interface {
@@ -172,7 +173,7 @@ func (s *Service) Handle(ctx context.Context, in Input) (Request, error) {
 	if len(thread) == 0 {
 		thread = []ContextMessage{{ID: in.Route.MessageID, Author: in.Actor, Text: in.Text, CreatedAt: in.At}}
 	}
-	r := Request{EventID: in.EventID + ":" + row.ID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, Authority: authority, Route: in.Route, Target: row.Target, Text: in.Text, Context: thread, Snapshot: in.Snapshot}
+	r := Request{EventID: in.EventID + ":" + row.ID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, RequesterID: in.Actor.ID, Authority: authority, Route: in.Route, Target: row.Target, Text: in.Text, Context: thread, Snapshot: in.Snapshot}
 	if previous, e := s.Store.ExistingEvent(r.EventID, s.Now()); e == nil {
 		r.Context = previous.Context
 	} else if !errors.Is(e, ErrNotFound) {
@@ -199,7 +200,7 @@ func (s *Service) dispatch(ctx context.Context, input Request) (Request, error) 
 		return r, nil
 	}
 	origin := &protocol.MessageOrigin{Kind: string(r.Authority), InstallationID: s.Config.InstallationID, RequestID: r.Ref, ActorID: r.Author.ID, ActorName: r.Author.Name,
-		GuildID: r.Route.GuildID, ChannelID: r.Route.ChannelID, MessageID: r.Route.MessageID, EndorserID: r.EndorserID}
+		GuildID: r.Route.GuildID, ChannelID: r.Route.ChannelID, MessageID: r.Route.MessageID, EndorserID: r.EndorserID, RequesterID: r.RequesterID}
 	text := s.envelope(r)
 	if len(text) > protocol.MaxSendInputText {
 		_ = s.Store.FinishDelivery(r.Ref, StateFailed, "request envelope exceeds semantic input limit")
@@ -238,10 +239,11 @@ func (s *Service) envelope(r Request) string {
 		flags = " --state-dir " + shellArg(s.StateDir)
 	}
 	identity, _ := json.Marshal(struct {
-		Author     Actor
-		Authority  Authority
-		EndorserID string
-	}{r.Author, r.Authority, r.EndorserID})
+		Author      Actor
+		Authority   Authority
+		EndorserID  string
+		RequesterID string
+	}{r.Author, r.Authority, r.EndorserID, r.RequesterID})
 	return fmt.Sprintf("Swarm Discord request %s.\n%s\nAttribution: %s\nRead the exact request and attributed thread context: swarm discord context %s%s\nInvestigate using your ordinary tools and subagents as needed. Carry this request reference and attribution into delegation. Publish only the answer intended for its originating discussion: swarm discord reply %s%s --body-file <file>\nThe default publication ID is final; use --publication-id for distinct progress replies. Do not mirror private transcripts or tool output. Native tool permissions remain separate.\n", r.Ref, standing, identity, shellArg(r.Ref), flags, shellArg(r.Ref), flags)
 }
 func (s *Service) Context(ref string, offset int) (ContextPage, error) {
