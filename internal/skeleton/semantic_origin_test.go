@@ -93,7 +93,7 @@ func TestOpenCodeOriginRetainedThroughNativeReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	id, _ := protocol.NewSemanticOperationID()
 	if err := client.SemanticSend(id, f.request); err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestOpenCodeImportedOriginRequiresRetainedExactIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	id, _ := protocol.NewSemanticOperationID()
 	if err := client.SemanticSend(id, f.request); err != nil {
 		t.Fatal(err)
