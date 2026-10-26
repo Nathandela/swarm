@@ -846,7 +846,6 @@ sink may restore authority for future sends through the existing sink-proof tran
   boundary or treating provider history as newly captured Swarm history.
 - Evidence: `docs/verification/adr010/amendment8-red.md`.
 
-<<<<<<< HEAD
 ## Amendment 9 (2026-10-14): a message's text is framed as a bracketed paste when the agent asked for one
 
 Amendment 1 A2 delivers a text message as one text frame, one `submitframe.Gap`, then a lone CR.
@@ -878,8 +877,9 @@ reset also drives), and the shim decides:
   frame after the gap, sent as before. Keys are never pasted.
 - The shim's submit transaction (the composer lane) frames its text the same way; its CR still
   follows the gap outside the markers.
-- A marker inside the text is removed before framing, as terminals do, so the text cannot end
-  the paste early and have its tail read as keys.
+- Markers inside the text are removed in one pass before framing. Removal also catches a
+  marker assembled by deleting another marker, so the text cannot end the paste early and
+  have its tail read as keys.
 - The mode is a lock-free flag. The shim's PTY writer holds its lock across the submit gap, and
   the emulator's reply pump waits on that writer while `Feed` holds the emulator's lock, so the
   writer must never wait on the emulator.
@@ -897,7 +897,6 @@ a shim restart resolves.
   which is what A2's paste semantics already intended.
 - Evidence: `docs/verification/adr010/amendment9-red.md`.
 
-=======
 ## Amendment 10 (2026-10-23): an agent handoff runs in a worktree of its own, never under /tmp
 
 Amendments 9 and 10 ship together in v0.23.1; neither depends on the other.
@@ -908,9 +907,9 @@ practice agents did not take the recommendation. On 2026-10-20 a source agent im
 under `/tmp/rehan-native-timeout-fix` and delegated two sessions into it with `--dir`; the
 2026-10-23 reboot erased the directory, and both discussions, plus their resumed attempts, were left
 pointing at a checkout that no longer existed. Two agents sharing one checkout is also the case
-D2 recommended a worktree for. These clauses are lettered J.
+D2 recommended a worktree for. These clauses are lettered K.
 
-### J1. A handoff child gets its own git worktree when its checkout is a git work tree
+### K1. A handoff child gets its own git worktree when its checkout is a git work tree
 
 - `swarm handoff`: after resolving the source's checkout (agents-tracker-xl6k), the daemon launches
   the child with worktree isolation when that checkout is inside a git work tree. The worktree is
@@ -928,12 +927,14 @@ Only committed work reaches the child's worktree. The supervised-handoff instruc
 the source to commit what the child needs before running `swarm handoff`, and to name in the
 document any changes it leaves uncommitted. The `swarm handoff` usage text says the same.
 
-### J2. An agent handoff's worktree is never created under a temporary directory
+### K2. An agent handoff's worktree is never created under a temporary directory
 
 Any launch with a lineage parent and `spawn_intent` handoff or delegate, that is not a resume and
-that will create a worktree, is refused by name when the checkout resolves (after symlinks) beneath
-`os.TempDir()` or `/tmp`. The refusal happens before the session id is reserved, so nothing is
-created. A handoff from a checkout outside git under `/tmp` is not refused: there is no worktree to
+that will create a worktree, is refused by name when the checkout or its worktree destination
+resolves beneath `os.TempDir()` or `/tmp`. Existing ancestors are resolved even when the
+worktree directory does not exist yet; dangling symlinks and resolution failures are refused.
+Preflight runs before the session id is reserved, and the production creation hook rechecks
+the destination immediately before creating a worktree. A handoff from a checkout outside git under `/tmp` is not refused: there is no worktree to
 lose, and the source's own directory is the only place the work exists.
 
 ### Consequences
@@ -945,4 +946,3 @@ lose, and the source's own directory is the only place the work exists.
 - The handoff document copy stays in `<os.TempDir()>/swarm-handoff-*` (F3). A reboot still erases
   it, which this amendment does not address; the child's worktree and branch survive.
 - Evidence: `docs/verification/adr010/amendment10-red.md`.
->>>>>>> 97ea89eb (Run agent handoffs in their own worktree, never under /tmp)
