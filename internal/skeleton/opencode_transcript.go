@@ -190,6 +190,10 @@ func (p *openCodeTranscript) interaction(info opencode.Message, item adapter.Int
 				if own.intent.Source == "supervisor" {
 					fields["source"] = adapter.SourceDerived
 				}
+				if own.intent.Origin != nil {
+					origin := *own.intent.Origin
+					fields["origin"] = &origin
+				}
 				fields["operation_id"] = own.operation
 				fields["input_sha256"] = own.intent.TextHash
 				if provenance == "imported" {
