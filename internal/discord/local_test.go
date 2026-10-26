@@ -66,6 +66,13 @@ func TestLocalContextExactAndReplyExplicit(t *testing.T) {
 	if result.Request.Author.ID != in.Actor.ID || result.Page.Ref != r.Ref {
 		t.Fatal(result)
 	}
+	var exact strings.Builder
+	for _, message := range result.Page.Messages {
+		exact.WriteString(message.Text)
+	}
+	if exact.String() != in.Text || result.Page.NextOffset != -1 {
+		t.Fatal("context changed source text", result.Page.NextOffset)
+	}
 	var p Publication
 	if e = CallLocal(context.Background(), dir, "reply", LocalReply{Ref: r.Ref, Body: "exact answer\n"}, &p); e != nil {
 		t.Fatal(e)
@@ -188,5 +195,49 @@ func TestLocalShutdownAcknowledgesBeforeConnectorStops(t *testing.T) {
 	}
 	if _, e := os.Lstat(filepath.Join(dir, "bridge.sock")); !os.IsNotExist(e) {
 		t.Fatal("shutdown left listening socket", e)
+	}
+}
+
+func TestLocalRejectsLinkedSocketWithoutTouchingSource(t *testing.T) {
+	s, _, _ := serviceRig(t)
+	dir, e := os.MkdirTemp("", "dll")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	state := filepath.Join(dir, "state")
+	if e = os.Mkdir(state, 0700); e != nil {
+		t.Fatal(e)
+	}
+	original := filepath.Join(dir, "original.sock")
+	listener, e := net.ListenUnix("unix", &net.UnixAddr{Name: original, Net: "unix"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	listener.SetUnlinkOnClose(false)
+	if e = listener.Close(); e != nil {
+		t.Fatal(e)
+	}
+	linked := filepath.Join(state, "bridge.sock")
+	if e = os.Link(original, linked); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.ServeLocal(context.Background(), state); e == nil {
+		t.Fatal("linked socket accepted")
+	}
+	if _, e = os.Lstat(original); e != nil {
+		t.Fatal("source socket touched", e)
+	}
+	if e = os.Remove(linked); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Symlink(original, linked); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.ServeLocal(context.Background(), state); e == nil {
+		t.Fatal("symlinked socket accepted")
+	}
+	if _, e = os.Lstat(original); e != nil {
+		t.Fatal("symlink source touched", e)
 	}
 }
