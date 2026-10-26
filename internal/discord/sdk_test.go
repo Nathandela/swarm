@@ -20,6 +20,14 @@ func mockEndpoints(t *testing.T, handler http.HandlerFunc) string {
 	t.Cleanup(s.Close)
 	return s.URL
 }
+
+func TestMessageNoncePreservesExactStringOrInteger(t *testing.T) {
+	for raw, want := range map[string]string{`{"nonce":"abc123"}`: "abc123", `{"nonce":123456789012345678901234}`: "123456789012345678901234", `{"nonce":null}`: "", `{}`: "", `{"nonce":1e20}`: "", `{"nonce":[]}`: ""} {
+		if got := messageNonce([]byte(raw)); got != want {
+			t.Fatalf("nonce %s: %q want %q", raw, got, want)
+		}
+	}
+}
 func TestDiscordREST(t *testing.T) {
 	count := 0
 	base := mockEndpoints(t, func(w http.ResponseWriter, r *http.Request) {

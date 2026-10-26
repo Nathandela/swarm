@@ -108,6 +108,10 @@ func TestConnectedMockDiscordContextEndorsementAndDeliberateReply(t *testing.T) 
 			default:
 				t.Error("unexpected publication flood")
 			}
+			if body["content"] == "The explicit answer. 🙂" {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": fmt.Sprint(ids.Add(1))})
 			return
 		}
@@ -191,19 +195,33 @@ func TestConnectedMockDiscordContextEndorsementAndDeliberateReply(t *testing.T) 
 		time.Sleep(10 * time.Millisecond)
 	}
 	var publication Publication
-	if err = CallLocal(ctx, dir, "reply", LocalReply{Ref: ref, ID: "final", Body: "The explicit answer. 🙂"}, &publication); err != nil {
-		t.Fatal(err)
+	if err = CallLocal(ctx, dir, "reply", LocalReply{Ref: ref, ID: "final", Body: "The explicit answer. 🙂"}, &publication); err == nil {
+		t.Fatal("lost REST acknowledgement reported success")
 	}
+	var nonce any
 	select {
 	case body := <-posts:
 		if body["content"] != "The explicit answer. 🙂" || body["enforce_nonce"] != true {
 			t.Fatalf("reply=%v", body)
 		}
+		nonce = body["nonce"]
 	case <-time.After(5 * time.Second):
 		t.Fatal("no explicit publication")
 	}
-	if err = CallLocal(ctx, dir, "reply", LocalReply{Ref: ref, ID: "final", Body: "The explicit answer. 🙂"}, &publication); err != nil {
-		t.Fatal(err)
+	events <- map[string]any{"op": 0, "s": 4, "t": "MESSAGE_CREATE", "d": map[string]any{"id": "42", "guild_id": "10", "channel_id": "20", "content": "The explicit answer. 🙂", "nonce": nonce, "author": map[string]any{"id": "100", "bot": true}}}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		err = CallLocal(ctx, dir, "reply", LocalReply{Ref: ref, ID: "final", Body: "The explicit answer. 🙂"}, &publication)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("own-bot Gateway proof did not settle lost ACK", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if publication.State != StateSent || len(publication.DiscordMessageIDs) != 1 || publication.DiscordMessageIDs[0] != "42" {
+		t.Fatal(publication)
 	}
 	select {
 	case duplicate := <-posts:

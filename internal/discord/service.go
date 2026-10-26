@@ -28,15 +28,16 @@ type Workers interface {
 	Submit(context.Context, string, protocol.ComposerSendReq) (protocol.SemanticMessageReceipt, error)
 }
 type Input struct {
-	EventID   string
-	Actor     Actor
-	Route     Route
-	Text      string
-	TargetID  string
-	Bot       bool
-	Addressed bool
-	Snapshot  bool
-	At        time.Time
+	CacheEpoch *uint64
+	EventID    string
+	Actor      Actor
+	Route      Route
+	Text       string
+	TargetID   string
+	Bot        bool
+	Addressed  bool
+	Snapshot   bool
+	At         time.Time
 }
 type Choice struct{ ID, Label, Description string }
 type Action struct {
@@ -54,19 +55,21 @@ type Messenger interface {
 	Message(context.Context, Route) (Input, error)
 }
 type Service struct {
-	Config         Config
-	Store          *Store
-	Workers        Workers
-	Messenger      Messenger
-	StateDir       string
-	Now            func() time.Time
-	Stop           func()
-	discussionMu   sync.Mutex
-	recent         map[string][]ContextMessage
-	reconcileMu    sync.Mutex
-	reconcileAfter string
-	publicationMu  sync.RWMutex
-	botID          string
+	Config          Config
+	Store           *Store
+	Workers         Workers
+	Messenger       Messenger
+	StateDir        string
+	Now             func() time.Time
+	Stop            func()
+	discussionMu    sync.Mutex
+	recent          map[string][]ContextMessage
+	discussionEpoch map[string]uint64
+	discussionClock uint64
+	reconcileMu     sync.Mutex
+	reconcileAfter  string
+	publicationMu   sync.RWMutex
+	botID           string
 }
 
 func NewService(c Config, store *Store, workers Workers, messenger Messenger) *Service {
@@ -209,8 +212,17 @@ func (s *Service) Handle(ctx context.Context, in Input) (Request, error) {
 		return Request{}, err
 	}
 	thread := s.threadContext(in.Route.ChannelID)
-	if len(thread) == 0 {
-		thread = []ContextMessage{{ID: in.Route.MessageID, Author: in.Actor, Text: in.Text, CreatedAt: in.At}}
+	source := ContextMessage{ID: in.Route.MessageID, Author: in.Actor, Text: in.Text, CreatedAt: in.At}
+	found := false
+	for index, row := range thread {
+		if row.ID == source.ID {
+			thread[index] = source
+			found = true
+			break
+		}
+	}
+	if !found {
+		thread = append(thread, source)
 	}
 	r := Request{EventID: in.EventID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, RequesterID: in.Actor.ID, Authority: authority, Route: in.Route, Target: row.Target, Text: in.Text, Context: thread, Snapshot: in.Snapshot}
 	return s.dispatch(ctx, r)

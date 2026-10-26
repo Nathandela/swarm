@@ -33,6 +33,7 @@ type DiscordClient struct {
 	cancel           context.CancelFunc
 	done             chan struct{}
 	OnMessage        func(*discordgo.MessageCreate)
+	OnPublication    func(PublicationMessage)
 	OnMessageUpdate  func(*discordgo.MessageUpdate)
 	OnMessageDelete  func(*discordgo.MessageDelete)
 	OnError          func(error)
@@ -396,8 +397,13 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 				onReady()
 			case "MESSAGE_CREATE":
 				var msg discordgo.MessageCreate
-				if json.Unmarshal(frame.Data, &msg) == nil && c.OnMessage != nil {
-					c.OnMessage(&msg)
+				if json.Unmarshal(frame.Data, &msg) == nil && msg.Message != nil {
+					if c.OnPublication != nil && msg.Author != nil {
+						c.OnPublication(PublicationMessage{AuthorID: msg.Author.ID, ChannelID: msg.ChannelID, MessageID: msg.ID, Nonce: messageNonce(frame.Data), Text: msg.Content, WebhookID: msg.WebhookID})
+					}
+					if c.OnMessage != nil {
+						c.OnMessage(&msg)
+					}
 				}
 			case "MESSAGE_UPDATE":
 				var msg discordgo.MessageUpdate
@@ -418,6 +424,28 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 			}
 		}
 	}
+}
+
+func messageNonce(raw []byte) string {
+	var fields struct {
+		Nonce json.RawMessage `json:"nonce"`
+	}
+	if json.Unmarshal(raw, &fields) != nil || len(fields.Nonce) > 128 {
+		return ""
+	}
+	var nonce string
+	if json.Unmarshal(fields.Nonce, &nonce) == nil {
+		return nonce
+	}
+	if len(fields.Nonce) == 0 {
+		return ""
+	}
+	for _, char := range fields.Nonce {
+		if char < '0' || char > '9' {
+			return ""
+		}
+	}
+	return string(fields.Nonce)
 }
 func components(actions []Action) ([]discordgo.MessageComponent, error) {
 	if len(actions) > 5 {

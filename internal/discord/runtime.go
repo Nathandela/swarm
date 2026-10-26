@@ -54,8 +54,25 @@ func runConnected(parent context.Context, s *Service, client *DiscordClient) err
 	s.Stop = cancel
 	bridge := NewBridge(s, client)
 	defer bridge.Wait()
-	client.OnMessage = func(m *discordgo.MessageCreate) { bridge.start(ctx, func() { bridge.Message(ctx, m) }) }
-	client.OnMessageUpdate = func(m *discordgo.MessageUpdate) { bridge.start(ctx, func() { bridge.MessageUpdate(ctx, m) }) }
+	client.OnMessage = func(m *discordgo.MessageCreate) {
+		if m == nil || m.Message == nil {
+			return
+		}
+		epoch := s.contextEpoch(m.ChannelID)
+		bridge.start(ctx, func() { bridge.message(ctx, m, epoch) })
+	}
+	client.OnPublication = func(m PublicationMessage) {
+		if m.AuthorID == s.botUserID() && m.WebhookID == "" && m.Nonce != "" {
+			_ = s.ObservePublication(ctx, m)
+		}
+	}
+	client.OnMessageUpdate = func(m *discordgo.MessageUpdate) {
+		if m == nil || m.Message == nil {
+			return
+		}
+		s.invalidateContext(m.ChannelID)
+		bridge.start(ctx, func() { bridge.messageUpdate(ctx, m) })
+	}
 	client.OnMessageDelete = bridge.MessageDelete
 	client.OnInteraction = func(i *discordgo.InteractionCreate) { bridge.start(ctx, func() { bridge.Interaction(ctx, i) }) }
 	networkErr := make(chan error, 1)
@@ -72,6 +89,10 @@ func runConnected(parent context.Context, s *Service, client *DiscordClient) err
 			default:
 			}
 			cancel()
+			return
+		}
+		if r.User != nil {
+			s.SetBotID(r.User.ID)
 		}
 	}
 	localErr := make(chan error, 1)
@@ -207,10 +228,17 @@ func (b *Bridge) notify(ctx context.Context, route Route, text string, actions [
 	_, _ = b.Service.Messenger.Post(ctx, Outbound{Route: route, Text: text, Actions: actions})
 }
 func (b *Bridge) Message(ctx context.Context, msg *discordgo.MessageCreate) {
+	if msg == nil || msg.Message == nil {
+		return
+	}
+	b.message(ctx, msg, b.Service.contextEpoch(msg.ChannelID))
+}
+func (b *Bridge) message(ctx context.Context, msg *discordgo.MessageCreate, epoch uint64) {
 	if msg == nil || msg.Message == nil || msg.Author == nil {
 		return
 	}
 	in := Input{EventID: msg.ID, Actor: Actor{ID: msg.Author.ID, Name: msg.Author.Username}, Route: Route{GuildID: msg.GuildID, ChannelID: msg.ChannelID, MessageID: msg.ID}, Text: msg.Content, Bot: msg.Author.Bot || msg.WebhookID != "", At: msg.Timestamp}
+	in.CacheEpoch = &epoch
 	if !b.Service.AllowedIdentity(in.Actor, in.Route.GuildID) {
 		return
 	}
@@ -224,13 +252,27 @@ func (b *Bridge) Message(ctx context.Context, msg *discordgo.MessageCreate) {
 	}
 	in.Addressed = msg.GuildID == ""
 	for _, u := range msg.Mentions {
-		if u.ID == b.Service.Config.ApplicationID {
+		if u.ID == b.Service.botUserID() {
 			in.Addressed = true
 		}
 	}
 	if in.Bot {
 		_, _ = b.Service.Handle(ctx, in)
 		return
+	}
+	replyTarget := ""
+	replyNeedsChoice := false
+	if ref := msg.MessageReference; ref != nil && ref.Type == discordgo.MessageReferenceTypeDefault && (ref.ChannelID == "" || ref.ChannelID == msg.ChannelID) {
+		if target, err := b.Service.TargetForReply(ctx, msg.ChannelID, ref.MessageID); err == nil {
+			replyTarget = target.ID
+			in.Addressed = true
+		} else if !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrSelection) {
+			b.notify(ctx, in.Route, "The original agent is unavailable for this reply.", nil)
+			return
+		} else if original := msg.ReferencedMessage; original != nil && original.Author != nil && original.Author.ID == b.Service.botUserID() && original.WebhookID == "" {
+			in.Addressed = true
+			replyNeedsChoice = true
+		}
 	}
 	if !in.Addressed {
 		_, _ = b.Service.Handle(ctx, in)
@@ -264,6 +306,13 @@ func (b *Bridge) Message(ctx context.Context, msg *discordgo.MessageCreate) {
 	}
 	if in.TargetID == "" {
 		in.TargetID = explicitAgent(text, rows)
+	}
+	if in.TargetID == "" {
+		in.TargetID = replyTarget
+	}
+	if in.TargetID == "" && replyNeedsChoice {
+		b.pick(ctx, in, rows)
+		return
 	}
 	if in.TargetID == "" {
 		if id, e := b.Service.boundTarget(in.Route.ChannelID); e == nil {

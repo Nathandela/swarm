@@ -311,16 +311,24 @@ func (b *Bridge) contextCommand(ctx context.Context, i *discordgo.InteractionCre
 	}
 	if len(rows) > 1 {
 		b.start(ctx, func() {
-			if _, e := b.receptionist(ctx, r); e != nil && b.Client.OnError != nil {
-				b.Client.OnError(e)
-			}
+			_, _ = b.receptionist(ctx, r)
 		})
 	}
 	return "Choose an agent in the source discussion; recommendations may follow.", nil
 }
 func (b *Bridge) selectRequest(ctx context.Context, actor Actor, r Request, targetID, eventID string) (Request, error) {
-	if actor.ID != r.Author.ID && actor.ID != r.RequesterID && actor.ID != b.Service.Config.OwnerID {
+	requester := r.RequesterID
+	if requester == "" {
+		requester = r.Author.ID
+	}
+	if actor.ID != b.Service.Config.OwnerID && (r.Authority != AuthorityExternal || actor.ID != requester) {
 		return Request{}, ErrNotAuthorized
+	}
+	selectionID := "selection:" + digest([]string{r.EventID, targetID})[:32]
+	if previous, err := b.Service.Store.ExistingEvent(selectionID, b.Service.Now()); err == nil {
+		return b.Service.dispatch(ctx, previous)
+	} else if !errors.Is(err, ErrNotFound) {
+		return Request{}, err
 	}
 	row, e := b.Service.target(ctx, targetID)
 	if e != nil {
@@ -328,7 +336,7 @@ func (b *Bridge) selectRequest(ctx context.Context, actor Actor, r Request, targ
 	}
 	r.Ref = ""
 	r.OperationID = ""
-	r.EventID = "selection:" + digest([]string{r.EventID, row.ID, row.Instance})[:32]
+	r.EventID = selectionID
 	r.EventAt = b.Service.Now()
 	r.Target = row.Target
 	return b.Service.dispatch(ctx, r)

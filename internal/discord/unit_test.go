@@ -71,3 +71,13 @@ func TestSystemdLiteralPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemdOfflineStartupDoesNotExhaustRestarts(t *testing.T) {
+	unit, err := RenderUnit("linux", "/bin/swarm", "/state", "/log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(unit, "StartLimitIntervalSec=0\n") || !strings.Contains(unit, "RestartSec=10\n") {
+		t.Fatal("offline connector can exhaust its restart budget", unit)
+	}
+}

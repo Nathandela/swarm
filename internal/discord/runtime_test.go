@@ -26,6 +26,25 @@ func TestGatewayBridgeRoutesHumanMentionAndNeverMirrorsWorkerHistory(t *testing.
 		t.Fatal("bot response started a loop or mirrored output")
 	}
 }
+
+func TestGatewayReplyKeepsTheOriginalAgentWithoutMention(t *testing.T) {
+	s, w, _ := serviceRig(t)
+	r, err := s.Handle(context.Background(), incoming())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Reply(context.Background(), r.Ref, "", "Answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.rows = append(w.rows, Worker{Target: Target{ID: "local/other", Instance: "other", Name: "Other", Agent: "claude"}, State: "running"})
+	c, _ := NewDiscordClient("fake")
+	b := NewBridge(s, c)
+	b.Message(context.Background(), &discordgo.MessageCreate{Message: &discordgo.Message{ID: "reply-event", GuildID: "10", ChannelID: "20", Content: "Could you explain that?", Timestamp: time.Now(), Author: &discordgo.User{ID: "2", Username: "Alice"}, MessageReference: &discordgo.MessageReference{MessageID: p.DiscordMessageIDs[0], ChannelID: "20"}}})
+	if len(w.sends) != 2 || w.sends[1].Session != r.Target.ID || w.sends[1].Origin.ActorID != "2" {
+		t.Fatal("reply did not route to its original agent", w.sends)
+	}
+}
 func TestImmutableCommandSnapshotCanBeEndorsedWithoutFetchingAMessage(t *testing.T) {
 	s, w, _ := serviceRig(t)
 	in := incoming()

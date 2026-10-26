@@ -57,6 +57,34 @@ func controlsRig(t *testing.T) (*Bridge, *controlWorkers) {
 	c, _ := NewDiscordClient("fake-token")
 	return NewBridge(s, c), cw
 }
+
+func TestUnavailableReceptionistKeepsTheConnectorAndDirectory(t *testing.T) {
+	b, w := controlsRig(t)
+	w.rows = append(w.rows, Worker{Target: Target{ID: "local/two", Instance: "two", Name: "Other", Agent: "codex"}, State: "running"})
+	w.launchErr = errors.New("native CLI unavailable")
+	b.Service.Config.ReceptionistCLI = "codex"
+	b.Service.Config.ReceptionistModel = "luna"
+	previous := receptionistLookPath
+	defer func() { receptionistLookPath = previous }()
+	receptionistLookPath = func(string) (string, error) { return "/fixture/codex", nil }
+	fatal := make(chan error, 1)
+	b.Client.OnError = func(err error) { fatal <- err }
+	source := &discordgo.Message{ID: "source", ChannelID: "20", Content: "explain", Author: &discordgo.User{ID: "2"}}
+	i := ownerInteraction("optional-receptionist", "1")
+	i.Data = discordgo.ApplicationCommandInteractionData{Name: "Ask Swarm", TargetID: source.ID, Resolved: &discordgo.ApplicationCommandInteractionDataResolved{Messages: map[string]*discordgo.Message{source.ID: source}}}
+	if _, err := b.contextCommand(context.Background(), i, Actor{ID: "1"}, Route{GuildID: "10", ChannelID: "20", MessageID: i.ID}); err != nil {
+		t.Fatal(err)
+	}
+	b.Wait()
+	select {
+	case err := <-fatal:
+		t.Fatal("optional receptionist stopped the connector", err)
+	default:
+	}
+	if len(b.Service.Messenger.(*fakeMessenger).posts) != 1 {
+		t.Fatal("directory unavailable")
+	}
+}
 func ownerInteraction(id, owner string) *discordgo.InteractionCreate {
 	return &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{ID: id, AppID: "100", User: &discordgo.User{ID: owner, Username: "Owner"}, Type: discordgo.InteractionApplicationCommand}}
 }

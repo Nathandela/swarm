@@ -37,7 +37,7 @@ func (s *Service) Join(route Route, target Target) error {
 	if route.ChannelID == "" || target.ID == "" || target.Instance == "" {
 		return ErrInvalid
 	}
-	return s.Store.db.Update(func(tx *bolt.Tx) error {
+	err := s.Store.db.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte("discussions"))
 		if err != nil {
 			return err
@@ -80,6 +80,10 @@ func (s *Service) Join(route Route, target Target) error {
 		}
 		return b.Put(key, raw)
 	})
+	if err == nil {
+		s.invalidateContext(route.ChannelID)
+	}
+	return err
 }
 func (s *Service) Leave(channel string) error {
 	if err := s.Store.db.Update(func(tx *bolt.Tx) error {
@@ -93,6 +97,7 @@ func (s *Service) Leave(channel string) error {
 	}
 	s.discussionMu.Lock()
 	delete(s.recent, channel)
+	delete(s.discussionEpoch, channel)
 	s.discussionMu.Unlock()
 	return nil
 }
@@ -102,6 +107,9 @@ func (s *Service) observe(in Input) {
 	}
 	s.discussionMu.Lock()
 	defer s.discussionMu.Unlock()
+	if in.CacheEpoch != nil && *in.CacheEpoch != s.discussionEpoch[in.Route.ChannelID] {
+		return
+	}
 	if s.recent == nil {
 		s.recent = make(map[string][]ContextMessage)
 	}
@@ -135,6 +143,7 @@ func boundedContext(rows []ContextMessage) []ContextMessage {
 	return rows
 }
 func (s *Service) ForgetMessage(channel, id string) {
+	s.invalidateContext(channel)
 	s.discussionMu.Lock()
 	defer s.discussionMu.Unlock()
 	rows := s.recent[channel]
@@ -147,6 +156,13 @@ func (s *Service) ForgetMessage(channel, id string) {
 }
 
 func (b *Bridge) MessageUpdate(ctx context.Context, msg *discordgo.MessageUpdate) {
+	if msg == nil || msg.Message == nil {
+		return
+	}
+	b.Service.invalidateContext(msg.ChannelID)
+	b.messageUpdate(ctx, msg)
+}
+func (b *Bridge) messageUpdate(ctx context.Context, msg *discordgo.MessageUpdate) {
 	if msg == nil || msg.Message == nil {
 		return
 	}
@@ -168,6 +184,24 @@ func (b *Bridge) MessageUpdate(ctx context.Context, msg *discordgo.MessageUpdate
 		s.recent[msg.ChannelID] = boundedContext(s.recent[msg.ChannelID])
 		return
 	}
+}
+
+func (s *Service) contextEpoch(channel string) uint64 {
+	s.discussionMu.Lock()
+	defer s.discussionMu.Unlock()
+	return s.discussionEpoch[channel]
+}
+func (s *Service) invalidateContext(channel string) {
+	if _, err := s.Discussion(channel); err != nil {
+		return
+	}
+	s.discussionMu.Lock()
+	defer s.discussionMu.Unlock()
+	if s.discussionEpoch == nil {
+		s.discussionEpoch = make(map[string]uint64)
+	}
+	s.discussionClock++
+	s.discussionEpoch[channel] = s.discussionClock
 }
 
 func (b *Bridge) MessageDelete(msg *discordgo.MessageDelete) {

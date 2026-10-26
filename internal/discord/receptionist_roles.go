@@ -84,6 +84,11 @@ func (b *Bridge) useReceptionist(ctx context.Context, role receptionistRole, sou
 		return true, nil
 	}
 	row, e := b.exactWorker(ctx, role.Target.ID)
+	if errors.Is(e, ErrNotFound) {
+		if id, err := b.Service.Store.ResolveTargetID(role.Target.ID); err == nil && id != role.Target.ID {
+			row, e = b.exactWorker(ctx, id)
+		}
+	}
 	if e != nil || row.State != "running" && row.State != "working" || row.Agent != role.CLI || row.Instance == "" || strings.HasPrefix(row.Instance, "unavailable:") {
 		return false, ErrReceptionistUnavailable
 	}
@@ -92,7 +97,7 @@ func (b *Bridge) useReceptionist(ctx context.Context, role receptionistRole, sou
 	} else if excluded {
 		return false, ErrOptedOut
 	}
-	if role.Target.Instance == "" {
+	if role.Target.Instance == "" || role.Target.ID != row.ID {
 		role.Target = &row.Target
 		if e = b.saveReceptionist(role); e != nil {
 			return false, e
@@ -130,7 +135,14 @@ func (b *Bridge) resetReceptionist(ctx context.Context, row Worker) error {
 			if e := json.Unmarshal(raw, &candidate); e != nil {
 				return e
 			}
-			if candidate.Target != nil && candidate.Target.ID == row.ID {
+			if candidate.Target == nil {
+				return nil
+			}
+			id, err := canonicalTarget(tx, candidate.Target.ID)
+			if err != nil {
+				return err
+			}
+			if id == row.ID {
 				role = candidate
 				found = true
 			}

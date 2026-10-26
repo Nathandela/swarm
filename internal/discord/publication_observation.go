@@ -20,12 +20,7 @@ func (s *Service) ObservePublication(ctx context.Context, message PublicationMes
 	if e := ctx.Err(); e != nil {
 		return e
 	}
-	s.publicationMu.RLock()
-	botID := s.botID
-	s.publicationMu.RUnlock()
-	if botID == "" {
-		botID = s.Config.ApplicationID
-	}
+	botID := s.botUserID()
 	if message.AuthorID != botID || message.WebhookID != "" {
 		return ErrNotAuthorized
 	}
@@ -72,6 +67,16 @@ func (s *Service) ObservePublication(ctx context.Context, message PublicationMes
 		aggregatePublication(matched)
 		return putJSON(tx, "publications", publicationKey(matched.RequestRef, matched.ID), matched)
 	})
+}
+
+func (s *Service) botUserID() string {
+	s.publicationMu.RLock()
+	id := s.botID
+	s.publicationMu.RUnlock()
+	if id == "" {
+		return s.Config.ApplicationID
+	}
+	return id
 }
 func (s *Service) TargetForReply(ctx context.Context, channel, messageID string) (Target, error) {
 	var ref string
