@@ -181,6 +181,7 @@ func requestHash(r Request) string {
 	r.ExpiresAt = time.Time{}
 	r.DeliveryState = ""
 	r.NativeEvidence = ""
+	r.Receiver = nil
 	r.EventAt = time.Time{} // Admission timing does not change an already accepted instruction.
 	return digest(r)
 }
@@ -202,7 +203,11 @@ func activeRequest(tx *bolt.Tx, ref string, now time.Time) (requestRecord, error
 	if e != nil {
 		return r, e
 	}
-	if optedOut(tx, r.Request.Target) {
+	target := r.Request.Target
+	if r.Request.Receiver != nil {
+		target = *r.Request.Receiver
+	}
+	if optedOut(tx, target) {
 		return r, ErrOptedOut
 	}
 	if !now.Before(r.Request.ExpiresAt) {
@@ -263,6 +268,7 @@ func validateRequest(r Request) error {
 
 // Admit binds immutable source input to a native operation before dispatch.
 func (s *Store) Admit(input Request, now time.Time) (out Request, fresh bool, err error) {
+	input.Receiver = nil // Receiver identity is confirmed only by BindReceiver.
 	if err = validateRequest(input); err != nil {
 		return
 	}
@@ -340,6 +346,9 @@ func (s *Store) Request(ref string, now time.Time) (out Request, err error) {
 			return e
 		}
 		out = r.Request
+		if out.Receiver != nil {
+			out.Target = *out.Receiver
+		}
 		return nil
 	})
 	return
@@ -451,7 +460,7 @@ func (s *Store) PreparePublication(ref, id, body string, now time.Time) (out Pub
 		return out, false, ErrCapacity
 	}
 	err = s.db.Update(func(tx *bolt.Tx) error {
-		if _, e := activeRequest(tx, ref, now); e != nil {
+		if _, e := publicationRequest(tx, ref, now); e != nil {
 			return e
 		}
 		old, e := loadPublication(tx, ref, id)
@@ -500,7 +509,7 @@ func splitUTF16(body string, limit int) []string {
 }
 func (s *Store) BeginPublication(ref, id string, now time.Time) (out Publication, fresh bool, err error) {
 	err = s.db.Update(func(tx *bolt.Tx) error {
-		if _, e := activeRequest(tx, ref, now); e != nil {
+		if _, e := publicationRequest(tx, ref, now); e != nil {
 			return e
 		}
 		p, e := loadPublication(tx, ref, id)
