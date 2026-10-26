@@ -54,15 +54,17 @@ type Messenger interface {
 	Message(context.Context, Route) (Input, error)
 }
 type Service struct {
-	Config       Config
-	Store        *Store
-	Workers      Workers
-	Messenger    Messenger
-	StateDir     string
-	Now          func() time.Time
-	Stop         func()
-	discussionMu sync.Mutex
-	recent       map[string][]ContextMessage
+	Config         Config
+	Store          *Store
+	Workers        Workers
+	Messenger      Messenger
+	StateDir       string
+	Now            func() time.Time
+	Stop           func()
+	discussionMu   sync.Mutex
+	recent         map[string][]ContextMessage
+	reconcileMu    sync.Mutex
+	reconcileAfter string
 }
 
 func NewService(c Config, store *Store, workers Workers, messenger Messenger) *Service {
@@ -222,6 +224,13 @@ func (s *Service) dispatch(ctx context.Context, input Request) (Request, error) 
 	}
 	if !fresh {
 		if r.DeliveryState == StateUncertain || r.DeliveryState == StateSending {
+			if status, e := s.Reconcile(ctx, r.Ref); e == nil && status.DeliveryState != r.DeliveryState {
+				if current, e := s.Store.Request(r.Ref, s.Now()); e == nil {
+					r = current
+				}
+			}
+		}
+		if r.DeliveryState == StateUncertain || r.DeliveryState == StateSending {
 			return r, ErrDeliveryUncertain
 		}
 		if r.DeliveryState == StateFailed {
@@ -249,10 +258,25 @@ func (s *Service) dispatch(ctx context.Context, input Request) (Request, error) 
 		return r, sendErr
 	}
 	evidence, _ := json.Marshal(receipt)
-	if err = s.Store.FinishDelivery(r.Ref, StateSent, string(evidence)); err != nil {
+	state := receiptState(receipt.State)
+	if !receiptMatches(r, receipt, s.Config.InstallationID) {
+		_ = s.Store.FinishDelivery(r.Ref, StateUncertain, "native receipt identity is unconfirmed")
+		r.DeliveryState = StateUncertain
+		return r, ErrConflict
+	}
+	if state == "" {
+		state = StateUncertain
+	}
+	if err = s.Store.FinishDelivery(r.Ref, state, string(evidence)); err != nil {
 		return r, err
 	}
-	r.DeliveryState = StateSent
+	r.DeliveryState = state
+	if state == StateUncertain {
+		return r, ErrDeliveryUncertain
+	}
+	if state == StateFailed {
+		return r, protocol.ErrSemanticSendRejected
+	}
 	return r, nil
 }
 func shellArg(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }

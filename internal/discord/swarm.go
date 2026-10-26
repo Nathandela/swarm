@@ -13,6 +13,15 @@ import (
 // SwarmClient opens short-lived owner connections; it never starts a daemon.
 type SwarmClient struct{ Socket string }
 
+func (s SwarmClient) Receipt(ctx context.Context, session, operation string) (protocol.SemanticMessageReceipt, error) {
+	client, e := s.dial(ctx)
+	if e != nil {
+		return protocol.SemanticMessageReceipt{}, e
+	}
+	defer func() { _ = client.Close() }()
+	return client.SemanticOperation(session, operation)
+}
+
 func (s SwarmClient) dial(ctx context.Context) (*protocol.Client, error) {
 	c, err := protocol.DialContext(ctx, s.Socket, []string{protocol.CapSemanticSend, protocol.CapMessageOrigin, protocol.CapNativeRequests, protocol.CapJournal, protocol.CapOpenCodeObservation})
 	if err == nil && ctx.Err() != nil {

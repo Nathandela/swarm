@@ -18,15 +18,17 @@ import (
 )
 
 type RequestHeader struct {
-	Ref         string    `json:"ref"`
-	Author      Actor     `json:"author"`
-	RequesterID string    `json:"requester_id,omitempty"`
-	EndorserID  string    `json:"endorser_id,omitempty"`
-	Authority   Authority `json:"authority"`
-	Route       Route     `json:"route"`
-	Target      Target    `json:"target"`
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	Ref           string    `json:"ref"`
+	Author        Actor     `json:"author"`
+	RequesterID   string    `json:"requester_id,omitempty"`
+	EndorserID    string    `json:"endorser_id,omitempty"`
+	Authority     Authority `json:"authority"`
+	Route         Route     `json:"route"`
+	Target        Target    `json:"target"`
+	CreatedAt     time.Time `json:"created_at"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	DeliveryState string    `json:"delivery_state"`
+	OperationID   string    `json:"operation_id"`
 }
 type LocalContext struct {
 	Request RequestHeader `json:"request"`
@@ -218,6 +220,13 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 			err = ErrInvalid
 			break
 		}
+		if offset < 0 {
+			err = ErrInvalid
+			break
+		}
+		receiptCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		_, _ = s.Reconcile(receiptCtx, r.URL.Query().Get("ref"))
+		cancel()
 		var request Request
 		request, err = s.Store.Request(r.URL.Query().Get("ref"), s.Now())
 		if err != nil {
@@ -228,7 +237,7 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			break
 		}
-		result = LocalContext{Request: RequestHeader{Ref: request.Ref, Author: request.Author, RequesterID: request.RequesterID, EndorserID: request.EndorserID, Authority: request.Authority, Route: request.Route, Target: request.Target, CreatedAt: request.CreatedAt, ExpiresAt: request.ExpiresAt}, Page: page}
+		result = LocalContext{Request: RequestHeader{Ref: request.Ref, Author: request.Author, RequesterID: request.RequesterID, EndorserID: request.EndorserID, Authority: request.Authority, Route: request.Route, Target: request.Target, CreatedAt: request.CreatedAt, ExpiresAt: request.ExpiresAt, DeliveryState: request.DeliveryState, OperationID: request.OperationID}, Page: page}
 	case "reply":
 		var input LocalReply
 		if err = decodeLocal(w, r, &input); err == nil {
