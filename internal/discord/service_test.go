@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +47,7 @@ func (f *fakeMessenger) Post(_ context.Context, out Outbound) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.posts = append(f.posts, out)
-	return "posted", f.err
+	return fmt.Sprintf("posted-%d", len(f.posts)), f.err
 }
 func (f *fakeMessenger) Message(context.Context, Route) (Input, error) { return f.original, nil }
 func serviceRig(t *testing.T) (*Service, *fakeWorkers, *fakeMessenger) {

@@ -65,6 +65,8 @@ type Service struct {
 	recent         map[string][]ContextMessage
 	reconcileMu    sync.Mutex
 	reconcileAfter string
+	publicationMu  sync.RWMutex
+	botID          string
 }
 
 func NewService(c Config, store *Store, workers Workers, messenger Messenger) *Service {
@@ -416,29 +418,48 @@ func (s *Service) Reply(ctx context.Context, ref, id, body string) (Publication,
 	if err != nil {
 		return p, err
 	}
-	var ids []string
 	for _, chunk := range p.Chunks {
-		// Each chunk is a separate dispatch; an acknowledged opt-out closes the next one.
-		if _, err = s.Store.Request(ref, s.Now()); err != nil {
-			break
+		claimed, fresh, e := s.Store.beginPublicationChunk(ref, p.ID, chunk.ID, s.Now())
+		if e != nil {
+			return p, e
 		}
-		var messageID string
-		messageID, err = s.Messenger.Post(ctx, Outbound{Route: r.Route, Text: chunk.Body, Nonce: chunk.ID})
-		if err != nil {
-			break
+		if !fresh {
+			if claimed.State == StateSent {
+				continue
+			}
+			return p, ErrDeliveryUncertain
 		}
-		ids = append(ids, messageID)
+		messageID, postErr := s.Messenger.Post(ctx, Outbound{Route: r.Route, Text: claimed.Body, Nonce: claimed.ID})
+		state, evidence := StateSent, "REST publication acknowledgement"
+		if postErr != nil {
+			state = StateUncertain
+			evidence = "REST outcome unconfirmed"
+		}
+		p, e = s.Store.finishPublicationChunk(ref, p.ID, claimed.ID, state, messageID, evidence)
+		if e != nil {
+			return p, e
+		}
+		if p.State == StateSent {
+			return p, nil
+		}
+		if postErr != nil {
+			known := false
+			for _, part := range p.Chunks {
+				if part.ID == claimed.ID && part.State == StateSent {
+					known = true
+				}
+			}
+			if !known {
+				return p, postErr
+			}
+		}
 	}
-	state := StateSent
-	evidence := "deliberate publication"
+	p, err = s.Store.publication(ref, p.ID)
 	if err != nil {
-		state = StateUncertain
-		evidence = err.Error()
+		return p, err
 	}
-	if finishErr := s.Store.FinishPublication(ref, p.ID, state, ids, evidence); finishErr != nil {
-		return p, finishErr
+	if p.State != StateSent {
+		return p, ErrDeliveryUncertain
 	}
-	p.State = state
-	p.DiscordMessageIDs = ids
-	return p, err
+	return p, nil
 }
