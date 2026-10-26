@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -157,7 +158,7 @@ func TestDisconnectedSubmitIsUncertainAndNeverReplayed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, err := Submit(ctx, b, "operation-1", "yes\n/approve all")
-	if err == nil || !IsUncertain(err) {
+	if err == nil || !errors.Is(err, errUncertain) {
 		t.Fatalf("error = %v, want uncertain", err)
 	}
 	mu.Lock()

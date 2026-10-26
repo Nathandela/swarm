@@ -195,19 +195,3 @@ func CloseViewer(ctx context.Context, b Binding) error {
 }
 
 func Validate(ctx context.Context, b Binding) error { _, err := identify(ctx, b); return err }
-
-func ReadReceipt(ctx context.Context, b Binding, admissionID string) (Receipt, error) {
-	var r Receipt
-	c, err := connect(ctx, b)
-	if err != nil {
-		return r, err
-	}
-	defer func() { _ = c.CloseNow() }()
-	if err = rpc(ctx, c, 1, "prompt.receipt", map[string]string{"session_id": b.SessionID, "admission_id": admissionID}, &r); err != nil {
-		return r, err
-	}
-	if r.AdmissionID != admissionID || b.AuthorityEpoch > 0 && r.AuthorityEpoch != b.AuthorityEpoch {
-		return r, errors.New("hermes native receipt identity changed")
-	}
-	return r, nil
-}
