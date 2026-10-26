@@ -265,7 +265,7 @@ var serverCaps = []string{
 	CapExternalResume, CapResumeRelocate, CapHandsOffHandoff,
 	CapContextGuardSettings,
 	CapLoginsManage,
-	CapSemanticSend, CapOpenCodeObservation, CapNativeRequests,
+	CapSemanticSend, CapMessageOrigin, CapOpenCodeObservation, CapNativeRequests,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1479,7 +1479,7 @@ func (s *Server) supportedCaps() []string {
 		if cap == CapJournalSubscribeFrom && !journalFrom {
 			continue
 		}
-		if cap == CapSemanticSend && (s.remoteTier || !durable || !sender || !transactional || !semantic) {
+		if (cap == CapSemanticSend || cap == CapMessageOrigin) && (s.remoteTier || !durable || !sender || !transactional || !semantic) {
 			continue
 		}
 		out = append(out, cap)
@@ -3509,7 +3509,7 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		SpawnIntent: m.SpawnIntent,
 		// The degraded-backend reason (persist.Meta.BackendPlanError): "" is healthy.
 		BackendPlanError: m.BackendPlanError,
-		ResumeError: m.ResumeError,
+		ResumeError:      m.ResumeError,
 		// nx44.7: not persisted -- the controller lease is live daemon state, sampled
 		// by the caller at stamp time.
 		RemoteControlled: remoteControlled,

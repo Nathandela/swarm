@@ -30,6 +30,9 @@ func (c *Client) SemanticSend(operationID string, req ComposerSendReq) error {
 	if !slices.Contains(c.caps, CapSemanticSend) {
 		return errors.New("protocol: semantic messages require an updated daemon; run swarm daemon restart")
 	}
+	if req.Origin != nil && !slices.Contains(c.caps, CapMessageOrigin) {
+		return errors.New("protocol: message origin requires an updated daemon; run swarm daemon restart")
+	}
 	if !validSemanticOperationID(operationID, time.Now()) {
 		return errors.New("protocol: invalid or expired semantic operation ID; an earlier attempt may still have an effect")
 	}

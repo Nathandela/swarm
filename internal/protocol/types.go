@@ -213,6 +213,7 @@ const (
 	CapContextGuardSettings = "context-guard-settings"
 	CapLoginsManage         = "logins.manage.v1"
 	CapSemanticSend         = "semantic-send"
+	CapMessageOrigin        = "message-origin"
 )
 
 // The closed spawn-intent vocabulary (ADR-010 D4), re-exported from the schema
@@ -415,6 +416,7 @@ type SemanticComposerSender interface {
 }
 
 type SemanticMessageReceipt = schema.SemanticMessageReceipt
+type MessageOrigin = schema.MessageOrigin
 
 type SemanticOperationReader interface {
 	SemanticOperation(local, operationID string) (SemanticMessageReceipt, error)

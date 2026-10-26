@@ -202,6 +202,16 @@ func (cc *clientConn) handleComposerSend(c Control) {
 		cc.replyErrorCode("composer_send: missing session_instance; refresh the session and upgrade the phone before retrying", CodeInvalidField)
 		return
 	}
+	if body.Origin != nil {
+		if !cc.hasCap(CapMessageOrigin) {
+			cc.replyErrorCode("composer_send: message-origin capability was not negotiated", CodeNotImplemented)
+			return
+		}
+		if err := body.Origin.Validate(); err != nil {
+			cc.replyErrorCode("composer_send: "+err.Error(), CodeInvalidField)
+			return
+		}
+	}
 	cs, ok := cc.srv.d.(ComposerSender)
 	if !ok {
 		// handleApprove's rule: OK here is a sent message the agent never received.
