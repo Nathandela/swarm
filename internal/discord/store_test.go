@@ -414,7 +414,7 @@ func TestPruneSettledBodiesRetainsGuardsAndUnresolved(t *testing.T) {
 	if e := s.Prune(testNow.Add(RequestTTL)); e != nil {
 		t.Fatal(e)
 	}
-	if _, fresh, e := s.Admit(original, testNow.Add(RequestTTL)); e != nil || fresh {
+	if _, fresh, e := s.Admit(original, testNow.Add(RequestTTL)); !errors.Is(e, ErrExpired) || fresh {
 		t.Fatal("expired guard lost", fresh, e)
 	}
 	if e := s.db.View(func(tx *bolt.Tx) error {
@@ -560,6 +560,99 @@ func TestResumeCannotBypassOptOutBound(t *testing.T) {
 	next.Instance = "next"
 	if e := s.FollowTarget(previous, next); !errors.Is(e, ErrCapacity) {
 		t.Fatal("resume bypassed optout cap", e)
+	}
+}
+
+func TestRevisionCannotReadmitAcceptedEvent(t *testing.T) {
+	s := openTestStore(t)
+	r := sampleRequest()
+	mustAdmit(t, s, r)
+	r.MessageRevision = "2"
+	r.Text = "edited source"
+	if got, fresh, e := s.Admit(r, testNow); !errors.Is(e, ErrConflict) || fresh || got.Text != "" {
+		t.Fatal("revision readmitted event", got, fresh, e)
+	}
+}
+func TestAdmissionReplayCannotExposeRevokedOrExpiredSource(t *testing.T) {
+	for _, revoke := range []bool{false, true} {
+		t.Run(fmt.Sprint(revoke), func(t *testing.T) {
+			s := openTestStore(t)
+			r := sampleRequest()
+			mustAdmit(t, s, r)
+			at := testNow.Add(RequestTTL)
+			want := ErrExpired
+			if revoke {
+				at = testNow
+				want = ErrOptedOut
+				if e := s.SetOptOut(r.Target, true); e != nil {
+					t.Fatal(e)
+				}
+			}
+			got, fresh, e := s.Admit(r, at)
+			if !errors.Is(e, want) || fresh || got.Text != "" || len(got.Context) != 0 {
+				t.Fatal("denied replay exposed source", got, fresh, e)
+			}
+		})
+	}
+}
+func TestExplicitIncludeSurvivesRepeatedResumeAndRestart(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "discord")
+	s, e := OpenStore(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	previous := sampleRequest().Target
+	next := previous
+	next.ID = "resumed"
+	for _, e := range []error{s.SetOptOut(previous, true), s.FollowTarget(previous, next), s.SetOptOut(next, false)} {
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	s, e = OpenStore(dir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { _ = s.Close() }()
+	for range 3 {
+		if e = s.FollowTarget(previous, next); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if out, e := s.IsOptedOut(next); e != nil || out {
+		t.Fatal("explicit include overwritten", out, e)
+	}
+}
+func TestStoreRejectsForeignHardlinkWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	foreign := filepath.Join(dir, "foreign")
+	state := filepath.Join(dir, "state")
+	if e := os.Mkdir(state, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(foreign, []byte("foreign data"), 0644); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Link(foreign, filepath.Join(state, "discord.db")); e != nil {
+		t.Fatal(e)
+	}
+	if s, e := OpenStore(state); e == nil {
+		_ = s.Close()
+		t.Fatal("hardlinked file accepted")
+	}
+	raw, e := os.ReadFile(foreign)
+	if e != nil {
+		t.Fatal(e)
+	}
+	info, e := os.Stat(foreign)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if string(raw) != "foreign data" || info.Mode().Perm() != 0644 {
+		t.Fatal("foreign inode changed", string(raw), info.Mode())
 	}
 }
 
