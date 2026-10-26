@@ -57,15 +57,18 @@ func TestNativeAgyModalAdmission(t *testing.T) {
 		t.Fatalf("private provider copy: %v %v", copyErr, closeErr)
 	}
 	binary = private
-	swarm := filepath.Join(dir, "swarm")
-	goTool := os.Getenv("SWARM_NATIVE_GO")
-	if goTool == "" {
-		goTool = "go"
-	}
-	build := exec.Command(goTool, "build", "-o", swarm, "./cmd/swarm")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build native registration role: %v %s", err, output)
+	swarm := os.Getenv("SWARM_NATIVE_INPUT_HELPER")
+	if swarm == "" {
+		swarm = filepath.Join(dir, "swarm")
+		goTool := os.Getenv("SWARM_NATIVE_GO")
+		if goTool == "" {
+			goTool = "go"
+		}
+		build := exec.Command(goTool, "build", "-o", swarm, "./cmd/swarm")
+		build.Dir = "../.."
+		if output, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build native registration role: %v %s", err, output)
+		}
 	}
 	fingerprint, err := persist.CLIFingerprint(binary)
 	if err != nil {

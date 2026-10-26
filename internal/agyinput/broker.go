@@ -29,7 +29,9 @@ const DescriptorFile = "agy-input.json"
 
 var ErrRejected = errors.New("agy native input rejected without a new effect")
 
-func SupportedVersion(version string) bool { return version == "1.4.0" || version == "1.4.7" }
+func SupportedVersion(version string) bool {
+	return version == "1.4.0" || version == "1.4.5" || version == "1.4.7"
+}
 
 type Config struct {
 	SessionID        string   `json:"session_id"`
@@ -167,7 +169,7 @@ func (b *Broker) validate(ctx context.Context, source Source) error {
 		if arguments.Cwd != cfg.Cwd {
 			return errors.New("native registration workspace mismatched")
 		}
-	case "1.4.7":
+	case "1.4.5", "1.4.7":
 		expected, err := filepath.EvalSymlinks(cfg.Cwd)
 		if err != nil {
 			return errors.New("registered workspace is unavailable")
