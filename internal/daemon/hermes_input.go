@@ -28,15 +28,13 @@ func (d *Daemon) hermesLaunchConfig(spec LaunchSpec) (*hermesinput.SessionConfig
 		}
 		return nil, nil
 	}
-	origin := spec.ClientEnv
-	if origin == nil {
-		origin = daemonEnviron()
+	origins := spec.HermesOrigins
+	if origins == nil {
+		origins = d.HermesConfigurationEnvironment(spec.ClientEnv)
 	}
-	var origins []string
-	for _, entry := range origin {
-		key, _, _ := strings.Cut(entry, "=")
-		if key == "HERMES_HOME" || key == "HERMES_GATEWAY_LOCK_DIR" || key == "XDG_STATE_HOME" {
-			origins = append(origins, entry)
+	for _, entry := range origins {
+		if entry == "SWARM_HERMES_UNSUPPORTED_ORIGIN=1" {
+			return nil, errors.New("hermes native input requires a local provider home; custom remote transports are unsupported")
 		}
 	}
 	profile := spec.Options["profile"]
@@ -51,7 +49,56 @@ func (d *Daemon) hermesLaunchConfig(spec LaunchSpec) (*hermesinput.SessionConfig
 		profile = source.LaunchOptions["profile"]
 		origins = append(origins, "HERMES_HOME="+desc.Binding.Home)
 	}
-	return &hermesinput.SessionConfig{Program: spec.Argv[0], ProviderVersion: spec.CLIIdentity.Version, Profile: profile, Cwd: spec.Cwd, Options: spec.Options, Origins: origins, ResumeID: spec.ConversationID, InitialPrompt: spec.InitialPrompt}, nil
+	cwd := spec.Cwd
+	if nativeResume {
+		desc, err := d.hermesDescriptor(source.ID, false)
+		if err != nil || desc.Binding.Directory == "" {
+			return nil, errors.New("hermes native resume cwd is unproven")
+		}
+		if spec.Cwd != source.Cwd && spec.Cwd != source.ProviderCwd() {
+			return nil, errors.New("hermes native resume cannot change its working directory")
+		}
+		cwd = desc.Binding.Directory
+	}
+	return &hermesinput.SessionConfig{Program: spec.Argv[0], ProviderVersion: spec.CLIIdentity.Version, Profile: profile, Cwd: cwd, Options: spec.Options, Origins: origins, ResumeID: spec.ConversationID, InitialPrompt: spec.InitialPrompt}, nil
+}
+
+func (d *Daemon) HermesNativeRequested(spec LaunchSpec) bool {
+	if spec.AgentType != "hermes" {
+		return false
+	}
+	if source, ok := d.Get(spec.ResumedFrom); ok && source.HermesNative {
+		return true
+	}
+	return d.cfg.NativeInputEnabled != nil && d.cfg.NativeInputEnabled()
+}
+
+func HermesConfigurationEnvironment(env []string) []string {
+	out := make([]string, 0)
+	for _, entry := range env {
+		key, value, _ := strings.Cut(entry, "=")
+		switch key {
+		case "HERMES_HOME", "HERMES_GATEWAY_LOCK_DIR", "XDG_STATE_HOME":
+			out = append(out, entry)
+		case "HERMES_TUI_GATEWAY_URL", "HERMES_TUI_SIDECAR_URL":
+			if value != "" {
+				out = append(out, "SWARM_HERMES_UNSUPPORTED_ORIGIN=1")
+			}
+		case "SWARM_HERMES_UNSUPPORTED_ORIGIN":
+			out = append(out, "SWARM_HERMES_UNSUPPORTED_ORIGIN=1")
+		}
+	}
+	return out
+}
+
+func (d *Daemon) HermesConfigurationEnvironment(env []string) []string {
+	if env == nil {
+		env = d.savedEnv
+		if len(env) == 0 {
+			env = daemonEnviron()
+		}
+	}
+	return HermesConfigurationEnvironment(env)
 }
 
 func (d *Daemon) hermesDescriptor(id string, live bool) (hermesinput.Descriptor, error) {

@@ -25,6 +25,7 @@ const nativeProtocol = "hermes-gateway-v1"
 
 // Binding names one profile, native owner incarnation and canonical session.
 type Binding struct {
+	Directory      string `json:"directory,omitempty"`
 	Home           string `json:"home"`
 	ControlHome    string `json:"control_home,omitempty"`
 	OwnerPID       int    `json:"owner_pid"`

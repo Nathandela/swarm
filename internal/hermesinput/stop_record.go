@@ -3,6 +3,7 @@ package hermesinput
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 )
@@ -34,13 +35,13 @@ func readStop(dir string, d Descriptor) (stopRecord, bool) {
 // that intent. Ordinary viewer closure detaches accepted native work.
 func ViewerEnded(ctx context.Context, dir string, d Descriptor) error {
 	r, intent := readStop(dir, d)
+	var stopErr error
 	if intent {
-		if err := Stop(ctx, d.Binding); err != nil {
-			return err
-		}
+		stopErr = Stop(ctx, d.Binding)
 	}
-	if err := CloseViewer(ctx, d.Binding); err != nil {
-		return err
+	closeErr := CloseViewer(ctx, d.Binding)
+	if stopErr != nil || closeErr != nil {
+		return errors.Join(stopErr, closeErr)
 	}
 	if intent {
 		r.Acknowledged = true

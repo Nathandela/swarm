@@ -177,6 +177,9 @@ func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
 	if r.Agent == "opencode" {
 		timeout = 75 * time.Second
 	}
+	if r.Agent == "hermes" {
+		timeout = 100 * time.Second
+	}
 	resp, err := c.requestWithTimeout(Control{Op: OpLaunch, EndpointID: c.endpointID, Launch: &r}, timeout)
 	if err != nil {
 		return "", "", err

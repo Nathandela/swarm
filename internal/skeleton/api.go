@@ -17,6 +17,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/hermesinput"
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -1061,6 +1062,9 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 			spec.ClientEnv = append([]string(nil), source.Env...)
 		}
 	}
+	if spec.AgentType == "hermes" && spec.HermesOrigins == nil {
+		spec.HermesOrigins = a.core.HermesConfigurationEnvironment(spec.ClientEnv)
+	}
 	if err := a.captureOpenCodeOrigin(&spec); err != nil {
 		return persist.Meta{}, err
 	}
@@ -1222,8 +1226,17 @@ func (a *coreAPI) launchResolvedWithOutcome(resolved daemon.LaunchSpec, coreAtte
 		return persist.Meta{}, err
 	}
 
-	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || resolved.AgentType == "agy" && a.core.NativeInputEnabled()) {
-		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], resolved.ClientEnv, resolved.Cwd)
+	if len(resolved.Argv) > 0 && (resolved.AgentType == "claude" || resolved.AgentType == "codex" || resolved.AgentType == "agy" && a.core.NativeInputEnabled() || a.core.HermesNativeRequested(resolved)) {
+		probeEnv := resolved.ClientEnv
+		if a.core.HermesNativeRequested(resolved) {
+			for _, origin := range resolved.HermesOrigins {
+				if origin == "SWARM_HERMES_UNSUPPORTED_ORIGIN=1" {
+					return persist.Meta{}, errors.New("hermes native input requires a local provider home")
+				}
+			}
+			probeEnv = hermesinput.SessionEnvironment(probeEnv, resolved.HermesOrigins)
+		}
+		observed, probeErr := probeCLIIdentity(resolved.AgentType, resolved.Argv[0], probeEnv, resolved.Cwd)
 		if expected := resolved.ExpectedCLIIdentity; expected != nil && (probeErr != nil || observed == nil || *expected != *observed) {
 			return persist.Meta{}, fmt.Errorf("launch: CLI installation changed before refresh")
 		}

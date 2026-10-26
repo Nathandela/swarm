@@ -77,10 +77,14 @@ var remoteForbiddenOptions = map[string]string{
 // so filtering is not enough — it must not survive at all.
 func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.LaunchSpec {
 	var clientEnv, openCodeEnv []string
+	var hermesOrigins []string
 	if !remote && req.Env != nil {
 		// Capture owner configuration origins before the launch allowlist removes
 		// them. Nil still requests daemon policy; an explicit empty env stays empty.
 		clientEnv = persist.FilterEnv(req.Env)
+		if req.Agent == "hermes" {
+			hermesOrigins = daemon.HermesConfigurationEnvironment(req.Env)
+		}
 		if req.Agent == "opencode" {
 			openCodeEnv = make([]string, 0)
 			for _, entry := range req.Env {
@@ -92,8 +96,9 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		}
 	}
 	return daemon.LaunchSpec{
-		AgentType: req.Agent,
-		Name:      SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
+		HermesOrigins: hermesOrigins,
+		AgentType:     req.Agent,
+		Name:          SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
 		// The launch-time tag takes the SAME sanitization as set_tag's (handleSetTag):
 		// a client is never trusted to have sanitized it, and a blank tag is no tag.
 		Tag:         strings.TrimSpace(SanitizeName(req.Tag)),
