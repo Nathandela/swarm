@@ -1456,6 +1456,11 @@ func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 	if spec.Options[protocol.OptionWorktree] != "true" {
 		return "", nil
 	}
+	if isAgentHandoffLaunch(spec) {
+		if err := refuseTemporaryHandoffWorktree(spec); err != nil {
+			return "", err
+		}
+	}
 	return worktree.Create(spec.Cwd, id, spec.Name)
 }
 

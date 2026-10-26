@@ -5,7 +5,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -51,36 +50,26 @@ func refuseTemporaryHandoffWorktree(spec daemon.LaunchSpec) error {
 	if spec.Options[protocol.OptionWorktree] != "true" {
 		return nil
 	}
-	if root, ok := underTemporaryRoot(spec.Cwd); ok {
-		return fmt.Errorf("handoff: the checkout %q is under the temporary directory %q, which a reboot erases; hand off from the repository's own checkout instead", spec.Cwd, root)
+	for _, path := range []string{spec.Cwd, filepath.Join(spec.Cwd, ".swarm", "worktrees")} {
+		// Resolve existing ancestors too: the worktree root may not exist yet.
+		resolved, err := canonicalCleanupPath(path)
+		if err != nil {
+			return fmt.Errorf("handoff: resolve worktree destination: %w", err)
+		}
+		for _, root := range handoffTemporaryRoots() {
+			if root == "" {
+				continue
+			}
+			r, err := canonicalCleanupPath(root)
+			if err != nil {
+				return fmt.Errorf("handoff: resolve temporary root: %w", err)
+			}
+			if cleanupContains(r, resolved) {
+				return fmt.Errorf("handoff: the worktree destination %q is under the temporary directory %q, which a reboot erases; hand off from a durable checkout instead", path, root)
+			}
+		}
 	}
 	return nil
-}
-
-// underTemporaryRoot reports the temporary root dir lies beneath, comparing resolved
-// paths so a symlinked /tmp (macOS's /private/tmp) cannot slip past.
-func underTemporaryRoot(dir string) (string, bool) {
-	resolved := resolvedPath(dir)
-	for _, root := range handoffTemporaryRoots() {
-		if root == "" {
-			continue
-		}
-		r := resolvedPath(root)
-		if resolved == r || strings.HasPrefix(resolved, r+string(filepath.Separator)) {
-			return root, true
-		}
-	}
-	return "", false
-}
-
-func resolvedPath(p string) string {
-	if abs, err := filepath.Abs(p); err == nil {
-		p = abs
-	}
-	if real, err := filepath.EvalSymlinks(p); err == nil {
-		return real
-	}
-	return filepath.Clean(p)
 }
 
 // isHandoffChildLaunch reports the first-class `swarm handoff` shape. The

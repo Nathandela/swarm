@@ -18,6 +18,7 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/worktree"
 )
 
 // handoffWorktreeFixture is handoffDirFixture with the production worktree hooks wired
@@ -206,5 +207,93 @@ func TestOrdinaryLaunchInAGitCheckoutIsNotIsolated(t *testing.T) {
 	t.Cleanup(func() { killSpawnedShim(t, m) })
 	if got := spawnBinding(t, dir, m.ID); got != repo {
 		t.Fatalf("an ordinary launch runs in %q, want %q", got, repo)
+	}
+}
+
+func TestHandoffRefusesTemporaryWorktreeDestinationAliases(t *testing.T) {
+	for _, alias := range []string{".swarm", filepath.Join(".swarm", "worktrees")} {
+		t.Run(alias, func(t *testing.T) {
+			src, repo := runningGitSource(t, "alias-src")
+			temporary := t.TempDir()
+			withTemporaryRoots(t, temporary)
+			link := filepath.Join(repo, alias)
+			if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(temporary, link); err != nil {
+				t.Fatal(err)
+			}
+			api, _ := handoffWorktreeFixture(t, src)
+			spec := handoffChildSpec(t, src, repo)
+			if child, err := api.Launch(spec); err == nil {
+				killSpawnedShim(t, child)
+				t.Fatal("handoff accepted a temporary worktree destination alias")
+			}
+			spec.Options = map[string]string{protocol.OptionWorktree: "true"}
+			if _, err := preLaunchWorktree("alias-child", spec); err == nil {
+				t.Fatal("creation hook accepted a temporary worktree destination alias")
+			}
+			if entries, err := os.ReadDir(temporary); err != nil || len(entries) != 0 {
+				t.Fatalf("refusal created worktree files: %v, %v", entries, err)
+			}
+			if got := gitOutput(t, repo, "worktree", "list", "--porcelain"); strings.Count(got, "worktree ") != 1 {
+				t.Fatalf("refusal registered a worktree: %s", got)
+			}
+		})
+	}
+}
+
+func TestHandoffWorktreeDestinationAliasesMustResolve(t *testing.T) {
+	src, repo := runningGitSource(t, "alias-src")
+	withTemporaryRoots(t, t.TempDir())
+	target := filepath.Join(t.TempDir(), "missing")
+	if err := os.Symlink(target, filepath.Join(repo, ".swarm")); err != nil {
+		t.Fatal(err)
+	}
+	spec := handoffChildSpec(t, src, repo)
+	spec.Options = map[string]string{protocol.OptionWorktree: "true"}
+	if _, err := preLaunchWorktree("alias-child", spec); err == nil {
+		t.Fatal("accepted an unresolved destination ancestor")
+	}
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preLaunchWorktree("alias-child", spec); err != nil {
+		t.Fatalf("durable resolved destination was refused: %v", err)
+	}
+}
+
+func TestHandoffFromAWorktreeUsesTheSourcesCommit(t *testing.T) {
+	withTemporaryRoots(t, t.TempDir())
+	src, repo := runningGitSource(t, "worktree-src")
+	var err error
+	src.AgentCwd, err = worktree.Create(repo, src.ID, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.LaunchOptions = map[string]string{protocol.OptionWorktree: "true"}
+	committed := filepath.Join(src.AgentCwd, "committed.txt")
+	if err := os.WriteFile(committed, []byte("source commit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitOutput(t, src.AgentCwd, "add", "committed.txt")
+	gitOutput(t, src.AgentCwd, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "source work")
+	if err := os.WriteFile(filepath.Join(src.AgentCwd, "uncommitted.txt"), []byte("keep with source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api, _ := handoffWorktreeFixture(t, src)
+	child, err := api.Launch(handoffChildSpec(t, src, repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { killSpawnedShim(t, child) })
+	if head := gitOutput(t, child.AgentCwd, "rev-parse", "HEAD"); head != gitOutput(t, src.AgentCwd, "rev-parse", "HEAD") {
+		t.Fatal("child started from another checkout's commit")
+	}
+	if got, err := os.ReadFile(filepath.Join(child.AgentCwd, "committed.txt")); err != nil || string(got) != "source commit" {
+		t.Fatalf("child lost source commit: %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(child.AgentCwd, "uncommitted.txt")); !os.IsNotExist(err) {
+		t.Fatalf("child inherited uncommitted source work: %v", err)
 	}
 }
