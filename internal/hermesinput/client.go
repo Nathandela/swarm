@@ -48,7 +48,7 @@ func (e *Refusal) Error() string {
 	return fmt.Sprintf("Hermes native refusal %d: %s", e.Code, e.Message)
 }
 
-var errUncertain = errors.New("Hermes native submission outcome is uncertain; do not replay")
+var errUncertain = errors.New("hermes native submission outcome is uncertain; do not replay")
 
 func IsUncertain(err error) bool { return errors.Is(err, errUncertain) }
 
@@ -72,14 +72,14 @@ func privateNode(path string, kind os.FileMode) error {
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Uid != uint32(os.Getuid()) || info.Mode().Perm()&0077 != 0 || info.Mode().Type() != kind {
-		return fmt.Errorf("Hermes native path is not private: %s", path)
+		return fmt.Errorf("hermes native path is not private: %s", path)
 	}
 	return nil
 }
 
 func controlSocket(home string) (string, error) {
 	if !filepath.IsAbs(home) {
-		return "", errors.New("Hermes home must be absolute")
+		return "", errors.New("hermes home must be absolute")
 	}
 	if err := privateNode(home, os.ModeDir); err != nil {
 		return "", err
@@ -98,7 +98,7 @@ func controlSocket(home string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(f, 4097))
 	if err != nil || len(raw) > 4096 {
 		return "", errors.New("invalid Hermes control pointer")
@@ -122,7 +122,7 @@ func control(ctx context.Context, home, verb string, params any, result any) err
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(deadline)
 	}
@@ -141,7 +141,7 @@ func control(ctx context.Context, home, verb string, params any, result any) err
 		Result json.RawMessage `json:"result"`
 	}
 	if json.Unmarshal(raw, &reply) != nil || !reply.OK || reply.ID != 1 {
-		return errors.New("Hermes private bootstrap refused")
+		return errors.New("hermes private bootstrap refused")
 	}
 	return json.Unmarshal(reply.Result, result)
 }
@@ -150,16 +150,16 @@ func identify(ctx context.Context, b Binding) (endpoint, error) {
 	var e endpoint
 	start, err := procstart.StartTime(b.OwnerPID)
 	if err != nil || b.OwnerPID <= 0 || b.OwnerStartTime <= 0 || start != b.OwnerStartTime {
-		return e, errors.New("Hermes owner incarnation changed")
+		return e, errors.New("hermes owner incarnation changed")
 	}
 	if err := control(ctx, b.Home, "identify", map[string]any{}, &e); err != nil {
 		return e, err
 	}
 	if e.PID != b.OwnerPID || e.Protocol != 1 || e.State != "ready" || e.InstanceID == "" || e.Home != b.Home || (b.InstanceID != "" && e.InstanceID != b.InstanceID) {
-		return e, errors.New("Hermes native owner binding mismatch")
+		return e, errors.New("hermes native owner binding mismatch")
 	}
 	if len(e.Profiles) != 1 || e.Profiles[0].ID != b.Home || e.Profiles[0].Home != b.Home {
-		return e, errors.New("Hermes native owner serves another profile")
+		return e, errors.New("hermes native owner serves another profile")
 	}
 	return e, nil
 }
@@ -171,7 +171,7 @@ func connect(ctx context.Context, b Binding) (*websocket.Conn, error) {
 	}
 	u, err := url.Parse(e.Origin)
 	if err != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || net.ParseIP(u.Hostname()) == nil || !net.ParseIP(u.Hostname()).IsLoopback() {
-		return nil, errors.New("Hermes native origin is not loopback")
+		return nil, errors.New("hermes native origin is not loopback")
 	}
 	var grant struct {
 		Ticket     string `json:"ticket"`
@@ -183,7 +183,7 @@ func connect(ctx context.Context, b Binding) (*websocket.Conn, error) {
 		return nil, err
 	}
 	if grant.Ticket == "" || grant.ProfileID != b.Home || grant.InstanceID != e.InstanceID || grant.Protocol != 1 {
-		return nil, errors.New("Hermes native ticket binding mismatch")
+		return nil, errors.New("hermes native ticket binding mismatch")
 	}
 	u.Scheme = "ws"
 	u.Path = "/api/ws"
@@ -193,7 +193,7 @@ func connect(ctx context.Context, b Binding) (*websocket.Conn, error) {
 	}
 	if c.Subprotocol() != nativeProtocol {
 		_ = c.CloseNow()
-		return nil, errors.New("Hermes native protocol mismatch")
+		return nil, errors.New("hermes native protocol mismatch")
 	}
 	c.SetReadLimit(8 * 1024 * 1024)
 	return c, nil
@@ -234,13 +234,13 @@ func rpc(ctx context.Context, c *websocket.Conn, id int, method string, params a
 func Submit(ctx context.Context, b Binding, operationID, text string) (Receipt, error) {
 	var receipt Receipt
 	if b.SessionID == "" || b.InstanceID == "" || operationID == "" || text == "" {
-		return receipt, errors.New("Hermes submission requires exact owner, session, operation and text")
+		return receipt, errors.New("hermes submission requires exact owner, session, operation and text")
 	}
 	c, err := connect(ctx, b)
 	if err != nil {
 		return receipt, err
 	}
-	defer c.CloseNow()
+	defer func() { _ = c.CloseNow() }()
 	var resumed struct {
 		SessionID string `json:"session_id"`
 	}
@@ -248,7 +248,7 @@ func Submit(ctx context.Context, b Binding, operationID, text string) (Receipt, 
 		return receipt, err
 	}
 	if resumed.SessionID != b.SessionID {
-		return receipt, errors.New("Hermes resumed another native session")
+		return receipt, errors.New("hermes resumed another native session")
 	}
 	err = rpc(ctx, c, 2, "prompt.submit", map[string]string{"session_id": b.SessionID, "input_id": operationID, "text": text}, &receipt)
 	if err != nil {
@@ -258,7 +258,7 @@ func Submit(ctx context.Context, b Binding, operationID, text string) (Receipt, 
 		}
 		return receipt, fmt.Errorf("%w: %v", errUncertain, err)
 	}
-	if receipt.AdmissionID == "" || receipt.ExecutionGeneration <= 0 || (receipt.Status != "queued" && receipt.Status != "started" && receipt.Status != "terminal" && receipt.Status != "unknown") {
+	if receipt.AdmissionID == "" || receipt.ExecutionGeneration < 0 || receipt.AuthorityEpoch <= 0 || (receipt.Status != "queued" && receipt.Status != "started" && receipt.Status != "terminal") {
 		return Receipt{}, errUncertain
 	}
 	return receipt, nil

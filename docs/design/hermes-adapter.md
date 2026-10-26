@@ -12,6 +12,11 @@ process owner or wire protocol. Swarm's existing shim owns a PTY, Hermes's
 classic interactive CLI runs inside it, and the engine derives status from the
 emulated grid. The adapter remains a stateless strategy object under T-1.
 
+The separate [native message ingress qualification](../verification/discord-protocol/hermes-native-ingress.md)
+records stable v0.22.5 owned-gateway and multiclient TUI evidence. Its runtime
+primitives do not change the classic adapter below or establish daemon/shim,
+authentication, or Discord release acceptance by themselves.
+
 ## Frozen decisions
 
 1. Swarm drives `hermes chat --cli`, even when the user's Hermes environment or

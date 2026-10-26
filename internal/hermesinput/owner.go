@@ -61,13 +61,28 @@ func Environment(base []string, home string) []string {
 // that multiplexes other profiles and never adopts, replaces, or kills one.
 func Start(ctx context.Context, cfg OwnerConfig) (*Owner, error) {
 	if len(cfg.Argv) == 0 || cfg.Argv[0] == "" || !filepath.IsAbs(cfg.Home) || !filepath.IsAbs(cfg.Cwd) {
-		return nil, errors.New("Hermes owner requires argv and absolute home/cwd")
+		return nil, errors.New("hermes owner requires argv and absolute home/cwd")
 	}
 	if err := privateNode(cfg.Home, os.ModeDir); err != nil {
 		return nil, err
 	}
+	canonical, err := filepath.EvalSymlinks(cfg.Home)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Home = canonical
+	if filepath.Base(filepath.Dir(cfg.Home)) == "profiles" {
+		return nil, errors.New("hermes owned gateway requires an independent home, not a multiplexed profile")
+	}
+	profiles, err := os.ReadDir(filepath.Join(cfg.Home, "profiles"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if len(profiles) > 0 {
+		return nil, errors.New("hermes owned gateway home must contain no other profiles")
+	}
 	if _, err := os.Stat(filepath.Join(cfg.Home, "config.yaml")); err != nil {
-		return nil, fmt.Errorf("Hermes native home is not configured; use the native Hermes setup flow: %w", err)
+		return nil, fmt.Errorf("hermes native home is not configured; use the native Hermes setup flow: %w", err)
 	}
 	cmd := exec.Command(cfg.Argv[0], cfg.Argv[1:]...)
 	cmd.Dir = cfg.Cwd
@@ -86,7 +101,7 @@ func Start(ctx context.Context, cfg OwnerConfig) (*Owner, error) {
 	start, err := procstart.StartTime(cmd.Process.Pid)
 	if err != nil || start <= 0 {
 		o.Stop()
-		return nil, errors.New("Hermes native owner start identity unavailable")
+		return nil, errors.New("hermes native owner start identity unavailable")
 	}
 	o.Binding.OwnerStartTime = start
 	ready, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -102,28 +117,29 @@ func Start(ctx context.Context, cfg OwnerConfig) (*Owner, error) {
 		select {
 		case <-o.dead:
 			o.Stop()
-			return nil, errors.New("Hermes native owner exited before readiness")
+			return nil, errors.New("hermes native owner exited before readiness")
 		case <-ready.Done():
 			o.Stop()
-			return nil, fmt.Errorf("Hermes native owner not ready: %w", ready.Err())
+			return nil, fmt.Errorf("hermes native owner not ready: %w (%v)", ready.Err(), err)
 		case <-ticker.C:
 		}
 	}
 	c, err := connect(ready, o.Binding)
 	if err == nil {
-		defer c.CloseNow()
+		defer func() { _ = c.CloseNow() }()
 		var status struct {
 			Configured bool `json:"provider_configured"`
 		}
 		err = rpc(ready, c, 1, "setup.status", map[string]any{}, &status)
 		if err == nil && !status.Configured {
-			err = errors.New("Hermes native provider is not configured; use the native Hermes setup flow")
+			err = errors.New("hermes native provider is not configured; use the native Hermes setup flow")
 		}
 		if err == nil {
-			params := map[string]any{"request_id": cfg.RequestID, "source": "cli", "cwd": cfg.Cwd}
+			params := map[string]any{}
 			for key, value := range cfg.Launch {
 				params[key] = value
 			}
+			params["request_id"], params["source"], params["cwd"] = cfg.RequestID, "cli", cfg.Cwd
 			method := "session.create"
 			if cfg.ResumeID != "" {
 				method = "session.resume"
@@ -134,7 +150,7 @@ func Start(ctx context.Context, cfg OwnerConfig) (*Owner, error) {
 			}
 			err = rpc(ready, c, 2, method, params, &session)
 			if err == nil && session.ID == "" {
-				err = errors.New("Hermes native owner returned no session")
+				err = errors.New("hermes native owner returned no session")
 			}
 			if err == nil {
 				o.Binding.SessionID = session.ID
