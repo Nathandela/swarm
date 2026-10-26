@@ -25,7 +25,7 @@ var (
 	ErrNotFound = errors.New("discord: reference not found")
 	ErrInvalid  = errors.New("discord: invalid request or transition")
 )
-var bucketNames = []string{"requests", "events", "operations", "publications", "optouts", "meta"}
+var bucketNames = []string{"requests", "events", "operations", "publications", "optouts"}
 
 type Store struct{ db *bolt.DB }
 type requestRecord struct {
@@ -186,9 +186,6 @@ func putJSON(tx *bolt.Tx, bucket string, key []byte, value any) error {
 	}
 	used := 0
 	for _, name := range bucketNames {
-		if name == "meta" {
-			continue
-		}
 		if err := tx.Bucket([]byte(name)).ForEach(func(k, v []byte) error { used += len(k) + len(v); return nil }); err != nil {
 			return err
 		}
@@ -298,7 +295,14 @@ func (s *Store) Admit(input Request, now time.Time) (out Request, fresh bool, er
 	return
 }
 func (s *Store) Request(ref string, now time.Time) (out Request, err error) {
-	err = s.db.View(func(tx *bolt.Tx) error { r, e := activeRequest(tx, ref, now); out = r.Request; return e })
+	err = s.db.View(func(tx *bolt.Tx) error {
+		r, e := activeRequest(tx, ref, now)
+		if e != nil {
+			return e
+		}
+		out = r.Request
+		return nil
+	})
 	return
 }
 func (s *Store) IsOptedOut(target Target) (out bool, err error) {
@@ -550,6 +554,7 @@ func (s *Store) Prune(now time.Time) error {
 			unresolved := false
 			pubs := tx.Bucket([]byte("publications"))
 			var deleteKeys [][]byte
+			var clearBodies []Publication
 			if e := pubs.ForEach(func(k, v []byte) error {
 				var p Publication
 				if e := json.Unmarshal(v, &p); e != nil {
@@ -563,9 +568,7 @@ func (s *Store) Prune(now time.Time) error {
 					} else {
 						p.Body = ""
 						p.Chunks = nil
-						if e := putJSON(tx, "publications", k, p); e != nil {
-							return e
-						}
+						clearBodies = append(clearBodies, p)
 					}
 				}
 				return nil
@@ -576,6 +579,11 @@ func (s *Store) Prune(now time.Time) error {
 				continue
 			}
 			if now.Before(r.GuardUntil) {
+				for _, p := range clearBodies {
+					if e := putJSON(tx, "publications", publicationKey(p.RequestRef, p.ID), p); e != nil {
+						return e
+					}
+				}
 				r.Request.Text = ""
 				r.Request.Context = nil
 				if e := putJSON(tx, "requests", []byte(r.Request.Ref), r); e != nil {
