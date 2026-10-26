@@ -60,12 +60,14 @@ func TestSystemdLiteralPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`ExecStart="/bin/$${HOME}%% \"\\\\swarm" discord run --state-dir "/state/$${HOME}%% \"\\\\data"`, `StandardOutput=append:/logs/a %% "\b`, `StandardError=append:/logs/a %% "\b`} {
+	for _, want := range []string{`ExecStart=:"/bin/${HOME}%% \"\\\\swarm" discord run --state-dir "/state/${HOME}%% \"\\\\data"`, `StandardOutput=append:/logs/a %% "\b`, `StandardError=append:/logs/a %% "\b`} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("missing %q in %s", want, unit)
 		}
 	}
-	if _, err := RenderUnit("linux", "/bin/swarm", "/state", "/log/trailing "); err == nil {
-		t.Fatal("accepted trailing space in log path")
+	for _, log := range []string{"/log/trailing ", `/log/trailing\`} {
+		if _, err := RenderUnit("linux", "/bin/swarm", "/state", log); err == nil {
+			t.Fatalf("accepted log path %q", log)
+		}
 	}
 }
