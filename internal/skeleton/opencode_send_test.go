@@ -71,7 +71,7 @@ func newOpenCodeSendFixture(t *testing.T, configure ...func(*openCodeSendFixture
 	if f.d == nil {
 		f.d = assemble(t)
 	}
-	spec := daemon.LaunchSpec{AgentType: "opencode", RequiredRuntime: persist.RequiredRuntimeOpenCode, Argv: []string{fakeAgentBin, mustScript(t, "idle 60s\n")}, Cwd: t.TempDir(), OpenCodeEnv: []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}, Cols: 80, Rows: 24}
+	spec := daemon.LaunchSpec{AgentType: "opencode", RequiredRuntime: persist.RequiredRuntimeOpenCode, Argv: []string{fakeAgentBin, mustScript(t, "ask fixture-held\n")}, Cwd: t.TempDir(), OpenCodeEnv: []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}, Cols: 80, Rows: 24}
 	if f.initialNativeMode {
 		spec.InitialPrompt = "exact initial input"
 	}

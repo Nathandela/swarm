@@ -145,11 +145,14 @@
 <!-- ============ SCREENS ============ -->
 <section class="panel active" id="panel-screens">
   <h2>The screens <span class="live-badge">LIVE MOCKUP</span></h2>
-  <p class="lede">This mockup is interactive — click it, then drive it with your keyboard exactly as you will drive swarm.</p>
+  <p class="lede">This interactive prototype shows the original wide-screen flow. The terminal also has a responsive viewport, folded groups and touch actions, specified in the <a href="../specifications/mobile-terminal-touch-plan.md">mobile terminal interaction contract</a>.</p>
   <div class="kbd-hint">
     <kbd>↑</kbd><kbd>↓</kbd> navigate &nbsp; <kbd>⏎</kbd> attach &nbsp; <kbd>n</kbd> new session &nbsp; <kbd>x</kbd> kill / delete &nbsp; <kbd>q</kbd> detach (real app: <kbd>ctrl+q</kbd>) &nbsp; <kbd>esc</kbd> back
   </div>
   <div class="term" id="mockup" tabindex="0" aria-label="Interactive swarm mockup. Use arrow keys, enter, n, x, q and escape."></div>
+
+  <h3>Mobile terminal navigation</h3>
+  <p>On a narrow SSH terminal, names and attention take priority. Scroll the viewport independently from keyboard focus, tap group headers to fold, and use New/Open/More for existing actions. Folded groups remain keyboard stops; the pinned attention count and <kbd>g</kbd> reveal sessions waiting for you. Forms preserve native text selection and adapt to the height left by the software keyboard. The attached agent still owns its native interface.</p>
 
   <h3>Design intent</h3>
   <div class="cols">
@@ -315,8 +318,8 @@ stateDiagram-v2
   <details><summary>V — General view <span class="count">6 reqs</span></summary><div><ul>
     <li><b>V-1</b> Groups: Needs input / Working / Ready for review / Completed.</li>
     <li><b>V-2</b> Status events reflected ≤ 1 s, no user action.</li>
-    <li><b>V-3</b> Keyboard-only: ↑↓, ⏎ attach, esc back, ctrl+x kill (confirm), n new.</li>
-    <li><b>V-4</b> Row = agent, dir, status, elapsed, one-line summary.</li>
+    <li><b>V-3</b> Keyboard-complete: ↑↓/jk, ⏎ open/expand, esc back, ctrl+x kill (confirm), n new; ←→ fold, g attention, m More. An offscreen session action reveals its target first (ADR-035).</li>
+    <li><b>V-4</b> Wide row = agent, dir, status, elapsed, summary. Compact rows prioritize useful identity and actionable state (ADR-035).</li>
     <li><b>V-5</b> needs_input / review transitions surface an in-TUI notification.</li>
     <li><b>V-6</b> Claude Code minimalism; no mouse required.</li>
   </ul></div></details>

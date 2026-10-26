@@ -331,7 +331,7 @@ func (o optionsModel) view(width int) string {
 	b.WriteString(fieldLine("auto compact", compact, o.focus == optionsFocusAutoCompact))
 	threshold := o.contextGuard.threshold.text + "%"
 	if o.focus == optionsFocusThreshold {
-		threshold = o.contextGuard.threshold.cursorView() + "%"
+		threshold = (launchModel{width: width - 1}).focusedEditorValue("threshold", o.contextGuard.threshold) + "%"
 	}
 	b.WriteString(fieldLine("threshold", threshold, o.focus == optionsFocusThreshold))
 	if o.contextGuard.saving {

@@ -569,6 +569,7 @@ func TestDaemonLog_HardenedOnOpen(t *testing.T) {
 
 	dir := shortStateDir(t)
 	logPath := filepath.Join(dir, "daemon.log")
+	makeDiagnosticLogParentPrivate(t, logPath)
 	if err := os.WriteFile(logPath, []byte("pre-existing\n"), 0o644); err != nil {
 		t.Fatalf("plant wide-perm log: %v", err)
 	}

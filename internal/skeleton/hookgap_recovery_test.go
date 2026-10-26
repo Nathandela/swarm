@@ -39,9 +39,23 @@ func TestSocketBindUmasksPreserveOwnerDirectoryTraversal(t *testing.T) {
 	}
 }
 
+func shortSocketTestDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "sksock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove socket test directory: %v", err)
+		}
+	})
+	return dir
+}
+
 func TestHookDrainer_CrashAfterGapJournalBeforeCheckpointDoesNotDuplicateBoundary(t *testing.T) {
-	stateDir := t.TempDir()
-	sessionDir := t.TempDir()
+	stateDir := shortSocketTestDir(t)
+	sessionDir := shortSocketTestDir(t)
 	const sessionID = "s-gap-crash-window"
 	spoolPath := filepath.Join(sessionDir, shim.HookSpoolFile)
 	spool, err := shim.OpenHookSpool(spoolPath, 0)
@@ -95,8 +109,8 @@ func TestHookDrainer_CrashAfterGapJournalBeforeCheckpointDoesNotDuplicateBoundar
 }
 
 func TestHookDrainer_GapDedupeUsesPersistedInstanceWithoutCapabilityRecord(t *testing.T) {
-	stateDir := t.TempDir()
-	sessionDir := t.TempDir()
+	stateDir := shortSocketTestDir(t)
+	sessionDir := shortSocketTestDir(t)
 	const sessionID = "s-gap-instance-without-capability"
 	spoolPath := filepath.Join(sessionDir, shim.HookSpoolFile)
 	spool, err := shim.OpenHookSpool(spoolPath, 0)
@@ -158,8 +172,8 @@ func TestHookDrainer_GapDedupeUsesPersistedInstanceWithoutCapabilityRecord(t *te
 }
 
 func TestHookDrainer_SameNumericBoundaryInFreshSpoolIncarnationEmitsAgain(t *testing.T) {
-	stateDir := t.TempDir()
-	sessionDir := t.TempDir()
+	stateDir := shortSocketTestDir(t)
+	sessionDir := shortSocketTestDir(t)
 	const sessionID = "s-gap-fresh-spool"
 	spoolPath := filepath.Join(sessionDir, shim.HookSpoolFile)
 	cursorPath := filepath.Join(sessionDir, "hook.fold")
@@ -221,8 +235,8 @@ func TestHookDrainer_SameNumericBoundaryInFreshSpoolIncarnationEmitsAgain(t *tes
 }
 
 func TestHookDrainer_DecimalCheckpointMigratesWithAnAdoptedLegacySpool(t *testing.T) {
-	stateDir := t.TempDir()
-	sessionDir := t.TempDir()
+	stateDir := shortSocketTestDir(t)
+	sessionDir := shortSocketTestDir(t)
 	const sessionID = "s-gap-legacy-migrate"
 	spoolPath := filepath.Join(sessionDir, shim.HookSpoolFile)
 	cursorPath := filepath.Join(sessionDir, "hook.fold")
@@ -290,8 +304,8 @@ func TestHookDrainer_DecimalCheckpointMigratesWithAnAdoptedLegacySpool(t *testin
 }
 
 func TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents(t *testing.T) {
-	stateDir := t.TempDir()
-	sessionDir := t.TempDir()
+	stateDir := shortSocketTestDir(t)
+	sessionDir := shortSocketTestDir(t)
 	const sessionID, token = "s-gap-recover", "tok-gap-recover"
 
 	h := startHookShim(t, sessionDir, sessionID)
@@ -388,8 +402,8 @@ func TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents(t *testing.T) {
 }
 
 func TestRunHookDrain_ContinuesAfterRecoverableGap(t *testing.T) {
-	stateDir := t.TempDir()
-	sessionDir := t.TempDir()
+	stateDir := shortSocketTestDir(t)
+	sessionDir := shortSocketTestDir(t)
 	const sessionID, token = "s-gap-loop", "tok-gap-loop"
 
 	h := startHookShim(t, sessionDir, sessionID)
@@ -455,8 +469,8 @@ func TestRunHookDrain_ContinuesAfterRecoverableGap(t *testing.T) {
 }
 
 func TestHookDrainer_FinalDrainRecoversRetainedSideWithNoLiveSocket(t *testing.T) {
-	stateDir := t.TempDir()
-	sessionDir := t.TempDir()
+	stateDir := shortSocketTestDir(t)
+	sessionDir := shortSocketTestDir(t)
 	const sessionID, token = "s-gap-final", "tok-gap-final"
 
 	h := startHookShim(t, sessionDir, sessionID)

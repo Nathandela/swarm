@@ -28,6 +28,9 @@ func TestInputEmbargoBlocksEveryUserInputPlaneUntilDurableRelease(t *testing.T) 
 	if n, err := p.WriteInput([]byte("typed")); n != 0 || !errors.Is(err, errLoginSwitching) {
 		t.Fatal("raw input escaped embargo")
 	}
+	if n, err := p.WritePaste([]byte("pasted")); n != 0 || !errors.Is(err, errLoginSwitching) {
+		t.Fatal("pasted input escaped embargo")
+	}
 	if n, err := p.WriteControl([]byte("control")); n != 0 || !errors.Is(err, errLoginSwitching) {
 		t.Fatal("control input escaped embargo")
 	}

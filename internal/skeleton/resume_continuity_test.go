@@ -88,7 +88,7 @@ func continuityAPI(t *testing.T, metas ...persist.Meta) *coreAPI {
 
 func continuityAPIWithConfig(t *testing.T, configure func(*daemon.Config), metas ...persist.Meta) *coreAPI {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "sw-cont-")
+	dir, err := os.MkdirTemp("", "sw-cont-")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,6 +31,7 @@ import (
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/testbin"
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
@@ -67,11 +68,7 @@ type codexExecutionRig struct {
 // metadata proof; this fixture does not claim native provider qualification.
 func newCodexExecutionRig(t *testing.T, conversation string, fresh bool) *codexExecutionRig {
 	t.Helper()
-	tempRoot := "/tmp"
-	if runtime.GOOS == "darwin" {
-		tempRoot = "/private/tmp"
-	}
-	root, err := os.MkdirTemp(tempRoot, "swce-")
+	root, err := os.MkdirTemp("", "swce-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +80,9 @@ func newCodexExecutionRig(t *testing.T, conversation string, fresh bool) *codexE
 	const local = "native"
 	instance := "owned-instance"
 	executable := filepath.Join(root, "codex-fixture")
+	if err = testbin.RegisterExecutable(executable); err != nil {
+		t.Fatal(err)
+	}
 	source, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

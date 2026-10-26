@@ -20,10 +20,13 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Metadata disclosure](operations/metadata-disclosure.md) — the register of who observes what: the relay operator, the push provider, the gateway, a network observer, and (§5) a second model vendor, the one entry that receives session content rather than metadata (PB-OPS-3)
 - [Physical-handset gate](operations/physical-handset-gate.md) — **every step UNRUN**: the playbook 11.2 matrix as 95 executable PH-* rows (rewritten 2026-08-15 for gateway push, multi-machine, presets)
 - [Agent CLI refresh](ops/cli-session-refresh.md) — idle-session refresh after installed Claude/Codex upgrades, recovery, and operator controls
+- [Clean Swarm-owned storage](ops/storage-clean.md) — preview or explicitly apply cleanup of the diagnostic log and certified stopped hook prefixes
 - [CLI refresh implementation plan](specifications/cli-session-refresh-plan.md) — reviewed lifecycle, observation limits, and acceptance criteria
 - [Auto-upgrade runbook](ops/auto-upgrade.md) — the nightly `launchd` timer that upgrades the owner's machine and converges the daemon/gateway onto it, or touches nothing (ADR-020)
 
 ## The plan
+
+- [Mobile terminal dashboard interaction plan](specifications/mobile-terminal-touch-plan.md) — implemented SSH-terminal viewport, compact layout, folding and touch actions; [local verification and independent reviews](verification/mobile-terminal-touch/implementation.md), with actual handset qualification still open
 
 - [OpenCode maturity implementation plan](specifications/opencode-maturity-plan.md) — dependency-ordered native lifecycle, observation, semantic messaging, controls, continuity, model selection and release qualification, reviewed through Swarm by DeepSeek and GLM
 - [OpenCode minimum version and deployment status](verification/opencode-minimum-version-2026-10-19.md) — stable >=1.19.3 admission, connected checks, actual native recovery and sustained qualification boundaries
@@ -39,6 +42,8 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Private mobile repository decision](research/mobile-private-repository.md) — source-access/IP benefits, APK/history limits, split/CI costs and release-continuity gates
 - [Lightweight storage strategies](research/swarm-lightweight-storage-strategies.md) — native history ownership, bounded caches, workspace growth, quota boundaries, and recovery trade-offs; research, not an implementation decision
 - [Disk growth audit 2026-10-24](research/disk-growth-audit-2026-10-24.md) — fresh Mac/VM measurements, tested growth mechanisms, independent Astra challenges and storage architecture tradeoffs; no production cleanup
+- [Storage lifecycle implementation contract](specifications/storage-lifecycle-plan.md) — Sol/Astra-reviewed warning-only accounting, diagnostic retention, safe hook/handoff cleanup and test supervision; [implementation evidence](verification/storage-lifecycle.md)
+- [Manual storage cleanup evidence](verification/storage-clean.md) — preview-first CLI source and current partial macOS/Linux qualification status
 - [Lightweight storage fixing plan](specifications/lightweight-storage-plan.md) — owner-selected live-only supervisor, workspace boundaries, deletion, legacy cleanup, and two-host acceptance
 
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
@@ -79,6 +84,9 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
 
 ## Process traces
+- [Felix fix patch v0.23.1](verification/felix-v0231-integration.md) — failed-turn input, bracketed paste, journal write protection and durable isolated handoffs; integration choices, negative controls and release evidence
+- [Responsive terminal v0.23.0 release](verification/mobile-terminal-v0230-release.md) — signed publication and verified Mac/VM installation; busy daemon convergence and actual handset qualification remain open
+- [Storage patch v0.22.1 rollout](verification/storage-v0221-release.md) — signed publication and verified two-host installation; active-session daemon convergence deferred
 - [Cleanup follow-up](verification/cleanup-followup-2026-10-21/README.md) — documentation reconciliation, platform custody/contracts, Android read ownership, audit retention and explicit phone recovery
 - [Repository tightening audit and verification](verification/repository-tightening-2026-10-21/audit.md) — ten Luna audit/implementation/review lanes, confirmed fixes, retired Android code, complete shortcut ledger, and remaining platform/policy debt
 - [OpenCode strategy model reviews](verification/opencode-plan-review-2026-10-18.md) — actual DeepSeek V4.1 Flash and GLM-5.3 Flash critiques, two-round observations, selected evidence, native API runtime qualification and model selector verification
@@ -90,6 +98,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Storage cleanup inventory](verification/storage-cleanup-inventory.md) — measured Mac/VM state, live-writer limits, missing recovery destination, and explicit cleanup boundaries
 - [Discussion deletion](verification/discussion-deletion.md) — remove retained attempts and owned worktrees, retry failed cleanup, and preserve lifecycle ordering
 - [Provider login qualification](verification/provider-logins.md) — native feasibility evidence and open integrated release gates
+- [Bracketed-paste message framing](verification/adr010/amendment9-red.md) — why `swarm send` text did not submit in codex, the real-CLI measurements, and the TDD record for ADR-010 Amendment 9
 - [Codex minimum version and migration readiness](verification/codex-minimum-version.md) — forward version admission, installed native sign-in checks and current bulk-migration limits
 - [Phase A verification](verification/phase-a.md) — Codex model scan, backend/shim resilience, resume history and journal retention (v0.17.8)
 - [v0.17.9 verification](verification/v0179.md) — CLI refresh retry bounds, board elapsed, SubagentStop ordering and status persist retry

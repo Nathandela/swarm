@@ -71,7 +71,7 @@ type daemonEnv struct {
 
 func newDaemonEnv(t *testing.T) daemonEnv {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "swe")
+	dir, err := os.MkdirTemp("", "swe")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

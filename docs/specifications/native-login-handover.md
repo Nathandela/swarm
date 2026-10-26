@@ -563,8 +563,10 @@ fence at admission and a final check under the existing lifecycle/input locks.
 Begin qualification with the recorded pending-question counterexample requiring
 zero stop and zero successor construction. Native background actor completeness,
 normal workflow/command/MCP behavior, and the managed chat interface remain
-separate acceptance gates; the owner authorized exploration, not conversion of
-existing sessions or replacement of the default terminal interface.
+separate acceptance gates. On 2026-10-26 the owner explicitly approved
+implementing a new opt-in Swarm chat for new Claude sessions only. This does
+not authorize converting existing sessions or replacing the default
+native-terminal interface.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It
@@ -574,6 +576,37 @@ If no better candidate exists, retain usable capacity and fall back to confirmed
 quota handling. Bounded retries and a visible all-exhausted state avoid loops.
 No per-discussion routing policy, balancing score, inference proxy or custom
 OAuth implementation is part of the initial design.
+
+## Opt-in Claude chat implementation
+
+**Accepted plan; implementation not started and runtime not active.** New Claude
+sessions will be able to choose **Swarm chat (experimental)** through the launch
+form or `swarm spawn --interface swarm-chat`. Ordinary launches remain native
+terminal sessions; existing sessions are unchanged. Initially refuse resume,
+handoff/import, remote/preset use, unsupported runtimes and platforms. Persist an
+exact `claude-chat` runtime discriminator so old readers fail closed.
+
+Use one shim-owned structured Claude primary. Reuse selected-login admission,
+profile custody, the authenticated shim connection, composer lane, operation
+journal, hook spool, execution record, native request/decision handlers and
+anchored transcript history. Do not create a Codex-style backend or a second
+transcript store. Native request decisions require their own positive replay and
+correlation gates; unsupported requests stay visible and unanswered.
+
+Deliver the connected exits test-first. **A** proves fresh launch through shim,
+owner protocol, one message/echo/result, history, and authenticated Stop/cleanup;
+negative origin, identity, write, storage and overflow cases must still allow
+Stop. Root qualifies the exact native user-UUID echo and finite flow before
+enabling it. **B** adds request-bound decisions only after separate native
+decision-replay and question-answer-correlation gates. **C** adds known actor
+retention, bounded history, reconnect and restart through the same shim; unknown
+workflow activity remains incomplete. Sol and Luna own their reviewed seams;
+Astra reviews each package and Root runs serial RED/GREEN and quality gates.
+
+Automatic recovery/continuation and workflow completeness remain excluded at
+every exit and require separate positive native gates. Qualify Linux Claude
+2.1.310 first and macOS separately. Existing native feasibility evidence does
+not qualify this connected implementation or activate the runtime.
 
 ## Implementation phases and exit contracts
 

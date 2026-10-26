@@ -1,0 +1,61 @@
+Root integration TDD and visual review — 2026-10-25
+Baseline for independent frame RED: e93c1fb3 (forms + redraw, before board).
+
+go test ./internal/tui -run '^TestMobileFrames/(board|fold|more)' -count=1
+RED 6.058s: compact boards lacked Login API; folded frame lacked Expand; More absent.
+After reviewed board integration, all six meaningful-context frame assertions passed.
+Six plain-text goldens retained under internal/tui/testdata/TestMobileFrames.
+
+go test ./internal/tui -run '^TestMobileFrames/(prompt|confirm)' -count=1
+RED 3.057s: 40x8 prompt footer hid enter launch; 32x8 confirmation hid esc cancel.
+Root fix prioritizes escape/submit in narrow form hints, preserves fitting wide hints,
+and avoids repeated titles/unrelated board rows in compact decision frames.
+Frame suite GREEN 2.868s before final confirmation whitespace cleanup.
+
+go test ./internal/tui -run '^TestStyleHoistPinnedOutput$' -count=1
+RED 2.836s after integration: five pins differed ONLY by deleted trailing SGR nonce;
+one confirmation pin additionally gained inspected Session/Agent/ID/Directory context.
+Repinned exact expected outputs; did not normalize actual output or relax palette checks.
+
+go test ./internal/tui -run '^Test(MobileFrames|StyleHoistPinnedOutput|ResponsiveForms|MobileBoard|Apply_)' -count=1
+GREEN 3.102s (shared integration; final repository qualification recorded separately).
+
+Merge conflict in updateGeneral kept BOTH captured More routing and safe n cancellation
+while disconnected. Root View keeps composeActiveForm before boardView; input guards,
+nonce removal and visible-working animation policy all retained.
+These are local render/model checks, not SSH or physical handset qualification.
+
+Fresh whole-feature audit corrections
+Root regressions RUN RED2.435s: vanished status/tag header viewport/focus and hidden
+pairing/confirmation Working timers. Sol46ec2094 resolves moves before mutation;
+root shouldAnimateWorking now excludes active form overlays. The duplicate root
+anchor test was consolidated into TestMobileBoardVanishedHeaderKeepsOldOrderNeighbor.
+Sol475f0a77 fixes wrapped resume results across reconnect generations; command-to-result
+RED/GREEN evidence is in forms-tdd.txt. Luna lint corrections are in lint-tdd.txt.
+Combined corrected targeted suite GREEN5.207s with GOMAXPROCS=2, go test -p2.
+
+Final authoritative focus correction
+Fresh Astra found removed focused header/session plus preceding rows selected c/18
+instead of next surviving old-order c/0. Root regression RED2.523s (session path);
+Astra separately reproduced header path. Shared survivingFocus now resolves navigation
+identity before reconcile/apply loops, alongside viewport identity. No-survivor
+rosters start at first new target. Focus/reconnect/board/allocation suite GREEN9.624s.
+The same run exposed hydrated-banner raw-output polling assuming full repaint;
+reconnect_test now reconstructs the terminal with the existing VT emulator and
+asserts exact visible banner plus expiry, preserving the acceptance requirement.
+
+An initial whole-repo run was intentionally interrupted for this final correction.
+Its CLI fixture failures were due to the host default /tmp symlink; all7 affected
+CLI-refresh/native-statusline tests pass unchanged with canonical TMPDIR=/private/tmp
+(1.784s). Final broad gates use a canonical task-private temporary root and normal
+per-package supervision. Production path validation was not changed.
+
+Broad TUI compatibility assertions
+The full normal suite found two obsolete UI expectations after the approved contract
+changes. TestRefreshAgents_OptionFocusClampsToDirectory used an unchanged schema; it
+now removes the focused option key, retains a different option at that index, and
+asserts fallback directory typing. Retained keys remain covered by semantic-focus tests.
+The confirmation footer version test now asserts the explicit y/ctrl+x and n/esc
+keys plus right-edge version alignment, matching the inspected frame.
+Entire TUI suite GREEN60.473s after these test-only corrections; targeted schema
+refresh/fallback suite GREEN2.653s. Production Go code is unchanged from08dbb10f.

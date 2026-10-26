@@ -1,0 +1,66 @@
+Forms slice TDD — 2026-10-25
+Baseline: 4b275c0a; branch feat/mobile-touch-forms.
+
+RED (before implementation)
+go test ./internal/tui -run '^TestResponsiveForms' -count=1
+FAIL TestResponsiveFormsFocusAndError: 40x8 clipped prompt, cursor draft and error.
+FAIL TestResponsiveFormsSelectedProvider: selected OpenCode absent from compact picker.
+FAIL TestResponsiveFormsSchemaKeepsOptionFocus: async schema insertion reset focus to 0.
+FAIL TestResponsiveFormsTooSmallBlocksMutationButAllowsCancel: 1x1/1x2/2x3/31x8/32x7 initiated launch; tiny frames overflowed.
+FAIL TestResponsiveFormsLongPairingRequiresVisibleStop: y approved hidden long SAS context.
+Package runtime: 2.449s (supervisor included).
+
+Additional RED (before busy-resume fix)
+go test ./internal/tui -run '^TestResponsiveFormsBusyResume' -count=1
+FAIL TestResponsiveFormsBusyResumeEscapeAndAcceptedResult: busy resume trapped Escape.
+Package runtime: 2.149s (supervisor included).
+
+GREEN
+go test ./internal/tui -run 'Test(ResponsiveForms|Launch|Resume|Handoff|Options|Logins|Rename|Tag|Confirm|TUI_Pairing|Golden|LineEditor|Paste|MouseCapture|BoardMouseCapture)' -count=1
+PASS; package runtime 7.793s (supervisor included).
+go test ./internal/tui -run '^TestResponsiveForms' -count=1
+PASS; package runtime 2.479s (supervisor included), including final production-provider schemas and long handoff warning/disclosure tests.
+
+Contract/evidence
+- Existing wide form and inline-row assertions retained; no frozen tests weakened.
+- Every production provider's last launch option is visible at32x8.
+- Geometry matrix includes24x4,32x8,36x12,40x18,48x24,72x12,90x16,80x24,120x40 and below-minimum1x1,1x2,2x3; threshold31/32/33 columns and7/8/9 rows.
+- Drafts/rune cursors survive resize, semantic option focus survives schema insertion.
+- Pairing, launch/resume/handoff, options, account c/d/s/activation and inline save/secondCtrlX/y obey size guards.
+- Long context pins target/action and field; explicit confirmation stop follows scrollable text. Ordinary editor Home/End and field Up/Down remain native; PageUp/PageDown read long context. Modal decisions additionally allowUp/Down/Tab/Home/End.
+- Cancellation/deny works below minimum; disconnected pairing deny is retained. Reopening a decision cannot inherit old confirmation focus.
+- Accepted asynchronous resume success still autoattaches after shrinking and leaving its busy form.
+- Capture policy and raw attach implementation unchanged.
+
+Limits
+Focused package suites only here; root integration owns repository-wide build/vet/lint/test/race gates and independent review. No actual phones, SSH clients, native selection/paste trials or deployment were exercised. Desktop model tests do not establish handset compatibility.
+
+Astra review correction — 2026-10-25
+RED before correction:
+go test ./internal/tui -run '^TestResponsiveForms(PairingRejectsModifiedApprovalKeys|DisconnectPreservesDeny|CapturedAgentInspectable)$' -count=1
+FAIL PairingRejectsModifiedApprovalKeys: [31 8] ctrl+y approved with Code:y/ModCtrl/Textempty.
+FAIL DisconnectPreservesDeny: pending inline confirmation swallowed n after disconnect.
+FAIL CapturedAgentInspectable: Agent absent from compact inline/resume/handoff context.
+Package runtime2.880s (supervisor included).
+
+Correction: one strict unmodified printable-y/Enter predicate shared by pairing guard and approval handler; pending n allowed through only the disconnected confirmation routes; full session context now includes Agent at every caller.
+Additional cases cover Ctrl/Alt+y and Ctrl/Alt+Enter at31x8,32x8,120x40 before/after the confirmation stop; n/Escape after disconnect at31x8/32x8; agent/name/ID/directory inspectability in inline/resume/handoff.
+
+GREEN after correction:
+go test ./internal/tui -run 'Test(ResponsiveForms|Launch|Resume|Handoff|Options|Logins|Rename|Tag|Confirm|TUI_Pairing|Golden|LineEditor|Paste|MouseCapture|BoardMouseCapture)' -count=1
+PASS; package runtime7.931s (supervisor included). No frozen tests changed.
+
+Whole-feature Astra resume-generation correction — 2026-10-25
+RED before correction:
+GOMAXPROCS=2 go test -p 2 ./internal/tui -run '^TestResumeGeneration' -count=1
+FAIL CurrentSuccessAutoattaches: normal and relocation commands at connection generation2 returned nested generation0; valid completions did not attach, including shrink-to1x1 and leaving an accepted busy relocation.
+FAIL StaleResultCannotReplaceCurrentScreen: an old failure replaced current Options with relocation.
+FAIL CurrentFailureStillOffersRelocation: nested generation0 instead of current2.
+Package runtime2.257s (test supervisor included).
+
+Correction: clientResultGeneration recognizes resumeResultMsg's nested launch generation, stampClientResults stamps it, and accepted success dispatches through the already-checked update path so the one completion increments roster revision once. No protocol or wire changes.
+Tests execute the actual returned command before delivering its result. They cover current generation2 normal/relocation success, accepted shrink/leave completion without duplicate launch, stale old success/failure preserving current Options draft, and current failure retaining relocation recovery.
+
+GREEN after correction:
+GOMAXPROCS=2 go test -p 2 ./internal/tui -run 'Test(Resume|ResponsiveForms|Reconnect_OldMutationRepliesCannotChangeTheRecoveredView)' -count=1
+PASS; package runtime2.779s (test supervisor included). Shared default caches retained; no broad performance or repository gates started in this correction lane.

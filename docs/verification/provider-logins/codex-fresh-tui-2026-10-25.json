@@ -1,7 +1,7 @@
 {
   "date": "2026-10-25",
-  "scope": "Eighteen unqualified full constructor attempts, two seed controls, one failed preparation and one unused duplicate preparation; synthetic grants only, no live account or installation changes.",
-  "overall": "Still NOT QUALIFIED. V25 rejected an unidentified provider POST; V26 stopped at seed setup. V27 preparation refused a changed installed image before any unit ran. No result supplies current merged-source native ownership or account-adoption proof.",
+  "scope": "Pinned constructor and synthetic seed controls, including failed or unused preparations. attempt_counts is the count source of truth; no live account or installation changes.",
+  "overall": "Current native constructor remains NOT QUALIFIED. The pure seed prerequisite passed for frozen helper321662; earlier native/seed/preparation failures remain preserved. No current merged-source or installed0.164 adoption proof follows.",
   "pins": {
     "manifest_sha256": "3da43ef7b342854243542a26c9c318ce29f2d55e5b2512af187e1a8acd562d14",
     "source_map_sha256": "5d7aa36378822cccf0f7905957b658da416e34540acd8076ccbd3c7b32acd305",
@@ -1411,16 +1411,25 @@
         "scope": "One read-only stopped-root observation; no native process, Store.Open, lock or remote write.",
         "interpretation": "Later visible bootstrap progress than V16: two registry entries and ordinary native config exist. No config-write return, entered/blocked migration call, durability or contention/I/O cause is established."
       }
+    },
+    {
+      "id": "pure-seed-V4",
+      "kind": "seed-only",
+      "result": "PASS for the frozen synthetic seed boundary only; no provider/merged-source qualification.",
+      "record": {
+        "path": "docs/verification/provider-logins/codex-pure-seed-2026-10-26.json",
+        "sha256": "2d951a58b217cff1920dbc100064ce2fe7088d1d6cfc78872e415ed459c73469"
+      }
     }
   ],
-  "next_step": "Review separate seed-only input preparation with no provider executable dependency. Native0.164 and merged-main qualification remain separate open gates.",
+  "next_step": "Complete current-main integration and gates, then review fresh merged-source/helper and installed-client qualification. No automatic full native run follows the pure seed pass.",
   "limits": [
     "V9 supplemental post-cleanup did not repair its original run. V10 likewise lacks complete final ownership proof despite 22 observed identities ended and endpoint no-listener/alias-removed evidence.",
     "V10 post-stop key absence corroborates the fixture proxy/CA transport mismatch only; post-stop state is not historical live-process proof and does not show an outgoing provider request or identify a specific auth failure.",
     "V14 establishes TLS-protected HTTP reach only. The target and native client are unidentified, no GET was recorded, and native ownership/conversation behavior remain unqualified; no production filtering or route allowance is implied.",
     "V15 recovers exact public target tokens but not the historical caller. Its intentional rejection provides no accepted GET/auth/adoption/model/MCP/complete ownership proof. Later exact-featured-route preparation did not qualify behavior; V16 timed out during seed before route reach. Scoped cached-ELF retirement does not repair failures.",
     "V16 driver seed timed out at3seconds; the blocking operation is unknown. No inference from five identities or absence of copied files to a specific seed lock, filesystem operation or native request is justified.",
-    "Thirteen full constructor attempts plus two seed-only controls remain unqualified; one failed preparation is separate. V17 does not establish auth, adoption, readiness, or a production cause; its two unexpected-query errors have only one diagnostic record.",
+    "V17 does not establish auth, adoption, readiness, or a production cause; its two unexpected-query errors have only one diagnostic record.",
     "V16 post-stop registry projection is a 373-byte synthetic public metadata snapshot (schema 1, revision 1, one visible login); it is not evidence of a stalled call.",
     "V18 recorded metadata GETs and a synthetic ordinary usage response, then failed at the CONNECT rejection. Its constant error does not distinguish a different target from a nested CONNECT. The target and producer remain unknown.",
     "Six admitted connections are not six proven TLS handshakes. Both unattributed image-gap identities remain ineligible for required-role claims; complete native ownership and fixture-listener proof remain absent. Source-plan pins do not permit another CONNECT authority or qualify account adoption."
@@ -1479,13 +1488,13 @@
   },
   "attempt_counts": {
     "full_constructor_attempts": 19,
-    "seed_only_controls": 3,
+    "seed_only_controls": 4,
     "failed_preparations": 2,
     "unused_successful_preparations": 1,
-    "total_recorded_operations": 25,
-    "count_scope": "Recorded constructor/seed/preparation evidence only; cleanup operations are separate.",
-    "latest_actual_attempt": "diagnostic-V26-seed",
-    "latest_recorded_operation": "preparation-V27"
+    "total_recorded_operations": 26,
+    "count_scope": "Actual constructor/seed operations plus failed/unused preparations; successful inputs used by a test count with that test. Cleanup is separate.",
+    "latest_actual_attempt": "pure-seed-V4",
+    "latest_recorded_operation": "pure-seed-V4"
   },
   "retirement_batch2_reference": {
     "path": "docs/verification/provider-logins/native-fixture-retirement-batch2-2026-10-25.json",

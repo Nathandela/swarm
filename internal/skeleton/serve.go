@@ -948,7 +948,7 @@ func (d *Daemon) endSession(id string) {
 	// never nested (no deadlock). Uses the Final variant (not captureConversationID):
 	// this call always sees an already-terminal status, so the tap path's
 	// Running-gate would silently no-op it every time (HIGH regression, C2 review).
-	d.stopHookDrain(id) // the session's spool has no more producer (hookdrainloop.go)
+	d.stopHookDrain(id) // final authenticated fold, then proven-quiescent prefix retirement
 	if err := d.forgetDirectInput(id); err != nil {
 		log.Printf("skeleton: retire direct-input marker for %s: %v", id, err)
 	}
@@ -1022,6 +1022,7 @@ func (d *Daemon) tapGrids(ctx context.Context) {
 // (C1), dispatched in its own per-session goroutine so a slow disk read for one
 // session cannot delay reaching the next (R2.1.2).
 func (d *Daemon) tapOnce(ctx context.Context) {
+	d.retryHookRetirements()
 	for _, m := range d.core.List() {
 		if m.Status.Process != status.ProcessRunning {
 			continue
@@ -1515,6 +1516,11 @@ func EndpointIDForStateDir(stateDir string) string { return endpointID(stateDir)
 func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 	if spec.Options[protocol.OptionWorktree] != "true" {
 		return "", nil
+	}
+	if isAgentHandoffLaunch(spec) {
+		if err := refuseTemporaryHandoffWorktree(spec); err != nil {
+			return "", err
+		}
 	}
 	return worktree.Create(spec.Cwd, id, spec.Name)
 }

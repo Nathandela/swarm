@@ -26,6 +26,8 @@ cat >"$handoff_file" <<'SWARM_HANDOFF_CONTEXT'
 SWARM_HANDOFF_CONTEXT
 ```
 
+If this checkout is a git repository, the receiving agent starts in a new git worktree at its current commit, so only committed work reaches it. Commit what it needs before launching, and name any changes you leave uncommitted in the document.
+
 Re-read the document and correct omissions before launching. Then run exactly:
 
 ```sh

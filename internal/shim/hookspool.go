@@ -148,14 +148,17 @@ var testHookAfterHookSpoolCreate func()
 // green, because a second in-process handle reads the record straight back through the
 // page cache. Ordering was never the defect -- unobservability was.
 var hookSpoolSync = func(f *os.File) error { return f.Sync() }
+var hookCompactSync = func(f *os.File) error { return f.Sync() }
+var testHookBeforeCompactRename func()
 
 // HookSpool is one session's durable hook-event log: unexported fields, opened over
 // one file. Every method is safe for concurrent use.
 type HookSpool struct {
-	mu       sync.Mutex
-	path     string
-	f        *os.File
-	maxBytes int
+	readLimit int64 // Nonzero only for bounded stopped cleanup.
+	mu        sync.Mutex
+	path      string
+	f         *os.File
+	maxBytes  int
 	// size is the byte offset through which the file is known-clean. Append always
 	// writes starting here (never at the file's raw physical EOF), so a torn tail --
 	// however it got there -- is never written past.
@@ -173,6 +176,9 @@ type HookSpool struct {
 	// pre-identity spool, so a decimal legacy gap checkpoint can be migrated once.
 	incarnation   string
 	adoptedLegacy bool
+	created       bool
+	producerLock  *os.File
+	producerProof *hookProducerProof
 }
 
 // OpenHookSpool opens (or creates, at 0600) the spool file at path -- and its parent
@@ -183,14 +189,20 @@ type HookSpool struct {
 // monotonic and a caller's pre-restart cursor is still recognized, never silently
 // treated as belonging to a brand new sequence space.
 func OpenHookSpool(path string, maxBytes int) (*HookSpool, error) {
+	return openHookSpool(path, maxBytes, false)
+}
+
+func openHookSpool(path string, maxBytes int, stopped bool) (*HookSpool, error) {
 	if maxBytes <= 0 {
 		maxBytes = hookSpoolDefaultMaxBytes
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("shim: hook spool dir: %w", err)
+	if !stopped {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("shim: hook spool dir: %w", err)
+		}
 	}
-	openLock, err := acquireHookSpoolOpenLock(path)
+	openLock, err := acquireHookSpoolOpenLock(path, stopped)
 	if err != nil {
 		return nil, err
 	}
@@ -202,10 +214,13 @@ func OpenHookSpool(path string, maxBytes int) (*HookSpool, error) {
 	// the answer between Stat and OpenFile. Under the per-path flock there is one
 	// decision. A missing path commits the new floor/identity first, then publishes
 	// the empty spool with O_EXCL.
-	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	f, err := openHookOwnedFile(path, os.O_RDWR)
 	created := false
 	var identity hookSpoolIdentity
 	if errors.Is(err, os.ErrNotExist) {
+		if stopped {
+			return nil, err
+		}
 		fresh, ferr := mintHookSpoolIncarnation()
 		if ferr != nil {
 			return nil, fmt.Errorf("shim: mint hook spool incarnation: %w", ferr)
@@ -238,6 +253,10 @@ func OpenHookSpool(path string, maxBytes int) (*HookSpool, error) {
 	} else {
 		identity, err = readHookSpoolIdentity(path)
 		if errors.Is(err, os.ErrNotExist) {
+			if stopped {
+				_ = f.Close()
+				return nil, err
+			}
 			fresh, ferr := mintHookSpoolIncarnation()
 			if ferr != nil {
 				_ = f.Close()
@@ -259,8 +278,10 @@ func OpenHookSpool(path string, maxBytes int) (*HookSpool, error) {
 			_ = f.Close()
 		}
 	}()
-	if err := f.Chmod(0o600); err != nil { // re-tighten regardless of umask or a pre-existing mode
-		return nil, fmt.Errorf("shim: chmod hook spool: %w", err)
+	if !stopped {
+		if err := f.Chmod(0o600); err != nil { // re-tighten regardless of umask or a pre-existing mode
+			return nil, fmt.Errorf("shim: chmod hook spool: %w", err)
+		}
 	}
 	if created {
 		// R6 REVIEW FIX-PACK ROUND 1 (MEDIUM 6): Append's fsync commits a record's
@@ -277,7 +298,7 @@ func OpenHookSpool(path string, maxBytes int) (*HookSpool, error) {
 	}
 	s := &HookSpool{
 		path: path, f: f, maxBytes: maxBytes, lastSeq: readHookFloor(path),
-		incarnation: identity.ID, adoptedLegacy: identity.AdoptedLegacy,
+		incarnation: identity.ID, adoptedLegacy: identity.AdoptedLegacy, created: created,
 	}
 	recs, cleanEnd, tornSeq, torn, err := s.parseLocked()
 	if err != nil {
@@ -319,32 +340,12 @@ func ReadHookSpoolIncarnation(path string) (id string, adoptedLegacy bool, err e
 	return identity.ID, identity.AdoptedLegacy, nil
 }
 
-// ReadHookSpoolFile is ReadFrom against a spool FILE, with no live HookSpool and no
-// listener -- the socket-independent reader (R6 review fix-pack round 2, BLOCKER 2).
-//
-// WHY IT EXISTS. The spool's whole promise is that an event is durable the moment it is
-// acked, but until now its ONLY reader was hookServer, which is shut down the instant
-// the agent is reaped (shim.go). Every hook acked inside the daemon's last drain
-// interval was therefore unreachable forever while its bytes sat on disk -- an item the
-// shim durably ACKED, lost at ordinary session end, which is exactly what playbook 6.1
-// ("neither fails a provider hook nor loses an accepted item") and the ack contract
-// forbid. A shim CRASH has the identical shape. The file is in the session's own 0700
-// dir and the format is self-describing, so the durability stops being hostage to a
-// live socket: the daemon reads the retired session's spool itself.
-//
-// It is READ-ONLY on purpose. Compact is the destructive half of a drain and belongs
-// only to the live, token-gated DRAIN verb (hooksocket.go); a reader of a spool whose
-// owner is gone folds nothing and leaves every byte exactly where it found it.
-//
-// Every rule ReadFrom's own doc states holds here verbatim, because this shares
-// readFromLocked: records are always strictly below a reported gapAt, a cursor naming
-// a sequence the file never produced is an honest gap, and so is a cursor sitting
-// behind the retained window. A missing file is an error, never a silent empty read --
-// "the spool is gone" and "the spool is clean and empty" must not look the same.
-func ReadHookSpoolFile(path string, after uint64) (recs []HookRecord, gapAt uint64, hasGap bool, err error) {
-	f, err := os.Open(path)
+// ReadHookSpoolFileResponse binds any producer certificate to the exact descriptor
+// whose bytes were read. An adjacent stale sidecar cannot certify a replaced file.
+func ReadHookSpoolFileResponse(path string, after uint64) (HookDrainResponse, error) {
+	f, err := openHookOwnedFile(path, os.O_RDONLY)
 	if err != nil {
-		return nil, 0, false, fmt.Errorf("shim: open hook spool for reading: %w", err)
+		return HookDrainResponse{}, fmt.Errorf("shim: open hook spool for reading: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -355,13 +356,25 @@ func ReadHookSpoolFile(path string, after uint64) (recs []HookRecord, gapAt uint
 	s := &HookSpool{path: path, f: f, maxBytes: hookSpoolDefaultMaxBytes, lastSeq: readHookFloor(path)}
 	all, cleanEnd, _, _, err := s.parseLocked()
 	if err != nil {
-		return nil, 0, false, err
+		return HookDrainResponse{}, err
 	}
 	if n := len(all); n > 0 && all[n-1].Seq > s.lastSeq {
 		s.lastSeq = all[n-1].Seq
 	}
 	s.size = cleanEnd
-	return s.readFromLocked(after)
+	recs, gapAt, gap, err := s.readFromLocked(after)
+	if err != nil {
+		return HookDrainResponse{}, err
+	}
+	incarnation, legacy, err := ReadHookSpoolIncarnation(path)
+	if err != nil {
+		return HookDrainResponse{}, err
+	}
+	resp := HookDrainResponse{Records: recs, Gap: gap, GapBoundary: gapAt, SpoolIncarnation: incarnation, SpoolAdoptedLegacy: legacy}
+	if proof, err := readHookProducerProof(path); err == nil && validHookProducerProof(path, f, proof) == nil {
+		resp.ProducerCertificate = proof.Nonce
+	}
+	return resp, nil
 }
 
 // Append durably appends body -- fsyncing before it returns -- and reports its
@@ -511,12 +524,9 @@ func (s *HookSpool) readFromLocked(after uint64) ([]HookRecord, uint64, bool, er
 // it requires nothing more than a body write to be interrupted) and for any torn
 // record found while the file has clean history before it.
 func (s *HookSpool) parseLocked() (recs []HookRecord, cleanEnd int64, tornSeq uint64, torn bool, err error) {
-	if _, err := s.f.Seek(0, io.SeekStart); err != nil {
-		return nil, 0, 0, false, fmt.Errorf("shim: seek hook spool: %w", err)
-	}
-	data, err := io.ReadAll(s.f)
+	data, err := s.readBytes()
 	if err != nil {
-		return nil, 0, 0, false, fmt.Errorf("shim: read hook spool: %w", err)
+		return nil, 0, 0, false, err
 	}
 	recs, cleanEnd, tornSeq, torn = scanHookRecords(data)
 	if torn && tornSeq == 0 {
@@ -532,6 +542,63 @@ func (s *HookSpool) parseLocked() (recs []HookRecord, cleanEnd int64, tornSeq ui
 	return recs, cleanEnd, tornSeq, torn, nil
 }
 
+func (s *HookSpool) readBytes() ([]byte, error) {
+	if _, err := s.f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	if s.readLimit == 0 {
+		return io.ReadAll(s.f)
+	}
+	info, err := s.f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > s.readLimit {
+		return nil, ErrHookCleanupTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(s.f, s.readLimit+1))
+	if int64(len(data)) > s.readLimit {
+		return nil, ErrHookCleanupTooLarge
+	}
+	return data, err
+}
+
+func hookRecordEnd(data []byte, off int) (end int, sequence uint64, clean bool) {
+	if len(data)-off < hookRecordHeaderLen {
+		return off, 0, false
+	}
+	sequence = binary.BigEndian.Uint64(data[off : off+8])
+	bodyLen := int(binary.BigEndian.Uint32(data[off+8 : off+hookRecordHeaderLen]))
+	bodyOff := off + hookRecordHeaderLen
+	if len(data)-bodyOff < bodyLen {
+		return off, sequence, false
+	}
+	return bodyOff + bodyLen, sequence, true
+}
+
+func hookCompactCut(data []byte, foldSeq, lastSeq, floor uint64) (int, error) {
+	if foldSeq > lastSeq {
+		return 0, fmt.Errorf("shim: hook spool compact fold cursor %d exceeds the highest appended sequence %d", foldSeq, lastSeq)
+	}
+	if foldSeq == 0 {
+		return 0, nil
+	}
+	for off := 0; off < len(data); {
+		end, sequence, clean := hookRecordEnd(data, off)
+		if !clean {
+			break
+		}
+		if sequence == foldSeq {
+			return end, nil
+		}
+		off = end
+	}
+	if floor == foldSeq && (len(data) == 0 || (len(data) >= hookRecordHeaderLen && binary.BigEndian.Uint64(data[:8]) > foldSeq)) {
+		return 0, nil
+	}
+	return 0, fmt.Errorf("shim: hook spool compact fold cursor %d is not a clean record boundary in the spool", foldSeq)
+}
+
 // scanHookRecords walks data from its start and returns every cleanly-readable
 // record in order, the byte offset immediately after the last one (cleanEnd -- data
 // through this offset is known-clean, and Append or Compact would cut there), and,
@@ -545,15 +612,12 @@ func (s *HookSpool) parseLocked() (recs []HookRecord, cleanEnd int64, tornSeq ui
 func scanHookRecords(data []byte) (recs []HookRecord, cleanEnd int64, tornSeq uint64, torn bool) {
 	off := 0
 	for off < len(data) {
-		if len(data)-off < hookRecordHeaderLen {
-			return recs, int64(off), 0, true
+		end, seq, clean := hookRecordEnd(data, off)
+		if !clean {
+			return recs, int64(off), seq, true
 		}
-		seq := binary.BigEndian.Uint64(data[off : off+8])
-		bodyLen := int(binary.BigEndian.Uint32(data[off+8 : off+hookRecordHeaderLen]))
 		bodyOff := off + hookRecordHeaderLen
-		if len(data)-bodyOff < bodyLen {
-			return recs, int64(off), seq, true // the header survived the tear, the body did not
-		}
+		bodyLen := end - bodyOff
 		body := append(json.RawMessage(nil), data[bodyOff:bodyOff+bodyLen]...)
 		recs = append(recs, HookRecord{Seq: seq, Body: body})
 		off = bodyOff + bodyLen
@@ -576,44 +640,30 @@ func scanHookRecords(data []byte) (recs []HookRecord, cleanEnd int64, tornSeq ui
 // removes only a verified-clean PREFIX and must never be able to erase a tear it
 // cannot even see past.
 func (s *HookSpool) Compact(foldSeq uint64) error {
+	_, err := s.compact(foldSeq, nil)
+	return err
+}
+
+func (s *HookSpool) compact(foldSeq uint64, checkPath func() error) (changed bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if foldSeq > s.lastSeq {
-		return fmt.Errorf("shim: hook spool compact fold cursor %d exceeds the highest appended sequence %d", foldSeq, s.lastSeq)
+		return false, fmt.Errorf("shim: hook spool compact fold cursor %d exceeds the highest appended sequence %d", foldSeq, s.lastSeq)
 	}
 	if foldSeq == 0 {
-		return nil // nothing folded yet: a no-op, not an error
+		return false, nil
 	}
-
-	if _, err := s.f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("shim: seek hook spool for compact: %w", err)
-	}
-	data, err := io.ReadAll(s.f)
+	data, err := s.readBytes()
 	if err != nil {
-		return fmt.Errorf("shim: read hook spool for compact: %w", err)
+		return false, err
 	}
-
-	cut := -1
-	off := 0
-	for off < len(data) {
-		if len(data)-off < hookRecordHeaderLen {
-			break
-		}
-		seq := binary.BigEndian.Uint64(data[off : off+8])
-		bodyLen := int(binary.BigEndian.Uint32(data[off+8 : off+hookRecordHeaderLen]))
-		bodyOff := off + hookRecordHeaderLen
-		if len(data)-bodyOff < bodyLen {
-			break
-		}
-		off = bodyOff + bodyLen
-		if seq == foldSeq {
-			cut = off
-			break
-		}
+	cut, err := hookCompactCut(data, foldSeq, s.lastSeq, readHookFloor(s.path))
+	if err != nil {
+		return false, err
 	}
-	if cut < 0 {
-		return fmt.Errorf("shim: hook spool compact fold cursor %d is not a clean record boundary in the spool", foldSeq)
+	if cut == 0 {
+		return false, nil
 	}
 	tail := data[cut:]
 
@@ -634,49 +684,115 @@ func (s *HookSpool) Compact(foldSeq uint64) error {
 	// HIGH only ever makes an already-stale cursor look stale; only one written too
 	// LOW is unrecoverable, which is why this must happen first, not merely be
 	// logged after the fact.
+	check := func() error {
+		if checkPath != nil {
+			if err := checkPath(); err != nil {
+				return err
+			}
+		}
+		info, err := s.f.Stat()
+		if err != nil {
+			return err
+		}
+		current, err := os.Lstat(s.path)
+		if err != nil {
+			return err
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || !current.Mode().IsRegular() || !os.SameFile(info, current) || st.Uid != uint32(os.Getuid()) || st.Nlink != 1 {
+			return ErrHookRetirementUnproven
+		}
+		return nil
+	}
+	if err := check(); err != nil {
+		return false, err
+	}
 	if err := writeHookFloor(s.path, foldSeq); err != nil {
-		return fmt.Errorf("shim: persist hook spool fold floor: %w", err)
+		return changed, fmt.Errorf("shim: persist hook spool fold floor: %w", err)
 	}
 
 	dir := filepath.Dir(s.path)
 	tmp, err := os.CreateTemp(dir, filepath.Base(s.path)+".tmp*")
 	if err != nil {
-		return fmt.Errorf("shim: create hook spool compact temp: %w", err)
+		return changed, fmt.Errorf("shim: create hook spool compact temp: %w", err)
 	}
+	// Keep the replacement inode alive through rename/reopen so inode reuse cannot
+	// make a replaced temporary pathname pass the physical identity checks.
+	defer func() {
+		if closeErr := tmp.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("shim: close hook spool compact temp: %w", closeErr))
+		}
+	}()
 	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed
+	temporary, err := tmp.Stat()
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if checkPath != nil && checkPath() != nil {
+			return
+		}
+		if current, err := os.Lstat(tmpName); err == nil && os.SameFile(temporary, current) {
+			_ = os.Remove(tmpName)
+		}
+	}()
 	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("shim: chmod hook spool compact temp: %w", err)
+		return changed, fmt.Errorf("shim: chmod hook spool compact temp: %w", err)
 	}
 	if _, err := tmp.Write(tail); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("shim: write hook spool compact temp: %w", err)
+		return changed, fmt.Errorf("shim: write hook spool compact temp: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("shim: fsync hook spool compact temp: %w", err)
+	if err := hookCompactSync(tmp); err != nil {
+		return changed, fmt.Errorf("shim: fsync hook spool compact temp: %w", err)
 	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("shim: close hook spool compact temp: %w", err)
+	replacement, err := tmp.Stat()
+	if err != nil {
+		return false, err
+	}
+	if testHookBeforeCompactRename != nil {
+		testHookBeforeCompactRename()
+	}
+	if err := check(); err != nil {
+		return false, err
+	}
+	linked, err := os.Lstat(tmpName)
+	if err != nil {
+		return false, err
+	}
+	linkedStat, ok := linked.Sys().(*syscall.Stat_t)
+	if !ok || !linked.Mode().IsRegular() || !os.SameFile(replacement, linked) || linkedStat.Uid != uint32(os.Getuid()) || linkedStat.Nlink != 1 {
+		return false, ErrHookRetirementUnproven
 	}
 	if err := os.Rename(tmpName, s.path); err != nil {
-		return fmt.Errorf("shim: rename hook spool compact temp: %w", err)
+		return changed, fmt.Errorf("shim: rename hook spool compact temp: %w", err)
 	}
+	changed = true
 	if err := fsyncDir(dir); err != nil {
-		return fmt.Errorf("shim: fsync hook spool dir: %w", err)
+		return changed, fmt.Errorf("shim: fsync hook spool dir: %w", err)
 	}
 
 	// The pre-rename handle now refers to an unlinked inode: reopen at path so the
 	// NEXT Append lands in the replacement file, not the one just retired.
 	if err := s.f.Close(); err != nil {
-		return fmt.Errorf("shim: close old hook spool handle: %w", err)
+		return changed, fmt.Errorf("shim: close old hook spool handle: %w", err)
 	}
-	f, err := os.OpenFile(s.path, os.O_RDWR, 0o600)
+	f, err := openHookOwnedFile(s.path, os.O_RDWR)
 	if err != nil {
-		return fmt.Errorf("shim: reopen hook spool after compact: %w", err)
+		return changed, fmt.Errorf("shim: reopen hook spool after compact: %w", err)
+	}
+	current, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return changed, err
+	}
+	if !os.SameFile(replacement, current) {
+		_ = f.Close()
+		return changed, ErrHookRetirementUnproven
 	}
 	s.f = f
+	if err := check(); err != nil {
+		return changed, err
+	}
 	// s.size is the offset through which the REPLACEMENT file is known-clean, not
 	// simply its length (R6 review fix-pack, MEDIUM): tail was copied verbatim and
 	// can itself hold a torn tail beyond its own clean records (this instance's
@@ -700,17 +816,39 @@ func (s *HookSpool) Compact(foldSeq uint64) error {
 			s.gapAt = tTornSeq
 		}
 	}
+	if s.producerProof != nil {
+		if err := check(); err != nil {
+			return changed, err
+		}
+		if err := s.persistProducerProof(); err != nil {
+			s.producerProof = nil
+			return changed, err
+		}
+	}
 	// s.lastSeq is untouched: Compact only ever removes an already-durably-folded
 	// prefix and must never invent or erase what happened above it.
 
-	return nil
+	return changed, nil
 }
 
 // Close closes the spool's file handle.
 func (s *HookSpool) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.f.Close()
+	err := s.f.Close()
+	if s.producerLock != nil {
+		if s.producerProof != nil && err == nil {
+			s.producerProof.Closed = true
+			data, merr := json.Marshal(s.producerProof)
+			if merr == nil {
+				merr = persistHookProducerProof(s.path, data)
+			}
+			err = errors.Join(err, merr)
+		}
+		err = errors.Join(err, s.producerLock.Close())
+		s.producerLock = nil
+	}
+	return err
 }
 
 // hookFloorPath is the fold-floor sidecar's path, sibling of the spool file.
@@ -719,7 +857,7 @@ func hookFloorPath(spoolPath string) string { return spoolPath + hookFloorSuffix
 // readHookFloor reads the persisted fold floor for spoolPath, or 0 if absent/unreadable
 // (no compaction has ever happened, or its sidecar predates this mechanism).
 func readHookFloor(spoolPath string) uint64 {
-	data, err := os.ReadFile(hookFloorPath(spoolPath))
+	data, err := readHookOwnedSidecar(hookFloorPath(spoolPath), 64)
 	if err != nil {
 		return 0
 	}
@@ -745,18 +883,31 @@ func hookSpoolIdentityPath(spoolPath string) string { return spoolPath + hookInc
 
 func hookSpoolOpenLockPath(spoolPath string) string { return spoolPath + hookOpenLockSuffix }
 
-func acquireHookSpoolOpenLock(spoolPath string) (*os.File, error) {
+func acquireHookSpoolOpenLock(spoolPath string, stopped bool) (*os.File, error) {
 	path := hookSpoolOpenLockPath(spoolPath)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	openFlags := os.O_RDWR
+	if !stopped {
+		openFlags |= os.O_CREATE
+	}
+	f, err := openHookOwnedFile(path, openFlags)
 	if err != nil {
 		return nil, fmt.Errorf("shim: open hook spool generation lock: %w", err)
 	}
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("shim: chmod hook spool generation lock: %w", err)
+	if !stopped {
+		if err := f.Chmod(0o600); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("shim: chmod hook spool generation lock: %w", err)
+		}
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	flags := syscall.LOCK_EX
+	if stopped {
+		flags |= syscall.LOCK_NB
+	}
+	if err := syscall.Flock(int(f.Fd()), flags); err != nil {
 		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrHookProducerBusy
+		}
 		return nil, fmt.Errorf("shim: lock hook spool generation: %w", err)
 	}
 	return f, nil
@@ -779,7 +930,7 @@ func mintHookSpoolIncarnation() (string, error) {
 }
 
 func readHookSpoolIdentity(spoolPath string) (hookSpoolIdentity, error) {
-	data, err := os.ReadFile(hookSpoolIdentityPath(spoolPath))
+	data, err := readHookOwnedSidecar(hookSpoolIdentityPath(spoolPath), 1024)
 	if err != nil {
 		return hookSpoolIdentity{}, err
 	}
@@ -788,7 +939,7 @@ func readHookSpoolIdentity(spoolPath string) (hookSpoolIdentity, error) {
 		return hookSpoolIdentity{}, err
 	}
 	if strings.TrimSpace(identity.ID) == "" {
-		return hookSpoolIdentity{}, errors.New("shim: empty hook spool incarnation")
+		return hookSpoolIdentity{}, fmt.Errorf("shim: empty hook spool incarnation: %w", ErrHookRetirementUnproven)
 	}
 	return identity, nil
 }

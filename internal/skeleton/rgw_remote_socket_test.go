@@ -34,7 +34,7 @@ import (
 func assembleWithRemote(t *testing.T) (*Daemon, string) {
 	t.Helper()
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swsk-rgw")
+	dir, err := os.MkdirTemp("", "swsk-rgw")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

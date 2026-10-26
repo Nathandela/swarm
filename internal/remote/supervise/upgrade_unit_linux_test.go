@@ -6,7 +6,7 @@ package supervise
 //
 // What must hold, and why it is load-bearing:
 //
-//   - The script converges UNCONDITIONALLY (`fetch || true` before the exec): the plist
+//   - The script converges UNCONDITIONALLY (`( fetch ) || true` before the exec): the plist
 //     joins its steps with ";" for the same reason -- a restart deferred one night must
 //     be retried the next, and a binary upgraded by hand must be converged too.
 //   - The script's own exit status is `daemon restart --unattended`'s (it ends in exec),
@@ -34,8 +34,8 @@ func readTemplateFile(t *testing.T, path string) string {
 
 func TestLinuxUpgradeScriptConvergesWhetherOrNotTheFetchSucceeded(t *testing.T) {
 	s := readTemplateFile(t, "../../../packaging/systemd/swarm-upgrade.sh")
-	if !regexp.MustCompile(`(?m)^fetch \|\| true$`).MatchString(s) {
-		t.Fatal("the fetch must not gate the converge (the plist's \";\" rule): want a `fetch || true` line")
+	if !regexp.MustCompile(`(?m)^\( fetch \) \|\| true$`).MatchString(s) {
+		t.Fatal("the fetch must not gate the converge and its EXIT trap must finish first: want a `( fetch ) || true` line")
 	}
 	if !regexp.MustCompile(`(?m)^exec "\$SWARM_BIN" daemon restart --unattended$`).MatchString(s) {
 		t.Fatal("the script's exit status must be --unattended's: want a final `exec \"$SWARM_BIN\" daemon restart --unattended`")

@@ -363,7 +363,7 @@ func TestR8Publication_EverySessionCreationPathAuthorsARecord(t *testing.T) {
 // killswitch_state_test.go, r6_fixpack_test.go).
 func r8StateDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "swsk-r8")
+	dir, err := os.MkdirTemp("", "swsk-r8")
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}

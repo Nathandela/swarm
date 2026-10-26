@@ -37,6 +37,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 // Fixture paths, relative to this package (internal/e2e), matching the convention
@@ -224,6 +225,9 @@ func buildReplayBinaries(t *testing.T) (binDir, startGate string) {
 			t.Fatalf("write %s replay source: %v", name, err)
 		}
 		out := filepath.Join(binDir, name)
+		if err := testbin.RegisterExecutable(out); err != nil {
+			t.Fatalf("register %s replay binary: %v", name, err)
+		}
 		cmd := exec.Command("go", "build", "-o", out, srcPath)
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {

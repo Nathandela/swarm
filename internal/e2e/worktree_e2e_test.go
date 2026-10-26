@@ -137,7 +137,7 @@ func requireGitE2E(t *testing.T) {
 // of the suite's temp-dir convention.
 func newGitRepoE2E(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "wt")
+	dir, err := os.MkdirTemp("", "wt")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}

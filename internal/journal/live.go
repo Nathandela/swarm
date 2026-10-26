@@ -73,10 +73,7 @@ var syncLiveDir = func(path string) error {
 
 var writeLiveReservation = func(j *Journal, ceiling uint64) error {
 	line := append(EncodeRecord(Record{SchemaVersion: SchemaVersion, Cursor: ceiling, Type: typeCursorReservation, TS: j.clock().UTC()}), '\n')
-	if _, err := j.activeF.Write(line); err != nil {
-		return err
-	}
-	if err := j.activeF.Sync(); err != nil {
+	if err := j.writeDurableLineLocked(line); err != nil {
 		return err
 	}
 	j.active.bytes += int64(len(line))
@@ -101,14 +98,6 @@ func (j *Journal) reserveCursorLocked() error {
 	}
 	j.reserved = ceiling
 	return nil
-}
-
-func (j *Journal) failLiveLocked(err error) error {
-	if j.opts.LiveBytes > 0 {
-		j.liveErr = fmt.Errorf("journal: storage failed; reopen after recovery: %w", err)
-		return j.liveErr
-	}
-	return err
 }
 
 // openLive streams legacy segments before replacing them; no whole-file allocation
@@ -233,9 +222,9 @@ func (j *Journal) openLive() (*Journal, error) {
 	}
 	j.active, j.segments, j.nextSeq = seg, segments, nextSeq
 	j.enforceLiveRetentionLocked()
-	if j.liveErr != nil {
+	if j.storageErr != nil {
 		_ = j.activeF.Close()
-		return nil, j.liveErr
+		return nil, j.storageErr
 	}
 	return j, nil
 }
@@ -266,7 +255,7 @@ func streamSegment(path string, visit func(Record) error) error {
 				if errors.Is(readErr, io.EOF) && !json.Valid(line) {
 					return nil
 				}
-				return fmt.Errorf("journal: invalid migration record: %w", decodeErr)
+				return fmt.Errorf("journal: invalid migration record in %s: %w", filepath.Base(path), decodeErr)
 			}
 			if err := visit(r); err != nil {
 				return err
@@ -430,7 +419,7 @@ func (j *Journal) enforceLiveRetentionLocked() {
 	for len(j.segments) > 1 && (len(j.segments) > j.opts.MaxFiles || total > j.opts.MaxTotalBytes) {
 		old := j.segments[0]
 		if err := os.Remove(old.path); err != nil {
-			_ = j.failLiveLocked(fmt.Errorf("retire control segment: %w", err))
+			_ = j.failStorageLocked(fmt.Errorf("retire control segment: %w", err))
 			return
 		}
 		total -= old.bytes

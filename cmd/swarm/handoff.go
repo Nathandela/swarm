@@ -24,8 +24,9 @@ const handoffUsage = `usage: swarm handoff --cli <agent> [--model m] [--name n]
                      [--supervision passive|manual|none] --context-file <file>
 
   Launch a new Swarm session from an agent-authored context document. The command
-  must run inside a live Swarm-managed source session. It prints the child session
-  id on stdout. With --supervision passive (the default) the daemon wakes the source
+  must run inside a live Swarm-managed source session. When the source's checkout is
+  a git repository, the child runs in a new git worktree at its current commit, so
+  commit what the child needs first. It prints the child session id on stdout. With --supervision passive (the default) the daemon wakes the source
   when the child needs attention; manual supervises with swarm watch, swarm peek,
   and swarm send; none leaves supervision to the human.
 `

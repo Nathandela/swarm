@@ -1,0 +1,226 @@
+{
+  "date": "2026-10-26",
+  "evidence": {
+    "focused_positive_log_sha256": {
+      "delete-focused-race.jsonl": "c7bdfa11dfecdec1dc8147cdce21a96d088950bd0009aaa64b43b91f53fe2d20",
+      "fixture-family-race.jsonl": "cdf776a29239fe504966483bbb16e0cfd36f9a0260e6c7a34598ceab66ef66f1",
+      "fixture-peer-green.jsonl": "9ff14c6ff76a7fa004db59414b02704edd6c83297dfd00bb4c6366b951075049",
+      "protocol-green-r2.jsonl": "6fe33b6205df7f94ca1ae7a271bb54590b03331de52ee37ab73772535ee1c50d",
+      "protocol-green.jsonl": "54ec26c83f0f885518f5a9454f59b63b2dc9a1b01b6966bb35cbaafe41e8fdf1",
+      "skeleton-green.jsonl": "f3a71fb687b4b5594c51680e823b432ca649f676f7d8978c15a8b756b443c306"
+    },
+    "initial_red_and_omission_history_sha256": {
+      "final-admission-omission-r2.jsonl": "54a443fb4f5f3e23d2c2e8a6879475f5b8dca1ea59a60da292f1ca5110921ca9",
+      "hook-red.jsonl": "06399f0f01316a63bf7d72642f57aee52690cf51c8259d75dfbfaa38c9c4842b",
+      "lease-red.jsonl": "9a80c338971adb2ad19c3086558c4431580e43415aec60533e685534693e1a04",
+      "red.jsonl": "19cc765aa535a97b4ef5c3a7309cf8b4fc9fe88055cdadbe14539dd78af5f5cb"
+    },
+    "race_package_summary": {
+      "packages": {
+        "github.com/Nathandela/swarm/internal/daemon": [
+          407,
+          3,
+          "daemon-race-r3.jsonl",
+          "b0c6143f0f14922bdce667b62f62349eb49a09ccbcd39e6669de817b6f1822f4"
+        ],
+        "github.com/Nathandela/swarm/internal/journal": [
+          59,
+          0,
+          "merged-race-r2.jsonl",
+          "8295dc746ad2f9e1101a572d301dbfd87613b6ebdad762a849f006cb320340ae"
+        ],
+        "github.com/Nathandela/swarm/internal/protocol": [
+          676,
+          0,
+          "merged-race.jsonl",
+          "719e32c683673a497f9e9308618af30d5b913bea896fdef0fd1990f5c7a0a39f"
+        ],
+        "github.com/Nathandela/swarm/internal/shim": [
+          321,
+          15,
+          "merged-race-r2.jsonl",
+          "8295dc746ad2f9e1101a572d301dbfd87613b6ebdad762a849f006cb320340ae"
+        ],
+        "github.com/Nathandela/swarm/internal/skeleton": [
+          2047,
+          28,
+          "skeleton-race-20m.jsonl",
+          "1afdc65366e345619f04b2b4ea3502817d578fab7a8b80473cd70164a5ff170e"
+        ],
+        "github.com/Nathandela/swarm/internal/vt": [
+          253,
+          0,
+          "merged-race-r2.jsonl",
+          "8295dc746ad2f9e1101a572d301dbfd87613b6ebdad762a849f006cb320340ae"
+        ]
+      },
+      "path": "/private/tmp/swarm-h6sc24-gates-20261026/race-package-summary.json",
+      "sha256": "7d902884e4ecd12017a1a11f93f5cf69f5688d7301827c33c0d533e073228447",
+      "totals": {
+        "packages": 6,
+        "passes": 3763,
+        "skips": 46
+      }
+    },
+    "log_root": "/private/tmp/swarm-h6sc24-gates-20261026",
+    "repository_tests_r1": {
+      "exit_code": 1,
+      "log": "/private/tmp/swarm-h6sc24-gates-20261026/repository-tests.jsonl",
+      "sha256": "b0abc02781e63e44e60aa4d35878383513472bdf34d50dd7d30b59d25aa3f67f",
+      "test_actions": {
+        "run": 10240,
+        "pass": 10141,
+        "skip": 81,
+        "fail": 17
+      },
+      "package_actions": {
+        "start": 86,
+        "pass": 76,
+        "skip": 7,
+        "fail": 3
+      },
+      "limits": [
+        "Skeleton hit the20minute whole-package timeout; unrun tests are not passes.",
+        "Unclosed fixture protocol servers are established; causation for other failures remains unproven.",
+        "Mobile missing gobind is a harness PATH dependency, not a tested code failure."
+      ],
+      "status": "FAIL; skeleton whole-package timeout and test failures, TUI restore failure, mobile tool missing from harness PATH"
+    },
+    "followup_log_sha256": {
+      "isolated-failures-r1.jsonl": "dffaf95099b56a34a75abaada652c704b5b4b47164b2be2713055885c6b3aac3",
+      "server-cleanup-red.jsonl": "986e920f1a2f6d925083774d6f2376d3e4877d2dd5995c195ddebae2e69faa39",
+      "failed-families-green-r1.jsonl": "a00c5731e2ffed1e9d6387a205f487ad47314acbd5a12a16459ea2db85675442"
+    },
+    "skeleton_complete_rerun": {
+      "log": "/private/tmp/swarm-h6sc24-gates-20261026/skeleton-plain-r2.jsonl",
+      "sha256": "6de175c7f541d0c427234620ba1be8e0a58599f420d17bce729b9115177bc09b",
+      "exit_code": 0,
+      "test_actions": {
+        "run": 2075,
+        "pass": 2047,
+        "skip": 28,
+        "fail": 0
+      },
+      "package_outcomes": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "pass",
+          "Elapsed": 756.747
+        }
+      ]
+    },
+    "changed_fixture_race": {
+      "log": "/private/tmp/swarm-h6sc24-gates-20261026/checkpoint-fixture-race.jsonl",
+      "sha256": "d56005f133691d77647e42ebd566662fae6cccb3fb2036d973af149179706987",
+      "exit_code": 0,
+      "test_actions": {
+        "run": 36,
+        "pass": 36,
+        "skip": 0,
+        "fail": 0
+      },
+      "package_outcomes": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/protocol",
+          "Action": "pass",
+          "Elapsed": 2.617
+        },
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "pass",
+          "Elapsed": 22.458
+        }
+      ]
+    },
+    "checkpoint_build_vet": {
+      "build": {
+        "exit_code": 0,
+        "elapsed_seconds": 7.969,
+        "log": "/private/tmp/swarm-h6sc24-gates-20261026/build-checkpoint.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "vet": {
+        "exit_code": 0,
+        "elapsed_seconds": 6.696,
+        "log": "/private/tmp/swarm-h6sc24-gates-20261026/vet-checkpoint.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "lint_initial_failure": {
+      "log": "/private/tmp/swarm-h6sc24-gates-20261026/lint-checkpoint.log",
+      "sha256": "75e0d726c981410336b4c3c4990c0733b330a6e6bc66a0816d5ddab228b76df0",
+      "exit_code": 1,
+      "findings": "Two test-only staticcheck findings corrected; final rerun passed with0issues."
+    },
+    "lint_rerun": {
+      "exit_code": 0,
+      "elapsed_seconds": 72.567,
+      "log": "/private/tmp/swarm-h6sc24-gates-20261026/lint-checkpoint-r2.log",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    }
+  },
+  "fixes": [
+    "Named owner/manual/paste input options.",
+    "Both admission gates plus current lease check.",
+    "Tap foreign/beforeWrite once; unsupported-only fallback.",
+    "Hook custody/pending takes precedence over rejected tag.",
+    "Independent export/coreAttempted from no-fork flags.",
+    "Fixture-only supervisor registration/shortroots; generic Delete diskmetadata and failure joins."
+  ],
+  "integration": {
+    "bead": "agents-tracker-h6sc.24",
+    "feature_parent": "51497cc0",
+    "overlap_count": 17,
+    "overlap_paths": [
+      "README.md",
+      "docs/INDEX.md",
+      "docs/specifications/system-spec.md",
+      "internal/daemon/daemon.go",
+      "internal/daemon/launch.go",
+      "internal/loginworker/worker_test.go",
+      "internal/protocol/fromdaemon.go",
+      "internal/protocol/sendinput.go",
+      "internal/shim/shim.go",
+      "internal/skeleton/api.go",
+      "internal/skeleton/cli_refresh_integration_test.go",
+      "internal/skeleton/hookdrain.go",
+      "internal/skeleton/opencode_history.go",
+      "internal/skeleton/r6_round2_test.go",
+      "internal/skeleton/serve.go",
+      "internal/skeleton/sessiontap.go",
+      "internal/tui/options.go"
+    ],
+    "pinned_main": "98e740100b385ee9ab827848f0cab40b132b86ac",
+    "priority": "P1",
+    "state": "Reviewed pinned-main integration checkpoint on feature; build/vet/lint and complete skeleton rerun pass, original terminal-restore repository failure remains an open release blocker."
+  },
+  "kind": "current-main integration evidence",
+  "limits": [
+    "No current-source native qualification.",
+    "No installed Codex 0.164 qualification.",
+    "No automatic recovery/continuation qualification or Claude structured-UI activation claim.",
+    "Initial failing logs remain historical; later results do not retroactively rewrite them."
+  ],
+  "quality_gates": {
+    "build": "PASS",
+    "lint": "PASS, zero issues",
+    "repository_tests": "FAIL: pinned-main terminal-restore regression remains; h6sc.26 is an open release blocker",
+    "six_package_race": "PASS, 3763 passes, 46 skips",
+    "vet": "PASS"
+  },
+  "fixture_followups": [
+    "Post-subtest input-fence regression proves both temporary protocol servers remained live; reviewed cleanup now joins the fence and closes both servers before core teardown.",
+    "Handover fixture awaits durable publication before starting its unchanged 5-second auth bound; cleanup releases and joins all workers.",
+    "OpenCode synthetic primary waits on the existing ask directive until cleanup, replacing unrelated 60-second expiry; no auth/native deadline changes.",
+    "Six previously failing synthetic top-level tests passed on original source in isolation (14 tests including subtests). Their historical cause remains unproven; diagnostic overlay was not used.",
+    "Focused repaired skeleton tests passed (43); mobile binding tests passed (2) using the existing gobind at the go.mod module pin via harness PATH.",
+    "Terminal restoration failure is an independent pinned-main release blocker (agents-tracker-h6sc.26). Shared helper and dependency experiments were reverted. The complete skeleton rerun passed2047 tests with28 skips; changed fixture race controls passed36 tests. The repository gate remains FAIL, never replaced by the GOMAXPROCS=2 diagnostic control."
+  ],
+  "release_blockers": [
+    {
+      "bead": "agents-tracker-h6sc.26",
+      "evidence": "../terminal-restore-2026-10-26.json",
+      "status": "OPEN; original failing regression retained"
+    }
+  ]
+}

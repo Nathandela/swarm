@@ -461,6 +461,19 @@ func waitContains(t *testing.T, tm *teatest.TestModel, sub string) {
 	}, teatest.WithDuration(3*time.Second), teatest.WithCheckInterval(10*time.Millisecond))
 }
 
+func waitContainsAll(t *testing.T, tm *teatest.TestModel, subs ...string) {
+	t.Helper()
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+		b = stripANSIB(b)
+		for _, sub := range subs {
+			if !bytes.Contains(b, []byte(sub)) {
+				return false
+			}
+		}
+		return true
+	}, teatest.WithDuration(3*time.Second), teatest.WithCheckInterval(10*time.Millisecond))
+}
+
 // quitTM quits the program, failing the test if the shutdown itself errors.
 func quitTM(t *testing.T, tm *teatest.TestModel) {
 	t.Helper()

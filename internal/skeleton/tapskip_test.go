@@ -20,7 +20,7 @@ import (
 
 func TestTapGrids_SkipsControlledSession(t *testing.T) {
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swsktap")
+	dir, err := os.MkdirTemp("", "swsktap")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

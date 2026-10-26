@@ -64,7 +64,7 @@ func (m rootModel) openResume(s protocol.SessionView, errMsg string) rootModel {
 }
 
 func (m rootModel) updateResume(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.resume.busy {
+	if m.resume.busy && k.Code != tea.KeyEsc {
 		return m, nil
 	}
 	switch k.Code {

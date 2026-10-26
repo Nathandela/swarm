@@ -1,13 +1,14 @@
 package protocol
 
 import (
+	"github.com/Nathandela/swarm/internal/testbin"
 	"os"
 	"testing"
 )
 
-// TestMain ends every shim and agent a test left behind: shims outlive their daemon by design.
 func TestMain(m *testing.M) {
-	code := m.Run()
-	testBins.Sweep()
-	os.Exit(code)
+	if code, parent := testbin.Supervise(); parent {
+		os.Exit(code)
+	}
+	os.Exit(m.Run())
 }

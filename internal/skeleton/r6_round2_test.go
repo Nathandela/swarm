@@ -59,12 +59,12 @@ func postRawEvent(t *testing.T, hookSocketPath, sessionID, token string, seq uin
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_TwoDistinctEventsSpooledOutOfSequenceOrder_BothShapeJournalItems(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskr2a")
+	dir, err := os.MkdirTemp("", "swskr2a")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskr2as")
+	sessionDir, err := os.MkdirTemp("", "swskr2as")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestHookDrainer_TwoDistinctEventsSpooledOutOfSequenceOrder_BothShapeJournal
 }
 
 func TestServeHook_LowerSequencedSiblingAfterAStop_IsStillIngestedOnTheLivePath(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskr2b")
+	dir, err := os.MkdirTemp("", "swskr2b")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -156,12 +156,12 @@ func postCallbackToDaemon(t *testing.T, sock string, cb engine.Callback) {
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_AppliesAckedRecordsFromTheSpoolFileAfterTheShimIsGone(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskr2c")
+	dir, err := os.MkdirTemp("", "swskr2c")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskr2cs")
+	sessionDir, err := os.MkdirTemp("", "swskr2cs")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestHookDrainer_AppliesAckedRecordsFromTheSpoolFileAfterTheShimIsGone(t *te
 }
 
 func TestStopHookDrain_FinalDrainRecoversAnItemAckedInTheLastInterval(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskr2d")
+	dir, err := os.MkdirTemp("", "swskr2d")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestStopHookDrain_FinalDrainRecoversAnItemAckedInTheLastInterval(t *testing
 // really wrote, and that the record still authenticates against a live engine session
 // because the final drain runs BEFORE d.eng.EndSession.
 func TestLaunchedSession_HookAckedJustBeforeTheAgentIsReaped_SurvivesSessionEnd(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskr2i")
+	dir, err := os.MkdirTemp("", "swskr2i")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestLaunchedSession_HookAckedJustBeforeTheAgentIsReaped_SurvivesSessionEnd(
 // ---------------------------------------------------------------------------
 
 func TestSessionCapabilities_NeverReadsPastTheDurableDegradedMarker(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskr2e")
+	dir, err := os.MkdirTemp("", "swskr2e")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestSessionCapabilities_NeverReadsPastTheDurableDegradedMarker(t *testing.T
 // ---------------------------------------------------------------------------
 
 func TestIngestHookBytes_UnauthenticatedSessionIDNeverReachesTheFilesystemOrTheSeenSet(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskr2f")
+	dir, err := os.MkdirTemp("", "swskr2f")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestIngestHookBytes_UnauthenticatedSessionIDNeverReachesTheFilesystemOrTheS
 // ---------------------------------------------------------------------------
 
 func TestHookSeenSet_IsAMembershipTestNotAHighWaterGate_AndSurvivesARestart(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskr2g")
+	dir, err := os.MkdirTemp("", "swskr2g")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestHookSeenSet_IsAMembershipTestNotAHighWaterGate_AndSurvivesARestart(t *t
 // hookdrain.go as the one place the honest membership test degrades back to a
 // high-water assumption) rather than the file growing without limit.
 func TestHookSeenSet_StaysBounded(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskr2h")
+	dir, err := os.MkdirTemp("", "swskr2h")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

@@ -1,15 +1,15 @@
-swarm                                                                                            3 running · 1 needs you
+swarm · 1 input · 1 review · group: status · order: arrival
 
-  NEEDS INPUT
+▾ NEEDS INPUT (1 · 1 input · 0 review)
 ▌ ● db-migration        claude   ~/Code/quanthome-api    approval         <t>   Permission: run db migration?
 
-  WORKING
+▾ WORKING (1 · 0 input · 0 review)
   ⠋                     codex    ~/Code/agents-tracker   working          <t>    Writing adapter fixture tests
 
-  READY FOR REVIEW
+▾ READY FOR REVIEW (1 · 0 input · 1 review)
   ✓ soml-review         claude   ~/Code/mcp-soml         ready for review <t>    Turn finished, review the diff
 
-  COMPLETED
+▾ COMPLETED (1 · 0 input · 0 review)
   ─                     gemini   ~/Code/scratch          completed        <t>    exit 0
 
 
@@ -37,4 +37,4 @@ swarm                                                                           
 
 
 
-  ↑↓ move · ⏎ attach (ctrl+q returns) · o options · t tag · e rename · n new · h handoff · ^x kill · esc quit        dev
+[New] [Open] [More] · n new · ⏎ attach (ctrl+q returns) · m more · o options                                         dev

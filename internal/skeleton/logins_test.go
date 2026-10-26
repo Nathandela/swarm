@@ -31,7 +31,13 @@ func testLoginCredential(id string) logins.Credential {
 }
 func newLoginFixture(t *testing.T) *loginFixture {
 	t.Helper()
-	state, err := filepath.EvalSymlinks(t.TempDir())
+	// Keep socket roots short inside the test supervisor's TMPDIR.
+	dir, err := os.MkdirTemp("", "sl-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	state, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -47,7 +47,7 @@ func serveReconnectProtocol(t *testing.T, b *reconnectProtocolBackend, socket st
 	return closeServer
 }
 func TestReconnect_RealOwnerProtocolSocketReplacement(t *testing.T) {
-	root, err := os.MkdirTemp("/tmp", "sw-rec-")
+	root, err := os.MkdirTemp("", "sw-rec-")
 	if err != nil {
 		t.Fatal(err)
 	}

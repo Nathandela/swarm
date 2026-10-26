@@ -940,8 +940,8 @@ func TestCodexHandoverPublicationReplacementAndAuthWriteCannotDeadlock(t *testin
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close() }()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	publicationCtx, cancelPublication := context.WithCancel(context.Background())
+	defer cancelPublication()
 	f.m.d.contextGuards = &contextGuardManager{}
 	f.m.d.contextGuards.replaceMu.Lock()
 	var releaseReplacement sync.Once
@@ -949,31 +949,56 @@ func TestCodexHandoverPublicationReplacementAndAuthWriteCannotDeadlock(t *testin
 	defer unlockReplacement()
 	writeReached := make(chan struct{})
 	releasePublication := make(chan struct{})
+	finishPublication := sync.OnceFunc(func() { close(releasePublication) })
 	c.afterUsageWrite = func() { close(writeReached); <-releasePublication }
 	s := &codexHandoverFeed{native: logins.NativeMember{SessionID: "source-1"}, current: func() bool { return true }}
 	s.publish = func(selection codexAuthSelection, phase string, usage *codexScopedUsage) error {
 		return f.m.publishCodexAdoption(s, selection, phase, usage)
 	}
 	published := make(chan error, 1)
-	go func() {
-		published <- s.publishProof(ctx, backendAuthTokens{selection: selection}, "adopted", &codexScopedUsage{allowed: true, order: 1}, 0)
-	}()
-	gate := &f.m.admission[loginProviderIndex(logins.ProviderCodex)]
-	// In the old cycle publication owns admission while waiting for replacement.
-	deadline := time.Now().Add(time.Second)
-	for gate.TryLock() {
-		gate.Unlock()
-		if time.Now().After(deadline) {
-			t.Fatal("publication never acquired admission")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	guardReached := make(chan struct{})
+	publicationDone := make(chan struct{})
+	installed := make(chan error, 1)
+	installDone := make(chan struct{})
+	replaced := make(chan error, 1)
+	replacementDone := make(chan struct{})
+	var installStarted, replacementStarted bool
 	auth := newBackendAuthCoordinator(nil, func() bool { return true })
 	auth.bind(conn)
-	defer auth.close()
-	installed := make(chan error, 1)
+	cancelAuth := func() {}
+	defer func() {
+		cancelAuth()
+		cancelPublication()
+		finishPublication()
+		unlockReplacement()
+		_ = conn.Close()
+		<-publicationDone
+		if installStarted {
+			<-installDone
+		}
+		if replacementStarted {
+			<-replacementDone
+		}
+		auth.close()
+	}()
 	go func() {
+		defer close(publicationDone)
+		published <- s.publishProof(publicationCtx, backendAuthTokens{selection: selection}, "adopted", &codexScopedUsage{allowed: true, order: 1}, 0)
+	}()
+	// Require the durable-write boundary; an earlier replacement-lock wait must fail setup.
+	select {
+	case <-writeReached:
+	case err := <-published:
+		t.Fatalf("publication returned before usage-write barrier: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("publication did not reach usage-write barrier within 5s")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cancelAuth = cancel
+	gate := &f.m.admission[loginProviderIndex(logins.ProviderCodex)]
+	guardReached := make(chan struct{})
+	installStarted = true
+	go func() {
+		defer close(installDone)
 		installed <- auth.install(ctx, backendAuthTokens{AccessToken: "synthetic", AccountID: "a", acquire: func() (func(), bool) { close(guardReached); gate.Lock(); return gate.Unlock, true }}, 0)
 	}()
 	select {
@@ -981,19 +1006,20 @@ func TestCodexHandoverPublicationReplacementAndAuthWriteCannotDeadlock(t *testin
 	case <-ctx.Done():
 		t.Fatal("auth did not reach guarded socket write")
 	}
-	replaced := make(chan error, 1)
-	go func() { err := conn.Notify(ctx, "test/replacement", nil); unlockReplacement(); replaced <- err }()
-	close(releasePublication)
+	replacementStarted = true
+	go func() {
+		defer close(replacementDone)
+		err := conn.Notify(ctx, "test/replacement", nil)
+		unlockReplacement()
+		replaced <- err
+	}()
+	finishPublication()
 	select {
 	case err := <-published:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(time.Second):
-		unlockReplacement()
-		<-published
-		<-installed
-		<-replaced
 		t.Fatal("publication/admission, replacement, and native write formed a lock cycle")
 	}
 	if err := <-installed; err != nil {

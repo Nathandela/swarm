@@ -1,6 +1,7 @@
 package shim
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"github.com/Nathandela/swarm/internal/opencodebridge"
@@ -116,10 +117,14 @@ type server struct {
 }
 
 func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcript.Writer, ptmx *os.File, pgid int, grace time.Duration, m *Metrics) *server {
+	in := &ptyWriter{f: ptmx}
+	if emu != nil {
+		in.bracketedPaste = emu.BracketedPaste
+	}
 	return &server{
 		hub:          &hub{emu: emu, tr: tr, metrics: m},
 		ptmx:         ptmx,
-		ptyIn:        &ptyWriter{f: ptmx},
+		ptyIn:        in,
 		pgid:         pgid,
 		graceTimeout: grace,
 		goAhead:      make(chan shimwire.Control, 1),
@@ -236,7 +241,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, InputEmbargo: true, OpenCodeInputEmbargo: true, OpenCodeDispatch: s.openCode != nil})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, PasteInput: true, InputEmbargo: true, OpenCodeInputEmbargo: true, OpenCodeDispatch: s.openCode != nil})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -309,6 +314,11 @@ func (s *server) serveConn(conn net.Conn) {
 				// write. The bytes reach the PTY verbatim but do not mutate the owner-input
 				// tracker; the frame they arrived on is the whole of that judgement.
 				_, _ = s.ptyIn.WriteControl([]byte(ctrl.Keys))
+			case shimwire.TypePasteInput:
+				// One message's text, framed as a paste when the agent asked for
+				// bracketed paste (ADR-010 Amendment 9). It is input like TDataIn:
+				// the owner-input tracker sees it as a draft.
+				_, _ = s.ptyIn.WritePaste([]byte(ctrl.Text))
 			case shimwire.TypeBackendAttach:
 				// The daemon's GO-AHEAD (ADR-013 §R7.2e): it is a connected client of the
 				// backend, and the agent may now be spawned with AgentArgs appended.
@@ -893,6 +903,56 @@ type ptyWriter struct {
 
 	embargo   *inputEmbargo
 	inputLine inputLineTracker
+
+	// bracketedPaste reports whether the agent enabled bracketed paste (DECSET 2004); nil
+	// means never. Production reads the emulator's lock-free flag: this writer's lock is
+	// held across the submit gap, so it must never wait on the emulator's lock.
+	bracketedPaste func() bool
+}
+
+func (p *ptyWriter) pasteOn() bool { return p.bracketedPaste != nil && p.bracketedPaste() }
+
+var (
+	pasteStart = []byte("\x1b[200~")
+	pasteEnd   = []byte("\x1b[201~")
+)
+
+// pasteFrame is the bytes one message's text becomes at the PTY (ADR-010 Amendment 9).
+// With bracketed paste on, the text travels inside the markers, so a CLI that reads keys one
+// by one (codex) knows where the paste ends before the submit arrives; a marker inside the
+// text is removed first, or its tail would be read as keys. With the mode off the text is
+// verbatim: markers would only be printed.
+func (p *ptyWriter) pasteFrame(text []byte) []byte {
+	if !p.pasteOn() {
+		return text
+	}
+	// Strip as bytes arrive so removing one marker cannot assemble another.
+	body := make([]byte, 0, len(text))
+	for _, b := range text {
+		body = append(body, b)
+		if bytes.HasSuffix(body, pasteStart) || bytes.HasSuffix(body, pasteEnd) {
+			body = body[:len(body)-len(pasteStart)]
+		}
+	}
+	out := make([]byte, 0, len(pasteStart)+len(body)+len(pasteEnd))
+	out = append(out, pasteStart...)
+	out = append(out, body...)
+	return append(out, pasteEnd...)
+}
+
+// WritePaste writes one message's text as a paste, without the carriage return that would
+// run it (the daemon sends that as its own frame after the gap). It is somebody's draft, so
+// it dirties the input line exactly as typing it would.
+func (p *ptyWriter) WritePaste(text []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.embargo != nil && p.embargo.held.Load() {
+		return 0, p.embargo.refusal
+	}
+	frame := p.pasteFrame(text)
+	n, err := p.writeLocked(frame)
+	p.inputLine.apply(frame[:n])
+	return n, err
 }
 
 func (p *ptyWriter) Write(b []byte) (int, error) {
@@ -945,7 +1005,8 @@ func (p *ptyWriter) submitMessage(text []byte, gap time.Duration) error {
 	if p.inputLine.dirty() {
 		return errInputBusy
 	}
-	if _, err := p.writeLocked(text); err != nil {
+	frame := p.pasteFrame(text)
+	if _, err := p.writeLocked(frame); err != nil {
 		return err
 	}
 	time.Sleep(gap)
@@ -953,7 +1014,7 @@ func (p *ptyWriter) submitMessage(text []byte, gap time.Duration) error {
 		// The text is in and the return is not. Count it as dirty, honestly: the line
 		// now holds words nobody submitted, and the next submit must refuse rather
 		// than run them together with its own.
-		p.inputLine.apply(text)
+		p.inputLine.apply(frame)
 		return err
 	}
 	p.inputLine.reset()

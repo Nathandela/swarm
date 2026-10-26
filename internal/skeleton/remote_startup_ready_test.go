@@ -15,7 +15,7 @@ import (
 // recycle embargoes are restored only before ready closes.
 func TestRemoteSocketDoesNotServeBeforeAssemblyReady(t *testing.T) {
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swsk-ready")
+	dir, err := os.MkdirTemp("", "swsk-ready")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestRemoteSocketDoesNotServeBeforeAssemblyReady(t *testing.T) {
 
 func TestFailedAssemblyClosesBoundRemoteListener(t *testing.T) {
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swsk-ready-fail")
+	dir, err := os.MkdirTemp("", "swsk-ready-fail")
 	if err != nil {
 		t.Fatal(err)
 	}

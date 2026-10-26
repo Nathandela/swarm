@@ -552,6 +552,29 @@ func (s *tapSub) tryLaunchGateControl(keys []byte, current func() bool) error {
 	return writer.TryControlInput(keys)
 }
 
+// PasteInput forwards one message's text on the frame that lets the shim bracket it as a paste
+// (ADR-010 Amendment 9). An upstream that proves no such frame gets it as Input: today's
+// behaviour until the session's shim is replaced.
+func (s *tapSub) PasteInput(p []byte) error {
+	if s.mode != readWrite {
+		return nil
+	}
+	if len(p) > 0 && s.t.mgr.foreignWrite != nil {
+		s.t.mgr.foreignWrite(s.t.id, s.t.gateBinding)
+	}
+	if len(p) > 0 && s.t.mgr.beforeWrite != nil {
+		if err := s.t.mgr.beforeWrite(s.t.id); err != nil {
+			return err
+		}
+	}
+	if pw, ok := s.t.up.(protocol.PasteInputWriter); ok {
+		if err := pw.PasteInput(p); !errors.Is(err, protocol.ErrPasteInputUnsupported) {
+			return err
+		}
+	}
+	return s.t.up.Input(p)
+}
+
 // Resize forwards to the shared upstream for a readWrite subscriber and updates
 // the daemon mirror in the same tap critical section. The lock serializes resize
 // with pump's frame feed and late-subscriber snapshots, preserving one coherent

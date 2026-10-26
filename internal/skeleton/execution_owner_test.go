@@ -27,6 +27,99 @@ func (u *ownerFenceUpstream) ControlInput([]byte) error {
 	return nil
 }
 
+type ownerFencePasteUpstream struct {
+	*ownerFenceUpstream
+	pasteErr error
+}
+
+func (u *ownerFencePasteUpstream) PasteInput([]byte) error {
+	u.order = append(u.order, "paste")
+	return u.pasteErr
+}
+
+func TestExecutionOwnerFencePrecedesPasteAndFallback(t *testing.T) {
+	for _, mode := range []string{"paste", "unsupported", "absent"} {
+		for _, refuse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/refuse=%v", mode, refuse), func(t *testing.T) {
+				base := &ownerFenceUpstream{fakeUpstream: newFakeUpstream(mustSnap(t, ""))}
+				var upstream protocol.SessionStream = base
+				if mode != "absent" {
+					paste := &ownerFencePasteUpstream{ownerFenceUpstream: base}
+					if mode == "unsupported" {
+						paste.pasteErr = protocol.ErrPasteInputUnsupported
+					}
+					upstream = paste
+				}
+				binding := launchGateIdentity{"owned", 123, 456}
+				mgr := newTapManager(func(string) (protocol.SessionStream, error) { return upstream, nil })
+				mgr.gateIdentity = func(string) (launchGateIdentity, bool) { return binding, true }
+				mgr.foreignWrite = func(id string, actual launchGateIdentity) {
+					if id != "s1" || actual != binding {
+						t.Fatal("paste used another launch binding")
+					}
+					base.order = append(base.order, "foreign")
+				}
+				mgr.beforeWrite = func(id string) error {
+					if id != "s1" {
+						t.Fatal("paste used another owner identity")
+					}
+					base.order = append(base.order, "fence")
+					if refuse {
+						return errors.New("current owner revision refused")
+					}
+					return nil
+				}
+				rw, err := mgr.subscribe("s1", readWrite)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = rw.Close() })
+				ro, err := mgr.subscribe("s1", readOnly)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = ro.Close() })
+				if err := ro.PasteInput([]byte("observe")); err != nil || len(base.order) != 0 {
+					t.Fatal("read-only paste advanced custody or wrote")
+				}
+				err = rw.PasteInput([]byte("message"))
+				want := []string{"foreign", "fence"}
+				if !refuse {
+					if mode != "absent" {
+						want = append(want, "paste")
+					}
+					if mode != "paste" {
+						want = append(want, "input")
+					}
+				}
+				if (err != nil) != refuse || !reflect.DeepEqual(base.order, want) {
+					t.Fatalf("paste escaped owner fence or fenced fallback twice: err=%v order=%v want=%v", err, base.order, want)
+				}
+			})
+		}
+	}
+}
+
+func TestExecutionOwnerPasteUncertainErrorNeverFallsBack(t *testing.T) {
+	base := &ownerFenceUpstream{fakeUpstream: newFakeUpstream(mustSnap(t, ""))}
+	uncertain := errors.New("paste write outcome unknown")
+	up := &ownerFencePasteUpstream{ownerFenceUpstream: base, pasteErr: uncertain}
+	mgr := newTapManager(func(string) (protocol.SessionStream, error) { return up, nil })
+	mgr.foreignWrite = func(string, launchGateIdentity) { base.order = append(base.order, "foreign") }
+	mgr.beforeWrite = func(string) error { base.order = append(base.order, "fence"); return nil }
+	rw, err := mgr.subscribe("s1", readWrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rw.Close() })
+	if err := rw.PasteInput([]byte("message")); !errors.Is(err, uncertain) {
+		t.Fatalf("uncertain write error changed: %v", err)
+	}
+	if !reflect.DeepEqual(base.order, []string{"foreign", "fence", "paste"}) {
+		t.Fatalf("uncertain paste was retried or lacked owner fences: %v", base.order)
+	}
+}
+
 func TestExecutionOwnerFencePrecedesEveryTapWrite(t *testing.T) {
 	for _, verb := range []string{"input", "submit", "control"} {
 		t.Run(verb, func(t *testing.T) {

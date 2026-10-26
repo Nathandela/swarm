@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -448,17 +449,31 @@ func TestLaunchGateBriefOwnerAttachAndBusyRemoteFence(t *testing.T) {
 			t.Fatal("brief owner takeover was missed")
 		}
 	})
+	var ownerServer, remoteServer *protocol.Server
 	t.Run("busy remote releases owner reservation", func(t *testing.T) {
 		r := newGateRig(t, sk.core, m, launchTrustSnapshot(t))
 		r.poll(t)
 		r.settle()
 		r.d.srv = protocol.NewServer(r.d.api, "owner")
+		t.Cleanup(func() { _ = r.d.srv.Close() })
 		r.d.remoteSrv = protocol.NewServer(r.d.api, "remote")
+		ownerServer, remoteServer = r.d.srv, r.d.remoteSrv
+		t.Cleanup(func() { _ = r.d.remoteSrv.Close() })
 		entered, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+		joined := make(chan struct{})
+		releaseFence := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(func() { releaseFence(); <-joined })
 		go func() {
+			defer close(joined)
 			done <- r.d.remoteSrv.WithInputFence(r.id, func() error { close(entered); <-release; return nil })
 		}()
-		<-entered
+		select {
+		case <-entered:
+		case err := <-done:
+			t.Fatalf("remote input fence returned before entry: %v", err)
+		case <-time.After(time.Second):
+			t.Fatal("remote input fence did not enter within 1s")
+		}
 		r.poll(t)
 		if len(r.up.attempts) != 0 || r.phase() != launchGateAbandoned {
 			t.Fatal("busy remote fence allowed gate")
@@ -467,11 +482,22 @@ func TestLaunchGateBriefOwnerAttachAndBusyRemoteFence(t *testing.T) {
 		if err := r.d.srv.TryWithInputFence(r.id, func() error { called = true; return nil }); err != nil || !called {
 			t.Fatal("owner fence leaked")
 		}
-		close(release)
+		releaseFence()
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
 	})
+	for name, server := range map[string]*protocol.Server{"owner": ownerServer, "remote": remoteServer} {
+		if server == nil {
+			t.Errorf("%s server was not created", name)
+			continue
+		}
+		called := false
+		err := server.TryWithInputFence("closed-server-proof", func() error { called = true; return nil })
+		if err == nil || called {
+			t.Errorf("%s server remained usable after subtest cleanup: err=%v callback=%v", name, err, called)
+		}
+	}
 }
 
 func TestLaunchGateInvalidationDuringEnterObserverPreventsWireAndRetry(t *testing.T) {

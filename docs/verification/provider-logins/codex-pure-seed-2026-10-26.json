@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-26",
+  "scope": "Pure synthetic seed prerequisite for the frozen helper; no provider/client or merged-source qualification.",
+  "review": "Root and Astra independently reviewed preparation, unit receipt, input bindings and cleanup.",
+  "result": "PASS",
+  "receipt": {
+    "path": "/private/tmp/swarm-codex-seed-run-hj_ke4df/receipt.json",
+    "sha256": "3bf24060c3f99834a6a56f8064b748be810f8c58f61285da9b5bcc29d292f5c8"
+  },
+  "seed_inputs": {
+    "path": "/private/tmp/swarm-codex-seed-inputs-52dlqre0/seed-inputs.json",
+    "sha256": "0cf8118845992594015547a619f7a8709474c5845a09954c556bf79266c0b282"
+  },
+  "runner": {
+    "path": "/private/tmp/swarm-codex-seed-20261026-v4/hashes.json",
+    "sha256": "512804dc3c423e3f9db7258c6997095486c5fca092988b02cc894ef179f64c25"
+  },
+  "packet": {
+    "path": "/private/tmp/swarm-codex-tui-constructor-20261026-v18/review-v18/manifest.json",
+    "sha256": "0761488a5b1a7a9f2d646162516186a4e4dbe3123cb3ce5599d926a22861532e"
+  },
+  "helper_sha256": "3216626968b4f10579eece2a4e00f7dab0042582bf9c6d6a789e958df6cf4450",
+  "observations": {
+    "elapsed_seconds": 0.4030675699468702,
+    "complete_marker_lines": 29,
+    "stderr_bytes": 878,
+    "unknown_marker_lines": 0,
+    "stdout_bytes": 302,
+    "stdout_matches_prepared": true,
+    "registry_schema": 3,
+    "ready_synthetic_grants": 2,
+    "owner_mode": "native-grant-v1",
+    "epoch": 1,
+    "remaining_switches": 0
+  },
+  "cleanup": {
+    "unit": "swarm-seed-0822d13b2cb45d1c",
+    "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-seed-0822d13b2cb45d1c.service",
+    "observed_identities_ended": 1,
+    "empty_and_directory_gone": true,
+    "signal_attempted": false,
+    "already_collected": true,
+    "input_pins_rechecked": true
+  },
+  "limits": [
+    "Uses frozen source3534 and helper321662; it does not qualify the current uncommitted main integration.",
+    "No Swarm/provider executable, OAuth service, model, MCP or PTY ran. Ready refers to synthetic fixture grants, not server-authenticated accounts.",
+    "One0.403-second sample does not explain prior timeouts or establish an eight-second full-constructor latency bound.",
+    "Installed npm0.164 compatibility, account adoption, input/constructor behavior, automatic continuation and release remain open."
+  ]
+}

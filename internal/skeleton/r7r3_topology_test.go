@@ -40,6 +40,7 @@ import (
 	"github.com/Nathandela/swarm/internal/appserver"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/testbin"
 	"github.com/Nathandela/swarm/internal/transcript"
 )
 
@@ -60,13 +61,17 @@ var (
 func buildFakeCodex(t *testing.T) string {
 	t.Helper()
 	fakeCodexOnce.Do(func() {
-		dir, err := os.MkdirTemp("/tmp", "swr7codex")
+		dir, err := os.MkdirTemp("", "swr7codex")
 		if err != nil {
 			fakeCodexErr = err
 			return
 		}
 		out := filepath.Join(dir, "codex")
 		fakeCodexBin = out
+		if err := testbin.RegisterExecutable(out); err != nil {
+			fakeCodexErr = err
+			return
+		}
 		cmd := exec.Command("go", "build", "-o", out, "github.com/Nathandela/swarm/cmd/swarm-fake-codex")
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {

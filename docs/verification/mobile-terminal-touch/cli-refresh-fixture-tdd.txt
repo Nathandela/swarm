@@ -1,0 +1,28 @@
+CLI-refresh installed-upgrade fixture readiness — 2026-10-25
+Test-only correction; CLI-refresh/shim production code remains unchanged.
+
+The fixture treated PTY 'fixture-ready' as proof of the post-spawn CLI observation.
+Shim starts PTY draining before managed-process recording and observed-cli.json.
+An installation replacement in that window changes the fingerprint, so the shim
+correctly withholds the observation and the watcher leaves the source untouched.
+The ten-second watcher loop cannot repair an observation already withheld.
+
+Correction: wait at most10s for the actual initial observation to equal the full
+launch identity before installing2.0.2. Keep the PTY/transcript checks, fail-closed
+watcher policy, real replacement, metadata preservation and stale-target refusal.
+
+RED: Go overlay retained the original test and inserted3.1s immediately before
+recordCLIObservation for fixture2.0.1. GOFLAGS=-overlay propagated the same source
+into testbin.Build's actual swarm fixture binaries. Old ordering failed exactly
+as the race gate: 'no matching post-spawn CLI observation', empty watcher state.
+Test17.01s/package19.755s.
+
+GREEN: same shim-delay overlay with the corrected test completed replacement at
+CLI2.0.2. Test7.18s/package9.946s. Neither overlay is committed.
+
+Both focused runs used GOMAXPROCS=2, -p2, canonical TMPDIR=/private/tmp, shared
+caches and the existing process supervisor. Commands targeted only
+^TestCLIRefreshInstalledUpgradeRealResume$ with -count=1 -v.
+Normal GREEN without overlays: test4.74s/package7.498s.
+Race GREEN without overlays: test6.37s/package12.644s; no race report.
+No full package or repository-wide suite was run in this correction lane.

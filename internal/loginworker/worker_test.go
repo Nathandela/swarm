@@ -40,6 +40,12 @@ func TestMain(m *testing.M) {
 		os.Exit(code)
 	}
 	if len(os.Args) == 4 && os.Args[1] == "internal" && os.Args[2] == "login-enroll" {
+		// The deadline test reproduces startup exceeding its former three-second budget.
+		if os.Getenv(runnerEnv) == "" {
+			if _, err := os.Stat("fixture-delayed-start"); err == nil {
+				time.Sleep(3100 * time.Millisecond)
+			}
+		}
 		if err := RunConfig(context.Background(), os.Args[3]); err != nil {
 			os.Exit(1)
 		}
@@ -301,7 +307,15 @@ func startFixture(t *testing.T, cfg Config) Ref {
 
 func waitProgress(t *testing.T, ref Ref, predicate func(Progress) bool) Progress {
 	t.Helper()
-	deadline := time.Now().Add(8 * time.Second)
+	cfg, err := ReadConfig(ref.StateRoot, ref.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return waitProgressUntil(t, ref, predicate, cfg.Deadline.Add(8*time.Second))
+}
+
+func waitProgressUntil(t *testing.T, ref Ref, predicate func(Progress) bool, deadline time.Time) Progress {
+	t.Helper()
 	for time.Now().Before(deadline) {
 		p, err := ReadProgress(ref.StateRoot, ref.JobID)
 		if err == nil && predicate(p) {
@@ -309,8 +323,8 @@ func waitProgress(t *testing.T, ref Ref, predicate func(Progress) bool) Progress
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	p, _ := ReadProgress(ref.StateRoot, ref.JobID)
-	t.Fatalf("worker progress did not converge: phase=%s error=%s stopped=%v", p.Phase, p.ErrorCode, p.WritersStopped)
+	p, err := ReadProgress(ref.StateRoot, ref.JobID)
+	t.Fatalf("worker progress did not converge: phase=%s error=%s stopped=%v read_error=%v", p.Phase, p.ErrorCode, p.WritersStopped, err)
 	return Progress{}
 }
 
@@ -475,8 +489,8 @@ func TestDetachedCodexRejectsConflictingCompletion(t *testing.T) {
 	cfg := testConfig(t, "codex", "mismatch")
 	ref := startFixture(t, cfg)
 	p := waitProgress(t, ref, func(p Progress) bool { return p.WritersStopped })
-	if p.Phase != PhaseFailed {
-		t.Fatal("conflicting completion accepted")
+	if p.Phase != PhaseFailed || p.ErrorCode != "stale_native_attempt" {
+		t.Fatalf("conflicting completion was not rejected as stale: phase=%s code=%s", p.Phase, p.ErrorCode)
 	}
 	assertNoJobSecrets(t, cfg)
 }
@@ -533,8 +547,8 @@ func TestRunnerCrashStopsNativeWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 	p = waitProgress(t, ref, func(p Progress) bool { return p.WritersStopped })
-	if p.Phase != PhaseFailed || child.Alive() {
-		t.Fatal("runner crash retained native writer")
+	if p.Phase != PhaseFailed || p.ErrorCode != "runner_stopped" || child.Alive() {
+		t.Fatalf("runner crash did not contain native writers: phase=%s code=%s", p.Phase, p.ErrorCode)
 	}
 	assertNoJobSecrets(t, cfg)
 }
@@ -561,13 +575,19 @@ func TestSupervisorCrashStopsWritersAndCancellationCanReconcile(t *testing.T) {
 
 func TestDeadlineContainsWriters(t *testing.T) {
 	cfg := testConfig(t, "codex", "pending")
-	cfg.Deadline = time.Now().Add(3 * time.Second)
+	job := filepath.Join(cfg.StateRoot, "logins", "enrollment", cfg.JobID)
+	if err := os.WriteFile(filepath.Join(job, "fixture-delayed-start"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Re-arm the ordinary fixture cap after setup; containment still uses the
+	// real Config deadline, with startup/readiness bounded by their own waits.
+	cfg.Deadline = time.Now().Add(20 * time.Second)
 	ref := startFixture(t, cfg)
 	waitProgress(t, ref, func(p Progress) bool { return p.Phase == PhaseAuthenticating })
 	child := waitFixtureDescendant(t, cfg)
-	p := waitProgress(t, ref, func(p Progress) bool { return p.WritersStopped })
-	if p.Phase != PhaseFailed || child.Alive() {
-		t.Fatal("deadline retained native writer")
+	p := waitProgressUntil(t, ref, func(p Progress) bool { return p.WritersStopped }, cfg.Deadline.Add(8*time.Second))
+	if time.Now().Before(cfg.Deadline) || p.Phase != PhaseFailed || p.ErrorCode != "deadline_or_worker_stopped" || !p.NativeWritersStopped || p.Runner.Alive() || child.Alive() {
+		t.Fatalf("deadline did not contain native writers: phase=%s error=%s native_stopped=%v", p.Phase, p.ErrorCode, p.NativeWritersStopped)
 	}
 	assertNoJobSecrets(t, cfg)
 }

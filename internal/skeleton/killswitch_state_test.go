@@ -63,7 +63,7 @@ func killSwitchOf(t *testing.T, sk *Daemon) protocol.KillSwitch {
 // sun_path limit) with cleanup, for a test that reopens the SAME dir across a restart.
 func freshStateDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "swsk-ks")
+	dir, err := os.MkdirTemp("", "swsk-ks")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

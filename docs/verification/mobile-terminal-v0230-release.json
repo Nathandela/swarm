@@ -1,0 +1,298 @@
+{
+  "schema": 1,
+  "date": "2026-10-25",
+  "version": "v0.23.0",
+  "release_url": "https://github.com/Nathandela/swarm/releases/tag/v0.23.0",
+  "release_commit": "74504f5500a19e8d374009be1a16ef043ca628ec",
+  "published_at": "2026-10-25T14:15:10Z",
+  "workflow": {
+    "id": 40199968287,
+    "url": "https://github.com/Nathandela/swarm/actions/runs/40199968287",
+    "conclusion": "success",
+    "successful_jobs": 17,
+    "jobs": [
+      {
+        "name": "container (pushgw-container.yml, reused) / build, scan, non-root, hardening",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / docs (required files)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / lint (golangci-lint)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test (go test ./...)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / android (aar + gradle gate)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test-darwin (macos)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / remote v2 (workerd + Firestore emulator)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / fuzz (active, bounded fuzztime)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / release dry-run (goreleaser snapshot, E13.1)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "publish immutable pushgw image",
+        "conclusion": "success"
+      },
+      {
+        "name": "publish (goreleaser release)",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "artifacts": {
+    "signature_verified": true,
+    "tamper_rejected": true,
+    "trust_slot": "d7938ebe67f5cb7ff202724352a7890cd0af8ca422c22e3e7af32b6284e7885a",
+    "expected_compat": {
+      "login_schema": 1,
+      "account_schema": 1,
+      "account_jobs": 1,
+      "account_recovery": 3,
+      "account_worker": 6,
+      "account_shim": 2,
+      "account_config": 4,
+      "account_inventory": 1,
+      "account_auth": 1,
+      "version": "v0.23.0",
+      "shimwire": 2,
+      "protocol": 1,
+      "schema": 4
+    },
+    "platforms": {
+      "mac": {
+        "archive": "swarm_0.23.0_darwin_all.tar.gz",
+        "archive_sha256": "50aeedb932846101666345f7357b2ed7484bb803a454b375634c45456f136117",
+        "binary_sha256": {
+          "swarm": "920592d26e08aedb2ffe9b6eae72e1cf805e314e90f80d7daf09443138dfd926",
+          "swarm-remote": "2106d5bf08cb03ec0bd4277b7d10756585ff408f6a08a453d80eb952c2eb89e7"
+        },
+        "compat_verified": true,
+        "metadata": {
+          "swarm": {
+            "version": "0.23.0",
+            "commit": "74504f5500a19e8d374009be1a16ef043ca628ec",
+            "go": "go1.26.10",
+            "buildinfo_sha256": "2a324166125d8eedecf94903b0907ccbaade9c98f31a705f3d48fd5b5486d9b9"
+          },
+          "swarm-remote": {
+            "version": "0.23.0",
+            "commit": "74504f5500a19e8d374009be1a16ef043ca628ec",
+            "go": "go1.26.10",
+            "buildinfo_sha256": "47272df12e418cc16fc3af3be4b510259426eb20a027d852a0f99295918bdc01"
+          }
+        }
+      },
+      "linux": {
+        "archive": "swarm_0.23.0_linux_amd64.tar.gz",
+        "archive_sha256": "9fd5ef98d37d3cd2210cf90a9436dd06bdef332a4d240f2935af65546c91f971",
+        "binary_sha256": {
+          "swarm": "b696fdd6e7b4134fb3299086a78a040f3eb1211ed5a928d16f08c40add4af06e",
+          "swarm-remote": "1083c187ac7d6c1f0d7d7663cea0d8a82f4bbdf258df06b1f1274f9dda1af19f"
+        },
+        "compat_verified": true,
+        "metadata": {
+          "swarm": {
+            "version": "0.23.0",
+            "commit": "74504f5500a19e8d374009be1a16ef043ca628ec",
+            "go": "go1.26.10",
+            "buildinfo_sha256": "8b15d9672906bc170124856e6db7034d2db54d17906a7c3766b4a0f32aa0ffea"
+          },
+          "swarm-remote": {
+            "version": "0.23.0",
+            "commit": "74504f5500a19e8d374009be1a16ef043ca628ec",
+            "go": "go1.26.10",
+            "buildinfo_sha256": "e3f5fb8d9d674c8af95fd716c860021e8b1280cc3640a0f070ea474c30dfa5c1"
+          }
+        }
+      }
+    },
+    "container_manifest": {
+      "schema": 1,
+      "release": "v0.23.0",
+      "commit": "74504f5500a19e8d374009be1a16ef043ca628ec",
+      "images": {
+        "pushgw": "ghcr.io/nathandela/swarm-pushgw@sha256:d9f2f73e8bbd22a2b6d8cf66cd0401b55289189b90572cd0182b6a8af05c9845"
+      }
+    }
+  },
+  "installation": {
+    "mac": {
+      "host": "mac",
+      "installed_version": "0.23.0",
+      "binary_sha256": {
+        "swarm": "920592d26e08aedb2ffe9b6eae72e1cf805e314e90f80d7daf09443138dfd926",
+        "swarm-remote": "2106d5bf08cb03ec0bd4277b7d10756585ff408f6a08a453d80eb952c2eb89e7"
+      },
+      "installed_hashes_verified": true,
+      "homebrew_exit": 1,
+      "homebrew_receipt": "swarm 0.23.0",
+      "convergence_exit": 2,
+      "daemon_detail": "the daemon runs 0.22.0 but this binary is 0.23.0",
+      "live_identities_before": 7,
+      "live_identities_preserved": 7,
+      "live_identity_set_sha256": "4c3ce187c5950132e8f13a1432c9213da04822f28bb7b306fd600c92bfefe13f",
+      "daemon_identity_unchanged": true,
+      "doctor_counts": {
+        "warn": 3,
+        "ok": 7
+      },
+      "existing_recovery_markers_preserved": true
+    },
+    "tf_nathan": {
+      "host": "tf_nathan",
+      "installed_version": "0.23.0",
+      "binary_sha256": {
+        "swarm": "b696fdd6e7b4134fb3299086a78a040f3eb1211ed5a928d16f08c40add4af06e",
+        "swarm-remote": "1083c187ac7d6c1f0d7d7663cea0d8a82f4bbdf258df06b1f1274f9dda1af19f"
+      },
+      "installed_hashes_verified": true,
+      "staged_exact_version_verified": true,
+      "convergence_exit": 2,
+      "daemon_detail": "the daemon runs 0.22.0 but this binary is 0.23.0",
+      "live_identities_before": 25,
+      "live_identities_preserved": 25,
+      "live_identity_set_sha256": "cc2cec754ba21891d5d25d65e6ad512f61963e7038b48487f831017aeb7663db",
+      "daemon_identity_unchanged": true,
+      "doctor_counts": {
+        "warn": 7,
+        "ok": 3
+      },
+      "existing_rollback_and_hold_preserved": true,
+      "pending_converge": "v0.23.0",
+      "rollback_version": "v0.22.0"
+    }
+  },
+  "review": {
+    "release_gate_and_artifact_helpers": "Astra approved; unknown kernel inspection failures refuse capture",
+    "independent_installed_version_hash_doctor_check": "Sol independently confirmed both installed pairs, Homebrew ownership, zero doctor failures and running daemon0.22.0",
+    "identity_scope": "Exact kernel PID/birth continuity of captured persisted shims; not a PTY/native-agent health trial",
+    "darwin_buildinfo_slice": "x86_64, matching this Mac"
+  },
+  "updater_timers": {
+    "mac_loaded": true,
+    "tf_nathan_active": true,
+    "configuration_changed": false
+  },
+  "limits": {
+    "daemon_convergence_task": "agents-tracker-pnaq",
+    "physical_handset_gate": "agents-tracker-nzo8.5",
+    "physical_handset_qualified": false,
+    "mac_homebrew_update_exit": 1,
+    "mac_homebrew_upgrade_exit": 1,
+    "mac_swarm_upgrade_verified_successful": true,
+    "mac_unrelated_failure": "pkgconf reinstall blocked by existing macOS27 CLT incompatibility",
+    "host_tooling_task": "agents-tracker-fi0w",
+    "vm_free_bytes_independent_check": 1884274688,
+    "oci_attestation_independently_verified": false,
+    "container_manifest_scope": "Tag/commit consistency only",
+    "hosted_services_deployed": false,
+    "native_agents_forcibly_restarted": false,
+    "cleanup_of_user_histories_or_credentials": false
+  },
+  "evidence_logs": {
+    "mac/brew-update.log": {
+      "sha256": "6246fe30a48aaef7c83d1f01d6fadf996912221ef3871ce7595b3d8791412ccf",
+      "bytes": 3341
+    },
+    "mac/brew-upgrade.log": {
+      "sha256": "ed41d961924b14183c2643cd7e91022f79e69a44108bac841ceefc8c30eeba5b",
+      "bytes": 1437
+    },
+    "mac/mac-converge.log": {
+      "sha256": "29cca11224f5368cc1427b1e41813527312301ccd0d8aa1e568fad24910c6760",
+      "bytes": 46
+    },
+    "mac/before-identities.json": {
+      "sha256": "d89c42ce9456f1590e0174c6a9688142ced0784c76763132899bdbcc0f6edf09",
+      "bytes": 560
+    },
+    "mac/after-identities.json": {
+      "sha256": "d89c42ce9456f1590e0174c6a9688142ced0784c76763132899bdbcc0f6edf09",
+      "bytes": 560
+    },
+    "mac/before-state.json": {
+      "sha256": "3fc85cb0acb8f2e86afeeff2d876fa863eff0b3835c56d665f44fc9c8004505f",
+      "bytes": 2510
+    },
+    "mac/after-state.json": {
+      "sha256": "d7368a18eb16d6658ca87f956a817a0097515eabe36aff3320bcba4183c56ea9",
+      "bytes": 2510
+    },
+    "vm/stage.log": {
+      "sha256": "61cfc137545254d084127b36f7ca166624b4f8e45c3ba896aa093d720e163b9a",
+      "bytes": 212
+    },
+    "vm/activate.log": {
+      "sha256": "6855ac5470d1b0227bb25d6fba0ebffdd1b2ab7ce6a134cf29dcd442c39dfe93",
+      "bytes": 46
+    },
+    "vm/before-identities.json": {
+      "sha256": "5cf288089462286a262601dc94f89bee5d98703511d95dc9d52026619fa72438",
+      "bytes": 1448
+    },
+    "vm/after-identities.json": {
+      "sha256": "5cf288089462286a262601dc94f89bee5d98703511d95dc9d52026619fa72438",
+      "bytes": 1448
+    },
+    "vm/before-state.json": {
+      "sha256": "ed020c7b8ce803ed73930e4ea57ab82ff9cf096d1bcbc2128e020215e6a97fb7",
+      "bytes": 3500
+    },
+    "vm/after-state.json": {
+      "sha256": "a6e32e948d14b63b14b26a72242b093173656ae41d08f7076393f506aae40bc9",
+      "bytes": 3500
+    }
+  },
+  "task_artifacts": {
+    "private_identity_reports_retired": true,
+    "local_scratch_removed": true,
+    "vm_scratch_removed": true,
+    "shared_caches_and_managed_recovery_state_retained": true,
+    "local_logical_bytes_removed": 137244719,
+    "local_allocated_bytes_removed": 137351168,
+    "vm_logical_bytes_removed": 3236307,
+    "vm_allocated_bytes_removed": 3268608
+  }
+}

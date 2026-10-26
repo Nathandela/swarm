@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 func TestReplayBinaryWaitsForExplicitStartGate(t *testing.T) {
@@ -20,6 +22,9 @@ func TestReplayBinaryWaitsForExplicitStartGate(t *testing.T) {
 		t.Fatalf("write replay source: %v", err)
 	}
 	binary := filepath.Join(dir, "replay")
+	if err := testbin.RegisterExecutable(binary); err != nil {
+		t.Fatal(err)
+	}
 	if out, err := exec.Command("go", "build", "-o", binary, source).CombinedOutput(); err != nil {
 		t.Fatalf("build replay: %v\n%s", err, out)
 	}

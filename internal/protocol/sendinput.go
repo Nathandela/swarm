@@ -118,7 +118,9 @@ func (cc *clientConn) handleSendInput(c Control) {
 		cc.replyError("send_input: session " + strconv.Quote(local) + " is not running")
 		return
 	}
-	if err := cc.srv.sendMessage(local, frames, sendInputSubmits(c.SendInput), true); err != nil {
+	if err := cc.srv.sendMessage(local, frames, sendMessageOptions{
+		submits: sendInputSubmits(c.SendInput), manual: true, pasteText: sendInputPastes(c.SendInput),
+	}); err != nil {
 		cc.replyError("send_input: " + err.Error())
 		return
 	}
@@ -142,11 +144,19 @@ func (s *Server) SendInput(local string, req SendInputReq) error {
 	if !s.sessionRunning(local) {
 		return fmt.Errorf("send_input: session %s is not running", strconv.Quote(local))
 	}
-	return s.sendMessage(local, frames, sendInputSubmits(&req), false)
+	return s.sendMessage(local, frames, sendMessageOptions{
+		submits: sendInputSubmits(&req), manual: false, pasteText: sendInputPastes(&req),
+	})
 }
 
 func sendInputSubmits(req *SendInputReq) bool {
 	return req != nil && (req.Submit || req.Key == "enter")
+}
+
+// sendInputPastes reports whether the message's first frame is TEXT, which rides the shim's
+// paste op (ADR-010 Amendment 9). A key is never pasted: a pasted CR or ESC is content.
+func sendInputPastes(req *SendInputReq) bool {
+	return req != nil && req.Text != ""
 }
 
 // rawDirectInputSubmits recognizes only the terminal's characterized Enter
@@ -388,7 +398,14 @@ func (s *Server) TryWithInputFence(local string, fn func() error) error {
 	return fn()
 }
 
-func (s *Server) sendMessage(local string, frames [][]byte, submits, manual bool) error {
+// Input origin controls admission independently of how text reaches the shim.
+type sendMessageOptions struct {
+	submits   bool
+	manual    bool
+	pasteText bool
+}
+
+func (s *Server) sendMessage(local string, frames [][]byte, options sendMessageOptions) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -399,7 +416,7 @@ func (s *Server) sendMessage(local string, frames [][]byte, submits, manual bool
 	if err := s.inputGate(local); err != nil {
 		return err
 	}
-	if err := s.newTurnGate(local, frames, manual); err != nil {
+	if err := s.newTurnGate(local, frames, options.manual); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -424,11 +441,15 @@ func (s *Server) sendMessage(local string, frames [][]byte, submits, manual bool
 	if err := s.inputGate(local); err != nil {
 		return err
 	}
-	if err := s.newTurnGate(local, frames, manual); err != nil {
+	if err := s.newTurnGate(local, frames, options.manual); err != nil {
 		return err
 	}
 
 	s.mu.Lock()
+	if s.closed || s.leases[local] != ls {
+		s.mu.Unlock()
+		return fmt.Errorf("protocol: session %q input fence is no longer current", local)
+	}
 	stream := ls.stream
 	s.mu.Unlock()
 	if stream == nil {
@@ -462,7 +483,13 @@ func (s *Server) sendMessage(local string, frames [][]byte, submits, manual bool
 				time.Sleep(wait)
 			}
 		}
-		if err := stream.Input(f); err != nil {
+		var err error
+		if i == 0 && options.pasteText {
+			err = pasteInput(stream, f)
+		} else {
+			err = stream.Input(f)
+		}
+		if err != nil {
 			if i > 0 {
 				return fmt.Errorf("text delivered, submit not sent — the session's input stream closed "+
 					"mid-message; peek and send --key enter to recover: %w", err)
@@ -471,11 +498,23 @@ func (s *Server) sendMessage(local string, frames [][]byte, submits, manual bool
 		}
 		wrote = time.Now()
 	}
-	if submits {
+	if options.submits {
 		// This is deliberately AFTER the explicit CR Input returned success. If
 		// the update itself fails, the durable Draft marker remains fail-closed;
 		// the already-successful user input must not be reported failed/retried.
 		_ = s.observeDirectInput(local, DirectInputSubmitted)
 	}
 	return nil
+}
+
+// pasteInput writes a message's text through the stream's paste op, so the shim can bracket
+// it when the agent enabled bracketed paste (ADR-010 Amendment 9). A stream without one -- an
+// old shim mid-upgrade -- gets the text as ordinary input, which is what shipped before.
+func pasteInput(stream SessionStream, text []byte) error {
+	if pw, ok := stream.(PasteInputWriter); ok {
+		if err := pw.PasteInput(text); !errors.Is(err, ErrPasteInputUnsupported) {
+			return err
+		}
+	}
+	return stream.Input(text)
 }

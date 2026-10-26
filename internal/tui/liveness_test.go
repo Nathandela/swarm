@@ -17,16 +17,15 @@ func TestLiveness_EventMovesRowGroup(t *testing.T) {
 	f := newFakeClient(sWorking("endpoint/s1", "codex", "~/Code/x", "compiling now", 3*time.Minute))
 	tm := startTM(t, New(f, detectMixed()))
 
-	// Initial state: the session sits under WORKING.
-	waitContains(t, tm, "WORKING")
-	waitContains(t, tm, "compiling now")
+	// Assert both parts of the initial state in one output read. teatest drains
+	// its shared output buffer per wait, so sequential waits lose the same frame.
+	waitContainsAll(t, tm, "WORKING", "compiling now")
 
 	// A status event moves the SAME session (same id) into needs_input with a new
 	// summary. The view must reflect the move purely from the event.
 	f.emit(protocol.Event{Session: sNeedsInput("endpoint/s1", "codex", "~/Code/x", "Permission: run tests?", 0)})
 
-	waitContains(t, tm, "NEEDS INPUT")
-	waitContains(t, tm, "Permission: run tests?")
+	waitContainsAll(t, tm, "NEEDS INPUT", "Permission: run tests?")
 	quitTM(t, tm)
 
 	// Final single-screen render: the row is under NEEDS INPUT, the old WORKING

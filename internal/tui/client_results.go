@@ -5,6 +5,8 @@ import tea "charm.land/bubbletea/v2"
 // Mutations may have landed before a disconnect; their old replies cannot replay UI effects.
 func clientResultGeneration(msg tea.Msg) (uint64, bool) {
 	switch m := msg.(type) {
+	case resumeResultMsg:
+		return m.result.generation, true
 	case launchResultMsg:
 		return m.generation, true
 	case deleteDoneMsg:
@@ -31,6 +33,9 @@ func stampClientResults(cmd tea.Cmd, generation uint64) tea.Cmd {
 			for i, c := range m {
 				m[i] = stampClientResults(c, generation)
 			}
+			return m
+		case resumeResultMsg:
+			m.result.generation = generation
 			return m
 		case launchResultMsg:
 			m.generation = generation

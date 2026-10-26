@@ -147,22 +147,9 @@ type detectMsg struct {
 	agents []AgentInfo
 }
 
-// repaintInterval is how often the general view re-emits its frame to refresh the
-// live elapsed-time column. Elapsed granularity is seconds and coarser, so a
-// one-second cadence suffices (down from the former 200 ms, cutting the idle
-// redraw rate 5x per N-3), and the tick only runs on the general view — never on
-// the launch/attach screens.
-//
-// F2 note: a repaint MUST re-emit the whole frame so a static board refreshes its
-// elapsed column (and so the frozen TestLiveness_EventMovesRowGroup, which drains
-// the teatest output between its two pre-event waits, sees the board on the second
-// wait). In charm.land/bubbletea v2's renderer this needs BOTH: the SGR nonce
-// (bumped each tick, consumed in View) to make the frame content differ so the
-// renderer does not early-return on an unchanged View, AND tea.ClearScreen to
-// force a full redraw rather than an empty cell diff. They are complementary, not
-// redundant — dropping either yields zero re-emission and regresses that frozen
-// test. The achievable N-3 wins here are the slower cadence and general-view-only
-// scope, not removing the periodic clear.
+// repaintInterval is how often the general view recomputes its elapsed-time
+// column. The renderer emits only when that displayed value or other content
+// changes. The timer runs only on the general view — never on launch/attach.
 const repaintInterval = time.Second
 
 func repaintTick() tea.Cmd {
@@ -184,8 +171,9 @@ type rootModel struct {
 	connections *clientLifetime
 	detect      DetectFunc
 
-	width  int
-	height int
+	width          int
+	height         int
+	formNavigation formNavigation
 
 	screen                                   screen
 	general                                  generalModel
@@ -217,9 +205,8 @@ type rootModel struct {
 	detected  bool        // whether a detectMsg has landed (else the form shows "checking...")
 	detectGen uint64      // latest dispatched detection generation; a detectMsg with an older gen is stale
 
-	events   <-chan protocol.Event
-	repaintN int  // repaint nonce: bumped each elapsed tick to force a full re-emit (see View)
-	ticking  bool // whether an elapsed repaint tick is in flight (only on the general view)
+	events  <-chan protocol.Event
+	ticking bool // whether an elapsed repaint tick is in flight (only on the general view)
 	// animatingWorking guards the faster glyph-only timer. At most one tick is in
 	// flight, and it lapses off-board, after connection loss, or with no Working row.
 	animatingWorking bool
@@ -381,8 +368,26 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rosterRevision++
 	}
+	shape := m.boardShape()
+	menu, menuKey := m.general.more, m.moreSelectionKey()
+	anchor := m.general.anchor()
 	next, cmd := m.update(msg)
-	return next, stampClientResults(cmd, next.(rootModel).reconnectGeneration)
+	updated := next.(rootModel)
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
+	default:
+		if menu != nil && updated.general.more == menu {
+			updated.restoreMoreSelection(menuKey)
+		}
+	}
+	if _, resize := msg.(tea.WindowSizeMsg); resize {
+		updated.general.restoreAnchor(anchor)
+		if updated.general.more != nil {
+			updated.revealMore()
+		}
+	}
+	updated.syncBoardGeometry(shape)
+	return updated, stampClientResults(tea.Batch(cmd, updated.armWorkingAnimation()), updated.reconnectGeneration)
 }
 
 func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -454,7 +459,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.openResume(msg.source, reason), nil
 		}
-		return m.Update(msg.result)
+		// The wrapper already passed the connection-generation gate.
+		return m.update(msg.result)
 
 	case launchResultMsg:
 		// A launch/resume failed: surface the reason on the general board's banner
@@ -660,13 +666,7 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !time.Now().Before(m.general.bannerExpiry) {
 			m.general.bannerText = ""
 		}
-		// Re-emit the general frame. Mirrors repaintMsg's full
-		// re-emit (SGR nonce + ClearScreen); a no-op off the general view.
-		if m.screen != screenGeneral {
-			return m, nil
-		}
-		m.repaintN++
-		return m, tea.ClearScreen
+		return m, nil
 
 	case repaintMsg:
 		if m.connectionLost {
@@ -683,13 +683,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ticking = false
 			return m, nil
 		}
-		// The elapsed-time column is relative to now, so the board is redrawn on
-		// the timer. Bumping the nonce (consumed in View) makes the frame differ
-		// so the renderer does not skip it, and tea.ClearScreen forces a full
-		// re-emit rather than an empty cell diff — both are needed (see the F2 note
-		// on repaintInterval). Runs at repaintInterval and only on the general view.
-		m.repaintN++
-		return m, tea.Batch(repaintTick(), tea.ClearScreen)
+		// Recompute elapsed values; Bubble Tea's renderer emits only if a displayed
+		// bucket changed. Runs at repaintInterval and only on the general view.
+		return m, repaintTick()
 
 	case workingAnimationMsg:
 		if !m.shouldAnimateWorking() {
@@ -707,25 +703,30 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The daemon pushed a pair_pending (SAS gate): open the pairing-confirm
 		// modal over whatever screen is showing. It stays up until answered (A4).
 		m.pairing = &pairingModal{sas: msg.SAS, deviceName: msg.DeviceName}
+		m.formNavigation = formNavigation{}
 		m.general.openID = ""
 		return m, nil
 
-	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg:
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
 		// ADR-029: only the board in plain navigation takes the mouse. A report that
 		// reaches any other state (already in flight when it opened) is dropped there.
 		return m.updateBoardMouse(msg.(tea.MouseMsg))
 
 	case tea.KeyPressMsg:
+		m.general.gesture = boardGesture{}
 		m.general.openID = ""
+		if m.guardFormInput(msg) {
+			return m, nil
+		}
 		// The SAS gate is modal: while it is open it owns every keypress so a
 		// y/n/enter/esc can never leak through to the board beneath it.
 		if m.pairing != nil {
-			if m.connectionLost {
+			if m.connectionLost && msg.Code != tea.KeyEsc && msg.Text != "n" {
 				return m, nil
 			}
 			return m.updatePairing(msg)
 		}
-		if m.connectionLost && m.screen != screenGeneral && m.screen != screenLogins && msg.Code != tea.KeyEsc {
+		if m.connectionLost && m.screen != screenGeneral && m.screen != screenLogins && msg.Code != tea.KeyEsc && (m.screen != screenHandoff || !m.handoff.confirmPending() || msg.Text != "n") {
 			if m.screen == screenOptions || msg.Code == tea.KeyEnter || m.screen == screenHandoff && m.handoff.confirmPending() {
 				return m, nil
 			}
@@ -753,54 +754,15 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m rootModel) View() tea.View {
 	var content string
 	switch {
-	case m.pairing != nil:
-		// The SAS gate overlays every screen: render it with its own allow/deny
-		// key hint on the bottom bar (A4). It stays until the operator answers.
-		content = m.composeBoard(m.pairing.view(), "y allow   n deny")
-	case m.screen == screenLaunch:
-		content = m.composeBoard(m.launch.view(), m.launch.hint())
-	case m.screen == screenResume:
-		content = m.composeBoard(m.resume.view(), m.resume.hint())
-	case m.screen == screenHandoff:
-		content = m.composeBoard(m.handoff.view(), m.handoff.hint())
-	case m.screen == screenOptions:
-		content = m.composeBoard(m.options.view(m.width), m.options.hint())
-	case m.screen == screenLogins:
-		width, height := m.width, m.height
-		if width > 4 {
-			width -= 4
-		}
-		if height > 0 {
-			height-- // The persistent status bar owns the last row.
-			if skewNotice(m.daemonVersion, m.clientVersion) != "" && m.height >= 3 {
-				height--
-			}
-		}
-		top := ""
-		if m.height >= 12 {
-			top = "\n"
-			height--
-		}
-		if m.height > 0 {
-			height = max(1, height)
-		}
-		body := m.logins.view(width, height, m.connectionLost, m.loginRunner != nil)
-		if m.width > 4 {
-			body = "  " + strings.ReplaceAll(body, "\n", "\n  ")
-		}
-		content = m.composeBoard(top+body, m.logins.hint(m.connectionLost, m.loginRunner != nil, m.width))
+	case m.hasActiveForm():
+		content = m.composeActiveForm()
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
 		content = m.attach.view()
 	default:
-		content = m.composeBoard(m.general.view(), m.generalStatus())
+		content = m.boardView()
 	}
-	// A trailing nonce of reset-SGR sequences makes each repaint's content distinct
-	// so the renderer re-emits the frame (see repaintMsg). It is a no-op for the
-	// terminal and is stripped by every ANSI-stripping reader, so it never reaches
-	// the visible screen or the golden files.
-	content += strings.Repeat("\x1b[m", m.repaintN%8+1)
 	// The board is a full-screen alternate-screen app (ADR-006): it stays off the
 	// terminal scrollback and gives the status bar a fixed bottom row. In
 	// charm.land/bubbletea/v2 the alternate screen is requested through the View
@@ -1086,7 +1048,7 @@ func (m *rootModel) enterGeneral() tea.Cmd {
 // shouldAnimateWorking is the lifecycle policy for the fast timer. A disconnected
 // roster must not imply live work, and an idle/off-board model has no visible glyph.
 func (m rootModel) shouldAnimateWorking() bool {
-	return !m.connectionLost && m.screen == screenGeneral && m.general.hasWorking()
+	return !m.connectionLost && m.screen == screenGeneral && !m.hasActiveForm() && m.boardUsable() && m.general.visibleWorking()
 }
 
 // armWorkingAnimation schedules the first tick of a chain when needed. It never

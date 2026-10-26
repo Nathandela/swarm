@@ -198,7 +198,7 @@ func TestDelete_IdentityMismatch_NoSignal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("processStartTime: %v", err)
 	}
-	d.putMem(persist.Meta{
+	if err := d.saveMeta(persist.Meta{
 		ID:            id,
 		AgentType:     "fake",
 		Cwd:           "/tmp",
@@ -207,7 +207,9 @@ func TestDelete_IdentityMismatch_NoSignal(t *testing.T) {
 		Status:        status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 		ShimPID:       pid,
 		ShimStartTime: realStart + 1, // deliberately wrong
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := d.Delete(id); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -245,12 +247,9 @@ func TestDelete_RacesNaturalShimExit(t *testing.T) {
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
-	d.mu.Lock()
-	d.sessions[id] = &session{
-		meta: persist.Meta{ID: id, Status: status.Status{Process: status.ProcessRunning}},
-		stop: make(chan struct{}),
+	if err := d.saveMeta(persist.Meta{ID: id, AgentType: "fake", Status: status.Status{Process: status.ProcessRunning}}); err != nil {
+		t.Fatal(err)
 	}
-	d.mu.Unlock()
 
 	// Identity mismatch stand-in: nothing to signal, Phase 1 passes trivially, so
 	// the only interesting race is Phase 2 (registry removal + tombstone) vs.
@@ -260,6 +259,7 @@ func TestDelete_RacesNaturalShimExit(t *testing.T) {
 	t.Cleanup(func() { terminateForDeleteFn = orig })
 
 	removing, release := make(chan struct{}), make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
 	originalRemove := deleteSessionDirFn
 	deleteSessionDirFn = func(d *Daemon, id string) error {
 		close(removing)
@@ -269,24 +269,35 @@ func TestDelete_RacesNaturalShimExit(t *testing.T) {
 	t.Cleanup(func() { deleteSessionDirFn = originalRemove })
 
 	deleteDone := make(chan struct{})
+	deleteResult := make(chan error, 1)
+	var exitDone chan struct{}
+	t.Cleanup(func() {
+		releaseOnce()
+		<-deleteDone
+		if exitDone != nil {
+			<-exitDone
+		}
+	})
 	go func() {
+		var deleteErr error
 		defer close(deleteDone)
+		defer func() { deleteResult <- deleteErr }()
 		defer func() {
 			if r := recover(); r != nil {
 				t.Errorf("Delete panicked racing a natural shim exit: %v", r)
 			}
 		}()
-		_ = d.Delete(id)
+		deleteErr = d.Delete(id)
 	}()
 
 	select {
 	case <-removing:
 	case <-time.After(3 * time.Second):
-		close(release)
+		releaseOnce()
 		t.Fatal("Delete never reached directory removal")
 	}
 
-	exitDone := make(chan struct{})
+	exitDone = make(chan struct{})
 	go func() {
 		defer close(exitDone)
 		defer func() {
@@ -300,9 +311,12 @@ func TestDelete_RacesNaturalShimExit(t *testing.T) {
 		})
 	}()
 
-	close(release)
+	releaseOnce()
 	<-deleteDone
 	<-exitDone
+	if err := <-deleteResult; err != nil {
+		t.Fatalf("Delete racing natural shim exit: %v", err)
+	}
 
 	if _, ok := d.Get(id); ok {
 		t.Fatal("session resurrected in the registry after Delete raced a natural shim exit")
@@ -325,17 +339,15 @@ func TestDelete_ConcurrentSameIDClosesStopOnce(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(cfg.StateDir, id), 0o700); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
-	d.mu.Lock()
-	d.sessions[id] = &session{
-		meta: persist.Meta{ID: id, Status: status.Status{Process: status.ProcessRunning}},
-		stop: make(chan struct{}),
+	if err := d.saveMeta(persist.Meta{ID: id, AgentType: "fake", Status: status.Status{Process: status.ProcessRunning}}); err != nil {
+		t.Fatal(err)
 	}
-	d.mu.Unlock()
 
 	// Hold both Deletes in the termination step (both already past Phase 1, both
 	// holding the same session) until released together, so they race into Phase 2.
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
 	orig := terminateForDeleteFn
 	terminateForDeleteFn = func(*Daemon, string, persist.Meta) bool {
 		started <- struct{}{}
@@ -345,15 +357,34 @@ func TestDelete_ConcurrentSameIDClosesStopOnce(t *testing.T) {
 	t.Cleanup(func() { terminateForDeleteFn = orig })
 
 	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	t.Cleanup(func() {
+		releaseOnce()
+		wg.Wait()
+	})
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); _ = d.Delete(id) }()
+		go func() { defer wg.Done(); results <- d.Delete(id) }()
 	}
-	<-started
-	<-started      // both are past Phase 1, both hold the same session pointer
-	close(release) // release both into Phase 2 concurrently
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case err := <-results:
+			t.Fatalf("Delete returned before both termination barriers: %v", err)
+		case <-deadline.C:
+			t.Fatal("Deletes did not both reach termination within 3s")
+		}
+	}
+	releaseOnce() // release both into Phase 2 concurrently
 
 	wg.Wait() // pre-fix: a double close of session.stop panics and crashes the run
+	for i := 0; i < 2; i++ {
+		if err := <-results; err != nil {
+			t.Errorf("concurrent Delete: %v", err)
+		}
+	}
 
 	if _, ok := d.Get(id); ok {
 		t.Fatal("session still present after concurrent Delete")
@@ -379,15 +410,13 @@ func TestDelete_ConcurrentSameIDRunsPreDeleteOnce(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(cfg.StateDir, id), 0o700); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
-	d.mu.Lock()
-	d.sessions[id] = &session{
-		meta: persist.Meta{ID: id, Status: status.Status{Process: status.ProcessRunning}},
-		stop: make(chan struct{}),
+	if err := d.saveMeta(persist.Meta{ID: id, AgentType: "fake", Status: status.Status{Process: status.ProcessRunning}}); err != nil {
+		t.Fatal(err)
 	}
-	d.mu.Unlock()
 
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
 	orig := terminateForDeleteFn
 	terminateForDeleteFn = func(*Daemon, string, persist.Meta) bool {
 		started <- struct{}{}
@@ -397,15 +426,34 @@ func TestDelete_ConcurrentSameIDRunsPreDeleteOnce(t *testing.T) {
 	t.Cleanup(func() { terminateForDeleteFn = orig })
 
 	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	t.Cleanup(func() {
+		releaseOnce()
+		wg.Wait()
+	})
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); _ = d.Delete(id) }()
+		go func() { defer wg.Done(); results <- d.Delete(id) }()
 	}
-	<-started
-	<-started      // both are past Phase 1, both hold the same session pointer
-	close(release) // release both into Phase 2 concurrently
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case err := <-results:
+			t.Fatalf("Delete returned before both termination barriers: %v", err)
+		case <-deadline.C:
+			t.Fatal("Deletes did not both reach termination within 3s")
+		}
+	}
+	releaseOnce() // release both into Phase 2 concurrently
 
 	wg.Wait()
+	for i := 0; i < 2; i++ {
+		if err := <-results; err != nil {
+			t.Errorf("concurrent Delete: %v", err)
+		}
+	}
 
 	if got := preDeleteCount.Load(); got != 1 {
 		t.Fatalf("PreDelete ran %d times on concurrent Delete of the same id; want exactly 1 (winner-gated)", got)

@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"github.com/Nathandela/swarm/internal/testbin"
 	"os"
 	"testing"
 )
 
 func TestMain(m *testing.M) {
-	code := m.Run()
-	gateBins.Sweep()
-	os.Exit(code)
+	if code, parent := testbin.Supervise(); parent {
+		os.Exit(code)
+	}
+	os.Exit(m.Run())
 }

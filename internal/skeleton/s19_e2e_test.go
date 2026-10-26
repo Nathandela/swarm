@@ -73,6 +73,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
+	"github.com/Nathandela/swarm/internal/testbin"
 	swarmmobile "github.com/Nathandela/swarm/mobile"
 )
 
@@ -255,7 +256,7 @@ func newS19Rig(t *testing.T) *s19Rig {
 	buildBinaries(t)
 
 	// A short state-directory path: the daemon's UDS must fit in sun_path (104 bytes).
-	stateDir, err := os.MkdirTemp("/tmp", "s19")
+	stateDir, err := os.MkdirTemp("", "s19")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -557,6 +558,10 @@ func s19GatewayBinary(t *testing.T) string {
 			args = append(args, "-race")
 		}
 		args = append(args, "-o", s19GatewayPath, "github.com/Nathandela/swarm/cmd/swarm-remote")
+		if err := testbin.RegisterExecutable(s19GatewayPath); err != nil {
+			s19GatewayErr = err
+			return
+		}
 		cmd := exec.Command("go", args...)
 		cmd.Stderr = os.Stderr
 		s19GatewayErr = cmd.Run()

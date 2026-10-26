@@ -114,6 +114,7 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
+	LogPath               string               `json:"log_path,omitempty"`
 	LoginRuntime          *logins.Runtime      `json:"login_runtime,omitempty"`
 	LoginStateRoot        string               `json:"login_state_root,omitempty"`
 	LoginSwitchID         string               `json:"login_switch_id,omitempty"`
@@ -697,6 +698,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		agentEnv = append(agentEnv, "OPENCODE_TUI_CONFIG="+filepath.Join(filepath.Dir(spec.OpenCodeLaunch.BindingFile), "opencode-tui.json"))
 	}
 	lc := shimSpawnConfig{
+		LogPath:      d.cfg.LogPath,
 		LoginRuntime: spec.LoginRuntime, LoginStateRoot: spec.LoginStateRoot, LoginSwitchID: spec.LoginSwitchID, LoginSwitchSource: spec.LoginSwitchSource,
 		OpenCode:       spec.OpenCodeLaunch,
 		OpenCodeEnv:    append([]string(nil), spec.OpenCodeEnv...),

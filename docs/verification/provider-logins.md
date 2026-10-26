@@ -306,3 +306,10 @@ The existing parser and transport/tool settings are preserved. This enforces the
 selected-subscription policy; API-key-dependent optional behavior remains
 unqualified. It does not demonstrate a default Responses authentication bypass
 or a server-side account change.
+
+The [current-main integration record](provider-logins/current-main-integration-2026-10-26.json)
+records six-package race results (3,763 passes and 46 skips), a complete skeleton
+rerun (2,047 passes and 28 skips), and 36 changed-fixture race passes. Build and
+vet and lint pass. The repository gate remains blocked by the
+[pinned-main terminal-restore regression](terminal-restore-2026-10-26.json).
+This is a feature-branch checkpoint, not release qualification.

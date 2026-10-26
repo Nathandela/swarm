@@ -13,7 +13,7 @@ import (
 )
 
 func TestJournalSubscribeFrom_CapturesRosterCapabilitiesAtTheSameBoundary(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "skcapsnap")
+	dir, err := os.MkdirTemp("", "skcapsnap")
 	if err != nil {
 		t.Fatal(err)
 	}

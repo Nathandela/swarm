@@ -1,0 +1,96 @@
+{
+  "date": "2026-10-26",
+  "dependency_experiment": {
+    "bubbletea": "v2.0.2 \u2192 v2.0.9",
+    "colorprofile": "v0.4.2 \u2192 v0.4.3",
+    "status": "reverted; not a production fix",
+    "ultraviolet": "0b88 \u2192 f5a",
+    "disposition_receipt": "/private/tmp/swarm-h6sc24-gates-20261026/terminal-restore-experiment-disposition.json"
+  },
+  "experiments": [
+    {
+      "action_counts": {
+        "fail": 2,
+        "pass": 0,
+        "run": 1
+      },
+      "bytes": 1657,
+      "path": "/private/tmp/swarm-h6sc24-gates-20261026/terminal-restore-connected-red.jsonl",
+      "record_count": 9,
+      "result": "FAIL",
+      "setup": "Bubble Tea v2.0.2; helper/delegate restore; GOMAXPROCS=1",
+      "sha256": "e3ba7e6bd408329df94ebeb2adb3838391de80c9127d3c55093be1228849ef98",
+      "test": "TestTerminalRestoreRedrawsUnchangedBoard",
+      "test_elapsed_seconds": 3.53,
+      "package_elapsed_seconds": 4.065
+    },
+    {
+      "action_counts": {
+        "fail": 2,
+        "pass": 0,
+        "run": 1
+      },
+      "bytes": 1660,
+      "path": "/private/tmp/swarm-h6sc24-gates-20261026/terminal-restore-connected-green.jsonl",
+      "record_count": 9,
+      "result": "FAIL",
+      "setup": "Bubble Tea v2.0.2; ClearScreen restore; GOMAXPROCS=1",
+      "sha256": "529a3aa6d0284f7c29107cc93d5296dcab8e1af2adb7bfa8b104132f405c8ea2",
+      "test": "TestTerminalRestoreRedrawsUnchangedBoard",
+      "test_elapsed_seconds": 3.53,
+      "package_elapsed_seconds": 4.046
+    },
+    {
+      "action_counts": {
+        "fail": 2,
+        "pass": 0,
+        "run": 1
+      },
+      "bytes": 1660,
+      "path": "/private/tmp/swarm-h6sc24-gates-20261026/terminal-restore-connected-green-r2.jsonl",
+      "record_count": 9,
+      "result": "FAIL",
+      "setup": "Bubble Tea v2.0.9; ClearScreen restore; GOMAXPROCS=1",
+      "sha256": "2a45773973a7ce82b3389f428c644583ab9e2004615732bd12b8f695caecae6d",
+      "test": "TestTerminalRestoreRedrawsUnchangedBoard",
+      "test_elapsed_seconds": 3.54,
+      "package_elapsed_seconds": 4.229
+    },
+    {
+      "action_counts": {
+        "fail": 0,
+        "pass": 2,
+        "run": 1
+      },
+      "bytes": 1377,
+      "path": "/private/tmp/swarm-h6sc24-gates-20261026/terminal-restore-two-procs-control.jsonl",
+      "record_count": 8,
+      "result": "PASS, 0.55s",
+      "setup": "Bubble Tea v2.0.9; ClearScreen restore; GOMAXPROCS=2 diagnostic control",
+      "sha256": "e5f8d26a9d4c63e3155daeaae5eb96a8742bed7dec44e11fe81f11e2e6d12e6b",
+      "test": "TestTerminalRestoreRedrawsUnchangedBoard",
+      "test_elapsed_seconds": 0.55,
+      "package_elapsed_seconds": 1.1400000000000001
+    }
+  ],
+  "finding": "The GOMAXPROCS=1 connected terminal-restore regression remains. The experimental helper/callback/test-routing and dependency changes were reverted; the original pinned-main regression is retained.",
+  "interpretation": [
+    "The GOMAXPROCS=2 control passes under GOMAXPROCS=2, but does not replace the failing GOMAXPROCS=1 release gate.",
+    "Source supports the hypothesis that the old renderer receives stop and stops the shared ticker after RestoreTerminal resets it; the exact interleaving has not been proven by a runtime trace.",
+    "The official pendingErase fix faf4dcf in Bubble Tea v2.0.9 is real but insufficient in the GOMAXPROCS=1 connected case."
+  ],
+  "next_evidence": {
+    "private_diagnostic_overlay": "prepared, NOT RUN",
+    "required_gate": "Resolve and pass the connected GOMAXPROCS=1 terminal-restore regression before release; retain the original regression test."
+  },
+  "regression": {
+    "assertion": "After terminal release, external terminal damage, and restore, the unchanged board marker must be rendered again.",
+    "test": "internal/tui/repaint_renderer_test.go:TestTerminalRestoreRedrawsUnchangedBoard"
+  },
+  "scope_limits": [
+    "Existing native and merged-source qualification is unchanged.",
+    "A1 is independently approved by Root/Astra; this record does not authorize main merge, release, or UI activation.",
+    "These failed experiments do not repair or supersede prior receipts."
+  ],
+  "status": "OPEN RELEASE BLOCKER"
+}

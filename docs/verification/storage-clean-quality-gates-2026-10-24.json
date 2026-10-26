@@ -1,0 +1,2558 @@
+{
+  "source_commit": "56899d97ab6b9a644735604345adfda7668396de",
+  "source_tree": "f13f8c45d205584bcd0c0fcea9851e693d1ae4d0",
+  "date": "2026-10-24",
+  "policy": "Warning only; no admission limit, deployment, or live-user cleanup. Rotator-owned paths unchanged.",
+  "reviewers": [
+    "Sol: plan and source GREEN",
+    "Astra: plan and corrected source GREEN"
+  ],
+  "commands": {
+    "normal": "go test -json -p 2 ./... -count=1 -timeout=30m",
+    "race": "go test -race -json -p 2 ./... -count=1 -timeout=30m",
+    "package_retry": "go test -json ./internal/loginworker -count=1 -timeout=2m",
+    "build": "go build ./...",
+    "vet": "go vet ./...",
+    "lint": "golangci-lint run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0"
+  },
+  "environment": {
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "2",
+    "umask": "0022",
+    "caches": "existing shared caches; no retained task-private caches",
+    "macos": "Darwin 27.0.0 arm64; Go 1.26.9",
+    "linux": "Linux 5.15.0-198-generic x86_64; Go 1.27.3",
+    "linter": "golangci-lint 2.12.2 built with Go 1.26.9; Linux target checked on macOS with GOOS=linux GOARCH=amd64 CGO_ENABLED=0"
+  },
+  "final": {
+    "macos": {
+      "build_exit": 0,
+      "build_seconds": 7,
+      "vet_exit": 0,
+      "vet_seconds": 3,
+      "lint_exit": 0,
+      "lint_seconds": 16,
+      "normal_exit": 1,
+      "normal_seconds": 921,
+      "normal": {
+        "path": "/private/tmp/swarm-clean-mac-test.log",
+        "bytes": 8802039,
+        "sha256": "9e2a57e558af0c862d9aa5927e733f5d1fe2a626b82badb62e80ced0c42d8cce",
+        "first": "2026-10-24T16:56:20.835247+02:00",
+        "last": "2026-10-24T17:11:39.963922+02:00",
+        "top_level_tests": {
+          "pass": 5979,
+          "skip": 64,
+          "fail": 1
+        },
+        "packages_finished": 85,
+        "package_status": {
+          "pass": 77,
+          "skip": 7,
+          "fail": 1
+        },
+        "failed_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/internal/loginworker",
+            "test": "TestStaleWorkerIdentityCannotCancelOrReadDevice",
+            "tail": [
+              "=== RUN   TestStaleWorkerIdentityCannotCancelOrReadDevice\n",
+              "    worker_test.go:794: context deadline exceeded\n",
+              "--- FAIL: TestStaleWorkerIdentityCannotCancelOrReadDevice (5.42s)\n"
+            ]
+          }
+        ],
+        "skipped_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface",
+            "tail": [
+              "=== RUN   TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface\n",
+              "    aarsurface_test.go:64: PB-BIND-7: no built AAR at android/app/libs/swarm.aar, so there is no artifact to compare. It is a build output and is gitignored; run android/build-aar.sh to give this gate something to measure.\n",
+              "--- SKIP: TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages",
+            "tail": [
+              "=== RUN   TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages\n",
+              "    pagesize_test.go:57: 16 KB PAGES: no built AAR at android/app/libs/swarm.aar, so there are no linked segments to measure. It is a build output and is gitignored; run android/build-aar.sh to give this gate something to measure.\n",
+              "--- SKIP: TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestOperatorRelayV2RevokeAndDeferredRetry",
+            "tail": [
+              "=== RUN   TestOperatorRelayV2RevokeAndDeferredRetry\n",
+              "    operator_relay_v2_workerd_test.go:66: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestOperatorRelayV2RevokeAndDeferredRetry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream",
+            "tail": [
+              "=== RUN   TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream\n",
+              "    operator_relay_v2_workerd_test.go:162: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRetentionSubcommandRunsOneBoundedFirestoreSweep",
+            "tail": [
+              "=== RUN   TestRetentionSubcommandRunsOneBoundedFirestoreSweep\n",
+              "    firestore_cutover_test.go:105: requires Firestore emulator\n",
+              "--- SKIP: TestRetentionSubcommandRunsOneBoundedFirestoreSweep (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_InsecureHTTP_BootsAndShutsDownCleanly",
+            "tail": [
+              "=== RUN   TestRun_InsecureHTTP_BootsAndShutsDownCleanly\n",
+              "    main_test.go:259: requires Firestore emulator\n",
+              "--- SKIP: TestRun_InsecureHTTP_BootsAndShutsDownCleanly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_TLSMode_PinsMinimumVersionAtTLS13",
+            "tail": [
+              "=== RUN   TestRun_TLSMode_PinsMinimumVersionAtTLS13\n",
+              "    main_test.go:376: requires Firestore emulator\n",
+              "--- SKIP: TestRun_TLSMode_PinsMinimumVersionAtTLS13 (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery",
+            "tail": [
+              "=== RUN   TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery\n",
+              "    s18b_unbrick_test.go:493: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice",
+            "tail": [
+              "=== RUN   TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice\n",
+              "    s18b_unbrick_test.go:541: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery",
+            "tail": [
+              "=== RUN   TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery\n",
+              "    s18b_unbrick_test.go:567: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody",
+            "tail": [
+              "=== RUN   TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody\n",
+              "    s18b_unbrick_test.go:613: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset",
+            "tail": [
+              "=== RUN   TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset\n",
+              "    s18b_unbrick_test.go:669: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold",
+            "tail": [
+              "=== RUN   TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold\n",
+              "    s18b_unbrick_test.go:790: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter",
+            "test": "TestConformance_Command_NoFdOrGoroutineLeak",
+            "tail": [
+              "=== RUN   TestConformance_Command_NoFdOrGoroutineLeak\n",
+              "    conformance_test.go:190: cannot read /dev/fd (fstatat /dev/fd: bad file descriptor); fd-neutrality check unavailable on this platform\n",
+              "--- SKIP: TestConformance_Command_NoFdOrGoroutineLeak (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/attach",
+            "test": "TestPTY_SIGKILLLeavesRawUnrestored_DocumentedLimitation",
+            "tail": [
+              "=== RUN   TestPTY_SIGKILLLeavesRawUnrestored_DocumentedLimitation\n",
+              "    pty_test.go:199: darwin: controlling-terminal revoke on session-leader death precludes the post-death termios read\n",
+              "--- SKIP: TestPTY_SIGKILLLeavesRawUnrestored_DocumentedLimitation (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO",
+            "tail": [
+              "=== RUN   TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO\n",
+              "    launch_crash_replay_test.go:260: W4 (live orphan agent) needs a spawn-then-kill-9 integration harness keeping a real shim alive across restart; W1+W3 cover the poison + silent-corpse core. See fix-pack 4a / DCR-1.\n",
+              "--- SKIP: TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestDaemonHostSubprocess",
+            "tail": [
+              "=== RUN   TestDaemonHostSubprocess\n",
+              "    realkill_test.go:60: daemon-host subprocess entrypoint; only runs when re-exec'd\n",
+              "--- SKIP: TestDaemonHostSubprocess (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/persist",
+            "test": "TestHelperCrashWriter",
+            "tail": [
+              "=== RUN   TestHelperCrashWriter\n",
+              "    crash_test.go:58: crash helper; runs only when re-exec'd with SWARM_CRASH_HELPER=1\n",
+              "--- SKIP: TestHelperCrashWriter (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/loginworker",
+            "test": "TestClaudePrivatePTYAttachAndReady",
+            "tail": [
+              "=== RUN   TestClaudePrivatePTYAttachAndReady\n",
+              "    worker_test.go:574: file-only fake Claude; Keychain transaction covered in logins\n",
+              "--- SKIP: TestClaudePrivatePTYAttachAndReady (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonecore",
+            "test": "TestHelperPhoneCoreSession",
+            "tail": [
+              "=== RUN   TestHelperPhoneCoreSession\n",
+              "    processdeath_test.go:77: phone-core crash helper; runs only when re-exec'd\n",
+              "--- SKIP: TestHelperPhoneCoreSession (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRepositorySharedClaims",
+            "tail": [
+              "=== RUN   TestFirestoreRepositorySharedClaims\n",
+              "    firestore_test.go:35: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRepositorySharedClaims (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreHealthCheckIsReadOnly",
+            "tail": [
+              "=== RUN   TestFirestoreHealthCheckIsReadOnly\n",
+              "    firestore_test.go:89: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreHealthCheckIsReadOnly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreMissingTransactionSnapshotHasServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreMissingTransactionSnapshotHasServerReadTime\n",
+              "    firestore_test.go:108: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreMissingTransactionSnapshotHasServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch",
+            "tail": [
+              "=== RUN   TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch\n",
+              "    firestore_test.go:210: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree",
+            "tail": [
+              "=== RUN   TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree\n",
+              "    firestore_test.go:295: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreSecretsAreNotPersistedInPlaintext",
+            "tail": [
+              "=== RUN   TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "    firestore_test.go:426: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreSecretsAreNotPersistedInPlaintext (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeLeaseCASAndTokenGeneration",
+            "tail": [
+              "=== RUN   TestFirestoreWakeLeaseCASAndTokenGeneration\n",
+              "    firestore_test.go:528: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeLeaseCASAndTokenGeneration (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeClaimUsesServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreWakeClaimUsesServerReadTime\n",
+              "    firestore_test.go:602: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeClaimUsesServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeCompletionUsesServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreWakeCompletionUsesServerReadTime\n",
+              "    firestore_test.go:653: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeCompletionUsesServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationClaimHasOneProviderOwner",
+            "tail": [
+              "=== RUN   TestFirestoreRegistrationClaimHasOneProviderOwner\n",
+              "    firestore_test.go:727: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRegistrationClaimHasOneProviderOwner (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRetentionRechecksAndCascadesBoundedly",
+            "tail": [
+              "=== RUN   TestFirestoreRetentionRechecksAndCascadesBoundedly\n",
+              "    firestore_test.go:777: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRetentionRechecksAndCascadesBoundedly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerWakeCancellationKeepsBoundedClaim",
+            "tail": [
+              "=== RUN   TestFirestoreServerWakeCancellationKeepsBoundedClaim\n",
+              "    firestore_test.go:841: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreServerWakeCancellationKeepsBoundedClaim (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestRevoke_OwnerSignature_RetryAfterAlreadyGone",
+            "tail": [
+              "=== RUN   TestRevoke_OwnerSignature_RetryAfterAlreadyGone\n",
+              "    revoke_test.go:206: open spec question: see this file's header comment and the RED-phase return summary\n",
+              "--- SKIP: TestRevoke_OwnerSignature_RetryAfterAlreadyGone (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RawCapabilitiesNeverAppearInTheBboltFile",
+            "tail": [
+              "=== RUN   TestStorage_RawCapabilitiesNeverAppearInTheBboltFile\n",
+              "    storage_test.go:26: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_RawCapabilitiesNeverAppearInTheBboltFile (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile",
+            "tail": [
+              "=== RUN   TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile\n",
+              "    storage_test.go:52: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_AttestationTokenNeverPersisted",
+            "tail": [
+              "=== RUN   TestStorage_AttestationTokenNeverPersisted\n",
+              "    storage_test.go:76: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_AttestationTokenNeverPersisted (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RevocationTombstoneNeverRetainsTheAddress",
+            "tail": [
+              "=== RUN   TestStorage_RevocationTombstoneNeverRetainsTheAddress\n",
+              "    storage_test.go:115: obsolete bbolt reopen assertion; Firestore durability is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_RevocationTombstoneNeverRetainsTheAddress (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+            "test": "TestWritePosterForEmulator",
+            "tail": [
+              "=== RUN   TestWritePosterForEmulator\n",
+              "    poster_for_emulator_test.go:25: SWARM_WRITE_POSTER unset: this test writes an emulator poster, it asserts nothing\n",
+              "--- SKIP: TestWritePosterForEmulator (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRetryRecovery",
+            "tail": [
+              "=== RUN   TestWorkerdDiscardRetryRecovery\n",
+              "    discard_workerd_test.go:17: RELAY_V2_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestWorkerdDiscardRetryRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRecoverySurvivesCutoffExpiry",
+            "tail": [
+              "=== RUN   TestWorkerdDiscardRecoverySurvivesCutoffExpiry\n",
+              "    discard_workerd_test.go:182: RELAY_V2_EXPIRY_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestWorkerdDiscardRecoverySurvivesCutoffExpiry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdNoiseMailboxReconnectReplayAndRevoke",
+            "tail": [
+              "=== RUN   TestWorkerdNoiseMailboxReconnectReplayAndRevoke\n",
+              "    workerd_integration_test.go:21: RELAY_V2_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestWorkerdNoiseMailboxReconnectReplayAndRevoke (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry",
+            "tail": [
+              "=== RUN   TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry\n",
+              "    workerd_integration_test.go:256: RELAY_V2_EXPIRY_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/supervise",
+            "test": "TestUpgradeLogNativeLaunchdJob",
+            "tail": [
+              "=== RUN   TestUpgradeLogNativeLaunchdJob\n",
+              "    upgrade_log_darwin_test.go:20: set SWARM_TEST_LAUNCHD_UPGRADE_LOG=1 for isolated launchd qualification\n",
+              "--- SKIP: TestUpgradeLogNativeLaunchdJob (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard",
+            "tail": [
+              "=== RUN   TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard\n",
+              "    approval_e2e_r4_test.go:31: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval",
+            "tail": [
+              "=== RUN   TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval\n",
+              "    approve_roundtrip_e2e_test.go:66: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone",
+            "tail": [
+              "=== RUN   TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone\n",
+              "    interaction_chain_e2e_test.go:84: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse",
+            "tail": [
+              "=== RUN   TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse\n",
+              "    interaction_chain_live_test.go:79: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed",
+            "tail": [
+              "=== RUN   TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed\n",
+              "    interaction_e2e_test.go:56: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestI1_TheScreensBytesAreTheFacadesBytes",
+            "tail": [
+              "=== RUN   TestI1_TheScreensBytesAreTheFacadesBytes\n",
+              "    interaction_screen_golden_test.go:100: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestI1_TheScreensBytesAreTheFacadesBytes (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPairingUsesNativeRelayV2Transport",
+            "tail": [
+              "=== RUN   TestPairingUsesNativeRelayV2Transport\n",
+              "    pairing_relay_v2_test.go:45: MOBILE_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestPairingUsesNativeRelayV2Transport (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization",
+            "tail": [
+              "=== RUN   TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization\n",
+              "    pairing_relay_v2_test.go:749: MOBILE_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPBBIND1_GomobileBindProducesAnAAR",
+            "tail": [
+              "=== RUN   TestPBBIND1_GomobileBindProducesAnAAR\n",
+              "    bind_test.go:133: no ANDROID_HOME/ANDROID_SDK_ROOT; PB-BIND-1's AAR leg needs the SDK+NDK from requirements 2\n",
+              "--- SKIP: TestPBBIND1_GomobileBindProducesAnAAR (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestLoadPairingConfigUsesNativeRelayV2MachineControl",
+            "tail": [
+              "=== RUN   TestLoadPairingConfigUsesNativeRelayV2MachineControl\n",
+              "    pairing_relay_v2_test.go:109: SKELETON_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestLoadPairingConfigUsesNativeRelayV2MachineControl (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway",
+            "tail": [
+              "=== RUN   TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway\n",
+              "    s18_revokeverb_test.go:57: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner",
+            "tail": [
+              "=== RUN   TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner\n",
+              "    s18_revokeverb_test.go:109: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved",
+            "tail": [
+              "=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved\n",
+              "    s18_sec6_adversarial_test.go:452: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType",
+            "tail": [
+              "=== RUN   TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType\n",
+              "    s18_sec6_adversarial_test.go:559: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_TheDeviceLossChainRunsEndToEnd",
+            "tail": [
+              "=== RUN   TestPBSEC7_TheDeviceLossChainRunsEndToEnd\n",
+              "    s18_sec7_deviceloss_test.go:61: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC7_TheDeviceLossChainRunsEndToEnd (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_ARevokedDeviceCannotTakeControlAgain",
+            "tail": [
+              "=== RUN   TestPBSEC7_ARevokedDeviceCannotTakeControlAgain\n",
+              "    s18_sec7_deviceloss_test.go:139: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC7_ARevokedDeviceCannotTakeControlAgain (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke",
+            "tail": [
+              "=== RUN   TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke\n",
+              "    s19_e2e_test.go:103: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_InputLatencyPhoneToPTY",
+            "tail": [
+              "=== RUN   TestS19Workerd_InputLatencyPhoneToPTY\n",
+              "    s19_latency_test.go:98: set SWARM_S6B_LATENCY=1 to run the full relay-v2 input benchmark\n",
+              "--- SKIP: TestS19Workerd_InputLatencyPhoneToPTY (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY",
+            "tail": [
+              "=== RUN   TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY\n",
+              "    s19_workerd_parity_test.go:19: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning",
+            "tail": [
+              "=== RUN   TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning\n",
+              "    s19_workerd_parity_test.go:85: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn",
+            "tail": [
+              "=== RUN   TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn\n",
+              "    s19_workerd_parity_test.go:118: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn (0.00s)\n"
+            ]
+          }
+        ],
+        "failed_packages": [
+          "github.com/Nathandela/swarm/internal/loginworker"
+        ]
+      },
+      "normal_retry_exit": 0,
+      "normal_retry": {
+        "path": "/private/tmp/swarm-clean-mac-loginworker-normal.log",
+        "bytes": 29398,
+        "sha256": "b3b3c480af6a52a478c6ed8004f1575d1735eeab2e3f4e13e67a237d203f7c4a",
+        "first": "2026-10-24T17:07:52.17993+02:00",
+        "last": "2026-10-24T17:08:02.034805+02:00",
+        "top_level_tests": {
+          "pass": 28,
+          "skip": 1
+        },
+        "packages_finished": 1,
+        "package_status": {
+          "pass": 1
+        },
+        "failed_tests": [],
+        "skipped_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/internal/loginworker",
+            "test": "TestClaudePrivatePTYAttachAndReady",
+            "tail": [
+              "=== RUN   TestClaudePrivatePTYAttachAndReady\n",
+              "    worker_test.go:574: file-only fake Claude; Keychain transaction covered in logins\n",
+              "--- SKIP: TestClaudePrivatePTYAttachAndReady (0.00s)\n"
+            ]
+          }
+        ],
+        "failed_packages": []
+      },
+      "race_exit": 0,
+      "race_seconds": 1110,
+      "race": {
+        "path": "/private/tmp/swarm-clean-mac-race.log",
+        "bytes": 8820782,
+        "sha256": "95e42c2ae067607d230d6a4e2eca9f0d8bffbbfb280e60d4d7f72b93aaa89a35",
+        "first": "2026-10-24T17:11:42.274969+02:00",
+        "last": "2026-10-24T17:30:10.766142+02:00",
+        "top_level_tests": {
+          "pass": 5980,
+          "skip": 64
+        },
+        "packages_finished": 85,
+        "package_status": {
+          "pass": 78,
+          "skip": 7
+        },
+        "failed_tests": [],
+        "skipped_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface",
+            "tail": [
+              "=== RUN   TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface\n",
+              "    aarsurface_test.go:64: PB-BIND-7: no built AAR at android/app/libs/swarm.aar, so there is no artifact to compare. It is a build output and is gitignored; run android/build-aar.sh to give this gate something to measure.\n",
+              "--- SKIP: TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages",
+            "tail": [
+              "=== RUN   TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages\n",
+              "    pagesize_test.go:57: 16 KB PAGES: no built AAR at android/app/libs/swarm.aar, so there are no linked segments to measure. It is a build output and is gitignored; run android/build-aar.sh to give this gate something to measure.\n",
+              "--- SKIP: TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestOperatorRelayV2RevokeAndDeferredRetry",
+            "tail": [
+              "=== RUN   TestOperatorRelayV2RevokeAndDeferredRetry\n",
+              "    operator_relay_v2_workerd_test.go:66: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestOperatorRelayV2RevokeAndDeferredRetry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream",
+            "tail": [
+              "=== RUN   TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream\n",
+              "    operator_relay_v2_workerd_test.go:162: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery",
+            "tail": [
+              "=== RUN   TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery\n",
+              "    s18b_unbrick_test.go:493: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice",
+            "tail": [
+              "=== RUN   TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice\n",
+              "    s18b_unbrick_test.go:541: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery",
+            "tail": [
+              "=== RUN   TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery\n",
+              "    s18b_unbrick_test.go:567: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody",
+            "tail": [
+              "=== RUN   TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody\n",
+              "    s18b_unbrick_test.go:613: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset",
+            "tail": [
+              "=== RUN   TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset\n",
+              "    s18b_unbrick_test.go:669: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold",
+            "tail": [
+              "=== RUN   TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold\n",
+              "    s18b_unbrick_test.go:790: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRetentionSubcommandRunsOneBoundedFirestoreSweep",
+            "tail": [
+              "=== RUN   TestRetentionSubcommandRunsOneBoundedFirestoreSweep\n",
+              "    firestore_cutover_test.go:105: requires Firestore emulator\n",
+              "--- SKIP: TestRetentionSubcommandRunsOneBoundedFirestoreSweep (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_InsecureHTTP_BootsAndShutsDownCleanly",
+            "tail": [
+              "=== RUN   TestRun_InsecureHTTP_BootsAndShutsDownCleanly\n",
+              "    main_test.go:259: requires Firestore emulator\n",
+              "--- SKIP: TestRun_InsecureHTTP_BootsAndShutsDownCleanly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_TLSMode_PinsMinimumVersionAtTLS13",
+            "tail": [
+              "=== RUN   TestRun_TLSMode_PinsMinimumVersionAtTLS13\n",
+              "    main_test.go:376: requires Firestore emulator\n",
+              "--- SKIP: TestRun_TLSMode_PinsMinimumVersionAtTLS13 (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter",
+            "test": "TestConformance_Command_NoFdOrGoroutineLeak",
+            "tail": [
+              "=== RUN   TestConformance_Command_NoFdOrGoroutineLeak\n",
+              "    conformance_test.go:190: cannot read /dev/fd (fstatat /dev/fd: bad file descriptor); fd-neutrality check unavailable on this platform\n",
+              "--- SKIP: TestConformance_Command_NoFdOrGoroutineLeak (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/attach",
+            "test": "TestPTY_SIGKILLLeavesRawUnrestored_DocumentedLimitation",
+            "tail": [
+              "=== RUN   TestPTY_SIGKILLLeavesRawUnrestored_DocumentedLimitation\n",
+              "    pty_test.go:199: darwin: controlling-terminal revoke on session-leader death precludes the post-death termios read\n",
+              "--- SKIP: TestPTY_SIGKILLLeavesRawUnrestored_DocumentedLimitation (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO",
+            "tail": [
+              "=== RUN   TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO\n",
+              "    launch_crash_replay_test.go:260: W4 (live orphan agent) needs a spawn-then-kill-9 integration harness keeping a real shim alive across restart; W1+W3 cover the poison + silent-corpse core. See fix-pack 4a / DCR-1.\n",
+              "--- SKIP: TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestDaemonHostSubprocess",
+            "tail": [
+              "=== RUN   TestDaemonHostSubprocess\n",
+              "    realkill_test.go:60: daemon-host subprocess entrypoint; only runs when re-exec'd\n",
+              "--- SKIP: TestDaemonHostSubprocess (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/persist",
+            "test": "TestHelperCrashWriter",
+            "tail": [
+              "=== RUN   TestHelperCrashWriter\n",
+              "    crash_test.go:58: crash helper; runs only when re-exec'd with SWARM_CRASH_HELPER=1\n",
+              "--- SKIP: TestHelperCrashWriter (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/loginworker",
+            "test": "TestClaudePrivatePTYAttachAndReady",
+            "tail": [
+              "=== RUN   TestClaudePrivatePTYAttachAndReady\n",
+              "    worker_test.go:574: file-only fake Claude; Keychain transaction covered in logins\n",
+              "--- SKIP: TestClaudePrivatePTYAttachAndReady (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonecore",
+            "test": "TestHelperPhoneCoreSession",
+            "tail": [
+              "=== RUN   TestHelperPhoneCoreSession\n",
+              "    processdeath_test.go:77: phone-core crash helper; runs only when re-exec'd\n",
+              "--- SKIP: TestHelperPhoneCoreSession (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRepositorySharedClaims",
+            "tail": [
+              "=== RUN   TestFirestoreRepositorySharedClaims\n",
+              "    firestore_test.go:35: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRepositorySharedClaims (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreHealthCheckIsReadOnly",
+            "tail": [
+              "=== RUN   TestFirestoreHealthCheckIsReadOnly\n",
+              "    firestore_test.go:89: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreHealthCheckIsReadOnly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreMissingTransactionSnapshotHasServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreMissingTransactionSnapshotHasServerReadTime\n",
+              "    firestore_test.go:108: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreMissingTransactionSnapshotHasServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch",
+            "tail": [
+              "=== RUN   TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch\n",
+              "    firestore_test.go:210: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree",
+            "tail": [
+              "=== RUN   TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree\n",
+              "    firestore_test.go:295: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreSecretsAreNotPersistedInPlaintext",
+            "tail": [
+              "=== RUN   TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "    firestore_test.go:426: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreSecretsAreNotPersistedInPlaintext (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeLeaseCASAndTokenGeneration",
+            "tail": [
+              "=== RUN   TestFirestoreWakeLeaseCASAndTokenGeneration\n",
+              "    firestore_test.go:528: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeLeaseCASAndTokenGeneration (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeClaimUsesServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreWakeClaimUsesServerReadTime\n",
+              "    firestore_test.go:602: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeClaimUsesServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeCompletionUsesServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreWakeCompletionUsesServerReadTime\n",
+              "    firestore_test.go:653: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeCompletionUsesServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationClaimHasOneProviderOwner",
+            "tail": [
+              "=== RUN   TestFirestoreRegistrationClaimHasOneProviderOwner\n",
+              "    firestore_test.go:727: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRegistrationClaimHasOneProviderOwner (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRetentionRechecksAndCascadesBoundedly",
+            "tail": [
+              "=== RUN   TestFirestoreRetentionRechecksAndCascadesBoundedly\n",
+              "    firestore_test.go:777: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRetentionRechecksAndCascadesBoundedly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerWakeCancellationKeepsBoundedClaim",
+            "tail": [
+              "=== RUN   TestFirestoreServerWakeCancellationKeepsBoundedClaim\n",
+              "    firestore_test.go:841: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreServerWakeCancellationKeepsBoundedClaim (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestRevoke_OwnerSignature_RetryAfterAlreadyGone",
+            "tail": [
+              "=== RUN   TestRevoke_OwnerSignature_RetryAfterAlreadyGone\n",
+              "    revoke_test.go:206: open spec question: see this file's header comment and the RED-phase return summary\n",
+              "--- SKIP: TestRevoke_OwnerSignature_RetryAfterAlreadyGone (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RawCapabilitiesNeverAppearInTheBboltFile",
+            "tail": [
+              "=== RUN   TestStorage_RawCapabilitiesNeverAppearInTheBboltFile\n",
+              "    storage_test.go:26: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_RawCapabilitiesNeverAppearInTheBboltFile (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile",
+            "tail": [
+              "=== RUN   TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile\n",
+              "    storage_test.go:52: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_AttestationTokenNeverPersisted",
+            "tail": [
+              "=== RUN   TestStorage_AttestationTokenNeverPersisted\n",
+              "    storage_test.go:76: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_AttestationTokenNeverPersisted (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RevocationTombstoneNeverRetainsTheAddress",
+            "tail": [
+              "=== RUN   TestStorage_RevocationTombstoneNeverRetainsTheAddress\n",
+              "    storage_test.go:115: obsolete bbolt reopen assertion; Firestore durability is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_RevocationTombstoneNeverRetainsTheAddress (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+            "test": "TestWritePosterForEmulator",
+            "tail": [
+              "=== RUN   TestWritePosterForEmulator\n",
+              "    poster_for_emulator_test.go:25: SWARM_WRITE_POSTER unset: this test writes an emulator poster, it asserts nothing\n",
+              "--- SKIP: TestWritePosterForEmulator (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRetryRecovery",
+            "tail": [
+              "=== RUN   TestWorkerdDiscardRetryRecovery\n",
+              "    discard_workerd_test.go:17: RELAY_V2_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestWorkerdDiscardRetryRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRecoverySurvivesCutoffExpiry",
+            "tail": [
+              "=== RUN   TestWorkerdDiscardRecoverySurvivesCutoffExpiry\n",
+              "    discard_workerd_test.go:182: RELAY_V2_EXPIRY_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestWorkerdDiscardRecoverySurvivesCutoffExpiry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdNoiseMailboxReconnectReplayAndRevoke",
+            "tail": [
+              "=== RUN   TestWorkerdNoiseMailboxReconnectReplayAndRevoke\n",
+              "    workerd_integration_test.go:21: RELAY_V2_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestWorkerdNoiseMailboxReconnectReplayAndRevoke (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry",
+            "tail": [
+              "=== RUN   TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry\n",
+              "    workerd_integration_test.go:256: RELAY_V2_EXPIRY_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/supervise",
+            "test": "TestUpgradeLogNativeLaunchdJob",
+            "tail": [
+              "=== RUN   TestUpgradeLogNativeLaunchdJob\n",
+              "    upgrade_log_darwin_test.go:20: set SWARM_TEST_LAUNCHD_UPGRADE_LOG=1 for isolated launchd qualification\n",
+              "--- SKIP: TestUpgradeLogNativeLaunchdJob (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard",
+            "tail": [
+              "=== RUN   TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard\n",
+              "    approval_e2e_r4_test.go:31: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval",
+            "tail": [
+              "=== RUN   TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval\n",
+              "    approve_roundtrip_e2e_test.go:66: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone",
+            "tail": [
+              "=== RUN   TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone\n",
+              "    interaction_chain_e2e_test.go:84: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse",
+            "tail": [
+              "=== RUN   TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse\n",
+              "    interaction_chain_live_test.go:79: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed",
+            "tail": [
+              "=== RUN   TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed\n",
+              "    interaction_e2e_test.go:56: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestI1_TheScreensBytesAreTheFacadesBytes",
+            "tail": [
+              "=== RUN   TestI1_TheScreensBytesAreTheFacadesBytes\n",
+              "    interaction_screen_golden_test.go:100: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestI1_TheScreensBytesAreTheFacadesBytes (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPairingUsesNativeRelayV2Transport",
+            "tail": [
+              "=== RUN   TestPairingUsesNativeRelayV2Transport\n",
+              "    pairing_relay_v2_test.go:45: MOBILE_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestPairingUsesNativeRelayV2Transport (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization",
+            "tail": [
+              "=== RUN   TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization\n",
+              "    pairing_relay_v2_test.go:749: MOBILE_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPBBIND1_GomobileBindProducesAnAAR",
+            "tail": [
+              "=== RUN   TestPBBIND1_GomobileBindProducesAnAAR\n",
+              "    bind_test.go:133: no ANDROID_HOME/ANDROID_SDK_ROOT; PB-BIND-1's AAR leg needs the SDK+NDK from requirements 2\n",
+              "--- SKIP: TestPBBIND1_GomobileBindProducesAnAAR (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestLoadPairingConfigUsesNativeRelayV2MachineControl",
+            "tail": [
+              "=== RUN   TestLoadPairingConfigUsesNativeRelayV2MachineControl\n",
+              "    pairing_relay_v2_test.go:109: SKELETON_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestLoadPairingConfigUsesNativeRelayV2MachineControl (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway",
+            "tail": [
+              "=== RUN   TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway\n",
+              "    s18_revokeverb_test.go:57: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner",
+            "tail": [
+              "=== RUN   TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner\n",
+              "    s18_revokeverb_test.go:109: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved",
+            "tail": [
+              "=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved\n",
+              "    s18_sec6_adversarial_test.go:452: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType",
+            "tail": [
+              "=== RUN   TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType\n",
+              "    s18_sec6_adversarial_test.go:559: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_TheDeviceLossChainRunsEndToEnd",
+            "tail": [
+              "=== RUN   TestPBSEC7_TheDeviceLossChainRunsEndToEnd\n",
+              "    s18_sec7_deviceloss_test.go:61: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC7_TheDeviceLossChainRunsEndToEnd (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_ARevokedDeviceCannotTakeControlAgain",
+            "tail": [
+              "=== RUN   TestPBSEC7_ARevokedDeviceCannotTakeControlAgain\n",
+              "    s18_sec7_deviceloss_test.go:139: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC7_ARevokedDeviceCannotTakeControlAgain (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke",
+            "tail": [
+              "=== RUN   TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke\n",
+              "    s19_e2e_test.go:103: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_InputLatencyPhoneToPTY",
+            "tail": [
+              "=== RUN   TestS19Workerd_InputLatencyPhoneToPTY\n",
+              "    s19_latency_test.go:98: set SWARM_S6B_LATENCY=1 to run the full relay-v2 input benchmark\n",
+              "--- SKIP: TestS19Workerd_InputLatencyPhoneToPTY (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY",
+            "tail": [
+              "=== RUN   TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY\n",
+              "    s19_workerd_parity_test.go:19: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning",
+            "tail": [
+              "=== RUN   TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning\n",
+              "    s19_workerd_parity_test.go:85: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn",
+            "tail": [
+              "=== RUN   TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn\n",
+              "    s19_workerd_parity_test.go:118: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn (0.00s)\n"
+            ]
+          }
+        ],
+        "failed_packages": []
+      }
+    },
+    "linux": {
+      "build_exit": 0,
+      "build_seconds": 7,
+      "vet_exit": 0,
+      "vet_seconds": 4,
+      "lint_exit": 0,
+      "normal_exit": 0,
+      "normal_seconds": 741,
+      "normal": {
+        "path": "/tmp/sclean.5hKzkd/gate-test.log",
+        "bytes": 9102264,
+        "sha256": "5c4766b6512d59f94ebe2c7218fc19234c7c4ed0dd45a5c56ad2e5ccf533bcb6",
+        "first": "2026-10-24T15:06:29.343721251Z",
+        "last": "2026-10-24T15:18:48.44004683Z",
+        "top_level_tests": {
+          "pass": 5982,
+          "skip": 62
+        },
+        "packages_finished": 85,
+        "package_status": {
+          "pass": 77,
+          "skip": 8
+        },
+        "failed_tests": [],
+        "skipped_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface",
+            "tail": [
+              "=== RUN   TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface\n",
+              "    aarsurface_test.go:64: PB-BIND-7: no built AAR at android/app/libs/swarm.aar, so there is no artifact to compare. It is a build output and is gitignored; run android/build-aar.sh to give this gate something to measure.\n",
+              "--- SKIP: TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages",
+            "tail": [
+              "=== RUN   TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages\n",
+              "    pagesize_test.go:57: 16 KB PAGES: no built AAR at android/app/libs/swarm.aar, so there are no linked segments to measure. It is a build output and is gitignored; run android/build-aar.sh to give this gate something to measure.\n",
+              "--- SKIP: TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestCleanProtectsSingletonCaseAliases",
+            "tail": [
+              "=== RUN   TestCleanProtectsSingletonCaseAliases\n",
+              "    clean_test.go:520: case-sensitive filesystem\n",
+              "--- SKIP: TestCleanProtectsSingletonCaseAliases (0.05s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestOperatorRelayV2RevokeAndDeferredRetry",
+            "tail": [
+              "=== RUN   TestOperatorRelayV2RevokeAndDeferredRetry\n",
+              "    operator_relay_v2_workerd_test.go:66: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestOperatorRelayV2RevokeAndDeferredRetry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream",
+            "tail": [
+              "=== RUN   TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream\n",
+              "    operator_relay_v2_workerd_test.go:162: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRetentionSubcommandRunsOneBoundedFirestoreSweep",
+            "tail": [
+              "=== RUN   TestRetentionSubcommandRunsOneBoundedFirestoreSweep\n",
+              "    firestore_cutover_test.go:105: requires Firestore emulator\n",
+              "--- SKIP: TestRetentionSubcommandRunsOneBoundedFirestoreSweep (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_InsecureHTTP_BootsAndShutsDownCleanly",
+            "tail": [
+              "=== RUN   TestRun_InsecureHTTP_BootsAndShutsDownCleanly\n",
+              "    main_test.go:259: requires Firestore emulator\n",
+              "--- SKIP: TestRun_InsecureHTTP_BootsAndShutsDownCleanly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_TLSMode_PinsMinimumVersionAtTLS13",
+            "tail": [
+              "=== RUN   TestRun_TLSMode_PinsMinimumVersionAtTLS13\n",
+              "    main_test.go:376: requires Firestore emulator\n",
+              "--- SKIP: TestRun_TLSMode_PinsMinimumVersionAtTLS13 (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery",
+            "tail": [
+              "=== RUN   TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery\n",
+              "    s18b_unbrick_test.go:493: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice",
+            "tail": [
+              "=== RUN   TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice\n",
+              "    s18b_unbrick_test.go:541: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery",
+            "tail": [
+              "=== RUN   TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery\n",
+              "    s18b_unbrick_test.go:567: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody",
+            "tail": [
+              "=== RUN   TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody\n",
+              "    s18b_unbrick_test.go:613: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset",
+            "tail": [
+              "=== RUN   TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset\n",
+              "    s18b_unbrick_test.go:669: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold",
+            "tail": [
+              "=== RUN   TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold\n",
+              "    s18b_unbrick_test.go:790: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO",
+            "tail": [
+              "=== RUN   TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO\n",
+              "    launch_crash_replay_test.go:260: W4 (live orphan agent) needs a spawn-then-kill-9 integration harness keeping a real shim alive across restart; W1+W3 cover the poison + silent-corpse core. See fix-pack 4a / DCR-1.\n",
+              "--- SKIP: TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestDaemonHostSubprocess",
+            "tail": [
+              "=== RUN   TestDaemonHostSubprocess\n",
+              "    realkill_test.go:60: daemon-host subprocess entrypoint; only runs when re-exec'd\n",
+              "--- SKIP: TestDaemonHostSubprocess (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/persist",
+            "test": "TestHelperCrashWriter",
+            "tail": [
+              "=== RUN   TestHelperCrashWriter\n",
+              "    crash_test.go:58: crash helper; runs only when re-exec'd with SWARM_CRASH_HELPER=1\n",
+              "--- SKIP: TestHelperCrashWriter (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonecore",
+            "test": "TestHelperPhoneCoreSession",
+            "tail": [
+              "=== RUN   TestHelperPhoneCoreSession\n",
+              "    processdeath_test.go:77: phone-core crash helper; runs only when re-exec'd\n",
+              "--- SKIP: TestHelperPhoneCoreSession (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRepositorySharedClaims",
+            "tail": [
+              "=== RUN   TestFirestoreRepositorySharedClaims\n",
+              "    firestore_test.go:35: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRepositorySharedClaims (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreHealthCheckIsReadOnly",
+            "tail": [
+              "=== RUN   TestFirestoreHealthCheckIsReadOnly\n",
+              "    firestore_test.go:89: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreHealthCheckIsReadOnly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreMissingTransactionSnapshotHasServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreMissingTransactionSnapshotHasServerReadTime\n",
+              "    firestore_test.go:108: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreMissingTransactionSnapshotHasServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch",
+            "tail": [
+              "=== RUN   TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch\n",
+              "    firestore_test.go:210: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree",
+            "tail": [
+              "=== RUN   TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree\n",
+              "    firestore_test.go:295: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreSecretsAreNotPersistedInPlaintext",
+            "tail": [
+              "=== RUN   TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "    firestore_test.go:426: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreSecretsAreNotPersistedInPlaintext (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeLeaseCASAndTokenGeneration",
+            "tail": [
+              "=== RUN   TestFirestoreWakeLeaseCASAndTokenGeneration\n",
+              "    firestore_test.go:528: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeLeaseCASAndTokenGeneration (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeClaimUsesServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreWakeClaimUsesServerReadTime\n",
+              "    firestore_test.go:602: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeClaimUsesServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeCompletionUsesServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreWakeCompletionUsesServerReadTime\n",
+              "    firestore_test.go:653: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeCompletionUsesServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationClaimHasOneProviderOwner",
+            "tail": [
+              "=== RUN   TestFirestoreRegistrationClaimHasOneProviderOwner\n",
+              "    firestore_test.go:727: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRegistrationClaimHasOneProviderOwner (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRetentionRechecksAndCascadesBoundedly",
+            "tail": [
+              "=== RUN   TestFirestoreRetentionRechecksAndCascadesBoundedly\n",
+              "    firestore_test.go:777: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRetentionRechecksAndCascadesBoundedly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerWakeCancellationKeepsBoundedClaim",
+            "tail": [
+              "=== RUN   TestFirestoreServerWakeCancellationKeepsBoundedClaim\n",
+              "    firestore_test.go:841: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreServerWakeCancellationKeepsBoundedClaim (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestRevoke_OwnerSignature_RetryAfterAlreadyGone",
+            "tail": [
+              "=== RUN   TestRevoke_OwnerSignature_RetryAfterAlreadyGone\n",
+              "    revoke_test.go:206: open spec question: see this file's header comment and the RED-phase return summary\n",
+              "--- SKIP: TestRevoke_OwnerSignature_RetryAfterAlreadyGone (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RawCapabilitiesNeverAppearInTheBboltFile",
+            "tail": [
+              "=== RUN   TestStorage_RawCapabilitiesNeverAppearInTheBboltFile\n",
+              "    storage_test.go:26: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_RawCapabilitiesNeverAppearInTheBboltFile (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile",
+            "tail": [
+              "=== RUN   TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile\n",
+              "    storage_test.go:52: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_AttestationTokenNeverPersisted",
+            "tail": [
+              "=== RUN   TestStorage_AttestationTokenNeverPersisted\n",
+              "    storage_test.go:76: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_AttestationTokenNeverPersisted (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RevocationTombstoneNeverRetainsTheAddress",
+            "tail": [
+              "=== RUN   TestStorage_RevocationTombstoneNeverRetainsTheAddress\n",
+              "    storage_test.go:115: obsolete bbolt reopen assertion; Firestore durability is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_RevocationTombstoneNeverRetainsTheAddress (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+            "test": "TestWritePosterForEmulator",
+            "tail": [
+              "=== RUN   TestWritePosterForEmulator\n",
+              "    poster_for_emulator_test.go:25: SWARM_WRITE_POSTER unset: this test writes an emulator poster, it asserts nothing\n",
+              "--- SKIP: TestWritePosterForEmulator (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRetryRecovery",
+            "tail": [
+              "=== RUN   TestWorkerdDiscardRetryRecovery\n",
+              "    discard_workerd_test.go:17: RELAY_V2_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestWorkerdDiscardRetryRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRecoverySurvivesCutoffExpiry",
+            "tail": [
+              "=== RUN   TestWorkerdDiscardRecoverySurvivesCutoffExpiry\n",
+              "    discard_workerd_test.go:182: RELAY_V2_EXPIRY_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestWorkerdDiscardRecoverySurvivesCutoffExpiry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdNoiseMailboxReconnectReplayAndRevoke",
+            "tail": [
+              "=== RUN   TestWorkerdNoiseMailboxReconnectReplayAndRevoke\n",
+              "    workerd_integration_test.go:21: RELAY_V2_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestWorkerdNoiseMailboxReconnectReplayAndRevoke (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry",
+            "tail": [
+              "=== RUN   TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry\n",
+              "    workerd_integration_test.go:256: RELAY_V2_EXPIRY_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard",
+            "tail": [
+              "=== RUN   TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard\n",
+              "    approval_e2e_r4_test.go:31: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval",
+            "tail": [
+              "=== RUN   TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval\n",
+              "    approve_roundtrip_e2e_test.go:66: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestCleanupContainsCaseAliases",
+            "tail": [
+              "=== RUN   TestCleanupContainsCaseAliases\n",
+              "    discussion_delete_test.go:247: case-sensitive filesystem\n",
+              "--- SKIP: TestCleanupContainsCaseAliases (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone",
+            "tail": [
+              "=== RUN   TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone\n",
+              "    interaction_chain_e2e_test.go:84: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse",
+            "tail": [
+              "=== RUN   TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse\n",
+              "    interaction_chain_live_test.go:79: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed",
+            "tail": [
+              "=== RUN   TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed\n",
+              "    interaction_e2e_test.go:56: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestI1_TheScreensBytesAreTheFacadesBytes",
+            "tail": [
+              "=== RUN   TestI1_TheScreensBytesAreTheFacadesBytes\n",
+              "    interaction_screen_golden_test.go:100: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestI1_TheScreensBytesAreTheFacadesBytes (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPairingUsesNativeRelayV2Transport",
+            "tail": [
+              "=== RUN   TestPairingUsesNativeRelayV2Transport\n",
+              "    pairing_relay_v2_test.go:45: MOBILE_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestPairingUsesNativeRelayV2Transport (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization",
+            "tail": [
+              "=== RUN   TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization\n",
+              "    pairing_relay_v2_test.go:749: MOBILE_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPBBIND1_GomobileBindProducesAnAAR",
+            "tail": [
+              "=== RUN   TestPBBIND1_GomobileBindProducesAnAAR\n",
+              "    bind_test.go:133: no ANDROID_HOME/ANDROID_SDK_ROOT; PB-BIND-1's AAR leg needs the SDK+NDK from requirements 2\n",
+              "--- SKIP: TestPBBIND1_GomobileBindProducesAnAAR (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestLoadPairingConfigUsesNativeRelayV2MachineControl",
+            "tail": [
+              "=== RUN   TestLoadPairingConfigUsesNativeRelayV2MachineControl\n",
+              "    pairing_relay_v2_test.go:109: SKELETON_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestLoadPairingConfigUsesNativeRelayV2MachineControl (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway",
+            "tail": [
+              "=== RUN   TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway\n",
+              "    s18_revokeverb_test.go:57: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner",
+            "tail": [
+              "=== RUN   TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner\n",
+              "    s18_revokeverb_test.go:109: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved",
+            "tail": [
+              "=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved\n",
+              "    s18_sec6_adversarial_test.go:452: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType",
+            "tail": [
+              "=== RUN   TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType\n",
+              "    s18_sec6_adversarial_test.go:559: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_TheDeviceLossChainRunsEndToEnd",
+            "tail": [
+              "=== RUN   TestPBSEC7_TheDeviceLossChainRunsEndToEnd\n",
+              "    s18_sec7_deviceloss_test.go:61: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC7_TheDeviceLossChainRunsEndToEnd (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_ARevokedDeviceCannotTakeControlAgain",
+            "tail": [
+              "=== RUN   TestPBSEC7_ARevokedDeviceCannotTakeControlAgain\n",
+              "    s18_sec7_deviceloss_test.go:139: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC7_ARevokedDeviceCannotTakeControlAgain (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke",
+            "tail": [
+              "=== RUN   TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke\n",
+              "    s19_e2e_test.go:103: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_InputLatencyPhoneToPTY",
+            "tail": [
+              "=== RUN   TestS19Workerd_InputLatencyPhoneToPTY\n",
+              "    s19_latency_test.go:98: set SWARM_S6B_LATENCY=1 to run the full relay-v2 input benchmark\n",
+              "--- SKIP: TestS19Workerd_InputLatencyPhoneToPTY (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY",
+            "tail": [
+              "=== RUN   TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY\n",
+              "    s19_workerd_parity_test.go:19: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning",
+            "tail": [
+              "=== RUN   TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning\n",
+              "    s19_workerd_parity_test.go:85: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn",
+            "tail": [
+              "=== RUN   TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn\n",
+              "    s19_workerd_parity_test.go:118: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn (0.00s)\n"
+            ]
+          }
+        ],
+        "failed_packages": []
+      },
+      "race_exit": 0,
+      "race_seconds": 909,
+      "race": {
+        "path": "/tmp/sclean.5hKzkd/gate-race.log",
+        "bytes": 9107105,
+        "sha256": "e09b4a8eb396be4e543be7e0b711476570cb5a7866fa36e86f705c3c88234129",
+        "first": "2026-10-24T15:18:50.589166203Z",
+        "last": "2026-10-24T15:33:57.66116007Z",
+        "top_level_tests": {
+          "pass": 5982,
+          "skip": 62
+        },
+        "packages_finished": 85,
+        "package_status": {
+          "pass": 77,
+          "skip": 8
+        },
+        "failed_tests": [],
+        "skipped_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface",
+            "tail": [
+              "=== RUN   TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface\n",
+              "    aarsurface_test.go:64: PB-BIND-7: no built AAR at android/app/libs/swarm.aar, so there is no artifact to compare. It is a build output and is gitignored; run android/build-aar.sh to give this gate something to measure.\n",
+              "--- SKIP: TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages",
+            "tail": [
+              "=== RUN   TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages\n",
+              "    pagesize_test.go:57: 16 KB PAGES: no built AAR at android/app/libs/swarm.aar, so there are no linked segments to measure. It is a build output and is gitignored; run android/build-aar.sh to give this gate something to measure.\n",
+              "--- SKIP: TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestCleanProtectsSingletonCaseAliases",
+            "tail": [
+              "=== RUN   TestCleanProtectsSingletonCaseAliases\n",
+              "    clean_test.go:520: case-sensitive filesystem\n",
+              "--- SKIP: TestCleanProtectsSingletonCaseAliases (0.05s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestOperatorRelayV2RevokeAndDeferredRetry",
+            "tail": [
+              "=== RUN   TestOperatorRelayV2RevokeAndDeferredRetry\n",
+              "    operator_relay_v2_workerd_test.go:66: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestOperatorRelayV2RevokeAndDeferredRetry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream",
+            "tail": [
+              "=== RUN   TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream\n",
+              "    operator_relay_v2_workerd_test.go:162: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery",
+            "tail": [
+              "=== RUN   TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery\n",
+              "    s18b_unbrick_test.go:493: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice",
+            "tail": [
+              "=== RUN   TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice\n",
+              "    s18b_unbrick_test.go:541: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery",
+            "tail": [
+              "=== RUN   TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery\n",
+              "    s18b_unbrick_test.go:567: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody",
+            "tail": [
+              "=== RUN   TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody\n",
+              "    s18b_unbrick_test.go:613: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset",
+            "tail": [
+              "=== RUN   TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset\n",
+              "    s18b_unbrick_test.go:669: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold",
+            "tail": [
+              "=== RUN   TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold\n",
+              "    s18b_unbrick_test.go:790: OPERATOR_RELAY_V2_HTTP is set by the fresh-workerd operator gate\n",
+              "--- SKIP: TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRetentionSubcommandRunsOneBoundedFirestoreSweep",
+            "tail": [
+              "=== RUN   TestRetentionSubcommandRunsOneBoundedFirestoreSweep\n",
+              "    firestore_cutover_test.go:105: requires Firestore emulator\n",
+              "--- SKIP: TestRetentionSubcommandRunsOneBoundedFirestoreSweep (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_InsecureHTTP_BootsAndShutsDownCleanly",
+            "tail": [
+              "=== RUN   TestRun_InsecureHTTP_BootsAndShutsDownCleanly\n",
+              "    main_test.go:259: requires Firestore emulator\n",
+              "--- SKIP: TestRun_InsecureHTTP_BootsAndShutsDownCleanly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_TLSMode_PinsMinimumVersionAtTLS13",
+            "tail": [
+              "=== RUN   TestRun_TLSMode_PinsMinimumVersionAtTLS13\n",
+              "    main_test.go:376: requires Firestore emulator\n",
+              "--- SKIP: TestRun_TLSMode_PinsMinimumVersionAtTLS13 (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO",
+            "tail": [
+              "=== RUN   TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO\n",
+              "    launch_crash_replay_test.go:260: W4 (live orphan agent) needs a spawn-then-kill-9 integration harness keeping a real shim alive across restart; W1+W3 cover the poison + silent-corpse core. See fix-pack 4a / DCR-1.\n",
+              "--- SKIP: TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestDaemonHostSubprocess",
+            "tail": [
+              "=== RUN   TestDaemonHostSubprocess\n",
+              "    realkill_test.go:60: daemon-host subprocess entrypoint; only runs when re-exec'd\n",
+              "--- SKIP: TestDaemonHostSubprocess (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/persist",
+            "test": "TestHelperCrashWriter",
+            "tail": [
+              "=== RUN   TestHelperCrashWriter\n",
+              "    crash_test.go:58: crash helper; runs only when re-exec'd with SWARM_CRASH_HELPER=1\n",
+              "--- SKIP: TestHelperCrashWriter (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonecore",
+            "test": "TestHelperPhoneCoreSession",
+            "tail": [
+              "=== RUN   TestHelperPhoneCoreSession\n",
+              "    processdeath_test.go:77: phone-core crash helper; runs only when re-exec'd\n",
+              "--- SKIP: TestHelperPhoneCoreSession (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRepositorySharedClaims",
+            "tail": [
+              "=== RUN   TestFirestoreRepositorySharedClaims\n",
+              "    firestore_test.go:35: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRepositorySharedClaims (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreHealthCheckIsReadOnly",
+            "tail": [
+              "=== RUN   TestFirestoreHealthCheckIsReadOnly\n",
+              "    firestore_test.go:89: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreHealthCheckIsReadOnly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreMissingTransactionSnapshotHasServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreMissingTransactionSnapshotHasServerReadTime\n",
+              "    firestore_test.go:108: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreMissingTransactionSnapshotHasServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch",
+            "tail": [
+              "=== RUN   TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch\n",
+              "    firestore_test.go:210: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree",
+            "tail": [
+              "=== RUN   TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree\n",
+              "    firestore_test.go:295: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreSecretsAreNotPersistedInPlaintext",
+            "tail": [
+              "=== RUN   TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "    firestore_test.go:426: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreSecretsAreNotPersistedInPlaintext (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeLeaseCASAndTokenGeneration",
+            "tail": [
+              "=== RUN   TestFirestoreWakeLeaseCASAndTokenGeneration\n",
+              "    firestore_test.go:528: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeLeaseCASAndTokenGeneration (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeClaimUsesServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreWakeClaimUsesServerReadTime\n",
+              "    firestore_test.go:602: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeClaimUsesServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeCompletionUsesServerReadTime",
+            "tail": [
+              "=== RUN   TestFirestoreWakeCompletionUsesServerReadTime\n",
+              "    firestore_test.go:653: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreWakeCompletionUsesServerReadTime (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationClaimHasOneProviderOwner",
+            "tail": [
+              "=== RUN   TestFirestoreRegistrationClaimHasOneProviderOwner\n",
+              "    firestore_test.go:727: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRegistrationClaimHasOneProviderOwner (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRetentionRechecksAndCascadesBoundedly",
+            "tail": [
+              "=== RUN   TestFirestoreRetentionRechecksAndCascadesBoundedly\n",
+              "    firestore_test.go:777: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreRetentionRechecksAndCascadesBoundedly (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerWakeCancellationKeepsBoundedClaim",
+            "tail": [
+              "=== RUN   TestFirestoreServerWakeCancellationKeepsBoundedClaim\n",
+              "    firestore_test.go:841: requires Firestore emulator\n",
+              "--- SKIP: TestFirestoreServerWakeCancellationKeepsBoundedClaim (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestRevoke_OwnerSignature_RetryAfterAlreadyGone",
+            "tail": [
+              "=== RUN   TestRevoke_OwnerSignature_RetryAfterAlreadyGone\n",
+              "    revoke_test.go:206: open spec question: see this file's header comment and the RED-phase return summary\n",
+              "--- SKIP: TestRevoke_OwnerSignature_RetryAfterAlreadyGone (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RawCapabilitiesNeverAppearInTheBboltFile",
+            "tail": [
+              "=== RUN   TestStorage_RawCapabilitiesNeverAppearInTheBboltFile\n",
+              "    storage_test.go:26: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_RawCapabilitiesNeverAppearInTheBboltFile (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile",
+            "tail": [
+              "=== RUN   TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile\n",
+              "    storage_test.go:52: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_AttestationTokenNeverPersisted",
+            "tail": [
+              "=== RUN   TestStorage_AttestationTokenNeverPersisted\n",
+              "    storage_test.go:76: obsolete bbolt physical-layout assertion; Firestore persistence is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_AttestationTokenNeverPersisted (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RevocationTombstoneNeverRetainsTheAddress",
+            "tail": [
+              "=== RUN   TestStorage_RevocationTombstoneNeverRetainsTheAddress\n",
+              "    storage_test.go:115: obsolete bbolt reopen assertion; Firestore durability is covered by TestFirestoreSecretsAreNotPersistedInPlaintext\n",
+              "--- SKIP: TestStorage_RevocationTombstoneNeverRetainsTheAddress (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+            "test": "TestWritePosterForEmulator",
+            "tail": [
+              "=== RUN   TestWritePosterForEmulator\n",
+              "    poster_for_emulator_test.go:25: SWARM_WRITE_POSTER unset: this test writes an emulator poster, it asserts nothing\n",
+              "--- SKIP: TestWritePosterForEmulator (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRetryRecovery",
+            "tail": [
+              "=== RUN   TestWorkerdDiscardRetryRecovery\n",
+              "    discard_workerd_test.go:17: RELAY_V2_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestWorkerdDiscardRetryRecovery (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRecoverySurvivesCutoffExpiry",
+            "tail": [
+              "=== RUN   TestWorkerdDiscardRecoverySurvivesCutoffExpiry\n",
+              "    discard_workerd_test.go:182: RELAY_V2_EXPIRY_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestWorkerdDiscardRecoverySurvivesCutoffExpiry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdNoiseMailboxReconnectReplayAndRevoke",
+            "tail": [
+              "=== RUN   TestWorkerdNoiseMailboxReconnectReplayAndRevoke\n",
+              "    workerd_integration_test.go:21: RELAY_V2_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestWorkerdNoiseMailboxReconnectReplayAndRevoke (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry",
+            "tail": [
+              "=== RUN   TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry\n",
+              "    workerd_integration_test.go:256: RELAY_V2_EXPIRY_HTTP is set by services/relay/test/run.sh\n",
+              "--- SKIP: TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard",
+            "tail": [
+              "=== RUN   TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard\n",
+              "    approval_e2e_r4_test.go:31: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval",
+            "tail": [
+              "=== RUN   TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval\n",
+              "    approve_roundtrip_e2e_test.go:66: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestCleanupContainsCaseAliases",
+            "tail": [
+              "=== RUN   TestCleanupContainsCaseAliases\n",
+              "    discussion_delete_test.go:247: case-sensitive filesystem\n",
+              "--- SKIP: TestCleanupContainsCaseAliases (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone",
+            "tail": [
+              "=== RUN   TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone\n",
+              "    interaction_chain_e2e_test.go:84: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse",
+            "tail": [
+              "=== RUN   TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse\n",
+              "    interaction_chain_live_test.go:79: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed",
+            "tail": [
+              "=== RUN   TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed\n",
+              "    interaction_e2e_test.go:56: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestI1_TheScreensBytesAreTheFacadesBytes",
+            "tail": [
+              "=== RUN   TestI1_TheScreensBytesAreTheFacadesBytes\n",
+              "    interaction_screen_golden_test.go:100: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestI1_TheScreensBytesAreTheFacadesBytes (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestLoadPairingConfigUsesNativeRelayV2MachineControl",
+            "tail": [
+              "=== RUN   TestLoadPairingConfigUsesNativeRelayV2MachineControl\n",
+              "    pairing_relay_v2_test.go:109: SKELETON_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestLoadPairingConfigUsesNativeRelayV2MachineControl (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPairingUsesNativeRelayV2Transport",
+            "tail": [
+              "=== RUN   TestPairingUsesNativeRelayV2Transport\n",
+              "    pairing_relay_v2_test.go:45: MOBILE_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestPairingUsesNativeRelayV2Transport (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization",
+            "tail": [
+              "=== RUN   TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization\n",
+              "    pairing_relay_v2_test.go:749: MOBILE_RELAY_V2_HTTP is set by the fresh-workerd pairing gate\n",
+              "--- SKIP: TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPBBIND1_GomobileBindProducesAnAAR",
+            "tail": [
+              "=== RUN   TestPBBIND1_GomobileBindProducesAnAAR\n",
+              "    bind_test.go:133: no ANDROID_HOME/ANDROID_SDK_ROOT; PB-BIND-1's AAR leg needs the SDK+NDK from requirements 2\n",
+              "--- SKIP: TestPBBIND1_GomobileBindProducesAnAAR (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway",
+            "tail": [
+              "=== RUN   TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway\n",
+              "    s18_revokeverb_test.go:57: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner",
+            "tail": [
+              "=== RUN   TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner\n",
+              "    s18_revokeverb_test.go:109: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved",
+            "tail": [
+              "=== RUN   TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved\n",
+              "    s18_sec6_adversarial_test.go:452: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType",
+            "tail": [
+              "=== RUN   TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType\n",
+              "    s18_sec6_adversarial_test.go:559: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_TheDeviceLossChainRunsEndToEnd",
+            "tail": [
+              "=== RUN   TestPBSEC7_TheDeviceLossChainRunsEndToEnd\n",
+              "    s18_sec7_deviceloss_test.go:61: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC7_TheDeviceLossChainRunsEndToEnd (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_ARevokedDeviceCannotTakeControlAgain",
+            "tail": [
+              "=== RUN   TestPBSEC7_ARevokedDeviceCannotTakeControlAgain\n",
+              "    s18_sec7_deviceloss_test.go:139: SKELETON_RELAY_V2_HTTP is set by services/relay/test/session.sh\n",
+              "--- SKIP: TestPBSEC7_ARevokedDeviceCannotTakeControlAgain (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke",
+            "tail": [
+              "=== RUN   TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke\n",
+              "    s19_e2e_test.go:103: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_InputLatencyPhoneToPTY",
+            "tail": [
+              "=== RUN   TestS19Workerd_InputLatencyPhoneToPTY\n",
+              "    s19_latency_test.go:98: set SWARM_S6B_LATENCY=1 to run the full relay-v2 input benchmark\n",
+              "--- SKIP: TestS19Workerd_InputLatencyPhoneToPTY (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY",
+            "tail": [
+              "=== RUN   TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY\n",
+              "    s19_workerd_parity_test.go:19: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning",
+            "tail": [
+              "=== RUN   TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning\n",
+              "    s19_workerd_parity_test.go:85: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning (0.00s)\n"
+            ]
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn",
+            "tail": [
+              "=== RUN   TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn\n",
+              "    s19_workerd_parity_test.go:118: SKELETON_RELAY_V2_HTTP is required for the relay-v2 S19 rig\n",
+              "--- SKIP: TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn (0.00s)\n"
+            ]
+          }
+        ],
+        "failed_packages": []
+      }
+    }
+  },
+  "initial_linux": {
+    "source_commit": "1a88823ceb4844570f7400e4224f6708c8f433e5",
+    "normal_exit": 1,
+    "normal_seconds": 759,
+    "normal": {
+      "path": "gate-test.log",
+      "bytes": 9103497,
+      "sha256": "a1bc85e5f57c6734753e6d544235c9eecff127977415168db0de165223c678e4",
+      "first": "2026-10-24T14:37:48.389485809Z",
+      "last": "2026-10-24T14:50:22.818204797Z",
+      "top_level_tests": {
+        "pass": 5981,
+        "skip": 62,
+        "fail": 1
+      },
+      "packages_finished": 85,
+      "package_status": {
+        "pass": 76,
+        "skip": 8,
+        "fail": 1
+      },
+      "failed_tests": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestHookCleanupRefusesReplacedTemporaryInode",
+          "tail": [
+            "=== RUN   TestHookCleanupRefusesReplacedTemporaryInode\n",
+            "    hookcleanup_test.go:238: temporary replacement accepted: {Before:0x11873b38e750 After:0x11873b320750 EligibleBytes:17 Changed:true} <nil>\n",
+            "--- FAIL: TestHookCleanupRefusesReplacedTemporaryInode (0.10s)\n"
+          ]
+        }
+      ],
+      "failed_packages": [
+        "github.com/Nathandela/swarm/internal/shim"
+      ]
+    },
+    "race_exit": 1,
+    "race_seconds": 950,
+    "race": {
+      "path": "gate-race.log",
+      "bytes": 9113953,
+      "sha256": "0f4a8142905ce005380b082f927ef46ee3d8205527dfb44ba1ee2e7d3a9ce01f",
+      "first": "2026-10-24T14:50:32.189295205Z",
+      "last": "2026-10-24T15:06:12.69856455Z",
+      "top_level_tests": {
+        "pass": 5980,
+        "skip": 62,
+        "fail": 2
+      },
+      "packages_finished": 85,
+      "package_status": {
+        "pass": 75,
+        "skip": 8,
+        "fail": 2
+      },
+      "failed_tests": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestHookCleanupRefusesReplacedTemporaryInode",
+          "tail": [
+            "=== RUN   TestHookCleanupRefusesReplacedTemporaryInode\n",
+            "    hookcleanup_test.go:238: temporary replacement accepted: {Before:0xc00022aea0 After:0xc000232c30 EligibleBytes:17 Changed:true} <nil>\n",
+            "--- FAIL: TestHookCleanupRefusesReplacedTemporaryInode (0.05s)\n"
+          ]
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/tui",
+          "test": "TestReconnect_HydratedBannerExpires",
+          "tail": [
+            "        \u001b[2L\n",
+            "          \u25cf connection to daemon lost - reconnecting\u001b[40;3Hdaemon connection lost \u00b7 reconnecting                                                                              de\u001b[?7lv\u001b[?7h\u001b[6;76H4s\u001b[?1002h\u001b[?1006h\u001b[1;110H1\u001b[3;7Hdex needs input (question)\u001b[K\n",
+            "        \n",
+            "          NEEDS INPUT\n",
+            "        \u001b[2C\u25cf                     codex                            question         9999d fresh question\u001b[K\u001b[40;3H\u2191\u2193 move \u00b7 \u23ce attach (ctrl+q returns) \u00b7 o options \u00b7 t tag \u00b7 e rename \u00b7 n new \u00b7 h handoff \u00b7 ^x kill \u00b7 esc quit\n",
+            "--- FAIL: TestReconnect_HydratedBannerExpires (3.04s)\n"
+          ]
+        }
+      ],
+      "failed_packages": [
+        "github.com/Nathandela/swarm/internal/shim",
+        "github.com/Nathandela/swarm/internal/tui"
+      ]
+    }
+  },
+  "disclosed_retries": [
+    {
+      "issue": "agents-tracker-moos",
+      "test": "internal/loginworker.TestStaleWorkerIdentityCannotCancelOrReadDevice",
+      "detail": "Final macOS normal invocation timed out at final cancellation; unchanged complete package passed on retry and test passed in final full race. Original failed invocation remains exit 1; no reserved files changed."
+    },
+    {
+      "issue": "agents-tracker-lrgf",
+      "test": "internal/tui.TestReconnect_HydratedBannerExpires",
+      "detail": "Initial Linux race hydration wait timed out at 3s; final source full gates re-exercise the unchanged test. No TUI source changes."
+    }
+  ],
+  "known_limits": [
+    "Unproven, busy, legacy, or >64MiB hook spools are retained.",
+    "Cooperative private same-UID directory and process-lock boundary; no malicious same-UID race guarantee.",
+    "No guaranteed physical free-space reduction; no arbitrary history, staging, scratch or cache sweep.",
+    "A crash can leave unproven staging; no automatic retirement of those files."
+  ],
+  "raw_log_retention": "Raw task logs are removed after compact hashes, counts, skips and failures are committed; original failures are preserved here.",
+  "artifact_retirement": {
+    "linux_checkout": "/tmp/sclean.5hKzkd",
+    "linux_removed": true,
+    "linux_allocated_bytes_before": 167858176,
+    "linux_observable_references_before": 0,
+    "linux_opaque_unrelated_process_fd_lists": 3,
+    "local_owned_files_removed": 28,
+    "local_file_bytes_removed": 26587197,
+    "reviewed_overlay_removed": true,
+    "task_private_caches_remaining": 0,
+    "shared_caches_and_source_worktree_retained": true
+  }
+}

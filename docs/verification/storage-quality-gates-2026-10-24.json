@@ -1,0 +1,3172 @@
+{
+  "date": "2026-10-24",
+  "status": "pass",
+  "normal_qualification": "Composite: original full normal runs completed; only reviewed fixture failures were corrected, all affected tests were rerun. Original failing runs remain recorded as failures. Production code unchanged between 73523a79 and 14e38fa9.",
+  "fixture_tree": "944347638c948289cd4a9e23f7947343dd2ac84f",
+  "environment": {
+    "GOMAXPROCS": "2",
+    "GOTOOLCHAIN": "local",
+    "TMPDIR": {
+      "darwin": "/private/tmp",
+      "linux": "/tmp"
+    },
+    "shared_existing_caches": true,
+    "removed_inherited_variables": [
+      "SWARM_SHIM_HOOK_SOCK",
+      "SWARM_DAEMON_SOCK",
+      "SWARM_HOOK_TOKEN",
+      "SWARM_HOOK_SEQ_FILE",
+      "SWARM_HOOK_CAPTURE",
+      "SWARM_SESSION_ID"
+    ]
+  },
+  "full_normal_command": [
+    "go",
+    "test",
+    "-json",
+    "-p",
+    "2",
+    "./...",
+    "-count=1",
+    "-timeout=30m"
+  ],
+  "full_race_command": [
+    "go",
+    "test",
+    "-race",
+    "-json",
+    "-p",
+    "2",
+    "./...",
+    "-count=1",
+    "-timeout=30m"
+  ],
+  "raw_log_note": "Raw logs were task-owned temporary provenance. This compact record preserves results, original failure output, skip names, commands and hashes before scratch cleanup. Native/provider/device opt-in skips are not represented as executions.",
+  "platforms": {
+    "darwin_arm64": {
+      "toolchain": "go1.26.9",
+      "production_full_run_revision": "73523a79a7b8c1b5125a993fb874c6c92dd91ced",
+      "original_full_normal_stages": [
+        {
+          "stage": "build",
+          "exit": 0,
+          "seconds": 4.97,
+          "log": "/tmp/swarm-storage-735-mac-build.txt",
+          "commit": "73523a79"
+        },
+        {
+          "stage": "vet",
+          "exit": 0,
+          "seconds": 2.15,
+          "log": "/tmp/swarm-storage-735-mac-vet.txt",
+          "commit": "73523a79"
+        },
+        {
+          "stage": "lint-darwin",
+          "exit": 0,
+          "seconds": 8.96,
+          "log": "/tmp/swarm-storage-735-mac-lint-darwin.txt",
+          "commit": "73523a79"
+        },
+        {
+          "stage": "lint-linux",
+          "exit": 0,
+          "seconds": 12.15,
+          "log": "/tmp/swarm-storage-735-mac-lint-linux.txt",
+          "commit": "73523a79"
+        },
+        {
+          "stage": "focused-race",
+          "exit": 0,
+          "seconds": 18.19,
+          "log": "/tmp/swarm-storage-735-mac-focused-race.txt",
+          "commit": "73523a79"
+        },
+        {
+          "stage": "test",
+          "exit": 1,
+          "seconds": 995.79,
+          "log": "/tmp/swarm-storage-735-mac-test.jsonl",
+          "commit": "73523a79"
+        }
+      ],
+      "original_full_normal": {
+        "raw_log_sha256": "0e2af6b606c190e6905eaceef95c83e3ce16ad25d0c051ab7df69b8ce286719d",
+        "raw_log_bytes": 8729105,
+        "package_results": [
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "result": "pass",
+            "seconds": 6.7379999999999995
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-char",
+            "result": "pass",
+            "seconds": 4.084
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-char/hookprobe",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-fake-agent",
+            "result": "pass",
+            "seconds": 1.215
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-fake-codex",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-publish",
+            "result": "pass",
+            "seconds": 0.405
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "result": "pass",
+            "seconds": 0.348
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "result": "pass",
+            "seconds": 28.574
+          },
+          {
+            "package": "github.com/Nathandela/swarm/deploy/gcp",
+            "result": "pass",
+            "seconds": 0.19
+          },
+          {
+            "package": "github.com/Nathandela/swarm/deploy/pushgw",
+            "result": "pass",
+            "seconds": 0.183
+          },
+          {
+            "package": "github.com/Nathandela/swarm/deploy/release",
+            "result": "pass",
+            "seconds": 0.183
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter",
+            "result": "pass",
+            "seconds": 0.224
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/agy",
+            "result": "pass",
+            "seconds": 0.249
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/claude",
+            "result": "pass",
+            "seconds": 0.301
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/codex",
+            "result": "pass",
+            "seconds": 0.274
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/detect",
+            "result": "pass",
+            "seconds": 9.562
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/fixtureio",
+            "result": "pass",
+            "seconds": 0.191
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/hermes",
+            "result": "pass",
+            "seconds": 0.25
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/opencode",
+            "result": "pass",
+            "seconds": 0.262
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/refadapter",
+            "result": "pass",
+            "seconds": 0.258
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/registry",
+            "result": "pass",
+            "seconds": 0.23
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/appserver",
+            "result": "pass",
+            "seconds": 1.454
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/attach",
+            "result": "pass",
+            "seconds": 1.423
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/contextguard",
+            "result": "pass",
+            "seconds": 0.195
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/converge",
+            "result": "pass",
+            "seconds": 0.23
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-remote",
+            "result": "pass",
+            "seconds": 34.698
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/design",
+            "result": "pass",
+            "seconds": 0.193
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/diagnosticlog",
+            "result": "pass",
+            "seconds": 0.227
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/e2e",
+            "result": "pass",
+            "seconds": 26.76
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/engine",
+            "result": "pass",
+            "seconds": 3.779
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/fakeagent",
+            "result": "pass",
+            "seconds": 0.184
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/hookclient",
+            "result": "pass",
+            "seconds": 1.5110000000000001
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/idempotency",
+            "result": "pass",
+            "seconds": 5.192
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/journal",
+            "result": "pass",
+            "seconds": 48.252
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/loginmigration",
+            "result": "pass",
+            "seconds": 20.239
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "result": "pass",
+            "seconds": 144.011
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/logins",
+            "result": "pass",
+            "seconds": 39.507
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/opencodebridge",
+            "result": "pass",
+            "seconds": 0.667
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/persist",
+            "result": "pass",
+            "seconds": 2.163
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/loginworker",
+            "result": "pass",
+            "seconds": 13.23
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonesim",
+            "result": "pass",
+            "seconds": 1.1
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/play",
+            "result": "pass",
+            "seconds": 1.42
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/processcontain",
+            "result": "pass",
+            "seconds": 0.274
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/procstart",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/protocol",
+            "result": "pass",
+            "seconds": 36.494
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/protocol/schema",
+            "result": "pass",
+            "seconds": 0.303
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "result": "pass",
+            "seconds": 6.779
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushreg",
+            "result": "pass",
+            "seconds": 0.256
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/crypto",
+            "result": "pass",
+            "seconds": 1.741
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/device",
+            "result": "pass",
+            "seconds": 2.055
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/enroll",
+            "result": "pass",
+            "seconds": 0.44
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/grant",
+            "result": "pass",
+            "seconds": 0.484
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/grantwire",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/machineid",
+            "result": "pass",
+            "seconds": 0.556
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonecore",
+            "result": "pass",
+            "seconds": 63.647
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/push",
+            "result": "pass",
+            "seconds": 1.43
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+            "result": "pass",
+            "seconds": 0.291
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relay",
+            "result": "pass",
+            "seconds": 4.208
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relaycfg",
+            "result": "pass",
+            "seconds": 0.29
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayhome",
+            "result": "pass",
+            "seconds": 0.206
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relaypurge",
+            "result": "pass",
+            "seconds": 1.994
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/pairing",
+            "result": "pass",
+            "seconds": 19.018
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "result": "pass",
+            "seconds": 10.319
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/transport",
+            "result": "pass",
+            "seconds": 8.242
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/supervise",
+            "result": "pass",
+            "seconds": 15.005
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remotegw",
+            "result": "pass",
+            "seconds": 30.133
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/shimwire",
+            "result": "pass",
+            "seconds": 0.283
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/shim",
+            "result": "pass",
+            "seconds": 103.857
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/smoke",
+            "result": "skip",
+            "seconds": 0.014
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/status",
+            "result": "pass",
+            "seconds": 0.24
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/submitframe",
+            "result": "pass",
+            "seconds": 0.209
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/testbin",
+            "result": "pass",
+            "seconds": 2.584
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/transcript",
+            "result": "pass",
+            "seconds": 0.638
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/tui",
+            "result": "pass",
+            "seconds": 43.354
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/upgrade",
+            "result": "pass",
+            "seconds": 2.7880000000000003
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/verify",
+            "result": "pass",
+            "seconds": 10.112
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/version",
+            "result": "pass",
+            "seconds": 0.225
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/vt",
+            "result": "pass",
+            "seconds": 1.4849999999999999
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/wire",
+            "result": "pass",
+            "seconds": 0.234
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/worktree",
+            "result": "pass",
+            "seconds": 2.651
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "result": "pass",
+            "seconds": 31.745
+          },
+          {
+            "package": "github.com/Nathandela/swarm/scripts/releasemanifest",
+            "result": "pass",
+            "seconds": 0.934
+          },
+          {
+            "package": "github.com/Nathandela/swarm/scripts/signchecksums",
+            "result": "skip",
+            "seconds": 0.003
+          },
+          {
+            "package": "github.com/Nathandela/swarm/scripts/verification",
+            "result": "skip",
+            "seconds": 0.007
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "result": "fail",
+            "seconds": 658.518
+          }
+        ],
+        "top_level_test_results": {
+          "pass": 5945,
+          "fail": 1,
+          "skip": 64
+        },
+        "failed_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents"
+          }
+        ],
+        "failed_test_output": [
+          "=== RUN   TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents",
+          "    hookgap_recovery_test.go:311: socket /private/tmp/s2029396852/TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents3783626091/002/c.sock never appeared",
+          "--- FAIL: TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents (5.01s)"
+        ],
+        "skipped_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestOperatorRelayV2RevokeAndDeferredRetry"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRetentionSubcommandRunsOneBoundedFirestoreSweep"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_InsecureHTTP_BootsAndShutsDownCleanly"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_TLSMode_PinsMinimumVersionAtTLS13"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter",
+            "test": "TestConformance_Command_NoFdOrGoroutineLeak"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/attach",
+            "test": "TestPTY_SIGKILLLeavesRawUnrestored_DocumentedLimitation"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestDaemonHostSubprocess"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/persist",
+            "test": "TestHelperCrashWriter"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/loginworker",
+            "test": "TestClaudePrivatePTYAttachAndReady"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonecore",
+            "test": "TestHelperPhoneCoreSession"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRepositorySharedClaims"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreHealthCheckIsReadOnly"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreMissingTransactionSnapshotHasServerReadTime"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreSecretsAreNotPersistedInPlaintext"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeLeaseCASAndTokenGeneration"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeClaimUsesServerReadTime"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeCompletionUsesServerReadTime"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationClaimHasOneProviderOwner"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRetentionRechecksAndCascadesBoundedly"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerWakeCancellationKeepsBoundedClaim"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestRegistrationExpiry_CompletedAuthorityOutlivesAttemptWindow/firestore"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestRevoke_OwnerSignature_RetryAfterAlreadyGone"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RawCapabilitiesNeverAppearInTheBboltFile"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_AttestationTokenNeverPersisted"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RevocationTombstoneNeverRetainsTheAddress"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+            "test": "TestWritePosterForEmulator"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRetryRecovery"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRecoverySurvivesCutoffExpiry"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdNoiseMailboxReconnectReplayAndRevoke"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/supervise",
+            "test": "TestUpgradeLogNativeLaunchdJob"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestI1_TheScreensBytesAreTheFacadesBytes"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPairingUsesNativeRelayV2Transport"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPBBIND1_GomobileBindProducesAnAAR"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestLoadPairingConfigUsesNativeRelayV2MachineControl"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_TheDeviceLossChainRunsEndToEnd"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_ARevokedDeviceCannotTakeControlAgain"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_InputLatencyPhoneToPTY"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn"
+          }
+        ],
+        "race_warning_present": false
+      },
+      "final_fixture_revision": "14e38fa952f3f5f96ead579fcdb3fb184dcb8303",
+      "final_stages": [
+        {
+          "stage": "vet-fixtures",
+          "exit": 0,
+          "seconds": 1.52,
+          "log": "/tmp/swarm-storage-14e-mac-vet-fixtures.txt",
+          "commit": "14e38fa9",
+          "command": [
+            "go",
+            "vet",
+            "./internal/protocol",
+            "./internal/skeleton"
+          ]
+        },
+        {
+          "stage": "lint-darwin",
+          "exit": 0,
+          "seconds": 6.91,
+          "log": "/tmp/swarm-storage-14e-mac-lint-darwin.txt",
+          "commit": "14e38fa9",
+          "command": [
+            "/private/tmp/swarm-oc-audit-gobin/golangci-lint",
+            "run",
+            "--timeout=10m",
+            "--max-issues-per-linter=0",
+            "--max-same-issues=0"
+          ]
+        },
+        {
+          "stage": "lint-linux",
+          "exit": 0,
+          "seconds": 9.27,
+          "log": "/tmp/swarm-storage-14e-mac-lint-linux.txt",
+          "commit": "14e38fa9",
+          "command": [
+            "/private/tmp/swarm-oc-audit-gobin/golangci-lint",
+            "run",
+            "--timeout=10m",
+            "--max-issues-per-linter=0",
+            "--max-same-issues=0"
+          ]
+        },
+        {
+          "stage": "protocol-normal",
+          "exit": 0,
+          "seconds": 29.35,
+          "log": "/tmp/swarm-storage-14e-mac-protocol-normal.jsonl",
+          "commit": "14e38fa9",
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "./internal/protocol",
+            "-count=1",
+            "-timeout=5m"
+          ]
+        },
+        {
+          "stage": "socket-normal",
+          "exit": 0,
+          "seconds": 10.48,
+          "log": "/tmp/swarm-storage-14e-mac-socket-normal.jsonl",
+          "commit": "14e38fa9",
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "./internal/skeleton",
+            "-run",
+            "^(TestSocketBindUmasksPreserveOwnerDirectoryTraversal|TestHookDrainer_CrashAfterGapJournalBeforeCheckpointDoesNotDuplicateBoundary|TestHookDrainer_GapDedupeUsesPersistedInstanceWithoutCapabilityRecord|TestHookDrainer_SameNumericBoundaryInFreshSpoolIncarnationEmitsAgain|TestHookDrainer_DecimalCheckpointMigratesWithAnAdoptedLegacySpool|TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents|TestRunHookDrain_ContinuesAfterRecoverableGap|TestHookDrainer_FinalDrainRecoversRetainedSideWithNoLiveSocket|TestCaptureConversationID_UnchangedSizeSkipsReread|TestCaptureConversationID_GrowthTriggersRereadAndCapturesLateID|TestCaptureConversationID_RejectsExtractorOutputBeforeWriteOncePersistence|TestCaptureConversationID_ShrinkTriggersRescan|TestCaptureConversationID_DiskErrorToleratedThenRecovers|TestCaptureConversationID_EndSessionRaceDoesNotResurrectConvScan|TestEndSession_CapturesConversationIDForShortLivedSession)$",
+            "-count=1",
+            "-timeout=5m"
+          ]
+        },
+        {
+          "stage": "race",
+          "exit": 0,
+          "seconds": 1190.93,
+          "log": "/tmp/swarm-storage-14e-mac-race.jsonl",
+          "commit": "14e38fa9",
+          "command": [
+            "go",
+            "test",
+            "-race",
+            "-json",
+            "-p",
+            "2",
+            "./...",
+            "-count=1",
+            "-timeout=30m"
+          ]
+        }
+      ],
+      "final_results": {
+        "protocol-normal": {
+          "raw_log_sha256": "9e0436c1f1e48764faba76e1aa649d29abd0989df49c7fe87ba9541fc1666186",
+          "raw_log_bytes": 600106,
+          "package_results": [
+            {
+              "package": "github.com/Nathandela/swarm/internal/protocol",
+              "result": "pass",
+              "seconds": 28.286
+            }
+          ],
+          "top_level_test_results": {
+            "pass": 435,
+            "fail": 0,
+            "skip": 0
+          },
+          "failed_tests": [],
+          "failed_test_output": [],
+          "skipped_tests": [],
+          "race_warning_present": false
+        },
+        "socket-normal": {
+          "raw_log_sha256": "849af3a6788287f88bd4d9738d639e352e256aa370482a71de8488d37e77b82b",
+          "raw_log_bytes": 15402,
+          "package_results": [
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "result": "pass",
+              "seconds": 8.331
+            }
+          ],
+          "top_level_test_results": {
+            "pass": 15,
+            "fail": 0,
+            "skip": 0
+          },
+          "failed_tests": [],
+          "failed_test_output": [],
+          "skipped_tests": [],
+          "race_warning_present": false
+        },
+        "race": {
+          "raw_log_sha256": "0973fa83695054661bc3e0309edc2511630bccbd633127a60d55e30c25e25bec",
+          "raw_log_bytes": 8731401,
+          "package_results": [
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "result": "pass",
+              "seconds": 33.626
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-char",
+              "result": "pass",
+              "seconds": 5.251
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-char/hookprobe",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-fake-agent",
+              "result": "pass",
+              "seconds": 2.699
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-fake-codex",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-publish",
+              "result": "pass",
+              "seconds": 1.2770000000000001
+            },
+            {
+              "package": "github.com/Nathandela/swarm/android/gate",
+              "result": "pass",
+              "seconds": 85.689
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+              "result": "pass",
+              "seconds": 1.423
+            },
+            {
+              "package": "github.com/Nathandela/swarm/deploy/gcp",
+              "result": "pass",
+              "seconds": 1.225
+            },
+            {
+              "package": "github.com/Nathandela/swarm/deploy/pushgw",
+              "result": "pass",
+              "seconds": 1.217
+            },
+            {
+              "package": "github.com/Nathandela/swarm/deploy/release",
+              "result": "pass",
+              "seconds": 1.22
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter",
+              "result": "pass",
+              "seconds": 1.351
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/agy",
+              "result": "pass",
+              "seconds": 1.336
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/claude",
+              "result": "pass",
+              "seconds": 1.532
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/codex",
+              "result": "pass",
+              "seconds": 1.3559999999999999
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/detect",
+              "result": "pass",
+              "seconds": 10.567
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/fixtureio",
+              "result": "pass",
+              "seconds": 1.259
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/hermes",
+              "result": "pass",
+              "seconds": 1.417
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/opencode",
+              "result": "pass",
+              "seconds": 1.478
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/refadapter",
+              "result": "pass",
+              "seconds": 1.275
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/registry",
+              "result": "pass",
+              "seconds": 1.224
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-remote",
+              "result": "pass",
+              "seconds": 35.325
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/appserver",
+              "result": "pass",
+              "seconds": 2.605
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/contextguard",
+              "result": "pass",
+              "seconds": 1.207
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/converge",
+              "result": "pass",
+              "seconds": 1.262
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/attach",
+              "result": "pass",
+              "seconds": 3.157
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/design",
+              "result": "pass",
+              "seconds": 1.2610000000000001
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/diagnosticlog",
+              "result": "pass",
+              "seconds": 1.264
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/e2e",
+              "result": "pass",
+              "seconds": 31.2
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/engine",
+              "result": "pass",
+              "seconds": 26.921
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/fakeagent",
+              "result": "pass",
+              "seconds": 1.213
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/hookclient",
+              "result": "pass",
+              "seconds": 2.618
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/idempotency",
+              "result": "pass",
+              "seconds": 9.429
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/journal",
+              "result": "pass",
+              "seconds": 50.44
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/daemon",
+              "result": "pass",
+              "seconds": 133.868
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/loginmigration",
+              "result": "pass",
+              "seconds": 17.177
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/logins",
+              "result": "pass",
+              "seconds": 27.76
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/opencodebridge",
+              "result": "pass",
+              "seconds": 1.435
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/persist",
+              "result": "pass",
+              "seconds": 3.401
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/loginworker",
+              "result": "pass",
+              "seconds": 26.243
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/phonesim",
+              "result": "pass",
+              "seconds": 1.3900000000000001
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/play",
+              "result": "pass",
+              "seconds": 3.307
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/processcontain",
+              "result": "pass",
+              "seconds": 2.332
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/procstart",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/protocol",
+              "result": "pass",
+              "seconds": 38.711
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/protocol/schema",
+              "result": "pass",
+              "seconds": 1.24
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "result": "pass",
+              "seconds": 4.54
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/phonecore",
+              "result": "pass",
+              "seconds": 63.565
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushreg",
+              "result": "pass",
+              "seconds": 1.238
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/device",
+              "result": "pass",
+              "seconds": 1.567
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/crypto",
+              "result": "pass",
+              "seconds": 2.115
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/enroll",
+              "result": "pass",
+              "seconds": 1.351
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/grantwire",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/grant",
+              "result": "pass",
+              "seconds": 1.333
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/machineid",
+              "result": "pass",
+              "seconds": 1.421
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/push",
+              "result": "pass",
+              "seconds": 2.609
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+              "result": "pass",
+              "seconds": 1.242
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relay",
+              "result": "pass",
+              "seconds": 5.146
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relaycfg",
+              "result": "pass",
+              "seconds": 1.22
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayhome",
+              "result": "pass",
+              "seconds": 1.2
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relaypurge",
+              "result": "pass",
+              "seconds": 1.888
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/pairing",
+              "result": "pass",
+              "seconds": 20.869
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "result": "pass",
+              "seconds": 11.557
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/supervise",
+              "result": "pass",
+              "seconds": 8.596
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/transport",
+              "result": "pass",
+              "seconds": 9.221
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remotegw",
+              "result": "pass",
+              "seconds": 31.063
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/shimwire",
+              "result": "pass",
+              "seconds": 1.209
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/shim",
+              "result": "pass",
+              "seconds": 139.308
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/smoke",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/status",
+              "result": "pass",
+              "seconds": 1.206
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/submitframe",
+              "result": "pass",
+              "seconds": 1.205
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/testbin",
+              "result": "pass",
+              "seconds": 10.436
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/transcript",
+              "result": "pass",
+              "seconds": 1.687
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/tui",
+              "result": "pass",
+              "seconds": 67.599
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/upgrade",
+              "result": "pass",
+              "seconds": 4.643
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/verify",
+              "result": "pass",
+              "seconds": 57.846
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/version",
+              "result": "pass",
+              "seconds": 1.2349999999999999
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/vt",
+              "result": "pass",
+              "seconds": 22.239
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/wire",
+              "result": "pass",
+              "seconds": 1.249
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/worktree",
+              "result": "pass",
+              "seconds": 5.336
+            },
+            {
+              "package": "github.com/Nathandela/swarm/mobile",
+              "result": "pass",
+              "seconds": 46.332
+            },
+            {
+              "package": "github.com/Nathandela/swarm/scripts/releasemanifest",
+              "result": "pass",
+              "seconds": 2.123
+            },
+            {
+              "package": "github.com/Nathandela/swarm/scripts/signchecksums",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/scripts/verification",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "result": "pass",
+              "seconds": 739.801
+            }
+          ],
+          "top_level_test_results": {
+            "pass": 5946,
+            "fail": 0,
+            "skip": 64
+          },
+          "failed_tests": [],
+          "failed_test_output": [],
+          "skipped_tests": [
+            {
+              "package": "github.com/Nathandela/swarm/android/gate",
+              "test": "TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/android/gate",
+              "test": "TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestOperatorRelayV2RevokeAndDeferredRetry"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+              "test": "TestRetentionSubcommandRunsOneBoundedFirestoreSweep"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+              "test": "TestRun_InsecureHTTP_BootsAndShutsDownCleanly"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+              "test": "TestRun_TLSMode_PinsMinimumVersionAtTLS13"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter",
+              "test": "TestConformance_Command_NoFdOrGoroutineLeak"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/attach",
+              "test": "TestPTY_SIGKILLLeavesRawUnrestored_DocumentedLimitation"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/daemon",
+              "test": "TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/daemon",
+              "test": "TestDaemonHostSubprocess"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/persist",
+              "test": "TestHelperCrashWriter"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/loginworker",
+              "test": "TestClaudePrivatePTYAttachAndReady"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/phonecore",
+              "test": "TestHelperPhoneCoreSession"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreRepositorySharedClaims"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreHealthCheckIsReadOnly"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreMissingTransactionSnapshotHasServerReadTime"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreSecretsAreNotPersistedInPlaintext"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreWakeLeaseCASAndTokenGeneration"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreWakeClaimUsesServerReadTime"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreWakeCompletionUsesServerReadTime"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreRegistrationClaimHasOneProviderOwner"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreRetentionRechecksAndCascadesBoundedly"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreServerWakeCancellationKeepsBoundedClaim"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestRegistrationExpiry_CompletedAuthorityOutlivesAttemptWindow/firestore"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestRevoke_OwnerSignature_RetryAfterAlreadyGone"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestStorage_RawCapabilitiesNeverAppearInTheBboltFile"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestStorage_AttestationTokenNeverPersisted"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestStorage_RevocationTombstoneNeverRetainsTheAddress"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+              "test": "TestWritePosterForEmulator"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "test": "TestWorkerdDiscardRetryRecovery"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "test": "TestWorkerdDiscardRecoverySurvivesCutoffExpiry"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "test": "TestWorkerdNoiseMailboxReconnectReplayAndRevoke"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "test": "TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/supervise",
+              "test": "TestUpgradeLogNativeLaunchdJob"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestI1_TheScreensBytesAreTheFacadesBytes"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestLoadPairingConfigUsesNativeRelayV2MachineControl"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/mobile",
+              "test": "TestPairingUsesNativeRelayV2Transport"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/mobile",
+              "test": "TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/mobile",
+              "test": "TestPBBIND1_GomobileBindProducesAnAAR"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBSEC7_TheDeviceLossChainRunsEndToEnd"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBSEC7_ARevokedDeviceCannotTakeControlAgain"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS19Workerd_InputLatencyPhoneToPTY"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn"
+            }
+          ],
+          "race_warning_present": false
+        }
+      }
+    },
+    "linux_amd64": {
+      "toolchain": "go1.27.3",
+      "production_full_run_revision": "73523a79a7b8c1b5125a993fb874c6c92dd91ced",
+      "original_full_normal_stages": [
+        {
+          "stage": "build",
+          "exit": 0,
+          "seconds": 6.03,
+          "log": "/tmp/ssq.sABm08/.storage-735-build.txt",
+          "source": "73523a79",
+          "tree": "467fe19814650beb7450b3153f85c66fc42e781d"
+        },
+        {
+          "stage": "vet",
+          "exit": 0,
+          "seconds": 4.91,
+          "log": "/tmp/ssq.sABm08/.storage-735-vet.txt",
+          "source": "73523a79",
+          "tree": "467fe19814650beb7450b3153f85c66fc42e781d"
+        },
+        {
+          "stage": "test",
+          "exit": 1,
+          "seconds": 742.2,
+          "log": "/tmp/ssq.sABm08/.storage-735-test.jsonl",
+          "source": "73523a79",
+          "tree": "467fe19814650beb7450b3153f85c66fc42e781d"
+        }
+      ],
+      "original_full_normal": {
+        "raw_log_sha256": "a4b4904c65a83dc8d698d843719b5117119621e08db515edb898a032daa6dbd6",
+        "raw_log_bytes": 9021624,
+        "package_results": [
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "result": "pass",
+            "seconds": 7.942
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-char",
+            "result": "pass",
+            "seconds": 3.742
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-char/hookprobe",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-fake-agent",
+            "result": "pass",
+            "seconds": 1.001
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-fake-codex",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-publish",
+            "result": "pass",
+            "seconds": 0.023
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "result": "pass",
+            "seconds": 0.048
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "result": "pass",
+            "seconds": 27.224
+          },
+          {
+            "package": "github.com/Nathandela/swarm/deploy/gcp",
+            "result": "pass",
+            "seconds": 0.01
+          },
+          {
+            "package": "github.com/Nathandela/swarm/deploy/pushgw",
+            "result": "pass",
+            "seconds": 0.003
+          },
+          {
+            "package": "github.com/Nathandela/swarm/deploy/release",
+            "result": "pass",
+            "seconds": 0.005
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter",
+            "result": "pass",
+            "seconds": 0.053
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/agy",
+            "result": "pass",
+            "seconds": 0.096
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/claude",
+            "result": "pass",
+            "seconds": 0.098
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/codex",
+            "result": "pass",
+            "seconds": 0.099
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/detect",
+            "result": "pass",
+            "seconds": 10.153
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/fixtureio",
+            "result": "pass",
+            "seconds": 0.004
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/hermes",
+            "result": "pass",
+            "seconds": 0.101
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/opencode",
+            "result": "pass",
+            "seconds": 0.1
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/refadapter",
+            "result": "pass",
+            "seconds": 0.079
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/adapter/registry",
+            "result": "pass",
+            "seconds": 0.006
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/appserver",
+            "result": "pass",
+            "seconds": 1.109
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/attach",
+            "result": "pass",
+            "seconds": 1.222
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/contextguard",
+            "result": "pass",
+            "seconds": 0.003
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/converge",
+            "result": "pass",
+            "seconds": 0.034
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-remote",
+            "result": "pass",
+            "seconds": 33.59
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/design",
+            "result": "pass",
+            "seconds": 0.006
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/diagnosticlog",
+            "result": "pass",
+            "seconds": 0.04
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/e2e",
+            "result": "pass",
+            "seconds": 22.601
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/engine",
+            "result": "pass",
+            "seconds": 5.838
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/fakeagent",
+            "result": "pass",
+            "seconds": 0.003
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/hookclient",
+            "result": "pass",
+            "seconds": 1.315
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/idempotency",
+            "result": "pass",
+            "seconds": 3.037
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/journal",
+            "result": "pass",
+            "seconds": 26.696
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/loginmigration",
+            "result": "pass",
+            "seconds": 9.668
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/logins",
+            "result": "pass",
+            "seconds": 17.54
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "result": "pass",
+            "seconds": 94.993
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/opencodebridge",
+            "result": "pass",
+            "seconds": 0.022
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/persist",
+            "result": "pass",
+            "seconds": 0.825
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/loginworker",
+            "result": "pass",
+            "seconds": 7.8309999999999995
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonesim",
+            "result": "pass",
+            "seconds": 0.102
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/play",
+            "result": "pass",
+            "seconds": 1.524
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/processcontain",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/procstart",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonecore",
+            "result": "pass",
+            "seconds": 30.375
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/protocol/schema",
+            "result": "pass",
+            "seconds": 0.005
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/protocol",
+            "result": "fail",
+            "seconds": 27.279
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushreg",
+            "result": "pass",
+            "seconds": 0.003
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/crypto",
+            "result": "pass",
+            "seconds": 0.27
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/device",
+            "result": "pass",
+            "seconds": 0.212
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/enroll",
+            "result": "pass",
+            "seconds": 0.076
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/grant",
+            "result": "pass",
+            "seconds": 0.065
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/grantwire",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/machineid",
+            "result": "pass",
+            "seconds": 0.056
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "result": "pass",
+            "seconds": 2.331
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/push",
+            "result": "pass",
+            "seconds": 1.565
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+            "result": "pass",
+            "seconds": 0.015
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relay",
+            "result": "pass",
+            "seconds": 1.3639999999999999
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relaycfg",
+            "result": "pass",
+            "seconds": 0.007
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayhome",
+            "result": "pass",
+            "seconds": 0.002
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relaypurge",
+            "result": "pass",
+            "seconds": 0.378
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "result": "pass",
+            "seconds": 10.073
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/pairing",
+            "result": "pass",
+            "seconds": 18.831
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/supervise",
+            "result": "pass",
+            "seconds": 7.9719999999999995
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/transport",
+            "result": "pass",
+            "seconds": 8.029
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remotegw",
+            "result": "pass",
+            "seconds": 22.748
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/shimwire",
+            "result": "pass",
+            "seconds": 0.003
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/shim",
+            "result": "pass",
+            "seconds": 99.691
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/smoke",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/status",
+            "result": "pass",
+            "seconds": 0.003
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/submitframe",
+            "result": "pass",
+            "seconds": 0.005
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/testbin",
+            "result": "pass",
+            "seconds": 1.759
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/transcript",
+            "result": "pass",
+            "seconds": 0.151
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/tui",
+            "result": "pass",
+            "seconds": 27.908
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/upgrade",
+            "result": "pass",
+            "seconds": 4.323
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/verify",
+            "result": "pass",
+            "seconds": 16.264
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/version",
+            "result": "pass",
+            "seconds": 0.006
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/vt",
+            "result": "pass",
+            "seconds": 3.689
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/wire",
+            "result": "pass",
+            "seconds": 0.008
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/worktree",
+            "result": "pass",
+            "seconds": 0.302
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "result": "pass",
+            "seconds": 23.986
+          },
+          {
+            "package": "github.com/Nathandela/swarm/scripts/releasemanifest",
+            "result": "pass",
+            "seconds": 0.393
+          },
+          {
+            "package": "github.com/Nathandela/swarm/scripts/signchecksums",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/scripts/verification",
+            "result": "skip",
+            "seconds": 0
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "result": "pass",
+            "seconds": 501.863
+          }
+        ],
+        "top_level_test_results": {
+          "pass": 5948,
+          "fail": 1,
+          "skip": 61
+        },
+        "failed_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/internal/protocol",
+            "test": "TestIntegration_ChunkedOversizedSnapshot"
+          }
+        ],
+        "failed_test_output": [
+          "=== RUN   TestIntegration_ChunkedOversizedSnapshot",
+          "    chunk_integration_test.go:158: re-attach snapshot (1088697 bytes) not byte-identical to first (1066620 bytes)",
+          "--- FAIL: TestIntegration_ChunkedOversizedSnapshot (1.41s)"
+        ],
+        "skipped_tests": [
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/android/gate",
+            "test": "TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestOperatorRelayV2RevokeAndDeferredRetry"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRetentionSubcommandRunsOneBoundedFirestoreSweep"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_InsecureHTTP_BootsAndShutsDownCleanly"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+            "test": "TestRun_TLSMode_PinsMinimumVersionAtTLS13"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/cmd/swarm",
+            "test": "TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/daemon",
+            "test": "TestDaemonHostSubprocess"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/persist",
+            "test": "TestHelperCrashWriter"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/phonecore",
+            "test": "TestHelperPhoneCoreSession"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRepositorySharedClaims"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreHealthCheckIsReadOnly"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreMissingTransactionSnapshotHasServerReadTime"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreSecretsAreNotPersistedInPlaintext"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeLeaseCASAndTokenGeneration"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeClaimUsesServerReadTime"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreWakeCompletionUsesServerReadTime"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRegistrationClaimHasOneProviderOwner"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreRetentionRechecksAndCascadesBoundedly"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestFirestoreServerWakeCancellationKeepsBoundedClaim"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestRegistrationExpiry_CompletedAuthorityOutlivesAttemptWindow/firestore"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestRevoke_OwnerSignature_RetryAfterAlreadyGone"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RawCapabilitiesNeverAppearInTheBboltFile"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_AttestationTokenNeverPersisted"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/pushgw",
+            "test": "TestStorage_RevocationTombstoneNeverRetainsTheAddress"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+            "test": "TestWritePosterForEmulator"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRetryRecovery"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdDiscardRecoverySurvivesCutoffExpiry"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestWorkerdNoiseMailboxReconnectReplayAndRevoke"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+            "test": "TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestCleanupContainsCaseAliases"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestI1_TheScreensBytesAreTheFacadesBytes"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPairingUsesNativeRelayV2Transport"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/mobile",
+            "test": "TestPBBIND1_GomobileBindProducesAnAAR"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestLoadPairingConfigUsesNativeRelayV2MachineControl"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_TheDeviceLossChainRunsEndToEnd"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBSEC7_ARevokedDeviceCannotTakeControlAgain"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_InputLatencyPhoneToPTY"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning"
+          },
+          {
+            "package": "github.com/Nathandela/swarm/internal/skeleton",
+            "test": "TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn"
+          }
+        ],
+        "race_warning_present": false
+      },
+      "final_fixture_revision": "14e38fa952f3f5f96ead579fcdb3fb184dcb8303",
+      "final_stages": [
+        {
+          "stage": "vet-fixtures",
+          "exit": 0,
+          "seconds": 1.81,
+          "log": "/tmp/ssq.sABm08/.storage-14e-vet-fixtures.txt",
+          "source": "14e38fa9",
+          "tree": "944347638c948289cd4a9e23f7947343dd2ac84f",
+          "command": [
+            "go",
+            "vet",
+            "./internal/protocol",
+            "./internal/skeleton"
+          ]
+        },
+        {
+          "stage": "protocol-normal",
+          "exit": 0,
+          "seconds": 32.14,
+          "log": "/tmp/ssq.sABm08/.storage-14e-protocol-normal.jsonl",
+          "source": "14e38fa9",
+          "tree": "944347638c948289cd4a9e23f7947343dd2ac84f",
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "./internal/protocol",
+            "-count=1",
+            "-timeout=5m"
+          ]
+        },
+        {
+          "stage": "socket-normal",
+          "exit": 0,
+          "seconds": 15.97,
+          "log": "/tmp/ssq.sABm08/.storage-14e-socket-normal.jsonl",
+          "source": "14e38fa9",
+          "tree": "944347638c948289cd4a9e23f7947343dd2ac84f",
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "./internal/skeleton",
+            "-run",
+            "^(TestSocketBindUmasksPreserveOwnerDirectoryTraversal|TestHookDrainer_CrashAfterGapJournalBeforeCheckpointDoesNotDuplicateBoundary|TestHookDrainer_GapDedupeUsesPersistedInstanceWithoutCapabilityRecord|TestHookDrainer_SameNumericBoundaryInFreshSpoolIncarnationEmitsAgain|TestHookDrainer_DecimalCheckpointMigratesWithAnAdoptedLegacySpool|TestHookDrainer_GapBoundaryPrecedesRetainedAndFutureEvents|TestRunHookDrain_ContinuesAfterRecoverableGap|TestHookDrainer_FinalDrainRecoversRetainedSideWithNoLiveSocket|TestCaptureConversationID_UnchangedSizeSkipsReread|TestCaptureConversationID_GrowthTriggersRereadAndCapturesLateID|TestCaptureConversationID_RejectsExtractorOutputBeforeWriteOncePersistence|TestCaptureConversationID_ShrinkTriggersRescan|TestCaptureConversationID_DiskErrorToleratedThenRecovers|TestCaptureConversationID_EndSessionRaceDoesNotResurrectConvScan|TestEndSession_CapturesConversationIDForShortLivedSession)$",
+            "-count=1",
+            "-timeout=5m"
+          ]
+        },
+        {
+          "stage": "race",
+          "exit": 0,
+          "seconds": 912.34,
+          "log": "/tmp/ssq.sABm08/.storage-14e-race.jsonl",
+          "source": "14e38fa9",
+          "tree": "944347638c948289cd4a9e23f7947343dd2ac84f",
+          "command": [
+            "go",
+            "test",
+            "-race",
+            "-json",
+            "-p",
+            "2",
+            "./...",
+            "-count=1",
+            "-timeout=30m"
+          ]
+        }
+      ],
+      "final_results": {
+        "protocol-normal": {
+          "raw_log_sha256": "cd1ff9c1c33f1bf6bbf89a5467071d0958c18b5535c9b605d4e5c252459e29e3",
+          "raw_log_bytes": 621460,
+          "package_results": [
+            {
+              "package": "github.com/Nathandela/swarm/internal/protocol",
+              "result": "pass",
+              "seconds": 27.868
+            }
+          ],
+          "top_level_test_results": {
+            "pass": 435,
+            "fail": 0,
+            "skip": 0
+          },
+          "failed_tests": [],
+          "failed_test_output": [],
+          "skipped_tests": [],
+          "race_warning_present": false
+        },
+        "socket-normal": {
+          "raw_log_sha256": "56b2a3b376589a9409118102c1546381bc283b3ba8abffc0cb9c1406a936acc3",
+          "raw_log_bytes": 15918,
+          "package_results": [
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "result": "pass",
+              "seconds": 5.445
+            }
+          ],
+          "top_level_test_results": {
+            "pass": 15,
+            "fail": 0,
+            "skip": 0
+          },
+          "failed_tests": [],
+          "failed_test_output": [],
+          "skipped_tests": [],
+          "race_warning_present": false
+        },
+        "race": {
+          "raw_log_sha256": "8e4413f2e7319ad8c975f0972fa11a9291149522b580c79d2fc81322d82420c6",
+          "raw_log_bytes": 9023945,
+          "package_results": [
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "result": "pass",
+              "seconds": 32.875
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-char",
+              "result": "pass",
+              "seconds": 4.809
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-char/hookprobe",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-fake-agent",
+              "result": "pass",
+              "seconds": 2.059
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-fake-codex",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-publish",
+              "result": "pass",
+              "seconds": 1.035
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+              "result": "pass",
+              "seconds": 1.056
+            },
+            {
+              "package": "github.com/Nathandela/swarm/android/gate",
+              "result": "pass",
+              "seconds": 99.726
+            },
+            {
+              "package": "github.com/Nathandela/swarm/deploy/gcp",
+              "result": "pass",
+              "seconds": 1.042
+            },
+            {
+              "package": "github.com/Nathandela/swarm/deploy/pushgw",
+              "result": "pass",
+              "seconds": 1.013
+            },
+            {
+              "package": "github.com/Nathandela/swarm/deploy/release",
+              "result": "pass",
+              "seconds": 1.027
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter",
+              "result": "pass",
+              "seconds": 1.203
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/agy",
+              "result": "pass",
+              "seconds": 1.171
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-remote",
+              "result": "pass",
+              "seconds": 34.808
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/claude",
+              "result": "pass",
+              "seconds": 1.591
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/codex",
+              "result": "pass",
+              "seconds": 1.283
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/fixtureio",
+              "result": "pass",
+              "seconds": 1.041
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/hermes",
+              "result": "pass",
+              "seconds": 1.313
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/opencode",
+              "result": "pass",
+              "seconds": 1.427
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/refadapter",
+              "result": "pass",
+              "seconds": 1.104
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/registry",
+              "result": "pass",
+              "seconds": 1.04
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/adapter/detect",
+              "result": "pass",
+              "seconds": 11.214
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/appserver",
+              "result": "pass",
+              "seconds": 2.492
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/contextguard",
+              "result": "pass",
+              "seconds": 1.02
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/converge",
+              "result": "pass",
+              "seconds": 1.053
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/attach",
+              "result": "pass",
+              "seconds": 7.058
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/design",
+              "result": "pass",
+              "seconds": 1.04
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/diagnosticlog",
+              "result": "pass",
+              "seconds": 1.053
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/e2e",
+              "result": "pass",
+              "seconds": 25.123
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/engine",
+              "result": "pass",
+              "seconds": 34.701
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/fakeagent",
+              "result": "pass",
+              "seconds": 1.015
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/hookclient",
+              "result": "pass",
+              "seconds": 2.344
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/idempotency",
+              "result": "pass",
+              "seconds": 6.55
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/daemon",
+              "result": "pass",
+              "seconds": 84.882
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/loginmigration",
+              "result": "pass",
+              "seconds": 12.105
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/journal",
+              "result": "pass",
+              "seconds": 36.401
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/logins",
+              "result": "pass",
+              "seconds": 20.63
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/opencodebridge",
+              "result": "pass",
+              "seconds": 1.047
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/persist",
+              "result": "pass",
+              "seconds": 2.109
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/loginworker",
+              "result": "pass",
+              "seconds": 26.787
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/phonesim",
+              "result": "pass",
+              "seconds": 1.117
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/play",
+              "result": "pass",
+              "seconds": 3.3449999999999998
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/processcontain",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/procstart",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/phonecore",
+              "result": "pass",
+              "seconds": 48.728
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/protocol/schema",
+              "result": "pass",
+              "seconds": 1.024
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "result": "pass",
+              "seconds": 4.571
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushreg",
+              "result": "pass",
+              "seconds": 1.015
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/crypto",
+              "result": "pass",
+              "seconds": 1.718
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/device",
+              "result": "pass",
+              "seconds": 1.149
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/enroll",
+              "result": "pass",
+              "seconds": 1.073
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/grant",
+              "result": "pass",
+              "seconds": 1.074
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/grantwire",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/protocol",
+              "result": "pass",
+              "seconds": 33.791
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/machineid",
+              "result": "pass",
+              "seconds": 1.171
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/push",
+              "result": "pass",
+              "seconds": 2.797
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+              "result": "pass",
+              "seconds": 1.071
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relay",
+              "result": "pass",
+              "seconds": 5.421
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relaycfg",
+              "result": "pass",
+              "seconds": 1.02
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayhome",
+              "result": "pass",
+              "seconds": 1.019
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relaypurge",
+              "result": "pass",
+              "seconds": 1.296
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/pairing",
+              "result": "pass",
+              "seconds": 20.915
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/supervise",
+              "result": "pass",
+              "seconds": 6.111
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "result": "pass",
+              "seconds": 11.541
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/transport",
+              "result": "pass",
+              "seconds": 9.042
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remotegw",
+              "result": "pass",
+              "seconds": 35.328
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/shimwire",
+              "result": "pass",
+              "seconds": 1.02
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/shim",
+              "result": "pass",
+              "seconds": 204.823
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/smoke",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/status",
+              "result": "pass",
+              "seconds": 1.018
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/submitframe",
+              "result": "pass",
+              "seconds": 1.016
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/testbin",
+              "result": "pass",
+              "seconds": 16.517
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/transcript",
+              "result": "pass",
+              "seconds": 1.322
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/tui",
+              "result": "pass",
+              "seconds": 34.804
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/upgrade",
+              "result": "pass",
+              "seconds": 5.331
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/verify",
+              "result": "pass",
+              "seconds": 56.822
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/version",
+              "result": "pass",
+              "seconds": 1.017
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/vt",
+              "result": "pass",
+              "seconds": 16.303
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/wire",
+              "result": "pass",
+              "seconds": 1.067
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/worktree",
+              "result": "pass",
+              "seconds": 1.444
+            },
+            {
+              "package": "github.com/Nathandela/swarm/mobile",
+              "result": "pass",
+              "seconds": 35.751
+            },
+            {
+              "package": "github.com/Nathandela/swarm/scripts/releasemanifest",
+              "result": "pass",
+              "seconds": 1.34
+            },
+            {
+              "package": "github.com/Nathandela/swarm/scripts/signchecksums",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/scripts/verification",
+              "result": "skip",
+              "seconds": 0
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "result": "pass",
+              "seconds": 510.917
+            }
+          ],
+          "top_level_test_results": {
+            "pass": 5949,
+            "fail": 0,
+            "skip": 61
+          },
+          "failed_tests": [],
+          "failed_test_output": [],
+          "skipped_tests": [
+            {
+              "package": "github.com/Nathandela/swarm/android/gate",
+              "test": "TestPBBIND7_TheBuiltAARExportsThePinnedFacadeSurface"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/android/gate",
+              "test": "TestPageSize_TheBuiltAARsNativeLibrariesAreLinkedFor16KBPages"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestOperatorRelayV2RevokeAndDeferredRetry"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestRelayDoctorV2UsesConfiguredMachineAndKeepsLiveStream"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_CorruptStateFailsClosedAndNamesTheOwnerSideRecovery"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_ThePairRefusalNamesHowToFindAndRevokeTheStrandedDevice"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_RevokeNamesTheRePairThatFinishesTheRecovery"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_RevokePurgesTheMachineSideOutboundCustody"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_TheSameHandsetRecoversWithoutAFactoryReset"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm",
+              "test": "TestPBSTATE10_TheRecoveryChainIsClosedUnderWhatTheOperatorWasTold"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+              "test": "TestRetentionSubcommandRunsOneBoundedFirestoreSweep"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+              "test": "TestRun_InsecureHTTP_BootsAndShutsDownCleanly"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/cmd/swarm-pushgw",
+              "test": "TestRun_TLSMode_PinsMinimumVersionAtTLS13"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/daemon",
+              "test": "TestLaunchCrashReplay_W4_LiveOrphanAgent_TODO"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/daemon",
+              "test": "TestDaemonHostSubprocess"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/persist",
+              "test": "TestHelperCrashWriter"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/phonecore",
+              "test": "TestHelperPhoneCoreSession"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreRepositorySharedClaims"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreHealthCheckIsReadOnly"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreMissingTransactionSnapshotHasServerReadTime"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreServerRegistrationIsSharedAndRejectsBodyMismatch"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreRegistrationProofRejectsNonHolderWithoutStateAndReplayIsFree"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreSecretsAreNotPersistedInPlaintext"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreWakeLeaseCASAndTokenGeneration"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreWakeClaimUsesServerReadTime"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreWakeCompletionUsesServerReadTime"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreRegistrationClaimHasOneProviderOwner"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreRetentionRechecksAndCascadesBoundedly"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestFirestoreServerWakeCancellationKeepsBoundedClaim"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestRegistrationExpiry_CompletedAuthorityOutlivesAttemptWindow/firestore"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestRevoke_OwnerSignature_RetryAfterAlreadyGone"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestStorage_RawCapabilitiesNeverAppearInTheBboltFile"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestStorage_FCMTokenNeverAppearsInThePlainInTheBboltFile"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestStorage_AttestationTokenNeverPersisted"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/pushgw",
+              "test": "TestStorage_RevocationTombstoneNeverRetainsTheAddress"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/qrterm",
+              "test": "TestWritePosterForEmulator"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "test": "TestWorkerdDiscardRetryRecovery"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "test": "TestWorkerdDiscardRecoverySurvivesCutoffExpiry"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "test": "TestWorkerdNoiseMailboxReconnectReplayAndRevoke"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/remote/relayv2",
+              "test": "TestExpiredReceiptBeyondCleanupBatchDoesNotSuppressRetry"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestCleanupContainsCaseAliases"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRendersTheProse"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestI1_TheScreensBytesAreTheFacadesBytes"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestLoadPairingConfigUsesNativeRelayV2MachineControl"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/mobile",
+              "test": "TestPairingUsesNativeRelayV2Transport"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/mobile",
+              "test": "TestWorkerdPairingCommitFailurePublishesNoOutcomeOrAuthorization"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/mobile",
+              "test": "TestPBBIND1_GomobileBindProducesAnAAR"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS18_APhoneSealedDeviceRevokeRemovesTheDeviceAndStopsTheGateway"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBSEC6_ServerSideControlsHoldAgainstAPhoneWithItsGuardsRemoved"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBSEC6_ACapabilityBelowFullCannotOpenALeaseOrType"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBSEC7_TheDeviceLossChainRunsEndToEnd"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBSEC7_ARevokedDeviceCannotTakeControlAgain"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestPBE2E1_PairObserveLaunchTakeControlTypeRevoke"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS19Workerd_InputLatencyPhoneToPTY"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS19Workerd_ComposerSendReachesCodexBackendAndNotPTY"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS19Workerd_DisallowedLaunchIsRefusedWithoutSpawning"
+            },
+            {
+              "package": "github.com/Nathandela/swarm/internal/skeleton",
+              "test": "TestS19Workerd_TerminalPeekBlanksOffAndRecoversOn"
+            }
+          ],
+          "race_warning_present": false
+        }
+      }
+    }
+  },
+  "workload_artifact_sha256": "7045bf55f74a4be91906b1060d2bae8414d4fc4065071fad9710b98be41fb4df"
+}

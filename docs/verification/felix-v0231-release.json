@@ -1,0 +1,244 @@
+{
+  "schema": 1,
+  "recorded_at": "2026-10-26T16:47:28.873311+00:00",
+  "release": {
+    "tag": "v0.23.1",
+    "source_commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+    "published_at": "2026-10-26T16:43:18Z",
+    "url": "https://github.com/Nathandela/swarm/releases/tag/v0.23.1"
+  },
+  "workflow": {
+    "id": 40358762093,
+    "url": "https://github.com/Nathandela/swarm/actions/runs/40358762093",
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "gates (ci.yml, reused) / remote v2 (workerd + Firestore emulator)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / fuzz (active, bounded fuzztime)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / release dry-run (goreleaser snapshot, E13.1)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / android (aar + gradle gate)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / lint (golangci-lint)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test (go test ./...)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / docs (required files)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test-darwin (macos)",
+        "conclusion": "success"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "container (pushgw-container.yml, reused) / build, scan, non-root, hardening",
+        "conclusion": "success"
+      },
+      {
+        "name": "publish immutable pushgw image",
+        "conclusion": "success"
+      },
+      {
+        "name": "publish (goreleaser release)",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "archive_verification": {
+    "archives": [
+      {
+        "archive": "swarm_0.23.1_darwin_all.tar.gz",
+        "binaries": 2,
+        "compatibility": "match",
+        "sha256": "911662b84365dfd810ad51f709e112b90625e52d4a873b3b54b5de1241ff7345"
+      },
+      {
+        "archive": "swarm_0.23.1_linux_amd64.tar.gz",
+        "binaries": 2,
+        "compatibility": "match",
+        "sha256": "d5113556d38b070097717fa9ed6a5d5022c479ed314fd74eaf9cfd4a1f18973c"
+      },
+      {
+        "archive": "swarm_0.23.1_linux_arm64.tar.gz",
+        "binaries": 2,
+        "compatibility": "match",
+        "sha256": "f79c3ee2a94a232d574480428456b51890fbd53d693caeabee25578a38584b6d"
+      }
+    ],
+    "signature": "trusted",
+    "tampered_checksums": "rejected"
+  },
+  "binary_verification": {
+    "binaries": [
+      {
+        "archive": "swarm_0.23.1_darwin_all.tar.gz",
+        "binary": "swarm.amd64",
+        "go": "go1.26.10",
+        "commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+        "clean_vcs": true,
+        "sha256": "6ffcb901a76ec35944daa0e84bc75e01142f1da8494026f89f5088f3ecae2495"
+      },
+      {
+        "archive": "swarm_0.23.1_darwin_all.tar.gz",
+        "binary": "swarm.arm64",
+        "go": "go1.26.10",
+        "commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+        "clean_vcs": true,
+        "sha256": "c4d55170607351d104eb99bfd64ad379d858c101d6eba30bcd1e7404f77507fd"
+      },
+      {
+        "archive": "swarm_0.23.1_darwin_all.tar.gz",
+        "binary": "swarm-remote.arm64",
+        "go": "go1.26.10",
+        "commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+        "clean_vcs": true,
+        "sha256": "814a7442153adf77996e621a4c51ad5f14a461acb6ad0a8fa81ed188694f31e0"
+      },
+      {
+        "archive": "swarm_0.23.1_darwin_all.tar.gz",
+        "binary": "swarm-remote.amd64",
+        "go": "go1.26.10",
+        "commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+        "clean_vcs": true,
+        "sha256": "60cb35bde12f689f296500aede971129fffce20c1f40e979f496a509e07fa407"
+      },
+      {
+        "archive": "swarm_0.23.1_linux_amd64.tar.gz",
+        "binary": "swarm",
+        "go": "go1.26.10",
+        "commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+        "clean_vcs": true,
+        "sha256": "941885189c582cf747c411e55f0ec7ebf83e537f806863e5c9c2eb7c2876fe64"
+      },
+      {
+        "archive": "swarm_0.23.1_linux_amd64.tar.gz",
+        "binary": "swarm-remote",
+        "go": "go1.26.10",
+        "commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+        "clean_vcs": true,
+        "sha256": "25b5570c2ae539c42cf72fadc03e6a759d2e094ddbd17e40d89646e2263f8a1f"
+      },
+      {
+        "archive": "swarm_0.23.1_linux_arm64.tar.gz",
+        "binary": "swarm",
+        "go": "go1.26.10",
+        "commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+        "clean_vcs": true,
+        "sha256": "df70da8234ae4cbbe89cab9af42f9a11197759ac0fd7d466574d9057250f4e7b"
+      },
+      {
+        "archive": "swarm_0.23.1_linux_arm64.tar.gz",
+        "binary": "swarm-remote",
+        "go": "go1.26.10",
+        "commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+        "clean_vcs": true,
+        "sha256": "d7ed0618a6c06545e22b678dbe463f7187eeaa916de65d0e47a8f6ddd58f1e3f"
+      }
+    ],
+    "linux_cli_version": "swarm 0.23.1 (go1.26.10)",
+    "container_manifest": {
+      "schema": 1,
+      "release": "v0.23.1",
+      "commit": "b878e58b4dfc7541d265ae7f53154a4c56ababc4",
+      "images": {
+        "pushgw": "ghcr.io/nathandela/swarm-pushgw@sha256:d9995c02d61def3f24b6a4e1faad98574d8d92dcc8d16f51a4c88ccfb70902da"
+      }
+    },
+    "container_attestation_independently_verified": false,
+    "installed_on_hosts": false
+  },
+  "local_qualification": {
+    "build": "pass",
+    "vet": "pass",
+    "lint": "pass, Go1.26.0",
+    "focused_race": "pass",
+    "full_race_toolchain": "go1.26.10",
+    "package_outcomes": {
+      "skip": 8,
+      "pass": 77
+    },
+    "passing_test_events": 9424,
+    "skipped_test_events": 63,
+    "local_excluded_test": "^TestTerminalRestoreRedrawsUnchangedBoard$",
+    "complete_tui_race_including_that_test": "pass",
+    "complete_login_race": "pass",
+    "initial_normal_run": "stopped after reproducing inherited environment failures on unchanged main",
+    "environment_correction": "umask 0022; private TMPDIR under /tmp; release compiler go1.26.10",
+    "local_normal_redraw_followup": "swarm-xmx"
+  },
+  "pull_requests": [
+    {
+      "number": 58,
+      "reviewed_head": "f0ba3f9c071b33be37598663cfd4f006f3416f02",
+      "disposition": "closed; superseded by v0.23.1 integration"
+    },
+    {
+      "number": 64,
+      "reviewed_head": "e3320374c7b6dc91d709c69e35c2129c877d8973",
+      "disposition": "closed; superseded by v0.23.1 integration"
+    },
+    {
+      "number": 65,
+      "reviewed_head": "49fd9431caea17a82ac214b74d428d2ab0da409e",
+      "disposition": "closed; superseded by v0.23.1 integration"
+    },
+    {
+      "number": 66,
+      "reviewed_head": "97ea89ebcee09d1a0925e459ffbca4ef7f76e06c",
+      "disposition": "closed; superseded by v0.23.1 integration"
+    }
+  ],
+  "pr65_code_and_tests_unchanged": true,
+  "main_ruleset": {
+    "id": 20874942,
+    "previous_enforcement": "active",
+    "current_enforcement": "disabled",
+    "definitions_conditions_and_bypass_actors_preserved": true,
+    "release_workflow_unchanged": true
+  },
+  "scope_limits": [
+    "Automatic ambiguous legacy journal salvage was omitted.",
+    "Existing shims need replacement to acquire paste_input.",
+    "New handoff worktrees contain committed source state; context copies remain temporary.",
+    "No live upgrade, forced daemon restart, handset trial or hosted-service deployment was performed.",
+    "The container manifest tag and commit were checked; OCI attestation was not independently verified."
+  ]
+}

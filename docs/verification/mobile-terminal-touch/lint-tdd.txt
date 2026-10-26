@@ -1,0 +1,18 @@
+Slice 5 lint cleanup — 2026-10-25
+
+Removed the unused `rootModel.boardRowAt` and `generalModel.rowAt` helpers after
+searching all repository call sites; only the retained planning probe text
+mentions `boardRowAt`. Rewrote both flagged De Morgan conditions equivalently
+and checked the external-output write error in the renderer test.
+
+Focused verification:
+
+```text
+GOMAXPROCS=2 go test ./internal/tui -run '^(TestRepaint_.*|TestWorkingAnimationWritesOnlyChangedGlyph|TestTerminalRestoreRedrawsUnchangedBoard|TestResizeReachesRenderer|TestBannerExpiryChangesReachRenderer|TestLiveness_EventMovesRowGroup|TestWorkingIndicatorAdvancesOnlyOnAnimationTick|TestConnectionLost_.*)$' -count=1
+ok github.com/Nathandela/swarm/internal/tui 4.726s
+
+GOMAXPROCS=2 golangci-lint run --concurrency=2 --timeout=5m --max-issues-per-linter=0 --max-same-issues=0
+0 issues.
+```
+
+No broad test, race, or performance suite was run for this lint-only cleanup.

@@ -5,6 +5,8 @@
 - Amends: nothing. V-6 (`system-spec.md`) says "no mouse required"; that stays true. Every action keeps its key, and the mouse is an additional way to reach some of them.
 - Affects: `internal/tui` (`tui.go`, `general.go`)
 
+Amended by [ADR-035](ADR-035-mobile-terminal-navigation.md), 2026-10-25: wheel viewport scrolling, folding, attention/action/menu targets and geometry cancellation supersede the corresponding D1/D2/D4/D5 rules below. D3's clock-free release activation and raw attach ownership remain. The original field evidence and rationale are retained here.
+
 ## Context
 
 The general board (the "main window") is driven entirely from the keyboard: `↑↓`/`jk`

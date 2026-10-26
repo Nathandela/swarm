@@ -279,12 +279,12 @@ func awaitJournalTexts(t *testing.T, sk *Daemon, sessionID string, want int) []s
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_DrainsEverythingThatAccumulatedWhileNeverDrained(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskhd1")
+	dir, err := os.MkdirTemp("", "swskhd1")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskhds1")
+	sessionDir, err := os.MkdirTemp("", "swskhds1")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}
@@ -339,12 +339,12 @@ func TestHookDrainer_DrainsEverythingThatAccumulatedWhileNeverDrained(t *testing
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_RestartMidDrain_ResumesIngressWithoutArchivingPriorHistory(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskhd2")
+	dir, err := os.MkdirTemp("", "swskhd2")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskhds2")
+	sessionDir, err := os.MkdirTemp("", "swskhds2")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}
@@ -434,12 +434,12 @@ func TestHookDrainer_RestartMidDrain_ResumesIngressWithoutArchivingPriorHistory(
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_OnAGap_EmitsStructuredGapAndDegradesCapabilityOneWay(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "swskhd3")
+	dir, err := os.MkdirTemp("", "swskhd3")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	sessionDir, err := os.MkdirTemp("/tmp", "swskhds3")
+	sessionDir, err := os.MkdirTemp("", "swskhds3")
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
 	}

@@ -98,6 +98,13 @@ func worktreeDir(repoDir, slug string) string {
 	return filepath.Join(worktreeRoot(repoDir), slug)
 }
 
+// IsRepo reports whether dir is inside a git work tree, the condition under which
+// Create can isolate a session there. A missing directory or a failing git is false.
+func IsRepo(dir string) bool {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
 // Create makes an isolated git worktree for session id. When name has usable
 // letters or numbers, its preferred directory is <name-slug> and its branch is
 // swarm/<name-slug>-<id>. If that friendly directory is occupied by another

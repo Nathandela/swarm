@@ -33,6 +33,9 @@ golangci-lint run
 
 At an epic close, GG-4 also requires `-race` on every package that spawns goroutines.
 
+Share the existing Go and Gradle caches across worktrees; do not create per-worktree cache copies.
+Use the test supervisor's per-run `TMPDIR` for scratch, keeping short socket roots inside it.
+
 ## CI policy
 
 GitHub Actions runs only for release tags (`v*`), at the owner's request to limit Actions usage.

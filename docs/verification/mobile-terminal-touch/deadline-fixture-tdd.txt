@@ -1,0 +1,62 @@
+Login-worker deadline fixture correction — 2026-10-25
+Untouched loginworker baseline; test-only correction for full-gate startup race.
+
+RED: TestDeadlineContainsWriters armed3s before Start's filesystem synchronization,
+config validation and detached exec. RunConfig rejects an expired config before
+publishing progress. A temporary overlay delaying detached startup3.1s reproduced
+the exact failure: phase= error= stopped=false (8.54s test,9.328s package).
+The unchanged isolated test passed5/5 (18.315s), consistent with startup coupling.
+
+Correction: retain the real Config.Deadline and re-arm the existing20s fixture cap
+after fixture preparation. The test deliberately delays supervisor startup3.1s,
+then separately requires Authenticating and a live escaped writer. It waits through
+the configured deadline plus the existing8s progress allowance, and requires failed
+phase/deadline error, WritersStopped, NativeWritersStopped, dead runner/escaped
+child and secret containment. Existing bounded cancellation cleanup is unchanged.
+Expired absolute configurations are separately rejected by Start and RunConfig,
+with no progress or native work. Final progress polling now reports read errors.
+
+GREEN: GOMAXPROCS=2 TMPDIR=/private/tmp go test -p1 ./internal/loginworker
+-run '^(TestDeadlineContainsWriters|TestExpiredDeadlineStartsNoWriters)$' -count=1 -v
+21.412s package; delayed-start real-deadline case20.34s.
+
+Mutation negative control: temporary Go overlay replaced only production
+context.WithDeadline(ctx,cfg.Deadline) with context.WithCancel(ctx).
+The corrected test FAILED after28.37s (29.107s package): phase=authenticating,
+stopped=false, read_error=<nil>. Existing bounded cancellation cleanup ran.
+This proves parent cancellation or a larger test timeout cannot replace the
+production Config.Deadline enforcement covered by the final test.
+
+RACE GREEN: same focused command with -race, GOMAXPROCS=2 and -p1.
+22.857s package; delayed-start real-deadline case20.36s; no race report.
+
+No production source, deadline policy, dependency, protocol or provider
+authentication changed. Broad integration gates remain the root lane's work.
+
+Admitted job polling bound — follow-up at integration7fbb887c
+Full race timed out NewerVersion at ready/stopped=false. Isolated-race count3
+was FAIL(starting,10.26s)/PASS(7.64s)/PASS(7.74s), with no race report, while
+the host was heavily contended. Ready is published before deferred writer scans,
+runner join and supervisor proof; it does not imply WritersStopped yet.
+
+The8s helper timeout was not a product success SLO. Fixtures admit20s jobs.
+waitProgress now reads the existing durable Config and uses its absolute deadline
+plus the existing8s cleanup allowance; it does not reset the job deadline.
+ReadConfig errors fail explicitly. The conflicting-completion and runner-crash
+tests now require stale_native_attempt and runner_stopped respectively, so a
+broken path cannot pass merely because the later deadline kills its writers.
+
+RED: scratch TestMain overlay delayed supervisor startup9.1s within the admitted
+20s deadline. Old now+8s polling failed before progress existed (12.92s test,
+20.560s package). Same delay with the corrected bound passed under -race
+(13.44s test,15.154s package).
+
+Causal negative controls: scratch overlays suppressed mismatched completion and
+postponed runner-exit cleanup until Config deadline. BOTH strengthened tests
+failed with deadline_or_worker_stopped (20.28s/20.21s;41.362s package).
+Thus deadline-only termination cannot substitute for either required cause.
+No mutant, production change or ordinary startFixture deadline reset is retained.
+
+Focused normal GREEN: NewerVersion/conflicting-completion/runner-crash/real-deadline
+and expired-config tests, GOMAXPROCS=2, -p2, -count=1:24.586s package.
+Identical focused -race suite GREEN:30.955s package, no race report.

@@ -29,7 +29,7 @@ import (
 
 func TestRosterPoll_ControlFlipAloneFiresAnEvent(t *testing.T) {
 	buildBinaries(t)
-	dir, err := os.MkdirTemp("/tmp", "swskrc")
+	dir, err := os.MkdirTemp("", "swskrc")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

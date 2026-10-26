@@ -55,6 +55,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/testbin"
 )
 
 const (
@@ -208,6 +209,9 @@ func main() { _, _ = io.Copy(io.Discard, os.Stdin) }
 		t.Fatalf("write drain agent source: %v", err)
 	}
 	bin := filepath.Join(dir, "swarm-drain-agent")
+	if err := testbin.RegisterExecutable(bin); err != nil {
+		t.Fatalf("register drain agent: %v", err)
+	}
 	cmd := exec.Command("go", "build", "-o", bin, src)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

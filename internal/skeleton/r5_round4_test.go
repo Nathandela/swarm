@@ -46,7 +46,7 @@ func TestR5Round4_RemoteLaunchOfAProductionPresetResolvesOnTheDaemonsOwnPath(t *
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	dir, err := os.MkdirTemp("/tmp", "swskr4")
+	dir, err := os.MkdirTemp("", "swskr4")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestR5Round4_ProductionLaunchStillFailsClearlyWhenTheBinaryIsAbsent(t *test
 	buildBinaries(t)
 	t.Setenv("PATH", t.TempDir()) // an empty PATH directory: no provider anywhere
 
-	dir, err := os.MkdirTemp("/tmp", "swskr4x")
+	dir, err := os.MkdirTemp("", "swskr4x")
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}

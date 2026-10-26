@@ -1,0 +1,35 @@
+=== RUN   TestTouchPlanProbe_OffscreenSelectionStillAttaches
+    touch_plan_probe_test.go:43: 120x8: 15 wheel events selected endpoint/15; its row is invisible; Enter attached it
+--- PASS: TestTouchPlanProbe_OffscreenSelectionStillAttaches (0.01s)
+=== RUN   TestTouchPlanProbe_NarrowFitLosesIdentity
+    touch_plan_probe_test.go:53: columns=24 rendered=36 name=0 cwd=0 summary=0
+    touch_plan_probe_test.go:53: columns=32 rendered=36 name=0 cwd=0 summary=0
+    touch_plan_probe_test.go:53: columns=36 rendered=36 name=0 cwd=0 summary=0
+    touch_plan_probe_test.go:53: columns=40 rendered=40 name=1 cwd=3 summary=0
+    touch_plan_probe_test.go:53: columns=48 rendered=48 name=5 cwd=7 summary=0
+    touch_plan_probe_test.go:53: columns=72 rendered=72 name=10 cwd=14 summary=12
+    touch_plan_probe_test.go:53: columns=120 rendered=94 name=20 cwd=24 summary=40
+--- PASS: TestTouchPlanProbe_NarrowFitLosesIdentity (0.01s)
+=== RUN   TestTouchPlanProbe_ResizeDoesNotCancelArmedOpen
+    touch_plan_probe_test.go:76: press -> 120x40 to 72x12 resize -> release still opens the selected session
+--- PASS: TestTouchPlanProbe_ResizeDoesNotCancelArmedOpen (0.00s)
+=== RUN   TestTouchPlanProbe_DragAwayAndBackStillOpens
+    touch_plan_probe_test.go:88: press -> left-button motion away -> release back on origin still opens
+--- PASS: TestTouchPlanProbe_DragAwayAndBackStillOpens (0.00s)
+=== RUN   TestTouchPlanProbe_PrePressOldFrameAmbiguity
+    touch_plan_probe_test.go:115: old frame showed A at Y; model update moved selected B there; delayed tap opened B
+--- PASS: TestTouchPlanProbe_PrePressOldFrameAmbiguity (0.00s)
+=== RUN   TestTouchPlanProbe_LaunchFocusAndErrorAreClipped
+    touch_plan_probe_test.go:133: 40x8: focused prompt and validation error exist in form, but neither is on screen
+--- PASS: TestTouchPlanProbe_LaunchFocusAndErrorAreClipped (0.00s)
+=== RUN   TestTouchPlanProbe_SelectedAgentCanBeTruncated
+    touch_plan_probe_test.go:150: 40 columns, selected agent=opencode, picker="◂ ○ cl"
+--- PASS: TestTouchPlanProbe_SelectedAgentCanBeTruncated (0.00s)
+=== RUN   TestTouchPlanProbe_CoalescePaintNotWheelDeltas
+    touch_plan_probe_test.go:160: at scroll bounds, down100 then up1 ends at 9; summing first ends at 10
+--- PASS: TestTouchPlanProbe_CoalescePaintNotWheelDeltas (0.00s)
+=== RUN   TestTouchPlanProbe_UnchangedTickRetransmitsContent
+    touch_plan_probe_test.go:196: manual unchanged repaint tick retransmitted marker in 316 captured renderer bytes
+--- PASS: TestTouchPlanProbe_UnchangedTickRetransmitsContent (0.05s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/tui	2.349s

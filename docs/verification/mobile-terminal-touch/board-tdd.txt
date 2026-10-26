@@ -1,0 +1,127 @@
+Board slices 1–3 TDD — 2026-10-25 — baseline 4b275c0a
+Isolated branch feat/mobile-touch-board; standard shared Go caches; testbin owns TMPDIR.
+
+RED: go test ./internal/tui -run '^TestMobileBoard' -count=1
+Baseline failed: wheel changed focus; 24×4 lost session identity; Left did not focus
+collapsed header; resize/drag acceptance setup exposed missing narrow identity.
+
+GREEN: same command passed after viewport, compact rows, semantic header focus,
+folds, persistent input/review counts and release-bound geometry implementation.
+
+Menu/geometry RED: go test ./internal/tui -run '^TestMobileBoard(More|Focused|Attention)' -count=1
+Caught Kill silently becoming Delete in an already-open captured menu, and 24×4
+banner leaving an expanded heading as the sole content row (no navigation stop).
+GREEN: disabled changed kill/delete eligibility with explicit menu explanation;
+one-line content budgets advance past an expanded heading to a navigation stop.
+Captured menu ID remains independent of current board focus, offscreen movement,
+and authoritative roster changes. Vanished menu targets cannot issue commands.
+
+Focused GREEN: TestMobileBoard*, TestMouse*, TestRouter*, TestStatusBar*,
+TestBottomBar*, TestStyleHoistPinnedOutput, TestWorkingAnimation*,
+TestResponsive*, TestApply_NoFlatAllocOnSameGroupUpdate, TestGoldenOptionsForm.
+The same-group apply allocation invariant remains zero.
+
+Intentional old-contract reversals: ADR-029 wheel now scrolls the independent
+viewport without moving focus; whole section headers fold and pinned header
+reveals attention; bottom chrome contains separate New/Open/More release targets.
+The old clipped-row test now clicks inert far-right footer padding. Version yields
+before controls. General golden and board/banner ANSI pins retain session-field
+colors and now pin fold headers, persistent attention totals and wide key hints.
+Confirm/form output remains owned by the forms lane; renderer nonce changes are
+owned by the render lane and require final integration repinning.
+
+Full TUI regression run after those fixes: 72.646s; only GoldenOptionsForm failed
+because its first-paint wait expected the old footer's 'options' substring.
+Restored a fitting wide 'o options' hint; focused GoldenOptionsForm then passed.
+Final full TUI run and root integration quality gates recorded by root.
+
+Render benchmark: go test ./internal/tui -run '^$' -bench '^BenchmarkMobileBoardRender$' -benchtime=100ms -count=1
+Darwin/amd64 VirtualApple @2.50GHz; 40×18 board, 20 repo/tag keys:
+50/status   71,465 ns/op; 50/repo 294,674; 50/tag 282,215
+500/status 251,154 ns/op; 500/repo 2,020,817; 500/tag 1,563,231
+No cache or indexing added: measured 500-session render stays about 2ms locally.
+These are local render timings, not phone-visible latency or network evidence.
+
+Limit: SSH reports have no displayed-frame identity. Generation binds an armed
+model gesture to unchanged model geometry; an old-frame press arriving after an
+update can still hit newer geometry. No handset qualification is claimed.
+
+Final standalone board full suite: go test ./internal/tui -count=1
+GREEN at 8df42e19: 42.483s, including existing real N-1/N-2 gates.
+
+Mandatory-banner follow-up RED:
+go test ./internal/tui -run '^TestMobileBoardOversizedError' -count=1
+Failed: oversized mandatory banner allowed action.
+GREEN after full required context wrapping + bounded resize-to-read fallback:
+go test ./internal/tui -run '^(TestMobileBoard|TestMouse|TestBanner|TestLaunchRefusal|TestApply_NoFlatAlloc|TestWorkingAnimation)' -count=1
+3.659s. Explicit setBanner messages cannot silently clip their required tail into
+an active board. Resize restores the full error and active controls. Ordinary
+status-attention notifications keep the board usable and counts remain pinned.
+
+Review corrections RED→GREEN:
+1. TestMobileBoardRosterKeepsHeaderThroughIntermediateEmptyGroup failed when
+reconcile temporarily emptied the focused section before adding its replacement
+member. Explicitly snapshot/restore semantic header across the whole roster.
+2. TestMobileBoardCompactWorkingUsesExistingAnimationAndPalette failed because
+compact rows omitted the existing Working glyph. Reuse groupIcon/groupStyle and
+selection/name styles in the compact row, accounting for the two extra cells.
+Generic input/review/ended states shorten deliberately; approval/question/error
+remain meaningful, and ordinary Working identity has a useful name budget.
+GREEN: go test ./internal/tui -run '^(TestMobileBoard|TestResponsive|TestWorking|TestApply_NoFlatAlloc)' -count=1
+11.520s. The focused header regression separately passed in 3.997s.
+
+Independent Astra review — three confirmed regressions, all failing-first:
+go test ./internal/tui -run '^TestMobileBoard(KeyboardFold|MoreQuit)' -count=1
+RED: keyboard collapse left its focused header offscreen; disconnected menu blocked
+local Quit (3.172s).
+go test ./internal/tui -run '^TestMobileBoardRemovedAnchor' -count=1
+RED: removed endpoint/27 jumped to endpoint/46 instead of the nearest surviving
+prior-order neighbor endpoint/28 (2.997s).
+
+Fixes: keyboard fold/expand reveals its destination after the shared fold operation;
+pointer folds retain their feasible clicked-header row. Local Quit precedes daemon
+availability checks. Before authoritative replacement or single deletion, choose a
+nearest surviving old content identity (following item wins ties), then restore that
+identity after mutation. Incoming roster membership maps exist only for that bulk
+mutation, with no cache or allocation added to ordinary same-group apply.
+
+GREEN: go test ./internal/tui -run '^(TestMobileBoard|TestMouse|TestReconnect|TestApply_NoFlatAlloc)' -count=1
+9.835s. Explicit pointer-header placement and all three regression tests also passed:
+go test ./internal/tui -run '^TestMobileBoard(PointerFold|KeyboardFold|MoreQuit|RemovedAnchor)' -count=1
+2.390s. No broad full TUI/performance gate rerun during root integration.
+
+Final targeted Astra correction: connected event removal anchor ownership.
+RED: go test ./internal/tui -run '^TestMobileBoardEventRemovalHasSingleAnchorOwner' -count=1
+All three actual eventMsg paths failed (3.159s): RosterHidden, SupersededBy and
+Supersedes restored the old numeric top and skipped the chosen Completed heading.
+
+Root cause fixed once at the mutation boundary: early removals delegate anchor
+ownership to remove(); ordinary/inlined replacement updates own one restoration,
+choosing the surviving old identity before deleting Supersedes sources. The outer
+apply restoration no longer overwrites a nested removal's resolved anchor.
+
+GREEN: go test ./internal/tui -run '^(TestMobileBoard|TestMouse|TestDiscussions|TestSelection|TestApply_NoFlatAlloc)' -count=1
+2.829s. Actual-event-path coverage, ordinary zero-allocation updates, pointer bounds,
+and the preceding reviewed fixes pass. Resume projection/archive filtering and
+all TestApply_ regressions were also run separately before commit. Implementation
+frozen after this targeted correction for final independent whole-feature audit.
+
+Fresh final Astra move regression — status/tag metadata group moves:
+RED: GOMAXPROCS=2 go test -p 2 ./internal/tui -run '^TestMobileBoardVanishedHeaderKeepsOldOrderNeighbor' -count=1
+2.734s; both status Working→Needs input and tag b→a placed the old top at the moved
+b/only member rather than the following Completed/c header. The permanent test
+also requires focus c/0, the next surviving old navigation target.
+
+Targeted correction: shared pre-mutation updatePositions predicts surviving old
+content/navigation identities for both apply and applyTag. A vanished header's
+viewport anchor and focus resolve before the mutation; tie-breaking keeps forward
+reading order. Ordinary same-group/no-removal updates retain the existing fast
+path. apply supplies explicit Supersedes IDs; applyTag supplies none and updates
+metadata directly, so RosterHidden/SupersededBy/Supersedes fields are never replayed
+as lifecycle actions by a tag change.
+
+GREEN: GOMAXPROCS=2 go test -p 2 ./internal/tui -run '^(TestMobileBoard|TestApply_|TestResumeProjection|TestDiscussionRoster|TestSessionLayout|TestSelection)' -count=1
+3.791s. The same-group apply allocation invariant remains zero. A separate focused
+run covers pure tag metadata with lifecycle fields present, all prior removal
+anchor cases, header refreshes, resume projection and archive filtering. No broad
+quality/performance gate was run in this correction lane.

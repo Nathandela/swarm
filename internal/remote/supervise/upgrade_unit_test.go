@@ -36,13 +36,13 @@ func readUpgradeTemplate(t *testing.T) []byte {
 	return raw
 }
 
-// checkUpgradeShellCommand is ProgramArguments[2]'s contract (auto-upgrade-plan.md L1):
+// checkUpgradeShellCommand checks the final shell command (auto-upgrade-plan.md L1):
 // brew's upgrade runs before the converge, joined by ";" and never "&&", so a brew upgrade
 // that finds swarm already current -- the common case -- still runs the converge.
 func checkUpgradeShellCommand(cmd string) error {
-	updateAt := strings.Index(cmd, "@PREFIX@/bin/brew update")
-	brewAt := strings.Index(cmd, "@PREFIX@/bin/brew upgrade --cask swarm")
-	restartAt := strings.Index(cmd, "@PREFIX@/bin/swarm daemon restart --unattended")
+	updateAt := strings.Index(cmd, `"$1/bin/brew" update`)
+	brewAt := strings.Index(cmd, `"$1/bin/brew" upgrade --cask swarm`)
+	restartAt := strings.Index(cmd, `"$1/bin/swarm" daemon restart --unattended`)
 	switch {
 	case updateAt == -1:
 		// brew's own auto-update runs only when the last one is older than
@@ -66,27 +66,18 @@ func checkUpgradeShellCommand(cmd string) error {
 	return nil
 }
 
-// TestUpgradeTemplate_ProgramArguments walks the RAW template through
-// launchdProgramArguments -- the same plist walk launchdExec uses, generalized to every
-// element instead of just the first -- and checks the three-element shell-out shape a
-// single ProgramArguments string would break (unit.go's own comment: launchd would exec a
-// file literally named "/bin/sh -c ...").
+// The platform wrapper opens one safe descriptor and execs the existing shell
+// sequence; HOME and PREFIX stay separate arguments rather than shell source.
 func TestUpgradeTemplate_ProgramArguments(t *testing.T) {
 	args, err := launchdProgramArguments(readUpgradeTemplate(t))
 	if err != nil {
 		t.Fatalf("launchdProgramArguments: %v", err)
 	}
-	if len(args) != 3 {
-		t.Fatalf("ProgramArguments has %d elements, want 3: %v", len(args), args)
+	if len(args) != 6 || args[0] != "/usr/bin/perl" || args[1] != "-MFcntl=:DEFAULT,:mode" || args[2] != "-e" {
+		t.Fatalf("unexpected safe log wrapper: %v", args)
 	}
-	if args[0] != "/bin/sh" {
-		t.Errorf("ProgramArguments[0] = %q, want /bin/sh", args[0])
-	}
-	if args[1] != "-c" {
-		t.Errorf("ProgramArguments[1] = %q, want -c", args[1])
-	}
-	if err := checkUpgradeShellCommand(args[2]); err != nil {
-		t.Errorf("ProgramArguments[2]: %v", err)
+	if err := checkUpgradeShellCommand(upgradeShellCommand(t, args)); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -99,7 +90,7 @@ func TestUpgradeTemplate_CheckCanActuallyFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launchdProgramArguments: %v", err)
 	}
-	real := args[2]
+	real := upgradeShellCommand(t, args)
 	if err := checkUpgradeShellCommand(real); err != nil {
 		t.Fatalf("the unperturbed command fails its own check: %v", err)
 	}
@@ -129,16 +120,29 @@ func TestUpgradeTemplate_Label(t *testing.T) {
 	}
 }
 
+func upgradeShellCommand(t *testing.T, args []string) string {
+	t.Helper()
+	if len(args) != 6 {
+		t.Fatalf("unexpected wrapper arguments: %v", args)
+	}
+	match := regexp.MustCompile(`my \$command = q\{([^}]*)\};`).FindStringSubmatch(args[3])
+	if len(match) != 2 {
+		t.Fatal("missing final upgrade shell command")
+	}
+	return match[1]
+}
+
 func TestUpgradeTemplate_LogPathsAreTemplatedOnHome(t *testing.T) {
 	raw := string(readUpgradeTemplate(t))
-	for _, re := range []*regexp.Regexp{upgradeStdoutRe, upgradeStderrRe} {
-		m := re.FindStringSubmatch(raw)
-		if m == nil {
-			t.Fatalf("template declares no match for %s", re.String())
-		}
-		if !strings.HasPrefix(m[1], "@HOME@") {
-			t.Errorf("log path %q does not start with @HOME@", m[1])
-		}
+	args, err := launchdProgramArguments([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 6 || args[4] != "@HOME@/.local/state/swarm/upgrade.log" || args[5] != "@PREFIX@" {
+		t.Fatalf("untemplated paths: %v", args)
+	}
+	if upgradeStdoutRe.MatchString(raw) || upgradeStderrRe.MatchString(raw) {
+		t.Fatal("launchd retains competing log descriptors")
 	}
 }
 

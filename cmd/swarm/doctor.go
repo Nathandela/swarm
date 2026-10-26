@@ -85,6 +85,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 	findings = append(findings, doctorSessionChecks(cc.StateDir)...)
 	findings = append(findings, doctorUpgradeCheck(cc.StateDir))
+	findings = append(findings, doctorStorageCheck(cc.StateDir))
 
 	if *asJSON {
 		if err := writeJSON(stdout, findings); err != nil {
