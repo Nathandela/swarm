@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/bwmarrin/discordgo"
 )
@@ -109,6 +110,19 @@ func TestOwnerInvalidLaunchHasNoEffects(t *testing.T) {
 	}
 	if len(w.launches) != 0 {
 		t.Fatal(w.launches)
+	}
+}
+func TestClaudeAliasesUseCanonicalNativeRegistry(t *testing.T) {
+	b, w := controlsRig(t)
+	for _, cli := range []string{"claude", "claude-code"} {
+		i := ownerInteraction(cli, "1")
+		if _, e := b.controlCommand(context.Background(), i, Actor{ID: "1"}, Route{ChannelID: "20", MessageID: i.ID}, controlOption("new", map[string]string{"cli": cli})); e != nil {
+			t.Fatal(e)
+		}
+		agent := w.launches[len(w.launches)-1].Agent
+		if agent != "claude" || !registry.IsProduction(agent) {
+			t.Fatal("Claude alias bypassed native registry", agent)
+		}
 	}
 }
 

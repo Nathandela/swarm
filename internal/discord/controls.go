@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/bwmarrin/discordgo"
@@ -41,7 +42,7 @@ func ControlOptions() []*discordgo.ApplicationCommandOption {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionString, Name: name, Description: description, Required: required}
 	}
 	var options []*discordgo.ApplicationCommandOption
-	options = append(options, &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "new", Description: "Create an agent (owner only)", Options: []*discordgo.ApplicationCommandOption{stringOption("cli", "claude-code, codex, agy, hermes or opencode", true), stringOption("name", "Agent name", false), stringOption("model", "Model ID", false), stringOption("dir", "Absolute working directory", false), stringOption("prompt", "Initial message", false)}})
+	options = append(options, &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "new", Description: "Create an agent (owner only)", Options: []*discordgo.ApplicationCommandOption{stringOption("cli", "claude, codex, agy, hermes or opencode", true), stringOption("name", "Agent name", false), stringOption("model", "Model ID", false), stringOption("dir", "Absolute working directory", false), stringOption("prompt", "Initial message", false)}})
 	for _, name := range []string{"resume", "stop", "exclude", "include", "requests"} {
 		options = append(options, &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionSubCommand, Name: name, Description: name + " an exact agent ID (owner only)", Options: []*discordgo.ApplicationCommandOption{stringOption("agent", "Exact agent ID", true)}})
 	}
@@ -81,10 +82,10 @@ func controlText(value string, max int) bool {
 }
 func launchControl(config Config, values map[string]string) (protocol.LaunchReq, error) {
 	cli := values["cli"]
-	if cli == "claude" {
-		cli = "claude-code"
+	if cli == "claude-code" {
+		cli = "claude"
 	}
-	if !containsID([]string{"claude-code", "codex", "agy", "hermes", "opencode"}, cli) {
+	if !registry.IsProduction(cli) {
 		return protocol.LaunchReq{}, ErrInvalid
 	}
 	dir := values["dir"]
