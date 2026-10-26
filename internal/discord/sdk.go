@@ -92,7 +92,7 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 			}
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if readErr != nil {
 			return errors.New("discord: response failed")
 		}
@@ -140,11 +140,11 @@ func (c *DiscordClient) Open(ctx context.Context) error {
 	select {
 	case err := <-ready:
 		if err != nil {
-			c.Close()
+			_ = c.Close()
 		}
 		return err
 	case <-ctx.Done():
-		c.Close()
+		_ = c.Close()
 		return ctx.Err()
 	}
 }
@@ -262,7 +262,7 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 	if err != nil {
 		return err
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	conn.SetReadLimit(1 << 20)
 	readCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	var hello gatewayFrame
@@ -302,11 +302,11 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 				return
 			case <-ticker.C:
 				if !ack.Swap(false) {
-					conn.CloseNow()
+					_ = conn.CloseNow()
 					return
 				}
 				if wsjson.Write(connCtx, conn, map[string]any{"op": 1, "d": heartbeatData()}) != nil {
-					conn.CloseNow()
+					_ = conn.CloseNow()
 					return
 				}
 			}
