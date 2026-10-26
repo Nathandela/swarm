@@ -27,7 +27,7 @@ func TestDiscordREST(t *testing.T) {
 			t.Errorf("auth %q", r.Header.Get("Authorization"))
 		}
 		if r.Method == "GET" {
-			w.Write([]byte(`{"id":"55","channel_id":"22","content":"original @everyone","author":{"id":"77","username":"User"},"timestamp":"2026-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"id":"55","channel_id":"22","content":"original @everyone","author":{"id":"77","username":"User"},"timestamp":"2026-01-01T00:00:00Z"}`))
 			return
 		}
 		var body map[string]any
@@ -49,7 +49,7 @@ func TestDiscordREST(t *testing.T) {
 			t.Errorf("edit %s %s", r.Method, r.URL.Path)
 		}
 		count++
-		w.Write([]byte(`{"id":"66"}`))
+		_, _ = w.Write([]byte(`{"id":"66"}`))
 	})
 	c, err := NewDiscordClient("test-secret")
 	c.apiBase = base
@@ -80,15 +80,15 @@ func TestDiscordRateLimitAndRedaction(t *testing.T) {
 		if calls == 1 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(429)
-			w.Write([]byte(`{"retry_after":0.05,"global":false}`))
+			_, _ = w.Write([]byte(`{"retry_after":0.05,"global":false}`))
 			return
 		}
 		if calls == 2 {
-			w.Write([]byte(`{"id":"66"}`))
+			_, _ = w.Write([]byte(`{"id":"66"}`))
 			return
 		}
 		w.WriteHeader(400)
-		w.Write([]byte(`test-secret`))
+		_, _ = w.Write([]byte(`test-secret`))
 	})
 	c, _ := NewDiscordClient("test-secret")
 	c.apiBase = base
@@ -116,7 +116,7 @@ func TestDiscordGatewayReconnect(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		n := connections.Add(1)
 		if err = conn.WriteJSON(map[string]any{"op": 10, "d": map[string]any{"heartbeat_interval": 50}}); err != nil {
 			return
@@ -167,7 +167,7 @@ func TestDiscordGatewayReconnect(t *testing.T) {
 	if err = c.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	for i := 0; i < 2; i++ {
 		select {
 		case got := <-events:
@@ -186,10 +186,10 @@ func TestCancellationAndNullResponses(t *testing.T) {
 		if r.Method == "POST" {
 			first <- struct{}{}
 			w.WriteHeader(429)
-			w.Write([]byte(`{"retry_after":1}`))
+			_, _ = w.Write([]byte(`{"retry_after":1}`))
 			return
 		}
-		w.Write([]byte(`null`))
+		_, _ = w.Write([]byte(`null`))
 	})
 	c, _ := NewDiscordClient("test-secret")
 	c.apiBase = base
@@ -231,14 +231,14 @@ func TestGatewayHelloCancellation(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- c.Open(ctx) }()
 	conn := <-accepted
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("gateway ignored cancellation")
 	}
-	c.Close()
+	_ = c.Close()
 }
 
 func TestCloseStopsReconnect(t *testing.T) {
@@ -265,7 +265,7 @@ func TestCloseStopsReconnect(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.WriteJSON(map[string]any{"op": 10, "d": map[string]any{"heartbeat_interval": 10000}})
 		var data any
 		if conn.ReadJSON(&data) != nil {
@@ -302,7 +302,7 @@ func TestRateLimitHeadersAndCloseDuringHello(t *testing.T) {
 		calls++
 		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.Header().Set("X-RateLimit-Reset-After", "0.1")
-		w.Write([]byte(`{"id":"66"}`))
+		_, _ = w.Write([]byte(`{"id":"66"}`))
 	})
 	c, _ := NewDiscordClient("secret")
 	c.apiBase = base
@@ -329,16 +329,16 @@ func TestReviewGatewayRecovery(t *testing.T) {
 			messages := make(chan struct{}, 3)
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/gateway" {
-					json.NewEncoder(w).Encode(map[string]string{"url": "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"})
+					_ = json.NewEncoder(w).Encode(map[string]string{"url": "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"})
 					return
 				}
 				conn, e := up.Upgrade(w, r, nil)
 				if e != nil {
 					return
 				}
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				n := attempts.Add(1)
-				conn.WriteJSON(map[string]any{"op": 10, "d": map[string]any{"heartbeat_interval": 10000}})
+				_ = conn.WriteJSON(map[string]any{"op": 10, "d": map[string]any{"heartbeat_interval": 10000}})
 				var identify struct {
 					Op int `json:"op"`
 				}
@@ -351,17 +351,17 @@ func TestReviewGatewayRecovery(t *testing.T) {
 						path string
 					}{identify.Op, r.URL.Path}
 				}
-				conn.WriteJSON(map[string]any{"op": 0, "s": 1, "t": "READY", "d": map[string]any{"session_id": "session", "resume_gateway_url": "ws" + strings.TrimPrefix(server.URL, "http") + "/resume", "user": map[string]any{"id": "1"}}})
+				_ = conn.WriteJSON(map[string]any{"op": 0, "s": 1, "t": "READY", "d": map[string]any{"session_id": "session", "resume_gateway_url": "ws" + strings.TrimPrefix(server.URL, "http") + "/resume", "user": map[string]any{"id": "1"}}})
 				if n == 1 {
 					switch mode {
 					case "expired-session":
-						conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(4009, "expired"), time.Now().Add(time.Second))
+						_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(4009, "expired"), time.Now().Add(time.Second))
 						return
 					case "resume-url":
-						conn.WriteJSON(map[string]any{"op": 7, "d": nil})
+						_ = conn.WriteJSON(map[string]any{"op": 7, "d": nil})
 					case "large-event":
-						conn.WriteJSON(map[string]any{"op": 0, "s": 2, "t": "GUILD_CREATE", "d": map[string]any{"id": "1", "name": strings.Repeat("a", 40000)}})
-						conn.WriteJSON(map[string]any{"op": 0, "s": 3, "t": "MESSAGE_CREATE", "d": map[string]any{"id": "2", "channel_id": "3", "content": "hello", "author": map[string]any{"id": "4"}}})
+						_ = conn.WriteJSON(map[string]any{"op": 0, "s": 2, "t": "GUILD_CREATE", "d": map[string]any{"id": "1", "name": strings.Repeat("a", 40000)}})
+						_ = conn.WriteJSON(map[string]any{"op": 0, "s": 3, "t": "MESSAGE_CREATE", "d": map[string]any{"id": "2", "channel_id": "3", "content": "hello", "author": map[string]any{"id": "4"}}})
 					}
 				}
 				var frame any
@@ -378,7 +378,7 @@ func TestReviewGatewayRecovery(t *testing.T) {
 			if e := c.Open(context.Background()); e != nil {
 				t.Fatal(e)
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			if mode == "large-event" {
 				select {
 				case <-messages:
@@ -416,7 +416,7 @@ func TestGatewayFatalAndMessageChanges(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.WriteJSON(map[string]any{"op": 10, "d": map[string]any{"heartbeat_interval": 10000}})
 		var input any
 		if conn.ReadJSON(&input) != nil {
@@ -439,7 +439,7 @@ func TestGatewayFatalAndMessageChanges(t *testing.T) {
 	if err := c.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	for i := 0; i < 2; i++ {
 		select {
 		case id := <-changed:

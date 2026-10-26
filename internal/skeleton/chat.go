@@ -600,6 +600,9 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	if code, err := d.requireStructuredComposer(local, req.Session); err != nil {
 		return code, err
 	}
+	if req.Origin != nil && meta.AgentType == "claude" {
+		return d.sendClaudeNative(local, operationID, req, begin, lane, admittedBarrier)
+	}
 	// Resolve the sink only after this request reaches the queue head. A backend may be
 	// replaced or disappear while earlier messages are in provider I/O.
 	sink, code, serr := d.resolveMessageSink(local, req.Session)

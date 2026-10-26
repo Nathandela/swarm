@@ -16,8 +16,12 @@ func TestConfigRoundTripAndPermissions(t *testing.T) {
 	if err := SaveConfig(dir, c); err != nil {
 		t.Fatal(err)
 	}
-	os.Chmod(dir, 0755)
-	os.Chmod(ConfigPath(dir), 0644)
+	if err := os.Chmod(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ConfigPath(dir), 0644); err != nil {
+		t.Fatal(err)
+	}
 	got, err := LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -162,5 +166,30 @@ func TestLinkedCustodyPathsAreRejectedWithoutChmod(t *testing.T) {
 				t.Fatal("changed linked file mode")
 			}
 		})
+	}
+}
+
+func TestNativeInputEnabled(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "missing")
+	if NativeInputEnabled(dir) {
+		t.Fatal("missing config enabled")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("created state directory")
+	}
+	c := sampleConfig(dir)
+	c.Enabled = true
+	if err := SaveConfig(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	if !NativeInputEnabled(dir) {
+		t.Fatal("enabled config ignored")
+	}
+	c.Enabled = false
+	if err := SaveConfig(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	if NativeInputEnabled(dir) {
+		t.Fatal("disabled config enabled")
 	}
 }

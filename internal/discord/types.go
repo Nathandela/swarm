@@ -38,11 +38,13 @@ type Request struct {
 	MessageRevision string           `json:"message_revision"`
 	EventAt         time.Time        `json:"event_at"`
 	Author          Actor            `json:"author"`
+	RequesterID     string           `json:"requester_id,omitempty"`
 	EndorserID      string           `json:"endorser_id,omitempty"`
 	Authority       Authority        `json:"authority"`
 	Route           Route            `json:"route"`
 	Target          Target           `json:"target"`
 	Text            string           `json:"text"`
+	Snapshot        bool             `json:"snapshot,omitempty"`
 	Context         []ContextMessage `json:"context,omitempty"`
 	OperationID     string           `json:"operation_id"`
 	CreatedAt       time.Time        `json:"created_at"`

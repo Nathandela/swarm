@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
+const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|discord|handoff|spawn|reattach|ls|watch|kill|send|message|requests|decide|peek|doctor|clean|relogin|refresh|upgrade|version]
 
   swarm            open the TUI
   swarm --pilot    enter a private pilot context and show the discussion roster
@@ -67,6 +67,7 @@ const usage = `usage: swarm [--pilot|pilot|daemon|shim|hook|handoff|spawn|reatta
   swarm daemon     run the session daemon
   swarm shim       run the PTY-owning shim process
   swarm hook       post a hook event to the daemon
+  swarm discord    connect this Swarm to Discord, or operate its local bridge
   swarm handoff    launch a supervised cross-CLI handoff
                    (--cli agent [--model m] [--name n]
                     [--supervision passive|manual|none] --context-file file)
@@ -143,6 +144,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runHook(args[1:], os.Stdin, stderr)
 	case "remote":
 		return runRemote(args[1:], stdout, stderr)
+	case "discord":
+		return dispatchDiscord(args[1:], stdout, stderr)
 	case "relay":
 		return runRelay(args[1:], stdout, stderr)
 	case "spawn":
@@ -602,6 +605,7 @@ func skeletonConfigFromEnv() (skeleton.Config, bool) {
 	exe, _ := os.Executable() // the daemon spawns `swarm shim` from its own binary
 	return skeleton.Config{
 		StateDir:           stateDir,
+		NativeInputEnabled: func() bool { return discordNativeInputEnabled(stateDir) },
 		SocketPath:         os.Getenv(daemon.EnvSocket),
 		LockPath:           os.Getenv(daemon.EnvLock),
 		LogPath:            os.Getenv(daemon.EnvLog),
@@ -640,6 +644,7 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
+	ClaudeInput       bool                 `json:"claude_input,omitempty"`
 	LogPath           string               `json:"log_path,omitempty"`
 	LoginRuntime      *logins.Runtime      `json:"login_runtime,omitempty"`
 	LoginStateRoot    string               `json:"login_state_root,omitempty"`
@@ -700,6 +705,7 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
+		ClaudeInput:  lc.ClaudeInput,
 		LogPath:      lc.LogPath,
 		OpenCode:     lc.OpenCode,
 		LoginRuntime: lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,

@@ -81,6 +81,9 @@ type Registry interface {
 
 // Config configures a daemon instance.
 type Config struct {
+	// NativeInputEnabled is checked at launch; nil keeps ordinary sessions unchanged.
+	NativeInputEnabled func() bool
+
 	StateDir    string
 	SocketPath  string
 	LockPath    string

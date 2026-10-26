@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -19,6 +20,7 @@ type Worker struct {
 	Target
 	Project    string   `json:"project,omitempty"`
 	State      string   `json:"state"`
+	Attention  bool     `json:"attention,omitempty"`
 	Supersedes []string `json:"supersedes,omitempty"`
 }
 type Workers interface {
@@ -33,6 +35,7 @@ type Input struct {
 	TargetID  string
 	Bot       bool
 	Addressed bool
+	Snapshot  bool
 	At        time.Time
 }
 type Choice struct{ ID, Label, Description string }
@@ -51,12 +54,15 @@ type Messenger interface {
 	Message(context.Context, Route) (Input, error)
 }
 type Service struct {
-	Config    Config
-	Store     *Store
-	Workers   Workers
-	Messenger Messenger
-	StateDir  string
-	Now       func() time.Time
+	Config       Config
+	Store        *Store
+	Workers      Workers
+	Messenger    Messenger
+	StateDir     string
+	Now          func() time.Time
+	Stop         func()
+	discussionMu sync.Mutex
+	recent       map[string][]ContextMessage
 }
 
 func NewService(c Config, store *Store, workers Workers, messenger Messenger) *Service {
@@ -120,20 +126,40 @@ func (s *Service) target(ctx context.Context, id string) (Worker, error) {
 			return row, nil
 		}
 	}
+	var matches []Worker
+	for _, row := range rows {
+		if strings.EqualFold(row.Name, id) {
+			matches = append(matches, row)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		return Worker{}, ErrSelection
+	}
 	return Worker{}, errors.New("discord: agent unavailable or opted out")
 }
 func (s *Service) Handle(ctx context.Context, in Input) (Request, error) {
-	if in.Bot || !s.Allowed(in.Actor, in.Route) {
+	if !s.Allowed(in.Actor, in.Route) {
 		return Request{}, ErrNotAuthorized
 	}
-	if !in.Addressed {
+	s.observe(in)
+	if in.Bot || !in.Addressed {
 		return Request{}, nil
 	}
 	if in.At.IsZero() {
 		in.At = s.Now()
 	}
 	if in.TargetID == "" {
-		return Request{}, ErrSelection
+		var err error
+		in.TargetID, err = s.boundTarget(in.Route.ChannelID)
+		if err != nil {
+			return Request{}, err
+		}
+		if in.TargetID == "" {
+			return Request{}, ErrSelection
+		}
 	}
 	row, err := s.target(ctx, in.TargetID)
 	if err != nil {
@@ -143,8 +169,16 @@ func (s *Service) Handle(ctx context.Context, in Input) (Request, error) {
 	if in.Actor.ID == s.Config.OwnerID {
 		authority = AuthorityOwnerDirect
 	}
-	r := Request{EventID: in.EventID + ":" + row.ID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, Authority: authority, Route: in.Route, Target: row.Target, Text: in.Text,
-		Context: []ContextMessage{{ID: in.Route.MessageID, Author: in.Actor, Text: in.Text, CreatedAt: in.At}}}
+	thread := s.threadContext(in.Route.ChannelID)
+	if len(thread) == 0 {
+		thread = []ContextMessage{{ID: in.Route.MessageID, Author: in.Actor, Text: in.Text, CreatedAt: in.At}}
+	}
+	r := Request{EventID: in.EventID + ":" + row.ID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, RequesterID: in.Actor.ID, Authority: authority, Route: in.Route, Target: row.Target, Text: in.Text, Context: thread, Snapshot: in.Snapshot}
+	if previous, e := s.Store.ExistingEvent(r.EventID, s.Now()); e == nil {
+		r.Context = previous.Context
+	} else if !errors.Is(e, ErrNotFound) {
+		return Request{}, e
+	}
 	return s.dispatch(ctx, r)
 }
 func (s *Service) dispatch(ctx context.Context, input Request) (Request, error) {
@@ -166,7 +200,7 @@ func (s *Service) dispatch(ctx context.Context, input Request) (Request, error) 
 		return r, nil
 	}
 	origin := &protocol.MessageOrigin{Kind: string(r.Authority), InstallationID: s.Config.InstallationID, RequestID: r.Ref, ActorID: r.Author.ID, ActorName: r.Author.Name,
-		GuildID: r.Route.GuildID, ChannelID: r.Route.ChannelID, MessageID: r.Route.MessageID, EndorserID: r.EndorserID}
+		GuildID: r.Route.GuildID, ChannelID: r.Route.ChannelID, MessageID: r.Route.MessageID, EndorserID: r.EndorserID, RequesterID: r.RequesterID}
 	text := s.envelope(r)
 	if len(text) > protocol.MaxSendInputText {
 		_ = s.Store.FinishDelivery(r.Ref, StateFailed, "request envelope exceeds semantic input limit")
@@ -205,16 +239,61 @@ func (s *Service) envelope(r Request) string {
 		flags = " --state-dir " + shellArg(s.StateDir)
 	}
 	identity, _ := json.Marshal(struct {
-		Author     Actor
-		Authority  Authority
-		EndorserID string
-	}{r.Author, r.Authority, r.EndorserID})
+		Author      Actor
+		Authority   Authority
+		EndorserID  string
+		RequesterID string
+	}{r.Author, r.Authority, r.EndorserID, r.RequesterID})
 	return fmt.Sprintf("Swarm Discord request %s.\n%s\nAttribution: %s\nRead the exact request and attributed thread context: swarm discord context %s%s\nInvestigate using your ordinary tools and subagents as needed. Carry this request reference and attribution into delegation. Publish only the answer intended for its originating discussion: swarm discord reply %s%s --body-file <file>\nThe default publication ID is final; use --publication-id for distinct progress replies. Do not mirror private transcripts or tool output. Native tool permissions remain separate.\n", r.Ref, standing, identity, shellArg(r.Ref), flags, shellArg(r.Ref), flags)
 }
 func (s *Service) Context(ref string, offset int) (ContextPage, error) {
 	return s.Store.ContextPage(ref, offset, MaxContextPageSize, s.Now())
 }
-func (s *Service) Endorse(ctx context.Context, owner Actor, ref, eventID string, eventAt time.Time) (Request, error) {
+
+// Propose publishes validated choices. A model suggestion cannot grant authority.
+func (s *Service) Propose(ctx context.Context, ref string, candidateIDs []string) error {
+	r, err := s.Store.Request(ref, s.Now())
+	if err != nil {
+		return err
+	}
+	rows, err := s.Roster(ctx)
+	if err != nil {
+		return err
+	}
+	if len(candidateIDs) > 25 {
+		return ErrCapacity
+	}
+	var choices []Choice
+	for _, id := range candidateIDs {
+		found := false
+		for _, row := range rows {
+			if row.ID == id {
+				choices = append(choices, Choice{ID: row.ID, Label: shortLabel(row.Name), Description: shortLabel(row.Agent + " · " + row.Project + " · " + row.State)})
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("discord: proposed agent unavailable or opted out")
+		}
+	}
+	if len(choices) == 0 {
+		return ErrSelection
+	}
+	_, err = s.Control(ctx, ref, "proposal", Outbound{Route: r.Route, Text: "Choose an agent for this request.", Actions: []Action{{ID: "choose:" + ref, Label: "Choose agent", Choices: choices}}})
+	return err
+}
+func shortLabel(s string) string {
+	r := []rune(s)
+	if len(r) > 95 {
+		return string(r[:95]) + "…"
+	}
+	if s == "" {
+		return "Agent"
+	}
+	return s
+}
+func (s *Service) Endorse(ctx context.Context, owner Actor, ref, _ string, eventAt time.Time) (Request, error) {
 	if owner.ID != s.Config.OwnerID {
 		return Request{}, ErrNotAuthorized
 	}
@@ -225,13 +304,6 @@ func (s *Service) Endorse(ctx context.Context, owner Actor, ref, eventID string,
 	if r.Authority != AuthorityExternal {
 		return Request{}, errors.New("discord: only an external message needs endorsement")
 	}
-	current, err := s.Messenger.Message(ctx, r.Route)
-	if err != nil {
-		return Request{}, err
-	}
-	if revision(current) != r.MessageRevision {
-		return Request{}, errors.New("discord: source message changed; refresh it before endorsement")
-	}
 	row, err := s.target(ctx, r.Target.ID)
 	if err != nil {
 		return Request{}, err
@@ -239,15 +311,33 @@ func (s *Service) Endorse(ctx context.Context, owner Actor, ref, eventID string,
 	if row.Instance != r.Target.Instance {
 		return Request{}, errors.New("discord: agent changed; select the current agent")
 	}
+	endorsementID := "endorsement:" + digest([]string{ref, r.MessageRevision, owner.ID, row.ID, row.Instance})[:32]
+	if previous, e := s.Store.ExistingEvent(endorsementID, s.Now()); e == nil {
+		return s.dispatch(ctx, previous)
+	} else if !errors.Is(e, ErrNotFound) {
+		return Request{}, e
+	}
+	if !r.Snapshot {
+		current, fetchErr := s.Messenger.Message(ctx, r.Route)
+		if fetchErr != nil {
+			return Request{}, fetchErr
+		}
+		if revision(current) != r.MessageRevision {
+			return Request{}, errors.New("discord: source message changed; refresh it before endorsement")
+		}
+	}
 	r.Ref = ""
 	r.OperationID = ""
-	r.EventID = eventID + ":" + row.ID
+	r.EventID = endorsementID
 	r.EventAt = eventAt
 	r.EndorserID = owner.ID
 	r.Authority = AuthorityOwnerEndorsed
 	return s.dispatch(ctx, r)
 }
 func (s *Service) Reply(ctx context.Context, ref, id, body string) (Publication, error) {
+	if strings.HasPrefix(id, "control:") {
+		return Publication{}, ErrInvalid
+	}
 	p, _, err := s.Store.PreparePublication(ref, id, body, s.Now())
 	if err != nil {
 		return p, err

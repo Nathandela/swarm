@@ -18,14 +18,15 @@ import (
 )
 
 type RequestHeader struct {
-	Ref        string    `json:"ref"`
-	Author     Actor     `json:"author"`
-	EndorserID string    `json:"endorser_id,omitempty"`
-	Authority  Authority `json:"authority"`
-	Route      Route     `json:"route"`
-	Target     Target    `json:"target"`
-	CreatedAt  time.Time `json:"created_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	Ref         string    `json:"ref"`
+	Author      Actor     `json:"author"`
+	RequesterID string    `json:"requester_id,omitempty"`
+	EndorserID  string    `json:"endorser_id,omitempty"`
+	Authority   Authority `json:"authority"`
+	Route       Route     `json:"route"`
+	Target      Target    `json:"target"`
+	CreatedAt   time.Time `json:"created_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
 }
 type LocalContext struct {
 	Request RequestHeader `json:"request"`
@@ -120,7 +121,7 @@ func CallLocal(ctx context.Context, stateDir, operation string, request, respons
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(res.Body, 4<<20+1))
 	if err != nil {
 		return err
@@ -221,7 +222,7 @@ func (s *Service) localHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			break
 		}
-		result = LocalContext{Request: RequestHeader{Ref: request.Ref, Author: request.Author, EndorserID: request.EndorserID, Authority: request.Authority, Route: request.Route, Target: request.Target, CreatedAt: request.CreatedAt, ExpiresAt: request.ExpiresAt}, Page: page}
+		result = LocalContext{Request: RequestHeader{Ref: request.Ref, Author: request.Author, RequesterID: request.RequesterID, EndorserID: request.EndorserID, Authority: request.Authority, Route: request.Route, Target: request.Target, CreatedAt: request.CreatedAt, ExpiresAt: request.ExpiresAt}, Page: page}
 	case "reply":
 		var input LocalReply
 		if err = decodeLocal(w, r, &input); err == nil {
@@ -285,7 +286,7 @@ func (s *Service) ServeLocal(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return errors.New("discord: local service already running")
 	}
@@ -318,7 +319,7 @@ func (s *Service) ServeLocal(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	listener.SetUnlinkOnClose(false)
 	identity, err := os.Lstat(path)
 	if err != nil {

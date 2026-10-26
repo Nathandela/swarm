@@ -175,6 +175,7 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 				}
 			}
 		}
+		config.Enabled = true
 		if err = config.Validate(); err != nil {
 			return discordCLIError(stderr, err)
 		}
@@ -253,6 +254,18 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		} else if !os.IsNotExist(e) {
 			return discordCLIError(stderr, e)
 		}
+		if _, e = os.Lstat(discord.ConfigPath(*stateDir)); e == nil {
+			config, loadErr := discord.LoadConfig(*stateDir)
+			if loadErr != nil {
+				return discordCLIError(stderr, loadErr)
+			}
+			config.Enabled = false
+			if saveErr := discord.SaveConfig(*stateDir, config); saveErr != nil {
+				return discordCLIError(stderr, saveErr)
+			}
+		} else if !os.IsNotExist(e) {
+			return discordCLIError(stderr, e)
+		}
 		_, err = fmt.Fprintln(stdout, "Discord connector disconnected.")
 		if err != nil {
 			return discordCLIError(stderr, err)
@@ -316,6 +329,10 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
+
+func discordNativeInputEnabled(stateDir string) bool {
+	return discord.NativeInputEnabled(filepath.Join(stateDir, "discord"))
+}
 func discordCLIError(stderr io.Writer, err error) int {
 	_, _ = fmt.Fprintf(stderr, "discord: %v\n", err)
 	return 1
@@ -351,7 +368,7 @@ func installDiscordUnit(goos, home, binary, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	defer func() { _ = os.Remove(file.Name()) }()
 	if _, err = file.WriteString(body); err != nil {
 		_ = file.Close()
 		return err
