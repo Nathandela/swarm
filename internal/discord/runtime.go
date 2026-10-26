@@ -71,6 +71,7 @@ func runConnected(parent context.Context, s *Service, client *DiscordClient) err
 			case networkErr <- errors.New("discord: bot token does not match configured application"):
 			default:
 			}
+			cancel()
 		}
 	}
 	localErr := make(chan error, 1)
