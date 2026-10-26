@@ -115,7 +115,7 @@ func (b *Bridge) claimControlTarget(ctx context.Context, eventID string, actor A
 	if e != nil {
 		return "", e
 	}
-	r, _, e := b.Service.Store.Admit(Request{EventID: "control:" + eventID, EventAt: b.Service.Now(), Author: actor, Authority: AuthorityOwnerDirect, Route: route, Target: target, Text: string(raw), Snapshot: true}, b.Service.Now())
+	r, _, e := b.Service.Store.Admit(Request{EventID: "control:" + eventID, EventAt: b.Service.Now(), Author: actor, RequesterID: actor.ID, Authority: AuthorityOwnerDirect, Route: route, Target: target, Text: string(raw), Context: []ContextMessage{{ID: route.MessageID, Author: actor, Text: string(raw)}}, Snapshot: true}, b.Service.Now())
 	if e != nil {
 		return "", e
 	}
@@ -177,9 +177,14 @@ func (b *Bridge) controlCommand(ctx context.Context, i *discordgo.InteractionCre
 		if !ok {
 			return "", ErrControlUnsupported
 		}
-		return b.claimControl(ctx, i.ID, actor, route, req, func(Request) (string, error) {
-			id, name, e := worker.Launch(ctx, req)
+		return b.claimControl(ctx, i.ID, actor, route, req, func(r Request) (string, error) {
+			launch := req
+			launch.InitialPrompt = b.Service.envelope(r) + "Read the stored launch request's initial_prompt as your exact first task.\n"
+			id, name, e := worker.Launch(ctx, launch)
 			if e != nil {
+				return "", e
+			}
+			if e = b.Service.Store.BindReceiver(r.Ref, Target{ID: id, Instance: "launch:" + r.Ref, Name: name, Agent: req.Agent}); e != nil {
 				return "", e
 			}
 			return "Created " + name + " · " + id, e

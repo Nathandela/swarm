@@ -43,6 +43,7 @@ type Request struct {
 	Authority       Authority        `json:"authority"`
 	Route           Route            `json:"route"`
 	Target          Target           `json:"target"`
+	Receiver        *Target          `json:"receiver,omitempty"`
 	Text            string           `json:"text"`
 	Snapshot        bool             `json:"snapshot,omitempty"`
 	Context         []ContextMessage `json:"context,omitempty"`

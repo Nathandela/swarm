@@ -80,7 +80,7 @@ func TestOwnerControlsClaimBeforeEffectAndDeduplicate(t *testing.T) {
 		t.Fatal("duplicate launch", first, again, e, len(w.launches))
 	}
 	r := w.launches[0]
-	if r.Env != nil || r.Cwd != b.Service.Config.WorkDir || r.InitialPrompt != "exact Unicode 🙂" || r.Options["model"] != "luna" {
+	if r.Env != nil || r.Cwd != b.Service.Config.WorkDir || !strings.Contains(r.InitialPrompt, "swarm discord reply") || r.Options["model"] != "luna" {
 		t.Fatal(r)
 	}
 	if _, e = b.controlCommand(ctx, ownerInteraction("stop", "1"), Actor{ID: "1"}, route, controlOption("stop", map[string]string{"agent": "Reviewer"})); e == nil || len(w.killed) != 0 {
