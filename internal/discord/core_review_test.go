@@ -113,3 +113,36 @@ func TestCorePreparedExpirySealsWithoutNativeEffect(t *testing.T) {
 		t.Fatal("old event readmitted", e)
 	}
 }
+
+func TestCorePreparedNativeSealsWhilePublicOutcomeStaysProtected(t *testing.T) {
+	s := openTestStore(t)
+	r := mustAdmit(t, s, sampleRequest())
+	if _, _, e := s.PreparePublication(r.Ref, "control:proposal", "canonical", testNow); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e := s.BeginPublication(r.Ref, "control:proposal", testNow); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Prune(testNow.Add(RequestTTL)); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.db.View(func(tx *bolt.Tx) error {
+		record, e := loadRequest(tx, r.Ref)
+		if e != nil {
+			return e
+		}
+		if record.Request.DeliveryState != StateFailed {
+			t.Fatal("never-dispatched native record remained prepared", record.Request.DeliveryState)
+		}
+		publication, e := loadPublication(tx, r.Ref, "control:proposal")
+		if e != nil {
+			return e
+		}
+		if publication.State != StateSending || publication.Body != "canonical" {
+			t.Fatal("in-flight publication guard was changed", publication)
+		}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+}

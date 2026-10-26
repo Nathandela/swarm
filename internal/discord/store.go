@@ -601,6 +601,7 @@ func (s *Store) Prune(now time.Time) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		requests := tx.Bucket([]byte("requests"))
 		var expired []requestRecord
+		var sealedRequests []requestRecord
 		if e := requests.ForEach(func(_, v []byte) error {
 			var r requestRecord
 			if e := json.Unmarshal(v, &r); e != nil {
@@ -609,13 +610,18 @@ func (s *Store) Prune(now time.Time) error {
 			if (terminal(r.Request.DeliveryState) || r.Request.DeliveryState == StatePrepared) && !now.Before(r.Request.ExpiresAt) {
 				if r.Request.DeliveryState == StatePrepared {
 					r.Request.DeliveryState = StateFailed
-					r.Request.NativeEvidence = "expired before dispatch"
+					sealedRequests = append(sealedRequests, r)
 				}
 				expired = append(expired, r)
 			}
 			return nil
 		}); e != nil {
 			return e
+		}
+		for _, r := range sealedRequests {
+			if e := putJSON(tx, "requests", []byte(r.Request.Ref), r); e != nil {
+				return e
+			}
 		}
 		for _, r := range expired {
 			unresolved := false
