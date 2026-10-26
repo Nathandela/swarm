@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/protocol"
 )
+
+var testHookClaudeNativeReceiptObserved atomic.Pointer[func()]
 
 type claudeInputIntent struct {
 	Hash       string             `json:"hash"`
@@ -63,7 +66,10 @@ func (d *Daemon) sendClaudeNative(local, operationID string, req protocol.Compos
 	for {
 		result, readErr := client.Operation(ctx, proof, operationID)
 		if readErr == nil && (result.State == "submitted" || result.State == "started" || result.State == "rejected") {
-			if _, err = d.retainClaudeReceipt(operationID, result); err != nil {
+			if hook := testHookClaudeNativeReceiptObserved.Load(); hook != nil {
+				(*hook)()
+			}
+			if result, err = d.retainClaudeReceipt(operationID, result); err != nil {
 				return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: native receipt could not be retained", protocol.ErrComposerOutcomeUnknown)
 			}
 			if result.State == "rejected" {
@@ -91,9 +97,13 @@ func (d *Daemon) claudeNativeReceipt(local, operationID string, intent composerO
 		cancel()
 		if err == nil && current.OperationID == operationID && current.Worker == binding.Worker && current.Hash == binding.Hash && (!valid || current.Hash == retained.Hash) {
 			if current.State == "submitted" || current.State == "started" || current.State == "rejected" {
-				if saved, err := d.retainClaudeReceipt(operationID, current); err == nil {
-					current = saved
+				saved, err := d.retainClaudeReceipt(operationID, current)
+				if err != nil {
+					result.State = "uncertain"
+					result.Reason = "native receipt could not be retained"
+					return result
 				}
+				current = saved
 			}
 			retained = current
 			valid = true
@@ -105,14 +115,30 @@ func (d *Daemon) claudeNativeReceipt(local, operationID string, intent composerO
 	switch retained.State {
 	case "submitted", "started":
 		result.State = "submitted"
-		if rec.Phase == idempotency.PhaseExecuting || rec.Phase == idempotency.PhaseOutcomeUnknown {
-			_ = d.core.CommitComposerOperation(operationID, []byte(`{"ok":true}`), true)
-		}
 	case "rejected":
 		result.State = "rejected"
 		result.Reason = retained.Reason
 	default:
 		result.State = "uncertain"
+		return result
+	}
+	if rec.Phase == idempotency.PhaseExecuting || rec.Phase == idempotency.PhaseOutcomeUnknown {
+		failed := retained.State == "rejected"
+		outcome := struct {
+			OK      bool               `json:"ok"`
+			Code    protocol.ErrorCode `json:"code,omitempty"`
+			Message string             `json:"message,omitempty"`
+		}{OK: !failed}
+		if failed {
+			outcome.Code = protocol.CodeInputBusy
+			outcome.Message = "Claude native queue refused the message: " + retained.Reason
+		}
+		raw, _ := json.Marshal(outcome)
+		evidence, _ := json.Marshal(retained)
+		if err := d.core.SettleNativeInput(operationID, evidence, raw, failed); err != nil {
+			result.State = "uncertain"
+			result.Reason = "native disposition could not be durably settled"
+		}
 	}
 	return result
 }

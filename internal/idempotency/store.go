@@ -295,7 +295,9 @@ func (s *Store) transition(operationID string, phase Phase, outcome []byte, setO
 		return fmt.Errorf("idempotency: unknown operation_id %q", operationID)
 	}
 	if phase == PhaseFailed && (rec.Action == "semantic_send" || rec.Action == "native_decide" || rec.Action == "composer_send" && len(rec.Request) > 0) && len(rec.Evidence) > 0 {
-		return errors.New("idempotency: native evidence cannot become a failed delivery")
+		if rec.Phase != PhaseFailed || !setOutcome || !bytes.Equal(rec.Outcome, outcome) {
+			return errors.New("idempotency: native evidence cannot become a failed delivery")
+		}
 	}
 	rec.Phase = phase
 	rec.UpdatedAt = s.clock()
