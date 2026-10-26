@@ -10,6 +10,9 @@ import (
 )
 
 type Snapshot struct {
+	Info struct {
+		Cwd string `json:"cwd"`
+	} `json:"info"`
 	SessionID           string    `json:"session_id"`
 	SubscriptionID      string    `json:"subscription_id"`
 	AuthorityEpoch      int64     `json:"authority_epoch"`

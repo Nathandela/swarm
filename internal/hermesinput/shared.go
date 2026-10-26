@@ -193,6 +193,11 @@ func Prepare(ctx context.Context, cfg SessionConfig, env []string, dir string, p
 	if cfg.WorkerID == "" || cfg.Cwd == "" {
 		return d, errors.New("hermes native session requires worker and cwd")
 	}
+	cwd, err := filepath.EvalSymlinks(cfg.Cwd)
+	if err != nil {
+		return d, errors.New("hermes native session cwd is unavailable")
+	}
+	cfg.Cwd = cwd
 	b, err := Ensure(ctx, cfg, env)
 	if err != nil {
 		return d, err
@@ -233,10 +238,11 @@ func Prepare(ctx context.Context, cfg SessionConfig, env []string, dir string, p
 	if err = rpc(ctx, c, 2, method, params, &snapshot); err != nil {
 		return d, err
 	}
-	if !ValidSessionID(snapshot.SessionID) || snapshot.AuthorityEpoch != b.AuthorityEpoch {
+	if !ValidSessionID(snapshot.SessionID) || snapshot.AuthorityEpoch != b.AuthorityEpoch || snapshot.Info.Cwd != cfg.Cwd {
 		return d, errors.New("hermes native session binding is unproven")
 	}
 	b.SessionID = snapshot.SessionID
+	b.Directory = snapshot.Info.Cwd
 	var nonce [16]byte
 	if _, err = rand.Read(nonce[:]); err != nil {
 		return d, err

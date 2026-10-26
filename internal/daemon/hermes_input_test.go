@@ -32,9 +32,9 @@ func TestHermesNativeLaunchIsQualifiedAndActivationGated(t *testing.T) {
 
 func TestHermesResumeRetainsNativeHomeWhenActivationChanges(t *testing.T) {
 	d := &Daemon{cfg: Config{StateDir: t.TempDir()}, sessions: map[string]*session{}}
-	m := persist.Meta{ID: "old-worker", HermesNative: true, AgentType: "hermes", ConversationID: "local-" + strings.Repeat("a", 64), ShimPID: 123, ShimStartTime: 456, CLIIdentity: &persist.CLIIdentity{Version: "0.22.5"}, LaunchOptions: map[string]string{"profile": "custom"}}
+	m := persist.Meta{ID: "old-worker", Cwd: "/project", HermesNative: true, AgentType: "hermes", ConversationID: "local-" + strings.Repeat("a", 64), ShimPID: 123, ShimStartTime: 456, CLIIdentity: &persist.CLIIdentity{Version: "0.22.5"}, LaunchOptions: map[string]string{"profile": "custom"}}
 	d.sessions[m.ID] = &session{meta: m}
-	desc := hermesinput.Descriptor{WorkerID: m.ID, Generation: strings.Repeat("b", 32), ProviderVersion: "0.22.5", ShimPID: 123, ShimStartTime: 456, Binding: hermesinput.Binding{Home: "/native/profiles/custom", ControlHome: "/native", OwnerPID: 42, OwnerStartTime: 99, InstanceID: "owner", SessionID: m.ConversationID, AuthorityEpoch: 1, CodeSHA: strings.Repeat("c", 40)}}
+	desc := hermesinput.Descriptor{WorkerID: m.ID, Generation: strings.Repeat("b", 32), ProviderVersion: "0.22.5", ShimPID: 123, ShimStartTime: 456, Binding: hermesinput.Binding{Directory: "/project", Home: "/native/profiles/custom", ControlHome: "/native", OwnerPID: 42, OwnerStartTime: 99, InstanceID: "owner", SessionID: m.ConversationID, AuthorityEpoch: 1, CodeSHA: strings.Repeat("c", 40)}}
 	if err := os.MkdirAll(d.sessionDir(m.ID), 0700); err != nil {
 		t.Fatal(err)
 	}

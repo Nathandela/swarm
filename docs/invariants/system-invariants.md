@@ -14,7 +14,7 @@
 
 **S4 — INJECTION-FREE SPAWN**: Every spawn is `exec(argv[])`; no user-supplied field is ever interpreted by a shell. *Assert*: metacharacter-laden cwd/prompt/options arrive as single argv elements; no `/bin/sh` exec observed. [S-1, ADR-004]
 
-**S5 — PROCESS-GROUP CONTAINMENT**: Kill terminates the whole session process group (TERM → grace → KILL). *Assert*: scenario 17 — no descendant survives. [S-4]
+**S5 — PROCESS-GROUP CONTAINMENT**: Kill terminates the whole session process group (TERM → grace → KILL). *Assert*: scenario 17 — no descendant survives. [S-4] For modern shared-owner Hermes, [ADR-037](../adr/ADR-037-hermes-shared-native-owner.md) limits this group proof to the viewer. Native job cancellation remains requested/unknown without joined proof; the session/workspace stays retained and Needs input. This boundary does not assert containment of another process's native jobs.
 
 **S6 — AUTHENTICATED STATUS**: A status callback mutates a session only with that session's live token and a fresh sequence number; tokens die with the session. *Assert*: tokenless, foreign-token, replayed, and post-end callbacks are all no-ops. [T-2, ADR-004]
 

@@ -19,7 +19,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/hermes"
-	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
@@ -31,6 +30,7 @@ type hermesWireFixture struct {
 	turns   map[string]map[string]string
 	methods map[string][]string
 	creates int
+	cwds    map[string]string
 }
 
 func fakeHermesProgram(t *testing.T) (string, []string, *hermesWireFixture) {
@@ -48,7 +48,7 @@ func fakeHermesProgram(t *testing.T) (string, []string, *hermesWireFixture) {
 	if err = os.Chmod(home, 0700); err != nil {
 		t.Fatal(err)
 	}
-	f := &hermesWireFixture{turns: map[string]map[string]string{}, methods: map[string][]string{}}
+	f := &hermesWireFixture{turns: map[string]map[string]string{}, methods: map[string][]string{}, cwds: map[string]string{}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"hermes-gateway-v1"}})
 		if err != nil {
@@ -74,6 +74,7 @@ func fakeHermesProgram(t *testing.T) (string, []string, *hermesWireFixture) {
 				hash := sha256.Sum256([]byte(fmt.Sprint(req.Params["request_id"])))
 				sid = "local-" + hex.EncodeToString(hash[:])
 				if f.turns[sid] == nil {
+					f.cwds[sid] = fmt.Sprint(req.Params["cwd"])
 					f.turns[sid] = map[string]string{}
 					f.creates++
 				}
@@ -83,7 +84,7 @@ func fakeHermesProgram(t *testing.T) (string, []string, *hermesWireFixture) {
 			for id := range f.turns[sid] {
 				pending = append(pending, map[string]any{"admission_id": "admission-" + id, "input_id": id, "status": "queued", "authority_epoch": 1})
 			}
-			result := map[string]any{"session_id": sid, "subscription_id": "sub-" + sid, "authority_epoch": 1, "execution_generation": 1, "execution_state": "idle", "pending": pending, "prompts": []any{}}
+			result := map[string]any{"session_id": sid, "subscription_id": "sub-" + sid, "authority_epoch": 1, "execution_generation": 1, "execution_state": "idle", "pending": pending, "prompts": []any{}, "info": map[string]string{"cwd": f.cwds[sid]}}
 			switch req.Method {
 			case "setup.status":
 				result = map[string]any{"provider_configured": true}
@@ -149,21 +150,26 @@ func fakeHermesProgram(t *testing.T) (string, []string, *hermesWireFixture) {
 	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 	program := filepath.Join(home, "hermes")
-	body := "#!/bin/sh\nif [ \"$1 $2\" = 'gateway ensure' ]; then\ncat <<'ENSURE_FIXTURE'\n" + string(ensure) + "\nENSURE_FIXTURE\nelse\nexec " + quote(fakeAgentBin) + " " + quote(script) + "\nfi\n"
+	body := "#!/bin/sh\nif [ \"$1\" = '--version' ]; then\n[ \"$HERMES_HOME\" = " + quote(home) + " ] || exit 44\nprintf 'Hermes Agent v0.22.5\\n'\nelif [ \"$1 $2\" = 'gateway ensure' ]; then\n[ \"$HERMES_HOME\" = " + quote(home) + " ] || exit 44\ncat <<'ENSURE_FIXTURE'\n" + string(ensure) + "\nENSURE_FIXTURE\nelse\nexec " + quote(fakeAgentBin) + " " + quote(script) + "\nfi\n"
 	if err = os.WriteFile(program, []byte(body), 0700); err != nil {
 		t.Fatal(err)
 	}
-	return program, []string{"PATH=" + os.Getenv("PATH"), "HERMES_HOME=" + home}, f
+	return program, []string{"PATH=" + home + string(os.PathListSeparator) + os.Getenv("PATH"), "HERMES_HOME=" + home}, f
 }
 
 func TestHermesSharedOwnerSemanticSendRestartAndStopIsolation(t *testing.T) {
-	program, env, native := fakeHermesProgram(t)
+	_, env, native := fakeHermesProgram(t)
 	sk := assemble(t, func(c *Config) { c.NativeInputEnabled = func() bool { return true } })
 	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return hermes.New(), true })
+	launcher := dialClient(t, sk)
 	launch := func() persist.Meta {
-		m, err := sk.core.Launch(daemon.LaunchSpec{AgentType: "hermes", Argv: []string{program, "chat", "--cli"}, Cwd: t.TempDir(), ClientEnv: env, CLIIdentity: &persist.CLIIdentity{Path: program, Version: "0.22.5"}, Cols: 80, Rows: 24})
+		id, _, err := launcher.Launch(protocol.LaunchReq{Agent: "hermes", Cwd: t.TempDir(), Env: env, Cols: 80, Rows: 24})
 		if err != nil {
 			t.Fatal(err)
+		}
+		m, ok := sk.core.Get(strings.TrimPrefix(id, sk.api.endpointID+"/"))
+		if !ok {
+			t.Fatal("public launch did not retain metadata")
 		}
 		t.Cleanup(func() { _ = syscall.Kill(m.ShimPID, syscall.SIGTERM) })
 		return m

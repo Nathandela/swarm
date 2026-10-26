@@ -158,6 +158,7 @@ type Config struct {
 
 // LaunchSpec is a request to launch a new session.
 type LaunchSpec struct {
+	HermesOrigins     []string                   `json:"-"`
 	HermesInput       *hermesinput.SessionConfig `json:"-"`
 	RequiredRuntime   string                     `json:"-"`
 	OpenCodeBinding   *persist.OpenCodeBinding   `json:"-"`

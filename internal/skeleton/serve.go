@@ -1460,6 +1460,9 @@ func EndpointIDForStateDir(stateDir string) string { return endpointID(stateDir)
 // directory. A session without the flag is untouched. The gate keeps the hook a
 // generic no-op for every non-worktree launch.
 func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
+	if spec.HermesInput != nil && spec.HermesInput.ResumeID != "" {
+		return spec.HermesInput.Cwd, nil
+	}
 	if spec.Options[protocol.OptionWorktree] != "true" {
 		return "", nil
 	}
@@ -1477,7 +1480,7 @@ func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 // its path component and takes the compatibility fallback.
 func preDeleteWorktree(m persist.Meta) error {
 	if m.HermesNative && m.ShimPID > 0 {
-		return errors.New("Hermes native job completion is unproven; workspace retained")
+		return errors.New("hermes native job completion is unproven; workspace retained")
 	}
 	if m.LaunchOptions[protocol.OptionWorktree] != "true" {
 		return nil

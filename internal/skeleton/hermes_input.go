@@ -65,7 +65,7 @@ func (d *Daemon) sendHermesNative(local, operationID string, req protocol.Compos
 	if err != nil {
 		var refusal *hermesinput.Refusal
 		if errors.As(err, &refusal) {
-			return protocol.CodeInputBusy, fmt.Errorf("Hermes native admission refused the message (code %d)", refusal.Code)
+			return protocol.CodeInputBusy, fmt.Errorf("hermes native admission refused the message (code %d)", refusal.Code)
 		}
 		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: Hermes admission is unconfirmed and will not be replayed", protocol.ErrComposerOutcomeUnknown)
 	}

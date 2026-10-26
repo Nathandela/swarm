@@ -34,6 +34,7 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 	}
 	var methods []string
 	mu := new(sync.Mutex)
+	nativeCwd := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{nativeProtocol}})
 		if err != nil {
@@ -56,6 +57,10 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 			}
 			mu.Lock()
 			methods = append(methods, req.Method)
+			if req.Method == "session.create" {
+				nativeCwd, _ = req.Params["cwd"].(string)
+			}
+			cwd := nativeCwd
 			mu.Unlock()
 			if req.Method == "prompt.submit" {
 				// A live native approval can precede the message receipt on the same socket.
@@ -67,7 +72,7 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 					t.Errorf("submit params = %#v", req.Params)
 				}
 			}
-			result := map[string]any{"session_id": "local-" + strings.Repeat("a", 64), "execution_generation": 7, "subscription_id": "sub-1", "authority_epoch": 1, "execution_state": "idle", "pending": []any{}}
+			result := map[string]any{"session_id": "local-" + strings.Repeat("a", 64), "execution_generation": 7, "subscription_id": "sub-1", "authority_epoch": 1, "execution_state": "idle", "pending": []any{}, "info": map[string]string{"cwd": cwd}}
 			if req.Method == "setup.status" {
 				result = map[string]any{"provider_configured": true}
 			}

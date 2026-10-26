@@ -86,6 +86,9 @@ func probeCLIIdentity(agentType, executable string, env []string, cwd string) (*
 	foundToken := false
 	for _, token := range strings.Fields(output) {
 		if strings.Contains(token, detection.Version) {
+			if agentType == "hermes" {
+				token = strings.TrimPrefix(token, "v")
+			}
 			if token != detection.Version {
 				return nil, fmt.Errorf("ambiguous CLI release version")
 			}

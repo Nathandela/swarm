@@ -73,6 +73,26 @@ func TestSharedStopAndViewerCloseNeverStopGateway(t *testing.T) {
 	}
 }
 
+func TestViewerDetachAttemptedAfterScopedStopRefusal(t *testing.T) {
+	b, methods, mu := fixture(t, false)
+	b.SessionID = "local-" + strings.Repeat("b", 64)
+	d := Descriptor{WorkerID: "worker", Generation: strings.Repeat("a", 32), Binding: b}
+	dir := t.TempDir()
+	if err := WriteStopIntent(dir, d); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := ViewerEnded(ctx, dir, d); err == nil {
+		t.Fatal("native scope refusal lost")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(*methods, []string{"session.resume", "session.resume"}) {
+		t.Fatalf("viewer detach was not attempted after stop refusal: %v", *methods)
+	}
+}
+
 func TestDescriptorBindsWorkerAndShimWithoutCredentials(t *testing.T) {
 	dir := t.TempDir()
 	d := Descriptor{WorkerID: "worker", Generation: strings.Repeat("a", 32), ProviderVersion: "0.22.5", ShimPID: 123, ShimStartTime: 456, Binding: Binding{Home: "/native", ControlHome: "/native-owner", OwnerPID: 42, OwnerStartTime: 99, InstanceID: "owner-instance", SessionID: "local-" + strings.Repeat("b", 64), AuthorityEpoch: 1, CodeSHA: strings.Repeat("c", 40)}}

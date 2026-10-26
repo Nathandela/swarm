@@ -20,6 +20,14 @@ joined job completion and Discord release acceptance remain separate gates.
 
 ## Frozen decisions
 
+These decisions describe the legacy classic runtime. The activation-gated
+modern runtime follows [ADR-037](../adr/ADR-037-hermes-shared-native-owner.md):
+normal native home/authentication reuse, a persistent shared owner, one canonical
+native session per worker, `--tui` viewers, typed message ingress, and explicit
+unknown native work after viewer loss. It uses the provider's frozen working
+directory on resume and retains workspaces without joined job completion proof.
+Historical classic launches and their characterization remain unchanged.
+
 1. Swarm drives `hermes chat --cli`, even when the user's Hermes environment or
    configuration selects the newer TUI. `--cli` is an internal invariant, not a
    user option. It gives the adapter one characterized screen protocol.
@@ -243,6 +251,10 @@ important because prompt_toolkit repaints the status row in pieces; it is safer
 to retain `active` briefly than to announce a false ready state.
 
 ## Typed transport decision
+
+[ADR-037](../adr/ADR-037-hermes-shared-native-owner.md) accepts the separate modern
+Gateway runtime for qualified activated sessions. The deferred-transport
+decision below remains the boundary of the legacy pure terminal adapter.
 
 Hermes exposes richer integration surfaces documented at
 <https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration>.
