@@ -36,6 +36,7 @@ type Descriptor struct {
 	ProviderVersion string `json:"provider_version"`
 	ShimPID         int    `json:"shim_pid"`
 	ShimStartTime   int64  `json:"shim_start_time"`
+	LifecycleFence  bool   `json:"lifecycle_fence"`
 }
 
 type Worker struct {
@@ -69,6 +70,8 @@ type Broker struct {
 	worker     Worker
 	seen       time.Time
 	revoked    bool
+	guard      Worker
+	guardSeen  time.Time
 	operations map[string]Message
 	order      []string
 }
@@ -81,7 +84,7 @@ func Start(dir, session, version string, pid int, started int64) (*Broker, error
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
 	}
-	desc := Descriptor{SessionID: session, Generation: hex.EncodeToString(nonce[:16]), Token: hex.EncodeToString(nonce[16:]), SocketPath: filepath.Join(dir, "claude-input.sock"), ProviderVersion: version, ShimPID: pid, ShimStartTime: started}
+	desc := Descriptor{SessionID: session, Generation: hex.EncodeToString(nonce[:16]), Token: hex.EncodeToString(nonce[16:]), SocketPath: filepath.Join(dir, "claude-input.sock"), ProviderVersion: version, ShimPID: pid, ShimStartTime: started, LifecycleFence: true}
 	listener, err := net.Listen("unix", desc.SocketPath)
 	if err != nil {
 		return nil, err
@@ -123,8 +126,30 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(value)
 	}
 	refuse := func(reason string) { http.Error(w, reason, http.StatusConflict) }
-	live := !b.revoked && b.worker.Generation != "" && time.Since(b.seen) < 3*time.Second
+	live := func() bool {
+		return !b.revoked && b.worker.Generation != "" && b.guard.Generation != "" && b.guard.NativeSessionID == b.worker.NativeSessionID && b.guard.Version == b.worker.Version && time.Since(b.seen) < 3*time.Second && time.Since(b.guardSeen) < 3*time.Second
+	}
 	switch r.URL.Path {
+	case "/guard":
+		guard := req.Worker
+		if guard.NativeSessionID == "" || len(guard.NativeSessionID) > 128 || guard.Generation == "" || len(guard.Generation) > 128 || guard.Version != b.descriptor.ProviderVersion || !SupportedVersion(guard.Version) || b.guard.Generation != "" && b.guard != guard || b.worker.Generation != "" && (b.worker.NativeSessionID != guard.NativeSessionID || b.worker.Version != guard.Version) {
+			refuse("native lifecycle guard mismatched")
+			return
+		}
+		if req.State == "revoked" {
+			b.guard = guard
+			b.revokeLocked()
+			respond(nil)
+			return
+		}
+		if b.revoked || req.State != "" {
+			refuse("native lifecycle guard retired; explicitly refresh this session")
+			return
+		}
+		b.guard = guard
+		b.guardSeen = time.Now()
+		respond(nil)
+
 	case "/exchange", "/revoke":
 		worker := req.Worker
 		if worker.NativeSessionID == "" || len(worker.NativeSessionID) > 128 || worker.Generation == "" || len(worker.Generation) > 128 || worker.Version != b.descriptor.ProviderVersion || !SupportedVersion(worker.Version) {
@@ -137,20 +162,7 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.URL.Path == "/revoke" {
 			b.worker = worker
-			b.revoked = true
-			for id, msg := range b.operations {
-				switch msg.State {
-				case "prepared":
-					msg.State = "rejected"
-				case "executing", "submitted":
-					msg.State = "uncertain"
-				default:
-					continue
-				}
-				msg.Text = ""
-				msg.Reason = "native session ended; explicitly refresh this session"
-				b.operations[id] = msg
-			}
+			b.revokeLocked()
 			respond(nil)
 			return
 		}
@@ -178,6 +190,10 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 			respond(nil)
 			return
 		}
+		if !live() {
+			respond(nil)
+			return
+		}
 		for _, id := range b.order {
 			msg := b.operations[id]
 			if msg.State == "prepared" {
@@ -189,13 +205,13 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		respond(nil)
 	case "/ready":
-		if !live {
+		if !live() {
 			refuse("native input is unproven; refresh the session")
 			return
 		}
 		respond(b.worker)
 	case "/submit":
-		if !live || req.Worker != b.worker {
+		if !live() || req.Worker != b.worker {
 			refuse("native input proof is stale")
 			return
 		}
@@ -311,4 +327,30 @@ func (c *Client) Operation(ctx context.Context, worker Worker, id string) (Messa
 // Revoke permanently retires the shim's native binding after a native session ends.
 func (c *Client) Revoke(ctx context.Context, worker Worker) error {
 	return c.call(ctx, "/revoke", request{Worker: worker}, nil)
+}
+
+// Guard proves the independent native queue guard for this exact conversation.
+func (c *Client) Guard(ctx context.Context, worker Worker, revoked bool) error {
+	state := ""
+	if revoked {
+		state = "revoked"
+	}
+	return c.call(ctx, "/guard", request{Worker: worker, State: state}, nil)
+}
+
+func (b *Broker) revokeLocked() {
+	b.revoked = true
+	for id, msg := range b.operations {
+		switch msg.State {
+		case "prepared":
+			msg.State = "rejected"
+		case "executing", "submitted":
+			msg.State = "uncertain"
+		default:
+			continue
+		}
+		msg.Text = ""
+		msg.Reason = "native session ended; explicitly refresh this session"
+		b.operations[id] = msg
+	}
 }
