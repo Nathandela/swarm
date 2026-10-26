@@ -151,6 +151,9 @@ func (b *Bridge) exactWorker(ctx context.Context, id string) (Worker, error) {
 	if e != nil {
 		return Worker{}, e
 	}
+	if e = followWorkerTargets(b.Service.Store, rows); e != nil {
+		return Worker{}, e
+	}
 	for _, row := range rows {
 		if row.ID == id {
 			return row, nil

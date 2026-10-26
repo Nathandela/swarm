@@ -153,6 +153,9 @@ func (s *Service) localStatus(ctx context.Context) (LocalStatus, error) {
 	if len(rows) > MaxRequests {
 		return status, ErrCapacity
 	}
+	if err = followWorkerTargets(s.Store, rows); err != nil {
+		return status, err
+	}
 	for _, row := range rows {
 		excluded, e := s.Store.IsOptedOut(row.Target)
 		if e != nil {

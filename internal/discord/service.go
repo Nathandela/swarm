@@ -100,12 +100,10 @@ func (s *Service) Roster(ctx context.Context) ([]Worker, error) {
 		return nil, err
 	}
 	var out []Worker
+	if err = followWorkerTargets(s.Store, rows); err != nil {
+		return nil, err
+	}
 	for _, row := range rows {
-		for _, previous := range row.Supersedes {
-			if err = s.Store.FollowTarget(Target{ID: previous, Instance: row.Instance}, row.Target); err != nil {
-				return nil, err
-			}
-		}
 		excluded, err := s.Store.IsOptedOut(row.Target)
 		if err != nil {
 			return nil, err
@@ -127,6 +125,29 @@ func (s *Service) target(ctx context.Context, id string) (Worker, error) {
 	for _, row := range rows {
 		if row.ID == id {
 			return row, nil
+		}
+	}
+	var successors []Worker
+	for _, row := range rows {
+		if containsID(row.Supersedes, id) {
+			successors = append(successors, row)
+		}
+	}
+	if len(successors) > 1 {
+		return Worker{}, ErrSelection
+	}
+	if len(successors) == 1 {
+		return successors[0], nil
+	}
+	resolved, e := s.Store.ResolveTargetID(id)
+	if e != nil {
+		return Worker{}, e
+	}
+	if resolved != id {
+		for _, row := range rows {
+			if row.ID == resolved {
+				return row, nil
+			}
 		}
 	}
 	var matches []Worker
@@ -154,6 +175,21 @@ func (s *Service) Handle(ctx context.Context, in Input) (Request, error) {
 	if in.At.IsZero() {
 		in.At = s.Now()
 	}
+	authority := AuthorityExternal
+	if in.Actor.ID == s.Config.OwnerID {
+		authority = AuthorityOwnerDirect
+	}
+	if previous, e := s.Store.ExistingEvent(in.EventID, s.Now()); e == nil {
+		if previous.Author.ID != in.Actor.ID || previous.RequesterID != in.Actor.ID || previous.Route != in.Route || previous.Text != in.Text || previous.MessageRevision != revision(in) || previous.Authority != authority || previous.Snapshot != in.Snapshot {
+			return Request{}, ErrConflict
+		}
+		if in.TargetID != "" && in.TargetID != previous.Target.ID && in.TargetID != previous.Target.Name {
+			return Request{}, ErrConflict
+		}
+		return s.dispatch(ctx, previous)
+	} else if !errors.Is(e, ErrNotFound) {
+		return Request{}, e
+	}
 	if in.TargetID == "" {
 		var err error
 		in.TargetID, err = s.boundTarget(in.Route.ChannelID)
@@ -168,20 +204,11 @@ func (s *Service) Handle(ctx context.Context, in Input) (Request, error) {
 	if err != nil {
 		return Request{}, err
 	}
-	authority := AuthorityExternal
-	if in.Actor.ID == s.Config.OwnerID {
-		authority = AuthorityOwnerDirect
-	}
 	thread := s.threadContext(in.Route.ChannelID)
 	if len(thread) == 0 {
 		thread = []ContextMessage{{ID: in.Route.MessageID, Author: in.Actor, Text: in.Text, CreatedAt: in.At}}
 	}
-	r := Request{EventID: in.EventID + ":" + row.ID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, RequesterID: in.Actor.ID, Authority: authority, Route: in.Route, Target: row.Target, Text: in.Text, Context: thread, Snapshot: in.Snapshot}
-	if previous, e := s.Store.ExistingEvent(r.EventID, s.Now()); e == nil {
-		r.Context = previous.Context
-	} else if !errors.Is(e, ErrNotFound) {
-		return Request{}, e
-	}
+	r := Request{EventID: in.EventID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, RequesterID: in.Actor.ID, Authority: authority, Route: in.Route, Target: row.Target, Text: in.Text, Context: thread, Snapshot: in.Snapshot}
 	return s.dispatch(ctx, r)
 }
 func (s *Service) dispatch(ctx context.Context, input Request) (Request, error) {

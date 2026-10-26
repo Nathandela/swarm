@@ -26,7 +26,7 @@ var (
 	ErrNotFound = errors.New("discord: reference not found")
 	ErrInvalid  = errors.New("discord: invalid request or transition")
 )
-var bucketNames = []string{"requests", "events", "operations", "publications", "optouts"}
+var bucketNames = []string{"requests", "events", "operations", "publications", "optouts", "aliases"}
 
 type Store struct{ db *bolt.DB }
 type requestRecord struct {
@@ -186,7 +186,11 @@ func requestHash(r Request) string {
 	return digest(r)
 }
 func optedOut(tx *bolt.Tx, t Target) bool {
-	raw := tx.Bucket([]byte("optouts")).Get(targetKey(t))
+	id, e := canonicalTarget(tx, t.ID)
+	if e != nil {
+		return true
+	}
+	raw := tx.Bucket([]byte("optouts")).Get(targetKey(Target{ID: id}))
 	return raw != nil && string(raw) != "false"
 }
 func loadRequest(tx *bolt.Tx, ref string) (requestRecord, error) {
@@ -390,6 +394,11 @@ func validTargetIdentity(target Target) bool {
 	return strings.TrimSpace(target.ID) != "" && target.Instance != "" && len(target.ID) <= 512 && len(target.Instance) <= 512 && utf8.ValidString(target.ID) && utf8.ValidString(target.Instance)
 }
 func putOptOut(tx *bolt.Tx, target Target, optOut bool) error {
+	id, e := canonicalTarget(tx, target.ID)
+	if e != nil {
+		return e
+	}
+	target.ID = id
 	b := tx.Bucket([]byte("optouts"))
 	if b.Get(targetKey(target)) == nil && b.Stats().KeyN >= MaxRequests {
 		return ErrCapacity
@@ -708,12 +717,34 @@ func (s *Store) FollowTarget(previous, next Target) error {
 		return ErrInvalid
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if tx.Bucket([]byte("optouts")).Get(targetKey(next)) != nil {
+		oldRoot, e := canonicalTarget(tx, previous.ID)
+		if e != nil {
+			return e
+		}
+		nextRoot, e := canonicalTarget(tx, next.ID)
+		if e != nil {
+			return e
+		}
+		if oldRoot == nextRoot {
 			return nil
 		}
-		if !optedOut(tx, previous) {
-			return nil
+		aliases := tx.Bucket([]byte("aliases"))
+		if aliases.Get([]byte(oldRoot)) == nil && aliases.Stats().KeyN >= MaxRequests {
+			return ErrCapacity
 		}
-		return putOptOut(tx, next, true)
+		decisions := tx.Bucket([]byte("optouts"))
+		oldKey := targetKey(Target{ID: oldRoot})
+		nextKey := targetKey(Target{ID: nextRoot})
+		if decisions.Get(nextKey) == nil {
+			if old := decisions.Get(oldKey); old != nil {
+				if e := putOptOut(tx, Target{ID: nextRoot}, string(old) != "false"); e != nil {
+					return e
+				}
+			}
+		}
+		if e := putJSON(tx, "aliases", []byte(oldRoot), nextRoot); e != nil {
+			return e
+		}
+		return decisions.Delete(oldKey)
 	})
 }
