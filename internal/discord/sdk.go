@@ -22,27 +22,31 @@ import (
 
 // DiscordClient owns its network operations and never exposes its token in errors.
 type DiscordClient struct {
-	token, apiBase  string
-	http            *http.Client
-	gate            chan struct{}
-	reset           time.Time
-	mu              sync.Mutex
-	cancel          context.CancelFunc
-	done            chan struct{}
-	OnMessage       func(*discordgo.MessageCreate)
-	OnMessageUpdate func(*discordgo.MessageUpdate)
-	OnMessageDelete func(*discordgo.MessageDelete)
-	OnError         func(error)
-	OnInteraction   func(*discordgo.InteractionCreate)
-	OnReady         func(*discordgo.Ready)
+	token, apiBase   string
+	http             *http.Client
+	gate             chan struct{}
+	reset            time.Time
+	interactionGate  chan struct{}
+	interactionReset time.Time
+	connected        atomic.Bool
+	mu               sync.Mutex
+	cancel           context.CancelFunc
+	done             chan struct{}
+	OnMessage        func(*discordgo.MessageCreate)
+	OnMessageUpdate  func(*discordgo.MessageUpdate)
+	OnMessageDelete  func(*discordgo.MessageDelete)
+	OnError          func(error)
+	OnInteraction    func(*discordgo.InteractionCreate)
+	OnReady          func(*discordgo.Ready)
 }
 
 func NewDiscordClient(token string) (*DiscordClient, error) {
 	if token == "" {
 		return nil, errors.New("discord: empty bot token")
 	}
-	return &DiscordClient{token: token, apiBase: "https://discord.com/api/v10", http: &http.Client{Timeout: 20 * time.Second}, gate: make(chan struct{}, 1)}, nil
+	return &DiscordClient{token: token, apiBase: "https://discord.com/api/v10", http: &http.Client{Timeout: 20 * time.Second}, gate: make(chan struct{}, 1), interactionGate: make(chan struct{}, 1)}, nil
 }
+func (c *DiscordClient) Connected() bool { return c.connected.Load() }
 
 // REST makes an authenticated, context-bound Discord API request. Paths are relative to the API root.
 func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, out any) error {
@@ -57,14 +61,18 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 			return errors.New("discord: invalid request")
 		}
 	}
+	gate, reset := c.gate, &c.reset
+	if strings.HasPrefix(path, "/interactions/") || strings.HasPrefix(path, "/webhooks/") {
+		gate, reset = c.interactionGate, &c.interactionReset
+	}
 	select {
-	case c.gate <- struct{}{}:
+	case gate <- struct{}{}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	defer func() { <-c.gate }()
+	defer func() { <-gate }()
 	for tries := 0; tries < 8; tries++ {
-		if wait := time.Until(c.reset); wait > 0 {
+		if wait := time.Until(*reset); wait > 0 {
 			timer := time.NewTimer(wait)
 			select {
 			case <-timer.C:
@@ -88,7 +96,7 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 		}
 		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
 			if seconds, e := strconv.ParseFloat(resp.Header.Get("X-RateLimit-Reset-After"), 64); e == nil && seconds > 0 && seconds <= 60 {
-				c.reset = time.Now().Add(time.Duration(seconds * float64(time.Second)))
+				*reset = time.Now().Add(time.Duration(seconds * float64(time.Second)))
 			}
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
@@ -248,6 +256,7 @@ func (c *DiscordClient) gateway(ctx context.Context, ready chan<- error, done ch
 	}
 }
 func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sessionID, resumeURL *string, seq *int64, onReady func()) error {
+	defer c.connected.Store(false)
 	u, err := url.Parse(base)
 	if err != nil || (u.Scheme != "wss" && u.Scheme != "ws") {
 		return errors.New("discord: invalid gateway")
@@ -372,12 +381,14 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 				_ = json.Unmarshal(frame.Data, &details)
 				*resumeURL = details.ResumeURL
 				first = false
+				c.connected.Store(true)
 				onReady()
 				if c.OnReady != nil {
 					c.OnReady(&ready)
 				}
 			case "RESUMED":
 				first = false
+				c.connected.Store(true)
 				onReady()
 			case "MESSAGE_CREATE":
 				var msg discordgo.MessageCreate

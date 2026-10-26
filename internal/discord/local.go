@@ -146,6 +146,9 @@ func CallLocal(ctx context.Context, stateDir, operation string, request, respons
 
 func (s *Service) localStatus(ctx context.Context) (LocalStatus, error) {
 	status := LocalStatus{Name: s.Config.Name, InstallationID: s.Config.InstallationID, Connected: true}
+	if connection, ok := s.Messenger.(interface{ Connected() bool }); ok {
+		status.Connected = connection.Connected()
+	}
 	rows, err := s.Workers.Roster(ctx)
 	if err != nil {
 		return status, err

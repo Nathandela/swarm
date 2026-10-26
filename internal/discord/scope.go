@@ -12,6 +12,8 @@ type ScopedMessenger struct {
 	Config Config
 }
 
+func (m ScopedMessenger) Connected() bool { return m.Client.Connected() }
+
 func (m ScopedMessenger) Resolve(ctx context.Context, route Route) (Route, error) {
 	if route.GuildID == "" {
 		return route, nil

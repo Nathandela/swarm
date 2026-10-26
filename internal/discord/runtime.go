@@ -166,6 +166,15 @@ func (b *Bridge) Register(ctx context.Context) error {
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "leave", Description: "Stop following this discussion"},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: "Show connection and agents"},
 	}}}
+	commands[0].Options = append(commands[0].Options, ControlOptions()...)
+	for _, option := range commands[0].Options {
+		for _, field := range option.Options {
+			if field.Name == "agent" {
+				field.Autocomplete = true
+			}
+		}
+	}
+	commands = append(commands, MessageCommands()...)
 	for _, cmd := range commands {
 		var result discordgo.ApplicationCommand
 		if err := b.Client.REST(ctx, http.MethodPost, "/applications/"+b.Service.Config.ApplicationID+"/commands", cmd, &result); err != nil {
@@ -207,6 +216,20 @@ func (b *Bridge) Message(ctx context.Context, msg *discordgo.MessageCreate) {
 		_, _ = b.Service.Handle(ctx, in)
 		return
 	}
+	// A replay keeps its original route even if the roster changed since reception.
+	if prior, e := b.Service.Store.ExistingEvent(in.EventID, b.Service.Now()); e == nil {
+		in.TargetID = prior.Target.ID
+		r, err := b.Service.Handle(ctx, in)
+		if err == nil {
+			b.accepted(ctx, r)
+		}
+		return
+	} else if !errors.Is(e, ErrNotFound) {
+		return
+	}
+	if _, e := b.Service.Store.ExistingEvent("routing:"+in.EventID, b.Service.Now()); e == nil || !errors.Is(e, ErrNotFound) {
+		return
+	}
 	rows, err := b.Service.Roster(ctx)
 	if err != nil {
 		b.notify(ctx, in.Route, "Swarm is unavailable: "+err.Error(), nil)
@@ -218,6 +241,9 @@ func (b *Bridge) Message(ctx context.Context, msg *discordgo.MessageCreate) {
 			in.TargetID = row.ID
 			break
 		}
+	}
+	if in.TargetID == "" {
+		in.TargetID = explicitAgent(text, rows)
 	}
 	if in.TargetID == "" {
 		if id, e := b.Service.boundTarget(in.Route.ChannelID); e == nil {
@@ -250,7 +276,7 @@ func (b *Bridge) pick(ctx context.Context, in Input, rows []Worker) {
 	if in.Actor.ID == b.Service.Config.OwnerID {
 		authority = AuthorityOwnerDirect
 	}
-	r, _, err := b.Service.Store.Admit(Request{EventID: "routing:" + in.EventID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, Authority: authority, Route: in.Route,
+	r, _, err := b.Service.Store.Admit(Request{EventID: "routing:" + in.EventID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, RequesterID: in.Actor.ID, Authority: authority, Route: in.Route, Snapshot: in.Snapshot,
 		Target: Target{ID: "routing", Instance: b.Service.Config.InstallationID, Name: "Agent selection"}, Text: in.Text, Context: []ContextMessage{{ID: in.Route.MessageID, Author: in.Actor, Text: in.Text, CreatedAt: in.At}}}, b.Service.Now())
 	if err != nil {
 		b.notify(ctx, in.Route, err.Error(), nil)
@@ -270,6 +296,7 @@ func (b *Bridge) pick(ctx context.Context, in Input, rows []Worker) {
 	if err = b.Service.Propose(ctx, r.Ref, ids); err != nil {
 		b.notify(ctx, in.Route, err.Error(), nil)
 	}
+	b.start(ctx, func() { _, _ = b.receptionist(ctx, r) })
 }
 func interactionActor(i *discordgo.InteractionCreate) Actor {
 	var u *discordgo.User
@@ -300,6 +327,10 @@ func (b *Bridge) Interaction(ctx context.Context, i *discordgo.InteractionCreate
 	if !b.Service.Allowed(actor, route) {
 		return
 	}
+	if i.Type == discordgo.InteractionApplicationCommandAutocomplete {
+		_ = b.autocomplete(ctx, i, actor, route)
+		return
+	}
 	ack := discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral}}
 	if err := b.Client.REST(ctx, http.MethodPost, "/interactions/"+i.ID+"/"+i.Token+"/callback", ack, nil); err != nil {
 		return
@@ -316,6 +347,8 @@ func (b *Bridge) interactionAction(ctx context.Context, i *discordgo.Interaction
 		data := i.MessageComponentData()
 		kind, ref, _ := strings.Cut(data.CustomID, ":")
 		switch kind {
+		case "native":
+			return b.nativeAction(ctx, i, actor, route)
 		case "endorse":
 			r, err := b.Service.Endorse(ctx, actor, ref, i.ID, b.Service.Now())
 			if err != nil {
@@ -330,11 +363,7 @@ func (b *Bridge) interactionAction(ctx context.Context, i *discordgo.Interaction
 			if err != nil {
 				return "", err
 			}
-			if actor.ID != r.Author.ID && actor.ID != b.Service.Config.OwnerID {
-				return "", ErrNotAuthorized
-			}
-			in := Input{EventID: i.ID, Actor: r.Author, Route: r.Route, Text: r.Text, TargetID: data.Values[0], Addressed: true, At: b.Service.Now()}
-			result, err := b.Service.Handle(ctx, in)
+			result, err := b.selectRequest(ctx, actor, r, data.Values[0], i.ID)
 			if err != nil {
 				return "", err
 			}
@@ -347,7 +376,10 @@ func (b *Bridge) interactionAction(ctx context.Context, i *discordgo.Interaction
 		return "", ErrInvalid
 	}
 	d := i.ApplicationCommandData()
-	if d.Name != "swarm" || len(d.Options) != 1 {
+	if d.Name != "swarm" {
+		return b.contextCommand(ctx, i, actor, route)
+	}
+	if len(d.Options) != 1 {
 		return "", ErrInvalid
 	}
 	command := d.Options[0]
@@ -396,7 +428,33 @@ func (b *Bridge) interactionAction(ctx context.Context, i *discordgo.Interaction
 		b.accepted(ctx, r)
 		return "Message submitted.", nil
 	}
-	return "", ErrInvalid
+	return b.controlCommand(ctx, i, actor, route, command)
+}
+
+func explicitAgent(text string, rows []Worker) string {
+	best := 0
+	id := ""
+	ambiguous := false
+	for _, row := range rows {
+		name := row.Name
+		if name == "" || len(text) < len(name) || !strings.EqualFold(text[:len(name)], name) {
+			continue
+		}
+		if len(text) > len(name) && !strings.ContainsRune(" :\t\r\n", rune(text[len(name)])) {
+			continue
+		}
+		if len(name) > best {
+			best = len(name)
+			id = row.ID
+			ambiguous = false
+		} else if len(name) == best && row.ID != id {
+			ambiguous = true
+		}
+	}
+	if ambiguous {
+		return ""
+	}
+	return id
 }
 func shortMessage(s string) string {
 	r := []rune(s)
