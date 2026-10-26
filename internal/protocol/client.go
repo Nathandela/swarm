@@ -399,7 +399,13 @@ func contextGuardSettingsReplyError(resp Control) error {
 }
 
 func (c *Client) simpleOp(op, id string) error {
-	resp, err := c.request(Control{Op: op, EndpointID: c.endpointID, SessionID: id})
+	timeout := clientTimeout
+	if op == OpKill || op == OpDelete {
+		// Native stop controls have their own bounded request plus local viewer
+		// shutdown. Keep the connection alive to receive an uncertain stop result.
+		timeout = 45 * time.Second
+	}
+	resp, err := c.requestWithTimeout(Control{Op: op, EndpointID: c.endpointID, SessionID: id}, timeout)
 	if err != nil {
 		return err
 	}
