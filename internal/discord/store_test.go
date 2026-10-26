@@ -540,6 +540,29 @@ func TestSettledPublicationPrunesBodyAndUnresolvedPublicationProtectsSource(t *t
 	}
 }
 
+func TestResumeCannotBypassOptOutBound(t *testing.T) {
+	s := openTestStore(t)
+	previous := sampleRequest().Target
+	if e := s.SetOptOut(previous, true); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.db.Update(func(tx *bolt.Tx) error {
+		for i := range MaxRequests - 1 {
+			if e := tx.Bucket([]byte("optouts")).Put([]byte(fmt.Sprint(i)), []byte("true")); e != nil {
+				return e
+			}
+		}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	next := previous
+	next.Instance = "next"
+	if e := s.FollowTarget(previous, next); !errors.Is(e, ErrCapacity) {
+		t.Fatal("resume bypassed optout cap", e)
+	}
+}
+
 func TestContextPaginationBoundsAndExpiry(t *testing.T) {
 	s := openTestStore(t)
 	r := sampleRequest()
