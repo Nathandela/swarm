@@ -270,7 +270,11 @@ func (b *Bridge) contextCommand(ctx context.Context, i *discordgo.InteractionCre
 		authority = AuthorityOwnerEndorsed
 		endorser = actor.ID
 	}
-	r, _, e := b.Service.Store.Admit(Request{EventID: "context:" + i.ID, EventAt: b.Service.Now(), Author: Actor{ID: source.Author.ID, Name: source.Author.Username}, RequesterID: actor.ID, Authority: authority, EndorserID: endorser, Route: route, Target: Target{ID: "routing", Instance: b.Service.Config.InstallationID}, Text: source.Content, Snapshot: true, MessageRevision: digest([]string{source.ID, source.Author.ID, source.Content}), Context: []ContextMessage{{ID: source.ID, Author: Actor{ID: source.Author.ID, Name: source.Author.Username}, Text: source.Content, CreatedAt: source.Timestamp}}}, b.Service.Now())
+	eventID := "context:" + i.ID
+	if endorse {
+		eventID = "context-endorsement:" + digest([]string{route.GuildID, route.ChannelID, source.ID, source.Author.ID, source.Content, actor.ID})[:32]
+	}
+	r, _, e := b.Service.Store.Admit(Request{EventID: eventID, EventAt: b.Service.Now(), Author: Actor{ID: source.Author.ID, Name: source.Author.Username}, RequesterID: actor.ID, Authority: authority, EndorserID: endorser, Route: route, Target: Target{ID: "routing", Instance: b.Service.Config.InstallationID}, Text: source.Content, Snapshot: true, MessageRevision: digest([]string{source.ID, source.Author.ID, source.Content}), Context: []ContextMessage{{ID: source.ID, Author: Actor{ID: source.Author.ID, Name: source.Author.Username}, Text: source.Content, CreatedAt: source.Timestamp}}}, b.Service.Now())
 	if e != nil {
 		return "", e
 	}
@@ -305,7 +309,7 @@ func (b *Bridge) selectRequest(ctx context.Context, actor Actor, r Request, targ
 	}
 	r.Ref = ""
 	r.OperationID = ""
-	r.EventID = "selection:" + r.EventID + ":" + row.ID
+	r.EventID = "selection:" + digest([]string{r.EventID, row.ID, row.Instance})[:32]
 	r.EventAt = b.Service.Now()
 	r.Target = row.Target
 	return b.Service.dispatch(ctx, r)
