@@ -30,7 +30,7 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 		if err != nil {
 			return
 		}
-		defer c.CloseNow()
+		defer func() { _ = c.CloseNow() }()
 		ctx := r.Context()
 		for {
 			_, raw, err := c.Read(ctx)
@@ -84,7 +84,7 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 				return
 			}
 			go func() {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				var req struct {
 					ID   int    `json:"id"`
 					Verb string `json:"verb"`

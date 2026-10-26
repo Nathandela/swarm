@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -35,6 +37,13 @@ func TestOwnerFailureStopsOnlyItsOwnProcessGroup(t *testing.T) {
 	raw, readErr := os.ReadFile(pidFile)
 	if readErr != nil || len(raw) == 0 {
 		t.Fatalf("fixture did not start: %q %v", raw, readErr)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(pid, 0); err != syscall.ESRCH {
+		t.Fatalf("failed owner was not reaped: %v", err)
 	}
 	if err := unrelated.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("unrelated native owner stopped: %v", err)
