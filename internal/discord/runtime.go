@@ -1,0 +1,358 @@
+package discord
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/bwmarrin/discordgo"
+)
+
+// Run owns the connector lifetime, leaving the local daemon and agents independent.
+func Run(parent context.Context, stateDir string) error {
+	cfg, err := LoadConfig(stateDir)
+	if err != nil {
+		return err
+	}
+	token, err := LoadToken(cfg.TokenFile)
+	if err != nil {
+		return err
+	}
+	store, err := OpenStore(stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	if err = store.Prune(time.Now()); err != nil {
+		return err
+	}
+	client, err := NewDiscordClient(token)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	s := NewService(cfg, store, SwarmClient{Socket: cfg.DaemonSocket}, client)
+	s.StateDir = stateDir
+	s.Stop = cancel
+	bridge := NewBridge(s, client)
+	defer bridge.Wait()
+	client.OnMessage = func(m *discordgo.MessageCreate) { bridge.start(ctx, func() { bridge.Message(ctx, m) }) }
+	client.OnInteraction = func(i *discordgo.InteractionCreate) { bridge.start(ctx, func() { bridge.Interaction(ctx, i) }) }
+	localErr := make(chan error, 1)
+	localDone := make(chan struct{})
+	go func() { defer close(localDone); localErr <- s.ServeLocal(ctx, stateDir) }()
+	defer func() { cancel(); _ = client.Close(); <-localDone }()
+	if err = waitLocal(ctx, stateDir, localErr); err != nil {
+		return err
+	}
+	if err = client.Open(ctx); err != nil {
+		return err
+	}
+	if err = bridge.Register(ctx); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-localErr:
+			return err
+		case <-ticker.C:
+			if err = store.Prune(time.Now()); err != nil {
+				return err
+			}
+		}
+	}
+}
+func waitLocal(ctx context.Context, dir string, failures <-chan error) error {
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-failures:
+			return err
+		case <-deadline.C:
+			return errors.New("discord: local service did not start")
+		case <-ticker.C:
+			conn, err := net.DialTimeout("unix", filepath.Join(dir, "bridge.sock"), 100*time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				return nil
+			}
+		}
+	}
+}
+
+type Bridge struct {
+	Service  *Service
+	Client   *DiscordClient
+	mu       sync.Mutex
+	work     sync.WaitGroup
+	stopping bool
+	active   chan struct{}
+}
+
+func NewBridge(s *Service, c *DiscordClient) *Bridge {
+	return &Bridge{Service: s, Client: c, active: make(chan struct{}, 64)}
+}
+func (b *Bridge) start(ctx context.Context, fn func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.stopping || ctx.Err() != nil {
+		return
+	}
+	select {
+	case b.active <- struct{}{}:
+	default:
+		return
+	}
+	b.work.Add(1)
+	go func() { defer b.work.Done(); defer func() { <-b.active }(); fn() }()
+}
+func (b *Bridge) Wait() { b.mu.Lock(); b.stopping = true; b.mu.Unlock(); b.work.Wait() }
+func (b *Bridge) Register(ctx context.Context) error {
+	commands := []*discordgo.ApplicationCommand{{Name: "swarm", Description: "Talk to this Swarm", Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "agents", Description: "Find agents"},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "ask", Description: "Ask an agent", Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "agent", Description: "Agent ID or name", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "text", Description: "Message", Required: true}}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "join", Description: "Follow this discussion", Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionString, Name: "agent", Description: "Agent ID or name", Required: true}}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "leave", Description: "Stop following this discussion"},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: "Show connection and agents"},
+	}}}
+	for _, cmd := range commands {
+		var result discordgo.ApplicationCommand
+		if err := b.Client.REST(ctx, http.MethodPost, "/applications/"+b.Service.Config.ApplicationID+"/commands", cmd, &result); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (b *Bridge) notify(ctx context.Context, route Route, text string, actions []Action) {
+	_, _ = b.Service.Messenger.Post(ctx, Outbound{Route: route, Text: text, Actions: actions})
+}
+func (b *Bridge) Message(ctx context.Context, msg *discordgo.MessageCreate) {
+	if msg == nil || msg.Message == nil || msg.Author == nil {
+		return
+	}
+	in := Input{EventID: msg.ID, Actor: Actor{ID: msg.Author.ID, Name: msg.Author.Username}, Route: Route{GuildID: msg.GuildID, ChannelID: msg.ChannelID, MessageID: msg.ID}, Text: msg.Content, Bot: msg.Author.Bot || msg.WebhookID != "", At: msg.Timestamp}
+	if !b.Service.Allowed(in.Actor, in.Route) {
+		return
+	}
+	in.Addressed = msg.GuildID == ""
+	for _, u := range msg.Mentions {
+		if u.ID == b.Service.Config.ApplicationID {
+			in.Addressed = true
+		}
+	}
+	if in.Bot {
+		_, _ = b.Service.Handle(ctx, in)
+		return
+	}
+	if !in.Addressed {
+		_, _ = b.Service.Handle(ctx, in)
+		return
+	}
+	rows, err := b.Service.Roster(ctx)
+	if err != nil {
+		b.notify(ctx, in.Route, "Swarm is unavailable: "+err.Error(), nil)
+		return
+	}
+	text := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(in.Text, "<@"+b.Service.Config.ApplicationID+">", ""), "<@!"+b.Service.Config.ApplicationID+">", ""))
+	for _, row := range rows {
+		if text == row.ID || strings.HasPrefix(text, row.ID+" ") {
+			in.TargetID = row.ID
+			break
+		}
+	}
+	if in.TargetID == "" {
+		if id, e := b.Service.boundTarget(in.Route.ChannelID); e == nil {
+			in.TargetID = id
+		}
+	}
+	if in.TargetID == "" && len(rows) == 1 {
+		in.TargetID = rows[0].ID
+	}
+	if in.TargetID == "" {
+		b.pick(ctx, in, rows)
+		return
+	}
+	r, err := b.Service.Handle(ctx, in)
+	if err != nil {
+		b.notify(ctx, in.Route, err.Error(), nil)
+		return
+	}
+	b.accepted(ctx, r)
+}
+func (b *Bridge) accepted(ctx context.Context, r Request) {
+	var actions []Action
+	if r.Authority == AuthorityExternal {
+		actions = []Action{{ID: "endorse:" + r.Ref, Label: "Treat as my instruction"}}
+	}
+	b.notify(ctx, r.Route, "Submitted to "+r.Target.Name+" · "+b.Service.Config.Name+".", actions)
+}
+func (b *Bridge) pick(ctx context.Context, in Input, rows []Worker) {
+	authority := AuthorityExternal
+	if in.Actor.ID == b.Service.Config.OwnerID {
+		authority = AuthorityOwnerDirect
+	}
+	r, _, err := b.Service.Store.Admit(Request{EventID: "routing:" + in.EventID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, Authority: authority, Route: in.Route,
+		Target: Target{ID: "routing", Instance: b.Service.Config.InstallationID, Name: "Agent selection"}, Text: in.Text, Context: []ContextMessage{{ID: in.Route.MessageID, Author: in.Actor, Text: in.Text, CreatedAt: in.At}}}, b.Service.Now())
+	if err != nil {
+		b.notify(ctx, in.Route, err.Error(), nil)
+		return
+	}
+	var ids []string
+	for i, row := range rows {
+		if i == 25 {
+			break
+		}
+		ids = append(ids, row.ID)
+	}
+	if len(ids) == 0 {
+		b.notify(ctx, in.Route, "There are no agents in this Swarm yet.", nil)
+		return
+	}
+	if err = b.Service.Propose(ctx, r.Ref, ids); err != nil {
+		b.notify(ctx, in.Route, err.Error(), nil)
+	}
+}
+func interactionActor(i *discordgo.InteractionCreate) Actor {
+	var u *discordgo.User
+	if i.Member != nil {
+		u = i.Member.User
+	} else {
+		u = i.User
+	}
+	if u == nil {
+		return Actor{}
+	}
+	return Actor{ID: u.ID, Name: u.Username}
+}
+func (b *Bridge) Interaction(ctx context.Context, i *discordgo.InteractionCreate) {
+	if i == nil || i.Interaction == nil || i.AppID != b.Service.Config.ApplicationID {
+		return
+	}
+	actor := interactionActor(i)
+	route := Route{GuildID: i.GuildID, ChannelID: i.ChannelID, MessageID: i.ID}
+	if !b.Service.Allowed(actor, route) {
+		return
+	}
+	ack := discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral}}
+	if err := b.Client.REST(ctx, http.MethodPost, "/interactions/"+i.ID+"/"+i.Token+"/callback", ack, nil); err != nil {
+		return
+	}
+	message, err := b.interactionAction(ctx, i, actor, route)
+	if err != nil {
+		message = err.Error()
+	}
+	payload := map[string]any{"content": message, "allowed_mentions": map[string]any{"parse": []string{}}}
+	_ = b.Client.REST(ctx, http.MethodPatch, "/webhooks/"+i.AppID+"/"+i.Token+"/messages/@original", payload, nil)
+}
+func (b *Bridge) interactionAction(ctx context.Context, i *discordgo.InteractionCreate, actor Actor, route Route) (string, error) {
+	if i.Type == discordgo.InteractionMessageComponent {
+		data := i.MessageComponentData()
+		kind, ref, _ := strings.Cut(data.CustomID, ":")
+		switch kind {
+		case "endorse":
+			r, err := b.Service.Endorse(ctx, actor, ref, i.ID, b.Service.Now())
+			if err != nil {
+				return "", err
+			}
+			return "Sent as your instruction to " + r.Target.Name + ".", nil
+		case "choose":
+			if len(data.Values) != 1 {
+				return "", ErrInvalid
+			}
+			r, err := b.Service.Store.Request(ref, b.Service.Now())
+			if err != nil {
+				return "", err
+			}
+			if actor.ID != r.Author.ID && actor.ID != b.Service.Config.OwnerID {
+				return "", ErrNotAuthorized
+			}
+			in := Input{EventID: i.ID, Actor: r.Author, Route: r.Route, Text: r.Text, TargetID: data.Values[0], Addressed: true, At: b.Service.Now()}
+			result, err := b.Service.Handle(ctx, in)
+			if err != nil {
+				return "", err
+			}
+			b.accepted(ctx, result)
+			return "Message submitted.", nil
+		}
+		return "", ErrInvalid
+	}
+	if i.Type != discordgo.InteractionApplicationCommand {
+		return "", ErrInvalid
+	}
+	d := i.ApplicationCommandData()
+	if d.Name != "swarm" || len(d.Options) != 1 {
+		return "", ErrInvalid
+	}
+	command := d.Options[0]
+	get := func(name string) string {
+		for _, o := range command.Options {
+			if o.Name == name {
+				v, _ := o.Value.(string)
+				return v
+			}
+		}
+		return ""
+	}
+	switch command.Name {
+	case "agents", "status":
+		rows, err := b.Service.Roster(ctx)
+		if err != nil {
+			return "", err
+		}
+		var text strings.Builder
+		fmt.Fprintf(&text, "%s · %d agents\n", b.Service.Config.Name, len(rows))
+		for n, row := range rows {
+			if n == 20 {
+				fmt.Fprintln(&text, "Use an agent ID to choose from the whole roster.")
+				break
+			}
+			fmt.Fprintf(&text, "%s · %s · %s · %s\n", row.Name, row.Agent, row.State, row.ID)
+		}
+		return shortMessage(text.String()), nil
+	case "leave":
+		return "Stopped following this discussion.", b.Service.Leave(route.ChannelID)
+	case "join":
+		row, err := b.Service.target(ctx, get("agent"))
+		if err != nil {
+			return "", err
+		}
+		if err = b.Service.Join(route, row.Target); err != nil {
+			return "", err
+		}
+		return row.Name + " is following this discussion and answers when addressed.", nil
+	case "ask":
+		in := Input{EventID: i.ID, Actor: actor, Route: route, Text: get("text"), TargetID: get("agent"), Addressed: true, At: b.Service.Now(), Snapshot: true}
+		r, err := b.Service.Handle(ctx, in)
+		if err != nil {
+			return "", err
+		}
+		b.accepted(ctx, r)
+		return "Message submitted.", nil
+	}
+	return "", ErrInvalid
+}
+func shortMessage(s string) string {
+	r := []rune(s)
+	if len(r) > 1800 {
+		return string(r[:1800]) + "…"
+	}
+	return s
+}

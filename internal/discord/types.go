@@ -43,6 +43,7 @@ type Request struct {
 	Route           Route            `json:"route"`
 	Target          Target           `json:"target"`
 	Text            string           `json:"text"`
+	Snapshot        bool             `json:"snapshot,omitempty"`
 	Context         []ContextMessage `json:"context,omitempty"`
 	OperationID     string           `json:"operation_id"`
 	CreatedAt       time.Time        `json:"created_at"`
