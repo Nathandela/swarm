@@ -15,6 +15,7 @@ import (
 
 // Config contains non-secret configuration for one local installation.
 type Config struct {
+	Enabled           bool     `json:"enabled"`
 	Version           int      `json:"version"`
 	InstallationID    string   `json:"installation_id"`
 	Name              string   `json:"name"`
@@ -31,6 +32,14 @@ type Config struct {
 }
 
 func ConfigPath(dir string) string { return filepath.Join(dir, "config.json") }
+
+func NativeInputEnabled(dir string) bool {
+	if _, err := os.Lstat(ConfigPath(dir)); err != nil {
+		return false
+	}
+	c, err := LoadConfig(dir)
+	return err == nil && c.Enabled
+}
 func (c Config) Validate() error {
 	if c.Version != 1 {
 		return errors.New("discord: unsupported config version")
@@ -94,7 +103,7 @@ func privateDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	opened, err := f.Stat()
 	if err != nil || !opened.IsDir() || !os.SameFile(entry, opened) {
 		return errors.New("discord: invalid state directory")
@@ -116,11 +125,11 @@ func openPrivateFile(path string) (*os.File, error) {
 	}
 	opened, err := f.Stat()
 	if err != nil || !singleFile(opened) || !os.SameFile(entry, opened) {
-		f.Close()
+		_ = f.Close()
 		return nil, errors.New("discord: invalid private file")
 	}
 	if err = f.Chmod(0600); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, errors.New("discord: secure private file failed")
 	}
 	return f, nil
@@ -141,13 +150,13 @@ func SaveConfig(dir string, c Config) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	if _, err = f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err = f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err = f.Close(); err != nil {
@@ -164,7 +173,7 @@ func LoadConfig(dir string) (Config, error) {
 	if err != nil {
 		return c, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, 1<<20))
 	if err != nil {
 		return c, err
@@ -187,7 +196,7 @@ func LoadToken(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	b, err := io.ReadAll(io.LimitReader(f, 4097))
 	if err != nil {
 		return "", errors.New("discord: read token file failed")
