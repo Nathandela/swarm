@@ -21,9 +21,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/diagnosticlog"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/procstart"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -44,6 +46,7 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
+	ClaudeInput bool `json:"claude_input,omitempty"`
 	// LogPath authorizes retention only when inherited stderr matches this owned inode.
 	LogPath           string
 	LoginRuntime      *logins.Runtime
@@ -157,6 +160,20 @@ func Run(cfg Config) (agentExit int, err error) {
 		return 0, err
 	}
 
+	if cfg.ClaudeInput {
+		if cfg.CLIIdentity == nil {
+			return 0, errors.New("shim: Claude input has no qualified CLI identity")
+		}
+		started, err := procstart.StartTime(os.Getpid())
+		if err != nil {
+			return 0, err
+		}
+		broker, err := claudeinput.Start(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = broker.Close() }()
+	}
 	embargo, err := openInputEmbargo(cfg)
 	if err != nil {
 		return 0, err

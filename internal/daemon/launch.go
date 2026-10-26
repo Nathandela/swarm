@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/logins"
@@ -114,6 +115,7 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
+	ClaudeInput           bool                 `json:"claude_input,omitempty"`
 	LogPath               string               `json:"log_path,omitempty"`
 	LoginRuntime          *logins.Runtime      `json:"login_runtime,omitempty"`
 	LoginStateRoot        string               `json:"login_state_root,omitempty"`
@@ -666,6 +668,14 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		GraceMS:        int(shimGrace / time.Millisecond),
 		HookSocketPath: hookSock,
 		HookDrainToken: drainToken,
+	}
+	if d.cfg.NativeInputEnabled != nil && d.cfg.NativeInputEnabled() && spec.AgentType == "claude" && spec.CLIIdentity != nil && claudeinput.SupportedVersion(spec.CLIIdentity.Version) {
+		plugin, err := claudeinput.Install(dir)
+		if err != nil {
+			return nil, "", err
+		}
+		lc.ClaudeInput = true
+		lc.Argv = append([]string{lc.Argv[0], "--plugin-dir", plugin}, lc.Argv[1:]...)
 	}
 	if spec.AgentType == "claude" || spec.AgentType == "codex" {
 		lc.NativeProvider = spec.AgentType
