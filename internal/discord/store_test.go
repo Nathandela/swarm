@@ -1,7 +1,9 @@
 package discord
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,7 +11,17 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/testbin"
+	bolt "go.etcd.io/bbolt"
 )
+
+func TestMain(m *testing.M) {
+	if code, done := testbin.Supervise(); done {
+		os.Exit(code)
+	}
+	os.Exit(m.Run())
+}
 
 var testNow = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 
@@ -55,13 +67,13 @@ func TestAdmissionDurableReplayConflictAndExactContext(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
-	again, fresh, e := s.Admit(sampleWithText(saved), testNow)
+	defer func() { _ = s.Close() }()
+	again, fresh, e := s.Admit(saved, testNow)
 	if e != nil || fresh || !reflect.DeepEqual(again, saved) {
 		t.Fatalf("replay %+v %v %v", again, fresh, e)
 	}
 	for _, change := range []func(*Request){func(r *Request) { r.Text = "edit" }, func(r *Request) { r.Author.ID = "bob" }, func(r *Request) { r.Target.ID = "other" }} {
-		r = sampleWithText(saved)
+		r = saved
 		change(&r)
 		if _, _, e = s.Admit(r, testNow); !errors.Is(e, ErrConflict) {
 			t.Fatalf("changed replay: %v", e)
@@ -85,11 +97,10 @@ func TestAdmissionDurableReplayConflictAndExactContext(t *testing.T) {
 		}
 	}
 	if extra, e := OpenStore(dir); e == nil {
-		extra.Close()
+		_ = extra.Close()
 		t.Fatal("second owner admitted")
 	}
 }
-func sampleWithText(r Request) Request { return r }
 
 func TestConcurrentClaimAndRevocation(t *testing.T) {
 	s := openTestStore(t)
@@ -152,7 +163,7 @@ func TestExpiryAndUnresolvedRecovery(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if got, fresh, e := s.BeginDelivery(r.Ref, testNow); e != nil || fresh || got.DeliveryState != StateUncertain {
 		t.Fatal(got, fresh, e)
 	}
@@ -203,12 +214,14 @@ func TestPublicationRetryAndCrashAreNotResent(t *testing.T) {
 	if _, fresh, e = s.BeginPublication(r.Ref, "", testNow); e != nil || !fresh {
 		t.Fatal(fresh, e)
 	}
-	s.Close()
+	if e = s.Close(); e != nil {
+		t.Fatal(e)
+	}
 	s, e = OpenStore(dir)
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	again, fresh, e := s.PreparePublication(r.Ref, "", body, testNow)
 	if e != nil || fresh || again.State != StateUncertain || !reflect.DeepEqual(again.Chunks, pub.Chunks) {
 		t.Fatal(again, fresh, e)
@@ -219,15 +232,311 @@ func TestPublicationRetryAndCrashAreNotResent(t *testing.T) {
 	if _, _, e = s.PreparePublication(r.Ref, "", "changed", testNow); !errors.Is(e, ErrConflict) {
 		t.Fatal(e)
 	}
-	if e = s.FinishPublication(r.Ref, "", StateSent, []string{"discord-id"}, "REST receipt"); e != nil {
+	ids := make([]string, len(pub.Chunks))
+	for i := range ids {
+		ids[i] = fmt.Sprint("discord-", i)
+	}
+	if e = s.FinishPublication(r.Ref, "", StateSent, ids, "REST receipt"); e != nil {
 		t.Fatal(e)
 	}
 	receipt, _, e := s.PreparePublication(r.Ref, "", body, testNow)
-	if e != nil || receipt.DiscordMessageIDs[0] != "discord-id" {
+	if e != nil || !reflect.DeepEqual(receipt.DiscordMessageIDs, ids) {
 		t.Fatal(receipt, e)
 	}
 	if _, fresh, e = s.PreparePublication(r.Ref, "follow-up", "extra", testNow); e != nil || !fresh {
 		t.Fatal(fresh, e)
+	}
+}
+
+func TestDeniedContextReturnsNoBodyAndLongPagesStayBounded(t *testing.T) {
+	s := openTestStore(t)
+	r := sampleRequest()
+	r.Context[0].Text = strings.Repeat("界🙂", 10000)
+	r = mustAdmit(t, s, r)
+	var body strings.Builder
+	for offset := 0; ; {
+		p, e := s.ContextPage(r.Ref, offset, MaxContextPageSize, testNow)
+		if e != nil {
+			t.Fatal(e)
+		}
+		raw, _ := json.Marshal(p)
+		if len(raw) > MaxContextPageBytes+1024 {
+			t.Fatal("page exceeds byte bound", len(raw))
+		}
+		for _, m := range p.Messages {
+			body.WriteString(m.Text)
+		}
+		if p.NextOffset < 0 {
+			break
+		}
+		offset = p.NextOffset
+	}
+	if body.String() != r.Context[0].Text {
+		t.Fatal("large Unicode source changed")
+	}
+	for _, revoke := range []bool{false, true} {
+		if revoke {
+			if e := s.SetOptOut(r.Target, true); e != nil {
+				t.Fatal(e)
+			}
+		}
+		at := testNow
+		if !revoke {
+			at = at.Add(RequestTTL)
+		}
+		got, e := s.Request(r.Ref, at)
+		if e == nil || got.Text != "" || len(got.Context) != 0 {
+			t.Fatal("denied request exposed body", e)
+		}
+	}
+}
+
+func TestEndorsementSnapshotResumeAndInFlightRevocation(t *testing.T) {
+	s := openTestStore(t)
+	r := sampleRequest()
+	r.Authority = AuthorityOwnerEndorsed
+	r.EndorserID = "owner"
+	r = mustAdmit(t, s, r)
+	if r.Author.ID != "alice" || r.EndorserID != "owner" {
+		t.Fatal("endorser replaced source author")
+	}
+	if _, fresh, e := s.BeginDelivery(r.Ref, testNow); e != nil || !fresh {
+		t.Fatal(fresh, e)
+	}
+	p, _, e := s.PreparePublication(r.Ref, "", "answer", testNow)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, fresh, e := s.BeginPublication(r.Ref, "", testNow); e != nil || !fresh {
+		t.Fatal(fresh, e)
+	}
+	if e = s.SetOptOut(r.Target, true); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.FinishDelivery(r.Ref, StateSent, "native receipt"); e != nil {
+		t.Fatal("inflight cannot finish", e)
+	}
+	if e = s.FinishPublication(r.Ref, "", StateSent, []string{"message"}, "REST receipt"); e != nil {
+		t.Fatal("inflight publication cannot finish", e)
+	}
+	next := r.Target
+	next.Instance = "resumed"
+	if e = s.FollowTarget(r.Target, next); e != nil {
+		t.Fatal(e)
+	}
+	if out, e := s.IsOptedOut(next); e != nil || !out {
+		t.Fatal("explicit resume lost optout", out, e)
+	}
+	if p.Body != "answer" {
+		t.Fatal("publication changed")
+	}
+}
+
+func TestBoundsAndFailedTransactionsDoNotCreateClaims(t *testing.T) {
+	t.Run("count", func(t *testing.T) {
+		s := openTestStore(t)
+		if e := s.db.Update(func(tx *bolt.Tx) error {
+			for i := range MaxRequests {
+				if e := tx.Bucket([]byte("requests")).Put([]byte(fmt.Sprint(i)), []byte("{}")); e != nil {
+					return e
+				}
+			}
+			return nil
+		}); e != nil {
+			t.Fatal(e)
+		}
+		if _, _, e := s.Admit(sampleRequest(), testNow); !errors.Is(e, ErrCapacity) {
+			t.Fatal(e)
+		}
+	})
+	t.Run("bytes", func(t *testing.T) {
+		s := openTestStore(t)
+		if e := s.db.Update(func(tx *bolt.Tx) error {
+			return tx.Bucket([]byte("publications")).Put([]byte("full"), []byte(strings.Repeat("x", MaxStoreBytes-32)))
+		}); e != nil {
+			t.Fatal(e)
+		}
+		if _, _, e := s.Admit(sampleRequest(), testNow); !errors.Is(e, ErrCapacity) {
+			t.Fatal(e)
+		}
+		if e := s.db.View(func(tx *bolt.Tx) error {
+			for _, name := range []string{"requests", "events", "operations"} {
+				if tx.Bucket([]byte(name)).Stats().KeyN != 0 {
+					t.Fatal("failed admission left partial identity", name)
+				}
+			}
+			return nil
+		}); e != nil {
+			t.Fatal(e)
+		}
+	})
+	t.Run("outbox", func(t *testing.T) {
+		s := openTestStore(t)
+		r := mustAdmit(t, s, sampleRequest())
+		if e := s.db.Update(func(tx *bolt.Tx) error {
+			for i := range MaxPublications {
+				if e := tx.Bucket([]byte("publications")).Put([]byte(fmt.Sprint(i)), []byte("{}")); e != nil {
+					return e
+				}
+			}
+			return nil
+		}); e != nil {
+			t.Fatal(e)
+		}
+		if _, _, e := s.PreparePublication(r.Ref, "", "answer", testNow); !errors.Is(e, ErrCapacity) {
+			t.Fatal(e)
+		}
+		if _, _, e := s.BeginPublication(r.Ref, "", testNow); !errors.Is(e, ErrNotFound) {
+			t.Fatal("capacity left publication claim", e)
+		}
+	})
+	t.Run("closed disk", func(t *testing.T) {
+		s := openTestStore(t)
+		if e := s.Close(); e != nil {
+			t.Fatal(e)
+		}
+		if _, _, e := s.Admit(sampleRequest(), testNow); e == nil {
+			t.Fatal("closed store admitted")
+		}
+	})
+}
+
+func TestPruneSettledBodiesRetainsGuardsAndUnresolved(t *testing.T) {
+	s := openTestStore(t)
+	original := sampleRequest()
+	r := mustAdmit(t, s, original)
+	if _, _, e := s.BeginDelivery(r.Ref, testNow); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.FinishDelivery(r.Ref, StateSent, "native"); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Prune(testNow.Add(RequestTTL)); e != nil {
+		t.Fatal(e)
+	}
+	if _, fresh, e := s.Admit(original, testNow.Add(RequestTTL)); e != nil || fresh {
+		t.Fatal("expired guard lost", fresh, e)
+	}
+	if e := s.db.View(func(tx *bolt.Tx) error {
+		record, e := loadRequest(tx, r.Ref)
+		if e != nil {
+			return e
+		}
+		if record.Request.Text != "" || len(record.Request.Context) != 0 {
+			t.Fatal("settled body retained")
+		}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Prune(testNow.Add(GuardTTL)); e != nil {
+		t.Fatal(e)
+	}
+	if _, fresh, e := s.Admit(original, testNow.Add(GuardTTL)); !errors.Is(e, ErrEventAge) || fresh {
+		t.Fatal("expired source readmitted", fresh, e)
+	}
+}
+
+func TestConflictingConcurrentClaimsAndOperationBinding(t *testing.T) {
+	s := openTestStore(t)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	won, conflicts := 0, 0
+	for i := range 2 {
+		wg.Go(func() {
+			r := sampleRequest()
+			r.Text = fmt.Sprint(i)
+			_, fresh, e := s.Admit(r, testNow)
+			mu.Lock()
+			defer mu.Unlock()
+			if e == nil && fresh {
+				won++
+			} else if errors.Is(e, ErrConflict) {
+				conflicts++
+			} else {
+				t.Errorf("unexpected claim %v %v", fresh, e)
+			}
+		})
+	}
+	wg.Wait()
+	if won != 1 || conflicts != 1 {
+		t.Fatal(won, conflicts)
+	}
+	original := sampleRequest()
+	original.EventID = "original-op"
+	original.OperationID = "explicit-operation"
+	saved := mustAdmit(t, s, original)
+	changed := original
+	changed.EventID = "different-event"
+	if _, _, e := s.Admit(changed, testNow); !errors.Is(e, ErrConflict) {
+		t.Fatal("native operation reused", e)
+	}
+	replay, fresh, e := s.Admit(original, testNow.Add(time.Hour))
+	if e != nil || fresh || replay.OperationID != saved.OperationID || replay.Ref != saved.Ref {
+		t.Fatal("retry changed native identity", replay, fresh, e)
+	}
+}
+
+func TestSettledPublicationPrunesBodyAndUnresolvedPublicationProtectsSource(t *testing.T) {
+	s := openTestStore(t)
+	r := mustAdmit(t, s, sampleRequest())
+	if _, _, e := s.BeginDelivery(r.Ref, testNow); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.FinishDelivery(r.Ref, StateSent, "native"); e != nil {
+		t.Fatal(e)
+	}
+	p, _, e := s.PreparePublication(r.Ref, "", "answer", testNow)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Prune(testNow.Add(GuardTTL)); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.db.View(func(tx *bolt.Tx) error {
+		record, e := loadRequest(tx, r.Ref)
+		if e != nil {
+			return e
+		}
+		if record.Request.Text == "" {
+			t.Fatal("unresolved outbox lost source")
+		}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = s.BeginPublication(r.Ref, "", testNow); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.FinishPublication(r.Ref, "", StateSent, []string{"id"}, "REST"); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Prune(testNow.Add(RequestTTL)); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.db.View(func(tx *bolt.Tx) error {
+		got, e := loadPublication(tx, r.Ref, "")
+		if e != nil {
+			return e
+		}
+		if got.Body != "" || len(got.Chunks) != 0 || got.BodyHash != p.BodyHash || len(got.DiscordMessageIDs) != 1 {
+			t.Fatal("incorrect guard pruning", got)
+		}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Prune(testNow.Add(GuardTTL)); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.db.View(func(tx *bolt.Tx) error {
+		_, e := loadPublication(tx, r.Ref, "")
+		if !errors.Is(e, ErrNotFound) {
+			t.Fatal("guard not expired", e)
+		}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
 	}
 }
 
