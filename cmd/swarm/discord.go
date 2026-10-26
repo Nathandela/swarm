@@ -110,7 +110,10 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		return discordCLIError(stderr, err)
 	}
 	if *stateDir == "" {
-		*stateDir = filepath.Join(cc.StateDir, "discord")
+		*stateDir, err = discord.ActiveState(cc.StateDir)
+		if err != nil {
+			return discordCLIError(stderr, err)
+		}
 	}
 	*stateDir, err = filepath.Abs(*stateDir)
 	if err != nil {
@@ -186,6 +189,9 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 			return discordCLIError(stderr, errors.New("discord: working directory does not exist"))
 		}
 		if err = discord.SaveConfig(*stateDir, config); err != nil {
+			return discordCLIError(stderr, err)
+		}
+		if err = discord.SelectState(cc.StateDir, *stateDir); err != nil {
 			return discordCLIError(stderr, err)
 		}
 		if install {
@@ -331,7 +337,8 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 }
 
 func discordNativeInputEnabled(stateDir string) bool {
-	return discord.NativeInputEnabled(filepath.Join(stateDir, "discord"))
+	dir, err := discord.ActiveState(stateDir)
+	return err == nil && discord.NativeInputEnabled(dir)
 }
 func discordCLIError(stderr io.Writer, err error) int {
 	_, _ = fmt.Fprintf(stderr, "discord: %v\n", err)

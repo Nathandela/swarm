@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -81,13 +82,16 @@ func TestAutocompleteRoster(t *testing.T) {
 	if len(response.Data.Choices) != 1 || response.Data.Choices[0].Value != "id-50" {
 		t.Fatalf("filtered %+v", response)
 	}
-	workers.rows[50].Name = strings.Repeat("界", 200)
+	workers.rows[50].Name = strings.Repeat("🙂", 200)
 	option.Value = "id-50"
 	if err := b.autocomplete(context.Background(), in, Actor{ID: "2"}, route); err != nil {
 		t.Fatal(err)
 	}
 	if utf8.RuneCountInString(response.Data.Choices[0].Name) > 100 {
 		t.Fatal("choice label too long")
+	}
+	if len(utf16.Encode([]rune(response.Data.Choices[0].Name))) > 100 {
+		t.Fatal("emoji choice exceeds Discord UTF16 limit")
 	}
 
 	if err := s.Store.SetOptOut(workers.rows[50].Target, true); err != nil {

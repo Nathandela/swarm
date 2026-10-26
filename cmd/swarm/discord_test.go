@@ -55,6 +55,27 @@ func TestDiscordConnectKeepsIdentityAcrossUnicodeRename(t *testing.T) {
 		t.Fatal(first, second)
 	}
 }
+
+func TestDiscordCustomStateSelectsThePlaceIntegration(t *testing.T) {
+	_, token := discordCLIRig(t)
+	root := os.Getenv(daemon.EnvStateDir)
+	dir := filepath.Join(root, "custom-discord")
+	if code, out, err := cliDiscord(t, "connect", "--state-dir", dir, "--name", "Workshop", "--application-id", "100", "--owner-id", "1", "--token-file", token); code != 0 {
+		t.Fatal(code, out, err)
+	}
+	if !discordNativeInputEnabled(root) {
+		t.Fatal("custom integration did not activate native input")
+	}
+	if code, out, err := cliDiscord(t, "status"); code != 0 || !strings.Contains(out, "Workshop") {
+		t.Fatal("default status ignored selected integration", code, out, err)
+	}
+	if code, out, err := cliDiscord(t, "disconnect"); code != 0 {
+		t.Fatal(code, out, err)
+	}
+	if discordNativeInputEnabled(root) {
+		t.Fatal("disconnected custom integration remained active")
+	}
+}
 func TestDiscordReplyReadsExactBodyAndRejectsFlagsBeforeEffects(t *testing.T) {
 	dir, _ := discordCLIRig(t)
 	body := "quoted ' \" $(not a shell) 🙂\nlast line\n"

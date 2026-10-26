@@ -617,11 +617,7 @@ func (b *Bridge) nativeAction(ctx context.Context, i *discordgo.InteractionCreat
 	})
 }
 func nativeLabel(label string) string {
-	runes := []rune(label)
-	if len(runes) > 80 {
-		return string(runes[:80])
-	}
-	return label
+	return clipUTF16(label, 80)
 }
 func (b *Bridge) Attention(ctx context.Context) error {
 	rows, e := b.Service.Roster(ctx)

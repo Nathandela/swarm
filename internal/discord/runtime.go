@@ -338,23 +338,31 @@ func (b *Bridge) Interaction(ctx context.Context, i *discordgo.InteractionCreate
 	if !b.Service.AllowedIdentity(actor, route.GuildID) {
 		return
 	}
-	checked, scopeErr := b.resolveRoute(ctx, route)
-	if scopeErr != nil {
-		return
-	}
-	route = checked
-	if !b.Service.Allowed(actor, route) {
-		return
-	}
 	if i.Type == discordgo.InteractionApplicationCommandAutocomplete {
-		_ = b.autocomplete(ctx, i, actor, route)
+		bounded, stop := context.WithTimeout(ctx, 2500*time.Millisecond)
+		defer stop()
+		if checked, err := b.resolveRoute(bounded, route); err == nil {
+			_ = b.autocomplete(bounded, i, actor, checked)
+		}
 		return
 	}
 	ack := discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral}}
-	if err := b.Client.REST(ctx, http.MethodPost, "/interactions/"+i.ID+"/"+i.Token+"/callback", ack, nil); err != nil {
+	ackCtx, stop := context.WithTimeout(ctx, 2500*time.Millisecond)
+	err := b.Client.REST(ackCtx, http.MethodPost, "/interactions/"+i.ID+"/"+i.Token+"/callback", ack, nil)
+	stop()
+	if err != nil {
 		return
 	}
-	message, err := b.interactionAction(ctx, i, actor, route)
+	ctx, stop = context.WithTimeout(ctx, 30*time.Second)
+	defer stop()
+	checked, err := b.resolveRoute(ctx, route)
+	message := ""
+	if err == nil && !b.Service.Allowed(actor, checked) {
+		err = ErrNotAuthorized
+	}
+	if err == nil {
+		message, err = b.interactionAction(ctx, i, actor, checked)
+	}
 	if err != nil {
 		message = err.Error()
 	}
@@ -476,9 +484,8 @@ func explicitAgent(text string, rows []Worker) string {
 	return id
 }
 func shortMessage(s string) string {
-	r := []rune(s)
-	if len(r) > 1800 {
-		return string(r[:1800]) + "…"
+	if prefix := clipUTF16(s, 1800); prefix != s {
+		return prefix + "…"
 	}
 	return s
 }

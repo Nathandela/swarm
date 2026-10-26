@@ -49,15 +49,8 @@ func (b *Bridge) autocomplete(ctx context.Context, i *discordgo.InteractionCreat
 		if !foldContains(row.Name, query) && !foldContains(row.Agent, query) && !foldContains(row.Project, query) && !foldContains(row.ID, query) {
 			continue
 		}
-		suffix := []rune(" · " + row.ID)
-		if len(suffix) > 99 {
-			suffix = suffix[len(suffix)-99:]
-		}
-		name := []rune(row.Name)
-		if len(name) > 100-len(suffix) {
-			name = name[:100-len(suffix)]
-		}
-		label := string(name) + string(suffix)
+		suffix := clipUTF16(" · "+row.ID, 99)
+		label := clipUTF16(row.Name, 100-lengthUTF16(suffix)) + suffix
 		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{Name: label, Value: row.ID})
 		if len(choices) == 25 {
 			break

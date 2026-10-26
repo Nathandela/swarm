@@ -62,8 +62,12 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 		}
 	}
 	gate, reset := c.gate, &c.reset
-	if strings.HasPrefix(path, "/interactions/") || strings.HasPrefix(path, "/webhooks/") {
+	if strings.HasPrefix(path, "/webhooks/") {
 		gate, reset = c.interactionGate, &c.interactionReset
+	}
+	if strings.HasPrefix(path, "/interactions/") {
+		// Each callback token has its own deadline and rate-limit bucket.
+		gate, reset = make(chan struct{}, 1), new(time.Time)
 	}
 	select {
 	case gate <- struct{}{}:

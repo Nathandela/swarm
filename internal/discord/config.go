@@ -33,6 +33,39 @@ type Config struct {
 
 func ConfigPath(dir string) string { return filepath.Join(dir, "config.json") }
 
+func ActiveState(daemonDir string) (string, error) {
+	path := filepath.Join(daemonDir, "discord-active.json")
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		return filepath.Join(daemonDir, "discord"), nil
+	} else if err != nil {
+		return "", err
+	}
+	f, err := openPrivateFile(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(f, 8193))
+	var dir string
+	if err != nil || len(raw) > 8192 || json.Unmarshal(raw, &dir) != nil || !validStatePath(dir) {
+		return "", errors.New("discord: invalid active integration")
+	}
+	return dir, nil
+}
+func validStatePath(dir string) bool {
+	return filepath.IsAbs(dir) && len(dir) <= 4096 && utf8.ValidString(dir) && strings.IndexFunc(dir, unicode.IsControl) < 0
+}
+func SelectState(daemonDir, dir string) error {
+	if !validStatePath(dir) {
+		return errors.New("discord: invalid active integration")
+	}
+	raw, err := json.Marshal(dir)
+	if err != nil {
+		return err
+	}
+	return savePrivate(daemonDir, "discord-active.json", raw)
+}
+
 func NativeInputEnabled(dir string) bool {
 	if _, err := os.Lstat(ConfigPath(dir)); err != nil {
 		return false
@@ -138,14 +171,17 @@ func SaveConfig(dir string, c Config) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	if err := privateDir(dir); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
+	return savePrivate(dir, "config.json", data)
+}
+func savePrivate(dir, name string, data []byte) error {
+	if err := privateDir(dir); err != nil {
+		return err
+	}
 	f, err := os.CreateTemp(dir, ".config-*")
 	if err != nil {
 		return err
@@ -162,7 +198,15 @@ func SaveConfig(dir string, c Config) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), ConfigPath(dir))
+	if err = os.Rename(f.Name(), filepath.Join(dir, name)); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
 }
 func LoadConfig(dir string) (Config, error) {
 	var c Config

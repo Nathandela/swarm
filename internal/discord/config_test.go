@@ -193,3 +193,46 @@ func TestNativeInputEnabled(t *testing.T) {
 		t.Fatal("disabled config enabled")
 	}
 }
+
+func TestActiveStateIsPrivateAndFailsClosed(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "daemon")
+	if got, err := ActiveState(root); err != nil || got != filepath.Join(root, "discord") {
+		t.Fatal(got, err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatal("read created an unconfigured daemon directory")
+	}
+	selected := filepath.Join(t.TempDir(), "Night orchestra 🙂")
+	if err := SelectState(root, selected); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ActiveState(root); err != nil || got != selected {
+		t.Fatal(got, err)
+	}
+	path := filepath.Join(root, "discord-active.json")
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal(info, err)
+	}
+	if err := os.WriteFile(path, []byte(`"relative"`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ActiveState(root); err == nil {
+		t.Fatal("invalid pointer silently fell back")
+	}
+	foreign := filepath.Join(t.TempDir(), "foreign")
+	if err := os.WriteFile(foreign, []byte(`"/tmp"`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(foreign, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ActiveState(root); err == nil {
+		t.Fatal("accepted linked active state")
+	}
+	if info, _ := os.Stat(foreign); info.Mode().Perm() != 0644 {
+		t.Fatal("changed linked file mode")
+	}
+}

@@ -338,9 +338,8 @@ func (s *Service) Propose(ctx context.Context, ref string, candidateIDs []string
 	return err
 }
 func shortLabel(s string) string {
-	r := []rune(s)
-	if len(r) > 95 {
-		return string(r[:95]) + "…"
+	if prefix := clipUTF16(s, 95); prefix != s {
+		return prefix + "…"
 	}
 	if s == "" {
 		return "Agent"
