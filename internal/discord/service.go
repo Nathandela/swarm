@@ -173,6 +173,11 @@ func (s *Service) Handle(ctx context.Context, in Input) (Request, error) {
 		thread = []ContextMessage{{ID: in.Route.MessageID, Author: in.Actor, Text: in.Text, CreatedAt: in.At}}
 	}
 	r := Request{EventID: in.EventID + ":" + row.ID, MessageRevision: revision(in), EventAt: in.At, Author: in.Actor, Authority: authority, Route: in.Route, Target: row.Target, Text: in.Text, Context: thread, Snapshot: in.Snapshot}
+	if previous, e := s.Store.ExistingEvent(r.EventID, s.Now()); e == nil {
+		r.Context = previous.Context
+	} else if !errors.Is(e, ErrNotFound) {
+		return Request{}, e
+	}
 	return s.dispatch(ctx, r)
 }
 func (s *Service) dispatch(ctx context.Context, input Request) (Request, error) {
@@ -273,7 +278,7 @@ func (s *Service) Propose(ctx context.Context, ref string, candidateIDs []string
 	if len(choices) == 0 {
 		return ErrSelection
 	}
-	_, err = s.Messenger.Post(ctx, Outbound{Route: r.Route, Text: "Choose an agent for this request.", Actions: []Action{{ID: "choose:" + ref, Label: "Choose agent", Choices: choices}}})
+	_, err = s.Control(ctx, ref, "proposal", Outbound{Route: r.Route, Text: "Choose an agent for this request.", Actions: []Action{{ID: "choose:" + ref, Label: "Choose agent", Choices: choices}}})
 	return err
 }
 func shortLabel(s string) string {
@@ -286,7 +291,7 @@ func shortLabel(s string) string {
 	}
 	return s
 }
-func (s *Service) Endorse(ctx context.Context, owner Actor, ref, eventID string, eventAt time.Time) (Request, error) {
+func (s *Service) Endorse(ctx context.Context, owner Actor, ref, _ string, eventAt time.Time) (Request, error) {
 	if owner.ID != s.Config.OwnerID {
 		return Request{}, ErrNotAuthorized
 	}
@@ -297,6 +302,19 @@ func (s *Service) Endorse(ctx context.Context, owner Actor, ref, eventID string,
 	if r.Authority != AuthorityExternal {
 		return Request{}, errors.New("discord: only an external message needs endorsement")
 	}
+	row, err := s.target(ctx, r.Target.ID)
+	if err != nil {
+		return Request{}, err
+	}
+	if row.Instance != r.Target.Instance {
+		return Request{}, errors.New("discord: agent changed; select the current agent")
+	}
+	endorsementID := "endorsement:" + digest([]string{ref, r.MessageRevision, owner.ID, row.ID, row.Instance})[:32]
+	if previous, e := s.Store.ExistingEvent(endorsementID, s.Now()); e == nil {
+		return s.dispatch(ctx, previous)
+	} else if !errors.Is(e, ErrNotFound) {
+		return Request{}, e
+	}
 	if !r.Snapshot {
 		current, fetchErr := s.Messenger.Message(ctx, r.Route)
 		if fetchErr != nil {
@@ -306,22 +324,18 @@ func (s *Service) Endorse(ctx context.Context, owner Actor, ref, eventID string,
 			return Request{}, errors.New("discord: source message changed; refresh it before endorsement")
 		}
 	}
-	row, err := s.target(ctx, r.Target.ID)
-	if err != nil {
-		return Request{}, err
-	}
-	if row.Instance != r.Target.Instance {
-		return Request{}, errors.New("discord: agent changed; select the current agent")
-	}
 	r.Ref = ""
 	r.OperationID = ""
-	r.EventID = eventID + ":" + row.ID
+	r.EventID = endorsementID
 	r.EventAt = eventAt
 	r.EndorserID = owner.ID
 	r.Authority = AuthorityOwnerEndorsed
 	return s.dispatch(ctx, r)
 }
 func (s *Service) Reply(ctx context.Context, ref, id, body string) (Publication, error) {
+	if strings.HasPrefix(id, "control:") {
+		return Publication{}, ErrInvalid
+	}
 	p, _, err := s.Store.PreparePublication(ref, id, body, s.Now())
 	if err != nil {
 		return p, err
