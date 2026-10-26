@@ -11,6 +11,7 @@ type Route struct {
 	GuildID   string `json:"guild_id"`
 	ChannelID string `json:"channel_id"`
 	MessageID string `json:"message_id"`
+	ParentID  string `json:"parent_id,omitempty"`
 }
 type Target struct {
 	ID       string `json:"id"`

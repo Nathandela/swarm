@@ -42,10 +42,15 @@ func Run(parent context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
+	s := NewService(cfg, store, SwarmClient{Socket: cfg.DaemonSocket}, ScopedMessenger{Client: client, Config: cfg})
+	s.StateDir = stateDir
+	return runConnected(parent, s, client)
+}
+
+func runConnected(parent context.Context, s *Service, client *DiscordClient) error {
+	cfg, store, stateDir := s.Config, s.Store, s.StateDir
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	s := NewService(cfg, store, SwarmClient{Socket: cfg.DaemonSocket}, client)
-	s.StateDir = stateDir
 	s.Stop = cancel
 	bridge := NewBridge(s, client)
 	defer bridge.Wait()
@@ -70,18 +75,18 @@ func Run(parent context.Context, stateDir string) error {
 	localDone := make(chan struct{})
 	go func() { defer close(localDone); localErr <- s.ServeLocal(ctx, stateDir) }()
 	defer func() { cancel(); _ = client.Close(); <-localDone }()
-	if err = waitLocal(ctx, stateDir, localErr); err != nil {
+	if err := waitLocal(ctx, stateDir, localErr); err != nil {
 		return err
 	}
-	if err = client.Open(ctx); err != nil {
+	if err := client.Open(ctx); err != nil {
 		return err
 	}
 	select {
-	case err = <-networkErr:
+	case err := <-networkErr:
 		return err
 	default:
 	}
-	if err = bridge.Register(ctx); err != nil {
+	if err := bridge.Register(ctx); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(time.Minute)
@@ -95,7 +100,7 @@ func Run(parent context.Context, stateDir string) error {
 		case err := <-networkErr:
 			return err
 		case <-ticker.C:
-			if err = store.Prune(time.Now()); err != nil {
+			if err := store.Prune(time.Now()); err != nil {
 				return err
 			}
 		}
@@ -177,6 +182,14 @@ func (b *Bridge) Message(ctx context.Context, msg *discordgo.MessageCreate) {
 		return
 	}
 	in := Input{EventID: msg.ID, Actor: Actor{ID: msg.Author.ID, Name: msg.Author.Username}, Route: Route{GuildID: msg.GuildID, ChannelID: msg.ChannelID, MessageID: msg.ID}, Text: msg.Content, Bot: msg.Author.Bot || msg.WebhookID != "", At: msg.Timestamp}
+	if !b.Service.AllowedIdentity(in.Actor, in.Route.GuildID) {
+		return
+	}
+	checked, scopeErr := b.resolveRoute(ctx, in.Route)
+	if scopeErr != nil {
+		return
+	}
+	in.Route = checked
 	if !b.Service.Allowed(in.Actor, in.Route) {
 		return
 	}
@@ -276,6 +289,14 @@ func (b *Bridge) Interaction(ctx context.Context, i *discordgo.InteractionCreate
 	}
 	actor := interactionActor(i)
 	route := Route{GuildID: i.GuildID, ChannelID: i.ChannelID, MessageID: i.ID}
+	if !b.Service.AllowedIdentity(actor, route.GuildID) {
+		return
+	}
+	checked, scopeErr := b.resolveRoute(ctx, route)
+	if scopeErr != nil {
+		return
+	}
+	route = checked
 	if !b.Service.Allowed(actor, route) {
 		return
 	}

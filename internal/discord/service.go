@@ -76,20 +76,23 @@ func containsID(ids []string, id string) bool {
 	}
 	return false
 }
-func (s *Service) Allowed(actor Actor, route Route) bool {
+func (s *Service) AllowedIdentity(actor Actor, guildID string) bool {
 	if actor.ID == "" {
 		return false
 	}
-	if route.GuildID == "" {
+	if guildID == "" {
 		return actor.ID == s.Config.OwnerID || containsID(s.Config.UserIDs, actor.ID)
 	}
-	if !containsID(s.Config.GuildIDs, route.GuildID) {
-		return false
-	}
-	if len(s.Config.ChannelIDs) > 0 && !containsID(s.Config.ChannelIDs, route.ChannelID) {
+	if !containsID(s.Config.GuildIDs, guildID) {
 		return false
 	}
 	return actor.ID == s.Config.OwnerID || len(s.Config.UserIDs) == 0 || containsID(s.Config.UserIDs, actor.ID)
+}
+func (s *Service) Allowed(actor Actor, route Route) bool {
+	if !s.AllowedIdentity(actor, route.GuildID) {
+		return false
+	}
+	return route.GuildID == "" || len(s.Config.ChannelIDs) == 0 || containsID(s.Config.ChannelIDs, route.ChannelID) || containsID(s.Config.ChannelIDs, route.ParentID)
 }
 func (s *Service) Roster(ctx context.Context) ([]Worker, error) {
 	rows, err := s.Workers.Roster(ctx)
