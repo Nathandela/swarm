@@ -22,6 +22,7 @@ func localRig(t *testing.T) (*Service, string, context.CancelFunc, chan error) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	ctx, cancel := context.WithCancel(context.Background())
+	s.Stop = cancel
 	done := make(chan error, 1)
 	go func() { done <- s.ServeLocal(ctx, dir) }()
 	t.Cleanup(func() {
@@ -168,5 +169,24 @@ func TestLocalRefusesConcurrentOwnerAndMalformedRequests(t *testing.T) {
 	}
 	if e := CallLocal(context.Background(), dir, "../reply", nil, nil); !errors.Is(e, ErrInvalid) {
 		t.Fatal(e)
+	}
+}
+
+func TestLocalShutdownAcknowledgesBeforeConnectorStops(t *testing.T) {
+	_, dir, _, done := localRig(t)
+	if e := CallLocal(context.Background(), dir, "shutdown", struct{}{}, nil); e != nil {
+		t.Fatal("shutdown receipt lost", e)
+	}
+	select {
+	case e := <-done:
+		if e != nil {
+			t.Fatal(e)
+		}
+		done <- nil
+	case <-time.After(3 * time.Second):
+		t.Fatal("connector did not stop")
+	}
+	if _, e := os.Lstat(filepath.Join(dir, "bridge.sock")); !os.IsNotExist(e) {
+		t.Fatal("shutdown left listening socket", e)
 	}
 }

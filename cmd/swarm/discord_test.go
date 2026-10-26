@@ -97,6 +97,12 @@ func TestDiscordReplyReadsExactBodyAndRejectsFlagsBeforeEffects(t *testing.T) {
 	if code, _, _ := cliDiscord(t, "reply", "ref", "--body-file", path); code == 0 || calls != 1 {
 		t.Fatal("oversized body published", code, calls)
 	}
+	if e := os.WriteFile(path, []byte{0xff}, 0600); e != nil {
+		t.Fatal(e)
+	}
+	if code, _, _ := cliDiscord(t, "reply", "ref", "--body-file", path); code == 0 || calls != 1 {
+		t.Fatal("invalid UTF-8 silently rewritten", code, calls)
+	}
 }
 func TestDiscordStatusDisconnectedAndNoInlineSecret(t *testing.T) {
 	_, token := discordCLIRig(t)
@@ -107,7 +113,8 @@ func TestDiscordStatusDisconnectedAndNoInlineSecret(t *testing.T) {
 	t.Cleanup(func() { discordLocalCall = previous })
 	discordLocalCall = func(context.Context, string, string, any, any) error { return errors.New("not running") }
 	_, out, err := cliDiscord(t, "status")
-	if !strings.Contains(out, `"connected":false`) || strings.Contains(out+err, "test-token-never-print") {
+	var status discord.LocalStatus
+	if json.Unmarshal([]byte(out), &status) != nil || status.Connected || status.Name != "Atlas" || strings.Contains(out+err, "test-token-never-print") {
 		t.Fatal(out, err)
 	}
 	if code, out, err := cliDiscord(t, "connect", "--token", "inline-secret"); code != misuseExit || strings.Contains(out+err, "inline-secret") {
@@ -142,5 +149,46 @@ func TestDiscordInstallCommandsAreShellFreeAndRealRunnerRefusesTests(t *testing.
 	}
 	if e = runDiscordUnit("systemctl", "--user", "stop", "swarm-discord.service"); e == nil {
 		t.Fatal("production init runner permitted in test")
+	}
+}
+
+func TestDiscordRunAndProposalDelegateOnlyExplicitInputs(t *testing.T) {
+	dir, _ := discordCLIRig(t)
+	previousRun := discordServiceRun
+	previousCall := discordLocalCall
+	t.Cleanup(func() { discordServiceRun = previousRun; discordLocalCall = previousCall })
+	ran := false
+	discordServiceRun = func(ctx context.Context, path string) error {
+		if path != dir || ctx.Err() != nil {
+			t.Fatal(path, ctx.Err())
+		}
+		ran = true
+		return nil
+	}
+	if code, out, err := cliDiscord(t, "run"); code != 0 || !ran {
+		t.Fatal(code, out, err)
+	}
+	calls := 0
+	discordLocalCall = func(_ context.Context, path, operation string, request, response any) error {
+		calls++
+		if path != dir || operation != "propose" {
+			t.Fatal(path, operation)
+		}
+		r, ok := request.(discord.LocalProposal)
+		if !ok || r.Ref != "ref" || !reflect.DeepEqual(r.CandidateIDs, []string{"local/one", "local/two"}) {
+			t.Fatal(request)
+		}
+		return nil
+	}
+	if code, out, err := cliDiscord(t, "propose", "ref", "--candidate-ids", `["local/one","local/two"]`); code != 0 {
+		t.Fatal(code, out, err)
+	}
+	for _, value := range []string{"null", "[]", `{"id":"one"}`, `[""]`} {
+		if code, out, err := cliDiscord(t, "propose", "ref", "--candidate-ids", value); code != misuseExit {
+			t.Fatal(code, out, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatal("invalid proposal admitted", calls)
 	}
 }
