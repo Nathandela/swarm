@@ -18,6 +18,17 @@ Failing-first protocol tests compiled against missing origin schema/capability, 
 
 The old-shim regression initially returned success after two raw writes although its hello did not prove atomic submission. The fix requires the current upstream's `SupportsMessageSubmit` before durable Begin; the fallback raw writes were removed. Unsupported survivors return `structured_unsupported` with explicit session refresh guidance. A daemon restart preserves existing shims and cannot upgrade their capability. No automatic restart is used.
 
+Validated on this branch:
+
+- `go test ./internal/protocol/...` — pass.
+- Connected skeleton composer, phone, OpenCode, FIFO, exact-origin and old-shim regressions — pass (67.6 seconds).
+- `go test -race ./internal/protocol/... ./internal/skeleton -run 'TestMessageOrigin|TestSemanticClientRefusesOrigin|TestSemanticOrigin|TestOpenCode.*Origin|TestOwnerSemanticSendKeepsOwner|TestComposerOldShim|TestComposerQueue_KeystrokeBeginAndSubmit' -count=1` — pass.
+- `go vet ./internal/protocol/... ./internal/skeleton/...` — pass.
+- `go build ./internal/protocol/... ./internal/skeleton/...` — pass.
+- `golangci-lint run ./internal/protocol/... ./internal/skeleton/...` — pass (0 issues).
+
+Full repository, independent review, actual installed-provider matrix, and release/deployment gates belong to integration; these lane results do not substitute for them.
+
 ## Five-provider admission boundary
 
 The existing `TypeSubmit` transaction serializes input writers and refuses a known/unknown owner draft. It does not coordinate with the provider's own event loop and cannot prove that a native modal will not open between typing and Enter. A grid/status check followed by Enter cannot close that race. The existing Claude path is preserved; this work does not upgrade that evidence to native modal admission proof.
