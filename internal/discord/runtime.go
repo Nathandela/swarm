@@ -20,6 +20,12 @@ func Run(parent context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
+	if !cfg.Enabled {
+		cfg.Enabled = true
+		if err = SaveConfig(stateDir, cfg); err != nil {
+			return err
+		}
+	}
 	token, err := LoadToken(cfg.TokenFile)
 	if err != nil {
 		return err
@@ -45,6 +51,21 @@ func Run(parent context.Context, stateDir string) error {
 	defer bridge.Wait()
 	client.OnMessage = func(m *discordgo.MessageCreate) { bridge.start(ctx, func() { bridge.Message(ctx, m) }) }
 	client.OnInteraction = func(i *discordgo.InteractionCreate) { bridge.start(ctx, func() { bridge.Interaction(ctx, i) }) }
+	networkErr := make(chan error, 1)
+	client.OnError = func(err error) {
+		select {
+		case networkErr <- err:
+		default:
+		}
+	}
+	client.OnReady = func(r *discordgo.Ready) {
+		if r.Application == nil || r.Application.ID != cfg.ApplicationID {
+			select {
+			case networkErr <- errors.New("discord: bot token does not match configured application"):
+			default:
+			}
+		}
+	}
 	localErr := make(chan error, 1)
 	localDone := make(chan struct{})
 	go func() { defer close(localDone); localErr <- s.ServeLocal(ctx, stateDir) }()
@@ -54,6 +75,11 @@ func Run(parent context.Context, stateDir string) error {
 	}
 	if err = client.Open(ctx); err != nil {
 		return err
+	}
+	select {
+	case err = <-networkErr:
+		return err
+	default:
 	}
 	if err = bridge.Register(ctx); err != nil {
 		return err
@@ -65,6 +91,8 @@ func Run(parent context.Context, stateDir string) error {
 		case <-ctx.Done():
 			return nil
 		case err := <-localErr:
+			return err
+		case err := <-networkErr:
 			return err
 		case <-ticker.C:
 			if err = store.Prune(time.Now()); err != nil {
@@ -202,7 +230,7 @@ func (b *Bridge) accepted(ctx context.Context, r Request) {
 	if r.Authority == AuthorityExternal {
 		actions = []Action{{ID: "endorse:" + r.Ref, Label: "Treat as my instruction"}}
 	}
-	b.notify(ctx, r.Route, "Submitted to "+r.Target.Name+" · "+b.Service.Config.Name+".", actions)
+	_, _ = b.Service.Control(ctx, r.Ref, "accepted", Outbound{Route: r.Route, Text: "Submitted to " + r.Target.Name + " · " + b.Service.Config.Name + ".", Actions: actions})
 }
 func (b *Bridge) pick(ctx context.Context, in Input, rows []Worker) {
 	authority := AuthorityExternal

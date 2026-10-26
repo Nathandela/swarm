@@ -605,6 +605,7 @@ func skeletonConfigFromEnv() (skeleton.Config, bool) {
 	exe, _ := os.Executable() // the daemon spawns `swarm shim` from its own binary
 	return skeleton.Config{
 		StateDir:           stateDir,
+		NativeInputEnabled: func() bool { return discordNativeInputEnabled(stateDir) },
 		SocketPath:         os.Getenv(daemon.EnvSocket),
 		LockPath:           os.Getenv(daemon.EnvLock),
 		LogPath:            os.Getenv(daemon.EnvLog),

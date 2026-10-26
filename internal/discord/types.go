@@ -38,6 +38,7 @@ type Request struct {
 	MessageRevision string           `json:"message_revision"`
 	EventAt         time.Time        `json:"event_at"`
 	Author          Actor            `json:"author"`
+	RequesterID     string           `json:"requester_id,omitempty"`
 	EndorserID      string           `json:"endorser_id,omitempty"`
 	Authority       Authority        `json:"authority"`
 	Route           Route            `json:"route"`
