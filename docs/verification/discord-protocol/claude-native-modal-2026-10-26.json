@@ -1,0 +1,34 @@
+{
+  "version": "2.1.296",
+  "native_permission_dialog_seen": true,
+  "broker_submitted": true,
+  "tool_ran": false,
+  "native_receipt": {
+    "operation_id": "native-message",
+    "hash": "6de0bb23878e52c6933001e14414ccbff04632d2943d19019265f00b8e3e6c02",
+    "state": "started",
+    "worker": {
+      "native_session_id": "a770f473-e1fc-4e41-ae09-8d36b4599a5f",
+      "generation": "600d8388-e9ab-4050-a879-285802ca6780",
+      "version": "2.1.296"
+    }
+  },
+  "message_in_model_context": true,
+  "requests": [
+    {
+      "primary": false,
+      "marker_present": false,
+      "permissions_result": false
+    },
+    {
+      "primary": true,
+      "marker_present": false,
+      "permissions_result": false
+    },
+    {
+      "primary": true,
+      "marker_present": true,
+      "permissions_result": true
+    }
+  ]
+}
