@@ -1,12 +1,12 @@
 # Claude native message admission
 
-2026-10-26. Source implementation and isolated native qualification; not a release/deployment record.
+2026-10-27. Source implementation and isolated native qualification; not a release/deployment record.
 
 ## Contract
 
 For an enabled local Discord installation, `skeleton.Config.NativeInputEnabled` is evaluated for each new session launch and passed through to the core. Nil/false leaves ordinary launches unchanged. The integration supplies a predicate over its local enabled configuration; no provider-specific publish action is needed. A qualified fresh Claude shim gets only session-owned `--plugin-dir` artifacts. Existing shims are preserved, and origin-bearing sends against unproven instances refuse with explicit owner-selected refresh guidance.
 
-The qualified runtime is exactly Claude Code **2.1.296**. Unknown/future versions are not inferred compatible. The shim owns a 0600 Unix HTTP socket and descriptor, random generation and authentication token. The embedded mod registers its actual native session ID and version. The daemon checks shim PID/start time and retained generation/worker identity before crossing durable Begin. A claimed request is never handed out twice; missing replies remain uncertain and are reconciled without replay. Outstanding unknown native delivery preserves the composer's existing ordering refusal.
+The qualified runtimes are exactly Claude Code **2.1.296, 2.1.310 and 2.1.311**. Unknown/future versions are not inferred compatible. The shim owns a 0600 Unix HTTP socket and descriptor, random generation and authentication token. The embedded mod registers its actual native session ID and version. The daemon checks shim PID/start time and retained generation/worker identity before crossing durable Begin. A claimed request is never handed out twice; missing replies remain uncertain and are reconciled without replay. Outstanding unknown native delivery preserves the composer's existing ordering refusal.
 
 The mod invokes the provider's `$.prompt.submit({text})`; it never types terminal keys, adds tool checks, or answers permissions. Claude owns idle/queue/refusal behavior. Swarm reports submission only; native queue drops remain refusals, and no receipt is interpreted as model/task completion. Provenance stays in exact durable request/receipt evidence; the mod does not invent transcript history or authority from text coincidence. Generic Claude degradation still refuses, with no raw fallback.
 
@@ -24,7 +24,9 @@ The native fixture parks a real Bash permission dialog, submits an unrelated tea
 
 Affected caller build, vet, lint (0 issues), connected behavioral tests, and targeted race tests passed. The final native Go broker/mod/modal fixture also passed under `-race` (10.02 seconds). Its [result](claude-native-modal-2026-10-26.json) contains only synthetic probe identity and outcome evidence.
 
-Only this version and fixture matrix are qualified here. Full native account/provider execution, installed host versions, whole-repository gates, independent review, and deployment remain integration gates.
+On the authorized Ubuntu x86_64 VM, retained 2.1.310 passed in 11.99 seconds and current 2.1.311 passed in 10.23 seconds. Both versions were admitted only through a test compiler overlay before their production allowlist changed. The fixture now reports the exact descriptor version instead of a hardcoded 2.1.296 label. [VM evidence](native-vm-modal-2026-10-27.json) records the isolated execution contract.
+
+Only this exact version and fixture matrix are qualified here. Full native account/provider execution, installed host versions, whole-repository gates, independent review, and deployment remain integration gates.
 
 ## Other native ingress observations
 

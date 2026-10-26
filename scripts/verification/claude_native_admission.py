@@ -48,7 +48,7 @@ def probe():
   def do_POST(self):self.send_error(403)
  api=http.server.ThreadingHTTPServer(('127.0.0.1',0),API);deny=http.server.ThreadingHTTPServer(('127.0.0.1',0),Deny)
  for s in [api,deny]:s.daemon_threads=True;threading.Thread(target=s.serve_forever,daemon=True).start()
- config={'hasCompletedOnboarding':True,'theme':'dark','lastOnboardingVersion':'2.1.296','oauthAccount':{'accountUuid':'synthetic-account','emailAddress':'synthetic@example.invalid','organizationUuid':'synthetic-org'},'projects':{str(root):{'hasTrustDialogAccepted':True}}}
+ config={'hasCompletedOnboarding':True,'theme':'dark','lastOnboardingVersion':descriptor['provider_version'],'oauthAccount':{'accountUuid':'synthetic-account','emailAddress':'synthetic@example.invalid','organizationUuid':'synthetic-org'},'projects':{str(root):{'hasTrustDialogAccepted':True}}}
  (cfg/'.claude.json').write_text(json.dumps(config));(cfg/'.credentials.json').write_text(json.dumps({'claudeAiOauth':{'accessToken':'synthetic-token','refreshToken':'synthetic-refresh','expiresAt':int(time.time()*1000)+3600000,'scopes':['user:inference','user:profile'],'subscriptionType':'max','rateLimitTier':'default_claude_max_5x'}}))
  env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':str(home),'CLAUDE_CONFIG_DIR':str(cfg),'TMPDIR':str(home/'tmp'),'TERM':'xterm-256color','ANTHROPIC_BASE_URL':'http://127.0.0.1:'+str(api.server_port),'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC':'1','DISABLE_AUTOUPDATER':'1','CLAUDE_CODE_MAX_RETRIES':'0','HTTP_PROXY':'http://127.0.0.1:'+str(deny.server_port),'HTTPS_PROXY':'http://127.0.0.1:'+str(deny.server_port),'ALL_PROXY':'http://127.0.0.1:'+str(deny.server_port),'NO_PROXY':'127.0.0.1,localhost'}
  mcp={'mcpServers':{'swarm-native':{'command':sys.executable,'args':[str(pathlib.Path(__file__).resolve()),'channel',str(root)]}}}
@@ -84,7 +84,7 @@ def probe():
     if not locals().get('denied'):
      os.write(master,b'2');denied=True
    if any(r['primary'] and r['marker_present'] for r in requests):break
-  result={'version':'2.1.296','native_permission_dialog_seen':dialog,'broker_submitted':channel_sent,'tool_ran':(root/'must-not-run').exists(),'native_receipt':broker('/operation',{'worker':worker,'operation_id':'native-message'}) if channel_sent else None,'message_in_model_context':any(r['primary'] and r['marker_present'] for r in requests),'requests':requests,'root':str(root)}
+  result={'version':descriptor['provider_version'],'native_permission_dialog_seen':dialog,'broker_submitted':channel_sent,'tool_ran':(root/'must-not-run').exists(),'native_receipt':broker('/operation',{'worker':worker,'operation_id':'native-message'}) if channel_sent else None,'message_in_model_context':any(r['primary'] and r['marker_present'] for r in requests),'requests':requests,'root':str(root)}
   (root/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2))
   assert dialog and channel_sent and result['message_in_model_context'] and not result['tool_ran']
  finally:

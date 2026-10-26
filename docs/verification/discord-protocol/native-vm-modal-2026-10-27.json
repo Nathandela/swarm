@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-27",
+  "host": "authorized tf_nathan Ubuntu x86_64",
+  "source": "actual retained native binaries, physical private copies; test-only compiler overlay before production gate change",
+  "isolation": {
+    "scratch": "owned /dev/shm/swarm-native-qual-20261027-sol",
+    "filesystem": "bwrap read-only root/data/dev-shm; one writable owned RAM bind and private /dev",
+    "network": "fresh namespace, only lo; no external network or host loopback",
+    "controls_passed": [
+      "allowed scratch write",
+      "own PTY",
+      "local fake provider TCP",
+      "denied outside-scratch write",
+      "denied external TCP"
+    ],
+    "configuration": "synthetic HOME/auth, fake local model, updater disabled; no production state or global symlink changes"
+  },
+  "results": [
+    {
+      "provider": "claude",
+      "version": "2.1.310",
+      "elapsed_seconds": 11.99,
+      "native_permission_dialog_seen": true,
+      "broker_submitted": true,
+      "native_state": "started",
+      "tool_ran": false,
+      "message_in_model_context": true
+    },
+    {
+      "provider": "claude",
+      "version": "2.1.311",
+      "elapsed_seconds": 10.23,
+      "native_permission_dialog_seen": true,
+      "broker_submitted": true,
+      "native_state": "started",
+      "tool_ran": false,
+      "message_in_model_context": true
+    }
+  ],
+  "commands": {
+    "build": "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -overlay=<owned exact-version candidate overlay> -c -o <owned RAM artifact>/claudeinput.test ./internal/claudeinput",
+    "namespace": "bwrap --unshare-user --uid 0 --gid 0 --unshare-net --unshare-pid --cap-add CAP_NET_ADMIN --ro-bind / / --ro-bind /home/ubuntu/data /home/ubuntu/data --proc /proc --dev /dev --ro-bind /dev/shm /dev/shm --bind \"$root\" \"$root\" --chdir \"$root/internal/claudeinput\" <fixture environment> /bin/sh -c 'ip link set lo up; exec \"$1\" -test.run \"^TestNativeClaudeModalAdmission$\" -test.v -test.timeout 90s' sh \"$root/claudeinput.test\"",
+    "fixture_environment": [
+      "PATH selects owned symlink to exact retained source binary; fixture physically copies it",
+      "TMPDIR=$root/tmp",
+      "SWARM_NATIVE_ADMISSION_FIXTURE=1",
+      "SWARM_NATIVE_FIXTURE_OS_ISOLATED=1",
+      "SWARM_NATIVE_FIXTURE_WRITABLE_ROOT=$root",
+      "SWARM_NATIVE_FIXTURE_HOST_NETNS=<host namespace inode before bwrap>",
+      "PYTHONDONTWRITEBYTECODE=1"
+    ]
+  },
+  "limits": [
+    "submission/native-start only, not task completion",
+    "synthetic provider and permission modal; no real-account model calls",
+    "unknown future versions remain unsupported"
+  ]
+}

@@ -24,7 +24,9 @@ const DescriptorFile = "claude-input.json"
 const maxOperations = 128
 
 // SupportedVersion names actual native runtime qualification, not an optimistic range.
-func SupportedVersion(version string) bool { return version == "2.1.296" }
+func SupportedVersion(version string) bool {
+	return version == "2.1.296" || version == "2.1.310" || version == "2.1.311"
+}
 
 type Descriptor struct {
 	SessionID       string `json:"session_id"`
