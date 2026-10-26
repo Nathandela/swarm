@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Isolated current-Claude native mod ingress and permission-separation probe."""
+from native_fixture_sandbox import guarded, check_guards
 import fcntl, http.server, json, os, pathlib, pty, re, select, signal, socket, struct, subprocess, sys, tempfile, termios, threading, time, uuid
 
 def probe():
@@ -53,7 +54,7 @@ def probe():
  mcp={'mcpServers':{'swarm-native':{'command':sys.executable,'args':[str(pathlib.Path(__file__).resolve()),'channel',str(root)]}}}
  cmd=[binary,'--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--plugin-dir',str(plugin),'--system-prompt','Synthetic bounded protocol probe.','--tools','Bash,SendMessage','--settings',json.dumps({'permissions':{'ask':['Bash']}}),'--permission-mode','default','--model','claude-sonnet-4-6','--debug-file',str(root/'debug.log'),'Begin the synthetic permission probe.']
 
- master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',45,160,0,0));proc=subprocess.Popen(cmd,cwd=root,env=env,stdin=slave,stdout=slave,stderr=slave,start_new_session=True);os.close(slave)
+ master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',45,160,0,0));guard_root=pathlib.Path(sys.argv[2]).parent.resolve();check_guards(guard_root,[api.server_port]);proc=subprocess.Popen(guarded(cmd,guard_root,[api.server_port]),cwd=root,env=env,stdin=slave,stdout=slave,stderr=slave,start_new_session=True);os.close(slave)
  output=bytearray();raw=root/'terminal.log';deadline=time.monotonic()+55;channel_sent=False;dialog=False;last_input=0
  try:
   while time.monotonic()<deadline and proc.poll() is None:

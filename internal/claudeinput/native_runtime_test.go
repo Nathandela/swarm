@@ -2,6 +2,7 @@ package claudeinput
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,23 @@ func TestNativeClaudeModalAdmission(t *testing.T) {
 	}
 	version := strings.Fields(string(banner))[0]
 	dir := shortDir(t)
+	original, err := os.Open(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := filepath.Join(dir, "claude")
+	target, err := os.OpenFile(private, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o700)
+	if err != nil {
+		_ = original.Close()
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(target, original)
+	closeErr := target.Close()
+	_ = original.Close()
+	if copyErr != nil || closeErr != nil {
+		t.Fatalf("private provider copy: %v %v", copyErr, closeErr)
+	}
+	binary = private
 	broker, err := Start(dir, "native-probe", version, os.Getpid(), 1)
 	if err != nil {
 		t.Fatal(err)
