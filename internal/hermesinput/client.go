@@ -55,8 +55,6 @@ func (e *Refusal) Error() string {
 
 var errUncertain = errors.New("hermes native submission outcome is uncertain; do not replay")
 
-func IsUncertain(err error) bool { return errors.Is(err, errUncertain) }
-
 type endpoint struct {
 	PID            int    `json:"pid"`
 	Protocol       int    `json:"runtime_protocol"`
