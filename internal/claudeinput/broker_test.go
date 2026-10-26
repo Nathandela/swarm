@@ -159,3 +159,32 @@ func TestNativeInputPreservesEscapedBodyAndAckCannotConsumeLaterMessage(t *testi
 		t.Fatalf("later input lost: %+v %v", second, err)
 	}
 }
+
+func TestQualifiedVMVersionsUseExactNativeWorker(t *testing.T) {
+	for _, version := range []string{"2.1.310", "2.1.311"} {
+		t.Run(version, func(t *testing.T) {
+			b, err := Start(shortDir(t), "qualified-vm", version, 123, 456)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = b.Close() }()
+			client := NewClient(b.Descriptor())
+			worker := Worker{NativeSessionID: "own-vm-session", Generation: "own-worker", Version: version}
+			if _, err := client.Exchange(context.Background(), worker, "", "", ""); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Submit(context.Background(), worker, "vm-operation", "exact VM message"); err != nil {
+				t.Fatal(err)
+			}
+			message, err := client.Exchange(context.Background(), worker, "", "", "")
+			if err != nil || message == nil || message.Text != "exact VM message" {
+				t.Fatalf("native VM admission: %+v %v", message, err)
+			}
+		})
+	}
+	for _, version := range []string{"2.1.309", "2.1.312", "2.1.311-beta.1"} {
+		if SupportedVersion(version) {
+			t.Fatalf("unqualified version %q enabled", version)
+		}
+	}
+}
