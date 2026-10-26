@@ -145,6 +145,13 @@ func cleanupContains(root, cwd string) bool {
 func canonicalCleanupPath(path string) (string, error) {
 	var suffix []string
 	for {
+		// A trailing slash makes Lstat follow a dangling symlink instead of seeing it.
+		if len(path) > 1 {
+			path = strings.TrimRight(path, string(filepath.Separator))
+			if path == "" {
+				path = string(filepath.Separator)
+			}
+		}
 		resolved, err := filepath.EvalSymlinks(path)
 		if err == nil {
 			resolved, err = filepath.Abs(resolved)

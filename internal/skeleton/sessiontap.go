@@ -471,7 +471,7 @@ func (s *tapSub) ControlKeys(p []byte) error {
 
 // PasteInput forwards one message's text on the frame that lets the shim bracket it as a paste
 // (ADR-010 Amendment 9). An upstream that proves no such frame gets it as Input: today's
-// behaviour, a disclosed degrade that a daemon restart resolves.
+// behaviour until the session's shim is replaced.
 func (s *tapSub) PasteInput(p []byte) error {
 	if s.mode != readWrite {
 		return nil

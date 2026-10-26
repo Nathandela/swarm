@@ -426,3 +426,16 @@ func TestDeleteDiscussionHiddenPredecessorStillRequiresCurrent(t *testing.T) {
 		t.Fatal("hidden predecessor bypassed the visible current discussion")
 	}
 }
+
+func TestCanonicalCleanupPathRefusesDanglingAncestors(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "dangling")
+	if err := os.Symlink(filepath.Join(dir, "missing"), link); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{link, link + string(filepath.Separator), filepath.Join(link, "child")} {
+		if _, err := canonicalCleanupPath(path); err == nil {
+			t.Fatalf("accepted unresolved symlink ancestor: %q", path)
+		}
+	}
+}
