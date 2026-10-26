@@ -14,17 +14,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func mockEndpoints(t *testing.T, handler http.HandlerFunc) {
+func mockEndpoints(t *testing.T, handler http.HandlerFunc) string {
 	t.Helper()
 	s := httptest.NewServer(handler)
 	t.Cleanup(s.Close)
-	old := discordgo.EndpointChannels
-	discordgo.EndpointChannels = s.URL + "/channels/"
-	t.Cleanup(func() { discordgo.EndpointChannels = old })
+	return s.URL
 }
 func TestDiscordREST(t *testing.T) {
 	count := 0
-	mockEndpoints(t, func(w http.ResponseWriter, r *http.Request) {
+	base := mockEndpoints(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bot test-secret" {
 			t.Errorf("auth %q", r.Header.Get("Authorization"))
 		}
@@ -54,6 +52,7 @@ func TestDiscordREST(t *testing.T) {
 		w.Write([]byte(`{"id":"66"}`))
 	})
 	c, err := NewDiscordClient("test-secret")
+	c.apiBase = base
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +75,7 @@ func TestDiscordREST(t *testing.T) {
 }
 func TestDiscordRateLimitAndRedaction(t *testing.T) {
 	calls := 0
-	mockEndpoints(t, func(w http.ResponseWriter, r *http.Request) {
+	base := mockEndpoints(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if calls == 1 {
 			w.Header().Set("Content-Type", "application/json")
@@ -92,6 +91,7 @@ func TestDiscordRateLimitAndRedaction(t *testing.T) {
 		w.Write([]byte(`test-secret`))
 	})
 	c, _ := NewDiscordClient("test-secret")
+	c.apiBase = base
 	start := time.Now()
 	_, err := c.Post(context.Background(), Outbound{Route: Route{ChannelID: "22"}, Text: "hi", Nonce: "1"})
 	if err != nil || time.Since(start) < 40*time.Millisecond {
@@ -156,15 +156,14 @@ func TestDiscordGatewayReconnect(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	old := discordgo.EndpointGateway
-	discordgo.EndpointGateway = server.URL + "/gateway"
-	defer func() { discordgo.EndpointGateway = old }()
+
 	c, err := NewDiscordClient("test-secret")
+	c.apiBase = server.URL
 	if err != nil {
 		t.Fatal(err)
 	}
 	events := make(chan string, 2)
-	c.Session().AddHandler(func(_ *discordgo.Session, m *discordgo.MessageCreate) { events <- m.Content })
+	c.OnMessage = func(m *discordgo.MessageCreate) { events <- m.Content }
 	if err = c.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -178,5 +177,141 @@ func TestDiscordGatewayReconnect(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("gateway did not deliver after reconnect")
 		}
+	}
+}
+
+func TestCancellationAndNullResponses(t *testing.T) {
+	first := make(chan struct{}, 1)
+	base := mockEndpoints(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			first <- struct{}{}
+			w.WriteHeader(429)
+			w.Write([]byte(`{"retry_after":1}`))
+			return
+		}
+		w.Write([]byte(`null`))
+	})
+	c, _ := NewDiscordClient("test-secret")
+	c.apiBase = base
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := c.Post(ctx, Outbound{Route: Route{ChannelID: "22"}, Nonce: "1"}); done <- err }()
+	<-first
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("rate limit ignored cancellation")
+	}
+	if _, err := c.Edit(context.Background(), Route{ChannelID: "22", MessageID: "55"}, "hi", nil); err == nil {
+		t.Fatal("accepted null edit")
+	}
+	if _, err := c.Message(context.Background(), Route{ChannelID: "22", MessageID: "55"}); err == nil {
+		t.Fatal("accepted null message")
+	}
+}
+func TestGatewayHelloCancellation(t *testing.T) {
+	accepted := make(chan *websocket.Conn, 1)
+	var server *httptest.Server
+	up := websocket.Upgrader{}
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/gateway" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"url": "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"})
+			return
+		}
+		conn, err := up.Upgrade(w, r, nil)
+		if err == nil {
+			accepted <- conn
+		}
+	}))
+	defer server.Close()
+	c, _ := NewDiscordClient("test-secret")
+	c.apiBase = server.URL
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Open(ctx) }()
+	conn := <-accepted
+	defer conn.Close()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("gateway ignored cancellation")
+	}
+	c.Close()
+}
+
+func TestCloseStopsReconnect(t *testing.T) {
+	var server *httptest.Server
+	up := websocket.Upgrader{}
+	var attempts atomic.Int32
+	drop := make(chan struct{})
+	failed := make(chan struct{})
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/gateway" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"url": "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"})
+			return
+		}
+		if attempts.Add(1) > 1 {
+			w.WriteHeader(503)
+			select {
+			case <-failed:
+			default:
+				close(failed)
+			}
+			return
+		}
+		conn, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.WriteJSON(map[string]any{"op": 10, "d": map[string]any{"heartbeat_interval": 10000}})
+		var data any
+		if conn.ReadJSON(&data) != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{"op": 0, "s": 1, "t": "READY", "d": map[string]any{"session_id": "session", "user": map[string]any{"id": "1"}}})
+		<-drop
+	}))
+	defer server.Close()
+	c, _ := NewDiscordClient("test-secret")
+	c.apiBase = server.URL
+	if err := c.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	close(drop)
+	select {
+	case <-failed:
+	case <-time.After(4 * time.Second):
+		t.Fatal("no reconnect attempt")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := attempts.Load()
+	time.Sleep(1200 * time.Millisecond)
+	if attempts.Load() != before {
+		t.Fatal("reconnected after close")
+	}
+}
+
+func TestRateLimitHeadersAndCloseDuringHello(t *testing.T) {
+	calls := 0
+	base := mockEndpoints(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset-After", "0.1")
+		w.Write([]byte(`{"id":"66"}`))
+	})
+	c, _ := NewDiscordClient("secret")
+	c.apiBase = base
+	if _, err := c.Post(context.Background(), Outbound{Route: Route{ChannelID: "1"}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := c.Post(ctx, Outbound{Route: Route{ChannelID: "1"}}); err == nil || calls != 1 {
+		t.Fatalf("rate wait: calls %d error %v", calls, err)
 	}
 }
