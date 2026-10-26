@@ -435,9 +435,9 @@ func (c *DiscordClient) Post(ctx context.Context, out Outbound) (string, error) 
 		Content         string                            `json:"content"`
 		Components      []discordgo.MessageComponent      `json:"components"`
 		AllowedMentions *discordgo.MessageAllowedMentions `json:"allowed_mentions"`
-		Nonce           string                            `json:"nonce"`
-		EnforceNonce    bool                              `json:"enforce_nonce"`
-	}{out.Text, rows, &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{}}, out.Nonce, true}
+		Nonce           string                            `json:"nonce,omitempty"`
+		EnforceNonce    bool                              `json:"enforce_nonce,omitempty"`
+	}{out.Text, rows, &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{}}, out.Nonce, out.Nonce != ""}
 	var msg discordgo.Message
 	if err := c.REST(ctx, http.MethodPost, "/channels/"+url.PathEscape(out.Route.ChannelID)+"/messages", payload, &msg); err != nil {
 		return "", err
