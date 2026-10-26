@@ -240,11 +240,13 @@ func TestExternalBirthRechecksCodexDotenvBeforeLaunch(t *testing.T) {
 	if err := resolveLoginEnvironment(&cfg); err != nil {
 		t.Fatalf("clean birth refused: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(rt.Home, ".env"), []byte("OPENAI_FEDERATION_RULE_ID=synthetic-rule\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := resolveLoginEnvironment(&cfg); err == nil {
-		t.Fatal("final shim resolution accepted a late dotenv auth selector")
+	for _, key := range []string{"OPENAI_FEDERATION_RULE_ID", "OPENAI_API_KEY", "OPENAI_ORGANIZATION", "OPENAI_PROJECT"} {
+		if err := os.WriteFile(filepath.Join(rt.Home, ".env"), []byte("export "+key+"=synthetic-private-value\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := resolveLoginEnvironment(&cfg); err == nil {
+			t.Fatalf("final shim resolution accepted late dotenv selector %s", key)
+		}
 	}
 }
 

@@ -123,7 +123,7 @@ func (s *Store) validateCodexDotenv() error {
 				return fmt.Errorf("%w: managed Codex .env has an invalid assignment near line %d; repair that assignment", ErrIneligible, recordLine)
 			}
 			switch key {
-			case "OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT":
+			case "OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT", "OPENAI_API_KEY", "OPENAI_ORGANIZATION", "OPENAI_PROJECT":
 				return fmt.Errorf("%w: managed Codex .env sets auth selector %s; remove that assignment", ErrIneligible, key)
 			}
 			recordStart, recordLine, state = end, line+1, complete

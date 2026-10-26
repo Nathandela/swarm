@@ -113,15 +113,20 @@ Test callback ownership with multiple native clients and daemon disconnection.
 The shim/native processes survive daemon loss; an unavailable refresh owner
 must fail visibly and recover when reconnected without a fabricated user turn.
 
-Managed Codex launches scrub inherited workload-identity selectors and reject
-`OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE` or
-`OPENAI_WORKLOAD_IDENTITY_CONTEXT` assignments in the common native home’s
-`.env`, including empty assignments. These inputs can select workload auth before
-external-token installation. Check fresh birth and normal/switch restart paths
+Managed Codex launches scrub inherited authentication selectors and reject
+`OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`,
+`OPENAI_WORKLOAD_IDENTITY_CONTEXT`, `OPENAI_API_KEY`, `OPENAI_ORGANIZATION` and
+`OPENAI_PROJECT` assignments in the common native home’s `.env`, including empty
+assignments. Workload inputs can select auth before external-token installation.
+The other three are refused consistently with the selected-subscription policy:
+optional API-key authentication and conflicting organization/project headers
+are outside that policy. This does not assert a default Responses bypass or a
+server-side account change. Check fresh birth and normal/switch restart paths
 again at final shim preparation. Reuse the private bounded file reader and native
 record/header grammar; never evaluate or report values. Ordinary tool and
 transport preferences remain native inputs. Validation does not lock the file
-against a later owner edit or qualify separate realtime/Guardian auth paths.
+against a later owner edit. API-key-dependent realtime/Guardian behavior is not
+qualified for subscription-managed sessions.
 
 For Claude, bind native refresh to the selected saved authority using the
 installed native refresh locks/CAS. Every future owned identity, including the

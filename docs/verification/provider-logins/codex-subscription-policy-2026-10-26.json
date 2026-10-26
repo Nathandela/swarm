@@ -1,0 +1,170 @@
+{
+  "date": "2026-10-26",
+  "scope": "Unreleased managed Codex subscription policy; no native handover enablement.",
+  "review": "Luna implemented the reviewed test-first change; Root, Sol and Astra reviewed policy and code.",
+  "policy": {
+    "new_refused_dotenv_keys": [
+      "OPENAI_API_KEY",
+      "OPENAI_ORGANIZATION",
+      "OPENAI_PROJECT"
+    ],
+    "existing_refused_workload_keys": [
+      "OPENAI_FEDERATION_RULE_ID",
+      "OPENAI_IDENTITY_TOKEN_FILE",
+      "OPENAI_WORKLOAD_IDENTITY_CONTEXT"
+    ],
+    "assignments": "Includes empty/export assignments. Refuse the file with a key-only error; never rewrite it or evaluate/report values.",
+    "reach": [
+      "External-token birth",
+      "Normal and switch environment preparation",
+      "Final shim resolution"
+    ],
+    "preserved": "Existing native record grouping/private reader, harmless comments and multiline value text, ordinary tool and transport settings. No callers, dependencies or configuration options added."
+  },
+  "rationale": {
+    "source_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+    "source_audit": {
+      "path": "/private/tmp/swarm-codex-dotenv-auth-audit-20261025/report.md",
+      "sha256": "e79ae03a509cc5fb37a21f94bbe1cd85ef76f9a184f55582611a9fc280b10be8"
+    },
+    "findings": [
+      "Inherited versions of these three keys were already scrubbed.",
+      "Pinned native source uses OPENAI_API_KEY as a fallback in optional realtime/Guardian paths, while default Responses uses the installed AuthManager credentials.",
+      "Organization/project values become provider headers; their server account effect was not established."
+    ],
+    "classification": "A deliberate selected-subscription policy correction, not proof of a successful default Responses bypass or server-side account change.",
+    "compatibility": "API-key overrides used by optional native behavior and conflicting organization/project headers are outside managed subscription policy. Optional runtime parity remains unqualified."
+  },
+  "implementation": [
+    {
+      "path": "/private/tmp/swarm-seamless-implementation-20261024/internal/logins/codex_dotenv.go",
+      "sha256": "5cf4a77fbbacc6a1f4becd24bb6815d369821569b28189af9a784f4ec4cacc5b"
+    },
+    {
+      "path": "/private/tmp/swarm-seamless-implementation-20261024/internal/logins/codex_dotenv_test.go",
+      "sha256": "270a50bcbbe163cc69f2199246a23694974ed71a00ee5fe8c4a00417ce7f133f"
+    },
+    {
+      "path": "/private/tmp/swarm-seamless-implementation-20261024/internal/shim/backend_external_auth_test.go",
+      "sha256": "b350c973d71f9ca6f42a84ef460b1f926314b281fadb2da26541baf84ae22740"
+    }
+  ],
+  "verification": {
+    "toolchain": "Go1.26.10 darwin/arm64, restored into a separate shared recovery cache after the old cache lacked standard-library sources; no cache copies per worktree.",
+    "meaningful_red": {
+      "path": "/private/tmp/swarm-codex-policy-gates-20261026/red-r4.jsonl",
+      "sha256": "c7abd97fb76d241bfb815810c8358238cfa24c42e0aaf41f801df9381abcde10"
+    },
+    "red_interpretation": "The prior implementation accepted the newly refused assignments across birth, normal/replacement and final-shim checks. Earlier infrastructure failures were not regression evidence.",
+    "focused_green": {
+      "evidence": {
+        "path": "/private/tmp/swarm-codex-policy-gates-20261026/green.jsonl",
+        "sha256": "ae8c2e0aae6e6b8115028c5594bf309b4d2c719ccbf68a65948554c61f1a25ff"
+      },
+      "passed": 53
+    },
+    "full_logins_shim_race": {
+      "evidence": {
+        "path": "/private/tmp/swarm-codex-policy-gates-20261026/full-race.jsonl",
+        "sha256": "a692726d886577c52f10015ab452551505830f5d82d9811781140dde7db55415"
+      },
+      "passed": 852,
+      "skipped": [
+        {
+          "package": "github.com/Nathandela/swarm/internal/logins",
+          "test": "TestCodexGrantDefaultInventoryClosesStartupIdentityGap"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeOwnedPrepareHelper"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeRunRefusalsPublishRemovableOwnedProof/missing-image"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeRunRefusalsPublishRemovableOwnedProof/changed-image"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeRunRefusalsPublishRemovableOwnedProof/unqualified-image"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeRunRefusalsPublishRemovableOwnedProof/unqualified-image-metadata"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeRunRefusalsPublishRemovableOwnedProof/auth-env"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeRunRefusalsPublishRemovableOwnedProof/stale-epoch"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeOwnedStartSyntheticHeldImageAndExclusiveClaim"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeOwnedStartSyntheticNewEpochRefusesAfterCustody"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeOwnedStartSyntheticPublicationFailureReturnsUnwaitedChild"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeOwnedStartSyntheticStartErrorConsumesAttempt"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeOwnedStartSyntheticPendingCancellation/term"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeOwnedStartSyntheticPendingCancellation/int"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeOwnedStartSyntheticPendingCancellation/hup"
+        },
+        {
+          "package": "github.com/Nathandela/swarm/internal/shim",
+          "test": "TestClaudeOwnedStartSyntheticPendingCancellation/clear"
+        }
+      ]
+    },
+    "repository_build": {
+      "evidence": {
+        "path": "/private/tmp/swarm-codex-policy-gates-20261026/build.log",
+        "sha256": "d9cde21c125c475845d5226ed7c7d9f78feafbdef6c8b42f6269d4eb19cf364f"
+      },
+      "exit": 0
+    },
+    "repository_vet": {
+      "evidence": {
+        "path": "/private/tmp/swarm-codex-policy-gates-20261026/vet.log",
+        "sha256": "9090a044fa638d3a91429f44a056d5b4363cc2d6b2e241ba820240e315a23aba"
+      },
+      "exit": 0
+    },
+    "repository_lint": {
+      "evidence": {
+        "path": "/private/tmp/swarm-codex-policy-gates-20261026/lint-r3.log",
+        "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+      },
+      "exit_evidence": {
+        "path": "/private/tmp/swarm-codex-policy-gates-20261026/lint-r3-exit.json",
+        "sha256": "15c5fc82b9f6acd127f44b545787872a29548125205b36b446ad834524ca1fec"
+      },
+      "exit": 0
+    }
+  },
+  "limits": [
+    "No real-account, native adoption, seamless rotation, automatic continuation or optional realtime/Guardian runtime qualification is added.",
+    "Owner edits after file validation remain outside the check; historical workload-only verification is unchanged.",
+    "Main, live sessions, account credentials, migration and release tags are unchanged."
+  ]
+}

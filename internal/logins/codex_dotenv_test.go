@@ -22,9 +22,9 @@ func codexDotenvBirthFixture(t *testing.T) (*Store, Runtime) {
 	return s, rt
 }
 
-func TestCodexDotenvRejectsWorkloadIdentity(t *testing.T) {
+func TestCodexDotenvRejectsAuthSelectors(t *testing.T) {
 	s, rt := codexDotenvBirthFixture(t)
-	for _, key := range []string{"OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT"} {
+	for _, key := range []string{"OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT", "OPENAI_API_KEY", "OPENAI_ORGANIZATION", "OPENAI_PROJECT"} {
 		for _, value := range []string{"synthetic-private-value", ""} {
 			t.Run(key+"/"+value, func(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(rt.Home, ".env"), []byte("export "+key+"="+value+"\r\n"), 0600); err != nil {
@@ -32,7 +32,7 @@ func TestCodexDotenvRejectsWorkloadIdentity(t *testing.T) {
 				}
 				_, err := s.PrepareCodexExternalBirth(rt, nil)
 				if !errors.Is(err, ErrIneligible) {
-					t.Fatalf("workload identity assignment accepted: %v", err)
+					t.Fatalf("auth selector assignment accepted: %v", err)
 				}
 				if !strings.Contains(err.Error(), key) || strings.Contains(err.Error(), "synthetic-private-value") {
 					t.Fatalf("diagnostic must identify only the selector: %v", err)
@@ -42,20 +42,23 @@ func TestCodexDotenvRejectsWorkloadIdentity(t *testing.T) {
 	}
 }
 
-func TestCodexWorkloadIdentityNeverInherited(t *testing.T) {
+func TestCodexAuthSelectorsNeverInherited(t *testing.T) {
 	rt := Runtime{Provider: ProviderCodex, Epoch: 1, Identity: identityDigest(ProviderCodex, "a"), Home: "/private/native"}
 	env, err := prepareEnvironment(rt, "", []string{
 		"PATH=/bin", "TOOL_SETTING=keep",
 		"OPENAI_FEDERATION_RULE_ID=synthetic-rule",
 		"OPENAI_IDENTITY_TOKEN_FILE=/private/synthetic-assertion",
 		"OPENAI_WORKLOAD_IDENTITY_CONTEXT=",
+		"OPENAI_API_KEY=synthetic-api-key",
+		"OPENAI_ORGANIZATION=synthetic-organization",
+		"OPENAI_PROJECT=synthetic-project",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"PATH=/bin", "TOOL_SETTING=keep", "CODEX_HOME=/private/native"}
 	if !reflect.DeepEqual(env, want) {
-		t.Fatalf("workload identity selectors retained: %v", env)
+		t.Fatalf("auth selectors retained: %v", env)
 	}
 }
 
@@ -82,11 +85,13 @@ func TestCodexDotenvCheckedOnEnvironmentPreparation(t *testing.T) {
 			if err := prepare(); err != nil {
 				t.Fatalf("clean home refused: %v", err)
 			}
-			if err := os.WriteFile(filepath.Join(rt.Home, ".env"), []byte("OPENAI_FEDERATION_RULE_ID=synthetic-rule\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if err := prepare(); !errors.Is(err, ErrIneligible) {
-				t.Fatalf("late dotenv selector accepted: %v", err)
+			for _, key := range []string{"OPENAI_FEDERATION_RULE_ID", "OPENAI_API_KEY", "OPENAI_ORGANIZATION", "OPENAI_PROJECT"} {
+				if err := os.WriteFile(filepath.Join(rt.Home, ".env"), []byte("export "+key+"=synthetic-private-value\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := prepare(); !errors.Is(err, ErrIneligible) {
+					t.Fatalf("late dotenv selector %s accepted: %v", key, err)
+				}
 			}
 		})
 	}
@@ -105,11 +110,11 @@ func TestCodexDotenvGrammar(t *testing.T) {
 		bad  bool
 	}{
 		{"empty", "", false},
-		{"comments", "# OPENAI_FEDERATION_RULE_ID=ignored\n  # unmatched '\" comment\r\n", false},
+		{"comments", "# OPENAI_FEDERATION_RULE_ID=ignored\n# OPENAI_API_KEY=ignored\n# OPENAI_ORGANIZATION=ignored\n# OPENAI_PROJECT=ignored\n  # unmatched '\" comment\r\n", false},
 		{"ordinary", "TOOL_SETTING=keep\nTool.Path=value\nexport=value\n", false},
 		{"exports_crlf", " export TOOL_SETTING = 'keep me' # '\" comment\r\n", false},
 		{"unicode_whitespace", "\u2003export\u2003TOOL_SETTING\u2003=\u2003value\u2003\n", false},
-		{"quoted_multiline", "TOOL_SETTING=\"first\nOPENAI_FEDERATION_RULE_ID=only-value-text\n# still a value\nlast\" # '\" comment\n", false},
+		{"quoted_multiline", "TOOL_SETTING=\"first\nOPENAI_FEDERATION_RULE_ID=only-value-text\nOPENAI_API_KEY=only-value-text\nOPENAI_ORGANIZATION=only-value-text\nOPENAI_PROJECT=only-value-text\n# still a value\nlast\" # '\" comment\n", false},
 		{"single_multiline", "TOOL_SETTING='first\nOPENAI_IDENTITY_TOKEN_FILE=only-value-text\nlast'\n", false},
 		{"large_leading_whitespace_multiline", largeMultiline, false},
 		{"selector_after_large_multiline", largeMultiline + "OPENAI_FEDERATION_RULE_ID=synthetic-private-value\n", true},
@@ -118,7 +123,9 @@ func TestCodexDotenvGrammar(t *testing.T) {
 		{"hash", "TOOL_SETTING=keep#literal # comment '\"\n", false},
 		{"substitutions", "TOOL_SETTING=\"${OTHER}/$OTHER-keep\"\nOTHER='${LITERAL}'\n", false},
 		{"native_filtered_keys", "CODEX_ACCESS_TOKEN=ignored\nCoDeX_API_KEY=ignored\n", false},
-		{"other_auth_policy_unchanged", "OPENAI_API_KEY=unchanged\nOPENAI_ORGANIZATION=unchanged\nOPENAI_PROJECT=unchanged\n", false},
+		{"api_key_assignment", "OPENAI_API_KEY=synthetic-private-value\n", true},
+		{"organization_assignment", "OPENAI_ORGANIZATION=synthetic-private-value\n", true},
+		{"project_assignment", "OPENAI_PROJECT=synthetic-private-value\n", true},
 		{"selector_after_multiline", "TOOL_SETTING='first\nlast'\nOPENAI_IDENTITY_TOKEN_FILE=synthetic-private-value\n", true},
 		{"duplicate_empty_selector", "OPENAI_FEDERATION_RULE_ID=synthetic-private-value\nOPENAI_FEDERATION_RULE_ID=\n", true},
 		{"missing_equals", "TOOL_SETTING synthetic-private-value\n", true},

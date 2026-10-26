@@ -298,3 +298,11 @@ Actual launch-path regressions pass, including final shim revalidation and
 multiline settings. The full account-store/shim race suites passed, followed by
 focused race and repository-wide build/vet/lint checks on the final source.
 This does not qualify native account adoption or separate realtime/Guardian auth.
+
+The [subscription policy checks](provider-logins/codex-subscription-policy-2026-10-26.json)
+also refuse `OPENAI_API_KEY`, `OPENAI_ORGANIZATION` and `OPENAI_PROJECT` in
+managed Codex `.env`, consistently with the inherited-environment filter.
+The existing parser and transport/tool settings are preserved. This enforces the
+selected-subscription policy; API-key-dependent optional behavior remains
+unqualified. It does not demonstrate a default Responses authentication bypass
+or a server-side account change.
