@@ -212,6 +212,9 @@ func (d *Daemon) semanticOperation(local, operationID string) (protocol.Semantic
 	if json.Unmarshal(rec.Request, &originIntent) == nil && originIntent.Version == 1 && originIntent.Origin != nil {
 		if originIntent.Origin.Validate() == nil {
 			result.Origin = originIntent.Origin
+			if originIntent.AgyInput != nil {
+				return d.agyNativeReceipt(local, operationID, originIntent, rec, result), nil
+			}
 			if originIntent.ClaudeInput != nil {
 				return d.claudeNativeReceipt(local, operationID, originIntent, rec, result), nil
 			}

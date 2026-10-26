@@ -26,6 +26,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/detect"
 	"github.com/Nathandela/swarm/internal/adapter/registry"
+	"github.com/Nathandela/swarm/internal/agyinput"
 	"github.com/Nathandela/swarm/internal/attach"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/hookclient"
@@ -136,6 +137,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchPilot(args[1:], stdout, stderr)
 	case "daemon":
 		return runDaemon(args[1:], stdout, stderr)
+	case "native-input":
+		return runNativeInput(args[1:], stderr)
 	case "shim":
 		return runShim(args[1:], stdout, stderr)
 	case "internal":
@@ -644,6 +647,7 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
+	AgyInput          *agyinput.Config     `json:"agy_input,omitempty"`
 	ClaudeInput       bool                 `json:"claude_input,omitempty"`
 	LogPath           string               `json:"log_path,omitempty"`
 	LoginRuntime      *logins.Runtime      `json:"login_runtime,omitempty"`
@@ -705,6 +709,7 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
+		AgyInput:     lc.AgyInput,
 		ClaudeInput:  lc.ClaudeInput,
 		LogPath:      lc.LogPath,
 		OpenCode:     lc.OpenCode,
