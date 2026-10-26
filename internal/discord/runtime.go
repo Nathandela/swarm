@@ -312,7 +312,7 @@ func (b *Bridge) pick(ctx context.Context, in Input, rows []Worker) {
 		b.notify(ctx, in.Route, "There are no agents in this Swarm yet.", nil)
 		return
 	}
-	if err = b.Service.Propose(ctx, r.Ref, ids); err != nil {
+	if err = b.Service.Directory(ctx, r.Ref, ids); err != nil {
 		b.notify(ctx, in.Route, err.Error(), nil)
 	}
 	b.start(ctx, func() { _, _ = b.receptionist(ctx, r) })

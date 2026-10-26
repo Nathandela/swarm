@@ -160,6 +160,18 @@ func TestClaudeNativeRejectedUnknownSettlesFailureAndUnfencesNextMessage(t *test
 	<-done
 }
 
+func TestClaudeNativeStartedReceiptDistinguishesQueueAdmission(t *testing.T) {
+	r := newClaudeReceiptRig(t)
+	r.prepare(t, "native-started", "message")
+	if _, err := r.client.Exchange(context.Background(), r.worker, "native-started", "started", ""); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := r.sk.semanticOperation(r.local, "native-started")
+	if err != nil || receipt.State != "admitted" {
+		t.Fatal("native start was indistinguishable from queued submission", receipt, err)
+	}
+}
+
 func TestClaudeNativeUnretainedReceiptCannotCommitSuccess(t *testing.T) {
 	r := newClaudeReceiptRig(t)
 	const id = "native-unretained"

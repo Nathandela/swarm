@@ -28,6 +28,10 @@ type receiptReader interface {
 	Receipt(context.Context, string, string) (protocol.SemanticMessageReceipt, error)
 }
 
+func queuedNativeInput(r Request) bool {
+	return r.Target.Agent == "claude" && r.DeliveryState == StateSent && deliveryStatus(r).NativeState == "submitted"
+}
+
 func (s *Store) PendingDeliveries(now time.Time, limit int) (out []PendingDelivery, err error) {
 	if limit < 1 || limit > MaxRequests {
 		return nil, ErrInvalid
@@ -42,7 +46,7 @@ func (s *Store) PendingDeliveries(now time.Time, limit int) (out []PendingDelive
 				return e
 			}
 			r := record.Request
-			if (r.DeliveryState != StateSending && r.DeliveryState != StateUncertain) || r.Target.ID == "routing" || r.Target.ID == "control" || strings.HasPrefix(r.EventID, "control:") || !now.Before(r.ExpiresAt) || optedOut(tx, r.Target) {
+			if (r.DeliveryState != StateSending && r.DeliveryState != StateUncertain && !queuedNativeInput(r)) || r.Target.ID == "routing" || r.Target.ID == "control" || strings.HasPrefix(r.EventID, "control:") || !now.Before(r.ExpiresAt) || optedOut(tx, r.Target) {
 				return nil
 			}
 			out = append(out, PendingDelivery{r.Ref, r.OperationID, r.Target.ID, r.Target.Instance, r.DeliveryState})
@@ -82,7 +86,7 @@ func (s *Service) Reconcile(ctx context.Context, ref string) (DeliveryStatus, er
 		return DeliveryStatus{}, e
 	}
 	status := deliveryStatus(r)
-	if (r.DeliveryState != StateSending && r.DeliveryState != StateUncertain) || r.Target.ID == "routing" || r.Target.ID == "control" || strings.HasPrefix(r.EventID, "control:") {
+	if (r.DeliveryState != StateSending && r.DeliveryState != StateUncertain && !queuedNativeInput(r)) || r.Target.ID == "routing" || r.Target.ID == "control" || strings.HasPrefix(r.EventID, "control:") {
 		return status, nil
 	}
 	reader, ok := s.Workers.(receiptReader)
@@ -104,7 +108,12 @@ func (s *Service) Reconcile(ctx context.Context, ref string) (DeliveryStatus, er
 	if e != nil {
 		return status, e
 	}
-	if e = s.Store.FinishDelivery(ref, state, string(evidence)); e != nil {
+	if queuedNativeInput(r) {
+		e = s.Store.observeNativeDisposition(r, receipt, s.Now())
+	} else {
+		e = s.Store.FinishDelivery(ref, state, string(evidence))
+	}
+	if e != nil {
 		if !errors.Is(e, ErrConflict) {
 			return status, e
 		}
@@ -119,7 +128,35 @@ func (s *Service) Reconcile(ctx context.Context, ref string) (DeliveryStatus, er
 	}
 	r.DeliveryState = state
 	r.NativeEvidence = string(evidence)
+	if state == StateFailed {
+		_, _ = s.Control(ctx, r.Ref, "native-rejected", Outbound{Route: r.Route, Text: "The agent rejected this message."})
+	}
 	return deliveryStatus(r), nil
+}
+
+func (s *Store) observeNativeDisposition(previous Request, receipt protocol.SemanticMessageReceipt, now time.Time) error {
+	if !queuedNativeInput(previous) || (receipt.State != "submitted" && receipt.State != "admitted" && receipt.State != "rejected") {
+		return ErrInvalid
+	}
+	raw, err := json.Marshal(receipt)
+	if err != nil || len(raw) > 16<<10 {
+		return ErrInvalid
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		record, err := activeRequest(tx, previous.Ref, now)
+		if err != nil {
+			return err
+		}
+		if record.Request.NativeEvidence == string(raw) {
+			return nil
+		}
+		if !queuedNativeInput(record.Request) || record.Request.NativeEvidence != previous.NativeEvidence {
+			return ErrConflict
+		}
+		record.Request.NativeEvidence = string(raw)
+		record.Request.DeliveryState = receiptState(receipt.State)
+		return putJSON(tx, "requests", []byte(previous.Ref), record)
+	})
 }
 func (s *Service) ReconcilePending(ctx context.Context) error {
 	if !s.reconcileMu.TryLock() {

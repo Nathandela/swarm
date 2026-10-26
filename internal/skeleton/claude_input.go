@@ -113,8 +113,10 @@ func (d *Daemon) claudeNativeReceipt(local, operationID string, intent composerO
 		return result
 	}
 	switch retained.State {
-	case "submitted", "started":
+	case "submitted":
 		result.State = "submitted"
+	case "started":
+		result.State = "admitted"
 	case "rejected":
 		result.State = "rejected"
 		result.Reason = retained.Reason

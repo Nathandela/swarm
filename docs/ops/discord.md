@@ -46,6 +46,8 @@ Rename preserves the installation identity and ledger. Discord's public bot nick
 
 All agent work uses existing native coding agents, tools and subagents. The bot does not act as another model or transcript viewer. It does not inspect unrelated channels or anyone's other personal messages.
 
+The receptionist reuses one registered agent for each configured CLI/model in this place. Its default Codex model must be a discovered Luna model; if unavailable, the directory still works. Select Claude Haiku with `connect --receptionist-cli claude --receptionist-model haiku`. It uses the installed CLI's account. A stopped role can be explicitly reset by the owner with `/swarm receptionist-reset`; an uncertain launch is never blindly replaced.
+
 ## Owner actions
 
 An external request is clearly attributed. The owner can press **Treat as my instruction** or use the message context command with that name. This endorses that selected message; it does not require a separate task plan and does not wait for the target to become idle. Edited or deleted original messages cannot silently reuse an earlier endorsement.
@@ -80,7 +82,7 @@ Use the exact `--state-dir` shown in a request's instructions if it has one. Con
 
 New qualified Claude sessions use a session-owned native mod. New qualified agy sessions register their exact native message endpoint through a normal one-time native bootstrap command; its normal permission must be answered locally. Existing unregistered/old shims refuse unsafe ingress and require an explicit owner-selected refresh. No check of terminal appearance is used as permission to press Enter. Codex/OpenCode use their existing structured message paths. See [native evidence](../verification/discord-protocol/README.md) for exact qualification boundaries and modern Hermes details.
 
-Busy-agent behavior belongs to the native provider. An admission receipt proves only its stated submission/admission outcome, not task completion. A timeout may mean the input landed. The connector reconciles the original receipt and never blindly submits it again. Similarly, an uncertain Discord publication is not blindly reposted; a nonce is not a permanent exactly-once guarantee. Do not create a new operation merely to suppress an uncertain status.
+Busy-agent behavior belongs to the native provider. A `submitted` receipt proves handoff to its message API; `admitted` can prove native prompt start. Neither proves task completion. Claude's queued submission remains observed until native start or rejection, and a later rejection gets a generic status notice without replay. A timeout may mean the input landed. The connector reconciles the original receipt and never blindly submits it again. Similarly, an uncertain Discord publication is not blindly reposted; a nonce is not a permanent exactly-once guarantee. Do not create a new operation merely to suppress an uncertain status.
 
 The ledger bounds active request/publication counts and logical bytes. It refuses new effects when full; unresolved guards are retained. This is not a physical disk quota. `status` reports current connection state; ordinary local Swarm operation continues during Discord outages.
 

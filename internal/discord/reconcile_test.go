@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/Nathandela/swarm/internal/protocol"
-	bolt "go.etcd.io/bbolt"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/protocol"
+	bolt "go.etcd.io/bbolt"
 )
 
 type receiptWorkers struct {
@@ -71,6 +72,38 @@ func TestReconcileReadsExactReceiptWithoutResending(t *testing.T) {
 			got, e := s.Store.Request(r.Ref, s.Now())
 			if e != nil || got.DeliveryState != want || status.DeliveryState != want || len(w.sends) != 1 || w.reads != 1 {
 				t.Fatal(status, got.DeliveryState, e, len(w.sends), w.reads)
+			}
+		})
+	}
+}
+
+func TestReconcileObservesClaudeQueueDropAfterSubmittedReceipt(t *testing.T) {
+	for _, native := range []string{"admitted", "rejected"} {
+		t.Run(native, func(t *testing.T) {
+			s, w, _ := serviceRig(t)
+			w.rows[0].Agent = "claude"
+			reader := &receiptWorkers{fakeWorkers: w}
+			s.Workers = reader
+			r, err := s.Handle(context.Background(), incoming())
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending, err := s.Store.PendingDeliveries(s.Now(), MaxRequests)
+			if err != nil || len(pending) != 1 {
+				t.Fatal("submitted native queue was no longer observed", pending, err)
+			}
+			reader.receipt = protocol.SemanticMessageReceipt{OperationID: r.OperationID, Session: r.Target.ID, SessionInstance: r.Target.Instance, State: native}
+			got, err := s.Reconcile(context.Background(), r.Ref)
+			want := StateSent
+			if native == "rejected" {
+				want = StateFailed
+			}
+			if err != nil || got.DeliveryState != want || got.NativeState != native || len(w.sends) != 1 {
+				t.Fatal("native queue outcome hidden or input replayed", got, err)
+			}
+			pending, err = s.Store.PendingDeliveries(s.Now(), MaxRequests)
+			if err != nil || len(pending) != 0 {
+				t.Fatal("terminal native queue was still polled", pending, err)
 			}
 		})
 	}
