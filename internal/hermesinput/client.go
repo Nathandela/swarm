@@ -1,4 +1,4 @@
-// Package hermesinput submits messages to a shim-owned Hermes native gateway.
+// Package hermesinput submits messages to a provider-owned Hermes native gateway.
 // A prompt receipt is admission evidence, never proof the model read the message.
 package hermesinput
 
@@ -23,16 +23,20 @@ import (
 
 const nativeProtocol = "hermes-gateway-v1"
 
-// Binding names one native owner incarnation and its session, never a global gateway.
+// Binding names one profile, native owner incarnation and canonical session.
 type Binding struct {
 	Home           string `json:"home"`
+	ControlHome    string `json:"control_home,omitempty"`
 	OwnerPID       int    `json:"owner_pid"`
 	OwnerStartTime int64  `json:"owner_start_time"`
 	InstanceID     string `json:"instance_id"`
 	SessionID      string `json:"session_id"`
+	AuthorityEpoch int64  `json:"authority_epoch,omitempty"`
+	CodeSHA        string `json:"code_sha,omitempty"`
 }
 
 type Receipt struct {
+	InputID             string `json:"input_id,omitempty"`
 	AdmissionID         string `json:"admission_id"`
 	Status              string `json:"status"`
 	ExecutionGeneration int64  `json:"execution_generation"`
@@ -53,13 +57,15 @@ var errUncertain = errors.New("hermes native submission outcome is uncertain; do
 func IsUncertain(err error) bool { return errors.Is(err, errUncertain) }
 
 type endpoint struct {
-	PID        int    `json:"pid"`
-	Protocol   int    `json:"runtime_protocol"`
-	InstanceID string `json:"instance_id"`
-	State      string `json:"state"`
-	Origin     string `json:"api_origin"`
-	Home       string `json:"hermes_home"`
-	Profiles   []struct {
+	PID            int    `json:"pid"`
+	Protocol       int    `json:"runtime_protocol"`
+	InstanceID     string `json:"instance_id"`
+	State          string `json:"state"`
+	Origin         string `json:"api_origin"`
+	Home           string `json:"hermes_home"`
+	AuthorityEpoch int64  `json:"authority_epoch"`
+	CodeSHA        string `json:"code_sha"`
+	Profiles       []struct {
 		ID   string `json:"profile_id"`
 		Home string `json:"home"`
 	} `json:"served_profiles"`
@@ -152,13 +158,23 @@ func identify(ctx context.Context, b Binding) (endpoint, error) {
 	if err != nil || b.OwnerPID <= 0 || b.OwnerStartTime <= 0 || start != b.OwnerStartTime {
 		return e, errors.New("hermes owner incarnation changed")
 	}
-	if err := control(ctx, b.Home, "identify", map[string]any{}, &e); err != nil {
+	controlHome := b.ControlHome
+	if controlHome == "" {
+		controlHome = b.Home
+	}
+	if err := control(ctx, controlHome, "identify", map[string]any{}, &e); err != nil {
 		return e, err
 	}
-	if e.PID != b.OwnerPID || e.Protocol != 1 || e.State != "ready" || e.InstanceID == "" || e.Home != b.Home || (b.InstanceID != "" && e.InstanceID != b.InstanceID) {
+	if e.PID != b.OwnerPID || e.Protocol != 1 || e.State != "ready" || e.InstanceID == "" || e.Home != controlHome || (b.InstanceID != "" && e.InstanceID != b.InstanceID) || b.AuthorityEpoch > 0 && e.AuthorityEpoch != b.AuthorityEpoch || b.CodeSHA != "" && e.CodeSHA != b.CodeSHA {
 		return e, errors.New("hermes native owner binding mismatch")
 	}
-	if len(e.Profiles) != 1 || e.Profiles[0].ID != b.Home || e.Profiles[0].Home != b.Home {
+	matched := 0
+	for _, profile := range e.Profiles {
+		if profile.ID == b.Home && profile.Home == b.Home {
+			matched++
+		}
+	}
+	if matched != 1 {
 		return e, errors.New("hermes native owner serves another profile")
 	}
 	return e, nil
@@ -179,7 +195,11 @@ func connect(ctx context.Context, b Binding) (*websocket.Conn, error) {
 		InstanceID string `json:"instance_id"`
 		Protocol   int    `json:"runtime_protocol"`
 	}
-	if err := control(ctx, b.Home, "session-ticket", map[string]string{"profile_id": b.Home, "instance_id": e.InstanceID, "purpose": "interactive"}, &grant); err != nil {
+	controlHome := b.ControlHome
+	if controlHome == "" {
+		controlHome = b.Home
+	}
+	if err := control(ctx, controlHome, "session-ticket", map[string]string{"profile_id": b.Home, "instance_id": e.InstanceID, "purpose": "interactive"}, &grant); err != nil {
 		return nil, err
 	}
 	if grant.Ticket == "" || grant.ProfileID != b.Home || grant.InstanceID != e.InstanceID || grant.Protocol != 1 {

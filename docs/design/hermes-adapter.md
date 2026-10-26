@@ -13,9 +13,10 @@ classic interactive CLI runs inside it, and the engine derives status from the
 emulated grid. The adapter remains a stateless strategy object under T-1.
 
 The separate [native message ingress qualification](../verification/discord-protocol/hermes-native-ingress.md)
-records stable v0.22.5 owned-gateway and multiclient TUI evidence. Its runtime
-primitives do not change the classic adapter below or establish daemon/shim,
-authentication, or Discord release acceptance by themselves.
+records stable v0.22.5 owned-gateway and multiclient TUI evidence. The separate activation-gated route uses the provider's persistent shared owner,
+canonical local identities and multiclient TUI. It preserves the classic launch
+below when disabled or below the qualified native floor. Source qualification,
+joined job completion and Discord release acceptance remain separate gates.
 
 ## Frozen decisions
 

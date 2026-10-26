@@ -1,11 +1,12 @@
 # Hermes native message ingress qualification
 
-2026-10-26, macOS arm64. The new `internal/hermesinput` package is a native
-runtime primitive; this evidence does not claim daemon/shim integration or an
-all-five Discord release gate has passed. The existing classic adapter remains
-unchanged.
+2026-10-26, macOS arm64. The activation-gated shared-owner Hermes runtime is wired through the daemon,
+shim, semantic protocol, native status sampling, and saved-session resume.
+The existing classic launch remains the path when activation is disabled or the
+installed version is below v0.22.5. All-five release and guarded shared-owner
+source qualification remain open.
 
-## Qualified native boundary
+## Historical native API and TUI qualification
 
 The executable was the real upstream Hermes console entrypoint in an isolated
 Python 3.14.2 environment. Both source pins passed against a loopback OpenAI-wire
@@ -25,7 +26,7 @@ The TUI was built from each pin's locked dependencies. Node 26.12.1 and npm
 The test Python environment installed upstream core requirements with its
 declared Pillow/cryptography overrides; it was not a packaged Hermes install.
 
-`TestNativeSourcePermissionAndOwnedLifecycle` starts two independent private
+The initial source prototype started two independent private
 foreground gateways through the native command:
 
 ```text
@@ -84,10 +85,22 @@ not a model-read or completion receipt.
 
 ## Open integration and setup boundaries
 
-Daemon/shim launch fields, durable incarnation binding, native observation,
-receipt mapping, and normal stop/reconnect wiring are not implemented by this
-package alone. The package's `MinimumVersion` is v0.22.5; production admission
-still needs an explicit modern runtime selection and detected-version gate.
+The implemented route calls the normal provider `gateway ensure` lifecycle
+and reuses the configured native home/profile and its shared persistent owner.
+It creates one canonical native session per fresh Swarm worker, attaches a native
+TUI viewer, and never signals the shared gateway when stopping a worker. The
+normal native authentication flow is reused; there is no per-worker home or
+profile clone. Native session descriptors bind the worker/shim generation to
+profile home, control home, owner PID/start, instance, code SHA and authority epoch.
+Schema 5 prevents older daemons from treating this native runtime as a classic
+PTY-owned worker.
+
+The deterministic assembled test covers A/B session isolation, literal native
+input, durable retry without another submission, restart without another native
+session or turn, scoped stop, and retained workspace uncertainty. Native status
+sampling bypasses the classic grid classifier. A native viewer exit sets
+`NativeWorkUnknown` and NeedsInput; cancellation acknowledgement is not joined
+completion, so Delete and workspace removal remain blocked.
 
 Native profile cloning is not yet a complete shared-auth solution for an
 independent owner. Hermes's normal profile fallback can share root OAuth
@@ -104,16 +117,18 @@ claimed here. The source test proves normal shutdown of its own native owner
 and survival of another; it does not prove that arbitrary native descendants
 cannot leave that owner's process group.
 
-## Reproduce
+## Current verification boundary
 
-```bash
-SWARM_HERMES_NATIVE_BINARY=/path/to/isolated/venv/bin/hermes \
-SWARM_HERMES_NATIVE_SOURCE=/path/to/pinned/hermes/source \
-SWARM_HERMES_NATIVE_TUI_DIR=/path/to/pinned/hermes/source/ui-tui \
-SWARM_HERMES_NATIVE_NODE=/path/to/pinned/node \
-go test ./internal/hermesinput -run TestNativeSource -v -count=1 -timeout=120s
-```
+The historical per-worker-owner prototype and its unguarded source runner were
+removed when the shared-owner architecture was approved. Its source receipts
+above remain historical API/TUI evidence, not proof of the approved shared-owner
+core path. Future real-provider qualification must use
+`scripts/verification/native_fixture_sandbox.py`: scratch-only native writes,
+private physical CLI copies, and only the explicit fake-provider/native-owner
+local ports and private Unix sockets. Linux additionally requires a read-only
+mount and fresh loopback-only network namespace.
 
-With no native binary variable, that source qualification is explicitly skipped.
-The deterministic package fixtures still run. `go test -race`, `go vet`, and
-the package lint gate are separate from the opt-in native source proof.
+`TestHermesSharedOwnerSemanticSendRestartAndStopIsolation` exercises the assembled
+core with a deterministic native wire fixture. Package race checks, vet and lint
+are distinct from the remaining guarded real shared-owner A/B background and
+subagent qualification.

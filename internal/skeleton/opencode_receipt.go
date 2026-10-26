@@ -209,9 +209,12 @@ func (d *Daemon) semanticOperation(local, operationID string) (protocol.Semantic
 		return result, nil
 	}
 	var originIntent composerOriginIntent
-	if json.Unmarshal(rec.Request, &originIntent) == nil && originIntent.Version == 1 && originIntent.Origin != nil {
-		if originIntent.Origin.Validate() == nil {
+	if json.Unmarshal(rec.Request, &originIntent) == nil && originIntent.Version == 1 && (originIntent.Origin != nil || originIntent.HermesInput != nil) {
+		if originIntent.Origin == nil || originIntent.Origin.Validate() == nil {
 			result.Origin = originIntent.Origin
+			if originIntent.HermesInput != nil {
+				return d.hermesNativeReceipt(local, operationID, originIntent, rec, result), nil
+			}
 			if originIntent.ClaudeInput != nil {
 				return d.claudeNativeReceipt(local, operationID, originIntent, rec, result), nil
 			}

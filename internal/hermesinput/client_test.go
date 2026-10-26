@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,7 +20,15 @@ import (
 
 func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 	t.Helper()
-	home := t.TempDir()
+	scratch, err := os.MkdirTemp("", "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(scratch) })
+	home, err := filepath.EvalSymlinks(scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(home, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +67,19 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 					t.Errorf("submit params = %#v", req.Params)
 				}
 			}
-			result := map[string]any{"session_id": "20261026_120000_1234abcd", "execution_generation": 7}
+			result := map[string]any{"session_id": "local-" + strings.Repeat("a", 64), "execution_generation": 7, "subscription_id": "sub-1", "authority_epoch": 1, "execution_state": "idle", "pending": []any{}}
+			if req.Method == "setup.status" {
+				result = map[string]any{"provider_configured": true}
+			}
+			if req.Method == "process.list" {
+				result = map[string]any{"processes": []any{}}
+			}
+			if req.Method == "subagent.list" {
+				result = map[string]any{"subagents": []any{}, "delegations": []any{}}
+			}
+			if req.Method == "session.detach" {
+				result = map[string]any{"session_id": req.Params["session_id"], "subscription_id": req.Params["subscription_id"], "detached": true}
+			}
 			if req.Method == "prompt.submit" {
 				result = map[string]any{"admission_id": "admission-1", "status": "queued", "execution_generation": 7, "authority_epoch": 2}
 			}
@@ -92,8 +113,8 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 				if json.NewDecoder(bufio.NewReader(c)).Decode(&req) != nil {
 					return
 				}
-				result := map[string]any{"pid": os.Getpid(), "runtime_protocol": 1, "instance_id": "instance-1", "state": "ready", "api_origin": server.URL, "hermes_home": home,
-					"served_profiles": []map[string]string{{"profile_id": home, "home": home}}}
+				result := map[string]any{"pid": os.Getpid(), "runtime_protocol": 1, "instance_id": "instance-1", "state": "ready", "api_origin": server.URL, "hermes_home": home, "authority_epoch": 1, "code_sha": strings.Repeat("c", 40),
+					"served_profiles": []map[string]string{{"profile_id": home, "home": home}, {"profile_id": home + "/other", "home": home + "/other"}}}
 				if req.Verb == "session-ticket" {
 					result = map[string]any{"ticket": "test-ticket", "profile_id": home, "instance_id": "instance-1", "runtime_protocol": 1}
 				}
@@ -105,7 +126,7 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Binding{Home: home, OwnerPID: os.Getpid(), OwnerStartTime: start, InstanceID: "instance-1", SessionID: "20261026_120000_1234abcd"}, &methods, mu
+	return Binding{Home: home, OwnerPID: os.Getpid(), OwnerStartTime: start, InstanceID: "instance-1", SessionID: "local-" + strings.Repeat("a", 64)}, &methods, mu
 }
 
 func TestSubmitDuringPermissionUsesOnlyNativePromptIngress(t *testing.T) {

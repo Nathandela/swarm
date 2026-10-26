@@ -597,6 +597,9 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 		}
 		return code, err
 	}
+	if meta.HermesNative {
+		return d.sendHermesNative(local, operationID, req, begin, lane, admittedBarrier)
+	}
 	if code, err := d.requireStructuredComposer(local, req.Session); err != nil {
 		return code, err
 	}

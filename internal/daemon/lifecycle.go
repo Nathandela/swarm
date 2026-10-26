@@ -28,17 +28,30 @@ func (d *Daemon) Kill(id string) error {
 	running := m.Status.Process == status.ProcessRunning
 	d.mu.Unlock()
 	if !running {
+		if m.HermesNative {
+			return errors.Join(errors.New("hermes native stop requested; completion remains unknown and the workspace is retained"), d.stopHermes(id))
+		}
 		return nil
+	}
+	var nativeStopErr error
+	if m.HermesNative {
+		nativeStopErr = d.stopHermes(id)
 	}
 	// Re-verify the shim identity before signalling: if (PID, start-time) no longer
 	// matches, the shim exited or its PID was reused, so signalling its socket could
 	// hit a rebound stranger. Resolve as lost instead of signalling (S3, F6).
 	if !d.shimIdentityMatches(m) {
 		d.markLost(id)
+		if m.HermesNative {
+			return errors.Join(errors.New("hermes viewer is unavailable; native job completion is unknown"), nativeStopErr)
+		}
 		return nil
 	}
 	if err := signalShim(shimSocketPath(d.cfg.StateDir, id), shimwire.SigTerm); err != nil {
 		return fmt.Errorf("daemon: kill %s: %w", id, err)
+	}
+	if m.HermesNative {
+		return errors.Join(errors.New("hermes native stop requested; completion remains unknown and the workspace is retained"), nativeStopErr)
 	}
 	return nil
 }
@@ -68,10 +81,18 @@ func (d *Daemon) Delete(id string) error {
 
 	// Phase 1 — TERMINATION FIRST. On failure (a live, identity-matched shim we
 	// could not confirm dead) error out having mutated nothing.
+	var nativeStopErr error
+	if ok && meta.HermesNative {
+		nativeStopErr = d.stopHermes(id)
+	}
 	if ok && meta.Status.Process == status.ProcessRunning {
 		if !terminateForDeleteFn(d, id, meta) {
 			return fmt.Errorf("daemon: delete %s: shim %d still alive after termination attempt; session not removed", id, meta.ShimPID)
 		}
+	}
+	if ok && meta.HermesNative && meta.ShimPID > 0 {
+		// shortcut: cancellation is not a joined native proof, retain this scope until Hermes exposes one.
+		return errors.Join(errors.New("hermes native job completion is unproven; session and workspace retained"), nativeStopErr)
 	}
 
 	// Termination can overlap; cleanup cannot, or two callers could tear down one worktree.

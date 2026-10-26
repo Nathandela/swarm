@@ -26,6 +26,10 @@ const SchemaVersion = 1
 // LoginSchemaVersion protects provider runtime provenance from older readers.
 const LoginSchemaVersion = 4
 
+// HermesSchemaVersion prevents older daemons treating a native viewer exit as
+// proof that the persistent owner's work and workspace have stopped.
+const HermesSchemaVersion = 5
+
 // metaFile is the committed per-session state file name within a session dir.
 const metaFile = "meta.json"
 
@@ -107,6 +111,7 @@ type Meta struct {
 	LoginRuntime    *logins.Runtime  `json:"login_runtime,omitempty"`
 	InputEmbargo    string           `json:"input_embargo,omitempty"`
 	RequiredRuntime string           `json:"required_runtime,omitempty"`
+	HermesNative    bool             `json:"hermes_native,omitempty"`
 	OpenCodeBinding *OpenCodeBinding `json:"opencode_binding,omitempty"`
 	// CLIIdentity is the selected installation observed at launch; nil is unknown.
 	// It does not attest a running process or a wrapper's dependencies.
@@ -241,7 +246,12 @@ func (s *Store) Save(m Meta) error {
 	}
 	m.Env = FilterEnv(m.Env)
 	m.SchemaVersion = SchemaVersion
-	if m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
+	if m.HermesNative {
+		if !validHermesMeta(m) {
+			return fmt.Errorf("persist: invalid Hermes native runtime")
+		}
+		m.SchemaVersion = HermesSchemaVersion
+	} else if m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
 		if !validOpenCodeMeta(m) {
 			return fmt.Errorf("persist: invalid OpenCode runtime binding")
 		}
@@ -371,8 +381,14 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	if m.ID != wantID {
 		return Meta{}, fmt.Errorf("meta id %q does not match session directory %q", m.ID, wantID)
 	}
-	if m.SchemaVersion > LoginSchemaVersion {
-		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, LoginSchemaVersion)
+	if m.SchemaVersion > HermesSchemaVersion {
+		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, HermesSchemaVersion)
+	}
+	if m.SchemaVersion == HermesSchemaVersion || m.HermesNative {
+		if m.SchemaVersion != HermesSchemaVersion || !validHermesMeta(m) {
+			return Meta{}, fmt.Errorf("invalid Hermes native runtime")
+		}
+		return m, nil
 	}
 	if m.SchemaVersion == OpenCodeSchemaVersion || m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
 		if m.SchemaVersion != OpenCodeSchemaVersion || !validOpenCodeMeta(m) {
@@ -397,6 +413,10 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 		return Meta{}, err
 	}
 	return m, nil
+}
+
+func validHermesMeta(m Meta) bool {
+	return m.HermesNative && m.AgentType == "hermes" && m.CLIIdentity != nil && m.CLIIdentity.Version != "" && m.LoginRuntime == nil && m.RequiredRuntime == "" && m.OpenCodeBinding == nil && m.InputEmbargo == ""
 }
 
 func validLoginMeta(m Meta) bool {

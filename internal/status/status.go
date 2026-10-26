@@ -50,9 +50,12 @@ const (
 
 // Status is a session's raw state along the three orthogonal dimensions.
 type Status struct {
-	Process     Process
-	Turn        Turn
-	Interaction Interaction
+	// NativeWorkUnknown survives a viewer exit when its native owner's jobs have
+	// no joined terminal proof. It must never be displayed as completed work.
+	NativeWorkUnknown bool `json:",omitempty"`
+	Process           Process
+	Turn              Turn
+	Interaction       Interaction
 	// Attention keeps a verified pending request visible during concurrent work.
 	Attention bool `json:",omitempty"`
 }
@@ -60,6 +63,9 @@ type Status struct {
 // Derive prioritizes terminal lifecycle, then verified attention, then the
 // ordinary turn/interaction rules. Attention does not falsify active sibling work.
 func Derive(s Status) Group {
+	if s.NativeWorkUnknown {
+		return GroupNeedsInput
+	}
 	if s.Process != ProcessRunning {
 		return GroupCompleted
 	}

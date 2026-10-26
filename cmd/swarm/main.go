@@ -28,6 +28,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/attach"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/hermesinput"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -644,26 +645,27 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
-	ClaudeInput       bool                 `json:"claude_input,omitempty"`
-	LogPath           string               `json:"log_path,omitempty"`
-	LoginRuntime      *logins.Runtime      `json:"login_runtime,omitempty"`
-	LoginStateRoot    string               `json:"login_state_root,omitempty"`
-	LoginSwitchID     string               `json:"login_switch_id,omitempty"`
-	LoginSwitchSource string               `json:"login_switch_source,omitempty"`
-	NativeProvider    string               `json:"native_provider,omitempty"`
-	OpenCode          *shim.OpenCodeConfig `json:"opencode,omitempty"`
-	InputEmbargo      string               `json:"input_embargo,omitempty"`
-	InputEmbargoToken string               `json:"input_embargo_token,omitempty"`
-	CLIIdentity       *persist.CLIIdentity `json:"cli_identity,omitempty"`
-	SessionID         string               `json:"session_id"`
-	Argv              []string             `json:"argv"`
-	Cwd               string               `json:"cwd"`
-	Env               []string             `json:"env"`
-	SocketPath        string               `json:"socket_path"`
-	SessionDir        string               `json:"session_dir"`
-	Cols              int                  `json:"cols"`
-	Rows              int                  `json:"rows"`
-	GraceMS           int                  `json:"grace_ms"`
+	HermesInput       *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
+	ClaudeInput       bool                       `json:"claude_input,omitempty"`
+	LogPath           string                     `json:"log_path,omitempty"`
+	LoginRuntime      *logins.Runtime            `json:"login_runtime,omitempty"`
+	LoginStateRoot    string                     `json:"login_state_root,omitempty"`
+	LoginSwitchID     string                     `json:"login_switch_id,omitempty"`
+	LoginSwitchSource string                     `json:"login_switch_source,omitempty"`
+	NativeProvider    string                     `json:"native_provider,omitempty"`
+	OpenCode          *shim.OpenCodeConfig       `json:"opencode,omitempty"`
+	InputEmbargo      string                     `json:"input_embargo,omitempty"`
+	InputEmbargoToken string                     `json:"input_embargo_token,omitempty"`
+	CLIIdentity       *persist.CLIIdentity       `json:"cli_identity,omitempty"`
+	SessionID         string                     `json:"session_id"`
+	Argv              []string                   `json:"argv"`
+	Cwd               string                     `json:"cwd"`
+	Env               []string                   `json:"env"`
+	SocketPath        string                     `json:"socket_path"`
+	SessionDir        string                     `json:"session_dir"`
+	Cols              int                        `json:"cols"`
+	Rows              int                        `json:"rows"`
+	GraceMS           int                        `json:"grace_ms"`
 	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1); "" (an
 	// old, pre-R6 launch config with no such key) disables it entirely (requirement
 	// 7's compat), leaving shim.Run's behavior exactly what it is today.
@@ -705,6 +707,7 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
+		HermesInput:  lc.HermesInput,
 		ClaudeInput:  lc.ClaudeInput,
 		LogPath:      lc.LogPath,
 		OpenCode:     lc.OpenCode,

@@ -23,6 +23,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/diagnosticlog"
+	"github.com/Nathandela/swarm/internal/hermesinput"
 	"github.com/Nathandela/swarm/internal/logins"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/procstart"
@@ -46,7 +47,8 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
-	ClaudeInput bool `json:"claude_input,omitempty"`
+	HermesInput *hermesinput.SessionConfig `json:"hermes_input,omitempty"`
+	ClaudeInput bool                       `json:"claude_input,omitempty"`
 	// LogPath authorizes retention only when inherited stderr matches this owned inode.
 	LogPath           string
 	LoginRuntime      *logins.Runtime
@@ -159,6 +161,11 @@ func Run(cfg Config) (agentExit int, err error) {
 	if err := resolveLoginEnvironment(&cfg); err != nil {
 		return 0, err
 	}
+	hermes, err := prepareHermesViewer(&cfg)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { err = errors.Join(err, hermesViewerEnded(cfg, hermes)) }()
 
 	if cfg.ClaudeInput {
 		if cfg.CLIIdentity == nil {
