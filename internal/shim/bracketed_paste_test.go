@@ -117,6 +117,20 @@ func TestPasteInput_StripsEmbeddedMarkers(t *testing.T) {
 	r.ptyBytes("\x1b[200~abc\x1b[201~")
 }
 
+func TestPasteInput_StrippingCannotReassembleMarkers(t *testing.T) {
+	for _, text := range []string{
+		"\x1b[20\x1b[201~1~",
+		"\x1b[20\x1b[201~0~",
+		"\x1b[20\x1b[20\x1b[201~1~1~",
+	} {
+		t.Run(text, func(t *testing.T) {
+			r := newPasteRig(t, pasteModeOn())
+			r.paste("before" + text + "\nafter")
+			r.ptyBytes("\x1b[200~before\nafter\x1b[201~")
+		})
+	}
+}
+
 // The pasted text is a draft the owner can see: a later submit transaction must still refuse
 // rather than run its own text together with it.
 func TestPasteInput_LeavesADraftThatRefusesSubmit(t *testing.T) {

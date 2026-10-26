@@ -196,7 +196,7 @@ type Caps struct {
 	SnapshotOnly         bool
 	SubmitTransaction    bool
 	ControlInput         bool
-	PasteInput          bool
+	PasteInput           bool
 }
 
 // Caps extracts the capability fields from a hello Control.
@@ -209,7 +209,7 @@ func (c Control) Caps() Caps {
 		SnapshotOnly:         c.SnapshotOnly,
 		SubmitTransaction:    c.SubmitTransaction,
 		ControlInput:         c.ControlInput,
-		PasteInput:          c.PasteInput,
+		PasteInput:           c.PasteInput,
 	}
 }
 

@@ -1,8 +1,8 @@
 package shim
 
 import (
-	"encoding/json"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"github.com/Nathandela/swarm/internal/opencodebridge"
 	"log"
@@ -926,7 +926,14 @@ func (p *ptyWriter) pasteFrame(text []byte) []byte {
 	if !p.pasteOn() {
 		return text
 	}
-	body := bytes.ReplaceAll(bytes.ReplaceAll(text, pasteStart, nil), pasteEnd, nil)
+	// Strip as bytes arrive so removing one marker cannot assemble another.
+	body := make([]byte, 0, len(text))
+	for _, b := range text {
+		body = append(body, b)
+		if bytes.HasSuffix(body, pasteStart) || bytes.HasSuffix(body, pasteEnd) {
+			body = body[:len(body)-len(pasteStart)]
+		}
+	}
 	out := make([]byte, 0, len(pasteStart)+len(body)+len(pasteEnd))
 	out = append(out, pasteStart...)
 	out = append(out, body...)
