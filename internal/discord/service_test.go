@@ -17,6 +17,7 @@ type fakeWorkers struct {
 	sends []protocol.ComposerSendReq
 	ops   []string
 	err   error
+	state string
 }
 
 func (f *fakeWorkers) Roster(context.Context) ([]Worker, error) {
@@ -27,7 +28,11 @@ func (f *fakeWorkers) Submit(_ context.Context, op string, req protocol.Composer
 	defer f.mu.Unlock()
 	f.sends = append(f.sends, req)
 	f.ops = append(f.ops, op)
-	return protocol.SemanticMessageReceipt{OperationID: op, Session: req.Session, State: "submitted"}, f.err
+	state := f.state
+	if state == "" {
+		state = "submitted"
+	}
+	return protocol.SemanticMessageReceipt{OperationID: op, Session: req.Session, SessionInstance: req.SessionInstance, State: state}, f.err
 }
 
 type fakeMessenger struct {
