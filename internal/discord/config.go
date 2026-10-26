@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -85,7 +86,44 @@ func privateDir(dir string) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	return os.Chmod(dir, 0700)
+	entry, err := os.Lstat(dir)
+	if err != nil || !entry.IsDir() {
+		return errors.New("discord: invalid state directory")
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil || !opened.IsDir() || !os.SameFile(entry, opened) {
+		return errors.New("discord: invalid state directory")
+	}
+	return f.Chmod(0700)
+}
+func singleFile(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && info.Mode().IsRegular() && stat.Nlink == 1
+}
+func openPrivateFile(path string) (*os.File, error) {
+	entry, err := os.Lstat(path)
+	if err != nil || !singleFile(entry) {
+		return nil, errors.New("discord: invalid private file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, errors.New("discord: open private file failed")
+	}
+	opened, err := f.Stat()
+	if err != nil || !singleFile(opened) || !os.SameFile(entry, opened) {
+		f.Close()
+		return nil, errors.New("discord: invalid private file")
+	}
+	if err = f.Chmod(0600); err != nil {
+		f.Close()
+		return nil, errors.New("discord: secure private file failed")
+	}
+	return f, nil
 }
 func SaveConfig(dir string, c Config) error {
 	if err := c.Validate(); err != nil {
@@ -122,14 +160,11 @@ func LoadConfig(dir string) (Config, error) {
 	if err := privateDir(dir); err != nil {
 		return c, err
 	}
-	f, err := os.Open(ConfigPath(dir))
+	f, err := openPrivateFile(ConfigPath(dir))
 	if err != nil {
 		return c, err
 	}
 	defer f.Close()
-	if err = f.Chmod(0600); err != nil {
-		return c, err
-	}
 	data, err := io.ReadAll(io.LimitReader(f, 1<<20))
 	if err != nil {
 		return c, err
@@ -148,25 +183,11 @@ func LoadConfig(dir string) (Config, error) {
 	return c, nil
 }
 func LoadToken(path string) (string, error) {
-	entry, err := os.Lstat(path)
-	if err != nil || !entry.Mode().IsRegular() {
-		return "", errors.New("discord: invalid token file")
-	}
-	f, err := os.Open(path)
+	f, err := openPrivateFile(path)
 	if err != nil {
-		return "", errors.New("discord: open token file failed")
+		return "", err
 	}
 	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil {
-		return "", errors.New("discord: inspect token file failed")
-	}
-	if !os.SameFile(opened, entry) {
-		return "", errors.New("discord: invalid token file")
-	}
-	if err = f.Chmod(0600); err != nil {
-		return "", errors.New("discord: secure token file failed")
-	}
 	b, err := io.ReadAll(io.LimitReader(f, 4097))
 	if err != nil {
 		return "", errors.New("discord: read token file failed")

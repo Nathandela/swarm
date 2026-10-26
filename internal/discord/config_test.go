@@ -106,3 +106,61 @@ func TestLoadTokenRejectsSymlinkAndHidesPath(t *testing.T) {
 		t.Fatalf("error %v", err)
 	}
 }
+
+func TestLinkedCustodyPathsAreRejectedWithoutChmod(t *testing.T) {
+	for _, kind := range []string{"directory", "config-symlink", "config-hardlink", "token-hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			base := t.TempDir()
+			foreign := filepath.Join(base, "foreign")
+			dir := filepath.Join(base, "state")
+			if kind == "directory" {
+				if err := os.Mkdir(foreign, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(foreign, dir); err != nil {
+					t.Fatal(err)
+				}
+				_, err := LoadConfig(dir)
+				if err == nil {
+					t.Fatal("accepted symlink directory")
+				}
+				info, _ := os.Stat(foreign)
+				if info.Mode().Perm() != 0755 {
+					t.Fatal("changed directory mode")
+				}
+				return
+			}
+			if err := os.Mkdir(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(foreign, []byte("secret"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			path := ConfigPath(dir)
+			if kind == "token-hardlink" {
+				path = filepath.Join(dir, "token")
+			}
+			var err error
+			if kind == "config-symlink" {
+				err = os.Symlink(foreign, path)
+			} else {
+				err = os.Link(foreign, path)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "token-hardlink" {
+				_, err = LoadToken(path)
+			} else {
+				_, err = LoadConfig(dir)
+			}
+			if err == nil {
+				t.Fatal("accepted linked file")
+			}
+			info, _ := os.Stat(foreign)
+			if info.Mode().Perm() != 0644 {
+				t.Fatal("changed linked file mode")
+			}
+		})
+	}
+}
