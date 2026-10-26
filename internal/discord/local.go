@@ -289,7 +289,7 @@ func (s *Service) ServeLocal(ctx context.Context, stateDir string) error {
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return errors.New("discord: local service already running")
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 	path := filepath.Join(stateDir, "bridge.sock")
 	if info, e := os.Lstat(path); e == nil {
 		stat, ok := info.Sys().(*syscall.Stat_t)
@@ -333,6 +333,7 @@ func (s *Service) ServeLocal(ctx context.Context, stateDir string) error {
 		return err
 	}
 	server := &http.Server{Handler: http.HandlerFunc(s.localHandler), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 35 * time.Second, MaxHeaderBytes: 8192, BaseContext: func(net.Listener) context.Context { return ctx }}
+	defer func() { _ = server.Close() }()
 	stopped := make(chan struct{})
 	go func() {
 		select {

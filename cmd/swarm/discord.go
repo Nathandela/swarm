@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/discord"
 )
@@ -284,6 +285,9 @@ func dispatchDiscord(args []string, stdout, stderr io.Writer) int {
 		}
 		if len(body) == 0 {
 			return discordCLIError(stderr, errors.New("discord: empty reply body"))
+		}
+		if !utf8.Valid(body) {
+			return discordCLIError(stderr, errors.New("discord: reply body must be valid UTF-8"))
 		}
 		request = discord.LocalReply{Ref: id, ID: publicationID, Body: string(body)}
 		response = &discord.Publication{}
