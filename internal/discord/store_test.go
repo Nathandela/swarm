@@ -244,7 +244,7 @@ func TestPublicationRetryAndCrashAreNotResent(t *testing.T) {
 	for i := range ids {
 		ids[i] = fmt.Sprint("discord-", i)
 	}
-	if e = s.FinishPublication(r.Ref, "", StateSent, ids, "REST receipt"); e != nil {
+	if e = finishPublicationFixture(s, r.Ref, "", ids, "REST receipt"); e != nil {
 		t.Fatal(e)
 	}
 	receipt, _, e := s.PreparePublication(r.Ref, "", body, testNow)
@@ -324,7 +324,7 @@ func TestEndorsementSnapshotResumeAndInFlightRevocation(t *testing.T) {
 	if e = s.FinishDelivery(r.Ref, StateSent, "native receipt"); e != nil {
 		t.Fatal("inflight cannot finish", e)
 	}
-	if e = s.FinishPublication(r.Ref, "", StateSent, []string{"message"}, "REST receipt"); e != nil {
+	if e = finishPublicationFixture(s, r.Ref, "", []string{"message"}, "REST receipt"); e != nil {
 		t.Fatal("inflight publication cannot finish", e)
 	}
 	next := r.Target
@@ -519,7 +519,7 @@ func TestSettledPublicationPrunesBodyAndUnresolvedPublicationProtectsSource(t *t
 	if _, _, e = s.BeginPublication(r.Ref, "", testNow); e != nil {
 		t.Fatal(e)
 	}
-	if e = s.FinishPublication(r.Ref, "", StateSent, []string{"id"}, "REST"); e != nil {
+	if e = finishPublicationFixture(s, r.Ref, "", []string{"id"}, "REST"); e != nil {
 		t.Fatal(e)
 	}
 	if e = s.Prune(testNow.Add(RequestTTL)); e != nil {
@@ -700,4 +700,20 @@ func TestContextPaginationBoundsAndExpiry(t *testing.T) {
 	if _, e := s.ContextPage(r.Ref, 0, 10, testNow.Add(RequestTTL)); !errors.Is(e, ErrExpired) {
 		t.Fatal(e)
 	}
+}
+
+func finishPublicationFixture(store *Store, ref, id string, messageIDs []string, evidence string) error {
+	publication, err := store.publication(ref, id)
+	if err != nil {
+		return err
+	}
+	if len(messageIDs) != len(publication.Chunks) {
+		return ErrInvalid
+	}
+	for index, messageID := range messageIDs {
+		if _, err = store.finishPublicationChunk(ref, id, publication.Chunks[index].ID, StateSent, messageID, evidence); err != nil {
+			return err
+		}
+	}
+	return nil
 }

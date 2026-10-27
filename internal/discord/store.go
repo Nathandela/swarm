@@ -566,48 +566,6 @@ func (s *Store) BeginPublication(ref, id string, now time.Time) (out Publication
 	})
 	return
 }
-func (s *Store) FinishPublication(ref, id, state string, messageIDs []string, evidence string) error {
-	if (!terminal(state) && state != StateUncertain) || len(evidence) > 16<<10 {
-		return ErrInvalid
-	}
-	return s.db.Update(func(tx *bolt.Tx) error {
-		p, e := loadPublication(tx, ref, id)
-		if e != nil {
-			return e
-		}
-		if p.State != StateSending && p.State != StateUncertain && p.State != StateSent && p.State != StatePrepared {
-			return ErrInvalid
-		}
-		if len(messageIDs) > len(p.Chunks) {
-			return ErrInvalid
-		}
-		for _, v := range messageIDs {
-			if len(v) > 128 || v == "" {
-				return ErrInvalid
-			}
-		}
-		for i, messageID := range messageIDs {
-			if e := mergePublicationChunk(tx, &p, i, StateSent, messageID); e != nil {
-				return e
-			}
-			p.Chunks[i].RESTAcknowledged = true
-		}
-		if state != StateSent {
-			for i := range p.Chunks {
-				if p.Chunks[i].State != StateSent {
-					if e := mergePublicationChunk(tx, &p, i, state, ""); e != nil {
-						return e
-					}
-					break
-				}
-			}
-		}
-		p.DiscordEvidence = evidence
-		aggregatePublication(&p)
-		return putJSON(tx, "publications", publicationKey(ref, id), p)
-	})
-}
-
 func (s *Store) ContextPage(ref string, offset, limit int, now time.Time) (page ContextPage, err error) {
 	if offset < 0 || limit < 1 || limit > MaxContextPageSize {
 		return page, ErrInvalid

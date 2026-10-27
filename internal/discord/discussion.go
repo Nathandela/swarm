@@ -155,14 +155,7 @@ func (s *Service) ForgetMessage(channel, id string) {
 	}
 }
 
-func (b *Bridge) MessageUpdate(ctx context.Context, msg *discordgo.MessageUpdate) {
-	if msg == nil || msg.Message == nil {
-		return
-	}
-	b.Service.invalidateContext(msg.ChannelID)
-	b.messageUpdate(ctx, msg)
-}
-func (b *Bridge) messageUpdate(ctx context.Context, msg *discordgo.MessageUpdate) {
+func (b *Bridge) messageUpdate(ctx context.Context, msg *discordgo.MessageUpdate, epoch uint64) {
 	if msg == nil || msg.Message == nil {
 		return
 	}
@@ -176,6 +169,9 @@ func (b *Bridge) messageUpdate(ctx context.Context, msg *discordgo.MessageUpdate
 	s := b.Service
 	s.discussionMu.Lock()
 	defer s.discussionMu.Unlock()
+	if epoch != s.discussionEpoch[msg.ChannelID] {
+		return
+	}
 	for i, row := range s.recent[msg.ChannelID] {
 		if row.ID != msg.ID {
 			continue
@@ -191,9 +187,9 @@ func (s *Service) contextEpoch(channel string) uint64 {
 	defer s.discussionMu.Unlock()
 	return s.discussionEpoch[channel]
 }
-func (s *Service) invalidateContext(channel string) {
+func (s *Service) invalidateContext(channel string) uint64 {
 	if _, err := s.Discussion(channel); err != nil {
-		return
+		return 0
 	}
 	s.discussionMu.Lock()
 	defer s.discussionMu.Unlock()
@@ -202,6 +198,7 @@ func (s *Service) invalidateContext(channel string) {
 	}
 	s.discussionClock++
 	s.discussionEpoch[channel] = s.discussionClock
+	return s.discussionClock
 }
 
 func (b *Bridge) MessageDelete(msg *discordgo.MessageDelete) {

@@ -70,8 +70,8 @@ func runConnected(parent context.Context, s *Service, client *DiscordClient) err
 		if m == nil || m.Message == nil {
 			return
 		}
-		s.invalidateContext(m.ChannelID)
-		bridge.start(ctx, func() { bridge.messageUpdate(ctx, m) })
+		epoch := s.invalidateContext(m.ChannelID)
+		bridge.start(ctx, func() { bridge.messageUpdate(ctx, m, epoch) })
 	}
 	client.OnMessageDelete = bridge.MessageDelete
 	client.OnInteraction = func(i *discordgo.InteractionCreate) { bridge.start(ctx, func() { bridge.Interaction(ctx, i) }) }
@@ -226,12 +226,6 @@ func (b *Bridge) Register(ctx context.Context) error {
 }
 func (b *Bridge) notify(ctx context.Context, route Route, text string, actions []Action) {
 	_, _ = b.Service.Messenger.Post(ctx, Outbound{Route: route, Text: text, Actions: actions})
-}
-func (b *Bridge) Message(ctx context.Context, msg *discordgo.MessageCreate) {
-	if msg == nil || msg.Message == nil {
-		return
-	}
-	b.message(ctx, msg, b.Service.contextEpoch(msg.ChannelID))
 }
 func (b *Bridge) message(ctx context.Context, msg *discordgo.MessageCreate, epoch uint64) {
 	if msg == nil || msg.Message == nil || msg.Author == nil {
