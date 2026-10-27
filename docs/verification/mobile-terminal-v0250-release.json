@@ -547,7 +547,35 @@
     "No remote gateway initialization, hosted service deployment, Android publication or native CLI refresh was requested by these helpers."
   ],
   "resource_cleanup": {
-    "status": "pending final independent verification; only task-owned scratch will be retired"
+    "status": "complete after independent audit and committed evidence",
+    "mac_task_roots": [
+      {
+        "kind": "sb",
+        "file_bytes": 5458688
+      },
+      {
+        "kind": "smi",
+        "file_bytes": 0
+      },
+      {
+        "kind": "swarm-touch-gates-",
+        "file_bytes": 550471161
+      }
+    ],
+    "vm_rollout": {
+      "host": "vm",
+      "task_rollout_artifacts_retired": true,
+      "retired_file_bytes": 40380825,
+      "managed_upgrade_state_untouched": true
+    },
+    "earlier_linux_test_artifacts_retired_bytes": 61022137,
+    "external_review_probe_files_retired": 12,
+    "external_review_probe_file_bytes": 10859,
+    "empty_fixture_scratch_roots_retired": 2,
+    "shared_caches_preserved": true,
+    "managed_rollback_and_pending_convergence_state_preserved": true,
+    "old_v024_calibration_artifacts_not_targeted": true,
+    "raw_identity_captures_retired": true
   },
   "independent_installed_state_verification": {
     "schema": 1,
