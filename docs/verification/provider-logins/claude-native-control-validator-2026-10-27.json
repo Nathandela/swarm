@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-27",
+  "scope": "Exact generated guard package accepted by the installed native validator; validation only.",
+  "result": "PASS_WITH_WARNINGS",
+  "product_source_commit": "94a67085df27a1297efe56d77a276f3aea7f87e0",
+  "native_version": "2.1.310",
+  "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+  "source_manifest_sha256": "7af3761df4b724906cbd6e9a0d14599007a8d3d47104bae9579efbf0a10389c8",
+  "packet_manifest_sha256": "01c29c3fca84f0f4bac263c08f5dca9ffa7783265daa89d498c466be18030b69",
+  "exporter_sha256": "212554d932cfe2c09a5fad0672c2a3cb30d98b4ab29e90ead7c73a29e34c5fbc",
+  "binding_sha256": "b9a848d6aeab2fda1e72df297c5d5ef6e9690c2f63f67f969f36f4ae22e8e37a",
+  "outer_receipt_sha256": "7d219d8d68042166ed12e96c96de439b370e5935b18416ae79a210e69d86909f",
+  "inner_receipt_sha256": "388fddd42141515be52df4ed3412702e21d1a615d6dea2be79d3e2356bfd1daf",
+  "validator_log_sha256": "107b567ef11f1be692fafcc2662281dd696755c6f809be434865e86bd29593f2",
+  "pure_checks_passed": 11,
+  "local_exporter_build_exit": 0,
+  "native_version_exit": 0,
+  "native_validator_exit": 0,
+  "installed_scope": {
+    "product_installer": "InstallNativeControl(root,false)",
+    "sender_installed": false,
+    "descriptor_or_live_worker_fabricated": false,
+    "artifact_hashes": {
+      ".claude-plugin/plugin.json": "21c10bc9053af85acc39b052aa5ff4be747e59fc3f4164504d34c808d31a80a1",
+      "hooks/hooks.json": "6597953bc9b20482e3a10201d08801818575a842e1ba12bace8eb069cd8ff029",
+      "hooks/input.js": "a5836ec04eb63919b744c54eb3430fd215f2e9914a4777d2fc8ed8f4d8d7d2e2",
+      "types/index.d.ts": "0168b8ca539d02a2a793b6759533c023393230a57c32b680eae2e00c0b211f37"
+    }
+  },
+  "validator_output": {
+    "accepted_with_warnings": true,
+    "author_information_missing": true,
+    "types_declare_no_engine_interface_members": true,
+    "gating_hooks_without_catch_reported": true,
+    "directory_submission_problems": [
+      "README missing",
+      "license missing"
+    ],
+    "directory_icon_missing": true,
+    "directory_profile_executed": false
+  },
+  "network": {
+    "audited_provider_listener_attempts": 0,
+    "audited_provider_listener_errors": [],
+    "observed_model_requests": 0,
+    "http_drained": true,
+    "external_egress_denied_by_namespace_guard": true,
+    "all_socket_census_claimed": false
+  },
+  "retirement": {
+    "unit_inactive": true,
+    "cgroup_gone": true,
+    "no_signal_needed": true,
+    "cleanup_errors": [],
+    "sampled_process_count": 9,
+    "full_process_birth_census_claimed": false,
+    "native_and_exporter_and_packet_unchanged": true,
+    "native_copies_created": 0,
+    "scratch_bytes": 21998,
+    "outer_elapsed_seconds": 2.592
+  },
+  "limits": [
+    "Validator acceptance does not establish interactive hook execution, pass-through behavior or assembled Swarm launch qualification.",
+    "Directory submission requirements were reported but that profile was not executed.",
+    "The isolated E1 fixture lacks a qualified normal AuthReady and settled/retired ClaudeAuth receipt; creating one through the normal flow needs a separate reviewed stage.",
+    "Actor/startup completeness, real account/org adoption, automatic recovery, shipping admission, epic-wide GG-4 and Astra production signoff remain open."
+  ],
+  "review": {
+    "root_source_artifact_and_actual_receipts": "GREEN_VALIDATION_ONLY",
+    "independent_sol_source_artifact_and_actual_receipts": "GREEN_VALIDATION_ONLY",
+    "production_or_astra_signoff": false
+  }
+}
