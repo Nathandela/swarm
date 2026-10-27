@@ -14,6 +14,8 @@ The terminal app translates touch into mouse reports, wheel events, keys and dim
 
 Keep Bubble Tea, Lip Gloss, the existing session model, and existing backend commands. No new dependency, daemon API, adapter interface or wire format is required. Do not add a touch gesture recognizer, application-side fling inertia, hover dependency, timed double-tap, persisted collapse preferences, or an attached-agent overlay. Agent transcripts and the attached return hint retain their current ownership.
 
+The paragraph above describes the v0.23.0 dashboard release. The owner-authorized attached `[swarm]` button amendment below adds an optional snapshot field and narrowly changes attached input ownership; it does not change that release's historical scope.
+
 ## Decisions established by the probes and review
 
 Nine small Go probes against baseline `fb20750f8bc6d30b5f3379618712a58e62b9e2f0` reproduced invisible selection activation, lost narrow-screen identity, gesture activation after resize/drag, delayed-coordinate ambiguity, clipped form focus/errors, a clipped selected agent, changed scrolling semantics when wheel deltas are summed at bounds, and retransmission of unchanged content by the actual renderer. See the verification record for commands and exact results.
@@ -145,3 +147,41 @@ Before a mobile compatibility claim, record on both actual phones: client/versio
 Run task trials finding/opening the bottom of a 50-session board, folding and restoring location, revealing attention inside folded groups, editing with the keyboard open, copying/pasting and returning from each used agent. Repeat with controlled RTT/jitter/bandwidth constraints and background/foreground transitions. Record pass/fail per actual client; desktop PTY tests do not establish thumb accuracy or phone rendering performance.
 
 Product changes require `go build ./...`, `go vet ./...`, `go test ./...`, `golangci-lint run` and the applicable GG-4 race gates. Follow the repository test supervisor and shared-cache rules. Release publication and physical handset qualification remain explicit gates; local implementation does not establish either. Attach input-mode continuity remains a separate hypothesis to characterize; do not add generic mode replay to this feature.
+
+## Attached `[swarm]` button integration amendment — 2026-10-27
+
+The owner authorized implementation after a focused feasibility investigation (`agents-tracker-q1vx`); integration is tracked in `agents-tracker-ppbw`. The control is labelled `[swarm]`. It uses the already reserved bottom row, returns through the existing detach path, and leaves the agent session running. It is a local client preference, initially off. This amendment authorizes one control rather than a new terminal renderer or a second screen overlay.
+
+### Interaction and ownership contract
+
+When enabled, a supported attach shows `[swarm]` at the left of its existing footer, followed by the keyboard return hint and the session name as space permits. Display-cell truncation drops the session name first. The complete seven-cell label is required before a hit target exists. Chrome disabled, at most two rows, insufficient width, an old snapshot without mouse state, or unsupported mode state produce no clickable-looking control and no additional mouse capture. Ctrl+Q remains available in every case.
+
+A completed unmodified left press and release inside the same current control detaches once. An orphan release, right click, wheel, actual drag, focus loss, resize or mode change cannot activate it. Presses originating in agent content retain native gesture ownership even if released over the footer. Paste and OSC/DCS/APC/PM/SOS input payloads remain data; report-looking text cannot activate the control. Button-owned input does not reach the PTY. Chrome and terminal mode commands go only to the user's terminal.
+
+Mouse reporting applies to the entire terminal. The option therefore explicitly changes terminal-native selection/scroll behavior; selection may require the terminal's override. Keep current raw ownership when the option is off. No terminal-brand or provider-name heuristic enables it automatically.
+
+The initial supported native envelope is mouse tracking disabled, or one of normal/button/any-event tracking with SGR character-cell encoding. The outer terminal requests button-motion reports when needed to detect a drag; native all-motion tracking is retained. Forward only reports the native CLI requested: with tracking disabled, consume generated body mouse reports; with normal tracking, suppress generated motion; otherwise preserve native report bytes and order. Do not translate keyboard or wheel input into invented commands.
+
+Legacy, UTF-8, URXVT, highlight, pixel-coordinate, ambiguous and unknown modes fall back to Ctrl+Q. Encountering unsupported state disables the button for the rest of that attach, rather than guessing whether a delayed SGR report contains cells or pixels. A subsequent attach starts from a fresh authoritative snapshot. Mode resets and changes cancel any armed gesture. This supported envelope may expand only with new behavioral evidence.
+
+### Integration boundaries and order
+
+| Boundary | Change and contract | Verification |
+|---|---|---|
+| Shim VT → snapshot | Add bounded optional mouse state, including known/unknown and requested tracking/encoding flags. New snapshots describe known-off as well as enabled modes. Missing state from an older peer is unknown. | Old/new JSON compatibility; deterministic serialization; state before attach; split sequences, resets and payload exclusion. |
+| Agent output → attached client | Reuse one bounded incremental tracker for initial and live mode meaning. Original agent output remains unchanged; only the existing sole terminal writer may inject outer mode/chrome commands, at complete escape-sequence boundaries. | Multi-parameter mode changes, split output, unsupported fallback, safe-boundary injection and output preservation. |
+| Terminal input → attach filter | Extend the existing paste-aware streaming filter with the single control's mouse routing. Share geometry/mode state safely between output, resize and input. | Every report split; ordered body bytes; gesture ownership, stale cancellation, paste, strings, read-only and teardown. |
+| Options → all attach paths | Save the default-off preference beside existing local layout preferences. Apply/cancel, restart, save ordering and reconnect preserve it. Capture it with the selected session for ordinary open and automatic launch/resume attach. | Persistence round-trip, old documents, cancel/failure, asynchronous saves and runner argument assertions. |
+| Attach → dashboard | Use the existing detached reason, lease release, input-mode reset, terminal restore and board restoration. | One detach call; live session continuity; board remains usable after repeated attach/detach; signal/error cleanup. |
+
+Implement snapshot/tracker and guarded input routing as separate TDD slices, then integrate the saved option. Each slice must first demonstrate a meaningful failing test. Independent Sol/Astra review challenges the connected code; fixes receive regression tests and re-review. Root owns cross-boundary integration and the final repository gates. Task status lives in Beads, not in this document.
+
+### Executable decision gates
+
+Before integration, demonstrate that the baseline forwards footer reports without detaching, that replacing the label alone requests no reports, and that paste remains protected. The feasibility probes already confirmed these three facts, including every split of a sample SGR press/release and a long name hiding the old hint at 32 columns.
+
+Before accepting the integrated source, exercise native tracking off/normal/button/any, initial state predating attach, old snapshots, mode changes and full reset; unsupported encodings and save/restore ambiguity; mode commands split across frames; and clicks/paste split across reads. Verify body drag ending on the footer, cancelled footer drag, key/focus/wheel/resize cancellation, mode transition during a press, small/chrome-off states, CJK/emoji names, exactly one lease detach and preservation of the running session. Keep the existing Ctrl+Q, Kitty, raw-mode restoration, PTY-byte, snapshot and output-healing tests.
+
+Run focused normal/race tests and measure the existing local added-input latency gate, then the repository build, vet, lint, full tests and applicable race suite serially using shared caches and supervised temporary roots. Cross-platform builds supplement native tests; neither substitutes for the other. Record exact commands and material limitations in verification evidence.
+
+Actual Termux and the still-unidentified iOS SSH client must separately qualify taps, long-press selection/paste, terminal selection override, keyboard resize/rotation, background/foreground, each used native CLI and repeated attach/detach. Use tmux only where actually used. That physical gate can remain open with the feature default-off, but blocks any claim of handset-qualified or universal touch support. Source integration does not publish or install another release by itself.

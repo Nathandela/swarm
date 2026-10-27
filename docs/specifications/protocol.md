@@ -49,6 +49,14 @@ returns). A snapshot that fits in one frame is sent as a single raw `TSnapshot`
 frame (the common case), so the ordering guarantee is unchanged: the `lease`, then
 the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 
+The opaque VT version-1 JSON may additionally carry `mouse`, a bounded optional
+object with `tracking` and `encoding` bit masks and a `known` boolean. It is captured
+atomically with the grid. New shims explicitly represent known-off state; an absent
+object means unknown, including snapshots from older shims. Unknown fields remain
+ignorable by older readers, so this optional projection does not bump the protocol,
+shim wire or VT snapshot version. The opt-in attached `[swarm]` control declines
+capture without known supported state; see [ADR-035](../adr/ADR-035-mobile-terminal-navigation.md#attached-swarm-button-amendment--2026-10-27).
+
 ## The `Control` message
 
 `Control` is the single JSON envelope for every control-plane message. Keys are
