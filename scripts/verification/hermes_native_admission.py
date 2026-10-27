@@ -45,6 +45,7 @@ def run(args):
     sleeper.chmod(0o700)
     home = root / 'home'
     home.mkdir(mode=0o700, exist_ok=True)
+    home.chmod(0o700)
     (root / 'tmp').mkdir(exist_ok=True)
     (root / 'user').mkdir(exist_ok=True)
     (root / 'protected').write_text('native permission must remain pending')
