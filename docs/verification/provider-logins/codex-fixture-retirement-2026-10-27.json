@@ -41,5 +41,95 @@
     "The original R1 constructor result remains FAIL; post-collection deletion does not repair it.",
     "Complete fixture-listener cleanup remains unproved.",
     "No storage-capacity reservation or runtime qualification is claimed."
-  ]
+  ],
+  "cache_only_followup": {
+    "date": "2026-10-27",
+    "scope": "Sealed public-transfer cache only; separate from complete PID retirement rule.",
+    "receipts": {
+      "dry_run_sha256": "775310a5d091af9172ea6ffd8acb0054a08cf849c5d29afea53fda2d598b74c8",
+      "applied_sha256": "c914147bc138677e05085d52e1724dd97f5d1d0d2424019dac054f1aa23f15d5",
+      "wrapper_exit_codes": [
+        0,
+        0
+      ]
+    },
+    "target": {
+      "path": "/tmp/scx.pb6q3wru/codex-source",
+      "device": 2049,
+      "inode": 851474,
+      "mode": "0600",
+      "bytes": 296865480,
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215"
+    },
+    "retirement": {
+      "applied": true,
+      "nontruncating_write_only_execution_guard_held_through_unlink_and_parent_fsync": true,
+      "fresh_unit_cgroup_and_endpoint_checks_passed": true,
+      "exact_run_and_local_attempt_seal_verified": true,
+      "errors": [],
+      "measured_free_bytes_after": 929038336,
+      "guaranteed_freed_bytes_claimed": false,
+      "read_only_holders_may_retain_inode_bytes": true
+    },
+    "historical_boundary": {
+      "earlier_observed_identities_ended": 38,
+      "earlier_sample_count": 32,
+      "earlier_sample_truncated": true,
+      "fresh_complete_pid_or_fd_census_claimed": false,
+      "session_retirement_or_full_listener_proof_claimed": false,
+      "scope_reason": "Original complete-PID intent remains blocked by incomplete historical sample."
+    },
+    "preserved": "Separate executable native/codex copy, evidence, backups, accounts and services were preserved.",
+    "npm_cache": {
+      "standard_download_cache_clean_succeeded": true,
+      "preclean_measured_kib": 233752,
+      "exact_freed_bytes_claimed": false
+    },
+    "review": "Root and independent Sol reviewed source, dry-run and apply receipts GREEN."
+  },
+  "prep_enospc_followup": {
+    "date": "2026-10-27",
+    "scope": "R4 PREP partial-asset cleanup before any unit or native execution.",
+    "receipt_sha256": "612f75c398e91383fb2f89773d34059ad6b3d82ab015202ac77827d1d1e9cc7e",
+    "prep_result": "ENOSPC; no run.json or prepared.json existed.",
+    "remote_returncode": 0,
+    "targets": [
+      {
+        "path": "native/codex",
+        "bytes": 276443136,
+        "retired": true,
+        "parent_directory_fsync": true,
+        "basis": "Never-executed incomplete preparation copy."
+      },
+      {
+        "path": "codex-source",
+        "bytes": 296865480,
+        "retired": true,
+        "parent_directory_fsync": true,
+        "basis": "Never-executed incomplete preparation copy."
+      }
+    ],
+    "total_bytes": 573308616,
+    "no_unit_or_native_run": true,
+    "backup_retained": true,
+    "measured_free_bytes_after": 574750720,
+    "fresh_complete_pid_census_claimed": false,
+    "reclaimed_bytes_claimed": false
+  },
+  "old_duplicate_archive_followup": {
+    "date": "2026-10-27",
+    "scope": "Verified duplicate packet archives older than 24 hours; local copies retained.",
+    "inventory_sha256": "d0c298170d6b0c7bafc2fa87f20af790606681bca540c5d4c69fdb7a77840931",
+    "inventory_read_only": true,
+    "candidate_count": 22,
+    "all_candidates_older_than_hours": 24,
+    "apply_receipt_sha256": "cd3ff21a966b4359898752b0675bd1e1ad15fe10b687a3c7f5298c70d6c23566",
+    "remote_returncode": 0,
+    "bytes_unlinked": 391987141,
+    "all_unlinks_parent_fsynced": true,
+    "local_copies_retained": true,
+    "measured_free_bytes_after": 966811648,
+    "reclaimed_bytes_claimed": false,
+    "fresh_complete_pid_census_claimed": false
+  }
 }

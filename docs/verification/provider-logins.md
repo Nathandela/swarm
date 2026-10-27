@@ -452,8 +452,13 @@ fixture amendment has passed source review and local checks only.
 
 The [post-evidence fixture retirement](provider-logins/codex-fixture-retirement-2026-10-27.json)
 removed the two public Codex executable copies after collection, under their
-qualified execution guards. This does not change the original FAIL or prove
-complete fixture-listener cleanup.
+qualified execution guards. A separate cache-only follow-up removed one sealed
+public-transfer copy; it does not claim a fresh PID/FD census, guaranteed freed
+bytes or complete listener proof. Later R4 PREP ENOSPC cleanup removed only two
+never-executed binary inputs before any unit/native run. A separate inventory
+removed 22 duplicate archives older than 24 hours, retaining local copies. The
+reported free-space readings are measurements, not reclaimed-byte guarantees.
+These cleanup actions do not change the original FAIL.
 
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.
