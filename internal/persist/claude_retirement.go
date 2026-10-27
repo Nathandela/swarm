@@ -29,7 +29,7 @@ func (s *Store) RetireClaudeReservation(id string, originalNoFork func() error) 
 		}
 		// A visible marker may follow a failed post-rename sync. Settle its
 		// directory before cleanup without rewriting the exact authorization.
-		if m.SchemaVersion == ClaudeSchemaVersion && m.ClaudeRetirement != nil && *m.ClaudeRetirement == marker {
+		if (m.SchemaVersion == ClaudeSchemaVersion || m.SchemaVersion == ClaudeChatSchemaVersion) && m.ClaudeRetirement != nil && *m.ClaudeRetirement == marker {
 			dir, err := s.sessionPath(id)
 			if err != nil {
 				return err
@@ -41,7 +41,7 @@ func (s *Store) RetireClaudeReservation(id string, originalNoFork func() error) 
 			return nil
 		}
 		m.ClaudeRetirement = &marker
-		m.SchemaVersion = ClaudeSchemaVersion
+		m.SchemaVersion = ClaudeMetadataSchemaVersion(m)
 		m, data, err := s.metadataBytes(m)
 		if err != nil {
 			return err

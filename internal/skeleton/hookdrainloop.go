@@ -51,7 +51,7 @@ type hookDrainState struct {
 // Re-starting an already-running session's loop is a no-op (reconcile can re-fire
 // OnSessionStart for a session this incarnation already registered).
 func (d *Daemon) startHookDrain(sessionID string) {
-	if d.core == nil {
+	if d.core == nil || d.claudeChatQuarantined(sessionID) {
 		return
 	}
 	ch, ok := d.core.SessionHookChannel(sessionID)
@@ -90,6 +90,10 @@ func (d *Daemon) startHookDrainsForRunning() {
 		return
 	}
 	for _, m := range d.core.List() {
+		if d.rememberClaudeChatRuntime(m) {
+			d.authorSessionCapabilitiesWhenDecided(m.ID, m.AgentType, m.ShimPID, m.ShimStartTime)
+			continue
+		}
 		if m.Status.Process == status.ProcessRunning {
 			d.startHookDrain(m.ID)
 		} else if ch, ok := d.core.SessionHookChannel(m.ID); ok {

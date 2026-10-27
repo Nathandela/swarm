@@ -38,7 +38,7 @@ func TestLoginCardDescribesNewWireAndOfflineImport(t *testing.T) {
 	if shimwire.Version != 2 {
 		t.Fatal("cutover wire version changed")
 	}
-	if card.LoginSchema != logins.SchemaVersion || card.Schema != persist.LoginSchemaVersion || card.Shimwire != shimwire.Version {
+	if card.LoginSchema != logins.SchemaVersion || card.Schema != persist.ClaudeChatSchemaVersion || card.Shimwire != shimwire.Version {
 		t.Fatalf("new contract missing: %+v", card)
 	}
 	if card.AccountSchema != 1 || card.AccountJobs != 1 || card.AccountRecovery != 3 || card.AccountWorker != 6 || card.AccountShim != 2 || card.AccountConfig != 4 || card.AccountInventory != 1 || card.AccountAuth != 1 {

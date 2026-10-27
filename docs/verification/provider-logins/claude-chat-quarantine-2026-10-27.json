@@ -1,0 +1,871 @@
+{
+  "date": "2026-10-27",
+  "kind": "A2 passive Claude-chat reader and quarantine evidence",
+  "status": "In-progress inactive checkpoint: passive safety source and focused race gates pass; broad integration/release gates remain open. Chat runtime and public interface remain inactive.",
+  "scope": {
+    "metadata": "Managed schema6 requires exact claude-chat runtime, immutable profile/CLI custody and directory durability; ordinary5 remains supported. Unmanaged/fake6 is refused.",
+    "quarantine": [
+      "running and ended startup",
+      "sticky runtime identity after missing metadata",
+      "hook live/disk/apply/final drains",
+      "cursor certificates and retirement retries",
+      "backend connect/join/rejoin/dial",
+      "raw owner/remote/direct attach/input/resize",
+      "sampling and conversation recapture",
+      "automatic login switch/recycle/supervision/ContextGuard"
+    ],
+    "owner_stop": "Existing authenticated Stop and exact-custody cleanup remain available.",
+    "source_files_sha256": {
+      "internal/daemon/claude_chat_metadata_test.go": "9db89ec9ca147d64997d67291b45a965e1dd1e35950d85714180e98aa3872b88",
+      "internal/daemon/claude_custody.go": "737b414500abcd4d358ac30c44a70e515c117a5a699d3fb3feea584b84f23259",
+      "internal/daemon/daemon.go": "85419b95502187fc7d9c067e3332b2fd4030f2bd0e134ccc75f5fc1909d4ae5a",
+      "internal/logins/claude_chat_custody_test.go": "03c8397075ad98c5e7cfc4ab326265adc715f19028fc621e722be3469cb69f34",
+      "internal/logins/claude_custody.go": "584490cf03532c00b406e7d75977abe6a14ab58a5a3494ebc933cf5a9c09d962",
+      "internal/persist/claude_chat_metadata_test.go": "a598e93ee8dbd5d4f1e24fd97948b5a4a3e3932fa5c15be32c4350db545a6250",
+      "internal/persist/claude_retirement.go": "4e51c9168de3624a6ae02c63bdcf63c3167a25a67db61a7410cb32896791dc42",
+      "internal/persist/persist.go": "81712575188b8ebbeec287806090180e5e2b69d17dbfe9c00007a7b3ae935924",
+      "internal/protocol/claude_chat_quarantine_test.go": "c3882f8eda21d42c9f6fc17f88bd59af3682f3befafcd1d86829c63945e75f89",
+      "internal/protocol/fromdaemon.go": "ab92e50532ffac759272525aca3622490b4a737308bc20ff86f9fc1a58cb2982",
+      "internal/protocol/sendinput.go": "e24aa86c3f733e47b31b859952a899e09f239e555d4b45b320f97e529b59c2cf",
+      "internal/protocol/server.go": "c58990cca3a11b4434ff6f61d1f87030724121964e17d37d9e2972c85003e03a",
+      "internal/skeleton/api.go": "58f88e0439bbfc334a88590bd7659f274cf4dbdc3ef98a420aceb2c4e83edbc6",
+      "internal/skeleton/authwatch.go": "9bd2265898d7ac17423684a6b93e60bde67a2de7052b74a0c5b11f6a94efaed6",
+      "internal/skeleton/backendconnect.go": "bad6903658c31de0be39fe9cc0f511980f369c675f0ddad7e3be27a03af2748c",
+      "internal/skeleton/capability.go": "1e919669a2aba4066673517d66b38fc2a1238e4a071d19c8059167c39cc2f578",
+      "internal/skeleton/claude_chat_adoption_test.go": "69c1fbd5e078343596e4a6d0c0f583e8a0b63c06dc18d9b7b1569441f2ead70e",
+      "internal/skeleton/claude_chat_backend_quarantine_test.go": "e20bb66acc32be5909bce0b81482603bf95ef7c633d83302f0a7002cd1762ad3",
+      "internal/skeleton/claude_chat_quarantine.go": "f03dca701cc34305eba58fbe1c56b35a711ee333969ee4bc163637c892942a35",
+      "internal/skeleton/claude_chat_quarantine_test.go": "c63d668bad14ae682202bedc2f47c1421ada22208925965165fc06354ab70af1",
+      "internal/skeleton/contextguard.go": "9290bd8d6b68fdcd21d410ea046324945d714160280f58005fd5ca3f5a5a091a",
+      "internal/skeleton/handoff_directory_test.go": "eb0fa8c3a4c5188147944857ab2c70062303fc1c6c7e86a93634b2c74b5bfb4b",
+      "internal/skeleton/handoff_worktree_test.go": "f507918760b08d6f274c2a15e22a194b7fe074dea14bf8a480afc3a4c27fae0f",
+      "internal/skeleton/hookdrain.go": "359e6315127c09af564d94dfdd696e40dd050c45b355a298a73ea0499a3fee96",
+      "internal/skeleton/hookdrainloop.go": "35f334f1ff79bc9cbfe573e4a3aeee6d8ab772ee8934e5349ea8e92576c83193",
+      "internal/skeleton/hookretirement.go": "9ba416b3deaca9666cff0265c62f15401eeb1439aad686bf949730e84a536a24",
+      "internal/skeleton/instance.go": "80134c0c1ef7794c80f6d1438b55006fbb8097fb0dc584cf09c9ab6be1c5e23e",
+      "internal/skeleton/journal_capability_snapshot_test.go": "3bc942b5414e23b0646c5822e21dadc482131f924ea546db96d001d7186e5f59",
+      "internal/skeleton/logins.go": "27815260433bc43f7b8b351e226bb111f58f9ed6f7781a57ee4be87438b7614d",
+      "internal/skeleton/logins_ready.go": "abb57262a1b7516a14ec2f5e95faf175035d8a8fbf2c6bb4196856678bd2283f",
+      "internal/skeleton/opencode_projection_test.go": "51e9cf1168dde3aee5e44d205f1c5cdb5893edf7ac2c3fc668e6866dafa1d792",
+      "internal/skeleton/r5_round4_test.go": "ad34e9bfa2ca427b5c73ceb15424ddba652ce5a9b70943a90e605083e4864edb",
+      "internal/skeleton/rostercontrol_test.go": "a1e9b36faa7c976129a282f6d574ee1f6cca0d0a83e70e730d0cf5712a74bda8",
+      "internal/skeleton/rostersupervision_test.go": "e49b0a9912784c32eca1e195c996e2f6b634a7bd1e3327f1bb044466f5de4367",
+      "internal/skeleton/serve.go": "a6c0726908c82e74be706dd6595d47cb0615a9534d5121e009a6215d74564664",
+      "internal/skeleton/supervision.go": "73b1b41605364e581d8ea7cdaedd0a4b4afaaed1cb12e04d03ba4ed94c7d9f19",
+      "internal/skeleton/tag_test.go": "385ffd159bfff6ea0c797679ea8f3510695b41129680838fb0c27ec71373b233",
+      "internal/skeleton/tap_observability_test.go": "809527f0ff2414e13b15220c607d002178e09e267fde522fc53e62e681e72f18",
+      "internal/upgrade/claude_chat_compat_test.go": "ad933cc3480e261682a871a5fb09de89dd8e1384efe7cfa4d16ee4b972105611",
+      "internal/upgrade/logins_test.go": "83505f2aa21bef72f317415b565b12e4bdf8fd07f9be29924014cbf8c8841e0b",
+      "internal/upgrade/manifest.go": "a6428e931859b22465a9a7330c3709066c163014a6f6b35e6c47e4d724b21be8"
+    }
+  },
+  "test_evidence": {
+    "focused_pre_final_ordering": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/atomic-green-r2.jsonl",
+      "sha256": "7cbc081456fcc701627e4576ffac22d200a231b7399040f9b1907b06282596bc",
+      "bytes": 88292,
+      "test_actions": {
+        "run": 88,
+        "output": 183,
+        "pass": 88
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/daemon": {
+          "result": "pass",
+          "elapsed_seconds": 39.797,
+          "test_actions": {
+            "run": 14,
+            "output": 28,
+            "pass": 14
+          }
+        },
+        "github.com/Nathandela/swarm/internal/logins": {
+          "result": "pass",
+          "elapsed_seconds": 8.031,
+          "test_actions": {
+            "run": 8,
+            "output": 16,
+            "pass": 8
+          }
+        },
+        "github.com/Nathandela/swarm/internal/persist": {
+          "result": "pass",
+          "elapsed_seconds": 5.635,
+          "test_actions": {
+            "run": 16,
+            "output": 32,
+            "pass": 16
+          }
+        },
+        "github.com/Nathandela/swarm/internal/protocol": {
+          "result": "pass",
+          "elapsed_seconds": 0.41,
+          "test_actions": {
+            "run": 6,
+            "output": 12,
+            "pass": 6
+          }
+        },
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "result": "pass",
+          "elapsed_seconds": 35.409,
+          "test_actions": {
+            "run": 38,
+            "output": 83,
+            "pass": 38
+          }
+        },
+        "github.com/Nathandela/swarm/internal/upgrade": {
+          "result": "pass",
+          "elapsed_seconds": 0.495,
+          "test_actions": {
+            "run": 6,
+            "output": 12,
+            "pass": 6
+          }
+        }
+      }
+    },
+    "metadata_red": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/metadata-red-r2.jsonl",
+      "sha256": "f7e44755c42795cd2248c0f9227f6171bbfcf1b80ef372aef9fc8829ca70dfe1",
+      "bytes": 48609,
+      "test_actions": {
+        "run": 43,
+        "output": 104,
+        "fail": 20,
+        "pass": 23
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/daemon": {
+          "result": "fail",
+          "elapsed_seconds": 7.529,
+          "test_actions": {
+            "run": 13,
+            "output": 36,
+            "fail": 11,
+            "pass": 2
+          }
+        },
+        "github.com/Nathandela/swarm/internal/logins": {
+          "result": "fail",
+          "elapsed_seconds": 2.735,
+          "test_actions": {
+            "run": 8,
+            "output": 18,
+            "fail": 2,
+            "pass": 6
+          }
+        },
+        "github.com/Nathandela/swarm/internal/persist": {
+          "result": "fail",
+          "elapsed_seconds": 1.9409999999999998,
+          "test_actions": {
+            "run": 16,
+            "output": 37,
+            "fail": 6,
+            "pass": 10
+          }
+        },
+        "github.com/Nathandela/swarm/internal/upgrade": {
+          "result": "fail",
+          "elapsed_seconds": 0.26,
+          "test_actions": {
+            "run": 6,
+            "output": 13,
+            "fail": 1,
+            "pass": 5
+          }
+        }
+      }
+    },
+    "quarantine_red": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quarantine-red-r3.jsonl",
+      "sha256": "e1ba57a3ed91d8ce3131bfae9db89be597fa0aec3e6347900396130d25fcf960",
+      "bytes": 45702,
+      "test_actions": {
+        "run": 28,
+        "output": 115,
+        "fail": 25,
+        "pass": 3
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/protocol": {
+          "result": "fail",
+          "elapsed_seconds": 1.116,
+          "test_actions": {
+            "run": 5,
+            "output": 16,
+            "fail": 4,
+            "pass": 1
+          }
+        },
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "result": "fail",
+          "elapsed_seconds": 11.763,
+          "test_actions": {
+            "run": 23,
+            "output": 99,
+            "fail": 21,
+            "pass": 2
+          }
+        }
+      }
+    },
+    "readonly_regression_red": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/readonly-red.jsonl",
+      "sha256": "fe3ed7da24d04abee117a9d0276459b07e2950f72bbcc298286c5249568b91bf",
+      "bytes": 3326,
+      "test_actions": {
+        "run": 2,
+        "output": 7,
+        "fail": 2
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/protocol": {
+          "result": "fail",
+          "elapsed_seconds": 1.215,
+          "test_actions": {
+            "run": 2,
+            "output": 7,
+            "fail": 2
+          }
+        }
+      }
+    },
+    "final_ordering_red": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/ordering-red.jsonl",
+      "sha256": "6c33dd4f20337b3f52a6c5cf4b52de69f0d4de1ed1c2a9d73ce21d1b019d242f",
+      "bytes": 3910,
+      "test_actions": {
+        "run": 3,
+        "output": 7,
+        "pass": 1,
+        "fail": 2
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/protocol": {
+          "result": "fail",
+          "elapsed_seconds": 0.5,
+          "test_actions": {
+            "run": 3,
+            "output": 7,
+            "pass": 1,
+            "fail": 2
+          }
+        }
+      }
+    },
+    "initial_full_race": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/full-six-package-race.jsonl",
+      "sha256": "4a97d5bf8f8868e103ec891aec919a26c55b78cbda1f1c0012ed495751759069",
+      "bytes": 4055098,
+      "test_actions": {
+        "run": 4062,
+        "output": 8878,
+        "pass": 4027,
+        "skip": 32,
+        "fail": 3
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/daemon": {
+          "result": "pass",
+          "elapsed_seconds": 150.8,
+          "test_actions": {
+            "run": 424,
+            "output": 852,
+            "pass": 421,
+            "skip": 3
+          }
+        },
+        "github.com/Nathandela/swarm/internal/logins": {
+          "result": "pass",
+          "elapsed_seconds": 296.653,
+          "test_actions": {
+            "run": 618,
+            "output": 1236,
+            "pass": 618
+          }
+        },
+        "github.com/Nathandela/swarm/internal/persist": {
+          "result": "pass",
+          "elapsed_seconds": 15.153,
+          "test_actions": {
+            "run": 181,
+            "output": 363,
+            "pass": 180,
+            "skip": 1
+          }
+        },
+        "github.com/Nathandela/swarm/internal/protocol": {
+          "result": "pass",
+          "elapsed_seconds": 46.556,
+          "test_actions": {
+            "run": 682,
+            "output": 1419,
+            "pass": 682
+          }
+        },
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "result": "fail",
+          "elapsed_seconds": 893.772,
+          "test_actions": {
+            "run": 2117,
+            "output": 4927,
+            "pass": 2087,
+            "skip": 28,
+            "fail": 2
+          }
+        },
+        "github.com/Nathandela/swarm/internal/upgrade": {
+          "result": "fail",
+          "elapsed_seconds": 2.9619999999999997,
+          "test_actions": {
+            "run": 40,
+            "output": 81,
+            "pass": 39,
+            "fail": 1
+          }
+        }
+      }
+    },
+    "post_review_four_package_race": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/post-fix-four-package-race.jsonl",
+      "sha256": "72c94745a5d2f7ef61daa6896f15282542580b3dbd115501b07e6b7978206e5e",
+      "bytes": 3045277,
+      "test_actions": {
+        "run": 3023,
+        "output": 6682,
+        "pass": 2993,
+        "skip": 29,
+        "fail": 1
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/persist": {
+          "result": "pass",
+          "elapsed_seconds": 8.464,
+          "test_actions": {
+            "run": 181,
+            "output": 363,
+            "pass": 180,
+            "skip": 1
+          }
+        },
+        "github.com/Nathandela/swarm/internal/protocol": {
+          "result": "pass",
+          "elapsed_seconds": 34.602,
+          "test_actions": {
+            "run": 685,
+            "output": 1425,
+            "pass": 685
+          }
+        },
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "result": "fail",
+          "elapsed_seconds": 807.81,
+          "test_actions": {
+            "run": 2117,
+            "output": 4814,
+            "pass": 2088,
+            "skip": 28,
+            "fail": 1
+          }
+        },
+        "github.com/Nathandela/swarm/internal/upgrade": {
+          "result": "pass",
+          "elapsed_seconds": 5.003,
+          "test_actions": {
+            "run": 40,
+            "output": 80,
+            "pass": 40
+          }
+        }
+      }
+    },
+    "startup_regression_repeated": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/startup-focused-race.jsonl",
+      "sha256": "c7a2a5d7fa34deb6930f8a176ff0c19b1c3b644f0a438576b5c7b6e36da17cad",
+      "bytes": 16277,
+      "test_actions": {
+        "run": 10,
+        "output": 40,
+        "pass": 10
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "result": "pass",
+          "elapsed_seconds": 14.827,
+          "test_actions": {
+            "run": 10,
+            "output": 40,
+            "pass": 10
+          }
+        }
+      }
+    },
+    "post_startup_full_skeleton_race": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/startup-fixed-skeleton-race.jsonl",
+      "sha256": "01ce49b0377a19c52c64fd1363dca22ad9b0a3b6c7d1c13ad544ba5f4c96985a",
+      "bytes": 2185808,
+      "test_actions": {
+        "run": 2117,
+        "output": 4730,
+        "pass": 2083,
+        "skip": 28,
+        "fail": 6
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "result": "fail",
+          "elapsed_seconds": 946.239,
+          "test_actions": {
+            "run": 2117,
+            "output": 4730,
+            "pass": 2083,
+            "skip": 28,
+            "fail": 6
+          }
+        }
+      }
+    },
+    "final_focused_race": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/final-focused-race.jsonl",
+      "sha256": "19ac83bd8a0854cf2d9701fc4acdf27bf8b2124d6dfc069c214ce86b46a1a489",
+      "bytes": 91225,
+      "test_actions": {
+        "run": 91,
+        "output": 189,
+        "pass": 91
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/daemon": {
+          "result": "pass",
+          "elapsed_seconds": 7.294,
+          "test_actions": {
+            "run": 14,
+            "output": 28,
+            "pass": 14
+          }
+        },
+        "github.com/Nathandela/swarm/internal/logins": {
+          "result": "pass",
+          "elapsed_seconds": 3.034,
+          "test_actions": {
+            "run": 8,
+            "output": 16,
+            "pass": 8
+          }
+        },
+        "github.com/Nathandela/swarm/internal/persist": {
+          "result": "pass",
+          "elapsed_seconds": 2.487,
+          "test_actions": {
+            "run": 16,
+            "output": 32,
+            "pass": 16
+          }
+        },
+        "github.com/Nathandela/swarm/internal/protocol": {
+          "result": "pass",
+          "elapsed_seconds": 2.532,
+          "test_actions": {
+            "run": 9,
+            "output": 18,
+            "pass": 9
+          }
+        },
+        "github.com/Nathandela/swarm/internal/skeleton": {
+          "result": "pass",
+          "elapsed_seconds": 19.283,
+          "test_actions": {
+            "run": 38,
+            "output": 83,
+            "pass": 38
+          }
+        },
+        "github.com/Nathandela/swarm/internal/upgrade": {
+          "result": "pass",
+          "elapsed_seconds": 1.335,
+          "test_actions": {
+            "run": 6,
+            "output": 12,
+            "pass": 6
+          }
+        }
+      }
+    },
+    "initial_race_source": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/pre-fix-source.json",
+      "sha256": "fefb9442479a7330a87cbc2a752d24e980562f9b98f82e858595c657372f3a8a",
+      "bytes": 3655
+    }
+  },
+  "fixture_history": "Earlier quarantine RED iterations included setup defects. Corrected ordinary ContextGuard, supervision and backend-connect controls subsequently passed in the 88-action focused run and final focused race. The two wrong-selector attempts are not proof.",
+  "quality_gates": {
+    "build": {
+      "exit_code": 0,
+      "elapsed_seconds": 5.249,
+      "command": [
+        "/private/tmp/swarm-login-repair-modcache/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64/bin/go",
+        "build",
+        "-p",
+        "1",
+        "./..."
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quality-r3/build.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "vet": {
+      "exit_code": 0,
+      "elapsed_seconds": 3.492,
+      "command": [
+        "/private/tmp/swarm-login-repair-modcache/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64/bin/go",
+        "vet",
+        "-p",
+        "1",
+        "./..."
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quality-r3/vet.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lint": {
+      "exit_code": 0,
+      "elapsed_seconds": 26.886,
+      "command": [
+        "/usr/local/bin/golangci-lint",
+        "run",
+        "--concurrency=1"
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quality-r3/lint.log",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    }
+  },
+  "initial_quality_attempt": {
+    "build": {
+      "exit_code": 0,
+      "elapsed_seconds": 17.802,
+      "command": [
+        "/private/tmp/swarm-login-repair-modcache/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64/bin/go",
+        "build",
+        "-p",
+        "1",
+        "./..."
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/build.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "vet": {
+      "exit_code": 0,
+      "elapsed_seconds": 17.303,
+      "command": [
+        "/private/tmp/swarm-login-repair-modcache/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64/bin/go",
+        "vet",
+        "-p",
+        "1",
+        "./..."
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/vet.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lint": {
+      "exit_code": 1,
+      "elapsed_seconds": 60.486,
+      "command": [
+        "/usr/local/bin/golangci-lint",
+        "run",
+        "--concurrency=1"
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/lint.log",
+      "sha256": "43f9872a85a5b18e1ac2e9535040c385879e65aaeadf77e6c258fe59d87cb85a"
+    }
+  },
+  "quality_disposition": "Initial build/vet passed; five lint findings were resolved with explicit ignored test-close results and a named equivalent strict-runtime predicate. Second build/vet/lint passed before the startup-race fix; final build/vet/lint all passed after it.",
+  "race_disposition": "Initial full race passed logins/persist/daemon/protocol. Upgrade assertion was updated for intentional reader-card4\u21926 change; new backend test uses the existing locked adapter seam after an actual fixture race. Second full persist/protocol/upgrade/skeleton race passed the first three but exposed a real startup publication race in the roster ContextGuard pointer. The already-created manager now enters newCoreAPI before its watcher starts, with every bare caller passing nil. Ten repeated adoption checks and the final focused race pass after that fix (agents-tracker-h6sc.27). The third full skeleton race still fails existing Codex event-drain tests and a synchronous synthetic Claude enrollment-completion test; causes remain under diagnosis in agents-tracker-h6sc.28 and .29. No full six-package or repository success is claimed.",
+  "failed_run_cleanup": {
+    "second_run": "The second skeleton run also returned a test-supervisor input/output error and retained /private/tmp/s3694677120. That cleanup remains failed, without inferred cause or retroactive repair.",
+    "fresh_census": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/post-r2-cleanup-census.json",
+      "sha256": "dbcd068f11a6adff5e43dd2a8e973a6041494a5bc81959c4cfa015a438b9a102",
+      "bytes": 3396
+    },
+    "fresh_resolution": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/post-r2-cleanup-text-mappings.json",
+      "sha256": "70ec98482ba4c947f87594cc5e8e809065bd047d357720a6718c75f4eb9b8d47",
+      "bytes": 19967
+    },
+    "scope": "Fresh read-only kernel executable/text mapping census found no live registered executable from the exact test root, with all 62 initially unresolved live entries resolved to other kernel text paths. No signals sent. This is point evidence allowing the next run, not prior-deadline cleanup proof."
+  },
+  "old_consumer": {
+    "commit": "fd7d676732c1d20ab1fedfbae60972f31d59e5cb",
+    "archive_sha256": "7bdd4d8ca388ce17fd2efe22436aa416f2bf534d350193697b4da411499b978f",
+    "local_initial": {
+      "path": "/private/tmp/swarm-a2-old-reader-20261027/gates/local.jsonl",
+      "sha256": "a0b54774b84691ea2b11976a6eccda2a3634defa001b359af4de7877096b790f",
+      "bytes": 11389,
+      "test_actions": {
+        "run": 9,
+        "output": 23,
+        "pass": 3,
+        "fail": 2,
+        "skip": 4
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/daemon": {
+          "result": "pass",
+          "elapsed_seconds": 9.18,
+          "test_actions": {
+            "run": 1,
+            "output": 2,
+            "pass": 1
+          }
+        },
+        "github.com/Nathandela/swarm/internal/logins": {
+          "result": "fail",
+          "elapsed_seconds": 0.831,
+          "test_actions": {
+            "run": 2,
+            "output": 5,
+            "fail": 2
+          }
+        },
+        "github.com/Nathandela/swarm/internal/shim": {
+          "result": "pass",
+          "elapsed_seconds": 0.424,
+          "test_actions": {
+            "run": 6,
+            "output": 16,
+            "skip": 4,
+            "pass": 2
+          }
+        }
+      }
+    },
+    "local_profile_fixture_fix": {
+      "path": "/private/tmp/swarm-a2-old-reader-20261027/gates/profile-local-r2.jsonl",
+      "sha256": "a3419489041364ca7bb7b708cbb3128e1654096b523653d4d5e49ba5eb9e676f",
+      "bytes": 2296,
+      "test_actions": {
+        "run": 2,
+        "output": 4,
+        "pass": 2
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/logins": {
+          "result": "pass",
+          "elapsed_seconds": 0.975,
+          "test_actions": {
+            "run": 2,
+            "output": 4,
+            "pass": 2
+          }
+        }
+      }
+    },
+    "linux_success_receipt": {
+      "path": "/private/tmp/swarm-a2-old-reader-20261027/linux-run-v4-retry/run.json",
+      "sha256": "596bd094a839e2fc040ac67bf9e99ec66931e9f17e9b0654b7895ad743009273",
+      "bytes": 4449
+    },
+    "linux_success": {
+      "kind": "frozen-old-synthetic-birth-linux",
+      "success": true,
+      "source_archive_sha256": "7bdd4d8ca388ce17fd2efe22436aa416f2bf534d350193697b4da411499b978f",
+      "test_binary_sha256": "b20107e0898a9ed9ac212234fd1cdb7b41c1154427200a9d5867d5bf8a6e4edd",
+      "containment_sha256": "6a09d5dcb6d39ee7799a53cd9e3e89f8b20b99cd50c29c16d226071ee1694c50",
+      "unit_limits": {
+        "seconds": 90,
+        "memory_mib": 512,
+        "tasks": 192,
+        "process_census": 96,
+        "cgroup_dirs": 32,
+        "output_bytes": 262144,
+        "cleanup_seconds": 5
+      },
+      "elapsed_seconds": 6.114041824010201,
+      "test_exit": 0,
+      "test_image_witness": {
+        "pid": 1340006,
+        "start": 84538843,
+        "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-a2old-d023481bb05c9970.service",
+        "exe_dev_inode": [
+          2049,
+          619121
+        ],
+        "go_monotonic": 845388.468229524,
+        "observed_monotonic": 845388.479687742,
+        "after_go_seconds": 0.011458217981271446,
+        "binary_sha256": "b20107e0898a9ed9ac212234fd1cdb7b41c1154427200a9d5867d5bf8a6e4edd",
+        "claim": "positive point observation; executable history remains incomplete if gaps observed"
+      },
+      "test_image_witness_sha256": "c70ce2c8a75afcfe46b0176f06fbbe133a118ac4d0eb6bae80224059acafc764",
+      "required_subcases": [
+        "TestA2FrozenOldProductionClaimRejectsFutureSession/ordinary5",
+        "TestA2FrozenOldProductionClaimRejectsFutureSession/chat6",
+        "TestA2FrozenOldProductionStartRejectsFutureSession/ordinary5",
+        "TestA2FrozenOldProductionStartRejectsFutureSession/chat6"
+      ],
+      "passed_subcases": [
+        "TestA2FrozenOldProductionClaimRejectsFutureSession/ordinary5",
+        "TestA2FrozenOldProductionClaimRejectsFutureSession/chat6",
+        "TestA2FrozenOldProductionStartRejectsFutureSession/ordinary5",
+        "TestA2FrozenOldProductionStartRejectsFutureSession/chat6"
+      ],
+      "cleanup": {
+        "precheck": {
+          "returncode": 0,
+          "load_state": "not-found\n",
+          "stderr": "",
+          "stderr_truncated": false,
+          "no_signal_needed": true,
+          "elapsed_seconds": 0.005542252911254764,
+          "directories": 0,
+          "task_count": 0,
+          "directory_present": false,
+          "observed_identities_ended": true
+        },
+        "kill": {
+          "returncode": 0,
+          "no_signal_needed": "already_collected",
+          "signal_attempted": false
+        },
+        "final_unit_state": {
+          "verified_not_found": true,
+          "within_deadline": true,
+          "status": "queried",
+          "returncode": 0,
+          "load_state": "not-found\n",
+          "stdout_truncated": false,
+          "stderr": "",
+          "stderr_truncated": false,
+          "elapsed_seconds": 0.010039874003268778,
+          "checked_monotonic": 845394.535840059
+        },
+        "elapsed_seconds": 0.3777655909070745
+      },
+      "kernel_proof": {
+        "exact_unit": "swarm-a2old-d023481bb05c9970",
+        "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/swarm-a2old-d023481bb05c9970.service",
+        "cgroup_pin": [
+          30,
+          5343644
+        ],
+        "empty": true,
+        "directory_gone": true,
+        "observed_identities_ended": true,
+        "inputs_unchanged": true,
+        "unit_not_found": true,
+        "elapsed_seconds": 0.3777655909070745
+      },
+      "failures": [],
+      "observed_count": 10,
+      "observed_sample": [
+        {
+          "pid": 1340006,
+          "start": 84538843,
+          "image_gap": true
+        },
+        {
+          "pid": 1340011,
+          "start": 84538847,
+          "image_gap": false
+        },
+        {
+          "pid": 1340034,
+          "start": 84538866,
+          "image_gap": false
+        },
+        {
+          "pid": 1340044,
+          "start": 84538901,
+          "image_gap": false
+        },
+        {
+          "pid": 1340052,
+          "start": 84538927,
+          "image_gap": false
+        },
+        {
+          "pid": 1340086,
+          "start": 84539109,
+          "image_gap": false
+        },
+        {
+          "pid": 1340091,
+          "start": 84539140,
+          "image_gap": false
+        },
+        {
+          "pid": 1340094,
+          "start": 84539147,
+          "image_gap": false
+        },
+        {
+          "pid": 1340097,
+          "start": 84539155,
+          "image_gap": false
+        },
+        {
+          "pid": 1340122,
+          "start": 84539375,
+          "image_gap": false
+        }
+      ],
+      "observed_sample_truncated": false,
+      "output_bytes": 865,
+      "output_sha256": "0f4f529b846582adc79de6ab3b5ba0221857593c14ac8ddfa33574897bc84369",
+      "limits": [
+        "Polling is not complete ephemeral exec trace.",
+        "Synthetic test ELF and credentials only; no provider/native/auth qualification.",
+        "Offline Go helper build uses existing shared caches; no cache installation or copying."
+      ]
+    },
+    "prior_failed_trials": [
+      {
+        "path": "/private/tmp/swarm-a2-old-reader-20261027/linux-run-v2/run.json",
+        "sha256": "4291b0b1c52e6d3c2e91064d89281c96a82d44c32ecfd560cfd0a09d3514863e",
+        "bytes": 3462
+      },
+      {
+        "path": "/private/tmp/swarm-a2-old-reader-20261027/linux-run-v4/run.json",
+        "sha256": "361e8883df3602245892c82bd96e2f90bddd41a1d9b0151f330063f8ad760ff8",
+        "bytes": 3546
+      }
+    ],
+    "limits": "Synthetic actual old-production-chain tests only. Earlier macOS Linux-only skips are not birth proof. Initial optional credential-file setup failure, V2 image-witness failure and V4 ENOSPC/teardown-shape failure remain historical failures."
+  },
+  "cache_cleanup": [
+    {
+      "plan": "/tmp/swarm-go-cache-clean-plan-4d9618tr.json",
+      "root": "/home/ubuntu/data/runtime/cache/go-build",
+      "minimum_age_hours": 24,
+      "target_bytes": 4294967296,
+      "deleted_count": 11475,
+      "deleted_bytes": 4298357385,
+      "skipped_changed_or_busy": 0,
+      "free_before": 0,
+      "free_after": 766259200,
+      "receipt": "/tmp/swarm-go-cache-clean-receipt-2htdonpa.json",
+      "receipt_sha256": "896888d68a9720cb8b1b01223e3ea8e3c1837dbf615499c8098e6225b45bc710"
+    },
+    {
+      "plan": "/tmp/swarm-go-cache-clean-plan-4d9618tr.json",
+      "root": "/home/ubuntu/data/runtime/cache/go-build",
+      "minimum_age_hours": 24,
+      "target_free_bytes": 3221225472,
+      "deleted_count": 18167,
+      "deleted_bytes": 2386904992,
+      "skipped_changed_busy_or_missing": 11475,
+      "free_before": 765792256,
+      "free_after": 3221327872,
+      "receipt": "/tmp/swarm-go-cache-clean-receipt-r2-isvvrj99.json",
+      "receipt_sha256": "db8feb07900d9b03b48af14fb575c665fdf502b616369dccd58f70a0f972de4e"
+    }
+  ],
+  "qualification_limits": [
+    "No constructor, primary-origin parser, FIFO, message/decision/history UI, public capability or automatic recovery is activated.",
+    "No native provider/auth/workflow qualification is claimed.",
+    "Root, Sol and Astra source/evidence review is separate from package results.",
+    "Main merge and release remain held; terminal-restore issue agents-tracker-h6sc.26, Codex drain issue agents-tracker-h6sc.28 and Claude enrollment-completion issue agents-tracker-h6sc.29 remain open.",
+    "Independent constructor RED preparation may continue; this is not epic closure, production constructor approval or a test waiver."
+  ]
+}

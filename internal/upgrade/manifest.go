@@ -46,7 +46,7 @@ func CurrentManifest(tag string) CompatManifest {
 		Version:       tag,
 		Shimwire:      shimwire.Version,
 		Protocol:      protocol.Version,
-		Schema:        persist.LoginSchemaVersion,
+		Schema:        persist.ClaudeChatSchemaVersion,
 		LoginSchema:   logins.SchemaVersion,
 		AccountSchema: 1, AccountJobs: 1, AccountRecovery: 3, AccountWorker: 6, AccountShim: 2, AccountConfig: 4,
 		AccountInventory: 1, AccountAuth: 1,

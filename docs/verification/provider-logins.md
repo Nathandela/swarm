@@ -6,6 +6,20 @@ Integrated native switching, local quality gates and exact-tag CI have passed.
 The table distinguishes native feasibility from complete Swarm runs.
 The unreleased seamless handover work below remains under qualification.
 
+## Opt-in Claude chat quarantine (2026-10-27)
+
+The passive A2 schema fence and quarantine evidence is recorded in
+[claude-chat-quarantine-2026-10-27.json](provider-logins/claude-chat-quarantine-2026-10-27.json).
+The old production consumer passed four synthetic Claim/Start cases; this is
+not native qualification. Managed metadata schema 6 requires the exact
+`claude-chat` discriminator, while ordinary schema 5 remains unchanged.
+Retained running or ended discussions cannot reach raw attach, input, resize,
+drain or automatic recovery through old terminal paths. Chat launch, stdio shim,
+UI and capabilities remain inactive. Main/release qualification is independently
+blocked by terminal restore (`h6sc.26`), Codex batch drain (`h6sc.28`) and
+synthetic Claude enrollment completion (`h6sc.29`). Focused safety checks and
+repository build/vet/lint pass; the full integration gate does not.
+
 ## Published v0.21.0
 
 [v0.21.0](https://github.com/Nathandela/swarm/releases/tag/v0.21.0) was published

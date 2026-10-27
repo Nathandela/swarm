@@ -35,6 +35,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/submitframe"
 )
@@ -267,7 +268,24 @@ func (s *Server) SetInputGateFunc(fn func(local string) error) {
 	s.inputGateFn.Store(&f)
 }
 
+var errClaudeChatRaw = errors.New("protocol: Claude chat runtime does not permit raw terminal access")
+
+func (s *Server) claudeChatQuarantined(local string) bool {
+	if query, ok := s.d.(interface{ ClaudeChatQuarantined(string) bool }); ok && query.ClaudeChatQuarantined(local) {
+		return true
+	}
+	for _, m := range s.d.List() {
+		if m.ID == local {
+			return persist.IsClaudeChatRuntime(m)
+		}
+	}
+	return false
+}
+
 func (s *Server) inputGate(local string) error {
+	if s.claudeChatQuarantined(local) {
+		return errClaudeChatRaw
+	}
 	if p := s.inputGateFn.Load(); p != nil {
 		return (*p)(local)
 	}
@@ -465,14 +483,6 @@ func (s *Server) sendMessage(local string, frames [][]byte, options sendMessageO
 
 	var wrote time.Time // when this message's PRECEDING frame was written
 	for i, f := range frames {
-		if i == 0 {
-			// Mark before the first ambiguous Input attempt: an error from Input does
-			// not prove whether the shim consumed bytes. Marker failure itself is a
-			// refusal and therefore precedes every byte.
-			if err := s.observeDirectInput(local, DirectInputDraft); err != nil {
-				return fmt.Errorf("record direct input before write: %w", err)
-			}
-		}
 		// The gap separates a message's text from the CR that submits it, and a message has
 		// at most those two frames. It is owed because a TEXT frame precedes the CR, not
 		// because of what that text contains — text and submit co-arriving in one PTY read
@@ -481,6 +491,17 @@ func (s *Server) sendMessage(local string, frames [][]byte, options sendMessageO
 		if i > 0 {
 			if wait := submitframe.Gap - time.Since(wrote); wait > 0 {
 				time.Sleep(wait)
+			}
+		}
+		if s.claudeChatQuarantined(local) {
+			return errClaudeChatRaw
+		}
+		if i == 0 {
+			// Mark before the first ambiguous Input attempt: an error from Input does
+			// not prove whether the shim consumed bytes. Marker failure itself is a
+			// refusal and therefore precedes every byte.
+			if err := s.observeDirectInput(local, DirectInputDraft); err != nil {
+				return fmt.Errorf("record direct input before write: %w", err)
 			}
 		}
 		var err error

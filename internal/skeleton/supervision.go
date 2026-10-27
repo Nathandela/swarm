@@ -165,6 +165,9 @@ func newSupervisor(endpointID, dir string, retry time.Duration,
 // ignored. LastGroup starts at the armed meta's own group so the first signal reports
 // only a CHANGE from the state the child was armed in.
 func (s *supervisor) arm(m persist.Meta) {
+	if persist.IsClaudeChatRuntime(m) {
+		return
+	}
 	if m.SpawnIntent != protocol.SpawnIntentHandoff || m.Supervision != protocol.SupervisionPassive {
 		return
 	}
@@ -222,6 +225,9 @@ func (s *supervisor) evaluateLocked(r *supervisionRecord) bool {
 	m, ok := s.get(r.Child)
 	if !ok {
 		s.retireLocked(r)
+		return false
+	}
+	if persist.IsClaudeChatRuntime(m) {
 		return false
 	}
 	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
@@ -305,6 +311,9 @@ func (s *supervisor) deliver(child, source string, ev supervisionEvent) {
 		return
 	}
 	m, exists := s.get(child)
+	if exists && persist.IsClaudeChatRuntime(m) {
+		return
+	}
 	if ev.NativeKey != "" || exists && m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
 		if !exists || ev.NativeKey == "" || s.nativeEvent == nil {
 			return
@@ -360,7 +369,7 @@ func supervisionOperationID(child, source string, ev supervisionEvent) string {
 // roster shows (C4).
 func (s *supervisor) sourceSafe(source string) bool {
 	m, ok := s.getSource(source)
-	return ok && m.Status.Process == status.ProcessRunning &&
+	return ok && !persist.IsClaudeChatRuntime(m) && m.Status.Process == status.ProcessRunning &&
 		m.Status.Turn == status.TurnIdle &&
 		m.Status.Interaction != status.InteractionPermission &&
 		m.Status.Interaction != status.InteractionPrompt &&

@@ -665,14 +665,15 @@ var (
 	_ protocol.InteractionDetailer  = (*coreAPI)(nil)
 )
 
-func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
+func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string, contextGuards *contextGuardManager) *coreAPI {
 	a := &coreAPI{
-		core:         core,
-		fakeAgentBin: fakeAgentBin,
-		endpointID:   endpointID,
-		events:       make(chan persist.Meta, eventsBuffer),
-		nudge:        make(chan struct{}, 1),
-		stop:         make(chan struct{}),
+		core:          core,
+		contextGuards: contextGuards,
+		fakeAgentBin:  fakeAgentBin,
+		endpointID:    endpointID,
+		events:        make(chan persist.Meta, eventsBuffer),
+		nudge:         make(chan struct{}, 1),
+		stop:          make(chan struct{}),
 	}
 	// The tap's dial seam is exactly today's Attach path (DialSession + the shared
 	// shim-wire stream); the tap tees that one upstream to N subscribers. DialSession
@@ -1904,11 +1905,26 @@ func validateResumeSource(src, agentType, endpointID string, getSource func(loca
 	return local, m, nil
 }
 
+// Retained runtime identity survives a missing roster row without byte-input effects.
+func (a *coreAPI) ClaudeChatQuarantined(local string) bool {
+	if a.logins != nil && a.logins.d != nil && a.logins.d.claudeChatQuarantined(local) {
+		return true
+	}
+	if a.core != nil {
+		m, ok := a.core.Get(local)
+		return ok && persist.IsClaudeChatRuntime(m)
+	}
+	return false
+}
+
 // Attach opens a SessionStream for id, multiplexed through the shared per-session
 // tap (A7 F1). The first attach opens the one upstream shim connection; concurrent
 // attaches (the owner controller and the future remote peek) SHARE it. The owner
 // tier attaches readWrite so its Input/Resize drive the session exactly as before.
 func (a *coreAPI) Attach(id string) (protocol.SessionStream, error) {
+	if a.ClaudeChatQuarantined(id) {
+		return nil, errClaudeChatQuarantined
+	}
 	return a.tap.subscribe(id, readWrite)
 }
 
@@ -1920,6 +1936,9 @@ func (a *coreAPI) Attach(id string) (protocol.SessionStream, error) {
 // exposure is limited to the tapOnce controlled-skip exactly as before (G-D:
 // old-shim degradation no worse than today).
 func (a *coreAPI) SampleSnapshot(id string) ([]byte, error) {
+	if a.ClaudeChatQuarantined(id) {
+		return nil, errClaudeChatQuarantined
+	}
 	conn, caps, err := a.core.DialSession(id)
 	if err != nil {
 		return nil, err

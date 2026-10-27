@@ -758,7 +758,9 @@ func (d *Daemon) abandon() {
 // on-disk form, persists it atomically, updates the in-memory registry, and fires
 // the onMetaSave observer. Writes are serialized by writeMu.
 func (d *Daemon) saveMeta(m persist.Meta) error {
-	m.SchemaVersion = persist.SchemaVersion
+	if !persist.IsClaudeChatRuntime(m) {
+		m.SchemaVersion = persist.SchemaVersion
+	}
 
 	d.writeMu.Lock()
 	written, err := d.saveMetaLocked(&m)
@@ -791,10 +793,9 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 // reaching here, or the unfiltered value will reach the in-memory registry
 // (store.Save only protects disk, since it filters its own copy of m).
 func (d *Daemon) saveMetaLocked(m *persist.Meta) (written bool, err error) {
-	if m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(d.cfg.StateDir, *m.LoginRuntime) {
-		m.SchemaVersion = persist.ClaudeSchemaVersion
-	}
-	if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
+	if persist.IsClaudeChatRuntime(*m) || m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(d.cfg.StateDir, *m.LoginRuntime) {
+		m.SchemaVersion = persist.ClaudeMetadataSchemaVersion(*m)
+	} else if m.RequiredRuntime == persist.RequiredRuntimeOpenCode {
 		m.SchemaVersion = persist.OpenCodeSchemaVersion
 	}
 	if d.isDeleted(m.ID) {

@@ -44,7 +44,7 @@ func TestCoreAPISetTagReachesTheRealDaemon(t *testing.T) {
 
 	// The production assembly, poller included: a bare &coreAPI{} would pass even
 	// if the roster poller never noticed a tag-only change.
-	api := newCoreAPI(core, "", "ep")
+	api := newCoreAPI(core, "", "ep", nil)
 	t.Cleanup(api.close)
 	// The poller's first sample announces the seeded session; drain it so the
 	// event asserted below can only be the tag change.

@@ -67,7 +67,7 @@ func TestR5Round4_RemoteLaunchOfAProductionPresetResolvesOnTheDaemonsOwnPath(t *
 
 	// fakeAgentBin "" == a REAL install: the GG-6 production gate is armed and no
 	// dev/test escape hatch is available to this launch.
-	api := newCoreAPI(core, "", "mach1")
+	api := newCoreAPI(core, "", "mach1", nil)
 
 	// Exactly what internal/protocol/remote_launch.go composes from a resolved preset.
 	spec := daemon.LaunchSpec{
@@ -126,7 +126,7 @@ func TestR5Round4_ProductionLaunchStillFailsClearlyWhenTheBinaryIsAbsent(t *test
 	}
 	t.Cleanup(func() { _ = core.Close() })
 
-	api := newCoreAPI(core, "", "mach1")
+	api := newCoreAPI(core, "", "mach1", nil)
 	m, err := api.Launch(daemon.LaunchSpec{
 		AgentType: "codex", Cwd: t.TempDir(), ClientEnv: nil, Cols: 80, Rows: 24,
 		Options: map[string]string{}, OperationID: "devA:01JR4ABSENT",

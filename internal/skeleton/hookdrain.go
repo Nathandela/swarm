@@ -80,6 +80,9 @@ func (d *Daemon) ingestHookBytes(raw []byte) error {
 	if err != nil {
 		return errors.Join(errHookIngestRejected, err)
 	}
+	if d.claudeChatQuarantined(cb.SessionID) {
+		return errClaudeChatQuarantined
+	}
 	if cb.Event == "SwarmUsage" {
 		if err := d.eng.AuthenticateCallback(cb); err != nil {
 			return errors.Join(errHookIngestRejected, err)
@@ -504,6 +507,7 @@ type HookDrainer struct {
 // its fold cursor at cursorPath -- reopened by a later daemon incarnation to resume
 // exactly where the prior one left off.
 func NewHookDrainer(d *Daemon, sessionID, hookSocketPath, cursorPath string) *HookDrainer {
+	d.claudeChatQuarantined(sessionID)
 	return &HookDrainer{d: d, sessionID: sessionID, hookSocketPath: hookSocketPath, cursorPath: cursorPath}
 }
 
@@ -561,6 +565,9 @@ func (hd *HookDrainer) DrainOnce() (applied, skipped int, err error) {
 }
 
 func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
+	if hd.d.claudeChatQuarantined(hd.sessionID) {
+		return 0, 0, errClaudeChatQuarantined
+	}
 	cursor := readHookCursor(hd.cursorPath)
 
 	conn, err := net.DialTimeout("unix", hd.hookSocketPath, hookDrainTimeout)
@@ -577,6 +584,9 @@ func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
 		return 0, 0, fmt.Errorf("skeleton: encode hook drain request: %w", err)
 	}
 	_ = conn.SetDeadline(time.Now().Add(hookDrainTimeout))
+	if hd.d.claudeChatQuarantined(hd.sessionID) {
+		return 0, 0, errClaudeChatQuarantined
+	}
 	if _, err := conn.Write(append([]byte{shim.HookDrainTag}, req...)); err != nil {
 		return 0, 0, fmt.Errorf("skeleton: write hook drain request: %w", err)
 	}
@@ -611,6 +621,9 @@ func (hd *HookDrainer) drainFromSpoolFile() (applied, skipped int, err error) {
 }
 
 func (hd *HookDrainer) drainFromSpoolFileLocked() (applied, skipped int, err error) {
+	if hd.d.claudeChatQuarantined(hd.sessionID) {
+		return 0, 0, errClaudeChatQuarantined
+	}
 	hd.mu.Lock()
 	spoolPath := hd.spoolPath
 	hd.mu.Unlock()
@@ -644,6 +657,9 @@ func (hd *HookDrainer) FinalDrain() {
 	hd.drainMu.Lock()
 	defer hd.drainMu.Unlock()
 	hd.pollStopped = true
+	if hd.d.claudeChatQuarantined(hd.sessionID) {
+		return
+	}
 	if _, _, err := hd.drainOnceLocked(); errors.Is(err, ErrHookDrainGap) && !hd.gapRecoveryPending {
 		return // the same gap survived a reset: no retained side can be recovered
 	}
@@ -678,6 +694,9 @@ func (hd *HookDrainer) FinalDrain() {
 // disk path can never diverge in what they apply, what they refuse, or what they
 // persist. Caller holds drainMu.
 func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor uint64) (applied, skipped int, err error) {
+	if hd.d.claudeChatQuarantined(hd.sessionID) {
+		return 0, 0, errClaudeChatQuarantined
+	}
 	if err := hd.flushCursorCertificate(); err != nil {
 		return 0, 0, err
 	}
@@ -706,6 +725,9 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor ui
 			skipped++
 		} else {
 			applied++
+		}
+		if hd.d.claudeChatQuarantined(hd.sessionID) {
+			return applied, skipped, errClaudeChatQuarantined
 		}
 		if perr := persistHookDrainCursor(hd.cursorPath, rec.Seq); perr != nil {
 			return applied, skipped, fmt.Errorf("skeleton: persist hook drain cursor: %w", perr)

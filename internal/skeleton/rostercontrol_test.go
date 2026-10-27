@@ -66,7 +66,7 @@ func TestRosterPoll_ControlFlipAloneFiresAnEvent(t *testing.T) {
 	})
 
 	var controlled atomic.Bool
-	api := newCoreAPI(core, fakeAgentBin, endpointID(dir))
+	api := newCoreAPI(core, fakeAgentBin, endpointID(dir), nil)
 	t.Cleanup(api.close)
 	api.SetRemoteControlledFunc(func(local string) bool { return controlled.Load() && local == m.ID })
 

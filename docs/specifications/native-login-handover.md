@@ -586,6 +586,16 @@ terminal sessions; existing sessions are unchanged. Initially refuse resume,
 handoff/import, remote/preset use, unsupported runtimes and platforms. Persist an
 exact `claude-chat` runtime discriminator so old readers fail closed.
 
+A2 adds passive quarantine for the exact managed metadata schema 6 plus
+`claude-chat` discriminator pair; ordinary schema 5 sessions retain their
+existing behavior. Retained running or ended chat discussions are fenced from
+the old terminal paths for raw attach, input, resize, drain and automatic
+recovery. The old production consumer passed four synthetic Claim/Start cases;
+this is not native qualification. No chat launch, stdio shim, UI or capabilities
+are active. Main and release remain blocked by terminal restore (`h6sc.26`)
+and unresolved native ingress/enrollment integration checks (`h6sc.28`,
+`h6sc.29`). See the [checkpoint evidence](../verification/provider-logins/claude-chat-quarantine-2026-10-27.json).
+
 Use one shim-owned structured Claude primary. Reuse selected-login admission,
 profile custody, the authenticated shim connection, composer lane, operation
 journal, hook spool, execution record, native request/decision handlers and

@@ -229,6 +229,9 @@ func (d *Daemon) registerSessionCapabilitiesTransitionLocked(sessionID string, c
 		// has an uncharacterized input region.
 		c.TerminalControl = false
 	}
+	if d.claudeChatQuarantined(sessionID) {
+		c = passiveClaudeChatCapabilities(c)
+	}
 	if d.capStore.byID == nil {
 		d.capStore.byID = map[string]protocol.SessionCapabilities{}
 	}
@@ -275,6 +278,9 @@ func (d *Daemon) lookupCapabilitiesLocked(sessionID string) (protocol.SessionCap
 	c, ok := d.rawCapabilitiesLocked(sessionID)
 	if !ok {
 		return protocol.SessionCapabilities{}, false
+	}
+	if d.claudeChatQuarantined(sessionID) {
+		return passiveClaudeChatCapabilities(c), true
 	}
 	c.NativeInteractionVersion = 0
 	c.NativeComposer = false

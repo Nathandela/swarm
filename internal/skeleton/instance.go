@@ -309,6 +309,9 @@ func (d *Daemon) authorSessionCapabilities(sessionID, instance, provider string,
 	defer d.capStore.authorMu.Unlock()
 	rec := deriveSessionCapabilities(provider, a, providerVersion, adapterRevision, liveBackend)
 	rec.SessionInstance = instance
+	if d.claudeChatQuarantined(sessionID) {
+		rec = passiveClaudeChatCapabilities(rec)
+	}
 	if err := rec.Validate(); err != nil {
 		return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: refusing to author a capability record for session %q: %w", sessionID, err)
 	}

@@ -29,6 +29,25 @@ const LoginSchemaVersion = 4
 // ClaudeSchemaVersion preserves owned native reservations and their retirement.
 const ClaudeSchemaVersion = logins.ClaudeReservationSchemaVersion
 
+// ClaudeChatSchemaVersion protects structured-primary metadata from PTY readers.
+const ClaudeChatSchemaVersion = logins.ClaudeChatReservationSchemaVersion
+const RequiredRuntimeClaudeChat = "claude-chat"
+
+// IsClaudeChatRuntime is conservative routing only. It grants no managed custody
+// or input authority; decoding still requires the exact owned schema/runtime pair.
+func IsClaudeChatRuntime(m Meta) bool {
+	return m.SchemaVersion == ClaudeChatSchemaVersion || m.RequiredRuntime == RequiredRuntimeClaudeChat
+}
+
+// ClaudeMetadataSchemaVersion selects the owned writer version even when a
+// metadata update reset its incoming baseline version to one.
+func ClaudeMetadataSchemaVersion(m Meta) int {
+	if IsClaudeChatRuntime(m) {
+		return ClaudeChatSchemaVersion
+	}
+	return ClaudeSchemaVersion
+}
+
 // metaFile is the committed per-session state file name within a session dir.
 const metaFile = "meta.json"
 
@@ -248,7 +267,7 @@ func (s *Store) Save(m Meta) error {
 		return err
 	}
 	return logins.WithClaudeMetadataSave(s.root, m.ID, data, func() error {
-		return s.writeMetadata(m.ID, data, m.SchemaVersion == ClaudeSchemaVersion)
+		return s.writeMetadata(m.ID, data, m.SchemaVersion == ClaudeSchemaVersion || m.SchemaVersion == ClaudeChatSchemaVersion)
 	})
 }
 
@@ -256,13 +275,14 @@ func (s *Store) Save(m Meta) error {
 // The public Save guard compares stored custody before its raw rename callback.
 func (s *Store) metadataBytes(m Meta) (Meta, []byte, error) {
 	m.Env = FilterEnv(m.Env)
-	owned := m.SchemaVersion == ClaudeSchemaVersion || m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(s.root, *m.LoginRuntime)
+	owned := m.SchemaVersion == ClaudeSchemaVersion || IsClaudeChatRuntime(m) || m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(s.root, *m.LoginRuntime)
+	ownedVersion := ClaudeMetadataSchemaVersion(m)
 	m.SchemaVersion = SchemaVersion
 	if owned {
+		m.SchemaVersion = ownedVersion
 		if !validClaudeMeta(m) || (!logins.IsClaudeProfileRuntime(s.root, *m.LoginRuntime) && (m.ClaudeRetirement == nil || m.LoginRuntime.Home != filepath.Join(s.root, "logins", "provider", "claude", "native"))) {
 			return m, nil, fmt.Errorf("persist: invalid owned Claude runtime")
 		}
-		m.SchemaVersion = ClaudeSchemaVersion
 	} else if m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
 		if !validOpenCodeMeta(m) {
 			return m, nil, fmt.Errorf("persist: invalid OpenCode runtime binding")
@@ -420,10 +440,19 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	if m.ID != wantID {
 		return Meta{}, fmt.Errorf("meta id %q does not match session directory %q", m.ID, wantID)
 	}
-	if m.SchemaVersion > ClaudeSchemaVersion {
-		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, ClaudeSchemaVersion)
+	if m.SchemaVersion > ClaudeChatSchemaVersion {
+		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, ClaudeChatSchemaVersion)
 	}
-	if m.SchemaVersion == ClaudeSchemaVersion {
+	if m.SchemaVersion == ClaudeSchemaVersion || IsClaudeChatRuntime(m) {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return Meta{}, err
+		}
+		for name := range fields {
+			if name != "required_runtime" && strings.EqualFold(name, "required_runtime") {
+				return Meta{}, fmt.Errorf("invalid owned Claude runtime key")
+			}
+		}
 		if !validClaudeMeta(m) {
 			return Meta{}, fmt.Errorf("invalid owned Claude runtime")
 		}
@@ -460,14 +489,18 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 // This is decoding, not writer-stop authorization. The shared logins guard
 // validates retained private proofs again before any custody mutation.
 func validClaudeMeta(m Meta) bool {
-	if !validLoginMeta(m) || m.LoginRuntime.Provider != logins.ProviderClaude || m.LoginRuntime.ExternalAuth || m.InputEmbargo != "" || m.RequiredRuntime != "" || m.OpenCodeBinding != nil {
+	validRuntime := m.SchemaVersion == ClaudeSchemaVersion && m.RequiredRuntime == "" || m.SchemaVersion == ClaudeChatSchemaVersion && m.RequiredRuntime == RequiredRuntimeClaudeChat
+	if !validRuntime {
+		return false
+	}
+	if !validLoginMeta(m) || m.LoginRuntime.Provider != logins.ProviderClaude || m.LoginRuntime.ExternalAuth || m.InputEmbargo != "" || m.OpenCodeBinding != nil {
 		return false
 	}
 	// These are wire shapes, not root membership or stop proof. The shared Store
 	// guard binds the exact state root and retained authority before mutation.
 	profile := strings.HasSuffix(m.LoginRuntime.Home, "/logins/provider/claude/profiles/"+m.LoginRuntime.Identity)
 	common := strings.HasSuffix(m.LoginRuntime.Home, "/logins/provider/claude/native")
-	if !profile && (!common || m.ClaudeRetirement == nil) {
+	if !profile && (m.SchemaVersion == ClaudeChatSchemaVersion || !common || m.ClaudeRetirement == nil) {
 		return false
 	}
 	fingerprint := ""
@@ -477,6 +510,9 @@ func validClaudeMeta(m Meta) bool {
 	if profile {
 		cli := m.CLIIdentity
 		if cli == nil || !filepath.IsAbs(cli.Path) || filepath.Clean(cli.Path) != cli.Path || cli.Version == "" || cli.Fingerprint == "" || len(cli.Fingerprint) > 256 || strings.ContainsAny(cli.Path+cli.Version+cli.Fingerprint, "\x00\r\n") {
+			return false
+		}
+		if m.SchemaVersion == ClaudeChatSchemaVersion && (cli.Version != "2.1.310" || !logins.IsClaudeCLIFingerprint(cli.Fingerprint)) {
 			return false
 		}
 	}

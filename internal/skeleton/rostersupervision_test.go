@@ -62,7 +62,7 @@ func TestRosterPoll_SupervisionPendingFlipAloneFiresAnEvent(t *testing.T) {
 	})
 
 	var pending atomic.Bool
-	api := newCoreAPI(core, fakeAgentBin, endpointID(dir))
+	api := newCoreAPI(core, fakeAgentBin, endpointID(dir), nil)
 	t.Cleanup(api.close)
 	api.SetSupervisionPendingFunc(func(local string) bool { return pending.Load() && local == m.ID })
 

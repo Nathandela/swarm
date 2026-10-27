@@ -103,7 +103,24 @@ func (m *loginManager) owns(local string) bool {
 	}
 	return false
 }
+func (m *loginManager) claudeChatQuarantined(local string) bool {
+	if m == nil || m.d == nil {
+		return false
+	}
+	if m.d.claudeChatQuarantined(local) {
+		return true
+	}
+	if m.d.core == nil && (m.d.authw == nil || m.d.authw.get == nil) {
+		return false
+	}
+	meta, ok := m.get(local)
+	return ok && persist.IsClaudeChatRuntime(meta)
+}
+
 func (m *loginManager) inputGate(local string) error {
+	if m.claudeChatQuarantined(local) {
+		return errClaudeChatQuarantined
+	}
 	if m == nil || m.d == nil || (m.d.core == nil && (m.d.authw == nil || m.d.authw.get == nil)) {
 		return nil
 	}
@@ -142,6 +159,9 @@ func (m *loginManager) inputGate(local string) error {
 
 // Owner terminal bytes cannot distinguish approval keys from a new turn.
 func (m *loginManager) manualInputGate(local string) error {
+	if m.claudeChatQuarantined(local) {
+		return errClaudeChatQuarantined
+	}
 	if m == nil || m.d == nil {
 		return nil
 	}
@@ -184,7 +204,22 @@ func (m *loginManager) semanticInputGate(local string) error {
 	return nil
 }
 
+func (m *loginManager) claudeChatProviderQuarantined(provider string) bool {
+	if m == nil || m.d == nil || m.d.core == nil && (m.d.authw == nil || m.d.authw.list == nil) {
+		return false
+	}
+	for _, meta := range m.list() {
+		if meta.AgentType == provider && (persist.IsClaudeChatRuntime(meta) || m.d.claudeChatQuarantined(meta.ID)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *loginManager) BeginSwitch(provider, toID, reason string) (out logins.Switch, err error) {
+	if m.claudeChatProviderQuarantined(provider) {
+		return out, errClaudeChatQuarantined
+	}
 	if m == nil || !managedLoginProvider(provider) {
 		return out, logins.ErrIneligible
 	}
@@ -213,6 +248,9 @@ func (m *loginManager) beginSwitch(provider, toID, reason string) (logins.Switch
 	return m.beginSwitchExpected(provider, toID, reason, nil)
 }
 func (m *loginManager) beginSwitchExpected(provider, toID, reason string, expected *uint64) (logins.Switch, error) {
+	if m.claudeChatProviderQuarantined(provider) {
+		return logins.Switch{}, errClaudeChatQuarantined
+	}
 	gate := &m.admission[loginProviderIndex(provider)]
 	gate.Lock()
 	defer gate.Unlock()
@@ -483,6 +521,14 @@ func (m *loginManager) sourceRows(op logins.Switch) []persist.Meta {
 }
 
 func (m *loginManager) stepSwitch(op logins.Switch) {
+	if m.claudeChatProviderQuarantined(op.Provider) {
+		return
+	}
+	for _, row := range op.Sessions {
+		if m.claudeChatQuarantined(row.SourceID) || row.ChildID != "" && m.claudeChatQuarantined(row.ChildID) {
+			return
+		}
+	}
 	switch op.Phase {
 	case "waiting", "stopping":
 		op.Phase = "stopping"
@@ -679,9 +725,15 @@ func (m *loginManager) stopClaimedSession(op *logins.Switch, index int, source p
 		fence = m.d.withClaimedAuthRecycleFence
 	}
 	return fence(source.ID, func() error {
+		if persist.IsClaudeChatRuntime(source) || m.d.claudeChatQuarantined(source.ID) {
+			return errClaudeChatQuarantined
+		}
 		current, ok := m.get(source.ID)
 		if !ok || current.RosterHidden {
 			return errAuthOwnerEnding
+		}
+		if persist.IsClaudeChatRuntime(current) {
+			return errClaudeChatQuarantined
 		}
 		if current.Status.Process != status.ProcessRunning || current.Status.Turn != status.TurnIdle || current.Status.Interaction != status.InteractionNone || m.d.anyControlled(source.ID) || m.d.contextGuardCompactionInFlight(source.ID) || m.d.composerOutcomeUnresolved(source.ID) || m.d.directInputUnresolved(source.ID) || m.d.executionCustodyUnsafe(source.ID) {
 			return fmt.Errorf("login switch: waiting for discussion %q to finish or detach", current.Name)
@@ -711,6 +763,9 @@ func (m *loginManager) stopClaimedSession(op *logins.Switch, index int, source p
 	})
 }
 func (m *loginManager) resumeSwitchSession(op *logins.Switch, index int) {
+	if m.claudeChatQuarantined(op.Sessions[index].SourceID) || op.Sessions[index].ChildID != "" && m.claudeChatQuarantined(op.Sessions[index].ChildID) {
+		return
+	}
 	row := &op.Sessions[index]
 	source, exists := m.get(row.SourceID)
 	if !exists || source.RosterHidden {
@@ -869,6 +924,9 @@ func (m *loginManager) beginReloginExpected(loginID string, credential logins.Cr
 	if !managedLoginProvider(provider) {
 		return logins.Switch{}, logins.ErrIneligible
 	}
+	if m.claudeChatProviderQuarantined(provider) {
+		return logins.Switch{}, errClaudeChatQuarantined
+	}
 	gate := &m.admission[loginProviderIndex(provider)]
 	gate.Lock()
 	defer gate.Unlock()
@@ -968,6 +1026,11 @@ func (m *loginManager) verifyStopped(meta persist.Meta) error {
 }
 
 func (m *loginManager) preflightSources(sources []persist.Meta) error {
+	for _, source := range sources {
+		if persist.IsClaudeChatRuntime(source) || m.d.claudeChatQuarantined(source.ID) {
+			return errClaudeChatQuarantined
+		}
+	}
 	if m.d.authw != nil {
 		if m.d.authw.stateErr != nil {
 			return errors.New("login switch: earlier native restart state is unreadable")

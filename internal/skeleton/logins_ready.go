@@ -19,6 +19,9 @@ type loginNativeReady struct {
 }
 
 func (d *Daemon) recordLoginReady(meta persist.Meta, cb engine.Callback) error {
+	if persist.IsClaudeChatRuntime(meta) || d.claudeChatQuarantined(meta.ID) {
+		return errClaudeChatQuarantined
+	}
 	if meta.LoginRuntime == nil {
 		return nil
 	}
@@ -30,6 +33,9 @@ func (d *Daemon) recordLoginReady(meta persist.Meta, cb engine.Callback) error {
 	return err
 }
 func (d *Daemon) loginRecoveryReady(meta persist.Meta) bool {
+	if persist.IsClaudeChatRuntime(meta) || d.claudeChatQuarantined(meta.ID) {
+		return false
+	}
 	if meta.AgentType != logins.ProviderClaude {
 		return d.authRecoveryReady(meta)
 	}

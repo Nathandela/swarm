@@ -63,6 +63,9 @@ var persistHookCursorCertificate = func(path string, data []byte) error { return
 // A pending certificate comes only from a cursor this drainer just committed.
 // Reading an old decimal cursor can never manufacture retirement authority.
 func (hd *HookDrainer) flushCursorCertificate() error {
+	if hd.d.claudeChatQuarantined(hd.sessionID) {
+		return errClaudeChatQuarantined
+	}
 	p := hd.certificatePending
 	if p == nil {
 		return nil
@@ -74,6 +77,9 @@ func (hd *HookDrainer) flushCursorCertificate() error {
 	data, err := json.Marshal(p)
 	if err != nil {
 		return err
+	}
+	if hd.d.claudeChatQuarantined(hd.sessionID) {
+		return errClaudeChatQuarantined
 	}
 	if err := persistHookCursorCertificate(hd.cursorPath, data); err != nil {
 		return err
@@ -125,6 +131,9 @@ func ReadHookRetirementCertificate(cursorPath string) (incarnation, producer str
 func (hd *HookDrainer) retireCertifiedPrefix() error {
 	hd.drainMu.Lock()
 	defer hd.drainMu.Unlock()
+	if hd.d.claudeChatQuarantined(hd.sessionID) {
+		return errClaudeChatQuarantined
+	}
 	if err := hd.flushCursorCertificate(); err != nil {
 		return err
 	}
@@ -148,6 +157,9 @@ func (hd *HookDrainer) retireCertifiedPrefix() error {
 			pid, start = m.ShimPID, m.ShimStartTime
 		}
 	}
+	if hd.d.claudeChatQuarantined(hd.sessionID) {
+		return errClaudeChatQuarantined
+	}
 	return shim.CompactStoppedHookSpool(path, incarnation, producer, sequence, pid, start)
 }
 
@@ -158,7 +170,7 @@ type hookRetirementRetry struct {
 
 func (d *Daemon) retireHookPayload(hd *HookDrainer) {
 	err := hd.retireCertifiedPrefix()
-	if err == nil || errors.Is(err, shim.ErrHookRetirementUnproven) || errors.Is(err, os.ErrNotExist) {
+	if err == nil || errors.Is(err, errClaudeChatQuarantined) || errors.Is(err, shim.ErrHookRetirementUnproven) || errors.Is(err, os.ErrNotExist) {
 		return
 	}
 	d.drains.mu.Lock()
@@ -182,7 +194,7 @@ func (d *Daemon) retryHookRetirements() {
 		err := r.drainer.retireCertifiedPrefix()
 		d.drains.mu.Lock()
 		if current, ok := d.drains.retirement[id]; ok && current.drainer == r.drainer {
-			if err == nil || errors.Is(err, shim.ErrHookRetirementUnproven) || errors.Is(err, os.ErrNotExist) || r.remaining <= 1 {
+			if err == nil || errors.Is(err, errClaudeChatQuarantined) || errors.Is(err, shim.ErrHookRetirementUnproven) || errors.Is(err, os.ErrNotExist) || r.remaining <= 1 {
 				if r.remaining <= 1 && err != nil && !errors.Is(err, shim.ErrHookRetirementUnproven) && !errors.Is(err, os.ErrNotExist) {
 					log.Printf("skeleton: hook payload retirement for session %s exhausted retries: %v", id, err)
 				}

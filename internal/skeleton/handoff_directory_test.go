@@ -54,7 +54,7 @@ func handoffDirFixture(t *testing.T, metas ...persist.Meta) (*coreAPI, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = core.Close() })
-	api := newCoreAPI(core, fakeAgentBin, endpointID(dir))
+	api := newCoreAPI(core, fakeAgentBin, endpointID(dir), nil)
 	t.Cleanup(api.close)
 	return api, dir
 }

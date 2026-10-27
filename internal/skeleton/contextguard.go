@@ -186,6 +186,9 @@ func contextGuardConfig(settings protocol.ContextGuardSettings) contextguard.Con
 }
 
 func (d *Daemon) registerContextGuardBackend(local string, backend *sessionBackend) {
+	if d.claudeChatQuarantined(local) {
+		return
+	}
 	if d.contextGuards == nil || backend == nil || backend.feed == nil {
 		if backend != nil && backend.feed != nil {
 			d.discardContextGuardFeed(backend.feed)
@@ -273,6 +276,9 @@ func (d *Daemon) registerContextGuardBackend(local string, backend *sessionBacke
 // never auto-compacted: whoever holds the controls can /compact themselves.
 // The guard exists for the unattended fleet.
 func (d *Daemon) contextGuardQuiet(local string) bool {
+	if d.claudeChatQuarantined(local) {
+		return false
+	}
 	if d.core == nil {
 		return false
 	}

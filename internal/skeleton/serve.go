@@ -217,7 +217,8 @@ type Daemon struct {
 	// ingested per session -- a membership test, not a high-water gate, because a hook
 	// sequence carries no causal order (internal/engine, agents-tracker-707). Rides
 	// itemMu like every other per-session ingest-side map above.
-	hookSeq map[string]*hookSeen
+	hookSeq            map[string]*hookSeen
+	claudeChatRetained sync.Map // session IDs captured before ordinary consumers can run
 
 	// capStore is the daemon-authored per-session capability record store (ADR-017 T2 /
 	// playbook §6.2; capability.go).
@@ -382,7 +383,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		locals = append(locals, m.ID)
 	}
 	d.restoreDirectInputState(locals)
-	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID, d.contextGuards)
 	// Every later assembly failure must release the core lock and its watchers.
 	var loginStore *logins.Store
 	assembled := false
@@ -450,7 +451,6 @@ func Serve(cfg Config) (*Daemon, error) {
 		}
 	}
 	d.api.contextGuardSettings = d.contextGuardSettings
-	d.api.contextGuards = d.contextGuards
 	d.api.syncName = func(local, name string) {
 		go d.syncSessionNameToProvider(local, name)
 	}
@@ -681,6 +681,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	// input, and supervisor delivery refuse before bytes while compaction or auth
 	// recycling owns the session (the supervisor avoids even attempting).
 	inputGate := func(local string) error {
+		if d.claudeChatQuarantined(local) {
+			return errClaudeChatQuarantined
+		}
 		d.abandonLaunchGate(local) // Includes a brief attach/detach between grid polls.
 		if reason := d.composerRecycleRefusal(local); reason != "" {
 			return fmt.Errorf("session %q %s; nothing was typed", local, reason)
@@ -779,7 +782,12 @@ func Serve(cfg Config) (*Daemon, error) {
 // "fake" agent has no adapter, so its sources are nil and only explicit-dimension
 // callbacks / the grid heuristic drive it.
 func (d *Daemon) registerSession(m persist.Meta, token string) {
+	quarantined := d.rememberClaudeChatRuntime(m)
 	if d.eng == nil {
+		return
+	}
+	if quarantined {
+		d.registerExecutionSession(m, "", nil, false)
 		return
 	}
 	var sources []adapter.SignalSource
@@ -962,7 +970,7 @@ func (d *Daemon) endSession(id string) {
 	d.forgetBackend(id)
 	d.clearBackendIngressLoss(id)
 	d.captureConversationIDFinal(id)
-	if m, ok := d.core.Get(id); ok && m.ConversationID != "" {
+	if m, ok := d.core.Get(id); ok && m.ConversationID != "" && !d.claudeChatQuarantined(id) {
 		if err := os.Remove(filepath.Join(d.stateDir, id, shim.IdentityTailFile)); err != nil && !os.IsNotExist(err) {
 			log.Printf("skeleton: retire identity tail for %s: %v", id, err)
 		}
@@ -1024,7 +1032,7 @@ func (d *Daemon) tapGrids(ctx context.Context) {
 func (d *Daemon) tapOnce(ctx context.Context) {
 	d.retryHookRetirements()
 	for _, m := range d.core.List() {
-		if m.Status.Process != status.ProcessRunning {
+		if d.rememberClaudeChatRuntime(m) || m.Status.Process != status.ProcessRunning {
 			continue
 		}
 		if m.RequiredRuntime != persist.RequiredRuntimeOpenCode && (d.controlled == nil || !d.controlled(m.ID)) {
@@ -1042,6 +1050,9 @@ func (d *Daemon) tapOnce(ctx context.Context) {
 // via asyncOnce: at most one in-flight sample each, so a persistently slow shim
 // never piles up a fresh goroutine every poll.
 func (d *Daemon) sampleGridAsync(ctx context.Context, id string) {
+	if d.claudeChatQuarantined(id) {
+		return
+	}
 	d.asyncOnce(ctx, &d.sampleMu, d.sampling, &d.sampleWG, id, d.sampleFn)
 }
 
@@ -1051,6 +1062,9 @@ func (d *Daemon) sampleGridAsync(ctx context.Context, id string) {
 // to the real captureConversationID when unset, so a test Daemon literal that
 // never sets it (most existing tests) still gets correct behavior.
 func (d *Daemon) captureConversationIDAsync(ctx context.Context, id string) {
+	if d.claudeChatQuarantined(id) {
+		return
+	}
 	fn := d.captureFn
 	if fn == nil {
 		fn = d.captureConversationID
@@ -1113,6 +1127,9 @@ func (d *Daemon) sampleGrid(id string) {
 }
 
 func (d *Daemon) sampleGridFrom(id string, read func() ([]byte, error)) {
+	if d.claudeChatQuarantined(id) {
+		return
+	}
 	identity, bound := d.cachedLaunchGateIdentity(id)
 	var entry *launchGateEntry
 	if bound {
@@ -1136,6 +1153,9 @@ func (d *Daemon) sampleGridFrom(id string, read func() ([]byte, error)) {
 			d.abandonLaunchGateEntry(id, entry)
 			return
 		}
+	}
+	if d.claudeChatQuarantined(id) {
+		return
 	}
 	d.eng.OnOutput(id, snap)
 	if bound {
@@ -1224,6 +1244,9 @@ func (d *Daemon) captureConversationIDFinal(id string) {
 // the convScan write additionally requires the session to still be Running
 // (the tap path) or always proceeds (endSession's final call).
 func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
+	if d.claudeChatQuarantined(id) {
+		return
+	}
 	m, ok := d.core.Get(id)
 	if !ok || m.ConversationID != "" {
 		return
@@ -1262,6 +1285,9 @@ func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
 	if generation == previous.generation && size == previous.size {
 		return
 	}
+	if d.claudeChatQuarantined(id) {
+		return
+	}
 
 	d.convScanMu.Lock()
 	if gateRunning {
@@ -1282,6 +1308,9 @@ func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
 	}
 	convID, ok := ad.ExtractConversationID(nil, tail)
 	if !ok || convID == "" || !adapter.AcceptsConversationID(ad, convID) {
+		return
+	}
+	if d.claudeChatQuarantined(id) {
 		return
 	}
 	if err := d.persistConversationIdentity(id, convID); err != nil {

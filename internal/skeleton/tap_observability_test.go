@@ -33,7 +33,7 @@ func TestTap_SnapshotFailureObservable(t *testing.T) {
 	t.Cleanup(func() { _ = core.Close() })
 
 	d := &Daemon{core: core, stateDir: dir, sampling: make(map[string]struct{})}
-	d.api = newCoreAPI(core, "", endpointID(dir))
+	d.api = newCoreAPI(core, "", endpointID(dir), nil)
 
 	// The real sampleGrid path: an attach to a non-existent session fails, which must
 	// be counted (this is exactly how the pre-1.2 oversized-snapshot bug manifested —

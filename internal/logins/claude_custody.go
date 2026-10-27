@@ -16,15 +16,17 @@ import (
 )
 
 const (
-	ClaudeProfileCustodySchemaVersion = 10
-	NativeWriterSchemaVersion         = 3
-	ClaudeNativeWriterSchemaVersion   = 4
-	ClaudeReservationSchemaVersion    = 5
-	NativeProcessFile                 = "native-process.json"
-	NativeStoppedFile                 = "native-writers-stopped.json"
-	ClaudeRetirementVersion           = 1
-	ClaudeRetirementStopped           = "native-stopped"
-	ClaudeRetirementNoFork            = "issuer-before-fork"
+	ClaudeProfileCustodySchemaVersion  = 10
+	NativeWriterSchemaVersion          = 3
+	ClaudeNativeWriterSchemaVersion    = 4
+	ClaudeReservationSchemaVersion     = 5
+	ClaudeChatReservationSchemaVersion = 6
+	claudeChatRequiredRuntime          = "claude-chat"
+	NativeProcessFile                  = "native-process.json"
+	NativeStoppedFile                  = "native-writers-stopped.json"
+	ClaudeRetirementVersion            = 1
+	ClaudeRetirementStopped            = "native-stopped"
+	ClaudeRetirementNoFork             = "issuer-before-fork"
 )
 
 // NativeProcessInfo is the exact process scope retained by the per-session shim.
@@ -82,16 +84,17 @@ type claudeCLIIdentity struct {
 }
 
 type claudeSessionMeta struct {
-	SchemaVersion int                          `json:"schema_version"`
-	ID            string                       `json:"id"`
-	AgentType     string                       `json:"agent_type"`
-	Cwd           string                       `json:"cwd"`
-	AgentCwd      string                       `json:"agent_cwd"`
-	ShimPID       int                          `json:"shim_pid"`
-	ShimStartTime int64                        `json:"shim_start_time"`
-	Runtime       *Runtime                     `json:"login_runtime"`
-	CLI           *claudeCLIIdentity           `json:"cli_identity"`
-	Retirement    *ClaudeReservationRetirement `json:"claude_retirement"`
+	SchemaVersion   int                          `json:"schema_version"`
+	ID              string                       `json:"id"`
+	AgentType       string                       `json:"agent_type"`
+	RequiredRuntime string                       `json:"required_runtime"`
+	Cwd             string                       `json:"cwd"`
+	AgentCwd        string                       `json:"agent_cwd"`
+	ShimPID         int                          `json:"shim_pid"`
+	ShimStartTime   int64                        `json:"shim_start_time"`
+	Runtime         *Runtime                     `json:"login_runtime"`
+	CLI             *claudeCLIIdentity           `json:"cli_identity"`
+	Retirement      *ClaudeReservationRetirement `json:"claude_retirement"`
 }
 
 func (m claudeSessionMeta) effectiveCWD() string {
@@ -166,7 +169,7 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 	if err != nil {
 		return m, ErrUnsafePath
 	}
-	routing := []string{"schema_version", "id", "agent_type", "cwd", "agent_cwd", "shim_pid", "shim_start_time", "login_runtime", "cli_identity", "claude_retirement"}
+	routing := []string{"schema_version", "id", "agent_type", "cwd", "agent_cwd", "shim_pid", "shim_start_time", "login_runtime", "cli_identity", "claude_retirement", "required_runtime"}
 	for name := range doc {
 		for _, key := range routing {
 			if name != key && strings.EqualFold(name, key) {
@@ -179,7 +182,7 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 			return m, ErrUnsafePath
 		}
 	}
-	if json.Unmarshal(raw, &m) != nil || !validClaudeSessionID(id) || m.ID != id || m.SchemaVersion < 0 || m.SchemaVersion > ClaudeReservationSchemaVersion || m.SchemaVersion == 2 || !claudeAuthProcessTuple(processcontain.Identity{PID: m.ShimPID, StartTime: m.ShimStartTime}) {
+	if json.Unmarshal(raw, &m) != nil || !validClaudeSessionID(id) || m.ID != id || m.SchemaVersion < 0 || m.SchemaVersion > ClaudeChatReservationSchemaVersion || m.SchemaVersion == 2 || !claudeAuthProcessTuple(processcontain.Identity{PID: m.ShimPID, StartTime: m.ShimStartTime}) {
 		return m, ErrUnsafePath
 	}
 	if m.Runtime != nil {
@@ -193,9 +196,9 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 		}
 	}
 	owned := m.Runtime != nil && IsClaudeProfileRuntime(stateRoot, *m.Runtime)
-	if m.SchemaVersion == ClaudeReservationSchemaVersion || owned || m.Retirement != nil {
+	if m.SchemaVersion == ClaudeReservationSchemaVersion || m.SchemaVersion == ClaudeChatReservationSchemaVersion || m.RequiredRuntime == claudeChatRequiredRuntime || owned || m.Retirement != nil {
 		terminalLegacy := claudeLegacyRuntime(stateRoot, m) && m.Retirement != nil
-		if m.SchemaVersion != ClaudeReservationSchemaVersion || (!owned && !terminalLegacy) || (!validClaudeCWDs([]string{m.Cwd}) || !validClaudeCWDs([]string{m.effectiveCWD()})) {
+		if !claudeOwnedMetadata(m) || (!owned && (!terminalLegacy || m.SchemaVersion == ClaudeChatReservationSchemaVersion)) || (!validClaudeCWDs([]string{m.Cwd}) || !validClaudeCWDs([]string{m.effectiveCWD()})) {
 			return m, ErrUnsafePath
 		}
 		if owned && (m.CLI == nil || !filepath.IsAbs(m.CLI.Path) || filepath.Clean(m.CLI.Path) != m.CLI.Path || strings.ContainsAny(m.CLI.Path, "\x00\r\n") || m.CLI.Version != "2.1.310" || !IsClaudeCLIFingerprint(m.CLI.Fingerprint)) {
@@ -277,7 +280,7 @@ func claudeNativeMatchesMeta(n NativeProcessInfo, m claudeSessionMeta) bool {
 		return false
 	}
 	if n.SchemaVersion == ClaudeNativeWriterSchemaVersion {
-		return m.SchemaVersion == ClaudeReservationSchemaVersion && n.SessionID == m.ID && n.Cwd == m.effectiveCWD() && m.CLI != nil && n.CLIFingerprint == m.CLI.Fingerprint && (m.ShimPID == 0 || n.ShimPID == m.ShimPID && n.ShimStartTime == m.ShimStartTime)
+		return claudeOwnedMetadata(m) && n.SessionID == m.ID && n.Cwd == m.effectiveCWD() && m.CLI != nil && n.CLIFingerprint == m.CLI.Fingerprint && (m.ShimPID == 0 || n.ShimPID == m.ShimPID && n.ShimStartTime == m.ShimStartTime)
 	}
 	return m.ShimPID > 0 && n.ShimPID == m.ShimPID && n.ShimStartTime == m.ShimStartTime
 }
@@ -497,7 +500,7 @@ func (s *Store) claudeMutationAllowed(r Registry, login *Login) error {
 		if m.AgentType == "" {
 			return ErrPending
 		}
-		if m.SchemaVersion == ClaudeReservationSchemaVersion && r.SchemaVersion < ClaudeProfileCustodySchemaVersion {
+		if claudeOwnedMetadata(m) && r.SchemaVersion < ClaudeProfileCustodySchemaVersion {
 			return ErrPending
 		}
 		if m.AgentType != ProviderClaude {
@@ -614,8 +617,13 @@ func claudeSameRuntimeMeta(a, b claudeSessionMeta) bool {
 	return a.ID == b.ID && a.AgentType == b.AgentType && a.Cwd == b.Cwd && a.AgentCwd == b.AgentCwd && a.Runtime != nil && b.Runtime != nil && *a.Runtime == *b.Runtime && ((a.CLI == nil && b.CLI == nil) || (a.CLI != nil && b.CLI != nil && *a.CLI == *b.CLI))
 }
 
+// This is a strict parsed metadata pair, not launch or writer-stop authority.
+func claudeOwnedMetadata(m claudeSessionMeta) bool {
+	return m.SchemaVersion == ClaudeReservationSchemaVersion && m.RequiredRuntime == "" || m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime
+}
+
 func claudeSameImmutableMeta(a, b claudeSessionMeta) bool {
-	return a.SchemaVersion == ClaudeReservationSchemaVersion && b.SchemaVersion == ClaudeReservationSchemaVersion && claudeSameRuntimeMeta(a, b)
+	return claudeOwnedMetadata(a) && claudeOwnedMetadata(b) && a.SchemaVersion == b.SchemaVersion && a.RequiredRuntime == b.RequiredRuntime && claudeSameRuntimeMeta(a, b)
 }
 
 // Absence is meaningful only while bootstrap cannot publish login storage.
@@ -712,7 +720,7 @@ func (s *Store) saveClaudeMetadata(state *os.Root, registry *Registry, stateRoot
 		if next.Retirement != nil {
 			return ErrConflict
 		}
-		if next.SchemaVersion == ClaudeReservationSchemaVersion && (registry == nil || registry.SchemaVersion < ClaudeProfileCustodySchemaVersion) {
+		if claudeOwnedMetadata(next) && (registry == nil || registry.SchemaVersion < ClaudeProfileCustodySchemaVersion) {
 			return ErrPending
 		}
 		return commit()
@@ -728,7 +736,7 @@ func (s *Store) saveClaudeMetadata(state *os.Root, registry *Registry, stateRoot
 			return ErrConflict
 		}
 	}
-	if old.SchemaVersion == ClaudeReservationSchemaVersion {
+	if claudeOwnedMetadata(old) {
 		if registry == nil || registry.SchemaVersion < ClaudeProfileCustodySchemaVersion || !claudeSameImmutableMeta(old, next) {
 			return ErrConflict
 		}
@@ -747,7 +755,7 @@ func (s *Store) saveClaudeMetadata(state *os.Root, registry *Registry, stateRoot
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-	} else if next.SchemaVersion == ClaudeReservationSchemaVersion {
+	} else if claudeOwnedMetadata(next) {
 		return ErrConflict
 	}
 	return commit()
@@ -807,7 +815,7 @@ func (s *Store) retireClaudeReservation(state *os.Root, registry *Registry, m cl
 	if legacy && !claudeLegacyRuntime(s.StateRoot(), m) {
 		return ErrPending
 	}
-	if m.SchemaVersion != ClaudeReservationSchemaVersion && !legacy {
+	if !claudeOwnedMetadata(m) && !legacy {
 		return retire(ClaudeReservationRetirement{})
 	}
 	if registry == nil || (!legacy && registry.SchemaVersion < ClaudeProfileCustodySchemaVersion) {

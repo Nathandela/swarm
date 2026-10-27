@@ -59,6 +59,9 @@ func (a *daemonAdapter) SetTag(id, tag string) error                         { r
 func (a *daemonAdapter) Events() <-chan persist.Meta                         { return a.events }
 
 func (a *daemonAdapter) Attach(id string) (SessionStream, error) {
+	if m, ok := a.d.Get(id); ok && persist.IsClaudeChatRuntime(m) {
+		return nil, errClaudeChatRaw
+	}
 	conn, caps, err := a.d.DialSession(id)
 	if err != nil {
 		return nil, err

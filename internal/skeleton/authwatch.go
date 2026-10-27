@@ -399,7 +399,24 @@ func (w *authWatcher) noteCLIRefreshHold(local string) {
 	}
 }
 
+func (w *authWatcher) claudeChatQuarantined(m persist.Meta) bool {
+	if persist.IsClaudeChatRuntime(m) {
+		return true
+	}
+	if w.logins != nil && w.logins.d != nil && w.logins.d.claudeChatQuarantined(m.ID) {
+		return true
+	}
+	if w.get != nil {
+		current, ok := w.get(m.ID)
+		return ok && persist.IsClaudeChatRuntime(current)
+	}
+	return false
+}
+
 func (w *authWatcher) sessionUnsafe(local string) bool {
+	if w.claudeChatQuarantined(persist.Meta{ID: local}) {
+		return true
+	}
 	if w.logins != nil && (w.logins.owns(local) || w.logins.inputGate(local) != nil) {
 		return true
 	}
@@ -837,6 +854,9 @@ func (w *authWatcher) workPending(agent, id string, allowKill ...bool) {
 // to be recorded, resume-as-new-session, verify the replacement -- and reports
 // whether the session should stay pending (true = retry next tick).
 func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
+	if w.claudeChatQuarantined(m) {
+		return true
+	}
 	w.ensureStateMaps()
 	local := m.ID
 	hadClaim := w.state.Killed[local]
@@ -956,7 +976,13 @@ func (w *authWatcher) recycle(agent string, m persist.Meta) (retry bool) {
 }
 
 func (w *authWatcher) resumeClaimed(agent string, m persist.Meta) (retry bool) {
+	if w.claudeChatQuarantined(m) {
+		return true
+	}
 	attempt := func() bool {
+		if w.claudeChatQuarantined(m) {
+			return true
+		}
 		if _, cli := w.state.CLI[m.ID]; cli {
 			return w.resumeCLIEnded(agent, m)
 		}
@@ -978,6 +1004,9 @@ func (w *authWatcher) resumeClaimed(agent string, m persist.Meta) (retry bool) {
 // resumeEnded starts at most one replacement and observes it on a later tick.
 // Retain the source history even after readiness; roster lineage hides old attempts.
 func (w *authWatcher) resumeEnded(agent string, m persist.Meta) (retry bool) {
+	if w.claudeChatQuarantined(m) {
+		return true
+	}
 	local := m.ID
 	if current, ok := w.get(local); !ok || current.RosterHidden {
 		return false // Owner deletion/archive wins even after the pending snapshot.
@@ -1025,6 +1054,9 @@ func (w *authWatcher) resumeEnded(agent string, m persist.Meta) (retry bool) {
 		}
 		log.Printf("authwatch: resumed %s session %s -> %s (%s): conversation transport ready; history retained", agent, local, candidate, m.Name)
 		return false
+	}
+	if w.claudeChatQuarantined(m) {
+		return true
 	}
 	fresh, err := w.launch(daemon.LaunchSpec{
 		AgentType: agent,

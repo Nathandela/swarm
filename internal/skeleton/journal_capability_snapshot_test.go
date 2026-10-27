@@ -44,7 +44,7 @@ func TestJournalSubscribeFrom_CapturesRosterCapabilitiesAtTheSameBoundary(t *tes
 	next := protocol.SessionCapabilities{Provider: "claude", SessionInstance: "next", StructuredChat: false}
 	sk.capStore.byID = map[string]protocol.SessionCapabilities{sessionID: old}
 
-	api := newCoreAPI(core, "", "ep")
+	api := newCoreAPI(core, "", "ep", nil)
 	t.Cleanup(api.close)
 	lookupStarted := make(chan struct{})
 	releaseLookup := make(chan struct{})

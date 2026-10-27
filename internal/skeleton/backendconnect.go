@@ -139,7 +139,7 @@ func (d *Daemon) launchEnv() []string { return daemon.PolicyEnv(nil) }
 // connectSessionBackend is started for every session the core reports as LAUNCHED. For a
 // session with NO backend it returns immediately, which is every session of every other CLI.
 func (d *Daemon) connectSessionBackend(id string) {
-	if d.core == nil {
+	if d.core == nil || d.claudeChatQuarantined(id) {
 		return
 	}
 	ch, ok := d.core.SessionBackend(id)
@@ -167,7 +167,7 @@ func (d *Daemon) connectBackendsForRunning() {
 		return
 	}
 	for _, m := range d.core.List() {
-		if m.Status.Process != status.ProcessRunning {
+		if d.rememberClaudeChatRuntime(m) || m.Status.Process != status.ProcessRunning {
 			continue
 		}
 		ch, ok := d.core.SessionBackend(m.ID)
@@ -201,9 +201,15 @@ func (d *Daemon) connectBackendsForRunning() {
 // in r7r4_join_test.go, which drives THIS function against a real WebSocket app-server -- the
 // absence of exactly that is why round 3 shipped two blockers in these twenty lines.
 func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
+	if d.claudeChatQuarantined(id) {
+		return
+	}
 	expectedInstance, _ := d.sessionInstance(id)
 	conn, feed, err := d.dialSessionBackend(id, expectedInstance, ch, true)
 	if err != nil {
+		if d.claudeChatQuarantined(id) {
+			return
+		}
 		log.Printf("skeleton: session %s backend unavailable: %v", id, err)
 		// §R7.7 case 1: this session will NEVER have a structured plane. The gap is emitted
 		// AT LAUNCH because the phone reads gaps off the transcript to decide whether to show
@@ -228,6 +234,10 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 		}
 	}
 	// THE GO-AHEAD, sent before there is a thread: the agent is the party that creates it.
+	if d.claudeChatQuarantined(id) {
+		_ = conn.Close()
+		return
+	}
 	if aerr := d.core.SendBackendAttach(id, ch.AgentArgs, backendResumeCommandArgs(ch, feed.userAgent)); aerr != nil {
 		log.Printf("skeleton: release session %s with its backend: %v", id, aerr)
 	}
@@ -282,6 +292,10 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	// Round 3 registered below the resume, and the resume cannot succeed until a turn starts,
 	// and no turn can start because resolveMessageSink finds no backend: a closed loop that
 	// made the wave's exit criterion structurally unreachable on the ORDINARY fresh launch.
+	if d.claudeChatQuarantined(id) {
+		_ = conn.Close()
+		return
+	}
 	if !d.registerBackendFeedForInstance(id, expectedInstance, threadID, conn, feed) {
 		_ = conn.Close()
 		d.noteBackendUnavailableForInstance(id, expectedInstance)
@@ -317,12 +331,18 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 // boundary may disable chat and a freshly proved exact sink may recover it, but an ordinary
 // daemon restart must not invent the boundary in the first place.
 func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
+	if d.claudeChatQuarantined(id) {
+		return
+	}
 	if _, ok := d.sessionBackendFor(id); ok {
 		return // already joined by the launch path; a rejoin would open a second connection
 	}
 	expectedInstance, _ := d.sessionInstance(id)
 	conn, feed, err := d.dialSessionBackend(id, expectedInstance, ch)
 	if err != nil {
+		if d.claudeChatQuarantined(id) {
+			return
+		}
 		// The shim outlived this daemon but its backend did not, or its socket is gone. The
 		// current structured plane is unavailable and history must say so: without this the
 		// transcript simply stops while the phone keeps offering an unproved composer. A later
@@ -352,6 +372,10 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 		// durable identity on the SAME instance is a current-session ownership conflict,
 		// so it must withdraw the unproved composer visibly.
 		d.noteBackendUnavailableForInstance(id, expectedInstance)
+		return
+	}
+	if d.claudeChatQuarantined(id) {
+		_ = conn.Close()
 		return
 	}
 	if !d.registerBackendFeedForInstance(id, expectedInstance, threadID, conn, feed) {
@@ -676,6 +700,9 @@ func selectOnlyLoadedThread(loaded []string) (string, error) {
 // session is on is the AGENT's to decide, and the two callers above learn it in the two ways
 // their situations allow.
 func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.BackendChannel, freshCapture ...bool) (*appserver.Client, *backendFeed, error) {
+	if d.claudeChatQuarantined(id) {
+		return nil, nil, errClaudeChatQuarantined
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), d.backendDeadline())
 	defer cancel()
 	feed := newBackendFeed()
@@ -708,6 +735,9 @@ func (d *Daemon) dialSessionBackend(id, expectedInstance string, ch daemon.Backe
 	var conn *appserver.Client
 	var err error
 	for {
+		if d.claudeChatQuarantined(id) {
+			return nil, nil, errClaudeChatQuarantined
+		}
 		conn, err = appserver.Dial(ctx, ch.SocketPath, appserver.Options{
 			Endpoint: feed.codexExecution.endpoint,
 			// Private auth bypasses generic ingress. The bounded FIFO keeps native socket

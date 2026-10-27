@@ -86,7 +86,7 @@ func TestOpenCodeObservationOnlyChangePublishesRosterEvent(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = core.Close() })
 	var attention atomic.Bool
-	api := newCoreAPI(core, "", "ep")
+	api := newCoreAPI(core, "", "ep", nil)
 	t.Cleanup(api.close)
 	source := openCodeObservationFunc(func(string) (protocol.OpenCodeObservationView, bool) {
 		return protocol.OpenCodeObservationView{Version: 1, RootID: "ses_root", Attention: attention.Load()}, true

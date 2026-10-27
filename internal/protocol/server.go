@@ -811,6 +811,9 @@ func (s *Server) supervisionPending(local string) bool {
 // needs. A supersede's own blocking is bounded by the shim dial; it never waits on
 // a wedged pump (evicted here within the pump's write bound).
 func (s *Server) attach(cc *clientConn, local string) error {
+	if s.claudeChatQuarantined(local) {
+		return errClaudeChatRaw
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -839,6 +842,10 @@ func (s *Server) attach(cc *clientConn, local string) error {
 	// stream/pump until Phase 4 installs a real pump, so stale/own input is dropped
 	// (stream == nil) meanwhile.
 	ls.inMu.Lock()
+	if s.claudeChatQuarantined(local) {
+		ls.inMu.Unlock()
+		return errClaudeChatRaw
+	}
 	s.mu.Lock()
 	if s.closed || s.leases[local] != ls {
 		s.mu.Unlock()
@@ -877,6 +884,10 @@ func (s *Server) attach(cc *clientConn, local string) error {
 
 	// Phase 3 — open a FRESH upstream stream: its snapshot is the shim's CURRENT
 	// grid, atomic with its first live frame (S10). A failure is a HARD error (F1).
+	if s.claudeChatQuarantined(local) {
+		s.abandonClaim(cc, local, myGen)
+		return errClaudeChatRaw
+	}
 	newStream, aerr := s.d.Attach(local)
 	if aerr != nil {
 		s.abandonClaim(cc, local, myGen)
@@ -1166,6 +1177,9 @@ func (s *Server) forwardResize(cc *clientConn, local string, gen uint64, cols, r
 	stream := ls.stream
 	s.mu.Unlock()
 	if !valid || stream == nil {
+		return
+	}
+	if s.claudeChatQuarantined(local) {
 		return
 	}
 	_ = stream.Resize(cols, rows)
@@ -2362,6 +2376,10 @@ func (cc *clientConn) handleTakeControl(c Control) {
 	if !ok {
 		return
 	}
+	if cc.srv.claudeChatQuarantined(local) {
+		cc.replyErrorCode(errClaudeChatRaw.Error(), CodeCapabilityRefused)
+		return
+	}
 	// The gate-token/single-use mechanism is coupled to the durable store: single-use is
 	// unenforceable without it, so it engages only when the backend is an OperationClaimer.
 	claimer, gated := cc.srv.d.(OperationClaimer)
@@ -2898,6 +2916,10 @@ func (cc *clientConn) journalBackend() (JournalBackend, bool) {
 func (cc *clientConn) handleTerminalSubscribe(c Control) {
 	local, ok := cc.resolveSession(c)
 	if !ok {
+		return
+	}
+	if cc.srv.claudeChatQuarantined(local) {
+		cc.replyErrorCode(errClaudeChatRaw.Error(), CodeCapabilityRefused)
 		return
 	}
 	// FIRST GATE (fail-closed): a disabled remote-control kill switch blanks the phone —
@@ -3510,7 +3532,7 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		SpawnIntent: m.SpawnIntent,
 		// The degraded-backend reason (persist.Meta.BackendPlanError): "" is healthy.
 		BackendPlanError: m.BackendPlanError,
-		ResumeError: m.ResumeError,
+		ResumeError:      m.ResumeError,
 		// nx44.7: not persisted -- the controller lease is live daemon state, sampled
 		// by the caller at stamp time.
 		RemoteControlled: remoteControlled,
