@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // E7.7 — every TUI unit test runs against a protocol stub. This is enforced by

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 func replaceLaunchDirectory(t *testing.T, m tea.Model, path string) tea.Model {

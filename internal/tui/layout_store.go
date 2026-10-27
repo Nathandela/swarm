@@ -20,7 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // BoardLayout is the persisted choice, named by the labels the options window

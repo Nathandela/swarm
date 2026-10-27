@@ -1,0 +1,400 @@
+{
+  "date": "2026-10-27",
+  "kind": "Renderer stop/join checkpoint; not provider recovery qualification",
+  "base_commit": "25b9010896ba3950a653917632536e91d555fb83",
+  "source_receipt_sha256": "7e739dfa5fc42b4fb1719bfd30cbe7b09490f349554dff2f72ed12c2c578f779",
+  "private_handoff_sha256": "39917a493da210ae9e8273ffe97e15f747ea5a1ba6448f4ea7ded895965756b3",
+  "change": "Pinned in-tree Bubble Tea 2.0.2 production source with a 12-line ordered renderer-stop join adapted from upstream PR #1781; copied teatest helper only redirects its Tea import. Canonical dependency module identities are removed; provenance and distributed MIT notices retained.",
+  "evidence": {
+    "runs": [
+      {
+        "label": "packaging-red",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/packaging-red.jsonl",
+        "sha256": "938057f08fa42cc2367da44926ea6fdf0255be86a60e014cbe8bbeedecf9635f",
+        "pass_actions": 0,
+        "fail_tests": [
+          "TestGoreleaserTUIArchiveCarriesCopiedLicenses"
+        ],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/remote/supervise",
+            "Action": "fail",
+            "Elapsed": 0.416
+          }
+        ]
+      },
+      {
+        "label": "in-tree-restore-race-r1",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/in-tree-restore-race-r1.jsonl",
+        "sha256": "8e07ffe3349ca311caf7f983ce0493a6fe29b6fa1b57254f650dca07ebd86091",
+        "pass_actions": 3,
+        "fail_tests": [],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/tui",
+            "Action": "pass",
+            "Elapsed": 4.7940000000000005
+          }
+        ]
+      },
+      {
+        "label": "focused-race-r1",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/focused-race-r1.jsonl",
+        "sha256": "c28db6fd781802be4e0096799afd8f0c624ac0d970ca313f9cdab1e9fb3a5b62",
+        "pass_actions": 51,
+        "fail_tests": [
+          "TestWorkingAnimationWritesOnlyChangedGlyph"
+        ],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/thirdparty",
+            "Action": "pass",
+            "Elapsed": 1.309
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/thirdparty/bubbletea",
+            "Action": "pass",
+            "Elapsed": 1.298
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/tui",
+            "Action": "fail",
+            "Elapsed": 2.29
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/cmd/swarm",
+            "Action": "pass",
+            "Elapsed": 1.825
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/remote/supervise",
+            "Action": "pass",
+            "Elapsed": 1.338
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/verify",
+            "Action": "pass",
+            "Elapsed": 46.726
+          }
+        ],
+        "classification": "ORIGINAL COMMAND FAIL retained;51pass actions plus spinner first-frame resize confound; later corrected focused cases do not relabel this run green"
+      },
+      {
+        "label": "spinner-upstream-control",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/spinner-upstream-control.jsonl",
+        "sha256": "ec45bba02115ede64ba939c8b5e1d17bcd0e7aac37f9d1bcbf0e1389ba001333",
+        "pass_actions": 3,
+        "fail_tests": [],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/tui",
+            "Action": "pass",
+            "Elapsed": 3.044
+          }
+        ]
+      },
+      {
+        "label": "spinner-join-control",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/spinner-join-control.jsonl",
+        "sha256": "fbcf3753fadab6ef2e4ea09c1627acb8e04e73f2166cf8976776797ca65029af",
+        "pass_actions": 3,
+        "fail_tests": [],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/tui",
+            "Action": "pass",
+            "Elapsed": 2.923
+          }
+        ]
+      },
+      {
+        "label": "spinner-resize-upstream",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/spinner-resize-upstream.jsonl",
+        "sha256": "7f75fe88fe4553ff9e04545bc6803fd0e0762903219d1aeef72519b17199541e",
+        "pass_actions": 0,
+        "fail_tests": [
+          "TestWorkingAnimationWritesOnlyChangedGlyph"
+        ],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/tui",
+            "Action": "fail",
+            "Elapsed": 0.815
+          }
+        ],
+        "classification": "PRIVATE controlled pending same-size resize; both upstream/join fail same assertion; startup confound, not join-specific regression"
+      },
+      {
+        "label": "spinner-resize-join",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/spinner-resize-join.jsonl",
+        "sha256": "f3f6166faedc7412c57e3685d118ee49a4657fd7df8ce3c51e959ef021da3952",
+        "pass_actions": 0,
+        "fail_tests": [
+          "TestWorkingAnimationWritesOnlyChangedGlyph"
+        ],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/tui",
+            "Action": "fail",
+            "Elapsed": 0.853
+          }
+        ],
+        "classification": "PRIVATE controlled pending same-size resize; both upstream/join fail same assertion; startup confound, not join-specific regression"
+      },
+      {
+        "label": "spinner-restore-race-r2",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/spinner-restore-race-r2.jsonl",
+        "sha256": "f973bf8f7b22d7882c82dbffe3fc9fbb8a3b4c7f11976d12d3999a2f4a4086cd",
+        "pass_actions": 6,
+        "fail_tests": [],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/tui",
+            "Action": "pass",
+            "Elapsed": 4.801
+          }
+        ]
+      },
+      {
+        "label": "restore-upstream-omission-r2",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/restore-upstream-omission-r2.jsonl",
+        "sha256": "9ce45f0f326972e8b2e8ed8f721a99fc36fcb6a13696f2890d6cdd5b0340453f",
+        "pass_actions": 1,
+        "fail_tests": [],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/tui",
+            "Action": "pass",
+            "Elapsed": 3.297
+          }
+        ],
+        "classification": "UNFORCED NEGATIVE PASS: inconclusive; not RED or guard-detection proof"
+      },
+      {
+        "label": "join-wait-omission-r1",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/join-wait-omission-r1.jsonl",
+        "sha256": "685504fa81be662cbf186fe6cd625d81160f1bae2f8ba51184c11c280d1a16a5",
+        "pass_actions": 1,
+        "fail_tests": [],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/thirdparty/bubbletea",
+            "Action": "pass",
+            "Elapsed": 1.341
+          }
+        ],
+        "classification": "UNFORCED NEGATIVE PASS: inconclusive; not RED or guard-detection proof"
+      },
+      {
+        "label": "held-stop-normal-r1",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/held-stop-normal-r1.jsonl",
+        "sha256": "a1c259cfb3c45b6cd56ae7b49f58a75ef85f6dfbb897a194546c681d49a735c9",
+        "pass_actions": 1,
+        "fail_tests": [],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/thirdparty/bubbletea",
+            "Action": "pass",
+            "Elapsed": 1.518
+          }
+        ]
+      },
+      {
+        "label": "held-stop-omission-r1",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/held-stop-omission-r1.jsonl",
+        "sha256": "f3550ea55dd0c77c848a2b20885e109f425476e616eef176f8532e6b4103ccb0",
+        "pass_actions": 0,
+        "fail_tests": [
+          "TestPrivateRendererHeldStopRequiresJoin"
+        ],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/thirdparty/bubbletea",
+            "Action": "fail",
+            "Elapsed": 0.227
+          }
+        ],
+        "classification": "DECISIVE PRIVATE await-only omission behavioral FAIL; same held-before-ticker.Stop hook as normal; all actors joined before verdict"
+      },
+      {
+        "label": "module-install-numeric-r2",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/module-install-numeric-r2.jsonl",
+        "sha256": "95c553b7edc2a0acc3f8228723835cda100d6c8696ec9f58b188eb6109e965fc",
+        "pass_actions": 1,
+        "fail_tests": [],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/verify",
+            "Action": "pass",
+            "Elapsed": 46.37
+          }
+        ]
+      },
+      {
+        "label": "final-targeted-race-r2",
+        "path": "/private/tmp/swarm-renderer-shipping-gates-20261027/final-targeted-race-r2.jsonl",
+        "sha256": "ce797c307a41203971105554fcbe6b7ccef5fb938d1121a9522052bd45d744db",
+        "pass_actions": 7,
+        "fail_tests": [],
+        "skip_tests": [],
+        "race_reports": 0,
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/cmd/swarm",
+            "Action": "pass",
+            "Elapsed": 1.865
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/thirdparty",
+            "Action": "pass",
+            "Elapsed": 1.241
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/thirdparty/bubbletea",
+            "Action": "pass",
+            "Elapsed": 1.209
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/remote/supervise",
+            "Action": "pass",
+            "Elapsed": 1.33
+          }
+        ]
+      }
+    ],
+    "final_gates": {
+      "source_receipt": "/private/tmp/swarm-renderer-shipping-gates-20261027/source-r4.json",
+      "source_changed": [],
+      "results": [
+        {
+          "name": "final-targeted-race",
+          "exit_code": 0,
+          "command": [
+            "python3",
+            "/private/tmp/swarm-login-go-repaired-r2-20261026.py",
+            "test",
+            "-race",
+            "-p=1",
+            "-json",
+            "-count=1",
+            "-timeout=180s",
+            "./cmd/swarm",
+            "./internal/thirdparty/...",
+            "./internal/remote/supervise",
+            "-run",
+            "^(TestProductionRunnerRendererRestore|TestRendererStopJoinsBeforeRestart|TestCopiedSource.*|TestGoreleaserTUIArchiveCarriesCopiedLicenses)$"
+          ],
+          "elapsed_seconds": 12.138,
+          "log": "/private/tmp/swarm-renderer-shipping-gates-20261027/final-targeted-race-r2.jsonl",
+          "sha256": "ce797c307a41203971105554fcbe6b7ccef5fb938d1121a9522052bd45d744db"
+        },
+        {
+          "name": "build",
+          "exit_code": 0,
+          "command": [
+            "python3",
+            "/private/tmp/swarm-login-go-repaired-r2-20261026.py",
+            "build",
+            "./..."
+          ],
+          "elapsed_seconds": 7.111,
+          "log": "/private/tmp/swarm-renderer-shipping-gates-20261027/build-r2.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "name": "vet",
+          "exit_code": 0,
+          "command": [
+            "python3",
+            "/private/tmp/swarm-login-go-repaired-r2-20261026.py",
+            "vet",
+            "./..."
+          ],
+          "elapsed_seconds": 2.372,
+          "log": "/private/tmp/swarm-renderer-shipping-gates-20261027/vet-r2.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "name": "lint",
+          "exit_code": 0,
+          "command": [
+            "/usr/local/bin/golangci-lint",
+            "run",
+            "--timeout=10m"
+          ],
+          "elapsed_seconds": 8.861,
+          "log": "/private/tmp/swarm-renderer-shipping-gates-20261027/lint-r2.log",
+          "sha256": "9f0a9bcf5b7b056ecb8f0c5ddd36a4649b6d7b49a30e731eb2b2a735f7390d81"
+        },
+        {
+          "name": "diff-check",
+          "exit_code": 0,
+          "command": [
+            "git",
+            "diff",
+            "--check"
+          ],
+          "elapsed_seconds": 0.076,
+          "log": "/private/tmp/swarm-renderer-shipping-gates-20261027/diff-check-r2.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "name": "goreleaser-check",
+          "exit_code": 0,
+          "command": [
+            "/Users/Nathan/go/bin/goreleaser",
+            "check"
+          ],
+          "elapsed_seconds": 0.573,
+          "log": "/private/tmp/swarm-renderer-shipping-gates-20261027/goreleaser-check-r2.log",
+          "sha256": "f9ae884d9a58c3c9dab298229f2fe32f860762d494a71e965995f4a08d976432"
+        }
+      ]
+    },
+    "latest_ordinary_test_outcomes": {
+      "pass": 53,
+      "fail": [],
+      "skip": []
+    }
+  },
+  "review": "Root and independent Sol rehashed all 116 source files and raw gate logs; bounded checkpoint approval. No Astra final review.",
+  "security": "Go1.26/mobiletool/xnet/crypto/sys/tools pins unchanged; no dependency versions changed; old Tea/teatest removed and3existingdeps promoteddirect. Exact upstreammodule h1 rederivedfromactualZIP andGoMod bytes, sourcehashes crosschecked ZIP entries. Dated official GoDB/upstreampublic advisory lookup hasno canonicalpath entries; not a source/CVE cleanliness claim; maintenance h6sc.26.1 remains open.",
+  "packaging": "FullMITlicenses copied+top-level THIRD_PARTY_NOTICES included in explicit swarm archivefiles; static packaging regression RED beforefix/PASSafter; existing release-only CI now compares notice bytes inside all actual swarm tarballs. Pushgw dependency list does not include copiedTea, main does. GoReleaser check PASS; full release archive generation not run here.",
+  "module_install": "Actual moduleZIP created from current Gittracked+untracked source, copiedpackages+licenses verifiedpresent; privatefileproxy serves it; GoInstall ofplainnumericunique0.0.patch executed from emptyoutsidecheckout with GOFLAGS cleared andsharedcaches; binarybuildinfo confirmsrequestedmoduleversion/noReplace, and installedbinary version command passes. No published versionmetadata changed.",
+  "spinner_fixture": "Firstidentical startupWindowSize filtered ONLY in spinner testcase becauseboth fixturemodel+renderer alreadypre-sized. Later/different resizeevents notfiltered. Shared helperdefault option sequence and originalrestoretestbody unchanged. Assertion/3sdeadline/GOMAX unchanged.",
+  "remaining_limits": [
+    "No arbitrary concurrent Restore/shutdown qualification; only ordered lifecycle",
+    "No full repository rerun; bounded relevant renderer/runner/packaging/install checks",
+    "No production/readiness/native/account/release claim; no shipping fork repository created",
+    "No copied-source style edits or lint exclusions; inheritedunknown-gomnd lintwarning remainsnonfatal",
+    "HistoricalRED andall originalfailedruns preserved; unforcednegativePASSs explicitlyinconclusive"
+  ],
+  "production_recovery_qualified": false,
+  "release_approved": false
+}

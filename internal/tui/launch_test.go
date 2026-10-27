@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
-	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
+	teatest "github.com/Nathandela/swarm/internal/testutil/teatest"
 )
 
 // openLaunch drives the router from the general view into the launch form (`n`).

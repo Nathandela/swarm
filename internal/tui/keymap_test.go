@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // selectedSummary returns the summary carried by the currently-selected row. The

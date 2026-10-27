@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+	teatest "github.com/Nathandela/swarm/internal/testutil/teatest"
 
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/hookclient"

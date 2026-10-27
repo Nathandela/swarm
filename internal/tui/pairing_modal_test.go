@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // A4 DoD — "TUI pairing-confirm shows the SAS; it equals the SAS the peer shows

@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/charmbracelet/x/term"
 
 	"github.com/Nathandela/swarm/internal/protocol"

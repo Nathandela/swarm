@@ -1,0 +1,109 @@
+{
+  "components": [
+    {
+      "module": "charm.land/bubbletea/v2",
+      "version": "v2.0.2",
+      "directory": "internal/thirdparty/bubbletea",
+      "upstream_sha256": {
+        "LICENSE": "373b3931e66627aadcfebd7771df93f3439203147e587a924508c63e20184d7f",
+        "clipboard.go": "5184302ec595e7cce5d93e5c887f960e0870071508d8b5c63deb0e704d43f1c4",
+        "color.go": "e2ed931d719a8f16e99232ba14619713781e7868dc4e025e3439de253d06e868",
+        "commands.go": "6d60e524a4a4bf4aca1a5181e3e9f287861d194d6809d1fd0d9faef5ce91a03b",
+        "cursed_renderer.go": "2cf136118aa1236a37e2a1543049d56362a4f9eddb98292064cb33d4ac8cee4b",
+        "cursor.go": "8bbab28d84795efc398dfab9825e17805c4f32d352275ff4d86ecc7fa4fd23a9",
+        "environ.go": "ee0b1b7f1aee18e459e871ffe363f29574e85baed8ced712125766383d2fef17",
+        "exec.go": "f30315987a145a9c99b9f77e521735ef94a7ae58f973331b779b19a8a07e21c0",
+        "focus.go": "ac27153c7127a434edf501816150c1919fb6b8d9c8ddd542f4293a7e053a50d3",
+        "input.go": "e8c63319ea6556e208149eed0a87638755905e729884a76450536819c8a17482",
+        "key.go": "43ba104b747188ae22e687a7bc6c4d21f167e839a6a8394c6d6d83b7643b87c2",
+        "keyboard.go": "33e5196e7d650e77ead89e56c84a11eb664e386b4e69b18816cd58facc588bfc",
+        "logging.go": "af7eaaf5b8ae2a4edc631a8750e93644459dae91bcb25e3c3de94a3b9e6593ad",
+        "mod.go": "58bbdc38a477cccdbb662ac7de0d3b28d88d8bdd69cce91dd6e56926f695280c",
+        "mouse.go": "58b0ff75d1a342a2fe3eb9db77c98435cc678eb97d702af8f62396b6762f7213",
+        "nil_renderer.go": "d02b3a9ae7b9e023620fe3c7ca00238bc4fb82f38a1b83b8c7b9cdb7f81a3ab4",
+        "options.go": "da8fefe4332a1ca935693dec99cc915d2ec693bd3f024068ec22854658056f90",
+        "paste.go": "cb91e047eb26da00f1632c9b3d208313a1fce4baba67c8356ea015cd47d4f7c9",
+        "profile.go": "226076bae79f5be55660b155f9f2aa5af187dde3e5a22fb47fcda32df34d9f42",
+        "raw.go": "82b95d099f79018c78ea4fea074f436f5479274dd25335c6679af74c7c3a215e",
+        "renderer.go": "7ce950bf69f89f7b261b38af583425c5b363231fb91cdb7e3bbbfc6e99e2ef80",
+        "screen.go": "088baa769753810500ee2796078f9b160d86e4a50f4af47682e1d260362de998",
+        "signals_unix.go": "3954426922ae0a399a29769ed8e85ace7c451f33bb835b7009336ed086e65bf3",
+        "signals_windows.go": "25437273fa773a70b2a11c8f6f63674d7483460f65d0352a2c5ca1d2c1677c4a",
+        "tea.go": "e73a6b55b622a41a1a0e7afbea5b4fa73ac62fb03a82ef0bd5c3f04823f73590",
+        "termcap.go": "6264786b3377681a94a29a7e0a47aaa6f19b4f9b80d7d095c753c876781a0ca5",
+        "termios_bsd.go": "8d68be3ba4a85e0d5265bc3e43c9e86200a7c06b556a78e9f375fb918013915b",
+        "termios_other.go": "6a71d046bf414f5cacfae2364d82b2de9da98102e642ad08698b2360fc72ccf4",
+        "termios_unix.go": "49d0b46c963a9a510a647f6f5c01ce222f908488981b771c8ea9d6f3122ff250",
+        "termios_windows.go": "c988d9b6fd637313974568a60b9777afbdc61a01b7613b471a469df51ed8ad63",
+        "tty.go": "4a6664e86cf526a06bdfa614cb29fe53c6649da888373b99785fae3c51a73e57",
+        "tty_unix.go": "c35d68ef3e143b37d7200b1a6670bb891b2341ee201e62dbee34c57229676888",
+        "tty_windows.go": "24835b590c48653ad2ca7ced02fb12beb6517684516039af8c8a566aef499517",
+        "xterm.go": "e2f2e76a03d6eba07188439294005daff72e07c56306a71a5f728f0a5a38c3cf"
+      },
+      "copied_sha256": {
+        "LICENSE": "373b3931e66627aadcfebd7771df93f3439203147e587a924508c63e20184d7f",
+        "clipboard.go": "5184302ec595e7cce5d93e5c887f960e0870071508d8b5c63deb0e704d43f1c4",
+        "color.go": "e2ed931d719a8f16e99232ba14619713781e7868dc4e025e3439de253d06e868",
+        "commands.go": "6d60e524a4a4bf4aca1a5181e3e9f287861d194d6809d1fd0d9faef5ce91a03b",
+        "cursed_renderer.go": "2cf136118aa1236a37e2a1543049d56362a4f9eddb98292064cb33d4ac8cee4b",
+        "cursor.go": "8bbab28d84795efc398dfab9825e17805c4f32d352275ff4d86ecc7fa4fd23a9",
+        "environ.go": "ee0b1b7f1aee18e459e871ffe363f29574e85baed8ced712125766383d2fef17",
+        "exec.go": "f30315987a145a9c99b9f77e521735ef94a7ae58f973331b779b19a8a07e21c0",
+        "focus.go": "ac27153c7127a434edf501816150c1919fb6b8d9c8ddd542f4293a7e053a50d3",
+        "input.go": "e8c63319ea6556e208149eed0a87638755905e729884a76450536819c8a17482",
+        "key.go": "43ba104b747188ae22e687a7bc6c4d21f167e839a6a8394c6d6d83b7643b87c2",
+        "keyboard.go": "33e5196e7d650e77ead89e56c84a11eb664e386b4e69b18816cd58facc588bfc",
+        "logging.go": "af7eaaf5b8ae2a4edc631a8750e93644459dae91bcb25e3c3de94a3b9e6593ad",
+        "mod.go": "58bbdc38a477cccdbb662ac7de0d3b28d88d8bdd69cce91dd6e56926f695280c",
+        "mouse.go": "58b0ff75d1a342a2fe3eb9db77c98435cc678eb97d702af8f62396b6762f7213",
+        "nil_renderer.go": "d02b3a9ae7b9e023620fe3c7ca00238bc4fb82f38a1b83b8c7b9cdb7f81a3ab4",
+        "options.go": "da8fefe4332a1ca935693dec99cc915d2ec693bd3f024068ec22854658056f90",
+        "paste.go": "cb91e047eb26da00f1632c9b3d208313a1fce4baba67c8356ea015cd47d4f7c9",
+        "profile.go": "226076bae79f5be55660b155f9f2aa5af187dde3e5a22fb47fcda32df34d9f42",
+        "raw.go": "82b95d099f79018c78ea4fea074f436f5479274dd25335c6679af74c7c3a215e",
+        "renderer.go": "7ce950bf69f89f7b261b38af583425c5b363231fb91cdb7e3bbbfc6e99e2ef80",
+        "screen.go": "088baa769753810500ee2796078f9b160d86e4a50f4af47682e1d260362de998",
+        "signals_unix.go": "3954426922ae0a399a29769ed8e85ace7c451f33bb835b7009336ed086e65bf3",
+        "signals_windows.go": "25437273fa773a70b2a11c8f6f63674d7483460f65d0352a2c5ca1d2c1677c4a",
+        "tea.go": "9441633f9fd433bd6ea9aa292f002487a461d00d92eb97da35e8885aec0917d5",
+        "termcap.go": "6264786b3377681a94a29a7e0a47aaa6f19b4f9b80d7d095c753c876781a0ca5",
+        "termios_bsd.go": "8d68be3ba4a85e0d5265bc3e43c9e86200a7c06b556a78e9f375fb918013915b",
+        "termios_other.go": "6a71d046bf414f5cacfae2364d82b2de9da98102e642ad08698b2360fc72ccf4",
+        "termios_unix.go": "49d0b46c963a9a510a647f6f5c01ce222f908488981b771c8ea9d6f3122ff250",
+        "termios_windows.go": "c988d9b6fd637313974568a60b9777afbdc61a01b7613b471a469df51ed8ad63",
+        "tty.go": "4a6664e86cf526a06bdfa614cb29fe53c6649da888373b99785fae3c51a73e57",
+        "tty_unix.go": "c35d68ef3e143b37d7200b1a6670bb891b2341ee201e62dbee34c57229676888",
+        "tty_windows.go": "24835b590c48653ad2ca7ced02fb12beb6517684516039af8c8a566aef499517",
+        "xterm.go": "e2f2e76a03d6eba07188439294005daff72e07c56306a71a5f728f0a5a38c3cf"
+      },
+      "module_sum": "h1:4CRtRnuZOdFDTWSff9r8QFt/9+z6Emubz3aDMnf/dx0=",
+      "go_mod_sum": "h1:3LRff2U4WIYXy7MTxfbAQ+AdfM3D8Xuvz2wbsOD9OHQ="
+    },
+    {
+      "module": "github.com/charmbracelet/x/exp/teatest/v2",
+      "version": "v2.0.0-20260713092006-0d683c34c74b",
+      "directory": "internal/testutil/teatest",
+      "upstream_sha256": {
+        "LICENSE": "0baa4a5942a801d93f4050d2bc0039d8c037105fcd335230d118eec99a11782b",
+        "teatest.go": "7708be966784eeb4cd7be1d3259a16f5d60638a0b5f4c288dd8aaff987097eaf"
+      },
+      "copied_sha256": {
+        "LICENSE": "0baa4a5942a801d93f4050d2bc0039d8c037105fcd335230d118eec99a11782b",
+        "teatest.go": "40553c45ecff00dfb34862509d0df4a169b7fa3227d3331068a05c1353233dae"
+      },
+      "module_sum": "h1:k9e6pnriOvo1M36EvJF9uVixKbSPyo/BTJIaw0CcgaY=",
+      "go_mod_sum": "h1:aRoQwQWmN9LBG2xi3sVByMFt2fdkPCagd0GAJ1qwOfw="
+    }
+  ],
+  "changes": [
+    "Bubble Tea tea.go: rendererStopped per-start channel, nil guard, stop joins before restart; upstream PR1781 commit5589b49965b303992cd18ac0f801d78cb6b2802b adapted to pinnedv2.0.2",
+    "teatest.go: import path only, to use the same in-tree Bubble Tea type identity"
+  ],
+  "security": "Source provenance/drift pins only. Relocation removes canonical module identity from govulncheck; no claim of CVE cleanliness. Review upstream advisories and remove the copy after an official fixed release is qualified.",
+  "preparation_metadata_notice": {
+    "unverified_advertised_sha256": "e738786733ae1e0183ebc6ff72aae5a1a99532f2cfb876def224b170cd24a06a",
+    "observed_current_sha256": "40f8cfda4d56f2684f9c5278f6cbde0d3f99059902d389a40d8af663ebfdc11a",
+    "status": "The earlier advertised blob was not retained and its cause is unknown. These source/module hashes were derived independently from actual pinned archives and copied files; no executed source snapshot depends on that earlier metadata pin."
+  },
+  "maintenance_issue": "h6sc.26.1"
+}

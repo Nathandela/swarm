@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/Nathandela/swarm/internal/protocol"
-	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+	teatest "github.com/Nathandela/swarm/internal/testutil/teatest"
 )
 
 func mobileFrameFixture(t *testing.T, width, height int) tea.Model {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+	teatest "github.com/Nathandela/swarm/internal/testutil/teatest"
 )
 
 // fullBoard returns one session per display group (the ui-preview set). Two rows

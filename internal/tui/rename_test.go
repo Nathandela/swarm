@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // v0.5 rename — the board's leftmost column is the session NAME; the agent

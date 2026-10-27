@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // fakeLayoutStore is the in-memory LayoutStore the router tests drive. saved

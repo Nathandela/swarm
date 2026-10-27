@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // pairing_modal.go is the A4 pairing-confirm overlay: the anti-MITM SAS gate as

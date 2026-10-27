@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // agents-tracker-gcf6 — the TUI names the terminal tab: every rendered View

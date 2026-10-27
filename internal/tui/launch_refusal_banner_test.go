@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // TestBanner_LaunchRefusalNamesTheAccountAndRemedy pins A4's surfacing half: a

@@ -123,10 +123,11 @@ archives:
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     # files REPLACES the default include globs, so README.md is restated
-    # alongside the compatibility card the before hook emitted.
+    # alongside the compatibility card and the copied dependencies' MIT notices.
     files:
       - README.md
       - compat.json
+      - THIRD_PARTY_NOTICES
 
   - id: swarm-pushgw
     ids:

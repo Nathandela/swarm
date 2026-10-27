@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
 

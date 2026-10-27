@@ -1,6 +1,6 @@
 package tui
 
-import tea "charm.land/bubbletea/v2"
+import tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 
 // Mutations may have landed before a disconnect; their old replies cannot replay UI effects.
 func clientResultGeneration(msg tea.Msg) (uint64, bool) {

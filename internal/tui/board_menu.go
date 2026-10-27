@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/charmbracelet/x/ansi"

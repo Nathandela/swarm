@@ -1,0 +1,36 @@
+{
+  "reviewed_utc": "2026-10-27T13:21:09.153128+00:00",
+  "maintenance_issue": "h6sc.26.1",
+  "go_database": {
+    "url": "https://vuln.go.dev/index/modules.json",
+    "index_sha256": "236bebdf94008e31b70b20f22a0345940a2ea3c8823305bdb5706cef21936803",
+    "database_metadata_url": "https://vuln.go.dev/index/db.json",
+    "database_metadata": {
+      "modified": "2026-10-21T00:27:29Z"
+    },
+    "queried_module_paths": [
+      "charm.land/bubbletea/v2",
+      "github.com/charmbracelet/bubbletea",
+      "github.com/charmbracelet/bubbletea/v2",
+      "github.com/charmbracelet/x/exp/teatest/v2",
+      "github.com/charmbracelet/x/exp/teatest"
+    ],
+    "listed_entries": []
+  },
+  "upstream_public_advisories": [
+    {
+      "url": "https://api.github.com/repos/charmbracelet/bubbletea/security-advisories?per_page=100",
+      "http_status": 200,
+      "raw_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "public_advisories": []
+    },
+    {
+      "url": "https://api.github.com/repos/charmbracelet/x/security-advisories?per_page=100",
+      "http_status": 200,
+      "raw_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "public_advisories": []
+    }
+  ],
+  "conclusion": "No entries for these canonical/legacy Bubble Tea and teatest module paths in the fetched official Go index, and no public advisories returned by either upstream repository API.",
+  "limits": "This is a dated public-advisory check, not source/CVE cleanliness proof. Copied packages lose canonical govulncheck module identity. Repeat before every release and track retirement in h6sc.26.1."
+}

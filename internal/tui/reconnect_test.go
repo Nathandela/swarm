@@ -1,7 +1,7 @@
 package tui
 
 import (
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -12,7 +12,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
-	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+	teatest "github.com/Nathandela/swarm/internal/testutil/teatest"
 )
 
 type reconnectTestClient struct {

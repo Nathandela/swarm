@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // lineEditor is the shared state and key contract for every TUI-owned

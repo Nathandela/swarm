@@ -8,7 +8,7 @@ import (
 
 // ADR-006 / bead agents-tracker-qes — the board is a full-screen alternate-screen
 // app so it no longer renders inline in the terminal scrollback. In
-// charm.land/bubbletea/v2 the alternate screen is requested through the View (there
+// github.com/Nathandela/swarm/internal/thirdparty/bubbletea the alternate screen is requested through the View (there
 // is no WithAltScreen program option), so the router's View must set it.
 func TestView_UsesAltScreen(t *testing.T) {
 	m := newModel(t, newFakeClient(sWorking("endpoint/s1", "codex", "~/Code/x", "compiling", time.Minute)), detectMixed())

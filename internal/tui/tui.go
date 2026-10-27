@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 	"charm.land/lipgloss/v2"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -779,7 +779,7 @@ func (m rootModel) View() tea.View {
 	}
 	// The board is a full-screen alternate-screen app (ADR-006): it stays off the
 	// terminal scrollback and gives the status bar a fixed bottom row. In
-	// charm.land/bubbletea/v2 the alternate screen is requested through the View
+	// github.com/Nathandela/swarm/internal/thirdparty/bubbletea the alternate screen is requested through the View
 	// (there is no WithAltScreen program option), so it is set here, not in cmd.
 	v := tea.NewView(content)
 	v.AltScreen = true

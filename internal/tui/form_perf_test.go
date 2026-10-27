@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // P0 — opening the launch form must not call the prober on the Update hot path. A

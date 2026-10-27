@@ -310,6 +310,11 @@ jobs:
         # gate to "unknown" fleet-wide (R2/R3 audit, Fable M5).
         run: |
           tar -Oxzf dist/swarm_*_linux_amd64.tar.gz compat.json | python3 -c 'import json,sys; m=json.load(sys.stdin); assert m["version"] == "v0.0.0" and m["shimwire"] > 0 and m["protocol"] > 0 and m["schema"] > 0'
+      - name: Assert copied source licenses ship in binary and Homebrew archives
+        run: |
+          for archive in dist/swarm_*.tar.gz; do
+            tar -Oxzf "$archive" THIRD_PARTY_NOTICES | cmp THIRD_PARTY_NOTICES -
+          done
       - name: Assert 3 artifacts (darwin universal + 2 linux) + a checksums file exist (E13.1, h07)
         run: |
           count=$(find dist -maxdepth 1 -name 'swarm_*.tar.gz' | wc -l)

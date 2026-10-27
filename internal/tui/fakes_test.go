@@ -34,8 +34,8 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
+	teatest "github.com/Nathandela/swarm/internal/testutil/teatest"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"

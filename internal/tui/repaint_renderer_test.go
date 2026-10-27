@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+	teatest "github.com/Nathandela/swarm/internal/testutil/teatest"
+	tea "github.com/Nathandela/swarm/internal/thirdparty/bubbletea"
 )
 
 // Suppress the app's timers so this test can drive renderer updates explicitly.
@@ -67,7 +67,17 @@ func TestWorkingAnimationWritesOnlyChangedGlyph(t *testing.T) {
 	const marker = "working-output-marker"
 	m := newModel(t, newFakeClient(sWorking("endpoint/working", "codex", "~/probe", marker, 2*time.Hour)), detectMixed())
 	output := &rendererCapture{}
-	p, stop := startRendererProgram(t, m, output)
+	initialSize := true
+	p, stop := startRendererProgram(t, m, output, tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+		if size, ok := msg.(tea.WindowSizeMsg); ok && initialSize {
+			initialSize = false
+			// Both fixture model and renderer already have this startup size.
+			if size.Width == testCols && size.Height == testRows {
+				return nil
+			}
+		}
+		return msg
+	}))
 	defer stop()
 	waitRendererContains(t, output, marker)
 	offset := output.Len()
@@ -166,10 +176,11 @@ func (b *rendererCapture) Bytes() []byte {
 	return append([]byte(nil), b.Buffer.Bytes()...)
 }
 
-func startRendererProgram(t *testing.T, model tea.Model, output *rendererCapture) (*tea.Program, func()) {
+func startRendererProgram(t *testing.T, model tea.Model, output *rendererCapture, options ...tea.ProgramOption) (*tea.Program, func()) {
 	t.Helper()
 	input, inputWriter := io.Pipe()
-	p := tea.NewProgram(repaintRendererModel{inner: model}, tea.WithInput(input), tea.WithOutput(output), tea.WithWindowSize(testCols, testRows), tea.WithoutSignalHandler(), tea.WithoutSignals())
+	options = append([]tea.ProgramOption{tea.WithInput(input), tea.WithOutput(output), tea.WithWindowSize(testCols, testRows), tea.WithoutSignalHandler(), tea.WithoutSignals()}, options...)
+	p := tea.NewProgram(repaintRendererModel{inner: model}, options...)
 	done := make(chan error, 1)
 	go func() {
 		_, err := p.Run()
