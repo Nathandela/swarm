@@ -1,0 +1,251 @@
+{
+  "date": "2026-10-27",
+  "kind": "Development-only single stdio primary constructor and unactivated view",
+  "base_commit": "a41fdb42",
+  "status": "Development-only constructor and unactivated view implemented; focused/ordinary race, build, vet and lint checks pass. Native/public runtime and complete chat remain unavailable.",
+  "scope": {
+    "source_files_sha256": {
+      "cmd/swarm-fake-agent/claude_primary_test.go": "ce6d7fb484d439758e32749c5134a2b5673d0cefe9da55286b49c5f7d8892f96",
+      "cmd/swarm-fake-agent/main.go": "ec4ca663a6b999447fbfb5553e3417b766d045a05293ac5f75c97bd3cf54796a",
+      "cmd/swarm/claude_chat_config.go": "d3ebb8d980bcf2ad7e45e3285e5bd7e1c2a9ff76995d2bd141c66a73ccc8a632",
+      "cmd/swarm/claude_chat_config_test.go": "6604e240ba0c3375cbda73ac9ab52cf3d994252e03d599a68f3483901579badb",
+      "cmd/swarm/main.go": "8e961d713882d63336b623d2300f6b443f658e6683651af4934d7795775f42c6",
+      "internal/daemon/claude_chat_carriage_test.go": "c25fd82bbd78c5c53e4d71ba9b4a9a184548fb544ff1e806407ce47723df6a12",
+      "internal/daemon/daemon.go": "7857ae2d42b3896cdf3b61c76fa56c4cf65a517bdb9c311737c7d7a92d3efca2",
+      "internal/daemon/launch.go": "765ce7d5381166c482bc4a55fc2cb5d1381bc669a8aeea0f585c1e2521c2c9ef",
+      "internal/shim/claude_chat.go": "15e0200e9e88df4b77608f36ae0324cc894cc567dbb369bdc7e73a1df9fe68f9",
+      "internal/shim/claude_chat_test.go": "824f609d8d0c66b862b6b383646e4ba1c17a3ff433ff2971408acaf46d5a9df5",
+      "internal/shim/server.go": "b20530526cbe37416a1c6b8c0a8b3f40fb7d06c92af137ab952a3e7f5cc0216d",
+      "internal/shim/shim.go": "7bdc616b4fae4eabe5e5d7ae2582b25d4148d058e21988be13a0abef5e52ecc0",
+      "internal/skeleton/api.go": "4cd246e1380d4a1bbd0a2b526ec5ce85e033680987aadec97a768128dfccace5",
+      "internal/skeleton/claude_chat_carriage_test.go": "35e0313bbb85c9fcf9aaf29b5183973f379ada5ccb47dd9d6c14c96ad0e16ddb",
+      "internal/skeleton/claude_chat_constructor_test.go": "37b4ce36b017123716a3a3be162b92088861847f55fbd740e65924c403017e15",
+      "internal/tui/chat_view.go": "7f27124a00ee9c63ad035f312b417b5e5e3b551d5e4cb7f47b858785279a1d47",
+      "internal/tui/chat_view_test.go": "57101bde8d58f8f95f3b902cb765f3094f6a81dce7c9d47046539de89cebcb53"
+    },
+    "behavior": [
+      "Fresh local development fake6 launch derives fixture path and state root internally; managed/public/resume/import/handoff/preset/remote admission refused.",
+      "One native-shaped UUID is minted after replay resolution; settled replay preserves the existing local/native/shim identity.",
+      "Marked config uses nonblocking nofollow descriptor read with 1MiB bound and duplicate/case/mixed selector refusal.",
+      "One shim-owned process/group, explicit stdin/stdout/stderr pipes; no PTY/VT, sidecar or automatic user message.",
+      "Version1 primary envelopes preserve exact raw bytes except terminal LF and bind local/runtime/native/shim/primary identity, monotonic read time and sequence.",
+      "FIFO64frames/1MiB encoded including processing; raw/frame wrapper limits, storage/read/loss and true EOF remain distinct.",
+      "Owner Stop terminates primary while persistence is held; all signal actors retire before final containment; inherited pipe writers contained before reader joins.",
+      "Buffered pre-Start signals cancel synchronously with zero Wait; successful Start has one Wait.",
+      "Pure chat view passes Unicode, multiline, small viewport, scroll, display sanitization, explicit send-intent and draft-preservation checks; it has no root routing."
+    ],
+    "not_included": [
+      "native Claude execution or account adoption",
+      "message/echo/receipt/history controller",
+      "permission/question decisions",
+      "actor/restart/recovery qualification",
+      "public CLI/picker/capability activation"
+    ],
+    "fixture_stderr_policy": "Fixed32KiB diagnostic chunks to inherited owned stderr lane; finite1MiB/run budget latches loss/containment. Accepted for synthetic fixture only, not native long-run policy.",
+    "hook_surface": "Fixture capture writes producer spool directly. No hook POST or DRAIN activation; native bring-up must preserve real settings/hooks and wrap hook provenance separately."
+  },
+  "tests": {
+    "initial_connected_red": {
+      "path": "/private/tmp/swarm-claude-chat-a2-constructor-gates-20261027/carriage-red.jsonl",
+      "sha256": "8f98ce9faf36127c8446e050349caa87cc651e26ae69652b5f9a83e37c34aa56",
+      "bytes": 28546,
+      "test_actions": {
+        "run": 24,
+        "output": 63,
+        "fail": 16,
+        "pass": 8
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/persist": "fail",
+        "github.com/Nathandela/swarm/internal/logins": "fail",
+        "github.com/Nathandela/swarm/cmd/swarm": "fail",
+        "github.com/Nathandela/swarm/internal/skeleton": "fail"
+      }
+    },
+    "first_combined_failure": {
+      "path": "/private/tmp/swarm-claude-chat-combined-r4/focused-race.jsonl",
+      "sha256": "c33e6f8642dfa3ea1194250d3ded1d103a3a599d97d7989011e5c4ae54d9131e",
+      "bytes": 144406,
+      "test_actions": {
+        "run": 146,
+        "output": 303,
+        "pass": 144,
+        "fail": 2
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/cmd/swarm-fake-agent": "pass",
+        "github.com/Nathandela/swarm/cmd/swarm": "pass",
+        "github.com/Nathandela/swarm/internal/daemon": "fail",
+        "github.com/Nathandela/swarm/internal/shim": "pass",
+        "github.com/Nathandela/swarm/internal/skeleton": "fail"
+      }
+    },
+    "private_combined_green": {
+      "path": "/private/tmp/swarm-claude-chat-combined-r5/focused-race.jsonl",
+      "sha256": "5ef52d21ba737c3f2c88f0ce39781ca02cd2ff56cbc81da5392ccf787f015a77",
+      "bytes": 157168,
+      "test_actions": {
+        "run": 160,
+        "output": 330,
+        "pass": 160
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/cmd/swarm-fake-agent": "pass",
+        "github.com/Nathandela/swarm/cmd/swarm": "pass",
+        "github.com/Nathandela/swarm/internal/daemon": "pass",
+        "github.com/Nathandela/swarm/internal/shim": "pass",
+        "github.com/Nathandela/swarm/internal/skeleton": "pass"
+      }
+    },
+    "applied_focused_race": {
+      "path": "/private/tmp/swarm-claude-chat-constructor-applied/focused-race.jsonl",
+      "sha256": "aa34aa18bc0658f6842d4b0754ba99ff3e9999cac1058fcabe54c77018222c40",
+      "bytes": 165818,
+      "test_actions": {
+        "run": 170,
+        "output": 349,
+        "pass": 170
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/cmd/swarm-fake-agent": "pass",
+        "github.com/Nathandela/swarm/cmd/swarm": "pass",
+        "github.com/Nathandela/swarm/internal/daemon": "pass",
+        "github.com/Nathandela/swarm/internal/shim": "pass",
+        "github.com/Nathandela/swarm/internal/skeleton": "pass",
+        "github.com/Nathandela/swarm/internal/tui": "pass"
+      }
+    },
+    "ordinary_regressions_race": {
+      "path": "/private/tmp/swarm-claude-chat-constructor-applied/ordinary-regressions-race.jsonl",
+      "sha256": "21e06e10491860905df86ae73f24c3318506869dbdca38d028ee2e1f16db36ce",
+      "bytes": 75463,
+      "test_actions": {
+        "run": 85,
+        "output": 170,
+        "pass": 85
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/shim": "pass",
+        "github.com/Nathandela/swarm/internal/daemon": "pass",
+        "github.com/Nathandela/swarm/cmd/swarm": "pass"
+      }
+    },
+    "view_cursor_red": {
+      "path": "/private/tmp/swarm-chat-view-private-v4/red.jsonl",
+      "sha256": "547c1bcdb2455286b1987d8c502bf4becb109cbc221fcda3502599b1b2ca61ed",
+      "bytes": 1668,
+      "test_actions": {
+        "run": 1,
+        "output": 3,
+        "fail": 1
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/tui": "fail"
+      }
+    },
+    "post_lint_race": {
+      "path": "/private/tmp/swarm-claude-chat-constructor-applied/post-lint-race.jsonl",
+      "sha256": "a00d7db1e58711b46cf1b17020b12998112b7cc41781afc0ebc0867dab3700bc",
+      "bytes": 39091,
+      "test_actions": {
+        "run": 41,
+        "output": 82,
+        "pass": 41
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/cmd/swarm-fake-agent": "pass",
+        "github.com/Nathandela/swarm/cmd/swarm": "pass",
+        "github.com/Nathandela/swarm/internal/shim": "pass"
+      }
+    }
+  },
+  "private_candidate_binding": {
+    "carriage_manifest": {
+      "path": "/private/tmp/swarm-a2-carriage-candidate-r3-20261027/MANIFEST.json",
+      "sha256": "728e1ac58dc06b7e3ad0515361391ad21695e555b48a01d74b10aeb6d3ad67f6",
+      "bytes": 5122
+    },
+    "stdio_manifest": {
+      "path": "/private/tmp/swarm-claude-chat-stdio-r5-0tpqpfb5/manifest.json",
+      "sha256": "12fe7382f2d2f2c3935e2a01a9a209f7a1eef3dfe9d1aa61cb688fcf4a0d1771",
+      "bytes": 3105
+    },
+    "actual_overlay": {
+      "path": "/private/tmp/swarm-claude-chat-combined-r5/overlay.json",
+      "sha256": "8763f2ce7db772f96929890ac31a70e3cc09e15d0b290aee636794aa3abecc2a",
+      "bytes": 2759
+    },
+    "actual_execution": {
+      "exit_code": 0,
+      "elapsed_seconds": 156.958,
+      "GOFLAGS": "-overlay=/private/tmp/swarm-claude-chat-combined-r5/overlay.json -race -p=1",
+      "overlay_sha256": "8763f2ce7db772f96929890ac31a70e3cc09e15d0b290aee636794aa3abecc2a",
+      "command": [
+        "python3",
+        "/private/tmp/swarm-login-go-repaired-r2-20261026.py",
+        "test",
+        "-race",
+        "-p",
+        "1",
+        "-json",
+        "-timeout=3m",
+        "./cmd/swarm-fake-agent",
+        "./cmd/swarm",
+        "./internal/daemon",
+        "./internal/shim",
+        "./internal/skeleton",
+        "-run",
+        "^TestClaude(Chat|Primary)",
+        "-count=1"
+      ],
+      "scope": "Reviewed synthetic dev-only constructor; no production apply or native/public activation"
+    },
+    "note": "Actual merged overlay and R5 manifest are authoritative; carriage manifest retains an older companion pointer."
+  },
+  "qualification_limits": [
+    "Mac synthetic evidence; Linux-specific pipe inode assertions have not run here.",
+    "No native image, real login/account refresh, SDK echo, hooks/MCP/history/workflow or automatic recovery qualification claimed.",
+    "Full feature/public runtime remains unavailable; integration gates h6sc.26/.28/.29 remain open.",
+    "Prior failed runs remain recorded; private/unoverlaid passing runs do not repair those historical outcomes."
+  ],
+  "quality_gates": {
+    "build": {
+      "exit_code": 0,
+      "elapsed_seconds": 18.468,
+      "command": [
+        "/private/tmp/swarm-login-repair-modcache/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64/bin/go",
+        "build",
+        "-p",
+        "1",
+        "./..."
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quality-constructor-r3/build.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "vet": {
+      "exit_code": 0,
+      "elapsed_seconds": 5.763,
+      "command": [
+        "/private/tmp/swarm-login-repair-modcache/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64/bin/go",
+        "vet",
+        "-p",
+        "1",
+        "./..."
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quality-constructor-r3/vet.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lint": {
+      "exit_code": 0,
+      "elapsed_seconds": 24.635,
+      "command": [
+        "/usr/local/bin/golangci-lint",
+        "run",
+        "--concurrency=1"
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quality-constructor-r3/lint.log",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    }
+  },
+  "lint_disposition": "Earlier lint findings retained in quality-constructor and quality-constructor-r2. Explicit close-result discards for test/read-only descriptors, lowercase error text and equivalent test loop syntax resolved them; affected 41 race checks passed afterward."
+}

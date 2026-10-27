@@ -14,18 +14,27 @@ The old production consumer passed four synthetic Claim/Start cases; this is
 not native qualification. Managed metadata schema 6 requires the exact
 `claude-chat` discriminator, while ordinary schema 5 remains unchanged.
 Retained running or ended discussions cannot reach raw attach, input, resize,
-drain or automatic recovery through old terminal paths. Chat launch, stdio shim,
-UI and capabilities remain inactive. Main/release qualification is independently
-blocked by terminal restore (`h6sc.26`), Codex batch drain (`h6sc.28`) and
-synthetic Claude enrollment completion (`h6sc.29`). Focused safety checks and
-repository build/vet/lint pass; the full integration gate does not.
+drain or automatic recovery through old terminal paths. At this quarantine
+checkpoint, chat launch, stdio shim, UI and capabilities were inactive. The
+checkpoint receipt records the then-current main/release blockers and focused
+checks; it does not qualify the integrated feature.
+
+The applied constructor is development-only: one shim-owned stdio primary, bounded
+R3 capture, real config/metadata binding, replay UUID, and signal/Stop/EOF cleanup.
+Managed/native/public admission remains refused; message sending, a history
+controller, decisions, recovery and public routing are not enabled. The chat
+message-view exists but is unactivated, and native qualification remains open.
+The [constructor receipt](provider-logins/claude-chat-constructor-2026-10-27.json)
+records 170 applied focused race passes, 85 ordinary regression passes, 41
+post-lint race passes, and passing build/vet/lint checks. Main/release gates
+`h6sc.26`, `h6sc.28` and `h6sc.29` remain open.
 
 The storage-only prerequisite allows strict development `fake6`/`claude-chat`
 metadata for structured child tests while preserving ordinary `fake1` and
 managed schema 5/6. Saved `fake6` mode is immutable; malformed or mixed rows are
 retained and refused. It grants no managed-login, CLI, retirement,
 native-writer-proof, OpenCode-binding or input-embargo authority, and enables no
-launch admission, stdio constructor, public chat/UI or capabilities.
+managed/native/public launch admission, public chat/UI or capabilities.
 [Storage evidence](provider-logins/claude-chat-fixture-storage-2026-10-27.json)
 records 148 focused race passes, 855 library race passes (one skip), and passing
 build, vet and lint checks.

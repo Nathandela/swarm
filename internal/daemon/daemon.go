@@ -153,6 +153,7 @@ type Config struct {
 
 // LaunchSpec is a request to launch a new session.
 type LaunchSpec struct {
+	ClaudeChatFixture string                   `json:"-"` // derived only from the dev FakeAgentBin
 	RequiredRuntime   string                   `json:"-"`
 	OpenCodeBinding   *persist.OpenCodeBinding `json:"-"`
 	OpenCodeEnv       []string                 `json:"-"`

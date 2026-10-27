@@ -640,6 +640,9 @@ func envOr(key, fallback string) string {
 // shimLaunchConfig is the JSON launch contract for `swarm shim --config`,
 // decoded into a shim.Config.
 type shimLaunchConfig struct {
+	RequiredRuntime   string               `json:"required_runtime,omitempty"`
+	ConversationID    string               `json:"conversation_id,omitempty"`
+	ClaudeChatFixture string               `json:"claude_chat_fixture,omitempty"`
 	LogPath           string               `json:"log_path,omitempty"`
 	LoginRuntime      *logins.Runtime      `json:"login_runtime,omitempty"`
 	LoginStateRoot    string               `json:"login_state_root,omitempty"`
@@ -700,9 +703,12 @@ type shimLaunchConfig struct {
 // shim's compat default of "no token configured".
 func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 	return shim.Config{
-		LogPath:      lc.LogPath,
-		OpenCode:     lc.OpenCode,
-		LoginRuntime: lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,
+		RequiredRuntime:   lc.RequiredRuntime,
+		ConversationID:    lc.ConversationID,
+		ClaudeChatFixture: lc.ClaudeChatFixture,
+		LogPath:           lc.LogPath,
+		OpenCode:          lc.OpenCode,
+		LoginRuntime:      lc.LoginRuntime, LoginStateRoot: lc.LoginStateRoot, LoginSwitchID: lc.LoginSwitchID, LoginSwitchSource: lc.LoginSwitchSource, NativeProvider: lc.NativeProvider,
 		InputEmbargo:      lc.InputEmbargo,
 		InputEmbargoToken: lc.InputEmbargoToken,
 		CLIIdentity:       lc.CLIIdentity,
@@ -756,6 +762,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "path to the JSON launch config")
 	requireOpenCode := fs.Bool("require-opencode-tui", false, "require a managed OpenCode TUI launch")
+	requireClaudeChat := fs.Bool("require-claude-chat", false, "require a Claude chat primary launch")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprint(stderr, shimUsage)
 		return 2
@@ -765,18 +772,24 @@ func runShim(args []string, _, stderr io.Writer) int {
 		return 2
 	}
 
-	data, err := os.ReadFile(*configPath)
+	if *requireOpenCode && *requireClaudeChat {
+		_, _ = fmt.Fprintln(stderr, "shim: runtime markers are mutually exclusive")
+		return 2
+	}
+	requiredRuntime := ""
+	if *requireOpenCode {
+		requiredRuntime = persist.RequiredRuntimeOpenCode
+	} else if *requireClaudeChat {
+		requiredRuntime = persist.RequiredRuntimeClaudeChat
+	}
+	data, err := readShimLaunchConfigBytes(*configPath, requiredRuntime)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shim: read config: %v\n", err)
 		return 2
 	}
-	var lc shimLaunchConfig
-	if err := json.Unmarshal(data, &lc); err != nil {
+	lc, err := decodeShimLaunchConfig(data, requiredRuntime)
+	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shim: parse config: %v\n", err)
-		return 2
-	}
-	if err := validateShimRuntime(lc, *requireOpenCode); err != nil {
-		_, _ = fmt.Fprintln(stderr, "shim:", err)
 		return 2
 	}
 

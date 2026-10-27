@@ -579,7 +579,7 @@ OAuth implementation is part of the initial design.
 
 ## Opt-in Claude chat implementation
 
-**Implementation in progress; the chat runtime is not active.** New Claude
+**Implementation in progress; the public/native runtime is not active.** New Claude
 sessions will be able to choose **Swarm chat (experimental)** through the launch
 form or `swarm spawn --interface swarm-chat`. Ordinary launches remain native
 terminal sessions; existing sessions are unchanged. Initially refuse resume,
@@ -591,17 +591,25 @@ A2 adds passive quarantine for the exact managed metadata schema 6 plus
 existing behavior. Retained running or ended chat discussions are fenced from
 the old terminal paths for raw attach, input, resize, drain and automatic
 recovery. The old production consumer passed four synthetic Claim/Start cases;
-this is not native qualification. No chat launch, stdio shim, UI or capabilities
-are active. Main and release remain blocked by terminal restore (`h6sc.26`)
-and unresolved native ingress/enrollment integration checks (`h6sc.28`,
-`h6sc.29`). See the [checkpoint evidence](../verification/provider-logins/claude-chat-quarantine-2026-10-27.json).
+this is not native qualification. At that quarantine checkpoint, chat launch,
+stdio shim, UI and capabilities were inactive. See the
+[checkpoint evidence](../verification/provider-logins/claude-chat-quarantine-2026-10-27.json).
+
+The applied constructor is development-only: one shim-owned stdio primary, bounded
+R3 capture, real config/metadata binding, replay UUID, and signal/Stop/EOF cleanup.
+Managed/native/public admission remains refused. Message sending, a history controller,
+decisions, recovery and public routing are not enabled; the chat message-view exists
+but is unactivated. This is not native or release qualification. The
+[constructor evidence](../verification/provider-logins/claude-chat-constructor-2026-10-27.json)
+records passing focused and ordinary regression checks. Main/release gates
+`h6sc.26`, `h6sc.28` and `h6sc.29` remain open.
 
 The storage-only prerequisite permits strict development `fake6`/`claude-chat`
 metadata for structured child tests. Ordinary `fake1` and managed schema 5/6
 remain supported; saved `fake6` mode is immutable, and malformed or mixed rows
-are retained and refused. This does not grant managed-login, CLI, retirement,
+are retained and refused. This prerequisite does not grant managed-login, CLI, retirement,
 native-writer-proof, OpenCode-binding or input-embargo authority, and does not
-enable launch admission, a stdio constructor, public chat/UI or capabilities.
+enable managed/native/public launch admission, public chat/UI or capabilities.
 The passing storage checks are recorded in
 [`claude-chat-fixture-storage-2026-10-27.json`](../verification/provider-logins/claude-chat-fixture-storage-2026-10-27.json).
 

@@ -114,6 +114,9 @@ const launchConfirmTimeout = 15 * time.Second
 // shimSpawnConfig is the `swarm shim --config` JSON schema (mirrors cmd/swarm's
 // contract). The daemon is the writer; the shim decodes it.
 type shimSpawnConfig struct {
+	RequiredRuntime       string               `json:"required_runtime,omitempty"`
+	ConversationID        string               `json:"conversation_id,omitempty"`
+	ClaudeChatFixture     string               `json:"claude_chat_fixture,omitempty"`
 	LogPath               string               `json:"log_path,omitempty"`
 	LoginRuntime          *logins.Runtime      `json:"login_runtime,omitempty"`
 	LoginStateRoot        string               `json:"login_state_root,omitempty"`
@@ -337,7 +340,10 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 			launchErr = BootstrapLaunchNotStarted(spec.OperationID)
 		}
 	}()
-	if spec.RequiredRuntime != "" && spec.OpenCodeEnv == nil {
+	if err := validateClaudeChatLaunchSpec(spec); err != nil {
+		return persist.Meta{}, err
+	}
+	if spec.RequiredRuntime == persist.RequiredRuntimeOpenCode && spec.OpenCodeEnv == nil {
 		var err error
 		spec.OpenCodeEnv, err = d.OpenCodeEnvironment(spec.ClientEnv)
 		if err != nil {
@@ -462,6 +468,19 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 		}
 	}
 
+	// Only the winning reservation mints a native UUID; replay above keeps its saved identity.
+	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		var uuid [16]byte
+		if _, err := rand.Read(uuid[:]); err != nil {
+			d.dropReserved(id)
+			return persist.Meta{}, fmt.Errorf("daemon: create Claude conversation identity: %w", err)
+		}
+		uuid[6], uuid[8] = uuid[6]&0x0f|0x40, uuid[8]&0x3f|0x80
+		spec.ConversationID = fmt.Sprintf("%x-%x-%x-%x-%x", uuid[:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:])
+		m.ConversationID = spec.ConversationID
+		spec.Argv = append(append([]string(nil), spec.Argv...), "--session-id="+spec.ConversationID)
+	}
+
 	// Epic 12: an optional pre-launch hook (e.g. worktree isolation) may override
 	// the AGENT's working directory. m.Cwd above already captured the caller's
 	// spec.Cwd, so overriding spec.Cwd here reaches only the later spawnShim call,
@@ -539,7 +558,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 		return persist.Meta{}, err
 	}
 
-	if err := d.prepareOpenCodeLaunch(&spec, &m, dir); err != nil {
+	if err := d.prepareLaunchRuntime(&spec, &m, dir); err != nil {
 		rollback()
 		return persist.Meta{}, err
 	}
@@ -665,6 +684,48 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (result persist.Meta
 	return cloneOpenCodeMeta(m), nil
 }
 
+// Keep provider-specific preparation on its exact runtime, including direct callers.
+func (d *Daemon) prepareLaunchRuntime(spec *LaunchSpec, m *persist.Meta, dir string) error {
+	switch spec.RequiredRuntime {
+	case "", persist.RequiredRuntimeOpenCode:
+		if spec.ClaudeChatFixture != "" || m.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+			return errors.New("daemon: incompatible Claude chat runtime selector")
+		}
+		return d.prepareOpenCodeLaunch(spec, m, dir)
+	case persist.RequiredRuntimeClaudeChat:
+		if spec.AgentType != "fake" || m.AgentType != "fake" || m.RequiredRuntime != spec.RequiredRuntime || m.ConversationID != spec.ConversationID || m.ProviderCwd() != spec.Cwd || spec.Backend != nil || spec.LoginStateRoot != "" || spec.OpenCodeBinding != nil || spec.OpenCodeEnv != nil || m.LoginRuntime != nil || m.CLIIdentity != nil || m.ClaudeRetirement != nil || m.OpenCodeBinding != nil || m.InputEmbargo != "" {
+			return errors.New("daemon: incompatible Claude chat launch binding")
+		}
+		return shim.ValidateClaudeChatConfig(shim.Config{
+			RequiredRuntime: spec.RequiredRuntime, ConversationID: spec.ConversationID, ClaudeChatFixture: spec.ClaudeChatFixture,
+			SessionID: m.ID, SessionDir: dir, LoginStateRoot: d.cfg.StateDir, Cwd: spec.Cwd, Argv: spec.Argv,
+			LoginRuntime: spec.LoginRuntime, CLIIdentity: spec.CLIIdentity, LoginSwitchID: spec.LoginSwitchID, LoginSwitchSource: spec.LoginSwitchSource,
+			OpenCode: spec.OpenCodeLaunch, InputEmbargo: spec.InputEmbargo,
+		})
+	default:
+		return errors.New("daemon: unknown required runtime")
+	}
+}
+
+func validateClaudeChatLaunchSpec(spec LaunchSpec) error {
+	if spec.RequiredRuntime != "" && spec.RequiredRuntime != persist.RequiredRuntimeOpenCode && spec.RequiredRuntime != persist.RequiredRuntimeClaudeChat {
+		return errors.New("daemon: unknown required runtime")
+	}
+	mode, present := spec.Options["claude_interface"]
+	if !present && spec.RequiredRuntime != persist.RequiredRuntimeClaudeChat && spec.ClaudeChatFixture == "" {
+		return nil
+	}
+	if !present || mode != "swarm-chat" || spec.RequiredRuntime != persist.RequiredRuntimeClaudeChat || spec.AgentType != "fake" || !filepath.IsAbs(spec.ClaudeChatFixture) || filepath.Clean(spec.ClaudeChatFixture) != spec.ClaudeChatFixture || spec.ConversationID != "" || len(spec.Argv) != 2 || spec.Argv[0] != spec.ClaudeChatFixture || spec.Argv[1] != "--claude-primary-fixture" || spec.ClientEnv == nil || spec.InitialPrompt != "" || spec.ResumedFrom != "" || spec.SpawnedFrom != "" || spec.SpawnIntent != "" || spec.Supervision != "" || spec.LoginRuntime != nil || spec.LoginStateRoot != "" || spec.LoginSwitchID != "" || spec.LoginSwitchSource != "" || spec.InputEmbargo != "" || spec.CLIIdentity != nil || spec.ExpectedCLIIdentity != nil || spec.AuthIdentity != "" || spec.Backend != nil || spec.OpenCodeLaunch != nil || spec.OpenCodeBinding != nil || spec.OpenCodeEnv != nil {
+		return errors.New("daemon: invalid dev Claude chat launch")
+	}
+	for _, key := range []string{"resume_from", "resume_conversation_id", "resume_relocate", "handoff_from"} {
+		if _, exists := spec.Options[key]; exists {
+			return errors.New("daemon: Claude chat requires a fresh launch")
+		}
+	}
+	return nil
+}
+
 // spawnShim writes the shim launch config and starts a detached `swarm shim
 // --config` process. It sets no process group, so the shim setsids in place (a
 // stable PID that reconcile can match) and detaches itself; the shim's stdio goes
@@ -716,6 +777,10 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		HookSocketPath: hookSock,
 		HookDrainToken: drainToken,
 	}
+	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		lc.RequiredRuntime, lc.ConversationID, lc.ClaudeChatFixture = spec.RequiredRuntime, spec.ConversationID, spec.ClaudeChatFixture
+		lc.LoginStateRoot = d.cfg.StateDir
+	}
 	if spec.AgentType == "claude" || spec.AgentType == "codex" {
 		lc.NativeProvider = spec.AgentType
 	}
@@ -736,7 +801,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	// backend socket path -- exist. Either way this package never derives it: it holds no
 	// adapter and could not.
 	backendSock := backendSocketPath(d.cfg.StateDir, id)
-	if spec.OpenCodeLaunch == nil && spec.Backend == nil && d.cfg.BackendPlanner != nil {
+	if spec.RequiredRuntime != persist.RequiredRuntimeClaudeChat && spec.OpenCodeLaunch == nil && spec.Backend == nil && d.cfg.BackendPlanner != nil {
 		plan, perr := d.cfg.BackendPlanner(spec.AgentType, dir, backendSock, spec.Cwd, spec.ClientEnv, spec.Argv)
 		if perr != nil {
 			// A backend failure is a failure for the BACKEND only (playbook §6.1's posture):
@@ -771,6 +836,9 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	}
 
 	shimArgs := []string{"shim"}
+	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		shimArgs = append(shimArgs, "--require-claude-chat")
+	}
 	if spec.OpenCodeLaunch != nil {
 		shimArgs = append(shimArgs, "--require-opencode-tui")
 	}

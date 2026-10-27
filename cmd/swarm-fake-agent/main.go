@@ -4,9 +4,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/Nathandela/swarm/internal/adapter"
 	"io"
 	"os"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/fakeagent"
@@ -23,6 +27,9 @@ func main() {
 // When enabled, every byte the scripted agent consumes from stdin is copied to a
 // private file before Run interprets it.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "--claude-primary-fixture" {
+		return runClaudePrimaryFixture(args, stdin, stdout, stderr)
+	}
 	scriptPath, stdinLog, raw, ok := parseArgs(args)
 	if !ok {
 		_, _ = fmt.Fprintln(stderr, "usage: swarm-fake-agent [--stdin-log PATH|--raw-stdin-log PATH] <script-path|->")
@@ -105,4 +112,67 @@ func parseArgs(args []string) (scriptPath, stdinLog string, raw, ok bool) {
 		return "", "", false, false
 	}
 	return args[2], args[1], args[0] == "--raw-stdin-log", true
+}
+
+// A finite dev-only stdio primary; it sends no automatic user message and
+// accepts no chat commands. Process termination owns its blocked input reader.
+func runClaudePrimaryFixture(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) != 2 || !strings.HasPrefix(args[1], "--session-id=") {
+		return 2
+	}
+	id := strings.TrimPrefix(args[1], "--session-id=")
+	if !adapter.IsCanonicalConversationID(id) {
+		return 2
+	}
+	tty := func(v any) bool { f, ok := v.(*os.File); return ok && term.IsTerminal(f.Fd()) }
+	type fixtureStdio struct {
+		StdinTTY  bool `json:"stdin_tty"`
+		StdoutTTY bool `json:"stdout_tty"`
+		StderrTTY bool `json:"stderr_tty"`
+	}
+	stdio := fixtureStdio{tty(stdin), tty(stdout), tty(stderr)}
+	pgid, err := syscall.Getpgid(0)
+	if err != nil {
+		return 3
+	}
+	init := struct {
+		Type         string       `json:"type"`
+		Subtype      string       `json:"subtype"`
+		SessionID    string       `json:"session_id"`
+		FixturePID   int          `json:"fixture_pid"`
+		FixturePGID  int          `json:"fixture_pgid"`
+		FixtureStdio fixtureStdio `json:"fixture_stdio"`
+	}{"system", "init", id, os.Getpid(), pgid, stdio}
+	if json.NewEncoder(stdout).Encode(init) != nil {
+		return 3
+	}
+	telemetry := struct {
+		Fixture     string `json:"fixture"`
+		StdinTTY    bool   `json:"stdin_tty"`
+		StdoutTTY   bool   `json:"stdout_tty"`
+		StderrTTY   bool   `json:"stderr_tty"`
+		FixturePID  int    `json:"fixture_pid"`
+		FixturePGID int    `json:"fixture_pgid"`
+	}{"claude-primary", tty(stdin), tty(stdout), tty(stderr), os.Getpid(), pgid}
+	if json.NewEncoder(stderr).Encode(telemetry) != nil {
+		return 3
+	}
+	input := make(chan int, 1)
+	go func() {
+		var b [1]byte
+		n, err := stdin.Read(b[:])
+		if n != 0 || err != io.EOF {
+			input <- 3
+		} else {
+			input <- 0
+		}
+	}()
+	timer := time.NewTimer(12 * time.Second)
+	defer timer.Stop()
+	select {
+	case code := <-input:
+		return code
+	case <-timer.C:
+		return 0
+	}
 }

@@ -59,6 +59,7 @@ var testHookAfterPTYResize func()
 // the hub still couples the pipeline to at most one live subscriber (S10), so a
 // later attach supersedes an earlier one.
 type server struct {
+	claudeChat     bool
 	openCode       *OpenCodeConfig
 	hub            *hub
 	ptmx           *os.File
@@ -241,7 +242,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true, PasteInput: true, InputEmbargo: true, OpenCodeInputEmbargo: true, OpenCodeDispatch: s.openCode != nil})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: !s.claudeChat, SnapshotOnly: !s.claudeChat, SubmitTransaction: !s.claudeChat, ControlInput: !s.claudeChat, PasteInput: !s.claudeChat, InputEmbargo: !s.claudeChat, OpenCodeInputEmbargo: !s.claudeChat, OpenCodeDispatch: s.openCode != nil})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -249,6 +250,9 @@ func (s *server) serveConn(conn net.Conn) {
 			}
 			if !helloed {
 				continue // ignore attach/resize/signal until the client has said hello
+			}
+			if s.claudeChat && ctrl.Type != shimwire.TypeSignal {
+				return
 			}
 			switch ctrl.Type {
 			case shimwire.TypeOpenCodeDispatch:
@@ -325,6 +329,9 @@ func (s *server) serveConn(conn net.Conn) {
 				s.noteGoAhead(ctrl)
 			}
 		case wire.TDataIn:
+			if s.claudeChat {
+				return
+			}
 			if !helloed {
 				continue // ignore input until the client has said hello
 			}

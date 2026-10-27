@@ -1011,6 +1011,9 @@ func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-c
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
 func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr error) {
+	if err := a.prepareClaudeChatFixtureLaunch(&spec); err != nil {
+		return persist.Meta{}, err
+	}
 	spec.BootstrapFirstAttempt = a.bootstrapFirstLaunchEligible(spec)
 	resolvedEntered := false
 	var handoff *handoffHistoryResolver
@@ -1213,6 +1216,39 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (result persist.Meta, launchErr
 	}
 	resolvedEntered = true
 	return a.launchResolvedWithOutcome(composed, &coreAttempted)
+}
+
+// This prerequisite is dev-only; managed/public chat requires the complete connected exit.
+func (a *coreAPI) prepareClaudeChatFixtureLaunch(spec *daemon.LaunchSpec) error {
+	for _, option := range []string{protocol.OptionResumeFrom, protocol.OptionHandoffFrom} {
+		if ref := spec.Options[option]; ref != "" && a.core != nil {
+			_, source, err := resolveSourceSession("launch", ref, a.endpointID, a.core.Get)
+			if err == nil && a.ClaudeChatQuarantined(source.ID) {
+				return fmt.Errorf("launch: Claude chat requires a fresh session")
+			}
+		}
+	}
+	if spec.SpawnedFrom != "" && a.ClaudeChatQuarantined(spec.SpawnedFrom) {
+		return fmt.Errorf("launch: Claude chat cannot create a successor")
+	}
+	mode, present := spec.Options["claude_interface"]
+	if spec.RequiredRuntime == persist.RequiredRuntimeClaudeChat || spec.ClaudeChatFixture != "" {
+		return fmt.Errorf("launch: Claude chat selectors are internally derived")
+	}
+	if !present {
+		return nil
+	}
+	if mode != "swarm-chat" || spec.AgentType != "fake" || a.fakeAgentBin == "" || !filepath.IsAbs(a.fakeAgentBin) || filepath.Clean(a.fakeAgentBin) != a.fakeAgentBin || spec.ClientEnv == nil || spec.InitialPrompt != "" || spec.ConversationID != "" || len(spec.Argv) != 0 || spec.ResumedFrom != "" || spec.SpawnedFrom != "" || spec.SpawnIntent != "" || spec.Supervision != "" || spec.LoginRuntime != nil || spec.LoginStateRoot != "" || spec.LoginSwitchID != "" || spec.LoginSwitchSource != "" || spec.InputEmbargo != "" || spec.CLIIdentity != nil || spec.ExpectedCLIIdentity != nil || spec.RequiredRuntime != "" || spec.OpenCodeLaunch != nil || spec.OpenCodeBinding != nil || spec.OpenCodeEnv != nil || spec.Backend != nil || spec.AuthIdentity != "" {
+		return fmt.Errorf("launch: Claude chat is available only for a fresh local dev fake fixture")
+	}
+	for _, key := range []string{protocol.OptionResumeFrom, protocol.OptionResumeConversationID, protocol.OptionResumeRelocate, protocol.OptionHandoffFrom} {
+		if _, exists := spec.Options[key]; exists {
+			return fmt.Errorf("launch: Claude chat cannot resume, import or hand off")
+		}
+	}
+	spec.RequiredRuntime, spec.ClaudeChatFixture = persist.RequiredRuntimeClaudeChat, a.fakeAgentBin
+	spec.Argv = []string{a.fakeAgentBin, "--claude-primary-fixture"}
+	return nil
 }
 
 // errCLIOlderThanSource refuses a bound resume that would downgrade the CLI
@@ -1463,6 +1499,9 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if err != nil {
 			return daemon.LaunchSpec{}, err
 		}
+		if persist.IsClaudeChatRuntime(srcMeta) {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: Claude chat requires a fresh session")
+		}
 		if spec.AgentType == "codex" && spec.Options["sandbox"] != "" {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: Codex restores the saved conversation permission policy; change sandbox in the resumed conversation instead")
 		}
@@ -1636,6 +1675,9 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 	local, source, err := resolveSourceSession("handoff", spec.Options[protocol.OptionHandoffFrom], endpointID, getSource)
 	if err != nil {
 		return daemon.LaunchSpec{}, err
+	}
+	if persist.IsClaudeChatRuntime(source) {
+		return daemon.LaunchSpec{}, fmt.Errorf("handoff: Claude chat cannot create a successor")
 	}
 
 	// STEP 2. E7's scope gate as amended (Amendment 5 F1), and it is the ADAPTER's

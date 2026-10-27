@@ -44,6 +44,9 @@ const defaultTerm = "TERM=xterm-256color"
 
 // Config is the frozen launch contract for a single shim-managed session.
 type Config struct {
+	RequiredRuntime   string `json:"required_runtime,omitempty"`
+	ConversationID    string `json:"conversation_id,omitempty"`
+	ClaudeChatFixture string `json:"claude_chat_fixture,omitempty"`
 	// LogPath authorizes retention only when inherited stderr matches this owned inode.
 	LogPath           string
 	LoginRuntime      *logins.Runtime
@@ -147,6 +150,9 @@ func Run(cfg Config) (agentExit int, err error) {
 	if err := ValidateOpenCodeConfig(cfg); err != nil {
 		return 0, err
 	}
+	if err := ValidateClaudeChatConfig(cfg); err != nil {
+		return 0, err
+	}
 	externalBirth := cfg.LoginRuntime != nil && cfg.LoginRuntime.ExternalAuth && cfg.LoginSwitchID == ""
 	if externalBirth {
 		if err := validateCodexExternalReservation(cfg); err != nil {
@@ -161,6 +167,9 @@ func Run(cfg Config) (agentExit int, err error) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer signal.Stop(sigCh)
+	if cfg.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		return runClaudeChatPrimary(cfg, sigCh)
+	}
 	managed, err := beginManagedNativeScope(cfg)
 	if err != nil {
 		return 0, err
