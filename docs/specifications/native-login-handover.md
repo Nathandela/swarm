@@ -585,7 +585,13 @@ Read and an exact-prompt typed quota failure in durable native history. A
 completed-answer capture also satisfies the corrected offline oracle; its
 original command failure is retained. These finite results support further
 investigation of the native terminal interface before extending Swarm chat.
-Human waits, cancellation, background actors, queued input and account adoption
+The later [human-state observations](../verification/provider-logins/claude-native-human-state-2026-10-27.json)
+observe an exact live question and one human-Esc cancellation. Native history
+does not durably record either exclusion in these cases: both question commands
+failed their physical-row gates, and the cancelled turn has no abort marker.
+Persist human-wait and cancellation exclusions in Swarm's existing execution
+record; missing native history cannot clear them or authorize a successor.
+The API abort operation, background actors, queued input and account adoption
 remain separate gates; no successor or automatic continuation was sent.
 
 Proactive selection consumes fresh account-scoped observations, validates the

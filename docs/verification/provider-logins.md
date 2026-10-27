@@ -51,6 +51,22 @@ managed/native/public launch admission, public chat/UI or capabilities.
 records 148 focused race passes, 855 library race passes (one skip), and passing
 build, vet and lint checks.
 
+## Terminal handoff renderer (2026-10-27)
+
+The [renderer checkpoint](provider-logins/renderer-stop-join-2026-10-27.json)
+fixes an upstream stop/reset race: terminal restoration now waits for the old
+renderer to exit before restarting its ticker. The unchanged board-restore
+regression, real attach/login PTY handoffs, lifecycle checks and outside-checkout
+versioned module installation pass. Build, vet, lint and focused race gates pass.
+The initial animation failure and inconclusive negative controls remain recorded;
+a controlled missing-join variant fails the intended lifecycle assertion.
+
+The temporary source copy retains MIT notices in module and binary archives.
+It loses canonical vulnerability-scanner identity; provenance, a dated advisory
+review and retirement issue `h6sc.26.1` cover that maintenance obligation. Full
+repository tests, actual release archive generation and arbitrary concurrent
+terminal lifecycle calls are not qualified by this checkpoint.
+
 ## Native Claude mod observations (2026-10-27)
 
 The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)
@@ -65,9 +81,18 @@ The completed-answer capture passed a corrected offline oracle; its original
 R5 command remains failed. Earlier validator, obsolete types-command, disk-scan
 and input-producer failures remain recorded, and the R8 screen matcher was held
 unexecuted. R9 uses calibrated input only; timing grants no production input or
-recovery authority. This is not a Swarm account-handover qualification. Human
-waits, cancellation, background work, queued input, real account adoption and
-Mac parity remain open.
+recovery authority. This is not a Swarm account-handover qualification.
+
+The [human-state observations](provider-logins/claude-native-human-state-2026-10-27.json)
+show an exact live native question and one explicit cancellation. Both question
+commands failed their durable-history gate: the exact question row was absent,
+including after 616 bounded live reads over 35 seconds. Teardown events are
+excluded from the live observation. One human Esc produced a same-turn
+`aborted` completion, but no durable abort marker. It does not qualify the API
+abort operation. Swarm must retain these exclusions durably; missing native
+history means unknown. No question was answered and no successor was sent.
+Complete actor accounting, queued input, real account adoption, restorable state
+and Mac parity remain open.
 
 ## Published v0.21.0
 

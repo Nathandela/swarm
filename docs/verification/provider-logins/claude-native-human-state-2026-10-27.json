@@ -1,0 +1,131 @@
+{
+  "date": "2026-10-27",
+  "kind": "Native human-question and explicit cancellation observations; no durable decision or recovery qualification",
+  "status": "LIVE_HUMAN_WAIT_AND_CANCEL_OBSERVATIONS / QUESTION_COMMANDS_FAILED / DURABLE_STATE_GATE_OPEN",
+  "native": {
+    "version": "2.1.310",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "environment": "Linux synthetic private profile, fake credentials, nonforwarding loopback endpoint."
+  },
+  "claims": {
+    "positive": "Exact live native AskUserQuestion UI and one explicit native abort were observed; both are finite same-version synthetic cases.",
+    "durability": "Question and cancellation states are not durably/restorably established; missing post-stop history means unknown, never idle/resolved/recoverable.",
+    "authority": "No answer, account switch, successor or recovery was sent; production and recovery qualification are false; actor census is unknown."
+  },
+  "Q1": {
+    "root": "/private/tmp/swarm-native-mod-question-20261027-r1/pair-linux-outer-ohh6rpl1",
+    "manifest": "e531a35b21ea977d4aa9ab6edf6d4fe7e51a85f9a3a6d48bef7a579f6bfd077f",
+    "outer_sha256": "a6a6cf6566e0782728a673aa730c3cfdb60cc4815b6d74fe4aa3298543f5505d",
+    "collection_sha256": "dd49df2f79ba67a1d322067d3ccd78b00703fcf5f0d039162cbecbb5c032a402",
+    "receipt_sha256": "102502c1cd5d10895f691d5854b2b595302943173277ae11b5717b40d7de2980",
+    "outcome": "Original command failed its durable history oracle; live UI was positive, no reply sent.",
+    "ids": {
+      "session": "8758b517-7b25-4f5f-803e-f7c9893e14e7",
+      "generation": "c2c940a8-23aa-4737-90b6-34b5d320978d",
+      "prompt": "b7758b0a-74a5-4690-b4e7-1cdde681d890",
+      "turn": "b459b9c0-103e-47c7-9dda-e264688d60cc",
+      "tool_use": "tool_question_8758b517",
+      "logical_append_uuid": "005d36c8-5199-4b57-a0f3-3c9e1c918524"
+    },
+    "cut": "42-event/9-heartbeat prefix. seq36 append; 37 AskUserQuestion call; 38 approver=person entered; 39 returned ask; 40/41 UI request entered/returned; 42 step returned tool_use. Question UUID absent in 27 post-stop rows. Teardown rejection/empty completion at seq43+ is outside cut.",
+    "raw": {
+      "events": "7516d68f5e6cad5b173e8c7ef3e533bc20cdf85ea2dfcd92e0b640b0c87f023d",
+      "heartbeats": "883aa109703c6c23b0409bf7b0776e7bcf2bbddf135911cd38b9a5e66218f2c8",
+      "history": "d12dd4ba07d3925aa211e6637f4f1c407179973dd079e5060cd37fa5ad45d1c7",
+      "project_hook": "d18569a10cfb295dad2261eaf8ea182809017623d99494263c7cf1b9ad324f96",
+      "mcp": "4d8599fe654472fb0ffe845c2acfc0f3e9c049241a3606fd5d413ac9e17260e7"
+    }
+  },
+  "Q3": {
+    "root": "/private/tmp/swarm-native-mod-question-20261027-r3/pair-linux-outer-9vgh8n6i",
+    "manifest": "917f037874111c3f52cf72f0842ee9a1aa117886c4d7a432554c78666641b3fb",
+    "outer_sha256": "6ded5c022137b32e1787ff80e9e10650902e1f1158b072d2ca6ef0b3e961bb8f",
+    "collection_sha256": "03e54f5e22818ae3465454bb8a1585cab19b25cf124ee26e95c6af9a78a60ab9",
+    "receipt_sha256": "a603c0bece5bb32b9edee5279650f50e8d9f6027379cdcfc45998be36c052228",
+    "outcome": "Original command failed unchanged 35s physical-row gate; live UI positive; no answer/extra query.",
+    "ids": {
+      "session": "3f4ec0f7-44a8-4542-aa2b-2c59393ea7de",
+      "generation": "ba908199-f91b-4226-9ea3-4eb1a091ad63",
+      "prompt": "23fde6d5-b044-4cb3-872d-d444ba7a9054",
+      "turn": "ce0ce6d2-58c6-4358-ac40-d8b3e393b292",
+      "tool_use": "tool_question_3f4ec0f7",
+      "logical_append_uuid": "99a2df21-eb70-4428-9131-4f0f3442d97a"
+    },
+    "cut": "616 exact-row reads/35s. seq38 call; 39 approver=person; 40 ask; 41/42 UI request entered/returned; 43 step returned tool_use. Exact row absent while alive and in 27 post-stop rows; one paste + one Enter.",
+    "raw": {
+      "events": "4bd2aa8fc9e50c3004c9bbb73ffdaee30871795f3b0afe4ec63791fbf2cadfaf",
+      "heartbeats": "9c688df045c498544cd5aceb91942cb646d18bd4662e0f066d45cd074a114498",
+      "history": "17bee83307ff710de75cfaef03f62330005c3473fd975c699c40b7dae58c508e",
+      "terminal": "ac7fffd31663e681befcce9ce55a9b9145b74c68b26a48b83ec5eb3f95bd4b34",
+      "project_hook": "251048ae648b01ceaa454ec752144ab15c294cbf1b34ee03bcce591c8080c6b2",
+      "mcp": "4d8599fe654472fb0ffe845c2acfc0f3e9c049241a3606fd5d413ac9e17260e7"
+    }
+  },
+  "Q2": {
+    "status": "HELD_UNEXECUTED",
+    "manifest_sha256": "4ec5af6a8197fe1fcd2155aa92e9aea13fbd5d24dc23d1962acebce54fe67cb3",
+    "reason": "Live-result/deadline oracle gaps; no native run."
+  },
+  "shared_canaries_and_limits": {
+    "native_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "declaration_sha256": "95bd52583669d28e8fefb0675fe48630a4f7cc42a1d3ee22aa445d7998a45334",
+    "plugin_validation_returncode": 0,
+    "canaries": "Default AUTO/settings/assets, SessionStart hook, and MCP discovery/initialize/tools-list observed in exact sessions; no tool approval answered.",
+    "limits": "Each run used a private 2.1.310 synthetic profile, fake credentials, nonforwarding loopback, 60s/1GiB/192-task unit and 35s live question window. Source/native unchanged; owned cgroups gone and HTTP joined."
+  },
+  "production_qualified": false,
+  "recovery_qualified": false,
+  "automatic_continuation_authority": false,
+  "cancellation": {
+    "classification": "PASS narrow native explicit one-Esc cancellation observation only; does not persist cancel semantics or authorize recovery.",
+    "native_manifest_sha256": "5cd1a9794ba834683b1a4d2e5adb66d3ede673ddae6964efbe04d3c5248fcd00",
+    "outer_receipt": {
+      "path": "/private/tmp/swarm-native-mod-cancel-20261027-r1/pair-linux-outer-b0pg5j58/outer-receipt.json",
+      "sha256": "950a552d81bb30911e4437f68cc880d0d14ece64435eb454e0ccb77727dbcd52",
+      "exit_code": 0,
+      "source_native_unchanged": true,
+      "cgroup_cleanup": "gone",
+      "http_joined": true
+    },
+    "collection": {
+      "path": "/private/tmp/swarm-native-mod-cancel-20261027-r1/pair-linux-outer-b0pg5j58/collection.json",
+      "sha256": "bf0eef5b6a2a81b2c26d84d0384d949dde0167fa14bdb2018bc56168f58bb6a9",
+      "events": 42,
+      "same_generation": true,
+      "heartbeats": 10,
+      "cut": "native_turn_terminal"
+    },
+    "receipt": {
+      "path": "/private/tmp/swarm-native-mod-cancel-20261027-r1/pair-linux-outer-b0pg5j58/cancel-0/receipt.json",
+      "sha256": "2282768c3e74d6dcf6333a11eb035a45ee8573066baec3f1f8bdd2265870fe67",
+      "observation_complete": true,
+      "held_main_request": true,
+      "handler_released_without_answer": true,
+      "question_reply_sent": false,
+      "history_rows": 27,
+      "actor_census": "unknown",
+      "recovery_qualified": false
+    },
+    "identities": {
+      "session": "fae36670-3276-42e9-a69d-eeba0ab22284",
+      "generation": "6637c804-a4ce-4c8a-b567-dc39fabc52ee",
+      "prompt_id": "638519af-9608-4e16-8b12-657d27b0b031",
+      "turn_id": "1cc11e42-a8dc-4e4b-9d4d-200122a9feb1",
+      "native_original_uuid": "796504bf-3cb5-4100-9b96-16d614b94df3"
+    },
+    "input_and_cut": "One original bracketed paste (87 bytes), Enter, then one ESC after held main request and frozen prefix seq35. No retry, answer or model query. Prefix: 42 same-generation events/10 heartbeats; no post-stop records.",
+    "terminal_events": "step0 returned answer empty, no tools, stopReason/usage null; turn.complete reason=aborted/isAborted=true at seq39/40. Post-stop 27-row native history has only original user and no semantic abort marker.",
+    "history": "Post-stop native JSONL has 27 rows and only the original user row among user/assistant rows; there is no semantic abort marker. Do not infer persisted or restorable cancellation from native history absence.",
+    "independent_review": "Root independently checked all 42 contiguous same-generation events and the cancel oracle; native pin/source, default AUTO/settings/assets, SessionStart/MCP canaries, cgroup retirement and HTTP join matched.",
+    "raw": {
+      "events": "0f12947d6d55f384a3261276f370c85463cbcbb53a39c64ab29ad2341f4e4031",
+      "heartbeats": "1cd489c86b00b9d1bded71bfde6d6f323abd9f7587ae7ca0767b1e2463fdd38c",
+      "history": "ccacf26db742dc3368e9b8b2609871fc6df9658babbad917d69340d81def9e43",
+      "native_history_raw": "5e0045f1caa863a5f1b2a965b0e1d86799b6bd0c6037736c91bd31e36beb8983",
+      "terminal": "939525aa853d555dd4a7672b0770e0b278997b38a6ed40024042036fb85ee9c5",
+      "project_hook": "4bc8ff0f0fee407ab4cde1f60ddfd2799cbd10299dedd0c828bec5225303196b",
+      "mcp": "08532d6952024c71cd5629032f547f772a4204b67210bbf1d8460183970a4ea0",
+      "requests": "68e859c80346e0c5a1a21c5e4994ae6069bb8af8bfded814e2137d6e6924a085"
+    }
+  }
+}
