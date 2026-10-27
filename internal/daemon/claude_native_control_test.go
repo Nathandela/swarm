@@ -5,12 +5,40 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 )
+
+func TestClaudeNativeControlPluginPreparation(t *testing.T) {
+	for _, sender := range []bool{false, true} {
+		d := &Daemon{cfg: Config{NativeInputEnabled: func() bool { return sender }}}
+		dir := t.TempDir()
+		spec := LaunchSpec{AgentType: "claude", RequiredRuntime: claudeinput.NativeControlRuntime, CLIIdentity: &persist.CLIIdentity{Version: "2.1.310"}}
+		lc := shimSpawnConfig{Argv: []string{"/held/claude", "--resume", "exact"}}
+		if err := d.prepareClaudePlugins(dir, spec, &lc); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(claudeinput.GuardPath(dir), "hooks/input.js")); err != nil {
+			t.Error("sender-off lost observation guard", err)
+		}
+		if lc.ClaudeInput != sender {
+			t.Error("sender option was changed")
+		}
+		args := strings.Join(lc.Argv, " ")
+		if !strings.Contains(args, "--plugin-dir "+claudeinput.GuardPath(dir)) || !strings.HasSuffix(args, "--resume exact") {
+			t.Errorf("native argv changed: %v", lc.Argv)
+		}
+		_, err := os.Stat(filepath.Join(dir, "claude-input-plugin"))
+		if sender != (err == nil) {
+			t.Error("sender artifacts disagree with existing option")
+		}
+	}
+}
 
 func TestClaudeNativeControlLaunchRemainsDormant(t *testing.T) {
 	d := openDaemon(t, daemonConfig(t))

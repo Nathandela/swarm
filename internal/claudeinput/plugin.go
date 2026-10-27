@@ -14,10 +14,30 @@ var pluginSource string
 //go:embed guard.js
 var guardSource string
 
+//go:embed control_guard.js
+var controlGuardSource string
+
+// InstallNativeControl installs the independent observer, with optional sender.
+func InstallNativeControl(dir string, sender bool) (string, error) {
+	return install(dir, sender, true)
+}
+
 // Install writes only session-owned, per-invocation plugin artifacts.
 func Install(dir string) (string, error) {
+	return install(dir, true, false)
+}
+
+func install(dir string, sender, control bool) (string, error) {
 	config, _ := json.Marshal(filepath.Join(dir, DescriptorFile))
-	for name, source := range map[string]string{"claude-input-plugin": pluginSource, "claude-input-guard-plugin": guardSource} {
+	guard := guardSource
+	if control {
+		guard = controlGuardSource
+	}
+	sources := map[string]string{"claude-input-guard-plugin": guard}
+	if sender {
+		sources["claude-input-plugin"] = pluginSource
+	}
+	for name, source := range sources {
 		root := filepath.Join(dir, name)
 		for _, path := range []string{filepath.Join(root, ".claude-plugin"), filepath.Join(root, "hooks"), filepath.Join(root, "types")} {
 			if err := os.MkdirAll(path, 0o700); err != nil {
@@ -29,10 +49,14 @@ func Install(dir string) (string, error) {
 			pluginName += "-guard"
 		}
 		manifest, _ := json.Marshal(map[string]string{"name": pluginName, "version": "1.1.0", "description": "Swarm native message ingress", "types": "./types/index.d.ts"})
+		types := "export {};\n"
+		if control && name == "claude-input-guard-plugin" {
+			types = "export type NativeControl = never;\n"
+		}
 		files := map[string]string{
 			".claude-plugin/plugin.json": string(manifest),
 			"hooks/hooks.json":           `{"modules":["./input.js"]}`,
-			"types/index.d.ts":           "export {};\n",
+			"types/index.d.ts":           types,
 			"hooks/input.js":             strings.ReplaceAll(source, "__CONFIG_PATH__", string(config)),
 		}
 		for name, body := range files {
@@ -41,7 +65,10 @@ func Install(dir string) (string, error) {
 			}
 		}
 	}
-	return filepath.Join(dir, "claude-input-plugin"), nil
+	if sender {
+		return filepath.Join(dir, "claude-input-plugin"), nil
+	}
+	return GuardPath(dir), nil
 }
 
 // GuardPath is the mandatory companion mod installed beside the sender.
@@ -60,6 +87,9 @@ func ReadDescriptor(dir string) (Descriptor, error) {
 		return desc, err
 	}
 	if !desc.LifecycleFence || !SupportedVersion(desc.ProviderVersion) || len(desc.Token) != 64 || len(desc.Generation) != 32 || desc.ShimPID <= 0 || desc.ShimStartTime <= 0 || desc.SocketPath != filepath.Join(dir, "claude-input.sock") {
+		return desc, os.ErrInvalid
+	}
+	if desc.RequiredRuntime != "" && (desc.RequiredRuntime != NativeControlRuntime || desc.ProviderVersion != "2.1.310") || desc.RequiredRuntime == "" && desc.SenderEnabled {
 		return desc, os.ErrInvalid
 	}
 	return desc, nil

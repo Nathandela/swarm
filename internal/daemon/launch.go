@@ -816,13 +816,8 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		lc.AgyInput = &agyinput.Config{SessionID: id, Executable: spec.CLIIdentity.Path, Version: spec.CLIIdentity.Version, Fingerprint: spec.CLIIdentity.Fingerprint, Cwd: spec.Cwd, BootstrapCommand: command}
 		lc.Argv = agyinput.LaunchArgs(lc.Argv, command)
 	}
-	if d.cfg.NativeInputEnabled != nil && d.cfg.NativeInputEnabled() && spec.AgentType == "claude" && spec.CLIIdentity != nil && claudeinput.SupportedVersion(spec.CLIIdentity.Version) {
-		plugin, err := claudeinput.Install(dir)
-		if err != nil {
-			return nil, "", err
-		}
-		lc.ClaudeInput = true
-		lc.Argv = append([]string{lc.Argv[0], "--plugin-dir", plugin, "--plugin-dir", claudeinput.GuardPath(dir)}, lc.Argv[1:]...)
+	if err := d.prepareClaudePlugins(dir, spec, &lc); err != nil {
+		return nil, "", err
 	}
 	if spec.AgentType == "claude" || spec.AgentType == "codex" {
 		lc.NativeProvider = spec.AgentType
@@ -1186,4 +1181,40 @@ func (d *Daemon) resolveStaleLaunches() {
 			d.logf("resolve stale launch %s: %v", rec.OperationID, err)
 		}
 	}
+}
+
+// prepareClaudePlugins retains the existing per-session install/argv seam.
+func (d *Daemon) prepareClaudePlugins(dir string, spec LaunchSpec, lc *shimSpawnConfig) error {
+	sender := d.cfg.NativeInputEnabled != nil && d.cfg.NativeInputEnabled()
+	control := spec.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl
+	if spec.AgentType != "claude" || (!sender && !control) {
+		return nil
+	}
+	if spec.CLIIdentity == nil || !claudeinput.SupportedVersion(spec.CLIIdentity.Version) {
+		if control {
+			return errors.New("daemon: native control has no qualified CLI identity")
+		}
+		return nil
+	}
+	if control && (spec.CLIIdentity.Version != "2.1.310" || len(lc.Argv) == 0) {
+		return errors.New("daemon: native control image is not qualified")
+	}
+	var plugin string
+	var err error
+	if control {
+		plugin, err = claudeinput.InstallNativeControl(dir, sender)
+	} else {
+		plugin, err = claudeinput.Install(dir)
+	}
+	if err != nil {
+		return err
+	}
+	lc.ClaudeInput = sender
+	args := []string{lc.Argv[0]}
+	if sender {
+		args = append(args, "--plugin-dir", plugin)
+	}
+	args = append(args, "--plugin-dir", claudeinput.GuardPath(dir))
+	lc.Argv = append(args, lc.Argv[1:]...)
+	return nil
 }

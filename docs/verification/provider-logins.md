@@ -105,6 +105,11 @@ and connected race checks, build, vet and lint pass, with one documented
 Linux-only skip on macOS. Both daemon and shim refuse launch of this runtime;
 the observer producer/reducer and automatic recovery are not enabled.
 
+The [Stage B producer checkpoint](provider-logins/claude-native-control-producer-2026-10-27.json)
+records the sender-off guard, bounded native observations and durable spool
+transport. The final review-focused race batch passed 46 checks; admission gates
+and automatic effects remain disabled, with no reducer or native qualification.
+
 The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)
 retains one 56-event native trace with exact composer, prompt, turn and history
 identities. A successful Read result matches the next HTTP request's canonical

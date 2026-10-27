@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-27",
+  "stage": "B producer, broker and spool checkpoint",
+  "status": "SOURCE_REVIEWED_DORMANT_CHECKPOINT",
+  "base_commit": "24c7c8a00eb1f7e8318976d5c927a75cacc562b5",
+  "frozen_evidence": {
+    "manifest_sha256": "7c9fc8336f8633f2ca15e0562aa6adfce79b4d6cbec6b84a5823e0bc4de3daef",
+    "source_diff_sha256": "15f259407d904b820d6ee09f7f92ade7116cf3cd85e0336aecaf7a24fdc59dc4",
+    "command_summary_sha256": "98bc0a945a89e3427fcc6a2d4f702d5e35f836b95513bc78f04158b154a5faa5",
+    "manifest_files": 46,
+    "source_files": 14
+  },
+  "implemented_scope": {
+    "guard_only_sender_off": true,
+    "legacy_installed_guard_sha256": "3be77704d7b2882768ec42af438e1f93f358d64d33f018240a4040efdfa46f76",
+    "native_2_1_310_shape": "metadata-only",
+    "fifo_exact_retry_and_durable_ack": true,
+    "uses_existing_post_pty_hook_spool": true,
+    "stop_independent_of_storage_wait": true,
+    "nonce_lease": "issued-time based; receiver subtracts full request roundtrip from remaining duration",
+    "bounded_maps": true,
+    "stream_next_identity_and_early_close_preserved": true,
+    "review_fixes_included": true
+  },
+  "verification": {
+    "final_review_focused_race_passes": 46,
+    "earlier_connected_race_passes": 98,
+    "separate_signal_batch_passes": 45,
+    "final_build_exit": 0,
+    "final_vet_exit": 0,
+    "final_lint_exit": 0,
+    "final_lint_issues": 0,
+    "final_diff_check_exit": 0,
+    "setup_compile_attempts_are_assertion_reds": false
+  },
+  "limits": [
+    "Both daemon and shim admission gates remain dormant; automatic effects remain disabled.",
+    "No drainer, reducer, cursor, projection, activation or recovery implementation is included.",
+    "No native qualification, real CLI, full repository suite, Astra review or production signoff is claimed."
+  ]
+}

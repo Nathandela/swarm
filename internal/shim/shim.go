@@ -228,7 +228,8 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 		defer func() { _ = broker.Close() }()
 	}
-	if cfg.ClaudeInput {
+	var claudeBroker *claudeinput.Broker
+	if cfg.ClaudeInput || cfg.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
 		if cfg.CLIIdentity == nil {
 			return 0, errors.New("shim: Claude input has no qualified CLI identity")
 		}
@@ -236,11 +237,17 @@ func Run(cfg Config) (agentExit int, err error) {
 		if err != nil {
 			return 0, err
 		}
-		broker, err := claudeinput.Start(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started)
+		var broker *claudeinput.Broker
+		if cfg.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+			broker, err = claudeinput.StartNativeControl(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started, cfg.ClaudeInput)
+		} else {
+			broker, err = claudeinput.Start(cfg.SessionDir, cfg.SessionID, cfg.CLIIdentity.Version, os.Getpid(), started)
+		}
 		if err != nil {
 			return 0, err
 		}
 		defer func() { _ = broker.Close() }()
+		claudeBroker = broker
 	}
 	embargo, err := openInputEmbargo(cfg)
 	if err != nil {
@@ -314,6 +321,9 @@ func Run(cfg Config) (agentExit int, err error) {
 			return
 		}
 		started = true
+		if claudeBroker != nil && cfg.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+			srv.claudeRetire = claudeBroker.Revoke
+		}
 		sigWG.Add(1)
 		go func() {
 			defer sigWG.Done()
@@ -564,6 +574,12 @@ func Run(cfg Config) (agentExit int, err error) {
 			hookSrv = nil
 		}
 	}
+	if claudeBroker != nil && cfg.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+		if controlErr := attachClaudeControlSpool(cfg, claudeBroker, hookSrv); controlErr != nil {
+			claudeBroker.Revoke()
+			log.Printf("shim: native control spool unavailable: %v", controlErr)
+		}
+	}
 
 	var hookAcceptDone chan struct{}
 	if hookSrv != nil {
@@ -586,6 +602,9 @@ func Run(cfg Config) (agentExit int, err error) {
 	// exit.json so it is never reported as an unexplained agent exit.
 	var backendExit *int
 	waitErr := waitAgentOrBackend(cmd, backendWatch, srv, &backendExit)
+	if claudeBroker != nil && cfg.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+		claudeBroker.Revoke()
+	}
 
 	// Agent reaped: release and JOIN the handler goroutine. Notify remains active
 	// through deferred proof publication, but no worker acts on later signals. It is

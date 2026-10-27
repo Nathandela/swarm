@@ -68,6 +68,7 @@ type server struct {
 	ptyIn          *ptyWriter // serialized writer to the PTY master (TDataIn + emulator replies)
 	graceTimeout   time.Duration
 	managedSignals bool // dedicated managed shim: PID-bound descendant signals
+	claudeRetire   func()
 
 	// pgidMu guards the two process groups this shim contains. The AGENT's group is known
 	// at construction on the ordinary path and only after the go-ahead on a backend
@@ -411,6 +412,9 @@ func setWinsize(f *os.File, ws *pty.Winsize) error {
 // worker and issues one final synchronous KILL (see finishEscalation), so no
 // armed timer ever outlives Run.
 func (s *server) onSignal(sig string) {
+	if (sig == shimwire.SigKill || sig == shimwire.SigTerm) && s.claudeRetire != nil {
+		s.claudeRetire()
+	}
 	switch sig {
 	case shimwire.SigKill:
 		s.killGroups(syscall.SIGKILL)

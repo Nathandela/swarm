@@ -23,6 +23,8 @@ import (
 const DescriptorFile = "claude-input.json"
 const maxOperations = 128
 
+const NativeControlRuntime = "claude-native-control"
+
 // SupportedVersion names actual native runtime qualification, not an optimistic range.
 func SupportedVersion(version string) bool {
 	return version == "2.1.296" || version == "2.1.310" || version == "2.1.311"
@@ -37,6 +39,8 @@ type Descriptor struct {
 	ShimPID         int    `json:"shim_pid"`
 	ShimStartTime   int64  `json:"shim_start_time"`
 	LifecycleFence  bool   `json:"lifecycle_fence"`
+	RequiredRuntime string `json:"required_runtime,omitempty"`
+	SenderEnabled   bool   `json:"sender_enabled,omitempty"`
 }
 
 type Worker struct {
@@ -64,19 +68,33 @@ type request struct {
 }
 
 type Broker struct {
-	descriptor Descriptor
-	server     *http.Server
-	mu         sync.Mutex
-	worker     Worker
-	seen       time.Time
-	revoked    bool
-	guard      Worker
-	guardSeen  time.Time
-	operations map[string]Message
-	order      []string
+	descriptor    Descriptor
+	server        *http.Server
+	mu            sync.Mutex
+	worker        Worker
+	seen          time.Time
+	revoked       bool
+	guard         Worker
+	guardSeen     time.Time
+	operations    map[string]Message
+	order         []string
+	controlAppend sync.Mutex
+	control       controlState
+}
+
+// StartNativeControl starts the existing broker with explicit observation intent.
+func StartNativeControl(dir, session, version string, pid int, started int64, sender bool) (*Broker, error) {
+	if version != "2.1.310" {
+		return nil, errors.New("claude native control runtime is not qualified")
+	}
+	return start(dir, session, version, pid, started, NativeControlRuntime, sender)
 }
 
 func Start(dir, session, version string, pid int, started int64) (*Broker, error) {
+	return start(dir, session, version, pid, started, "", false)
+}
+
+func start(dir, session, version string, pid int, started int64, runtime string, sender bool) (*Broker, error) {
 	if !SupportedVersion(version) || session == "" {
 		return nil, errors.New("claude native input runtime is not qualified")
 	}
@@ -84,7 +102,7 @@ func Start(dir, session, version string, pid int, started int64) (*Broker, error
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
 	}
-	desc := Descriptor{SessionID: session, Generation: hex.EncodeToString(nonce[:16]), Token: hex.EncodeToString(nonce[16:]), SocketPath: filepath.Join(dir, "claude-input.sock"), ProviderVersion: version, ShimPID: pid, ShimStartTime: started, LifecycleFence: true}
+	desc := Descriptor{SessionID: session, Generation: hex.EncodeToString(nonce[:16]), Token: hex.EncodeToString(nonce[16:]), SocketPath: filepath.Join(dir, "claude-input.sock"), ProviderVersion: version, ShimPID: pid, ShimStartTime: started, LifecycleFence: true, RequiredRuntime: runtime, SenderEnabled: sender}
 	listener, err := net.Listen("unix", desc.SocketPath)
 	if err != nil {
 		return nil, err
@@ -107,11 +125,19 @@ func Start(dir, session, version string, pid int, started int64) (*Broker, error
 	return b, nil
 }
 func (b *Broker) Descriptor() Descriptor { return b.descriptor }
-func (b *Broker) Close() error           { return b.server.Close() }
+func (b *Broker) Close() error           { b.Revoke(); return b.server.Close() }
 
 func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+b.descriptor.Token)) != 1 {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if b.descriptor.RequiredRuntime == NativeControlRuntime && (r.URL.Path == "/control" || r.URL.Path == "/guard" || r.URL.Path == "/observation") {
+		b.serveControl(w, r)
+		return
+	}
+	if b.descriptor.RequiredRuntime == NativeControlRuntime && !b.descriptor.SenderEnabled && r.URL.Path != "/guard" {
+		http.Error(w, "native sender is disabled", http.StatusConflict)
 		return
 	}
 	var req request
@@ -120,14 +146,19 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	var reply func()
+	defer func() {
+		b.mu.Unlock()
+		if reply != nil {
+			reply()
+		}
+	}()
 	respond := func(value any) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(value)
+		reply = func() { w.Header().Set("Content-Type", "application/json"); _ = json.NewEncoder(w).Encode(value) }
 	}
-	refuse := func(reason string) { http.Error(w, reason, http.StatusConflict) }
+	refuse := func(reason string) { reply = func() { http.Error(w, reason, http.StatusConflict) } }
 	live := func() bool {
-		return !b.revoked && b.worker.Generation != "" && b.guard.Generation != "" && b.guard.NativeSessionID == b.worker.NativeSessionID && b.guard.Version == b.worker.Version && time.Since(b.seen) < 3*time.Second && time.Since(b.guardSeen) < 3*time.Second
+		return !b.revoked && b.worker.Generation != "" && b.guard.Generation != "" && b.guard.NativeSessionID == b.worker.NativeSessionID && b.guard.Version == b.worker.Version && time.Since(b.seen) < 3*time.Second && time.Since(b.guardSeen) < 3*time.Second && (b.descriptor.RequiredRuntime != NativeControlRuntime || b.observationLocked(time.Now()).Live)
 	}
 	switch r.URL.Path {
 	case "/guard":
@@ -263,7 +294,7 @@ func (b *Broker) serve(w http.ResponseWriter, r *http.Request) {
 		msg.Text = ""
 		respond(msg)
 	default:
-		http.NotFound(w, r)
+		reply = func() { http.NotFound(w, r) }
 	}
 }
 
@@ -340,6 +371,8 @@ func (c *Client) Guard(ctx context.Context, worker Worker, revoked bool) error {
 
 func (b *Broker) revokeLocked() {
 	b.revoked = true
+	b.control.nonce = ""
+	b.control.leaseUntil = time.Time{}
 	for id, msg := range b.operations {
 		switch msg.State {
 		case "prepared":
