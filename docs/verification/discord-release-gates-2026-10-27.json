@@ -1,0 +1,80 @@
+{
+  "date": "2026-10-27",
+  "tested_code_commit": "1c29e277f9acfeb774a1acf1c6fb4a8bb9728245",
+  "go_toolchain": "go1.26.10 darwin/arm64",
+  "environment": "SWARM_* cleared; native Go first on PATH; TMPDIR=/private/tmp",
+  "quality_gates": [
+    {
+      "source_commit": "1c29e277f9acfeb774a1acf1c6fb4a8bb9728245",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 9.006
+    },
+    {
+      "source_commit": "1c29e277f9acfeb774a1acf1c6fb4a8bb9728245",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 6.627
+    },
+    {
+      "source_commit": "1c29e277f9acfeb774a1acf1c6fb4a8bb9728245",
+      "command": [
+        "golangci-lint",
+        "run"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 45.041
+    }
+  ],
+  "full_race_gate": {
+    "source_commit": "1c29e277f9acfeb774a1acf1c6fb4a8bb9728245",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-race",
+      "-timeout=30m",
+      "./..."
+    ],
+    "go_toolchain": "go1.26.10 darwin/arm64",
+    "environment": "SWARM_* cleared; native Go first on PATH; TMPDIR=/private/tmp",
+    "exit_code": 0,
+    "elapsed_seconds": 822.75,
+    "tests_passed": 9701,
+    "tests_skipped": 67,
+    "packages_passed": 82,
+    "failures": []
+  },
+  "candidate_cli_smoke": {
+    "version": "swarm 0.24.0 (go1.26.10)",
+    "unicode_label": true,
+    "rename_preserves_installation": true,
+    "custom_state_default_routing": true,
+    "private_config": true,
+    "disconnect_disables_activation": true,
+    "no_daemon_or_native_sessions_started": true,
+    "scope": "private candidate CLI smoke; synthetic token; no service install or external Discord connection"
+  },
+  "native_platform_evidence": [
+    "discord-protocol/claude-native-lifecycle-2026-10-27.json",
+    "discord-protocol/agy-native-input.md",
+    "discord-protocol/hermes-native-shared-owner-2026-10-27.json",
+    "discord-protocol/hermes-native-shared-owner-linux-2026-10-27.json"
+  ],
+  "review_evidence": [
+    "discord-core-astra-review-2026-10-27.json",
+    "discord-native-astra-review-2026-10-27.json"
+  ],
+  "limits": [
+    "Opt-in hosted/native tests skipped by the ordinary Go suite have separate evidence where relevant; no claim of live Discord credentials or physical service reboot",
+    "Release CI, signed artifacts and installed-host checks follow this pre-release source gate"
+  ]
+}

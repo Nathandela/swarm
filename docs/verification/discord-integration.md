@@ -38,7 +38,7 @@ Astra reviews have independently challenged private-file custody, durable replay
 
 ## Open release gates
 
-Final independent component reviews and guarded native qualification are complete. Claude 2.1.296/310/311, agy 1.4.0/1.4.5/1.4.7 and pinned Hermes v0.22.5 have the linked Mac/Linux evidence. The frozen repository gate rerun, release-tag CI, signed publication, installation on both hosts and installed-artifact checks are not recorded as complete yet. No production sessions have been automatically restarted.
+Final independent component reviews and guarded native qualification are complete. Claude 2.1.296/310/311, agy 1.4.0/1.4.5/1.4.7 and pinned Hermes v0.22.5 have the linked Mac/Linux evidence. The [frozen source gates](discord-release-gates-2026-10-27.json) passed on `1c29e277`: full build, vet, lint and race suite, 9,701 passing tests/subtests in 82 packages, zero failures, 822.75 seconds. The 67 ordinary-suite skips do not substitute for the separately recorded native qualification. Release-tag CI, signed publication, installation on both hosts and installed-artifact checks follow. No production sessions have been automatically restarted.
 
 The data volume on `tf_nathan` was full during qualification. Only explicitly verified regenerable Go build-cache objects were reclaimed; no provider histories or project data were deleted. Native qualification uses owned RAM-backed scratch. The later bounded cleanup removed 4,851 standard owner-owned, singly linked cache objects older than 24 hours, reclaiming 921,128,960 allocated bytes. Available data-volume space was then 4,137,484,288 bytes; it is rechecked before installation.
 
