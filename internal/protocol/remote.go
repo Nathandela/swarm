@@ -295,6 +295,7 @@ func serveRemoteWithIDReady(d DaemonAPI, socketPath, endpointID string, ready <-
 	s.endpointID = endpointID
 	s.ln = ln
 	s.remoteTier = true
+	s.startWorkers()
 	s.wg.Add(1)
 	go s.acceptLoop(ready)
 	return s, nil

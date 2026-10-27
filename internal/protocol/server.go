@@ -412,6 +412,7 @@ func Serve(d DaemonAPI, socketPath string) (*Server, error) {
 	}
 	s := newServer(d)
 	s.ln = ln
+	s.startWorkers()
 	s.wg.Add(1)
 	go s.acceptLoop(nil)
 	return s, nil
@@ -430,11 +431,12 @@ func Serve(d DaemonAPI, socketPath string) (*Server, error) {
 func NewServer(d DaemonAPI, endpointID string) *Server {
 	s := newServer(d)
 	s.endpointID = endpointID
+	s.startWorkers()
 	return s
 }
 
-// newServer allocates a Server and starts its event fan-out. The listener (Serve)
-// or the per-connection feed (NewServer/ServeConn) is layered on by the caller.
+// newServer allocates without publishing workers. Each constructor configures
+// its listener, endpoint and tier before calling startWorkers exactly once.
 func newServer(d DaemonAPI) *Server {
 	s := &Server{
 		d:                d,
@@ -450,6 +452,10 @@ func newServer(d DaemonAPI) *Server {
 	if observer, ok := d.(DirectInputObserver); ok {
 		s.SetDirectInputObserver(observer.ObserveDirectInput)
 	}
+	return s
+}
+
+func (s *Server) startWorkers() {
 	s.wg.Add(1)
 	go s.fanoutLoop()
 	// ADR-017 T6-c: expire idle terminal control generations on the SERVER's clock. It is
@@ -460,12 +466,11 @@ func newServer(d DaemonAPI) *Server {
 	go s.terminalSweepLoop()
 	// When the backend exposes a journal, drain its single source and fan journal
 	// events out to journal subscribers (reusing the bounded-queue evict discipline).
-	if jb, ok := d.(JournalBackend); ok {
+	if jb, ok := s.d.(JournalBackend); ok {
 		source, cancel := jb.JournalSubscribe()
 		s.wg.Add(1)
 		go s.journalFanoutLoop(jb, source, cancel)
 	}
-	return s
 }
 
 // ServeConn serves one already-accepted client connection to completion. It is

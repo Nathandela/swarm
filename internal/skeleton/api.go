@@ -666,6 +666,14 @@ var (
 )
 
 func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
+	a := newCoreAPIUnstarted(core, fakeAgentBin, endpointID)
+	a.startWatch()
+	return a
+}
+
+// newCoreAPIUnstarted lets assembly wire every plain callback before publishing
+// the roster worker. Failure cleanup may close it without starting the worker.
+func newCoreAPIUnstarted(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	a := &coreAPI{
 		core:         core,
 		fakeAgentBin: fakeAgentBin,
@@ -684,9 +692,12 @@ func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 		}
 		return protocol.NewShimStream(conn, caps)
 	})
+	return a
+}
+
+func (a *coreAPI) startWatch() {
 	a.wg.Add(1)
 	go a.watch()
-	return a
 }
 
 func (a *coreAPI) List() []persist.Meta { return a.core.List() }

@@ -373,7 +373,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		locals = append(locals, m.ID)
 	}
 	d.restoreDirectInputState(locals)
-	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	d.api = newCoreAPIUnstarted(core, cfg.FakeAgentBin, epID)
 	// Every later assembly failure must release the core lock and its watchers.
 	var loginStore *logins.Store
 	assembled := false
@@ -738,6 +738,8 @@ func Serve(cfg Config) (*Daemon, error) {
 	// starts it; this closes the reconcile window if a backend became live first.
 	d.startContextGuardsForRunning()
 
+	// Publish all assembly callbacks before the roster worker can read them.
+	d.api.startWatch()
 	assembled = true // success: the defer'd cleanup-unless-success must NOT tear anything down
 	close(d.ready)   // assembly complete: the ConnHandler may now serve
 	return d, nil
