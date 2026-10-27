@@ -172,12 +172,6 @@ func Stop(ctx context.Context, b Binding) error {
 	}
 }
 
-// CloseViewer ends only the subscription created on this connection. It never
-// calls session.close, deletes history, or signals the persistent gateway.
-func CloseViewer(ctx context.Context, b Binding) error {
-	return closeViewer(ctx, b, "swarm_viewer_close")
-}
-
 func closeViewer(ctx context.Context, b Binding, endReason string) error {
 	c, err := connect(ctx, b)
 	if err != nil {

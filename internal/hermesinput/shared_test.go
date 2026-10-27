@@ -56,13 +56,18 @@ func TestPrepareUsesExistingOwnerAndDoesNotSubmitOrClone(t *testing.T) {
 }
 
 func TestSharedStopAndViewerCloseNeverStopGateway(t *testing.T) {
-	b, methods, mu := fixture(t, false)
+	detached := make(chan map[string]any, 1)
+	b, methods, mu := fixture(t, false, func(method string, result map[string]any) {
+		if method == "session.detach" {
+			detached <- result
+		}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := Stop(ctx, b); err != nil {
 		t.Fatal(err)
 	}
-	if err := CloseViewer(ctx, b); err != nil {
+	if err := ViewerEnded(ctx, t.TempDir(), Descriptor{Binding: b}); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
@@ -70,6 +75,11 @@ func TestSharedStopAndViewerCloseNeverStopGateway(t *testing.T) {
 	want := []string{"session.resume", "process.stop", "session.resume", "process.list", "subagent.list", "session.resume", "session.detach"}
 	if !reflect.DeepEqual(*methods, want) {
 		t.Fatalf("native stop/close calls=%v", *methods)
+	}
+	detach := <-detached
+	reason, _ := detach["fixture_end_reason"].(string)
+	if detach["session_id"] != b.SessionID || detach["subscription_id"] != "sub-1" || reason != "" {
+		t.Fatalf("unexpected viewer detach: %v", detach)
 	}
 }
 
