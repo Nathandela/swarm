@@ -264,6 +264,64 @@
       ],
       "fixture_semantics": "An empty installed snapshot is authoritative and sync deletes stale cache. The existing empty mock is appropriate only for a fresh synthetic profile; no populated-user-cache preservation is claimed.",
       "qualification": "Fresh managed TUI adoption remains unqualified; this failed attempt supplies no hosted-tool success, real-account or recovery proof."
+    },
+    "r6_attempt": {
+      "prepared_receipt_sha256": "fb14bbde8849b4fa4af5eb91655484b3f1e4f007051804690d5f4678fdcd777c",
+      "outer_receipt_sha256": "2fb5ea5a5b280d0d6a070134a14f476fe4f08a7df5e51ebbb1b94ef909739981",
+      "inner_receipt_sha256": "b9af1f56111c2f570e0328796fa4a1e0832c7283e6c7b078740beb4d6216ddc2",
+      "result": "FAIL_TIMEOUT",
+      "prep": "Single-image publication and all capacity gates passed.",
+      "elapsed_seconds": {
+        "inner": 16.581,
+        "outer": 20.12444
+      },
+      "failure_cause": "UNKNOWN; timeout diagnosis pending.",
+      "failure_stage": "First six-second input/tool-ready interval, after composer and execution-feed bootstrap checks. The retained receipt does not distinguish input-helper completion from tool-ready waiting.",
+      "native_input_acceptance_proved": false,
+      "unexpected_provider_routes": 0,
+      "counts": {
+        "native_frames": 6,
+        "prewarms": 1,
+        "main_inferences": 0,
+        "mcp_messages": 3,
+        "mcp_calls": 0,
+        "pty_bytes": 0,
+        "route_requests": 57
+      },
+      "public_actions": [
+        "launch",
+        "screen",
+        "input",
+        "stop"
+      ],
+      "pins": {
+        "frozen_root_manifest_sha256": "26b7e62c0b32fe4cc0b6b4f963bfa6b7426b13bda23d7065775bea09848453ad",
+        "packet_manifest_sha256": "751f3498037345e28ac40adf2742a6c8506843a02e4695ac3f2242b7195e50dc",
+        "packet_files": 133,
+        "product_sha256": "31e6c3d9eb986aa625e7e3b65072c7d0e3bd316cdb6d35f284613ce89e420674",
+        "helper_sha256": "1d219f679732c17032da986d7c11cf96933186c54c1fb03748fb1eee5abcdf2c",
+        "native_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215"
+      },
+      "cleanup": {
+        "unit_cgroup_empty_and_gone": true,
+        "observed_identities_ended": 35,
+        "sample_count": 32,
+        "sample_truncated": true,
+        "native_endpoint_absent": true,
+        "pins_unchanged": true,
+        "full_ownership_proved": false,
+        "fixture_listener_proof": false
+      },
+      "controls": {
+        "root_controls_receipt_sha256": "a476710200fe632b78ce26a3429665e657acac2f7601c1d6c946abf8a003b56a",
+        "normal_controls_passed": 5,
+        "old_query_control": "MEANINGFUL_EXPECTED_ASSERTION_RED"
+      },
+      "limits": [
+        "No retry or deadline-cap increase claimed.",
+        "No native qualification, real-account adoption, live-service, main, release or recovery qualification."
+      ],
+      "query_observation": "Third installed-query variant accepted; no unexpected route rejection recorded."
     }
   }
 }

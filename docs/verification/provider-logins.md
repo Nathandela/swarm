@@ -466,6 +466,11 @@ exact allowlist excludes. The precise native caller branch remains unattested. T
 observed identities ended; the sample and listener proofs remain incomplete. Earlier
 FAILs remain intact; this adds no hosted success or runtime qualification.
 
+The R6 attempt passed guarded single-image PREP and capacity gates, then timed out
+with no unexpected provider route. All 35 observed identities ended and the native
+endpoint disappeared, but ownership and listener proofs remain incomplete. Diagnosis
+is pending; no retry or deadline change, native qualification or recovery claim follows.
+
 The [post-evidence fixture retirement](provider-logins/codex-fixture-retirement-2026-10-27.json)
 removed the two public Codex executable copies after collection, under their
 qualified execution guards. A separate cache-only follow-up removed one sealed
