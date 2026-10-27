@@ -432,14 +432,23 @@ were observed before a CONNECT rejection. A masked diagnostic identified the
 raw GitHub authority; source review found a default public announcement fetch.
 The historical sender and path remain unknown. Real-account and continuation gates remain open.
 
-The [current integrated constructor attempt](provider-logins/codex-fresh-constructor-2026-10-27.json)
-passed its separate synthetic seed prerequisite, then failed when the strict fake
-provider rejected a default analytics POST before any main inference or MCP call.
-The outer finalizer masked that error with missing ownership metadata; the retained
-inner receipt identifies it. Later rejected query/GET targets remain unknown.
-The full case, loaded account handover and installed 0.164.0 compatibility remain
-unqualified. Existing Swarm services and discussions were unchanged; complete
-fixture-listener cleanup is not proved by the outer receipt.
+The [R1 integrated constructor attempt](provider-logins/codex-fresh-constructor-2026-10-27.json)
+remains FAIL. A later R2 seed attempt also failed before go/marker completion with
+an unknown executable identity; its exact cause remains unknown. An R3 synthetic
+seed diagnostic passed 29 markers, but does not explain or repair that failure.
+
+The single R2 full attempt remains FAIL. Its finalizer retained the inner failure:
+a rejected 19-byte POST hash maps to `/backend-api/ps/mcp`. Pinned source shows a
+default optional hosted Apps MCP route, but the request body was not observed.
+There were no main inferences, PTY bytes or local MCP calls. Full ownership and
+fixture-listener cleanup remain unproved; account adoption and release qualification
+remain open. Existing Swarm services and live discussions were unchanged.
+
+The R3 full attempt also failed before any main task, on the source-supported
+`installed?scope=GLOBAL` startup query. Two hosted MCP initialization requests
+received explicit unavailable responses; hosted tools were not qualified. The
+unit ended, but its socket files remain without a listener. The next exact-query
+fixture amendment has passed source review and local checks only.
 
 The [post-evidence fixture retirement](provider-logins/codex-fixture-retirement-2026-10-27.json)
 removed the two public Codex executable copies after collection, under their

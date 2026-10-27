@@ -43,5 +43,128 @@
     "The failed attempt is unchanged; neither the seed result nor the observed constructor progress qualifies the complete case.",
     "No actual account adoption, loaded-turn handover, continuation, installed 0.164.0 compatibility or release qualification follows.",
     "Main, installed Swarm services and live discussions were unchanged. Unknown provider routes remain failures."
-  ]
+  ],
+  "followups": {
+    "r2_seed_attempt": {
+      "receipt": "/private/tmp/swarm-codex-seed-run-zm63qjud/receipt.json",
+      "receipt_sha256": "1c078d3671ca67e97997e388335bc61d433a6f79691bb63ab0e8cd39d24bbcb7",
+      "result": "FAIL",
+      "first_failure": "Unknown executable identity before go/marker completion.",
+      "marker_lines": 0,
+      "stdout_bytes": 0,
+      "unit_empty_and_gone": true,
+      "cause": "UNKNOWN; later diagnostic PASS does not explain or repair this failure."
+    },
+    "r3_diagnostic_seed": {
+      "receipt": "/private/tmp/swarm-codex-seed-run-zqgu8zj9/receipt.json",
+      "receipt_sha256": "0382eb2ebbc5666544ae148f9bd8db6b48a9190e7de9a17c7a723cb18a718841",
+      "result": "PASS_DIAGNOSTIC_ONLY",
+      "packet_manifest_sha256": "94576cab986e2f58c3433ec537919ef8390cb53795af67a9685c3fde0703530f",
+      "helper_sha256": "1d219f679732c17032da986d7c11cf96933186c54c1fb03748fb1eee5abcdf2c",
+      "synthetic_registry": "Two ready synthetic grants; A selected at epoch 1; no switch.",
+      "markers": {
+        "lines": 29,
+        "stderr_bytes": 878,
+        "stdout_bytes": 302
+      },
+      "unit_empty_and_gone": true,
+      "does_not_explain_prior_failure": true
+    },
+    "r2_full_attempt": {
+      "attempts": 1,
+      "outer_receipt": "/private/tmp/swarm-codex-outer-vhd3tcpl/run.json",
+      "outer_receipt_sha256": "fdf99fd684b4b0ed2ae7e510c1410080738f2b1749509eba35eeeb469b55f70a",
+      "inner_receipt": "/private/tmp/swarm-codex-outer-vhd3tcpl/tmp/ctui-hwiugq07/receipt.inner.json",
+      "inner_receipt_sha256": "68b95caf474d3815d046ebfe1a1f77e1c7c07f9e1f007ea109b770ee75ac89ff",
+      "result": "FAIL",
+      "first_rejected_post": {
+        "path": "/backend-api/ps/mcp",
+        "path_bytes": 19,
+        "path_sha256": "5da9311360a43fe5fcbc76b40008d1f782c07adb3b236d560a694cd717c34f72",
+        "source_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+        "source_finding": "Pinned source shows a default optional hosted Apps MCP route; the actual request body, method parameters and auth fields were not witnessed."
+      },
+      "counts": {
+        "native_frames": 3,
+        "main_inferences": 0,
+        "title_inferences": 0,
+        "prewarms": 0,
+        "mcp_messages": 0,
+        "mcp_calls": 0,
+        "pty_bytes": 0
+      },
+      "pins": {
+        "product_sha256": "31e6c3d9eb986aa625e7e3b65072c7d0e3bd316cdb6d35f284613ce89e420674",
+        "helper_sha256": "1d219f679732c17032da986d7c11cf96933186c54c1fb03748fb1eee5abcdf2c",
+        "source_commit": "492abbf947c32a57a61ad67e6eae1b9caa6d8e9a"
+      },
+      "retirement": {
+        "observed_identities": 38,
+        "image_gaps": 1,
+        "sample_truncated": true,
+        "unit_cgroup_empty_and_gone": true,
+        "native_endpoint_absent": true,
+        "pins_unchanged": true,
+        "full_ownership_proved": false,
+        "fixture_listener_proved_closed": false
+      },
+      "reporting": "The finalizer retained the inner failure; ownership proof failed separately.",
+      "qualification": "No live/account adoption, main or release qualification."
+    },
+    "r3_full_attempt": {
+      "result": "FAIL",
+      "outer_receipt": "/private/tmp/swarm-codex-outer-yffev2sp/run.json",
+      "outer_receipt_sha256": "45e6b1e0cab0b698f87dcb99e72e0e6783ca0430422a67b8a88571e2d8a950a4",
+      "inner_receipt": "/private/tmp/swarm-codex-outer-yffev2sp/tmp/ctui-qbs83cti/receipt.inner.json",
+      "inner_receipt_sha256": "cf2a0d4b8410248e5baa1d090d524a3d0125058fc0fb911a8917585006ee3318",
+      "elapsed_seconds": 11.208676201989874,
+      "first_failure": "Unexpected startup query before owner task or main inference.",
+      "first_rejection_witness": {
+        "method": "rejected-query",
+        "path": {
+          "sha256": "ba4b152505005de546513fdb50db122fd88ad78871d23746c2fa834e4f9c9a51",
+          "bytes": 33
+        },
+        "pairs": [
+          [
+            {
+              "sha256": "5f161c9149882e0e10124bc5dd5c11f0fbe8ec452edd52bcec76b01e9252cb33",
+              "bytes": 5
+            },
+            {
+              "sha256": "e7440dd384f12056f4865f279e2c40932ae3c7aceca1a798a0145ebd499b9072",
+              "bytes": 6
+            },
+            true
+          ]
+        ],
+        "pairs_total": 1,
+        "truncated": false
+      },
+      "source_matched_target": "/backend-api/ps/plugins/installed?scope=GLOBAL",
+      "source_scope": "Pinned source emits this exact query variant; the actual caller branch was not identified.",
+      "counts": {
+        "native_frames": 4,
+        "main_inferences": 0,
+        "prewarms": 1,
+        "mcp_messages": 3,
+        "mcp_calls": 0,
+        "pty_bytes": 0
+      },
+      "hosted_mcp_unavailable_requests": 2,
+      "hosted_mcp_scope": "Two initialization requests received explicit 404-unavailable responses; this proves neither successful hosted tools nor universal absence of retries.",
+      "retirement": {
+        "unit_cgroup_empty_and_gone": true,
+        "observed_identities_ended": true,
+        "pins_unchanged": true,
+        "native_listener_absent": true,
+        "logical_alias_present": true,
+        "physical_socket_file_present": true,
+        "full_ownership_proved": false,
+        "fixture_listener_proved_closed": false
+      },
+      "secondary_credit_error": "Occurred after the permanent abort latch; no independent header/schema cause is established.",
+      "next_source_amendment": "The exact query-only R4 fixture is source-reviewed and locally checked, not prepared or executed."
+    }
+  }
 }
