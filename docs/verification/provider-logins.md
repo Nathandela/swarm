@@ -419,6 +419,15 @@ were observed before a CONNECT rejection. A masked diagnostic identified the
 raw GitHub authority; source review found a default public announcement fetch.
 The historical sender and path remain unknown. Real-account and continuation gates remain open.
 
+The [current integrated constructor attempt](provider-logins/codex-fresh-constructor-2026-10-27.json)
+passed its separate synthetic seed prerequisite, then failed when the strict fake
+provider rejected a default analytics POST before any main inference or MCP call.
+The outer finalizer masked that error with missing ownership metadata; the retained
+inner receipt identifies it. Later rejected query/GET targets remain unknown.
+The full case, loaded account handover and installed 0.164.0 compatibility remain
+unqualified. Existing Swarm services and discussions were unchanged; complete
+fixture-listener cleanup is not proved by the outer receipt.
+
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.
 

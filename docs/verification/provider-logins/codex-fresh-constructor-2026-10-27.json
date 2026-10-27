@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-27",
+  "scope": "One private fresh managed Codex constructor experiment on the integrated feature branch; synthetic accounts and provider endpoints only",
+  "result": "FAIL",
+  "product_commit": "03b4a32ea9d661a953e2bed74028334801a9bdf7",
+  "product_sha256": "087a11e4f3680041e5233608c67cf688553feff2229485affbeef45821bc0674",
+  "retained_native_version": "0.163.0",
+  "retained_native_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+  "packet_manifest_sha256": "21b509de3caf4f92f37a4cb449176364775ddba820bf0020c036773a8b68a5be",
+  "seed_prerequisite": {
+    "result": "PASS",
+    "receipt": "/private/tmp/swarm-codex-seed-run-3ipftcqe/receipt.json",
+    "receipt_sha256": "1ccd32924d046b09c15626c002ac8b1b28c425817044c2b397677007d47d659c",
+    "marker_lines": 29,
+    "marker_bytes": 878,
+    "scope": "Two ready synthetic saved grants, selected A, no switch. No native client, provider authentication, model, MCP or PTY execution."
+  },
+  "constructor_attempt": {
+    "outer_receipt": "/private/tmp/swarm-codex-outer-trs_3l7d/run.json",
+    "outer_receipt_sha256": "9a98e1e438df731e6fdc694602c93f0cf0d3aea322d1b91c79216c1b745a68b6",
+    "inner_receipt_sha256": "f021ccafe7f1c01d71049aa28198f1afbd191158e80278f0f74b402cd99cbb5b",
+    "inner_elapsed_seconds": 3.275616661994718,
+    "first_failure": "The strict fake provider rejected a POST before any main inference or MCP call.",
+    "rejected_path_bytes": 42,
+    "rejected_path_sha256": "5b1f13207946f6dd6c0458c1160743e04ded1ff14095ac7cd3749a36c8e96956",
+    "source_matched_path": "/backend-api/codex/analytics-events/events",
+    "source_boundary": "Pinned upstream source identifies a default background analytics route. The exact event body and sending actor were not recorded. This is not model or account-adoption evidence.",
+    "secondary_failures": "Later rejected query and GET targets were not retained; their route and causal role remain unknown. HTTP/parser/TLS failures are retained without a sole-cause claim.",
+    "reporting_defect": "The outer finalizer indexed ownership that the inner case records only after both task finals. Its KeyError masked the original inner failure; missing ownership does not prove absence of a TUI.",
+    "main_inferences": 0,
+    "mcp_calls": 0,
+    "pty_task_bytes": 0
+  },
+  "retirement": {
+    "unit_empty_and_gone": true,
+    "observed_process_identities_ended": 31,
+    "native_endpoint_absent": true,
+    "pins_unchanged": true,
+    "outer_complete_fixture_listener_proof": false,
+    "scratch_retired": false
+  },
+  "limits": [
+    "The failed attempt is unchanged; neither the seed result nor the observed constructor progress qualifies the complete case.",
+    "No actual account adoption, loaded-turn handover, continuation, installed 0.164.0 compatibility or release qualification follows.",
+    "Main, installed Swarm services and live discussions were unchanged. Unknown provider routes remain failures."
+  ]
+}
