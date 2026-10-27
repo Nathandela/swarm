@@ -116,14 +116,15 @@ func Stop(ctx context.Context, b Binding) error {
 		return err
 	}
 	id := 2
+	var stopErr error
 	for _, pending := range s.Pending {
 		if pending.Status == "unknown" {
-			return errUncertain
+			stopErr = errors.Join(stopErr, errUncertain)
 		}
 		if pending.Status == "queued" {
 			var result Receipt
 			if err = rpc(ctx, c, id, "prompt.cancel", map[string]any{"session_id": b.SessionID, "admission_id": pending.AdmissionID}, &result); err != nil {
-				return err
+				stopErr = errors.Join(stopErr, err)
 			}
 			id++
 		}
@@ -131,7 +132,7 @@ func Stop(ctx context.Context, b Binding) error {
 	if s.ExecutionState == "running" || s.ExecutionState == "waiting" {
 		var result json.RawMessage
 		if err = rpc(ctx, c, id, "session.interrupt", map[string]any{"session_id": b.SessionID, "execution_generation": s.ExecutionGeneration}, &result); err != nil {
-			return err
+			stopErr = errors.Join(stopErr, err)
 		}
 		id++
 	}
@@ -140,7 +141,10 @@ func Stop(ctx context.Context, b Binding) error {
 		Delegations int `json:"delegations"`
 	}
 	if err = rpc(ctx, c, id, "process.stop", map[string]string{"session_id": b.SessionID}, &stopped); err != nil {
-		return err
+		stopErr = errors.Join(stopErr, err)
+	}
+	if stopErr != nil {
+		return stopErr
 	}
 	id++
 	for {
@@ -171,6 +175,10 @@ func Stop(ctx context.Context, b Binding) error {
 // CloseViewer ends only the subscription created on this connection. It never
 // calls session.close, deletes history, or signals the persistent gateway.
 func CloseViewer(ctx context.Context, b Binding) error {
+	return closeViewer(ctx, b, "swarm_viewer_close")
+}
+
+func closeViewer(ctx context.Context, b Binding, endReason string) error {
 	c, err := connect(ctx, b)
 	if err != nil {
 		return err
@@ -185,7 +193,11 @@ func CloseViewer(ctx context.Context, b Binding) error {
 		SubscriptionID string `json:"subscription_id"`
 		Detached       bool   `json:"detached"`
 	}
-	if err = rpc(ctx, c, 2, "session.detach", map[string]string{"session_id": b.SessionID, "subscription_id": s.SubscriptionID, "end_reason": "swarm_viewer_close"}, &reply); err != nil {
+	params := map[string]string{"session_id": b.SessionID, "subscription_id": s.SubscriptionID}
+	if endReason != "" {
+		params["end_reason"] = endReason
+	}
+	if err = rpc(ctx, c, 2, "session.detach", params, &reply); err != nil {
 		return err
 	}
 	if !reply.Detached || reply.SessionID != b.SessionID || reply.SubscriptionID != s.SubscriptionID {

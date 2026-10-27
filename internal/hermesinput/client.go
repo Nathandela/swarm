@@ -37,6 +37,10 @@ type Binding struct {
 }
 
 type Receipt struct {
+	Ref struct {
+		ProfileID string `json:"profile_id"`
+		SessionID string `json:"session_id"`
+	} `json:"ref"`
 	InputID             string `json:"input_id,omitempty"`
 	AdmissionID         string `json:"admission_id"`
 	Status              string `json:"status"`
@@ -252,7 +256,7 @@ func rpc(ctx context.Context, c *websocket.Conn, id int, method string, params a
 // Submit never writes terminal bytes, answers a native request, or retries an uncertain send.
 func Submit(ctx context.Context, b Binding, operationID, text string) (Receipt, error) {
 	var receipt Receipt
-	if b.SessionID == "" || b.InstanceID == "" || operationID == "" || text == "" {
+	if b.SessionID == "" || b.InstanceID == "" || b.AuthorityEpoch <= 0 || operationID == "" || text == "" {
 		return receipt, errors.New("hermes submission requires exact owner, session, operation and text")
 	}
 	c, err := connect(ctx, b)
@@ -260,14 +264,8 @@ func Submit(ctx context.Context, b Binding, operationID, text string) (Receipt, 
 		return receipt, err
 	}
 	defer func() { _ = c.CloseNow() }()
-	var resumed struct {
-		SessionID string `json:"session_id"`
-	}
-	if err = rpc(ctx, c, 1, "session.resume", map[string]string{"session_id": b.SessionID}, &resumed); err != nil {
+	if _, err = resume(ctx, c, b, 1); err != nil {
 		return receipt, err
-	}
-	if resumed.SessionID != b.SessionID {
-		return receipt, errors.New("hermes resumed another native session")
 	}
 	err = rpc(ctx, c, 2, "prompt.submit", map[string]string{"session_id": b.SessionID, "input_id": operationID, "text": text}, &receipt)
 	if err != nil {
@@ -277,7 +275,7 @@ func Submit(ctx context.Context, b Binding, operationID, text string) (Receipt, 
 		}
 		return receipt, fmt.Errorf("%w: %v", errUncertain, err)
 	}
-	if receipt.AdmissionID == "" || receipt.ExecutionGeneration < 0 || receipt.AuthorityEpoch <= 0 || (receipt.Status != "queued" && receipt.Status != "started" && receipt.Status != "terminal") {
+	if receipt.Ref.ProfileID != b.Home || receipt.Ref.SessionID != b.SessionID || receipt.AdmissionID == "" || receipt.ExecutionGeneration < 0 || receipt.AuthorityEpoch != b.AuthorityEpoch || (receipt.Status != "queued" && receipt.Status != "started" && receipt.Status != "terminal") {
 		return Receipt{}, errUncertain
 	}
 	return receipt, nil

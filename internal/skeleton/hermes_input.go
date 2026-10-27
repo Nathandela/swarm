@@ -83,8 +83,12 @@ func (d *Daemon) hermesNativeReceipt(local, operationID string, intent composerO
 	binding := intent.HermesInput
 	result.NativeSessionID = binding.Descriptor.Binding.SessionID
 	result.NativeGeneration = binding.Descriptor.Generation
+	if rec.Phase == idempotency.PhasePrepared || rec.Phase == idempotency.PhaseFailed {
+		return result
+	}
+	result.State = "uncertain"
 	var retained hermesInputEvidence
-	valid := json.Unmarshal(rec.Evidence, &retained) == nil && retained.Hash == binding.Hash && retained.Descriptor == binding.Descriptor && retained.Receipt.AdmissionID != "" && retained.Receipt.AuthorityEpoch == binding.Descriptor.Binding.AuthorityEpoch
+	valid := json.Unmarshal(rec.Evidence, &retained) == nil && retained.Hash == binding.Hash && retained.Descriptor == binding.Descriptor && retained.Receipt.AdmissionID != "" && retained.Receipt.AuthorityEpoch == binding.Descriptor.Binding.AuthorityEpoch && retained.Receipt.Ref.ProfileID == binding.Descriptor.Binding.Home && retained.Receipt.Ref.SessionID == binding.Descriptor.Binding.SessionID
 	if !valid {
 		if desc, err := d.core.SessionHermesInput(local); err == nil && desc == binding.Descriptor {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -92,7 +96,7 @@ func (d *Daemon) hermesNativeReceipt(local, operationID string, intent composerO
 			cancel()
 			if err == nil {
 				for _, pending := range activity.Snapshot.Pending {
-					if pending.InputID == operationID && pending.AdmissionID != "" && pending.AuthorityEpoch == desc.Binding.AuthorityEpoch {
+					if pending.InputID == operationID && pending.AdmissionID != "" && pending.AuthorityEpoch == desc.Binding.AuthorityEpoch && pending.Ref.ProfileID == desc.Binding.Home && pending.Ref.SessionID == desc.Binding.SessionID {
 						retained = hermesInputEvidence{Hash: binding.Hash, Descriptor: desc, Receipt: pending}
 						raw, _ := json.Marshal(retained)
 						if d.core.ObserveSemanticReceipt(operationID, raw) == nil {

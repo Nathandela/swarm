@@ -19,11 +19,53 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/hermes"
+	"github.com/Nathandela/swarm/internal/hermesinput"
+	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/coder/websocket"
 )
+
+func TestHermesRetainedWrongScopeCannotRemainSubmitted(t *testing.T) {
+	sk := assemble(t)
+	desc := hermesinput.Descriptor{WorkerID: "missing", Generation: "generation", Binding: hermesinput.Binding{Home: "/fixture", SessionID: "local-" + strings.Repeat("a", 64), AuthorityEpoch: 1}}
+	intent := composerOriginIntent{HermesInput: &hermesInputIntent{Hash: "hash", Descriptor: desc}}
+	for _, field := range []string{"profile", "session", "epoch"} {
+		t.Run(field, func(t *testing.T) {
+			receipt := hermesinput.Receipt{AdmissionID: "admission", Status: "queued", AuthorityEpoch: 1}
+			receipt.Ref.ProfileID = desc.Binding.Home
+			receipt.Ref.SessionID = desc.Binding.SessionID
+			switch field {
+			case "profile":
+				receipt.Ref.ProfileID = "/other"
+			case "session":
+				receipt.Ref.SessionID = "local-" + strings.Repeat("b", 64)
+			case "epoch":
+				receipt.AuthorityEpoch = 2
+			}
+			raw, _ := json.Marshal(hermesInputEvidence{Hash: "hash", Descriptor: desc, Receipt: receipt})
+			got := sk.hermesNativeReceipt("missing", "operation", intent, idempotency.Record{Phase: idempotency.PhaseCompleted, Evidence: raw}, protocol.SemanticMessageReceipt{State: "submitted"})
+			if got.State != "uncertain" {
+				t.Fatalf("invalid completed receipt remained successful: %+v", got)
+			}
+		})
+	}
+}
+
+func TestHermesNoEffectReceiptPreservesRejectedAndPreparedCustody(t *testing.T) {
+	sk := assemble(t)
+	intent := composerOriginIntent{HermesInput: &hermesInputIntent{Descriptor: hermesinput.Descriptor{Binding: hermesinput.Binding{SessionID: "local-" + strings.Repeat("a", 64)}}}}
+	for _, tc := range []struct {
+		phase idempotency.Phase
+		state string
+	}{{idempotency.PhaseFailed, "rejected"}, {idempotency.PhasePrepared, "accepted"}} {
+		got := sk.hermesNativeReceipt("missing", "operation", intent, idempotency.Record{Phase: tc.phase}, protocol.SemanticMessageReceipt{State: tc.state})
+		if got.State != tc.state {
+			t.Fatalf("no-effect phase %s became %s", tc.phase, got.State)
+		}
+	}
+}
 
 type hermesWireFixture struct {
 	mu      sync.Mutex
@@ -31,6 +73,7 @@ type hermesWireFixture struct {
 	methods map[string][]string
 	creates int
 	cwds    map[string]string
+	refuse  bool
 }
 
 func fakeHermesProgram(t *testing.T) (string, []string, *hermesWireFixture) {
@@ -82,7 +125,7 @@ func fakeHermesProgram(t *testing.T) (string, []string, *hermesWireFixture) {
 			f.methods[sid] = append(f.methods[sid], req.Method)
 			pending := []any{}
 			for id := range f.turns[sid] {
-				pending = append(pending, map[string]any{"admission_id": "admission-" + id, "input_id": id, "status": "queued", "authority_epoch": 1})
+				pending = append(pending, map[string]any{"admission_id": "admission-" + id, "input_id": id, "status": "queued", "authority_epoch": 1, "ref": map[string]string{"profile_id": home, "session_id": sid}})
 			}
 			result := map[string]any{"session_id": sid, "subscription_id": "sub-" + sid, "authority_epoch": 1, "execution_generation": 1, "execution_state": "idle", "pending": pending, "prompts": []any{}, "info": map[string]string{"cwd": f.cwds[sid]}}
 			switch req.Method {
@@ -94,8 +137,10 @@ func fakeHermesProgram(t *testing.T) (string, []string, *hermesWireFixture) {
 				result = map[string]any{"subagents": []any{}, "delegations": []any{}}
 			case "prompt.submit":
 				id := fmt.Sprint(req.Params["input_id"])
-				f.turns[sid][id] = fmt.Sprint(req.Params["text"])
-				result = map[string]any{"admission_id": "admission-" + id, "status": "queued", "authority_epoch": 1, "execution_generation": nil}
+				if !f.refuse {
+					f.turns[sid][id] = fmt.Sprint(req.Params["text"])
+				}
+				result = map[string]any{"admission_id": "admission-" + id, "status": "queued", "authority_epoch": 1, "execution_generation": nil, "ref": map[string]string{"profile_id": home, "session_id": sid}}
 			case "prompt.cancel":
 				delete(f.turns[sid], strings.TrimPrefix(fmt.Sprint(req.Params["admission_id"]), "admission-"))
 				result = map[string]any{"status": "terminal"}
@@ -104,8 +149,13 @@ func fakeHermesProgram(t *testing.T) (string, []string, *hermesWireFixture) {
 			case "process.stop":
 				result = map[string]any{"killed": 0, "delegations": 0}
 			}
+			reply := map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result}
+			if req.Method == "prompt.submit" && f.refuse {
+				delete(reply, "result")
+				reply["error"] = map[string]any{"code": -32001, "message": "native refuses this admission"}
+			}
 			f.mu.Unlock()
-			raw, _ = json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+			raw, _ = json.Marshal(reply)
 			if c.Write(r.Context(), websocket.MessageText, raw) != nil {
 				return
 			}
@@ -247,5 +297,42 @@ func TestHermesSharedOwnerSemanticSendRestartAndStopIsolation(t *testing.T) {
 		if method == "process.stop" || method == "session.interrupt" {
 			t.Fatalf("native stop escaped to sibling: %v", native.methods[b.ConversationID])
 		}
+	}
+}
+
+func TestHermesNativeRefusalRemainsRejectedThroughPublicOperation(t *testing.T) {
+	_, env, native := fakeHermesProgram(t)
+	sk := assemble(t, func(c *Config) { c.NativeInputEnabled = func() bool { return true } })
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return hermes.New(), true })
+	client := dialClient(t, sk, protocol.CapSemanticSend, protocol.CapMessageOrigin)
+	id, _, err := client.Launch(protocol.LaunchReq{Agent: "hermes", Cwd: t.TempDir(), Env: env, Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := strings.TrimPrefix(id, sk.api.endpointID+"/")
+	m, _ := sk.core.Get(local)
+	t.Cleanup(func() { _ = syscall.Kill(m.ShimPID, syscall.SIGTERM) })
+	instance, ok := sk.sessionInstance(local)
+	if !ok {
+		t.Fatal("missing instance")
+	}
+	native.mu.Lock()
+	native.refuse = true
+	native.mu.Unlock()
+	op, err := protocol.NewSemanticOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.SemanticSend(op, protocol.ComposerSendReq{Session: id, SessionInstance: instance, Text: "refused message"}); err == nil {
+		t.Fatal("native refusal disappeared")
+	}
+	receipt, err := client.SemanticOperation(id, op)
+	if err != nil || receipt.State != "rejected" {
+		t.Fatalf("definite native refusal became uncertain: %+v %v", receipt, err)
+	}
+	native.mu.Lock()
+	defer native.mu.Unlock()
+	if len(native.turns[m.ConversationID]) != 0 {
+		t.Fatal("refused admission created a native turn")
 	}
 }
