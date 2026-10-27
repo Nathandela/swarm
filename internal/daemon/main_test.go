@@ -145,12 +145,28 @@ func runEnvDumpAgent() {
 		buf = append(buf, kv...)
 		buf = append(buf, '\n')
 	}
-	if err := os.WriteFile(os.Args[2], buf, 0o600); err != nil {
+	if err := publishEnvDump(os.Args[2], buf); err != nil {
 		fmt.Fprintln(os.Stderr, "envdump agent: write envfile:", err)
 		os.Exit(2)
 	}
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	os.Exit(0)
+}
+
+func publishEnvDump(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".envdump-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+	if _, err = f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // runCatchTermAgent records any TERM/INT it receives (proving whether a signal
