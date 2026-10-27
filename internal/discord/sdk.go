@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/version"
 	"github.com/bwmarrin/discordgo"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -92,6 +93,7 @@ func (c *DiscordClient) REST(ctx context.Context, method, path string, payload, 
 		}
 		req.Header.Set("Authorization", "Bot "+c.token)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", discordUserAgent())
 		resp, err := c.http.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -271,7 +273,7 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 	q.Set("encoding", "json")
 	u.RawQuery = q.Encode()
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	conn, _, err := websocket.Dial(dialCtx, u.String(), nil)
+	conn, _, err := websocket.Dial(dialCtx, u.String(), &websocket.DialOptions{HTTPHeader: http.Header{"User-Agent": []string{discordUserAgent()}}})
 	cancel()
 	if err != nil {
 		return err
@@ -424,6 +426,10 @@ func (c *DiscordClient) gatewayConnection(ctx context.Context, base string, sess
 			}
 		}
 	}
+}
+
+func discordUserAgent() string {
+	return "DiscordBot (https://github.com/Nathandela/swarm, " + version.Version + ")"
 }
 
 func messageNonce(raw []byte) string {

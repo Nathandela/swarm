@@ -35,6 +35,8 @@ swarm discord disconnect
 
 Rename preserves the installation identity and ledger. Discord's public bot nickname/name is managed through Discord. Disconnect stops the connector and disables new native ingress activation without ending coding agents. Reconnect uses the same private config and token. Bot token replacement uses `connect --token-file /new/private/file`; restart the connector to load changes.
 
+Saved configuration changes take effect when the connector restarts; `connect … --install` replaces and restarts its installed service. Use `disconnect` when the active connection must stop immediately. Saving a new allowlist by itself does not change the running process.
+
 ## Talk and invite agents
 
 - `/swarm agents` shows the current local discussions. `/swarm ask` and `/swarm join` offer agent autocomplete with stable IDs beside names.
@@ -87,6 +89,8 @@ Busy-agent behavior belongs to the native provider. A `submitted` receipt proves
 The ledger bounds active request/publication counts and logical bytes. It refuses new effects when full; unresolved guards are retained. This is not a physical disk quota. `status` reports current connection state; ordinary local Swarm operation continues during Discord outages.
 
 This feature deliberately shares unrestricted personal agents with admitted colleagues. External-message framing and owner endorsement do not create a filesystem sandbox or guarantee confidentiality. Choose the Discord channel/user scope accordingly.
+
+Modern Hermes keeps uncertain native work and its workspace after viewer loss until joined completion can be proven. Swarm does not bundle or patch Hermes's Node runtime: the pinned v0.22.5 qualification fixture has an upstream [Undici content-decoding advisory](https://github.com/advisories/GHSA-xjj6-f33q-929c). The isolated test used only synthetic loopback services; that qualification is not a blanket security audit of the provider's dependencies.
 
 ## Verification status
 

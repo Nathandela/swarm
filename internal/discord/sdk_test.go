@@ -31,6 +31,9 @@ func TestMessageNoncePreservesExactStringOrInteger(t *testing.T) {
 func TestDiscordREST(t *testing.T) {
 	count := 0
 	base := mockEndpoints(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.UserAgent(), "DiscordBot (https://github.com/Nathandela/swarm, ") {
+			t.Errorf("invalid Discord API user agent %q", r.UserAgent())
+		}
 		if r.Header.Get("Authorization") != "Bot test-secret" {
 			t.Errorf("auth %q", r.Header.Get("Authorization"))
 		}
