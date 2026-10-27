@@ -1,10 +1,10 @@
 {
-  "date": "2026-10-26",
+  "date": "2026-10-27",
   "dependency_experiment": {
-    "bubbletea": "v2.0.2 \u2192 v2.0.9",
-    "colorprofile": "v0.4.2 \u2192 v0.4.3",
+    "bubbletea": "v2.0.2 → v2.0.9",
+    "colorprofile": "v0.4.2 → v0.4.3",
     "status": "reverted; not a production fix",
-    "ultraviolet": "0b88 \u2192 f5a",
+    "ultraviolet": "0b88 → f5a",
     "disposition_receipt": "/private/tmp/swarm-h6sc24-gates-20261026/terminal-restore-experiment-disposition.json"
   },
   "experiments": [
@@ -92,5 +92,52 @@
     "A1 is independently approved by Root/Astra; this record does not authorize main merge, release, or UI activation.",
     "These failed experiments do not repair or supersede prior receipts."
   ],
-  "status": "OPEN RELEASE BLOCKER"
+  "status": "OPEN RELEASE BLOCKER",
+  "renderer_stop_join_probe": {
+    "status": "PRIVATE paired diagnostic evidence; application and dependency shipping fix not qualified",
+    "source": "/private/tmp/swarm-renderer-stop-join-probe-20261027",
+    "paired_results": [
+      {
+        "label": "clear-only",
+        "result": "FAIL",
+        "setup": "GOMAXPROCS=1 -race; test-only successful-restore ClearScreen overlay; no dependency source patch",
+        "test": "TestTerminalRestoreRedrawsUnchangedBoard",
+        "log": "/private/tmp/swarm-renderer-stop-join-probe-20261027/clear-only.jsonl",
+        "sha256": "2439d3ed57efc62ee8fad041bb453b44faa7e71ad33b272b04df02759c2f6292"
+      },
+      {
+        "label": "clear-and-join-r3",
+        "result": "PASS, 3/3 race runs",
+        "setup": "GOMAXPROCS=1 -race; same test-only successful-restore ClearScreen overlay plus private Bubble Tea stop/join source patch",
+        "test": "TestTerminalRestoreRedrawsUnchangedBoard",
+        "log": "/private/tmp/swarm-renderer-stop-join-probe-20261027/clear-and-join-r3.jsonl",
+        "sha256": "5fa02d307e534e89b5b4035b5a2bf881cd36f0bba60a902b79197a32b9990deb"
+      }
+    ],
+    "candidate_hashes": {
+      "private_dependency_tea_go_sha256": "9441633f9fd433bd6ea9aa292f002487a461d00d92eb97da35e8885aec0917d5",
+      "private_test_source_sha256": "57d3b3c604fd5da1c81fb5911a97acb3d95b001c57d9ce667ca0f0466f856b3e",
+      "private_test_candidate_sha256": "ec7e4840a4d473db29cfdd23a1698d49c065cb9a2f510965e5ebb59dc8bb2599",
+      "private_patch_sha256": "2bfc511078ce0feb617454efbb333809d203f5e4e22eaa571da89f9f03d53ee2"
+    },
+    "setup_only_failures": [
+      "Go refused overlays beneath GOMODCACHE; the join command did not execute.",
+      "The private module source copy inherited read-only permissions; overwrite was refused and the command using the absent modfile did not execute. Only the private copy tea.go permissions were corrected."
+    ],
+    "interpretation": [
+      "This paired probe strongly supports a renderer stop/join race hypothesis; it does not provide an exact runtime interleaving trace.",
+      "ClearScreen was added only in a private test overlay, and the stop/join patch was applied only to a private dependency source copy. Production callbacks, go.mod, and module-cache sources were untouched.",
+      "Join-only was not tested. No application fix or dependency shipping fix is qualified."
+    ],
+    "upstream": [
+      {
+        "url": "https://github.com/charmbracelet/bubbletea/issues/1778",
+        "status": "OPEN"
+      },
+      {
+        "url": "https://github.com/charmbracelet/bubbletea/pull/1781",
+        "status": "OPEN"
+      }
+    ]
+  }
 }
