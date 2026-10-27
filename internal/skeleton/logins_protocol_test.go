@@ -79,8 +79,13 @@ func TestLoginCompletionCrashDoesNotReplayOldGrant(t *testing.T) {
 }
 
 func TestLoginViewsNeverContainCredentials(t *testing.T) {
-	a, c, _ := readyLoginJob(t)
-	if _, err := a.Logins(protocol.LoginsReq{Action: "complete", JobID: c.JobID}); err != nil {
+	a, c, credential := readyLoginJob(t)
+	// Redaction is independent of the host's transient native-writer inventory.
+	r, err := a.logins.store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.logins.store.Import(r.Revision, logins.Login{ID: c.JobID, Provider: c.Provider, Label: c.Label, LastLoginJobID: c.JobID}, credential); err != nil {
 		t.Fatal(err)
 	}
 	view, err := a.Logins(protocol.LoginsReq{Action: "list"})
