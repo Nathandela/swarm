@@ -1,0 +1,158 @@
+{
+  "date": "2026-10-27",
+  "kind": "Strict unmanaged fixture metadata prerequisite",
+  "base_commit": "76b91e571452ebd392fbdecd7fca71bbbc30b55c",
+  "status": "Storage prerequisite implemented; focused and complete edited-library race checks, build, vet and lint pass. No runtime or public feature activation.",
+  "scope": {
+    "source_files_sha256": {
+      "internal/persist/persist.go": "b76ece3433c3d42b1a77c5e30ffe6858af91d49586733ac1306470e144129201",
+      "internal/logins/claude_custody.go": "1c7b74ffaaa27125ec801ccbbe35296028690a9198fdd174314e75f4657d0aac",
+      "internal/persist/claude_chat_fixture_test.go": "8ac5b2a90a12bb80b7865fe54e372a52016ffa903092db3235c74c3726ab80c1",
+      "internal/logins/claude_chat_fixture_test.go": "528abf927120af1202b2604c6c8b7ef1cc9a67076ecd32b85006d04f22393763"
+    },
+    "behavior": [
+      "Exact fake6/claude-chat storage shape with no managed runtime, CLI, retirement, OpenCode binding, native-provider or input-embargo authority.",
+      "Native matching and owned metadata classification explicitly exclude fake6.",
+      "Incoming version1 writes retain header6 and directory durability.",
+      "Both initialized and unmanaged roots refuse mode/provider/CWD/established shim tuple changes before save callbacks; initial zero-to-established tuple is permitted.",
+      "Malformed, aliased, duplicate, mixed-authority and wrong-ID rows remain refused and non-disposable.",
+      "Ordinary fake1 and managed5/6 behavior remains covered."
+    ],
+    "not_included": [
+      "launch admission",
+      "stdio constructor",
+      "public chat/UI/capabilities",
+      "native authentication or automatic recovery"
+    ]
+  },
+  "tests": {
+    "real_red": {
+      "path": "/private/tmp/swarm-claude-chat-a2-constructor-gates-20261027/fixture-storage-red.jsonl",
+      "sha256": "87727d78f0d589def1db5d548406f00e6a280c06e4f8809d50fb3be833541cc7",
+      "bytes": 9205,
+      "test_actions": {
+        "run": 8,
+        "output": 18,
+        "fail": 2,
+        "pass": 6
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/persist": "fail",
+        "github.com/Nathandela/swarm/internal/logins": "fail"
+      }
+    },
+    "initial_green": {
+      "path": "/private/tmp/swarm-claude-chat-a2-constructor-gates-20261027/fixture-storage-green-r1.jsonl",
+      "sha256": "aff19117f0843a1e1dcc3b992408c860639b62cba8e51a13cb3dc608f3d67710",
+      "bytes": 80107,
+      "test_actions": {
+        "run": 82,
+        "output": 164,
+        "pass": 82
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/persist": "pass",
+        "github.com/Nathandela/swarm/internal/logins": "pass",
+        "github.com/Nathandela/swarm/internal/daemon": "pass"
+      }
+    },
+    "focused_race": {
+      "path": "/private/tmp/swarm-claude-chat-a2-constructor-gates-20261027/fixture-storage-green-r2-race.jsonl",
+      "sha256": "f09a1be11aa8e520c57fda783812a06cdf44fc52f789107e87946633901f53bc",
+      "bytes": 148216,
+      "test_actions": {
+        "run": 148,
+        "output": 303,
+        "pass": 148
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/persist": "pass",
+        "github.com/Nathandela/swarm/internal/logins": "pass",
+        "github.com/Nathandela/swarm/internal/daemon": "pass",
+        "github.com/Nathandela/swarm/internal/upgrade": "pass",
+        "github.com/Nathandela/swarm/internal/skeleton": "pass",
+        "github.com/Nathandela/swarm/internal/protocol": "pass"
+      }
+    },
+    "complete_edited_library_race": {
+      "path": "/private/tmp/swarm-claude-chat-a2-constructor-gates-20261027/fixture-storage-library-race.jsonl",
+      "sha256": "401d18e587932e617bd7785b399a14ac71cecb4e592b3dc600f1e14e5922ee51",
+      "bytes": 802048,
+      "test_actions": {
+        "run": 856,
+        "output": 1713,
+        "pass": 855,
+        "skip": 1
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/persist": "pass",
+        "github.com/Nathandela/swarm/internal/logins": "pass"
+      }
+    },
+    "frozen_old_fake6": {
+      "path": "/private/tmp/swarm-claude-chat-a2-gates-20261027/old-fake6.jsonl",
+      "sha256": "3d034d728685ca5db4b458d214f9fa5e4796db0485e48ab3ce88591df32da15e",
+      "bytes": 6583,
+      "test_actions": {
+        "run": 5,
+        "output": 10,
+        "pass": 5
+      },
+      "packages": {
+        "github.com/Nathandela/swarm/internal/persist": "pass",
+        "github.com/Nathandela/swarm/internal/logins": "pass",
+        "github.com/Nathandela/swarm/internal/daemon": "pass"
+      }
+    }
+  },
+  "old_consumer": {
+    "commit": "fd7d676732c1d20ab1fedfbae60972f31d59e5cb",
+    "source_archive_sha256": "7bdd4d8ca388ce17fd2efe22436aa416f2bf534d350193697b4da411499b978f",
+    "original_files_reverified_before_and_after": 3642,
+    "scope": "Actual old Store/metadata fence/daemon refusal with fake1 controls and synthetic live process retention; no native or managed-custody qualification."
+  },
+  "qualification_limits": [
+    "Storage-only support for development fixtures.",
+    "Unresolved integration/release gates remain h6sc.26, h6sc.28 and h6sc.29.",
+    "Runtime candidate requires separate paired lifecycle/FIFO review and testing."
+  ],
+  "quality_gates": {
+    "build": {
+      "exit_code": 0,
+      "elapsed_seconds": 7.717,
+      "command": [
+        "/private/tmp/swarm-login-repair-modcache/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64/bin/go",
+        "build",
+        "-p",
+        "1",
+        "./..."
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quality-storage/build.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "vet": {
+      "exit_code": 0,
+      "elapsed_seconds": 11.898,
+      "command": [
+        "/private/tmp/swarm-login-repair-modcache/golang.org/toolchain@v0.0.1-go1.26.10.darwin-arm64/bin/go",
+        "vet",
+        "-p",
+        "1",
+        "./..."
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quality-storage/vet.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "lint": {
+      "exit_code": 0,
+      "elapsed_seconds": 57.049,
+      "command": [
+        "/usr/local/bin/golangci-lint",
+        "run",
+        "--concurrency=1"
+      ],
+      "log": "/private/tmp/swarm-claude-chat-a2-gates-20261027/quality-storage/lint.log",
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    }
+  }
+}

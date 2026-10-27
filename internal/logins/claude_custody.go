@@ -88,6 +88,9 @@ type claudeSessionMeta struct {
 	ID              string                       `json:"id"`
 	AgentType       string                       `json:"agent_type"`
 	RequiredRuntime string                       `json:"required_runtime"`
+	InputEmbargo    string                       `json:"input_embargo"`
+	OpenCodeBinding *json.RawMessage             `json:"opencode_binding"`
+	NativeProvider  string                       `json:"native_provider"`
 	Cwd             string                       `json:"cwd"`
 	AgentCwd        string                       `json:"agent_cwd"`
 	ShimPID         int                          `json:"shim_pid"`
@@ -169,7 +172,7 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 	if err != nil {
 		return m, ErrUnsafePath
 	}
-	routing := []string{"schema_version", "id", "agent_type", "cwd", "agent_cwd", "shim_pid", "shim_start_time", "login_runtime", "cli_identity", "claude_retirement", "required_runtime"}
+	routing := []string{"schema_version", "id", "agent_type", "cwd", "agent_cwd", "shim_pid", "shim_start_time", "login_runtime", "cli_identity", "claude_retirement", "required_runtime", "input_embargo", "opencode_binding", "native_provider"}
 	for name := range doc {
 		for _, key := range routing {
 			if name != key && strings.EqualFold(name, key) {
@@ -194,6 +197,12 @@ func parseClaudeSessionMeta(raw []byte, stateRoot, id string) (claudeSessionMeta
 		if _, err := claudeAuthObject(doc["cli_identity"], "path", "version", "fingerprint"); err != nil {
 			return m, ErrUnsafePath
 		}
+	}
+	if claudeFakeChatMetadata(m) {
+		if !validClaudeCWDs([]string{m.Cwd}) || !validClaudeCWDs([]string{m.effectiveCWD()}) {
+			return m, ErrUnsafePath
+		}
+		return m, nil
 	}
 	owned := m.Runtime != nil && IsClaudeProfileRuntime(stateRoot, *m.Runtime)
 	if m.SchemaVersion == ClaudeReservationSchemaVersion || m.SchemaVersion == ClaudeChatReservationSchemaVersion || m.RequiredRuntime == claudeChatRequiredRuntime || owned || m.Retirement != nil {
@@ -272,6 +281,9 @@ func validateClaudeRetirement(raw []byte, m claudeSessionMeta) error {
 }
 
 func claudeNativeMatchesMeta(n NativeProcessInfo, m claudeSessionMeta) bool {
+	if claudeFakeChatMetadata(m) {
+		return false
+	}
 	expected := Runtime{}
 	if m.Runtime != nil {
 		expected = *m.Runtime
@@ -619,7 +631,33 @@ func claudeSameRuntimeMeta(a, b claudeSessionMeta) bool {
 
 // This is a strict parsed metadata pair, not launch or writer-stop authority.
 func claudeOwnedMetadata(m claudeSessionMeta) bool {
-	return m.SchemaVersion == ClaudeReservationSchemaVersion && m.RequiredRuntime == "" || m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime
+	return m.AgentType == ProviderClaude && m.Runtime != nil && m.Runtime.Provider == ProviderClaude && (m.SchemaVersion == ClaudeReservationSchemaVersion && m.RequiredRuntime == "" || m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime)
+}
+
+func claudeFakeChatMetadata(m claudeSessionMeta) bool {
+	return m.SchemaVersion == ClaudeChatReservationSchemaVersion && m.RequiredRuntime == claudeChatRequiredRuntime && m.AgentType == "fake" && m.Runtime == nil && m.CLI == nil && m.Retirement == nil && m.InputEmbargo == "" && m.OpenCodeBinding == nil && m.NativeProvider == ""
+}
+
+// ValidateClaudeChatFixtureMetadata validates storage shape only, never launch or custody.
+func ValidateClaudeChatFixtureMetadata(raw []byte, id string) error {
+	m, err := parseClaudeSessionMeta(raw, "", id)
+	if err != nil {
+		return err
+	}
+	if !claudeFakeChatMetadata(m) {
+		return ErrUnsafePath
+	}
+	return nil
+}
+
+func claudeFakeChatTransition(old, next claudeSessionMeta) error {
+	if !claudeFakeChatMetadata(old) && !claudeFakeChatMetadata(next) {
+		return nil
+	}
+	if !claudeFakeChatMetadata(old) || !claudeFakeChatMetadata(next) || old.ID != next.ID || old.Cwd != next.Cwd || old.AgentCwd != next.AgentCwd || old.ShimPID > 0 && (next.ShimPID != old.ShimPID || next.ShimStartTime != old.ShimStartTime) {
+		return ErrConflict
+	}
+	return nil
 }
 
 func claudeSameImmutableMeta(a, b claudeSessionMeta) bool {
@@ -674,12 +712,18 @@ func WithClaudeMetadataSave(stateRoot, sessionID string, incoming []byte, save f
 		return ErrIneligible
 	}
 	return withClaudeMetadataFence(stateRoot, func() error {
-		if err := claudeUnmanagedRow(incoming, stateRoot); err != nil {
+		if err := claudeUnmanagedRow(incoming, stateRoot, sessionID); err != nil {
 			return err
 		}
 		old, err := readClaudeUnmanagedMeta(stateRoot, sessionID)
 		if err == nil {
-			if err := claudeUnmanagedRow(old, stateRoot); err != nil {
+			if err := claudeUnmanagedRow(old, stateRoot, sessionID); err != nil {
+				return err
+			}
+			var previous, next claudeSessionMeta
+			_ = json.Unmarshal(old, &previous)
+			_ = json.Unmarshal(incoming, &next)
+			if err := claudeFakeChatTransition(previous, next); err != nil {
 				return err
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -726,6 +770,9 @@ func (s *Store) saveClaudeMetadata(state *os.Root, registry *Registry, stateRoot
 		return commit()
 	}
 	if err != nil {
+		return err
+	}
+	if err := claudeFakeChatTransition(old, next); err != nil {
 		return err
 	}
 	if registry != nil && old.SchemaVersion == 4 && old.AgentType == ProviderClaude {
@@ -783,7 +830,7 @@ func WithClaudeReservationRetirement(stateRoot, sessionID string, originalNoFork
 		if err != nil {
 			return err
 		}
-		if err := claudeUnmanagedRow(old, stateRoot); err != nil {
+		if err := claudeUnmanagedRow(old, stateRoot, sessionID); err != nil {
 			return err
 		}
 		return retire(ClaudeReservationRetirement{})
@@ -880,7 +927,7 @@ func (s *Store) retireClaudeReservation(state *os.Root, registry *Registry, m cl
 
 // Unmanaged persistence retains its historical path/schema semantics only after
 // bounded routing inspection positively excludes an owned-profile reservation.
-func claudeUnmanagedRow(raw []byte, stateRoot string) error {
+func claudeUnmanagedRow(raw []byte, stateRoot, sessionID string) error {
 	doc, err := jsonObject(raw)
 	if err != nil {
 		return ErrUnsafePath
@@ -895,6 +942,11 @@ func claudeUnmanagedRow(raw []byte, stateRoot string) error {
 	}
 	if json.Unmarshal(doc["schema_version"], &version) != nil && len(doc["schema_version"]) != 0 {
 		return ErrUnsafePath
+	}
+	var candidate claudeSessionMeta
+	_ = json.Unmarshal(raw, &candidate)
+	if version == ClaudeChatReservationSchemaVersion || candidate.RequiredRuntime == claudeChatRequiredRuntime {
+		return ValidateClaudeChatFixtureMetadata(raw, sessionID)
 	}
 	if version >= ClaudeReservationSchemaVersion {
 		return ErrPending

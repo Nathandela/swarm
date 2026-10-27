@@ -278,7 +278,12 @@ func (s *Store) metadataBytes(m Meta) (Meta, []byte, error) {
 	owned := m.SchemaVersion == ClaudeSchemaVersion || IsClaudeChatRuntime(m) || m.ClaudeRetirement != nil || m.LoginRuntime != nil && logins.IsClaudeProfileRuntime(s.root, *m.LoginRuntime)
 	ownedVersion := ClaudeMetadataSchemaVersion(m)
 	m.SchemaVersion = SchemaVersion
-	if owned {
+	if m.AgentType == "fake" && ownedVersion == ClaudeChatSchemaVersion {
+		m.SchemaVersion = ownedVersion
+		if !validClaudeChatFixtureMeta(m) {
+			return m, nil, fmt.Errorf("persist: invalid Claude chat fixture")
+		}
+	} else if owned {
 		m.SchemaVersion = ownedVersion
 		if !validClaudeMeta(m) || (!logins.IsClaudeProfileRuntime(s.root, *m.LoginRuntime) && (m.ClaudeRetirement == nil || m.LoginRuntime.Home != filepath.Join(s.root, "logins", "provider", "claude", "native"))) {
 			return m, nil, fmt.Errorf("persist: invalid owned Claude runtime")
@@ -443,6 +448,12 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 	if m.SchemaVersion > ClaudeChatSchemaVersion {
 		return Meta{}, fmt.Errorf("meta schema version %d is newer than supported version %d", m.SchemaVersion, ClaudeChatSchemaVersion)
 	}
+	if m.AgentType == "fake" && IsClaudeChatRuntime(m) {
+		if !validClaudeChatFixtureMeta(m) || logins.ValidateClaudeChatFixtureMetadata(data, wantID) != nil {
+			return Meta{}, fmt.Errorf("invalid Claude chat fixture")
+		}
+		return m, nil
+	}
 	if m.SchemaVersion == ClaudeSchemaVersion || IsClaudeChatRuntime(m) {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(data, &fields); err != nil {
@@ -484,6 +495,10 @@ func decodeMeta(data []byte, wantID string) (Meta, error) {
 		return Meta{}, err
 	}
 	return m, nil
+}
+
+func validClaudeChatFixtureMeta(m Meta) bool {
+	return m.SchemaVersion == ClaudeChatSchemaVersion && m.RequiredRuntime == RequiredRuntimeClaudeChat && m.AgentType == "fake" && m.LoginRuntime == nil && m.CLIIdentity == nil && m.ClaudeRetirement == nil && m.OpenCodeBinding == nil && m.InputEmbargo == ""
 }
 
 // This is decoding, not writer-stop authorization. The shared logins guard

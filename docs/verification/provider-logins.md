@@ -20,6 +20,16 @@ blocked by terminal restore (`h6sc.26`), Codex batch drain (`h6sc.28`) and
 synthetic Claude enrollment completion (`h6sc.29`). Focused safety checks and
 repository build/vet/lint pass; the full integration gate does not.
 
+The storage-only prerequisite allows strict development `fake6`/`claude-chat`
+metadata for structured child tests while preserving ordinary `fake1` and
+managed schema 5/6. Saved `fake6` mode is immutable; malformed or mixed rows are
+retained and refused. It grants no managed-login, CLI, retirement,
+native-writer-proof, OpenCode-binding or input-embargo authority, and enables no
+launch admission, stdio constructor, public chat/UI or capabilities.
+[Storage evidence](provider-logins/claude-chat-fixture-storage-2026-10-27.json)
+records 148 focused race passes, 855 library race passes (one skip), and passing
+build, vet and lint checks.
+
 ## Published v0.21.0
 
 [v0.21.0](https://github.com/Nathandela/swarm/releases/tag/v0.21.0) was published

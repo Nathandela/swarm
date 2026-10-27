@@ -596,6 +596,15 @@ are active. Main and release remain blocked by terminal restore (`h6sc.26`)
 and unresolved native ingress/enrollment integration checks (`h6sc.28`,
 `h6sc.29`). See the [checkpoint evidence](../verification/provider-logins/claude-chat-quarantine-2026-10-27.json).
 
+The storage-only prerequisite permits strict development `fake6`/`claude-chat`
+metadata for structured child tests. Ordinary `fake1` and managed schema 5/6
+remain supported; saved `fake6` mode is immutable, and malformed or mixed rows
+are retained and refused. This does not grant managed-login, CLI, retirement,
+native-writer-proof, OpenCode-binding or input-embargo authority, and does not
+enable launch admission, a stdio constructor, public chat/UI or capabilities.
+The passing storage checks are recorded in
+[`claude-chat-fixture-storage-2026-10-27.json`](../verification/provider-logins/claude-chat-fixture-storage-2026-10-27.json).
+
 Use one shim-owned structured Claude primary. Reuse selected-login admission,
 profile custody, the authenticated shim connection, composer lane, operation
 journal, hook spool, execution record, native request/decision handlers and
