@@ -199,3 +199,17 @@ stalled-reply latch assertion in
 `TestContextGuardStalledReplyStillLatchesOnQueuedCompletion`, and
 `TestContextGuardContinuationShapeAndFence` (codex adapter: turn/start
 shape, exact-version fence, degenerate identity).
+
+
+## Continuation fixture write ordering (2026-10-27)
+
+The final integration race run exposed a test-ordering fault in `TestContextGuardContinuationWaitsOutFoldLagThenSends`. The fake records a call attempt before invoking the write-boundary callback. The test could mark the session busy at that point, causing the production quiet check to correctly refuse the compaction before any bytes. A later native completion still latches, but S13 correctly grants no continuation for a compaction Swarm never wrote. This was not evidence of a lost status wake.
+
+A fake pre-write gate reproduced the original failure deterministically: the recorded call had `wrote=false`, and the continuation assertion failed after the unchanged five-second budget. Continuation fixtures now wait for durable `awaiting_confirmation` before changing status or injecting provider lifecycle events. The added `TestContextGuardUnwrittenAttemptDoesNotOwnNativeCompletion` pins the opposite case: an attempted but refused write followed by native completion must not earn a continuation or another compaction. Production guards, reducer behavior and timeout budgets are unchanged.
+
+With the native ARM Go toolchain on PATH, `TMPDIR=/private/tmp`, shared Go caches and all `SWARM_*` variables cleared:
+
+- Unmodified fold-lag test: `-race -count=100` passed (30.961s); the gated old ordering then failed deterministically (5.23s test / 6.209s package).
+- Corrected fold-lag plus unwritten-attempt regression: `-race -count=100` passed (200 cases, 67.220s).
+- All skeleton tests matching `ContextGuard`: `-race -count=1` passed (42.013s).
+- Complete `internal/contextguard` reducer suite: `-race -count=1` passed (1.162s).
