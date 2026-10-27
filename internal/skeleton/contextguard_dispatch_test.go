@@ -55,9 +55,10 @@ func (f *fakeDispatchConn) plainSnapshot() []fakeDispatchCall {
 }
 
 type fakeDispatchBehavior struct {
-	refuseBeforeCallbacks bool          // the closed-conn shape: error before beforeWrite runs
-	replyErr              error         // returned AFTER the write (afterWrite has run)
-	replyGate             chan struct{} // when set, the reply blocks until the gate closes
+	refuseBeforeCallbacks bool            // the closed-conn shape: error before beforeWrite runs
+	replyErr              error           // returned AFTER the write (afterWrite has run)
+	replyGate             chan struct{}   // when set, the reply blocks until the gate closes
+	beforeWriteGate       <-chan struct{} // holds an attempted compact before revalidation/write
 }
 
 type fakeDispatchCall struct {
@@ -95,6 +96,13 @@ func (f *fakeDispatchConn) CallAtWriteBoundary(ctx context.Context, method strin
 	f.mu.Unlock()
 	if behavior.refuseBeforeCallbacks {
 		return errFakeConnClosed
+	}
+	if behavior.beforeWriteGate != nil {
+		select {
+		case <-behavior.beforeWriteGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	if beforeWrite != nil {
 		if err := beforeWrite(); err != nil {
@@ -756,7 +764,7 @@ func (r *dispatchRig) requireNoPlainCallsFor(t *testing.T, d time.Duration) {
 func TestContextGuardContinuationStartsTheResumptionTurn(t *testing.T) {
 	r := newDispatchRig(t)
 	r.ingestUsage(t, 1, 85, 100)
-	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
 	r.ingestLifecycle(t, 2, "item/started")
 	r.waitPhase(t, contextguard.StateProviderCompacting)
 	// While the compaction runs, NOTHING may be sent: a turn/start here would
@@ -784,7 +792,7 @@ func TestContextGuardContinuationStartsTheResumptionTurn(t *testing.T) {
 	r.ingestUsage(t, 4, 60, 100)
 	r.waitPhase(t, contextguard.StateArmed)
 	r.ingestUsage(t, 5, 90, 100)
-	r.waitCalls(t, 2)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
 	r.ingestLifecycle(t, 6, "item/started")
 	r.ingestLifecycle(t, 7, "item/completed")
 	r.waitPlainCalls(t, 2)
@@ -797,15 +805,42 @@ func TestContextGuardContinuationStartsTheResumptionTurn(t *testing.T) {
 func TestContextGuardContinuationWaitsOutFoldLagThenSends(t *testing.T) {
 	r := newDispatchRig(t)
 	r.ingestUsage(t, 1, 85, 100)
-	r.waitCalls(t, 1)
-	r.setQuiet(false) // the fold has not settled to idle yet
+	// A recorded call attempt may still be refused; only this phase proves our write.
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
+	r.setQuiet(false)
 	r.ingestLifecycle(t, 2, "item/started")
 	r.ingestLifecycle(t, 3, "item/completed")
 	r.waitPhase(t, contextguard.StateLatched)
 	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
 	r.setQuiet(true)
-	r.nudge() // the status edge
+	r.nudge()
 	r.waitPlainCalls(t, 1)
+}
+
+// An attempted compact can lose its last quiet check. A later native/manual
+// completion must not turn that unwritten attempt into our continuation.
+func TestContextGuardUnwrittenAttemptDoesNotOwnNativeCompletion(t *testing.T) {
+	r := newDispatchRig(t)
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	defer release()
+	r.conn.script[0] = fakeDispatchBehavior{beforeWriteGate: gate}
+	r.ingestUsage(t, 1, 85, 100)
+	if calls := r.waitCalls(t, 1); calls[0].wrote {
+		t.Fatal("gated attempt already wrote")
+	}
+	r.setQuiet(false)
+	release()
+	r.waitPhase(t, contextguard.StatePendingIdle)
+	r.ingestLifecycle(t, 2, "item/started")
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	r.setQuiet(true)
+	r.nudge()
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
+	if calls := r.conn.snapshot(); len(calls) != 1 || calls[0].wrote {
+		t.Fatalf("refused attempt reached provider: %+v", calls)
+	}
 }
 
 // TestContextGuardContinuationForfeitsOnStopBarrierAtTheLaneHead: a Stop
@@ -814,7 +849,7 @@ func TestContextGuardContinuationWaitsOutFoldLagThenSends(t *testing.T) {
 func TestContextGuardContinuationForfeitsOnStopBarrierAtTheLaneHead(t *testing.T) {
 	r := newDispatchRig(t)
 	r.ingestUsage(t, 1, 85, 100)
-	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
 	r.lane.enter() // a composer holds the lane through the latch
 	r.ingestLifecycle(t, 2, "item/started")
 	r.ingestLifecycle(t, 3, "item/completed")
@@ -836,7 +871,7 @@ func TestContextGuardContinuationForfeitsOnStopBarrierAtTheLaneHead(t *testing.T
 func TestContextGuardContinuationForfeitsOnRecycleAtTheLaneHead(t *testing.T) {
 	r := newDispatchRig(t)
 	r.ingestUsage(t, 1, 85, 100)
-	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
 	r.lane.enter() // hold the lane while completion arms the continuation
 	r.ingestLifecycle(t, 2, "item/started")
 	r.ingestLifecycle(t, 3, "item/completed")
@@ -857,7 +892,7 @@ func TestContextGuardContinuationForfeitsOnRecycleAtTheLaneHead(t *testing.T) {
 func TestContextGuardContinuationAtLatchWhenCompletionArrivesFirst(t *testing.T) {
 	r := newDispatchRig(t)
 	r.ingestUsage(t, 1, 85, 100)
-	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
 	r.ingestLifecycle(t, 2, "item/completed") // conclusive, straight from awaiting
 	r.waitPhase(t, contextguard.StateLatched)
 	r.waitPlainCalls(t, 1)
@@ -882,7 +917,7 @@ func TestContextGuardNeverContinuesACompactionItDidNotDispatch(t *testing.T) {
 func TestContextGuardContinuationSkipsAttendedSessions(t *testing.T) {
 	r := newDispatchRig(t)
 	r.ingestUsage(t, 1, 85, 100)
-	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
 	r.setAttended(true)
 	r.ingestLifecycle(t, 2, "item/started")
 	r.ingestLifecycle(t, 3, "item/completed")
@@ -902,7 +937,7 @@ func TestContextGuardContinuationFailureIsForfeitNotRetry(t *testing.T) {
 	r.conn.plainErr = errors.New("turn refused")
 	r.conn.mu.Unlock()
 	r.ingestUsage(t, 1, 85, 100)
-	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
 	r.ingestLifecycle(t, 2, "item/started")
 	r.ingestLifecycle(t, 3, "item/completed")
 	r.waitPhase(t, contextguard.StateLatched) // lifecycle unharmed
@@ -984,7 +1019,7 @@ func TestContextGuardContinuationForfeitsWhenTheWindowPasses(t *testing.T) {
 	r := newDispatchRig(t)
 	r.session(t).continuationFreshness = 50 * time.Millisecond
 	r.ingestUsage(t, 1, 85, 100)
-	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
 	r.setQuiet(false) // the fold never settles inside the window
 	r.ingestLifecycle(t, 2, "item/started")
 	r.ingestLifecycle(t, 3, "item/completed")
@@ -1002,7 +1037,7 @@ func TestContextGuardContinuationRechecksProviderHoldBeforeNativeBytes(t *testin
 	r.conn.beforeContinuation = func() { r.setQuiet(false); close(boundary) }
 	r.conn.mu.Unlock()
 	r.ingestUsage(t, 1, 85, 100)
-	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
 	r.ingestLifecycle(t, 2, "item/started")
 	r.ingestLifecycle(t, 3, "item/completed")
 	select {
