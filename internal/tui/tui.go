@@ -80,6 +80,7 @@ const (
 	screenAttach
 	screenLogins
 	screenResume
+	screenChat
 )
 
 // eventMsg carries one Subscribe status-change into the update loop.
@@ -167,9 +168,12 @@ func workingAnimationTick() tea.Cmd {
 // rootModel is the screen router: the only tea.Model, holding the screen
 // sub-models and the shared client/size state.
 type rootModel struct {
-	client      Client
-	connections *clientLifetime
-	detect      DetectFunc
+	chat           claudeChatModel
+	chatGeneration uint64
+	chatDialer     DaemonReconnector
+	client         Client
+	connections    *clientLifetime
+	detect         DetectFunc
 
 	width          int
 	height         int
@@ -391,6 +395,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.updateClaudeChatMessage(msg); handled {
+		return next, cmd
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -574,6 +581,9 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pairing != nil || m.screen == screenHandoff && m.handoff.confirmPending() {
 			return m, nil
 		}
+		if m.screen == screenChat {
+			return m.updateClaudeChat(msg)
+		}
 		switch {
 		case m.screen == screenLogins && m.logins.mode == "label":
 			m.logins.label.paste(msg.Content)
@@ -744,6 +754,8 @@ func (m rootModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateOptions(msg)
 		case screenLogins:
 			return m.updateLogins(msg)
+		case screenChat:
+			return m.updateClaudeChat(msg)
 		case screenAttach:
 			return m.updateAttach(msg)
 		}
@@ -756,6 +768,8 @@ func (m rootModel) View() tea.View {
 	switch {
 	case m.hasActiveForm():
 		content = m.composeActiveForm()
+	case m.screen == screenChat:
+		content = m.chat.rendered(m.width, m.height)
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).

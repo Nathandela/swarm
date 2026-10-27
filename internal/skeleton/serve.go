@@ -787,6 +787,12 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 		return
 	}
 	if quarantined {
+		if d.core != nil && m.AgentType == "fake" && m.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+			if canonical, ok := d.core.Get(m.ID); ok && freshClaudeFixture(canonical) && canonical.ShimPID == m.ShimPID && canonical.ShimStartTime == m.ShimStartTime && canonical.ConversationID == m.ConversationID {
+				d.registerClaudeFixture(canonical)
+				return
+			}
+		}
 		d.registerExecutionSession(m, "", nil, false)
 		return
 	}
@@ -944,6 +950,9 @@ func (d *Daemon) anyControlled(local string) bool {
 // engine registration and token (S6). Ending an unregistered session (e.g. one
 // adopted by reconcile, never registered) is a harmless no-op.
 func (d *Daemon) endSession(id string) {
+	if state := d.claudeFixtureState(id); state != nil {
+		state.fail()
+	}
 	d.gateMu.Lock()
 	gateEntry := d.gateDone[id]
 	d.gateMu.Unlock()

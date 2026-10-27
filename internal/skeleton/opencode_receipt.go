@@ -205,6 +205,12 @@ func (d *Daemon) semanticOperation(local, operationID string) (protocol.Semantic
 	if len(rec.Request) == 0 {
 		return result, nil
 	}
+	var fixtureKind struct {
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(rec.Request, &fixtureKind) == nil && fixtureKind.Kind == "claude_fixture_message" {
+		return d.claudeFixtureReceipt(local, operationID, rec), nil
+	}
 	var intent openCodeSendIntent
 	if json.Unmarshal(rec.Request, &intent) != nil || !validOpenCodeIntent(operationID, local, intent) {
 		result.State = "uncertain"

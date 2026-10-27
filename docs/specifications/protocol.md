@@ -202,6 +202,7 @@ alongside the group.
 | --------------- | --------------- | ------------------------------------------------------------- |
 | `endpoint_id`   | string          | the receiving connection's endpoint id                        |
 | `id`            | string          | namespaced session id `<endpoint_id>/<local>`                 |
+| `required_runtime` | string | optional persisted runtime discriminator, such as `claude-chat`; selects the matching interface and grants no input or recovery authority |
 | `agent`         | string          | agent type (e.g. `claude`, `codex`)                           |
 | `name`          | string          | user-provided session label; empty/absent falls back to `agent` (P2) |
 | `tag`           | string          | user-assigned grouping label; empty/absent means untagged            |

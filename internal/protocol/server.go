@@ -3483,6 +3483,13 @@ func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group
 	if s.remoteTier {
 		return view
 	}
+	if m.SchemaVersion == 6 && m.AgentType == "fake" && m.RequiredRuntime == persist.RequiredRuntimeClaudeChat {
+		if source, ok := s.d.(SessionCapabilityLookup); ok {
+			if capabilities, present := source.SessionCapabilities(m.ID); present {
+				view.Capabilities = &capabilities
+			}
+		}
+	}
 	if source, ok := s.d.(OpenCodeObservationBackend); ok {
 		if native, present := source.OpenCodeObservation(m.ID); present {
 			view.OpenCode = &native
@@ -3510,18 +3517,19 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		sentAt = &at
 	}
 	return &SessionView{
-		RosterHidden:   m.RosterHidden,
-		EndpointID:     endpointID,
-		ID:             NamespacedID(endpointID, m.ID),
-		Agent:          m.AgentType,
-		Name:           m.Name, // P2: carry the persisted label; "" degrades to Agent at display
-		Tag:            m.Tag,
-		Cwd:            m.Cwd,
-		Status:         m.Status,
-		Group:          group,
-		GroupEnteredAt: m.EffectiveGroupEnteredAt(),
-		LastActivity:   m.LastActivity,
-		CreatedAt:      m.CreatedAt,
+		RequiredRuntime: m.RequiredRuntime,
+		RosterHidden:    m.RosterHidden,
+		EndpointID:      endpointID,
+		ID:              NamespacedID(endpointID, m.ID),
+		Agent:           m.AgentType,
+		Name:            m.Name, // P2: carry the persisted label; "" degrades to Agent at display
+		Tag:             m.Tag,
+		Cwd:             m.Cwd,
+		Status:          m.Status,
+		Group:           group,
+		GroupEnteredAt:  m.EffectiveGroupEnteredAt(),
+		LastActivity:    m.LastActivity,
+		CreatedAt:       m.CreatedAt,
 		// Summary (V-4 one-line last-output) is derived from the session's grid by
 		// the status engine (Epic 7/10), which persist.Meta does not yet carry. Left
 		// "" until then rather than presented as a stale/empty live summary (F12).

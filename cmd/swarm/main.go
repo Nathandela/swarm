@@ -238,7 +238,7 @@ func runTUI(stdout, stderr io.Writer) int {
 		Release: func() error { return prog.ReleaseTerminal() },
 		Restore: func() error { return prog.RestoreTerminal() },
 	})
-	opts := []tui.Option{tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc))}
+	opts := []tui.Option{tui.WithAttachRunner(runner), tui.WithDaemonRestarter(daemonRestarter(cc)), tui.WithClaudeChatDialer(func() (tui.Client, error) { return protocol.Dial(cc.SocketPath, tuiCaps()) })}
 	opts = append(opts, tui.WithDaemonReconnector(func() (tui.Client, error) {
 		return dialClient(tuiCaps())
 	}), tui.WithLoginRunner(loginRunner(tui.TerminalHandoff{
@@ -320,7 +320,7 @@ func clientConfig() (daemon.ClientConfig, error) {
 // attachDialer's per-attach dial deliberately does NOT use this set: it offers
 // {"attach"} and never submits a launch.
 func tuiCaps() []string {
-	return []string{"attach", "subscribe", protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapLoginsManage, protocol.CapOpenCodeObservation}
+	return []string{"attach", "subscribe", protocol.CapJournal, protocol.CapSemanticSend, protocol.CapResumeRelocate, protocol.CapHandsOffHandoff, protocol.CapContextGuardSettings, protocol.CapLoginsManage, protocol.CapOpenCodeObservation}
 }
 
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected

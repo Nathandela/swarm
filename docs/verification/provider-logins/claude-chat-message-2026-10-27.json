@@ -1,0 +1,628 @@
+{
+  "date": "2026-10-27",
+  "status": "IN_PROGRESS_DEVELOPMENT_CHECKPOINT",
+  "production_qualified": false,
+  "scope": {
+    "enabled": "Configured FakeAgentBin only; fresh strict fake6/claude-chat primary, one owner turn through the real TUI model/protocol, not terminal-renderer qualification.",
+    "disabled": [
+      "managed/native/public launch",
+      "native decisions",
+      "ordinary subsequent turns",
+      "runtime restart/rejoin",
+      "workflow completeness",
+      "automatic recovery/continuation"
+    ],
+    "unchanged": "Default and existing native-terminal discussions."
+  },
+  "implementation": [
+    "Reuse one shim-owned stdio primary, existing composer FIFO, operation journal, hook spool, execution record, native-history protocol and sanitized chatView. No sidecar/backend, additional transcript store or new dependency.",
+    "Bind durable owner intent to session incarnation, conversation, exact persisted execution revision, native UUID/text hash, process birth and current reader/stream revisions before write.",
+    "Native ACK is separate from genuine own echo. Lost ACK can reconcile to the exact echo without resend; uncertain input retains custody and draft.",
+    "Prepare all persistence before the lifecycle fence; separate owned message/read and Stop connections. Six actual-view cases hold real Sync returns under owned/foreign Request/Evidence/execution locks and prove exact process Stop before release. This does not inject an uninterruptible kernel fsync.",
+    "A real frame validated before Stop may finish persistence after Stop. A first fold after exact lifecycle retirement cannot promote retained output. Neither path restores failed readiness or clears UnknownActors/dev_fake_chat_subset.",
+    "Queued Send loses authority on Escape or pairing modal; retained drafts and read reconnect remain scoped to the exact instance."
+  ],
+  "source": {
+    "base_commit": "99bdeee4",
+    "receipt": "/private/tmp/swarm-claude-thin-message-final-source-r2-20261027.json",
+    "receipt_sha256": "ba5e2019f282f57a4be2c6219c23a73776f0f8a2fbaaa3b7bb72aeb58390c47b",
+    "files": {
+      "cmd/swarm-fake-agent/claude_message_test.go": "da6493c09e8f7e52a3c135bb79384a344036e73ec9d532193375d4b59b5322b6",
+      "cmd/swarm-fake-agent/main.go": "a46bbb7199c02992a14809f0a765af12566ef0714969a02388b5374938ff50fe",
+      "cmd/swarm/main.go": "350ae2a3e470a35839cc425d9ed5e541a3acef99cbfba9ee303a857a46479124",
+      "docs/specifications/protocol.md": "c203e77a66255178fc1b66b129f0b0b47e9c71ef23b2fedbd3a2b72b7ce22038",
+      "internal/daemon/claude_chat_dispatch.go": "e086d44b55ac8d0f4d9d55ee392c36d5775b6ca37cae812219ac9ba2366a58a4",
+      "internal/daemon/claude_chat_dispatch_test.go": "3abff2770aa5ea87e33ab936cef9a2e81f25d91f43f3b8b708ae94481677ec78",
+      "internal/daemon/claude_chat_stop.go": "81752529d5ede5b5574c9230f67f3152b9d5c7e18e5fce8597cfe8a7cd920aa1",
+      "internal/daemon/claude_chat_stop_test.go": "8dcfb1f6b21890825c06b817564703b96cd8ae38aeba628794ad0dfa253ee2cb",
+      "internal/idempotency/native_input_records.go": "735379b0faaadab8c015e56e71478f9f0ea00d827c8ad2138a0f56168dcfe07e",
+      "internal/protocol/client.go": "a69436438aec50e623a71d0ef660e5dd431f6f725883424af1283a0c8bf3191b",
+      "internal/protocol/native_history_client.go": "e96f4934503caf7920b0a38731b2b32c6393a5cc0f6f0f960e6b7021f506a750",
+      "internal/protocol/schema/capability.go": "f102512f090a9285a66203f6e2137b6216f09f09ef568e8c28301f20fa6615bf",
+      "internal/protocol/schema/schema.go": "4e707aca4509491cf586679f3bdfcf33d0355bd060d21706d94092845b49f398",
+      "internal/protocol/server.go": "935a46b280e70e96b3781c04fb8f2984189bdf37339339d6d3d302ed77cfdc6e",
+      "internal/shim/claude_chat.go": "399900942a4105b59c34354cb971245997dc03206e788d69fe3e414a30c789a5",
+      "internal/shim/claude_message.go": "6c36b3c9708158335c5115d2530f55d8192659b49b1d7496b259b7178f6dd3e2",
+      "internal/shim/claude_message_test.go": "963c5832cdbbfc0e9f81187303e1e06b6be171702f06218097975951825040a8",
+      "internal/shim/claude_reader_test.go": "49329ed7a88e413af1314bf25eca93c5ba9490b89a70503e50c0bc417eb351b2",
+      "internal/shim/claude_valid_json_eof_test.go": "c4b57606e127078b8f93f3421166a4af179acd1bc28eb903307ed59354f41878",
+      "internal/shim/server.go": "b71f7e9e0a7d591c12681fb5b058296713cfc3cc4239a2d1d94a09403003596f",
+      "internal/shimwire/claude_message.go": "6eed0e17a45a6e308b664504b9261d6e12af2712fec8da35673940a2b81ecd23",
+      "internal/shimwire/shimwire.go": "6c098cab3908bcd5752a679d38c478725e5cecda7a7c9e6698d01d5fc3ca6836",
+      "internal/skeleton/auth_recycle_owner.go": "ad148482c5912e13a1092b95b9216575a3a1b63bfea18db5e532501be17b2e0b",
+      "internal/skeleton/capability.go": "a771ad2594a198f28dcc7fabe58b0df2c8e1cef27b171260c5639f02b0f14bea",
+      "internal/skeleton/chat.go": "40b198566353e8147e99db8450031264073314b2ac5442c7f039d6dc81f17133",
+      "internal/skeleton/claude_chat_eof_consumer_test.go": "828c7814cba8aea226a7427d72653f676acbc56901c5570c8dc4623d37e313dc",
+      "internal/skeleton/claude_chat_evidence_test.go": "22431764ed92ba8e81d9ae2230a1d6ffadf852d5b44fb3be08014b95c5d07d45",
+      "internal/skeleton/claude_chat_history.go": "26e681cfac5f9df3b7ff63d82280584f20f43c60c2781a59a90f7f2d02f07e07",
+      "internal/skeleton/claude_chat_message.go": "e394931c182c30d1ee00ff54d3f86ddba95e467c8cad0b31d351ce86bd39f543",
+      "internal/skeleton/claude_chat_message_test.go": "04ea19c508eed5abf6bcb4c3ff42d179bb65afceb7adff2b0dab71762c238997",
+      "internal/skeleton/claude_chat_view_test.go": "304d91297b2e56e9f00ad3bb181c052f8b484efc08cf1f326cb98ae6bdc66ecf",
+      "internal/skeleton/execution.go": "265c59599dbb306b43df64d6c4ab86f93e5b1bc8deb4582d8e5fb8017044e41e",
+      "internal/skeleton/hookdrain.go": "5072a3c59d71f9c46745111024c328da526a00904f788d2f402fd80be77c0ffc",
+      "internal/skeleton/hookdrainloop.go": "0ecd6cf4d1b5e436d022c829690c7e09786eb00d71920dc71abebb0bc7f1b5f7",
+      "internal/skeleton/opencode_history_page.go": "b9e4cc1290c076dd5067520361ebf1d57fb197771af5d5d283ad4a142e963896",
+      "internal/skeleton/opencode_receipt.go": "9669f6825bbcfe8d4dc164834673fdf812a3888eb4180d98817a67a83d4f378f",
+      "internal/skeleton/serve.go": "18a916151ff89bdfc6f6b3e7e52f2920c86f97d8293d2e055277f9e03aa6c790",
+      "internal/tui/claude_chat.go": "40d54b52f79a33909ab57881dbb60f5b62532a6817210d44e2a442de882de691",
+      "internal/tui/claude_chat_test.go": "211e8e6c7448d53e14381a4815931129ed0fc15dd0d96dbcf559766814a33b19",
+      "internal/tui/general.go": "c75b7b9c9dda16586a04292e96d87f14c3500ada92e6f634315d220af170629b",
+      "internal/tui/tui.go": "d0a35d19eaf296ad33a817835f064924e01f859c9d73d93373348cf426d82d9d"
+    }
+  },
+  "focused_normal": {
+    "path": "/private/tmp/swarm-claude-thin-message-normal-r1-20261027.jsonl",
+    "sha256": "c35b25abfaea9d79f1a5eb7aa336f70c1797cc9d6a4d4886f35fe0e6c82a3bdf",
+    "test_actions": {
+      "pass": 239,
+      "fail": 0,
+      "skip": 0
+    },
+    "package_results": [
+      {
+        "Package": "github.com/Nathandela/swarm/cmd/swarm-fake-agent",
+        "Action": "pass",
+        "Elapsed": 1.442
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/shim",
+        "Action": "pass",
+        "Elapsed": 8.137
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/daemon",
+        "Action": "pass",
+        "Elapsed": 19.837
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/skeleton",
+        "Action": "pass",
+        "Elapsed": 20.731
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/tui",
+        "Action": "pass",
+        "Elapsed": 2.94
+      }
+    ]
+  },
+  "targeted_evidence": [
+    {
+      "log": "/private/tmp/swarm-claude-thin-message-saved-intent-red-20261027.jsonl",
+      "sha256": "4dfbf79b14c0244b198a620a2f96606840c052590553d8baa66180c77c7bcfb6",
+      "test_pass": 1,
+      "test_fail": 6,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "fail",
+          "Elapsed": 7.608
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-thin-message-saved-intent-green-r2-20261027.jsonl",
+      "sha256": "40c3509259f21d6917cc96d3c795588a4424158ca889b9854e43f9e3ca523390",
+      "test_pass": 6,
+      "test_fail": 0,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "pass",
+          "Elapsed": 4.871
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-consumer-eof-normal-r3-20261027.jsonl",
+      "sha256": "38d6d5e87a38ae1955350c02460a6acdfed9cc88650fc6a12d2fbab1fd3ec06a",
+      "test_pass": 1,
+      "test_fail": 0,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "pass",
+          "Elapsed": 2.8209999999999997
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-consumer-eof-omission-r3-20261027.jsonl",
+      "sha256": "8d7c488812457b54b57c0082b38468c9c9ae49ee3e3dda2530c74d8bade97608",
+      "test_pass": 0,
+      "test_fail": 1,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "fail",
+          "Elapsed": 6.128
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-held-sync-normal-r4-20261027.jsonl",
+      "sha256": "7da66670b966e1a554bef1b0f4be1e89607ff8a2fe3d2da442953a639cc61db7",
+      "test_pass": 17,
+      "test_fail": 0,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "pass",
+          "Elapsed": 12.949
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-held-sync-client-omission-r5-20261027.jsonl",
+      "sha256": "7d29b8dac8922bed034bad5d7a9ac9032780849dce9617abe3d0182ad04a5726",
+      "test_pass": 0,
+      "test_fail": 3,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "fail",
+          "Elapsed": 11.463
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-held-sync-endmu-omission-r5-20261027.jsonl",
+      "sha256": "cfde3cff662d9229c55a76265db8e7c46cdbd0c817230dbace8139f3769173b6",
+      "test_pass": 0,
+      "test_fail": 3,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "fail",
+          "Elapsed": 14.285
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-pairing-queued-send-red-20261027.jsonl",
+      "sha256": "852756b587bf220e4a041ba2613025dcf89b6116476a4c7a8c455d4ab3471875",
+      "test_pass": 0,
+      "test_fail": 1,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/tui",
+          "Action": "fail",
+          "Elapsed": 0.534
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-modal-owner-normal-20261027.jsonl",
+      "sha256": "31a18714a5e120e5bde1347a151a5b1246db78cb0b6c4a6f90f9c5e3eb68172b",
+      "test_pass": 4,
+      "test_fail": 0,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/tui",
+          "Action": "pass",
+          "Elapsed": 0.543
+        },
+        {
+          "Package": "github.com/Nathandela/swarm/internal/shim",
+          "Action": "pass",
+          "Elapsed": 1.059
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-owner-expected-omission-r2-20261027.jsonl",
+      "sha256": "298c5a59eca523b6d5afcd9e4a014aa5b5daee2b0dcb7fac277274e7904d780d",
+      "test_pass": 0,
+      "test_fail": 2,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/shim",
+          "Action": "fail",
+          "Elapsed": 1.014
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-owner-increasing-omission-20261027.jsonl",
+      "sha256": "3073940b4309f1a776fad928b30de05657527236ff943d3d8d0a0ca9575eec4b",
+      "test_pass": 0,
+      "test_fail": 2,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/shim",
+          "Action": "fail",
+          "Elapsed": 0.994
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-reader-revision-omission-20261027.jsonl",
+      "sha256": "4d34062eef1e080a06aa738020d84542858cbe3fe25113aa535dc0faefd352d8",
+      "test_pass": 0,
+      "test_fail": 1,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/shim",
+          "Action": "fail",
+          "Elapsed": 0.917
+        }
+      ]
+    },
+    {
+      "log": "/private/tmp/swarm-claude-stream-sequence-omission-20261027.jsonl",
+      "sha256": "dfbd98bff7b07828b6c0a1608e68d979aef587ef1749fe20e0aa8d4a77a6f437",
+      "test_pass": 0,
+      "test_fail": 1,
+      "test_skip": [],
+      "package_result": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/shim",
+          "Action": "fail",
+          "Elapsed": 0.763
+        }
+      ]
+    }
+  ],
+  "corrected_eof_omission": {
+    "path": "/private/tmp/swarm-claude-consumer-eof-omission-r4-race-20261027.jsonl",
+    "sha256": "4f6c86ce814d02538841ef9d713a7ca6726f9fb126dceae549cd87b165eb4772",
+    "test_actions": {
+      "pass": 0,
+      "fail": 1,
+      "skip": 0
+    },
+    "package_results": [
+      {
+        "Package": "github.com/Nathandela/swarm/internal/skeleton",
+        "Action": "fail",
+        "Elapsed": 7.149
+      }
+    ]
+  },
+  "earlier_failed_attempts": [
+    {
+      "path": "/private/tmp/swarm-claude-thin-message-red-r1-20261027.jsonl",
+      "sha256": "563f1c44c59666da327727f0676ba1044f14040e0fb5688ed0327d45ce83feb0",
+      "test_actions": {
+        "pass": 0,
+        "fail": 2,
+        "skip": 0
+      },
+      "package_results": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "fail",
+          "Elapsed": 2.716
+        },
+        {
+          "Package": "github.com/Nathandela/swarm/internal/tui",
+          "Action": "fail",
+          "Elapsed": 0.49
+        }
+      ]
+    },
+    {
+      "path": "/private/tmp/swarm-claude-thin-message-focused-r1-20261027.jsonl",
+      "sha256": "0c797f035afcb2f356cf478988f5ca28ef6c3c3a37eebb587d86e75fff08c3de",
+      "test_actions": {
+        "pass": 14,
+        "fail": 11,
+        "skip": 0
+      },
+      "package_results": [
+        {
+          "Package": "github.com/Nathandela/swarm/cmd/swarm-fake-agent",
+          "Action": "fail",
+          "Elapsed": 0.311
+        },
+        {
+          "Package": "github.com/Nathandela/swarm/internal/shim",
+          "Action": "fail",
+          "Elapsed": 7.27
+        },
+        {
+          "Package": "github.com/Nathandela/swarm/internal/daemon",
+          "Action": "fail",
+          "Elapsed": 15.297
+        },
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "fail",
+          "Elapsed": 3.865
+        },
+        {
+          "Package": "github.com/Nathandela/swarm/internal/tui",
+          "Action": "fail",
+          "Elapsed": 0.744
+        }
+      ]
+    },
+    {
+      "path": "/private/tmp/swarm-claude-thin-message-focused-r2-20261027.jsonl",
+      "sha256": "1bf27a729c325f4c42ef58f88df20fced2f1fb94d93f7425bde97531a73fcec3",
+      "test_actions": {
+        "pass": 15,
+        "fail": 11,
+        "skip": 0
+      },
+      "package_results": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/tui",
+          "Action": "fail",
+          "Elapsed": 0.931
+        },
+        {
+          "Package": "github.com/Nathandela/swarm/internal/skeleton",
+          "Action": "fail",
+          "Elapsed": 8.576
+        }
+      ]
+    }
+  ],
+  "eintr": {
+    "red": {
+      "path": "/private/tmp/swarm-claude-thin-message-eintr-red-20261027.jsonl",
+      "sha256": "f2798f9d27b52100767bc34931a79bd13d72c099ac51efdcc95828318332efbe",
+      "test_actions": {
+        "pass": 0,
+        "fail": 2,
+        "skip": 0
+      },
+      "package_results": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/shim",
+          "Action": "fail",
+          "Elapsed": 1.105
+        }
+      ]
+    },
+    "green": {
+      "path": "/private/tmp/swarm-claude-thin-message-eintr-green-20261027.jsonl",
+      "sha256": "5ea21a4ced0e447f4bfa28d046061cc9f869d8e22d3d490f5c2bd936443ecfe3",
+      "test_actions": {
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      },
+      "package_results": [
+        {
+          "Package": "github.com/Nathandela/swarm/internal/shim",
+          "Action": "pass",
+          "Elapsed": 2.163
+        }
+      ]
+    },
+    "limit": "Injected poll EINTR defect reproduced and repaired within the unchanged deadline. The original fixture SIGKILL errno remains unknown."
+  },
+  "broader_race": {
+    "command_result": "FAIL; never replaced by a diagnostic control or sum of passing follow-ups.",
+    "receipt": "/private/tmp/swarm-claude-thin-message-final-race-r1-20261027.json",
+    "receipt_sha256": "b72e6e6012e07d5084f681656ebc97f8ba0248af3452d28acb885e305386eb34",
+    "log": "/private/tmp/swarm-claude-thin-message-final-race-r1-20261027.jsonl",
+    "log_sha256": "bd57cd05a6ee24e7b1ddd4fd8322e8db5ac9e13ecfb73601da877d710d5d3bd8",
+    "test_pass": 4635,
+    "test_fail": [
+      {
+        "Package": "github.com/Nathandela/swarm/internal/protocol",
+        "Test": "TestProtocolMDBidi_FieldSetMatchesStructs"
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/protocol",
+        "Test": "TestProtocolMD_ExistsAndDocumentsEveryField"
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/skeleton",
+        "Test": "TestClaudeChatEndedStreamCannotPromoteRetainedResult"
+      },
+      {
+        "Package": "github.com/Nathandela/swarm/internal/tui",
+        "Test": "TestTerminalRestoreRedrawsUnchangedBoard"
+      }
+    ],
+    "skip_count": 43,
+    "race_reports": 0,
+    "aggregate_timeout": "skeleton timed out at12m, unfinished TestR7R4_AHardResumeFailureAtTheJoinRefusesToRegisterADeafBackend",
+    "source_changed": [],
+    "corrections": "Document required_runtime; retry only existing pending-consumer result within the original5s setup bound. Equivalent lint cleanups and diagnostic wording are covered separately.",
+    "followups": [
+      {
+        "path": "/private/tmp/swarm-claude-eof-protocol-corrections-race-r1-20261027.jsonl",
+        "sha256": "71e1d17793a9d2399b45fdfb66670cd2b383cd42169fa6ef1fb16af99c2574d3",
+        "test_actions": {
+          "pass": 3,
+          "fail": 0,
+          "skip": 0
+        },
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/skeleton",
+            "Action": "pass",
+            "Elapsed": 5.281
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/protocol",
+            "Action": "pass",
+            "Elapsed": 2.547
+          }
+        ]
+      },
+      {
+        "path": "/private/tmp/swarm-claude-lint-corrections-race-r1-20261027.jsonl",
+        "sha256": "5d4ace3524d8bd5465d7c5b7d0978cd73f0aa7ffbf4dae32d62c082283a7a522",
+        "test_actions": {
+          "pass": 124,
+          "fail": 0,
+          "skip": 1
+        },
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/protocol/schema",
+            "Action": "pass",
+            "Elapsed": 1.319
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/skeleton",
+            "Action": "pass",
+            "Elapsed": 31.339
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/tui",
+            "Action": "pass",
+            "Elapsed": 3.028
+          }
+        ]
+      },
+      {
+        "path": "/private/tmp/swarm-claude-lint-corrections-race-r2-20261027.jsonl",
+        "sha256": "0b16c63a11b53c79cc6d1d53cbac2be46e707ddbf4b2d3f18d2671adae48f521",
+        "test_actions": {
+          "pass": 45,
+          "fail": 0,
+          "skip": 0
+        },
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/protocol/schema",
+            "Action": "pass",
+            "Elapsed": 1.095
+          },
+          {
+            "Package": "github.com/Nathandela/swarm/internal/skeleton",
+            "Action": "pass",
+            "Elapsed": 9.505
+          }
+        ]
+      },
+      {
+        "path": "/private/tmp/swarm-claude-skeleton-unfinished-race-r1-20261027.jsonl",
+        "sha256": "21f7bb6c2dae2c9f36563d73164e6936463c82209d0cc410db4bbb25badbaa65",
+        "test_actions": {
+          "pass": 424,
+          "fail": 0,
+          "skip": 10
+        },
+        "package_results": [
+          {
+            "Package": "github.com/Nathandela/swarm/internal/skeleton",
+            "Action": "pass",
+            "Elapsed": 95.659
+          }
+        ]
+      }
+    ],
+    "skeleton_inventory": {
+      "compiled_count": 1320,
+      "latest_top_level_pass": 1292,
+      "latest_top_level_skip": 28,
+      "fail": 0,
+      "missing": 0,
+      "inventory_path": "/private/tmp/swarm-claude-final-gates-r1-20261027/skeleton-list.log",
+      "inventory_sha256": "cc0981c6358cbfcfc7631d543a19d311cb14975e4a5b3a5161952d70f5cc9991",
+      "coverage_receipt": "/private/tmp/swarm-claude-thin-message-final-race-coverage-r1-20261027.json",
+      "coverage_sha256": "7cc9d3284dcddabeab33a15cbc8dfbd8589e05317cfd2a60729bc37e8395b28d",
+      "verification": "Root independently reconstructed the exact inventory/outcome union from the five recorded logs. Counts overlap and must not be added."
+    }
+  },
+  "final_gates": {
+    "source_receipt": "/private/tmp/swarm-claude-thin-message-final-source-r2-20261027.json",
+    "source_receipt_sha256": "ba5e2019f282f57a4be2c6219c23a73776f0f8a2fbaaa3b7bb72aeb58390c47b",
+    "source_changed_during_gates": [],
+    "results": [
+      {
+        "gate": "build",
+        "command": [
+          "python3",
+          "/private/tmp/swarm-login-go-repaired-r2-20261026.py",
+          "build",
+          "./..."
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 13.517,
+        "log": "/private/tmp/swarm-claude-final-gates-r2-20261027/build.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "gate": "vet",
+        "command": [
+          "python3",
+          "/private/tmp/swarm-login-go-repaired-r2-20261026.py",
+          "vet",
+          "./..."
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 9.401,
+        "log": "/private/tmp/swarm-claude-final-gates-r2-20261027/vet.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "gate": "lint",
+        "command": [
+          "/usr/local/bin/golangci-lint",
+          "run",
+          "--timeout=10m"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 46.271,
+        "log": "/private/tmp/swarm-claude-final-gates-r2-20261027/lint.log",
+        "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+      },
+      {
+        "gate": "diff-check",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.082,
+        "log": "/private/tmp/swarm-claude-final-gates-r2-20261027/diff-check.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  },
+  "reviews": {
+    "Sol": "Independent connected-source review found queued Send bypass of pairing modal; minimal fix/test reviewed and green for the development boundary.",
+    "Root": "Reviewed connected implementation, EOF lifecycle/omission test and lock/identity/receipt/UI boundaries; independently rehashed focused logs, full race log, source pins, final gate logs and skeleton inventory coverage.",
+    "Astra": "Earlier design/source reviews exist; final review unavailable due model usage limit. No final Astra or production sign-off is claimed."
+  },
+  "open_limits": [
+    "h6sc.25.1: finite dev reader readiness polls at10ms; cancellable readiness and fleet CPU must qualify before native activation.",
+    "h6sc.26: unchanged terminal restore test reproduces its known failure; evidence in ../terminal-restore-2026-10-26.json. Root verified unchanged test SHA57d3b3c604fd5da1c81fb5911a97acb3d95b001c57d9ce667ca0f0466f856b3e.",
+    "h6sc.28/.29: historical Codex ingress and Claude enrollment failures remain unexplained; later passes do not repair them.",
+    "h6sc.24: main6324374c/v0.25.0 native sender/guard and delivery-settlement additions are not integrated here. No dual prompt authority.",
+    "h6sc.30: investigate installed native mod execution evidence before expanding native chat; submitted/started and coarse error remain insufficient.",
+    "No real accounts, live fleet migration, main merge, release tag or deployment in this checkpoint."
+  ]
+}

@@ -119,21 +119,25 @@ const (
 // Control is the single message envelope for every shimwire control message;
 // which fields are meaningful depends on Type.
 type Control struct {
-	OpenCodeDispatch     bool            `json:"opencode_dispatch,omitempty"`
-	OpenCodeRequest      json.RawMessage `json:"opencode_request,omitempty"`
-	OpenCodeReceipt      json.RawMessage `json:"opencode_receipt,omitempty"`
-	OpenCodeError        string          `json:"opencode_error,omitempty"`
-	OpenCodeInputEmbargo bool            `json:"opencode_input_embargo,omitempty"`
-	InputEmbargo         bool            `json:"input_embargo,omitempty"`
-	IncidentID           string          `json:"incident_id,omitempty"`
-	Token                string          `json:"token,omitempty"`
-	Type                 string          `json:"type"`
-	WireVersion          int             `json:"wire_version,omitempty"` // hello
-	Cols                 int             `json:"cols,omitempty"`         // resize
-	Rows                 int             `json:"rows,omitempty"`         // resize
-	Sig                  string          `json:"sig,omitempty"`          // signal: SigTerm|SigKill
-	ExitCode             *int            `json:"exit_code,omitempty"`    // exit_report
-	ExitSignal           string          `json:"exit_signal,omitempty"`  // exit_report
+	ClaudePrimaryV1      bool                   `json:"claude_primary_v1,omitempty"`
+	ClaudePrimary        *ClaudePrimarySnapshot `json:"claude_primary,omitempty"`
+	ClaudeMessage        *ClaudeMessageRequest  `json:"claude_message,omitempty"`
+	ClaudeMessageResult  *ClaudeMessageResult   `json:"claude_message_result,omitempty"`
+	OpenCodeDispatch     bool                   `json:"opencode_dispatch,omitempty"`
+	OpenCodeRequest      json.RawMessage        `json:"opencode_request,omitempty"`
+	OpenCodeReceipt      json.RawMessage        `json:"opencode_receipt,omitempty"`
+	OpenCodeError        string                 `json:"opencode_error,omitempty"`
+	OpenCodeInputEmbargo bool                   `json:"opencode_input_embargo,omitempty"`
+	InputEmbargo         bool                   `json:"input_embargo,omitempty"`
+	IncidentID           string                 `json:"incident_id,omitempty"`
+	Token                string                 `json:"token,omitempty"`
+	Type                 string                 `json:"type"`
+	WireVersion          int                    `json:"wire_version,omitempty"` // hello
+	Cols                 int                    `json:"cols,omitempty"`         // resize
+	Rows                 int                    `json:"rows,omitempty"`         // resize
+	Sig                  string                 `json:"sig,omitempty"`          // signal: SigTerm|SigKill
+	ExitCode             *int                   `json:"exit_code,omitempty"`    // exit_report
+	ExitSignal           string                 `json:"exit_signal,omitempty"`  // exit_report
 	// SnapshotChunking is an OPTIONAL hello capability advertised by BOTH peers:
 	// the daemon sets it in its hello to tell the shim it can reassemble a chunked
 	// snapshot, and the shim sets it in its hello reply to tell the daemon it will

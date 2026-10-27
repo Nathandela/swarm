@@ -540,8 +540,17 @@ func (c *Client) Attach(id string) (*Attachment, error) {
 	return att, nil
 }
 
-// Close disconnects the client; the server observes the EOF and releases any lease
-// this client held (P-4/L3).
+// Closed reports whether this connection has ended.
+func (c *Client) Closed() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// Close disconnects the client and releases its leases.
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.done)

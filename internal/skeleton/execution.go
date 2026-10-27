@@ -17,7 +17,7 @@ func executionIncarnation(meta persist.Meta) string {
 }
 
 func (d *Daemon) registerExecutionSession(meta persist.Meta, token string, sources []adapter.SignalSource, fromStart bool) {
-	if d.executionStore == nil || !managedLoginProvider(meta.AgentType) {
+	if d.executionStore == nil || (!managedLoginProvider(meta.AgentType) && (!fromStart || !freshClaudeFixture(meta))) {
 		d.eng.RegisterSession(meta.ID, token, meta.ShimPID, sources, meta.Status)
 		return
 	}
@@ -35,6 +35,10 @@ func (d *Daemon) registerExecutionSession(meta persist.Meta, token string, sourc
 	// Restored native evidence still requires live reconciliation in the engine.
 	if saved != nil && saved.Validate() == nil && saved.SessionID == meta.ID && saved.Incarnation == identity.Incarnation && saved.ConversationID == identity.ConversationID {
 		identity.OwnerRevision = saved.OwnerRevision
+	}
+	if fromStart && freshClaudeFixture(meta) {
+		identity.ObservedFromStart = false
+		saved = &persist.ExecutionRecord{Version: persist.ExecutionVersion, SessionID: meta.ID, Incarnation: identity.Incarnation, ConversationID: meta.ConversationID, OwnerRevision: identity.OwnerRevision, UnknownActors: true, Incomplete: "dev_fake_chat_subset", MainTurn: meta.Status.Turn, Interaction: meta.Status.Interaction}
 	}
 	if err := d.eng.RegisterExecutionSession(meta.ID, token, meta.ShimPID, sources, meta.Status, identity, saved); err != nil {
 		log.Printf("skeleton: execution evidence requires reconciliation for session %s", meta.ID)

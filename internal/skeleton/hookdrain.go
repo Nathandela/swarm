@@ -480,6 +480,7 @@ func persistHookSeen(path string, rec hookSeenRecord) error {
 
 // HookDrainer drains one session's shim-owned hook spool into the daemon.
 type HookDrainer struct {
+	claudeFixture  *claudeFixtureState
 	d              *Daemon
 	sessionID      string
 	hookSocketPath string
@@ -565,6 +566,9 @@ func (hd *HookDrainer) DrainOnce() (applied, skipped int, err error) {
 }
 
 func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
+	if hd.claudeFixture != nil {
+		return hd.drainClaudeFixtureLocked()
+	}
 	if hd.d.claudeChatQuarantined(hd.sessionID) {
 		return 0, 0, errClaudeChatQuarantined
 	}

@@ -154,14 +154,17 @@ var testHookComposerBackendBegunNotYetCalled atomic.Pointer[func(local string)]
 // turn is current. The reservation bridges the normal app-server race in which turn/start has
 // returned its turn id but turn/started has not reached the event pump yet.
 type composerLane struct {
-	mu                  sync.Mutex
-	ready               *sync.Cond
-	nextTicket          uint64
-	servingTicket       uint64
-	barrier             uint64
-	stopsInFlight       uint64
-	reservedNativeTurn  string
-	closedAtReservation string
+	claudeAdmitMu          sync.Mutex
+	pendingClaudeAdmission uint64
+	claudeFixture          *claudeFixtureState
+	mu                     sync.Mutex
+	ready                  *sync.Cond
+	nextTicket             uint64
+	servingTicket          uint64
+	barrier                uint64
+	stopsInFlight          uint64
+	reservedNativeTurn     string
+	closedAtReservation    string
 	// supersededTurn is the daemon turn a typed provider steer refusal proved has ended.
 	// It is published at the retry turn/start write boundary, before that call's reply can
 	// reveal the replacement's native id. Until the event pump folds current state, a Stop
@@ -541,6 +544,9 @@ func (d *Daemon) composerSendFrom(machine, operationID string, req protocol.Comp
 	local, err := d.resolveChatSession(machine, req.Session)
 	if err != nil {
 		return protocol.CodeInvalidField, errIsLife5("composer send: %v", err)
+	}
+	if d.claudeFixtureState(local) != nil {
+		return d.sendClaudeFixture(local, operationID, req, originalBegin, source)
 	}
 	lane := d.composerLaneFor(local)
 	admittedBarrier := lane.enter()

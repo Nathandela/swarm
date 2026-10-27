@@ -64,8 +64,9 @@ func (c *SessionCapabilities) Validate() error {
 	if c.SessionInstance == "" {
 		return fmt.Errorf("%w: no session_instance", ErrCapabilityInconsistent)
 	}
-	if c.NativeComposer && (c.Provider != "opencode" || c.NativeInteractionVersion != 2 || c.StructuredChat) {
-		return fmt.Errorf("%w: native composer requires the exact OpenCode read contract", ErrCapabilityInconsistent)
+	nativeComposer := (c.Provider == "opencode" && c.NativeInteractionVersion == 2 && !c.StructuredChat) || (c.Provider == "fake" && c.NativeInteractionVersion == 1 && !c.StructuredChat && !c.TerminalFallback && !c.TerminalControl && !c.Interrupt)
+	if c.NativeComposer && !nativeComposer {
+		return fmt.Errorf("%w: native composer has an incompatible read contract", ErrCapabilityInconsistent)
 	}
 	return nil
 }

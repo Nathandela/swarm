@@ -19,15 +19,27 @@ checkpoint, chat launch, stdio shim, UI and capabilities were inactive. The
 checkpoint receipt records the then-current main/release blockers and focused
 checks; it does not qualify the integrated feature.
 
-The applied constructor is development-only: one shim-owned stdio primary, bounded
+The earlier development-only constructor checkpoint established one shim-owned stdio primary, bounded
 R3 capture, real config/metadata binding, replay UUID, and signal/Stop/EOF cleanup.
-Managed/native/public admission remains refused; message sending, a history
-controller, decisions, recovery and public routing are not enabled. The chat
-message-view exists but is unactivated, and native qualification remains open.
+At that checkpoint, message sending, history control, decisions, recovery and
+public routing were inactive. Native qualification remains open.
 The [constructor receipt](provider-logins/claude-chat-constructor-2026-10-27.json)
 records 170 applied focused race passes, 85 ordinary regression passes, 41
 post-lint race passes, and passing build/vet/lint checks. Main/release gates
 `h6sc.26`, `h6sc.28` and `h6sc.29` remain open.
+
+The [later thin-message checkpoint](provider-logins/claude-chat-message-2026-10-27.json)
+connects the fake-only one-turn primary through the actual TUI model and owner
+protocol to durable input, exact echo/result, history and Stop. Focused checks
+and deliberate guard-removal controls cover stale execution, read publication,
+EOF, lost acknowledgements and held persistence Sync returns. A queued Send is revoked when
+the pairing modal opens. A genuine frame validated before Stop may finish
+persistence afterwards; it cannot restore readiness or workflow completeness.
+The broader affected-package race run failed, including the existing terminal
+restore blocker and an aggregate skeleton timeout; the receipt preserves the
+test/doc setup failures and their focused corrections. No managed/native/public
+launch, native decisions, runtime restart/rejoin, ordinary subsequent turns or
+automatic continuation is qualified. Final Astra review remains unavailable.
 
 The storage-only prerequisite allows strict development `fake6`/`claude-chat`
 metadata for structured child tests while preserving ordinary `fake1` and

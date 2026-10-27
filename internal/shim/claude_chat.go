@@ -3,7 +3,6 @@ package shim
 // This constructor is deliberately available only through the existing dev
 // FakeAgentBin seam. Managed/native chat admission remains unavailable.
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -93,15 +93,7 @@ func validateClaudeChatReservation(cfg Config, shimStart int64) error {
 
 // One stdout frame has one shim-authored envelope. Raw preserves all bytes
 // except exactly one terminal LF. The identity is captured before readers start.
-type claudeChatPrimaryIdentity struct {
-	SessionID        string `json:"session_id"`
-	RequiredRuntime  string `json:"required_runtime"`
-	NativeSessionID  string `json:"native_session_id"`
-	ShimPID          int    `json:"shim_pid"`
-	ShimStartTime    int64  `json:"shim_start_time"`
-	PrimaryPID       int    `json:"primary_pid"`
-	PrimaryStartTime int64  `json:"primary_start_time"`
-}
+type claudeChatPrimaryIdentity = shimwire.ClaudePrimaryIdentity
 
 type claudeChatEnvelope struct {
 	Version         int                       `json:"v"`
@@ -113,32 +105,47 @@ type claudeChatEnvelope struct {
 	Raw             []byte                    `json:"raw"`
 }
 
+type claudeChatFrame struct {
+	body     []byte
+	sequence uint64
+}
+
 type claudeChatCapture struct {
-	signalMu       sync.Mutex // held THROUGH onSignal; retirement joins entered calls
-	signalsRetired bool
-	mu             sync.Mutex
-	frames, bytes  int // queued PLUS the frame currently inside Append
-	lost           bool
-	eof            [2]bool
-	sequence       uint64
-	identity       claudeChatPrimaryIdentity
-	queue          chan []byte
-	done           chan struct{}
-	spool          *HookSpool
-	server         *server
+	admission                     sync.Mutex
+	partial                       []byte
+	oversized                     bool
+	readerRevision, ownerRevision uint64
+	stdin, stdout                 *os.File
+	durableSequence               uint64     // capture.mu; successful contiguous Append prefix
+	signalMu                      sync.Mutex // held THROUGH onSignal; retirement joins entered calls
+	signalsRetired                bool
+	mu                            sync.Mutex
+	frames, bytes                 int // queued PLUS the frame currently inside Append
+	lost                          bool
+	eof                           [2]bool
+	sequence                      uint64
+	identity                      claudeChatPrimaryIdentity
+	queue                         chan claudeChatFrame
+	done                          chan struct{}
+	spool                         *HookSpool
+	server                        *server
 }
 
 func newClaudeChatCapture(spool *HookSpool, srv *server, identity claudeChatPrimaryIdentity) *claudeChatCapture {
-	c := &claudeChatCapture{queue: make(chan []byte, claudeChatFrames), done: make(chan struct{}), spool: spool, server: srv, identity: identity}
+	c := &claudeChatCapture{queue: make(chan claudeChatFrame, claudeChatFrames), done: make(chan struct{}), spool: spool, server: srv, identity: identity}
 	go func() {
 		defer close(c.done)
-		for body := range c.queue {
-			if _, err := c.spool.Append(body); err != nil {
+		for frame := range c.queue {
+			_, appendErr := c.spool.Append(frame.body)
+			if appendErr != nil {
 				c.fail()
 			}
 			c.mu.Lock()
+			if appendErr == nil && frame.sequence == c.durableSequence+1 {
+				c.durableSequence = frame.sequence
+			}
 			c.frames--
-			c.bytes -= len(body)
+			c.bytes -= len(frame.body)
 			c.mu.Unlock()
 		}
 	}()
@@ -195,52 +202,28 @@ func (c *claudeChatCapture) admit(raw []byte) bool {
 	c.sequence++
 	c.frames++
 	c.bytes += len(body)
-	c.queue <- body // capacity reserved under the same lock; never waits on fsync
+	c.queue <- claudeChatFrame{body: body, sequence: c.sequence} // capacity reserved under the same lock; never waits on fsync
 	c.mu.Unlock()
 	return true
 }
 
 func (c *claudeChatCapture) readStdout(r io.Reader) {
-	rd := bufio.NewReaderSize(r, 32<<10)
-	var line []byte
-	oversized := false
+	var buf [32 << 10]byte
 	for {
-		part, err := rd.ReadSlice('\n')
-		if !oversized {
-			// Permit the optional LF in addition to the raw cap. All later chunks of
-			// a rejected line are drained without accumulating or encoding them.
-			if len(part) > claudeChatBytes+1-len(line) {
-				c.fail()
-				line = nil
-				oversized = true
+		_, err := c.consumeStdout(r, buf[:])
+		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) {
+			if c.stdout != nil {
+				// shortcut: finite dev fixture polls at 10ms; use cancellable runtime readiness before native/fleet activation.
+				if _, pollErr := claudePipePoll(c.stdout, unix.POLLIN, 10); pollErr != nil && !errors.Is(pollErr, unix.EINTR) {
+					c.fail()
+					return
+				}
 			} else {
-				line = append(line, part...)
+				time.Sleep(time.Millisecond)
 			}
-		}
-		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
-		terminated := len(part) > 0 && part[len(part)-1] == '\n'
-		if !oversized && len(line) != 0 {
-			raw := line
-			if terminated {
-				raw = raw[:len(raw)-1]
-			}
-			c.admit(raw)
-			if !terminated {
-				c.fail()
-			} // retain bounded torn bytes, never call them complete
-		}
-		line = nil
-		oversized = false
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				c.mu.Lock()
-				c.eof[0] = true
-				c.mu.Unlock()
-			} else {
-				c.fail()
-			}
 			return
 		}
 	}
@@ -366,7 +349,20 @@ func runClaudeChatPrimary(cfg Config, sigCh <-chan os.Signal) (agentExit int, ru
 	if err != nil {
 		return 0, err
 	}
-	cmd := &exec.Cmd{Path: cfg.Argv[0], Args: cfg.Argv, Env: buildEnv(cfg.Env), Dir: cfg.Cwd, Stdin: inR, Stdout: outW, Stderr: errW, SysProcAttr: &syscall.SysProcAttr{Setpgid: true}}
+	fixtureEnv := make([]string, 0, len(cfg.Env)+1)
+	for _, entry := range cfg.Env {
+		if !strings.HasPrefix(entry, "SWARM_CLAUDE_PRIMARY_FIXTURE_DIR=") {
+			fixtureEnv = append(fixtureEnv, entry)
+		}
+	}
+	fixtureEnv = append(fixtureEnv, "SWARM_CLAUDE_PRIMARY_FIXTURE_DIR="+cfg.SessionDir)
+	if err := claudePipeNonblock(inW); err != nil {
+		return 0, err
+	}
+	if err := claudePipeNonblock(outR); err != nil {
+		return 0, err
+	}
+	cmd := &exec.Cmd{Path: cfg.Argv[0], Args: cfg.Argv, Env: buildEnv(fixtureEnv), Dir: cfg.Cwd, Stdin: inR, Stdout: outW, Stderr: errW, SysProcAttr: &syscall.SysProcAttr{Setpgid: true}}
 	if testHookAfterSignalArm != nil {
 		testHookAfterSignalArm()
 	}
@@ -399,9 +395,11 @@ func runClaudeChatPrimary(cfg Config, sigCh <-chan os.Signal) (agentExit int, ru
 	}
 	identity := claudeChatPrimaryIdentity{SessionID: cfg.SessionID, RequiredRuntime: cfg.RequiredRuntime, NativeSessionID: cfg.ConversationID, ShimPID: os.Getpid(), ShimStartTime: shimStart, PrimaryPID: cmd.Process.Pid, PrimaryStartTime: primaryStart}
 	capture = newClaudeChatCapture(spool, srv, identity)
+	capture.stdin, capture.stdout = inW, outR
+	srv.claudePrimary.Store(capture)
 	var readers sync.WaitGroup
 	readers.Add(2)
-	go func() { defer readers.Done(); capture.readStdout(outR) }()
+	go func() { defer readers.Done(); capture.readStdout(claudePipeReader{file: outR}) }()
 	go func() { defer readers.Done(); capture.readStderr(errR, os.Stderr) }()
 	waitErr := cmd.Wait()
 	stopSignals()

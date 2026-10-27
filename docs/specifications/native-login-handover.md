@@ -568,6 +568,17 @@ implementing a new opt-in Swarm chat for new Claude sessions only. This does
 not authorize converting existing sessions or replacing the default
 native-terminal interface.
 
+Main `6324374c` now includes Claude's native sender and independent queue guard,
+with native permission and conversation-change checks; these additions are not
+yet merged into this branch. Their submitted/started
+receipts prove message admission, not task completion or safe quota recovery.
+Before extending the native chat runtime, `h6sc.30` evaluates passive native mod
+events through the installed pinned CLI. The documented
+[turn, tool and session hooks](https://code.claude.com/docs/en/plugins/mods/reference)
+could preserve the native terminal interface, but unfinished-work, human-wait,
+cancellation and background-work discrimination remain unqualified. This
+investigation grants no automatic continuation authority.
+
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It
 does not permanently mark a merely near-limit account exhausted. Known reset
@@ -595,14 +606,25 @@ this is not native qualification. At that quarantine checkpoint, chat launch,
 stdio shim, UI and capabilities were inactive. See the
 [checkpoint evidence](../verification/provider-logins/claude-chat-quarantine-2026-10-27.json).
 
-The applied constructor is development-only: one shim-owned stdio primary, bounded
+The earlier constructor checkpoint was development-only: one shim-owned stdio primary, bounded
 R3 capture, real config/metadata binding, replay UUID, and signal/Stop/EOF cleanup.
-Managed/native/public admission remains refused. Message sending, a history controller,
-decisions, recovery and public routing are not enabled; the chat message-view exists
-but is unactivated. This is not native or release qualification. The
+At that checkpoint, message sending, history control, decisions, recovery and
+public routing were inactive. This was not native or release qualification. The
 [constructor evidence](../verification/provider-logins/claude-chat-constructor-2026-10-27.json)
 records passing focused and ordinary regression checks. Main/release gates
 `h6sc.26`, `h6sc.28` and `h6sc.29` remain open.
+
+The current development slice connects that fake primary to the existing TUI
+chat view, one durable semantic owner message, exact native-style echo/result,
+bounded history and owned Stop. Reader publication, execution revision and
+process identity fence input and evidence; Stop completes while the test holds
+persistence Sync returns. Any different message operation refuses in this one-turn fixture.
+Workflow custody remains explicitly incomplete. Managed/native/public launch,
+native decisions, runtime restart/rejoin, ordinary subsequent turns and automatic
+continuation remain unavailable. See the
+[thin-message evidence](../verification/provider-logins/claude-chat-message-2026-10-27.json)
+for passing focused checks, deliberate source-removal controls and the failed
+broader regression run; this is an in-progress checkpoint.
 
 The storage-only prerequisite permits strict development `fake6`/`claude-chat`
 metadata for structured child tests. Ordinary `fake1` and managed schema 5/6

@@ -390,6 +390,9 @@ func (d *Daemon) nativeInteractionHistory(req schema.InteractionHistoryReq) (sch
 	if err != nil || !req.Native || req.Limit <= 0 || len(req.NativeCursor) > schema.MaxNativeHistoryCursorBytes || len(req.BeforeItem) > 128 {
 		return empty, protocol.CodeInvalidField, errors.New("native history request is invalid")
 	}
+	if d.claudeFixtureState(local) != nil {
+		return d.claudeFixtureHistory(req, local)
+	}
 	if d.core == nil {
 		return empty, protocol.CodeUnavailable, errors.New("native history is unavailable")
 	}

@@ -12,6 +12,8 @@ package skeleton
 import (
 	"errors"
 	"sync/atomic"
+
+	"github.com/Nathandela/swarm/internal/shimwire"
 )
 
 var errAuthOwnerEnding = errors.New("authwatch: the owner already ended this session")
@@ -102,6 +104,14 @@ func (d *Daemon) withAuthResumeFence(local string, attempt func() bool) (attempt
 }
 
 func (d *Daemon) ownerKill(local string) error {
+	if s := d.claudeFixtureState(local); s != nil {
+		s.fail()
+		s.mu.Lock()
+		target := shimwire.ClaudePrimaryIdentity{SessionID: s.meta.ID, RequiredRuntime: s.meta.RequiredRuntime, NativeSessionID: s.meta.ConversationID, ShimPID: s.meta.ShimPID, ShimStartTime: s.meta.ShimStartTime}
+		s.mu.Unlock()
+		return d.withOwnerSessionEnd(local, func() error { return d.core.KillClaudeFixture(local, target) })
+	}
+
 	if d.logins != nil && d.logins.owns(local) {
 		return d.logins.OwnerEnd(local, "kill")
 	}

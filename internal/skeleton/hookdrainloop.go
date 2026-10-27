@@ -51,7 +51,16 @@ type hookDrainState struct {
 // Re-starting an already-running session's loop is a no-op (reconcile can re-fire
 // OnSessionStart for a session this incarnation already registered).
 func (d *Daemon) startHookDrain(sessionID string) {
-	if d.core == nil || d.claudeChatQuarantined(sessionID) {
+	fixture := d.claudeFixtureState(sessionID)
+	if fixture != nil {
+		fixture.mu.Lock()
+		healthy := fixture.healthy
+		fixture.mu.Unlock()
+		if !healthy {
+			return
+		}
+	}
+	if d.core == nil || (d.claudeChatQuarantined(sessionID) && fixture == nil) {
 		return
 	}
 	ch, ok := d.core.SessionHookChannel(sessionID)
@@ -68,6 +77,12 @@ func (d *Daemon) startHookDrain(sessionID string) {
 		return
 	}
 	hd := NewHookDrainer(d, sessionID, ch.SocketPath, ch.CursorPath)
+	hd.claudeFixture = fixture
+	if fixture != nil {
+		fixture.mu.Lock()
+		fixture.drainer = hd
+		fixture.mu.Unlock()
+	}
 	hd.SetToken(ch.DrainToken)
 	hd.SetSpoolPath(ch.SpoolPath)
 	stop := make(chan struct{})

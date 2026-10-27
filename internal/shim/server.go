@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -59,6 +60,7 @@ var testHookAfterPTYResize func()
 // the hub still couples the pipeline to at most one live subscriber (S10), so a
 // later attach supersedes an earlier one.
 type server struct {
+	claudePrimary  atomic.Pointer[claudeChatCapture]
 	claudeChat     bool
 	openCode       *OpenCodeConfig
 	hub            *hub
@@ -242,7 +244,14 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: !s.claudeChat, SnapshotOnly: !s.claudeChat, SubmitTransaction: !s.claudeChat, ControlInput: !s.claudeChat, PasteInput: !s.claudeChat, InputEmbargo: !s.claudeChat, OpenCodeInputEmbargo: !s.claudeChat, OpenCodeDispatch: s.openCode != nil})
+				hello := shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: !s.claudeChat, SnapshotOnly: !s.claudeChat, SubmitTransaction: !s.claudeChat, ControlInput: !s.claudeChat, PasteInput: !s.claudeChat, InputEmbargo: !s.claudeChat, OpenCodeInputEmbargo: !s.claudeChat, OpenCodeDispatch: s.openCode != nil}
+				if s.claudeChat {
+					hello.ClaudePrimaryV1 = true
+					if primary := s.claudePrimary.Load(); primary != nil {
+						hello.ClaudePrimary = primary.primarySnapshot()
+					}
+				}
+				cw.writeControl(hello)
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -250,6 +259,17 @@ func (s *server) serveConn(conn net.Conn) {
 			}
 			if !helloed {
 				continue // ignore attach/resize/signal until the client has said hello
+			}
+			if s.claudeChat && ctrl.Type == shimwire.TypeClaudeMessage {
+				result := shimwire.ClaudeMessageResult{Version: 1, Status: "refused"}
+				if req := ctrl.ClaudeMessage; req != nil {
+					result.OperationID, result.NativeUserUUID, result.Identity, result.OwnerRevision = req.OperationID, req.NativeUserUUID, req.Identity, req.OwnerRevision
+					if primary := s.claudePrimary.Load(); primary != nil {
+						result = primary.writeMessage(*req)
+					}
+				}
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeClaudeMessageResult, ClaudeMessageResult: &result})
+				continue
 			}
 			if s.claudeChat && ctrl.Type != shimwire.TypeSignal {
 				return

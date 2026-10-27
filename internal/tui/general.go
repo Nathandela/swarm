@@ -648,6 +648,9 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 	if s.Status.Process != status.ProcessRunning {
 		return m, m.general.setBanner("session has ended - r resume, ctrl+x delete")
 	}
+	if s.RequiredRuntime == "claude-chat" {
+		return m.openClaudeChat(s)
+	}
 	if m.attachRunner != nil {
 		m.screen = screenAttach
 		// Only running rows reach here, so the passthrough is always read-write.
