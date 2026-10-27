@@ -14,7 +14,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [Install](install.md) — Homebrew tap, `go install`, static binary download, upgrade/D-8 note (E13.3)
 
 ## Operations
-- [Discord whole-swarm connection](ops/discord.md) — independent per-place bot setup, attributed teammate conversations, owner controls and deliberate replies; [decision](adr/ADR-036-whole-swarm-discord.md), [integration evidence and open release gates](verification/discord-integration.md)
+- [Discord whole-swarm connection](ops/discord.md) — independent per-place bot setup, attributed teammate conversations, owner controls and deliberate replies; [decision](adr/ADR-036-whole-swarm-discord.md), [implementation and v0.24.0 deployment evidence](verification/discord-integration.md)
 - [Provider logins](operations/provider-logins.md) — manage native Claude Code and Codex logins and provider-wide safe switches
 - [Pilot a Swarm conversation](operations/pilot.md) — caller-scoped `swarm --pilot` guidance and commands
 - [Remote-control operator runbook](operations/operator-runbook.md) — provision, pair, revoke and diagnose the one Cloudflare relay-v2 Worker

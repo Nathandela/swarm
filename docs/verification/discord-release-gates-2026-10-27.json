@@ -75,6 +75,7 @@
   ],
   "limits": [
     "Opt-in hosted/native tests skipped by the ordinary Go suite have separate evidence where relevant; no claim of live Discord credentials or physical service reboot",
-    "Release CI, signed artifacts and installed-host checks follow this pre-release source gate"
-  ]
+    "Release CI, signed publication and installed-host checks passed; see discord-v0240-release.json."
+  ],
+  "release_record": "discord-v0240-release.json"
 }

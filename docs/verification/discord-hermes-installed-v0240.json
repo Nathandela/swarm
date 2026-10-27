@@ -1,0 +1,55 @@
+{
+  "release": "v0.24.0",
+  "release_source_commit": "917b36fef0b0381cb26ce947acca93b3a68bae77",
+  "boundary": "Release-source embedded daemon/core plus actual installed-binary shims; does not execute installed daemon CLI entrypoint. Hermes itself is pinned source with prepared TUI and synthetic loopback provider/auth.",
+  "hosts": {
+    "mac": {
+      "exit_code": 0,
+      "cleanup_complete": true,
+      "installed_and_private_copy_sha256": "a1a21cbcc3ac57b9ef62e16a4779cc3c4f627394638f67115c94ae2df505e210",
+      "release_probe_sha256": "42d10b2ff63cfab986cb1b92f5f2e24a92b413d510679ed580343a66c72d950a",
+      "assertions": {
+        "a_async_child_stopped": true,
+        "a_background_stopped": true,
+        "b_background_survived": true,
+        "b_still_usable": true,
+        "literal_approval_text_queued": true,
+        "native_tui_permission_rendered": true,
+        "restart_no_model_turn": true,
+        "workspace_retained_unknown": true,
+        "os_write_guard": true,
+        "os_network_guard": true,
+        "no_production_auth": true
+      },
+      "receipt_states": [
+        "submitted"
+      ]
+    },
+    "linux": {
+      "exit_code": 0,
+      "cleanup_complete": true,
+      "installed_and_private_copy_sha256": "9dbf24ea7659b548ac57d0eb3557bcdd207ff8f5a61ac730182ba60f2258899c",
+      "release_probe_sha256": "606329a021580580189f21f25665970d6f1343d1dd3ab2c050318ddf0d750988",
+      "assertions": {
+        "a_async_child_stopped": true,
+        "a_background_stopped": true,
+        "b_background_survived": true,
+        "b_still_usable": true,
+        "literal_approval_text_queued": true,
+        "native_tui_permission_rendered": true,
+        "restart_no_model_turn": true,
+        "workspace_retained_unknown": true,
+        "os_write_guard": true,
+        "os_network_guard": true,
+        "no_production_auth": true
+      },
+      "receipt_states": [
+        "submitted"
+      ]
+    }
+  },
+  "read_or_completion_receipts_claimed": false,
+  "native_refreshes": false,
+  "preflight_note": "First Mac preflight stopped before provider execution because whole-universal codesign verification encountered unsigned x86_64. Coordinator approved arm64-only verification; arm64 embedded adhoc/linker signature verifies, binaries were not modified or re-signed. Archive trust is separately verified Ed25519 provenance by coordinator.",
+  "production_provider_mutations": false
+}
