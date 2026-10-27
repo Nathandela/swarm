@@ -4,8 +4,8 @@
 shim, semantic protocol, native status sampling, and saved-session resume.
 The existing classic launch remains the path when activation is disabled or the
 installed version is below v0.22.5. The guarded macOS shared-owner source gate
-passed on 2026-10-27. All-five release, Linux Hermes source qualification and
-installed-release-artifact qualification remain separate gates.
+passed on 2026-10-27, followed by the equivalent Linux x86_64 source gate.
+All-five release and installed-release-artifact qualification remain separate gates.
 
 ## Guarded shared-owner core qualification
 
@@ -51,7 +51,7 @@ run `scripts/verification/hermes_native_admission.py` with `--root`, `--source`,
 `--hermes`, `--node`, `--swarm` and `--probe`. The source pin is enforced. Linux
 must wrap the complete harness, fake provider and native processes in the
 read-only mount/fresh loopback network namespace required by
-`native_fixture_sandbox.py`; no Linux Hermes result is claimed here.
+`native_fixture_sandbox.py`.
 
 These observations establish this fixture's scoped stop behavior, not an
 authoritative native join or arbitrary descendant containment. Native list
@@ -68,6 +68,35 @@ without an end reason: ending the native scope could discard an unknown
 admission and drain its queued successor. The stable native TUI signal cleanup
 only closes its sockets; deliberate native UI quit remains provider-owned.
 The guarded source run above was repeated successfully after these fixes.
+
+## Linux shared-owner source qualification
+
+[Linux result](hermes-native-shared-owner-linux-2026-10-27.json): PASS, Ubuntu
+x86_64, Go 1.26.10 cross-compiled with CGO disabled, the same v0.22.5 source,
+Python 3.14.2, Node 26.12.1 and npm 12.0.2. Upstream core dependencies and their
+declared overrides were installed in an owned RAM directory; the TUI was built
+from its locked dependencies. Runtime archives were checksum verified. The
+source checkout and dependencies were mounted read-only outside the separate
+writable runtime root. No global package install, native authentication or
+production state change was required.
+
+`scripts/verification/hermes_native_linux.sh` ran the entire harness, fake
+provider, native owner, public Swarm daemon, TUI viewers and tool subprocesses
+inside Bubblewrap's read-only filesystem and fresh user/PID/network namespaces.
+Only loopback was enabled. The guard checked allowed scratch writes, PTY and
+provider TCP, rejected outside-root writes and external TCP, and verified the
+network namespace differs from its host. All macOS assertions above passed
+again on Linux, and the complete namespace fixture exited zero after cleanup.
+
+Two setup details surfaced on Linux. Source qualification needs the exact
+upstream release tag as well as its peeled source commit; an untagged shallow
+checkout reports a `vgit.*` version and correctly fails the stable floor. The
+real stable `--version` command took 3.45 seconds in the guarded VM, exceeding
+the ordinary three-second identity probe budget. Hermes now has a bounded
+ten-second identity probe; other providers retain three seconds. Its delayed
+CLI regression was red before the fix and green afterward, including race
+checks. Hermes Kill/Delete still report uncertain completion where no join
+proof exists; the longer detection budget changes no native approval policy.
 
 ## Historical native API and TUI qualification
 
@@ -174,7 +203,7 @@ topology or manually read/copy real credentials. The owner-facing normal native
 authentication/setup flow and its storage custody need integration review;
 per-agent forced login is not an accepted workaround.
 
-No Linux/VM, general background tool/subagent containment, process-crash recovery,
+No general background tool/subagent containment, process-crash recovery,
 production credential refresh, or installed-release-artifact qualification is
 claimed here. The source test proves normal shutdown of its own native owner
 and survival of another; it does not prove that arbitrary native descendants

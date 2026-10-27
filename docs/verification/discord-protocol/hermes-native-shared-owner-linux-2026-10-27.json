@@ -1,0 +1,137 @@
+{
+  "a_async_child_stopped": true,
+  "a_background_stopped": true,
+  "b_background_survived": true,
+  "b_still_usable": true,
+  "literal_approval_text_queued": true,
+  "native_tui_permission_rendered": true,
+  "permission_id": "040d20fcd8264bda93f8ac1097dd7288",
+  "receipts": [
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793060368807:7c98a63d3542b81146389dd1d1f38738",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793060368807:7c98a63d3542b81146389dd1d1f38738",
+      "session": "ep-25ab898c/xb75w5sge5o7bm6g",
+      "session_instance": "6e4fc03771a06922d39a7ece6ebce915",
+      "state": "submitted",
+      "native_session_id": "local-f4c01d816a7cadb07f65f2788fdf886ab1012beeff5e273ff5db478d18bced66",
+      "native_generation": "7fd10de341792ea05953ae72357ddb7a"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793060372392:47d08b7b61eb050520d71901460353cf",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793060372392:47d08b7b61eb050520d71901460353cf",
+      "session": "ep-25ab898c/pctf25lp4auiq26c",
+      "session_instance": "0e566c9b12f772b179e7e0c920492b69",
+      "state": "submitted",
+      "native_session_id": "local-7eaeaf8a48fa1ea1aa08fa7d0fd31cbbc14313f2b9c868612d8cc25190af3abb",
+      "native_generation": "73679fc88478f8397e06115c901d8033"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793060372887:e5598a407bf44451f4d350aaf8e1c0f3",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793060372887:e5598a407bf44451f4d350aaf8e1c0f3",
+      "session": "ep-25ab898c/xb75w5sge5o7bm6g",
+      "session_instance": "6e4fc03771a06922d39a7ece6ebce915",
+      "state": "submitted",
+      "native_session_id": "local-f4c01d816a7cadb07f65f2788fdf886ab1012beeff5e273ff5db478d18bced66",
+      "native_generation": "7fd10de341792ea05953ae72357ddb7a"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793060373641:66827be23978972329b3dd014a718e46",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793060373641:66827be23978972329b3dd014a718e46",
+      "session": "ep-25ab898c/xb75w5sge5o7bm6g",
+      "session_instance": "6e4fc03771a06922d39a7ece6ebce915",
+      "state": "submitted",
+      "native_session_id": "local-f4c01d816a7cadb07f65f2788fdf886ab1012beeff5e273ff5db478d18bced66",
+      "native_generation": "7fd10de341792ea05953ae72357ddb7a"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793060374594:e338451db4a16cd99211d6b51eaf03d8",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793060374594:e338451db4a16cd99211d6b51eaf03d8",
+      "session": "ep-25ab898c/xb75w5sge5o7bm6g",
+      "session_instance": "6e4fc03771a06922d39a7ece6ebce915",
+      "state": "submitted",
+      "native_session_id": "local-f4c01d816a7cadb07f65f2788fdf886ab1012beeff5e273ff5db478d18bced66",
+      "native_generation": "7fd10de341792ea05953ae72357ddb7a"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793060397899:5f799ccac1bb3bb9497ba3b5da07fcd9",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793060397899:5f799ccac1bb3bb9497ba3b5da07fcd9",
+      "session": "ep-25ab898c/pctf25lp4auiq26c",
+      "session_instance": "0e566c9b12f772b179e7e0c920492b69",
+      "state": "submitted",
+      "native_session_id": "local-7eaeaf8a48fa1ea1aa08fa7d0fd31cbbc14313f2b9c868612d8cc25190af3abb",
+      "native_generation": "73679fc88478f8397e06115c901d8033"
+    }
+  ],
+  "restart_no_model_turn": true,
+  "session_a": "local-f4c01d816a7cadb07f65f2788fdf886ab1012beeff5e273ff5db478d18bced66",
+  "session_b": "local-7eaeaf8a48fa1ea1aa08fa7d0fd31cbbc14313f2b9c868612d8cc25190af3abb",
+  "shared_owner_instance": "0a51236cf4b54213b25443d6704fa651",
+  "shared_owner_pid": 12,
+  "shared_owner_start": 84320927,
+  "workspace_retained_unknown": true,
+  "source_pin": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+  "provider_version": "0.22.5",
+  "platform": "Linux",
+  "os_write_guard": true,
+  "os_network_guard": true,
+  "no_production_auth": true,
+  "qualification_date": "2026-10-27",
+  "architecture": "x86_64",
+  "fixture_root": "/dev/shm/swarm-hermes-qual-20261027-run2",
+  "source_checkout_tracked_files_clean": true,
+  "release_tag": "v0.22.5",
+  "swarm_code_checkpoint": "c2042186 (same production code; artifacts built immediately before checkpoint)",
+  "python_version": "3.14.2",
+  "node_version": "26.12.1",
+  "npm_version": "12.0.2",
+  "namespace_cleanup_exit_code": 0,
+  "artifact_sha256": {
+    "hermes-fixture-swarm-linux": "c3c159b7e6800932ecf39b30eebdc1dff3b69eb0f10c9f6fcb3874f84fe0684f",
+    "hermes-native-probe-linux": "b32741a6b0c08bf647c8a62d7ea9c1716647ee02549ded9b05f572c7b25c0dbb",
+    "original_hermes_console_script": "f9fe0f553de86ea5e4e5af248f52c8b2456ebb0680b78c138d71da979378e95b",
+    "scripts/verification/hermes_native_admission.py": "4a63db82f1b1417bd4c93f54e8c4b2f51f3e56907e59943a52d77443d0b9bb93",
+    "scripts/verification/native_fixture_sandbox.py": "638de64825090995b71511f01cdeadf44f4871d07d27aed8e79381c8757dd7bd",
+    "scripts/verification/hermes_native_linux.sh": "73fbf45de573ffebb99f034cda75931f88c3983793b509d64bdc9604b6afcf72",
+    "scripts/verification/hermes_native_probe/main.go": "2f2395c6555183dd9eab2efe2ca0954cf4bfd1ff29833d5feafdf8296b835208"
+  },
+  "runtime_archive_sha256": {
+    "node_linux_x64": "6170b2d474e1c626f43cff3adc118df9fe3b573258a4fc3d850c8dbc6b079bbd",
+    "npm": "5dbb86c71d07a1957f2e90734092dd6a58bdcd9ebc2d8d41ca1c6e6a21d364e1",
+    "python_build_standalone_20260127_cpython3142_x86_64": "c2926d6707f4339e3bf30e90437b387712b47e60e9e55bff1dcb36bf7688b01d"
+  },
+  "limits": [
+    "Synthetic auth and loopback provider only; no production native authentication or credential refresh qualification.",
+    "Pinned Hermes source with prepared upstream TUI assets; no installed-release-artifact qualification.",
+    "Observed fixture A background and async-child processes stopped; no general native job join or workspace cleanup proof."
+  ]
+}
