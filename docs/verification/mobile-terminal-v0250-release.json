@@ -1,0 +1,669 @@
+{
+  "schema": 1,
+  "date": "2026-10-27",
+  "release": {
+    "tag": "v0.25.0",
+    "source_commit": "6a6a432076a412d4326d57960810fe74f1876503",
+    "url": "https://github.com/Nathandela/swarm/releases/tag/v0.25.0",
+    "published_at": "2026-10-27T08:28:06Z",
+    "optional_feature_default_off": true
+  },
+  "workflow": {
+    "id": 40471411699,
+    "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699",
+    "head_sha": "6a6a432076a412d4326d57960810fe74f1876503",
+    "status": "completed",
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "container (pushgw-container.yml, reused) / build, scan, non-root, hardening",
+        "conclusion": "success",
+        "databaseId": 122079702640,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079702640"
+      },
+      {
+        "name": "gates (ci.yml, reused) / fuzz (active, bounded fuzztime)",
+        "conclusion": "success",
+        "databaseId": 122079702825,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079702825"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/amd64)",
+        "conclusion": "success",
+        "databaseId": 122079702845,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079702845"
+      },
+      {
+        "name": "gates (ci.yml, reused) / release dry-run (goreleaser snapshot, E13.1)",
+        "conclusion": "success",
+        "databaseId": 122079702882,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079702882"
+      },
+      {
+        "name": "gates (ci.yml, reused) / remote v2 (workerd + Firestore emulator)",
+        "conclusion": "success",
+        "databaseId": 122079702900,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079702900"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/amd64)",
+        "conclusion": "success",
+        "databaseId": 122079702932,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079702932"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test-darwin (macos)",
+        "conclusion": "success",
+        "databaseId": 122079702964,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079702964"
+      },
+      {
+        "name": "gates (ci.yml, reused) / test (go test ./...)",
+        "conclusion": "success",
+        "databaseId": 122079702994,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079702994"
+      },
+      {
+        "name": "gates (ci.yml, reused) / docs (required files)",
+        "conclusion": "success",
+        "databaseId": 122079703061,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079703061"
+      },
+      {
+        "name": "gates (ci.yml, reused) / android (aar + gradle gate)",
+        "conclusion": "success",
+        "databaseId": 122079703092,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079703092"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/amd64)",
+        "conclusion": "success",
+        "databaseId": 122079703121,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079703121"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build-darwin (darwin/arm64)",
+        "conclusion": "success",
+        "databaseId": 122079703130,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079703130"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (linux/arm64)",
+        "conclusion": "success",
+        "databaseId": 122079703169,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079703169"
+      },
+      {
+        "name": "gates (ci.yml, reused) / build (darwin/arm64)",
+        "conclusion": "success",
+        "databaseId": 122079703230,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079703230"
+      },
+      {
+        "name": "gates (ci.yml, reused) / lint (golangci-lint)",
+        "conclusion": "success",
+        "databaseId": 122079703516,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122079703516"
+      },
+      {
+        "name": "publish immutable pushgw image",
+        "conclusion": "success",
+        "databaseId": 122085282774,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122085282774"
+      },
+      {
+        "name": "publish (goreleaser release)",
+        "conclusion": "success",
+        "databaseId": 122086383301,
+        "url": "https://github.com/Nathandela/swarm/actions/runs/40471411699/job/122086383301"
+      }
+    ],
+    "fresh_hosted_full_race_passed": true,
+    "separate_hosted_full_normal_not_claimed": true
+  },
+  "artifact_verification": {
+    "release": "v0.25.0",
+    "commit": "6a6a432076a412d4326d57960810fe74f1876503",
+    "trust_key": "d7938ebe67f5cb7ff202724352a7890cd0af8ca422c22e3e7af32b6284e7885a",
+    "checksums_sha256": "464dcf2db9b8b2be8976ff14cd7a61071ca697c9df45f59b82a3c2caa5752fe7",
+    "signature_valid": true,
+    "tampered_checksums_rejected": true,
+    "archives": {
+      "swarm_0.25.0_darwin_all.tar.gz": {
+        "sha256": "5a7190007e6d3a4ec8c0eae940ee5a95a29f106910775cb38e8edf0fa16919be",
+        "compat": {
+          "login_schema": 1,
+          "account_schema": 1,
+          "account_jobs": 1,
+          "account_recovery": 3,
+          "account_worker": 6,
+          "account_shim": 2,
+          "account_config": 4,
+          "account_inventory": 1,
+          "account_auth": 1,
+          "version": "v0.25.0",
+          "shimwire": 2,
+          "protocol": 1,
+          "schema": 5
+        },
+        "binaries": {
+          "swarm": {
+            "sha256": "3714f52c1da62cae6bdc2ffd1795193a48103beb77663ea4065a9eeb337b8791",
+            "slices": {
+              "amd64": {
+                "sha256": "88bb4b2b6198b0aa476e77b70952902f2d4382c27197377bd5315ad703d57abd",
+                "go": "go1.26.10",
+                "path": "github.com/Nathandela/swarm/cmd/swarm",
+                "module": {
+                  "Path": "github.com/Nathandela/swarm",
+                  "Version": "v0.25.0"
+                },
+                "settings": {
+                  "-buildmode": "exe",
+                  "-compiler": "gc",
+                  "-ldflags": "-s -w -X github.com/Nathandela/swarm/internal/version.Version=0.25.0 -X github.com/Nathandela/swarm/internal/version.Commit=6a6a432076a412d4326d57960810fe74f1876503 -X github.com/Nathandela/swarm/internal/version.Date=2026-10-27T08:27:51Z",
+                  "CGO_ENABLED": "0",
+                  "GOAMD64": "v1",
+                  "GOARCH": "amd64",
+                  "GOOS": "darwin",
+                  "vcs": "git",
+                  "vcs.modified": "false",
+                  "vcs.revision": "6a6a432076a412d4326d57960810fe74f1876503",
+                  "vcs.time": "2026-10-27T08:05:22Z"
+                }
+              },
+              "arm64": {
+                "sha256": "0ad6bded37aa57bb7919dd3d6e3bb0be8148eb9282a87950d6af4415f300b72d",
+                "go": "go1.26.10",
+                "path": "github.com/Nathandela/swarm/cmd/swarm",
+                "module": {
+                  "Path": "github.com/Nathandela/swarm",
+                  "Version": "v0.25.0"
+                },
+                "settings": {
+                  "-buildmode": "exe",
+                  "-compiler": "gc",
+                  "-ldflags": "-s -w -X github.com/Nathandela/swarm/internal/version.Version=0.25.0 -X github.com/Nathandela/swarm/internal/version.Commit=6a6a432076a412d4326d57960810fe74f1876503 -X github.com/Nathandela/swarm/internal/version.Date=2026-10-27T08:27:51Z",
+                  "CGO_ENABLED": "0",
+                  "GOARCH": "arm64",
+                  "GOARM64": "v8.0",
+                  "GOOS": "darwin",
+                  "vcs": "git",
+                  "vcs.modified": "false",
+                  "vcs.revision": "6a6a432076a412d4326d57960810fe74f1876503",
+                  "vcs.time": "2026-10-27T08:05:22Z"
+                }
+              }
+            }
+          },
+          "swarm-remote": {
+            "sha256": "6a00139c9534f04a877a83161dd75a1b64ba6c15ad1fda541b9c9ff1f13d0a9c",
+            "slices": {
+              "amd64": {
+                "sha256": "128092fe3a5978dbcdb715a42578a3dc75885d9d2669b64c8b77c0e478cbed63",
+                "go": "go1.26.10",
+                "path": "github.com/Nathandela/swarm/cmd/swarm-remote",
+                "module": {
+                  "Path": "github.com/Nathandela/swarm",
+                  "Version": "v0.25.0"
+                },
+                "settings": {
+                  "-buildmode": "exe",
+                  "-compiler": "gc",
+                  "-ldflags": "-s -w -X github.com/Nathandela/swarm/internal/version.Version=0.25.0 -X github.com/Nathandela/swarm/internal/version.Commit=6a6a432076a412d4326d57960810fe74f1876503 -X github.com/Nathandela/swarm/internal/version.Date=2026-10-27T08:27:51Z",
+                  "CGO_ENABLED": "0",
+                  "GOAMD64": "v1",
+                  "GOARCH": "amd64",
+                  "GOOS": "darwin",
+                  "vcs": "git",
+                  "vcs.modified": "false",
+                  "vcs.revision": "6a6a432076a412d4326d57960810fe74f1876503",
+                  "vcs.time": "2026-10-27T08:05:22Z"
+                }
+              },
+              "arm64": {
+                "sha256": "cdef20d87e92dd2df25b02a6fa8397d64065de80a4886abb53cebf00dc5de62e",
+                "go": "go1.26.10",
+                "path": "github.com/Nathandela/swarm/cmd/swarm-remote",
+                "module": {
+                  "Path": "github.com/Nathandela/swarm",
+                  "Version": "v0.25.0"
+                },
+                "settings": {
+                  "-buildmode": "exe",
+                  "-compiler": "gc",
+                  "-ldflags": "-s -w -X github.com/Nathandela/swarm/internal/version.Version=0.25.0 -X github.com/Nathandela/swarm/internal/version.Commit=6a6a432076a412d4326d57960810fe74f1876503 -X github.com/Nathandela/swarm/internal/version.Date=2026-10-27T08:27:51Z",
+                  "CGO_ENABLED": "0",
+                  "GOARCH": "arm64",
+                  "GOARM64": "v8.0",
+                  "GOOS": "darwin",
+                  "vcs": "git",
+                  "vcs.modified": "false",
+                  "vcs.revision": "6a6a432076a412d4326d57960810fe74f1876503",
+                  "vcs.time": "2026-10-27T08:05:22Z"
+                }
+              }
+            }
+          }
+        }
+      },
+      "swarm_0.25.0_linux_amd64.tar.gz": {
+        "sha256": "f2550297f831164345b3e7a9b8ab8efd88979a6bd36afd0d3830f83624f9f167",
+        "compat": {
+          "login_schema": 1,
+          "account_schema": 1,
+          "account_jobs": 1,
+          "account_recovery": 3,
+          "account_worker": 6,
+          "account_shim": 2,
+          "account_config": 4,
+          "account_inventory": 1,
+          "account_auth": 1,
+          "version": "v0.25.0",
+          "shimwire": 2,
+          "protocol": 1,
+          "schema": 5
+        },
+        "binaries": {
+          "swarm": {
+            "sha256": "6f2aebe85efd9487f0d9c497999cc8d475ca41b2c9f311cf038bf2fc1ce2cb56",
+            "slices": {
+              "amd64": {
+                "sha256": "6f2aebe85efd9487f0d9c497999cc8d475ca41b2c9f311cf038bf2fc1ce2cb56",
+                "go": "go1.26.10",
+                "path": "github.com/Nathandela/swarm/cmd/swarm",
+                "module": {
+                  "Path": "github.com/Nathandela/swarm",
+                  "Version": "v0.25.0"
+                },
+                "settings": {
+                  "-buildmode": "exe",
+                  "-compiler": "gc",
+                  "-ldflags": "-s -w -X github.com/Nathandela/swarm/internal/version.Version=0.25.0 -X github.com/Nathandela/swarm/internal/version.Commit=6a6a432076a412d4326d57960810fe74f1876503 -X github.com/Nathandela/swarm/internal/version.Date=2026-10-27T08:27:51Z",
+                  "CGO_ENABLED": "0",
+                  "GOAMD64": "v1",
+                  "GOARCH": "amd64",
+                  "GOOS": "linux",
+                  "vcs": "git",
+                  "vcs.modified": "false",
+                  "vcs.revision": "6a6a432076a412d4326d57960810fe74f1876503",
+                  "vcs.time": "2026-10-27T08:05:22Z"
+                }
+              }
+            }
+          },
+          "swarm-remote": {
+            "sha256": "4352536a45946ed41b163515689def2c4ab115c45ac3f12cde2b81eaaee6ed9a",
+            "slices": {
+              "amd64": {
+                "sha256": "4352536a45946ed41b163515689def2c4ab115c45ac3f12cde2b81eaaee6ed9a",
+                "go": "go1.26.10",
+                "path": "github.com/Nathandela/swarm/cmd/swarm-remote",
+                "module": {
+                  "Path": "github.com/Nathandela/swarm",
+                  "Version": "v0.25.0"
+                },
+                "settings": {
+                  "-buildmode": "exe",
+                  "-compiler": "gc",
+                  "-ldflags": "-s -w -X github.com/Nathandela/swarm/internal/version.Version=0.25.0 -X github.com/Nathandela/swarm/internal/version.Commit=6a6a432076a412d4326d57960810fe74f1876503 -X github.com/Nathandela/swarm/internal/version.Date=2026-10-27T08:27:51Z",
+                  "CGO_ENABLED": "0",
+                  "GOAMD64": "v1",
+                  "GOARCH": "amd64",
+                  "GOOS": "linux",
+                  "vcs": "git",
+                  "vcs.modified": "false",
+                  "vcs.revision": "6a6a432076a412d4326d57960810fe74f1876503",
+                  "vcs.time": "2026-10-27T08:05:22Z"
+                }
+              }
+            }
+          }
+        }
+      },
+      "swarm_0.25.0_linux_arm64.tar.gz": {
+        "sha256": "b6e74d73bf1811d4414c3930a36c5e793763f8b23843b24b53c308af1c2605f1",
+        "compat": {
+          "login_schema": 1,
+          "account_schema": 1,
+          "account_jobs": 1,
+          "account_recovery": 3,
+          "account_worker": 6,
+          "account_shim": 2,
+          "account_config": 4,
+          "account_inventory": 1,
+          "account_auth": 1,
+          "version": "v0.25.0",
+          "shimwire": 2,
+          "protocol": 1,
+          "schema": 5
+        },
+        "binaries": {
+          "swarm": {
+            "sha256": "8c44c8e745d0a4627a205ff5714e6dfa1815f0cb22a8b2d29258b2f695796374",
+            "slices": {
+              "arm64": {
+                "sha256": "8c44c8e745d0a4627a205ff5714e6dfa1815f0cb22a8b2d29258b2f695796374",
+                "go": "go1.26.10",
+                "path": "github.com/Nathandela/swarm/cmd/swarm",
+                "module": {
+                  "Path": "github.com/Nathandela/swarm",
+                  "Version": "v0.25.0"
+                },
+                "settings": {
+                  "-buildmode": "exe",
+                  "-compiler": "gc",
+                  "-ldflags": "-s -w -X github.com/Nathandela/swarm/internal/version.Version=0.25.0 -X github.com/Nathandela/swarm/internal/version.Commit=6a6a432076a412d4326d57960810fe74f1876503 -X github.com/Nathandela/swarm/internal/version.Date=2026-10-27T08:27:51Z",
+                  "CGO_ENABLED": "0",
+                  "GOARCH": "arm64",
+                  "GOARM64": "v8.0",
+                  "GOOS": "linux",
+                  "vcs": "git",
+                  "vcs.modified": "false",
+                  "vcs.revision": "6a6a432076a412d4326d57960810fe74f1876503",
+                  "vcs.time": "2026-10-27T08:05:22Z"
+                }
+              }
+            }
+          },
+          "swarm-remote": {
+            "sha256": "20017841360dceaf2f73dda200f991e594e041903955f30e3fed62e19c2a6d1f",
+            "slices": {
+              "arm64": {
+                "sha256": "20017841360dceaf2f73dda200f991e594e041903955f30e3fed62e19c2a6d1f",
+                "go": "go1.26.10",
+                "path": "github.com/Nathandela/swarm/cmd/swarm-remote",
+                "module": {
+                  "Path": "github.com/Nathandela/swarm",
+                  "Version": "v0.25.0"
+                },
+                "settings": {
+                  "-buildmode": "exe",
+                  "-compiler": "gc",
+                  "-ldflags": "-s -w -X github.com/Nathandela/swarm/internal/version.Version=0.25.0 -X github.com/Nathandela/swarm/internal/version.Commit=6a6a432076a412d4326d57960810fe74f1876503 -X github.com/Nathandela/swarm/internal/version.Date=2026-10-27T08:27:51Z",
+                  "CGO_ENABLED": "0",
+                  "GOARCH": "arm64",
+                  "GOARM64": "v8.0",
+                  "GOOS": "linux",
+                  "vcs": "git",
+                  "vcs.modified": "false",
+                  "vcs.revision": "6a6a432076a412d4326d57960810fe74f1876503",
+                  "vcs.time": "2026-10-27T08:05:22Z"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "container_manifest": {
+    "schema": 1,
+    "release": "v0.25.0",
+    "commit": "6a6a432076a412d4326d57960810fe74f1876503",
+    "images": {
+      "pushgw": "ghcr.io/nathandela/swarm-pushgw@sha256:315165c63e5ceb3e6d10b031d525c4830654ae32337fd316b2996bb808f4e056"
+    }
+  },
+  "container_manifest_covered_by_binary_checksum_signature": false,
+  "oci_attestation_independently_verified": false,
+  "installation": {
+    "mac": {
+      "host": "mac",
+      "method": "Homebrew cask upgrade",
+      "previous_version": "swarm 0.24.0 (go1.26.10)",
+      "installed_version": "swarm 0.25.0 (go1.26.10)",
+      "brew_exit": 1,
+      "install_seconds": 6.983,
+      "before_sha256": {
+        "swarm": "a1a21cbcc3ac57b9ef62e16a4779cc3c4f627394638f67115c94ae2df505e210",
+        "swarm-remote": "ecd02fb12a641a93933ce41ee39c1dc7e3e88635e5b521f0f7290c57f41008d5"
+      },
+      "installed_sha256": {
+        "swarm": "3714f52c1da62cae6bdc2ffd1795193a48103beb77663ea4065a9eeb337b8791",
+        "swarm-remote": "6a00139c9534f04a877a83161dd75a1b64ba6c15ad1fda541b9c9ff1f13d0a9c"
+      },
+      "signed_artifact_hashes_match": true,
+      "link_targets": {
+        "swarm": "/usr/local/Caskroom/swarm/0.25.0/swarm",
+        "swarm-remote": "/usr/local/Caskroom/swarm/0.25.0/swarm-remote"
+      },
+      "continuity": {
+        "host": "mac",
+        "captured_before": 8,
+        "unchanged_shim_instances": 8,
+        "changed_or_missing_captured_instances": 0,
+        "captured_after": 8,
+        "daemon_identity_unchanged": true,
+        "owner_environment_preserved": true,
+        "doctor_exit": 0,
+        "counts": {
+          "ok": 7,
+          "warn": 3,
+          "fail": 0
+        },
+        "daemon": [
+          {
+            "check": "daemon",
+            "status": "warn",
+            "detail": "the daemon runs 0.24.0 but this binary is 0.25.0",
+            "fix": "swarm daemon restart (adopts live sessions)"
+          }
+        ]
+      },
+      "smoke": {
+        "host": "mac",
+        "exit": 0,
+        "seconds": 2.375,
+        "installed_cli_sha256": "3714f52c1da62cae6bdc2ffd1795193a48103beb77663ea4065a9eeb337b8791",
+        "scope": "hash-verified installed bytes via private supervised copies; private HOME/XDG/state; no user sessions or credentials",
+        "private_copies_supervised": true,
+        "actual_installed_entrypoint_checked_separately": true
+      },
+      "safe_convergence_exit": 2,
+      "upgrade_timer": {
+        "loaded": true,
+        "state": "not running"
+      },
+      "homebrew_limit": "Swarm cask installation succeeded, receipt/links and both hashes verified. Overall brew command exited1 on pre-existing unrelated pkgconf reinstall because CLT does not support macOS27; no SDK/CLT deletion or repair attempted."
+    },
+    "vm": {
+      "host": "vm",
+      "method": "signature-verifying stage/activate",
+      "installed_version": "swarm 0.25.0 (go1.26.10)",
+      "activation_exit": 2,
+      "seconds": 2.029,
+      "installed_sha256": {
+        "swarm": "6f2aebe85efd9487f0d9c497999cc8d475ca41b2c9f311cf038bf2fc1ce2cb56",
+        "swarm-remote": "4352536a45946ed41b163515689def2c4ab115c45ac3f12cde2b81eaaee6ed9a"
+      },
+      "signed_artifact_hashes_match": true,
+      "continuity": {
+        "host": "vm",
+        "captured_before": 31,
+        "unchanged_shim_instances": 31,
+        "changed_or_missing_captured_instances": 0,
+        "captured_after": 31,
+        "daemon_identity_unchanged": true,
+        "owner_environment_preserved": true,
+        "doctor_exit": 0,
+        "counts": {
+          "ok": 3,
+          "warn": 7,
+          "fail": 0
+        },
+        "daemon": [
+          {
+            "check": "daemon",
+            "status": "warn",
+            "detail": "the daemon runs 0.24.0 but this binary is 0.25.0",
+            "fix": "swarm daemon restart (adopts live sessions)"
+          }
+        ],
+        "pending_converge": "v0.25.0",
+        "rollback_version": "v0.24.0"
+      },
+      "smoke": {
+        "host": "vm",
+        "exit": 0,
+        "seconds": 1.876,
+        "installed_cli_sha256": "6f2aebe85efd9487f0d9c497999cc8d475ca41b2c9f311cf038bf2fc1ce2cb56",
+        "scope": "hash-verified installed bytes via private supervised copies; private HOME/XDG/state; no user sessions or credentials",
+        "private_copies_supervised": true,
+        "actual_installed_entrypoint_checked_separately": true
+      },
+      "upgrade_timer": {
+        "ActiveState": "active",
+        "SubState": "waiting",
+        "UnitFileState": "enabled"
+      }
+    }
+  },
+  "private_identity_proof_sha256": {
+    "mac_before": "00fe5402dd85f15563b2a482cffda2725990bbf0555ca020dfb68298b7154099",
+    "mac_after": "8f5d51772fc8e9f9350497c0048b2ec2c173a4db23dc48ff2e42912db86ddb7d",
+    "vm_before": "74ba4f9898f9a7a509d501189b53ca454c87a38b5fc4e6883c0c24907156f630",
+    "vm_after": "06766a31ddad4126f4e283d4bdb2346e9d169b7c34ca3305a5b260542c1e7120"
+  },
+  "evidence_log_sha256": {
+    "brew": "b1b7b42c70f45199c5bd34369d657b6244e72a5bb29ae18bc45ecf78ba9ff3ae",
+    "mac_smoke": "33a8a6902d2436abe031af13b105fc02ceb23ce2093bd683995bf2e468297073",
+    "vm_activation": "2bda0a94760ce9b4bfe53c871fa059132a1d0aabcb1844738779a6ba11c1c93f",
+    "vm_smoke": "63d290797851b7c8438224959a9c568c69ddfbc9c9ec53689ec5d0c87b05d6ef"
+  },
+  "reviewed_tools": {
+    "artifact_verifier_source_sha256": "0d63df38d5c796d1fe157c6293cdc175be1a65300f1edb43d915b2b7dcaa6bfe",
+    "identity_source_sha256": "20ff969aec4ce61c8eed98e8dd388be801a94f95acebdcb257800110d002d15f",
+    "identity_rule": "Every birth-inspection error refuses unless independent signal0 positively returnsESRCH; no real signal is delivered by capture.",
+    "smoke_supervision": "Only registered private copies are swept; installed executable is never registered or swept.",
+    "astra_review": "Verifier, identity helper and supervised installed-byte smoke overlay independently approved."
+  },
+  "limits": [
+    "Actual Termux/iOS/native-CLI combinations remain unqualified (agents-tracker-ppbw.4).",
+    "Older live shims lack mouse metadata; they retain Ctrl+Q. No native session was restarted to enable the button.",
+    "Both safe convergence requests deferred (exit2) around working sessions; installed0.25.0 and running daemon0.24.0 are distinct. Follow-up agents-tracker-ppbw.8.",
+    "Kernel PID/birth continuity proves captured process instances, not native PTY responsiveness or provider health.",
+    "Installed-byte smoke uses private copies and synthetic fake agents; actual installed path version/hash/doctor is verified separately.",
+    "No remote gateway initialization, hosted service deployment, Android publication or native CLI refresh was requested by these helpers."
+  ],
+  "resource_cleanup": {
+    "status": "pending final independent verification; only task-owned scratch will be retired"
+  },
+  "independent_installed_state_verification": {
+    "schema": 1,
+    "recorded_at": "2026-10-27T08:56:14Z",
+    "release": "v0.25.0",
+    "source_commit": "6a6a432076a412d4326d57960810fe74f1876503",
+    "artifact_proof_sha256": "95bf545012bad126af4d9f0e8045387168f8534a0ce230960796b447a0ef7839",
+    "scope": "Independent read-only installed versions, hashes, links/receipt, non-spawning doctor summaries and version markers; SWARM_* scrubbed on both hosts.",
+    "hosts": {
+      "mac": {
+        "host": "mac",
+        "captured_at": "2026-10-27T08:54:27Z",
+        "swarm_environment_scrubbed": true,
+        "binaries": {
+          "swarm": {
+            "path": "/usr/local/bin/swarm",
+            "resolved_path": "/usr/local/Caskroom/swarm/0.25.0/swarm",
+            "symlink": true,
+            "sha256": "3714f52c1da62cae6bdc2ffd1795193a48103beb77663ea4065a9eeb337b8791",
+            "matches_verified_release": true
+          },
+          "swarm-remote": {
+            "path": "/usr/local/bin/swarm-remote",
+            "resolved_path": "/usr/local/Caskroom/swarm/0.25.0/swarm-remote",
+            "symlink": true,
+            "sha256": "6a00139c9534f04a877a83161dd75a1b64ba6c15ad1fda541b9c9ff1f13d0a9c",
+            "matches_verified_release": true
+          }
+        },
+        "version_exit": 0,
+        "installed_version": "swarm 0.25.0 (go1.26.10)",
+        "doctor": {
+          "exit": 0,
+          "counts": {
+            "warn": 3,
+            "ok": 7
+          },
+          "findings": 10,
+          "fail_count": 0
+        },
+        "daemon": {
+          "status": "warn",
+          "running_version": "0.24.0",
+          "installed_version": "0.25.0"
+        },
+        "state_dir": "/Users/Nathan/.local/state/swarm/sessions",
+        "saved_owner_environment_sha256": "2785379552068f3646382fee09273cab3d75d34483d51adaf87728eb02c6ecb0",
+        "upgrade": {
+          "pending_converge": null,
+          "rollback_version": null
+        },
+        "homebrew": {
+          "exit": 0,
+          "receipt": "swarm 0.25.0",
+          "auto_update_disabled": true,
+          "analytics_disabled": true
+        },
+        "saved_owner_environment_matches_prior_hash": true
+      },
+      "vm": {
+        "host": "vm",
+        "captured_at": "2026-10-27T08:54:25Z",
+        "swarm_environment_scrubbed": true,
+        "binaries": {
+          "swarm": {
+            "path": "/usr/local/bin/swarm",
+            "resolved_path": "/usr/local/bin/swarm",
+            "symlink": false,
+            "sha256": "6f2aebe85efd9487f0d9c497999cc8d475ca41b2c9f311cf038bf2fc1ce2cb56",
+            "matches_verified_release": true
+          },
+          "swarm-remote": {
+            "path": "/usr/local/bin/swarm-remote",
+            "resolved_path": "/usr/local/bin/swarm-remote",
+            "symlink": false,
+            "sha256": "4352536a45946ed41b163515689def2c4ab115c45ac3f12cde2b81eaaee6ed9a",
+            "matches_verified_release": true
+          }
+        },
+        "version_exit": 0,
+        "installed_version": "swarm 0.25.0 (go1.26.10)",
+        "doctor": {
+          "exit": 0,
+          "counts": {
+            "warn": 7,
+            "ok": 3
+          },
+          "findings": 10,
+          "fail_count": 0
+        },
+        "daemon": {
+          "status": "warn",
+          "running_version": "0.24.0",
+          "installed_version": "0.25.0"
+        },
+        "state_dir": "/home/ubuntu/.local/state/swarm/sessions",
+        "saved_owner_environment_sha256": "3b801b16b177eaebaa901533e17206e492c19ee4cfae2f6973f94df31b2feab0",
+        "upgrade": {
+          "pending_converge": "v0.25.0",
+          "rollback_version": "v0.24.0"
+        }
+      }
+    },
+    "homebrew_exit_qualification": {
+      "swarm_upgrade_success_preceded_unrelated_pkgconf_clt_error": true,
+      "brew_log_sha256": "b1b7b42c70f45199c5bd34369d657b6244e72a5bb29ae18bc45ecf78ba9ff3ae"
+    },
+    "limits": [
+      "Running daemons remain0.24.0; installed0.25.0 is not a daemon-convergence claim.",
+      "Live shim identity continuity is covered by root before/after captures; this independent check did not recapture session identities.",
+      "No swarm-remote execution, native session input, installation, upgrade, restart, auto-starting ls, or TUI invocation."
+    ]
+  },
+  "independent_installed_state_record_sha256": "5e0e60b309a1fe28b141171096783a724f04b0303af0ff57ac6075aec36f9779",
+  "final_record_review": {
+    "astra": "Approved; independently matched verifier output, installed hashes, proof hashes and recomputed8/8Mac31/31VM continuity; no Go diff after release tag.",
+    "sol": "Independent actual installed versions, hashes, Homebrew links/receipt and zero-failure doctor summaries match signed artifacts; did not recapture shim continuity."
+  }
+}

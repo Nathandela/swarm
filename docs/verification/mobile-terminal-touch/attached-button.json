@@ -376,9 +376,13 @@
   },
   "publication": {
     "target": "v0.25.0",
-    "status": "awaiting exact-tag hosted gates",
+    "status": "published; both binary pairs installed; safe supervisor convergence deferred",
+    "tag_source_commit": "6a6a432076a412d4326d57960810fe74f1876503",
+    "workflow_id": 40471411699,
+    "workflow_url": "https://github.com/Nathandela/swarm/actions/runs/40471411699",
+    "hosted_full_race_passed": true,
     "hosted_full_normal_claim": false,
-    "hosted_full_race_required": true
+    "release_record": "../mobile-terminal-v0250-release.json"
   },
   "limits": [
     "Actual Termux/iOS and native-CLI combinations remain unqualified; no Android device attached and iOS client unidentified.",

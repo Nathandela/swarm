@@ -85,6 +85,8 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
 
 ## Process traces
+
+- [Attached return-button v0.25.0 release](verification/mobile-terminal-v0250-release.md) — all 17 exact-tag gates, signed archives, verified Mac/VM installation, preserved captured shim instances and installed-byte smoke; busy supervisor convergence and actual handset qualification remain open
 - [Felix fix patch v0.23.1](verification/felix-v0231-integration.md) — failed-turn input, bracketed paste, journal write protection and durable isolated handoffs; integration choices, negative controls and release evidence
 - [Responsive terminal v0.23.0 release](verification/mobile-terminal-v0230-release.md) — signed publication and verified Mac/VM installation; busy daemon convergence and actual handset qualification remain open
 - [Storage patch v0.22.1 rollout](verification/storage-v0221-release.md) — signed publication and verified two-host installation; active-session daemon convergence deferred
