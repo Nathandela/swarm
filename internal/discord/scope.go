@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 // ScopedMessenger checks current channel placement before any public publication.
@@ -24,15 +26,11 @@ func (m ScopedMessenger) Resolve(ctx context.Context, route Route) (Route, error
 	if len(m.Config.ChannelIDs) == 0 || containsID(m.Config.ChannelIDs, route.ChannelID) {
 		return route, nil
 	}
-	var channel struct {
-		ID       string `json:"id"`
-		GuildID  string `json:"guild_id"`
-		ParentID string `json:"parent_id"`
-	}
+	var channel discordgo.Channel
 	if err := m.Client.REST(ctx, http.MethodGet, "/channels/"+url.PathEscape(route.ChannelID), nil, &channel); err != nil {
 		return Route{}, err
 	}
-	if channel.ID != route.ChannelID || channel.GuildID != route.GuildID || !containsID(m.Config.ChannelIDs, channel.ParentID) {
+	if channel.ID != route.ChannelID || channel.GuildID != route.GuildID || !channel.IsThread() || !containsID(m.Config.ChannelIDs, channel.ParentID) {
 		return Route{}, ErrNotAuthorized
 	}
 	route.ParentID = channel.ParentID
