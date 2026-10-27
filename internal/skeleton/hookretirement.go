@@ -63,6 +63,9 @@ var persistHookCursorCertificate = func(path string, data []byte) error { return
 // A pending certificate comes only from a cursor this drainer just committed.
 // Reading an old decimal cursor can never manufacture retirement authority.
 func (hd *HookDrainer) flushCursorCertificate() error {
+	if err := hd.checkClaudeControlBinding(); err != nil {
+		return err
+	}
 	if hd.d.claudeChatQuarantined(hd.sessionID) {
 		return errClaudeChatQuarantined
 	}
@@ -131,6 +134,9 @@ func ReadHookRetirementCertificate(cursorPath string) (incarnation, producer str
 func (hd *HookDrainer) retireCertifiedPrefix() error {
 	hd.drainMu.Lock()
 	defer hd.drainMu.Unlock()
+	if err := hd.checkClaudeControlBinding(); err != nil {
+		return err
+	}
 	if hd.d.claudeChatQuarantined(hd.sessionID) {
 		return errClaudeChatQuarantined
 	}

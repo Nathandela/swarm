@@ -144,20 +144,27 @@ type Engine struct {
 // session is the engine's per-session state and the one place a session's status
 // lives (G6 single writer).
 type session struct {
-	codexExecution       *persist.CodexExecution
-	executionEnabled     bool
-	executionIdentity    ExecutionIdentity
-	executionIncomplete  string
-	executionPending     bool
-	pendingCallbacks     map[uint64]string
-	untrackedChildren    bool
-	executionTurn        status.Turn
-	executionInteraction status.Interaction
-	token                string
-	pid                  int
-	sources              []adapter.SignalSource // declared observation kinds (Epic 11 uses these)
-	rules                gridRules              // parsed grid rules from sources (R-C1/R-C2), immutable after RegisterSession
-	alive                bool
+	claudeExecution       *persist.ClaudeExecution
+	claudeCommitted       *persist.ClaudeExecution
+	claudeStatusMu        sync.Mutex
+	claudeLeaseUntil      time.Time
+	claudeBaseInteraction status.Interaction
+	claudeLossPending     bool
+	claudeProjectionDirty bool
+	codexExecution        *persist.CodexExecution
+	executionEnabled      bool
+	executionIdentity     ExecutionIdentity
+	executionIncomplete   string
+	executionPending      bool
+	pendingCallbacks      map[uint64]string
+	untrackedChildren     bool
+	executionTurn         status.Turn
+	executionInteraction  status.Interaction
+	token                 string
+	pid                   int
+	sources               []adapter.SignalSource // declared observation kinds (Epic 11 uses these)
+	rules                 gridRules              // parsed grid rules from sources (R-C1/R-C2), immutable after RegisterSession
+	alive                 bool
 
 	// emitMu serializes this session's commit→emit so its emits stay ordered (G6)
 	// without holding the global e.mu across Emit. It is acquired BEFORE e.mu and
@@ -277,6 +284,9 @@ func (e *Engine) AuthenticateCallback(cb Callback) error {
 	if cb.Token == "" || cb.Token != s.token {
 		return errors.New("engine: callback token does not match the session's live token")
 	}
+	if s.executionIdentity.ClaudeNativeControl && !claudeReady(e, s) {
+		return executionCustodyError(errors.New("engine: Claude callback store unavailable"))
+	}
 	return nil
 }
 
@@ -311,6 +321,10 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		e.mu.Unlock()
 		return errors.New("engine: callback token does not match the session's live token")
 	}
+	if s.executionIdentity.ClaudeNativeControl && !claudeReady(e, s) {
+		e.mu.Unlock()
+		return executionCustodyError(errors.New("engine: Claude callback store unavailable"))
+	}
 	fingerprint := callbackFingerprint(cb)
 	managed := s.executionEnabled && e.storeExecution != nil
 	if expected, pending := s.pendingCallbacks[cb.Sequence]; pending {
@@ -339,7 +353,7 @@ func (e *Engine) HandleCallback(cb Callback) error {
 	// adapter's declared event->status descriptor. A pre-normalized caller carrying
 	// explicit turn/interaction dims is honored as-is.
 	now := e.now()
-	next, advanced, typed, err := applySignal(s, cb.Event, cb.Payload, cb.Sequence, now)
+	next, advanced, typed, err := applySignalWithClaudeBase(s, cb.Event, cb.Payload, cb.Sequence, now)
 	if err != nil {
 		delete(s.pendingCallbacks, cb.Sequence)
 		persistErr := e.persistExecutionLocked(cb.SessionID, s)
@@ -359,12 +373,20 @@ func (e *Engine) HandleCallback(cb Callback) error {
 	}
 	s.lastSignalAt = now
 	next = projectCodexCustody(s, next)
+	if s.claudeExecution != nil {
+		s.claudeBaseInteraction = next.Interaction
+		next = projectClaudeCustody(s, next, e.now())
+	}
 	changed := commit(s, next)
 	persistErr := e.persistExecutionLocked(cb.SessionID, s)
 	e.mu.Unlock()
 
 	if changed {
-		e.emit(cb.SessionID, next)
+		if s.executionIdentity.ClaudeNativeControl {
+			e.emitClaudeCurrent(cb.SessionID, s, true)
+		} else {
+			e.emit(cb.SessionID, next)
+		}
 	}
 	return executionCustodyError(persistErr)
 }
@@ -438,11 +460,19 @@ func (e *Engine) OnOutput(id string, snap *vt.Snap) {
 	next.Turn = turn
 	next.Interaction = interaction
 	next = projectCodexCustody(s, next)
+	if s.claudeExecution != nil {
+		s.claudeBaseInteraction = next.Interaction
+		next = projectClaudeCustody(s, next, e.now())
+	}
 	changed := commit(s, next)
 	e.mu.Unlock()
 
 	if changed {
-		e.emit(id, next)
+		if s.executionIdentity.ClaudeNativeControl {
+			e.emitClaudeCurrent(id, s, true)
+		} else {
+			e.emit(id, next)
+		}
 	}
 }
 
@@ -493,6 +523,26 @@ func gridSignature(sources []adapter.SignalSource) string {
 // syscall-based read, not an operation expected to hang.
 func (e *Engine) Tick() {
 	e.mu.Lock()
+	claudeSessions := map[string]*session{}
+	for id, s := range e.sessions {
+		if s.claudeExecution != nil {
+			if !s.claudeLeaseUntil.IsZero() && !e.now().Before(s.claudeLeaseUntil) {
+				markClaudeLeaseLost(s, "producer_lease_expired")
+			}
+			withdrawClaudeWorkingLocked(s, e.now())
+			claudeSessions[id] = s
+		}
+	}
+	e.mu.Unlock()
+	for id, s := range claudeSessions {
+		e.emitClaudeCurrent(id, s, false)
+		if s.emitMu.TryLock() {
+			e.publishClaudeCustody(id, s)
+			s.emitMu.Unlock()
+		}
+	}
+
+	e.mu.Lock()
 	type job struct {
 		id  string
 		pid int
@@ -531,12 +581,17 @@ func (e *Engine) Tick() {
 					j.s.mainTurn = status.TurnUnknown
 				}
 				next = projectCodexCustody(j.s, next)
+				next = projectClaudeCustody(j.s, next, e.now())
 				changed = commit(j.s, next)
 			}
 			e.mu.Unlock()
 
 			if changed {
-				e.emit(j.id, next)
+				if j.s.executionIdentity.ClaudeNativeControl {
+					e.emitClaudeCurrent(j.id, j.s, true)
+				} else {
+					e.emit(j.id, next)
+				}
 			}
 			j.s.emitMu.Unlock()
 		}(j)

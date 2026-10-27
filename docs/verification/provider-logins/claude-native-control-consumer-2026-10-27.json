@@ -1,0 +1,77 @@
+{
+  "date": "2026-10-27",
+  "stage": "C2+D durable consumer and projection checkpoint",
+  "status": "REVIEWED_DORMANT_CHECKPOINT",
+  "base_commit": "2987e4916372f748fb42d096260a031d56dfc4c1",
+  "frozen_evidence": {
+    "manifest_sha256": "af5f57b8d787c4584b36f4f55c2b318b9a8dd74e93d3555cec41b8d7d6cc15d9",
+    "source_diff_sha256": "93c05947a670861b94c0ac75f39f33c09e88764346c80f452b8c7d115156adc2",
+    "command_summary_sha256": "503e64a34108feba1a60cc747322505a75f584bffdeffa23cef69617cc69a0a5",
+    "manifest_files": 59,
+    "source_files": 16,
+    "raw_logs": 38
+  },
+  "implemented_scope": {
+    "immutable_bound_drain_before_fold": true,
+    "strict_control_and_explicit_ordinary_lanes": true,
+    "malformed_control_no_skip_cursor_certificate_or_retirement": true,
+    "fingerprint": "complete sanitized envelope excluding authentication token",
+    "execution_record_version": {
+      "claude_native_control": 4,
+      "other_providers_unchanged": 3
+    },
+    "first_control_before_classic_identity": "exact descriptor/local/shim/token and enabled-store validation; canonical write-once identity durable before fold",
+    "ordinary_duplicate_crash_recovery": "exact pending callback ACK persists before cursor",
+    "durable_exclusions": [
+      "exact pending tool custody",
+      "matched native question UI request",
+      "same-turn entered/returned aborted cancellation",
+      "qualified fresh local background child joined to its active step"
+    ],
+    "child_order": "step may precede spawn return, but must follow spawn entry; parent answer does not close child",
+    "liveness": "ephemeral exact-epoch/current-prefix broker proof; full request roundtrip subtracted; expired/revoked proof cannot restore Working",
+    "public_projection": "status-only serialization independent of execution persistence; all relevant writers recheck current session/projection; actual Emit observer and pre-ingress core publication checked",
+    "restore": "explicit independent base interaction prevents projected human Prompt from becoming permanent; unrelated permission/error preserved",
+    "ended_startup": "unread strict tails retained; no replay/authentication coverage inferred"
+  },
+  "invariants": {
+    "unknown_actors": true,
+    "incomplete": "claude_observation_subset",
+    "startup_prebootstrap_unknown": true,
+    "startup_observation_complete": false,
+    "automatic_effects_eligible": false,
+    "daemon_admission_dormant": true,
+    "shim_admission_dormant": true
+  },
+  "verification": {
+    "full_engine_persist_race_pass_events": 698,
+    "full_engine_persist_race_skip_events": 1,
+    "skip": "TestHelperCrashWriter: helper-only entry point skipped without child mode",
+    "connected_race_pass_events": 159,
+    "connected_failures": 0,
+    "final_focused_race_pass_events": 54,
+    "final_focused_failures": 0,
+    "independent_final_invalidation_emit_observer_pass_events": 1,
+    "build_exit": 0,
+    "vet_exit": 0,
+    "lint_exit": 0,
+    "lint_issues": 0,
+    "diff_check_exit": 0,
+    "assertion_reds_retained": true,
+    "earlier_reader_integration_failure_retained": true,
+    "initial_lint_style_findings": 7
+  },
+  "limits": [
+    "Both admission gates remain dormant and the exact runtime stays unsafe for automatic session effects.",
+    "No native CLI/SDK loader qualification, SSH, live service/account operation, account adoption or automatic recovery was performed.",
+    "Native settings/hooks/MCP/PTY and retained-image custody paths are preserved; no existing-row conversion, new user option, store, scheduler or account policy.",
+    "Ended-tail replay, full actor/workflow/MCP census, queued owner-intent completeness, other images/platforms, real org/account coherence and epic-wide GG-4 remain open.",
+    "Component and local real-storage evidence is not a production signoff; Astra review was unavailable."
+  ],
+  "review": {
+    "root_connected_source_and_frozen_evidence": "GREEN",
+    "independent_sol_connected_source_and_frozen_evidence": "GREEN",
+    "public_docs_root_review": "GREEN",
+    "astra_production_signoff": false
+  }
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -14,6 +15,7 @@ import (
 
 // ExecutionIdentity must identify the exact live native incarnation, never a credential.
 type ExecutionIdentity struct {
+	ClaudeNativeControl bool
 	// ObservedFromStart requires owned launch plus complete ingress custody from birth.
 	ObservedFromStart bool
 	Incarnation       string
@@ -41,6 +43,16 @@ func (e *Engine) RegisterExecutionSession(id, token string, pid int, sources []a
 	if saved != nil {
 		err = restoreExecution(s, id, *saved)
 	}
+	if identity.ClaudeNativeControl {
+		if s.claudeExecution == nil {
+			s.claudeExecution = newClaudeExecution(identity.ConversationID)
+			s.claudeExecution.BaseInteraction = s.executionInteraction
+		}
+		s.executionIncomplete = persist.ClaudeObservationSubset
+		s.untrackedChildren = true
+		s.claudeBaseInteraction = s.claudeExecution.BaseInteraction
+		s.status = projectClaudeCustody(s, s.status, e.now())
+	}
 	e.sessions[id] = s
 	return err
 }
@@ -48,6 +60,16 @@ func (e *Engine) RegisterExecutionSession(id, token string, pid int, sources []a
 func executionSnapshot(id string, s *session) persist.ExecutionRecord {
 	r := persist.ExecutionRecord{Version: persist.ExecutionVersion, AnonymousActors: s.anonymousChildren, UnknownActors: s.untrackedChildren, SessionID: id, Incarnation: s.executionIdentity.Incarnation, ConversationID: s.executionIdentity.ConversationID, OwnerRevision: s.executionIdentity.OwnerRevision, Incomplete: s.executionIncomplete, TurnSequence: s.turnSeq, InteractionSequence: s.interSeq, ChildSequence: s.childSeq, TypedSequence: s.typedSeq, MainTurn: s.executionTurn, Interaction: s.executionInteraction, InputActor: s.inputActor, Actors: make(map[string]persist.ExecutionActor, len(s.childStates))}
 	r.Codex = cloneCodexExecution(s.codexExecution)
+	r.Claude = cloneClaudeExecution(s.claudeExecution)
+	if r.Claude != nil {
+		r.Interaction = s.claudeBaseInteraction
+		r.Claude.BaseInteraction = s.claudeBaseInteraction
+	}
+	if r.Claude != nil {
+		r.Version = persist.ClaudeExecutionVersion
+		r.UnknownActors = true
+		r.Incomplete = persist.ClaudeObservationSubset
+	}
 	if r.Codex != nil {
 		r.TurnID = r.Codex.TurnID
 	}
@@ -55,7 +77,7 @@ func executionSnapshot(id string, s *session) persist.ExecutionRecord {
 	for sequence, fingerprint := range s.pendingCallbacks {
 		r.PendingCallbacks[strconv.FormatUint(sequence, 10)] = fingerprint
 	}
-	if s.executionPending {
+	if s.executionPending && r.Claude == nil {
 		r.Incomplete = "persistence_pending"
 	}
 	for id, a := range s.childStates {
@@ -91,6 +113,15 @@ func restoreExecution(s *session, id string, r persist.ExecutionRecord) error {
 		}
 		return fmt.Errorf("engine: execution identity mismatch")
 	}
+	if (r.Claude != nil) != s.executionIdentity.ClaudeNativeControl {
+		return fmt.Errorf("engine: Claude execution runtime mismatch")
+	}
+	s.claudeExecution = cloneClaudeExecution(r.Claude)
+	s.claudeCommitted = cloneClaudeExecution(r.Claude)
+	if s.claudeExecution != nil {
+		s.claudeBaseInteraction = s.claudeExecution.BaseInteraction
+	}
+	s.claudeLeaseUntil = time.Time{}
 	s.codexExecution = cloneCodexExecution(r.Codex)
 	if s.codexExecution != nil {
 		s.codexExecution.UnknownCustody = true
@@ -115,6 +146,9 @@ func restoreExecution(s *session, id string, r persist.ExecutionRecord) error {
 	s.mainTurn = r.MainTurn
 	s.executionTurn = r.MainTurn
 	s.executionInteraction = r.Interaction
+	if s.claudeExecution != nil {
+		s.executionInteraction = s.claudeBaseInteraction
+	}
 	s.status.Interaction = r.Interaction
 	s.inputActor = r.InputActor
 	s.children = r.AnonymousActors
@@ -134,6 +168,7 @@ func restoreExecution(s *session, id string, r persist.ExecutionRecord) error {
 		s.status.Turn = status.TurnUnknown
 	}
 	s.status = projectCodexCustody(s, s.status)
+	s.status = projectClaudeCustody(s, s.status, time.Time{})
 	return nil
 }
 
@@ -158,6 +193,11 @@ func (e *Engine) InvalidateExecution(id string) error {
 		// Fence immediately; a slow earlier writer must not delay observed loss.
 		s.executionIncomplete = "observation_gap"
 		s.untrackedChildren = true
+		if s.claudeExecution != nil {
+			s.claudeExecution.Failure = "observation_gap"
+			s.claudeLeaseUntil = time.Time{}
+			withdrawClaudeWorkingLocked(s, e.now())
+		}
 		if s.codexExecution != nil {
 			s.codexExecution.UnknownCustody = true
 			s.codexExecution.Incomplete = "observation_gap"
@@ -170,9 +210,13 @@ func (e *Engine) InvalidateExecution(id string) error {
 	if !enabled {
 		return nil
 	}
+	if s.executionIdentity.ClaudeNativeControl {
+		e.emitClaudeCurrent(id, s, false)
+	}
 	s.emitMu.Lock()
 	defer s.emitMu.Unlock()
 	defer e.publishCodexCustody(id, s)
+	defer e.publishClaudeCustody(id, s)
 	e.mu.Lock()
 	if current, ok := e.sessions[id]; !ok || current != s || !s.alive {
 		e.mu.Unlock()
@@ -187,19 +231,38 @@ func (e *Engine) InvalidateExecution(id string) error {
 // unrelated sessions. Failure retains live custody and permanently fences effects.
 func (e *Engine) persistExecutionLocked(id string, s *session) error {
 	if !s.executionEnabled || e.storeExecution == nil {
+		if s.executionIdentity.ClaudeNativeControl {
+			return fmt.Errorf("engine: Claude durable execution store unavailable")
+		}
 		return nil
 	}
 	r := executionSnapshot(id, s)
 	s.executionPending = true
 	e.mu.Unlock()
+	if r.Claude != nil {
+		e.emitClaudeCurrent(id, s, false)
+	}
 	err := e.storeExecution(r)
 	e.mu.Lock()
+	if err == nil && r.Claude != nil {
+		s.claudeCommitted = cloneClaudeExecution(r.Claude)
+	}
 	s.executionPending = false
 	if err != nil {
 		s.executionIncomplete = "persistence_failure"
+		if s.claudeExecution != nil {
+			if s.claudeExecution.Failure == "" || s.claudeExecution.Failure == "persistence_failure" {
+				s.claudeExecution.Failure = "persistence_failure"
+			}
+			s.claudeLossPending = true
+			s.claudeLeaseUntil = time.Time{}
+		}
 		if s.codexExecution != nil {
 			s.codexExecution.Incomplete = "persistence_failure"
 		}
+	}
+	if err == nil && r.Claude != nil && s.claudeExecution != nil && r.Claude.Failure == s.claudeExecution.Failure {
+		s.claudeLossPending = false
 	}
 	return err
 }
@@ -228,6 +291,9 @@ func (e *Engine) BindExecutionConversation(id, incarnation, conversation string)
 		return fmt.Errorf("engine: conversation already bound")
 	}
 	s.executionIdentity.ConversationID = conversation
+	if s.claudeExecution != nil {
+		s.claudeExecution.NativeSessionID = conversation
+	}
 	err := e.persistExecutionLocked(id, s)
 	e.mu.Unlock()
 	return err
@@ -273,6 +339,10 @@ func (e *Engine) AcknowledgeExecutionCallback(cb Callback) error {
 	if current, ok := e.sessions[cb.SessionID]; !ok || current != s || !s.alive || cb.Token == "" || cb.Token != s.token {
 		e.mu.Unlock()
 		return fmt.Errorf("engine: callback ownership mismatch")
+	}
+	if s.executionIdentity.ClaudeNativeControl && !claudeReady(e, s) {
+		e.mu.Unlock()
+		return executionCustodyError(fmt.Errorf("engine: Claude callback ACK store unavailable"))
 	}
 	expected, pending := s.pendingCallbacks[cb.Sequence]
 	if !pending {

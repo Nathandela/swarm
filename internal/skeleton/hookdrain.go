@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/claudeinput"
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/logins"
@@ -76,6 +77,21 @@ const hookDrainTimeout = 5 * time.Second
 // event. hookSeqDuplicate closes that gap independent of the engine's own
 // dimension-scoped tracking: at most one ingest per (session, cb.Sequence) pair.
 func (d *Daemon) ingestHookBytes(raw []byte) error {
+	if claudeinput.ControlShaped(raw) {
+		return &engine.ExecutionCustodyError{Err: errors.New("claude control requires bound durable spool")}
+	}
+	cb, err := hookclient.Decode(bytes.NewReader(raw))
+	if err == nil && d.core != nil {
+		if meta, ok := d.core.Get(cb.SessionID); ok && meta.RequiredRuntime == claudeinput.NativeControlRuntime {
+			if err := claudeinput.ValidateControlOrdinaryHook(raw); err != nil {
+				return &engine.ExecutionCustodyError{Err: err}
+			}
+		}
+	}
+	return d.ingestOrdinaryHookBytes(raw)
+}
+
+func (d *Daemon) ingestOrdinaryHookBytes(raw []byte) error {
 	cb, err := hookclient.Decode(bytes.NewReader(raw))
 	if err != nil {
 		return errors.Join(errHookIngestRejected, err)
@@ -480,6 +496,7 @@ func persistHookSeen(path string, rec hookSeenRecord) error {
 
 // HookDrainer drains one session's shim-owned hook spool into the daemon.
 type HookDrainer struct {
+	claudeControl  *claudeControlBinding
 	claudeFixture  *claudeFixtureState
 	d              *Daemon
 	sessionID      string
@@ -509,7 +526,9 @@ type HookDrainer struct {
 // exactly where the prior one left off.
 func NewHookDrainer(d *Daemon, sessionID, hookSocketPath, cursorPath string) *HookDrainer {
 	d.claudeChatQuarantined(sessionID)
-	return &HookDrainer{d: d, sessionID: sessionID, hookSocketPath: hookSocketPath, cursorPath: cursorPath}
+	hd := &HookDrainer{d: d, sessionID: sessionID, hookSocketPath: hookSocketPath, cursorPath: cursorPath}
+	hd.bindClaudeControl()
+	return hd
 }
 
 // SetToken configures the drain-auth token this drainer presents on every DRAIN
@@ -566,6 +585,9 @@ func (hd *HookDrainer) DrainOnce() (applied, skipped int, err error) {
 }
 
 func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
+	if err := hd.checkClaudeControlBinding(); err != nil {
+		return 0, 0, err
+	}
 	if hd.claudeFixture != nil {
 		return hd.drainClaudeFixtureLocked()
 	}
@@ -590,6 +612,9 @@ func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
 	_ = conn.SetDeadline(time.Now().Add(hookDrainTimeout))
 	if hd.d.claudeChatQuarantined(hd.sessionID) {
 		return 0, 0, errClaudeChatQuarantined
+	}
+	if err := hd.checkClaudeControlBinding(); err != nil {
+		return 0, 0, err
 	}
 	if _, err := conn.Write(append([]byte{shim.HookDrainTag}, req...)); err != nil {
 		return 0, 0, fmt.Errorf("skeleton: write hook drain request: %w", err)
@@ -625,6 +650,9 @@ func (hd *HookDrainer) drainFromSpoolFile() (applied, skipped int, err error) {
 }
 
 func (hd *HookDrainer) drainFromSpoolFileLocked() (applied, skipped int, err error) {
+	if err := hd.checkClaudeControlBinding(); err != nil {
+		return 0, 0, err
+	}
 	if hd.d.claudeChatQuarantined(hd.sessionID) {
 		return 0, 0, errClaudeChatQuarantined
 	}
@@ -698,6 +726,9 @@ func (hd *HookDrainer) FinalDrain() {
 // disk path can never diverge in what they apply, what they refuse, or what they
 // persist. Caller holds drainMu.
 func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor uint64) (applied, skipped int, err error) {
+	if err := hd.checkClaudeControlBinding(); err != nil {
+		return 0, 0, err
+	}
 	if hd.d.claudeChatQuarantined(hd.sessionID) {
 		return 0, 0, errClaudeChatQuarantined
 	}
@@ -721,7 +752,7 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor ui
 		if resp.Gap && rec.Seq >= resp.GapBoundary {
 			break
 		}
-		if ierr := hd.d.ingestHookBytes(rec.Body); ierr != nil {
+		if ierr := hd.ingestBoundHook(rec.Body); ierr != nil {
 			var custody *engine.ExecutionCustodyError
 			if errors.As(ierr, &custody) || errors.Is(ierr, errLoginObservationPending) || !errors.Is(ierr, errHookIngestRejected) {
 				return applied, skipped, ierr
@@ -732,6 +763,9 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor ui
 		}
 		if hd.d.claudeChatQuarantined(hd.sessionID) {
 			return applied, skipped, errClaudeChatQuarantined
+		}
+		if err := hd.checkClaudeControlBinding(); err != nil {
+			return applied, skipped, err
 		}
 		if perr := persistHookDrainCursor(hd.cursorPath, rec.Seq); perr != nil {
 			return applied, skipped, fmt.Errorf("skeleton: persist hook drain cursor: %w", perr)

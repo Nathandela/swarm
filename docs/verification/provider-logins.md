@@ -110,6 +110,15 @@ records the sender-off guard, bounded native observations and durable spool
 transport. The final review-focused race batch passed 46 checks; admission gates
 and automatic effects remain disabled, with no reducer or native qualification.
 
+The [durable consumer and projection checkpoint](provider-logins/claude-native-control-consumer-2026-10-27.json)
+adds strict session-bound draining, durable question/cancellation/tool/known-child
+custody and lease-bounded status projection. Malformed control cannot advance a
+fold cursor; an exact known child survives its parent answer. Real local storage,
+crash replay and actual status-observer checks pass, including withdrawal during
+held execution persistence. Actor/startup coverage stays incomplete, unread ended
+tails are retained, and both launch gates and automatic effects remain disabled.
+This checkpoint adds no native CLI qualification or account adoption.
+
 The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)
 retains one 56-event native trace with exact composer, prompt, turn and history
 identities. A successful Read result matches the next HTTP request's canonical

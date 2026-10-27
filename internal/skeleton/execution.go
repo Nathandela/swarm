@@ -17,6 +17,10 @@ func executionIncarnation(meta persist.Meta) string {
 }
 
 func (d *Daemon) registerExecutionSession(meta persist.Meta, token string, sources []adapter.SignalSource, fromStart bool) {
+	if d.executionStore == nil && meta.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl {
+		_ = d.eng.RegisterExecutionSession(meta.ID, token, meta.ShimPID, sources, meta.Status, engine.ExecutionIdentity{Incarnation: executionIncarnation(meta), ConversationID: meta.ConversationID, ClaudeNativeControl: true}, nil)
+		return
+	}
 	if d.executionStore == nil || (!managedLoginProvider(meta.AgentType) && (!fromStart || !freshClaudeFixture(meta))) {
 		d.eng.RegisterSession(meta.ID, token, meta.ShimPID, sources, meta.Status)
 		return
@@ -30,7 +34,7 @@ func (d *Daemon) registerExecutionSession(meta persist.Meta, token string, sourc
 		fromStart = false
 	}
 	// Only a launch observed from birth may start without unknown child custody.
-	identity := engine.ExecutionIdentity{Incarnation: executionIncarnation(meta), ConversationID: meta.ConversationID, ObservedFromStart: fromStart && meta.ShimPID > 0 && meta.ShimStartTime > 0}
+	identity := engine.ExecutionIdentity{Incarnation: executionIncarnation(meta), ConversationID: meta.ConversationID, ObservedFromStart: fromStart && meta.ShimPID > 0 && meta.ShimStartTime > 0, ClaudeNativeControl: meta.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl}
 	// Restore the monotonic input fence only for this exact persisted incarnation.
 	// Restored native evidence still requires live reconciliation in the engine.
 	if saved != nil && saved.Validate() == nil && saved.SessionID == meta.ID && saved.Incarnation == identity.Incarnation && saved.ConversationID == identity.ConversationID {
@@ -108,6 +112,8 @@ func (d *Daemon) publishExecutionStatusesForRunning() {
 	for _, meta := range d.core.List() {
 		if meta.AgentType == "codex" && meta.Status.Process == status.ProcessRunning {
 			d.eng.PublishCodexExecutionStatus(meta.ID)
+		} else if meta.RequiredRuntime == persist.RequiredRuntimeClaudeNativeControl && meta.Status.Process == status.ProcessRunning {
+			d.eng.PublishClaudeExecutionStatus(meta.ID)
 		}
 	}
 }

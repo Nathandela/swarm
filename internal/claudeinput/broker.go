@@ -311,6 +311,10 @@ func NewClient(desc Descriptor) *Client {
 }
 func (c *Client) call(ctx context.Context, path string, req request, out any) error {
 	req.Generation = c.descriptor.Generation
+	return c.callJSON(ctx, path, req, out)
+}
+
+func (c *Client) callJSON(ctx context.Context, path string, req any, out any) error {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return err
@@ -332,7 +336,29 @@ func (c *Client) call(ctx context.Context, path string, req request, out any) er
 	if out == nil {
 		return nil
 	}
+	if _, ok := out.(*ObservationLease); ok {
+		raw, err := io.ReadAll(io.LimitReader(response.Body, 16385))
+		if err != nil || len(raw) > 16384 {
+			return errors.New("claude observation reply exceeds bound")
+		}
+		if _, ok := controlFields(raw, "generation worker captured_sequence durable_sequence live nonce revoked sink_available queued guard_age_ms lease_remaining_ms", "generation worker captured_sequence durable_sequence live revoked sink_available queued guard_age_ms lease_remaining_ms"); !ok {
+			return errors.New("claude observation reply incomplete")
+		}
+		return strictControlJSON(raw, out)
+	}
 	return json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(out)
+}
+
+// Observation returns only ephemeral proof from this exact private broker.
+func (c *Client) Observation(ctx context.Context) (ObservationLease, error) {
+	var out ObservationLease
+	if c.descriptor.RequiredRuntime != NativeControlRuntime {
+		return out, errors.New("claude observation runtime unavailable")
+	}
+	err := c.callJSON(ctx, "/observation", struct {
+		Generation string `json:"generation"`
+	}{c.descriptor.Generation}, &out)
+	return out, err
 }
 func (c *Client) Ready(ctx context.Context) (Worker, error) {
 	var out Worker

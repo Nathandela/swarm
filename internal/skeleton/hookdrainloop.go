@@ -114,6 +114,9 @@ func (d *Daemon) startHookDrainsForRunning() {
 		} else if ch, ok := d.core.SessionHookChannel(m.ID); ok {
 			hd := NewHookDrainer(d, m.ID, "", ch.CursorPath)
 			hd.SetSpoolPath(ch.SpoolPath)
+			if hd.claudeControl != nil {
+				continue
+			} // Unread strict tails need a real execution fold before retirement.
 			d.retireHookPayload(hd)
 		}
 	}
@@ -189,6 +192,7 @@ func (d *Daemon) runHookDrain(sessionID string, hd *HookDrainer, stop chan struc
 		}
 
 		_, _, err := hd.DrainOnce()
+		hd.refreshClaudeLease()
 		switch {
 		case err == nil:
 			everDrained = true

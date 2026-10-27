@@ -66,7 +66,7 @@ func (e *Engine) ApplyTypedEvent(sessionID, event string, payload map[string]str
 	// allocated under e.mu -- so two frames can never draw the same number and have the
 	// second silently rejected as a replay by applyTyped's high-water.
 	s.typedSeq++
-	next, advanced, typed, err := applySignal(s, event, payload, s.typedSeq, now)
+	next, advanced, typed, err := applySignalWithClaudeBase(s, event, payload, s.typedSeq, now)
 	if err != nil {
 		persistErr := e.persistExecutionLocked(sessionID, s)
 		e.mu.Unlock()
@@ -85,12 +85,20 @@ func (e *Engine) ApplyTypedEvent(sessionID, event string, payload map[string]str
 	}
 	s.lastSignalAt = now
 	next = projectCodexCustody(s, next)
+	if s.claudeExecution != nil {
+		s.claudeBaseInteraction = next.Interaction
+		next = projectClaudeCustody(s, next, e.now())
+	}
 	changed := commit(s, next)
 	persistErr := e.persistExecutionLocked(sessionID, s)
 	e.mu.Unlock()
 
 	if changed {
-		e.emit(sessionID, next)
+		if s.executionIdentity.ClaudeNativeControl {
+			e.emitClaudeCurrent(sessionID, s, true)
+		} else {
+			e.emit(sessionID, next)
+		}
 	}
 	return executionCustodyError(persistErr)
 }

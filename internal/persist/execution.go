@@ -24,6 +24,7 @@ const MaxExecutionRecords = 1024
 // ExecutionRecord holds control evidence, never native message bodies or credentials.
 // Empty Incomplete means complete observation, not permission to perform an effect.
 type ExecutionRecord struct {
+	Claude              *ClaudeExecution          `json:"claude,omitempty"`
 	Codex               *CodexExecution           `json:"codex,omitempty"`
 	PendingCallbacks    map[string]string         `json:"pending_callbacks"`
 	AnonymousActors     int                       `json:"anonymous_actors"`
@@ -52,6 +53,17 @@ type ExecutionActor struct {
 }
 
 func (r ExecutionRecord) Validate() error {
+	if r.Claude != nil {
+		if r.Version != ClaudeExecutionVersion || r.Codex != nil || !r.UnknownActors || r.Incomplete != ClaudeObservationSubset || r.Claude.NativeSessionID != r.ConversationID {
+			return fmt.Errorf("persist: inconsistent Claude execution ownership")
+		}
+		if err := r.Claude.Validate(); err != nil {
+			return err
+		}
+	} else if r.Version == ClaudeExecutionVersion {
+		return fmt.Errorf("persist: missing Claude execution subsection")
+	}
+
 	if r.Codex != nil {
 		for _, item := range r.Codex.Items {
 			if r.Version < 3 && item.ClientID != "" {
@@ -89,7 +101,7 @@ func (r ExecutionRecord) Validate() error {
 	if r.AnonymousActors < 0 || r.AnonymousActors > MaxExecutionActors {
 		return fmt.Errorf("persist: invalid anonymous actor bound")
 	}
-	if (r.Version != ExecutionVersion && r.Version != 2 && r.Version != 1) || (r.Version == 1 && r.Codex != nil) || !ValidID(r.SessionID) || r.Incarnation == "" || len(r.Incarnation) > 256 || len(r.ConversationID) > 256 || len(r.TurnID) > 256 || len(r.InputActor) > 256 || len(r.Incomplete) > 128 || len(r.Actors) > MaxExecutionActors {
+	if (r.Version != ExecutionVersion && r.Version != ClaudeExecutionVersion && r.Version != 2 && r.Version != 1) || (r.Version == 1 && r.Codex != nil) || !ValidID(r.SessionID) || r.Incarnation == "" || len(r.Incarnation) > 256 || len(r.ConversationID) > 256 || len(r.TurnID) > 256 || len(r.InputActor) > 256 || len(r.Incomplete) > 128 || len(r.Actors) > MaxExecutionActors {
 		return fmt.Errorf("persist: invalid execution identity or bounds")
 	}
 	if r.MainTurn != status.TurnActive && r.MainTurn != status.TurnIdle && r.MainTurn != status.TurnUnknown {
@@ -702,7 +714,19 @@ func executionJSON(raw []byte) error {
 				allowed := ""
 				switch path {
 				case "":
-					allowed = "version session_id incarnation conversation_id turn_id owner_revision incomplete turn_sequence interaction_sequence child_sequence typed_sequence main_turn interaction input_actor actors anonymous_actors unknown_actors pending_callbacks codex"
+					allowed = "version session_id incarnation conversation_id turn_id owner_revision incomplete turn_sequence interaction_sequence child_sequence typed_sequence main_turn interaction input_actor actors anonymous_actors unknown_actors pending_callbacks codex claude"
+				case "claude":
+					allowed = "base_interaction descriptor_generation observer_epoch native_session_id sequence last_fingerprint failure startup_prebootstrap_unknown observation_complete invocations calls turns children cancelled"
+				case "claude/invocations/*":
+					allowed = "event context data sequence"
+				case "claude/calls/*":
+					allowed = "actor_id turn_id tool_id tool invocation context_known returned ask_person human_request_id agent_status agent_actor_id spawn_actor_id spawn_sequence fresh_background"
+				case "claude/turns/*":
+					allowed = "actor_id turn_id index invocation active_step native_origin"
+				case "claude/children/*":
+					allowed = "tool_id parent_actor_id parent_turn_id spawn_sequence"
+				case "claude/cancelled/*":
+					allowed = "actor_id turn_id entered_sequence returned_sequence"
 				case "actors/*":
 					allowed = "sequence start_sequence active"
 				case "codex":
@@ -728,7 +752,7 @@ func executionJSON(raw []byte) error {
 					next = path + "/" + name
 				}
 				switch path {
-				case "actors", "codex/items", "codex/children", "codex/decisions", "codex/stimuli", "codex/host_inputs":
+				case "claude/invocations", "claude/calls", "claude/turns", "claude/children", "claude/cancelled", "actors", "codex/items", "codex/children", "codex/decisions", "codex/stimuli", "codex/host_inputs":
 					next = path + "/*"
 				}
 
