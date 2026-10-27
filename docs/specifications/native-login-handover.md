@@ -579,6 +579,15 @@ could preserve the native terminal interface, but unfinished-work, human-wait,
 cancellation and background-work discrimination remain unqualified. This
 investigation grants no automatic continuation authority.
 
+The [first passive native mod observation](../verification/provider-logins/claude-native-mod-observation-2026-10-27.json)
+now joins one Linux Claude 2.1.310 owner prompt to its main turn, a completed
+Read and an exact-prompt typed quota failure in durable native history. A
+completed-answer capture also satisfies the corrected offline oracle; its
+original command failure is retained. These finite results support further
+investigation of the native terminal interface before extending Swarm chat.
+Human waits, cancellation, background actors, queued input and account adoption
+remain separate gates; no successor or automatic continuation was sent.
+
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It
 does not permanently mark a merely near-limit account exhausted. Known reset

@@ -1,0 +1,153 @@
+{
+  "date": "2026-10-27",
+  "kind": "Finite pinned Linux Claude native mod observation",
+  "status": "NARROW_OBSERVATION_PASS / PRODUCTION_NOT_QUALIFIED",
+  "scope": {
+    "native": "Installed Claude Code 2.1.310, exact pin b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56; private Linux synthetic profile, fake credentials, nonforwarding loopback model endpoint.",
+    "observation": "One exact native owner prompt; one main turn with successful Read result followed by a typed quota error; one exact native session/history chain.",
+    "not_established": [
+      "account handover/adoption/refresh",
+      "automatic continuation/recovery",
+      "global actor/workflow completeness",
+      "pending human decision, cancellation, queued-input arbitration",
+      "normal completed-control current run",
+      "Mac parity",
+      "production/public Swarm chat or launch authority"
+    ],
+    "result": "R9 observation is positive evidence that this native version can expose this finite quota-after-Read shape. It grants no dispatch or continuation authority."
+  },
+  "source_and_run": {
+    "R9_source_manifest": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/manifest.json",
+      "sha256": "60aa75e68f3fd676f5c51720d326b1db5d3bf9575e9d731ef8c76bf121a2ef09",
+      "scope": "Input-calibration-only source pin; R7 base; one bracketed paste, 200ms calibration, separate Enter. No current-screen detector."
+    },
+    "outer_receipt": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/pair-linux-outer-s5iapdl4/outer-receipt.json",
+      "sha256": "0edb2baf4c5c121eacfc7968d839c164bc86ed2808c4d8642f2ecf29a90b58d6",
+      "exit_code": 0,
+      "elapsed_seconds": 8.378,
+      "source_unchanged": true,
+      "native_copy_unchanged": true,
+      "cgroup_cleanup": "gone",
+      "http_joined": true
+    },
+    "collection": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/pair-linux-outer-s5iapdl4/collection.json",
+      "sha256": "ec872bb52a98e97bcdcf65e6653550f35094a09e4bc10acaa06d6615e7c335b4",
+      "classification": "narrow synthetic completed-Read/typed-quota observation"
+    },
+    "native_case_receipt": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/pair-linux-outer-s5iapdl4/quota-0/receipt.json",
+      "sha256": "adb39c60ac134ef4268d31506d0537dc16a0cb3305d278bcd5549fa25315dd34",
+      "observation_complete": true,
+      "events": 56,
+      "history_rows": 39,
+      "primary_model_requests": 2,
+      "read_requests": 1,
+      "turn_reason": "error",
+      "stop_failure_rate_limit": true,
+      "actor_census": "unknown",
+      "recovery_qualified": false
+    },
+    "source_and_identity_reconciliation": {
+      "independent_review": "Root independently matched all 56 events, source and native pins, canonical HTTP request and native Read result digest.",
+      "native_user_uuid": "564aa074-3211-465d-ba7b-c38088011fc6",
+      "native_prompt_id": "fe4587b3-ccd0-4939-b4f6-01f4f5833b33",
+      "native_turn_id": "1ab7e7d5-ecba-4b03-8f94-9065ba401255",
+      "note": "User UUID, prompt ID and turn ID are distinct identities; equality is not assumed."
+    }
+  },
+  "native_evidence": {
+    "event_stream": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/pair-linux-outer-s5iapdl4/quota-0/events.local.json",
+      "sha256": "7cf5973d0f27000ecf408f500a7b9d2fa377be6c13f2003d94081681ae2bb4dc",
+      "bytes": 69032,
+      "events": 56
+    },
+    "history": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/pair-linux-outer-s5iapdl4/quota-0/history.local.json",
+      "sha256": "ee1f30eb2f84674b175e710a409a927cea08fdd3414411cebbada22e6f932b5d",
+      "bytes": 186375,
+      "rows": 39
+    },
+    "requests": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/pair-linux-outer-s5iapdl4/quota-0/requests.local.json",
+      "sha256": "d946b1ec96736a285b7113606e60e77ac9408c048b1688df1a95fcc67f6f299d",
+      "bytes": 955
+    },
+    "heartbeats": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/pair-linux-outer-s5iapdl4/quota-0/heartbeats.local.json",
+      "sha256": "04856dc075e18eb2e3e7b1d55bae9854ee85a455bdf74fdd257909e09f74d627",
+      "bytes": 10598
+    },
+    "key_chain": [
+      "Original prompt entered and returned under exact composer origin/session.",
+      "Main turn and native prompt linkage observed; turn.step 0 returned stopReason=tool_use for Read.",
+      "Native history row26 contains the successful Read tool_result; its canonical digest b8fef292d47e3366837a78f89e40f10c874c53e9d7dbdc87ff6e96d3b20cbdfa matches the Read result carried in the second main HTTP request, which received the synthetic quota rejection.",
+      "Native turn.step 1 terminal returned stopReason=null, followed by classic.StopFailure error=rate_limit for the same native prompt ID and session.",
+      "Native turn.complete ended with reason=error; history contains usage_limit_reached and no original-task final answer."
+    ],
+    "read_digest": "b8fef292d47e3366837a78f89e40f10c874c53e9d7dbdc87ff6e96d3b20cbdfa",
+    "project_canaries": "Project SessionStart hook and MCP initialize/tools-list were observed in the exact session; native plugin validation returned 0 and generated type declarations matched the 2.1.310 source pin.",
+    "project_hook": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/pair-linux-outer-s5iapdl4/quota-0/project-hook.jsonl",
+      "sha256": "42a6da26fec784163501719e4ee4baef3f034969cb1254c368b56ab074e597e4"
+    },
+    "mcp": {
+      "path": "/private/tmp/swarm-native-mod-input-calibrated-luna-20261027/pair-linux-outer-s5iapdl4/quota-0/mcp-log.jsonl",
+      "sha256": "870fa3800cdeef3628336379fbaabf222fbd29dc3ac750aab2410c0f8a39ea11"
+    }
+  },
+  "historical_status": [
+    {
+      "stage": "R1-R3 earlier attempts",
+      "status": "Failures/unqualified; retained source and attempt records remain historical and are not upgraded by R9."
+    },
+    {
+      "stage": "R3 plugin types",
+      "status": "The obsolete /plugin-types command was unknown and its stage failed. During the same R3 run the native CLI automatically generated declarations beside the loaded mod; these were later read back without native re-execution and pin-checked. The failed command is not reclassified as passing."
+    },
+    {
+      "stage": "R5 completed control",
+      "status": "Original native command failed its oracle because optional classic.UserPromptSubmit.source was absent; the actual 46-event capture remains a failed command result."
+    },
+    {
+      "stage": "R6 offline replay",
+      "status": "Oracle-only replay of that unchanged 46-event R5 capture accepted the completed control with an exact native composer witness. No native execution occurred during replay; R5 command remains failed."
+    },
+    {
+      "stage": "R6 and R7 quota attempts",
+      "status": "Failed before observed user/model work; neither establishes quota behavior."
+    },
+    {
+      "stage": "R8 candidate",
+      "status": "Held unexecuted because its ANSI-stripped draft matcher did not prove current screen contents."
+    },
+    {
+      "stage": "R9",
+      "status": "Finite Linux 2.1.310 quota observation passed with calibrated input. No completed control was rerun; no account switch, successor, or recovery was sent."
+    }
+  ],
+  "type_source": {
+    "path": "/private/tmp/swarm-native-mod-types-source-root-20261027.json",
+    "sha256": "cb537096dae29050f3f1ef61b07da96e038854de96b32b5beb2a4271d9f466c0",
+    "native_pin": "2.1.310 / b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "classification": "source-only; no model requests; not native behavior qualification"
+  },
+  "remaining_limits": [
+    "No proof that a fresh saved account was adopted or requests moved accounts.",
+    "No evidence that unfinished work can be safely recovered while excluding human waits, cancellation, queued input, actors or workflows.",
+    "No automatic continuation was constructed or authorized.",
+    "The successful observation is one synthetic quota case, not production Swarm runtime or a completed two-case native matrix."
+  ],
+  "production_qualified": false,
+  "method": {
+    "input": "One bracketed paste, >=200ms private fixture calibration, then one Enter; no retry, no current-screen or production readiness authority from timing.",
+    "runtime_bounds": "One fresh exact systemd unit per case, RuntimeMaxSec60, MemoryMax1GiB, TasksMax192; read-only filesystem/fresh loopback-only namespace and one owned writable scratch bind. No limits increased.",
+    "recovery": "No account switch, successor, prompt resend or automatic continuation constructed.",
+    "cleanup": "Root independently verified successful outer retirement and raw tuple/digest; exact owned R9 scratch removed after fresh unit/cgroup/owner/inode/source/native/canary checks. Original retained CLI image and live sessions untouched.",
+    "review": "Root and independent Sol reviewed frozen source/oracles; Luna prepared the final input producer/evidence draft. Astra final review unavailable; no production sign-off."
+  },
+  "research_complete": false
+}

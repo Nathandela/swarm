@@ -51,6 +51,24 @@ managed/native/public launch admission, public chat/UI or capabilities.
 records 148 focused race passes, 855 library race passes (one skip), and passing
 build, vet and lint checks.
 
+## Native Claude mod observations (2026-10-27)
+
+The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)
+retains one 56-event native trace with exact composer, prompt, turn and history
+identities. A successful Read result matches the next HTTP request's canonical
+digest; native `StopFailure` reports `rate_limit` for that prompt and the saved
+history records `usage_limit_reached` without an original-task final answer.
+Normal settings, project hook and MCP initialization canaries pass. The actor
+census stays unknown and recovery stays disabled.
+
+The completed-answer capture passed a corrected offline oracle; its original
+R5 command remains failed. Earlier validator, obsolete types-command, disk-scan
+and input-producer failures remain recorded, and the R8 screen matcher was held
+unexecuted. R9 uses calibrated input only; timing grants no production input or
+recovery authority. This is not a Swarm account-handover qualification. Human
+waits, cancellation, background work, queued input, real account adoption and
+Mac parity remain open.
+
 ## Published v0.21.0
 
 [v0.21.0](https://github.com/Nathandela/swarm/releases/tag/v0.21.0) was published
