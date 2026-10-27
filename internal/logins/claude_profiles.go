@@ -628,6 +628,12 @@ func (s *Store) claudeProfileSetup() (map[string]json.RawMessage, error) {
 			return nil, fmt.Errorf("%w: cannot inherit unsupported theme; choose a supported built-in theme and remove or replace the legacy theme field in the shared native .claude.json", ErrIneligible)
 		}
 	}
+	if value, ok := source["fullscreenUpsellSeenCount"]; ok {
+		var count *int
+		if json.Unmarshal(value, &count) == nil && count != nil && *count >= 0 && *count <= 3 {
+			out["fullscreenUpsellSeenCount"] = value
+		}
+	}
 	return out, nil
 }
 

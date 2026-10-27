@@ -1,0 +1,134 @@
+{
+  "date": "2026-10-27",
+  "scope": "Safe initial Claude profile renderer-offer counter inheritance; not rotation qualification",
+  "base_commit": "ee44588e3a42cc45ca6ee8a77f54244c4238cc2d",
+  "issue": "h6sc.31",
+  "change": "New managed profiles copy only a native fullscreenUpsellSeenCount integer from 0 through 3 from the existing shared native configuration. Invalid or missing values are omitted. Existing profiles and the shared settings.json renderer choice are unchanged. Authentication, permissions, project trust and other config fields retain their existing policy.",
+  "source_files": {
+    "internal/logins/claude_profiles.go": "a8ea4814579ce6afab632c1805859b35b5b87663a1529b68d3d07f4f81f46778",
+    "internal/logins/claude_profile_setup_test.go": "f4234b7251a99a37a2df4d37ff6b5c7a94e7201090fdc575318d5d2e1cf78689"
+  },
+  "native_source_reference": {
+    "version": "2.1.310",
+    "binary_sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "renderer_source_proof_sha256": "c5e85a3df8c8fa7eb90f5971d5b0105fa3c2079bfdb9b9d370bc8a9f89a30145",
+    "finding": "Native renderer-offer history is independent of account identity. Dismissal records count 3; lower counts can still allow an offer. This change preserves that existing counter and does not choose a renderer."
+  },
+  "tdd": {
+    "baseline_red_log_sha256": "68e3d3662a8453ed7f77959c043d4626485c08a6c3f976c9b197dfac63cc8d6a",
+    "failure": "fullscreenUpsellSeenCount=<nil>; want 3",
+    "focused_race_pass_events": 28,
+    "focused_green_log_sha256": "5ed3991bba98fb5ac3f8afb7c0c39a95f38416bbc5c3d9b2172b7ef2e8d34afc"
+  },
+  "gates": {
+    "logins-race-r1": {
+      "receipt": "/private/tmp/h6sc31-final-gates-20261027/logins-race-r1.json",
+      "receipt_sha256": "5eb5a9513f70aedc44e2a0d1f4588c6a6f957dd7e09dd1cf6933e7c7100d7e53",
+      "log": "/private/tmp/h6sc31-final-gates-20261027/logins-race-r1.jsonl",
+      "log_sha256": "06b2ed2269d2b5799de50f740259f6c57f0d0a87a84994dbbc3c94906432565e",
+      "exit_code": 0,
+      "seconds": 236.466,
+      "pass": 675,
+      "fail": 0,
+      "skip": 0
+    },
+    "build-r1": {
+      "receipt": "/private/tmp/h6sc31-final-gates-20261027/build-r1.json",
+      "receipt_sha256": "4c32342513cec4129c66a073137fd72695dc67a02043012b1c89e07db415b170",
+      "log": "/private/tmp/h6sc31-final-gates-20261027/build-r1.jsonl",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit_code": 0,
+      "seconds": 13.826,
+      "pass": 0,
+      "fail": 0,
+      "skip": 0
+    },
+    "vet-r1": {
+      "receipt": "/private/tmp/h6sc31-final-gates-20261027/vet-r1.json",
+      "receipt_sha256": "2e82ee74ec428ecaa62a104732e3e582337a9d693029bc8f3a1cf06a1166b392",
+      "log": "/private/tmp/h6sc31-final-gates-20261027/vet-r1.jsonl",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit_code": 0,
+      "seconds": 5.357,
+      "pass": 0,
+      "fail": 0,
+      "skip": 0
+    },
+    "lint-r1": {
+      "receipt": "/private/tmp/h6sc31-final-gates-20261027/lint-r1.json",
+      "receipt_sha256": "5d532f46787f5e08cb9f375fc8fb65008612a4fe669edbdf0b9cf0b8f8d667ae",
+      "log": "/private/tmp/h6sc31-final-gates-20261027/lint-r1.log",
+      "log_sha256": "9f0a9bcf5b7b056ecb8f0c5ddd36a4649b6d7b49a30e731eb2b2a735f7390d81",
+      "exit_code": 0,
+      "seconds": 48.48,
+      "pass": 0,
+      "fail": 0,
+      "skip": 0
+    },
+    "diff-check-r1": {
+      "receipt": "/private/tmp/h6sc31-final-gates-20261027/diff-check-r1.json",
+      "receipt_sha256": "cfe333bcd2946fddc0bd21d5925678461c4a651d6db34b79b4d77a2d7536c8ac",
+      "log": "/private/tmp/h6sc31-final-gates-20261027/diff-check-r1.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit_code": 0,
+      "seconds": 0.036,
+      "pass": 0,
+      "fail": 0,
+      "skip": 0
+    },
+    "completion-original-20-r1": {
+      "receipt": "/private/tmp/h6sc31-final-gates-20261027/completion-original-20-r1.json",
+      "receipt_sha256": "cb7e1ee14353761dc228f5d021efa13bdab115064f598aeeb356ed88b0fb027f",
+      "log": "/private/tmp/h6sc31-final-gates-20261027/completion-original-20-r1.jsonl",
+      "log_sha256": "116f6f6ca8ac28700e53bd135343515516d1713d7937d2521d03f5a6cf0901e3",
+      "exit_code": 0,
+      "seconds": 32.922,
+      "pass": 20,
+      "fail": 0,
+      "skip": 0
+    },
+    "completion-overlay-20-r1": {
+      "receipt": "/private/tmp/h6sc31-final-gates-20261027/completion-overlay-20-r1.json",
+      "receipt_sha256": "721d60d2cb43f884a474de6cf959b03a8eec19e086beb314191cd02b2676f1a2",
+      "log": "/private/tmp/h6sc31-final-gates-20261027/completion-overlay-20-r1.jsonl",
+      "log_sha256": "6c2934574fd4f64a1ae7b496c759f360a45f9568bf0a6bec0b582461010529a3",
+      "exit_code": 0,
+      "seconds": 30.938,
+      "pass": 20,
+      "fail": 0,
+      "skip": 0
+    }
+  },
+  "review": "Root and independent Sol reviewed the bounded implementation; another Sol verified source and focused evidence. All final source/log pins independently checked by Root.",
+  "private_handoff_sha256": "28bdf8040fbe81d29aeb6ad84049ba2dee46dbd971e0947e04eb4838e1620dd1",
+  "completion_diagnostic": {
+    "verdict": "NO_REPRO_INCONCLUSIVE",
+    "cause": "UNKNOWN",
+    "issue_status": "OPEN",
+    "details": {
+      "completion-original-20-r1": {
+        "diagnostic_rows": 0,
+        "row_counts": {},
+        "darwin_completion_not_qualified_notes": 0
+      },
+      "completion-overlay-20-r1": {
+        "diagnostic_rows": 180,
+        "row_counts": {
+          "A2_COMPLETION_DIAG stage=jobs count=0 error_type=<nil>": 20,
+          "A2_COMPLETION_DIAG stage=jobs count=1 error_type=<nil>": 40,
+          "A2_COMPLETION_DIAG stage=stopped_inventory writers=0 error_type=<nil> unavailable=false": 80,
+          "A2_COMPLETION_DIAG stage=cleanup error_type=<nil> unavailable=false pending=false conflict=false": 20,
+          "A2_COMPLETION_DIAG stage=completed_receipt error_type=<nil> unavailable=false pending=false conflict=false": 20
+        },
+        "darwin_completion_not_qualified_notes": 0
+      }
+    }
+  },
+  "remaining_limits": [
+    "No source fix or cause claim for .29. Overlay timing can perturb observation; both fixed 20-iteration batches were retained.",
+    "No full repository ordinary sweep or full repository race rerun for this optional six-line inheritance change.",
+    "No native/live SSH/device/account actions, commit or push."
+  ],
+  "production_recovery_qualified": false,
+  "release_approved": false
+}

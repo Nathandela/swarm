@@ -3,6 +3,7 @@ package logins
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -58,7 +59,8 @@ func TestClaudeProfileSetupInitialInheritance(t *testing.T) {
 	s, login, common := profileFixture(t)
 	before := writeClaudeSetupSource(t, common, map[string]any{
 		"hasCompletedOnboarding": true, "lastOnboardingVersion": "2.0.41", "theme": "light",
-		"primaryApiKey": "private-api-key", "customApiKeyResponses": map[string]any{"approved": []string{"private-key"}},
+		"fullscreenUpsellSeenCount": 3,
+		"primaryApiKey":             "private-api-key", "customApiKeyResponses": map[string]any{"approved": []string{"private-key"}},
 		"bypassPermissionsModeAccepted": true, "enabledMcpjsonServers": []string{"private-approval"},
 		"hasCompletedClaudeInChromeOnboarding": true, "unknownPreference": "preserve-only-in-source",
 	})
@@ -66,12 +68,12 @@ func TestClaudeProfileSetupInitialInheritance(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readClaudeSetupProfile(t, s, login.Identity)
-	for key, want := range map[string]any{"hasCompletedOnboarding": true, "lastOnboardingVersion": "2.0.41", "theme": "light"} {
+	for key, want := range map[string]any{"hasCompletedOnboarding": true, "lastOnboardingVersion": "2.0.41", "theme": "light", "fullscreenUpsellSeenCount": float64(3)} {
 		if !reflect.DeepEqual(got[key], want) {
 			t.Fatalf("initial profile %s=%v; want %v", key, got[key], want)
 		}
 	}
-	if len(got) != 5 || got["mcpServers"] == nil || got["projects"] == nil {
+	if len(got) != 6 || got["mcpServers"] == nil || got["projects"] == nil {
 		t.Fatal("profile must contain only setup allowlist and explicit MCP definitions")
 	}
 	project := got["projects"].(map[string]any)["/work"].(map[string]any)
@@ -92,6 +94,34 @@ func TestClaudeProfileSetupInitialInheritance(t *testing.T) {
 }
 
 func TestClaudeProfileSetupFieldPolicy(t *testing.T) {
+	for count := 0; count <= 3; count++ {
+		t.Run(fmt.Sprintf("fullscreen-upsell-count-%d", count), func(t *testing.T) {
+			s, login, common := profileFixture(t)
+			writeClaudeSetupSource(t, common, map[string]any{"fullscreenUpsellSeenCount": count})
+			if _, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, login.ID, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := readClaudeSetupProfile(t, s, login.Identity)["fullscreenUpsellSeenCount"]; got != float64(count) {
+				t.Fatalf("fullscreenUpsellSeenCount=%v; want %d", got, count)
+			}
+		})
+	}
+	for name, count := range map[string]any{
+		"null": nil, "string": "3", "bool": true, "object": map[string]any{"count": 3},
+		"array": []int{3}, "negative": -1, "over-limit": 4, "fractional": 2.5,
+		"overflow-int": json.RawMessage("9223372036854775808"),
+	} {
+		t.Run("fullscreen-upsell-invalid-"+name, func(t *testing.T) {
+			s, login, common := profileFixture(t)
+			writeClaudeSetupSource(t, common, map[string]any{"fullscreenUpsellSeenCount": count})
+			if _, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, login.ID, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := readClaudeSetupProfile(t, s, login.Identity)["fullscreenUpsellSeenCount"]; got != nil {
+				t.Fatalf("unsupported fullscreenUpsellSeenCount inherited: %v", got)
+			}
+		})
+	}
 	for _, theme := range []string{"auto", "dark", "light", "dark-daltonized", "light-daltonized", "dark-ansi", "light-ansi"} {
 		t.Run(theme, func(t *testing.T) {
 			s, login, common := profileFixture(t)
@@ -115,7 +145,7 @@ func TestClaudeProfileSetupFieldPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := readClaudeSetupProfile(t, s, login.Identity)
-			if got["theme"] != nil || got["unknownPreference"] != nil || (got["hasCompletedOnboarding"] == true) != strings.Contains(body, `:true`) {
+			if got["theme"] != nil || got["unknownPreference"] != nil || got["fullscreenUpsellSeenCount"] != nil || (got["hasCompletedOnboarding"] == true) != strings.Contains(body, `:true`) {
 				t.Fatal("missing fields were inferred")
 			}
 		})
@@ -300,13 +330,14 @@ func TestClaudeProfileSetupRetryNeverBackfillsExistingConfig(t *testing.T) {
 
 func TestClaudeProfileSetupEstablishedAndSecondProfile(t *testing.T) {
 	s, login, common := profileFixture(t)
-	writeClaudeSetupSource(t, common, map[string]any{"hasCompletedOnboarding": true, "lastOnboardingVersion": "2.0.41", "theme": "light"})
+	writeClaudeSetupSource(t, common, map[string]any{"hasCompletedOnboarding": true, "lastOnboardingVersion": "2.0.41", "theme": "light", "fullscreenUpsellSeenCount": 3})
 	if _, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, login.ID, []string{"/work"}); err != nil {
 		t.Fatal(err)
 	}
 	home, _ := s.ClaudeProfileHome(login.Identity)
 	got := readClaudeSetupProfile(t, s, login.Identity)
 	got["theme"], got["hasCompletedOnboarding"], got["lastOnboardingVersion"] = "dark", false, "native-original"
+	got["fullscreenUpsellSeenCount"] = float64(1)
 	got["oauthAccount"], got["privateNative"] = map[string]any{"accountUuid": "native-a"}, "keep"
 	got["projects"].(map[string]any)["/work"].(map[string]any)["hasTrustDialogAccepted"] = true
 	raw, _ := json.Marshal(got)
@@ -316,7 +347,7 @@ func TestClaudeProfileSetupEstablishedAndSecondProfile(t *testing.T) {
 	for _, theme := range []string{"auto", "custom:source-private-value"} {
 		cwd := "/new-" + strings.Split(theme, ":")[0]
 		newScope := map[string]any{"mcpServers": map[string]any{"added": map[string]any{"command": "added-server"}}}
-		writeClaudeSetupSource(t, common, map[string]any{"theme": theme, "lastOnboardingVersion": "2.1.310", "projects": map[string]any{cwd: newScope}})
+		writeClaudeSetupSource(t, common, map[string]any{"theme": theme, "lastOnboardingVersion": "2.1.310", "fullscreenUpsellSeenCount": 3, "projects": map[string]any{cwd: newScope}})
 		if _, err := s.ProvisionClaudeProfile(snapshot(t, s).Revision, login.ID, []string{"/work"}); err != nil {
 			t.Fatal(err)
 		}

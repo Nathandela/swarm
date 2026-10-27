@@ -84,6 +84,17 @@ corrections remain recorded; this is no single clean full-command claim.
 The literal full ordinary sweep, native recovery, device/release qualification
 and unresolved earlier regressions `h6sc.28`/`h6sc.29` remain separate gates.
 
+## Claude profile setup (2026-10-27)
+
+New managed Claude profiles now retain the native renderer-offer counter from
+the shared configuration. A recorded dismissal (value 3) survives profile
+creation; lower counts retain Claude's normal offer policy. Existing profiles and the
+user's renderer choice are unchanged; malformed or missing counters are omitted.
+The [test-first checkpoint](provider-logins/claude-profile-ui-setup-2026-10-27.json)
+records the original missing-field failure, 675 passing login race checks and
+passing build/vet/lint gates. The earlier completion failure was not reproduced
+in either fixed 20-run diagnostic batch; its cause and `h6sc.29` remain open.
+
 ## Native Claude mod observations (2026-10-27)
 
 The [finite Linux 2.1.310 observation](provider-logins/claude-native-mod-observation-2026-10-27.json)
