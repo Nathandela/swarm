@@ -70,5 +70,13 @@
   ],
   "isolation": "private physical binaries; synthetic HOME/auth; native updater disabled; Mac Seatbelt scratch-only writes/fake-provider port; VM bwrap read-only mounts, one owned RAM bind and fresh loopback-only namespace; positive/negative guard controls passed",
   "reproduce": "SWARM_NATIVE_ADMISSION_FIXTURE=1 <native-arm64-go> test ./internal/claudeinput -run TestNativeClaudeModalAdmission -count=1 -v; VM uses crosscompiled package test inside the namespace contract recorded in native-vm-modal-2026-10-27.json",
-  "scope": "ordinary native transitions and native public API/mods; no production sessions, global settings, credentials, real inference, release or deployment"
+  "scope": "ordinary native transitions and native public API/mods; no production sessions, global settings, credentials, real inference, release or deployment",
+  "negative_control": {
+    "version": "2.1.296",
+    "elapsed_seconds": 30.78,
+    "change": "test-only compiler overlay disables only the companion guard prompt.submit condition; broker handshake, heartbeats, lifecycle retirement and sender checks stay enabled",
+    "observed": "late-clear native receipt became started after actual native identity replacement",
+    "result": "combined fixture failed its exact late-native-rejection assertion",
+    "purpose": "proves the distinct queue guard, rather than readiness revocation alone, closes the delayed native API race"
+  }
 }
