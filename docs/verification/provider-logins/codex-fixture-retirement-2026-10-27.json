@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-27",
+  "scope": "Post-evidence retirement of exactly two public Codex executable copies from a synthetic fixture",
+  "result": "APPLIED",
+  "receipts": {
+    "dry_run_sha256": "6fe45fdcf9faa18c291cf0cada197fddb972c7ed79a531ae9a085ab7b206fc6b",
+    "applied_sha256": "9f50ae43e8d2b023165e8407fc6ca0e84e9540730f448bf422cd1f0d37e6c643"
+  },
+  "targets": [
+    {
+      "path": "/tmp/scx.pbcvwljc/codex-source",
+      "device": 2049,
+      "inode": 851318,
+      "mode": "0600",
+      "bytes": 296865480,
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215"
+    },
+    {
+      "path": "/tmp/scx.pbcvwljc/native/codex",
+      "device": 2049,
+      "inode": 851474,
+      "mode": "0700",
+      "bytes": 296865480,
+      "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215"
+    }
+  ],
+  "total_bytes_retired": 593730960,
+  "retirement": {
+    "write_only_execution_guards_held_through_unlink_and_directory_fsync": true,
+    "fresh_unit_cgroup_empty_and_gone": true,
+    "observed_process_identities_ended": 31,
+    "endpoints_absent": true,
+    "error": null,
+    "free_bytes_after": 1717071872,
+    "qualified_prior_guard_batch": 7,
+    "f_setlease_or_general_fd_exclusion_claimed": false
+  },
+  "independent_actual_review": "GREEN: Root and independent Sol checked the exact applied receipt against the reviewed dry run",
+  "preserved": "Local retained backup, receipts, logs, metadata, source, archive, user accounts and live services were preserved.",
+  "limits": [
+    "The original R1 constructor result remains FAIL; post-collection deletion does not repair it.",
+    "Complete fixture-listener cleanup remains unproved.",
+    "No storage-capacity reservation or runtime qualification is claimed."
+  ]
+}

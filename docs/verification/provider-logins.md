@@ -436,6 +436,11 @@ The full case, loaded account handover and installed 0.164.0 compatibility remai
 unqualified. Existing Swarm services and discussions were unchanged; complete
 fixture-listener cleanup is not proved by the outer receipt.
 
+The [post-evidence fixture retirement](provider-logins/codex-fixture-retirement-2026-10-27.json)
+removed the two public Codex executable copies after collection, under their
+qualified execution guards. This does not change the original FAIL or prove
+complete fixture-listener cleanup.
+
 Sanitized machine-readable observations are in
 [provider-logins/](provider-logins/). They contain no login tokens or account IDs.
 
