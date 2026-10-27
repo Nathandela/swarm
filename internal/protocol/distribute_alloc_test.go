@@ -118,7 +118,7 @@ func TestDistributeSharedBranchDeliversNameToEverySubscriber(t *testing.T) {
 // gives each subscriber its own correctly namespaced event, never another
 // subscriber's shared payload.
 func TestDistributeFallbackNamespacesPerConnection(t *testing.T) {
-	s := newServer(newStubDaemon()) // fallback: no stable endpoint id (endpointID == "")
+	s := NewServer(newStubDaemon(), "") // fallback: no stable endpoint id (endpointID == "")
 	defer func() { _ = s.Close() }()
 
 	makeConn := func(epID string) *clientConn {

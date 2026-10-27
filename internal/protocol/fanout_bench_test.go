@@ -37,7 +37,7 @@ func benchDistribute(b *testing.B, numSubs int, sharedEndpoint bool) {
 	if sharedEndpoint {
 		s = NewServer(newStubDaemon(), "ep-daemon")
 	} else {
-		s = newServer(newStubDaemon())
+		s = NewServer(newStubDaemon(), "")
 	}
 	defer func() { _ = s.Close() }()
 
