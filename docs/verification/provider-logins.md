@@ -122,6 +122,22 @@ history means unknown. No question was answered and no successor was sent.
 Complete actor accounting, queued input, real account adoption, restorable state
 and Mac parity remain open.
 
+The [known-child ledger](provider-logins/claude-native-known-child-2026-10-27.json)
+records a frozen 85-event/13-heartbeat trace where the parent answered while its
+exact local child remained running. The original full command failed during unit
+shutdown. Earlier failed and unexecuted attempts remain recorded; this grants
+no complete actor census or recovery authority.
+
+The [Linux startup-resume ledger](provider-logins/claude-native-linux-startup-resume-2026-10-27.json)
+records one finite synthetic A→B continuation: quota after Read, complete A
+retirement, exact-session B resume, B credential/account context, one main request,
+zero B input, no repeated Read and a native final. A's original physical history
+prefix remained unchanged; native serialization trimmed the result's final tab and added
+B's refreshed context. The full command remains failed because B's unit hit a
+shutdown timeout; both cgroups were gone. Earlier mount, startup, scanner and
+wire-oracle failures are preserved. Startup/actor completeness, real-account
+adoption, organization-policy coherence and production recovery are unqualified.
+
 ## Published v0.21.0
 
 [v0.21.0](https://github.com/Nathandela/swarm/releases/tag/v0.21.0) was published

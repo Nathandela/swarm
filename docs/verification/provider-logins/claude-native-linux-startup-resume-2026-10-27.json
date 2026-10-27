@@ -1,0 +1,84 @@
+{
+  "date": "2026-10-27",
+  "status": "NARROW finite synthetic Linux startup-resume observation; original full R6 command FAIL; no startup-completeness or recovery qualification",
+  "documentation": {
+    "url": "https://code.claude.com/docs/en/env-vars",
+    "finding": "CLAUDE_CODE_RESUME_INTERRUPTED_TURN is officially documented for SDK use. Documentation also describes its continuation message and age-bound behavior."
+  },
+  "binary": {
+    "version": "2.1.310",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "provider": "claude",
+    "platform": "linux"
+  },
+  "private_source_ledger": {
+    "path": "/private/tmp/swarm-native-linux-startup-resume-source-20261027.json",
+    "sha256": "354d82ef0b6b31ff402f34b46b5db1f9a1278bbeb97271d7aea598d7bb7d69b9"
+  },
+  "bounded_source_finding": "Pinned Linux interactive startup source contains a route that can schedule a native continuation without a host prompt write. This is not a stable interactive CLI contract.",
+  "historical_attempts": [
+    {
+      "attempt": "R2",
+      "status": "FAIL before B construction",
+      "outer_receipt": "/private/tmp/swarm-native-startup-resume-20261027-r2/startup-linux-outer-qmw_ot6u/outer-receipt.json",
+      "outer_receipt_sha256": "edfce0cbf2f5b1472f7274e58e43efcc02cb1aca86ab117d7f01c06a3fcc74b3",
+      "finding": "Before any native CLI or API startup, the fixture write probe received EACCES rather than EROFS. The read-only mount check was invalid; B was not constructed. No resume finding follows."
+    },
+    {
+      "attempt": "R3",
+      "status": "FAIL",
+      "outer_receipt": "/private/tmp/swarm-native-startup-resume-20261027-r3/startup-linux-outer-vspzjy3w/outer-receipt.json",
+      "outer_receipt_sha256": "2cf07d942f72165137afb3385987966cdfd83ac3b4f78ae7fca121a0ae25c6c1",
+      "finding": "Renderer-startup canary failure retained."
+    },
+    {
+      "attempt": "R4",
+      "status": "FAIL",
+      "outer_receipt": "/private/tmp/swarm-native-startup-resume-20261027-r4/startup-linux-outer-qntugu11/outer-receipt.json",
+      "outer_receipt_sha256": "c2312dfb351b504be6dd986b4739dd8897084505e573102dd671d068ab3c58f1",
+      "finding": "Scanner canary failure retained."
+    },
+    {
+      "attempt": "R5",
+      "status": "FAIL",
+      "outer_receipt": "/private/tmp/swarm-native-startup-resume-20261027-r5/startup-linux-outer-ovb8hs_z/outer-receipt.json",
+      "outer_receipt_sha256": "06123ab33e7db374a82b42154302f7ccfedddde8fb7bfc43f5c4ce1e5c5c2999",
+      "failure_observation_proof": "/private/tmp/swarm-native-startup-resume-20261027-r5/startup-linux-outer-ovb8hs_z/failure-observation-proof.json",
+      "failure_observation_proof_sha256": "ad10e3a574ba326a6b46f383f30d23410f5a8a8831a0925210439526686bd9ec",
+      "finding": "Wire-oracle failure retained; the final event was not qualified."
+    }
+  ],
+  "r6_finite_observation": {
+    "proof_path": "/private/tmp/swarm-native-startup-resume-20261027-r6/startup-linux-outer-3gzsx7x7/finite-observation-proof.json",
+    "proof_sha256": "81a0ecc6315baf90d3a56f2f0bebc457a511d576aefd8f0d6684db58120e57c9",
+    "outer_receipt_path": "/private/tmp/swarm-native-startup-resume-20261027-r6/startup-linux-outer-3gzsx7x7/outer-receipt.json",
+    "outer_receipt_sha256": "b16e5b1898abf398f710e2cad3fd0dc292050f9d539a7435917af4648e0e8007",
+    "narrow_result": "Synthetic A received a typed quota failure after a completed Read. A and its helpers were fully retired before B construction. B resumed the exact same native conversation with synthetic credential/account/session context, made one main request, received zero host input, did not replay Read, and produced a native final answer.",
+    "history_and_wire": "The physical A history prefix remained unchanged. The native B wire representation trimmed the Read result's final tab and added exact native B context; the stored Read result itself remained unchanged.",
+    "original_full_command": {
+      "status": "FAIL",
+      "A_exit": 0,
+      "B_exit": 1,
+      "B_failure": "stop-SIGTERM timeout",
+      "A_cgroup": "gone",
+      "B_cgroup": "gone"
+    },
+    "independent_replay": "Root rehashed all 48 collected files and replayed both actual oracles against the frozen authority.",
+    "startup_observation_complete": false,
+    "startup_prebootstrap_unknown": true,
+    "actor_census": "unknown",
+    "production_eligible": false,
+    "recovery_qualified": false,
+    "real_identity_or_adoption_qualified": false,
+    "org_policy_coherence_qualified": false
+  },
+  "qualification": {
+    "finite_synthetic_observation": true,
+    "positive_production_startup": false,
+    "production_qualified": false,
+    "recovery_qualified": false,
+    "startup_completeness": "unknown",
+    "actor_census": "unknown"
+  },
+  "privacy": "Paths, hashes and bounded synthetic outcomes only; no proprietary source snippets, raw authentication payloads, credential contents or transcript bodies included."
+}

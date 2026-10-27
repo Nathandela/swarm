@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-27",
+  "scope": "Sanitized native observation ledger; original outcomes retained; no production behavior or recovery activated.",
+  "evidence": {
+    "private_source_ledger": "/private/tmp/swarm-native-known-child-ledger-20261027.json",
+    "private_source_ledger_sha256": "23b1b364e997003664b63cc07dfaa7221788a8aa67b6f39d7320811cde894f7d",
+    "cases": [
+      {
+        "case": "Child1",
+        "status": "FAIL original outer command",
+        "manifest_sha256": "c2e895675dd7fc54b3499d03f80c47a697ee33ab250e0f687df0326c1af86b37",
+        "actor_census": "unknown",
+        "recovery_qualified": false
+      },
+      {
+        "case": "Child2",
+        "status": "UNEXECUTED",
+        "manifest_sha256": "e04d34d8228a177501778f2c7a8e34bf383ae3b5ce047638bc8752bf42aa66f6",
+        "actor_census": "unknown",
+        "recovery_qualified": false
+      },
+      {
+        "case": "Child3",
+        "status": "FAIL original outer command",
+        "manifest_sha256": "b5f7d625e0d7462ae54525b758aae28436f646d36306fcaadc3c16edd2b18afe",
+        "actor_census": "unknown",
+        "recovery_qualified": false
+      },
+      {
+        "case": "Child4",
+        "status": "FAIL original outer command; narrow frozen-prefix oracle PASS",
+        "manifest_sha256": "99f1451c45a5dd3a9b64db363f75b3609276f673d81161edc518346de3b77ad5",
+        "outer_receipt_sha256": "6d077f1ca29fc0dbffd7bbabe97ab59270767fe68dac62c3baec47b86bc2cbde",
+        "outer_failure": "stop-SIGTERM timeout; retained as failure, no green-only rerun",
+        "narrow_observation": "Strict oracle accepted a frozen 85-event / 13-beat prefix in which the native parent had answered while the exact fresh local child remained running.",
+        "actor_census": "unknown",
+        "recovery_qualified": false
+      }
+    ]
+  },
+  "qualification": {
+    "global_actor_census": "unknown",
+    "recovery_qualified": false,
+    "human_wait_inferred_from_ask_person": false,
+    "production_or_recovery_activation": false
+  },
+  "privacy": "Contains paths, hashes, statuses and bounded observations only; no proprietary source excerpts, raw transcripts or authentication material."
+}

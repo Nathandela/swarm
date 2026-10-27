@@ -492,8 +492,11 @@ A separate native interrupted-turn resume capability is under finite
 qualification. Bare `--reply-on-resume` fails the source hypothesis: a quota
 assistant row can prevent replay, while cancellation stripping can expose an
 earlier prompt. The distinct native `CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1`
-route uses native transcript repair and a vendor-owned recovery message. It is
-an implementation capability, not a stable documented CLI contract. It receives
+route uses native transcript repair and a vendor-owned recovery message. The
+[environment variable is documented for SDK use](https://code.claude.com/docs/en/env-vars);
+pinned Linux 2.1.310 source and the finite observation below also establish an
+interactive startup path. This does not qualify a stable interactive recovery
+contract. It receives
 no host continuation prompt, transcript surgery or input replay. Qualification
 must prove quota-after-tool recovery and zero automatic inference for completed
 answers, unanswered questions, unapproved tools and explicit cancellation, with
@@ -503,7 +506,7 @@ binding remain required even if those native cases pass. No frontend/mode change
 or global preference change is implied.
 
 The owner authorized structured Claude exploration on 2026-10-25. Terminal
-resume experiments are paused while a direct native stream-JSON baseline tests
+resume experiments were paused at that checkpoint while a direct native stream-JSON baseline tested
 trust recording, normal relaunch, request-bound human input and durable native
 history. Preserve the normal CLI prompt, settings, tools and project features;
 do not spoof a cloud session origin or assume cloud-only pending-action recovery
@@ -592,8 +595,31 @@ does not durably record either exclusion in these cases: both question commands
 failed their physical-row gates, and the cancelled turn has no abort marker.
 Persist human-wait and cancellation exclusions in Swarm's existing execution
 record; missing native history cannot clear them or authorize a successor.
-The API abort operation, background actors, queued input and account adoption
-remain separate gates; no successor or automatic continuation was sent.
+Those human-state cases sent no successor or automatic continuation. The API
+abort operation, background actors, queued input and account adoption remain
+separate gates.
+
+The [known-child observation](../verification/provider-logins/claude-native-known-child-2026-10-27.json)
+retains a strict frozen-prefix result: the parent answered while its exact local
+child remained running. The full command failed during unit shutdown; actor
+census remains unknown. An `ask/person` check alone is not a human wait.
+
+The [native startup-resume evidence](../verification/provider-logins/claude-native-linux-startup-resume-2026-10-27.json)
+adds one synthetic A→B continuation. A reached quota after a completed Read and
+all A writers were retired before B construction. B resumed the same conversation,
+used B's synthetic credential/account context, made one main request with zero
+terminal input, and produced a native final without repeating the Read. A's original
+physical history prefix remained unchanged; native wire formatting trimmed one trailing tab and
+added refreshed B context. The full command still failed on B's unit shutdown
+timeout. Startup/actor completeness, real accounts, policy coherence and
+production recovery remain unqualified.
+
+Full standard-login hot adoption remains unknown. The earlier negative replaced
+both credentials and account metadata in macOS SDK mode: the next request used
+B's bearer but retained A metadata. It did not exercise native login and its
+post-login resets or interactive sibling adoption. Those results justify retaining
+immutable account profiles as the current candidate; they do not disprove every
+native login transition.
 
 Proactive selection consumes fresh account-scoped observations, validates the
 destination, and uses one conservative reserve with cooldown/hysteresis. It
