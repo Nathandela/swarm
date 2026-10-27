@@ -156,5 +156,26 @@
     "guaranteed_reclaimed_bytes_or_capacity_reservation_claimed": false,
     "review": "Root and independent Sol reviewed source, dry-run and apply GREEN.",
     "local_pre_ssh_refusal": "Initial copied parent output files caused a local refusal before SSH. They were preserved under historical-parent-R2 in the clean-output revision; no deletion occurred in that invocation."
+  },
+  "r3_cache_followup": {
+    "date": "2026-10-28",
+    "scope": "One duplicate public-transfer input from the ended R3 fixture; executable and current orphan entries preserved.",
+    "source_manifest_sha256": "a9d8326212673b3bb49f739788165c861c36e76648cb4d059c6bda773c067223",
+    "dry_run_sha256": "ae6ae9bd4a1fb239fd43edf1ae0b069ce92877bcf15ccea130a3d1b311569496",
+    "apply_receipt_sha256": "ff0e7a863a36f7cc7196afb6b8d669c8cbd974eaaeba214300ffdf52aed25b30",
+    "bytes_unlinked": 296865480,
+    "public_image_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+    "device": 2049,
+    "inode": 283612,
+    "guarded_unlink_and_parent_fsync_completed": true,
+    "historical_observed_ended": 37,
+    "historical_sample_count": 32,
+    "historical_sample_truncated": true,
+    "fresh_full_pid_fd_or_session_retirement_claimed": false,
+    "measured_free_bytes_after": 618573824,
+    "guaranteed_reclaimed_bytes_or_capacity_reservation_claimed": false,
+    "earlier_failure": "An initial dry-run refused before any operation because stale directory literals did not join the intended stage. Exact receipt hashing prevented a wrong-stage operation. Three directory joins now derive from the fixed intended stage, with wrong-parent regression checks.",
+    "label_revision": "The unexecuted initial private packet was corrected in place for its historical count label. Its prior source was reconstructed and hash-verified; no complete prior-packet retention is claimed. The later failed dry-run and corrected clean-r2 packet are retained.",
+    "review": "Root and independent Sol reviewed corrected source; Root reviewed the actual dry-run and apply receipts."
   }
 }
