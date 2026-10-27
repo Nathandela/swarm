@@ -321,7 +321,28 @@
         "No retry or deadline-cap increase claimed.",
         "No native qualification, real-account adoption, live-service, main, release or recovery qualification."
       ],
-      "query_observation": "Third installed-query variant accepted; no unexpected route rejection recorded."
+      "query_observation": "Third installed-query variant accepted; no unexpected route rejection recorded.",
+      "existing_artifacts_followup": {
+        "collection": "Read-only fixed files from the ended synthetic case; no provider RPC, input or execution.",
+        "input_collection_sha256": "9b3b5c412e734617f2fec6f2c37600e1fce9bc1358268f6b086e058ab4c9bbc2",
+        "session_collection_sha256": "a4ddcb0ddbc77fe1c1a8a12a9dbc1fb99c8820a2be2b5470b04aa7b4e7fcb419",
+        "rollout_collection_sha256": "53694bd945d1fa704de6cb666c09f12a0b7daee0b036fed040b8df1684cea16d",
+        "input_helper_wire_write_completed_once": true,
+        "input_helper_stderr_empty": true,
+        "tool_ready_absent": true,
+        "localized_wait": "tool.ready after the helper wire write completed",
+        "pre_input_screen_only": true,
+        "execution_user_sequence": 0,
+        "execution_turn_id_empty": true,
+        "execution_state": "unobserved; unknown custody",
+        "exact_main_rollout_records": {
+          "session_meta": 1,
+          "user_or_turn_records": 0
+        },
+        "native_input_acceptance_proved": false,
+        "draft_only_proved": false,
+        "paste_burst_hypothesis": "Pinned native source supports Enter suppression as a possibility; these records do not prove the cause."
+      }
     }
   }
 }
