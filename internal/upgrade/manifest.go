@@ -36,7 +36,7 @@ type CompatManifest struct {
 	Version          string `json:"version"`      // the release tag
 	Shimwire         int    `json:"shimwire"`     // internal/shimwire.Version
 	Protocol         int    `json:"protocol"`     // internal/protocol.Version
-	Schema           int    `json:"schema"`       // internal/persist.SchemaVersion
+	Schema           int    `json:"schema"`       // maximum supported session schema
 }
 
 // CurrentManifest is THIS build's card -- what the emitter writes at release,
@@ -46,7 +46,7 @@ func CurrentManifest(tag string) CompatManifest {
 		Version:       tag,
 		Shimwire:      shimwire.Version,
 		Protocol:      protocol.Version,
-		Schema:        persist.LoginSchemaVersion,
+		Schema:        persist.HermesSchemaVersion,
 		LoginSchema:   logins.SchemaVersion,
 		AccountSchema: 1, AccountJobs: 1, AccountRecovery: 3, AccountWorker: 6, AccountShim: 2, AccountConfig: 4,
 		AccountInventory: 1, AccountAuth: 1,
