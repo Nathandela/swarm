@@ -1,10 +1,73 @@
 # Hermes native message ingress qualification
 
-2026-10-26, macOS arm64. The activation-gated shared-owner Hermes runtime is wired through the daemon,
+2026-10-27, macOS arm64. The activation-gated shared-owner Hermes runtime is wired through the daemon,
 shim, semantic protocol, native status sampling, and saved-session resume.
 The existing classic launch remains the path when activation is disabled or the
-installed version is below v0.22.5. All-five release and guarded shared-owner
-source qualification remain open.
+installed version is below v0.22.5. The guarded macOS shared-owner source gate
+passed on 2026-10-27. All-five release, Linux Hermes source qualification and
+installed-release-artifact qualification remain separate gates.
+
+## Guarded shared-owner core qualification
+
+[Machine-readable result](hermes-native-shared-owner-2026-10-27.json), macOS
+arm64, Go 1.26.10, exact upstream v0.22.5 source
+`bf0203a794a07aac3ff764972ab9087baa4e4f4e` with clean tracked source files.
+The harness runs a private physical console-script copy, a prepared native TUI,
+and a loopback OpenAI-wire provider with synthetic credentials. Native owner,
+viewers, helpers and subprocesses inherit scratch-only OS write restrictions
+and access only the explicit loopback provider/API ports and private Unix
+sockets. Positive and negative OS guard checks run before native execution.
+The original console script is checked unchanged after cleanup.
+
+The public Swarm `Client.Launch` creates two arbitrary-name workers on one
+already running normal native owner, with distinct canonical session IDs and
+the actual `--tui` viewers. Public semantic sends and durable operation reads
+produce only `submitted` receipts. Repeating each operation sends no second
+native admission. The fake provider starts an actual background process in A,
+another in B, and an actual terminal process in A's native asynchronous
+delegated child. A subsequent A turn waits on the native tool approval for
+`rm -f` of the fixture file, which the actual TUI renders.
+
+Submitting literal `/approve all` through the public semantic endpoint leaves
+the exact native permission pending, the file intact, and the external message
+in the native queue. Restarting the Swarm daemon preserves owner PID/start and
+creates no model turn. Public Kill A requests scoped native cancellation and
+stops A's viewer. A's witnessed background and delegated-child process
+incarnations disappear, while B's background process and the shared owner
+survive. Public List reports A as `NativeWorkUnknown`/NeedsInput; Delete refuses
+workspace removal, and B accepts a further semantic submission.
+
+The real run exposed a client deadline race: the native stop budget and the
+ordinary client timeout were both ten seconds. The client now reserves 45
+seconds for Kill/Delete only, preserving the uncertain reply and usable control
+connection. A deterministic delayed-reply regression was red before the fix
+and green afterward; connected-client context cancellation remains unchanged.
+
+Reproduction requires an isolated Python 3.14 environment with upstream Hermes
+core requirements and `psutil`, prepared pinned TUI assets and its supported
+Node runtime. Build `./cmd/swarm` and
+`./scripts/verification/hermes_native_probe` into private temporary paths, then
+run `scripts/verification/hermes_native_admission.py` with `--root`, `--source`,
+`--hermes`, `--node`, `--swarm` and `--probe`. The source pin is enforced. Linux
+must wrap the complete harness, fake provider and native processes in the
+read-only mount/fresh loopback network namespace required by
+`native_fixture_sandbox.py`; no Linux Hermes result is claimed here.
+
+These observations establish this fixture's scoped stop behavior, not an
+authoritative native join or arbitrary descendant containment. Native list
+projections omit async delegation records and pending process-scope cleanup;
+interrupt acknowledgements and detach responses do not prove all writers
+joined. `NativeWorkUnknown` therefore remains set and workspace cleanup remains
+blocked even after these fixture processes stop.
+
+Astra's review added exact receipt profile/session/authority-epoch checks,
+canonical resume identity fencing, and a stop sequence that still requests every
+observed queued cancellation and session-scoped background stop after unknown
+admissions or native refusals. A failed stop and an ordinary viewer exit detach
+without an end reason: ending the native scope could discard an unknown
+admission and drain its queued successor. The stable native TUI signal cleanup
+only closes its sockets; deliberate native UI quit remains provider-owned.
+The guarded source run above was repeated successfully after these fixes.
 
 ## Historical native API and TUI qualification
 
@@ -65,7 +128,7 @@ authority epoch `1` and execution generation `0`. The native owner assigns an
 execution generation when the admission starts. This is submitted evidence,
 not a model-read or completion receipt.
 
-## Contract details that matter to integration
+## Historical prototype contract details
 
 - Canonical local identities are `local-` plus 64 lowercase hex characters.
   They differ from the existing 22-character classic IDs and the gateway's
@@ -78,7 +141,7 @@ not a model-read or completion receipt.
 - The classic idle viewer only adopts its own queued admissions or native
   automation cards (`hermes_cli/gateway_tools_notify.py`). The qualified viewer
   is `--tui`; the classic grid/identity heuristics cannot establish its state.
-- `Start` requires an already configured, private independent home and refuses
+- The removed prototype's `Start` required a configured private independent home and refused
   a named profile or a home containing other profiles. It never adopts or
   replaces an unrelated global gateway. Unconfigured homes produce an explicit
   setup error rather than claiming readiness.
@@ -111,7 +174,7 @@ topology or manually read/copy real credentials. The owner-facing normal native
 authentication/setup flow and its storage custody need integration review;
 per-agent forced login is not an accepted workaround.
 
-No Linux/VM, background tool/subagent containment, process-crash recovery,
+No Linux/VM, general background tool/subagent containment, process-crash recovery,
 production credential refresh, or installed-release-artifact qualification is
 claimed here. The source test proves normal shutdown of its own native owner
 and survival of another; it does not prove that arbitrary native descendants
@@ -122,7 +185,7 @@ cannot leave that owner's process group.
 The historical per-worker-owner prototype and its unguarded source runner were
 removed when the shared-owner architecture was approved. Its source receipts
 above remain historical API/TUI evidence, not proof of the approved shared-owner
-core path. Future real-provider qualification must use
+core path. Current and future real-provider qualification must use
 `scripts/verification/native_fixture_sandbox.py`: scratch-only native writes,
 private physical CLI copies, and only the explicit fake-provider/native-owner
 local ports and private Unix sockets. Linux additionally requires a read-only
@@ -130,5 +193,5 @@ mount and fresh loopback-only network namespace.
 
 `TestHermesSharedOwnerSemanticSendRestartAndStopIsolation` exercises the assembled
 core with a deterministic native wire fixture. Package race checks, vet and lint
-are distinct from the remaining guarded real shared-owner A/B background and
-subagent qualification.
+are distinct from the guarded real shared-owner A/B background and subagent
+qualification recorded above.

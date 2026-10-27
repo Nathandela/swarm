@@ -1,0 +1,127 @@
+{
+  "a_async_child_stopped": true,
+  "a_background_stopped": true,
+  "b_background_survived": true,
+  "b_still_usable": true,
+  "literal_approval_text_queued": true,
+  "native_tui_permission_rendered": true,
+  "permission_id": "554e817351074504acd88c635bf6e27f",
+  "receipts": [
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793059771275:dcc4281f7b67e265472d0ca9c764c5a0",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793059771275:dcc4281f7b67e265472d0ca9c764c5a0",
+      "session": "ep-75e663b2/w6hwtb3fb4zfqw2z",
+      "session_instance": "c3cfa7cf24ea6cd0b365ab167d92d2ba",
+      "state": "submitted",
+      "native_session_id": "local-7db6432e5ce8950b8c1f1361c45c84f587624963257b838c8a6cfe3d69f528f8",
+      "native_generation": "b704e896f372681981b73f6694325a3d"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793059773557:64ec4596e12c428068b45fbacbeb1ecc",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793059773557:64ec4596e12c428068b45fbacbeb1ecc",
+      "session": "ep-75e663b2/bu4tbfifpfbqnvlk",
+      "session_instance": "444eda5f04a9cd26d3da04569ca228a9",
+      "state": "submitted",
+      "native_session_id": "local-abe8d1249d20c808ac782c68d7f48b56a74c77ec7e86a4887fbd46ca6445cec7",
+      "native_generation": "3297ae86dd414b32a4008f160451169a"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793059773970:1a872fdc26b5aea28605c7ab308e5497",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793059773970:1a872fdc26b5aea28605c7ab308e5497",
+      "session": "ep-75e663b2/w6hwtb3fb4zfqw2z",
+      "session_instance": "c3cfa7cf24ea6cd0b365ab167d92d2ba",
+      "state": "submitted",
+      "native_session_id": "local-7db6432e5ce8950b8c1f1361c45c84f587624963257b838c8a6cfe3d69f528f8",
+      "native_generation": "b704e896f372681981b73f6694325a3d"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793059774690:a8ac16a9ee23d65db6adf098404fe645",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793059774690:a8ac16a9ee23d65db6adf098404fe645",
+      "session": "ep-75e663b2/w6hwtb3fb4zfqw2z",
+      "session_instance": "c3cfa7cf24ea6cd0b365ab167d92d2ba",
+      "state": "submitted",
+      "native_session_id": "local-7db6432e5ce8950b8c1f1361c45c84f587624963257b838c8a6cfe3d69f528f8",
+      "native_generation": "b704e896f372681981b73f6694325a3d"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793059775849:64660243e95fc2982415fc8a1aeac6dd",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793059775849:64660243e95fc2982415fc8a1aeac6dd",
+      "session": "ep-75e663b2/w6hwtb3fb4zfqw2z",
+      "session_instance": "c3cfa7cf24ea6cd0b365ab167d92d2ba",
+      "state": "submitted",
+      "native_session_id": "local-7db6432e5ce8950b8c1f1361c45c84f587624963257b838c8a6cfe3d69f528f8",
+      "native_generation": "b704e896f372681981b73f6694325a3d"
+    },
+    {
+      "origin": {
+        "kind": "external",
+        "installation_id": "fixture",
+        "request_id": "semantic:1793059800062:755d5a077567dd3af98e5d2c8ca1f155",
+        "actor_id": "synthetic-discord-user"
+      },
+      "operation_id": "semantic:1793059800062:755d5a077567dd3af98e5d2c8ca1f155",
+      "session": "ep-75e663b2/bu4tbfifpfbqnvlk",
+      "session_instance": "444eda5f04a9cd26d3da04569ca228a9",
+      "state": "submitted",
+      "native_session_id": "local-abe8d1249d20c808ac782c68d7f48b56a74c77ec7e86a4887fbd46ca6445cec7",
+      "native_generation": "3297ae86dd414b32a4008f160451169a"
+    }
+  ],
+  "restart_no_model_turn": true,
+  "session_a": "local-7db6432e5ce8950b8c1f1361c45c84f587624963257b838c8a6cfe3d69f528f8",
+  "session_b": "local-abe8d1249d20c808ac782c68d7f48b56a74c77ec7e86a4887fbd46ca6445cec7",
+  "shared_owner_instance": "52ff369e70434bd8af27fa7765405863",
+  "shared_owner_pid": 1397,
+  "shared_owner_start": 1793059763966283,
+  "workspace_retained_unknown": true,
+  "source_pin": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+  "provider_version": "0.22.5",
+  "platform": "Darwin",
+  "os_write_guard": true,
+  "os_network_guard": true,
+  "no_production_auth": true,
+  "qualification_date": "2026-10-27",
+  "architecture": "arm64",
+  "source_checkout_tracked_files_clean": true,
+  "limits": [
+    "Synthetic auth and loopback provider only; no production native authentication or credential refresh qualification.",
+    "Pinned Hermes source with prepared upstream TUI assets; no installed-release-artifact qualification.",
+    "Observed fixture A background and async-child processes stopped; no general native job join or workspace cleanup proof.",
+    "macOS arm64 only; Linux Hermes native source gate remains open."
+  ],
+  "fixture_root": "/private/tmp/hs.GOd0rq",
+  "swarm_code_checkpoint": "1a5d1db7 (same production code; artifacts built immediately before checkpoint)",
+  "artifact_sha256": {
+    "/private/tmp/hermes-fixture-swarm": "c8eb4e0295fdc88fca36727d2cdd03fe783c8720a46754ebca48990bf06d4cb5",
+    "/private/tmp/hermes-native-probe": "7208e9533354e5fccd0b6b53d846a1e0536075084b6317e37b04a9e6c758e294",
+    "/private/tmp/swarm-hermes-native314-venv/bin/hermes": "a302cef976dce6de2f66e922b12b510617892fd3d15713a9dc54c991ef7e6cf7",
+    "scripts/verification/hermes_native_admission.py": "d242b873b51483d3b47992cc9b461169bea1e1aad51a06c2cc7f6f349886f423",
+    "scripts/verification/hermes_native_probe/main.go": "2f2395c6555183dd9eab2efe2ca0954cf4bfd1ff29833d5feafdf8296b835208",
+    "scripts/verification/native_fixture_sandbox.py": "638de64825090995b71511f01cdeadf44f4871d07d27aed8e79381c8757dd7bd"
+  }
+}
