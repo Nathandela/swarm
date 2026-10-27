@@ -238,7 +238,7 @@ func Prepare(ctx context.Context, cfg SessionConfig, env []string, dir string, p
 	if err = rpc(ctx, c, 2, method, params, &snapshot); err != nil {
 		return d, err
 	}
-	if !ValidSessionID(snapshot.SessionID) || snapshot.AuthorityEpoch != b.AuthorityEpoch || snapshot.Info.Cwd != cfg.Cwd {
+	if !ValidSessionID(snapshot.SessionID) || strings.HasPrefix(cfg.ResumeID, "local-") && snapshot.SessionID != cfg.ResumeID || snapshot.AuthorityEpoch != b.AuthorityEpoch || snapshot.Info.Cwd != cfg.Cwd {
 		return d, errors.New("hermes native session binding is unproven")
 	}
 	b.SessionID = snapshot.SessionID

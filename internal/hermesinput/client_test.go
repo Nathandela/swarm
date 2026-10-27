@@ -19,7 +19,7 @@ import (
 	"github.com/coder/websocket"
 )
 
-func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
+func fixture(t *testing.T, drop bool, changes ...func(string, map[string]any)) (Binding, *[]string, *sync.Mutex) {
 	t.Helper()
 	scratch, err := os.MkdirTemp("", "hi")
 	if err != nil {
@@ -84,10 +84,13 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 				result = map[string]any{"subagents": []any{}, "delegations": []any{}}
 			}
 			if req.Method == "session.detach" {
-				result = map[string]any{"session_id": req.Params["session_id"], "subscription_id": req.Params["subscription_id"], "detached": true}
+				result = map[string]any{"session_id": req.Params["session_id"], "subscription_id": req.Params["subscription_id"], "detached": true, "fixture_end_reason": req.Params["end_reason"]}
 			}
 			if req.Method == "prompt.submit" {
-				result = map[string]any{"admission_id": "admission-1", "status": "queued", "execution_generation": 7, "authority_epoch": 2}
+				result = map[string]any{"admission_id": "admission-1", "status": "queued", "execution_generation": 7, "authority_epoch": 1, "ref": map[string]string{"profile_id": home, "session_id": "local-" + strings.Repeat("a", 64)}}
+			}
+			for _, change := range changes {
+				change(req.Method, result)
 			}
 			raw, _ = json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
 			if c.Write(ctx, websocket.MessageText, raw) != nil {
@@ -132,7 +135,39 @@ func fixture(t *testing.T, drop bool) (Binding, *[]string, *sync.Mutex) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Binding{Home: home, OwnerPID: os.Getpid(), OwnerStartTime: start, InstanceID: "instance-1", SessionID: "local-" + strings.Repeat("a", 64)}, &methods, mu
+	return Binding{Home: home, OwnerPID: os.Getpid(), OwnerStartTime: start, InstanceID: "instance-1", SessionID: "local-" + strings.Repeat("a", 64), AuthorityEpoch: 1}, &methods, mu
+}
+
+func TestSubmitRejectsReceiptOutsideExactNativeScope(t *testing.T) {
+	for _, field := range []string{"missing-ref", "profile", "session", "epoch"} {
+		t.Run(field, func(t *testing.T) {
+			b, methods, mu := fixture(t, false, func(method string, result map[string]any) {
+				if method != "prompt.submit" {
+					return
+				}
+				switch field {
+				case "missing-ref":
+					delete(result, "ref")
+				case "profile":
+					result["ref"].(map[string]string)["profile_id"] = "/another-profile"
+				case "session":
+					result["ref"].(map[string]string)["session_id"] = "local-" + strings.Repeat("b", 64)
+				case "epoch":
+					result["authority_epoch"] = 2
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if receipt, err := Submit(ctx, b, "operation-1", "yes\n/approve all"); !errors.Is(err, errUncertain) || receipt.AdmissionID != "" {
+				t.Fatalf("unproven native receipt became success: %+v %v", receipt, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(*methods) != 2 {
+				t.Fatalf("uncertain receipt replayed: %v", *methods)
+			}
+		})
+	}
 }
 
 func TestSubmitDuringPermissionUsesOnlyNativePromptIngress(t *testing.T) {

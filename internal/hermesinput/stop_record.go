@@ -39,7 +39,11 @@ func ViewerEnded(ctx context.Context, dir string, d Descriptor) error {
 	if intent {
 		stopErr = Stop(ctx, d.Binding)
 	}
-	closeErr := CloseViewer(ctx, d.Binding)
+	endReason := ""
+	if intent && stopErr == nil {
+		endReason = "swarm_viewer_close"
+	}
+	closeErr := closeViewer(ctx, d.Binding, endReason)
 	if stopErr != nil || closeErr != nil {
 		return errors.Join(stopErr, closeErr)
 	}
