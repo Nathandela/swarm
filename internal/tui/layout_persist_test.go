@@ -96,7 +96,7 @@ func TestOptionsApplyPersistsLayout(t *testing.T) {
 	if len(store.saved) != 1 {
 		t.Fatalf("options apply wrote %d layouts, want exactly 1: %+v", len(store.saved), store.saved)
 	}
-	if want := (BoardLayout{Grouping: "repo", Ordering: "activity"}); store.saved[0] != want {
+	if want := (BoardLayout{Grouping: "repo", Ordering: "activity", TouchBack: false}); store.saved[0] != want {
 		t.Fatalf("persisted %+v, want %+v", store.saved[0], want)
 	}
 }
@@ -156,8 +156,11 @@ func TestLayoutSaveFailureStillAppliesAndBanners(t *testing.T) {
 
 	m = send(m, keyRune('o'))
 	m = send(m, keyRight) // group: status -> repo
+	m = send(m, keyDown)
+	m = send(m, keyDown)
+	m = send(m, keyRight) // CLI button on
 	m2, cmd := m.Update(keyEnter)
-	if rm := m2.(rootModel); rm.general.grouping != groupByRepo {
+	if rm := m2.(rootModel); rm.general.grouping != groupByRepo || !rm.touchBack {
 		t.Fatalf("a failed save cost the running client its layout: grouping=%v", rm.general.grouping)
 	}
 	// The save command resolves to the failure message the router banners.
@@ -215,11 +218,12 @@ func TestLayoutSaveCommandsIgnoreOlderReverseExecution(t *testing.T) {
 	m := newLayoutModel(t, newFakeClient(), detectMixed(), store).(rootModel)
 
 	older := m.applyLayout(groupByRepo, orderByArrival)
+	m.touchBack = true
 	newer := m.applyLayout(groupByTag, orderByName)
 	execCmd(newer)
 	execCmd(older)
 
-	want := BoardLayout{Grouping: "tag", Ordering: "name"}
+	want := BoardLayout{Grouping: "tag", Ordering: "name", TouchBack: true}
 	if store.layout != want {
 		t.Fatalf("stored layout %+v after reverse command execution, want %+v", store.layout, want)
 	}
@@ -338,17 +342,17 @@ func TestFileLayoutStoreOverwritesInPlace(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "board-layout.json")
 	s := NewFileLayoutStore(path)
-	if err := s.SaveLayout(BoardLayout{Grouping: "repo", Ordering: "activity"}); err != nil {
+	if err := s.SaveLayout(BoardLayout{Grouping: "repo", Ordering: "activity", TouchBack: true}); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
-	if err := s.SaveLayout(BoardLayout{Grouping: "status", Ordering: "created"}); err != nil {
+	if err := s.SaveLayout(BoardLayout{Grouping: "status", Ordering: "created", TouchBack: true}); err != nil {
 		t.Fatalf("second save: %v", err)
 	}
 	got, err := s.LoadLayout()
 	if err != nil {
 		t.Fatalf("LoadLayout: %v", err)
 	}
-	if want := (BoardLayout{Grouping: "status", Ordering: "created"}); got != want {
+	if want := (BoardLayout{Grouping: "status", Ordering: "created", TouchBack: true}); got != want {
 		t.Fatalf("after two saves %+v, want %+v", got, want)
 	}
 	entries, err := os.ReadDir(dir)

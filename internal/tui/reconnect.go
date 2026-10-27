@@ -195,7 +195,7 @@ func (m rootModel) applyDaemonReconnected(msg daemonReconnectedMsg) (tea.Model, 
 	if m.screen == screenOptions || m.screen == screenLogins {
 		old := m.options.contextGuard
 		m.optionsGeneration++
-		fresh, load := newOptionsModel(m.options.grouping, m.options.ordering, m.client, m.optionsGeneration)
+		fresh, load := newOptionsModel(m.options.grouping, m.options.ordering, m.touchBack, m.client, m.optionsGeneration)
 		if old.dirty() {
 			fresh.contextGuard.reconnectDraft = &contextGuardDraft{compact: old.autoCompact, threshold: old.threshold}
 		} else {

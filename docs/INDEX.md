@@ -27,7 +27,7 @@ The approved [system spec](specifications/system-spec.md), [build plan](specific
 
 ## The plan
 
-- [Mobile terminal dashboard interaction plan](specifications/mobile-terminal-touch-plan.md) — implemented SSH-terminal viewport, compact layout, folding and touch actions; [local verification and independent reviews](verification/mobile-terminal-touch/implementation.md), with actual handset qualification still open
+- [Mobile terminal dashboard interaction plan](specifications/mobile-terminal-touch-plan.md) — SSH-terminal viewport, compact layout, folding and touch actions, plus the opt-in attached `[swarm]` return-button integration contract; [local verification and independent reviews](verification/mobile-terminal-touch/implementation.md), with actual handset qualification still open
 
 - [OpenCode maturity implementation plan](specifications/opencode-maturity-plan.md) — dependency-ordered native lifecycle, observation, semantic messaging, controls, continuity, model selection and release qualification, reviewed through Swarm by DeepSeek and GLM
 - [OpenCode minimum version and deployment status](verification/opencode-minimum-version-2026-10-19.md) — stable >=1.19.3 admission, connected checks, actual native recovery and sustained qualification boundaries

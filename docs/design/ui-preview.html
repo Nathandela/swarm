@@ -161,7 +161,7 @@
     <div class="card"><h4 style="color:var(--tok)">READY FOR REVIEW</h4><p>The agent finished its turn. Attach, review the diff, send the next prompt — the session drops back to Working.</p></div>
     <div class="card"><h4 style="color:var(--tgrey)">COMPLETED</h4><p>Exited sessions, exit code shown. They stay listed (transcript on disk) until you delete them with <span class="mono">x</span>.</p></div>
   </div>
-  <div class="note">Attach is raw passthrough: the agent CLI's own interface, untouched, full-screen. swarm adds exactly one thin line — session name and the detach key — and even that is toggleable. No fluff.</div>
+  <div class="note">Attach shows the agent CLI's native interface with a reserved bottom return hint. The optional CLI button adds [swarm] to that same row and uses the existing detach path. It defaults off because terminal-wide mouse capture can affect selection and scrolling. Unsupported modes and older live shims retain Ctrl+Q; actual handset qualification remains open.</div>
 </section>
 
 <!-- ============ FLOW ============ -->

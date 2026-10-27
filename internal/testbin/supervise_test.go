@@ -98,7 +98,13 @@ func TestSuperviseCleansAfterChildExit(t *testing.T) {
 			}
 			reportPath := filepath.Join(t.TempDir(), "report")
 			exe, _ := os.Executable()
-			cmd := exec.Command(exe, "-test.run=^TestSupervisorFixture$", "-test.timeout=500ms")
+			// Go's watchdog includes fixture setup and child readiness; only the
+			// timeout scenario should intentionally exhaust it after reporting ownership.
+			timeout := "30s"
+			if mode == "timeout" {
+				timeout = "5s"
+			}
+			cmd := exec.Command(exe, "-test.run=^TestSupervisorFixture$", "-test.timeout="+timeout)
 			for _, env := range os.Environ() {
 				if !strings.HasPrefix(env, runRootEnv+"=") && !strings.HasPrefix(env, "TESTBIN_SCENARIO=") {
 					cmd.Env = append(cmd.Env, env)
@@ -132,6 +138,9 @@ func TestSuperviseCleansAfterChildExit(t *testing.T) {
 			}
 			if !success && err == nil {
 				t.Fatal("lost failing child exit status")
+			}
+			if mode == "timeout" && !strings.Contains(string(output), "panic: test timed out after "+timeout) {
+				t.Errorf("child did not fail through Go's timeout watchdog: %v\n%s", err, output)
 			}
 			if identity.Alive() {
 				t.Errorf("%s left detached owned process %d alive", mode, report.PID)

@@ -601,7 +601,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// 2026-08-27: one form with arrow navigation, not one key per setting).
 		m.optionsGeneration++
 		var cmd tea.Cmd
-		m.options, cmd = newOptionsModel(m.general.grouping, m.general.ordering, m.client, m.optionsGeneration)
+		m.options, cmd = newOptionsModel(m.general.grouping, m.general.ordering, m.touchBack, m.client, m.optionsGeneration)
 		m.screen = screenOptions
 		return m, cmd
 	case k.Text == "h":
@@ -651,7 +651,7 @@ func (m rootModel) openSelected() (tea.Model, tea.Cmd) {
 	if m.attachRunner != nil {
 		m.screen = screenAttach
 		// Only running rows reach here, so the passthrough is always read-write.
-		return m, runAttach(m.attachRunner, s, false)
+		return m, runAttach(m.attachRunner, s, false, m.touchBack)
 	}
 	m.attach = attachModel{session: s, hasSession: true, width: m.width}
 	m.screen = screenAttach

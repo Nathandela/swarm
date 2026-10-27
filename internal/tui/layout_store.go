@@ -29,8 +29,9 @@ import (
 // survives any later reordering of the modes. The zero value means "no stored
 // preference", which reads back as the built-in defaults.
 type BoardLayout struct {
-	Grouping string `json:"grouping,omitempty"`
-	Ordering string `json:"ordering,omitempty"`
+	Grouping  string `json:"grouping,omitempty"`
+	Ordering  string `json:"ordering,omitempty"`
+	TouchBack bool   `json:"touch_back,omitempty"`
 }
 
 // LayoutStore is the durable custody of the board layout. Both halves are
@@ -60,11 +61,11 @@ type layoutSaveState struct {
 
 // saveLayoutCmd writes the layout off the update loop. A nil store yields no
 // command, so a storeless client dispatches nothing at all.
-func saveLayoutCmd(s LayoutStore, state *layoutSaveState, generation uint64, g groupingMode, o orderingMode) tea.Cmd {
+func saveLayoutCmd(s LayoutStore, state *layoutSaveState, generation uint64, g groupingMode, o orderingMode, touchBack bool) tea.Cmd {
 	if s == nil {
 		return nil
 	}
-	l := BoardLayout{Grouping: groupingLabels[g], Ordering: orderingLabels[o]}
+	l := BoardLayout{Grouping: groupingLabels[g], Ordering: orderingLabels[o], TouchBack: touchBack}
 	return func() tea.Msg {
 		state.mu.Lock()
 		defer state.mu.Unlock()
@@ -87,7 +88,7 @@ func (m *rootModel) applyLayout(g groupingMode, o orderingMode) tea.Cmd {
 		m.layoutSaves = &layoutSaveState{}
 	}
 	generation := m.layoutSaves.generation.Add(1)
-	return saveLayoutCmd(m.layoutStore, m.layoutSaves, generation, g, o)
+	return saveLayoutCmd(m.layoutStore, m.layoutSaves, generation, g, o, m.touchBack)
 }
 
 // restoreLayout seeds the board from durable custody before the first paint. An
@@ -110,6 +111,7 @@ func (m *rootModel) restoreLayout() {
 		o = v
 	}
 	m.general.setLayout(g, o)
+	m.touchBack = l.TouchBack
 }
 
 // groupingFromLabel resolves a persisted grouping label, reporting whether this
@@ -148,6 +150,7 @@ type layoutDocument struct {
 	SchemaVersion int    `json:"schema_version"`
 	Grouping      string `json:"grouping,omitempty"`
 	Ordering      string `json:"ordering,omitempty"`
+	TouchBack     bool   `json:"touch_back,omitempty"`
 }
 
 // FileLayoutStore keeps the layout in one small JSON document.
@@ -189,7 +192,7 @@ func (s *FileLayoutStore) LoadLayout() (BoardLayout, error) {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return BoardLayout{}, fmt.Errorf("parse board layout %s: %w", s.path, err)
 	}
-	return BoardLayout{Grouping: doc.Grouping, Ordering: doc.Ordering}, nil
+	return BoardLayout{Grouping: doc.Grouping, Ordering: doc.Ordering, TouchBack: doc.TouchBack}, nil
 }
 
 // SaveLayout replaces the document atomically: a temp file in the same directory
@@ -206,6 +209,7 @@ func (s *FileLayoutStore) SaveLayout(l BoardLayout) error {
 		SchemaVersion: layoutSchemaVersion,
 		Grouping:      l.Grouping,
 		Ordering:      l.Ordering,
+		TouchBack:     l.TouchBack,
 	})
 	if err != nil {
 		return fmt.Errorf("encode board layout: %w", err)

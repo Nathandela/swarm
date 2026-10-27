@@ -33,9 +33,8 @@ import (
 	xvt "github.com/charmbracelet/x/vt"
 )
 
-// SnapshotVersion is the schema version embedded in every snapshot. Bump it
-// whenever the Snap/Line/Run wire format changes; DecodeSnapshot rejects any
-// other version.
+// SnapshotVersion changes for incompatible snapshot formats. Optional metadata
+// is additive in v1; older readers ignore it and its absence remains unknown.
 const SnapshotVersion = 1
 
 // SnapshotTextMax bounds a single cell's Run.Text (its grapheme cluster) in a
@@ -85,15 +84,16 @@ type Line struct {
 // Snap is the serialized visible screen: dimensions, cursor, mode flags, the
 // sanitized window title, and the grid as Rows lines.
 type Snap struct {
-	Version       int    `json:"version"`
-	Cols          int    `json:"cols"`
-	Rows          int    `json:"rows"`
-	AltScreen     bool   `json:"altScreen"`
-	CursorX       int    `json:"cursorX"`
-	CursorY       int    `json:"cursorY"`
-	CursorVisible bool   `json:"cursorVisible"`
-	Title         string `json:"title,omitempty"`
-	Lines         []Line `json:"lines"`
+	Version       int         `json:"version"`
+	Cols          int         `json:"cols"`
+	Rows          int         `json:"rows"`
+	AltScreen     bool        `json:"altScreen"`
+	CursorX       int         `json:"cursorX"`
+	CursorY       int         `json:"cursorY"`
+	CursorVisible bool        `json:"cursorVisible"`
+	Title         string      `json:"title,omitempty"`
+	Lines         []Line      `json:"lines"`
+	Mouse         *MouseState `json:"mouse,omitempty"` // absent in older v1 snapshots; never replayed as ANSI
 }
 
 // Emulator wraps a charm x/vt emulator with Feed/Snapshot/Resize and the
@@ -120,6 +120,7 @@ type Emulator struct {
 	guard        *ansi.Parser // shadow parser for the CSI-parameter guard; see clampCsiParams
 	guardDigits  int          // consecutive digits seen in the CSI parameter currently being scanned
 	guardPrivate bool         // the CSI being scanned carries a private-parameter marker (?, >, <, =)
+	mouse        *MouseTracker
 }
 
 // isClosed reports whether Close has run. It never blocks and never touches mu,
@@ -171,6 +172,7 @@ func NewEmulator(cols, rows int) *Emulator {
 		closing:   make(chan struct{}),
 		drainDone: make(chan struct{}),
 		guard:     guard,
+		mouse:     NewMouseTracker(&MouseState{Known: true}),
 	}
 	// These callbacks fire synchronously inside term.Write, which only runs
 	// while Feed holds e.mu, so the writes below need no extra locking.
@@ -297,6 +299,7 @@ func (e *Emulator) FeedChecked(p []byte) (err error) {
 			return
 		}
 		err = ErrParserPanic
+		e.mouse.unknown()
 		// x/vt's Resize resets both active/inactive screen scroll regions. Keep
 		// this repair best-effort and independently contained: terminal output
 		// must not escape this trust boundary even if upstream recovery changes.
@@ -305,6 +308,9 @@ func (e *Emulator) FeedChecked(p []byte) (err error) {
 			e.term.Resize(e.cols, e.rows)
 		}()
 	}()
+	// Track original output, as the raw attach consumer does, before the grid's
+	// defensive CSI clamp. Ambiguous raw mode sequences become unknown.
+	e.mouse.Feed(p)
 	_, err = e.term.Write(e.clampCsiParams(p))
 	return err
 }
@@ -516,6 +522,7 @@ func (e *Emulator) Snapshot() ([]byte, error) {
 // buildSnap assembles the Snap from the current terminal state. Caller holds mu.
 func (e *Emulator) buildSnap() *Snap {
 	pos := e.term.CursorPosition()
+	mouse := e.mouse.snapshotState()
 	s := &Snap{
 		Version:       SnapshotVersion,
 		Cols:          e.cols,
@@ -526,6 +533,7 @@ func (e *Emulator) buildSnap() *Snap {
 		CursorVisible: e.visible,
 		Title:         clampBytes(sanitizeText(e.title), SnapshotTitleMax),
 		Lines:         make([]Line, e.rows),
+		Mouse:         &mouse,
 	}
 	for y := 0; y < e.rows; y++ {
 		s.Lines[y] = e.buildLine(y)
@@ -625,6 +633,9 @@ func DecodeSnapshot(b []byte) (*Snap, error) {
 	}
 	if s.Version != SnapshotVersion {
 		return nil, fmt.Errorf("vt: unsupported snapshot version %d (want %d)", s.Version, SnapshotVersion)
+	}
+	if s.Mouse != nil && (!s.Mouse.valid() || s.Mouse.ambiguous()) {
+		s.Mouse.Known = false
 	}
 	return &s, nil
 }

@@ -28,6 +28,7 @@ type contextGuardSettingsClient interface {
 const (
 	optionsFocusGroup = iota
 	optionsFocusOrder
+	optionsFocusTouchBack
 	optionsFocusAutoCompact
 	optionsFocusThreshold
 	optionsFocusLogins
@@ -35,9 +36,10 @@ const (
 
 // optionsModel is the open form: the focused row and the pending choices.
 type optionsModel struct {
-	focus    int // 0 = group, 1 = order
-	grouping groupingMode
-	ordering orderingMode
+	focus     int // 0 = group, 1 = order
+	grouping  groupingMode
+	ordering  orderingMode
+	touchBack bool
 
 	contextGuard contextGuardOptions
 }
@@ -82,8 +84,8 @@ func (m *rootModel) invalidateOptionsConnection() {
 	o.err = "daemon connection changed; reopen options to reload settings"
 }
 
-func newOptionsModel(grouping groupingMode, ordering orderingMode, c Client, generation uint64) (optionsModel, tea.Cmd) {
-	o := optionsModel{grouping: grouping, ordering: ordering}
+func newOptionsModel(grouping groupingMode, ordering orderingMode, touchBack bool, c Client, generation uint64) (optionsModel, tea.Cmd) {
+	o := optionsModel{grouping: grouping, ordering: ordering, touchBack: touchBack}
 	settingsClient, ok := c.(contextGuardSettingsClient)
 	if !ok || !hasContextGuardSettingsCap(settingsClient.Capabilities()) {
 		return o, nil
@@ -120,7 +122,12 @@ func saveContextGuardSettingsCmd(c contextGuardSettingsClient, generation, revis
 // optionsHint is the constant footer: both rows are arrow pickers.
 const optionsHint = "←→ change · tab/↑↓ next · enter apply · esc cancel"
 
+const touchBackSelectionNotice = "Touch captures the whole screen.\nText selection may need your terminal's override."
+
 func (o optionsModel) hint() string {
+	if o.focus == optionsFocusTouchBack {
+		return "←→ change · terminal-wide mouse capture can affect text selection · tab/↑↓ next · enter apply · esc cancel"
+	}
 	if o.focus == optionsFocusLogins {
 		return "enter provider logins · tab/↑↓ next · esc cancel options"
 	}
@@ -159,6 +166,7 @@ func (m rootModel) updateOptions(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !o.contextGuard.dirty() {
+			m.touchBack = o.touchBack
 			return m, tea.Batch(m.applyLayout(o.grouping, o.ordering), m.enterGeneral())
 		}
 		return m.beginContextGuardSave()
@@ -192,7 +200,7 @@ func optionStep(k tea.KeyPressMsg) int {
 }
 
 func (o optionsModel) focusRows() []int {
-	rows := []int{optionsFocusGroup, optionsFocusOrder}
+	rows := []int{optionsFocusGroup, optionsFocusOrder, optionsFocusTouchBack}
 	if o.contextGuard.available && o.contextGuard.loaded {
 		rows = append(rows, optionsFocusAutoCompact, optionsFocusThreshold)
 	}
@@ -217,6 +225,8 @@ func (o *optionsModel) cycle(step int) {
 		o.grouping = groupingMode(wrapIndex(int(o.grouping)+step, len(groupingLabels)))
 	case optionsFocusOrder:
 		o.ordering = orderingMode(wrapIndex(int(o.ordering)+step, len(orderingLabels)))
+	case optionsFocusTouchBack:
+		o.touchBack = !o.touchBack
 	case optionsFocusAutoCompact:
 		if o.contextGuard.loaded {
 			o.contextGuard.autoCompact.Enabled = !o.contextGuard.autoCompact.Enabled
@@ -293,6 +303,7 @@ func (m rootModel) applyContextGuardSettingsSaved(msg contextGuardSettingsSavedM
 	o.savedCompact = msg.settings.AutoCompact
 	o.threshold.set(strconv.Itoa(msg.settings.AutoCompact.ThresholdPercent))
 	o.err = ""
+	m.touchBack = m.options.touchBack
 	if m.screen == screenLogins {
 		// A save acknowledged while visiting Logins commits the layout, but
 		// leaves the active page and the Options form intact for the return trip.
@@ -310,6 +321,14 @@ func (o optionsModel) view(width int) string {
 	b.WriteString(styleTitle.Render("swarm") + styleDim.Render(" · options") + "\n\n")
 	b.WriteString(fieldLine("group", picker(groupingLabels[:], int(o.grouping), width-agentRowIndent), o.focus == optionsFocusGroup))
 	b.WriteString(fieldLine("order", picker(orderingLabels[:], int(o.ordering), width-agentRowIndent), o.focus == optionsFocusOrder))
+	touchBack := "[ ] off"
+	if o.touchBack {
+		touchBack = "[x] on"
+	}
+	b.WriteString(fieldLine("CLI button", touchBack, o.focus == optionsFocusTouchBack))
+	if o.focus == optionsFocusTouchBack || o.touchBack {
+		b.WriteString(styleDim.Render(touchBackSelectionNotice) + "\n")
+	}
 	// Every early return (unsupported/loading/error) retains the action.
 	logins := fieldLine("logins", "Provider logins →", o.focus == optionsFocusLogins)
 	if !o.contextGuard.available {

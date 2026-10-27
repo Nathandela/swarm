@@ -231,6 +231,19 @@ func TestReconnect_RefreshCannotUndoCompletedRename(t *testing.T) {
 	}
 }
 
+func newReconnectTestScreen(t *testing.T) *vt.Emulator {
+	t.Helper()
+	terminal := vt.NewEmulator(testCols, testRows)
+	// Bubble Tea's non-TTY renderer assumes LF maps to CRLF; teatest's buffer does not.
+	terminal.Feed([]byte("\x1b[20h"))
+	t.Cleanup(func() {
+		if err := terminal.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return terminal
+}
+
 func TestReconnect_HydratedBannerExpires(t *testing.T) {
 	old := newFakeClient(sWorking("endpoint/task", "codex", "/tmp", "before reconnect", time.Second))
 	question := protocol.SessionView{ID: "endpoint/task", Agent: "codex", Summary: "fresh question", Group: status.GroupNeedsInput, Status: status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionPrompt}}
@@ -238,13 +251,8 @@ func TestReconnect_HydratedBannerExpires(t *testing.T) {
 	model := New(old, nil, WithDaemonReconnector(func() (Client, error) { return fresh, nil }))
 	defer func() { _ = model.(interface{ Close() error }).Close() }()
 	tm := startTM(t, model)
-	terminal := vt.NewEmulator(testCols, testRows)
-	t.Cleanup(func() {
-		if err := terminal.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	waitScreen := func(text string) {
+	terminal := newReconnectTestScreen(t)
+	waitScreen := func(text string, present bool) {
 		consumed := 0
 		teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
 			terminal.Feed(b[consumed:])
@@ -257,14 +265,15 @@ func TestReconnect_HydratedBannerExpires(t *testing.T) {
 			if err := json.Unmarshal(raw, &snap); err != nil {
 				t.Fatal(err)
 			}
-			return strings.Contains(strings.Join(vt.SnapText(&snap), "\n"), text)
+			return strings.Contains(strings.Join(vt.SnapText(&snap), "\n"), text) == present
 		}, teatest.WithDuration(3*time.Second), teatest.WithCheckInterval(10*time.Millisecond))
 	}
 	// Cell diffs may reuse a prefix from the previous banner; inspect the screen.
-	waitScreen("before reconnect")
+	waitScreen("before reconnect", true)
 	close(old.events)
-	waitScreen("codex needs input (question)")
+	waitScreen("codex needs input (question)", true)
 	time.Sleep(bannerDuration + 100*time.Millisecond)
+	waitScreen("codex needs input (question)", false)
 	quitTM(t, tm)
 	if strings.Contains(finalView(t, tm), "codex needs input (question)") {
 		t.Fatal("hydrated attention banner did not expire")
@@ -279,9 +288,10 @@ func TestReconnect_OptionsReloadPreservesPolicyDraft(t *testing.T) {
 			m := New(old, nil).(rootModel)
 			m.screen = activeScreen
 			var load tea.Cmd
-			m.options, load = newOptionsModel(groupByRepo, orderByName, old, 1)
+			m.options, load = newOptionsModel(groupByRepo, orderByName, false, old, 1)
 			m = send(m, load()).(rootModel)
 			m.options.focus = optionsFocusThreshold
+			m.options.touchBack = true
 			m.options.contextGuard.threshold.set("87")
 			m = send(m, connectionLostMsg{from: m.events}).(rootModel)
 			m.reconnecting = true
@@ -305,7 +315,7 @@ func TestReconnect_OptionsReloadPreservesPolicyDraft(t *testing.T) {
 				case result := <-results:
 					if loaded, ok := result.(contextGuardSettingsLoadedMsg); ok {
 						m = send(m, loaded).(rootModel)
-						if m.options.contextGuard.revision != 9 || m.options.contextGuard.threshold.text != "87" || m.options.focus != optionsFocusThreshold || m.options.grouping != groupByRepo {
+						if m.options.contextGuard.revision != 9 || m.options.contextGuard.threshold.text != "87" || m.options.focus != optionsFocusThreshold || m.options.grouping != groupByRepo || !m.options.touchBack || m.touchBack {
 							t.Fatal("reload lost policy draft/focus or retained stale revision")
 						}
 						return

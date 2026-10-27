@@ -16,7 +16,7 @@ package tui
 //
 // FROZEN tui additions the implementer must land (undefined-RED until then):
 //
-//	type AttachRunner func(session protocol.SessionView, readOnly bool) error
+//	type AttachRunner func(session protocol.SessionView, readOnly, touchBack bool) error
 //	type Option func(*rootModel)
 //	func WithAttachRunner(r AttachRunner) Option
 //	func New(c Client, detect DetectFunc, opts ...Option) tea.Model  // variadic added; 2-arg calls unaffected
@@ -44,13 +44,14 @@ type recordingRunner struct {
 }
 
 type attachCall struct {
-	session  protocol.SessionView
-	readOnly bool
+	session   protocol.SessionView
+	readOnly  bool
+	touchBack bool
 }
 
-func (r *recordingRunner) run(s protocol.SessionView, readOnly bool) error {
+func (r *recordingRunner) run(s protocol.SessionView, readOnly, touchBack bool) error {
 	r.mu.Lock()
-	r.calls = append(r.calls, attachCall{s, readOnly})
+	r.calls = append(r.calls, attachCall{s, readOnly, touchBack})
 	r.mu.Unlock()
 	return r.returnErr
 }
